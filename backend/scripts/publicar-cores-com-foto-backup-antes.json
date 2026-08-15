@@ -1,0 +1,2959 @@
+{
+  "quando": "2026-08-13T17:37:04.927Z",
+  "linhas": [
+    {
+      "id": "98235c85-ddfb-48d3-965f-766cb4779d52",
+      "ref": "00410",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:09:28.924Z"
+    },
+    {
+      "id": "778453dc-9d33-4a02-8a68-7818125e5564",
+      "ref": "00457",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:04:01.320Z"
+    },
+    {
+      "id": "8a94481d-458f-46cb-8b1e-57aef736e814",
+      "ref": "00478",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:10:05.857Z"
+    },
+    {
+      "id": "2413f00a-5091-4d55-b6d3-c144dd1a6454",
+      "ref": "00478",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:10:02.756Z"
+    },
+    {
+      "id": "43e64658-a203-44b8-ae02-c09e7eb9201a",
+      "ref": "00478",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:09:59.046Z"
+    },
+    {
+      "id": "79d31687-b8d7-42c6-b391-45e47d3f6cb4",
+      "ref": "007184",
+      "cor": "ESTAMPA ONCA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:10:15.216Z"
+    },
+    {
+      "id": "9062a180-e6da-4497-9431-2434011b1018",
+      "ref": "007184",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:10:20.187Z"
+    },
+    {
+      "id": "0b256dbc-9aaa-4232-80f0-39cfd86d2a41",
+      "ref": "0085",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:04:03.722Z"
+    },
+    {
+      "id": "fe815746-6048-4176-b381-300d1534d4c5",
+      "ref": "0090",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:04:06.159Z"
+    },
+    {
+      "id": "09bb7a40-f72e-41b9-b3ee-e7404df92cd0",
+      "ref": "00944",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:10:58.445Z"
+    },
+    {
+      "id": "a03858cc-c320-49f1-93ab-3fa527c1dc0d",
+      "ref": "0143",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:04:08.415Z"
+    },
+    {
+      "id": "9176aad8-abdf-42b7-8928-75b573092625",
+      "ref": "0171",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:11:25.365Z"
+    },
+    {
+      "id": "464b71cb-245c-467f-9e18-375ea7f1767d",
+      "ref": "0173",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:11:45.704Z"
+    },
+    {
+      "id": "13d1b0ff-f3d9-4d2c-be93-7a5f8e29c7ac",
+      "ref": "02842",
+      "cor": "ESTAMPA AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:12:17.345Z"
+    },
+    {
+      "id": "8a1ef671-746e-4a3e-b2e0-e91d60f2e000",
+      "ref": "02963",
+      "cor": "ESTAMPA AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:12:27.400Z"
+    },
+    {
+      "id": "3285ad0d-8f26-46e9-9bd6-bd41fe60ac08",
+      "ref": "106220",
+      "cor": "MOSTARDA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:14:21.704Z"
+    },
+    {
+      "id": "cda390bc-9bdd-414c-aa12-c336ea011100",
+      "ref": "108542",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:05:30.714Z"
+    },
+    {
+      "id": "a5f00407-a4fa-44a2-9754-cb7065b3e958",
+      "ref": "108806",
+      "cor": "MOSTARDA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:16:04.306Z"
+    },
+    {
+      "id": "97e940af-cdbc-42a9-8531-09ceacf82b81",
+      "ref": "11016",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:16:43.603Z"
+    },
+    {
+      "id": "2b729929-24dc-4bd6-ac40-1c24a593b559",
+      "ref": "110561",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:17:37.122Z"
+    },
+    {
+      "id": "8289a820-0192-4408-a58e-8f92428efa8f",
+      "ref": "11080",
+      "cor": "ROXO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:17:59.731Z"
+    },
+    {
+      "id": "311a0009-90b2-40aa-bdd5-016151fbafa3",
+      "ref": "11186",
+      "cor": "ONCINHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:19:07.131Z"
+    },
+    {
+      "id": "18896ba7-cd57-4c38-8cb8-d8dfbc11268c",
+      "ref": "11187",
+      "cor": "ONCINHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:19:16.173Z"
+    },
+    {
+      "id": "f6a562ac-1569-49a3-8370-703ce8ad19e6",
+      "ref": "11382",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:21:19.619Z"
+    },
+    {
+      "id": "84de5b0c-db3d-40b1-8597-d4a4445cd2e3",
+      "ref": "11399",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:21:28.661Z"
+    },
+    {
+      "id": "e4991b5e-075d-4e93-9d08-58116b788fee",
+      "ref": "11420",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:21:40.857Z"
+    },
+    {
+      "id": "b534efba-76b4-450f-b8ce-663aa423ecc3",
+      "ref": "11420",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:21:49.439Z"
+    },
+    {
+      "id": "33c792e4-337e-4411-b420-901e8a61c6fd",
+      "ref": "11420",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:21:44.552Z"
+    },
+    {
+      "id": "3faa15f9-4fee-4f0a-a79c-ce3255a8c518",
+      "ref": "116920",
+      "cor": "CAFE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:48:41.521Z"
+    },
+    {
+      "id": "85d40285-4da3-4ca5-82fc-71307fa3f2b5",
+      "ref": "116920",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:48:49.701Z"
+    },
+    {
+      "id": "f74baf21-e286-4ec8-87f3-1ca9a2737e9f",
+      "ref": "116920",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:48:54.808Z"
+    },
+    {
+      "id": "772302ec-688c-4594-82e2-8c6dfd5ba47f",
+      "ref": "11831",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:23:09.646Z"
+    },
+    {
+      "id": "f8cbb289-ab8e-458d-8489-e8bb908e6ea6",
+      "ref": "11851",
+      "cor": "BRANCO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:23:17.731Z"
+    },
+    {
+      "id": "601ba8b0-6016-4e05-bb0f-5510c3498d23",
+      "ref": "12051",
+      "cor": "BEGE FERRUGEM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:24:39.152Z"
+    },
+    {
+      "id": "fbd4086e-3e8c-4da7-b54c-14285c0ae745",
+      "ref": "12121",
+      "cor": "AZUL BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:27:01.406Z"
+    },
+    {
+      "id": "7b1dfcfe-369b-42d1-8575-b1619a7f2a19",
+      "ref": "12123",
+      "cor": "CINZA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:27:10.368Z"
+    },
+    {
+      "id": "54e07dfa-6189-49dc-a2e9-1a9a73b05d70",
+      "ref": "12125",
+      "cor": "MESCLA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:05:32.952Z"
+    },
+    {
+      "id": "ab999ac5-42ba-422e-b496-8254786dff10",
+      "ref": "12298",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:29:38.427Z"
+    },
+    {
+      "id": "16dd9262-3376-490e-850a-5173bb9d6ec3",
+      "ref": "12321",
+      "cor": "CINZA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:29:47.249Z"
+    },
+    {
+      "id": "dab86b03-89ea-4800-9027-ca4ceb0c040b",
+      "ref": "12321",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:29:52.095Z"
+    },
+    {
+      "id": "db122035-caae-4684-bfa6-8c1b7cf4cd9a",
+      "ref": "12333",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:30:04.974Z"
+    },
+    {
+      "id": "ff348285-77cc-4857-afc7-987082d99dc9",
+      "ref": "12342",
+      "cor": "BEGE PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:30:25.052Z"
+    },
+    {
+      "id": "a38f6190-03f6-4f23-96ce-8976560d567e",
+      "ref": "12378",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:31:29.056Z"
+    },
+    {
+      "id": "2cfcdf7b-145c-41bf-aeab-5d7a6ddc8eb7",
+      "ref": "12378",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:31:25.846Z"
+    },
+    {
+      "id": "d5706584-d5db-48cf-bdb8-10fd2945cd9d",
+      "ref": "12400",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:31:56.451Z"
+    },
+    {
+      "id": "02bebf97-cb0c-4c5a-a683-96f3ee5ea0ee",
+      "ref": "12526",
+      "cor": "TELHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:37:25.901Z"
+    },
+    {
+      "id": "37f83133-fb60-4889-bdf4-4e5845b74c39",
+      "ref": "12538",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:37:48.104Z"
+    },
+    {
+      "id": "ef145853-dcfa-461d-a5f7-7394c46a7bd0",
+      "ref": "12564",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:40:58.327Z"
+    },
+    {
+      "id": "21ad509e-35b9-4c85-8908-c0c238281e4c",
+      "ref": "12572",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:41:17.256Z"
+    },
+    {
+      "id": "3e175a90-4a30-4fee-afc4-b7d1cd4e8365",
+      "ref": "12572",
+      "cor": "CARAMELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:41:21.249Z"
+    },
+    {
+      "id": "9fca1cda-897e-431c-a66f-4c65e86cf9f1",
+      "ref": "12608",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:42:57.876Z"
+    },
+    {
+      "id": "4c5de421-c005-4cb6-87d6-09d4cf06c626",
+      "ref": "12608",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:43:02.885Z"
+    },
+    {
+      "id": "a033703e-f6db-44ab-9f6d-8d195328a33f",
+      "ref": "12639",
+      "cor": "BORDO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:45:28.390Z"
+    },
+    {
+      "id": "2ab90ed8-669e-4f6e-ae66-66497e123caa",
+      "ref": "12639",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:45:37.166Z"
+    },
+    {
+      "id": "029f7e5c-2101-4288-943c-c6377f1b337f",
+      "ref": "12639",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:45:32.690Z"
+    },
+    {
+      "id": "83c64518-86e8-448e-befb-1b75fcd57ca5",
+      "ref": "12652",
+      "cor": "ESTAMPA MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:46:11.082Z"
+    },
+    {
+      "id": "8360f523-1817-4c69-abce-eab817533bcc",
+      "ref": "127465",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:05:37.452Z"
+    },
+    {
+      "id": "dbbb4dc9-5b39-46c0-a896-4bc90fdfaa7a",
+      "ref": "12852",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:47:30.349Z"
+    },
+    {
+      "id": "205920ac-0347-41d5-b527-52ca25e4dd4b",
+      "ref": "12852",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:47:35.093Z"
+    },
+    {
+      "id": "75bbf3c9-40ac-45e5-91c4-5bce2a2c4b80",
+      "ref": "12858",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:48:02.053Z"
+    },
+    {
+      "id": "69b5f84e-64fd-4220-9775-4a24ffa604cd",
+      "ref": "12858",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:47:57.336Z"
+    },
+    {
+      "id": "32a74a55-f154-41d4-9cfd-6cd01d4e4c2a",
+      "ref": "12859",
+      "cor": "CRU",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:48:24.605Z"
+    },
+    {
+      "id": "29985115-adc8-449b-9fb8-fb8941dcea40",
+      "ref": "129360",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:07:04.684Z"
+    },
+    {
+      "id": "5dfaf691-3039-43f2-a551-71c19cd84168",
+      "ref": "129360",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:07:06.915Z"
+    },
+    {
+      "id": "3e146db8-c473-460e-aed0-3985079cd24f",
+      "ref": "129670",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:11:38.101Z"
+    },
+    {
+      "id": "041d72a3-9c34-42a1-b456-4f1f8b43e324",
+      "ref": "12980",
+      "cor": "CARAMELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:13:03.828Z"
+    },
+    {
+      "id": "a3259671-5f13-4560-874f-80dd983d7183",
+      "ref": "12980",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:13:06.133Z"
+    },
+    {
+      "id": "2c2e7b18-aa4c-4b61-acb2-d9765a630eb1",
+      "ref": "13014",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:13:08.420Z"
+    },
+    {
+      "id": "3d8c3798-77ec-49ec-8936-85bf5e975cec",
+      "ref": "13014",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:14:31.053Z"
+    },
+    {
+      "id": "009e5a84-4ab2-447d-ae8e-b8832082516c",
+      "ref": "13015",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:14:33.188Z"
+    },
+    {
+      "id": "c29b71af-7da7-4abd-917a-cd975cb3595f",
+      "ref": "13015",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:14:35.288Z"
+    },
+    {
+      "id": "097fafd0-63e3-406d-ad79-85e6f952ff03",
+      "ref": "13015",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:14:38.034Z"
+    },
+    {
+      "id": "81e56407-b22b-49f6-bb74-70a861320b0e",
+      "ref": "13044",
+      "cor": "POÁ BORDO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:16:01.218Z"
+    },
+    {
+      "id": "f4cbda37-9efa-473c-86d9-841c1b5668ec",
+      "ref": "13044",
+      "cor": "POÁ PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:16:03.695Z"
+    },
+    {
+      "id": "0f93f09a-23ce-4e7a-8766-4d203c07b078",
+      "ref": "13050",
+      "cor": "ESTAMPA MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:16:06.857Z"
+    },
+    {
+      "id": "6d488171-ebf3-4915-8dc3-52b05f5014ea",
+      "ref": "13050",
+      "cor": "ESTAMPA MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:16:09.852Z"
+    },
+    {
+      "id": "7506090f-c953-497a-9601-6e803da4db27",
+      "ref": "13056",
+      "cor": "POÁ PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:17:31.329Z"
+    },
+    {
+      "id": "aca48ca6-b0e3-412c-b36c-58177eed914a",
+      "ref": "131775",
+      "cor": "MOSTARDA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:17:33.694Z"
+    },
+    {
+      "id": "80be2348-852c-4a5a-b33b-6365b9ae6595",
+      "ref": "132901",
+      "cor": "ESTAMPA LARANJA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:19:10.506Z"
+    },
+    {
+      "id": "fd7a9b4d-d982-431a-840c-792abd10b2ac",
+      "ref": "132901",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:20:38.154Z"
+    },
+    {
+      "id": "ec64a7b2-44f3-4c2f-bcc5-a0e9d7a0deb0",
+      "ref": "132903",
+      "cor": "BRANCO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:22:03.544Z"
+    },
+    {
+      "id": "16952555-47b4-4df7-9caf-c602c066e900",
+      "ref": "132903",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:22:05.724Z"
+    },
+    {
+      "id": "3a0bd761-de7d-4d3f-825c-3af33c587e8e",
+      "ref": "132908",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-03T22:40:29.669Z"
+    },
+    {
+      "id": "5c4f7174-c10c-4080-a4ea-af1574d62094",
+      "ref": "133127",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:23:30.872Z"
+    },
+    {
+      "id": "966b10b5-e2dc-45bf-9e3e-f5ace19d58c1",
+      "ref": "134397",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:23:33.316Z"
+    },
+    {
+      "id": "fd4020ff-6ec7-4edc-9d11-d3727e801016",
+      "ref": "134397",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:23:36.191Z"
+    },
+    {
+      "id": "46f31e36-3555-4e6a-948b-d118ea7f2f2b",
+      "ref": "13589",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:23:38.534Z"
+    },
+    {
+      "id": "4d2d965e-e8fd-4838-85e9-4cbbf9a040ac",
+      "ref": "13830",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:54:46.306Z"
+    },
+    {
+      "id": "4fbede1c-6c76-485b-ba37-f984b40bdc9e",
+      "ref": "15263",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:25:00.794Z"
+    },
+    {
+      "id": "e3e16226-59b1-4895-b6a5-c581531a6d13",
+      "ref": "15314",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:25:03.083Z"
+    },
+    {
+      "id": "ea2b230b-aa49-48e2-a3ac-aed11a5aea95",
+      "ref": "15321",
+      "cor": "BLACK",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:25:05.444Z"
+    },
+    {
+      "id": "5e70f49f-de6e-41f0-ab55-517343c84de7",
+      "ref": "1574",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:25:07.811Z"
+    },
+    {
+      "id": "3e78b1ba-0b26-49a0-aebd-eebc6330b9c0",
+      "ref": "17485",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:26:30.532Z"
+    },
+    {
+      "id": "7c0bd7a5-8963-4d02-9b07-76230654124a",
+      "ref": "175",
+      "cor": "FUCSIA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:00:18.579Z"
+    },
+    {
+      "id": "24bb3728-d1ed-44bf-840d-7f3fefc5dad1",
+      "ref": "17503",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:26:33.144Z"
+    },
+    {
+      "id": "67f94e18-7618-4164-99d0-1c92cc4f32ed",
+      "ref": "184506",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:26:35.531Z"
+    },
+    {
+      "id": "81b93f09-7a91-40f8-8d34-030507e99c13",
+      "ref": "184506",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:26:37.972Z"
+    },
+    {
+      "id": "f2683ed3-ceaf-419e-8106-5f2caf7f141a",
+      "ref": "1939",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:01:27.143Z"
+    },
+    {
+      "id": "9f33bfcc-d204-4a21-ae1d-ed15475f77c3",
+      "ref": "206635",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:01:48.081Z"
+    },
+    {
+      "id": "30df6bce-e35b-4cac-9086-9bededbc3c73",
+      "ref": "206635",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:01:54.985Z"
+    },
+    {
+      "id": "740dbf02-8b83-4ec4-add9-83e49b4a81b6",
+      "ref": "206681",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:49:27.990Z"
+    },
+    {
+      "id": "8b9b7b88-55de-4de3-86a7-fd90978c6f77",
+      "ref": "206681",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:49:37.029Z"
+    },
+    {
+      "id": "9604cb82-8d7b-4744-965f-ee553b7a5f29",
+      "ref": "206681",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:49:23.256Z"
+    },
+    {
+      "id": "72591172-1d4c-47ec-a3db-c6193a9570a2",
+      "ref": "206681",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:49:31.777Z"
+    },
+    {
+      "id": "6315c81a-8c2f-4753-b3a5-9680955d4340",
+      "ref": "206879",
+      "cor": "FUCSIA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:49:40.072Z"
+    },
+    {
+      "id": "9d3ed5ce-b019-486c-bf7c-31568c7fb85f",
+      "ref": "206879",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T03:49:43.783Z"
+    },
+    {
+      "id": "6454705a-cd84-4db9-8039-320bbac4c5d7",
+      "ref": "206899",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:03:08.295Z"
+    },
+    {
+      "id": "9d207910-871b-48ac-9dac-2fbef98ee3b6",
+      "ref": "206901",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:28:01.344Z"
+    },
+    {
+      "id": "04e55928-faa3-48a7-ad8c-848f8cc665ba",
+      "ref": "206901",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:28:04.251Z"
+    },
+    {
+      "id": "eddab2b1-61a5-4add-b1f3-d2b35b763879",
+      "ref": "206940",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:28:06.533Z"
+    },
+    {
+      "id": "fee85b13-112c-4c28-9934-b25604773a25",
+      "ref": "206941",
+      "cor": "ESTAMPA ONÇA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:28:09.791Z"
+    },
+    {
+      "id": "78041251-0ed9-41ce-b486-909c2a130490",
+      "ref": "206981",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T16:08:05.572Z"
+    },
+    {
+      "id": "0cbf4757-a8f7-41b4-99d2-46eacf995836",
+      "ref": "206981",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T16:08:16.410Z"
+    },
+    {
+      "id": "ff251d6b-a4d4-40d6-9b68-25bcc29aff01",
+      "ref": "206981",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T16:08:23.279Z"
+    },
+    {
+      "id": "8220a09a-759e-4f69-9b1a-bf49a0282bd7",
+      "ref": "207030",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T18:25:29.171Z"
+    },
+    {
+      "id": "9133f703-8402-496b-89fd-922c33b4e1ec",
+      "ref": "207030",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T18:25:35.560Z"
+    },
+    {
+      "id": "5e867d39-deaf-4133-9d28-bff37ba7e20e",
+      "ref": "207030",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T18:25:40.536Z"
+    },
+    {
+      "id": "65a35263-2cc3-4c4f-be35-bf62d5079046",
+      "ref": "207030",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T18:25:46.157Z"
+    },
+    {
+      "id": "64a0550c-83c8-4734-b542-e692358af68c",
+      "ref": "207146",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:06:06.603Z"
+    },
+    {
+      "id": "7681ee39-742c-4886-b05a-55d71cfb88eb",
+      "ref": "207272",
+      "cor": "ESTAMPA ONÇA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:06:27.095Z"
+    },
+    {
+      "id": "934c748c-cfdf-48ae-933d-31b831d659f6",
+      "ref": "207272",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:06:32.691Z"
+    },
+    {
+      "id": "6564abd2-990a-44b5-94da-1b795c8b20cc",
+      "ref": "207275",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:06:51.069Z"
+    },
+    {
+      "id": "5f3b192c-a160-473e-a0e0-8a39e2d2865a",
+      "ref": "207275",
+      "cor": "ROYAL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:06:47.698Z"
+    },
+    {
+      "id": "d5b48a57-2e6e-4438-963a-72e69e4e31cb",
+      "ref": "207278",
+      "cor": "XADREZ VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:07:02.468Z"
+    },
+    {
+      "id": "cb491ff2-40a5-446a-a10f-895844ee4fed",
+      "ref": "207279",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:29:31.553Z"
+    },
+    {
+      "id": "83f33663-cf2b-41fc-b75e-d4fd6cfe9733",
+      "ref": "207282",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:08:06.816Z"
+    },
+    {
+      "id": "e248af47-3021-48c0-8428-73a3235cbcd2",
+      "ref": "207286",
+      "cor": "TERRACOTA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:08:48.089Z"
+    },
+    {
+      "id": "109b9f92-aa4a-41a4-9e4c-200e3c746d3e",
+      "ref": "207286",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:08:41.743Z"
+    },
+    {
+      "id": "3d7be86a-e5be-4739-acdc-f0d1252c4fb1",
+      "ref": "207299",
+      "cor": "CAMELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:09:04.964Z"
+    },
+    {
+      "id": "8d0efb19-93d7-499f-9398-6224b6146b83",
+      "ref": "207299",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:09:10.184Z"
+    },
+    {
+      "id": "57f67fae-7627-4225-b7ba-01e621715970",
+      "ref": "207320",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:09:29.545Z"
+    },
+    {
+      "id": "b91ab57a-7fef-4e76-aa40-aab62958db36",
+      "ref": "207333",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:29:34.380Z"
+    },
+    {
+      "id": "172b3117-817b-4858-8c8c-55cb1419ea3c",
+      "ref": "207333",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:29:36.982Z"
+    },
+    {
+      "id": "4d13149a-e0c8-4534-a320-428afefbdf9b",
+      "ref": "207333",
+      "cor": "MUSGO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:29:39.934Z"
+    },
+    {
+      "id": "380cb88e-1d3d-4e25-b49b-e53cd10d0c32",
+      "ref": "207333",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:31:01.018Z"
+    },
+    {
+      "id": "92905e1b-118a-4b9a-a3c0-ddf930d603a1",
+      "ref": "207333",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:31:03.466Z"
+    },
+    {
+      "id": "b6f2ed3b-50e9-46c0-ac81-a90a55462b1a",
+      "ref": "207361",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:10:01.025Z"
+    },
+    {
+      "id": "de0ebc50-e179-41f9-839d-b9ed1f5c5bea",
+      "ref": "207361",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:09:55.593Z"
+    },
+    {
+      "id": "776d5d3b-cadd-43bc-9d68-fa9a986a97d0",
+      "ref": "207372",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:10:44.708Z"
+    },
+    {
+      "id": "9c1cd025-a080-4b60-bb11-a7c141956235",
+      "ref": "207372",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:10:33.377Z"
+    },
+    {
+      "id": "5fff686d-b588-425c-ae60-6517e27ef15f",
+      "ref": "207372",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:10:37.125Z"
+    },
+    {
+      "id": "4054ce8d-c515-43c8-b05e-7d4b7bd47370",
+      "ref": "207372",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:10:40.457Z"
+    },
+    {
+      "id": "9466bd33-b4ab-42a0-adfe-d0cd90f7da3f",
+      "ref": "2108",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:31:08.141Z"
+    },
+    {
+      "id": "a185089d-b134-4e3a-98b4-9a36b4adb32b",
+      "ref": "21121",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:32:34.049Z"
+    },
+    {
+      "id": "f3588c11-5ec0-4437-abce-6b68899f4a34",
+      "ref": "21121509",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:32:36.341Z"
+    },
+    {
+      "id": "fb708a8c-ce01-4f27-8393-100ac609be36",
+      "ref": "2116",
+      "cor": "ESTAMPA ONÇA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:11:30.637Z"
+    },
+    {
+      "id": "47d63b85-82ac-4ca4-8566-1fa7c00b16c8",
+      "ref": "223243",
+      "cor": "PINK",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:13:46.793Z"
+    },
+    {
+      "id": "139969f6-b0fb-4a62-8868-ebbc3db2363b",
+      "ref": "223243",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:13:51.665Z"
+    },
+    {
+      "id": "c0772660-18e8-4c37-b101-4251dd2e263e",
+      "ref": "223248",
+      "cor": "LARANJA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:14:04.458Z"
+    },
+    {
+      "id": "4b45556e-1374-4b9b-a9a6-1cf53e5928d2",
+      "ref": "223248",
+      "cor": "MUSGO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:32:38.763Z"
+    },
+    {
+      "id": "6568fceb-3c7d-48fe-a0aa-d9d5101823c7",
+      "ref": "2280",
+      "cor": "LIMA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:14:46.609Z"
+    },
+    {
+      "id": "858e3afa-71c0-4e3e-9f13-23f5030ea904",
+      "ref": "2298",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:15:16.571Z"
+    },
+    {
+      "id": "f2a65143-78d6-4194-9830-38634272021e",
+      "ref": "23076",
+      "cor": "LARANJA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:15:30.438Z"
+    },
+    {
+      "id": "dc68664c-98cd-43a5-af28-f144c4d899bc",
+      "ref": "23141",
+      "cor": "CARAMELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:15:39.084Z"
+    },
+    {
+      "id": "ea6a9451-707f-407c-86f3-a5d691e2f186",
+      "ref": "23141",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:15:44.780Z"
+    },
+    {
+      "id": "3cb2301e-081b-4b06-9fdf-a434ad958cd0",
+      "ref": "2339",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:34:03.769Z"
+    },
+    {
+      "id": "9e42c94f-81f1-4743-b7af-380a7448d9d4",
+      "ref": "2339",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:34:05.984Z"
+    },
+    {
+      "id": "1f7f6024-a0ee-40e2-9c44-a8a07c48530d",
+      "ref": "240112",
+      "cor": "LARANJA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:17:18.849Z"
+    },
+    {
+      "id": "c9040547-c045-4be5-9db0-3b5f52253e04",
+      "ref": "2941",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:19:52.386Z"
+    },
+    {
+      "id": "9299ee8b-547d-44ec-af0f-4222d4f9813c",
+      "ref": "306919",
+      "cor": "ESTAMPA MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:20:26.584Z"
+    },
+    {
+      "id": "b414312e-bf73-4164-92c6-085d50c6a4b0",
+      "ref": "306919",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:20:22.121Z"
+    },
+    {
+      "id": "aa038d9d-badd-4b75-a743-f98e2bff3636",
+      "ref": "350676",
+      "cor": "CHOCOLATE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:34:08.288Z"
+    },
+    {
+      "id": "c1129643-093c-48b9-98d9-1760e23301de",
+      "ref": "350840",
+      "cor": "CHOCOLATE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:35:30.855Z"
+    },
+    {
+      "id": "4444c31e-7a56-4a3d-828b-002204a85eeb",
+      "ref": "350840",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:35:33.108Z"
+    },
+    {
+      "id": "e9a7cb43-b900-45a0-89a7-fa27fbaead14",
+      "ref": "350842",
+      "cor": "CHOCOLATE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:35:35.255Z"
+    },
+    {
+      "id": "6cfa8a1f-4deb-408c-b7ad-25214457c16e",
+      "ref": "350842",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:35:37.498Z"
+    },
+    {
+      "id": "aea8f177-09de-46fc-86bc-793523e4f1f7",
+      "ref": "3716",
+      "cor": "TERRACOTA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:25:22.479Z"
+    },
+    {
+      "id": "54c999fe-568c-4262-b4a0-5a07ffe94a52",
+      "ref": "3977",
+      "cor": "ESTAMPA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:26:20.026Z"
+    },
+    {
+      "id": "77111939-f0b2-4668-bc9a-94e5fa02542f",
+      "ref": "4002",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:26:28.563Z"
+    },
+    {
+      "id": "70d888cb-2035-4300-ab4f-0e1a6b376bfd",
+      "ref": "4002",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:26:31.692Z"
+    },
+    {
+      "id": "21e93ce1-f72c-433e-b9c2-52939cfaa15f",
+      "ref": "4003",
+      "cor": "BRANCO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:26:46.101Z"
+    },
+    {
+      "id": "03257dec-6c3f-46fa-b763-63cf5898110e",
+      "ref": "4003",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:26:49.687Z"
+    },
+    {
+      "id": "1b6d13cb-9abc-43e5-8810-3d4e34d9a754",
+      "ref": "4005",
+      "cor": "PINK",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:26:59.773Z"
+    },
+    {
+      "id": "c07f74df-df11-4a1a-b6fb-ce2f0cb477aa",
+      "ref": "4005",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:26:56.361Z"
+    },
+    {
+      "id": "da1a40bf-acfc-47ef-87db-ff0dbfcf86ad",
+      "ref": "4111-1",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:37:00.752Z"
+    },
+    {
+      "id": "232cc67c-72e4-4006-a23d-97c342c6bd88",
+      "ref": "41244",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:28:33.943Z"
+    },
+    {
+      "id": "6f13c86a-e3df-4336-89a4-20459347d1de",
+      "ref": "43775",
+      "cor": "LIMA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:28:42.621Z"
+    },
+    {
+      "id": "0e061251-037e-4d25-ae46-3858a5db0230",
+      "ref": "4532",
+      "cor": "BEGE AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:37:04.370Z"
+    },
+    {
+      "id": "23b7da00-2743-43bc-b2cb-3761115b1ab4",
+      "ref": "51140007",
+      "cor": "LISTRA FERRUGEM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:37:07.473Z"
+    },
+    {
+      "id": "7c57daa9-fb58-469e-9fb0-76339a90ab2d",
+      "ref": "51140028",
+      "cor": "ESTAMPA MUSGO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:37:10.858Z"
+    },
+    {
+      "id": "815f1069-893f-4c51-94c8-a87d41d00c1d",
+      "ref": "51140072",
+      "cor": "CARAMELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:38:30.878Z"
+    },
+    {
+      "id": "5c37069c-2a6f-42bc-8f86-98000f4d2b47",
+      "ref": "51140072",
+      "cor": "MUSGO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:38:33.416Z"
+    },
+    {
+      "id": "6c2838a9-2e2e-4e0e-ab18-268e205671ea",
+      "ref": "51140082",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:38:36.071Z"
+    },
+    {
+      "id": "0956266e-75f3-4d31-976d-54ee97a64f93",
+      "ref": "51140083",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:31:21.358Z"
+    },
+    {
+      "id": "f86ec15b-55ee-4918-b384-ececb6252e15",
+      "ref": "51140084",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:38:38.396Z"
+    },
+    {
+      "id": "2daaff10-2d69-4748-bc80-3ab3d11de7f0",
+      "ref": "51140084",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:40:03.750Z"
+    },
+    {
+      "id": "216a594c-7158-48e7-a960-9c735d4fd322",
+      "ref": "51140085",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:40:05.959Z"
+    },
+    {
+      "id": "9e894c44-9e68-41cc-870c-24fd8ed0741a",
+      "ref": "51140093",
+      "cor": "CRU",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:32:18.151Z"
+    },
+    {
+      "id": "2d4653d8-e78e-4bff-86c8-77a473146e35",
+      "ref": "52140028",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:40:08.219Z"
+    },
+    {
+      "id": "65da0496-3cda-4901-afca-3be71a680f55",
+      "ref": "52140041",
+      "cor": "ESTAMPA AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:40:10.867Z"
+    },
+    {
+      "id": "1370522b-ad0c-4b23-a9aa-9537478fcc7c",
+      "ref": "52140042",
+      "cor": "ESTAMPA AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:41:31.628Z"
+    },
+    {
+      "id": "4b335fb9-056f-428b-9394-675ab886044d",
+      "ref": "52140051",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:41:34.718Z"
+    },
+    {
+      "id": "7fd03ac4-3196-4cd7-bccc-13d3673d25b3",
+      "ref": "52140056",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:41:37.477Z"
+    },
+    {
+      "id": "d4bd922f-7fd0-430f-9f55-8e07ee626148",
+      "ref": "52140074",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:41:40.175Z"
+    },
+    {
+      "id": "2b286463-0965-4078-b8e1-83cb1b8c4c61",
+      "ref": "52140085",
+      "cor": "ESTAMPA BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:43:01.386Z"
+    },
+    {
+      "id": "8810348a-ac1a-4c0f-9e7d-5f0d577d125a",
+      "ref": "52140097",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:43:03.634Z"
+    },
+    {
+      "id": "d054d4c7-4aff-4a4c-8898-a0845c9a5646",
+      "ref": "52229",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:43:05.944Z"
+    },
+    {
+      "id": "616c0e24-334d-46f0-90dd-dca17d3c426d",
+      "ref": "53140002",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:43:08.269Z"
+    },
+    {
+      "id": "dc331062-38f3-4dad-b388-57c02f7c7019",
+      "ref": "53140022",
+      "cor": "BRANCO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:44:31.816Z"
+    },
+    {
+      "id": "f2d187f1-04c3-44c9-95b2-bac41667408d",
+      "ref": "53140032",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:44:34.503Z"
+    },
+    {
+      "id": "1e771372-31d0-48b5-bdc3-03df7801500f",
+      "ref": "53140051",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:44:37.233Z"
+    },
+    {
+      "id": "05fb5fb1-752b-46f0-ae0d-831026c9aaf3",
+      "ref": "53140052",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:44:39.703Z"
+    },
+    {
+      "id": "b4d10f4d-fb45-4596-bfd0-f602b4ff0b98",
+      "ref": "53140067",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:46:01.542Z"
+    },
+    {
+      "id": "60f33d09-8273-4ef1-b7ef-4e848591a0a9",
+      "ref": "53140075",
+      "cor": "DOURADO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:46:03.859Z"
+    },
+    {
+      "id": "3c95f5c7-9e49-46a3-8eb0-260ca341706b",
+      "ref": "53140088",
+      "cor": "ESTAMPA BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:46:06.670Z"
+    },
+    {
+      "id": "e2d18c34-1e21-468d-b3bb-5e819f1cac96",
+      "ref": "53140091",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:46:09.522Z"
+    },
+    {
+      "id": "3420fc30-bf99-4581-880a-41dadc0e98a3",
+      "ref": "61140001",
+      "cor": "UVA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:47:30.978Z"
+    },
+    {
+      "id": "f10fec71-fec8-4582-85d9-f9eef6986e15",
+      "ref": "61140011",
+      "cor": "MESCLA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:47:34.327Z"
+    },
+    {
+      "id": "b0973077-130a-41a5-bec3-330de1cdd302",
+      "ref": "61140015",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:47:36.952Z"
+    },
+    {
+      "id": "557b3c76-21cb-4237-a134-ed472e8f0348",
+      "ref": "61140016",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:47:39.036Z"
+    },
+    {
+      "id": "9bfd01e6-335d-468b-b993-67ba3379480d",
+      "ref": "61140064",
+      "cor": "ESTAMPA OLIVA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:49:01.582Z"
+    },
+    {
+      "id": "136292fb-e7c1-47a7-93c1-557d1be83fdb",
+      "ref": "61140072",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:49:03.577Z"
+    },
+    {
+      "id": "1dd63413-083a-45d3-bac4-ce672d8540d9",
+      "ref": "61140077",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:49:07.267Z"
+    },
+    {
+      "id": "9f7abf16-1ffa-4c23-b42a-f6fc041c95bb",
+      "ref": "61140100",
+      "cor": "ESTAMPA MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:49:10.387Z"
+    },
+    {
+      "id": "e8ce3a4c-ab27-49d7-90ff-5f29d1930ea8",
+      "ref": "61140110",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:50:30.995Z"
+    },
+    {
+      "id": "f24b6868-e3fd-4416-9927-2ef97fb7fca4",
+      "ref": "61140115",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:50:33.393Z"
+    },
+    {
+      "id": "914627b3-18ab-4ecf-9857-f142e2bd64e4",
+      "ref": "6167796",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:50:35.636Z"
+    },
+    {
+      "id": "8c39a6a5-0735-47a0-bbcb-e0a276311365",
+      "ref": "617568",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:50:39.081Z"
+    },
+    {
+      "id": "b422512e-f360-4790-9747-b1716484970d",
+      "ref": "617577",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:52:00.907Z"
+    },
+    {
+      "id": "381141d7-6610-4e74-85df-b85e2ae1c029",
+      "ref": "617581",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:52:03.641Z"
+    },
+    {
+      "id": "71ed2b38-81b8-44ac-9c28-9f8b495e6482",
+      "ref": "617581",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:52:05.976Z"
+    },
+    {
+      "id": "5c9ec390-b246-4ddd-b53e-aee628d9019e",
+      "ref": "621527",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:52:08.343Z"
+    },
+    {
+      "id": "e8ebceae-5fcb-4328-a5ba-49b92501645f",
+      "ref": "69169",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:42:20.633Z"
+    },
+    {
+      "id": "e236cfa3-2b84-4603-bb3f-f6761a9da240",
+      "ref": "69199",
+      "cor": "BEGE TELHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:43:21.032Z"
+    },
+    {
+      "id": "9dc0832a-43cc-4ecc-879c-79eff7ca4179",
+      "ref": "69201",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:43:30.510Z"
+    },
+    {
+      "id": "913bcc88-6baa-4ad1-9c3b-b585a6a87c63",
+      "ref": "69208",
+      "cor": "CINZA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:43:38.659Z"
+    },
+    {
+      "id": "af4843d3-73fc-4432-8a06-1479c45af610",
+      "ref": "69209",
+      "cor": "BEGE TELHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:43:46.268Z"
+    },
+    {
+      "id": "950307bf-4d4c-440c-9fc8-1d9da262e6c3",
+      "ref": "700773",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:53:43.238Z"
+    },
+    {
+      "id": "92cbabc1-4eb5-4f43-b273-9524f104ed88",
+      "ref": "700773",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:53:48.852Z"
+    },
+    {
+      "id": "4ab88da1-dac7-4dd4-8cc7-e70549a6b864",
+      "ref": "700773",
+      "cor": "ROSA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:55:09.390Z"
+    },
+    {
+      "id": "350d5910-f1da-4ed1-8930-c4e0145937e1",
+      "ref": "700780",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:50:09.438Z"
+    },
+    {
+      "id": "984e8913-9ecd-476e-8986-01e45ef513cb",
+      "ref": "700780",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:50:02.629Z"
+    },
+    {
+      "id": "252fd834-987a-4505-b54e-cc3802543e45",
+      "ref": "700815",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:55:18.932Z"
+    },
+    {
+      "id": "665713c2-9dd2-488d-9da7-2b45030c9ced",
+      "ref": "700833",
+      "cor": "ESTAMPA MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:51:43.071Z"
+    },
+    {
+      "id": "a447bede-d7bd-4ef5-b66a-77f65717107a",
+      "ref": "700833",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:51:37.895Z"
+    },
+    {
+      "id": "34757b06-68e9-46c9-9d1c-eac1ab917d48",
+      "ref": "700841",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:52:07.465Z"
+    },
+    {
+      "id": "ba5e473f-b8fd-440b-9696-2208137d8451",
+      "ref": "700851",
+      "cor": "ESTAMPA CREME",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:52:32.521Z"
+    },
+    {
+      "id": "d008ca75-8d36-4a4f-82d4-268ba881a196",
+      "ref": "700861",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:56:43.078Z"
+    },
+    {
+      "id": "cf2eba43-e265-40a0-a8b7-4ec819ce6171",
+      "ref": "700861",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:56:46.185Z"
+    },
+    {
+      "id": "04d664fa-214a-49d6-9ab7-551780cb9200",
+      "ref": "700861",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:58:04.241Z"
+    },
+    {
+      "id": "0208d5bc-4f13-45ad-a2d2-07005e64304e",
+      "ref": "700861",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:53:17.435Z"
+    },
+    {
+      "id": "e908f3be-9316-4fbc-84b6-9c71fe3b2a3c",
+      "ref": "700861",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:53:26.994Z"
+    },
+    {
+      "id": "ea6383c9-5776-4802-a81f-6d44dffb51f1",
+      "ref": "700862",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:58:13.712Z"
+    },
+    {
+      "id": "2e0e7b3e-2553-421b-9c20-ce2e1b25465d",
+      "ref": "700866",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:54:14.980Z"
+    },
+    {
+      "id": "10bd079f-4c70-4c7c-9fe0-7373529a99ad",
+      "ref": "700866",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T04:54:19.111Z"
+    },
+    {
+      "id": "f0b9800d-8866-4110-b4d1-233d1c77eba6",
+      "ref": "700908",
+      "cor": "LISTRA CINZA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:59:35.578Z"
+    },
+    {
+      "id": "4b7fe9ab-b507-44c5-a0ec-3f266d41c63f",
+      "ref": "700916",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T21:59:37.848Z"
+    },
+    {
+      "id": "6a128061-a185-45c7-b270-ceed1dde499b",
+      "ref": "700920",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:01:09.031Z"
+    },
+    {
+      "id": "4ac3f756-1da1-4bf8-8712-e60e0aab938f",
+      "ref": "700920",
+      "cor": "CRU",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:01:15.443Z"
+    },
+    {
+      "id": "8b882978-4c63-4d2c-b4bd-a3284bcb5432",
+      "ref": "700920",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:02:33.581Z"
+    },
+    {
+      "id": "5450619b-b641-4ae1-99e2-c585b4d8a040",
+      "ref": "700924",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:02:35.886Z"
+    },
+    {
+      "id": "b6d4a5ee-1ea5-49b3-84a9-9cdfd08cda8e",
+      "ref": "700924",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:02:42.133Z"
+    },
+    {
+      "id": "78d39b70-bf19-4cb1-add1-71d17c3252e7",
+      "ref": "700927",
+      "cor": "ESTAMPA BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:04:12.432Z"
+    },
+    {
+      "id": "dc02ee88-0ee9-4cac-9011-ea26d2bfd487",
+      "ref": "700930",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:05:37.009Z"
+    },
+    {
+      "id": "bebb7629-a4ba-4e2a-936e-61fa39e0943f",
+      "ref": "700930",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:07:05.563Z"
+    },
+    {
+      "id": "80ac4ede-76b2-4e34-afbd-1d3aaf0a659a",
+      "ref": "700930",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:08:30.718Z"
+    },
+    {
+      "id": "2a2a10db-dfff-442d-976a-0f412a834b21",
+      "ref": "700931",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:10:00.721Z"
+    },
+    {
+      "id": "b17b1259-10ad-4f4e-ad78-1c62155ea5d9",
+      "ref": "700937",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:11:30.711Z"
+    },
+    {
+      "id": "6a89574c-ad80-4b6b-8cb7-8f7d58b775e6",
+      "ref": "700937",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:13:00.554Z"
+    },
+    {
+      "id": "f18e2d1e-bbbe-4163-b8ef-fe25acf740a0",
+      "ref": "700944",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:14:31.311Z"
+    },
+    {
+      "id": "a5daba10-f6c0-446c-9ee2-3c66e84ef4e7",
+      "ref": "700944",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:16:00.937Z"
+    },
+    {
+      "id": "75285ca2-92ef-47bb-9a87-6ff5f2773782",
+      "ref": "700945",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:17:31.033Z"
+    },
+    {
+      "id": "57cba7c1-09f4-49ae-aa43-7cee5d43b03a",
+      "ref": "700945",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:19:00.752Z"
+    },
+    {
+      "id": "b1785d8c-ad7c-4783-82f0-da0ef1f50fa6",
+      "ref": "700951",
+      "cor": "ESTAMPA MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:20:31.402Z"
+    },
+    {
+      "id": "a4bd00bc-adc4-4ef4-bc42-81f6dd8240e9",
+      "ref": "700951",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-12T22:22:03.171Z"
+    },
+    {
+      "id": "0595aea8-ccbf-4557-9f91-fea91802e23b",
+      "ref": "703602",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:01:30.328Z"
+    },
+    {
+      "id": "e6a83b6e-6663-4c03-a694-981ea0a2b6f6",
+      "ref": "800148",
+      "cor": "SALMAO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:03:31.035Z"
+    },
+    {
+      "id": "3dfe3369-c9e7-47ec-8dff-15cded1f534c",
+      "ref": "800229",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:03:43.650Z"
+    },
+    {
+      "id": "c232f60f-e0d1-44f4-bbbd-84306b5cb913",
+      "ref": "800229",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:03:38.318Z"
+    },
+    {
+      "id": "ffdff7b1-9a5d-458e-bccf-fbabed09bfa3",
+      "ref": "800229",
+      "cor": "TELHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:03:48.722Z"
+    },
+    {
+      "id": "9769385b-9f1a-4e1a-b33d-39dac258a2dc",
+      "ref": "800251",
+      "cor": "FÚCSIA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:04:39.483Z"
+    },
+    {
+      "id": "ebcb4e82-95be-4489-a07b-6a63fcc3f0c9",
+      "ref": "800266",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:05:07.049Z"
+    },
+    {
+      "id": "77deefd1-a4a1-41b0-913d-d774f6480803",
+      "ref": "800266",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:05:02.168Z"
+    },
+    {
+      "id": "5dd801c2-c074-442c-8020-720f0eb6e9b6",
+      "ref": "800276",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:06:07.811Z"
+    },
+    {
+      "id": "3fa6c480-257b-46c4-80f4-f1ec40d9db0d",
+      "ref": "800276",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:06:10.630Z"
+    },
+    {
+      "id": "82905cc3-a75f-42a6-9a29-1de541d93a46",
+      "ref": "810108",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:08:31.347Z"
+    },
+    {
+      "id": "f21d5073-51eb-4131-aae6-ecd59ac7720c",
+      "ref": "810134",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:10:00.924Z"
+    },
+    {
+      "id": "35a3c520-254e-4e71-b32e-593987d3339d",
+      "ref": "810134",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:09:56.395Z"
+    },
+    {
+      "id": "a9bf922e-4d16-43f2-8f80-e67bab65a884",
+      "ref": "810149",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:10:15.832Z"
+    },
+    {
+      "id": "4238c6dc-de03-4f1c-bcd2-52ac834327f0",
+      "ref": "810149",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:10:22.418Z"
+    },
+    {
+      "id": "1e1c704e-e28f-4a8c-a496-051b49b9ce97",
+      "ref": "810149",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:10:26.424Z"
+    },
+    {
+      "id": "bf3dd0f4-9e19-407b-b2e0-ce0cc84fb01a",
+      "ref": "813103",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:11:58.377Z"
+    },
+    {
+      "id": "9a8ab56d-7456-491a-9224-78d7b2ae17f3",
+      "ref": "813103",
+      "cor": "ROSA RETRO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:11:55.141Z"
+    },
+    {
+      "id": "2b02ae48-7995-46f5-889c-592ccd362fe4",
+      "ref": "820076",
+      "cor": "VERDE LIMAO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:12:25.543Z"
+    },
+    {
+      "id": "0f9fa045-b63a-4749-8d67-dc4b0eb8a18d",
+      "ref": "820092",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:12:51.061Z"
+    },
+    {
+      "id": "e709fc82-492b-4931-9bf2-6f989bb99af9",
+      "ref": "820092",
+      "cor": "VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:12:46.760Z"
+    },
+    {
+      "id": "553ee111-0125-402a-83a1-225c63007d66",
+      "ref": "8358",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:14:16.842Z"
+    },
+    {
+      "id": "0bb590c5-8560-4d4e-a911-9e758d1cfcd4",
+      "ref": "8359",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:14:24.191Z"
+    },
+    {
+      "id": "828d6191-1f75-419c-b61b-d62376fdc09e",
+      "ref": "8594",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:14:48.814Z"
+    },
+    {
+      "id": "6e117819-663d-4188-858b-cce38a3e5edb",
+      "ref": "8689",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:15:20.917Z"
+    },
+    {
+      "id": "6f8943ed-cff9-4730-aab0-0f28402d1d4d",
+      "ref": "8691",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:15:27.681Z"
+    },
+    {
+      "id": "3d3a1b9a-a050-410f-a231-00f1724b4de9",
+      "ref": "8912",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:15:35.845Z"
+    },
+    {
+      "id": "822ba89d-d62b-49e4-ab4d-ce1e25c06197",
+      "ref": "8987",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:16:40.568Z"
+    },
+    {
+      "id": "d84f6d2c-214a-4385-9b57-3838ecc0a22d",
+      "ref": "900445",
+      "cor": "LARANJA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:18:01.933Z"
+    },
+    {
+      "id": "32d68aae-3bc4-4194-b44d-0361b0683d9e",
+      "ref": "900515",
+      "cor": "ROXO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:18:28.048Z"
+    },
+    {
+      "id": "78cbc0dc-113b-49ea-9b1e-d1e9bb9af616",
+      "ref": "900515",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:18:17.596Z"
+    },
+    {
+      "id": "afb21f4a-524f-4367-977b-a63d9eabc4c5",
+      "ref": "900536",
+      "cor": "ESTAMPA AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:19:21.678Z"
+    },
+    {
+      "id": "44d43607-bcfc-44d6-bc93-c86c15524f1b",
+      "ref": "900536",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:19:16.935Z"
+    },
+    {
+      "id": "0c985480-a50d-4d91-8ae0-57dd414e5e8e",
+      "ref": "900551",
+      "cor": "ONCINHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:19:35.693Z"
+    },
+    {
+      "id": "fc9f003d-ede6-4561-a0dd-6976db7459a5",
+      "ref": "900553",
+      "cor": "PRETO DOURADO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:19:46.548Z"
+    },
+    {
+      "id": "9eabbeb1-dfdd-4411-933d-c3f05512b15c",
+      "ref": "900640",
+      "cor": "LIMA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:21:04.025Z"
+    },
+    {
+      "id": "ecda4f9c-5da2-4552-9053-eebc96ecf6ac",
+      "ref": "900640",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:21:08.692Z"
+    },
+    {
+      "id": "98151d92-85b8-44dc-8bff-19f2d9b4a691",
+      "ref": "900640",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:21:14.696Z"
+    },
+    {
+      "id": "45222ac7-0232-4e5e-a987-9df7e098f158",
+      "ref": "900736",
+      "cor": "ESTAMPA AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:25:36.993Z"
+    },
+    {
+      "id": "832426cc-096f-4d35-a2ca-76cbab7d8bc7",
+      "ref": "900736",
+      "cor": "ESTAMPA LIMA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:25:31.956Z"
+    },
+    {
+      "id": "68bc6e9b-7ee7-4c3e-bb17-61719cfa9ebd",
+      "ref": "900741",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:26:19.951Z"
+    },
+    {
+      "id": "4822dfd8-2e05-4d15-86ce-5c5776837b07",
+      "ref": "900743",
+      "cor": "PINK",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:26:32.543Z"
+    },
+    {
+      "id": "dd3f87b4-0078-4835-b6a3-8f418a908913",
+      "ref": "900751",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:28:07.844Z"
+    },
+    {
+      "id": "bbbb03c5-a68d-4618-b1af-510c100072e0",
+      "ref": "900751",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:28:02.889Z"
+    },
+    {
+      "id": "9acd441c-ebc2-40cd-be1c-aa1a6fb544e4",
+      "ref": "900755",
+      "cor": "LARANJA ROSA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:28:24.449Z"
+    },
+    {
+      "id": "5348d1d5-9844-4224-b436-6d5cde87217d",
+      "ref": "900758",
+      "cor": "ESTAMPA CREME",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:29:04.586Z"
+    },
+    {
+      "id": "f99e9eb6-068a-4b62-9a51-8f3f24b8bca5",
+      "ref": "900758",
+      "cor": "ESTAMPA VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:28:56.904Z"
+    },
+    {
+      "id": "439ad45d-62b7-4ee8-9300-d702e48b7a47",
+      "ref": "900760",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:29:21.086Z"
+    },
+    {
+      "id": "f0530fcd-4f1f-4d84-a7ec-3cd9570c3edf",
+      "ref": "900771",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:30:06.017Z"
+    },
+    {
+      "id": "8f4540b4-13ce-4400-b327-c107e9913c9e",
+      "ref": "900771",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:30:00.375Z"
+    },
+    {
+      "id": "527cd897-9693-4be5-9d6a-bb03a84b9a69",
+      "ref": "900777",
+      "cor": "FERRUGEM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:30:27.622Z"
+    },
+    {
+      "id": "71be83b8-e48a-4d40-b253-0de2cee82fd3",
+      "ref": "900777",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:30:31.931Z"
+    },
+    {
+      "id": "bb2c9eb5-ef9c-4de9-9a6d-c8d556099ba6",
+      "ref": "900779",
+      "cor": "MARROM ROSA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:31:13.430Z"
+    },
+    {
+      "id": "56ea4da8-52ed-4b33-bdee-6ca4540a3130",
+      "ref": "900779",
+      "cor": "PRETO BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:31:08.871Z"
+    },
+    {
+      "id": "162b6a25-e2eb-414b-b2a1-3be1a41a93b5",
+      "ref": "900792",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:31:34.164Z"
+    },
+    {
+      "id": "2a3d602f-a20b-483a-af54-2f97ea01a67e",
+      "ref": "900821",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:33:36.766Z"
+    },
+    {
+      "id": "17aaa43b-b580-498f-81cb-8c52b8a1d683",
+      "ref": "900821",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:33:41.380Z"
+    },
+    {
+      "id": "eb636031-6215-4339-8cff-7d76a8388687",
+      "ref": "900829",
+      "cor": "BEGE PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:34:05.685Z"
+    },
+    {
+      "id": "5753c0fb-bf41-43b7-b7fe-a6f60bb119e8",
+      "ref": "900831",
+      "cor": "ESTAMPA LARANJA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:34:16.274Z"
+    },
+    {
+      "id": "980fc8ed-6818-4fc7-9fb7-c78ecd18071b",
+      "ref": "900833",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:34:41.103Z"
+    },
+    {
+      "id": "ee089c55-5972-4392-a535-46f78ffa157b",
+      "ref": "900833",
+      "cor": "ROSE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:34:36.946Z"
+    },
+    {
+      "id": "5adf68e3-2d5f-4b99-9308-8d4a88393e03",
+      "ref": "900834",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:35:11.254Z"
+    },
+    {
+      "id": "d775cf84-6793-415d-bbfc-3ce44baca029",
+      "ref": "900834",
+      "cor": "ROSE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:35:15.737Z"
+    },
+    {
+      "id": "ac17ef60-8547-459a-866d-f3576e79fcd8",
+      "ref": "900834",
+      "cor": "VERDE ROSA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:35:04.882Z"
+    },
+    {
+      "id": "963a6bf2-60f0-4181-8835-3a42fa3baf98",
+      "ref": "900843",
+      "cor": "ESTAMPA BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:35:48.427Z"
+    },
+    {
+      "id": "0cc5cb98-56df-4d95-8fa9-9db1d043a06e",
+      "ref": "900843",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:35:53.983Z"
+    },
+    {
+      "id": "39fb9e4d-00b4-4332-8232-af03517b4416",
+      "ref": "900846",
+      "cor": "ESTAMPA VINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:36:07.701Z"
+    },
+    {
+      "id": "381dbbea-fe28-45e6-8e7c-a428a811e395",
+      "ref": "9024",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:41:16.862Z"
+    },
+    {
+      "id": "0de9427d-6c05-4431-9a1f-ddad598e229a",
+      "ref": "9025",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:41:24.903Z"
+    },
+    {
+      "id": "0909d67c-390f-4de9-98d6-814fb7aeab61",
+      "ref": "9090",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:41:31.495Z"
+    },
+    {
+      "id": "54a261c6-ea59-4313-aeab-cac383a9e78f",
+      "ref": "9091",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:41:47.511Z"
+    },
+    {
+      "id": "c32c8884-5aa1-467d-be1a-ead1f64ca910",
+      "ref": "98998",
+      "cor": "ROSA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:43:05.666Z"
+    },
+    {
+      "id": "e41265b6-5c58-4656-954b-a4f7ea5932a8",
+      "ref": "BEATLES",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:43:46.729Z"
+    },
+    {
+      "id": "12d94893-0bb3-4004-ba50-3347841a53f8",
+      "ref": "BMM-008",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:43:58.873Z"
+    },
+    {
+      "id": "f623abf8-bcdf-4da1-a347-931bf76eadbf",
+      "ref": "BMM-008",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:43:54.470Z"
+    },
+    {
+      "id": "524b8f95-3195-4b35-a3a0-f9f6417af753",
+      "ref": "BMM-008",
+      "cor": "ROSA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:44:03.372Z"
+    },
+    {
+      "id": "fb4899de-4271-48e6-8cd5-1ff475d41178",
+      "ref": "BOL-CORAC",
+      "cor": "JEANS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:45:38.416Z"
+    },
+    {
+      "id": "1e2591e2-a1fc-44b9-a40f-94ba3b66bbb9",
+      "ref": "C0309",
+      "cor": "GOIABA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:46:17.124Z"
+    },
+    {
+      "id": "0db7ef39-8d1c-45be-899e-93417653e162",
+      "ref": "C0309",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:46:22.000Z"
+    },
+    {
+      "id": "3ff4de1d-afb9-43c3-8836-5e7baa650a43",
+      "ref": "C0329",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:47:03.427Z"
+    },
+    {
+      "id": "80ce0ce6-d854-42a8-a64b-20aa4a24e5b5",
+      "ref": "C0329",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:46:59.967Z"
+    },
+    {
+      "id": "b5db4873-1ffc-42d3-8c5c-31efb3318e53",
+      "ref": "C0332",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:47:10.156Z"
+    },
+    {
+      "id": "9b96917c-f438-410c-bcbe-441c8569eff1",
+      "ref": "C0333",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:47:18.385Z"
+    },
+    {
+      "id": "c5b914b8-d4db-47b4-87b5-d22a84b2293b",
+      "ref": "C0336",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:47:31.986Z"
+    },
+    {
+      "id": "e140a667-07c3-47f0-9a0c-f4c1afb58675",
+      "ref": "C5113",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:47:43.879Z"
+    },
+    {
+      "id": "b009c7ab-36fe-48df-8d6b-88802dd8236b",
+      "ref": "C5113",
+      "cor": "VERDE JADE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:47:50.527Z"
+    },
+    {
+      "id": "2a3c8ce9-b0b4-4285-bd0e-4fe952ac6254",
+      "ref": "C5113",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:47:47.080Z"
+    },
+    {
+      "id": "759a4eb5-80bb-47b6-98a6-fcc25a6d9a7d",
+      "ref": "C5114",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:48:01.516Z"
+    },
+    {
+      "id": "f7fc5b9c-53d5-466b-974a-048ada55eb30",
+      "ref": "C5114",
+      "cor": "VERMELHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:48:04.987Z"
+    },
+    {
+      "id": "b754bab5-8121-4a6b-b3a5-d2c881b49610",
+      "ref": "C5130",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:49:01.832Z"
+    },
+    {
+      "id": "94fcb0d5-cdbe-400d-bc05-d9aab9a14ea8",
+      "ref": "C5136",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:49:10.516Z"
+    },
+    {
+      "id": "a33d039f-8f1c-49bc-8e42-c13b16c2b62d",
+      "ref": "C5136",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:49:14.336Z"
+    },
+    {
+      "id": "c48cec44-0d5b-4d09-ab23-7ab2fada4e2b",
+      "ref": "C5137",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:49:32.348Z"
+    },
+    {
+      "id": "6525bf50-83e4-4c57-a270-96ef663c9de9",
+      "ref": "C5137",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:49:36.454Z"
+    },
+    {
+      "id": "cbef941d-e79c-4957-a87c-ca0f7645a2b5",
+      "ref": "C5145",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:50:01.188Z"
+    },
+    {
+      "id": "3a760ef9-0d7b-44fb-b0ec-ab71b9a3f07f",
+      "ref": "C5145",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:50:05.415Z"
+    },
+    {
+      "id": "6c560df6-319f-4f46-b37a-ec258ac9c021",
+      "ref": "C5154",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:50:26.175Z"
+    },
+    {
+      "id": "4723eb73-f8aa-45c1-bff9-bab1d5c0286e",
+      "ref": "C5154",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:50:29.376Z"
+    },
+    {
+      "id": "f6b60bca-7004-4a0e-8d78-7355921918c4",
+      "ref": "C5157",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:50:46.826Z"
+    },
+    {
+      "id": "6ea39ec6-40a6-47bc-8ea9-cd3d69fbc6aa",
+      "ref": "C5157",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:50:50.304Z"
+    },
+    {
+      "id": "519d5d3e-93a0-437e-bb87-53bcd7246f61",
+      "ref": "C5158",
+      "cor": "TERRACOTA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:50:56.846Z"
+    },
+    {
+      "id": "817b9e09-29f1-4884-b362-f12a2005034d",
+      "ref": "C5166",
+      "cor": "ESTAMPA BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:51:05.050Z"
+    },
+    {
+      "id": "62a71e91-c8e6-42ae-a4e0-d9d0d7fb2be0",
+      "ref": "C5166",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:51:09.058Z"
+    },
+    {
+      "id": "e9f94bf1-31d3-4747-8d26-f4dff87ec551",
+      "ref": "C5192",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:51:38.799Z"
+    },
+    {
+      "id": "c2742132-90f5-4d89-8c24-cd6811b53f63",
+      "ref": "C5192",
+      "cor": "CREME",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:51:31.428Z"
+    },
+    {
+      "id": "dfc7d6d0-c125-44ab-9779-12fb6b32168a",
+      "ref": "C5192",
+      "cor": "SALMAO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:51:34.833Z"
+    },
+    {
+      "id": "1394a45b-8d4c-40fd-8ee0-f13a8315e257",
+      "ref": "CHIC",
+      "cor": "GOIABA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-03T18:22:32.528Z"
+    },
+    {
+      "id": "d3531e5e-a3f3-4bfc-bbeb-5325b9911c7a",
+      "ref": "CON-082",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:53:50.393Z"
+    },
+    {
+      "id": "534c8fb1-ffea-42c1-8f37-3ff23105deee",
+      "ref": "CON-082",
+      "cor": "ROSE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:53:53.708Z"
+    },
+    {
+      "id": "90b7e6c1-1cc5-46de-a959-dc46e4e05ded",
+      "ref": "DISNEY-012",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:54:23.870Z"
+    },
+    {
+      "id": "f9070c67-9bcc-49d0-add1-a1ef998ddc6d",
+      "ref": "DISNEY-014",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:54:31.685Z"
+    },
+    {
+      "id": "7cbacf27-c3f0-45cf-b0c4-1a1f61156198",
+      "ref": "MARGARIDA",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:56:06.541Z"
+    },
+    {
+      "id": "287c450d-4e5a-4085-8c19-5655cde4c0d9",
+      "ref": "PUGGYOFF",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:58:18.686Z"
+    },
+    {
+      "id": "93f95f1b-6617-47c4-a6a4-3271b87c93bd",
+      "ref": "RAMONES",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-03T22:40:32.929Z"
+    },
+    {
+      "id": "61a26ea1-6a49-409e-aa75-f2f9505c6182",
+      "ref": "ROLLING",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T05:59:06.073Z"
+    },
+    {
+      "id": "6f13a099-4491-4515-897f-522833b2fd73",
+      "ref": "S01789",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:05:02.230Z"
+    },
+    {
+      "id": "38fdf3b4-665a-4c19-8211-3681bd545f8e",
+      "ref": "S01789",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:05:05.862Z"
+    },
+    {
+      "id": "8110e086-d3db-4736-8c42-ef100a967a6b",
+      "ref": "S01790",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:05:16.251Z"
+    },
+    {
+      "id": "569d1bd4-48f7-4620-910b-2d6de7e29929",
+      "ref": "S01802",
+      "cor": "TELHA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:05:30.343Z"
+    },
+    {
+      "id": "d0f5991f-cb29-4c5b-a6d7-831c55820683",
+      "ref": "S01813",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:06:01.561Z"
+    },
+    {
+      "id": "8f7facab-0355-44bb-bbb7-4656a1722939",
+      "ref": "S01871",
+      "cor": "AZUL",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:07:29.475Z"
+    },
+    {
+      "id": "2b9bb353-e559-4a97-8e18-c3406e439b0a",
+      "ref": "S01871",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:07:32.303Z"
+    },
+    {
+      "id": "16005539-f9b6-4170-86e1-67f9431d712b",
+      "ref": "S01879",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:07:39.825Z"
+    },
+    {
+      "id": "43aa45d6-dd8b-4a83-9fb9-7feecf3949ec",
+      "ref": "S01879",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:07:42.381Z"
+    },
+    {
+      "id": "859c28f4-0a28-48c3-bd74-acd1fd6c19dc",
+      "ref": "S01881",
+      "cor": "CRU",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:08:08.206Z"
+    },
+    {
+      "id": "ddfcdf92-3069-4dc5-870f-f5354960b637",
+      "ref": "S01881",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:08:05.053Z"
+    },
+    {
+      "id": "b7f5ad1f-f4b4-43be-b52e-ac1af542b058",
+      "ref": "S01884",
+      "cor": "ESTAMPA PINK",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:08:32.909Z"
+    },
+    {
+      "id": "c24235a2-78af-45e6-a330-02125d168a4d",
+      "ref": "S01884",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:08:37.947Z"
+    },
+    {
+      "id": "2201694a-8f2c-40a1-9328-8f99bc76e425",
+      "ref": "S01885",
+      "cor": "ESTAMPA PINK",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:08:54.919Z"
+    },
+    {
+      "id": "3de01d86-95fc-4829-a2e6-1ee0f677d3dc",
+      "ref": "S01885",
+      "cor": "ESTAMPA VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:08:59.961Z"
+    },
+    {
+      "id": "a1c3395f-964d-4d5d-9e5a-8f6223522310",
+      "ref": "S01886",
+      "cor": "ESTAMPA PINK",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:09:22.176Z"
+    },
+    {
+      "id": "e2bc31d5-5315-4cc8-be48-105f04e86ec2",
+      "ref": "S01895",
+      "cor": "BEGE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:09:59.810Z"
+    },
+    {
+      "id": "fa4e7c6b-a245-40ee-9e67-19881ac1b492",
+      "ref": "S01895",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:10:03.095Z"
+    },
+    {
+      "id": "db875f61-4666-4f41-9f73-2e8f9148cee4",
+      "ref": "S01910",
+      "cor": "ROSE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:10:30.443Z"
+    },
+    {
+      "id": "03e965d5-8a35-42a6-a9c2-4d6cc91017b0",
+      "ref": "S01928",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:11:14.474Z"
+    },
+    {
+      "id": "bd9fd009-c035-4499-9770-cf56fc5ca422",
+      "ref": "S01928",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:11:11.090Z"
+    },
+    {
+      "id": "475739bb-33b1-4266-ade5-1e4262dae70d",
+      "ref": "S01929",
+      "cor": "NUDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:11:38.477Z"
+    },
+    {
+      "id": "f79bc0b8-07d8-4632-9db4-63f5ab95f10e",
+      "ref": "S01929",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:11:34.674Z"
+    },
+    {
+      "id": "820ed2ce-cf04-4b2d-bb9f-21fe37687ac9",
+      "ref": "SB01519",
+      "cor": "FÚCSIA",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:12:34.422Z"
+    },
+    {
+      "id": "8e66fd2a-eb4a-4a2a-86ab-39b4752a22c5",
+      "ref": "SNOOPY-001",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:13:53.711Z"
+    },
+    {
+      "id": "76c00bb8-acd6-4e86-ac5b-f1a9f016dcd6",
+      "ref": "STITCH-004",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:14:16.589Z"
+    },
+    {
+      "id": "a0a84cc7-697e-4e0a-9873-263eff3ad6ef",
+      "ref": "STITCH-005",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:14:23.537Z"
+    },
+    {
+      "id": "924dd758-83f7-47d4-959a-90f5997d5ad8",
+      "ref": "VB2740",
+      "cor": "AMARELO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:14:55.938Z"
+    },
+    {
+      "id": "5891ad4e-4797-44c8-81b8-ad921d2ed8a4",
+      "ref": "VB2750",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:15:04.458Z"
+    },
+    {
+      "id": "29985114-de91-4df4-8e04-2bfe31ec04e3",
+      "ref": "VB2770",
+      "cor": "OFF WHITE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:15:20.206Z"
+    },
+    {
+      "id": "8ab56cb7-9221-4e93-a644-6c7b4766b6bc",
+      "ref": "VMM-003",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:16:00.214Z"
+    },
+    {
+      "id": "75b9aff2-aec7-425e-a591-77fb85657773",
+      "ref": "VMM-003",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:15:52.496Z"
+    },
+    {
+      "id": "3c98a474-b4c7-40bc-a5a5-cb889bc3ae1d",
+      "ref": "VMM-003",
+      "cor": "PRETO FLORES",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:16:06.620Z"
+    },
+    {
+      "id": "bb7ac7db-52f6-46bb-9e1f-4027824e0905",
+      "ref": "VMM-003",
+      "cor": "PRETO FOLHAS",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:16:13.347Z"
+    },
+    {
+      "id": "826b4126-ed31-4f91-8754-0ef55383f203",
+      "ref": "VMM-003",
+      "cor": "VERDE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:15:55.941Z"
+    },
+    {
+      "id": "ea66563f-8330-40ba-be86-af41512a38f4",
+      "ref": "VMM-080",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:17:25.465Z"
+    },
+    {
+      "id": "b5b3a901-4d3b-44df-9e67-2446c969f944",
+      "ref": "VMM-080",
+      "cor": "ROSE",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:17:28.747Z"
+    },
+    {
+      "id": "d6b6c8ad-8ea2-4cb0-a46e-6b8e3d6310ac",
+      "ref": "VMM-120",
+      "cor": "ESTAMPA PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-07T06:17:38.761Z"
+    },
+    {
+      "id": "ead52d41-d65d-4726-8dc5-b44f68a403fb",
+      "ref": "VMS-223",
+      "cor": "BLUSH",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-09T14:17:09.707Z"
+    },
+    {
+      "id": "08218c9d-a335-4c9f-8fb2-e9adb21dbf47",
+      "ref": "VMS-223",
+      "cor": "MARINHO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-09T14:17:51.492Z"
+    },
+    {
+      "id": "57964413-6635-4779-85b4-65346a8c50c9",
+      "ref": "VMS-223",
+      "cor": "MARROM",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-09T14:17:37.793Z"
+    },
+    {
+      "id": "a319df67-cb9a-4839-8fff-a1c07d3cb0cf",
+      "ref": "VMS-223",
+      "cor": "PRETO",
+      "status_publicacao": "nao_publicar",
+      "created_at": "2026-08-09T14:18:01.639Z"
+    }
+  ]
+}
