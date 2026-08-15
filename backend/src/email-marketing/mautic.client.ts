@@ -104,12 +104,14 @@ export class MauticClient {
    * Cria um e-mail do tipo LISTA já vinculado ao segmento. `publishUp` opcional
    * agenda a partida — o Mautic só envia a partir dessa data.
    *
-   * `texto` e `headers` NÃO são enfeite (medição de 15/08/2026): as 5 campanhas
-   * disparadas por aqui em 14/08 somaram 13.014 envios e **zero abertura**,
-   * enquanto as campanhas de julho — mesma base, mesmo SES — abriam ~3,8%. A
-   * diferença é que as nossas saíram sem versão texto e sem descadastro de 1
-   * clique, os dois itens que Gmail e Outlook exigem de quem manda acima de
-   * 5.000/dia. Sem eles o provedor bloqueia antes da caixa de entrada.
+   * `texto` não é enfeite: as 4 campanhas de 14/08 saíram com `plainText` de
+   * ZERO byte (e-mail só-HTML pontua como spam), enquanto as de julho — que
+   * abriram 3,8% — tinham 1,6–2,6 KB de texto.
+   *
+   * ⚠️ NÃO mandar `headers` aqui. A API do Mautic recusa com 400 ("Este
+   * formulário não deve conter campos adicionais") e o disparo inteiro morre —
+   * testado em 15/08/2026, na cara. O `List-Unsubscribe` fica por conta do
+   * próprio Mautic; o que garantimos é o link de descadastro no CORPO.
    */
   async criarEmailLista(input: {
     nome: string;
@@ -126,13 +128,6 @@ export class MauticClient {
       emailType: 'list',
       lists: [input.segmentoId],
       isPublished: true,
-      // Descadastro de 1 clique direto no cabeçalho: o Gmail mostra o "Cancelar
-      // inscrição" ao lado do remetente e conta como sinal de remetente sério.
-      // `{unsubscribe_url}` é token do Mautic, trocado por contato no envio.
-      headers: {
-        'List-Unsubscribe': '<{unsubscribe_url}>',
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      },
     };
     if (input.texto) body.plainText = input.texto;
     if (input.publishUp) body.publishUp = input.publishUp;
