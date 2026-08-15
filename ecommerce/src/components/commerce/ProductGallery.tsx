@@ -6,7 +6,8 @@ import { motion } from 'framer-motion';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
-import type { Media } from '@/types';
+import { ProductBadgeTag } from '@/components/ui/Badge';
+import type { Media, ProductBadge } from '@/types';
 
 /**
  * Galeria do produto — miniaturas verticais à esquerda + foto grande, NO
@@ -48,6 +49,7 @@ export function ProductGallery({
   name,
   autoPlay = false,
   grupos,
+  badges,
 }: {
   images: Media[];
   name: string;
@@ -55,6 +57,15 @@ export function ProductGallery({
   autoPlay?: boolean;
   /** Presente (2+) = barra lateral vira "uma miniatura por cor". */
   grupos?: GrupoDeCor[];
+  /**
+   * "Novo", "Promoção", "Últimas peças" — SOBRE a foto, canto superior
+   * direito (dono, 15/08: "tem um carimbo NOVO ocupando um espaço absurdo").
+   * No fluxo da coluna de compra ele custava 43px de rolagem (23 da pílula +
+   * 20 de respiro) pra dizer uma palavra; sobre a foto ele não custa nada e
+   * é onde a cliente já está olhando. O `Badge` sempre foi desenhado pra
+   * isso — fundo opaco e `backdrop-blur`.
+   */
+  badges?: ProductBadge[];
 }) {
   const [active, setActive] = useState(0);
   const [parado, setParado] = useState(false);
@@ -147,13 +158,25 @@ export function ProductGallery({
           <div className="grain size-full bg-gradient-to-br from-champagne to-surface-alt" />
         )}
 
+        {/* Etiquetas no canto de cima à direita. A lupa, que morava aqui,
+            foi pra ESQUERDA: os dois no mesmo canto se cobriam, e entre um
+            selo que argumenta e um controle de zoom, quem manda no canto
+            nobre é o selo. */}
+        {badges && badges.length > 0 && (
+          <div className="absolute top-4 right-4 z-[2] flex flex-col items-end gap-1.5">
+            {badges.map((badge) => (
+              <ProductBadgeTag key={badge} badge={badge} />
+            ))}
+          </div>
+        )}
+
         {current.src && (
           <button
             type="button"
             onClick={() => setZoomed((value) => !value)}
             aria-label={zoomed ? 'Reduzir foto' : 'Ampliar foto'}
             aria-pressed={zoomed}
-            className="absolute top-4 right-4 z-[2] flex size-11 items-center justify-center rounded-pill bg-surface/90 text-ink backdrop-blur transition-colors hover:bg-surface"
+            className="absolute top-4 left-4 z-[2] flex size-11 items-center justify-center rounded-pill bg-surface/90 text-ink backdrop-blur transition-colors hover:bg-surface"
           >
             {zoomed ? <ZoomOut className="size-4" /> : <ZoomIn className="size-4" />}
           </button>
