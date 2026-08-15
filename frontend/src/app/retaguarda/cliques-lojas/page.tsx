@@ -55,7 +55,7 @@ type Agora = {
  * add cart, initiate checkout, etc"). Mesmo período De/Até dos cliques; conta
  * todo mundo (com e sem aceite do banner) porque vem de `site_eventos`.
  */
-type EtapaFunil = { evento: string; eventos: number; pessoas: number };
+type EtapaFunil = { evento: string; eventos: number; pessoas: number; valor?: number };
 type DiagnosticoFunil = {
   evento: string;
   codigo: string;
@@ -70,11 +70,20 @@ type RespostaFunil = {
   diagnosticos?: DiagnosticoFunil[];
 };
 
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+/**
+ * Data 'YYYY-MM-DD' SEMPRE em Brasília, independente do fuso do PC. Era
+ * `d.toISOString().slice(0,10)` — UTC: depois das 21h de Brasília o "Hoje"
+ * pulava pra amanhã e a tela abria vazia. `en-CA` formata como YYYY-MM-DD.
+ */
+const fmtDataBr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
+const iso = (d: Date) => fmtDataBr.format(d);
+const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export default function CliquesLojasPage() {
-  const [de, setDe] = useState('');
-  const [ate, setAte] = useState('');
+  // ABRE EM HOJE (dono, 15/08): a pergunta de todo dia é "como foi HOJE?", não
+  // "os últimos 30 dias". Os atalhos e o "Limpar (30 dias)" seguem na mão.
+  const [de, setDe] = useState(() => iso(new Date()));
+  const [ate, setAte] = useState(() => iso(new Date()));
   const [dados, setDados] = useState<Resposta | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
@@ -353,7 +362,7 @@ function FunilSite({ etapas, diagnosticos }: { etapas: EtapaFunil[]; diagnostico
     const pessoas = dado?.pessoas ?? 0;
     const pct = anterior !== null && anterior > 0 ? Math.round((pessoas / anterior) * 100) : null;
     anterior = pessoas;
-    return { ...o, pessoas, eventos: dado?.eventos ?? 0, pct };
+    return { ...o, pessoas, eventos: dado?.eventos ?? 0, pct, valor: dado?.valor ?? 0 };
   });
 
   return (
@@ -367,6 +376,16 @@ function FunilSite({ etapas, diagnosticos }: { etapas: EtapaFunil[]; diagnostico
             <div className={`mt-2 text-2xl font-bold tabular-nums ${c.evento === 'purchase' ? 'text-[#2E7D46]' : 'text-slate-800'}`}>
               {c.pessoas}
             </div>
+            {/* VALOR DE CONVERSÃO (dono, 15/08): o R$ somado das compras
+                confirmadas do período, colado no card Compras. */}
+            {c.evento === 'purchase' && (
+              <div
+                className="text-sm font-bold text-[#2E7D46] tabular-nums"
+                title="Valor de conversão — R$ somado das compras confirmadas no período"
+              >
+                {brl(c.valor)}
+              </div>
+            )}
             <div className="text-xs text-slate-400 tabular-nums">
               {c.eventos} evento{c.eventos === 1 ? '' : 's'}
               {c.pct !== null && <span className="ml-1 font-semibold text-[#B8912B]">· {c.pct}%</span>}
