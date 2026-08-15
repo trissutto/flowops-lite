@@ -65,6 +65,7 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `ERP_STOCK_WRITES_ASYNC` | on | `0` volta TODAS as escritas de estoque secundárias (devoluções, trocas, marcados, realinhamento) ao inline — espera o Giga |
 | `ERP_WRITE_ENABLED` / `PDV_ERP_WRITE_ENABLED` | — | shadow mode das escritas no Wincred (loga SQL sem executar) |
 | `PDV_FINALIZE_ASYNC` | false | legado (só vale com outbox desligado) |
+| `MAISENVIOS_FORCA_SEDEX` | **off** | `1` volta a etiqueta do Mais Envios a sair SEDEX SEMPRE (comportamento até 15/08, que postava expresso em pedido de PAC pago — 11 casos em 180 dias). Off = a etiqueta segue o serviço que a cliente pagou, igual ao caminho Correios |
 | `PONTO_IP_CHECK` | on | `0` desliga a regra "celular só bate ponto no WiFi da loja" (batida `pwa_selfie` vs IPs do heartbeat do PDV Electron; fail-open se não há IP <48h) |
 
 ## Convenções de trabalho (Thiago)
