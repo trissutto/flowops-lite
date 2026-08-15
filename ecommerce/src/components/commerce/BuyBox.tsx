@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
-import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
 import { useUiStore } from '@/store/ui';
@@ -203,14 +202,11 @@ export function BuyBox({
 
   return (
     <div className="flex flex-col">
-      {product.badges && product.badges.length > 0 && (
-        <div className="mb-5 flex flex-wrap gap-2">
-          {product.badges.map((badge) => (
-            <ProductBadgeTag key={badge} badge={badge} />
-          ))}
-        </div>
-      )}
-
+      {/* AS ETIQUETAS SAÍRAM DAQUI (dono, 15/08). "Novo" abria a coluna de
+          compra e custava 43px de rolagem — a pílula mais o respiro — pra
+          dizer uma palavra. Agora elas vivem SOBRE a foto, no canto superior
+          direito (ver `badges` do ProductGallery), que é onde a cliente já
+          está olhando e onde não empurram nada pra baixo. */}
       {product.fabric && <p className="eyebrow text-primary-strong">{product.fabric}</p>}
 
       {/* TÍTULO MENOR NO CELULAR (dono, 15/08: "reduza esta quebra").

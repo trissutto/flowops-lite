@@ -157,7 +157,12 @@ export function EscolhaDaPeca({
   })();
 
   return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+    /* `gap-5` no mobile (dono, 15/08: "aproxime a referência e todo o bloco
+       da foto"): os 40px do `gap-10` eram respiro de página larga, onde a
+       galeria e a coluna de compra ficam LADO A LADO. Empilhadas no celular
+       o mesmo número vira um buraco entre a foto e o nome da peça. O desktop
+       segue nos 64px do `lg:gap-16`. */
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
       {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
@@ -169,7 +174,14 @@ export function EscolhaDaPeca({
           pra 620px e a PDP INTEIRA cortava à direita — grade de tamanhos,
           "Adicionar à sacola", tudo. Quanto mais cores a peça ganhava, pior. */}
       <div className="min-w-0">
-        <ProductGallery key={cor ?? 'unica'} images={galeria} name={pecaDaCor.name} autoPlay grupos={grupos} />
+        <ProductGallery
+          key={cor ?? 'unica'}
+          images={galeria}
+          name={pecaDaCor.name}
+          autoPlay
+          grupos={grupos}
+          badges={pecaDaCor.badges}
+        />
         {fotoIlustrativa && (
           <p className="mt-3 text-small text-ink-muted">
             Ainda não temos foto de <strong>{corAtual!.nome}</strong> — as fotos acima são das
