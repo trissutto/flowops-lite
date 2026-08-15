@@ -18,7 +18,7 @@ export class SiteMediaController {
   }
 
   @Post(':id/confirm')
-  confirm(@Param('id') id: string, @Body() body: { ref?: string; cor?: string }, @Req() req: any) {
+  confirm(@Param('id') id: string, @Body() body: { ref?: string; cor?: string; substituirId?: string }, @Req() req: any) {
     return this.service.confirm(id, body, req.user);
   }
 
