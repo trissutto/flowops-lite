@@ -4,8 +4,11 @@
  * Motivo (dono, 16/08/2026): o card "Agora no site" mostrou "26 pessoas · 25 em
  * /lojas" numa manhã em que /lojas recebia 1 visita por hora. O número não
  * estava quebrado — a conta é `COUNT(DISTINCT session_id)` e cada acesso de
- * robô ganha uma sessão nova, porque o `session_id` nasce no `sessionStorage`
- * do navegador. Robô com JavaScript vira "pessoa navegando".
+ * robô ganha uma sessão nova, porque o `session_id` nasce no armazenamento do
+ * navegador e robô não guarda nada entre uma página e a seguinte. Robô com
+ * JavaScript vira "pessoa navegando". (A sessão saiu do `sessionStorage` pro
+ * `localStorage` em 16/08 — ver `identity.ts` —, mas isso conserta a cliente
+ * com várias abas, não o robô: quem varre continua chegando sem storage.)
  *
  * ── O QUE ESTE ARQUIVO PEGA E O QUE NÃO PEGA ──
  *
