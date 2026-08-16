@@ -6870,10 +6870,19 @@ model SiteEvento {
   dados     Json?
   /// true = visitante sem aceite do banner (linha anônima).
   semAceite Boolean  @default(false) @map("sem_aceite")
+  /// true = NÃO é gente. Carimbado na origem pelo user-agent, no `/api/events`
+  /// do site — que é o único ponto que enxerga o navegador de verdade (aqui
+  /// chega tudo com o user-agent da Vercel). A linha continua sendo GRAVADA de
+  /// propósito: marcada, responde "quem varreu meu site"; descartada, some.
+  bot       Boolean  @default(false)
+  /// Qual robô ('googlebot', 'gptbot', 'ahrefsbot', 'headless'…). Null = gente.
+  botNome   String?  @map("bot_nome") @db.VarChar(60)
   criadoEm  DateTime @default(now()) @map("criado_em")
 
   @@index([criadoEm])
   @@index([evento, criadoEm])
+  /// Toda tela de métrica filtra `bot = false` antes de qualquer outra coisa.
+  @@index([bot, criadoEm])
   @@map("site_eventos")
 }
 

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { Robo } from '../bot-detect';
 import type { TrackingEvent } from '../types';
 
 /**
@@ -125,8 +126,17 @@ export async function persistirCliquesDeLoja(events: TrackingEvent[]): Promise<n
  * Vai o mínimo que dá leitura: nome do evento, path, loja, sessão, valor e um
  * `dados` enxuto (REFs, termo de busca, origem). Nada de e-mail, telefone,
  * endereço — dado pessoal não entra nesta tabela.
+ *
+ * `robo` vem carimbado do `/api/events`, que é o único lugar com o user-agent
+ * na mão. O evento de robô CONTINUA sendo gravado, de propósito: marcado, ele
+ * responde "quem varreu meu site" e dá pra medir o custo que a varredura gera.
+ * Descartar aqui jogaria essa resposta fora — quem esconde o robô é a tela.
  */
-export async function persistirEventosSite(events: TrackingEvent[], semAceite: boolean): Promise<number> {
+export async function persistirEventosSite(
+  events: TrackingEvent[],
+  semAceite: boolean,
+  robo: Robo = { bot: false, nome: null },
+): Promise<number> {
   const baseUrl = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
   const token = process.env.LOJA_ORDER_TOKEN ?? '';
   if (!baseUrl || !token) return 0;
@@ -184,6 +194,8 @@ export async function persistirEventosSite(events: TrackingEvent[], semAceite: b
       valor: typeof e.value === 'number' && Number.isFinite(e.value) ? e.value : null,
       dados: Object.keys(dados).length ? dados : undefined,
       semAceite,
+      bot: robo.bot,
+      botNome: robo.nome,
     };
   });
 
