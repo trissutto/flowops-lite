@@ -41,12 +41,20 @@ type Resposta = { de: string; ate: string; totalCliques: number; linhas: Linha[]
  * `site_eventos` — o nosso Postgres, não o GA4 (que mistura o site novo com o
  * WordPress no mesmo stream). Sessão com evento nos últimos 5 min = pessoa
  * navegando agora.
+ *
+ * PESSOA, não sessão (16/08): robô que roda JavaScript ganha sessão nova a
+ * cada acesso e chegou a responder por 25 das 26 "pessoas" numa manhã. O
+ * backend agora separa os dois — e o robô aparece na tela em vez de sumir,
+ * porque saber que estão varrendo o site é informação.
  */
 type Agora = {
   ativos5min: number;
   ativos30min: number;
   sessoesHoje: number;
   pageViewsHoje: number;
+  robos5min: number;
+  robosHoje: number;
+  quemSaoOsRobos: Array<{ nome: string; acessos: number }>;
   paginasQuentes: Array<{ path: string; pessoas: number }>;
 };
 
@@ -222,6 +230,34 @@ export default function CliquesLojasPage() {
             <p className="text-xs text-slate-400 mt-0.5">
               últimos 5 min · dado nosso, só do lurdsplussize.com.br · atualiza sozinho
             </p>
+
+            {/**
+             * O ROBÔ APARECE, NÃO SOME.
+             *
+             * Podia ser filtrado em silêncio, mas aí o número cairia sem
+             * explicação e a primeira reação seria achar que o site perdeu
+             * visita. Mostrando os dois lado a lado, a queda se explica
+             * sozinha — e "quem" varreu é resposta útil (16/08: 25 das 26
+             * "pessoas" da tela eram varredura na página das lojas).
+             */}
+            {!!agora?.robos5min && (
+              <p className="text-xs text-slate-500 mt-1.5">
+                <span className="font-semibold text-slate-600">
+                  +{agora.robos5min} {agora.robos5min === 1 ? 'robô' : 'robôs'}
+                </span>{' '}
+                agora (fora da conta)
+                {!!agora.robosHoje && ` · ${agora.robosHoje} hoje`}
+                {!!agora.quemSaoOsRobos?.length && (
+                  <span className="text-slate-400">
+                    {' — '}
+                    {agora.quemSaoOsRobos
+                      .slice(0, 4)
+                      .map((r) => `${r.nome} (${r.acessos})`)
+                      .join(' · ')}
+                  </span>
+                )}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-3 sm:w-auto w-full">
@@ -492,7 +528,10 @@ function FunilSite({
         <strong className="font-semibold text-slate-600">
           Quem entrou pela página das lojas fica FORA desta conta
         </strong>{' '}
-        — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.
+        — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.{' '}
+        <strong className="font-semibold text-slate-600">Robô também fica de fora</strong> — o de
+        user-agent conhecido (Google, IA, SEO) e o disfarçado, que se entrega por carregar a página
+        e ir embora sem rolar nem dar um segundo passo.
       </p>
       {alertasCheckout.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-amber-300 bg-white">

@@ -12,6 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { detectarRobo } from '@/lib/tracking/bot-detect';
 import { dispatchBatch } from '@/lib/tracking/server/dispatch';
 import { persistirCliquesDeLoja, persistirEventosSite } from '@/lib/tracking/server/flowops-store';
 import { getLogStore } from '@/lib/tracking/server/log-store';
@@ -119,11 +120,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, dispatched: 0, rejeitados: recusados }, { status: 202 });
   }
 
+  const userAgent = req.headers.get('user-agent') || undefined;
+
+  /**
+   * ESTE É O ÚNICO LUGAR COM O USER-AGENT NA MÃO.
+   *
+   * O FlowOps recebe o evento deste servidor, não do navegador — pra ele todo
+   * mundo tem o user-agent da Vercel. Se o carimbo não sair daqui, não sai de
+   * lugar nenhum, e o card "Agora no site" volta a contar robô como pessoa
+   * (16/08/2026: 25 "pessoas" em /lojas numa manhã de 1 visita por hora).
+   */
+  const robo = detectarRobo(userAgent);
+
   const signals = {
     fbp: meta?.fbp,
     fbc: meta?.fbc,
     client_ip_address: ip,
-    client_user_agent: req.headers.get('user-agent') || undefined,
+    client_user_agent: userAgent,
   };
 
   try {
@@ -139,7 +152,7 @@ export async function POST(req: Request) {
     const [despacho] = await Promise.allSettled([
       consentido ? dispatchBatch(aceitos, signals) : Promise.resolve({ dispatched: 0 }),
       persistirCliquesDeLoja(aceitos),
-      persistirEventosSite(aceitos, !consentido),
+      persistirEventosSite(aceitos, !consentido, robo),
     ]);
     const dispatched = despacho.status === 'fulfilled' ? despacho.value.dispatched : 0;
     if (despacho.status === 'rejected') throw despacho.reason;

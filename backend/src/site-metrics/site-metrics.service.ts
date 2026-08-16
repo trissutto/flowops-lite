@@ -28,7 +28,45 @@ export interface EventoEntrada {
   valor?: number | null;
   dados?: unknown;
   semAceite?: boolean;
+  /** Carimbado pelo `/api/events` do site, pelo user-agent (ver `bot-detect.ts`). */
+  bot?: boolean;
+  botNome?: string | null;
 }
+
+/**
+ * SESSÃO DE GENTE — a segunda defesa contra robô, e a que pega quem mente.
+ *
+ * A primeira é o carimbo `bot`, feito na origem pelo user-agent. Scraper em
+ * Chrome headless disfarçado de Chrome normal passa por ela — mas não passa
+ * por esta: ele carrega a página e vai embora, sem rolar, sem ficar, sem
+ * clicar. Pessoa produz `scroll_depth`/`time_on_page` em segundos, ou navega
+ * pra uma segunda página.
+ *
+ * Daí a régua: "algum evento além de `page_view`, OU 2+ páginas". Ela custa a
+ * sessão legítima que bateu e saiu em menos de ~10s — que é, com o dado que
+ * temos, indistinguível de robô.
+ *
+ * Medição que originou a regra (16/08/2026): em `/lojas`, 31 de 38 sessões
+ * tinham UM `page_view` e mais nada; na mesma manhã, numa página de produto
+ * com gente de verdade, eram 4 de 112 (3,6%).
+ *
+ * Vale pro passado inteiro sem depender de deploy — é comportamento que já
+ * está gravado, não campo novo.
+ *
+ * A REGRA VIVE AQUI, EM UM LUGAR SÓ. Cada tela que a copiasse seria uma
+ * definição de "pessoa" pronta pra divergir das outras.
+ */
+const SQL_SINAL_DE_GENTE = `
+    COUNT(*) FILTER (WHERE evento <> 'page_view') > 0
+    OR COUNT(DISTINCT path) > 1`;
+
+/** As sessões de gente de um período ($1..$2) — pronta pra virar CTE. */
+const SQL_SESSOES_DE_GENTE = `
+    SELECT session_id
+      FROM site_eventos
+     WHERE criado_em >= $1 AND criado_em <= $2 AND session_id IS NOT NULL AND NOT bot
+     GROUP BY session_id
+    HAVING ${SQL_SINAL_DE_GENTE}`;
 
 const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   color_switch: ['color'],
@@ -134,6 +172,8 @@ export class SiteMetricsService {
         valor: typeof e.valor === 'number' && Number.isFinite(e.valor) ? e.valor : null,
         dados: sanitizarDadosEvento(String(e.evento), e.dados),
         semAceite: e.semAceite === true,
+        bot: e.bot === true,
+        botNome: this.corta(e.botNome, 60),
       }));
 
     if (!linhas.length) return 0;
@@ -246,16 +286,29 @@ export class SiteMetricsService {
    * Ressalva conhecida: sessão iniciada ANTES da janela tem como "entrada" o
    * primeiro evento dentro dela. O erro é pequeno e sempre a favor de contar no
    * funil — nunca de esconder venda.
+   *
+   * ── ROBÔ FICA DE FORA DAQUI (16/08/2026) ──
+   *
+   * Esta é a lista que alimenta o quadro do tráfego de lojas, ou seja, a
+   * medição do anúncio. É JUSTAMENTE onde a varredura mais mentia: naquela
+   * manhã, 31 das 38 sessões da `/lojas` eram um `page_view` sozinho, sem
+   * rolagem e sem segundo passo. Sem o corte, o anúncio parecia trazer 38
+   * pessoas que não contatavam ninguém — e o número real de "chegaram" é o
+   * denominador de "chegaram × contataram".
+   *
+   * Quem contatou a loja nunca cai fora: `whatsapp_click` e companhia não são
+   * `page_view`, então a sessão passa na régua por definição.
    */
   private static readonly SESSOES_DE_LOJA = `
     SELECT session_id FROM (
       SELECT DISTINCT ON (session_id) session_id, path
         FROM site_eventos
        WHERE criado_em >= $1 AND criado_em <= $2
-         AND session_id IS NOT NULL AND path IS NOT NULL
+         AND session_id IS NOT NULL AND path IS NOT NULL AND NOT bot
        ORDER BY session_id, criado_em
     ) entrada
-     WHERE path ILIKE '/lojas%' OR path ILIKE '/nossaslojas%'`;
+     WHERE (path ILIKE '/lojas%' OR path ILIKE '/nossaslojas%')
+       AND session_id IN (${SQL_SESSOES_DE_GENTE})`;
 
   async funil(
     de: Date,
@@ -264,17 +317,30 @@ export class SiteMetricsService {
     const linhas = await this.prisma.$queryRawUnsafe<
       Array<{ evento: string; eventos: number; pessoas: number; valor: number }>
     >(
-      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+      /**
+       * MESMO CORTE DE ROBÔ DO CARD "AGORA NO SITE" — de propósito.
+       *
+       * As duas coisas vivem na MESMA tela: o card ao vivo em cima, VISITAS
+       * logo abaixo. Filtrar só um lado faria a tela se contradizer sozinha
+       * ("18 pessoas agora" embaixo de 379 visitas cheias de varredura) — e
+       * divergência assim já custou caro em outra tela (a lista do CRM que
+       * mostrava o cliente e a ficha que negava). Na prática o corte só mexe
+       * no topo do funil: quem chegou no `add_to_cart` já provou que é gente.
+       */
+      `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
        SELECT evento,
               COUNT(*)::int                   AS eventos,
               COUNT(DISTINCT session_id)::int AS pessoas,
               COALESCE(SUM(valor), 0)::float  AS valor
          FROM site_eventos e
-        WHERE criado_em >= $1 AND criado_em <= $2
+        WHERE criado_em >= $1 AND criado_em <= $2 AND NOT bot
           AND evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
           -- Sessão sem id não dá pra classificar: fica no funil. Perder dado é
           -- pior que carregar um punhado de anônimos no denominador.
-          AND (e.session_id IS NULL OR e.session_id NOT IN (SELECT session_id FROM lojas))
+          AND (e.session_id IS NULL
+               OR (e.session_id IN (SELECT session_id FROM gente)
+                   AND e.session_id NOT IN (SELECT session_id FROM lojas)))
         GROUP BY evento`,
       de,
       ate,
@@ -507,53 +573,108 @@ export class SiteMetricsService {
    * WordPress ([[ga4-site-novo-stream-trocado]]), então o "tempo real" de lá
    * soma os dois sites.
    *
-   * Tudo em UMA query com subselects — a tela recarrega a cada 20s e não vale
-   * quatro idas ao banco. `::int` em todo COUNT: BigInt na resposta é 500 mudo
-   * de serialização.
+   * ── PESSOA ≠ SESSÃO (16/08/2026) ──
+   *
+   * Este card já mostrou "26 pessoas navegando · 25 em /lojas" numa manhã em
+   * que /lojas recebia 1 visita por hora. A conta estava certa e o número era
+   * mentira: `session_id` nasce no `sessionStorage`, então cada acesso de robô
+   * inaugura uma sessão e vira "pessoa". Agora passam DOIS filtros — o carimbo
+   * `bot` (user-agent, feito na origem) e a régua de comportamento
+   * (`SQL_SINAL_DE_GENTE`), que é a que pega quem falseia o user-agent.
+   *
+   * O robô não é escondido, é CONTADO à parte: some da conta de gente e
+   * aparece com nome próprio. Varredura é informação — inclusive de custo.
+   *
+   * Duas queries: os números (uma só, com CTE) e as páginas quentes. A tela
+   * recarrega a cada 20s e não vale seis idas ao banco. `::int` em todo COUNT:
+   * BigInt na resposta é 500 mudo de serialização.
    */
   async agora(): Promise<{
     ativos5min: number;
     ativos30min: number;
     sessoesHoje: number;
     pageViewsHoje: number;
+    robos5min: number;
+    robosHoje: number;
+    quemSaoOsRobos: Array<{ nome: string; acessos: number }>;
     paginasQuentes: Array<{ path: string; pessoas: number }>;
   }> {
     // "Hoje" no fuso da loja (São Paulo), não em UTC — meia-noite UTC é 21h
     // daqui e comeria as três primeiras horas do dia (mesmo cuidado do
     // relatório de cliques).
+    const DIA = `date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'`;
+
     const [linha] = await this.prisma.$queryRawUnsafe<Array<{
       ativos5: number; ativos30: number; sessoes_hoje: number; pv_hoje: number;
+      total5: number; total_hoje: number;
     }>>(
-      `SELECT
+      `WITH gente AS (
+         SELECT session_id, MAX(criado_em) AS ultimo
+           FROM site_eventos
+          WHERE criado_em > NOW() - INTERVAL '30 minutes'
+            AND session_id IS NOT NULL AND NOT bot
+          GROUP BY session_id
+         HAVING ${SQL_SINAL_DE_GENTE}
+       ), gente_dia AS (
+         SELECT session_id, COUNT(*) FILTER (WHERE evento = 'page_view')::int AS page_views
+           FROM site_eventos
+          WHERE criado_em >= ${DIA} AND session_id IS NOT NULL AND NOT bot
+          GROUP BY session_id
+         HAVING ${SQL_SINAL_DE_GENTE}
+       )
+       SELECT
+         (SELECT COUNT(*)::int FROM gente WHERE ultimo > NOW() - INTERVAL '5 minutes') AS ativos5,
+         (SELECT COUNT(*)::int FROM gente)                                             AS ativos30,
+         (SELECT COUNT(*)::int FROM gente_dia)                                         AS sessoes_hoje,
+         (SELECT COALESCE(SUM(page_views), 0)::int FROM gente_dia)                     AS pv_hoje,
+         -- Total CRU (robô incluído): a diferença pro de cima é o que a
+         -- varredura estava inflando, e é o que a tela mostra como "robôs".
          (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
-           WHERE criado_em > NOW() - INTERVAL '5 minutes' AND session_id IS NOT NULL)  AS ativos5,
+           WHERE criado_em > NOW() - INTERVAL '5 minutes' AND session_id IS NOT NULL)  AS total5,
          (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
-           WHERE criado_em > NOW() - INTERVAL '30 minutes' AND session_id IS NOT NULL) AS ativos30,
-         (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
-           WHERE criado_em >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
-                             AT TIME ZONE 'America/Sao_Paulo'
-             AND session_id IS NOT NULL)                                               AS sessoes_hoje,
-         (SELECT COUNT(*)::int FROM site_eventos
-           WHERE criado_em >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
-                             AT TIME ZONE 'America/Sao_Paulo'
-             AND evento = 'page_view')                                                 AS pv_hoje`,
+           WHERE criado_em >= ${DIA} AND session_id IS NOT NULL)                       AS total_hoje`,
     );
 
     const paginas = await this.prisma.$queryRawUnsafe<Array<{ path: string; pessoas: number }>>(
-      `SELECT path, COUNT(DISTINCT session_id)::int AS pessoas
-         FROM site_eventos
-        WHERE criado_em > NOW() - INTERVAL '5 minutes'
-          AND session_id IS NOT NULL AND path IS NOT NULL
-        GROUP BY path
-        ORDER BY pessoas DESC, path
+      `WITH gente AS (
+         SELECT session_id
+           FROM site_eventos
+          WHERE criado_em > NOW() - INTERVAL '30 minutes'
+            AND session_id IS NOT NULL AND NOT bot
+          GROUP BY session_id
+         HAVING ${SQL_SINAL_DE_GENTE}
+       )
+       SELECT e.path, COUNT(DISTINCT e.session_id)::int AS pessoas
+         FROM site_eventos e
+         JOIN gente g ON g.session_id = e.session_id
+        WHERE e.criado_em > NOW() - INTERVAL '5 minutes' AND e.path IS NOT NULL AND NOT e.bot
+        GROUP BY e.path
+        ORDER BY pessoas DESC, e.path
         LIMIT 8`,
     );
 
+    /** QUEM veio varrer hoje — a resposta que o carimbo do user-agent dá e o
+     *  filtro de comportamento não dá: nome e volume de cada robô. */
+    const robos = await this.prisma.$queryRawUnsafe<Array<{ nome: string; acessos: number }>>(
+      `SELECT COALESCE(bot_nome, 'nao-identificado') AS nome, COUNT(*)::int AS acessos
+         FROM site_eventos
+        WHERE criado_em >= ${DIA} AND bot
+        GROUP BY 1 ORDER BY acessos DESC LIMIT 10`,
+    );
+
+    const ativos5 = Number(linha?.ativos5 ?? 0);
+    const sessoesHoje = Number(linha?.sessoes_hoje ?? 0);
+
     return {
-      ativos5min: Number(linha?.ativos5 ?? 0),
+      ativos5min: ativos5,
       ativos30min: Number(linha?.ativos30 ?? 0),
-      sessoesHoje: Number(linha?.sessoes_hoje ?? 0),
+      sessoesHoje,
       pageViewsHoje: Number(linha?.pv_hoje ?? 0),
+      // Nunca negativo: as duas contas saem da mesma query, mas subtração de
+      // número vindo do banco não é lugar pra confiar em invariante.
+      robos5min: Math.max(0, Number(linha?.total5 ?? 0) - ativos5),
+      robosHoje: Math.max(0, Number(linha?.total_hoje ?? 0) - sessoesHoje),
+      quemSaoOsRobos: robos.map((r) => ({ nome: r.nome, acessos: Number(r.acessos) })),
       paginasQuentes: paginas.map((p) => ({ path: p.path, pessoas: Number(p.pessoas) })),
     };
   }
