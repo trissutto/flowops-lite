@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { AlertCircle, ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
+import { Overlay } from '@/components/ui/Overlay';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
 import { useToast } from '@/components/feedback/ToastProvider';
@@ -56,6 +57,8 @@ export function BuyBox({
   const [sizeError, setSizeError] = useState(false);
   // A tabela abre sobre a PDP para a cliente não perder a seleção da peça.
   const [sizeChartOpen, setSizeChartOpen] = useState(false);
+  /** Folha de tamanhos — sobe quando ela tenta comprar sem ter escolhido. */
+  const [folhaTamanho, setFolhaTamanho] = useState(false);
   const { toast } = useToast();
   const mounted = useMounted();
   const addToCart = useCartStore((s) => s.add);
@@ -126,13 +129,43 @@ export function BuyBox({
     ? discountPercent(product.compareAtPrice, product.price)
     : 0;
 
+  /**
+   * O CLIQUE SEM TAMANHO PRECISA VIRAR ESCOLHA, NÃO ERRO (16/08).
+   *
+   * Medição de 5 dias: 41 pessoas bateram nesta trava e **36 delas nunca
+   * tinham tocado no seletor** — não é que perderam a escolha, é que ela nunca
+   * passou pela cabeça delas. Em peça multicor a falha é 16% de quem tenta
+   * comprar, contra 5% na peça de cor única: o passo da cor consome a decisão
+   * e as pílulas viram enfeite.
+   *
+   * A tentativa de 15/08 foi gritar mais alto DEPOIS do clique (acender o
+   * passo em vermelho + rolar até ele). Medido: taxa igual, 1,7% antes e 1,7%
+   * depois — e só 1 pessoa em 41 clicou travado duas vezes. Elas entendem o
+   * aviso e vão embora mesmo assim, porque o clique já foi gasto.
+   *
+   * Agora a escolha vai ATÉ o dedo dela: a folha sobe com os números, um toque
+   * escolhe e já põe na sacola. O destaque vermelho continua atrás, pra quem
+   * fecha a folha e volta pra página.
+   */
   function handleAdd() {
     if (!size) {
       trackAddToCartBlocked(product, soldOut ? 'sold_out' : 'size_missing');
       setSizeError(true);
-      document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
+      // Sem tamanho ESGOTADO não há o que escolher — a folha vazia seria uma
+      // porta pra parede. Aí vale o caminho antigo: acende o passo e mostra a
+      // legenda de esgotado.
+      if (product.sizes.some((s) => s.available)) {
+        setFolhaTamanho(true);
+      } else {
+        document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
+      }
       return;
     }
+    adicionar(size);
+  }
+
+  /** O caminho único de entrada na sacola — página e folha passam por aqui. */
+  function adicionar(tamanho: string) {
     /**
      * A cor escolhida vai junto no carrinho, NO CAMPO `color`.
      *
@@ -154,21 +187,34 @@ export function BuyBox({
        */
       name: product.name,
       image: product.images[0] ?? { src: '', alt: product.name },
-      size,
+      size: tamanho,
       color: cor,
       quantity: 1,
       unitPrice: product.price,
     });
     // add_to_cart SÓ depois da peça entrar de fato no carrinho (contrato do
     // tracking).
-    trackAddToCart(product, { tamanho: size, cor });
+    trackAddToCart(product, { tamanho, cor });
     toast({
       message: 'Adicionado à sacola',
-      description: `${product.name} · ${cor ? `${cor} · ` : ''}tamanho ${size}`,
+      description: `${product.name} · ${cor ? `${cor} · ` : ''}tamanho ${tamanho}`,
     });
     // Abre o mini-cart: a cliente VÊ a peça entrar na sacola sem sair da
     // página — e o próximo passo (finalizar) já está na mão dela.
     openOverlay('cart');
+  }
+
+  /**
+   * Um toque na folha faz as três coisas: escolhe, registra a escolha no funil
+   * (é o `size_switch` que prova que a folha resolveu) e põe na sacola. Pedir
+   * um segundo toque em "Adicionar" recriaria o passo que a folha veio matar.
+   */
+  function escolherNaFolha(tamanho: string) {
+    setSize(tamanho);
+    setSizeError(false);
+    setFolhaTamanho(false);
+    trackSizeSwitch(product, tamanho);
+    adicionar(tamanho);
   }
 
   /**
@@ -539,9 +585,14 @@ export function BuyBox({
             Ver peças parecidas
           </Button>
         )}
+        {/* O RÓTULO CONTA O QUE FALTA. Enquanto não há número escolhido o
+            botão não promete "adicionar" pra depois recusar: ele diz o passo
+            que vem — e o toque cumpre exatamente o que o rótulo prometeu,
+            abrindo a folha de tamanhos. Mesma cor, mesmo tamanho, mesmo lugar:
+            continua sendo O botão da página. */}
         {!soldOut && (
           <Button size="lg" block onClick={handleAdd} className="h-14 text-[1.05rem]">
-            <ShoppingBag /> Adicionar à sacola
+            <ShoppingBag /> {size ? 'Adicionar à sacola' : 'Escolha o tamanho'}
           </Button>
         )}
 
@@ -616,6 +667,62 @@ export function BuyBox({
           className="mx-auto h-auto w-full max-w-[750px]"
         />
       </Modal>
+
+      {/* FOLHA DE TAMANHOS — a escolha vai até o dedo dela.
+
+          É aqui que a barra fixa do mobile deixa de ser uma armadilha: ela
+          está na tela desde o primeiro segundo, então dá pra tentar comprar
+          SEM NUNCA ter passado pelo seletor lá em cima — foi o que 36 das 41
+          pessoas travadas fizeram. Rolar a página até os números (o que a
+          gente fazia) tira o dedo de onde ele está; a folha traz os números
+          até ele. Um toque escolhe e já põe na sacola. */}
+      <Overlay
+        open={folhaTamanho}
+        onClose={() => setFolhaTamanho(false)}
+        side="bottom"
+        label="Escolha o tamanho"
+        className="rounded-t-lg pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:mx-auto sm:w-[min(480px,92vw)]"
+      >
+        <div className="px-6 pt-7">
+          <h2 className="font-display text-h4 text-ink">Escolha o tamanho</h2>
+          <p className="mt-1 text-small text-ink-soft">
+            {corSelecionada ? `${product.name} · ${corSelecionada}` : product.name}
+          </p>
+          <p className="mt-4 text-body text-ink">Toque no seu número — a peça já vai pra sacola.</p>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {product.sizes.map((option) => (
+              <SizePill
+                key={option.label}
+                size="lg"
+                label={option.label}
+                disabled={!option.available}
+                onSelect={() => escolherNaFolha(option.label)}
+              />
+            ))}
+          </div>
+
+          {product.sizes.some((s) => !s.available) && (
+            <p className="mt-3 text-small text-ink-muted">
+              Os números riscados estão esgotados{temCor ? ' nesta cor' : ''}.
+            </p>
+          )}
+
+          {/* Não saber o número É um motivo de não escolher — e a saída não
+              pode ser fechar a folha e procurar a tabela na página. */}
+          <button
+            type="button"
+            onClick={() => {
+              setFolhaTamanho(false);
+              setSizeChartOpen(true);
+            }}
+            className="mt-5 inline-flex items-center gap-1.5 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
+          >
+            <Ruler className="size-3.5" strokeWidth={1.75} />
+            Não sei meu número — ver tabela de medidas
+          </button>
+        </div>
+      </Overlay>
 
       {!soldOut && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">
