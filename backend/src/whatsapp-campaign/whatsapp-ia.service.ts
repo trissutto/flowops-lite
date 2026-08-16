@@ -127,7 +127,8 @@ export class WhatsappIaService {
     '- "saudacao": só cumprimento/agradecimento, sem pergunta;\n' +
     '- "loja": endereço, telefone ou horário de uma loja, ou se existe loja em tal cidade;\n' +
     '- "pedido": quer saber do PEDIDO DELA (cadê, chegou, status, rastreio, número do pedido);\n' +
-    '- "produto": pergunta sobre uma PEÇA em si (o que é, como é, se tem tal peça/modelo);\n' +
+    '- "produto": pergunta sobre uma PEÇA ESPECÍFICA que a cliente cita (uma REF, um link, uma foto, "esse vestido"). ' +
+    'Pergunta de CATEGORIA ("tem moda masculina?", "tem infantil?", "vendem calçado?") NÃO é produto — é "sobre_loja";\n' +
     '- "tamanho": quer saber se serve/tem no TAMANHO dela (ex.: "tem no 52?", "veste bem no 58?");\n' +
     '- "preco": quer o PREÇO/valor de uma peça;\n' +
     '- "estoque": disponibilidade de uma peça (tem, acabou, chega mais);\n' +
@@ -136,7 +137,7 @@ export class WhatsappIaService {
     '- "pagamento": formas de pagamento, Pix, cartão, parcelas;\n' +
     '- "reclamacao": reclamação, problema, cobrança, insatisfação;\n' +
     '- "humano": quer falar com uma pessoa/atendente de verdade;\n' +
-    '- "sobre_loja": o que é a Lurd\'s, tamanhos gerais (46 ao 60), é plus size, o site;\n' +
+    '- "sobre_loja": o que é a Lurd\'s, se trabalha com uma CATEGORIA (moda masculina, infantil, calçado — o foco da Lurd\'s é plus size FEMININA), tamanhos gerais (46 ao 60), é plus size, o site;\n' +
     '- "generica": dúvida que não encaixa em nenhuma acima.\n' +
     'Também extraia "cidade": a cidade/loja que a cliente citou (ex.: "Campinas"), ou "" se não citou.\n' +
     'E avalie o "tom" da cliente na conversa: "neutro"; "insatisfeito" (reclamação, irritação, cobrança, ameaça); ' +
@@ -325,8 +326,8 @@ export class WhatsappIaService {
       case 'sobre_loja':
       case 'generica':
         return (
-          'A Lurd\'s é especializada em moda plus size do 46 ao 60 💜 Temos lojas físicas e o site ' +
-          'www.lurdsplussize.com.br. Posso te ajudar com endereço/horário de loja, seu pedido, ou uma peça (me manda a REF). O que você quer?'
+          'A Lurd\'s é especializada em moda plus size FEMININA do 46 ao 60 💜 (o site é todo feminino). ' +
+          'Temos lojas físicas e o site www.lurdsplussize.com.br. Posso te ajudar com endereço/horário de loja, seu pedido, ou uma peça (me manda a REF). O que você quer?'
         );
       case 'loja': {
         const { ls, exatas } = this.matchLojas(cidade);
