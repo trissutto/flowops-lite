@@ -177,13 +177,18 @@ export class WhatsappInboxService {
     const r = await this.evo.enviarTexto(numero, texto);
     const waId = r?.key?.id || null;
     const ts = new Date();
+    // A auto-resposta da Lulú NÃO zera o não-lidas: a acolhida ("uma pessoa te
+    // responde") não é atendimento humano — o badge tem que continuar sinalizando
+    // a pendência (ex.: reclamação) até uma pessoa ABRIR a conversa. Só resposta
+    // humana ('texto') marca como lida.
+    const zerarNaoLidas = tipo !== 'auto-ia';
     // Otimista: já grava no nosso banco pra aparecer NA HORA (o webhook depois
     // repete com o mesmo waId e é ignorado).
     try {
       await this.p().whatsappConversation.upsert({
         where: { jid },
         create: { jid, numero, ultimaMsg: texto, ultimaEm: ts, fromMe: true, naoLidas: 0 },
-        update: { ultimaMsg: texto, ultimaEm: ts, fromMe: true, naoLidas: 0 },
+        update: { ultimaMsg: texto, ultimaEm: ts, fromMe: true, ...(zerarNaoLidas ? { naoLidas: 0 } : {}) },
       });
       await this.p().whatsappMessage.create({
         data: { conversationJid: jid, waId, fromMe: true, texto, tipo, status: 'enviado', ts },

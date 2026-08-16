@@ -95,13 +95,15 @@ export class WhatsappAutoReplyService {
       for (const c of convs) {
         try {
           const ultimaEmMs = c.ultimaEm ? new Date(c.ultimaEm).getTime() : 0;
-          // Já avaliei ESTE estado (acerto OU recusa)? Não re-chama o Claude.
+          // Já avaliei ESTE estado (acerto OU recusa de conteúdo)? Não re-chama o Claude.
           if (this.avaliadas.get(c.jid) === ultimaEmMs) continue;
-          // Cooldown: já respondeu no automático nos últimos 20min? Pula (sem ping-pong).
-          const jaAuto = await this.p().whatsappMessage.findFirst({
-            where: { conversationJid: c.jid, tipo: 'auto-ia', ts: { gte: new Date(agora - 20 * 60 * 1000) } },
+          // Cooldown: a LOJA já respondeu (Lulú OU humano) nos últimos 20min? Pula.
+          // Conta qualquer msg fromMe recente (não depende do tag 'auto-ia', que o
+          // webhook re-grava como 'texto') — resposta humana também segura o bot.
+          const respondeuRecente = await this.p().whatsappMessage.findFirst({
+            where: { conversationJid: c.jid, fromMe: true, ts: { gte: new Date(agora - 20 * 60 * 1000) } },
           });
-          if (jaAuto) {
+          if (respondeuRecente) {
             this.avaliadas.set(c.jid, ultimaEmMs);
             continue;
           }
@@ -111,8 +113,14 @@ export class WhatsappAutoReplyService {
 
           this.ultimaChamadaIA.set(c.jid, agora);
           const dec = await this.ia.decidirAutoResposta(c.jid, { fora });
-          this.avaliadas.set(c.jid, ultimaEmMs); // marca avaliado (evita re-billar a recusa)
+          // Falha TRANSITÓRIA (IA/DB fora): NÃO cacheia — o próximo ciclo reavalia
+          // (o throttle de 90s evita martelar). Não perde a mensagem no silêncio.
+          if (dec.erro && !dec.responder) {
+            this.logger.warn(`[wa-auto] ${c.numero}: erro transitório — ${dec.motivo} (reavalia)`);
+            continue;
+          }
           if (!dec.responder || !dec.resposta.trim()) {
+            this.avaliadas.set(c.jid, ultimaEmMs); // recusa de CONTEÚDO → não re-billa
             this.logger.log(`[wa-auto] ${c.numero}: NÃO respondeu — ${dec.motivo}`);
             continue;
           }
@@ -120,11 +128,9 @@ export class WhatsappAutoReplyService {
           // humano respondeu) nesse meio, não envia — o próximo ciclo reavalia.
           const fresh = await this.p().whatsappConversation.findUnique({ where: { jid: c.jid } });
           const freshMs = fresh?.ultimaEm ? new Date(fresh.ultimaEm).getTime() : 0;
-          if (freshMs !== ultimaEmMs || fresh?.fromMe) {
-            this.avaliadas.delete(c.jid); // estado mudou → deixa reavaliar
-            continue;
-          }
+          if (freshMs !== ultimaEmMs || fresh?.fromMe) continue; // estado mudou → reavalia (sem cachear)
           await this.inbox.responder(c.jid, dec.resposta.trim(), 'auto-ia');
+          this.avaliadas.set(c.jid, ultimaEmMs); // só cacheia DEPOIS do envio OK
           this.logger.log(`[wa-auto] ${c.numero}: Lulú respondeu (fora=${fora}) — ${dec.motivo}`);
         } catch (e: any) {
           this.logger.warn(`[wa-auto] ${c.jid} falhou: ${e?.message || e}`);
