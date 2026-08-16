@@ -105,6 +105,26 @@ describe('jornadaCompra', () => {
     }
   });
 
+  /**
+   * `view_item` dispara sozinho no `useEffect` de montagem do BuyBox da PDP —
+   * não é ação de ninguém. Enquanto ele contou como "sinal de gente", todo
+   * scraper que abria uma peça era promovido a pessoa: "Produto visto" chegou
+   * a 97% das sessões (419 de 432) e a perda da Visita caiu pra 3%. Se este
+   * teste cair, o relatório volta a certificar robô como cliente exatamente
+   * na etapa que ele precisa medir.
+   */
+  it('não aceita evento automático (page_view/view_item) como prova de que é gente', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+
+    await service.jornadaCompra(new Date(), new Date());
+
+    for (const [sql] of query.mock.calls) {
+      expect(String(sql)).toContain("evento NOT IN ('page_view','view_item')");
+      expect(String(sql)).not.toContain("evento <> 'page_view'");
+    }
+  });
+
   it('corta robô também no diagnóstico e no alerta de checkout da mesma tela', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);

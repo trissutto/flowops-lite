@@ -42,13 +42,31 @@ export interface EventoEntrada {
  * clicar. Pessoa produz `scroll_depth`/`time_on_page` em segundos, ou navega
  * pra uma segunda página.
  *
- * Daí a régua: "algum evento além de `page_view`, OU 2+ páginas". Ela custa a
- * sessão legítima que bateu e saiu em menos de ~10s — que é, com o dado que
+ * Daí a régua: "algum evento de AÇÃO HUMANA, OU 2+ páginas". Ela custa a
+ * sessão legítima que bateu e saiu em menos de ~3s — que é, com o dado que
  * temos, indistinguível de robô.
  *
  * Medição que originou a regra (16/08/2026): em `/lojas`, 31 de 38 sessões
  * tinham UM `page_view` e mais nada; na mesma manhã, numa página de produto
  * com gente de verdade, eram 4 de 112 (3,6%).
+ *
+ * ── POR QUE `view_item` NÃO CONTA COMO SINAL (16/08/2026, segunda passada) ──
+ *
+ * A primeira versão da régua dizia "algum evento além de `page_view`", e com
+ * ela a tela ficou PIOR na página de produto: 419 de 432 sessões (97%) viram
+ * peça, e a perda "Visita → Produto visto" desabou de 36% pra 3%. O corte
+ * limpou a home e não limpou a PDP — justo onde estava o problema.
+ *
+ * A causa é que `view_item` NÃO É AÇÃO DE NINGUÉM: ele dispara sozinho no
+ * `useEffect` de montagem do `BuyBox` (site), a cada carregamento de PDP.
+ * Scraper que abre `/produto/x` ganhava `page_view` + `view_item` e com isso
+ * era PROMOVIDO a pessoa — enquanto o mesmo scraper na home, que só produz
+ * `page_view`, era corretamente descartado. A régua certificava como humana
+ * exatamente a etapa que ela precisava medir.
+ *
+ * Sinal de gente é o que exige um dedo: `scroll_depth`, `time_on_page` (3s+,
+ * dispara também quando a aba some), troca de cor/tamanho, busca, filtro,
+ * sacola, checkout. `page_view` e `view_item` são automáticos e ficam fora.
  *
  * Vale pro passado inteiro sem depender de deploy — é comportamento que já
  * está gravado, não campo novo.
@@ -56,8 +74,13 @@ export interface EventoEntrada {
  * A REGRA VIVE AQUI, EM UM LUGAR SÓ. Cada tela que a copiasse seria uma
  * definição de "pessoa" pronta pra divergir das outras.
  */
+
+/** Eventos que o navegador dispara SOZINHO ao montar a página. Não provam
+ *  gente: robô com JavaScript produz os dois sem tocar em nada. */
+const EVENTOS_AUTOMATICOS = `('page_view','view_item')`;
+
 const SQL_SINAL_DE_GENTE = `
-    COUNT(*) FILTER (WHERE evento <> 'page_view') > 0
+    COUNT(*) FILTER (WHERE evento NOT IN ${EVENTOS_AUTOMATICOS}) > 0
     OR COUNT(DISTINCT path) > 1`;
 
 /** As sessões de gente de um período ($1..$2) — pronta pra virar CTE. */
