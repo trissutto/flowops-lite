@@ -346,6 +346,17 @@ export class LojaCatalogAdminController {
     return this.svc.coresSemFotoRecarregar();
   }
 
+  /**
+   * Re-carimba a IDADE do acervo pela PRIMEIRA VENDA — corrige "peça velha como
+   * nova" nos catálogos de Novidade (publicado_em vinha da data da foto do
+   * lançamento). One-off: rodar uma vez, já estoura os caches do site/feed.
+   */
+  @Post('recarimbar-idade')
+  recarimbarIdade(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.recarimbarIdadePorVenda();
+  }
+
   @Get('classificacao')
   classListar(@Req() req: any, @Query() q: any) {
     this.requireAdmin(req);

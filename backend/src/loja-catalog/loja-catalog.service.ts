@@ -1348,6 +1348,11 @@ export class LojaCatalogService {
    */
   private async carimbarPublicadoEm(): Promise<void> {
     try {
+      // 1) Idade REAL pela PRIMEIRA VENDA (a foto/sync sobem no lançamento e faziam
+      //    peça velha virar novidade). Só toca quem ainda está sem carimbo.
+      await this.aplicarIdadePorVenda(true);
+      // 2) Sobrou sem venda = peça nova de verdade (ainda não vendeu): foto/sync =
+      //    recente = novidade, o que é correto. (Fase 2: trocar por data de cadastro.)
       await this.prisma.$executeRawUnsafe(
         `UPDATE site_produto sp
             SET publicado_em = COALESCE(
@@ -1450,6 +1455,124 @@ export class LojaCatalogService {
       this.logger.warn(`[catalogo] vendas por família indisponíveis: ${e?.message || e}`);
     }
     return total;
+  }
+
+  /**
+   * PRIMEIRA VENDA por REF-BASE (idade REAL da peça). Gêmeo de `vendasPorFamilia`
+   * — mesmas 3 fontes e as MESMAS exclusões (dupla-contagem `flowops%`, marcado,
+   * treino, pedido cancelado) — mas pega `MIN(data)` em vez de `SUM`.
+   *
+   * É o sinal de idade que substitui a data da FOTO (que subiu no lançamento e
+   * fazia peça velha virar "novidade"). A peça é, no mínimo, tão velha quanto a
+   * primeira vez que vendeu — monotônico ("nunca posterior ao nascimento").
+   * Piso do espelho = 02/01/2025; peça vendida antes satura aí (segue > 30 dias,
+   * então sai de Novidades igual). Cache próprio de 10 min (histórico quase não muda).
+   */
+  private cachePrimeiraVenda: { at: number; mapa: Map<string, number> } | null = null;
+
+  private async primeiraVendaPorFamilia(): Promise<Map<string, number>> {
+    if (this.cachePrimeiraVenda && Date.now() - this.cachePrimeiraVenda.at < this.TTL_VENDAS) {
+      return this.cachePrimeiraVenda.mapa;
+    }
+    const mapa = new Map<string, number>();
+    const menor = (linhas: Array<{ ref: string; dt: any }>) => {
+      for (const l of linhas) {
+        const base = refBaseOf(l.ref);
+        if (!base || l.dt == null) continue;
+        const t = new Date(l.dt).getTime();
+        if (!Number.isFinite(t)) continue;
+        const atual = mapa.get(base);
+        if (atual === undefined || t < atual) mapa.set(base, t);
+      }
+    };
+    try {
+      const [historico, pdv, site] = await Promise.all([
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; dt: any }>>(
+          `SELECT UPPER(TRIM(p.ref)) AS ref, MIN(m.data) AS dt
+             FROM giga_caixa_mov m
+             JOIN wincred_produtos p ON p.codigo = TRIM(m.codigo)
+            WHERE COALESCE(m.obs_pedido, '') NOT LIKE 'flowops%'
+              AND (m.marcado IS NULL OR TRIM(m.marcado) = '')
+            GROUP BY 1`,
+        ),
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; dt: any }>>(
+          `SELECT UPPER(TRIM(i.ref)) AS ref, MIN(s.created_at) AS dt
+             FROM pdv_sale_items i
+             JOIN pdv_sales s ON s.id = i.sale_id
+            WHERE i.ref IS NOT NULL
+              AND s.status = 'finalized'
+              AND s.is_training = false
+              AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+            GROUP BY 1`,
+        ),
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; dt: any }>>(
+          `SELECT UPPER(TRIM(p.ref)) AS ref, MIN(o.created_at) AS dt
+             FROM order_items i
+             JOIN orders o ON o.id = i.order_id
+             JOIN wincred_produtos p ON p.codigo = TRIM(i.sku)
+            WHERE o.status <> 'cancelled'
+            GROUP BY 1`,
+        ),
+      ]);
+      menor(historico);
+      menor(pdv);
+      menor(site);
+      this.cachePrimeiraVenda = { at: Date.now(), mapa };
+    } catch (e: any) {
+      this.logger.warn(`[catalogo] primeira venda por família indisponível: ${e?.message || e}`);
+    }
+    return mapa;
+  }
+
+  /**
+   * Grava `publicado_em` = PRIMEIRA VENDA da família. `soNulos=true` (roda junto
+   * da remontagem) só toca quem ainda não tem carimbo; `false` (re-carimbo one-off)
+   * SOBRESCREVE o acervo todo. Peça SEM histórico de venda não é tocada — mantém a
+   * data atual (foto/sync = recente = novidade, o que é correto pra peça nova).
+   */
+  private async aplicarIdadePorVenda(soNulos: boolean): Promise<number> {
+    const idade = await this.primeiraVendaPorFamilia();
+    if (!idade.size) return 0;
+    const pub: Array<{ ref: string }> = await (this.prisma as any).siteProduto.findMany({
+      where: soNulos ? { publicado: true, publicadoEm: null } : { publicado: true },
+      select: { ref: true },
+    });
+    const refs: string[] = [];
+    const datas: string[] = [];
+    for (const row of pub) {
+      const base = refBaseOf(row.ref);
+      const t = base ? idade.get(base) : undefined;
+      if (t === undefined) continue;
+      refs.push(String(row.ref).trim().toUpperCase());
+      datas.push(new Date(t).toISOString());
+    }
+    if (!refs.length) return 0;
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE site_produto sp
+          SET publicado_em = v.dt
+         FROM unnest($1::text[], $2::timestamptz[]) AS v(ref, dt)
+        WHERE UPPER(TRIM(sp.ref)) = v.ref
+          AND sp.publicado = true
+          ${soNulos ? 'AND sp.publicado_em IS NULL' : ''}`,
+      refs,
+      datas,
+    );
+    return refs.length;
+  }
+
+  /**
+   * RE-CARIMBO one-off (admin): corrige o "peça velha como nova" reescrevendo
+   * `publicado_em` de TODO o acervo pela PRIMEIRA VENDA. Depois estoura o cache do
+   * catálogo (a vitrine/feed leem a nova ordem em ≤60s ou na próxima releitura).
+   */
+  async recarimbarIdadePorVenda(): Promise<{ atualizadas: number; comHistorico: number }> {
+    const comHistorico = (await this.primeiraVendaPorFamilia()).size;
+    const atualizadas = await this.aplicarIdadePorVenda(false);
+    this.invalidarCache();
+    // Avisa o site/feed (senão a vitrine e o /feed/meta.xml seguem no cache por até 1h).
+    avisarVitrine(['catalogo', 'categorias', 'filtros', 'vitrine'], this.logger, 'recarimbo-idade');
+    this.logger.log(`[catalogo] re-carimbo de idade: ${atualizadas} peças reescritas (${comHistorico} famílias com venda)`);
+    return { atualizadas, comHistorico };
   }
 
   private async montarCatalogo(): Promise<any[]> {
