@@ -21,10 +21,10 @@ export class WhatsappInboxController {
     return this.ia.sugerir(b.jid);
   }
 
-  /** Lista de conversas (mais recentes primeiro). `force=1` fura o cache. */
+  /** Lista de conversas (mais recentes primeiro) — lê do nosso banco. */
   @Get('conversas')
-  conversas(@Query('force') force?: string) {
-    return this.service.conversas(force === '1' || force === 'true');
+  conversas() {
+    return this.service.conversas();
   }
 
   /** Mensagens de uma conversa (por remoteJid). */
@@ -37,5 +37,23 @@ export class WhatsappInboxController {
   @Post('responder')
   responder(@Body() b: { jid: string; texto: string }) {
     return this.service.responder(b.jid, b.texto);
+  }
+
+  /** Status do webhook (a instância está empurrando as mensagens pra nós?). */
+  @Get('webhook-status')
+  webhookStatus() {
+    return this.service.statusWebhook();
+  }
+
+  /** Aponta o webhook do Evolution pra nós. `forcar` sobrescreve webhook de terceiro. */
+  @Post('webhook-apontar')
+  webhookApontar(@Body() b: { forcar?: boolean }) {
+    return this.service.apontarWebhook(!!b?.forcar);
+  }
+
+  /** Importa o histórico do Evolution pro nosso banco (uma vez / sob demanda). */
+  @Post('backfill')
+  backfill(@Body() b: { limite?: number }) {
+    return this.service.backfill(Number(b?.limite) || 200);
   }
 }

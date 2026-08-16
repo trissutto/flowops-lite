@@ -7117,3 +7117,40 @@ model SiteContentVersion {
   @@index([resourceType, resourceKey, createdAt])
   @@map("site_content_versions")
 }
+
+// INBOX DE WHATSAPP alimentado por WEBHOOK do Evolution (dono, 15/08). O
+// findChats devolvia 42k conversas (lento) e as vezes nem trazia a nova. Agora
+// o Evolution EMPURRA cada mensagem; a gente indexa aqui e o inbox le do banco:
+// instantaneo, tempo real e completo. So `//` nos comentarios (o /** quebra).
+model WhatsappConversation {
+  id           String    @id @default(uuid())
+  jid          String    @unique
+  numero       String
+  nome         String?
+  ultimaMsg    String?   @map("ultima_msg")
+  ultimaEm     DateTime? @map("ultima_em")
+  fromMe       Boolean   @default(false) @map("from_me")
+  naoLidas     Int       @default(0) @map("nao_lidas")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @default(now()) @updatedAt @map("atualizado_em")
+  mensagens    WhatsappMessage[]
+
+  @@index([ultimaEm])
+  @@map("whatsapp_conversations")
+}
+
+model WhatsappMessage {
+  id              String   @id @default(uuid())
+  conversationJid String   @map("conversation_jid")
+  waId            String?  @unique @map("wa_id")
+  fromMe          Boolean  @default(false) @map("from_me")
+  texto           String?
+  tipo            String?
+  status          String?
+  ts              DateTime
+  criadoEm        DateTime @default(now()) @map("criado_em")
+  conversation    WhatsappConversation @relation(fields: [conversationJid], references: [jid], onDelete: Cascade)
+
+  @@index([conversationJid, ts])
+  @@map("whatsapp_messages")
+}
