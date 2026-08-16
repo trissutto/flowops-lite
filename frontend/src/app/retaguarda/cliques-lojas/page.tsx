@@ -63,6 +63,36 @@ type DiagnosticoFunil = {
   pessoas: number;
   eventos: number;
 };
+type LinhaJornada = {
+  evento: string;
+  chegaram: number;
+  avancaram: number | null;
+  abandonaram: number;
+  taxaAvanco: number | null;
+  taxaPerda: number | null;
+};
+type ProblemaJornada = {
+  evento: string;
+  codigo: string;
+  campo: string | null;
+  pessoas: number;
+  ocorrencias: number;
+  recuperadas: number;
+};
+type InteracaoJornada = {
+  evento: string;
+  codigo: string;
+  campo: string | null;
+  pessoas: number;
+  interacoes: number;
+};
+type ResumoJornada = {
+  maiorPerda: LinhaJornada | null;
+  sessoesComProblema: number;
+  sessoesRecuperadas: number;
+  pixPendente: number;
+  amostraPequena: boolean;
+};
 type AlertaCheckout = {
   sessionId: string;
   etapa: string;
@@ -97,6 +127,10 @@ type RespostaFunil = {
   faturamento?: { pedidos: number; valor: number };
   alertasCheckout?: AlertaCheckout[];
   trafegoLojas?: TrafegoLojas;
+  jornada?: LinhaJornada[];
+  problemas?: ProblemaJornada[];
+  interacoes?: InteracaoJornada[];
+  resumo?: ResumoJornada;
 };
 
 /**
@@ -282,7 +316,16 @@ export default function CliquesLojasPage() {
 
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
           loja ainda tem funil, e um não pode esconder o outro. */}
-      {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} faturamento={funil.faturamento} alertasCheckout={funil.alertasCheckout ?? []} />}
+      {funil && <FunilSite
+        etapas={funil.etapas}
+        diagnosticos={funil.diagnosticos ?? []}
+        faturamento={funil.faturamento}
+        alertasCheckout={funil.alertasCheckout ?? []}
+        jornada={funil.jornada ?? []}
+        problemas={funil.problemas ?? []}
+        interacoes={funil.interacoes ?? []}
+        resumo={funil.resumo}
+      />}
 
       {/* Logo abaixo do funil, e não numa aba escondida: é aqui que a pessoa
           entende POR QUE o número do funil mudou de tamanho. */}
@@ -383,11 +426,19 @@ function FunilSite({
   diagnosticos,
   faturamento,
   alertasCheckout,
+  jornada,
+  problemas,
+  interacoes,
+  resumo,
 }: {
   etapas: EtapaFunil[];
   diagnosticos: DiagnosticoFunil[];
   faturamento?: { pedidos: number; valor: number };
   alertasCheckout: AlertaCheckout[];
+  jornada: LinhaJornada[];
+  problemas: ProblemaJornada[];
+  interacoes: InteracaoJornada[];
+  resumo?: ResumoJornada;
 }) {
   const por = new Map(etapas.map((e) => [e.evento, e]));
   const ordem = [
@@ -494,6 +545,14 @@ function FunilSite({
         </strong>{' '}
         — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.
       </p>
+      {jornada.length > 0 && resumo && (
+        <RelatorioJornada
+          jornada={jornada}
+          problemas={problemas}
+          interacoes={interacoes}
+          resumo={resumo}
+        />
+      )}
       {alertasCheckout.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-amber-300 bg-white">
           <div className="flex items-start gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3">
@@ -535,7 +594,7 @@ function FunilSite({
           </div>
         </div>
       )}
-      {diagnosticos.length > 0 && (
+      {jornada.length === 0 && diagnosticos.length > 0 && (
         <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-[#E7E2D8]">
             <h2 className="font-semibold text-slate-800">Diagnóstico das decisões e falhas</h2>
@@ -568,6 +627,171 @@ function FunilSite({
             </table>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+const TITULOS_ETAPA: Record<string, string> = {
+  page_view: 'Visita',
+  view_item: 'Produto visto',
+  add_to_cart: 'Sacola',
+  begin_checkout: 'Checkout',
+  add_payment_info: 'Pagamento',
+  purchase: 'Compra confirmada',
+};
+
+function formatarPct(valor: number | null): string {
+  if (valor === null) return '—';
+  return `${valor.toFixed(valor < 10 ? 1 : 0).replace('.', ',')}%`;
+}
+
+function RelatorioJornada({
+  jornada,
+  problemas,
+  interacoes,
+  resumo,
+}: {
+  jornada: LinhaJornada[];
+  problemas: ProblemaJornada[];
+  interacoes: InteracaoJornada[];
+  resumo: ResumoJornada;
+}) {
+  const maior = resumo.maiorPerda;
+
+  return (
+    <div className="space-y-3">
+      {maior && (
+        <div className="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-amber-800">Maior perda da jornada</p>
+            <p className="mt-0.5 font-semibold text-amber-950">
+              {TITULOS_ETAPA[maior.evento] ?? maior.evento}: {maior.abandonaram} pessoa{maior.abandonaram === 1 ? '' : 's'} não avançaram
+            </p>
+            <p className="text-xs text-amber-800">
+              {resumo.amostraPequena
+                ? 'Amostra pequena: use como indício, não como conclusão.'
+                : `Base de ${maior.chegaram} pessoas nesta etapa.`}
+            </p>
+          </div>
+          <div className="text-3xl font-black tabular-nums text-amber-900">{formatarPct(maior.taxaPerda)}</div>
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-xl border border-[#E7E2D8] bg-white">
+        <div className="border-b border-[#E7E2D8] px-4 py-3">
+          <h2 className="font-semibold text-slate-800">Onde a compra parou</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Cada sessão aparece uma única vez na etapa mais avançada que alcançou.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-[#FBF6E6] text-slate-600">
+              <tr>
+                <th className="px-4 py-2.5 text-left font-semibold">Etapa</th>
+                <th className="px-4 py-2.5 text-right font-semibold">Chegaram</th>
+                <th className="px-4 py-2.5 text-right font-semibold">Avançaram</th>
+                <th className="px-4 py-2.5 text-right font-semibold">Pararam aqui</th>
+                <th className="px-4 py-2.5 text-right font-semibold">Perda</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jornada.map((linha) => (
+                <tr key={linha.evento} className="border-t border-[#E7E2D8]">
+                  <td className="px-4 py-2.5 font-medium text-slate-700">{TITULOS_ETAPA[linha.evento] ?? linha.evento}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{linha.chegaram}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-[#2E7D46]">{linha.avancaram ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-slate-800">{linha.evento === 'purchase' ? '—' : linha.abandonaram}</td>
+                  <td className="px-4 py-2.5 text-right font-bold tabular-nums text-amber-800">{formatarPct(linha.taxaPerda)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {(problemas.length > 0 || resumo.pixPendente > 0) && (
+        <div className="overflow-hidden rounded-xl border border-rose-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-100 bg-rose-50 px-4 py-3">
+            <div>
+              <h2 className="font-semibold text-rose-950">Problemas confirmados</h2>
+              <p className="text-xs text-rose-800">Falhas reais, separadas das escolhas normais de produto.</p>
+            </div>
+            <div className="text-xs text-rose-900">
+              <strong>{resumo.sessoesComProblema}</strong> sessões com problema ·{' '}
+              <strong className="text-[#2E7D46]">{resumo.sessoesRecuperadas}</strong> recuperadas
+            </div>
+          </div>
+          {resumo.pixPendente > 0 && (
+            <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+              <span className="font-medium text-amber-950">Pix criado, ainda sem compra confirmada no período</span>
+              <strong className="tabular-nums text-amber-900">{resumo.pixPendente}</strong>
+            </div>
+          )}
+          {problemas.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left font-semibold">Problema</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Motivo</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Pessoas</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Ocorrências</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Recuperadas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {problemas.map((linha, index) => (
+                    <tr key={`${linha.evento}:${linha.codigo}:${linha.campo ?? ''}:${index}`} className="border-t border-[#E7E2D8]">
+                      <td className="px-4 py-2.5 font-medium text-slate-700">{rotuloDiagnostico(linha.evento)}</td>
+                      <td className="px-4 py-2.5 text-slate-600">{rotuloCodigo(linha.codigo)}{linha.campo ? ` · ${rotuloCampo(linha.campo)}` : ''}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{linha.pessoas}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{linha.ocorrencias}</td>
+                      <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-[#2E7D46]">{linha.recuperadas}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {interacoes.length > 0 && (
+        <details className="overflow-hidden rounded-xl border border-[#E7E2D8] bg-white">
+          <summary className="cursor-pointer px-4 py-3 font-semibold text-slate-700 hover:bg-[#FBF6E6]">
+            O que as clientes compararam
+            <span className="ml-2 text-xs font-normal text-slate-500">cores, tamanhos, frete e pagamento — não são erros</span>
+          </summary>
+          <div className="border-t border-[#E7E2D8]">
+            <p className="px-4 py-2 text-xs text-slate-500">
+              A mesma pessoa pode comparar várias opções; por isso as linhas abaixo não devem ser somadas.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-[#FBF6E6] text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left font-semibold">Interação</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Escolha</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Pessoas</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Interações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {interacoes.map((linha, index) => (
+                    <tr key={`${linha.evento}:${linha.codigo}:${index}`} className="border-t border-[#E7E2D8]">
+                      <td className="px-4 py-2.5 font-medium text-slate-700">{rotuloDiagnostico(linha.evento)}</td>
+                      <td className="px-4 py-2.5 text-slate-600">{rotuloCodigo(linha.codigo)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{linha.pessoas}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{linha.interacoes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
       )}
     </div>
   );

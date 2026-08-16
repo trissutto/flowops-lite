@@ -75,6 +75,59 @@ export interface LinhaLoja {
   pessoas: number;
 }
 
+export const ETAPAS_JORNADA = [
+  'page_view',
+  'view_item',
+  'add_to_cart',
+  'begin_checkout',
+  'add_payment_info',
+  'purchase',
+] as const;
+
+export type LinhaJornada = {
+  evento: (typeof ETAPAS_JORNADA)[number];
+  chegaram: number;
+  avancaram: number | null;
+  abandonaram: number;
+  taxaAvanco: number | null;
+  taxaPerda: number | null;
+};
+
+/** Converte a etapa máxima de cada sessão em transições sem dupla contagem. */
+export function montarJornada(
+  contagens: Array<{ etapaMaxima: number; pessoas: number }>,
+): LinhaJornada[] {
+  const porEtapa = new Map<number, number>();
+  for (const linha of contagens) {
+    const etapa = Number(linha.etapaMaxima);
+    porEtapa.set(etapa, (porEtapa.get(etapa) ?? 0) + (Number(linha.pessoas) || 0));
+  }
+
+  return ETAPAS_JORNADA.map((evento, indice) => {
+    const chegaram = Array.from(porEtapa.entries()).reduce(
+      (total, [etapa, pessoas]) => total + (etapa >= indice ? pessoas : 0),
+      0,
+    );
+    const final = indice === ETAPAS_JORNADA.length - 1;
+    const avancaram = final
+      ? null
+      : Array.from(porEtapa.entries()).reduce(
+          (total, [etapa, pessoas]) => total + (etapa > indice ? pessoas : 0),
+          0,
+        );
+    const abandonaram = final ? 0 : Math.max(0, chegaram - (avancaram ?? 0));
+
+    return {
+      evento,
+      chegaram,
+      avancaram,
+      abandonaram,
+      taxaAvanco: final || chegaram === 0 ? null : ((avancaram ?? 0) / chegaram) * 100,
+      taxaPerda: final || chegaram === 0 ? null : (abandonaram / chegaram) * 100,
+    };
+  });
+}
+
 @Injectable()
 export class SiteMetricsService {
   private readonly logger = new Logger(SiteMetricsService.name);
@@ -288,6 +341,217 @@ export class SiteMetricsService {
       // outras etapas somam o preço da peça vista/na sacola e a tela ignora.
       valor: Number(l.valor) || 0,
     }));
+  }
+
+  /** Jornada real: uma sessão ocupa somente a etapa mais avançada que alcançou. */
+  async jornadaCompra(de: Date, ate: Date): Promise<{
+    jornada: LinhaJornada[];
+    problemas: Array<{
+      evento: string; codigo: string; campo: string | null;
+      pessoas: number; ocorrencias: number; recuperadas: number;
+    }>;
+    interacoes: Array<{
+      evento: string; codigo: string; campo: string | null; pessoas: number; interacoes: number;
+    }>;
+    resumo: {
+      maiorPerda: LinhaJornada | null;
+      sessoesComProblema: number;
+      sessoesRecuperadas: number;
+      pixPendente: number;
+      amostraPequena: boolean;
+    };
+  }> {
+    const [maximos, problemasRaw, interacoesRaw, totais] = await Promise.all([
+      this.prisma.$queryRawUnsafe<Array<{ etapa_maxima: number; pessoas: number }>>(
+        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+              sessoes AS (
+                SELECT e.session_id,
+                       MAX(CASE e.evento
+                         WHEN 'page_view' THEN 0 WHEN 'view_item' THEN 1
+                         WHEN 'add_to_cart' THEN 2 WHEN 'begin_checkout' THEN 3
+                         WHEN 'add_payment_info' THEN 4 WHEN 'purchase' THEN 5
+                       END)::int AS etapa_maxima
+                  FROM site_eventos e
+                 WHERE e.criado_em >= $1 AND e.criado_em <= $2
+                   AND e.session_id IS NOT NULL
+                   AND e.evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
+                   AND e.session_id NOT IN (SELECT session_id FROM lojas)
+                 GROUP BY e.session_id
+              )
+         SELECT etapa_maxima, COUNT(*)::int AS pessoas
+           FROM sessoes GROUP BY etapa_maxima ORDER BY etapa_maxima`,
+        de,
+        ate,
+      ),
+      this.prisma.$queryRawUnsafe<Array<{
+        evento: string; codigo: string; campo: string | null;
+        pessoas: number; ocorrencias: number; recuperadas: number;
+      }>>(
+        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+              falhas AS (
+                SELECT e.*,
+                       COALESCE(e.dados->>'reason', e.dados->>'method', e.dados->>'section', 'sem_codigo') AS codigo,
+                       CASE WHEN e.dados ? 'field' THEN e.dados->>'field' ELSE NULL END AS campo,
+                       CASE e.evento
+                         WHEN 'add_to_cart_blocked' THEN 1
+                         WHEN 'checkout_validation_error' THEN 3
+                         WHEN 'checkout_error' THEN 3
+                         ELSE 4
+                       END AS etapa_falha
+                  FROM site_eventos e
+                 WHERE e.criado_em >= $1 AND e.criado_em <= $2
+                   AND e.session_id IS NOT NULL
+                   AND e.evento IN ('add_to_cart_blocked','checkout_validation_error','checkout_error',
+                                    'card_declined','pix_expired','payment_retry')
+                   AND (e.evento <> 'payment_retry' OR (
+                     SELECT COUNT(*) FROM site_eventos repeticao
+                      WHERE repeticao.session_id = e.session_id
+                        AND repeticao.evento = 'payment_retry'
+                        AND repeticao.criado_em >= $1 AND repeticao.criado_em <= $2
+                   ) >= 2)
+                   AND e.session_id NOT IN (SELECT session_id FROM lojas)
+              ), agrupadas AS (
+                SELECT evento, codigo, campo, session_id,
+                       COUNT(*)::int AS ocorrencias,
+                       MAX(criado_em) AS ultima_falha,
+                       MAX(etapa_falha) AS etapa_falha
+                  FROM falhas
+                 GROUP BY evento, codigo, campo, session_id
+              )
+         SELECT f.evento, f.codigo, f.campo,
+                COUNT(*)::int AS pessoas,
+                SUM(f.ocorrencias)::int AS ocorrencias,
+                COUNT(*) FILTER (WHERE EXISTS (
+                  SELECT 1 FROM site_eventos r
+                   WHERE r.session_id = f.session_id AND r.criado_em > f.ultima_falha
+                     AND r.criado_em <= $2
+                     AND (r.evento IN ('checkout_recovered','purchase') OR
+                          CASE r.evento
+                            WHEN 'view_item' THEN 1 WHEN 'add_to_cart' THEN 2
+                            WHEN 'begin_checkout' THEN 3 WHEN 'add_payment_info' THEN 4
+                            WHEN 'purchase' THEN 5 ELSE -1
+                          END > f.etapa_falha)
+                ))::int AS recuperadas
+           FROM agrupadas f
+          GROUP BY f.evento, f.codigo, f.campo
+          ORDER BY pessoas DESC, ocorrencias DESC
+          LIMIT 100`,
+        de,
+        ate,
+      ),
+      this.prisma.$queryRawUnsafe<Array<{
+        evento: string; codigo: string; campo: string | null; pessoas: number; interacoes: number;
+      }>>(
+        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+         SELECT e.evento,
+                COALESCE(e.dados->>'method', e.dados->>'shipping_tier',
+                         e.dados->>'color', e.dados->>'size', 'sem_codigo') AS codigo,
+                NULL::text AS campo,
+                COUNT(DISTINCT e.session_id)::int AS pessoas,
+                COUNT(*)::int AS interacoes
+           FROM site_eventos e
+          WHERE e.criado_em >= $1 AND e.criado_em <= $2
+            AND e.session_id IS NOT NULL
+            AND e.evento IN ('color_switch','size_switch','add_shipping_info',
+                             'payment_method_selected','pix_copied')
+            AND e.session_id NOT IN (SELECT session_id FROM lojas)
+          GROUP BY e.evento, codigo
+          ORDER BY interacoes DESC, e.evento, codigo
+          LIMIT 100`,
+        de,
+        ate,
+      ),
+      this.prisma.$queryRawUnsafe<Array<{
+        sessoes_problema: number; sessoes_recuperadas: number; pix_pendente: number;
+      }>>(
+        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+              falhas AS (
+                SELECT evento, session_id, criado_em,
+                       CASE evento
+                         WHEN 'add_to_cart_blocked' THEN 1
+                         WHEN 'checkout_validation_error' THEN 3
+                         WHEN 'checkout_error' THEN 3
+                         ELSE 4
+                       END AS etapa_falha
+                  FROM site_eventos e
+                 WHERE criado_em >= $1 AND criado_em <= $2 AND session_id IS NOT NULL
+                   AND evento IN ('add_to_cart_blocked','checkout_validation_error','checkout_error',
+                                  'card_declined','pix_expired','payment_retry')
+                   AND (evento <> 'payment_retry' OR (
+                     SELECT COUNT(*) FROM site_eventos repeticao
+                      WHERE repeticao.session_id = e.session_id
+                        AND repeticao.evento = 'payment_retry'
+                        AND repeticao.criado_em >= $1 AND repeticao.criado_em <= $2
+                   ) >= 2)
+                   AND session_id NOT IN (SELECT session_id FROM lojas)
+              ),
+              falhas_sessao AS (
+                SELECT session_id, MAX(criado_em) AS ultima_falha, MAX(etapa_falha) AS etapa_falha
+                  FROM falhas GROUP BY session_id
+              ),
+              recuperadas AS (
+                SELECT f.session_id FROM falhas_sessao f
+                 WHERE EXISTS (
+                   SELECT 1 FROM site_eventos r
+                    WHERE r.session_id = f.session_id AND r.criado_em > f.ultima_falha
+                      AND r.criado_em <= $2
+                      AND (r.evento IN ('checkout_recovered','purchase') OR
+                           CASE r.evento
+                             WHEN 'view_item' THEN 1 WHEN 'add_to_cart' THEN 2
+                             WHEN 'begin_checkout' THEN 3 WHEN 'add_payment_info' THEN 4
+                             WHEN 'purchase' THEN 5 ELSE -1
+                           END > f.etapa_falha)
+                 )
+              ),
+              pix AS (
+                SELECT DISTINCT p.session_id FROM site_eventos p
+                 WHERE p.criado_em >= $1 AND p.criado_em <= $2 AND p.evento = 'pix_created'
+                   AND p.session_id IS NOT NULL AND p.session_id NOT IN (SELECT session_id FROM lojas)
+                   AND NOT EXISTS (
+                     SELECT 1 FROM site_eventos c WHERE c.session_id = p.session_id
+                       AND c.evento = 'purchase' AND c.criado_em >= p.criado_em AND c.criado_em <= $2
+                   )
+              )
+         SELECT (SELECT COUNT(DISTINCT session_id) FROM falhas)::int AS sessoes_problema,
+                (SELECT COUNT(*) FROM recuperadas)::int AS sessoes_recuperadas,
+                (SELECT COUNT(*) FROM pix)::int AS pix_pendente`,
+        de,
+        ate,
+      ),
+    ]);
+
+    const jornada = montarJornada(maximos.map((linha) => ({
+      etapaMaxima: Number(linha.etapa_maxima),
+      pessoas: Number(linha.pessoas),
+    })));
+    const candidatas = jornada.filter((linha) => linha.taxaPerda !== null && linha.chegaram > 0);
+    const maiorPerda = candidatas.reduce<LinhaJornada | null>(
+      (maior, linha) => !maior || (linha.taxaPerda ?? 0) > (maior.taxaPerda ?? 0) ? linha : maior,
+      null,
+    );
+    const total = totais[0];
+
+    return {
+      jornada,
+      problemas: problemasRaw.map((linha) => ({
+        ...linha,
+        pessoas: Number(linha.pessoas),
+        ocorrencias: Number(linha.ocorrencias),
+        recuperadas: Number(linha.recuperadas),
+      })),
+      interacoes: interacoesRaw.map((linha) => ({
+        ...linha,
+        pessoas: Number(linha.pessoas),
+        interacoes: Number(linha.interacoes),
+      })),
+      resumo: {
+        maiorPerda,
+        sessoesComProblema: Number(total?.sessoes_problema ?? 0),
+        sessoesRecuperadas: Number(total?.sessoes_recuperadas ?? 0),
+        pixPendente: Number(total?.pix_pendente ?? 0),
+        amostraPequena: (maiorPerda?.chegaram ?? 0) < 20,
+      },
+    };
   }
 
   /**
