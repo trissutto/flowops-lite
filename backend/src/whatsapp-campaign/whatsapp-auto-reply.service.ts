@@ -27,6 +27,9 @@ export class WhatsappAutoReplyService {
   /** jid → ultimaEm(ms) já avaliado. Evita re-chamar o Claude pro MESMO estado
    *  (inclusive quando a IA recusa — a conversa recusada não muda fromMe). */
   private avaliadas = new Map<string, number>();
+  /** jid → ts da última chamada à IA. Throttle: no máx 1 chamada / 90s por conversa
+   *  (mesmo que a cliente mande várias mensagens novas seguidas). */
+  private ultimaChamadaIA = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -58,9 +61,12 @@ export class WhatsappAutoReplyService {
     }).formatToParts(new Date());
     const hora = Number(partes.find((p) => p.type === 'hour')?.value ?? '0');
     const dia = partes.find((p) => p.type === 'weekday')?.value ?? '';
-    if (dia === 'Sun') return false;
+    if (dia === 'Sun') return false; // domingo: todas fechadas
+    // UNIÃO da rede: como há UM só WhatsApp e algumas lojas vão até 19h (Itanhaém,
+    // Praia Grande, inclusive sábado), o gate do modo 'fora' usa a janela MAIS
+    // AMPLA — só considera "fora" quando NENHUMA loja pode estar aberta.
     const abre = Number(process.env.LOJA_ABRE ?? '9');
-    const fecha = dia === 'Sat' ? Number(process.env.LOJA_FECHA_SAB ?? '13') : Number(process.env.LOJA_FECHA ?? '18');
+    const fecha = Number(process.env.LOJA_FECHA ?? '19');
     return hora >= abre && hora < fecha;
   }
 
@@ -75,6 +81,7 @@ export class WhatsappAutoReplyService {
     this.rodando = true;
     try {
       if (this.avaliadas.size > 1000) this.avaliadas.clear(); // não vaza memória
+      if (this.ultimaChamadaIA.size > 1000) this.ultimaChamadaIA.clear();
       const agora = Date.now();
       const desde = new Date(agora - 30 * 60 * 1000); // não mexe em conversa velha
       const ate = new Date(agora - 45 * 1000); // espera 45s (rajada)
@@ -98,7 +105,11 @@ export class WhatsappAutoReplyService {
             this.avaliadas.set(c.jid, ultimaEmMs);
             continue;
           }
+          // Throttle por conversa: no máx 1 chamada à IA / 90s (cliente pode
+          // mandar várias mensagens seguidas, cada uma com ultimaEm diferente).
+          if (agora - (this.ultimaChamadaIA.get(c.jid) || 0) < 90 * 1000) continue;
 
+          this.ultimaChamadaIA.set(c.jid, agora);
           const dec = await this.ia.decidirAutoResposta(c.jid, { fora });
           this.avaliadas.set(c.jid, ultimaEmMs); // marca avaliado (evita re-billar a recusa)
           if (!dec.responder || !dec.resposta.trim()) {
