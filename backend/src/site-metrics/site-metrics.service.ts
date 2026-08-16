@@ -68,6 +68,32 @@ const SQL_SESSOES_DE_GENTE = `
      GROUP BY session_id
     HAVING ${SQL_SINAL_DE_GENTE}`;
 
+/**
+ * O CORTE "SÓ GENTE" pronto pra colar em QUALQUER query desta tela. Exige que
+ * a query declare a CTE `gente` (= `SQL_SESSOES_DE_GENTE`).
+ *
+ * ── POR QUE ISTO VIROU FUNÇÃO (16/08/2026) ──
+ *
+ * A régua de "pessoa" existia em um lugar só, mas era APLICADA em um lugar só
+ * também: o `funil()` filtrava robô e o quadro "Onde a compra parou", logo
+ * abaixo dele NA MESMA TELA, não filtrava nada. O parágrafo explicativo
+ * prometia o corte para os dois. Duas populações, um texto, uma tela.
+ *
+ * O sintoma era o topo do funil inchado: `session_id` nasce no `sessionStorage`
+ * do navegador, então CADA página que um robô com JavaScript abre vira uma
+ * "pessoa" nova (ver `bot-detect.ts` no site). Varredura de catálogo dispara
+ * `page_view` + `view_item` — o `view_item` só existe na página de produto —
+ * e nunca avança. Medição de 16/08: 401 de 622 sessões "viram peça" (64%,
+ * quando gente de verdade fica em 25-40%) e 386 delas morriam ali, produzindo
+ * um "MAIOR PERDA: 96%" que era varredura, não cliente desistindo.
+ *
+ * Regra daqui pra frente: query nova nesta tela nasce com este corte. Tela que
+ * se contradiz sozinha já custou caro antes (a lista do CRM que mostrava o
+ * cliente e a ficha que negava).
+ */
+const soGente = (alias: string) =>
+  `NOT ${alias}.bot AND ${alias}.session_id IN (SELECT session_id FROM gente)`;
+
 const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   color_switch: ['color'],
   size_switch: ['size'],
@@ -429,7 +455,8 @@ export class SiteMetricsService {
   }> {
     const [maximos, problemasRaw, interacoesRaw, totais] = await Promise.all([
       this.prisma.$queryRawUnsafe<Array<{ etapa_maxima: number; pessoas: number }>>(
-        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+        `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+              lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               sessoes AS (
                 SELECT e.session_id,
                        MAX(CASE e.evento
@@ -441,6 +468,7 @@ export class SiteMetricsService {
                  WHERE e.criado_em >= $1 AND e.criado_em <= $2
                    AND e.session_id IS NOT NULL
                    AND e.evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
+                   AND ${soGente('e')}
                    AND e.session_id NOT IN (SELECT session_id FROM lojas)
                  GROUP BY e.session_id
               )
@@ -453,7 +481,8 @@ export class SiteMetricsService {
         evento: string; codigo: string; campo: string | null;
         pessoas: number; ocorrencias: number; recuperadas: number;
       }>>(
-        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+        `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+              lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               falhas AS (
                 SELECT e.*,
                        COALESCE(e.dados->>'reason', e.dados->>'method', e.dados->>'section', 'sem_codigo') AS codigo,
@@ -475,6 +504,7 @@ export class SiteMetricsService {
                         AND repeticao.evento = 'payment_retry'
                         AND repeticao.criado_em >= $1 AND repeticao.criado_em <= $2
                    ) >= 2)
+                   AND ${soGente('e')}
                    AND e.session_id NOT IN (SELECT session_id FROM lojas)
               ), agrupadas AS (
                 SELECT evento, codigo, campo, session_id,
@@ -508,7 +538,8 @@ export class SiteMetricsService {
       this.prisma.$queryRawUnsafe<Array<{
         evento: string; codigo: string; campo: string | null; pessoas: number; interacoes: number;
       }>>(
-        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+        `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+              lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
          SELECT e.evento,
                 COALESCE(e.dados->>'method', e.dados->>'shipping_tier',
                          e.dados->>'color', e.dados->>'size', 'sem_codigo') AS codigo,
@@ -520,6 +551,7 @@ export class SiteMetricsService {
             AND e.session_id IS NOT NULL
             AND e.evento IN ('color_switch','size_switch','add_shipping_info',
                              'payment_method_selected','pix_copied')
+            AND ${soGente('e')}
             AND e.session_id NOT IN (SELECT session_id FROM lojas)
           GROUP BY e.evento, codigo
           ORDER BY interacoes DESC, e.evento, codigo
@@ -530,7 +562,8 @@ export class SiteMetricsService {
       this.prisma.$queryRawUnsafe<Array<{
         sessoes_problema: number; sessoes_recuperadas: number; pix_pendente: number;
       }>>(
-        `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+        `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+              lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               falhas AS (
                 SELECT evento, session_id, criado_em,
                        CASE evento
@@ -549,6 +582,7 @@ export class SiteMetricsService {
                         AND repeticao.evento = 'payment_retry'
                         AND repeticao.criado_em >= $1 AND repeticao.criado_em <= $2
                    ) >= 2)
+                   AND ${soGente('e')}
                    AND session_id NOT IN (SELECT session_id FROM lojas)
               ),
               falhas_sessao AS (
@@ -572,7 +606,8 @@ export class SiteMetricsService {
               pix AS (
                 SELECT DISTINCT p.session_id FROM site_eventos p
                  WHERE p.criado_em >= $1 AND p.criado_em <= $2 AND p.evento = 'pix_created'
-                   AND p.session_id IS NOT NULL AND p.session_id NOT IN (SELECT session_id FROM lojas)
+                   AND p.session_id IS NOT NULL AND ${soGente('p')}
+                   AND p.session_id NOT IN (SELECT session_id FROM lojas)
                    AND NOT EXISTS (
                      SELECT 1 FROM site_eventos c WHERE c.session_id = p.session_id
                        AND c.evento = 'purchase' AND c.criado_em >= p.criado_em AND c.criado_em <= $2
@@ -745,21 +780,24 @@ export class SiteMetricsService {
     const linhas = await this.prisma.$queryRawUnsafe<Array<{
       evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
     }>>(
-      `SELECT evento,
-              COALESCE(dados->>'reason', dados->>'method', dados->>'payment_type', dados->>'section',
-                       dados->>'shipping_tier', dados->>'color', dados->>'size', 'sem_codigo') AS codigo,
-              CASE WHEN dados ? 'field' THEN dados->>'field' ELSE NULL END AS campo,
-              COUNT(DISTINCT session_id)::int AS pessoas,
+      `WITH gente AS (${SQL_SESSOES_DE_GENTE})
+       SELECT e.evento,
+              COALESCE(e.dados->>'reason', e.dados->>'method', e.dados->>'payment_type', e.dados->>'section',
+                       e.dados->>'shipping_tier', e.dados->>'color', e.dados->>'size', 'sem_codigo') AS codigo,
+              CASE WHEN e.dados ? 'field' THEN e.dados->>'field' ELSE NULL END AS campo,
+              COUNT(DISTINCT e.session_id)::int AS pessoas,
               COUNT(*)::int AS eventos
-         FROM site_eventos
-        WHERE criado_em >= $1 AND criado_em <= $2
-          AND evento IN ('color_switch','size_switch','add_to_cart_blocked',
+         FROM site_eventos e
+        WHERE e.criado_em >= $1 AND e.criado_em <= $2
+          AND e.session_id IS NOT NULL
+          AND e.evento IN ('color_switch','size_switch','add_to_cart_blocked',
                          'add_shipping_info','add_payment_info','checkout_submission',
                          'checkout_error','checkout_validation_error','pix_created',
                          'payment_method_selected','pix_copied','pix_expired',
                          'card_declined','payment_retry','checkout_recovered')
-        GROUP BY evento, codigo, campo
-        ORDER BY eventos DESC, evento, codigo
+          AND ${soGente('e')}
+        GROUP BY e.evento, codigo, campo
+        ORDER BY eventos DESC, e.evento, codigo
         LIMIT 100`,
       de,
       ate,
@@ -782,11 +820,13 @@ export class SiteMetricsService {
       session_id: string; etapa: string; pagamento: string; codigo: string;
       pedido: string | null; tentativas: number; primeira_falha: Date; ultima_falha: Date;
     }>>(
-      `WITH erros AS (
-         SELECT session_id, criado_em, dados
-           FROM site_eventos
-          WHERE criado_em >= $1 AND criado_em <= $2
-            AND evento = 'checkout_error' AND session_id IS NOT NULL
+      `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            erros AS (
+         SELECT e.session_id, e.criado_em, e.dados
+           FROM site_eventos e
+          WHERE e.criado_em >= $1 AND e.criado_em <= $2
+            AND e.evento = 'checkout_error' AND e.session_id IS NOT NULL
+            AND ${soGente('e')}
        ), sessoes_alerta AS (
          SELECT DISTINCT a.session_id
            FROM erros a
