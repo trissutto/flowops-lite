@@ -64,13 +64,15 @@ export class WhatsappIaService {
     'generica',
   ]);
 
-  /** Status do pedido que AUTORIZAM afirmar envio / dar rastreio. Fail-closed: fora
-   *  desta lista (cancelado, pagamento recusado, aguardando, expirado, ou status
-   *  DESCONHECIDO) a Lulú NÃO dá o código — manda pro humano conferir. Uma etiqueta
-   *  pode ter sido gerada antes do despacho num pedido que depois caiu. */
+  /** Status que AUTORIZAM afirmar envio / dar rastreio. Fail-closed: SÓ status de
+   *  peça REALMENTE DESPACHADA (alinhado ao `isShippedStatus` do order-app-hooks). NÃO
+   *  entra pago-mas-parado ('processing'/'paid'/'separating'/'em_separacao'): a etiqueta
+   *  é gerada ANTES do despacho e a caixa fica dias na loja — dar o código aí faz a
+   *  cliente rastrear um objeto que não anda por dias e achar que sumiu. Esses e os
+   *  cancelados/recusados/aguardando/desconhecidos caem no ramo "uma pessoa confere". */
   private readonly STATUS_ENVIO_OK = new Set([
-    'processing', 'paid', 'separating', 'shipped', 'delivered', 'completed',
-    'enviado', 'postado', 'em_separacao', 'em_transito', 'concluido',
+    'shipped', 'sent', 'dispatched', 'delivered', 'completed',
+    'enviado', 'entregue', 'postado', 'em_transito', 'concluido',
   ]);
 
   /** Acolhida SÓBRIA (reclamação/urgência): sem festa, sem upsell — só reconhece e garante retorno. */
@@ -82,6 +84,28 @@ export class WhatsappIaService {
   private readonly ACK_FORA_NEUTRO =
     'Recebi sua mensagem aqui 💜 Uma pessoa do time vê certinho e te responde assim que a gente abrir!';
 
+  // Variantes DENTRO do horário (modo full-time 'sempre'): a Lulú acolhe também no
+  // horário aberto — mas sem dizer "fora do horário/assim que a gente abrir".
+  private readonly ACK_ABERTO_SOBRIO =
+    'Oi, recebi sua mensagem e sinto muito pelo transtorno. Já passei aqui pro time e uma pessoa vai te responder pra resolver, tá?';
+  private readonly ACK_ABERTO_NEUTRO =
+    'Recebi sua mensagem aqui 💜 Já passei pro time e uma pessoa te responde rapidinho, tá?';
+
+  // Acolhida de MÍDIA (áudio/foto/vídeo que a Lulú NÃO leu): NÃO promete "vê certinho"
+  // (ninguém leu) — só confirma que chegou e que uma pessoa vai ouvir/ver com atenção.
+  private readonly ACK_MIDIA_FORA =
+    'Recebi seu áudio/mídia aqui. Assim que a gente abrir, uma pessoa do time ouve com atenção e te responde, tá?';
+  private readonly ACK_MIDIA_ABERTO =
+    'Recebi seu áudio/mídia aqui. Uma pessoa do time já vai ouvir com atenção e te responder, tá?';
+
+  /** Escolhe a acolhida certa por horário/tom/mídia. Full-time: sempre há uma acolhida
+   *  (nunca fica muda por conta própria — quem faz a Lulú parar é um humano entrar). */
+  private ack(fora: boolean, sobrio: boolean, midia = false): string {
+    if (midia && !sobrio) return fora ? this.ACK_MIDIA_FORA : this.ACK_MIDIA_ABERTO;
+    if (sobrio) return fora ? this.ACK_FORA_SOBRIO : this.ACK_ABERTO_SOBRIO;
+    return fora ? this.ACK_FORA_NEUTRO : this.ACK_ABERTO_NEUTRO;
+  }
+
   /** Última mensagem é mídia (áudio/foto/vídeo/doc…) ou vazia? Aí a Lulú NÃO lê o
    *  conteúdo — não pode classificar nem detectar tom. Nunca cai em template alegre. */
   private ehMidia(texto: string): boolean {
@@ -91,7 +115,7 @@ export class WhatsappIaService {
 
   /** Cheira a reclamação/insatisfação? (reforço da regex por cima do tom da IA) */
   private pareceReclamacao(texto: string): boolean {
-    return /reclama|absurd|vergonha|descaso|palha[çc]|processar|processo|pro?con|advogad|justi[çc]a|horr[íi]vel|p[ée]ssim|pior|lixo|nunca mais|decep|revolt|indign|golpe|enganad|roubar|calote|problema|n[ãa]o funciona|n[ãa]o serve|furad|mancha|rasg|n[ãa]o chegou|n[ãa]o recebi|atras|demora|ainda n[ãa]o|at[ée] agora|at[ée] hoje|cad[êe] |quero meu dinheiro|sumi(u|ram)|\b\d+\s*dias?\b|(t[ôo]|estou) esperando|sem acreditar|n[ãa]o aguento|reembols|estorn|cancel|defeito|quebrad|errad|urgente|ningu[ée]m (me )?(responde|atende)|sem resposta/i.test(
+    return /reclama|absurd|vergonha|descaso|palha[çc]|processar|processo|pro?con|advogad|justi[çc]a|horr[íi]vel|p[ée]ssim|pior|lixo|nunca mais|decep|revolt|indign|golpe|enganad|roubar|calote|problema|n[ãa]o funciona|n[ãa]o serve|furad|mancha|rasg|puid|desbot|encolh|descos|desfi|veio (trocad|errad|faltando|rasgad|com defeito)|tamanho errad|faltou|diferente da foto|n[ãa]o ficou como|n[ãa]o chegou|n[ãa]o recebi|atras|demora|ainda n[ãa]o|at[ée] agora|at[ée] hoje|cad[êe] |quero meu dinheiro|sumi(u|ram)|\b\d+\s*dias?\b|(t[ôo]|estou) esperando|sem acreditar|n[ãa]o aguento|reembols|estorn|cancel|defeito|quebrad|errad|urgente|ningu[ée]m (me )?(responde|atende)|sem resposta/i.test(
       String(texto || ''),
     );
   }
@@ -192,22 +216,16 @@ export class WhatsappIaService {
   ): Promise<{ responder: boolean; resposta: string; motivo: string; erro?: boolean }> {
     let ultimaCliente = '';
     const nao = (motivo: string, erro = false) => ({ responder: false, resposta: '', motivo, erro });
-    // Acolhida fixa só fora do horário. SÓBRIA quando: o tom da IA não é neutro, OU a
-    // regex de reclamação/vulnerabilidade dispara (backstop independente da IA). Senão
-    // NEUTRA — nunca a alegre com upsell ("me diga a cidade"): o fallback pega justo o
-    // caso incerto (intent desconhecido, erro), onde festa+upsell soa leviano se a
-    // cliente estiver frustrada. Saudação genuína tem template próprio em montarResposta.
+    // Acolhida da Lulú quando não há template específico (intent incerto, erro, mídia).
+    // FULL-TIME: acolhe SEMPRE (fora E dentro do horário) — nunca fica muda por conta
+    // própria; quem a faz parar é um HUMANO entrar na conversa (guard humanoRecente).
+    // SÓBRIA quando o tom da IA não é neutro OU a regex de reclamação/vulnerabilidade
+    // dispara (backstop independente da IA); senão NEUTRA — nunca a alegre com upsell.
+    // Fora vs dentro do horário muda só o TEXTO. Saudação genuína tem template próprio.
     const acolher = (motivo: string, erro = false, sobrio?: boolean) => {
       const usarSobrio =
         sobrio ?? (this.pareceReclamacao(ultimaCliente) || this.pareceVulneravel(ultimaCliente));
-      return opts.fora
-        ? {
-            responder: true,
-            resposta: usarSobrio ? this.ACK_FORA_SOBRIO : this.ACK_FORA_NEUTRO,
-            motivo: `acolhida (${motivo})`,
-            erro,
-          }
-        : nao(motivo, erro);
+      return { responder: true, resposta: this.ack(opts.fora, usarSobrio), motivo: `acolhida (${motivo})`, erro };
     };
     if (!this.apiKey) return nao('IA off (sem ANTHROPIC_API_KEY)');
     if (!jid) return nao('sem jid');
@@ -229,14 +247,13 @@ export class WhatsappIaService {
       .map((m) => m.texto)
       .join('  ');
 
-    // MÍDIA como última mensagem (áudio/foto/vídeo): a Lulú NÃO lê o conteúdo → não
-    // dá pra classificar nem ler o tom. Nunca cai em template alegre: se o histórico
-    // recente cheira a reclamação/luto → sóbrio; senão → acolhida NEUTRA. Fora do
-    // horário acolhe; dentro, deixa pro humano.
+    // MÍDIA como última mensagem (áudio/foto/vídeo): a Lulú NÃO lê o conteúdo → não dá
+    // pra classificar nem ler o tom. Full-time acolhe também no horário aberto. Nunca
+    // template alegre: se o histórico recente cheira a reclamação/luto → sóbrio; senão
+    // → acolhida de MÍDIA (contida, sem prometer "vê certinho" o que ninguém leu).
     if (this.ehMidia(ultimaCliente)) {
-      if (!opts.fora) return nao('mídia (dentro do horário → humano)');
       const delicadoRegex = this.pareceReclamacao(clienteRecente) || this.pareceVulneravel(clienteRecente);
-      return { responder: true, resposta: delicadoRegex ? this.ACK_FORA_SOBRIO : this.ACK_FORA_NEUTRO, motivo: 'mídia' };
+      return { responder: true, resposta: this.ack(opts.fora, delicadoRegex, true), motivo: 'mídia' };
     }
 
     const conteudo =
@@ -441,7 +458,7 @@ export class WhatsappIaService {
       .replace(/\r?\n/g, ' ')
       .replace(/[<>{}]/g, '')
       .replace(
-        /\b(LOJA|CLIENTE|SISTEMA|SYSTEM|ASSISTANT|ASSISTENTE|USER|ADMIN|ADMINISTRADOR|ATENDENTE|SAC|SUPORTE|GERENTE|DONO|MODERADOR|WHATSAPP|IA|LULU|BOT|REGRA|INSTRU[ÇC][ÃA]O)\s*:/gi,
+        /\b(LOJA|CLIENTE|SISTEMA|SYSTEM|ASSISTANT|ASSISTENTE|USER|ADMIN|ADMINISTRADOR|ATENDENTE|OPERADORA?|OWNER|SAC|SUPORTE|GERENTE|DONO|MODERADOR|WHATSAPP|IA|LULU|BOT|REGRA|PROMPT|OUTPUT|JSON|RESPOSTA|RESPONDA|INSTRU[ÇC][ÃA]O)\s*:/gi,
         '- ',
       )
       .replace(/```+|#{2,}|\[\/?INST\]/g, ' ') // fences/tokens de prompt

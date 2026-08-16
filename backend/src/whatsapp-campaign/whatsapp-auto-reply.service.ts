@@ -124,13 +124,26 @@ export class WhatsappAutoReplyService implements OnModuleInit {
       // Throttle: no máx 1 chamada à IA a cada 3s por conversa (ping-pong; env).
       const throttleMs = Math.max(1000, Number(process.env.WHATSAPP_AUTO_THROTTLE_MS ?? 3000));
       if (agora - (this.ultimaChamadaIA.get(jid) || 0) < throttleMs) return;
+      // Marca a chamada JÁ AQUI (antes dos awaits) — fecha a corrida evento×rede-de-
+      // segurança sobre o MESMO estado (senão as duas passam o throttle e chamam o Haiku
+      // em dobro; o claim só evita o ENVIO duplo, não a chamada extra).
+      this.ultimaChamadaIA.set(jid, agora);
 
-      // Se um HUMANO respondeu nos últimos 10min, a Lulú fica FORA (a pessoa está
-      // atendendo). Conta SÓ resposta humana (tipo 'texto'); a própria Lulú
-      // ('auto-ia') NÃO trava a conversa — senão ela parava depois de 1 resposta.
-      const humanoRecente = await this.p().whatsappMessage.findFirst({
-        where: { conversationJid: jid, fromMe: true, tipo: 'texto', ts: { gte: new Date(agora - 10 * 60 * 1000) } },
+      // Se um HUMANO respondeu nos últimos N min (env WHATSAPP_AUTO_HUMANO_MIN, default
+      // 10), a Lulú fica FORA — é ela "parando porque um humano entrou". Conta resposta
+      // humana (tipo 'texto'), MAS descarta o ECO da própria Lulú: quando o Evolution não
+      // devolve waId, o webhook do envio dela entra como 'texto' e passaria por humano —
+      // travaria a Lulú achando que assumiram. Filtra pelo texto da última auto-resposta.
+      const humanoMin = Math.max(1, Number(process.env.WHATSAPP_AUTO_HUMANO_MIN ?? 10));
+      const ultAuto = this.ultimaAutoResp.get(jid);
+      const fromMeRecentes = await this.p().whatsappMessage.findMany({
+        where: { conversationJid: jid, fromMe: true, tipo: 'texto', ts: { gte: new Date(agora - humanoMin * 60 * 1000) } },
+        orderBy: { ts: 'desc' },
+        take: 5,
       });
+      const humanoRecente = fromMeRecentes.some(
+        (m: any) => !(ultAuto && String(m.texto || '').trim() === ultAuto.texto),
+      );
       if (humanoRecente) {
         this.avaliadas.set(jid, ultimaEmMs);
         return;
@@ -146,7 +159,6 @@ export class WhatsappAutoReplyService implements OnModuleInit {
         return;
       }
 
-      this.ultimaChamadaIA.set(jid, agora);
       const dec = await this.ia.decidirAutoResposta(jid, { fora });
       if (dec.erro && !dec.responder) {
         this.logger.warn(`[wa-auto] ${c.numero}: erro transitório — ${dec.motivo} (reavalia)`);
@@ -184,7 +196,18 @@ export class WhatsappAutoReplyService implements OnModuleInit {
         this.avaliadas.set(jid, ultimaEmMs);
         return;
       }
-      await this.inbox.responder(jid, texto, 'auto-ia');
+      try {
+        await this.inbox.responder(jid, texto, 'auto-ia');
+      } catch (e: any) {
+        // Envio falhou (Evolution 5xx/timeout) DEPOIS do claim → DEVOLVE o claim
+        // (autoRepliedAt=null) pra rede de segurança poder RETENTAR; senão a acolhida
+        // desta mensagem se perderia pra sempre. responder() só lança se o enviarTexto
+        // lançar (ANTES de mandar), então reverter aqui não duplica envio.
+        await this.p()
+          .whatsappConversation.updateMany({ where: { jid, autoRepliedAt: new Date(agora) }, data: { autoRepliedAt: null } })
+          .catch(() => undefined);
+        throw e; // cai no catch externo (loga); NÃO cacheia avaliadas → reavalia no próximo ciclo
+      }
       this.ultimaAutoResp.set(jid, { texto, ts: agora });
       const tsHora = (this.autoRespTs.get(jid) || []).filter((t) => t >= agora - 60 * 60 * 1000);
       tsHora.push(agora);
