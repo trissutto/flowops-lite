@@ -213,6 +213,48 @@ export type { Attribution } from './types';
  * first-click: se ela voltou por outro anúncio, quem levou ela de volta é
  * quem fecha a venda.
  */
+/**
+ * O UTM DO META CHEGA CODIFICADO DUAS VEZES (16/08/2026).
+ *
+ * `URLSearchParams.get()` já decodifica uma vez, e isso bastaria se a
+ * plataforma codificasse uma. O Meta, ao substituir `{{campaign.name}}`,
+ * codifica o nome ANTES de montar a URL e a URL inteira depois — então uma
+ * campanha chamada `|SITENOVO| Vendas Capitais VOGUE Preta` chegava no
+ * relatório como `%7CSITENOVO%7C+Vendas+Capitais+VOGUE+Preta`.
+ *
+ * Aqui a segunda camada cai: `+` vira espaço (regra de query string, que o
+ * segundo encode escondeu atrás de `%2B`) e o `%XX` restante é decodificado.
+ *
+ * Só age se AINDA parecer codificado — nome legítimo com `%` (uma campanha
+ * "PROMO 50%") não é tocado, porque `%` solto não casa com `%XX`. E qualquer
+ * decode inválido devolve o texto como veio: nome feio é melhor que nome
+ * perdido.
+ */
+export function decodificaUtm(valor: string | null): string | undefined {
+  if (!valor) return undefined;
+  let texto = valor;
+  // Duas passadas no máximo: cobre o encode duplo e não vira loop se alguém
+  // um dia mandar três.
+  for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(texto); i += 1) {
+    try {
+      texto = decodeURIComponent(texto.replace(/\+/g, ' '));
+    } catch {
+      break; // sequência inválida — fica com o que já tem
+    }
+  }
+  /**
+   * Sobrou `+` e nenhum espaço: era espaço codificado.
+   *
+   * Nome sem caractere especial ("Linha Conforto Capitais") não deixa nenhum
+   * `%XX` pra trás depois da primeira decodificação, então o laço acima nem
+   * roda e os `+` ficariam na tela. A condição "e nenhum espaço" é o que
+   * protege o `+` legítimo: "Advantage+ Vendas" chega COM espaço e passa
+   * intacto, porque um nome que já tem espaço não precisou codificar nenhum.
+   */
+  if (texto.includes('+') && !texto.includes(' ')) texto = texto.replace(/\+/g, ' ');
+  return texto.trim() || undefined;
+}
+
 export function captureAttribution(): Attribution {
   if (typeof window === 'undefined') return {};
 
@@ -233,11 +275,11 @@ export function captureAttribution(): Attribution {
   if (guardada && !temToqueNovo) return guardada;
 
   const attr: Attribution = {
-    source: q.get('utm_source') || inferSource(ref),
-    medium: q.get('utm_medium') || (ref ? 'referral' : 'direct'),
-    campaign: q.get('utm_campaign') || undefined,
-    term: q.get('utm_term') || undefined,
-    content: q.get('utm_content') || undefined,
+    source: decodificaUtm(q.get('utm_source')) || inferSource(ref),
+    medium: decodificaUtm(q.get('utm_medium')) || (ref ? 'referral' : 'direct'),
+    campaign: decodificaUtm(q.get('utm_campaign')),
+    term: decodificaUtm(q.get('utm_term')),
+    content: decodificaUtm(q.get('utm_content')),
     // O ID da campanha existe como coluna no pedido (`utmId`) e nunca era
     // capturado aqui — se o Meta manda `utm_id={{campaign.id}}`, o dado
     // chegava e era jogado fora.

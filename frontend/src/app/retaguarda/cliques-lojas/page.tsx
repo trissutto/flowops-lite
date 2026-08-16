@@ -181,6 +181,39 @@ const ROTULO_PLATAFORMA: Record<string, string> = {
   whatsapp: 'WhatsApp',
 };
 
+/**
+ * O NOME DA CAMPANHA, LEGÍVEL.
+ *
+ * Duas sujeiras chegam aqui, de origens diferentes:
+ *
+ * 1. CODIFICAÇÃO DUPLA do Meta — `%7CSITENOVO%7C+Vendas+Capitais` em vez de
+ *    `|SITENOVO| Vendas Capitais`. Corrigido na origem (`decodificaUtm`, no
+ *    site), mas as linhas gravadas ANTES do conserto continuam tortas no
+ *    banco. Este decode existe pra elas: é leitura, não regravação.
+ *
+ * 2. ID NO LUGAR DO NOME — anúncio etiquetado com `utm_campaign={{campaign.id}}`
+ *    manda `52531954165766`. Aqui não dá pra adivinhar o nome, então a tela
+ *    ASSUME o buraco em vez de mostrar um número solto: quem lê entende que
+ *    falta arrumar a etiqueta daquele anúncio, e não que a campanha se chama
+ *    assim.
+ */
+function rotuloCampanha(valor: string): string {
+  let texto = valor;
+  for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(texto); i += 1) {
+    try {
+      texto = decodeURIComponent(texto.replace(/\+/g, ' '));
+    } catch {
+      break;
+    }
+  }
+  // Sobrou `+` e nenhum espaço: era espaço codificado (ver `decodificaUtm`).
+  if (texto.includes('+') && !texto.includes(' ')) texto = texto.replace(/\+/g, ' ');
+  texto = texto.trim();
+  // Só dígitos = é o ID da campanha, não o nome dela.
+  if (/^\d{6,}$/.test(texto)) return `sem nome (ID ${texto.slice(-6)})`;
+  return texto || valor;
+}
+
 /** Um degrau da cascata. Vazio some — degrau com uma opção só não é escolha. */
 function Degrau({
   titulo,
@@ -312,6 +345,7 @@ function Cascata({
           titulo="Campanha"
           opcoes={nivel3}
           valor={campanha}
+          rotulo={rotuloCampanha}
           onEscolher={(v) => onMudar({ trafego, plataforma, campanha: v })}
         />
       )}
