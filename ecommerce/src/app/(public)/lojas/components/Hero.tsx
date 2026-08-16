@@ -2,12 +2,14 @@
 
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { MapPin, LocateFixed, ChevronDown } from 'lucide-react';
+import { MapPin, ShoppingBag, ChevronDown } from 'lucide-react';
+import { AppLink } from '@/components/ui/AppLink';
 import { site, imgSrc, BLUR_DATA_URL } from '../lib';
 
 interface Props {
   onFindStore: () => void;
-  onLocate: () => void;
+  onlineHref: string;
+  onOnlineClick: () => void;
   /**
    * Arte do cadastro de banners (slot `lojas-hero`). Sem ela vale a foto do
    * `lojas.json` — a página nunca fica sem capa.
@@ -15,7 +17,7 @@ interface Props {
   imagem?: string | null;
 }
 
-export default function Hero({ onFindStore, onLocate, imagem }: Props) {
+export default function Hero({ onFindStore, onlineHref, onOnlineClick, imagem }: Props) {
   return (
     <section className="relative flex min-h-[100svh] items-center justify-center overflow-hidden">
       {/* Fotografia editorial com zoom-out lento na entrada */}
@@ -83,13 +85,14 @@ export default function Hero({ onFindStore, onLocate, imagem }: Props) {
             <MapPin className="h-4 w-4 text-[var(--lj-gold-strong)] transition-colors group-hover:text-[var(--lj-ink)]" />
             Encontrar minha loja
           </button>
-          <button
-            onClick={onLocate}
+          <AppLink
+            href={onlineHref}
+            onClick={onOnlineClick}
             className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-white/60 px-9 py-4 text-sm font-medium uppercase tracking-[0.18em] text-white transition-all duration-300 hover:border-white hover:bg-white/10 sm:w-auto"
           >
-            <LocateFixed className="h-4 w-4" />
-            Usar minha localização
-          </button>
+            <ShoppingBag className="h-4 w-4" />
+            Comprar online
+          </AppLink>
         </motion.div>
       </div>
 

@@ -11,14 +11,30 @@ import WhyVisit from './components/WhyVisit';
 import Testimonials from './components/Testimonials';
 import InstagramCta from './components/InstagramCta';
 import FinalCta from './components/FinalCta';
+import OnlineShoppingSection from './components/OnlineShoppingSection';
+import CampaignMobileBar from './components/CampaignMobileBar';
+import { trackStoresOnlineCta } from '@/lib/tracking';
+import { withCampaignParams } from '@/lib/campaign-links';
+import type { Product } from '@/types';
 
 export type GeoState = 'idle' | 'loading' | 'ok' | 'error';
 
-export default function NossasLojasClient({ heroImagem }: { heroImagem?: string | null }) {
+export default function NossasLojasClient({
+  heroImagem,
+  products,
+  campaignQuery,
+}: {
+  heroImagem?: string | null;
+  products: Product[];
+  campaignQuery: string;
+}) {
   const [selectedSlug, setSelectedSlug] = useState<string>(stores[0].slug);
   const [drawerSlug, setDrawerSlug] = useState<string | null>(null);
   const [nearest, setNearest] = useState<{ store: Store; km: number } | null>(null);
   const [geoState, setGeoState] = useState<GeoState>('idle');
+  const [hasSelectedStore, setHasSelectedStore] = useState(false);
+  const campaignParams = useMemo(() => new URLSearchParams(campaignQuery), [campaignQuery]);
+  const onlineHref = useMemo(() => withCampaignParams('/novidades', campaignParams), [campaignParams]);
 
   const selected = useMemo(
     () => stores.find((s) => s.slug === selectedSlug) ?? stores[0],
@@ -35,6 +51,7 @@ export default function NossasLojasClient({ heroImagem }: { heroImagem?: string 
 
   const selectStore = useCallback((slug: string, scroll = true) => {
     setSelectedSlug(slug);
+    setHasSelectedStore(true);
     if (scroll) {
       // Centraliza o card selecionado — o mapa (sincronizado) troca sozinho.
       document
@@ -54,6 +71,7 @@ export default function NossasLojasClient({ heroImagem }: { heroImagem?: string 
         const found = nearestStore(pos.coords.latitude, pos.coords.longitude);
         setNearest(found);
         setSelectedSlug(found.store.slug);
+        setHasSelectedStore(true);
         setGeoState('ok');
         document.getElementById('buscar')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       },
@@ -64,7 +82,12 @@ export default function NossasLojasClient({ heroImagem }: { heroImagem?: string 
 
   return (
     <main>
-      <Hero onFindStore={() => scrollToId('buscar')} onLocate={locate} imagem={heroImagem} />
+      <Hero
+        onFindStore={() => scrollToId('buscar')}
+        onlineHref={onlineHref}
+        onOnlineClick={() => trackStoresOnlineCta('hero', hasSelectedStore ? selected.unit : undefined)}
+        imagem={heroImagem}
+      />
       <Manifesto />
       <SearchLocate
         geoState={geoState}
@@ -79,10 +102,19 @@ export default function NossasLojasClient({ heroImagem }: { heroImagem?: string 
         onOpen={(slug) => setDrawerSlug(slug)}
       />
       <StoreDrawer store={drawerStore} onClose={() => setDrawerSlug(null)} />
+      <OnlineShoppingSection
+        products={products}
+        campaignParams={campaignParams}
+        storeUnit={hasSelectedStore ? selected.unit : undefined}
+      />
       <WhyVisit />
       <Testimonials />
       <InstagramCta store={selected} />
       <FinalCta store={nearest?.store ?? selected} />
+      <CampaignMobileBar
+        campaignParams={campaignParams}
+        selectedStore={hasSelectedStore ? selected : null}
+      />
       <footer className="border-t border-[var(--lj-line)] bg-[var(--lj-cream)] px-6 py-12 text-center">
         <p className="lojas-serif text-lg tracking-wide">Lurd&apos;s Plus Size</p>
         <p className="mt-3 text-xs uppercase tracking-[0.2em] text-[var(--lj-ink-soft)]">
