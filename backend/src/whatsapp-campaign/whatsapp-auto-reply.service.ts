@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { EvolutionClient } from './evolution.client';
@@ -7,29 +7,30 @@ import { WhatsappIaService } from './whatsapp-ia.service';
 
 /**
  * AUTO-RESPOSTA da Lulú (dono, 16/08): a IA responde SOZINHA no WhatsApp, com
- * trava dura. Kill-switch por env `WHATSAPP_AUTO_REPLY`:
- *   off (padrão) · fora (só fora do horário da loja) · sempre.
+ * trava dura. Kill-switch por env `WHATSAPP_AUTO_REPLY`: off · fora · sempre.
  *
- * Arquitetura por CRON (não no webhook) — igual ao reconcile da Live: dá o
- * DEBOUNCE natural (só age quando a cliente para de digitar) e não trava o
- * caminho da mensagem. Travas:
- *  - só conversa cuja ÚLTIMA mensagem é da CLIENTE (ninguém — humano ou IA —
- *    respondeu ainda; `fromMe=false` na conversa);
- *  - janela: chegou entre 45s e 30min atrás (espera a rajada; ignora antigo);
- *  - cooldown: nada de 2ª auto-resposta na mesma conversa em 20min (sem ping-pong);
- *  - a própria IA decide se responde (REGRAS_AUTO: só o simples e seguro);
- *  - tudo gravado como `tipo:'auto-ia'` → aparece no inbox com tarja.
+ * ARQUITETURA POR EVENTO (16/08, meta 5-8s): a mensagem que chega no webhook
+ * AGENDA a resposta com um respiro curto (~4s, debounce — se a cliente manda de
+ * novo, reinicia). Passado o respiro → classifica (Haiku) → envia. ~6-8s no total.
+ * O CRON virou só REDE DE SEGURANÇA pro que o caminho por-evento perdeu.
+ *
+ * Travas (valem nos DOIS caminhos, em `tentarResponder`):
+ *  - só conversa cuja ÚLTIMA msg é da CLIENTE (`fromMe=false`);
+ *  - não mexe em conversa > 30min;
+ *  - throttle 90s/conversa + cooldown 20s via qualquer fromMe recente;
+ *  - CLAIM atômico (autoRepliedAt + ultimaEm) antes de enviar → 1 só envio;
+ *  - a IA decide (allowlist) e o texto é template — tudo com tarja `auto-ia`.
  */
 @Injectable()
-export class WhatsappAutoReplyService {
+export class WhatsappAutoReplyService implements OnModuleInit {
   private readonly logger = new Logger(WhatsappAutoReplyService.name);
   private rodando = false;
-  /** jid → ultimaEm(ms) já avaliado. Evita re-chamar o Claude pro MESMO estado
-   *  (inclusive quando a IA recusa — a conversa recusada não muda fromMe). */
+  /** jid → ultimaEm(ms) já avaliado. Evita re-chamar o Claude pro MESMO estado. */
   private avaliadas = new Map<string, number>();
-  /** jid → ts da última chamada à IA. Throttle: no máx 1 chamada / 90s por conversa
-   *  (mesmo que a cliente mande várias mensagens novas seguidas). */
+  /** jid → ts da última chamada à IA (throttle: máx 1 chamada / 90s por conversa). */
   private ultimaChamadaIA = new Map<string, number>();
+  /** jid → timer de debounce do caminho por-evento. */
+  private timers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -37,6 +38,11 @@ export class WhatsappAutoReplyService {
     private readonly inbox: WhatsappInboxService,
     private readonly ia: WhatsappIaService,
   ) {}
+
+  onModuleInit() {
+    // Assim que chega mensagem NOVA da cliente, agenda a resposta na hora.
+    this.inbox.aoReceber((jid) => this.agendar(jid));
+  }
 
   private p(): any {
     return this.prisma as any;
@@ -47,11 +53,7 @@ export class WhatsappAutoReplyService {
     return v === 'fora' || v === 'sempre' ? v : 'off';
   }
 
-  /**
-   * Loja aberta AGORA (Brasília)? Janela global conservadora: Seg–Sex
-   * LOJA_ABRE..LOJA_FECHA (9..18), Sáb LOJA_ABRE..LOJA_FECHA_SAB (9..13), Dom
-   * fechado. É só o gate do modo 'fora'; horário fino por loja está em lojas-info.
-   */
+  /** Loja aberta AGORA (Brasília)? União da rede (Seg-Sáb 9..19, Dom fechado). */
   private lojaAberta(): boolean {
     const partes = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/Sao_Paulo',
@@ -61,101 +63,116 @@ export class WhatsappAutoReplyService {
     }).formatToParts(new Date());
     const hora = Number(partes.find((p) => p.type === 'hour')?.value ?? '0');
     const dia = partes.find((p) => p.type === 'weekday')?.value ?? '';
-    if (dia === 'Sun') return false; // domingo: todas fechadas
-    // UNIÃO da rede: como há UM só WhatsApp e algumas lojas vão até 19h (Itanhaém,
-    // Praia Grande, inclusive sábado), o gate do modo 'fora' usa a janela MAIS
-    // AMPLA — só considera "fora" quando NENHUMA loja pode estar aberta.
+    if (dia === 'Sun') return false;
     const abre = Number(process.env.LOJA_ABRE ?? '9');
     const fecha = Number(process.env.LOJA_FECHA ?? '19');
     return hora >= abre && hora < fecha;
   }
 
-  // A cada 20s. A janela de espera abaixo é que dá o debounce da rajada.
-  @Cron('*/20 * * * * *', { name: 'wa-auto-reply' })
+  /** Caminho POR EVENTO: agenda a resposta com debounce curto (reinicia a cada msg). */
+  agendar(jid: string) {
+    if (this.modo() === 'off' || !jid) return;
+    const antigo = this.timers.get(jid);
+    if (antigo) clearTimeout(antigo);
+    const debounce = Math.max(1000, Number(process.env.WHATSAPP_AUTO_DEBOUNCE_MS ?? '4000'));
+    const t = setTimeout(() => {
+      this.timers.delete(jid);
+      void this.tentarResponder(jid);
+    }, debounce);
+    // `unref` pra não segurar o processo; nunca deixa a fila de timers explodir.
+    if (typeof t.unref === 'function') t.unref();
+    if (this.timers.size > 2000) {
+      const primeiro = this.timers.keys().next().value;
+      if (primeiro) {
+        clearTimeout(this.timers.get(primeiro)!);
+        this.timers.delete(primeiro);
+      }
+    }
+    this.timers.set(jid, t);
+  }
+
+  /** Tenta responder UMA conversa (usado pelo evento E pela rede de segurança). */
+  private async tentarResponder(jid: string) {
+    try {
+      const modo = this.modo();
+      if (modo === 'off' || !this.evo.configurado()) return;
+      const fora = !this.lojaAberta();
+      if (modo === 'fora' && !fora) return; // dentro do horário: humanos atendem
+
+      const agora = Date.now();
+      const c = await this.p().whatsappConversation.findUnique({ where: { jid } });
+      if (!c || c.fromMe) return; // sumiu, ou a última já é da loja
+      const ultimaEmMs = c.ultimaEm ? new Date(c.ultimaEm).getTime() : 0;
+      if (agora - ultimaEmMs > 30 * 60 * 1000) return; // velho demais
+      if (this.avaliadas.get(jid) === ultimaEmMs) return; // já avaliei este estado
+      if (agora - (this.ultimaChamadaIA.get(jid) || 0) < 90 * 1000) return; // throttle
+
+      // Cooldown: a LOJA já respondeu (Lulú OU humano) nos últimos 20min?
+      const respondeuRecente = await this.p().whatsappMessage.findFirst({
+        where: { conversationJid: jid, fromMe: true, ts: { gte: new Date(agora - 20 * 60 * 1000) } },
+      });
+      if (respondeuRecente) {
+        this.avaliadas.set(jid, ultimaEmMs);
+        return;
+      }
+
+      this.ultimaChamadaIA.set(jid, agora);
+      const dec = await this.ia.decidirAutoResposta(jid, { fora });
+      if (dec.erro && !dec.responder) {
+        this.logger.warn(`[wa-auto] ${c.numero}: erro transitório — ${dec.motivo} (reavalia)`);
+        return; // transitório → não cacheia (o throttle de 90s evita martelar)
+      }
+      if (!dec.responder || !dec.resposta.trim()) {
+        this.avaliadas.set(jid, ultimaEmMs); // recusa de CONTEÚDO → não re-billa
+        this.logger.log(`[wa-auto] ${c.numero}: NÃO respondeu — ${dec.motivo}`);
+        return;
+      }
+      // CLAIM ATÔMICO: 1 só envio mesmo com 2 processos; trava TOCTOU (ultimaEm
+      // igual) + cooldown de 20min. Feito ANTES do envio (timeout que entregou
+      // não reenvia). Só quem atualiza 1 linha ganha o direito.
+      const claim = await this.p().whatsappConversation.updateMany({
+        where: {
+          jid,
+          ultimaEm: c.ultimaEm,
+          OR: [{ autoRepliedAt: null }, { autoRepliedAt: { lt: new Date(agora - 20 * 60 * 1000) } }],
+        },
+        data: { autoRepliedAt: new Date(agora) },
+      });
+      if (claim.count !== 1) {
+        this.avaliadas.set(jid, ultimaEmMs);
+        return;
+      }
+      await this.inbox.responder(jid, dec.resposta.trim(), 'auto-ia');
+      this.avaliadas.set(jid, ultimaEmMs);
+      this.logger.log(`[wa-auto] ${c.numero}: Lulú respondeu (fora=${fora}) — ${dec.motivo}`);
+    } catch (e: any) {
+      this.logger.warn(`[wa-auto] ${jid} falhou: ${e?.message || e}`);
+    }
+  }
+
+  // REDE DE SEGURANÇA: pega o que o caminho por-evento perdeu (processo caiu, msg
+  // que não passou pelo webhook). Só mexe no que está parado > 45s.
+  @Cron('*/30 * * * * *', { name: 'wa-auto-reply-safety' })
   async ciclo() {
     const modo = this.modo();
     if (modo === 'off' || !this.evo.configurado() || this.rodando) return;
-    const fora = !this.lojaAberta();
-    if (modo === 'fora' && !fora) return; // dentro do horário: humanos atendem
-
+    if (modo === 'fora' && this.lojaAberta()) return;
     this.rodando = true;
     try {
-      if (this.avaliadas.size > 1000) this.avaliadas.clear(); // não vaza memória
-      if (this.ultimaChamadaIA.size > 1000) this.ultimaChamadaIA.clear();
+      if (this.avaliadas.size > 2000) this.avaliadas.clear();
+      if (this.ultimaChamadaIA.size > 2000) this.ultimaChamadaIA.clear();
       const agora = Date.now();
-      const desde = new Date(agora - 30 * 60 * 1000); // não mexe em conversa velha
-      const ate = new Date(agora - 12 * 1000); // espera 12s (deixa a rajada assentar)
-      // 'asc': atende primeiro quem está mais perto de EXPIRAR (30min) — senão,
-      // num disparo em massa à noite, as conversas antigas nunca subiam ao topo
-      // e saíam da janela sem acolhida nenhuma.
       const convs = await this.p().whatsappConversation.findMany({
-        where: { fromMe: false, ultimaEm: { gte: desde, lte: ate } },
-        orderBy: { ultimaEm: 'asc' },
+        where: {
+          fromMe: false,
+          ultimaEm: { gte: new Date(agora - 30 * 60 * 1000), lte: new Date(agora - 45 * 1000) },
+        },
+        orderBy: { ultimaEm: 'asc' }, // atende primeiro quem vai expirar
         take: 25,
       });
-      if (!convs.length) return;
-      if (convs.length === 25) this.logger.warn('[wa-auto] fila cheia (25+) — pode haver conversa represada');
-
-      for (const c of convs) {
-        try {
-          const ultimaEmMs = c.ultimaEm ? new Date(c.ultimaEm).getTime() : 0;
-          // Já avaliei ESTE estado (acerto OU recusa de conteúdo)? Não re-chama o Claude.
-          if (this.avaliadas.get(c.jid) === ultimaEmMs) continue;
-          // Cooldown: a LOJA já respondeu (Lulú OU humano) nos últimos 20min? Pula.
-          // Conta qualquer msg fromMe recente (não depende do tag 'auto-ia', que o
-          // webhook re-grava como 'texto') — resposta humana também segura o bot.
-          const respondeuRecente = await this.p().whatsappMessage.findFirst({
-            where: { conversationJid: c.jid, fromMe: true, ts: { gte: new Date(agora - 20 * 60 * 1000) } },
-          });
-          if (respondeuRecente) {
-            this.avaliadas.set(c.jid, ultimaEmMs);
-            continue;
-          }
-          // Throttle por conversa: no máx 1 chamada à IA / 90s (cliente pode
-          // mandar várias mensagens seguidas, cada uma com ultimaEm diferente).
-          if (agora - (this.ultimaChamadaIA.get(c.jid) || 0) < 90 * 1000) continue;
-
-          this.ultimaChamadaIA.set(c.jid, agora);
-          const dec = await this.ia.decidirAutoResposta(c.jid, { fora });
-          // Falha TRANSITÓRIA (IA/DB fora): NÃO cacheia — o próximo ciclo reavalia
-          // (o throttle de 90s evita martelar). Não perde a mensagem no silêncio.
-          if (dec.erro && !dec.responder) {
-            this.logger.warn(`[wa-auto] ${c.numero}: erro transitório — ${dec.motivo} (reavalia)`);
-            continue;
-          }
-          if (!dec.responder || !dec.resposta.trim()) {
-            this.avaliadas.set(c.jid, ultimaEmMs); // recusa de CONTEÚDO → não re-billa
-            this.logger.log(`[wa-auto] ${c.numero}: NÃO respondeu — ${dec.motivo}`);
-            continue;
-          }
-          // CLAIM ATÔMICO no banco: garante UM só envio mesmo com 2 processos
-          // (rolling deploy do Railway) e trava de uma vez o TOCTOU (a `ultimaEm`
-          // tem que ser a MESMA — se chegou msg nova, não casa) e o cooldown de
-          // 20min. Só quem atualizar exatamente 1 linha ganha o direito de enviar.
-          const claim = await this.p().whatsappConversation.updateMany({
-            where: {
-              jid: c.jid,
-              ultimaEm: c.ultimaEm,
-              OR: [{ autoRepliedAt: null }, { autoRepliedAt: { lt: new Date(agora - 20 * 60 * 1000) } }],
-            },
-            data: { autoRepliedAt: new Date(agora) },
-          });
-          if (claim.count !== 1) {
-            // outro processo ganhou, ou o estado mudou (msg nova), ou cooldown.
-            this.avaliadas.set(c.jid, ultimaEmMs);
-            continue;
-          }
-          // Claim feito ANTES do envio: se o Evolution der timeout mas entregar,
-          // o autoRepliedAt já está gravado → o próximo ciclo NÃO reenvia (sem duplicar).
-          await this.inbox.responder(c.jid, dec.resposta.trim(), 'auto-ia');
-          this.avaliadas.set(c.jid, ultimaEmMs);
-          this.logger.log(`[wa-auto] ${c.numero}: Lulú respondeu (fora=${fora}) — ${dec.motivo}`);
-        } catch (e: any) {
-          this.logger.warn(`[wa-auto] ${c.jid} falhou: ${e?.message || e}`);
-        }
-      }
+      for (const c of convs) await this.tentarResponder(c.jid);
     } catch (e: any) {
-      this.logger.warn(`[wa-auto] ciclo falhou: ${e?.message || e}`);
+      this.logger.warn(`[wa-auto] rede de segurança falhou: ${e?.message || e}`);
     } finally {
       this.rodando = false;
     }

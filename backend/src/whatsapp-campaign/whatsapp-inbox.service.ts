@@ -35,6 +35,12 @@ export class WhatsappInboxService {
     return this.prisma as any;
   }
 
+  /** Callback avisado quando chega msg NOVA da CLIENTE (o auto-reply agenda na hora). */
+  private aoReceberCb?: (jid: string) => void;
+  aoReceber(cb: (jid: string) => void) {
+    this.aoReceberCb = cb;
+  }
+
   // ── helpers ────────────────────────────────────────────────────────
   private toMs(v: any): number {
     if (v == null) return 0;
@@ -278,6 +284,15 @@ export class WhatsappInboxService {
         // corrida de webhook duplicado (mesmo waId) → ignora
         if (!String(e?.message || '').includes('Unique')) throw e;
       });
+    // Msg NOVA da cliente (chegamos aqui = não é duplicada por waId) → avisa o
+    // auto-reply pra agendar na hora (caminho por-evento, ~5-8s).
+    if (!fromMe) {
+      try {
+        this.aoReceberCb?.(jid);
+      } catch {
+        /* callback nunca derruba o webhook */
+      }
+    }
   }
 
   private async atualizarStatus(u: any) {
