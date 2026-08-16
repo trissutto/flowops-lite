@@ -64,13 +64,15 @@ export class WhatsappIaService {
     'generica',
   ]);
 
-  /** Status do pedido que AUTORIZAM afirmar envio / dar rastreio. Fail-closed: fora
-   *  desta lista (cancelado, pagamento recusado, aguardando, expirado, ou status
-   *  DESCONHECIDO) a Lulú NÃO dá o código — manda pro humano conferir. Uma etiqueta
-   *  pode ter sido gerada antes do despacho num pedido que depois caiu. */
+  /** Status que AUTORIZAM afirmar envio / dar rastreio. Fail-closed: SÓ status de
+   *  peça REALMENTE DESPACHADA (alinhado ao `isShippedStatus` do order-app-hooks). NÃO
+   *  entra pago-mas-parado ('processing'/'paid'/'separating'/'em_separacao'): a etiqueta
+   *  é gerada ANTES do despacho e a caixa fica dias na loja — dar o código aí faz a
+   *  cliente rastrear um objeto que não anda por dias e achar que sumiu. Esses e os
+   *  cancelados/recusados/aguardando/desconhecidos caem no ramo "uma pessoa confere". */
   private readonly STATUS_ENVIO_OK = new Set([
-    'processing', 'paid', 'separating', 'shipped', 'delivered', 'completed',
-    'enviado', 'postado', 'em_separacao', 'em_transito', 'concluido',
+    'shipped', 'sent', 'dispatched', 'delivered', 'completed',
+    'enviado', 'entregue', 'postado', 'em_transito', 'concluido',
   ]);
 
   /** Acolhida SÓBRIA (reclamação/urgência): sem festa, sem upsell — só reconhece e garante retorno. */
@@ -82,6 +84,28 @@ export class WhatsappIaService {
   private readonly ACK_FORA_NEUTRO =
     'Recebi sua mensagem aqui 💜 Uma pessoa do time vê certinho e te responde assim que a gente abrir!';
 
+  // Variantes DENTRO do horário (modo full-time 'sempre'): a Lulú acolhe também no
+  // horário aberto — mas sem dizer "fora do horário/assim que a gente abrir".
+  private readonly ACK_ABERTO_SOBRIO =
+    'Oi, recebi sua mensagem e sinto muito pelo transtorno. Já passei aqui pro time e uma pessoa vai te responder pra resolver, tá?';
+  private readonly ACK_ABERTO_NEUTRO =
+    'Recebi sua mensagem aqui 💜 Já passei pro time e uma pessoa te responde rapidinho, tá?';
+
+  // Acolhida de MÍDIA (áudio/foto/vídeo que a Lulú NÃO leu): NÃO promete "vê certinho"
+  // (ninguém leu) — só confirma que chegou e que uma pessoa vai ouvir/ver com atenção.
+  private readonly ACK_MIDIA_FORA =
+    'Recebi seu áudio/mídia aqui. Assim que a gente abrir, uma pessoa do time ouve com atenção e te responde, tá?';
+  private readonly ACK_MIDIA_ABERTO =
+    'Recebi seu áudio/mídia aqui. Uma pessoa do time já vai ouvir com atenção e te responder, tá?';
+
+  /** Escolhe a acolhida certa por horário/tom/mídia. Full-time: sempre há uma acolhida
+   *  (nunca fica muda por conta própria — quem faz a Lulú parar é um humano entrar). */
+  private ack(fora: boolean, sobrio: boolean, midia = false): string {
+    if (midia && !sobrio) return fora ? this.ACK_MIDIA_FORA : this.ACK_MIDIA_ABERTO;
+    if (sobrio) return fora ? this.ACK_FORA_SOBRIO : this.ACK_ABERTO_SOBRIO;
+    return fora ? this.ACK_FORA_NEUTRO : this.ACK_ABERTO_NEUTRO;
+  }
+
   /** Última mensagem é mídia (áudio/foto/vídeo/doc…) ou vazia? Aí a Lulú NÃO lê o
    *  conteúdo — não pode classificar nem detectar tom. Nunca cai em template alegre. */
   private ehMidia(texto: string): boolean {
@@ -91,7 +115,7 @@ export class WhatsappIaService {
 
   /** Cheira a reclamação/insatisfação? (reforço da regex por cima do tom da IA) */
   private pareceReclamacao(texto: string): boolean {
-    return /reclama|absurd|vergonha|descaso|palha[çc]|processar|processo|pro?con|advogad|justi[çc]a|horr[íi]vel|p[ée]ssim|pior|lixo|nunca mais|decep|revolt|indign|golpe|enganad|roubar|calote|problema|n[ãa]o funciona|n[ãa]o serve|furad|mancha|rasg|n[ãa]o chegou|n[ãa]o recebi|atras|demora|ainda n[ãa]o|at[ée] agora|at[ée] hoje|cad[êe] |quero meu dinheiro|sumi(u|ram)|\b\d+\s*dias?\b|(t[ôo]|estou) esperando|sem acreditar|n[ãa]o aguento|reembols|estorn|cancel|defeito|quebrad|errad|urgente|ningu[ée]m (me )?(responde|atende)|sem resposta/i.test(
+    return /reclama|absurd|vergonha|descaso|palha[çc]|processar|processo|pro?con|advogad|justi[çc]a|horr[íi]vel|p[ée]ssim|pior|lixo|nunca mais|decep|revolt|indign|golpe|enganad|roubar|calote|problema|n[ãa]o funciona|n[ãa]o serve|furad|mancha|rasg|puid|desbot|encolh|descos|desfi|veio (trocad|errad|faltando|rasgad|com defeito)|tamanho errad|faltou|diferente da foto|n[ãa]o ficou como|n[ãa]o chegou|n[ãa]o recebi|atras|demora|ainda n[ãa]o|at[ée] agora|at[ée] hoje|cad[êe] |quero meu dinheiro|sumi(u|ram)|\b\d+\s*dias?\b|(t[ôo]|estou) esperando|sem acreditar|n[ãa]o aguento|reembols|estorn|cancel|defeito|quebrad|errad|urgente|ningu[ée]m (me )?(responde|atende)|sem resposta/i.test(
       String(texto || ''),
     );
   }
@@ -169,7 +193,7 @@ export class WhatsappIaService {
       // prazo, cupom ou rastreio, prefixa um alerta pra operadora conferir antes
       // — defesa contra uma injeção que faça a IA sugerir promessa indevida.
       const risco =
-        /\d+\s*%|por\s*cento|cupom|desconto|cashback|vale|brinde|gr[áa]tis|gratuit|cortesia|sem pagar|por conta da (casa|loja)|pode (levar|retirar)|dobro|garant|devolv|reembols|R\$\s*\d|rastrei|c[óo]digo\b|\d+\s*dias?\b|\d+\s*x\b|parcel/i.test(
+        /\d+\s*%|por\s*cento|cupom|desconto|cashback|vale|brinde|gr[áa]tis|gratuit|cortesia|sem pagar|por conta da (casa|loja)|pode (levar|retirar)|dobro|garant|devolv|reembols|R\$\s*\d|rastrei|c[óo]digo\b|\d+\s*dias?\b|\d+\s*x\b|parcel|despach|enviad|postad|a caminho|saiu (pra|para)|chega (hoje|amanh[ãa]|rapidinho|em breve)|entregue|retir/i.test(
           texto,
         );
       const sugestao = risco ? `⚠️ confira valor/prazo/rastreio antes de enviar:\n${texto}` : texto;
@@ -192,22 +216,16 @@ export class WhatsappIaService {
   ): Promise<{ responder: boolean; resposta: string; motivo: string; erro?: boolean }> {
     let ultimaCliente = '';
     const nao = (motivo: string, erro = false) => ({ responder: false, resposta: '', motivo, erro });
-    // Acolhida fixa só fora do horário. SÓBRIA quando: o tom da IA não é neutro, OU a
-    // regex de reclamação/vulnerabilidade dispara (backstop independente da IA). Senão
-    // NEUTRA — nunca a alegre com upsell ("me diga a cidade"): o fallback pega justo o
-    // caso incerto (intent desconhecido, erro), onde festa+upsell soa leviano se a
-    // cliente estiver frustrada. Saudação genuína tem template próprio em montarResposta.
+    // Acolhida da Lulú quando não há template específico (intent incerto, erro, mídia).
+    // FULL-TIME: acolhe SEMPRE (fora E dentro do horário) — nunca fica muda por conta
+    // própria; quem a faz parar é um HUMANO entrar na conversa (guard humanoRecente).
+    // SÓBRIA quando o tom da IA não é neutro OU a regex de reclamação/vulnerabilidade
+    // dispara (backstop independente da IA); senão NEUTRA — nunca a alegre com upsell.
+    // Fora vs dentro do horário muda só o TEXTO. Saudação genuína tem template próprio.
     const acolher = (motivo: string, erro = false, sobrio?: boolean) => {
       const usarSobrio =
         sobrio ?? (this.pareceReclamacao(ultimaCliente) || this.pareceVulneravel(ultimaCliente));
-      return opts.fora
-        ? {
-            responder: true,
-            resposta: usarSobrio ? this.ACK_FORA_SOBRIO : this.ACK_FORA_NEUTRO,
-            motivo: `acolhida (${motivo})`,
-            erro,
-          }
-        : nao(motivo, erro);
+      return { responder: true, resposta: this.ack(opts.fora, usarSobrio), motivo: `acolhida (${motivo})`, erro };
     };
     if (!this.apiKey) return nao('IA off (sem ANTHROPIC_API_KEY)');
     if (!jid) return nao('sem jid');
@@ -229,14 +247,13 @@ export class WhatsappIaService {
       .map((m) => m.texto)
       .join('  ');
 
-    // MÍDIA como última mensagem (áudio/foto/vídeo): a Lulú NÃO lê o conteúdo → não
-    // dá pra classificar nem ler o tom. Nunca cai em template alegre: se o histórico
-    // recente cheira a reclamação/luto → sóbrio; senão → acolhida NEUTRA. Fora do
-    // horário acolhe; dentro, deixa pro humano.
+    // MÍDIA como última mensagem (áudio/foto/vídeo): a Lulú NÃO lê o conteúdo → não dá
+    // pra classificar nem ler o tom. Full-time acolhe também no horário aberto. Nunca
+    // template alegre: se o histórico recente cheira a reclamação/luto → sóbrio; senão
+    // → acolhida de MÍDIA (contida, sem prometer "vê certinho" o que ninguém leu).
     if (this.ehMidia(ultimaCliente)) {
-      if (!opts.fora) return nao('mídia (dentro do horário → humano)');
       const delicadoRegex = this.pareceReclamacao(clienteRecente) || this.pareceVulneravel(clienteRecente);
-      return { responder: true, resposta: delicadoRegex ? this.ACK_FORA_SOBRIO : this.ACK_FORA_NEUTRO, motivo: 'mídia' };
+      return { responder: true, resposta: this.ack(opts.fora, delicadoRegex, true), motivo: 'mídia' };
     }
 
     const conteudo =
@@ -248,7 +265,12 @@ export class WhatsappIaService {
     try {
       bruto = await this.chamarClaude(`${this.PERSONA_CLASSIF}\n\n${this.REGRAS_CLASSIF}`, conteudo, 300, this.modeloClassificador);
     } catch (e: any) {
-      return acolher(`erro na IA: ${e?.message || e}`, true); // transitório → não cacheia; fora acolhe
+      // Erro TRANSITÓRIO do Haiku (429/5xx/timeout): NÃO acolhe genérico nem cacheia —
+      // devolve erro pro guard de `tentarResponder` pular sem claim, e a rede de
+      // segurança reavalia no próximo ciclo (dá a resposta CERTA quando o Haiku voltar,
+      // em vez de jogar a cliente pro humano à toa). Falha DEFINITIVA (JSON inválido)
+      // segue caindo em acolher, mais abaixo.
+      return nao(`erro na IA: ${e?.message || e}`, true);
     }
     const bloco = bruto.match(/\{[\s\S]*\}/);
     if (!bloco) return acolher('IA não devolveu JSON');
@@ -290,8 +312,10 @@ export class WhatsappIaService {
     return { responder: true, resposta, motivo: cidade ? `${intent}:${cidade}` : intent };
   }
 
-  /** Resposta do PEDIDO: confirma que existe (pelo telefone) + rastreio se houver.
-   *  Nunca crava um status que pode estar errado — pra detalhe, manda pro humano. */
+  /** Resposta do PEDIDO com o STATUS REAL (o dado), sem inventar. Responde o pedido
+   *  MAIS RECENTE por padrão (é o que "meu pedido"/"o último" quase sempre significa);
+   *  se houver outros, avisa que dá pra escolher pelo número. Rastreio só em status de
+   *  despacho de verdade (fail-closed); cancelado/recusado/desconhecido → humano. */
   private async respostaPedido(numero: string, fora: boolean): Promise<string> {
     const espera = fora ? 'assim que a gente abrir' : 'já já';
     const pedidos = await this.pedidosDaCliente(numero);
@@ -300,21 +324,37 @@ export class WhatsappIaService {
         'Não consegui localizar pelo seu número aqui 🤔 Me manda o número do pedido (tipo LP-00000) que uma pessoa ' +
         `do time confere certinho pra você ${espera} 💜`
       );
-    // Mais de um pedido: NÃO chuta qual — pede o número (senão dá rastreio errado).
-    if (pedidos.length > 1)
-      return `Achei mais de um pedido no seu número 💜 Me manda o número do que você quer saber (tipo LP-00000) que a gente vê o certo pra você ${espera}.`;
-    const p = pedidos[0];
+    const p = pedidos[0]; // o mais recente (pedidosDaCliente já vem ordenado desc)
     const num = p.wc_order_number ? ` ${p.wc_order_number}` : '';
+    const quando = p.dia ? ` (de ${p.dia})` : '';
+    const outros =
+      pedidos.length > 1
+        ? ' — peguei o seu mais recente; se for sobre outro, é só me mandar o número (tipo LP-00000) 💜'
+        : '';
     const st = String(p.status || '').toLowerCase().trim();
-    // SÓ dá o rastreio quando o status é de PAGO-em-diante (fail-closed). Um pedido
-    // cancelado / pagamento recusado / aguardando pode ter etiqueta gerada ANTES do
-    // despacho — dar o código faria a cliente esperar uma entrega que não sai.
-    // Status desconhecido também cai pro humano (nunca afirmo envio no escuro).
-    if (p.tracking_code && this.STATUS_ENVIO_OK.has(st))
-      return `Achei seu pedido${num} aqui! 📦 O código de rastreio é: ${p.tracking_code} — assim que os Correios registrarem a postagem, ele começa a atualizar. Qualquer dúvida, me chama 💜`;
-    // Sem rastreio confiável (sem código OU status que não garante envio): NÃO cravo
-    // status — uma pessoa confere o andamento. Nunca afirmo "a caminho" no escuro.
-    return `Achei seu pedido${num} aqui 💜 Pra te passar o andamento certinho, uma pessoa do time confere o status pra você ${espera} — qualquer coisa, é só chamar.`;
+
+    // ENTREGUE → consta como entregue (rastreio só pra conferência; nunca "vai atualizar").
+    if (['delivered', 'entregue', 'completed', 'concluido'].includes(st)) {
+      const cod = p.tracking_code ? ` O rastreio pra conferir é ${p.tracking_code}.` : '';
+      return `Seu pedido${num}${quando} consta como ENTREGUE por aqui ✅${cod} Se não recebeu ou ficou alguma dúvida, me chama que a gente verifica!${outros}`;
+    }
+    // DESPACHADO (a caminho) → dá o rastreio recém-postado.
+    if (this.STATUS_ENVIO_OK.has(st)) {
+      const cod = p.tracking_code
+        ? `O código de rastreio é: ${p.tracking_code} — assim que os Correios registrarem, começa a atualizar`
+        : 'assim que sair o código de rastreio, te passo certinho';
+      return `Boa notícia! Seu pedido${num}${quando} já saiu 📦 ${cod}.${outros}`;
+    }
+    // PAGO, ainda NÃO despachado → responde "ainda não saiu" com precisão (é o dado).
+    if (['processing', 'paid'].includes(st))
+      return `Seu pedido${num}${quando} está pago e em preparação aqui 💜 Ainda não saiu — assim que despachar, te passo o código de rastreio.${outros}`;
+    if (['separating', 'em_separacao', 'ready'].includes(st))
+      return `Seu pedido${num}${quando} está em separação 💜 Saindo pra postagem em breve — te aviso o rastreio assim que despachar.${outros}`;
+    // AGUARDANDO PAGAMENTO.
+    if (['awaiting_payment', 'pending', 'on-hold', 'on_hold'].includes(st))
+      return `Seu pedido${num}${quando} está aguardando a confirmação do pagamento 💜 Assim que cair, ele entra em preparação — qualquer dúvida, me chama!${outros}`;
+    // CANCELADO / RECUSADO / DESCONHECIDO → NÃO cravo no escuro; uma pessoa confere.
+    return `Achei seu pedido${num}${quando} aqui 💜 Pra te passar o andamento certinho, uma pessoa do time confere o status pra você ${espera} — qualquer coisa, é só chamar.${outros}`;
   }
 
   // ── montagem de resposta (templates + dados reais) ─────────────────
@@ -441,7 +481,7 @@ export class WhatsappIaService {
       .replace(/\r?\n/g, ' ')
       .replace(/[<>{}]/g, '')
       .replace(
-        /\b(LOJA|CLIENTE|SISTEMA|SYSTEM|ASSISTANT|ASSISTENTE|USER|ADMIN|ADMINISTRADOR|ATENDENTE|SAC|SUPORTE|GERENTE|DONO|MODERADOR|WHATSAPP|IA|LULU|BOT|REGRA|INSTRU[ÇC][ÃA]O)\s*:/gi,
+        /\b(LOJA|CLIENTE|SISTEMA|SYSTEM|ASSISTANT|ASSISTENTE|USER|ADMIN|ADMINISTRADOR|ATENDENTE|OPERADORA?|OWNER|SAC|SUPORTE|GERENTE|DONO|MODERADOR|WHATSAPP|IA|LULU|BOT|REGRA|PROMPT|OUTPUT|JSON|RESPOSTA|RESPONDA|INSTRU[ÇC][ÃA]O)\s*:/gi,
         '- ',
       )
       .replace(/```+|#{2,}|\[\/?INST\]/g, ' ') // fences/tokens de prompt
@@ -458,25 +498,25 @@ export class WhatsappIaService {
       .join('\n');
   }
 
-  /** Variantes com/sem 9º dígito do telefone LOCAL (sem DDI). null = curto demais. */
-  private variantesTelefone(numero: string): { com9: string; sem9: string } | null {
+  /** Formas REAIS do telefone do remetente pra casar pedido, SEM sintetizar o 9º
+   *  dígito. Sintetizar (inserir/tirar o 9) apontaria pro número de OUTRA pessoa e
+   *  vazaria pedido alheio. Aceita o número EXATO, com ou sem DDI 55. null = curto. */
+  private telefonesMatch(numero: string): { local: string; comDdi: string } | null {
     const d = String(numero).replace(/\D/g, '');
     const local = d.length >= 12 && d.startsWith('55') ? d.slice(2) : d;
-    if (local.length === 11) return { com9: local, sem9: local.slice(0, 2) + local.slice(3) };
-    if (local.length === 10) return { sem9: local, com9: local.slice(0, 2) + '9' + local.slice(2) };
-    return null;
+    if (local.length !== 10 && local.length !== 11) return null;
+    return { local, comDdi: '55' + local };
   }
 
   /**
-   * Pedidos da cliente por telefone. Casa SÓ pelo número LOCAL canônico completo
-   * (DDD+9+8 = 11 díg, `right(...,11) = com9`) ou pelo local exato de 10 díg
-   * (`= sem9`). NUNCA `right(...,10)` — isso derrubava um dígito do DDD e podia
-   * casar o pedido de OUTRA cliente (DDD 11 x 19, mesmo sufixo). Usado pelo
-   * `sugerir` (revisado) E pela AUTO-RESPOSTA (sem revisão) — por isso o rigor.
-   * Se telefones DISTINTOS casarem, retorna vazio (ambíguo).
+   * Pedidos da cliente por telefone. Casa SÓ pelo número EXATO do remetente (com ou
+   * sem DDI 55) — NUNCA sintetiza o 9º dígito nem usa `right(...,10)` (ambos podiam
+   * casar o pedido de OUTRA cliente e vazar PII). Usado pelo `sugerir` (revisado) E
+   * pela AUTO-RESPOSTA (sem revisão) — por isso o rigor. Prefere PERDER (manda pro
+   * humano) a arriscar. Se ainda assim casar números LOCAIS distintos, descarta.
    */
   private async pedidosDaCliente(numero: string): Promise<any[]> {
-    const v = this.variantesTelefone(numero);
+    const v = this.telefonesMatch(numero);
     if (!v) return [];
     try {
       const rows = await this.prisma.$queryRawUnsafe<any[]>(
@@ -484,15 +524,22 @@ export class WhatsappIaService {
                 regexp_replace(COALESCE(customer_phone,''),'\\D','','g') AS tel,
                 to_char(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo','DD/MM') dia
            FROM orders
-          WHERE right(regexp_replace(COALESCE(customer_phone,''),'\\D','','g'), 11) = $1
+          WHERE regexp_replace(COALESCE(customer_phone,''),'\\D','','g') = $1
              OR regexp_replace(COALESCE(customer_phone,''),'\\D','','g') = $2
           ORDER BY created_at DESC LIMIT 20`,
-        v.com9,
-        v.sem9,
+        v.local,
+        v.comDdi,
       );
-      const tels = new Set(rows.map((r: any) => String(r.tel)));
-      if (tels.size > 1) {
-        this.logger.warn(`[wa-ia] match de pedido ambíguo p/ ${numero} (${tels.size} telefones) — descartado`);
+      // Guard defensivo: normaliza pro LOCAL (tira DDI) e descarta se sobrar mais de
+      // um número distinto (o match exato já torna isso raríssimo).
+      const locais = new Set(
+        rows.map((r: any) => {
+          const t = String(r.tel);
+          return t.length >= 12 && t.startsWith('55') ? t.slice(2) : t;
+        }),
+      );
+      if (locais.size > 1) {
+        this.logger.warn(`[wa-ia] match de pedido ambíguo p/ ${numero} (${locais.size} telefones) — descartado`);
         return [];
       }
       return rows.slice(0, 5);

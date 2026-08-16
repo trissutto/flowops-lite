@@ -19,6 +19,8 @@ const EVENTOS_DE_LOJA = new Set([
   'instagram_click',
   'store_locator',
   'phone_click',
+  'stores_online_cta_click',
+  'stores_product_click',
 ]);
 
 /** Nunca segura a resposta do beacon por causa de métrica. */
@@ -46,6 +48,8 @@ const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
   card_declined: ['method', 'attempt'],
   payment_retry: ['method', 'attempt'],
   checkout_recovered: ['method', 'order_id'],
+  stores_online_cta_click: ['source_position'],
+  stores_product_click: ['source_position', 'product_ref', 'item_index'],
 };
 
 function dadosSeguros(evento: TrackingEvent): Record<string, unknown> {
@@ -80,7 +84,7 @@ export async function persistirCliquesDeLoja(events: TrackingEvent[]): Promise<n
        */
       loja: texto(e.params?.store) ?? texto(e.context?.loja),
       cidade: texto(e.params?.city),
-      origem: texto(e.params?.source),
+      origem: texto(e.params?.source) ?? texto(e.params?.source_position),
       path: texto(e.context?.page?.path),
       sessionId: texto(e.context?.session_id),
     }));
@@ -135,7 +139,9 @@ export async function persistirEventosSite(events: TrackingEvent[], semAceite: b
     if (refs.length) dados.refs = refs;
     const termo = texto((e.params as Record<string, unknown>)?.search_term);
     if (termo) dados.busca = termo;
-    const origem = texto((e.params as Record<string, unknown>)?.source);
+    const origem =
+      texto((e.params as Record<string, unknown>)?.source) ??
+      texto((e.params as Record<string, unknown>)?.source_position);
     if (origem) dados.origem = origem;
 
     /**

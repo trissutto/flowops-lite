@@ -185,6 +185,14 @@ export const trackInstagramClick = (origem: string, loja?: string) => track('ins
 export const trackPhoneClick = (loja: string, origem?: string) => track('phone_click', { store: loja, source: origem });
 export const trackStoreLocator = (cidade?: string, loja?: string, origem?: string) =>
   track('store_locator', { city: cidade, store: loja, source: origem });
+export const trackStoresOnlineCta = (sourcePosition: string, loja?: string) =>
+  track('stores_online_cta_click', { source_position: sourcePosition, store: loja });
+export const trackStoresProductClick = (product: TrackableProduct, index: number, loja?: string) =>
+  track(
+    'stores_product_click',
+    { source_position: 'products_section', store: loja, product_ref: product.sku ?? product.id, item_index: index },
+    { items: [toTrackedItem(product, { index, list_name: 'Lojas — novidades' })] },
+  );
 export const trackStoreAvailability = (product: TrackableProduct, loja: string, disponivel: boolean) =>
   track('store_availability', { store: loja, available: disponivel }, { items: [toTrackedItem(product)] });
 export const trackStoreReservation = (product: TrackableProduct, loja: string) =>

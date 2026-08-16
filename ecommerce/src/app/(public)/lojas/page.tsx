@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import NossasLojasClient from './NossasLojasClient';
 import { stores, site, imgSrc, SITE_URL, instagramUrl, directionsUrl, type Store } from './lib';
 import { getBanners } from '@/services/banners';
+import { fetchVitrine } from '@/services/vitrine';
+import { sanitizeCampaignParams } from '@/lib/campaign-links';
 
 // No site novo a rota é /lojas (o menu, o rodapé e a retirada em loja já
 // apontam pra ela). O /nossaslojas do site antigo redireciona pra cá.
@@ -87,7 +89,11 @@ function storeJsonLd(s: Store) {
   };
 }
 
-export default async function NossasLojasPage() {
+export default async function NossasLojasPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   /**
    * A CAPA VEM DO CADASTRO (13/08/2026). Era uma foto do UNSPLASH chumbada no
    * `lojas.json` — banco de imagens genérico numa página que existe justamente
@@ -96,7 +102,21 @@ export default async function NossasLojasPage() {
    * do ar: continua valendo a foto do JSON, então a página nunca fica sem
    * capa.
    */
-  const [capa] = await getBanners('lojas-hero');
+  const rawParams = await searchParams;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(rawParams)) {
+    const first = Array.isArray(value) ? value[0] : value;
+    if (first) query.set(key, first);
+  }
+  const campaignQuery = sanitizeCampaignParams(query).toString();
+  const [banners, vitrine] = await Promise.all([
+    getBanners('lojas-hero'),
+    fetchVitrine({ ordenar: 'novidades', limite: 6 }),
+  ]);
+  const [capa] = banners;
+  const produtos = vitrine
+    .filter((produto) => produto.price > 0 && Boolean(produto.images[0]?.src))
+    .slice(0, 6);
   const jsonLd = {
     '@context': 'https://schema.org',
     '@graph': [
@@ -117,7 +137,11 @@ export default async function NossasLojasPage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <NossasLojasClient heroImagem={capa?.imagemUrl ?? null} />
+      <NossasLojasClient
+        heroImagem={capa?.imagemUrl ?? null}
+        products={produtos}
+        campaignQuery={campaignQuery}
+      />
     </>
   );
 }
