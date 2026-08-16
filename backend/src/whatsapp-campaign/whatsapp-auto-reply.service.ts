@@ -31,6 +31,10 @@ export class WhatsappAutoReplyService implements OnModuleInit {
   private ultimaChamadaIA = new Map<string, number>();
   /** jid → timer de debounce do caminho por-evento. */
   private timers = new Map<string, NodeJS.Timeout>();
+  /** ms de quando a Lulú foi LIGADA (0 = desligada). A rede de segurança não pega
+   *  backlog anterior a isso — senão, ao ligar, dispararia acolhida pra todo mundo
+   *  que mandou msg nos últimos 30min. */
+  private ligadoDesde = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -155,17 +159,25 @@ export class WhatsappAutoReplyService implements OnModuleInit {
   @Cron('*/30 * * * * *', { name: 'wa-auto-reply-safety' })
   async ciclo() {
     const modo = this.modo();
-    if (modo === 'off' || !this.evo.configurado() || this.rodando) return;
+    if (modo === 'off') {
+      this.ligadoDesde = 0; // desligou → próxima ativação começa do zero (sem backlog)
+      return;
+    }
+    if (!this.evo.configurado() || this.rodando) return;
     if (modo === 'fora' && this.lojaAberta()) return;
+    if (!this.ligadoDesde) this.ligadoDesde = Date.now(); // acabou de ligar
+
     this.rodando = true;
     try {
       if (this.avaliadas.size > 2000) this.avaliadas.clear();
       if (this.ultimaChamadaIA.size > 2000) this.ultimaChamadaIA.clear();
       const agora = Date.now();
+      // desde = o mais recente entre "30min atrás" e "quando ligou" — não pega backlog anterior à ativação.
+      const desde = new Date(Math.max(agora - 30 * 60 * 1000, this.ligadoDesde));
       const convs = await this.p().whatsappConversation.findMany({
         where: {
           fromMe: false,
-          ultimaEm: { gte: new Date(agora - 30 * 60 * 1000), lte: new Date(agora - 45 * 1000) },
+          ultimaEm: { gte: desde, lte: new Date(agora - 45 * 1000) },
         },
         orderBy: { ultimaEm: 'asc' }, // atende primeiro quem vai expirar
         take: 25,
