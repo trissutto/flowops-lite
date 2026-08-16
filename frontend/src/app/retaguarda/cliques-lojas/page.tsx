@@ -73,6 +73,22 @@ type AlertaCheckout = {
   primeiraFalha: string;
   ultimaFalha: string;
 };
+/**
+ * O tráfego que entra pela página das LOJAS (anúncio de loja física).
+ *
+ * Ele sai do funil de e-commerce de propósito — não veio comprar no site, e
+ * contá-lo lá dentro afunda a conversão com quem nunca teve essa intenção. A
+ * conversão DELE é outra: falar com a loja.
+ */
+type TrafegoLojas = {
+  pessoas: number;
+  contataram: number;
+  contatos: { whatsapp: number; comoChegar: number; telefone: number; instagram: number };
+  navegaram: { viramPeca: number; sacola: number; checkout: number; compraram: number };
+  valorComprado: number;
+  porUnidade: Array<{ loja: string; contatos: number }>;
+  porCampanha: Array<{ campanha: string; canal: string | null; pessoas: number }>;
+};
 type RespostaFunil = {
   de: string;
   ate: string;
@@ -80,6 +96,7 @@ type RespostaFunil = {
   diagnosticos?: DiagnosticoFunil[];
   faturamento?: { pedidos: number; valor: number };
   alertasCheckout?: AlertaCheckout[];
+  trafegoLojas?: TrafegoLojas;
 };
 
 /**
@@ -266,6 +283,10 @@ export default function CliquesLojasPage() {
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
           loja ainda tem funil, e um não pode esconder o outro. */}
       {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} faturamento={funil.faturamento} alertasCheckout={funil.alertasCheckout ?? []} />}
+
+      {/* Logo abaixo do funil, e não numa aba escondida: é aqui que a pessoa
+          entende POR QUE o número do funil mudou de tamanho. */}
+      {funil?.trafegoLojas && <TrafegoDeLojas dados={funil.trafegoLojas} />}
 
       {erro && (
         <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">{erro}</div>
@@ -467,7 +488,11 @@ function FunilSite({
       <p className="text-xs text-slate-400">
         Funil em pessoas (sessões), contando todo mundo — com e sem aceite de cookies. Coleta
         desde 13/08/2026; período anterior aparece zerado. O % é sobre a etapa anterior.
-        Compras = pagamento confirmado; o número fiscal é o da tela de Pedidos.
+        Compras = pagamento confirmado; o número fiscal é o da tela de Pedidos.{' '}
+        <strong className="font-semibold text-slate-600">
+          Quem entrou pela página das lojas fica FORA desta conta
+        </strong>{' '}
+        — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.
       </p>
       {alertasCheckout.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-amber-300 bg-white">
@@ -544,6 +569,104 @@ function FunilSite({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ═══════════ O MAPA DO TRÁFEGO DE LOJAS (dono, 16/08) ═══════════
+ *
+ * "pessoas que entraram pelo /lojas não contam no funil de ecomm, pois elas
+ * andam pelo site mas acabam sem comprar — mas crie um mapa disso mostrando
+ * que tipo de conversão este tráfego nos traz."
+ *
+ * Sair do funil não é sumir. Esta gente converte em CONTATO com a loja, e o
+ * quadro põe as duas leituras lado a lado: o que ela veio fazer (falar com a
+ * unidade) e o que ela acabou fazendo no site mesmo assim — porque uma parte
+ * compra, e essa venda não pode ficar sem dono.
+ */
+function TrafegoDeLojas({ dados }: { dados: TrafegoLojas }) {
+  const { pessoas, contataram, contatos, navegaram, valorComprado, porUnidade, porCampanha } = dados;
+  if (!pessoas) return null;
+
+  const pct = (n: number) => (pessoas > 0 ? Math.round((n / pessoas) * 100) : 0);
+  const blocos = [
+    { titulo: 'Chegaram pela /lojas', valor: pessoas, sub: 'fora do funil do site' },
+    { titulo: 'Falaram com a loja', valor: contataram, sub: `${pct(contataram)}% de quem chegou` },
+    { titulo: 'Olharam peça', valor: navegaram.viramPeca, sub: `${pct(navegaram.viramPeca)}% passearam no catálogo` },
+    { titulo: 'Compraram no site', valor: navegaram.compraram, sub: valorComprado > 0 ? brl(valorComprado) : 'mesmo sem ser o objetivo' },
+  ];
+
+  return (
+    <div className="space-y-2">
+      <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">
+        Tráfego de lojas — o que ele converte
+      </h2>
+
+      <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+        <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-[#E7E2D8]">
+          {blocos.map((b) => (
+            <div key={b.titulo} className="px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{b.titulo}</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-800">{b.valor}</p>
+              <p className="text-xs text-slate-500">{b.sub}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="border-t border-[#E7E2D8] px-4 py-3 text-sm text-slate-600">
+          <span className="font-semibold text-slate-700">Como falaram: </span>
+          WhatsApp {contatos.whatsapp} · Como chegar {contatos.comoChegar} · Telefone {contatos.telefone} · Instagram {contatos.instagram}
+          <span className="ml-2 text-slate-400">
+            (sacola {navegaram.sacola} · checkout {navegaram.checkout})
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-2 lg:grid-cols-2">
+        <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-[#E7E2D8]">
+            <h3 className="font-semibold text-slate-800 text-sm">Qual unidade recebeu o contato</h3>
+          </div>
+          {porUnidade.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-slate-500">
+              Ninguém clicou pra falar com loja nesse período.
+            </p>
+          ) : (
+            <table className="w-full text-sm">
+              <tbody>
+                {porUnidade.map((u) => (
+                  <tr key={u.loja} className="border-t border-[#E7E2D8] first:border-t-0">
+                    <td className="px-4 py-2 text-slate-700">{u.loja}</td>
+                    <td className="px-4 py-2 text-right font-bold tabular-nums text-slate-800">{u.contatos}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-[#E7E2D8]">
+            <h3 className="font-semibold text-slate-800 text-sm">De qual anúncio vieram</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Vem do UTM do link. Sessão antes de 16/08 — ou visita orgânica — aparece como “sem campanha”.
+            </p>
+          </div>
+          <table className="w-full text-sm">
+            <tbody>
+              {porCampanha.map((c) => (
+                <tr key={`${c.campanha}:${c.canal ?? ''}`} className="border-t border-[#E7E2D8] first:border-t-0">
+                  <td className="px-4 py-2 text-slate-700">
+                    {c.campanha}
+                    {c.canal && <span className="text-slate-400"> · {c.canal}</span>}
+                  </td>
+                  <td className="px-4 py-2 text-right font-bold tabular-nums text-slate-800">{c.pessoas}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

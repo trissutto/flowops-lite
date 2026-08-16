@@ -137,6 +137,39 @@ export async function persistirEventosSite(events: TrackingEvent[], semAceite: b
     if (termo) dados.busca = termo;
     const origem = texto((e.params as Record<string, unknown>)?.source);
     if (origem) dados.origem = origem;
+
+    /**
+     * DE ONDE A PESSOA VEIO — o UTM, que chegava aqui e era jogado fora.
+     *
+     * `context.attribution` já viajava em TODO evento (o checkout usa pra casar
+     * o pedido com a campanha), mas nada disso entrava no `site_eventos`: o
+     * painel do funil não tinha como separar público de intenção diferente.
+     * Foi o que faltou pra medir o anúncio das LOJAS, cujo público não compra
+     * no site e por isso não pode contar como "visitante sem compra".
+     *
+     * Chave `campanha`, não `origem`: `origem` já significa outra coisa aqui
+     * (a POSIÇÃO do botão de loja clicado — store_card, rodapé). Misturar os
+     * dois quebraria a tela de cliques de loja, que lê essa chave.
+     *
+     * ⚠️ A atribuição sobrevive 30 dias (ver `captureAttribution`). Quem veio
+     * pelo anúncio hoje continua carimbado se voltar semana que vem — então
+     * regra de exclusão do funil casa a campanha COM a página de entrada, e
+     * não só o `campanha=`, senão uma compra orgânica dela sumiria da conta.
+     */
+    const attr = e.context?.attribution;
+    const campanha = texto(attr?.campaign);
+    if (campanha) dados.campanha = campanha;
+    const canal = texto(attr?.source);
+    if (canal) dados.canal = canal;
+    const midia = texto(attr?.medium);
+    if (midia) dados.midia = midia;
+    // `term` carrega o `{{placement}}` do Meta — é ele que denuncia se o clique
+    // veio de um lugar que só gera rejeição.
+    const posicao = texto(attr?.term);
+    if (posicao) dados.posicao = posicao;
+    const utmId = texto(attr?.id);
+    if (utmId) dados.utm_id = utmId;
+
     return {
       evento: e.event,
       path: texto(e.context?.page?.path),

@@ -228,6 +228,35 @@ export class SiteMetricsService {
    * de deixar parecer que o site não vendia. `::int` nos COUNTs: BigInt na
    * resposta é 500 mudo de serialização.
    */
+  /**
+   * SESSÕES QUE ENTRARAM PELA PÁGINA DAS LOJAS — ficam FORA do funil.
+   *
+   * Decisão do dono (16/08): o anúncio que cai na `/lojas` vende visita à loja
+   * física, não compra no site. Essa gente navega, às vezes olha peça, e sai
+   * sem comprar; contá-la no denominador afunda a conversão do site com um
+   * público que nunca teve intenção de comprar online. O que ELAS convertem é
+   * contato com a loja, e isso tem quadro próprio (`trafegoDeLojas`).
+   *
+   * O corte é pela PÁGINA DE ENTRADA, não pelo UTM, de propósito: a atribuição
+   * sobrevive 30 dias no navegador, então quem veio pelo anúncio hoje continua
+   * carimbado se voltar semana que vem — e uma compra orgânica dela sumiria da
+   * conta. Entrar pela `/lojas` é o que define a intenção DAQUELA visita; o UTM
+   * (gravado desde 16/08) responde de qual anúncio ela veio.
+   *
+   * Ressalva conhecida: sessão iniciada ANTES da janela tem como "entrada" o
+   * primeiro evento dentro dela. O erro é pequeno e sempre a favor de contar no
+   * funil — nunca de esconder venda.
+   */
+  private static readonly SESSOES_DE_LOJA = `
+    SELECT session_id FROM (
+      SELECT DISTINCT ON (session_id) session_id, path
+        FROM site_eventos
+       WHERE criado_em >= $1 AND criado_em <= $2
+         AND session_id IS NOT NULL AND path IS NOT NULL
+       ORDER BY session_id, criado_em
+    ) entrada
+     WHERE path ILIKE '/lojas%' OR path ILIKE '/nossaslojas%'`;
+
   async funil(
     de: Date,
     ate: Date,
@@ -235,13 +264,17 @@ export class SiteMetricsService {
     const linhas = await this.prisma.$queryRawUnsafe<
       Array<{ evento: string; eventos: number; pessoas: number; valor: number }>
     >(
-      `SELECT evento,
+      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+       SELECT evento,
               COUNT(*)::int                   AS eventos,
               COUNT(DISTINCT session_id)::int AS pessoas,
               COALESCE(SUM(valor), 0)::float  AS valor
-         FROM site_eventos
+         FROM site_eventos e
         WHERE criado_em >= $1 AND criado_em <= $2
           AND evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
+          -- Sessão sem id não dá pra classificar: fica no funil. Perder dado é
+          -- pior que carregar um punhado de anônimos no denominador.
+          AND (e.session_id IS NULL OR e.session_id NOT IN (SELECT session_id FROM lojas))
         GROUP BY evento`,
       de,
       ate,
@@ -255,6 +288,103 @@ export class SiteMetricsService {
       // outras etapas somam o preço da peça vista/na sacola e a tela ignora.
       valor: Number(l.valor) || 0,
     }));
+  }
+
+  /**
+   * O MAPA DO TRÁFEGO DE LOJAS (dono, 16/08: "crie um mapa disso mostrando que
+   * tipo de conversão este tráfego nos trás").
+   *
+   * Estas pessoas saíram do funil de e-commerce — mas sair do funil não é
+   * sumir. A conversão delas é OUTRA: falar com a loja. Aqui a conta é
+   * "chegaram × contataram", com a unidade que recebeu o contato, a campanha
+   * que trouxe e o que elas fizeram no site apesar de tudo (parte compra, e
+   * isso precisa aparecer em algum lugar).
+   */
+  async trafegoDeLojas(de: Date, ate: Date): Promise<{
+    pessoas: number;
+    contataram: number;
+    contatos: { whatsapp: number; comoChegar: number; telefone: number; instagram: number };
+    navegaram: { viramPeca: number; sacola: number; checkout: number; compraram: number };
+    valorComprado: number;
+    porUnidade: Array<{ loja: string; contatos: number }>;
+    porCampanha: Array<{ campanha: string; canal: string | null; pessoas: number }>;
+  }> {
+    const CONTATO = `('whatsapp_click','store_locator','phone_click','instagram_click')`;
+
+    const [tot] = await this.prisma.$queryRawUnsafe<Array<Record<string, any>>>(
+      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+       SELECT COUNT(DISTINCT l.session_id)::int AS pessoas,
+              COUNT(DISTINCT e.session_id) FILTER (WHERE e.evento IN ${CONTATO})::int AS contataram,
+              COUNT(*) FILTER (WHERE e.evento='whatsapp_click')::int  AS whatsapp,
+              COUNT(*) FILTER (WHERE e.evento='store_locator')::int   AS como_chegar,
+              COUNT(*) FILTER (WHERE e.evento='phone_click')::int     AS telefone,
+              COUNT(*) FILTER (WHERE e.evento='instagram_click')::int AS instagram,
+              COUNT(DISTINCT e.session_id) FILTER (WHERE e.evento='view_item')::int      AS viram_peca,
+              COUNT(DISTINCT e.session_id) FILTER (WHERE e.evento='add_to_cart')::int    AS sacola,
+              COUNT(DISTINCT e.session_id) FILTER (WHERE e.evento='begin_checkout')::int AS checkout,
+              COUNT(DISTINCT e.session_id) FILTER (WHERE e.evento='purchase')::int       AS compraram,
+              COALESCE(SUM(e.valor) FILTER (WHERE e.evento='purchase'), 0)::float        AS valor
+         FROM lojas l
+         LEFT JOIN site_eventos e
+                ON e.session_id = l.session_id AND e.criado_em >= $1 AND e.criado_em <= $2`,
+      de,
+      ate,
+    );
+
+    const porUnidade = await this.prisma.$queryRawUnsafe<Array<{ loja: string; contatos: number }>>(
+      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+       SELECT COALESCE(e.loja, 'sem unidade') AS loja, COUNT(*)::int AS contatos
+         FROM site_eventos e JOIN lojas l ON l.session_id = e.session_id
+        WHERE e.criado_em >= $1 AND e.criado_em <= $2 AND e.evento IN ${CONTATO}
+        GROUP BY 1 ORDER BY contatos DESC LIMIT 20`,
+      de,
+      ate,
+    );
+
+    // A campanha vem do UTM gravado desde 16/08 (`dados->>'campanha'`). Sessão
+    // anterior a isso — ou visita orgânica — cai em "sem campanha", e isso é
+    // informação: mostra quanto do tráfego da /lojas não é do anúncio.
+    const porCampanha = await this.prisma.$queryRawUnsafe<
+      Array<{ campanha: string; canal: string | null; pessoas: number }>
+    >(
+      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+            marca AS (
+              SELECT DISTINCT ON (e.session_id) e.session_id,
+                     COALESCE(e.dados->>'campanha', 'sem campanha') AS campanha,
+                     e.dados->>'canal' AS canal
+                FROM site_eventos e JOIN lojas l ON l.session_id = e.session_id
+               WHERE e.criado_em >= $1 AND e.criado_em <= $2
+               ORDER BY e.session_id, (e.dados->>'campanha') IS NULL, e.criado_em
+            )
+       SELECT campanha, canal, COUNT(*)::int AS pessoas
+         FROM marca GROUP BY 1, 2 ORDER BY pessoas DESC LIMIT 12`,
+      de,
+      ate,
+    );
+
+    return {
+      pessoas: Number(tot?.pessoas ?? 0),
+      contataram: Number(tot?.contataram ?? 0),
+      contatos: {
+        whatsapp: Number(tot?.whatsapp ?? 0),
+        comoChegar: Number(tot?.como_chegar ?? 0),
+        telefone: Number(tot?.telefone ?? 0),
+        instagram: Number(tot?.instagram ?? 0),
+      },
+      navegaram: {
+        viramPeca: Number(tot?.viram_peca ?? 0),
+        sacola: Number(tot?.sacola ?? 0),
+        checkout: Number(tot?.checkout ?? 0),
+        compraram: Number(tot?.compraram ?? 0),
+      },
+      valorComprado: Number(tot?.valor ?? 0),
+      porUnidade: porUnidade.map((u) => ({ loja: u.loja, contatos: Number(u.contatos) })),
+      porCampanha: porCampanha.map((c) => ({
+        campanha: c.campanha,
+        canal: c.canal,
+        pessoas: Number(c.pessoas),
+      })),
+    };
   }
 
   /**
