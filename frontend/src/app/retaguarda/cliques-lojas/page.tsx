@@ -344,6 +344,8 @@ export default function CliquesLojasPage() {
   const [dados, setDados] = useState<Resposta | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
+  /** Separado do `erro` geral: o funil pode cair sozinho e a tela continua. */
+  const [erroFunil, setErroFunil] = useState('');
   const [agora, setAgora] = useState<Agora | null>(null);
   const [funil, setFunil] = useState<RespostaFunil | null>(null);
   // A cascata. Os três juntos num estado só porque nunca mudam sozinhos:
@@ -374,6 +376,7 @@ export default function CliquesLojasPage() {
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro('');
+    setErroFunil('');
     try {
       const qs = new URLSearchParams();
       if (de) qs.set('de', de);
@@ -386,10 +389,19 @@ export default function CliquesLojasPage() {
       if (seg.plataforma) qsFunil.set('plataforma', seg.plataforma);
       if (seg.campanha) qsFunil.set('campanha', seg.campanha);
       const sufixoFunil = qsFunil.toString() ? `?${qsFunil}` : '';
-      // Funil em paralelo e tolerante: se falhar, a tela de cliques segue de pé.
+      /**
+       * Funil em paralelo e tolerante: se falhar, a tela de cliques segue de
+       * pé. Mas o erro APARECE — em 16/08 uma CTE duplicada derrubou o
+       * endpoint e este `catch` mudo transformou o 500 num relatório vazio,
+       * com cara de "não teve movimento hoje". Silêncio aqui é pior que a
+       * falha: número errado não se anuncia sozinho.
+       */
       const [r, f] = await Promise.all([
         api<Resposta>(`/site-metrics/lojas${sufixo}`),
-        api<RespostaFunil>(`/site-metrics/funil${sufixoFunil}`).catch(() => null),
+        api<RespostaFunil>(`/site-metrics/funil${sufixoFunil}`).catch((e) => {
+          setErroFunil(e?.message || 'não consegui carregar o funil');
+          return null;
+        }),
       ]);
       setDados(r);
       setFunil(f);
@@ -550,6 +562,21 @@ export default function CliquesLojasPage() {
           <button onClick={() => { setDe(''); setAte(''); }} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] text-slate-500">Limpar (30 dias)</button>
         </div>
       </div>
+
+      {/* O funil caiu sozinho: diz isso, em vez de mostrar relatório vazio,
+          que se confunde com "não teve movimento". */}
+      {erroFunil && (
+        <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-semibold">O relatório de conversão não carregou.</p>
+            <p className="text-rose-700">
+              Os números abaixo são só dos cliques de loja — o funil, a jornada e os
+              problemas estão FORA DO AR neste momento, não zerados. ({erroFunil})
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* A CASCATA — colada no filtro de data, porque as duas respondem "de
           quem é esse número": uma recorta o quando, a outra o quem. */}

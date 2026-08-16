@@ -136,6 +136,42 @@ describe('jornadaCompra', () => {
   });
 
   /**
+   * CTE DECLARADA DUAS VEZES DERRUBA A TELA INTEIRA (16/08/2026).
+   *
+   * As CTEs desta tela são montadas por interpolação de constante, então uma
+   * duplicata é sintaticamente invisível no TypeScript: compila, passa nos
+   * testes que conferem CONTEÚDO da string, e o Postgres recusa a query só em
+   * produção — `WITH query name "x" specified more than once`. Foi o que
+   * aconteceu quando o segmento entrou na `jornadaCompra`: as quatro queries
+   * nasceram com `segmento` declarada duas vezes e o endpoint do funil passou
+   * a responder 500, deixando a tela com cara de dia sem movimento.
+   *
+   * Vale pra qualquer CTE, não só a do segmento: o risco é a montagem por
+   * string, e ela não vai deixar de existir.
+   */
+  it('não declara a mesma CTE duas vezes em nenhuma query da tela', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+    const seg = { trafego: 'pago' as const, plataforma: 'meta', campanha: 'c1' };
+
+    await service.funil(new Date(), new Date(), seg);
+    await service.jornadaCompra(new Date(), new Date(), seg);
+    await service.diagnosticosFunil(new Date(), new Date(), seg);
+    await service.alertasCheckout(new Date(), new Date(), seg);
+    await service.trafegoDeLojas(new Date(), new Date(), seg);
+    await service.segmentosDisponiveis(new Date(), new Date());
+
+    expect(query.mock.calls.length).toBeGreaterThan(0);
+    for (const [sql] of query.mock.calls) {
+      // `nome AS (` só aparece em declaração de CTE — alias de coluna é
+      // `AS nome`, e tabela derivada fecha com `) nome`, sem o AS.
+      const nomes = [...String(sql).matchAll(/\b([a-z_]+) AS \(/g)].map((m) => m[1]);
+      const repetidas = nomes.filter((n, i) => nomes.indexOf(n) !== i);
+      expect(repetidas).toEqual([]);
+    }
+  });
+
+  /**
    * `view_item` dispara sozinho no `useEffect` de montagem do BuyBox da PDP —
    * não é ação de ninguém. Enquanto ele contou como "sinal de gente", todo
    * scraper que abria uma peça era promovido a pessoa: "Produto visto" chegou
