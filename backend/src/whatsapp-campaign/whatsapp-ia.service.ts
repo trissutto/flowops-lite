@@ -74,9 +74,17 @@ export class WhatsappIaService {
     'Oi, recebi sua mensagem e sinto muito pelo transtorno. Nosso atendimento no WhatsApp está fora do horário ' +
     'agora, mas já registrei tudo aqui e uma pessoa do time vai te responder assim que a gente abrir pra resolver.';
 
-  /** Cheira a reclamação/urgência/insatisfação? Para escolher a acolhida sóbria. */
+  /** Cheira a reclamação/insatisfação? (reforço da regex por cima do tom da IA) */
   private pareceReclamacao(texto: string): boolean {
     return /reclama|absurd|vergonha|descaso|palha[çc]|processar|processo|pro?con|advogad|justi[çc]a|horr[íi]vel|p[ée]ssim|pior|nunca mais|decep|revolt|indign|golpe|enganad|roubar|calote|n[ãa]o chegou|n[ãa]o recebi|atras|cad[êe] |quero meu dinheiro|reembols|estorn|cancel|defeito|quebrad|rasgad|errad|urgente|ningu[ée]m (me )?(responde|atende)|sem resposta/i.test(
+      String(texto || ''),
+    );
+  }
+
+  /** Cheira a VULNERABILIDADE (luto, doença, aflição)? FORÇA acolhida sóbria + humano,
+   *  independente do intent e do tom — o backstop que a persona promete. */
+  private pareceVulneravel(texto: string): boolean {
+    return /falec|faleceu|vel[óo]rio|enterro|luto|morte|morreu|hospital|internad|\buti\b|c[âa]ncer|doen[çt]|doente|grave| terminal|quimio|cirurgia|acidente|desempreg|sem dinheiro|passando por/i.test(
       String(texto || ''),
     );
   }
@@ -159,16 +167,20 @@ export class WhatsappIaService {
   ): Promise<{ responder: boolean; resposta: string; motivo: string; erro?: boolean }> {
     let ultimaCliente = '';
     const nao = (motivo: string, erro = false) => ({ responder: false, resposta: '', motivo, erro });
-    // Acolhida fixa só fora do horário; sóbria se a última msg cheira a reclamação.
-    const acolher = (motivo: string, erro = false) =>
-      opts.fora
+    // Acolhida fixa só fora do horário. SÓBRIA quando: o tom da IA não é neutro,
+    // OU a regex de reclamação/vulnerabilidade dispara (backstop independente da IA).
+    const acolher = (motivo: string, erro = false, sobrio?: boolean) => {
+      const usarSobrio =
+        sobrio ?? (this.pareceReclamacao(ultimaCliente) || this.pareceVulneravel(ultimaCliente));
+      return opts.fora
         ? {
             responder: true,
-            resposta: this.pareceReclamacao(ultimaCliente) ? this.ACK_FORA_SOBRIO : this.ACK_FORA,
+            resposta: usarSobrio ? this.ACK_FORA_SOBRIO : this.ACK_FORA,
             motivo: `acolhida (${motivo})`,
             erro,
           }
         : nao(motivo, erro);
+    };
     if (!this.apiKey) return nao('IA off (sem ANTHROPIC_API_KEY)');
     if (!jid) return nao('sem jid');
 
@@ -212,9 +224,11 @@ export class WhatsappIaService {
     // mesmo perguntando algo institucional (ex.: "vestido pro enterro, que horas
     // abre?"). Vai pra acolhida sóbria e pro humano. A IA avalia o tom (bom nisso)
     // e a regex é só um reforço pra quando ela vacilar.
-    if ((tom !== 'neutro' && tom) || this.pareceReclamacao(ultimaCliente)) {
-      return acolher(tom !== 'neutro' && tom ? tom : 'reclamação');
-    }
+    // Cliente NÃO neutra (insatisfeita/vulnerável) NUNCA recebe template alegre —
+    // mesmo perguntando algo institucional. Vai pra acolhida SÓBRIA + humano. Vale
+    // o tom da IA E os dois reforços por regex (backstop se o Haiku vacilar).
+    const delicado = (tom !== 'neutro' && !!tom) || this.pareceReclamacao(ultimaCliente) || this.pareceVulneravel(ultimaCliente);
+    if (delicado) return acolher(tom !== 'neutro' && tom ? tom : 'delicado', false, true);
 
     // PEDIDO da cliente = DADO real (status/rastreio casado pelo telefone dela,
     // com a mesma trava anti-PII do sugerir). Texto montado aqui.
@@ -257,7 +271,7 @@ export class WhatsappIaService {
     // Pra produto/tamanho/preço/estoque: em vez de empurrar, ela ENGAJA pedindo a
     // REF. (Fase 2 liga o catálogo pra responder de verdade — aí quem dá número é o dado.)
     const pedeRef = (oQue: string) =>
-      `Pra te falar ${oQue} certinho, me manda a REF da peça (fica na etiqueta ou no link do site) ou o link dela que eu já confiro pra você 💜`;
+      `Me manda a REF da peça (fica na etiqueta ou no link do site) ou o link dela que a gente vê ${oQue} pra você ${espera} 💜`;
 
     switch (intent) {
       case 'saudacao':
@@ -287,7 +301,7 @@ export class WhatsappIaService {
       case 'preco':
         return pedeRef('o preço');
       case 'entrega':
-        return 'Claro! Me manda seu CEP que eu calculo o frete e o prazo de entrega certinho pra você 💜';
+        return `Claro! Me manda seu CEP que a gente calcula o frete e o prazo de entrega certinho pra você ${espera} 💜`;
       case 'troca':
         return (
           'Nossa troca é tranquila 💜 Você resolve pelo site: www.lurdsplussize.com.br (entra na área de Trocas com o número do ' +
@@ -295,8 +309,8 @@ export class WhatsappIaService {
         );
       case 'pagamento':
         return (
-          'A gente aceita Pix (com 5% de desconto 💜), cartão e mais. Pra parcelamento ou um caso específico, ' +
-          `uma pessoa do time te passa o detalhe ${espera}.`
+          'A gente aceita Pix, cartão e mais 💜 As condições, descontos e parcelamento uma pessoa do time confirma ' +
+          `certinho pra você ${espera}.`
         );
       case 'humano':
         return `Claro! Já anotei aqui e uma pessoa do time vai falar com você ${espera} 💜 Enquanto isso, se precisar de endereço/horário de loja é só me dizer a cidade.`;
