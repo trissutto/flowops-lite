@@ -7131,6 +7131,9 @@ model WhatsappConversation {
   ultimaEm     DateTime? @map("ultima_em")
   fromMe       Boolean   @default(false) @map("from_me")
   naoLidas     Int       @default(0) @map("nao_lidas")
+  // Reivindicacao ATOMICA do direito de auto-responder (anti-duplicata entre
+  // processos: no rolling deploy do Railway 2 processos rodam o cron ~30s).
+  autoRepliedAt DateTime? @map("auto_replied_at")
   criadoEm     DateTime  @default(now()) @map("criado_em")
   atualizadoEm DateTime  @default(now()) @updatedAt @map("atualizado_em")
   mensagens    WhatsappMessage[]

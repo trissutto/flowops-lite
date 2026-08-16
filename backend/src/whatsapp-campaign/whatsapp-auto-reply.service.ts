@@ -124,13 +124,27 @@ export class WhatsappAutoReplyService {
             this.logger.log(`[wa-auto] ${c.numero}: NÃO respondeu — ${dec.motivo}`);
             continue;
           }
-          // TOCTOU: a chamada à IA leva até 45s. Se chegou mensagem nova (ou um
-          // humano respondeu) nesse meio, não envia — o próximo ciclo reavalia.
-          const fresh = await this.p().whatsappConversation.findUnique({ where: { jid: c.jid } });
-          const freshMs = fresh?.ultimaEm ? new Date(fresh.ultimaEm).getTime() : 0;
-          if (freshMs !== ultimaEmMs || fresh?.fromMe) continue; // estado mudou → reavalia (sem cachear)
+          // CLAIM ATÔMICO no banco: garante UM só envio mesmo com 2 processos
+          // (rolling deploy do Railway) e trava de uma vez o TOCTOU (a `ultimaEm`
+          // tem que ser a MESMA — se chegou msg nova, não casa) e o cooldown de
+          // 20min. Só quem atualizar exatamente 1 linha ganha o direito de enviar.
+          const claim = await this.p().whatsappConversation.updateMany({
+            where: {
+              jid: c.jid,
+              ultimaEm: c.ultimaEm,
+              OR: [{ autoRepliedAt: null }, { autoRepliedAt: { lt: new Date(agora - 20 * 60 * 1000) } }],
+            },
+            data: { autoRepliedAt: new Date(agora) },
+          });
+          if (claim.count !== 1) {
+            // outro processo ganhou, ou o estado mudou (msg nova), ou cooldown.
+            this.avaliadas.set(c.jid, ultimaEmMs);
+            continue;
+          }
+          // Claim feito ANTES do envio: se o Evolution der timeout mas entregar,
+          // o autoRepliedAt já está gravado → o próximo ciclo NÃO reenvia (sem duplicar).
           await this.inbox.responder(c.jid, dec.resposta.trim(), 'auto-ia');
-          this.avaliadas.set(c.jid, ultimaEmMs); // só cacheia DEPOIS do envio OK
+          this.avaliadas.set(c.jid, ultimaEmMs);
           this.logger.log(`[wa-auto] ${c.numero}: Lulú respondeu (fora=${fora}) — ${dec.motivo}`);
         } catch (e: any) {
           this.logger.warn(`[wa-auto] ${c.jid} falhou: ${e?.message || e}`);
