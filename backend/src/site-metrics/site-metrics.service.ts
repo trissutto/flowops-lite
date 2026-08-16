@@ -135,18 +135,73 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   checkout_recovered: ['method', 'order_id'],
 };
 
+/**
+ * CAMPOS DE CONTEXTO — valem pra QUALQUER evento.
+ *
+ * ── O BUG QUE ISTO CONSERTA (16/08/2026) ──
+ *
+ * `CAMPOS_DIAGNOSTICOS` é indexado POR EVENTO, e o UTM não pertence a evento
+ * nenhum: ele viaja em todos. Resultado, desde que a coleta nasceu: `campanha`,
+ * `canal`, `midia`, `posicao` e `utm_id` chegavam do site e eram descartados
+ * aqui em SILÊNCIO — `page_view` nem tem entrada no mapa, então `permitidos`
+ * era `[]` e o `dados` inteiro virava `undefined`.
+ *
+ * Duas coisas estavam no ar por causa disto: o quadro "por campanha" do
+ * tráfego de lojas respondia "sem campanha" pra todo mundo, e a cláusula que
+ * protege tráfego pago do corte de robô (`dados ? 'campanha'`) era letra
+ * morta — a chave nunca existiu no banco.
+ *
+ * Mesma família da pegadinha do Zod: chave fora do schema some sem erro. Por
+ * isso a lista de contexto mora separada da de diagnóstico — pro próximo campo
+ * que valha pra todo evento não ter que ser repetido em quinze linhas.
+ *
+ * A defesa contra PII continua inteira: a lista é FECHADA e os valores são
+ * cortados. E-mail, telefone e endereço seguem sem entrar.
+ */
+const CAMPOS_DE_CONTEXTO = [
+  'campanha',
+  'canal',
+  'midia',
+  'posicao',
+  'utm_id',
+  /** `true` quando veio de gclid/fbclid ou de utm_medium pago (ver o site). */
+  'pago',
+  'plataforma',
+  'busca',
+  'origem',
+] as const;
+
 /** Defesa final contra PII: só persiste chaves fechadas e valores curtos. */
-export function sanitizarDadosEvento(evento: string, dados: unknown): Record<string, string> | undefined {
+export function sanitizarDadosEvento(
+  evento: string,
+  dados: unknown,
+): Record<string, string | string[]> | undefined {
   if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return undefined;
-  const permitidos = CAMPOS_DIAGNOSTICOS[evento] ?? [];
+  const permitidos = [...CAMPOS_DE_CONTEXTO, ...(CAMPOS_DIAGNOSTICOS[evento] ?? [])];
   const origem = dados as Record<string, unknown>;
-  const limpo: Record<string, string> = {};
+  const limpo: Record<string, string | string[]> = {};
   for (const campo of permitidos) {
     const valor = origem[campo];
     if (typeof valor !== 'string' && typeof valor !== 'number' && typeof valor !== 'boolean') continue;
     const texto = String(valor).trim().slice(0, 80);
     if (texto) limpo[campo] = texto;
   }
+
+  /**
+   * `refs` (as REFs das peças do evento) é LISTA e não passa pelo laço acima,
+   * que só aceita escalar — então vinha sendo descartada pelo mesmo silêncio.
+   * Teto de 6 itens curtos, igual ao que o site já manda.
+   */
+  const refs = origem.refs;
+  if (Array.isArray(refs)) {
+    const limpas = refs
+      .filter((r): r is string => typeof r === 'string')
+      .map((r) => r.trim().slice(0, 40))
+      .filter(Boolean)
+      .slice(0, 6);
+    if (limpas.length) limpo.refs = limpas;
+  }
+
   return Object.keys(limpo).length ? limpo : undefined;
 }
 
