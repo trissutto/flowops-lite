@@ -56,6 +56,7 @@ interface PecaFeed {
   imagens: string[];
   tamanhos: string[];
   cores: string[];
+  topSemana?: boolean;
 }
 
 /** `&` vira `&amp;` etc. Sem isto, um nome com "&" invalida o XML inteiro. */
@@ -159,6 +160,10 @@ function item(p: PecaFeed, novidade?: string): string {
   if (p.subcategoria) campos.push(`<g:custom_label_0>${escapar(p.subcategoria)}</g:custom_label_0>`);
   // Ver `carimbarNovidades`. Só as 20 do topo de cada categoria recebem.
   if (novidade) campos.push(`<g:custom_label_2>${escapar(novidade)}</g:custom_label_2>`);
+  // Curadoria "mais top da semana": o backend marca a peça com `topSemana` e o
+  // carimbo entra no `custom_label_1` (o que estava de reserva). Vira conjunto
+  // de produtos no Meta com um `eq "top-semana"`, igual às novidades.
+  if (p.topSemana) campos.push(`<g:custom_label_1>top-semana</g:custom_label_1>`);
 
   if (capa) campos.push(`<g:image_link>${escapar(capa)}</g:image_link>`);
   // Até 10 fotos extras — o carrossel do anúncio dinâmico usa estas.
