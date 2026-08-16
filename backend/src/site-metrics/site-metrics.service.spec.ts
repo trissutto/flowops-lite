@@ -85,6 +85,39 @@ describe('jornadaCompra', () => {
     expect(String(query.mock.calls[3][0])).toContain("c.evento = 'purchase'");
   });
 
+  /**
+   * A REGRESSÃO QUE ESTE TESTE EXISTE PRA IMPEDIR (16/08/2026): a jornada
+   * rodava sem o corte de robô que o `funil()` — logo acima dela na MESMA tela
+   * — já aplicava. O topo do funil vinha inflado de varredura de catálogo
+   * (cada página aberta por robô com JS vira uma sessão nova), e o quadro
+   * "MAIOR PERDA" acusava 96% de abandono em "Produto visto" que era robô.
+   */
+  it('aplica o corte de robô e de sessão-de-gente em TODAS as queries da jornada', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+
+    await service.jornadaCompra(new Date(), new Date());
+
+    expect(query).toHaveBeenCalledTimes(4);
+    for (const [sql] of query.mock.calls) {
+      expect(String(sql)).toContain('WITH gente AS (');
+      expect(String(sql)).toMatch(/NOT \w+\.bot AND \w+\.session_id IN \(SELECT session_id FROM gente\)/);
+    }
+  });
+
+  it('corta robô também no diagnóstico e no alerta de checkout da mesma tela', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+
+    await service.diagnosticosFunil(new Date(), new Date());
+    await service.alertasCheckout(new Date(), new Date());
+
+    for (const [sql] of query.mock.calls) {
+      expect(String(sql)).toContain('WITH gente AS (');
+      expect(String(sql)).toContain('IN (SELECT session_id FROM gente)');
+    }
+  });
+
   it('não cria maior perda nem alerta de amostra quando não há sessões', async () => {
     const query = jest.fn()
       .mockResolvedValueOnce([])
