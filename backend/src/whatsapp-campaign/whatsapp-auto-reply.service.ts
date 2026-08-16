@@ -70,8 +70,8 @@ export class WhatsappAutoReplyService {
     return hora >= abre && hora < fecha;
   }
 
-  // 1x por minuto (segundo 15). A janela de 45s abaixo é que dá o debounce da rajada.
-  @Cron('15 * * * * *', { name: 'wa-auto-reply' })
+  // A cada 20s. A janela de espera abaixo é que dá o debounce da rajada.
+  @Cron('*/20 * * * * *', { name: 'wa-auto-reply' })
   async ciclo() {
     const modo = this.modo();
     if (modo === 'off' || !this.evo.configurado() || this.rodando) return;
@@ -84,7 +84,7 @@ export class WhatsappAutoReplyService {
       if (this.ultimaChamadaIA.size > 1000) this.ultimaChamadaIA.clear();
       const agora = Date.now();
       const desde = new Date(agora - 30 * 60 * 1000); // não mexe em conversa velha
-      const ate = new Date(agora - 45 * 1000); // espera 45s (rajada)
+      const ate = new Date(agora - 12 * 1000); // espera 12s (deixa a rajada assentar)
       // 'asc': atende primeiro quem está mais perto de EXPIRAR (30min) — senão,
       // num disparo em massa à noite, as conversas antigas nunca subiam ao topo
       // e saíam da janela sem acolhida nenhuma.

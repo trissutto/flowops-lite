@@ -41,6 +41,10 @@ export class WhatsappIaService {
   private get modelo(): string {
     return this.config.get<string>('ANTHROPIC_MODEL') || 'claude-sonnet-4-6';
   }
+  /** Modelo RÁPIDO só pra CLASSIFICAR (tarefa pequena) — Haiku dá conta e volta rápido. */
+  private get modeloClassificador(): string {
+    return this.config.get<string>('ANTHROPIC_MODEL_FAST') || 'claude-haiku-4-5-20251001';
+  }
 
   /** Intents que a Lulú responde sozinha — todos com TEXTO montado aqui. */
   private readonly INTENTS_OK = new Set(['saudacao', 'horario', 'endereco', 'sobre_loja']);
@@ -164,7 +168,7 @@ export class WhatsappIaService {
 
     let bruto = '';
     try {
-      bruto = await this.chamarClaude(`${this.PERSONA}\n\n${this.REGRAS_CLASSIF}`, conteudo, 300);
+      bruto = await this.chamarClaude(`${this.PERSONA}\n\n${this.REGRAS_CLASSIF}`, conteudo, 300, this.modeloClassificador);
     } catch (e: any) {
       return acolher(`erro na IA: ${e?.message || e}`, true); // transitório → não cacheia; fora acolhe
     }
@@ -271,11 +275,11 @@ export class WhatsappIaService {
   // ── helpers ────────────────────────────────────────────────────────
 
   /** Chamada crua ao Claude → texto puro. Lança em erro (quem chama trata). */
-  private async chamarClaude(system: string, user: string, maxTokens = 400): Promise<string> {
+  private async chamarClaude(system: string, user: string, maxTokens = 400, modelo = this.modelo): Promise<string> {
     const res = await firstValueFrom(
       this.http.post(
         'https://api.anthropic.com/v1/messages',
-        { model: this.modelo, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }] },
+        { model: modelo, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }] },
         {
           headers: {
             'x-api-key': this.apiKey,
