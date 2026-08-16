@@ -98,6 +98,94 @@ export function galleryFor(s: Store): GalleryPhoto[] {
   return [...cover, ...own];
 }
 
+/**
+ * Foto de banco de imagem (Unsplash) — NÃO é a loja de verdade.
+ *
+ * Hoje as 14 unidades apontam pro mesmo punhado de fotos genéricas (e algumas
+ * repetem entre si). O drawer usa isso pra decidir o que mostrar: com foto
+ * real ela vira capa; com stock ela vira só textura de fundo, porque uma
+ * modelo cortada no torso não diz nada sobre a loja e ainda cria expectativa
+ * falsa. Trocar o `image`/`gallery` da loja no lojas.json por foto própria
+ * liga a capa e a galeria de volta sozinho — sem mexer em componente.
+ */
+export function isStockPhoto(src: string | null | undefined): boolean {
+  return !!src && /images\.unsplash\.com/.test(src);
+}
+
+/** Fotos próprias da unidade (galeria real). Vazio = não mostra galeria. */
+export function ownGalleryFor(s: Store): GalleryPhoto[] {
+  const own = (s.gallery ?? []).filter((p) => !isStockPhoto(p.src));
+  const cover: GalleryPhoto[] = s.image && !isStockPhoto(s.image) ? [{ src: s.image, label: 'A boutique' }] : [];
+  return [...cover, ...own];
+}
+
+export interface OpenStatus {
+  open: boolean;
+  /** "Fecha às 18h", "Abre às 9h", "Abre sábado às 9h" */
+  label: string;
+}
+
+const WEEKDAY_PT: Record<string, string> = {
+  Sunday: 'domingo',
+  Monday: 'segunda',
+  Tuesday: 'terça',
+  Wednesday: 'quarta',
+  Thursday: 'quinta',
+  Friday: 'sexta',
+  Saturday: 'sábado',
+};
+const WEEK_ORDER = Object.keys(WEEKDAY_PT);
+
+/** "09:00" → "9h" · "13:30" → "13h30" */
+function prettyHour(hhmm: string): string {
+  const [h, m] = hhmm.split(':');
+  return m === '00' ? `${Number(h)}h` : `${Number(h)}h${m}`;
+}
+
+function toMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(':');
+  return Number(h) * 60 + Number(m);
+}
+
+/**
+ * Aberto agora? Calculado no fuso da loja (America/Sao_Paulo) — o relógio do
+ * visitante pode estar em qualquer lugar. Chamar só depois do mount: no SSR o
+ * horário do servidor difere do da cliente e o React acusa hydration mismatch.
+ */
+export function openStatus(s: Store, now: Date = new Date()): OpenStatus {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const part = (t: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === t)?.value ?? '';
+  const weekday = part('weekday');
+  // Intl com hour12:false devolve "24" na virada da meia-noite.
+  const mins = (Number(part('hour')) % 24) * 60 + Number(part('minute'));
+
+  const blockOf = (day: string) => s.hours.schema.find((b) => b.days.includes(day));
+
+  const today = blockOf(weekday);
+  if (today) {
+    if (mins < toMinutes(today.opens)) return { open: false, label: `Abre às ${prettyHour(today.opens)}` };
+    if (mins < toMinutes(today.closes)) return { open: true, label: `Fecha às ${prettyHour(today.closes)}` };
+  }
+
+  // Fechada agora: procura o próximo dia com expediente.
+  const start = WEEK_ORDER.indexOf(weekday);
+  for (let i = 1; i <= 7; i++) {
+    const day = WEEK_ORDER[(start + i) % 7];
+    const block = blockOf(day);
+    if (block) {
+      const when = i === 1 ? 'amanhã' : WEEKDAY_PT[day];
+      return { open: false, label: `Abre ${when} às ${prettyHour(block.opens)}` };
+    }
+  }
+  return { open: false, label: 'Consulte os horários' };
+}
+
 export function fullAddress(s: Store): string {
   const zip = s.address.zip ? ` · CEP ${s.address.zip}` : '';
   return `${s.address.street} – ${s.address.neighborhood}, ${s.address.city}/${s.address.uf}${zip}`;
