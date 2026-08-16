@@ -7,11 +7,9 @@ import { CategoryListing } from '@/components/commerce/CategoryListing';
 import { ChipsSubcategoria } from '@/components/commerce/ChipsSubcategoria';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
-import { EditorialCard } from '@/components/sections/ImageGrid';
 import { categoryMeta } from '@/services/products';
 import { fetchPrimeiraPagina } from '@/services/vitrine';
 import { getCategorias } from '@/services/categorias-menu';
-import { editorials, storeInteriorImage } from '@/data/content';
 import { getInstagram } from '@/services/instagram';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 
@@ -61,7 +59,12 @@ export async function generateMetadata({
     title: meta.title,
     description: meta.intro,
     path: `/categoria/${slug}`,
-    image: `${meta.heroImage}?q=80&w=1200&auto=format&fit=crop`,
+    /**
+     * A imagem do card compartilhado era uma foto de banco de imagem
+     * (`meta.heroImage`, hoje `null`) — saiu em 16/08 com o resto do stock.
+     * Sem foto oficial por categoria, vale a OG padrão do site.
+     */
+    ...(meta.heroImage ? { image: `${meta.heroImage}?q=80&w=1200&auto=format&fit=crop` } : {}),
     keywords: [meta.title, `${meta.name} plus size`, `${meta.name} 44 ao 60`, 'moda plus size'],
   });
 }
@@ -176,28 +179,29 @@ export default async function CategoryPage({
           ))}
         </div>
 
-        <div className="mt-16 grid gap-10 sm:grid-cols-2">
-          {editorials.slice(0, 2).map((article, index) => (
-            <EditorialCard key={article.slug} article={article} index={index} />
-          ))}
-        </div>
+        {/* OS DOIS CARDS EDITORIAIS SAÍRAM EM 16/08/2026 — foto de banco de
+            imagem levando a `/blog/<slug>`, blog que nunca existiu. Já tinham
+            saído da home em 10/08 pelo mesmo motivo; aqui haviam ficado. O
+            guia acima é o conteúdo de verdade da seção. */}
       </Section>
 
-      {/* 10 — INSTAGRAM */}
-      <Section width="wide" aria-labelledby="ig-categoria">
-        <SectionTitle
-          id="ig-categoria"
-          eyebrow="@lurdsplussize"
-          title={`${meta.name} nas clientes reais`}
-          cta={{ label: 'Ver no Instagram', href: 'https://www.instagram.com/lurdsplussize' }}
-          align="left"
-        />
-        <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {postsInstagram.map((post) => (
-            <InstagramCard key={post.id} post={post} />
-          ))}
-        </div>
-      </Section>
+      {/* 10 — INSTAGRAM — só com post REAL (ver home e `services/instagram`) */}
+      {postsInstagram.length > 0 && (
+        <Section width="wide" aria-labelledby="ig-categoria">
+          <SectionTitle
+            id="ig-categoria"
+            eyebrow="@lurdsplussize"
+            title={`${meta.name} nas clientes reais`}
+            cta={{ label: 'Ver no Instagram', href: 'https://www.instagram.com/lurdsplussize' }}
+            align="left"
+          />
+          <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {postsInstagram.map((post) => (
+              <InstagramCard key={post.id} post={post} />
+            ))}
+          </div>
+        </Section>
+      )}
 
       {/* 11 — NEWSLETTER */}
       <NewsletterBlock
@@ -212,16 +216,12 @@ export default async function CategoryPage({
         description={`Uma mensagem por semana com as novidades de ${meta.name.toLowerCase()} e o que entrou na loja mais perto de você.`}
       />
 
-      {/* Imagem institucional de fechamento (evita o corte seco pro footer) */}
-      <div className="relative aspect-21/9 w-full overflow-hidden">
-        {/* eslint-disable-next-line @next/next/no-img-element -- decorativa, sem LCP */}
-        <img
-          src={`${storeInteriorImage.src}?q=80&w=2000&auto=format&fit=crop`}
-          alt={storeInteriorImage.alt}
-          loading="lazy"
-          className="size-full object-cover"
-        />
-      </div>
+      {/* A FAIXA INSTITUCIONAL DE FECHAMENTO SAIU EM 16/08/2026.
+          Era uma foto de banco de imagem em 21:9 legendada "Interior de uma
+          loja Lurds Plus Size" — a mesma foto de loja MASCULINA de streetwear
+          que tirou o vídeo institucional da home em 10/08. Existia só pra
+          evitar o corte seco pro rodapé; o `NewsletterBlock` em champagne
+          acima já faz esse fecho. Volta com foto REAL de uma das 14 lojas. */}
     </>
   );
 }

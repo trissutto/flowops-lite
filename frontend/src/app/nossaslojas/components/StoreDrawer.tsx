@@ -150,7 +150,11 @@ export default function StoreDrawer({ store, onClose }: Props) {
             </li>
           </ul>
 
-          {/* Galeria */}
+          {/* Galeria — SÓ com foto própria da unidade (16/08/2026). Sem foto
+              real a seção some inteira: banco de imagem repetido nas 14 lojas
+              engana quem quer ver a loja. */}
+          {galleryFor(s).length > 0 && (
+          <>
           <h3 className="mt-9 text-[11px] font-medium uppercase tracking-[0.3em] text-[var(--lj-gold-strong)]">
             Um pedacinho da loja
           </h3>
@@ -175,6 +179,8 @@ export default function StoreDrawer({ store, onClose }: Props) {
               </figure>
             ))}
           </div>
+          </>
+          )}
 
           {/* Mapa da unidade */}
           <h3 className="mt-9 text-[11px] font-medium uppercase tracking-[0.3em] text-[var(--lj-gold-strong)]">

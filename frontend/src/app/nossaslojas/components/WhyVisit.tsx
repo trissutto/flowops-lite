@@ -69,25 +69,35 @@ export default function WhyVisit() {
           ))}
         </div>
 
-        {/* Quem te recebe — moda vende pessoas */}
-        <div className="mt-24 grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
-          <motion.div
-            initial={{ opacity: 0, x: -24 }}
-            whileInView={{ opacity: 1, x: 0 }}
-            viewport={{ once: true, margin: '-80px' }}
-            transition={{ duration: 0.8 }}
-            className="relative aspect-[4/3] overflow-hidden rounded-3xl shadow-[0_24px_60px_-35px_rgba(33,28,24,0.5)]"
-          >
-            <Image
-              src={imgSrc(site.peopleImage, 1200)}
-              alt="Consultora recebendo cliente em uma boutique — atendimento Lurds"
-              fill
-              sizes="(max-width: 1024px) 100vw, 50vw"
-              placeholder="blur"
-              blurDataURL={BLUR_DATA_URL}
-              className="object-cover"
-            />
-          </motion.div>
+        {/* Quem te recebe — moda vende pessoas.
+            A FOTO SÓ ENTRA SE FOR NOSSA (16/08/2026): aqui morava uma
+            consultora de banco de imagem, numa loja que não é a Lurds, embaixo
+            do título "Quem te recebe". Sem foto oficial o bloco vira texto
+            centrado. Preencher `site.peopleImage` traz a coluna de volta. */}
+        <div
+          className={`mt-24 grid items-center gap-10 lg:gap-16 ${
+            site.peopleImage ? 'lg:grid-cols-2' : 'mx-auto max-w-3xl text-center'
+          }`}
+        >
+          {site.peopleImage && (
+            <motion.div
+              initial={{ opacity: 0, x: -24 }}
+              whileInView={{ opacity: 1, x: 0 }}
+              viewport={{ once: true, margin: '-80px' }}
+              transition={{ duration: 0.8 }}
+              className="relative aspect-[4/3] overflow-hidden rounded-3xl shadow-[0_24px_60px_-35px_rgba(33,28,24,0.5)]"
+            >
+              <Image
+                src={imgSrc(site.peopleImage, 1200)}
+                alt="Consultora recebendo cliente em uma boutique — atendimento Lurds"
+                fill
+                sizes="(max-width: 1024px) 100vw, 50vw"
+                placeholder="blur"
+                blurDataURL={BLUR_DATA_URL}
+                className="object-cover"
+              />
+            </motion.div>
+          )}
           <motion.div
             initial={{ opacity: 0, x: 24 }}
             whileInView={{ opacity: 1, x: 0 }}

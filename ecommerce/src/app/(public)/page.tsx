@@ -321,8 +321,12 @@ export default async function HomePage() {
           história de outra marca — e logo na seção que fala do acolhimento no
           provador, que é o argumento mais forte da Lurd's.
 
-          Volta com vídeo ou foto REAL de uma das lojas. `VideoBlock` e
-          `institutionalVideo` seguem no código, só esperando o material. */}
+          Volta com vídeo ou foto REAL de uma das lojas. O componente
+          `VideoBlock` segue no código, esperando o material; os dados
+          (`institutionalVideo`) saíram em 16/08 junto com todo o banco de
+          imagem — o vídeo era de banco (Pexels) e o pôster, daquela loja
+          masculina. Quando a Lurd's gravar o material, é passar a URL nossa
+          direto pro componente. */}
 
       {/*
         11 — DEPOIMENTOS · REMOVIDO DO AR EM 06/08/2026
@@ -347,21 +351,26 @@ export default async function HomePage() {
         que falta é o dado, não a tela.
       */}
 
-      {/* 09 — INSTAGRAM */}
-      <Section width="wide" aria-labelledby="instagram-titulo">
-        <SectionTitle
-          id="instagram-titulo"
-          eyebrow="@lurdsplussize"
-          title="No feed e no seu guarda-roupa"
-          cta={{ label: 'Seguir no Instagram', href: PERFIL_INSTAGRAM }}
-          align="left"
-        />
-        <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {posts.map((post) => (
-            <InstagramCard key={post.id} post={post} />
-          ))}
-        </div>
-      </Section>
+      {/* 09 — INSTAGRAM — só com post REAL da @lurdsplussize (16/08/2026).
+          Sem feed, a seção inteira não sai: o fallback era uma grade de banco
+          de imagem, ou seja, o feed de outra marca ocupando o nosso bloco de
+          prova social. Ver `services/instagram.ts`. */}
+      {posts.length > 0 && (
+        <Section width="wide" aria-labelledby="instagram-titulo">
+          <SectionTitle
+            id="instagram-titulo"
+            eyebrow="@lurdsplussize"
+            title="No feed e no seu guarda-roupa"
+            cta={{ label: 'Seguir no Instagram', href: PERFIL_INSTAGRAM }}
+            align="left"
+          />
+          <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {posts.map((post) => (
+              <InstagramCard key={post.id} post={post} />
+            ))}
+          </div>
+        </Section>
+      )}
 
       {/* 10 — NOSSAS LOJAS */}
       <Section tone="alt" width="wide" aria-labelledby="lojas-titulo">
