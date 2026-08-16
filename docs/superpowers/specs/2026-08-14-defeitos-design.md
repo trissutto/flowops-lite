@@ -12,8 +12,10 @@ Hoje o defeito vira um `Marcado` com `status='baixado'` (o schema documenta: *"w
 
 | Questão | Decisão |
 |---|---|
-| Destino final da peça | Devolução ao fornecedor **ou** descarte (lixo). Nunca volta a vender. |
+| Destino final da peça | Devolução ao fornecedor · descarte (lixo) · **conserto na costureira** (poucas peças) |
+| Peça consertada volta pra | **Loja de origem** — quem perdeu a venda recupera a peça |
 | Origens do defeito | Arara da loja · devolução de cliente por defeito · achado na própria matriz |
+| Peça sem etiqueta | O campo de bipe tem a **mesma busca do PDV** (REF, cor, descrição) |
 | Controle do caminho | Rastreado: baixa na loja, matriz confirma a chegada bipando |
 | Transporte | Caixa exclusiva de defeitos, com romaneio impresso |
 | Nota fiscal | **Não** emite NF-e no v1 (decisão do dono) |
@@ -22,9 +24,11 @@ Hoje o defeito vira um `Marcado` com `status='baixado'` (o schema documenta: *"w
 
 ## Estoque — a regra central
 
-**A peça baixa do estoque uma única vez, no registro, e nunca mais reentra.**
+**A peça baixa do estoque uma única vez, no registro, e só reentra por um caminho: o conserto.**
 
-Como ela não volta pra vitrine, a matriz recebendo a caixa **não movimenta estoque nenhum** — só muda o status. Isso elimina o risco de peça defeituosa voltar a ser vendida e dispensa qualquer "depósito de defeitos" com estoque paralelo.
+A matriz recebendo a caixa **não movimenta estoque nenhum** — só muda o status. Isso elimina o risco de peça defeituosa voltar a ser vendida e dispensa qualquer "depósito de defeitos" com estoque paralelo.
+
+A **única** exceção é `recuperarDoConserto`: a peça voltou boa da costureira e entra de novo no estoque da **loja de origem** (`increaseStockAsync`, simétrico à baixa). É idempotente por status — peça já `RECUPERADO` não credita duas vezes, senão clicar duas vezes criaria peça do nada.
 
 A baixa usa `decreaseStockAsync` — mesmo caminho dos marcados e da separação: aplica no Flow (fonte da verdade desde 14/07) e enfileira a réplica pro Giga no outbox, sem pendurar a tela no MySQL da KingHost. Idempotência por `stockDecreasedAt`, no padrão do `ErpOutboxService`.
 
@@ -37,7 +41,7 @@ A baixa usa `decreaseStockAsync` — mesmo caminho dos marcados e da separação
 - **Defeito**: `motivo` (enum abaixo), `observacao`, `fotoUrl`
 - **Fornecedor**: `fornecedorCnpj`, `fornecedorNome`, `marca` — snapshot no registro, porque é por eles que a devolução é agrupada
 - **Valor**: `custoUnitCents`, `precoUnitCents` — snapshot; base do valor da perda no relatório
-- **Ciclo**: `status` (`EM_TRANSITO` → `RECEBIDO` → `DEVOLVIDO_FORNECEDOR` | `DESCARTADO`), `recebidoAt`/`recebidoPor`, `decididoAt`/`decididoPor`, `decisaoObservacao`
+- **Ciclo**: `status` (`EM_TRANSITO` → `RECEBIDO` → `DEVOLVIDO_FORNECEDOR` | `DESCARTADO` | `EM_CONSERTO` → `RECUPERADO`), `recebidoAt`/`recebidoPor`, `decididoAt`/`decididoPor`, `decisaoObservacao`
 - **Vínculos**: `batchId` (a caixa), `returnId` (quando veio de devolução de cliente), `marcadoId` (quando veio da migração — também serve de chave de idempotência)
 - **Controle**: `stockDecreasedAt`, `isTraining`
 
@@ -63,6 +67,8 @@ Cada loja tem no máximo **uma caixa aberta** por vez; o registro de defeito cai
 
 Vendedora bipa o código → o sistema resolve a peça pelo `WincredCatalogService` (espelho primeiro, Giga como fallback — mesmo caminho do bipe do PDV) → escolhe motivo → foto opcional → confirma.
 
+**Peça sem etiqueta:** o campo aceita busca por REF, cor ou descrição usando `/products/erp-search`, o mesmo endpoint do dropdown do PDV — a vendedora escolhe da lista e o código entra sozinho. Termo só de dígitos não abre a lista: é o leitor bipando.
+
 Na confirmação, em sequência: cria `DefectItem` com snapshot de peça/fornecedor/valores → `decreaseStockAsync` da loja → marca `stockDecreasedAt` → anexa à caixa aberta → status `EM_TRANSITO`.
 
 Se a baixa de estoque falhar, o registro **não** é criado — sem meia-baixa.
@@ -81,7 +87,15 @@ Nenhum movimento de estoque nesta etapa.
 
 ### 4. Decisão
 
-Fila agrupada **por fornecedor**. A matriz seleciona várias peças e aplica em lote: `DEVOLVIDO_FORNECEDOR` (com observação, ex.: número da NF de devolução digitado à mão) ou `DESCARTADO`.
+Fila agrupada **por fornecedor**. A matriz seleciona várias peças e aplica em lote: `DEVOLVIDO_FORNECEDOR` (com observação, ex.: número da NF de devolução digitado à mão), `DESCARTADO` ou `EM_CONSERTO`.
+
+Só decide peça que está `RECEBIDO`: decidir sobre peça `EM_TRANSITO` esconderia justamente a que sumiu no caminho.
+
+### 4b. Voltou da costureira
+
+Peça em `EM_CONSERTO` que volta boa recebe **"Voltou do conserto"**: entra de novo no estoque da **loja de origem** e fica `RECUPERADO`. É o único ponto do módulo que credita estoque.
+
+O status `EM_CONSERTO` existe pra peça na costureira sair da fila de decisão sem sumir do controle — sem ele ela ficaria em `RECEBIDO` para sempre, misturada com as que ninguém decidiu.
 
 ### 5. Devolução de cliente por defeito
 
@@ -112,8 +126,8 @@ Todo `Marcado` com `status='baixado'` vira um `DefectItem` histórico. Regras:
 - NF-e e etiqueta dos Correios pra caixa de defeitos — decisão do dono; entra depois se o contador exigir
 - Lançamento na DRE — basta o relatório
 - Aprovação da matriz antes da baixa
-- Conserto/retorno da peça ao estoque vendável — a peça não volta a vender
 - Crédito financeiro do fornecedor — a devolução registra a decisão, o acerto é por fora
+- Controle de quem é a costureira / prazo do conserto — o `EM_CONSERTO` só diz que a peça está fora
 - Defeito detectado na conferência do pedido de compra — o dono não incluiu como origem
 
 ## Riscos e cuidados

@@ -46,6 +46,17 @@ type Caixa = {
   totalCustoCents: number;
 } | null;
 
+/** Mesmo shape que o PDV recebe de /products/erp-search. */
+type Hit = {
+  CODIGO: string;
+  REF: string;
+  DESCRICAOCOMPLETA?: string;
+  COR?: string | null;
+  TAMANHO?: string | null;
+  qtyMyStore?: number;
+  qtyTotal?: number;
+};
+
 const brl = (cents: number) =>
   (Number(cents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -85,6 +96,34 @@ export default function DefeitosPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const skuRef = useRef<HTMLInputElement>(null);
+
+  // ── Busca igual à do PDV (dono, 14/08) ──
+  // Peça volta sem etiqueta e a vendedora não tem código pra bipar. Aqui ela
+  // digita REF, cor ou parte da descrição e escolhe da lista — é o MESMO
+  // endpoint do dropdown do PDV, então o comportamento é o que ela já
+  // conhece (espelho primeiro, Giga como fallback).
+  const [hits, setHits] = useState<Hit[]>([]);
+  const [buscando, setBuscando] = useState(false);
+  const [mostrarHits, setMostrarHits] = useState(false);
+
+  useEffect(() => {
+    const termo = sku.trim();
+    // Código puro (o que o leitor manda) não abre lista: resolve no registro.
+    if (termo.length < 3 || /^\d+$/.test(termo)) { setHits([]); return; }
+    let vivo = true;
+    setBuscando(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await api<Hit[]>(`/products/erp-search?q=${encodeURIComponent(termo)}`);
+        if (vivo) { setHits(r || []); setMostrarHits(true); }
+      } catch {
+        if (vivo) setHits([]);
+      } finally {
+        if (vivo) setBuscando(false);
+      }
+    }, 350);
+    return () => { vivo = false; clearTimeout(t); };
+  }, [sku]);
 
   const motivoSelecionado = motivos.find((m) => m.valor === motivo);
   const exigeObs = !!motivoSelecionado?.exigeObservacao;
@@ -199,24 +238,62 @@ export default function DefeitosPage() {
           </div>
 
           <label className="block text-xs font-bold text-slate-600 mb-1">
-            Código da etiqueta
+            Código da etiqueta <span className="font-normal text-slate-400">— ou busque por REF, cor ou descrição se a peça veio sem etiqueta</span>
           </label>
-          <input
-            ref={skuRef}
-            value={sku}
-            onChange={(e) => setSku(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter no bipe já registra quando o motivo está escolhido —
-              // leitor de código de barras manda Enter no fim da leitura.
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                if (motivo) void registrar();
-              }
-            }}
-            placeholder="Bipe a etiqueta da peça"
-            inputMode="numeric"
-            className="w-full h-16 px-4 border-2 border-slate-800 rounded-xl font-mono text-3xl font-black tracking-wider text-slate-800 bg-white outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
-          />
+          <div className="relative">
+            <input
+              ref={skuRef}
+              value={sku}
+              onChange={(e) => setSku(e.target.value)}
+              onFocus={() => { if (hits.length) setMostrarHits(true); }}
+              onBlur={() => setTimeout(() => setMostrarHits(false), 200)}
+              onKeyDown={(e) => {
+                // Enter no bipe já registra quando o motivo está escolhido —
+                // leitor de código de barras manda Enter no fim da leitura.
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (motivo) void registrar();
+                }
+                if (e.key === 'Escape') setMostrarHits(false);
+              }}
+              placeholder="Bipe a etiqueta ou digite a REF"
+              className="w-full h-16 px-4 border-2 border-slate-800 rounded-xl font-mono text-3xl font-black tracking-wider text-slate-800 bg-white outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
+            />
+            {buscando && (
+              <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 animate-spin text-slate-400" />
+            )}
+
+            {mostrarHits && hits.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-amber-400 rounded-xl shadow-2xl max-h-72 overflow-y-auto z-20">
+                {hits.map((h) => (
+                  <button
+                    key={h.CODIGO}
+                    type="button"
+                    onClick={() => {
+                      setSku(h.CODIGO);
+                      setMostrarHits(false);
+                      setHits([]);
+                      focarBipe();
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-amber-50 border-b border-slate-100 last:border-b-0"
+                  >
+                    <div className="font-bold text-sm text-slate-800">
+                      {h.REF} {h.COR} {h.TAMANHO}
+                      <span className="ml-2 font-mono text-[11px] text-slate-500">{h.CODIGO}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate">
+                      {h.DESCRICAOCOMPLETA}
+                      {typeof h.qtyMyStore === 'number' && (
+                        <span className={`ml-2 font-bold ${h.qtyMyStore > 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                          {h.qtyMyStore > 0 ? `${h.qtyMyStore} nesta loja` : 'sem estoque aqui'}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div className="mt-3">
             <label className="block text-xs font-bold text-slate-600 mb-1">
@@ -322,7 +399,10 @@ export default function DefeitosPage() {
                       {it.marca && <span className="ml-2 text-[10px] font-bold text-slate-500">{it.marca}</span>}
                     </div>
                     <div className="text-xs text-slate-500 truncate">
-                      {labelMotivo(it.motivo)}
+                      {/* Código de barras da peça na relação — é por ele que a
+                          matriz confere, e peça pode chegar sem etiqueta. */}
+                      <span className="font-mono text-slate-600">{it.sku}</span>
+                      {' · '}{labelMotivo(it.motivo)}
                       {it.observacao ? ` · ${it.observacao}` : ''}
                     </div>
                   </div>

@@ -14,6 +14,42 @@ import { useParams } from 'next/navigation';
 import { Printer, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 
+/**
+ * Renderiza os códigos de barras da lista (mesmo JsBarcode do EtiquetaPrint).
+ *
+ * Existe porque peça pode chegar na matriz SEM ETIQUETA (acontece): com as
+ * barras impressas no romaneio, quem confere bipa direto do papel em vez de
+ * digitar código a código.
+ */
+function useBarcodes(dependencia: unknown) {
+  useEffect(() => {
+    const render = () => {
+      // @ts-expect-error JsBarcode global injetado via CDN
+      if (typeof window === 'undefined' || !window.JsBarcode) return;
+      document.querySelectorAll<HTMLElement>('.romaneio-barcode').forEach((el) => {
+        const code = el.dataset.code || '';
+        if (!code) return;
+        try {
+          // @ts-expect-error JsBarcode global
+          window.JsBarcode(el, code, {
+            format: 'CODE128',
+            width: 1.1,
+            height: 26,
+            displayValue: false,
+            margin: 0,
+          });
+        } catch { /* código fora do padrão — a coluna do número resolve */ }
+      });
+    };
+    // @ts-expect-error JsBarcode global
+    if (window.JsBarcode) { render(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js';
+    s.onload = render;
+    document.head.appendChild(s);
+  }, [dependencia]);
+}
+
 type Item = {
   code: string;
   sku: string;
@@ -49,6 +85,7 @@ export default function RomaneioDefeitosPage() {
   const [caixa, setCaixa] = useState<Caixa | null>(null);
   const [itens, setItens] = useState<Item[]>([]);
   const [erro, setErro] = useState<string | null>(null);
+  useBarcodes(itens);
 
   useEffect(() => {
     if (!id) return;
@@ -123,6 +160,7 @@ export default function RomaneioDefeitosPage() {
             <thead>
               <tr className="bg-slate-100">
                 <th className="text-left p-2 border-b border-slate-300">Controle</th>
+                <th className="text-left p-2 border-b border-slate-300">Código de barras</th>
                 <th className="text-left p-2 border-b border-slate-300">REF · Cor · Tam</th>
                 <th className="text-left p-2 border-b border-slate-300">Marca</th>
                 <th className="text-left p-2 border-b border-slate-300">Defeito</th>
@@ -133,6 +171,13 @@ export default function RomaneioDefeitosPage() {
               {itens.map((it) => (
                 <tr key={it.code} className="border-b border-slate-100">
                   <td className="p-2 font-mono font-bold">{it.code}</td>
+                  {/* Barras + número: a matriz bipa do papel quando a peça
+                      chega sem etiqueta, e o número cobre o caso do leitor
+                      não pegar (papel amassado, impressão fraca). */}
+                  <td className="p-2">
+                    <svg className="romaneio-barcode block" data-code={it.sku} />
+                    <span className="font-mono text-[10px] tracking-wide">{it.sku}</span>
+                  </td>
                   <td className="p-2 font-bold">
                     {it.ref || it.sku} {it.cor} {it.tamanho}
                   </td>

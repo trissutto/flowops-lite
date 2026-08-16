@@ -116,4 +116,74 @@ export class DefeitosController {
   async romaneio(@Param('id') id: string) {
     return this.svc.romaneio(id);
   }
+
+  // ── Matriz ────────────────────────────────────────────────────────────
+  // Receber, decidir e o reverso do conserto. Só matriz opera aqui: a loja
+  // registra e manda, quem decide o destino da mercadoria é o CD.
+
+  private requireMatriz(req: any) {
+    if (!['admin', 'supervisor', 'operator'].includes(this.user(req).role)) {
+      throw new ForbiddenException('Apenas matriz (admin/supervisor/operator)');
+    }
+  }
+
+  /** POST /defeitos/caixas/:id/receber — bipe de conferência na chegada. */
+  @Post('caixas/:id/receber')
+  async receberPeca(
+    @Req() req: any,
+    @Param('id') batchId: string,
+    @Body() body: { codigo: string },
+  ) {
+    this.requireMatriz(req);
+    return this.svc.receberPeca({
+      batchId,
+      codigo: body?.codigo,
+      userName: this.user(req).nome,
+    });
+  }
+
+  /**
+   * POST /defeitos/caixas/:id/fechar-conferencia
+   * Peça não bipada continua EM_TRANSITO de propósito — é assim que "sumiu
+   * no caminho" aparece no relatório em vez de virar silêncio.
+   */
+  @Post('caixas/:id/fechar-conferencia')
+  async fecharConferencia(@Req() req: any, @Param('id') batchId: string) {
+    this.requireMatriz(req);
+    return this.svc.fecharConferencia(batchId, this.user(req).nome);
+  }
+
+  /** POST /defeitos/decidir — devolver ao fornecedor · descartar · mandar consertar. */
+  @Post('decidir')
+  async decidir(
+    @Req() req: any,
+    @Body() body: { itemIds: string[]; decisao: string; observacao?: string },
+  ) {
+    this.requireMatriz(req);
+    return this.svc.decidir({
+      itemIds: body?.itemIds || [],
+      decisao: body?.decisao,
+      observacao: body?.observacao ?? null,
+      userName: this.user(req).nome,
+    });
+  }
+
+  /**
+   * POST /defeitos/:id/recuperar — voltou da costureira.
+   * ÚNICO caminho em que o estoque reentra: a peça volta pra loja que a
+   * mandou (decisão do dono, 14/08).
+   */
+  @Post(':id/recuperar')
+  async recuperar(
+    @Req() req: any,
+    @Param('id') itemId: string,
+    @Body() body: { observacao?: string },
+  ) {
+    this.requireMatriz(req);
+    return this.svc.recuperarDoConserto({
+      itemId,
+      observacao: body?.observacao ?? null,
+      userName: this.user(req).nome,
+    });
+  }
 }
