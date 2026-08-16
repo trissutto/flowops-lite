@@ -236,13 +236,30 @@ export class WhatsappInboxService {
       }
     }
 
-    await this.p().whatsappConversation.upsert({
-      where: { jid },
-      create: { jid, numero, nome, ultimaMsg: texto, ultimaEm: ts, fromMe, naoLidas: fromMe ? 0 : 1 },
-      update: fromMe
-        ? { ultimaMsg: texto, ultimaEm: ts, fromMe: true, naoLidas: 0, nome: nome ?? undefined }
-        : { ultimaMsg: texto, ultimaEm: ts, fromMe: false, naoLidas: { increment: 1 }, nome: nome ?? undefined },
-    });
+    // Não deixar a conversa RETROCEDER: os webhooks do Evolution podem chegar
+    // FORA DE ORDEM (a msg antiga da cliente depois da resposta da loja). Só
+    // avança direção/timestamp/preview quando ESTA msg é a mais nova. Mensagem
+    // recebida conta em não-lidas de qualquer jeito (a trava do auto-reply
+    // depende de fromMe/ultimaEm refletirem a msg realmente mais recente).
+    const conv = await this.p().whatsappConversation.findUnique({ where: { jid } }).catch(() => null);
+    const maisNova = !conv?.ultimaEm || ts >= new Date(conv.ultimaEm);
+    if (!conv) {
+      await this.p()
+        .whatsappConversation.create({
+          data: { jid, numero, nome, ultimaMsg: texto, ultimaEm: ts, fromMe, naoLidas: fromMe ? 0 : 1 },
+        })
+        .catch(() => undefined); // corrida de criação → o outro webhook cobre
+    } else {
+      const upd: any = { nome: nome ?? undefined };
+      if (!fromMe) upd.naoLidas = { increment: 1 }; // recebida sempre conta
+      if (maisNova) {
+        upd.ultimaMsg = texto;
+        upd.ultimaEm = ts;
+        upd.fromMe = fromMe;
+        if (fromMe) upd.naoLidas = 0; // loja respondeu a msg mais nova → lida
+      }
+      await this.p().whatsappConversation.update({ where: { jid }, data: upd }).catch(() => undefined);
+    }
     await this.p()
       .whatsappMessage.create({
         data: { conversationJid: jid, waId, fromMe, texto, tipo: 'texto', status: status || undefined, ts },
