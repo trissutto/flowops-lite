@@ -5473,6 +5473,22 @@ model SiteCupom {
 /// tabela não cria nem apaga categoria, só VESTE a que já existe — foto,
 /// nome de exibição, texto e ordem no menu. Sem linha aqui, o site segue
 /// com o nome derivado do slug e sem foto, como hoje.
+/// Coleção CURADA e ORDENADA de peças (ex.: "Mais Top da Semana" — os 20 que o dono
+/// mais quer vender na semana). É PARALELA à categoria real da peça: NÃO troca
+/// `SiteProduto.categoria` (a blusa continua em Blusas), diferente de classificar. Uma
+/// linha por coleção; `refs` = array ORDENADO de REF (a mesma REF do feed/pixel). A
+/// ordem do array É a ordem na vitrine e no carimbo do feed. Alimenta: página do site,
+/// item do menu e o `custom_label_1=top-semana` do feed do Meta.
+model SiteColecao {
+  slug          String   @id
+  nome          String?
+  refs          Json     @default("[]")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor String?  @map("atualizado_por")
+
+  @@map("site_colecao")
+}
+
 model SiteCategoria {
   id            String   @id @default(uuid())
 

@@ -1836,8 +1836,11 @@ export class LojaCatalogService {
       imagens: string[];
       tamanhos: string[];
       cores: string[];
+      topSemana: boolean;
     }>
   > {
+    // REFs curadas da "Mais Top da Semana" — pra carimbar custom_label_1 no feed.
+    const topSemanaRefs = new Set(await this.colecaoRefs('mais-top-da-semana'));
     /**
      * `listar` trava `perPage` em 60 (proteção da rota pública de vitrine),
      * então pedir 5.000 numa chamada só devolvia a PRIMEIRA página — o feed
@@ -1879,7 +1882,51 @@ export class LojaCatalogService {
       imagens: (p.imagens ?? []).map((i: any) => i.src).filter(Boolean),
       tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
       cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),
+      topSemana: topSemanaRefs.has(this.refKey(p.ref)),
     }));
+  }
+
+  // ── COLEÇÕES CURADAS (ex.: "Mais Top da Semana") ───────────────────────────
+  // Coleção PARALELA e ORDENADA: uma linha `SiteColecao` por slug, `refs` = array
+  // ordenado de REF. Não toca `SiteProduto.categoria` (a peça continua na categoria
+  // real dela). A ordem do array É a ordem na vitrine e o carimbo do feed.
+
+  /** Normaliza REF igual ao resto do catálogo (UPPER/TRIM/sem espaço). */
+  private refKey(r: any): string {
+    return String(r ?? '').trim().toUpperCase().replace(/\s+/g, '');
+  }
+
+  /** REFs da coleção, na ordem gravada (normalizadas). */
+  async colecaoRefs(slug: string): Promise<string[]> {
+    const row = await (this.prisma as any).siteColecao.findUnique({ where: { slug } });
+    const arr = Array.isArray(row?.refs) ? row.refs : [];
+    return arr.map((r: any) => this.refKey(r)).filter(Boolean);
+  }
+
+  /** Grava a lista ORDENADA de REFs da coleção (dedup preservando a ordem; teto 100). */
+  async setColecao(slug: string, refs: string[], quem: string, nome?: string) {
+    const limpos = Array.from(new Set((refs ?? []).map((r) => this.refKey(r)).filter(Boolean))).slice(0, 100);
+    await (this.prisma as any).siteColecao.upsert({
+      where: { slug },
+      create: { slug, nome: nome ?? null, refs: limpos, atualizadoPor: quem },
+      update: { refs: limpos, ...(nome !== undefined ? { nome } : {}), atualizadoPor: quem },
+    });
+    return { ok: true, slug, total: limpos.length };
+  }
+
+  /** Produtos da coleção, NA ORDEM curada (mesma forma de card da vitrine). Peça que
+   *  saiu do catálogo (despublicada/esgotada) simplesmente não aparece. */
+  async curadoriaProdutos(slug: string): Promise<{ itens: any[]; total: number }> {
+    const refs = await this.colecaoRefs(slug);
+    if (!refs.length) return { itens: [], total: 0 };
+    const catalogo = await this.catalogoPublicado();
+    const porRef = new Map<string, any>();
+    for (const p of catalogo) {
+      const k = this.refKey(p.ref);
+      if (k && !porRef.has(k)) porRef.set(k, p);
+    }
+    const itens = refs.map((r) => porRef.get(r)).filter(Boolean);
+    return { itens, total: itens.length };
   }
 
   /**
