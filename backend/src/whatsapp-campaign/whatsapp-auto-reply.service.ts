@@ -78,7 +78,7 @@ export class WhatsappAutoReplyService implements OnModuleInit {
     if (this.modo() === 'off' || !jid) return;
     const antigo = this.timers.get(jid);
     if (antigo) clearTimeout(antigo);
-    const debounce = Math.max(1000, Number(process.env.WHATSAPP_AUTO_DEBOUNCE_MS ?? '4000'));
+    const debounce = Math.max(1000, Number(process.env.WHATSAPP_AUTO_DEBOUNCE_MS ?? '3000'));
     const t = setTimeout(() => {
       this.timers.delete(jid);
       void this.tentarResponder(jid);
@@ -109,14 +109,27 @@ export class WhatsappAutoReplyService implements OnModuleInit {
       const ultimaEmMs = c.ultimaEm ? new Date(c.ultimaEm).getTime() : 0;
       if (agora - ultimaEmMs > 30 * 60 * 1000) return; // velho demais
       if (this.avaliadas.get(jid) === ultimaEmMs) return; // já avaliei este estado
-      if (agora - (this.ultimaChamadaIA.get(jid) || 0) < 90 * 1000) return; // throttle
+      // Throttle: no máx 1 chamada à IA a cada 3s por conversa (ping-pong; env).
+      const throttleMs = Math.max(1000, Number(process.env.WHATSAPP_AUTO_THROTTLE_MS ?? 3000));
+      if (agora - (this.ultimaChamadaIA.get(jid) || 0) < throttleMs) return;
 
-      // Cooldown: a LOJA já respondeu (Lulú OU humano) nos últimos 20min?
-      const respondeuRecente = await this.p().whatsappMessage.findFirst({
-        where: { conversationJid: jid, fromMe: true, ts: { gte: new Date(agora - 20 * 60 * 1000) } },
+      // Se um HUMANO respondeu nos últimos 10min, a Lulú fica FORA (a pessoa está
+      // atendendo). Conta SÓ resposta humana (tipo 'texto'); a própria Lulú
+      // ('auto-ia') NÃO trava a conversa — senão ela parava depois de 1 resposta.
+      const humanoRecente = await this.p().whatsappMessage.findFirst({
+        where: { conversationJid: jid, fromMe: true, tipo: 'texto', ts: { gte: new Date(agora - 10 * 60 * 1000) } },
       });
-      if (respondeuRecente) {
+      if (humanoRecente) {
         this.avaliadas.set(jid, ultimaEmMs);
+        return;
+      }
+      // Teto anti-runaway: no máx 15 auto-respostas por conversa por hora.
+      const autoNaHora = await this.p().whatsappMessage.count({
+        where: { conversationJid: jid, tipo: 'auto-ia', ts: { gte: new Date(agora - 60 * 60 * 1000) } },
+      });
+      if (autoNaHora >= 15) {
+        this.avaliadas.set(jid, ultimaEmMs);
+        this.logger.warn(`[wa-auto] ${c.numero}: teto de 15 auto-respostas/hora atingido`);
         return;
       }
 
@@ -131,14 +144,15 @@ export class WhatsappAutoReplyService implements OnModuleInit {
         this.logger.log(`[wa-auto] ${c.numero}: NÃO respondeu — ${dec.motivo}`);
         return;
       }
-      // CLAIM ATÔMICO: 1 só envio mesmo com 2 processos; trava TOCTOU (ultimaEm
-      // igual) + cooldown de 20min. Feito ANTES do envio (timeout que entregou
-      // não reenvia). Só quem atualiza 1 linha ganha o direito.
+      // CLAIM ATÔMICO: 1 só envio mesmo com 2 processos; trava TOCTOU (a ultimaEm
+      // tem que ser a MESMA — msg nova não casa). Janela curta (3s): só evita
+      // dois envios do MESMO estado quase simultâneos; a próxima pergunta da
+      // cliente (ultimaEm nova) reivindica de novo. Feito ANTES do envio.
       const claim = await this.p().whatsappConversation.updateMany({
         where: {
           jid,
           ultimaEm: c.ultimaEm,
-          OR: [{ autoRepliedAt: null }, { autoRepliedAt: { lt: new Date(agora - 20 * 60 * 1000) } }],
+          OR: [{ autoRepliedAt: null }, { autoRepliedAt: { lt: new Date(agora - 3 * 1000) } }],
         },
         data: { autoRepliedAt: new Date(agora) },
       });
@@ -164,8 +178,11 @@ export class WhatsappAutoReplyService implements OnModuleInit {
       return;
     }
     if (!this.evo.configurado() || this.rodando) return;
-    if (modo === 'fora' && this.lojaAberta()) return;
-    if (!this.ligadoDesde) this.ligadoDesde = Date.now(); // acabou de ligar
+    if (modo === 'fora' && this.lojaAberta()) {
+      this.ligadoDesde = 0; // loja aberta → zera; ao fechar, re-marca (não pega backlog do comercial)
+      return;
+    }
+    if (!this.ligadoDesde) this.ligadoDesde = Date.now(); // acabou de ligar / acabou de fechar
 
     this.rodando = true;
     try {

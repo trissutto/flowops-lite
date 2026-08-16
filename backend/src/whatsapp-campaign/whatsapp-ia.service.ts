@@ -261,8 +261,11 @@ export class WhatsappIaService {
     // regex nas últimas mensagens) NUNCA recebe template alegre — vale inclusive pra
     // 'reclamacao' (que fica fora do INTENTS_OK) e pra quando o Haiku classifica errado.
     const delicado =
-      (tom !== 'neutro' && !!tom) || this.pareceReclamacao(clienteRecente) || this.pareceVulneravel(clienteRecente);
-    if (delicado) return acolher(tom !== 'neutro' && tom ? tom : 'delicado', false, true);
+      (tom !== 'neutro' && !!tom) ||
+      intent === 'reclamacao' || // o próprio rótulo da IA força sóbrio (não depende de regex/tom)
+      this.pareceReclamacao(clienteRecente) ||
+      this.pareceVulneravel(clienteRecente);
+    if (delicado) return acolher(intent === 'reclamacao' ? 'reclamação' : tom !== 'neutro' && tom ? tom : 'delicado', false, true);
 
     if (!this.INTENTS_OK.has(intent)) return acolher(intent || 'outro');
 
@@ -294,9 +297,10 @@ export class WhatsappIaService {
       return `Achei mais de um pedido no seu número 💜 Me manda o número do que você quer saber (tipo LP-00000) que a gente vê o certo pra você ${espera}.`;
     const p = pedidos[0];
     const num = p.wc_order_number ? ` ${p.wc_order_number}` : '';
-    // Rastreio existe = já foi postado (isso é verdade, o código só sai no envio).
+    // Rastreio existe: dá o código SEM cravar "já postado" — a etiqueta pode ter
+    // sido gerada antes do despacho físico (a rede tem histórico disso).
     if (p.tracking_code)
-      return `Achei seu pedido${num} aqui! 📦 Já foi postado — o código de rastreio é: ${p.tracking_code}. Qualquer dúvida na entrega, me chama 💜`;
+      return `Achei seu pedido${num} aqui! 📦 O código de rastreio é: ${p.tracking_code} — assim que os Correios registrarem a postagem, ele começa a atualizar. Qualquer dúvida, me chama 💜`;
     // SEM rastreio: NÃO cravo status (pode estar cancelado/pagamento recusado/em
     // espera). Uma pessoa confere o andamento — nunca afirmo "em andamento".
     return `Achei seu pedido${num} aqui 💜 Pra te passar o andamento certinho, uma pessoa do time confere o status pra você ${espera} — qualquer coisa, é só chamar.`;
@@ -451,9 +455,12 @@ export class WhatsappIaService {
   }
 
   /**
-   * Pedidos da cliente por telefone COMPLETO ancorado (right 11/10). Confere a
-   * ambiguidade ANTES de limitar: se telefones DISTINTOS casam, retorna vazio —
-   * nunca vaza PII de terceiro. (Usado só pelo `sugerir`, revisado por humano.)
+   * Pedidos da cliente por telefone. Casa SÓ pelo número LOCAL canônico completo
+   * (DDD+9+8 = 11 díg, `right(...,11) = com9`) ou pelo local exato de 10 díg
+   * (`= sem9`). NUNCA `right(...,10)` — isso derrubava um dígito do DDD e podia
+   * casar o pedido de OUTRA cliente (DDD 11 x 19, mesmo sufixo). Usado pelo
+   * `sugerir` (revisado) E pela AUTO-RESPOSTA (sem revisão) — por isso o rigor.
+   * Se telefones DISTINTOS casarem, retorna vazio (ambíguo).
    */
   private async pedidosDaCliente(numero: string): Promise<any[]> {
     const v = this.variantesTelefone(numero);
@@ -465,7 +472,7 @@ export class WhatsappIaService {
                 to_char(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo','DD/MM') dia
            FROM orders
           WHERE right(regexp_replace(COALESCE(customer_phone,''),'\\D','','g'), 11) = $1
-             OR right(regexp_replace(COALESCE(customer_phone,''),'\\D','','g'), 10) = $2
+             OR regexp_replace(COALESCE(customer_phone,''),'\\D','','g') = $2
           ORDER BY created_at DESC LIMIT 20`,
         v.com9,
         v.sem9,
