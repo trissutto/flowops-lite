@@ -199,10 +199,13 @@ export class WhatsappAutoReplyService implements OnModuleInit {
       try {
         await this.inbox.responder(jid, texto, 'auto-ia');
       } catch (e: any) {
-        // Envio falhou (Evolution 5xx/timeout) DEPOIS do claim → DEVOLVE o claim
-        // (autoRepliedAt=null) pra rede de segurança poder RETENTAR; senão a acolhida
-        // desta mensagem se perderia pra sempre. responder() só lança se o enviarTexto
-        // lançar (ANTES de mandar), então reverter aqui não duplica envio.
+        // Envio falhou DEPOIS do claim → DEVOLVE o claim (autoRepliedAt=null) pra rede
+        // de segurança RETENTAR; senão a acolhida se perderia. NOTA: o enviarTexto PODE
+        // ter entregado a msg e mesmo assim lançar (timeout de rede). Nesse caso o ECO
+        // (fromMe=true) do próprio envio chega pelo webhook e flipa a conversa, então a
+        // rede de segurança (query fromMe:false) não a repega → não duplica. Favorecemos
+        // "não perder" sobre o raro duplicado (o modo webhook padrão cobre; o dedup por
+        // conteúdo pega o resto na mesma instância).
         await this.p()
           .whatsappConversation.updateMany({ where: { jid, autoRepliedAt: new Date(agora) }, data: { autoRepliedAt: null } })
           .catch(() => undefined);
