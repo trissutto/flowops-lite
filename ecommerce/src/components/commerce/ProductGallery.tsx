@@ -223,6 +223,7 @@ export function ProductGallery({
             </button>
           ))}
         </div>
+        </div>
       ) : safeImages.length > 1 && (
         <div
           className="no-scrollbar flex gap-3 overflow-x-auto lg:w-20 lg:flex-col lg:overflow-visible"
