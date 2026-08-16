@@ -181,6 +181,39 @@ const ROTULO_PLATAFORMA: Record<string, string> = {
   whatsapp: 'WhatsApp',
 };
 
+/**
+ * O NOME DA CAMPANHA, LEGÍVEL.
+ *
+ * Duas sujeiras chegam aqui, de origens diferentes:
+ *
+ * 1. CODIFICAÇÃO DUPLA do Meta — `%7CSITENOVO%7C+Vendas+Capitais` em vez de
+ *    `|SITENOVO| Vendas Capitais`. Corrigido na origem (`decodificaUtm`, no
+ *    site), mas as linhas gravadas ANTES do conserto continuam tortas no
+ *    banco. Este decode existe pra elas: é leitura, não regravação.
+ *
+ * 2. ID NO LUGAR DO NOME — anúncio etiquetado com `utm_campaign={{campaign.id}}`
+ *    manda `52531954165766`. Aqui não dá pra adivinhar o nome, então a tela
+ *    ASSUME o buraco em vez de mostrar um número solto: quem lê entende que
+ *    falta arrumar a etiqueta daquele anúncio, e não que a campanha se chama
+ *    assim.
+ */
+function rotuloCampanha(valor: string): string {
+  let texto = valor;
+  for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(texto); i += 1) {
+    try {
+      texto = decodeURIComponent(texto.replace(/\+/g, ' '));
+    } catch {
+      break;
+    }
+  }
+  // Sobrou `+` e nenhum espaço: era espaço codificado (ver `decodificaUtm`).
+  if (texto.includes('+') && !texto.includes(' ')) texto = texto.replace(/\+/g, ' ');
+  texto = texto.trim();
+  // Só dígitos = é o ID da campanha, não o nome dela.
+  if (/^\d{6,}$/.test(texto)) return `sem nome (ID ${texto.slice(-6)})`;
+  return texto || valor;
+}
+
 /** Um degrau da cascata. Vazio some — degrau com uma opção só não é escolha. */
 function Degrau({
   titulo,
@@ -312,6 +345,7 @@ function Cascata({
           titulo="Campanha"
           opcoes={nivel3}
           valor={campanha}
+          rotulo={rotuloCampanha}
           onEscolher={(v) => onMudar({ trafego, plataforma, campanha: v })}
         />
       )}
@@ -726,14 +760,35 @@ function FunilSite({
 
   const [analisando, setAnalisando] = useState(false);
 
-  let anterior: number | null = null;
-  const cards = ordem.map((o) => {
-    const dado = por.get(o.evento);
-    const pessoas = dado?.pessoas ?? 0;
-    const pct = anterior !== null && anterior > 0 ? Math.round((pessoas / anterior) * 100) : null;
-    anterior = pessoas;
-    return { ...o, pessoas, eventos: dado?.eventos ?? 0, pct, valor: dado?.valor ?? 0 };
-  });
+  /**
+   * UM FUNIL SÓ NA TELA (dono, 16/08: "pode tirar os cards").
+   *
+   * Existiam DOIS: a fileira de cards saía do `funil()` (conta o evento que
+   * de fato aconteceu) e a tabela "Onde a compra parou" sai da `jornada`
+   * (cada sessão na etapa mais avançada, IMPUTANDO as anteriores). As duas
+   * estão certas e discordam de propósito — a compra que chega pelo webhook
+   * não tem `view_item` do navegador, então a tabela assume que ela viu a
+   * peça e o card não conta. No dia 16/08 dava 153 contra 156.
+   *
+   * Duas definições de "viram peça" na mesma tela é uma a mais. Ficou a da
+   * tabela, que é a que responde "onde a compra parou", e os cards saíram.
+   *
+   * A análise de conversão passa a ler a MESMA lista — antes ela lia os
+   * cards, e teria continuado a divergir sozinha depois deles sumirem.
+   */
+  const rotuloEtapa = new Map(ordem.map((o) => [o.evento, o.titulo]));
+  const etapasAnalise = jornada.length
+    ? jornada.map((l) => ({
+        evento: l.evento,
+        titulo: rotuloEtapa.get(l.evento) ?? l.evento,
+        pessoas: l.chegaram,
+      }))
+    : ordem.map((o) => ({
+        evento: o.evento,
+        titulo: o.titulo,
+        pessoas: por.get(o.evento)?.pessoas ?? 0,
+      }));
+  const valorCompras = por.get('purchase')?.valor ?? 0;
 
   return (
     <div className="space-y-2">
@@ -755,45 +810,20 @@ function FunilSite({
 
       {analisando && (
         <AnaliseConversao
-          etapas={cards.map((c) => ({ evento: c.evento, titulo: c.titulo, pessoas: c.pessoas }))}
+          etapas={etapasAnalise}
           faturamento={faturamento}
-          valorCompras={cards.find((c) => c.evento === 'purchase')?.valor ?? 0}
+          valorCompras={valorCompras}
           aoFechar={() => setAnalisando(false)}
         />
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        {cards.map((c) => (
-          <div key={c.evento} className="bg-white border border-[#E7E2D8] rounded-xl p-4">
-            <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-              {c.icone} {c.titulo}
-            </div>
-            <div className={`mt-2 text-2xl font-bold tabular-nums ${c.evento === 'purchase' ? 'text-[#2E7D46]' : 'text-slate-800'}`}>
-              {c.pessoas}
-            </div>
-            {/* VALOR DE CONVERSÃO (dono, 15/08): o R$ somado das compras
-                confirmadas do período, colado no card Compras. */}
-            {c.evento === 'purchase' && (
-              <div
-                className="text-sm font-bold text-[#2E7D46] tabular-nums"
-                title="Valor de conversão — R$ somado das compras confirmadas no período"
-              >
-                {brl(c.valor)}
-              </div>
-            )}
-            <div className="text-xs text-slate-400 tabular-nums">
-              {c.eventos} evento{c.eventos === 1 ? '' : 's'}
-              {c.pct !== null && <span className="ml-1 font-semibold text-[#B8912B]">· {c.pct}%</span>}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* FATURAMENTO REAL (dono, 15/08) — a Fonte B, numa linha SEPARADA do
-          valor de conversão do funil de propósito: aqui é o DINHEIRO (pedidos
-          pagos, inclusive quem veio por e-mail/orgânico e o PIX pago depois);
-          lá no card Compras é a conversão das sessões rastreadas. As duas
-          divergem e cada uma responde uma pergunta diferente. */}
+      {/* O DINHEIRO, UMA VEZ SÓ.
+          Eram dois valores na tela: este e o R$ do card Compras (a soma dos
+          eventos `purchase` rastreados). Divergiam por motivo legítimo — o PIX
+          pago hoje de um pedido de ontem conta no dia do PEDIDO aqui e no dia
+          do PAGAMENTO lá —, mas dois números em verde a três centímetros um do
+          outro só fazem duvidar dos dois. Ficou o do pedido pago, que é o
+          dinheiro que entrou. */}
       {faturamento && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#CDE9D6] bg-[#F3FAF5] px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -820,7 +850,13 @@ function FunilSite({
         — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.{' '}
         <strong className="font-semibold text-slate-600">Robô também fica de fora</strong> — o de
         user-agent conhecido (Google, IA, SEO) e o disfarçado, que se entrega por carregar a página
-        e ir embora sem rolar nem dar um segundo passo.
+        e ir embora sem rolar nem dar um segundo passo.{' '}
+        {/* Sem esta frase a tela se contradiz sozinha: o card ao vivo lá em cima
+            conta a rede inteira, este funil conta só quem veio comprar. Já
+            aconteceu de "565 visitas hoje" aparecer em cima de "173 visitas". */}
+        Por isso <strong className="font-semibold text-slate-600">este número é menor que o
+        &quot;Visitas hoje&quot; do card ao vivo</strong> — lá entra o site todo, incluindo a
+        página das lojas.
       </p>
       {jornada.length > 0 && resumo && (
         <RelatorioJornada
