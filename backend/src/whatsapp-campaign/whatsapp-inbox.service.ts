@@ -152,10 +152,16 @@ export class WhatsappInboxService {
       texto: m.texto || '',
       ts: new Date(m.ts).getTime(),
       status: m.fromMe ? m.status || '' : '',
+      tipo: m.tipo || 'texto',
     }));
   }
 
-  async responder(jid: string, texto: string) {
+  /**
+   * Envia uma resposta pela loja e grava no banco. `tipo` marca a origem:
+   * 'texto' (operadora), 'auto-ia' (a Lulú respondeu sozinha) — pra tela poder
+   * mostrar a tarja e pro cron de auto-resposta não repetir.
+   */
+  async responder(jid: string, texto: string, tipo: 'texto' | 'auto-ia' = 'texto') {
     if (!this.evo.configurado()) throw new BadRequestException('Evolution não configurado.');
     const numero = String(jid || '').split('@')[0].replace(/\D/g, '');
     if (numero.length < 10) throw new BadRequestException('Conversa inválida.');
@@ -172,7 +178,7 @@ export class WhatsappInboxService {
         update: { ultimaMsg: texto, ultimaEm: ts, fromMe: true, naoLidas: 0 },
       });
       await this.p().whatsappMessage.create({
-        data: { conversationJid: jid, waId, fromMe: true, texto, tipo: 'texto', status: 'enviado', ts },
+        data: { conversationJid: jid, waId, fromMe: true, texto, tipo, status: 'enviado', ts },
       });
     } catch (e: any) {
       this.logger.warn(`[wa-inbox] resposta não gravou local (${e?.message || e}) — o webhook cobre`);
