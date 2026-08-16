@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { SiteMetricsController, SiteMetricsPublicController } from './site-metrics.controller';
 import { SiteMetricsService } from './site-metrics.service';
+import { MetaAdsService } from './meta-ads.service';
 
 /**
  * MÉTRICA DOS BOTÕES DA LOJA — dado nosso, não do Google.
@@ -23,6 +24,6 @@ import { SiteMetricsService } from './site-metrics.service';
 @Module({
   imports: [PrismaModule, AuthModule],
   controllers: [SiteMetricsPublicController, SiteMetricsController],
-  providers: [SiteMetricsService],
+  providers: [SiteMetricsService, MetaAdsService],
 })
 export class SiteMetricsModule {}

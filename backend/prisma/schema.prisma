@@ -6902,6 +6902,44 @@ model SiteEvento {
   @@map("site_eventos")
 }
 
+/// GASTO DE ANÚNCIO POR CAMPANHA E DIA — o "I" do ROAS.
+///
+/// A receita já mora aqui (`Order.utmId`), o gasto não morava em lugar nenhum:
+/// vive no Gerenciador do Meta. Este espelho traz o gasto pra dentro do
+/// Postgres pra tela poder dividir um pelo outro sem depender de API na hora
+/// de renderizar — mesmo princípio do espelho Wincred.
+///
+/// ⚠️ A CHAVE É O `campanhaId`, NUNCA O NOME. O nome muda quando alguém
+/// renomeia a campanha no Meta, chega codificado duas vezes na URL e às vezes
+/// vem como número. O id é imutável, e é o que o `utm_id={{campaign.id}}`
+/// grava no pedido. O NOME vem daqui (da API), não do UTM — é o que conserta
+/// de vez os rótulos tortos da cascata.
+model MetaAdsGastoDia {
+  id          String   @id @default(uuid())
+  /// Conta de anúncio (sem o prefixo `act_`).
+  contaId     String   @map("conta_id") @db.VarChar(32)
+  /// `campaign.id` do Meta — casa com `Order.utmId`.
+  campanhaId  String   @map("campanha_id") @db.VarChar(40)
+  /// Nome no dia da coleta. Guardado pra tela mostrar rótulo mesmo quando a
+  /// campanha some do Gerenciador; o id continua sendo quem manda.
+  campanhaNome String? @map("campanha_nome") @db.VarChar(200)
+  /// Dia no fuso de São Paulo (00:00 local), não UTC — a tela é De/Até local.
+  dia         DateTime @db.Date
+  gasto       Decimal  @default(0) @db.Decimal(12, 2)
+  impressoes  Int      @default(0)
+  cliques     Int      @default(0)
+  /// Quantas chegadas na página o Meta contou — serve pra medir o quanto a
+  /// nossa contagem de sessão diverge da dele.
+  chegadas    Int      @default(0)
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  /// Recoleta do mesmo dia sobrescreve em vez de duplicar: o Meta reprocessa
+  /// atribuição por dias, então o gasto de ontem ainda muda hoje.
+  @@unique([contaId, campanhaId, dia])
+  @@index([dia])
+  @@map("meta_ads_gasto_dia")
+}
+
 /// LOOK — peças que formam um conjunto (dono, 13/08: Regata 403048 + Calça
 /// Aladdin 406027 saem na MESMA foto e têm que se vender juntas). Fase 1: a
 /// PDP de cada peça mostra as irmãs do look ("Complete o look"). Fase 2 (o
