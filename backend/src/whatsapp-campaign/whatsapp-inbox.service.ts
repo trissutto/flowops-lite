@@ -190,9 +190,14 @@ export class WhatsappInboxService {
         create: { jid, numero, ultimaMsg: texto, ultimaEm: ts, fromMe: true, naoLidas: 0 },
         update: { ultimaMsg: texto, ultimaEm: ts, fromMe: true, ...(zerarNaoLidas ? { naoLidas: 0 } : {}) },
       });
-      await this.p().whatsappMessage.create({
-        data: { conversationJid: jid, waId, fromMe: true, texto, tipo, status: 'enviado', ts },
-      });
+      // Só grava a mensagem otimista se veio o waId. Sem ele, o webhook do
+      // próprio envio cria a linha (com o waId real) — gravar aqui um waId null
+      // faria a idempotência-por-waId não casar e duplicar a linha no inbox.
+      if (waId) {
+        await this.p().whatsappMessage.create({
+          data: { conversationJid: jid, waId, fromMe: true, texto, tipo, status: 'enviado', ts },
+        });
+      }
     } catch (e: any) {
       this.logger.warn(`[wa-inbox] resposta não gravou local (${e?.message || e}) — o webhook cobre`);
     }

@@ -89,7 +89,9 @@ export class WhatsappIaService {
     '- "outro": QUALQUER outra coisa — preço, desconto, cashback, cupom, pedido, status, rastreio, estoque, tamanho de peça, ' +
     'troca/devolução, defeito, reclamação, pagamento/parcelas, prazo de entrega, retirada de pedido, ou algo que precise de humano.\n' +
     'Também extraia "cidade": a cidade/loja que a cliente citou (ex.: "Campinas"), ou "" se não citou.\n' +
-    'Responda SÓ com um JSON válido: {"intent":"<um dos acima>","cidade":"<cidade ou vazio>","motivo":"<curto>"}.';
+    'E avalie o "tom" da cliente na conversa: "neutro"; "insatisfeito" (reclamação, irritação, cobrança, ameaça); ' +
+    'ou "vulneravel" (luto, doença, hospital, aperto financeiro, aflição, algo delicado). Na dúvida entre neutro e os outros, escolha o outro.\n' +
+    'Responda SÓ com um JSON válido: {"intent":"<um dos acima>","cidade":"<cidade ou vazio>","tom":"neutro|insatisfeito|vulneravel","motivo":"<curto>"}.';
 
   async sugerir(jid: string): Promise<{ sugestao: string }> {
     if (!this.apiKey) throw new BadRequestException('IA desabilitada — configure ANTHROPIC_API_KEY.');
@@ -108,7 +110,12 @@ export class WhatsappIaService {
     try {
       const texto = await this.chamarClaude(this.PERSONA, conteudo, 400);
       if (!texto) throw new Error('resposta vazia da IA');
-      return { sugestao: texto };
+      // O rascunho é texto LIVRE (o humano revisa e envia). Se contiver valor,
+      // prazo, cupom ou rastreio, prefixa um alerta pra operadora conferir antes
+      // — defesa contra uma injeção que faça a IA sugerir promessa indevida.
+      const risco = /\d+\s*%|cupom|desconto|R\$\s*\d|rastrei|c[óo]digo\b|\d+\s*dias?\b|\d+\s*x\b|parcel/i.test(texto);
+      const sugestao = risco ? `⚠️ confira valor/prazo/rastreio antes de enviar:\n${texto}` : texto;
+      return { sugestao };
     } catch (e: any) {
       const status = e?.response?.status;
       const detalhe = e?.response?.data?.error?.message || e?.message || 'erro';
@@ -165,18 +172,24 @@ export class WhatsappIaService {
     if (!bloco) return acolher('IA não devolveu JSON');
     let intent = '';
     let cidade = '';
+    let tom = 'neutro';
     try {
       const j = JSON.parse(bloco[0]);
       if (typeof j?.intent !== 'string') return acolher('JSON sem intent');
       intent = j.intent.toLowerCase().trim();
       cidade = typeof j?.cidade === 'string' ? j.cidade : '';
+      tom = typeof j?.tom === 'string' ? j.tom.toLowerCase().trim() : 'neutro';
     } catch {
       return acolher('JSON inválido da IA');
     }
     if (!this.INTENTS_OK.has(intent)) return acolher(intent || 'outro');
-    // Reclamação/urgência NUNCA recebe template alegre, mesmo classificada como
-    // institucional (a cliente pode ter perguntado endereço COM uma reclamação).
-    if (this.pareceReclamacao(ultimaCliente)) return acolher('reclamação');
+    // Cliente NÃO neutra (insatisfeita/vulnerável) NUNCA recebe template alegre —
+    // mesmo perguntando algo institucional (ex.: "vestido pro enterro, que horas
+    // abre?"). Vai pra acolhida sóbria e pro humano. A IA avalia o tom (bom nisso)
+    // e a regex é só um reforço pra quando ela vacilar.
+    if ((tom !== 'neutro' && tom) || this.pareceReclamacao(ultimaCliente)) {
+      return acolher(tom !== 'neutro' && tom ? tom : 'reclamação');
+    }
 
     // TEXTO 100% MONTADO AQUI — a IA não escreve nada que a cliente lê.
     const resposta = this.montarResposta(intent, cidade, opts.fora);
@@ -201,18 +214,19 @@ export class WhatsappIaService {
           'www.lurdsplussize.com.br. Quer o endereço ou o horário de alguma loja? Me fala a cidade!'
         );
       case 'horario': {
-        const ls = this.acharLojas(cidade);
-        if (ls.length === 1) return `A loja de ${ls[0].unidade} funciona: ${ls[0].horario} 💜`;
-        if (ls.length > 1)
-          return `Temos ${ls.length} lojas por aí (${ls.map((l) => l.unidade).join(', ')}). De qual você quer o horário? ${todas}`;
+        const { ls, exatas } = this.matchLojas(cidade);
+        if (exatas.length === 1)
+          return `A loja de ${exatas[0].unidade} funciona: ${exatas[0].horario} (nos feriados pode variar, confirma com a gente) 💜`;
+        if (ls.length >= 1)
+          return `Temos ${ls.length} loja(s) por aí: ${ls.map((l) => l.unidade).join(', ')}. É alguma dessas? ${todas}`;
         return `Me diz de qual cidade você quer o horário que eu te falo certinho! ${todas}`;
       }
       case 'endereco': {
-        const ls = this.acharLojas(cidade);
-        if (ls.length === 1)
-          return `A loja de ${ls[0].unidade} fica em ${ls[0].endereco}. Telefone/WhatsApp: ${ls[0].telefone}. Horário: ${ls[0].horario} 💜`;
-        if (ls.length > 1)
-          return `Temos ${ls.length} lojas por aí: ${ls.map((l) => l.unidade).join(', ')}. De qual você quer o endereço? ${todas}`;
+        const { ls, exatas } = this.matchLojas(cidade);
+        if (exatas.length === 1)
+          return `A loja de ${exatas[0].unidade} fica em ${exatas[0].endereco}. Telefone/WhatsApp: ${exatas[0].telefone}. Horário: ${exatas[0].horario} 💜`;
+        if (ls.length >= 1)
+          return `Temos ${ls.length} loja(s) por aí: ${ls.map((l) => l.unidade).join(', ')}. É alguma dessas? ${todas}`;
         return `De qual cidade você quer o endereço? Temos várias lojas — me fala a cidade. ${todas}`;
       }
       default:
@@ -236,16 +250,22 @@ export class WhatsappIaService {
    * conjunto pra quem chama decidir: 1 → afirma; várias (ex.: São Paulo tem 2)
    * → lista, nunca escolhe uma escondendo as outras; 0 → manda pro /lojas.
    */
-  private acharLojas(cidade: string): LojaInfo[] {
+  private matchLojas(cidade: string): { ls: LojaInfo[]; exatas: LojaInfo[] } {
     const c = this.norm(cidade);
-    if (c.length < 3) return [];
-    return LOJAS.filter((l) => {
+    if (c.length < 3) return { ls: [], exatas: [] };
+    const ls: LojaInfo[] = [];
+    const exatas: LojaInfo[] = [];
+    for (const l of LOJAS) {
       const cidadeLoja = this.norm(l.cidade.split('/')[0]); // "são paulo/sp" → "sao paulo"
       const uni = this.norm(l.unidade); // bairro/unidade (ex.: "Moema")
-      // Match FORTE: cidade igual, unidade igual, ou a cidade da loja começa com
-      // a citada. Sem substring solta (que fazia "Santos Dumont" casar "Santos").
-      return cidadeLoja === c || uni === c || cidadeLoja.startsWith(c);
-    });
+      const exato = cidadeLoja === c || uni === c;
+      // `exatas` só afirma UMA loja quando a cidade citada É a cidade/unidade da
+      // loja. `ls` inclui prefixo ("São José" → "São José dos Campos") — mas aí a
+      // gente LISTA ("é essa?"), nunca afirma como se fosse a cidade da cliente.
+      if (exato || cidadeLoja.startsWith(c)) ls.push(l);
+      if (exato) exatas.push(l);
+    }
+    return { ls, exatas };
   }
 
   // ── helpers ────────────────────────────────────────────────────────

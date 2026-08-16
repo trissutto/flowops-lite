@@ -85,12 +85,16 @@ export class WhatsappAutoReplyService {
       const agora = Date.now();
       const desde = new Date(agora - 30 * 60 * 1000); // não mexe em conversa velha
       const ate = new Date(agora - 45 * 1000); // espera 45s (rajada)
+      // 'asc': atende primeiro quem está mais perto de EXPIRAR (30min) — senão,
+      // num disparo em massa à noite, as conversas antigas nunca subiam ao topo
+      // e saíam da janela sem acolhida nenhuma.
       const convs = await this.p().whatsappConversation.findMany({
         where: { fromMe: false, ultimaEm: { gte: desde, lte: ate } },
-        orderBy: { ultimaEm: 'desc' },
-        take: 10,
+        orderBy: { ultimaEm: 'asc' },
+        take: 25,
       });
       if (!convs.length) return;
+      if (convs.length === 25) this.logger.warn('[wa-auto] fila cheia (25+) — pode haver conversa represada');
 
       for (const c of convs) {
         try {
