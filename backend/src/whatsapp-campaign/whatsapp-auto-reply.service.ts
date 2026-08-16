@@ -17,8 +17,11 @@ import { WhatsappIaService } from './whatsapp-ia.service';
  * Travas (valem nos DOIS caminhos, em `tentarResponder`):
  *  - só conversa cuja ÚLTIMA msg é da CLIENTE (`fromMe=false`);
  *  - não mexe em conversa > 30min;
- *  - throttle 90s/conversa + cooldown 20s via qualquer fromMe recente;
- *  - CLAIM atômico (autoRepliedAt + ultimaEm) antes de enviar → 1 só envio;
+ *  - throttle 3s/conversa (ping-pong; env WHATSAPP_AUTO_THROTTLE_MS) — a Lulú só fica
+ *    FORA quando um HUMANO respondeu nos últimos 10min;
+ *  - dedup: não repete o MESMO texto pra mesma conversa em < 30min;
+ *  - CLAIM atômico idempotente POR MENSAGEM (autoRepliedAt ≥ ultimaEm) → 1 só envio;
+ *  - teto de 15 auto-respostas/hora por conversa (contado em memória);
  *  - a IA decide (allowlist) e o texto é template — tudo com tarja `auto-ia`.
  */
 @Injectable()
@@ -27,8 +30,13 @@ export class WhatsappAutoReplyService implements OnModuleInit {
   private rodando = false;
   /** jid → ultimaEm(ms) já avaliado. Evita re-chamar o Claude pro MESMO estado. */
   private avaliadas = new Map<string, number>();
-  /** jid → ts da última chamada à IA (throttle: máx 1 chamada / 90s por conversa). */
+  /** jid → ts da última chamada à IA (throttle: máx 1 chamada / 3s por conversa). */
   private ultimaChamadaIA = new Map<string, number>();
+  /** jid → texto+ts da última auto-resposta ENVIADA (dedup: não repete o mesmo texto <30min). */
+  private ultimaAutoResp = new Map<string, { texto: string; ts: number }>();
+  /** jid → timestamps das auto-respostas na última hora (teto anti-flood; independe do
+   *  waId do Evolution, que o DB usa e às vezes não volta). */
+  private autoRespTs = new Map<string, number[]>();
   /** jid → timer de debounce do caminho por-evento. */
   private timers = new Map<string, NodeJS.Timeout>();
   /** ms de quando a Lulú foi LIGADA (0 = desligada). A rede de segurança não pega
@@ -69,7 +77,11 @@ export class WhatsappAutoReplyService implements OnModuleInit {
     const dia = partes.find((p) => p.type === 'weekday')?.value ?? '';
     if (dia === 'Sun') return false;
     const abre = Number(process.env.LOJA_ABRE ?? '9');
-    const fecha = Number(process.env.LOJA_FECHA ?? '19');
+    // Sábado a maioria da rede fecha 13h (só Itanhaém/Praia Grande vão até 19h). Default
+    // 13 pra Lulú COBRIR a tarde de sábado no modo 'fora' (acolher > silêncio até segunda).
+    // Se o WhatsApp central for atendido sábado à tarde, subir LOJA_FECHA_SAB=19.
+    const fecha =
+      dia === 'Sat' ? Number(process.env.LOJA_FECHA_SAB ?? '13') : Number(process.env.LOJA_FECHA ?? '19');
     return hora >= abre && hora < fecha;
   }
 
@@ -123,10 +135,11 @@ export class WhatsappAutoReplyService implements OnModuleInit {
         this.avaliadas.set(jid, ultimaEmMs);
         return;
       }
-      // Teto anti-runaway: no máx 15 auto-respostas por conversa por hora.
-      const autoNaHora = await this.p().whatsappMessage.count({
-        where: { conversationJid: jid, tipo: 'auto-ia', ts: { gte: new Date(agora - 60 * 60 * 1000) } },
-      });
+      // Teto anti-runaway: no máx 15 auto-respostas por conversa por hora. Contado em
+      // MEMÓRIA — o DB só grava a linha 'auto-ia' quando o Evolution devolve waId, então
+      // contar no banco deixaria o teto FURADO justo quando o Evolution não devolve id.
+      const desdeHora = agora - 60 * 60 * 1000;
+      const autoNaHora = (this.autoRespTs.get(jid) || []).filter((t) => t >= desdeHora).length;
       if (autoNaHora >= 15) {
         this.avaliadas.set(jid, ultimaEmMs);
         this.logger.warn(`[wa-auto] ${c.numero}: teto de 15 auto-respostas/hora atingido`);
@@ -137,22 +150,33 @@ export class WhatsappAutoReplyService implements OnModuleInit {
       const dec = await this.ia.decidirAutoResposta(jid, { fora });
       if (dec.erro && !dec.responder) {
         this.logger.warn(`[wa-auto] ${c.numero}: erro transitório — ${dec.motivo} (reavalia)`);
-        return; // transitório → não cacheia (o throttle de 90s evita martelar)
+        return; // transitório → não cacheia (o throttle de 3s evita martelar)
       }
       if (!dec.responder || !dec.resposta.trim()) {
         this.avaliadas.set(jid, ultimaEmMs); // recusa de CONTEÚDO → não re-billa
         this.logger.log(`[wa-auto] ${c.numero}: NÃO respondeu — ${dec.motivo}`);
         return;
       }
-      // CLAIM ATÔMICO: 1 só envio mesmo com 2 processos; trava TOCTOU (a ultimaEm
-      // tem que ser a MESMA — msg nova não casa). Janela curta (3s): só evita
-      // dois envios do MESMO estado quase simultâneos; a próxima pergunta da
-      // cliente (ultimaEm nova) reivindica de novo. Feito ANTES do envio.
+      const texto = dec.resposta.trim();
+      // DEDUP: se a última auto-resposta desta conversa (há < 30min) é IDÊNTICA ao que
+      // íamos mandar, não manda de novo — evita eco da mesma acolhida/template quando a
+      // cliente dispara várias mensagens seguidas. O ping-pong de 3s segue valendo pra
+      // respostas DIFERENTES (o que o dono pediu). Memória local, não depende do waId.
+      const ult = this.ultimaAutoResp.get(jid);
+      if (ult && ult.texto === texto && agora - ult.ts < 30 * 60 * 1000) {
+        this.avaliadas.set(jid, ultimaEmMs);
+        this.logger.log(`[wa-auto] ${c.numero}: pulou (resposta idêntica à última auto)`);
+        return;
+      }
+      // CLAIM ATÔMICO idempotente POR MENSAGEM: uma vez respondida ESTA mensagem
+      // (autoRepliedAt passa a ficar ≥ ultimaEm), nunca re-clama a mesma — só uma
+      // mensagem NOVA da cliente (ultimaEm maior) libera de novo. Não depende de
+      // fromMe nem da memória em processo. Trava TOCTOU: ultimaEm tem que ser a MESMA.
       const claim = await this.p().whatsappConversation.updateMany({
         where: {
           jid,
           ultimaEm: c.ultimaEm,
-          OR: [{ autoRepliedAt: null }, { autoRepliedAt: { lt: new Date(agora - 3 * 1000) } }],
+          OR: [{ autoRepliedAt: null }, { autoRepliedAt: { lt: c.ultimaEm } }],
         },
         data: { autoRepliedAt: new Date(agora) },
       });
@@ -160,7 +184,11 @@ export class WhatsappAutoReplyService implements OnModuleInit {
         this.avaliadas.set(jid, ultimaEmMs);
         return;
       }
-      await this.inbox.responder(jid, dec.resposta.trim(), 'auto-ia');
+      await this.inbox.responder(jid, texto, 'auto-ia');
+      this.ultimaAutoResp.set(jid, { texto, ts: agora });
+      const tsHora = (this.autoRespTs.get(jid) || []).filter((t) => t >= agora - 60 * 60 * 1000);
+      tsHora.push(agora);
+      this.autoRespTs.set(jid, tsHora);
       this.avaliadas.set(jid, ultimaEmMs);
       this.logger.log(`[wa-auto] ${c.numero}: Lulú respondeu (fora=${fora}) — ${dec.motivo}`);
     } catch (e: any) {
@@ -188,6 +216,8 @@ export class WhatsappAutoReplyService implements OnModuleInit {
     try {
       if (this.avaliadas.size > 2000) this.avaliadas.clear();
       if (this.ultimaChamadaIA.size > 2000) this.ultimaChamadaIA.clear();
+      if (this.ultimaAutoResp.size > 2000) this.ultimaAutoResp.clear();
+      if (this.autoRespTs.size > 2000) this.autoRespTs.clear();
       const agora = Date.now();
       // desde = o mais recente entre "30min atrás" e "quando ligou" — não pega backlog anterior à ativação.
       const desde = new Date(Math.max(agora - 30 * 60 * 1000, this.ligadoDesde));

@@ -64,10 +64,14 @@ export class WhatsappIaService {
     'generica',
   ]);
 
-  /** Acolhida FIXA pro que a Lulú não responde, fora do horário. */
-  private readonly ACK_FORA =
-    'Oi! 💜 Nosso atendimento no WhatsApp está fora do horário agora, mas já registrei sua mensagem e uma ' +
-    'pessoa te responde assim que a gente abrir. Se for sobre nossas lojas (endereço, horário), é só me dizer a cidade!';
+  /** Status do pedido que AUTORIZAM afirmar envio / dar rastreio. Fail-closed: fora
+   *  desta lista (cancelado, pagamento recusado, aguardando, expirado, ou status
+   *  DESCONHECIDO) a Lulú NÃO dá o código — manda pro humano conferir. Uma etiqueta
+   *  pode ter sido gerada antes do despacho num pedido que depois caiu. */
+  private readonly STATUS_ENVIO_OK = new Set([
+    'processing', 'paid', 'separating', 'shipped', 'delivered', 'completed',
+    'enviado', 'postado', 'em_separacao', 'em_transito', 'concluido',
+  ]);
 
   /** Acolhida SÓBRIA (reclamação/urgência): sem festa, sem upsell — só reconhece e garante retorno. */
   private readonly ACK_FORA_SOBRIO =
@@ -87,7 +91,7 @@ export class WhatsappIaService {
 
   /** Cheira a reclamação/insatisfação? (reforço da regex por cima do tom da IA) */
   private pareceReclamacao(texto: string): boolean {
-    return /reclama|absurd|vergonha|descaso|palha[çc]|processar|processo|pro?con|advogad|justi[çc]a|horr[íi]vel|p[ée]ssim|pior|lixo|nunca mais|decep|revolt|indign|golpe|enganad|roubar|calote|problema|n[ãa]o funciona|n[ãa]o serve|furad|mancha|rasg|n[ãa]o chegou|n[ãa]o recebi|atras|demora|ainda n[ãa]o|at[ée] agora|cad[êe] |quero meu dinheiro|reembols|estorn|cancel|defeito|quebrad|errad|urgente|ningu[ée]m (me )?(responde|atende)|sem resposta/i.test(
+    return /reclama|absurd|vergonha|descaso|palha[çc]|processar|processo|pro?con|advogad|justi[çc]a|horr[íi]vel|p[ée]ssim|pior|lixo|nunca mais|decep|revolt|indign|golpe|enganad|roubar|calote|problema|n[ãa]o funciona|n[ãa]o serve|furad|mancha|rasg|n[ãa]o chegou|n[ãa]o recebi|atras|demora|ainda n[ãa]o|at[ée] agora|at[ée] hoje|cad[êe] |quero meu dinheiro|sumi(u|ram)|\b\d+\s*dias?\b|(t[ôo]|estou) esperando|sem acreditar|n[ãa]o aguento|reembols|estorn|cancel|defeito|quebrad|errad|urgente|ningu[ée]m (me )?(responde|atende)|sem resposta/i.test(
       String(texto || ''),
     );
   }
@@ -95,7 +99,7 @@ export class WhatsappIaService {
   /** Cheira a VULNERABILIDADE (luto, doença, aflição)? FORÇA acolhida sóbria + humano,
    *  independente do intent e do tom — o backstop que a persona promete. */
   private pareceVulneravel(texto: string): boolean {
-    return /falec|faleceu|vel[óo]rio|enterro|luto|morte|morreu|hospital|internad|\buti\b|c[âa]ncer|doen[çt]|doente|grave| terminal|quimio|cirurgia|acidente|desempreg|sem dinheiro|passando por/i.test(
+    return /falec|faleceu|vel[óo]rio|enterro|sepultamento|luto|morte|morreu|partiu dessa|nos deixou|perdi (a|o|minha|meu|meus|minhas)|hospital|internad|internou|\buti\b|c[âa]ncer|doen[çt]|doente|grave| terminal|quimio|cirurgia|acidente|desempreg|sem dinheiro|passando por/i.test(
       String(texto || ''),
     );
   }
@@ -165,7 +169,7 @@ export class WhatsappIaService {
       // prazo, cupom ou rastreio, prefixa um alerta pra operadora conferir antes
       // — defesa contra uma injeção que faça a IA sugerir promessa indevida.
       const risco =
-        /\d+\s*%|por\s*cento|cupom|desconto|cashback|vale|brinde|gr[áa]tis|dobro|garant|devolv|reembols|R\$\s*\d|rastrei|c[óo]digo\b|\d+\s*dias?\b|\d+\s*x\b|parcel/i.test(
+        /\d+\s*%|por\s*cento|cupom|desconto|cashback|vale|brinde|gr[áa]tis|gratuit|cortesia|sem pagar|por conta da (casa|loja)|pode (levar|retirar)|dobro|garant|devolv|reembols|R\$\s*\d|rastrei|c[óo]digo\b|\d+\s*dias?\b|\d+\s*x\b|parcel/i.test(
           texto,
         );
       const sugestao = risco ? `⚠️ confira valor/prazo/rastreio antes de enviar:\n${texto}` : texto;
@@ -188,15 +192,18 @@ export class WhatsappIaService {
   ): Promise<{ responder: boolean; resposta: string; motivo: string; erro?: boolean }> {
     let ultimaCliente = '';
     const nao = (motivo: string, erro = false) => ({ responder: false, resposta: '', motivo, erro });
-    // Acolhida fixa só fora do horário. SÓBRIA quando: o tom da IA não é neutro,
-    // OU a regex de reclamação/vulnerabilidade dispara (backstop independente da IA).
+    // Acolhida fixa só fora do horário. SÓBRIA quando: o tom da IA não é neutro, OU a
+    // regex de reclamação/vulnerabilidade dispara (backstop independente da IA). Senão
+    // NEUTRA — nunca a alegre com upsell ("me diga a cidade"): o fallback pega justo o
+    // caso incerto (intent desconhecido, erro), onde festa+upsell soa leviano se a
+    // cliente estiver frustrada. Saudação genuína tem template próprio em montarResposta.
     const acolher = (motivo: string, erro = false, sobrio?: boolean) => {
       const usarSobrio =
         sobrio ?? (this.pareceReclamacao(ultimaCliente) || this.pareceVulneravel(ultimaCliente));
       return opts.fora
         ? {
             responder: true,
-            resposta: usarSobrio ? this.ACK_FORA_SOBRIO : this.ACK_FORA,
+            resposta: usarSobrio ? this.ACK_FORA_SOBRIO : this.ACK_FORA_NEUTRO,
             motivo: `acolhida (${motivo})`,
             erro,
           }
@@ -290,7 +297,7 @@ export class WhatsappIaService {
     const pedidos = await this.pedidosDaCliente(numero);
     if (!pedidos.length)
       return (
-        'Não achei nenhum pedido no seu número aqui 🤔 Me manda o número do pedido (tipo LP-00000) que uma pessoa ' +
+        'Não consegui localizar pelo seu número aqui 🤔 Me manda o número do pedido (tipo LP-00000) que uma pessoa ' +
         `do time confere certinho pra você ${espera} 💜`
       );
     // Mais de um pedido: NÃO chuta qual — pede o número (senão dá rastreio errado).
@@ -298,12 +305,15 @@ export class WhatsappIaService {
       return `Achei mais de um pedido no seu número 💜 Me manda o número do que você quer saber (tipo LP-00000) que a gente vê o certo pra você ${espera}.`;
     const p = pedidos[0];
     const num = p.wc_order_number ? ` ${p.wc_order_number}` : '';
-    // Rastreio existe: dá o código SEM cravar "já postado" — a etiqueta pode ter
-    // sido gerada antes do despacho físico (a rede tem histórico disso).
-    if (p.tracking_code)
+    const st = String(p.status || '').toLowerCase().trim();
+    // SÓ dá o rastreio quando o status é de PAGO-em-diante (fail-closed). Um pedido
+    // cancelado / pagamento recusado / aguardando pode ter etiqueta gerada ANTES do
+    // despacho — dar o código faria a cliente esperar uma entrega que não sai.
+    // Status desconhecido também cai pro humano (nunca afirmo envio no escuro).
+    if (p.tracking_code && this.STATUS_ENVIO_OK.has(st))
       return `Achei seu pedido${num} aqui! 📦 O código de rastreio é: ${p.tracking_code} — assim que os Correios registrarem a postagem, ele começa a atualizar. Qualquer dúvida, me chama 💜`;
-    // SEM rastreio: NÃO cravo status (pode estar cancelado/pagamento recusado/em
-    // espera). Uma pessoa confere o andamento — nunca afirmo "em andamento".
+    // Sem rastreio confiável (sem código OU status que não garante envio): NÃO cravo
+    // status — uma pessoa confere o andamento. Nunca afirmo "a caminho" no escuro.
     return `Achei seu pedido${num} aqui 💜 Pra te passar o andamento certinho, uma pessoa do time confere o status pra você ${espera} — qualquer coisa, é só chamar.`;
   }
 
@@ -421,13 +431,15 @@ export class WhatsappIaService {
 
   /**
    * Neutraliza o texto da cliente pra ir DENTRO do prompt: quebras viram espaço;
-   * remove < e > (senão fecharia a cerca <<< >>>); descaracteriza prefixos que
-   * fingem ser turno (LOJA:/SISTEMA:…) em QUALQUER posição; corta em 1000 chars.
+   * remove < > (senão fecharia a cerca <<< >>>) e { } (senão a cliente injeta o
+   * PRÓPRIO literal de saída do classificador — {"intent":...} — e sequestra a
+   * classificação); descaracteriza prefixos que fingem ser turno (LOJA:/SISTEMA:…)
+   * em QUALQUER posição; corta em 1000 chars.
    */
   private neutralizar(texto: string): string {
     return String(texto || '')
       .replace(/\r?\n/g, ' ')
-      .replace(/[<>]/g, '')
+      .replace(/[<>{}]/g, '')
       .replace(
         /\b(LOJA|CLIENTE|SISTEMA|SYSTEM|ASSISTANT|ASSISTENTE|USER|ADMIN|ADMINISTRADOR|ATENDENTE|SAC|SUPORTE|GERENTE|DONO|MODERADOR|WHATSAPP|IA|LULU|BOT|REGRA|INSTRU[ÇC][ÃA]O)\s*:/gi,
         '- ',
