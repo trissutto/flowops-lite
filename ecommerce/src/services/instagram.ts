@@ -14,9 +14,13 @@ import type { InstagramPost } from '@/types';
  * API que a live usa pra mandar DM — ver `InstagramFeedService`). Aqui é só
  * mais uma camada de ISR pra nem sair da Vercel a cada visita.
  *
- * **Cai na grade estática** quando a integração não está configurada ou o
- * Instagram falha: seção sem foto é pior que seção com foto genérica, e home
- * quebrada é pior que as duas.
+ * **Sem post real, a seção SOME** (16/08/2026). A rede de segurança era uma
+ * grade estática de banco de imagem: com o Instagram fora, a cliente via seis
+ * fotos de outra marca no lugar do nosso feed — mentira bem no bloco de prova
+ * social, e silenciosa (ninguém percebia a falha). A lista de `data/content`
+ * está vazia agora, então `getInstagram` devolve `[]` e a home/categoria não
+ * renderizam a seção. Home quebrada continua sendo o pior caso: por isso o
+ * `catch` devolve lista vazia, nunca erro.
  */
 
 interface PostApi {
@@ -55,7 +59,7 @@ export async function getInstagram(limite = 6): Promise<InstagramPost[]> {
      * resposta boa. Tempo de sobra pro dono abrir a página e concluir que
      * quebrou de novo. Vazio não merece cache: retenta na hora com TTL
      * mínimo (5s mantém a página estática, ao contrário de no-store), e só
-     * aceita a grade estática se a segunda tentativa também vier vazia.
+     * desiste da seção se a segunda tentativa também vier vazia.
      */
     if (!Array.isArray(posts) || !posts.length) {
       // `&retry=1` NÃO é enfeite: a chave do Data Cache é a URL — repetir a

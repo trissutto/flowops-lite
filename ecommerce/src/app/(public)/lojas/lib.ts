@@ -48,8 +48,13 @@ export interface Testimonial {
 }
 
 export interface SiteConfig {
-  heroImage: string;
-  peopleImage: string;
+  /**
+   * `null` enquanto não houver foto OFICIAL da Lurds — e é o estado de hoje
+   * (16/08/2026). Cada tela que usa estes campos tem o caminho sem foto
+   * pronto; nenhuma depende de imagem pra ficar de pé.
+   */
+  heroImage: string | null;
+  peopleImage: string | null;
   manifesto: {
     title: string;
     text: string;
@@ -81,7 +86,7 @@ export const BLUR_DATA_URL =
     '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><rect width="8" height="6" fill="#efe6d6"/><rect width="8" height="3" y="3" fill="#e6d3b3" opacity=".6"/></svg>',
   );
 
-/** URLs do Unsplash ganham parâmetros de qualidade/corte; caminhos locais passam direto. */
+/** URL remota ganha parâmetros de qualidade/corte; caminho local passa direto. */
 export function imgSrc(src: string, w: number): string {
   if (!src.startsWith('http')) return src;
   return `${src}?q=80&w=${w}&auto=format&fit=crop`;
@@ -91,22 +96,14 @@ export function badgesFor(s: Store): string[] {
   return s.badges && s.badges.length > 0 ? s.badges : site.badgesDefault;
 }
 
-/** Galeria do drawer: foto principal da loja + fotos próprias ou padrão da rede. */
-export function galleryFor(s: Store): GalleryPhoto[] {
-  const own = s.gallery && s.gallery.length > 0 ? s.gallery : site.galleryDefaults;
-  const cover: GalleryPhoto[] = s.image ? [{ src: s.image, label: 'A boutique' }] : [];
-  return [...cover, ...own];
-}
-
 /**
  * Foto de banco de imagem (Unsplash) — NÃO é a loja de verdade.
  *
- * Hoje as 14 unidades apontam pro mesmo punhado de fotos genéricas (e algumas
- * repetem entre si). O drawer usa isso pra decidir o que mostrar: com foto
- * real ela vira capa; com stock ela vira só textura de fundo, porque uma
- * modelo cortada no torso não diz nada sobre a loja e ainda cria expectativa
- * falsa. Trocar o `image`/`gallery` da loja no lojas.json por foto própria
- * liga a capa e a galeria de volta sozinho — sem mexer em componente.
+ * As URLs de stock SAÍRAM do `lojas.json` em 16/08/2026 (pedido do dono: só
+ * foto oficial da Lurds no site), então hoje esta função não tem o que barrar.
+ * Ela fica como TRAVA: se alguém colar de novo uma URL de banco de imagem no
+ * cadastro, a capa e a galeria continuam desligadas em vez de a foto genérica
+ * voltar calada pro ar. Foto própria em `image`/`gallery` liga tudo sozinho.
  */
 export function isStockPhoto(src: string | null | undefined): boolean {
   return !!src && /images\.unsplash\.com/.test(src);

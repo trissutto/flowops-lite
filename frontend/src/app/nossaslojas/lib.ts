@@ -47,8 +47,13 @@ export interface Testimonial {
 }
 
 export interface SiteConfig {
-  heroImage: string;
-  peopleImage: string;
+  /**
+   * `null` enquanto não houver foto OFICIAL da Lurds — o estado de hoje
+   * (16/08/2026, mesma limpeza feita no site novo). Cada tela tem o caminho
+   * sem foto pronto; nenhuma depende de imagem pra ficar de pé.
+   */
+  heroImage: string | null;
+  peopleImage: string | null;
   manifesto: {
     title: string;
     text: string;
@@ -74,7 +79,7 @@ export const BLUR_DATA_URL =
     '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><rect width="8" height="6" fill="#efe6d6"/><rect width="8" height="3" y="3" fill="#e6d3b3" opacity=".6"/></svg>',
   );
 
-/** URLs do Unsplash ganham parâmetros de qualidade/corte; caminhos locais passam direto. */
+/** URL remota ganha parâmetros de qualidade/corte; caminho local passa direto. */
 export function imgSrc(src: string, w: number): string {
   if (!src.startsWith('http')) return src;
   return `${src}?q=80&w=${w}&auto=format&fit=crop`;
@@ -84,7 +89,13 @@ export function badgesFor(s: Store): string[] {
   return s.badges && s.badges.length > 0 ? s.badges : site.badgesDefault;
 }
 
-/** Galeria do drawer: foto principal da loja + fotos próprias ou padrão da rede. */
+/**
+ * Galeria do drawer — SÓ foto própria da unidade.
+ *
+ * As fotos de banco de imagem saíram do `lojas.json` em 16/08/2026 (só foto
+ * oficial da Lurds no ar), então hoje isto devolve lista vazia e o drawer não
+ * mostra galeria. Foto nossa em `image`/`gallery` liga a seção de volta.
+ */
 export function galleryFor(s: Store): GalleryPhoto[] {
   const own = s.gallery && s.gallery.length > 0 ? s.gallery : site.galleryDefaults;
   const cover: GalleryPhoto[] = s.image ? [{ src: s.image, label: 'A boutique' }] : [];

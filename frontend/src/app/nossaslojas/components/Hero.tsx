@@ -11,28 +11,54 @@ interface Props {
 }
 
 export default function Hero({ onFindStore, onLocate }: Props) {
+  /**
+   * CAPA: foto oficial do cadastro > arte tipográfica da marca.
+   *
+   * A segunda é o estado de hoje (16/08/2026): as fotos de banco de imagem
+   * saíram do `lojas.json` — só foto oficial da Lurds entra no ar. Sem capa a
+   * página NÃO fica sem hero: entra tinta + halo dourado + monograma, e o
+   * texto branco continua legível. Preencher `site.heroImage` traz a foto.
+   */
+  const capa = site.heroImage ? imgSrc(site.heroImage, 2000) : null;
+
   return (
-    <section className="relative flex min-h-[100svh] items-center justify-center overflow-hidden">
-      {/* Fotografia editorial com zoom-out lento na entrada */}
-      <motion.div
-        initial={{ scale: 1.06 }}
-        animate={{ scale: 1 }}
-        transition={{ duration: 2.2, ease: [0.22, 1, 0.36, 1] }}
-        className="absolute inset-0"
-      >
-        <Image
-          src={imgSrc(site.heroImage, 2000)}
-          alt="Mulheres plus size em produção editorial de moda — Lurds Plus Size"
-          fill
-          priority
-          sizes="100vw"
-          placeholder="blur"
-          blurDataURL={BLUR_DATA_URL}
-          className="object-cover object-center"
-        />
-      </motion.div>
+    <section className="relative flex min-h-[100svh] items-center justify-center overflow-hidden bg-[var(--lj-ink)]">
+      {capa ? (
+        /* Fotografia editorial com zoom-out lento na entrada */
+        <motion.div
+          initial={{ scale: 1.06 }}
+          animate={{ scale: 1 }}
+          transition={{ duration: 2.2, ease: [0.22, 1, 0.36, 1] }}
+          className="absolute inset-0"
+        >
+          <Image
+            src={capa}
+            alt="Lurd's Plus Size — moda plus size elegante"
+            fill
+            priority
+            sizes="100vw"
+            placeholder="blur"
+            blurDataURL={BLUR_DATA_URL}
+            className="object-cover object-center"
+          />
+        </motion.div>
+      ) : (
+        <div className="lojas-grain absolute inset-0" aria-hidden>
+          <div
+            className="absolute -right-32 -top-40 h-[42rem] w-[42rem] rounded-full opacity-45 blur-3xl"
+            style={{ background: 'radial-gradient(circle, var(--lj-gold) 0%, transparent 70%)' }}
+          />
+          <div
+            className="absolute -bottom-48 -left-40 h-[38rem] w-[38rem] rounded-full opacity-25 blur-3xl"
+            style={{ background: 'radial-gradient(circle, var(--lj-gold-soft) 0%, transparent 70%)' }}
+          />
+          <span className="lojas-serif absolute inset-0 flex items-center justify-center text-[52vw] font-medium italic leading-none text-white/[0.05] sm:text-[26rem]">
+            L
+          </span>
+        </div>
+      )}
       {/* Gradiente leve só pra ancorar o texto — a foto continua protagonista */}
-      <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/25 to-black/55" />
+      {capa && <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/25 to-black/55" />}
 
       <div className="relative z-10 mx-auto max-w-4xl px-6 text-center text-white">
         <motion.p

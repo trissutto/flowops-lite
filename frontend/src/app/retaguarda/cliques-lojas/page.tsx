@@ -41,12 +41,20 @@ type Resposta = { de: string; ate: string; totalCliques: number; linhas: Linha[]
  * `site_eventos` — o nosso Postgres, não o GA4 (que mistura o site novo com o
  * WordPress no mesmo stream). Sessão com evento nos últimos 5 min = pessoa
  * navegando agora.
+ *
+ * PESSOA, não sessão (16/08): robô que roda JavaScript ganha sessão nova a
+ * cada acesso e chegou a responder por 25 das 26 "pessoas" numa manhã. O
+ * backend agora separa os dois — e o robô aparece na tela em vez de sumir,
+ * porque saber que estão varrendo o site é informação.
  */
 type Agora = {
   ativos5min: number;
   ativos30min: number;
   sessoesHoje: number;
   pageViewsHoje: number;
+  robos5min: number;
+  robosHoje: number;
+  quemSaoOsRobos: Array<{ nome: string; acessos: number }>;
   paginasQuentes: Array<{ path: string; pessoas: number }>;
 };
 
@@ -119,9 +127,24 @@ type TrafegoLojas = {
   porUnidade: Array<{ loja: string; contatos: number }>;
   porCampanha: Array<{ campanha: string; canal: string | null; pessoas: number }>;
 };
+/** Tráfego pago, orgânico ou direto — o primeiro nível da cascata. */
+type Trafego = 'pago' | 'organico' | 'direto';
+/**
+ * Uma combinação que EXISTE no período, com o tamanho dela. A cascata inteira
+ * é montada a partir desta lista — o backend manda as combinações do período
+ * cheio, nunca do recorte atual, senão escolher uma campanha apagaria as
+ * outras da lista e não teria como voltar.
+ */
+type OpcaoSegmento = {
+  trafego: Trafego;
+  plataforma: string | null;
+  campanha: string | null;
+  pessoas: number;
+};
 type RespostaFunil = {
   de: string;
   ate: string;
+  segmentos?: OpcaoSegmento[];
   etapas: EtapaFunil[];
   diagnosticos?: DiagnosticoFunil[];
   faturamento?: { pedidos: number; valor: number };
@@ -142,6 +165,177 @@ const fmtDataBr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paul
 const iso = (d: Date) => fmtDataBr.format(d);
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+const ROTULO_TRAFEGO: Record<Trafego, string> = {
+  pago: 'Tráfego pago',
+  organico: 'Orgânico e indicação',
+  direto: 'Direto',
+};
+
+/** Nome bonito só pros que a gente conhece; o resto sai como veio do UTM. */
+const ROTULO_PLATAFORMA: Record<string, string> = {
+  google: 'Google',
+  meta: 'Meta',
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  tiktok: 'TikTok',
+  whatsapp: 'WhatsApp',
+};
+
+/** Um degrau da cascata. Vazio some — degrau com uma opção só não é escolha. */
+function Degrau({
+  titulo,
+  opcoes,
+  valor,
+  onEscolher,
+  rotulo = (v: string) => v,
+}: {
+  titulo: string;
+  opcoes: Array<{ valor: string; pessoas: number }>;
+  valor: string | null;
+  onEscolher: (v: string | null) => void;
+  rotulo?: (v: string) => string;
+}) {
+  if (!opcoes.length) return null;
+  const total = opcoes.reduce((s, o) => s + o.pessoas, 0);
+  const pilula = (ativo: boolean) =>
+    `px-3 py-1 rounded-full border text-sm transition ${
+      ativo
+        ? 'border-[#B8912B] bg-[#FBF6E6] text-[#8C7325] font-semibold'
+        : 'border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+    }`;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 w-20 shrink-0">
+        {titulo}
+      </span>
+      <button className={pilula(valor === null)} onClick={() => onEscolher(null)}>
+        Tudo <span className="tabular-nums text-slate-400">{total}</span>
+      </button>
+      {opcoes.map((o) => (
+        <button key={o.valor} className={pilula(valor === o.valor)} onClick={() => onEscolher(o.valor)}>
+          {rotulo(o.valor)} <span className="tabular-nums text-slate-400">{o.pessoas}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A CASCATA — tudo → tráfego pago → Google/Meta → campanha.
+ *
+ * Pedido do dono (16/08). Ela filtra o RELATÓRIO INTEIRO, não um quadro: a
+ * pergunta é "como é o funil do público desse anúncio", e isso só responde se
+ * visita, sacola, checkout e compra vierem todos do mesmo recorte.
+ *
+ * Cada degrau só aparece depois do de cima estar escolhido — é o que faz dela
+ * uma cascata e não três filtros soltos. Trocar um degrau limpa os de baixo,
+ * senão sobraria uma campanha do Meta selecionada embaixo de "Google".
+ *
+ * O número em cada pílula é gente, não evento: dá pra ver o tamanho da fatia
+ * antes de clicar e não cair num funil de 3 pessoas sem perceber.
+ */
+function Cascata({
+  opcoes,
+  trafego,
+  plataforma,
+  campanha,
+  onMudar,
+}: {
+  opcoes: OpcaoSegmento[];
+  trafego: Trafego | null;
+  plataforma: string | null;
+  campanha: string | null;
+  onMudar: (s: { trafego: Trafego | null; plataforma: string | null; campanha: string | null }) => void;
+}) {
+  const somar = (
+    linhas: OpcaoSegmento[],
+    chave: (o: OpcaoSegmento) => string | null,
+  ): Array<{ valor: string; pessoas: number }> => {
+    const mapa = new Map<string, number>();
+    for (const o of linhas) {
+      const k = chave(o);
+      if (!k) continue;
+      mapa.set(k, (mapa.get(k) ?? 0) + o.pessoas);
+    }
+    return Array.from(mapa, ([valor, pessoas]) => ({ valor, pessoas })).sort(
+      (a, b) => b.pessoas - a.pessoas || a.valor.localeCompare(b.valor),
+    );
+  };
+
+  const nivel1 = somar(opcoes, (o) => o.trafego);
+  const doTrafego = trafego ? opcoes.filter((o) => o.trafego === trafego) : [];
+  const nivel2 = somar(doTrafego, (o) => o.plataforma);
+  const daPlataforma = plataforma ? doTrafego.filter((o) => o.plataforma === plataforma) : [];
+  const nivel3 = somar(daPlataforma, (o) => o.campanha);
+  const filtrando = Boolean(trafego || plataforma || campanha);
+
+  return (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl p-4 space-y-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-slate-800 text-sm">De onde veio quem estou olhando</h2>
+          <p className="text-xs text-slate-500">
+            Filtra o relatório inteiro — funil, jornada e problemas.
+          </p>
+        </div>
+        {filtrando && (
+          <button
+            onClick={() => onMudar({ trafego: null, plataforma: null, campanha: null })}
+            className="px-3 py-1 rounded-full border border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6] text-sm shrink-0"
+          >
+            Limpar
+          </button>
+        )}
+      </div>
+
+      <Degrau
+        titulo="Tráfego"
+        opcoes={nivel1}
+        valor={trafego}
+        rotulo={(v) => ROTULO_TRAFEGO[v as Trafego] ?? v}
+        onEscolher={(v) =>
+          onMudar({ trafego: (v as Trafego) ?? null, plataforma: null, campanha: null })
+        }
+      />
+      {trafego && (
+        <Degrau
+          titulo="Origem"
+          opcoes={nivel2}
+          valor={plataforma}
+          rotulo={(v) => ROTULO_PLATAFORMA[v.toLowerCase()] ?? v}
+          onEscolher={(v) => onMudar({ trafego, plataforma: v, campanha: null })}
+        />
+      )}
+      {trafego && plataforma && (
+        <Degrau
+          titulo="Campanha"
+          opcoes={nivel3}
+          valor={campanha}
+          onEscolher={(v) => onMudar({ trafego, plataforma, campanha: v })}
+        />
+      )}
+
+      {!opcoes.length && (
+        <p className="text-xs text-slate-500">
+          Nenhuma origem gravada neste período. O UTM só passou a ser guardado
+          em 16/08/2026 — antes disso ele chegava e era descartado, então
+          período anterior aparece vazio aqui.
+        </p>
+      )}
+      {filtrando && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          A origem vale por 30 dias no navegador, igual ao Meta e ao GA4 (último
+          clique). &quot;Campanha X&quot; quer dizer <strong>o último anúncio que
+          essa pessoa clicou foi o X</strong> — não que esta visita veio dele. O
+          faturamento sai da tela enquanto há filtro: ele vem do pedido, que não
+          guarda sessão, e não dá pra recortar por campanha.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function CliquesLojasPage() {
   // ABRE EM HOJE (dono, 15/08): a pergunta de todo dia é "como foi HOJE?", não
   // "os últimos 30 dias". Os atalhos e o "Limpar (30 dias)" seguem na mão.
@@ -150,8 +344,18 @@ export default function CliquesLojasPage() {
   const [dados, setDados] = useState<Resposta | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
+  /** Separado do `erro` geral: o funil pode cair sozinho e a tela continua. */
+  const [erroFunil, setErroFunil] = useState('');
   const [agora, setAgora] = useState<Agora | null>(null);
   const [funil, setFunil] = useState<RespostaFunil | null>(null);
+  // A cascata. Os três juntos num estado só porque nunca mudam sozinhos:
+  // trocar o de cima limpa os de baixo, e dois `useState` separados abririam
+  // a janela pra um render com "campanha do Meta" embaixo de "Google".
+  const [seg, setSeg] = useState<{
+    trafego: Trafego | null;
+    plataforma: string | null;
+    campanha: string | null;
+  }>({ trafego: null, plataforma: null, campanha: null });
 
   /**
    * O card ao vivo se atualiza sozinho a cada 20s — "agora" com botão de
@@ -172,15 +376,32 @@ export default function CliquesLojasPage() {
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro('');
+    setErroFunil('');
     try {
       const qs = new URLSearchParams();
       if (de) qs.set('de', de);
       if (ate) qs.set('ate', ate);
       const sufixo = qs.toString() ? `?${qs}` : '';
-      // Funil em paralelo e tolerante: se falhar, a tela de cliques segue de pé.
+      // A cascata vale só pro funil. A lista de cliques por loja é outra
+      // pergunta ("qual unidade recebeu contato") e não se recorta por campanha.
+      const qsFunil = new URLSearchParams(qs);
+      if (seg.trafego) qsFunil.set('trafego', seg.trafego);
+      if (seg.plataforma) qsFunil.set('plataforma', seg.plataforma);
+      if (seg.campanha) qsFunil.set('campanha', seg.campanha);
+      const sufixoFunil = qsFunil.toString() ? `?${qsFunil}` : '';
+      /**
+       * Funil em paralelo e tolerante: se falhar, a tela de cliques segue de
+       * pé. Mas o erro APARECE — em 16/08 uma CTE duplicada derrubou o
+       * endpoint e este `catch` mudo transformou o 500 num relatório vazio,
+       * com cara de "não teve movimento hoje". Silêncio aqui é pior que a
+       * falha: número errado não se anuncia sozinho.
+       */
       const [r, f] = await Promise.all([
         api<Resposta>(`/site-metrics/lojas${sufixo}`),
-        api<RespostaFunil>(`/site-metrics/funil${sufixo}`).catch(() => null),
+        api<RespostaFunil>(`/site-metrics/funil${sufixoFunil}`).catch((e) => {
+          setErroFunil(e?.message || 'não consegui carregar o funil');
+          return null;
+        }),
       ]);
       setDados(r);
       setFunil(f);
@@ -189,7 +410,7 @@ export default function CliquesLojasPage() {
     } finally {
       setCarregando(false);
     }
-  }, [de, ate]);
+  }, [de, ate, seg]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -256,6 +477,34 @@ export default function CliquesLojasPage() {
             <p className="text-xs text-slate-400 mt-0.5">
               últimos 5 min · dado nosso, só do lurdsplussize.com.br · atualiza sozinho
             </p>
+
+            {/**
+             * O ROBÔ APARECE, NÃO SOME.
+             *
+             * Podia ser filtrado em silêncio, mas aí o número cairia sem
+             * explicação e a primeira reação seria achar que o site perdeu
+             * visita. Mostrando os dois lado a lado, a queda se explica
+             * sozinha — e "quem" varreu é resposta útil (16/08: 25 das 26
+             * "pessoas" da tela eram varredura na página das lojas).
+             */}
+            {!!agora?.robos5min && (
+              <p className="text-xs text-slate-500 mt-1.5">
+                <span className="font-semibold text-slate-600">
+                  +{agora.robos5min} {agora.robos5min === 1 ? 'robô' : 'robôs'}
+                </span>{' '}
+                agora (fora da conta)
+                {!!agora.robosHoje && ` · ${agora.robosHoje} hoje`}
+                {!!agora.quemSaoOsRobos?.length && (
+                  <span className="text-slate-400">
+                    {' — '}
+                    {agora.quemSaoOsRobos
+                      .slice(0, 4)
+                      .map((r) => `${r.nome} (${r.acessos})`)
+                      .join(' · ')}
+                  </span>
+                )}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-3 sm:w-auto w-full">
@@ -313,6 +562,31 @@ export default function CliquesLojasPage() {
           <button onClick={() => { setDe(''); setAte(''); }} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] text-slate-500">Limpar (30 dias)</button>
         </div>
       </div>
+
+      {/* O funil caiu sozinho: diz isso, em vez de mostrar relatório vazio,
+          que se confunde com "não teve movimento". */}
+      {erroFunil && (
+        <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-semibold">O relatório de conversão não carregou.</p>
+            <p className="text-rose-700">
+              Os números abaixo são só dos cliques de loja — o funil, a jornada e os
+              problemas estão FORA DO AR neste momento, não zerados. ({erroFunil})
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* A CASCATA — colada no filtro de data, porque as duas respondem "de
+          quem é esse número": uma recorta o quando, a outra o quem. */}
+      <Cascata
+        opcoes={funil?.segmentos ?? []}
+        trafego={seg.trafego}
+        plataforma={seg.plataforma}
+        campanha={seg.campanha}
+        onMudar={setSeg}
+      />
 
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
           loja ainda tem funil, e um não pode esconder o outro. */}
@@ -543,7 +817,10 @@ function FunilSite({
         <strong className="font-semibold text-slate-600">
           Quem entrou pela página das lojas fica FORA desta conta
         </strong>{' '}
-        — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.
+        — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.{' '}
+        <strong className="font-semibold text-slate-600">Robô também fica de fora</strong> — o de
+        user-agent conhecido (Google, IA, SEO) e o disfarçado, que se entrega por carregar a página
+        e ir embora sem rolar nem dar um segundo passo.
       </p>
       {jornada.length > 0 && resumo && (
         <RelatorioJornada

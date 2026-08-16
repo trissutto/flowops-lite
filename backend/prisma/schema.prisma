@@ -5473,6 +5473,22 @@ model SiteCupom {
 /// tabela não cria nem apaga categoria, só VESTE a que já existe — foto,
 /// nome de exibição, texto e ordem no menu. Sem linha aqui, o site segue
 /// com o nome derivado do slug e sem foto, como hoje.
+/// Coleção CURADA e ORDENADA de peças (ex.: "Mais Top da Semana" — os 20 que o dono
+/// mais quer vender na semana). É PARALELA à categoria real da peça: NÃO troca
+/// `SiteProduto.categoria` (a blusa continua em Blusas), diferente de classificar. Uma
+/// linha por coleção; `refs` = array ORDENADO de REF (a mesma REF do feed/pixel). A
+/// ordem do array É a ordem na vitrine e no carimbo do feed. Alimenta: página do site,
+/// item do menu e o `custom_label_1=top-semana` do feed do Meta.
+model SiteColecao {
+  slug          String   @id
+  nome          String?
+  refs          Json     @default("[]")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor String?  @map("atualizado_por")
+
+  @@map("site_colecao")
+}
+
 model SiteCategoria {
   id            String   @id @default(uuid())
 
@@ -6870,10 +6886,19 @@ model SiteEvento {
   dados     Json?
   /// true = visitante sem aceite do banner (linha anônima).
   semAceite Boolean  @default(false) @map("sem_aceite")
+  /// true = NÃO é gente. Carimbado na origem pelo user-agent, no `/api/events`
+  /// do site — que é o único ponto que enxerga o navegador de verdade (aqui
+  /// chega tudo com o user-agent da Vercel). A linha continua sendo GRAVADA de
+  /// propósito: marcada, responde "quem varreu meu site"; descartada, some.
+  bot       Boolean  @default(false)
+  /// Qual robô ('googlebot', 'gptbot', 'ahrefsbot', 'headless'…). Null = gente.
+  botNome   String?  @map("bot_nome") @db.VarChar(60)
   criadoEm  DateTime @default(now()) @map("criado_em")
 
   @@index([criadoEm])
   @@index([evento, criadoEm])
+  /// Toda tela de métrica filtra `bot = false` antes de qualquer outra coisa.
+  @@index([bot, criadoEm])
   @@map("site_eventos")
 }
 

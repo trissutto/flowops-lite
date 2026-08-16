@@ -69,6 +69,8 @@ export const ENGAGEMENT_EVENTS = [
   'quick_view',
   'store_reservation',
   'buy_and_pickup',
+  'stores_online_cta_click',
+  'stores_product_click',
 ] as const;
 
 /**

@@ -300,7 +300,12 @@ export interface MenuFeature {
   eyebrow?: string;
   title: string;
   description?: string;
-  image: Media;
+  /**
+   * OPCIONAL desde 16/08/2026: os cards do menu ilustravam com banco de
+   * imagem e o dono tirou do site toda foto que não é da Lurds. Sem `image`
+   * o `MenuCard` vira card tipográfico. Foto de campanha nossa entra aqui.
+   */
+  image?: Media;
   href: string;
   cta?: string;
 }

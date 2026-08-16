@@ -45,6 +45,10 @@ interface ProductCardProps {
   sizes?: string;
   /** Usado só na home: segura o download até a vitrine se aproximar. */
   progressiveImage?: boolean;
+  /** Destino customizado, usado quando a origem precisa preservar atribuição. */
+  href?: string;
+  /** Dispara somente quando a cliente abre a página da peça. */
+  onProductClick?: () => void;
 }
 
 /** Largura do card na grade padrão de catálogo. */
@@ -66,13 +70,15 @@ export function ProductCard({
   priority = false,
   sizes = GRID_SIZES,
   progressiveImage = false,
+  href: customHref,
+  onProductClick,
 }: ProductCardProps) {
   const mounted = useMounted();
   const abrirQuickAdd = useQuickAddStore((s) => s.abrir);
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
 
-  const href = `/produto/${product.slug}`;
+  const href = customHref ?? `/produto/${product.slug}`;
   const cover = product.images[0];
   const alternate = product.images[1];
   const discount = product.compareAtPrice
@@ -116,7 +122,7 @@ export function ProductCard({
     >
       {/* Mídia */}
       <div className={cn('relative overflow-hidden rounded-md bg-surface-alt', aspectClass)}>
-        <Link href={href} className="absolute inset-0" aria-label={product.name}>
+        <Link href={href} onClick={onProductClick} className="absolute inset-0" aria-label={product.name}>
           <ProductImage
             src={cover.src}
             alt={cover.alt}
@@ -233,6 +239,7 @@ export function ProductCard({
         <h3 className="mt-1.5">
           <Link
             href={href}
+            onClick={onProductClick}
             className="text-body font-normal text-ink transition-colors hover:text-primary-strong"
           >
             {product.name}

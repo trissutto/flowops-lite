@@ -51,8 +51,15 @@ export async function getBanners(slot: string): Promise<Banner[]> {
 
 /** O que o `<Hero>` da home precisa, já resolvido com o fallback estático. */
 export interface HeroDaHome {
-  /** `largura`/`altura` só vêm quando a medição da arte deu certo. */
-  image: { src: string; alt: string; largura?: number; altura?: number };
+  /**
+   * OPCIONAL desde 16/08/2026 — a foto do hero estático era de banco de
+   * imagem e saiu com o resto do stock. Sem campanha cadastrada o hero vai
+   * SEM foto (fundo champagne da marca + o texto), que é o que o `<Hero>` já
+   * faz quando não recebe `image`.
+   *
+   * `largura`/`altura` só vêm quando a medição da arte deu certo.
+   */
+  image?: { src: string; alt: string; largura?: number; altura?: number };
   /** Recorte vertical do banner, quando a retaguarda subiu um. */
   imageMobile?: { src: string; alt: string; largura?: number; altura?: number };
   eyebrow: string;
@@ -71,7 +78,6 @@ export interface HeroDaHome {
 }
 
 const HERO_ESTATICO: HeroDaHome = {
-  image: homeHero.image,
   eyebrow: homeHero.eyebrow,
   lead: homeHero.lead,
   emphasis: homeHero.emphasis,
@@ -101,7 +107,7 @@ export async function getHeroDaHome(): Promise<HeroDaHome> {
     daRetaguarda: true,
     image: {
       src: banner.imagemUrl,
-      alt: banner.alt || banner.titulo || HERO_ESTATICO.image.alt,
+      alt: banner.alt || banner.titulo || "Lurd's Plus Size — nova coleção",
       ...(medidaDesktop ?? {}),
     },
     ...(banner.imagemMobileUrl

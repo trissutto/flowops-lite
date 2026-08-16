@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { Robo } from '../bot-detect';
 import type { TrackingEvent } from '../types';
 
 /**
@@ -19,6 +20,8 @@ const EVENTOS_DE_LOJA = new Set([
   'instagram_click',
   'store_locator',
   'phone_click',
+  'stores_online_cta_click',
+  'stores_product_click',
 ]);
 
 /** Nunca segura a resposta do beacon por causa de métrica. */
@@ -46,6 +49,8 @@ const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
   card_declined: ['method', 'attempt'],
   payment_retry: ['method', 'attempt'],
   checkout_recovered: ['method', 'order_id'],
+  stores_online_cta_click: ['source_position'],
+  stores_product_click: ['source_position', 'product_ref', 'item_index'],
 };
 
 function dadosSeguros(evento: TrackingEvent): Record<string, unknown> {
@@ -80,7 +85,7 @@ export async function persistirCliquesDeLoja(events: TrackingEvent[]): Promise<n
        */
       loja: texto(e.params?.store) ?? texto(e.context?.loja),
       cidade: texto(e.params?.city),
-      origem: texto(e.params?.source),
+      origem: texto(e.params?.source) ?? texto(e.params?.source_position),
       path: texto(e.context?.page?.path),
       sessionId: texto(e.context?.session_id),
     }));
@@ -121,8 +126,17 @@ export async function persistirCliquesDeLoja(events: TrackingEvent[]): Promise<n
  * Vai o mínimo que dá leitura: nome do evento, path, loja, sessão, valor e um
  * `dados` enxuto (REFs, termo de busca, origem). Nada de e-mail, telefone,
  * endereço — dado pessoal não entra nesta tabela.
+ *
+ * `robo` vem carimbado do `/api/events`, que é o único lugar com o user-agent
+ * na mão. O evento de robô CONTINUA sendo gravado, de propósito: marcado, ele
+ * responde "quem varreu meu site" e dá pra medir o custo que a varredura gera.
+ * Descartar aqui jogaria essa resposta fora — quem esconde o robô é a tela.
  */
-export async function persistirEventosSite(events: TrackingEvent[], semAceite: boolean): Promise<number> {
+export async function persistirEventosSite(
+  events: TrackingEvent[],
+  semAceite: boolean,
+  robo: Robo = { bot: false, nome: null },
+): Promise<number> {
   const baseUrl = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
   const token = process.env.LOJA_ORDER_TOKEN ?? '';
   if (!baseUrl || !token) return 0;
@@ -135,7 +149,9 @@ export async function persistirEventosSite(events: TrackingEvent[], semAceite: b
     if (refs.length) dados.refs = refs;
     const termo = texto((e.params as Record<string, unknown>)?.search_term);
     if (termo) dados.busca = termo;
-    const origem = texto((e.params as Record<string, unknown>)?.source);
+    const origem =
+      texto((e.params as Record<string, unknown>)?.source) ??
+      texto((e.params as Record<string, unknown>)?.source_position);
     if (origem) dados.origem = origem;
 
     /**
@@ -170,6 +186,39 @@ export async function persistirEventosSite(events: TrackingEvent[], semAceite: b
     const utmId = texto(attr?.id);
     if (utmId) dados.utm_id = utmId;
 
+    /**
+     * CLIQUE PAGO — o `gclid`/`fbclid`, que o navegador capturava e este
+     * módulo jogava fora.
+     *
+     * Sem isto, "tráfego pago" no relatório dependeria 100% de o `utm_medium`
+     * estar certo em cada anúncio — e anúncio mal etiquetado é a regra, não a
+     * exceção. O id do clique é posto pela PRÓPRIA plataforma na URL de
+     * destino: existe mesmo quando ninguém lembrou de marcar UTM, e não existe
+     * em quem chegou de graça. É a única prova de "isto foi anúncio" que não
+     * depende da disciplina de quem sobe a campanha.
+     *
+     * Guarda o FATO e a PLATAFORMA, nunca o id: `gclid`/`fbclid` identificam
+     * um clique de uma pessoa, e identificador de pessoa não entra nesta
+     * tabela (mesma regra que já barra e-mail, telefone e endereço aqui).
+     *
+     * O `utm_medium` entra como segunda via, pro anúncio que venha etiquetado
+     * mas sem id de clique (link na bio impulsionado, parceria, e-mail pago).
+     *
+     * ⚠️ Herda a janela de 30 dias da atribuição: quem clicou no anúncio na
+     * semana passada e voltou direto hoje continua marcada como paga. É o
+     * mesmo last-click do Meta e do GA4 — bate com o Gerenciador, mas não se
+     * confunde com "esta visita veio do anúncio".
+     */
+    const gclid = texto(attr?.gclid);
+    const fbclid = texto(attr?.fbclid);
+    const midiaPaga = /^(cpc|ppc|paid|paid_social|paidsocial|paid-social)$/i.test(midia ?? '');
+    if (gclid || fbclid || midiaPaga) {
+      dados.pago = true;
+      // Os dois ids ao mesmo tempo só acontece com URL montada na mão; o
+      // Google ganha por ser o que reescreve a URL de destino sozinho.
+      dados.plataforma = gclid ? 'google' : fbclid ? 'meta' : (canal ?? 'nao-identificada');
+    }
+
     return {
       evento: e.event,
       path: texto(e.context?.page?.path),
@@ -178,6 +227,8 @@ export async function persistirEventosSite(events: TrackingEvent[], semAceite: b
       valor: typeof e.value === 'number' && Number.isFinite(e.value) ? e.value : null,
       dados: Object.keys(dados).length ? dados : undefined,
       semAceite,
+      bot: robo.bot,
+      botNome: robo.nome,
     };
   });
 

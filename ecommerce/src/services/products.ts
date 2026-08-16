@@ -484,7 +484,12 @@ export interface CategoryMeta {
   name: string;
   title: string;
   intro: string;
-  heroImage: string;
+  /**
+   * `null` desde 16/08/2026 — eram duas fotos do Unsplash usadas só no card
+   * de compartilhamento (a página não tem hero desde 07/08). Sem foto oficial
+   * por categoria, o link compartilhado usa a OG padrão do site.
+   */
+  heroImage: string | null;
   guide: { title: string; paragraphs: string[] };
 }
 
@@ -495,7 +500,7 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
     title: 'Vestidos plus size',
     intro:
       'Do envelope clássico ao midi de festa: modelagens que valorizam o corpo real, em tecidos que aguentam o dia inteiro. Do 44 ao 60.',
-    heroImage: 'https://images.unsplash.com/photo-1657550853452-f13aa437f6c9?w=2000&q=85&fm=jpg&fit=max',
+    heroImage: null,
     guide: {
       title: 'Como escolher o vestido ideal',
       paragraphs: [
@@ -516,7 +521,7 @@ export function categoryMeta(slug: string): CategoryMeta {
       title: `${slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, ' ')} plus size`,
       intro:
         'Curadoria Lurds do 44 ao 60: peças escolhidas pelo caimento, pelo tecido e pela forma como vestem o corpo real.',
-      heroImage: 'https://images.unsplash.com/photo-1603400521630-9f2de124b33b?w=2000&q=85&fm=jpg&fit=max',
+      heroImage: null,
       guide: {
         title: 'Como escolher a peça ideal',
         paragraphs: [

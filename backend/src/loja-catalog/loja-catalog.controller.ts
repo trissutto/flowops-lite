@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Query, Req, UseGuards,
+  Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Put, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { LojaCatalogService, ListarParams } from './loja-catalog.service';
@@ -54,6 +54,16 @@ export class LojaCatalogPublicController {
   @Get('feed')
   feed() {
     return this.svc.catalogoParaFeed();
+  }
+
+  /**
+   * GET /api/public/loja/curadoria/:slug — os produtos de uma coleção curada
+   * (ex.: "mais-top-da-semana"), NA ORDEM que o dono escolheu. Alimenta a página
+   * do site. Coleção paralela: a peça continua na categoria real dela.
+   */
+  @Get('curadoria/:slug')
+  curadoria(@Param('slug') slug: string) {
+    return this.svc.curadoriaProdutos(String(slug || '').toLowerCase());
   }
 
   /**
@@ -204,6 +214,31 @@ export class LojaCatalogAdminController {
     this.requireAdmin(req);
     const quem = req?.user?.email || req?.user?.name || 'admin';
     return this.svc.criarLook(String(body?.nome || ''), body?.refs ?? [], quem);
+  }
+
+  /* ── COLEÇÕES CURADAS — "Mais Top da Semana" (dono, 16/08) ──────────────── */
+
+  /** GET /loja-catalog/curadoria/:slug — REFs gravadas + os produtos (na ordem)
+   *  pra tela de curadoria montar a lista atual. */
+  @Get('curadoria/:slug')
+  async curadoriaAdmin(@Req() req: any, @Param('slug') slug: string) {
+    this.requireAdmin(req);
+    const s = String(slug || '').toLowerCase();
+    const [refs, produtos] = await Promise.all([this.svc.colecaoRefs(s), this.svc.curadoriaProdutos(s)]);
+    return { slug: s, refs, itens: produtos.itens, total: produtos.total };
+  }
+
+  /** PUT /loja-catalog/curadoria/:slug — grava a lista ORDENADA de REFs (a ordem
+   *  do array é a ordem na vitrine e no feed). */
+  @Put('curadoria/:slug')
+  salvarCuradoria(
+    @Req() req: any,
+    @Param('slug') slug: string,
+    @Body() body: { refs?: string[]; nome?: string },
+  ) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.svc.setColecao(String(slug || '').toLowerCase(), body?.refs ?? [], quem, body?.nome);
   }
 
   @Post('looks/:id/pecas')

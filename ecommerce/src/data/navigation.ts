@@ -14,29 +14,14 @@ import { STORE_POLICIES } from '@/data/store-policies';
  * Os blocos voltam quando o cadastro estiver preenchido (o campo já existe na
  * ficha do produto).
  *
- * As imagens dos cards editoriais são TEMPORÁRIAS (royalty-free) — trocar
- * pelas fotos de campanha da marca. Ver docs/navigation.md.
+ * OS CARDS DO MENU NÃO TÊM MAIS FOTO (16/08/2026).
+ *
+ * Eram oito imagens de banco de imagem (Unsplash) ilustrando os eixos —
+ * modelos de outra marca abrindo o menu da Lurds. O dono mandou tirar do site
+ * TODA foto que não é oficial da casa, e estas foram junto: o card continua,
+ * com a arte tipográfica da marca no lugar da foto (ver `MenuCard`). Quando
+ * existir foto de campanha NOSSA, basta devolver o campo `image` do card.
  */
-
-/**
- * Cards do mega menu: nunca passam de ~340px de largura. Pedir o original de
- * 5 MB ao Unsplash só pra devolver 320px é desperdício puro no otimizador —
- * ver a explicação completa em `data/content.ts`.
- */
-function unsplash(id: string, width = 800): string {
-  return `https://images.unsplash.com/${id}?w=${width}&q=85&fm=jpg&fit=max`;
-}
-
-const EDITORIAL = {
-  novidades: unsplash('photo-1657550853452-f13aa437f6c9'),
-  looks: unsplash('photo-1664893876112-64c308bf0d70'),
-  ocasioes: unsplash('photo-1582745140877-0480c22d91ee'),
-  categorias: unsplash('photo-1603400521630-9f2de124b33b'),
-  tecidos: unsplash('photo-1441984904996-e0b6ba687e04'),
-  colecoes: unsplash('photo-1652288832306-73735bbb94b3'),
-  tamanhos: unsplash('photo-1657549091422-3b748b8f72b2'),
-  outlet: unsplash('photo-1441986300917-64674bd600d8'),
-} as const;
 
 /**
  * Desenho COMPLETO da navegação — inclui eixos e sub-links de páginas que
@@ -67,7 +52,6 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
           eyebrow: 'Coleção',
           title: 'A nova estação chegou',
           description: 'Peças pensadas pro corpo real, do 44 ao 60.',
-          image: { src: EDITORIAL.novidades, alt: 'Nova coleção Lurds Plus Size' },
           href: '/novidades/lancamentos',
           cta: 'Ver a coleção',
         },
@@ -121,7 +105,6 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
           eyebrow: 'Campeã de vendas',
           title: 'Vestidos que vestem bem',
           description: 'A categoria mais amada da Lurds, do casual ao festa.',
-          image: { src: EDITORIAL.categorias, alt: 'Vestidos plus size' },
           href: '/categoria/vestidos',
           cta: 'Ver vestidos',
         },
@@ -152,7 +135,6 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
           eyebrow: 'Shop the look',
           title: 'Leve o look completo',
           description: 'A composição inteira em um clique — ou peça por peça.',
-          image: { src: EDITORIAL.looks, alt: 'Look completo plus size' },
           href: '/looks',
           cta: 'Comprar looks',
         },
@@ -195,7 +177,6 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
           eyebrow: 'Tabela de medidas',
           title: 'Descubra a sua numeração',
           description: 'Três medidas e a gente te diz o tamanho certo.',
-          image: { src: EDITORIAL.tamanhos, alt: 'Guia de tamanhos plus size' },
           href: '/tamanhos/guia',
           cta: 'Ver guia de medidas',
         },

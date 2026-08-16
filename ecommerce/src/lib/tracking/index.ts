@@ -54,6 +54,8 @@ export {
   trackSortChanged,
   trackStoreAvailability,
   trackStoreLocator,
+  trackStoresOnlineCta,
+  trackStoresProductClick,
   trackStoreReservation,
   trackTimeOnPage,
   trackVideoWatched,

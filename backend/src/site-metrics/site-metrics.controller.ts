@@ -13,7 +13,14 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { JwtAuthGuard } from '../auth/jwt.guard';
-import { CliqueEntrada, EventoEntrada, SiteMetricsService } from './site-metrics.service';
+import {
+  CliqueEntrada,
+  EventoEntrada,
+  Segmento,
+  SiteMetricsService,
+  Trafego,
+  TRAFEGOS,
+} from './site-metrics.service';
 
 /**
  * A PORTA DO SITE — server-to-server, do BFF do e-commerce pra cá.
@@ -137,26 +144,66 @@ export class SiteMetricsController {
     return { de: inicio.toISOString(), ate: fim.toISOString(), ...dados };
   }
 
-  /** O funil do site (visita → sacola → checkout → compra) — mesma janela De/Até. */
+  /**
+   * O funil do site (visita → sacola → checkout → compra) — mesma janela De/Até.
+   *
+   * A CASCATA vem na query string: `trafego` (pago/organico/direto),
+   * `plataforma` e `campanha`. Vazio em qualquer nível = "tudo" daquele nível.
+   *
+   * O recorte vale pro relatório INTEIRO — funil, jornada, problemas,
+   * interações e tráfego de lojas saem todos do mesmo segmento. Tela em que
+   * metade dos quadros responde uma pergunta e a outra metade responde outra
+   * já custou caro aqui duas vezes.
+   *
+   * `faturamento` é a exceção, e declarada: sai de `orders`, que não tem
+   * sessão, então não há como recortar por campanha. Com filtro ligado ele
+   * simplesmente não vai — mostrar o faturamento cheio ao lado de um funil
+   * recortado faria parecer que aquela campanha faturou tudo aquilo.
+   */
   @Get('funil')
-  async funil(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
+  async funil(
+    @Req() req: any,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+    @Query('trafego') trafego?: string,
+    @Query('plataforma') plataforma?: string,
+    @Query('campanha') campanha?: string,
+  ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
 
     const fim = this.fimDoDia(ate) ?? this.fimDoDia(this.hoje())!;
     const inicio = this.inicioDoDia(de) ?? new Date(fim.getTime() - 29 * 24 * 60 * 60 * 1000);
 
-    const [etapas, diagnosticos, faturamento, alertasCheckout, trafegoLojas, jornadaCompra] = await Promise.all([
-      this.service.funil(inicio, fim),
-      this.service.diagnosticosFunil(inicio, fim),
-      this.service.faturamentoSite(inicio, fim),
-      this.service.alertasCheckout(inicio, fim),
-      // Quem entrou pela /lojas saiu do funil acima — este é o quadro dela.
-      this.service.trafegoDeLojas(inicio, fim),
-      this.service.jornadaCompra(inicio, fim),
-    ]);
+    // Valor fora da lista vira "tudo" em vez de 400: relatório que devolve erro
+    // por causa de um link velho é relatório que atrapalha.
+    const seg: Segmento = {
+      trafego: (TRAFEGOS as readonly string[]).includes(trafego ?? '')
+        ? (trafego as Trafego)
+        : null,
+      plataforma: plataforma?.trim() || null,
+      campanha: campanha?.trim() || null,
+    };
+    const filtrado = Boolean(seg.trafego || seg.plataforma || seg.campanha);
+
+    const [etapas, diagnosticos, faturamento, alertasCheckout, trafegoLojas, jornadaCompra, segmentos] =
+      await Promise.all([
+        this.service.funil(inicio, fim, seg),
+        this.service.diagnosticosFunil(inicio, fim, seg),
+        filtrado ? Promise.resolve(undefined) : this.service.faturamentoSite(inicio, fim),
+        this.service.alertasCheckout(inicio, fim, seg),
+        // Quem entrou pela /lojas saiu do funil acima — este é o quadro dela.
+        this.service.trafegoDeLojas(inicio, fim, seg),
+        this.service.jornadaCompra(inicio, fim, seg),
+        // As opções da cascata saem do período INTEIRO, nunca do recorte atual:
+        // se saíssem do recorte, escolher uma campanha apagaria as outras da
+        // lista e não teria como voltar.
+        this.service.segmentosDisponiveis(inicio, fim),
+      ]);
     return {
       de: inicio.toISOString(),
       ate: fim.toISOString(),
+      segmento: seg,
+      segmentos,
       etapas,
       diagnosticos,
       faturamento,

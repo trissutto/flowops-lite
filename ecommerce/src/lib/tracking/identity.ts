@@ -4,8 +4,10 @@
  * Três identificadores, com vidas diferentes de propósito:
  *   anonymous_id — o aparelho. Vive ~2 anos no localStorage. É o que costura a
  *                  visitante que voltou 3 semanas depois pra comprar.
- *   session_id   — a visita. Morre em 30 min de inatividade (mesma janela do
- *                  GA4, pra os relatórios baterem).
+ *   session_id   — a visita. Vive no localStorage e morre em 30 min de
+ *                  inatividade — mesma janela E mesmo escopo do GA4 (que usa
+ *                  cookie), pra os relatórios baterem. Vale para o ORIGIN, não
+ *                  para a aba: ver `getSessionId`.
  *   user_id      — a pessoa. Só existe depois do login; vem do CRM e é o mesmo
  *                  id do app, senão a visão única de cliente não fecha.
  *
@@ -97,29 +99,66 @@ interface SessionRecord {
   last_seen: number;
 }
 
+/** Lê um registro de sessão de um dos storages, já validando a inatividade. */
+function sessaoViva(storage: 'local' | 'session', agora: number): SessionRecord | null {
+  const raw = safeGet(storage, SESSION_KEY);
+  if (!raw) return null;
+  try {
+    const rec = JSON.parse(raw) as SessionRecord;
+    if (rec?.id && agora - rec.last_seen < SESSION_TIMEOUT_MS) return rec;
+  } catch {
+    /* registro corrompido → vale como inexistente */
+  }
+  return null;
+}
+
 /**
  * Devolve a sessão viva, criando ou renovando conforme a inatividade.
  * Chamado a cada evento — é ele que empurra o `last_seen`.
+ *
+ * ── POR QUE `localStorage` E NÃO `sessionStorage` (16/08/2026) ──
+ *
+ * `sessionStorage` é POR ABA. Enquanto a sessão morava lá, a cliente que abre
+ * quatro peças em quatro abas — comportamento normal de quem compra roupa —
+ * virava QUATRO pessoas no relatório: quatro que viram produto e uma que pôs
+ * na sacola. Toda taxa a jusante afundava sem ninguém ter desistido de nada.
+ *
+ * Pior: o comentário lá em cima promete "mesma janela do GA4, pra os
+ * relatórios baterem", e o GA4 guarda a sessão em COOKIE, compartilhado entre
+ * abas. A janela batia; o escopo, não.
+ *
+ * `localStorage` é do ORIGIN inteiro, então a sessão atravessa aba e recarga.
+ * A regra de fim continua a mesma e é o que segura o escopo: 30 min sem
+ * evento nenhum encerra. Aba fechada e reaberta dentro da janela continua a
+ * mesma visita — que é exatamente o que o GA4 faz.
+ *
+ * Isto NÃO resolve robô: crawler não guarda storage entre páginas, então
+ * continua ganhando sessão nova a cada peça varrida. Quem corta robô é o
+ * `bot-detect.ts` aqui e a régua de "sessão de gente" no FlowOps.
  */
 export function getSessionId(): string {
   const now = Date.now();
-  const raw = safeGet('session', SESSION_KEY);
 
-  if (raw) {
-    try {
-      const rec = JSON.parse(raw) as SessionRecord;
-      if (rec?.id && now - rec.last_seen < SESSION_TIMEOUT_MS) {
-        safeSet('session', SESSION_KEY, JSON.stringify({ ...rec, last_seen: now }));
-        return rec.id;
-      }
-    } catch {
-      /* registro corrompido → abre sessão nova */
-    }
+  const atual = sessaoViva('local', now);
+  if (atual) {
+    safeSet('local', SESSION_KEY, JSON.stringify({ ...atual, last_seen: now }));
+    return atual.id;
   }
 
-  const fresh: SessionRecord = { id: uuid(), started_at: now, last_seen: now };
-  safeSet('session', SESSION_KEY, JSON.stringify(fresh));
-  return fresh.id;
+  /**
+   * ADOÇÃO DO REGISTRO ANTIGO: quem estava navegando na hora do deploy tem a
+   * sessão no `sessionStorage`. Sem isto, a visita dela se parte em duas no
+   * meio do funil — e a que perde é sempre a de baixo, a que ia comprar.
+   */
+  const legado = sessaoViva('session', now);
+  const rec: SessionRecord = legado
+    ? { ...legado, last_seen: now }
+    : { id: uuid(), started_at: now, last_seen: now };
+
+  safeSet('local', SESSION_KEY, JSON.stringify(rec));
+  // O registro antigo já foi absorvido; deixá-lo vivo só convida a divergir.
+  if (legado) safeRemove('session', SESSION_KEY);
+  return rec.id;
 }
 
 export function getUserId(): string | null {
