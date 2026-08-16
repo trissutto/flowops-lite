@@ -125,7 +125,13 @@ export class WhatsappInboxService {
     this.backfill(300).catch((e: any) => this.logger.warn(`[wa-inbox] backfill auto falhou: ${e?.message || e}`));
   }
 
-  async mensagens(jid: string) {
+  /**
+   * Mensagens de uma conversa. `marcarLido=true` (padrão) zera o não-lidas —
+   * é o caso de um HUMANO abrir a conversa. O cron de auto-resposta passa
+   * `false`: ele lê pra decidir, mas NÃO pode apagar o badge de não-lida (senão
+   * some a pendência de uma reclamação que ele mesmo recusou responder).
+   */
+  async mensagens(jid: string, marcarLido = true) {
     if (!jid) throw new BadRequestException('Conversa não informada.');
     let rows = await this.p().whatsappMessage.findMany({
       where: { conversationJid: jid },
@@ -142,10 +148,12 @@ export class WhatsappInboxService {
         take: 300,
       });
     }
-    // Abriu a conversa = zerou não-lidas.
-    await this.p()
-      .whatsappConversation.updateMany({ where: { jid }, data: { naoLidas: 0 } })
-      .catch(() => undefined);
+    // Abriu a conversa = zerou não-lidas (só quando um humano abre).
+    if (marcarLido) {
+      await this.p()
+        .whatsappConversation.updateMany({ where: { jid }, data: { naoLidas: 0 } })
+        .catch(() => undefined);
+    }
     return rows.slice(-100).map((m: any) => ({
       id: m.waId || m.id,
       fromMe: m.fromMe,

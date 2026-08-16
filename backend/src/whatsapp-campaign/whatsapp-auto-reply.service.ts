@@ -24,6 +24,9 @@ import { WhatsappIaService } from './whatsapp-ia.service';
 export class WhatsappAutoReplyService {
   private readonly logger = new Logger(WhatsappAutoReplyService.name);
   private rodando = false;
+  /** jid → ultimaEm(ms) já avaliado. Evita re-chamar o Claude pro MESMO estado
+   *  (inclusive quando a IA recusa — a conversa recusada não muda fromMe). */
+  private avaliadas = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -41,7 +44,11 @@ export class WhatsappAutoReplyService {
     return v === 'fora' || v === 'sempre' ? v : 'off';
   }
 
-  /** Loja aberta AGORA (Brasília)? Seg–Sáb, faixa LOJA_ABRE..LOJA_FECHA (9..18). */
+  /**
+   * Loja aberta AGORA (Brasília)? Janela global conservadora: Seg–Sex
+   * LOJA_ABRE..LOJA_FECHA (9..18), Sáb LOJA_ABRE..LOJA_FECHA_SAB (9..13), Dom
+   * fechado. É só o gate do modo 'fora'; horário fino por loja está em lojas-info.
+   */
   private lojaAberta(): boolean {
     const partes = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/Sao_Paulo',
@@ -51,12 +58,13 @@ export class WhatsappAutoReplyService {
     }).formatToParts(new Date());
     const hora = Number(partes.find((p) => p.type === 'hour')?.value ?? '0');
     const dia = partes.find((p) => p.type === 'weekday')?.value ?? '';
-    const abre = Number(process.env.LOJA_ABRE ?? '9');
-    const fecha = Number(process.env.LOJA_FECHA ?? '18');
     if (dia === 'Sun') return false;
+    const abre = Number(process.env.LOJA_ABRE ?? '9');
+    const fecha = dia === 'Sat' ? Number(process.env.LOJA_FECHA_SAB ?? '13') : Number(process.env.LOJA_FECHA ?? '18');
     return hora >= abre && hora < fecha;
   }
 
+  // 1x por minuto (segundo 15). A janela de 45s abaixo é que dá o debounce da rajada.
   @Cron('15 * * * * *', { name: 'wa-auto-reply' })
   async ciclo() {
     const modo = this.modo();
@@ -66,6 +74,7 @@ export class WhatsappAutoReplyService {
 
     this.rodando = true;
     try {
+      if (this.avaliadas.size > 1000) this.avaliadas.clear(); // não vaza memória
       const agora = Date.now();
       const desde = new Date(agora - 30 * 60 * 1000); // não mexe em conversa velha
       const ate = new Date(agora - 45 * 1000); // espera 45s (rajada)
@@ -78,15 +87,30 @@ export class WhatsappAutoReplyService {
 
       for (const c of convs) {
         try {
-          // Cooldown: já respondeu no automático nos últimos 20min? Pula (sem loop).
+          const ultimaEmMs = c.ultimaEm ? new Date(c.ultimaEm).getTime() : 0;
+          // Já avaliei ESTE estado (acerto OU recusa)? Não re-chama o Claude.
+          if (this.avaliadas.get(c.jid) === ultimaEmMs) continue;
+          // Cooldown: já respondeu no automático nos últimos 20min? Pula (sem ping-pong).
           const jaAuto = await this.p().whatsappMessage.findFirst({
             where: { conversationJid: c.jid, tipo: 'auto-ia', ts: { gte: new Date(agora - 20 * 60 * 1000) } },
           });
-          if (jaAuto) continue;
+          if (jaAuto) {
+            this.avaliadas.set(c.jid, ultimaEmMs);
+            continue;
+          }
 
           const dec = await this.ia.decidirAutoResposta(c.jid, { fora });
+          this.avaliadas.set(c.jid, ultimaEmMs); // marca avaliado (evita re-billar a recusa)
           if (!dec.responder || !dec.resposta.trim()) {
             this.logger.log(`[wa-auto] ${c.numero}: NÃO respondeu — ${dec.motivo}`);
+            continue;
+          }
+          // TOCTOU: a chamada à IA leva até 45s. Se chegou mensagem nova (ou um
+          // humano respondeu) nesse meio, não envia — o próximo ciclo reavalia.
+          const fresh = await this.p().whatsappConversation.findUnique({ where: { jid: c.jid } });
+          const freshMs = fresh?.ultimaEm ? new Date(fresh.ultimaEm).getTime() : 0;
+          if (freshMs !== ultimaEmMs || fresh?.fromMe) {
+            this.avaliadas.delete(c.jid); // estado mudou → deixa reavaliar
             continue;
           }
           await this.inbox.responder(c.jid, dec.resposta.trim(), 'auto-ia');
