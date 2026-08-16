@@ -28,7 +28,7 @@ export const revalidate = 60;
 export const metadata = buildMetadata({
   title: 'Mais Top da Semana',
   description:
-    'A seleção da semana da Lurd’s Plus Size, do 44 ao 60 — as peças mais desejadas, escolhidas a dedo.',
+    'A seleção da semana da Lurd’s Plus Size, do 46 ao 60 — as peças mais desejadas, escolhidas a dedo.',
   path: '/mais-top-da-semana',
   keywords: ['mais vendidos plus size', 'destaques plus size', 'seleção da semana plus size'],
 });
@@ -63,7 +63,7 @@ export default async function MaisTopDaSemanaPage() {
         <SectionTitle
           eyebrow="A seleção da semana"
           title="Mais Top da Semana"
-          description="As peças mais desejadas, escolhidas a dedo — do 44 ao 60. Atualizamos toda semana."
+          description="As peças mais desejadas, escolhidas a dedo — do 46 ao 60. Atualizamos toda semana."
           as="h1"
         />
       </Section>
