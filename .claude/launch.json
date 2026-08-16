@@ -30,6 +30,13 @@
       "port": 3101
     },
     {
+      "name": "ecommerce-galeria-lateral",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "-p", "3102"],
+      "cwd": "C:/Users/User/Documents/Claude/Projects/ROBOT SITE/flowops-lite/.claude/worktrees/pdp-galeria-lateral/ecommerce",
+      "port": 3102
+    },
+    {
       "name": "prototipo-familia",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["-y", "http-server", "C:/Users/User/Documents/Claude/Projects/familia-plus", "-p", "4173", "-c-1"],

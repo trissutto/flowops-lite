@@ -168,10 +168,17 @@ export function ProductGallery({
         )}
       </div>
 
-      {/* Miniaturas: uma POR COR quando a peça tem variações; senão, por foto. */}
+      {/* Miniaturas: uma POR COR quando a peça tem variações; senão, por foto.
+
+          A coluna é um trilho que ROLA DENTRO da altura da foto: o `absolute`
+          tira as miniaturas do cálculo de altura, então uma peça de 8 cores
+          não estica a galeria pra baixo — ela rola ali mesmo, do lado da
+          foto. Sem isso, cada cor a mais devolveria a rolagem que a mudança
+          de 15/08 veio eliminar. */}
       {grupos && grupos.length > 1 ? (
+        <div className="relative w-14 shrink-0 lg:w-20">
         <div
-          className="no-scrollbar flex gap-3 overflow-x-auto lg:w-20 lg:flex-col lg:overflow-visible"
+          className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
           role="tablist"
           aria-label="Cores da peça"
         >
@@ -184,7 +191,7 @@ export function ProductGallery({
               aria-label={`Cor ${g.nome}`}
               title={g.nome}
               onClick={g.onSelect}
-              className="w-16 shrink-0 lg:w-full"
+              className="w-full shrink-0"
             >
               <span
                 className={cn(
