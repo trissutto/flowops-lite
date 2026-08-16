@@ -125,6 +125,26 @@ describe('jornadaCompra', () => {
     }
   });
 
+  /**
+   * Rejeição relâmpago de tráfego pago é o sintoma nº 1 de anúncio prometendo
+   * o que a página não entrega (dono, 16/08). Se a régua apagar essa sessão
+   * como robô, a tela esconde dinheiro sendo queimado — o pior tipo de erro de
+   * medição que existe. Clique em anúncio é ação humana por definição.
+   */
+  it('nunca corta quem chegou por link identificado, mesmo sem rolar nem ficar 3s', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+
+    await service.jornadaCompra(new Date(), new Date());
+
+    for (const [sql] of query.mock.calls) {
+      expect(String(sql)).toContain("dados ? 'campanha' OR dados ? 'canal'");
+      // `midia` vale 'direct' pra todo mundo sem referrer — usá-la aqui
+      // devolveria o robô inteiro pra dentro da conta.
+      expect(String(sql)).not.toContain("dados ? 'midia'");
+    }
+  });
+
   it('corta robô também no diagnóstico e no alerta de checkout da mesma tela', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);

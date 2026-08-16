@@ -68,6 +68,22 @@ export interface EventoEntrada {
  * dispara também quando a aba some), troca de cor/tamanho, busca, filtro,
  * sacola, checkout. `page_view` e `view_item` são automáticos e ficam fora.
  *
+ * ── QUEM VEIO DE ANÚNCIO NUNCA É CORTADA (dono, 16/08/2026) ──
+ *
+ * "E se a pessoa entrar e sair antes de 3 segundos porque o site não tinha
+ * nada a ver com o que ela esperava? Aí é erro de campanha."
+ *
+ * Está certo, e sem esta cláusula a régua apagava justamente a prova disso: a
+ * rejeição relâmpago de tráfego pago é o sintoma nº 1 de anúncio prometendo o
+ * que a página não entrega, e some da conta classificada como robô. O pior
+ * tipo de erro de medição — o que esconde dinheiro sendo queimado.
+ *
+ * Clique em anúncio é ação humana por definição. `campanha`/`canal` só são
+ * gravados quando houve UTM na URL ou referrer externo de verdade (ver
+ * `captureAttribution` e `inferSource` no site): scraper batendo na URL crua
+ * não tem nenhum dos dois. `midia` NÃO serve — ela vale 'direct' pra todo
+ * mundo que chega sem referrer, robô incluído.
+ *
  * Vale pro passado inteiro sem depender de deploy — é comportamento que já
  * está gravado, não campo novo.
  *
@@ -79,9 +95,14 @@ export interface EventoEntrada {
  *  gente: robô com JavaScript produz os dois sem tocar em nada. */
 const EVENTOS_AUTOMATICOS = `('page_view','view_item')`;
 
+/** Chegou por link identificado (UTM ou referrer externo) — clicou em algo
+ *  fora do site pra chegar aqui, e isso é dedo de gente. */
+const SQL_VEIO_DE_LINK = `dados ? 'campanha' OR dados ? 'canal'`;
+
 const SQL_SINAL_DE_GENTE = `
     COUNT(*) FILTER (WHERE evento NOT IN ${EVENTOS_AUTOMATICOS}) > 0
-    OR COUNT(DISTINCT path) > 1`;
+    OR COUNT(DISTINCT path) > 1
+    OR COUNT(*) FILTER (WHERE ${SQL_VEIO_DE_LINK}) > 0`;
 
 /** As sessões de gente de um período ($1..$2) — pronta pra virar CTE. */
 const SQL_SESSOES_DE_GENTE = `
