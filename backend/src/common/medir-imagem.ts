@@ -76,6 +76,24 @@ export function medirImagem(buf: Buffer): TamanhoImagem | null {
 export const FOTO_LARGURA_MINIMA = 1400;
 export const FOTO_ALTURA_MINIMA = 2000;
 
+/**
+ * O TETO DO ARQUIVO-MESTRE NO BUCKET (16/08/2026).
+ *
+ * Mesma proporção 7:10 do mínimo, com folga de sobra: o maior quadro da PDP
+ * pede ~1540px num monitor a 200%, e o `next/image` reencoda pra AVIF/WebP no
+ * tamanho do dispositivo — ninguém baixa o mestre. Quem consome o mestre CRU é
+ * o feed do Meta/Google, e lá 2000px já é o dobro do recomendado.
+ *
+ * Existe porque o acervo do WordPress traz arquivo de qualquer tamanho, e um
+ * mestre de 4000px é banda e memória do `sharp` jogadas fora.
+ *
+ * ⚠️ É TETO, NUNCA PISO: reduzir preserva o que a foto tem, AMPLIAR inventa
+ * pixel e entrega peça borrada. Foto abaixo do mínimo se resolve refazendo a
+ * foto — `fotoBaixaResolucao` marca quais são.
+ */
+export const FOTO_LARGURA_MAXIMA = 2000;
+export const FOTO_ALTURA_MAXIMA = 2858;
+
 export function fotoBaixaResolucao(largura?: number | null, altura?: number | null): boolean {
   if (!largura || !altura) return false; // não medida ≠ ruim
   return largura < FOTO_LARGURA_MINIMA || altura < FOTO_ALTURA_MINIMA;
