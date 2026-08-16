@@ -186,6 +186,39 @@ export async function persistirEventosSite(
     const utmId = texto(attr?.id);
     if (utmId) dados.utm_id = utmId;
 
+    /**
+     * CLIQUE PAGO — o `gclid`/`fbclid`, que o navegador capturava e este
+     * módulo jogava fora.
+     *
+     * Sem isto, "tráfego pago" no relatório dependeria 100% de o `utm_medium`
+     * estar certo em cada anúncio — e anúncio mal etiquetado é a regra, não a
+     * exceção. O id do clique é posto pela PRÓPRIA plataforma na URL de
+     * destino: existe mesmo quando ninguém lembrou de marcar UTM, e não existe
+     * em quem chegou de graça. É a única prova de "isto foi anúncio" que não
+     * depende da disciplina de quem sobe a campanha.
+     *
+     * Guarda o FATO e a PLATAFORMA, nunca o id: `gclid`/`fbclid` identificam
+     * um clique de uma pessoa, e identificador de pessoa não entra nesta
+     * tabela (mesma regra que já barra e-mail, telefone e endereço aqui).
+     *
+     * O `utm_medium` entra como segunda via, pro anúncio que venha etiquetado
+     * mas sem id de clique (link na bio impulsionado, parceria, e-mail pago).
+     *
+     * ⚠️ Herda a janela de 30 dias da atribuição: quem clicou no anúncio na
+     * semana passada e voltou direto hoje continua marcada como paga. É o
+     * mesmo last-click do Meta e do GA4 — bate com o Gerenciador, mas não se
+     * confunde com "esta visita veio do anúncio".
+     */
+    const gclid = texto(attr?.gclid);
+    const fbclid = texto(attr?.fbclid);
+    const midiaPaga = /^(cpc|ppc|paid|paid_social|paidsocial|paid-social)$/i.test(midia ?? '');
+    if (gclid || fbclid || midiaPaga) {
+      dados.pago = true;
+      // Os dois ids ao mesmo tempo só acontece com URL montada na mão; o
+      // Google ganha por ser o que reescreve a URL de destino sozinho.
+      dados.plataforma = gclid ? 'google' : fbclid ? 'meta' : (canal ?? 'nao-identificada');
+    }
+
     return {
       evento: e.event,
       path: texto(e.context?.page?.path),

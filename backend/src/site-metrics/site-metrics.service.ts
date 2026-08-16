@@ -138,6 +138,82 @@ const SQL_SESSOES_DE_GENTE = `
 const soGente = (alias: string) =>
   `NOT ${alias}.bot AND ${alias}.session_id IN (SELECT session_id FROM gente)`;
 
+/**
+ * O SEGMENTO — a cascata "tudo → pago → plataforma → campanha".
+ *
+ * Pedido do dono (16/08): "aparece todos os dados, depois filtramos tráfego
+ * pago, depois Google/Meta, depois a campanha". O recorte é de SESSÃO, não de
+ * evento: a pergunta é "como é o funil INTEIRO do público desse anúncio", e
+ * pra isso a sessão precisa entrar ou sair por completo. Filtrar evento a
+ * evento daria um funil onde a visita é de um público e a compra é de outro.
+ *
+ * ── A ORIGEM DA SESSÃO É A DO PRIMEIRO EVENTO QUE TIVER UMA ──
+ *
+ * `DISTINCT ON` com `(canal) IS NULL` primeiro no ORDER BY: vale o evento mais
+ * antigo que trouxe origem, e só cai pro mais antigo de todos quando nenhum
+ * trouxe. Mesmo critério que o quadro "por campanha" do tráfego de lojas já
+ * usava — dois critérios de "de onde veio" na mesma tela seria pedir pra
+ * divergirem.
+ *
+ * ⚠️ A atribuição vive 30 dias no navegador (last-click, igual Meta e GA4).
+ * "Sessão da campanha X" quer dizer "o último anúncio que essa pessoa clicou
+ * foi o X", não "esta visita veio do anúncio". A tela avisa.
+ *
+ * Os três filtros são parâmetros ($3/$4/$5) e NULL desliga cada um. Sempre
+ * referenciados, mesmo em "tudo": query que deixasse de citar um parâmetro
+ * quebraria no bind do Postgres, e valor concatenado à mão seria injeção.
+ */
+const SQL_SESSOES_DO_SEGMENTO = `
+    SELECT session_id FROM (
+      SELECT DISTINCT ON (session_id) session_id,
+             dados->>'campanha'   AS campanha,
+             dados->>'canal'      AS canal,
+             dados->>'plataforma' AS plataforma,
+             COALESCE(dados->>'pago', 'false') = 'true' AS pago
+        FROM site_eventos
+       WHERE criado_em >= $1 AND criado_em <= $2 AND session_id IS NOT NULL
+       ORDER BY session_id, (dados->>'canal') IS NULL, criado_em
+    ) origem
+     WHERE ($3::text IS NULL
+            OR ($3 = 'pago'     AND pago)
+            OR ($3 = 'organico' AND NOT pago AND canal IS NOT NULL)
+            OR ($3 = 'direto'   AND canal IS NULL))
+       AND ($4::text IS NULL OR COALESCE(plataforma, canal) = $4)
+       AND ($5::text IS NULL OR campanha = $5)`;
+
+/** Recorte do segmento pra uma tabela `site_eventos` com o alias dado. Exige
+ *  que a query declare a CTE `segmento`. */
+const doSegmento = (alias: string) =>
+  `${alias}.session_id IN (SELECT session_id FROM segmento)`;
+
+/**
+ * OS DOIS CORTES JUNTOS — é assim que toda query desta tela filtra.
+ *
+ * Só gente E só o segmento escolhido. Existem colados de propósito: a versão
+ * anterior tinha o corte de robô aplicado em umas queries e não em outras, e a
+ * tela mostrou duas populações ao mesmo tempo. Um filtro que dá pra esquecer é
+ * um filtro que vai ser esquecido.
+ */
+const soGenteDoSegmento = (alias: string) =>
+  `${soGente(alias)} AND ${doSegmento(alias)}`;
+
+/** O que os três níveis da cascata aceitam. Qualquer outra coisa vira "tudo". */
+export const TRAFEGOS = ['pago', 'organico', 'direto'] as const;
+export type Trafego = (typeof TRAFEGOS)[number];
+
+/** Os três filtros da cascata, já normalizados pro bind ($3/$4/$5). */
+export interface Segmento {
+  trafego: Trafego | null;
+  plataforma: string | null;
+  campanha: string | null;
+}
+
+export const SEM_SEGMENTO: Segmento = { trafego: null, plataforma: null, campanha: null };
+
+/** Os parâmetros da cascata na ordem do bind, pra não repetir em 8 queries. */
+const args = (de: Date, ate: Date, s: Segmento) =>
+  [de, ate, s.trafego, s.plataforma, s.campanha] as const;
+
 const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   color_switch: ['color'],
   size_switch: ['size'],
@@ -156,18 +232,73 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   checkout_recovered: ['method', 'order_id'],
 };
 
+/**
+ * CAMPOS DE CONTEXTO — valem pra QUALQUER evento.
+ *
+ * ── O BUG QUE ISTO CONSERTA (16/08/2026) ──
+ *
+ * `CAMPOS_DIAGNOSTICOS` é indexado POR EVENTO, e o UTM não pertence a evento
+ * nenhum: ele viaja em todos. Resultado, desde que a coleta nasceu: `campanha`,
+ * `canal`, `midia`, `posicao` e `utm_id` chegavam do site e eram descartados
+ * aqui em SILÊNCIO — `page_view` nem tem entrada no mapa, então `permitidos`
+ * era `[]` e o `dados` inteiro virava `undefined`.
+ *
+ * Duas coisas estavam no ar por causa disto: o quadro "por campanha" do
+ * tráfego de lojas respondia "sem campanha" pra todo mundo, e a cláusula que
+ * protege tráfego pago do corte de robô (`dados ? 'campanha'`) era letra
+ * morta — a chave nunca existiu no banco.
+ *
+ * Mesma família da pegadinha do Zod: chave fora do schema some sem erro. Por
+ * isso a lista de contexto mora separada da de diagnóstico — pro próximo campo
+ * que valha pra todo evento não ter que ser repetido em quinze linhas.
+ *
+ * A defesa contra PII continua inteira: a lista é FECHADA e os valores são
+ * cortados. E-mail, telefone e endereço seguem sem entrar.
+ */
+const CAMPOS_DE_CONTEXTO = [
+  'campanha',
+  'canal',
+  'midia',
+  'posicao',
+  'utm_id',
+  /** `true` quando veio de gclid/fbclid ou de utm_medium pago (ver o site). */
+  'pago',
+  'plataforma',
+  'busca',
+  'origem',
+] as const;
+
 /** Defesa final contra PII: só persiste chaves fechadas e valores curtos. */
-export function sanitizarDadosEvento(evento: string, dados: unknown): Record<string, string> | undefined {
+export function sanitizarDadosEvento(
+  evento: string,
+  dados: unknown,
+): Record<string, string | string[]> | undefined {
   if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return undefined;
-  const permitidos = CAMPOS_DIAGNOSTICOS[evento] ?? [];
+  const permitidos = [...CAMPOS_DE_CONTEXTO, ...(CAMPOS_DIAGNOSTICOS[evento] ?? [])];
   const origem = dados as Record<string, unknown>;
-  const limpo: Record<string, string> = {};
+  const limpo: Record<string, string | string[]> = {};
   for (const campo of permitidos) {
     const valor = origem[campo];
     if (typeof valor !== 'string' && typeof valor !== 'number' && typeof valor !== 'boolean') continue;
     const texto = String(valor).trim().slice(0, 80);
     if (texto) limpo[campo] = texto;
   }
+
+  /**
+   * `refs` (as REFs das peças do evento) é LISTA e não passa pelo laço acima,
+   * que só aceita escalar — então vinha sendo descartada pelo mesmo silêncio.
+   * Teto de 6 itens curtos, igual ao que o site já manda.
+   */
+  const refs = origem.refs;
+  if (Array.isArray(refs)) {
+    const limpas = refs
+      .filter((r): r is string => typeof r === 'string')
+      .map((r) => r.trim().slice(0, 40))
+      .filter(Boolean)
+      .slice(0, 6);
+    if (limpas.length) limpo.refs = limpas;
+  }
+
   return Object.keys(limpo).length ? limpo : undefined;
 }
 
@@ -436,6 +567,7 @@ export class SiteMetricsService {
   async funil(
     de: Date,
     ate: Date,
+    seg: Segmento = SEM_SEGMENTO,
   ): Promise<Array<{ evento: string; eventos: number; pessoas: number; valor: number }>> {
     const linhas = await this.prisma.$queryRawUnsafe<
       Array<{ evento: string; eventos: number; pessoas: number; valor: number }>
@@ -451,6 +583,7 @@ export class SiteMetricsService {
        * no topo do funil: quem chegou no `add_to_cart` já provou que é gente.
        */
       `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
             lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
        SELECT evento,
               COUNT(*)::int                   AS eventos,
@@ -463,10 +596,10 @@ export class SiteMetricsService {
           -- pior que carregar um punhado de anônimos no denominador.
           AND (e.session_id IS NULL
                OR (e.session_id IN (SELECT session_id FROM gente)
+                   AND e.session_id IN (SELECT session_id FROM segmento)
                    AND e.session_id NOT IN (SELECT session_id FROM lojas)))
         GROUP BY evento`,
-      de,
-      ate,
+      ...args(de, ate, seg),
     );
     return linhas.map((l) => ({
       evento: l.evento,
@@ -480,7 +613,7 @@ export class SiteMetricsService {
   }
 
   /** Jornada real: uma sessão ocupa somente a etapa mais avançada que alcançou. */
-  async jornadaCompra(de: Date, ate: Date): Promise<{
+  async jornadaCompra(de: Date, ate: Date, seg: Segmento = SEM_SEGMENTO): Promise<{
     jornada: LinhaJornada[];
     problemas: Array<{
       evento: string; codigo: string; campo: string | null;
@@ -500,6 +633,8 @@ export class SiteMetricsService {
     const [maximos, problemasRaw, interacoesRaw, totais] = await Promise.all([
       this.prisma.$queryRawUnsafe<Array<{ etapa_maxima: number; pessoas: number }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
+              segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               sessoes AS (
                 SELECT e.session_id,
@@ -512,20 +647,21 @@ export class SiteMetricsService {
                  WHERE e.criado_em >= $1 AND e.criado_em <= $2
                    AND e.session_id IS NOT NULL
                    AND e.evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
-                   AND ${soGente('e')}
+                   AND ${soGenteDoSegmento('e')}
                    AND e.session_id NOT IN (SELECT session_id FROM lojas)
                  GROUP BY e.session_id
               )
          SELECT etapa_maxima, COUNT(*)::int AS pessoas
            FROM sessoes GROUP BY etapa_maxima ORDER BY etapa_maxima`,
-        de,
-        ate,
+        ...args(de, ate, seg),
       ),
       this.prisma.$queryRawUnsafe<Array<{
         evento: string; codigo: string; campo: string | null;
         pessoas: number; ocorrencias: number; recuperadas: number;
       }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
+              segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               falhas AS (
                 SELECT e.*,
@@ -548,7 +684,7 @@ export class SiteMetricsService {
                         AND repeticao.evento = 'payment_retry'
                         AND repeticao.criado_em >= $1 AND repeticao.criado_em <= $2
                    ) >= 2)
-                   AND ${soGente('e')}
+                   AND ${soGenteDoSegmento('e')}
                    AND e.session_id NOT IN (SELECT session_id FROM lojas)
               ), agrupadas AS (
                 SELECT evento, codigo, campo, session_id,
@@ -576,13 +712,14 @@ export class SiteMetricsService {
           GROUP BY f.evento, f.codigo, f.campo
           ORDER BY pessoas DESC, ocorrencias DESC
           LIMIT 100`,
-        de,
-        ate,
+        ...args(de, ate, seg),
       ),
       this.prisma.$queryRawUnsafe<Array<{
         evento: string; codigo: string; campo: string | null; pessoas: number; interacoes: number;
       }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
+              segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
          SELECT e.evento,
                 COALESCE(e.dados->>'method', e.dados->>'shipping_tier',
@@ -595,18 +732,19 @@ export class SiteMetricsService {
             AND e.session_id IS NOT NULL
             AND e.evento IN ('color_switch','size_switch','add_shipping_info',
                              'payment_method_selected','pix_copied')
-            AND ${soGente('e')}
+            AND ${soGenteDoSegmento('e')}
             AND e.session_id NOT IN (SELECT session_id FROM lojas)
           GROUP BY e.evento, codigo
           ORDER BY interacoes DESC, e.evento, codigo
           LIMIT 100`,
-        de,
-        ate,
+        ...args(de, ate, seg),
       ),
       this.prisma.$queryRawUnsafe<Array<{
         sessoes_problema: number; sessoes_recuperadas: number; pix_pendente: number;
       }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
+              segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               falhas AS (
                 SELECT evento, session_id, criado_em,
@@ -626,7 +764,7 @@ export class SiteMetricsService {
                         AND repeticao.evento = 'payment_retry'
                         AND repeticao.criado_em >= $1 AND repeticao.criado_em <= $2
                    ) >= 2)
-                   AND ${soGente('e')}
+                   AND ${soGenteDoSegmento('e')}
                    AND session_id NOT IN (SELECT session_id FROM lojas)
               ),
               falhas_sessao AS (
@@ -650,7 +788,7 @@ export class SiteMetricsService {
               pix AS (
                 SELECT DISTINCT p.session_id FROM site_eventos p
                  WHERE p.criado_em >= $1 AND p.criado_em <= $2 AND p.evento = 'pix_created'
-                   AND p.session_id IS NOT NULL AND ${soGente('p')}
+                   AND p.session_id IS NOT NULL AND ${soGenteDoSegmento('p')}
                    AND p.session_id NOT IN (SELECT session_id FROM lojas)
                    AND NOT EXISTS (
                      SELECT 1 FROM site_eventos c WHERE c.session_id = p.session_id
@@ -660,8 +798,7 @@ export class SiteMetricsService {
          SELECT (SELECT COUNT(DISTINCT session_id) FROM falhas)::int AS sessoes_problema,
                 (SELECT COUNT(*) FROM recuperadas)::int AS sessoes_recuperadas,
                 (SELECT COUNT(*) FROM pix)::int AS pix_pendente`,
-        de,
-        ate,
+        ...args(de, ate, seg),
       ),
     ]);
 
@@ -709,7 +846,7 @@ export class SiteMetricsService {
    * que trouxe e o que elas fizeram no site apesar de tudo (parte compra, e
    * isso precisa aparecer em algum lugar).
    */
-  async trafegoDeLojas(de: Date, ate: Date): Promise<{
+  async trafegoDeLojas(de: Date, ate: Date, seg: Segmento = SEM_SEGMENTO): Promise<{
     pessoas: number;
     contataram: number;
     contatos: { whatsapp: number; comoChegar: number; telefone: number; instagram: number };
@@ -721,7 +858,8 @@ export class SiteMetricsService {
     const CONTATO = `('whatsapp_click','store_locator','phone_click','instagram_click')`;
 
     const [tot] = await this.prisma.$queryRawUnsafe<Array<Record<string, any>>>(
-      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+      `WITH segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
+            lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
        SELECT COUNT(DISTINCT l.session_id)::int AS pessoas,
               COUNT(DISTINCT e.session_id) FILTER (WHERE e.evento IN ${CONTATO})::int AS contataram,
               COUNT(*) FILTER (WHERE e.evento='whatsapp_click')::int  AS whatsapp,
@@ -734,20 +872,21 @@ export class SiteMetricsService {
               COUNT(DISTINCT e.session_id) FILTER (WHERE e.evento='purchase')::int       AS compraram,
               COALESCE(SUM(e.valor) FILTER (WHERE e.evento='purchase'), 0)::float        AS valor
          FROM lojas l
+         JOIN segmento sg ON sg.session_id = l.session_id
          LEFT JOIN site_eventos e
                 ON e.session_id = l.session_id AND e.criado_em >= $1 AND e.criado_em <= $2`,
-      de,
-      ate,
+      ...args(de, ate, seg),
     );
 
     const porUnidade = await this.prisma.$queryRawUnsafe<Array<{ loja: string; contatos: number }>>(
-      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
+      `WITH segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
+            lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
        SELECT COALESCE(e.loja, 'sem unidade') AS loja, COUNT(*)::int AS contatos
          FROM site_eventos e JOIN lojas l ON l.session_id = e.session_id
         WHERE e.criado_em >= $1 AND e.criado_em <= $2 AND e.evento IN ${CONTATO}
+          AND ${doSegmento('e')}
         GROUP BY 1 ORDER BY contatos DESC LIMIT 20`,
-      de,
-      ate,
+      ...args(de, ate, seg),
     );
 
     // A campanha vem do UTM gravado desde 16/08 (`dados->>'campanha'`). Sessão
@@ -756,19 +895,20 @@ export class SiteMetricsService {
     const porCampanha = await this.prisma.$queryRawUnsafe<
       Array<{ campanha: string; canal: string | null; pessoas: number }>
     >(
-      `WITH lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
+      `WITH segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
+            lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
             marca AS (
               SELECT DISTINCT ON (e.session_id) e.session_id,
                      COALESCE(e.dados->>'campanha', 'sem campanha') AS campanha,
                      e.dados->>'canal' AS canal
                 FROM site_eventos e JOIN lojas l ON l.session_id = e.session_id
                WHERE e.criado_em >= $1 AND e.criado_em <= $2
+                 AND ${doSegmento('e')}
                ORDER BY e.session_id, (e.dados->>'campanha') IS NULL, e.criado_em
             )
        SELECT campanha, canal, COUNT(*)::int AS pessoas
          FROM marca GROUP BY 1, 2 ORDER BY pessoas DESC LIMIT 12`,
-      de,
-      ate,
+      ...args(de, ate, seg),
     );
 
     return {
@@ -797,6 +937,63 @@ export class SiteMetricsService {
   }
 
   /**
+   * O QUE EXISTE PRA FILTRAR no período — alimenta a cascata da tela.
+   *
+   * Uma linha por combinação (tráfego, plataforma, campanha) com o tamanho de
+   * cada uma. Os TRÊS níveis saem daqui e a tela monta a cascata em cima
+   * disto: o nível 1 agrupa por tráfego, o 2 por plataforma, o 3 é a campanha.
+   *
+   * Uma query só, de propósito. Três endpoints encadeados dariam três estados
+   * de carregamento e a chance de a lista de campanhas discordar da lista de
+   * plataformas — e esta tela já teve o bastante de dois números brigando.
+   *
+   * Conta só gente: opção que só existe por causa de robô não é opção. E não
+   * recebe segmento — este método é justamente quem descobre quais existem.
+   */
+  async segmentosDisponiveis(de: Date, ate: Date): Promise<Array<{
+    trafego: Trafego;
+    plataforma: string | null;
+    campanha: string | null;
+    pessoas: number;
+  }>> {
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{
+      trafego: Trafego; plataforma: string | null; campanha: string | null; pessoas: number;
+    }>>(
+      `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            origem AS (
+              SELECT DISTINCT ON (e.session_id) e.session_id,
+                     e.dados->>'campanha'   AS campanha,
+                     e.dados->>'canal'      AS canal,
+                     e.dados->>'plataforma' AS plataforma,
+                     COALESCE(e.dados->>'pago', 'false') = 'true' AS pago
+                FROM site_eventos e
+               WHERE e.criado_em >= $1 AND e.criado_em <= $2
+                 AND e.session_id IS NOT NULL AND NOT e.bot
+                 AND e.session_id IN (SELECT session_id FROM gente)
+               ORDER BY e.session_id, (e.dados->>'canal') IS NULL, e.criado_em
+            )
+       SELECT CASE WHEN pago THEN 'pago'
+                   WHEN canal IS NOT NULL THEN 'organico'
+                   ELSE 'direto' END      AS trafego,
+              COALESCE(plataforma, canal) AS plataforma,
+              campanha,
+              COUNT(*)::int               AS pessoas
+         FROM origem
+        GROUP BY 1, 2, 3
+        ORDER BY pessoas DESC, 1, 2, 3
+        LIMIT 200`,
+      de,
+      ate,
+    );
+    return linhas.map((l) => ({
+      trafego: l.trafego,
+      plataforma: l.plataforma,
+      campanha: l.campanha,
+      pessoas: Number(l.pessoas),
+    }));
+  }
+
+  /**
    * FATURAMENTO REAL DO SITE no período (dono, 15/08) — a Fonte B, ao lado do
    * valor de conversão do funil (Fonte A). O funil soma o EVENTO `purchase`
    * (sessionizado, com/sem cookie) e casa com a coluna Compras; isto soma o
@@ -818,13 +1015,14 @@ export class SiteMetricsService {
     return { pedidos: Number(r[0]?.pedidos ?? 0), valor: Number(r[0]?.valor ?? 0) };
   }
 
-  async diagnosticosFunil(de: Date, ate: Date): Promise<Array<{
+  async diagnosticosFunil(de: Date, ate: Date, seg: Segmento = SEM_SEGMENTO): Promise<Array<{
     evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
   }>> {
     const linhas = await this.prisma.$queryRawUnsafe<Array<{
       evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
     }>>(
-      `WITH gente AS (${SQL_SESSOES_DE_GENTE})
+      `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            segmento AS (${SQL_SESSOES_DO_SEGMENTO})
        SELECT e.evento,
               COALESCE(e.dados->>'reason', e.dados->>'method', e.dados->>'payment_type', e.dados->>'section',
                        e.dados->>'shipping_tier', e.dados->>'color', e.dados->>'size', 'sem_codigo') AS codigo,
@@ -839,12 +1037,11 @@ export class SiteMetricsService {
                          'checkout_error','checkout_validation_error','pix_created',
                          'payment_method_selected','pix_copied','pix_expired',
                          'card_declined','payment_retry','checkout_recovered')
-          AND ${soGente('e')}
+          AND ${soGenteDoSegmento('e')}
         GROUP BY e.evento, codigo, campo
         ORDER BY eventos DESC, e.evento, codigo
         LIMIT 100`,
-      de,
-      ate,
+      ...args(de, ate, seg),
     );
     return linhas.map((l) => ({
       evento: l.evento,
@@ -856,7 +1053,7 @@ export class SiteMetricsService {
   }
 
   /** Sessões que tiveram pelo menos duas falhas num intervalo móvel de 10 min. */
-  async alertasCheckout(de: Date, ate: Date): Promise<Array<{
+  async alertasCheckout(de: Date, ate: Date, seg: Segmento = SEM_SEGMENTO): Promise<Array<{
     sessionId: string; etapa: string; pagamento: string; codigo: string;
     pedido: string | null; tentativas: number; primeiraFalha: Date; ultimaFalha: Date;
   }>> {
@@ -865,12 +1062,13 @@ export class SiteMetricsService {
       pedido: string | null; tentativas: number; primeira_falha: Date; ultima_falha: Date;
     }>>(
       `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
             erros AS (
          SELECT e.session_id, e.criado_em, e.dados
            FROM site_eventos e
           WHERE e.criado_em >= $1 AND e.criado_em <= $2
             AND e.evento = 'checkout_error' AND e.session_id IS NOT NULL
-            AND ${soGente('e')}
+            AND ${soGenteDoSegmento('e')}
        ), sessoes_alerta AS (
          SELECT DISTINCT a.session_id
            FROM erros a
@@ -891,8 +1089,7 @@ export class SiteMetricsService {
         GROUP BY e.session_id
         ORDER BY ultima_falha DESC
         LIMIT 100`,
-      de,
-      ate,
+      ...args(de, ate, seg),
     );
     return linhas.map((l) => ({
       sessionId: l.session_id,

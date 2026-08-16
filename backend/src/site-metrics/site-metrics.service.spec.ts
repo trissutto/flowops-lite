@@ -27,6 +27,36 @@ describe('sanitizarDadosEvento', () => {
       section: 'identification', field: 'cpf', value: '123.456.789-00',
     })).toEqual({ section: 'identification', field: 'cpf' });
   });
+
+  /**
+   * O UTM não pertence a evento nenhum — viaja em todos. Enquanto a lista era
+   * só por evento, `page_view` não tinha entrada, `permitidos` era `[]` e a
+   * campanha inteira era descartada em silêncio: o quadro "por campanha"
+   * respondia "sem campanha" pra todo mundo e a cláusula que protege tráfego
+   * pago do corte de robô (`dados ? 'campanha'`) era letra morta.
+   */
+  it('guarda a origem da visita em QUALQUER evento, inclusive page_view', () => {
+    expect(sanitizarDadosEvento('page_view', {
+      campanha: 'inverno26', canal: 'meta', midia: 'cpc', posicao: 'feed', utm_id: '123',
+    })).toEqual({ campanha: 'inverno26', canal: 'meta', midia: 'cpc', posicao: 'feed', utm_id: '123' });
+  });
+
+  it('guarda a marca de clique pago junto com o diagnóstico do evento', () => {
+    expect(sanitizarDadosEvento('add_to_cart_blocked', {
+      reason: 'size_missing', pago: true, plataforma: 'google', campanha: 'inverno26',
+    })).toEqual({ reason: 'size_missing', pago: 'true', plataforma: 'google', campanha: 'inverno26' });
+  });
+
+  it('guarda as REFs, que são lista e não passavam pelo filtro de escalar', () => {
+    expect(sanitizarDadosEvento('view_item', { refs: ['VST-001', 'VST-002', 7, ''] }))
+      .toEqual({ refs: ['VST-001', 'VST-002'] });
+  });
+
+  it('continua barrando PII mesmo quando ela vem junto da campanha', () => {
+    expect(sanitizarDadosEvento('page_view', {
+      campanha: 'inverno26', email: 'cliente@exemplo.com', cpf: '123', telefone: '11999999999',
+    })).toEqual({ campanha: 'inverno26' });
+  });
 });
 
 describe('montarJornada', () => {
