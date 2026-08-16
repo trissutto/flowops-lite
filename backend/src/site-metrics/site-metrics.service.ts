@@ -633,7 +633,6 @@ export class SiteMetricsService {
     const [maximos, problemasRaw, interacoesRaw, totais] = await Promise.all([
       this.prisma.$queryRawUnsafe<Array<{ etapa_maxima: number; pessoas: number }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
-            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               sessoes AS (
@@ -660,7 +659,6 @@ export class SiteMetricsService {
         pessoas: number; ocorrencias: number; recuperadas: number;
       }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
-            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               falhas AS (
@@ -718,7 +716,6 @@ export class SiteMetricsService {
         evento: string; codigo: string; campo: string | null; pessoas: number; interacoes: number;
       }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
-            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA})
          SELECT e.evento,
@@ -743,7 +740,6 @@ export class SiteMetricsService {
         sessoes_problema: number; sessoes_recuperadas: number; pix_pendente: number;
       }>>(
         `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
-            segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
               lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
               falhas AS (
