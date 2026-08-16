@@ -139,7 +139,12 @@ type OpcaoSegmento = {
   trafego: Trafego;
   plataforma: string | null;
   campanha: string | null;
+  /** `campaign.id` — a chave que casa gasto e receita. */
+  utmId: string | null;
   pessoas: number;
+  gasto: number;
+  receita: number;
+  pedidos: number;
 };
 type RespostaFunil = {
   de: string;
@@ -215,6 +220,25 @@ function rotuloCampanha(valor: string): string {
 }
 
 /** Um degrau da cascata. Vazio some — degrau com uma opção só não é escolha. */
+/** Uma opção de degrau, com o dinheiro que ela moveu. */
+type Opcao = { valor: string; pessoas: number; gasto: number; receita: number };
+
+/**
+ * ROAS só existe onde houve gasto.
+ *
+ * Direto e orgânico não custam anúncio: mostrar "ROAS 0" ou "∞" ali seria
+ * inventar. Devolve null e a pílula só exibe a receita.
+ */
+function roasDe(o: { gasto: number; receita: number }): number | null {
+  return o.gasto > 0 ? o.receita / o.gasto : null;
+}
+
+/** R$ curto pra caber na pílula: 1.239,57 → "1,2 mil". */
+function brlCurto(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil`;
+  return n.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+}
+
 function Degrau({
   titulo,
   opcoes,
@@ -223,31 +247,58 @@ function Degrau({
   rotulo = (v: string) => v,
 }: {
   titulo: string;
-  opcoes: Array<{ valor: string; pessoas: number }>;
+  opcoes: Opcao[];
   valor: string | null;
   onEscolher: (v: string | null) => void;
   rotulo?: (v: string) => string;
 }) {
   if (!opcoes.length) return null;
-  const total = opcoes.reduce((s, o) => s + o.pessoas, 0);
+  const total = opcoes.reduce(
+    (s, o) => ({
+      valor: 'Tudo',
+      pessoas: s.pessoas + o.pessoas,
+      gasto: s.gasto + o.gasto,
+      receita: s.receita + o.receita,
+    }),
+    { valor: 'Tudo', pessoas: 0, gasto: 0, receita: 0 } as Opcao,
+  );
   const pilula = (ativo: boolean) =>
-    `px-3 py-1 rounded-full border text-sm transition ${
+    `px-3 py-1.5 rounded-xl border text-sm text-left transition ${
       ativo
         ? 'border-[#B8912B] bg-[#FBF6E6] text-[#8C7325] font-semibold'
         : 'border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
     }`;
 
+  /** A segunda linha da pílula: o dinheiro. Some quando não houve nenhum. */
+  const dinheiro = (o: Opcao) => {
+    const roas = roasDe(o);
+    if (!o.gasto && !o.receita) return null;
+    return (
+      <span className="block text-[11px] leading-tight tabular-nums text-slate-400">
+        {o.gasto > 0 && <>R$ {brlCurto(o.gasto)} → </>}
+        <span className="text-[#2E7D46] font-semibold">R$ {brlCurto(o.receita)}</span>
+        {roas !== null && (
+          <span className={`ml-1 font-bold ${roas >= 1 ? 'text-[#8C7325]' : 'text-rose-600'}`}>
+            · {roas.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}x
+          </span>
+        )}
+      </span>
+    );
+  };
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 w-20 shrink-0">
+    <div className="flex flex-wrap items-start gap-2">
+      <span className="mt-1.5 w-20 shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-400">
         {titulo}
       </span>
       <button className={pilula(valor === null)} onClick={() => onEscolher(null)}>
-        Tudo <span className="tabular-nums text-slate-400">{total}</span>
+        Tudo <span className="tabular-nums text-slate-400">{total.pessoas}</span>
+        {dinheiro(total)}
       </button>
       {opcoes.map((o) => (
         <button key={o.valor} className={pilula(valor === o.valor)} onClick={() => onEscolher(o.valor)}>
           {rotulo(o.valor)} <span className="tabular-nums text-slate-400">{o.pessoas}</span>
+          {dinheiro(o)}
         </button>
       ))}
     </div>
@@ -284,14 +335,18 @@ function Cascata({
   const somar = (
     linhas: OpcaoSegmento[],
     chave: (o: OpcaoSegmento) => string | null,
-  ): Array<{ valor: string; pessoas: number }> => {
-    const mapa = new Map<string, number>();
+  ): Opcao[] => {
+    const mapa = new Map<string, Opcao>();
     for (const o of linhas) {
       const k = chave(o);
       if (!k) continue;
-      mapa.set(k, (mapa.get(k) ?? 0) + o.pessoas);
+      const atual = mapa.get(k) ?? { valor: k, pessoas: 0, gasto: 0, receita: 0 };
+      atual.pessoas += o.pessoas;
+      atual.gasto += o.gasto;
+      atual.receita += o.receita;
+      mapa.set(k, atual);
     }
-    return Array.from(mapa, ([valor, pessoas]) => ({ valor, pessoas })).sort(
+    return Array.from(mapa.values()).sort(
       (a, b) => b.pessoas - a.pessoas || a.valor.localeCompare(b.valor),
     );
   };
