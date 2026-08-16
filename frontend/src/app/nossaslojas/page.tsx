@@ -26,14 +26,23 @@ export const metadata: Metadata = {
     siteName: 'Lurds Plus Size',
     locale: 'pt_BR',
     type: 'website',
-    images: [
-      {
-        url: imgSrc(site.heroImage, 1200),
-        width: 1200,
-        height: 630,
-        alt: 'Lurds Plus Size — moda plus size elegante',
-      },
-    ],
+    /**
+     * Sem foto oficial, o link compartilhado vai SEM imagem (16/08/2026) —
+     * melhor que carimbar banco de imagem como se fosse a loja. Volta sozinho
+     * quando `site.heroImage` tiver foto nossa.
+     */
+    ...(site.heroImage
+      ? {
+          images: [
+            {
+              url: imgSrc(site.heroImage, 1200),
+              width: 1200,
+              height: 630,
+              alt: 'Lurds Plus Size — moda plus size elegante',
+            },
+          ],
+        }
+      : {}),
   },
   twitter: {
     card: 'summary_large_image',
