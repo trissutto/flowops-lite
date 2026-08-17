@@ -202,7 +202,7 @@ export async function GET() {
     // sobrevive a deploy — trocar revalidate/tags no código não alcança a
     // entrada já gravada (config de cache não entra na chave). O backend
     // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
-    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=2', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=3', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
   } catch {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o

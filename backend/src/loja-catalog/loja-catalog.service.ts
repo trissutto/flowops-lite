@@ -1088,11 +1088,13 @@ export class LojaCatalogService {
        * tag "Novidade" herdada do WooCommerce — editorial do site velho que
        * nunca expirava: regata de meses atrás ficava em "Novidades" pra
        * sempre, e peça recém-publicada sem a tag nunca entrava. Agora:
-       * publicou há até 30 dias = novidade; envelheceu = sai sozinha.
+       * publicou (1ª venda) há até `NOVIDADE_DIAS` dias = novidade; envelheceu =
+       * sai sozinha. Janela via env (dono 16/08 escolheu 60): tunar sem deploy.
        */
       lancamento: !!(
         site?.publicadoEm &&
-        Date.now() - new Date(site.publicadoEm).getTime() <= 30 * 24 * 60 * 60 * 1000
+        Date.now() - new Date(site.publicadoEm).getTime() <=
+          Math.max(1, Number(process.env.NOVIDADE_DIAS ?? 60)) * 24 * 60 * 60 * 1000
       ),
       /**
        * PROMOÇÃO = TEM DESCONTO DE VERDADE (dono, 15/08). É este campo que
