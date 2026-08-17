@@ -164,14 +164,28 @@ export class PagarmeLinkReconcileService {
           this.avisar(p.saleId, 'sem valor pra registrar');
           return false;
         }
+        /**
+         * MÉTODO = 'venda_online', igual ao botão "FINALIZAR VENDA" da lista de
+         * links pendentes do PDV (17/08, caso Audrey Baldin — loja SITE, link
+         * pago 16:48). No PDV o link Pagar.me SÓ existe dentro de "Venda
+         * Online"; gravar 'credito'/'pix' aqui fazia o finalize achar que era
+         * venda de balcão: sem Order ON-, sem card pra loja separar, estoque
+         * baixado na loja vendedora (a 13/SITE nem tem estoque) e NFC-e
+         * automática pra uma venda que não pede nota. O pedido sumia.
+         * A forma real (cartão/PIX) fica em `details.formaLink`.
+         */
+        const formaLink = String(p.method || '').toLowerCase() === 'pix' ? 'pix' : 'credito';
         await this.pdv.addPayment({
           saleId: p.saleId,
-          // O link cobra cartão ou PIX — o `method` do registro decide.
-          method: String(p.method || '').toLowerCase() === 'pix' ? 'pix' : 'credito',
+          method: 'venda_online',
           valor,
           details: {
+            tipo: 'pagarme_link',
+            origem: 'whatsapp_instagram',
+            formaLink,
             pagarmeOrderId: p.pagarmeOrderId,
             pagarmeChargeId: p.pagarmeChargeId ?? null,
+            paidByWebhook: true,
             linkPagarme: true,
             reconciliadoPeloCron: true,
           },
