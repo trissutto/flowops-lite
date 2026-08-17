@@ -12,7 +12,7 @@ interface Props {
 
 export default function FinalCta({ store }: Props) {
   return (
-    <section className="relative overflow-hidden px-6 py-28 sm:py-40">
+    <section className="relative overflow-hidden px-6 py-14 sm:py-20">
       <div className="lojas-grain absolute inset-0 bg-gradient-to-br from-[var(--lj-champagne)] via-[var(--lj-ivory)] to-[var(--lj-cream)]" />
       <div className="relative z-10 mx-auto max-w-3xl text-center">
         <motion.div
@@ -21,16 +21,16 @@ export default function FinalCta({ store }: Props) {
           viewport={{ once: true, margin: '-80px' }}
           transition={{ duration: 0.7 }}
         >
-          <h2 className="lojas-serif text-4xl font-medium leading-tight sm:text-5xl">
+          <h2 className="lojas-serif text-3xl font-medium leading-tight sm:text-4xl">
             Sua próxima peça favorita
             <br />
             <span className="italic text-[var(--lj-gold-strong)]">está te esperando</span>
           </h2>
-          <p className="mx-auto mt-6 max-w-xl text-base font-light leading-relaxed text-[var(--lj-ink-soft)]">
+          <p className="mx-auto mt-4 max-w-xl text-sm font-light leading-relaxed text-[var(--lj-ink-soft)] sm:text-base">
             Passa na Lurds {store.unit} pra experimentar com calma — a gente te recebe com um
             sorriso e um provador só seu.
           </p>
-          <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <a
               href={directionsUrl(store)}
               target="_blank"
