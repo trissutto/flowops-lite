@@ -31,11 +31,15 @@ import type { Media, VideoMedia } from '@/types';
  * a campanha aparece inteira em qualquer tela — que é o que "se adaptar ao
  * tamanho da tela" quer dizer pra quem desenhou o banner.
  */
-export type HeroHeight = 'small' | 'medium' | 'large' | 'fullscreen' | 'arte';
+export type HeroHeight = 'home' | 'small' | 'medium' | 'large' | 'fullscreen' | 'arte';
 export type HeroAlign = 'left' | 'center' | 'right';
 export type HeroOverlay = 'none' | 'soft' | 'medium' | 'strong';
+export type HeroContentTone = 'light' | 'ink';
 
 const HEIGHTS: Record<HeroHeight, string> = {
+  // Proporção da capa aprovada: curta no celular para categorias e produtos
+  // continuarem visíveis na primeira jornada; mais editorial no desktop.
+  home: 'min-h-[18rem] sm:min-h-[26rem] lg:min-h-[34rem]',
   small: 'min-h-[42svh] lg:min-h-[46svh]',
   medium: 'min-h-[62svh] lg:min-h-[68svh]',
   large: 'min-h-[82svh] lg:min-h-[86svh]',
@@ -70,6 +74,8 @@ interface HeroProps {
   align?: HeroAlign;
   /** Intensidade do véu escuro sobre a mídia. */
   overlay?: HeroOverlay;
+  /** Cor do texto sobre a mídia. `ink` é usada pela capa clara da Home. */
+  contentTone?: HeroContentTone;
   /** Conteúdo extra acima do título (breadcrumb, por exemplo). */
   above?: React.ReactNode;
   /** Seta de "role pra baixo". */
@@ -157,6 +163,7 @@ export function Hero({
   height = 'large',
   align = 'center',
   overlay = 'medium',
+  contentTone = 'light',
   above,
   showScrollHint = false,
   priority = false,
@@ -165,6 +172,7 @@ export function Hero({
   // Arte fechada não faz parallax nem zoom: mover a campanha corta a arte de
   // novo — pela borda, em vez de pelo enquadramento. É a mesma perda.
   const arte = height === 'arte';
+  const home = height === 'home';
 
   if (arte) {
     return (
@@ -297,8 +305,8 @@ export function Hero({
       {overlay !== 'none' && <div className={cn('absolute inset-0', OVERLAYS[overlay])} />}
 
       {/* Conteúdo */}
-      <Container width="page" className="relative z-10 py-20">
-        <div className={cn('flex flex-col', ALIGNMENTS[align])}>
+      <Container width="page" className={cn('relative z-10', home ? 'py-8 sm:py-12 lg:py-20' : 'py-20')}>
+        <div className={cn('flex flex-col', ALIGNMENTS[align], home && 'max-w-[54%] lg:max-w-[48%]')}>
           {above && (
             <div
               className="mb-8 animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both]"
@@ -310,7 +318,10 @@ export function Hero({
 
           {eyebrow && (
             <p
-              className="eyebrow animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] text-primary-soft"
+              className={cn(
+                'eyebrow animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both]',
+                contentTone === 'ink' ? 'text-primary-strong' : 'text-primary-soft',
+              )}
               style={{ animationDelay: '200ms' }}
             >
               {eyebrow}
@@ -318,7 +329,12 @@ export function Hero({
           )}
 
           <h1
-            className="mt-6 max-w-3xl animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] text-display text-light"
+            className={cn(
+              'max-w-3xl animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] text-display',
+              eyebrow ? 'mt-6' : 'mt-0',
+              home && 'text-[clamp(1.9rem,5vw,4.75rem)] leading-[0.98]',
+              contentTone === 'ink' ? 'text-ink' : 'text-light',
+            )}
             style={{ animationDelay: '320ms' }}
           >
             {title}
@@ -326,7 +342,11 @@ export function Hero({
 
           {subtitle && (
             <p
-              className="mt-7 max-w-xl animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] text-body-lg font-light text-light/85"
+              className={cn(
+                'max-w-xl animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] font-light',
+                home ? 'mt-4 text-sm leading-snug sm:mt-6 sm:text-lg' : 'mt-7 text-body-lg',
+                contentTone === 'ink' ? 'text-ink/80' : 'text-light/85',
+              )}
               style={{ animationDelay: '460ms' }}
             >
               {subtitle}
@@ -336,7 +356,8 @@ export function Hero({
           {(primaryAction || secondaryAction) && (
             <div
               className={cn(
-                'mt-11 flex w-full animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4',
+                'flex animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] gap-3 sm:w-auto sm:flex-row sm:gap-4',
+                home ? 'mt-6 w-auto flex-row' : 'mt-11 w-full flex-col',
                 align === 'center' && 'sm:justify-center',
                 align === 'right' && 'sm:justify-end',
               )}
@@ -347,9 +368,9 @@ export function Hero({
                   href={primaryAction.href}
                   external={primaryAction.external}
                   variant={primaryAction.variant ?? 'light'}
-                  size="lg"
-                  className="sm:w-auto"
-                  block
+                  size={home ? 'md' : 'lg'}
+                  className={cn('sm:w-auto', home && '!rounded-sm px-7')}
+                  block={!home}
                 >
                   {primaryAction.label}
                 </Button>
@@ -359,9 +380,9 @@ export function Hero({
                   href={secondaryAction.href}
                   external={secondaryAction.external}
                   variant={secondaryAction.variant ?? 'outlineLight'}
-                  size="lg"
-                  className="sm:w-auto"
-                  block
+                  size={home ? 'md' : 'lg'}
+                  className={cn('sm:w-auto', home && '!rounded-sm px-7')}
+                  block={!home}
                 >
                   {secondaryAction.label}
                 </Button>

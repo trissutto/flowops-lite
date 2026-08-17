@@ -85,10 +85,10 @@ const HERO_ESTATICO: HeroDaHome = {
     altura: 864,
   },
   imageMobile: {
-    src: '/images/home-hero/moda-valoriza-mobile.webp',
+    src: '/images/home-hero/moda-valoriza-mobile-mockup.webp',
     alt: "Modelo Lurd's Plus Size usando vestido envelope preto",
     largura: 992,
-    altura: 1488,
+    altura: 735,
   },
   eyebrow: homeHero.eyebrow,
   lead: homeHero.lead,

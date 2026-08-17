@@ -39,11 +39,10 @@ import type { InstagramPost, TaxonomyCard, Testimonial } from '@/types';
  * `emphasis`), para permanecerem acessíveis, responsivos e nítidos.
  */
 export const homeHero = {
-  eyebrow: 'Nova coleção',
-  lead: 'Moda que valoriza',
-  emphasis: 'você',
-  subtitle:
-    'Novidades do 46 ao 60, com caimento pensado para o corpo real.',
+  eyebrow: '',
+  lead: 'MODA QUE VALORIZA',
+  emphasis: 'VOCÊ',
+  subtitle: 'Novidades do 46 ao 60',
 };
 
 /* ---------------------------------------------------------------- MANIFESTO */

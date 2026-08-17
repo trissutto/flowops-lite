@@ -63,20 +63,22 @@ export default async function HomePage({
         eyebrow={hero.eyebrow}
         title={
           hero.lead || hero.emphasis ? (
-            <>
-              {hero.lead}
-              {hero.emphasis && <><br /><span className="text-primary-soft italic">{hero.emphasis}</span></>}
-            </>
+            hero.daRetaguarda ? (
+              <>
+                {hero.lead}
+                {hero.emphasis && <><br /><span className="text-primary-soft italic">{hero.emphasis}</span></>}
+              </>
+            ) : <>{hero.lead}{hero.emphasis && ` ${hero.emphasis}`}</>
           ) : (
             <span className="sr-only">Lurd&apos;s Plus Size — moda elegante do 44 ao 60</span>
           )
         }
         subtitle={hero.subtitle}
         primaryAction={{ label: 'Ver novidades', href: novidadesHref, variant: 'primary' }}
-        secondaryAction={{ label: 'Conhecer nossas lojas', href: storesHref, variant: 'secondary' }}
-        height={hero.daRetaguarda ? 'arte' : 'medium'}
+        height={hero.daRetaguarda ? 'arte' : 'home'}
         align={hero.daRetaguarda ? 'center' : 'left'}
-        overlay={hero.daRetaguarda ? 'none' : 'medium'}
+        overlay="none"
+        contentTone={hero.daRetaguarda ? 'light' : 'ink'}
         priority
       />
 
