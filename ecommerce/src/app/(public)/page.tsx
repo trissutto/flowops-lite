@@ -1,16 +1,12 @@
-import { MapPin, MessageCircle } from 'lucide-react';
 import { Hero } from '@/components/sections/Hero';
 import { HomeBenefitsAndStores, HomeCategoryNav, type HomeCategory } from '@/components/sections/HomeDiscovery';
 import { ProductCarousel } from '@/components/sections/ProductCarousel';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { InstagramCard } from '@/components/cards/InstagramCard';
-import { StoreCard } from '@/components/cards/StoreCard';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
-import { Button } from '@/components/ui/Button';
 import { PERFIL_INSTAGRAM } from '@/data/content';
-import { LINK_WHATSAPP_SITE } from '@/data/contato';
-import { featuredStores, stores } from '@/data/stores';
+import { stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
 import { getInstagram } from '@/services/instagram';
 import { fetchVitrine } from '@/services/vitrine';
@@ -105,24 +101,6 @@ export default async function HomePage({
       )}
 
       <HomeBenefitsAndStores storesHref={storesHref} />
-
-      <Section tone="alt" width="wide" aria-labelledby="lojas-titulo">
-        <SectionTitle
-          id="lojas-titulo"
-          eyebrow="Nossas lojas"
-          title="14 endereços, o mesmo acolhimento"
-          description="Prove com calma, converse com uma consultora e leve na hora."
-        />
-        <div className="mt-10 grid gap-6 lg:grid-cols-3">
-          {featuredStores.map((store, index) => <StoreCard key={store.slug} store={store} index={index} />)}
-        </div>
-        <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Button href={storesHref} size="lg"><MapPin /> Ver todas as lojas</Button>
-          <Button href={LINK_WHATSAPP_SITE} external variant="whatsapp" size="lg">
-            <MessageCircle /> Falar com uma consultora
-          </Button>
-        </div>
-      </Section>
 
       {posts.length > 0 && (
         <Section width="wide" aria-labelledby="instagram-titulo">
