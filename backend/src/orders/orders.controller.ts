@@ -468,6 +468,135 @@ export class OrdersController {
     };
   }
 
+  /**
+   * GET /orders/pdv-online/abertos
+   *
+   * MUTIRÃO DA VENDA ONLINE (17/08) — pedidos nascidos de Venda Online do PDV
+   * que ainda não fecharam, com o diagnóstico de CADA um.
+   *
+   * Por que existe: a loja fecha a venda no caixa, manda a peça pra cliente e
+   * segue a vida — ninguém no balcão sabe que um pedido nasceu e foi pra fila
+   * da matriz. Foi assim que o ON-000004 de Suzano passou o fim de semana
+   * parado e na segunda foi roteado pra Sorocaba (150 km) pra separar uma
+   * SEGUNDA peça, com o estoque de Suzano fantasma.
+   *
+   * `situacao` diz o que fazer com cada um:
+   *   - 'roteado-pra-outra' → card numa loja que NÃO vendeu. É o caso grave:
+   *     risco de peça dupla. Resolve com POST .../fechar-na-loja-vendedora.
+   *   - 'na-fila'           → sem card nenhum, esperando a matriz. Se a loja já
+   *     entregou, fecha; se não, roteia.
+   *   - 'na-vendedora'      → card na própria loja que vendeu. Normal (retirada
+   *     ou auto-atende), só precisa a loja bipar.
+   */
+  @Get('pdv-online/abertos')
+  async pdvOnlineAbertos() {
+    const pedidos = await (this.prisma as any).order.findMany({
+      where: {
+        source: 'pdv_online',
+        status: { notIn: ['shipped', 'delivered', 'cancelled'] },
+      },
+      include: {
+        items: { select: { sku: true, quantity: true, ref: true, cor: true, tamanho: true } },
+        pickOrders: {
+          select: { id: true, status: true, store: { select: { code: true, name: true } } },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const lojas = await (this.prisma as any).store.findMany({
+      select: { code: true, name: true },
+    });
+    const nomePorCode = new Map<string, string>(
+      lojas.map((s: any) => [String(s.code), String(s.name)]),
+    );
+
+    const agora = Date.now();
+    const linhas = pedidos.map((p: any) => {
+      const sellerCode = String(p.sellerStoreCode || '').trim() || null;
+      const ativos = p.pickOrders.filter((po: any) =>
+        ['new', 'separating'].includes(po.status),
+      );
+      const foraDaVendedora = ativos.filter(
+        (po: any) => sellerCode && String(po.store?.code || '') !== sellerCode,
+      );
+
+      const situacao = !sellerCode
+        ? 'sem-loja-vendedora'
+        : foraDaVendedora.length > 0
+          ? 'roteado-pra-outra'
+          : ativos.length > 0
+            ? 'na-vendedora'
+            : 'na-fila';
+
+      const criado = new Date(p.wcDateCreated ?? p.createdAt).getTime();
+      return {
+        wcOrderId: p.wcOrderId,
+        wcOrderNumber: p.wcOrderNumber,
+        status: p.status,
+        situacao,
+        // 'roteado-pra-outra' é o único que pode gerar peça dupla — a tela
+        // ordena e pinta por aqui em vez de reimplementar a regra.
+        risco: situacao === 'roteado-pra-outra',
+        diasAberto: Math.floor((agora - criado) / 86_400_000),
+        criadoEm: new Date(criado).toISOString(),
+        lojaVendedora: sellerCode
+          ? { code: sellerCode, name: nomePorCode.get(sellerCode) ?? sellerCode }
+          : null,
+        lojasComCard: ativos.map((po: any) => ({
+          code: po.store?.code ?? null,
+          name: po.store?.name ?? null,
+          status: po.status,
+        })),
+        entrega: p.shippingMethod ?? null,
+        isPickup: !!p.isPickup,
+        cliente: p.customerName ?? null,
+        cidade: (() => {
+          try {
+            const end = JSON.parse(p.shippingAddress || '{}');
+            return [end.city, end.state].filter(Boolean).join('/') || null;
+          } catch {
+            return null;
+          }
+        })(),
+        total: Number(p.totalAmount ?? 0),
+        pecas: p.items.length,
+      };
+    });
+
+    // Risco primeiro, depois o que está parado há mais tempo.
+    linhas.sort(
+      (a: any, b: any) => Number(b.risco) - Number(a.risco) || b.diasAberto - a.diasAberto,
+    );
+
+    return {
+      total: linhas.length,
+      comRisco: linhas.filter((l: any) => l.risco).length,
+      naFila: linhas.filter((l: any) => l.situacao === 'na-fila').length,
+      pedidos: linhas,
+    };
+  }
+
+  /**
+   * POST /orders/wc/:wcId/fechar-na-loja-vendedora
+   *
+   * A loja que VENDEU já entregou: cancela card indevido, baixa o estoque nela
+   * e fecha o pedido. Ver `RoutingService.fecharNaLojaPedinte` pro porquê.
+   */
+  @Post('wc/:wcId/fechar-na-loja-vendedora')
+  async fecharNaLojaVendedora(@Req() req: any, @Param('wcId') wcId: string) {
+    const wcOrderId = Number(wcId);
+    if (!wcOrderId || isNaN(wcOrderId)) {
+      throw new BadRequestException('wcOrderId inválido');
+    }
+    const local = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId },
+      select: { id: true },
+    });
+    if (!local) throw new BadRequestException(`Pedido ${wcId} não encontrado`);
+    return this.routing.fecharNaLojaPedinte(local.id, req?.user?.id);
+  }
+
   /** Contadores por status (pra renderizar os filtros com número exato do WC). */
   @Get('wc/counts')
   async wcCounts() {

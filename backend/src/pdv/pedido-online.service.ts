@@ -5,6 +5,7 @@ import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * PEDIDO ONLINE (14/08) — a Venda Online do PDV vira um Order no trilho do
@@ -14,16 +15,20 @@ import { PedidoEmailService } from '../loja-orders/pedido-email.service';
  * este Order é o trilho LOGÍSTICO+FINANCEIRO: separação com card verde ONLINE,
  * etiqueta Correios e acerto fornecedora→vendedora (Order.sellerStoreCode).
  *
- * Dois caminhos na criação:
- *   - loja vendedora TEM todas as peças → auto-atende: nasce 'separating' com
- *     o card na PRÓPRIA loja (pula o roteamento — decisão do dono 14/08,
- *     "PIRACICABA ATENDE O PEDIDO TODO").
+ * Três caminhos na criação:
+ *   - loja vendedora TEM tudo e a entrega NÃO é retirada → nasce 'shipped'
+ *     NELA: o estoque baixa nela na hora e NENHUM card é aberto (ver
+ *     `fecharNaLojaVendedora`).
+ *   - loja vendedora TEM tudo e é RETIRADA → auto-atende: nasce 'separating'
+ *     com o card na PRÓPRIA loja (a peça precisa ser separada e guardada pro
+ *     balcão — decisão do dono 14/08, "PIRACICABA ATENDE O PEDIDO TODO").
  *   - falta peça → nasce 'processing' e cai na tela de roteamento da matriz,
  *     igual pedido do site.
  *
  * ⚠️ TRAVA DE BAIXA DUPLA: quem cria o Order NÃO baixa estoque no finalize —
  * o finalize marca sale.stockDecreasedAt e quem baixa é a loja que SEPARA
- * (runAutoDebit no bipe do card). Ver o call-site no PdvService.finalize.
+ * (runAutoDebit no bipe do card), OU este serviço quando fecha na vendedora.
+ * Ver o call-site no PdvService.finalize.
  */
 @Injectable()
 export class PedidoOnlineService {
@@ -36,6 +41,7 @@ export class PedidoOnlineService {
     private readonly prisma: PrismaService,
     private readonly routing: RoutingService,
     private readonly pedidoEmail: PedidoEmailService,
+    private readonly erp: ErpService,
   ) {}
 
   enabled(): boolean {
@@ -135,6 +141,87 @@ export class PedidoOnlineService {
   }
 
   /**
+   * Fecha o pedido na PRÓPRIA loja vendedora: baixa o estoque dela e marca o
+   * Order como enviado, sem abrir card de separação pra ninguém.
+   *
+   * A baixa usa `decreaseStockAsync` de propósito: aplica o delta no Flow
+   * (fonte do estoque desde 14/07) na hora e enfileira a réplica no outbox, em
+   * vez de pendurar o finalize esperando MySQL.
+   *
+   * `allowNegative`/`skipNotFound` porque a peça JÁ SAIU fisicamente — igual ao
+   * `runAutoDebit` da separação. Divergência de saldo não pode impedir o
+   * sistema de registrar o que de fato aconteceu; saldo negativo aparecendo na
+   * tela é melhor que peça fantasma vendida de novo no site.
+   *
+   * Retorna false se a baixa não aplicou nada — aí o chamador deixa o pedido
+   * em 'processing' e ele cai na matriz (degradação segura).
+   */
+  private async fecharNaLojaVendedora(
+    order: any,
+    store: any,
+    pecas: any[],
+    sale: any,
+  ): Promise<boolean> {
+    try {
+      const items = pecas.map((it) => ({
+        sku: String(it.sku),
+        qty: Number(it.qty || 1),
+        storeCode: store.code,
+      }));
+
+      const r = await this.erp.decreaseStockAsync(items, {
+        allowNegative: true,
+        skipNotFound: true,
+      });
+      if (!r?.success) {
+        this.logger.error(
+          `[pedido-online] ${order.wcOrderNumber}: baixa na vendedora ${store.name} ` +
+            `falhou (${r?.error || 'sem detalhe'}) — pedido segue pro roteamento`,
+        );
+        return false;
+      }
+
+      const vendedora = sale?.sellerName || sale?.vendedorName || null;
+      await (this.prisma as any).order.update({
+        where: { id: order.id },
+        data: {
+          status: 'shipped',
+          // A peça saiu da vendedora: os itens são DELA, não de quem separaria.
+          // Sem isso o acerto ÷2,5 e a auditoria de roteamento ficam sem dono.
+          items: { updateMany: { where: { orderId: order.id }, data: { assignedStoreId: store.id } } },
+        },
+      });
+
+      await (this.prisma as any).orderHistory
+        .create({
+          data: {
+            orderId: order.id,
+            fromStatus: 'processing',
+            toStatus: 'shipped',
+            note:
+              `Venda online entregue pela própria ${store.name}` +
+              `${vendedora ? ` (vendedora: ${vendedora})` : ''} — ` +
+              `${items.length} peça(s) baixada(s) do estoque dela no fechamento. ` +
+              `Sem separação: a peça já estava em mãos e saiu pra cliente.`,
+          },
+        })
+        .catch(() => null);
+
+      this.logger.log(
+        `[pedido-online] ${order.wcOrderNumber} FECHADO na ${store.name} — ` +
+          `${items.length} peça(s) baixada(s)${r.gigaEnfileirado ? ' (réplica no outbox)' : ''}`,
+      );
+      return true;
+    } catch (e: any) {
+      this.logger.error(
+        `[pedido-online] ${order?.wcOrderNumber}: falha ao fechar na vendedora ` +
+          `(${e?.message || e}) — pedido segue pro roteamento`,
+      );
+      return false;
+    }
+  }
+
+  /**
    * Chamado pelo finalize (venda 100% 'venda_online', flag ligada, não-treino).
    * NUNCA lança: qualquer falha → null e o finalize segue no comportamento
    * legado (baixa na própria loja). Retorna info pro front exibir a mensagem.
@@ -142,6 +229,8 @@ export class PedidoOnlineService {
   async criarDoFinalize(sale: any): Promise<{
     wcOrderNumber: string;
     autoAtendida: boolean;
+    /** Loja vendedora entregou ela mesma: estoque já baixou nela, sem card. */
+    fechadoNaLoja: boolean;
     storeName: string | null;
   } | null> {
     try {
@@ -185,6 +274,30 @@ export class PedidoOnlineService {
       }
 
       const autoAtende = await this.lojaTemTudo(pecas, store.code).catch(() => false);
+
+      /**
+       * A LOJA VENDEDORA ENTREGA ELA MESMA (17/08) — não vira tarefa de
+       * separação pra ninguém.
+       *
+       * CASO SUZANO / ON-000004 (15/08): a loja fechou a venda no caixa,
+       * escolheu MOTOBOY e mandou a peça pra cliente no mesmo dia. O pedido
+       * nasceu 'processing', passou o fim de semana na fila da matriz e na
+       * segunda foi roteado pra SOROCABA — 150 km de distância, que ia separar
+       * e enviar uma SEGUNDA peça pra mesma cliente. Pior: a trava de baixa
+       * dupla tinha delegado a baixa pra "quem separar", então o estoque de
+       * Suzano ficou FANTASMA (a peça saiu fisicamente, o saldo não baixou) e
+       * as redes de segurança do outbox/reconcile pulam por causa do mesmo
+       * `stockDecreasedAt`. Ninguém no balcão sabia que um pedido tinha nascido.
+       *
+       * Quem fecha uma venda online no PRÓPRIO caixa com a peça em mãos é quem
+       * entrega. Então o pedido nasce FECHADO nela: estoque baixa nela na hora,
+       * o registro fica de pé pra NF-e/etiqueta, e nenhum card é aberto.
+       *
+       * RETIRADA fica de fora de propósito: ali a peça precisa ser separada e
+       * guardada pro balcão (é tarefa real), e o `routePickup` já dá prioridade
+       * total à loja da retirada — nunca vaza pra outra cidade.
+       */
+      const fechaNaLoja = autoAtende && !entrega.pickup;
 
       const checkoutInfo = {
         origem: 'pdv_online',
@@ -285,7 +398,17 @@ export class PedidoOnlineService {
       if (!order) throw new Error('colisão de wcOrderId em 6 tentativas');
 
       let autoOk = false;
-      if (autoAtende) {
+      let fechadoNaLoja = false;
+
+      // FECHA NA VENDEDORA: baixa o estoque dela e marca 'shipped', sem card.
+      // Se a baixa falhar, o pedido FICA em 'processing' e cai na matriz — o
+      // status só avança depois que o estoque mexeu de verdade, senão eu
+      // recriaria o estoque fantasma que este fix existe pra matar.
+      if (fechaNaLoja) {
+        fechadoNaLoja = await this.fecharNaLojaVendedora(order, store, pecas, sale);
+      }
+
+      if (!fechadoNaLoja && autoAtende) {
         // AUTO-ATENDE: a própria loja vendedora tem tudo → card nela AGORA,
         // pulando a matriz. confirmRoute cuida de pick-order + assignedStoreId
         // + status separating + histórico + socket (mesmo trilho da matriz).
@@ -322,11 +445,18 @@ export class PedidoOnlineService {
         .aoConfirmarPagamento({ ...order, items: order.items ?? [] })
         .catch((e: any) => this.logger.warn(`[pedido-online] aviso ao cliente falhou: ${e?.message || e}`));
 
-      this.logger.log(
-        `[pedido-online] venda ${sale.id} → pedido ${order.wcOrderNumber} ` +
-          `(${autoOk ? `AUTO-ATENDE na ${store.name}` : 'fila de roteamento'})`,
-      );
-      return { wcOrderNumber: order.wcOrderNumber, autoAtendida: autoOk, storeName: store.name };
+      const destino = fechadoNaLoja
+        ? `FECHADO na ${store.name} (estoque baixado lá, sem separação)`
+        : autoOk
+          ? `AUTO-ATENDE na ${store.name}`
+          : 'fila de roteamento';
+      this.logger.log(`[pedido-online] venda ${sale.id} → pedido ${order.wcOrderNumber} (${destino})`);
+      return {
+        wcOrderNumber: order.wcOrderNumber,
+        autoAtendida: autoOk,
+        fechadoNaLoja,
+        storeName: store.name,
+      };
     } catch (e: any) {
       this.logger.error(`[pedido-online] venda ${sale?.id}: ${e?.message || e} — fluxo legado (baixa local)`);
       return null;
