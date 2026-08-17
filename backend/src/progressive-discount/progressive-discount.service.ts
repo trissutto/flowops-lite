@@ -10,6 +10,9 @@ export type DiscountTier = {
 
 export type ProgressiveDiscountConfig = {
   enabled: boolean;
+  mode: 'progressive_percentage' | 'buy_4_pay_3';
+  campaignCode: string;
+  headline: string;
   tiers: DiscountTier[];
   excludePromoItems: boolean;
   countMode: 'unique_sku' | 'unit';   // unique_sku = peças variadas (regra Lurd's)
@@ -19,10 +22,15 @@ export type ProgressiveDiscountConfig = {
   bannerText: string;                 // texto banner home
   // PIX: se enabled e tier ativo, PIX NÃO dá desconto adicional
   blocksPixDiscount: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
 };
 
 const DEFAULT_CONFIG: ProgressiveDiscountConfig = {
   enabled: false,
+  mode: 'progressive_percentage',
+  campaignCode: 'LEVE4PAGUE3',
+  headline: 'Leve 4, Pague 3',
   tiers: [
     { minPieces: 2, discountPct: 10 },
     { minPieces: 3, discountPct: 15 },
@@ -36,6 +44,8 @@ const DEFAULT_CONFIG: ProgressiveDiscountConfig = {
   endsAt: null,
   bannerText: '🎉 LEVA MAIS, PAGA MENOS — até 25% OFF no app',
   blocksPixDiscount: true,
+  updatedAt: null,
+  updatedBy: null,
 };
 
 export type CartItem = {
@@ -58,6 +68,15 @@ export type DiscountResult = {
   blocksPixDiscount: boolean;
   // Pra mostrar progress: "+1 peça e ganha 5% extra"
   nextTier: { piecesToGo: number; nextPct: number; extraPct: number } | null;
+  mode: ProgressiveDiscountConfig['mode'] | null;
+  campaignCode: string | null;
+  distinctProducts: number;
+  productsToGo: number;
+  freeItem: {
+    productId: number;
+    variationId: number | null;
+    unitPrice: number;
+  } | null;
 };
 
 @Injectable()
@@ -68,21 +87,26 @@ export class ProgressiveDiscountService {
 
   /** Lê config do banco (cria default se não existe) */
   async getConfig(): Promise<ProgressiveDiscountConfig> {
-    const row = await (this.prisma as any).appConfig.findUnique({
-      where: { key: CONFIG_KEY },
-    });
-    if (!row) return DEFAULT_CONFIG;
     try {
+      const row = await (this.prisma as any).appConfig.findUnique({
+        where: { key: CONFIG_KEY },
+      });
+      if (!row) return { ...DEFAULT_CONFIG };
       return { ...DEFAULT_CONFIG, ...JSON.parse(row.valueJson) };
-    } catch {
-      return DEFAULT_CONFIG;
+    } catch (error) {
+      this.logger.error('[progressive] falha ao ler configuração; campanha desativada', error);
+      return { ...DEFAULT_CONFIG, enabled: false };
     }
   }
 
   /** Salva config (admin) */
   async setConfig(input: Partial<ProgressiveDiscountConfig>): Promise<ProgressiveDiscountConfig> {
     const current = await this.getConfig();
-    const merged: ProgressiveDiscountConfig = { ...current, ...input };
+    const merged: ProgressiveDiscountConfig = {
+      ...current,
+      ...input,
+      updatedAt: new Date().toISOString(),
+    };
 
     // Sanity: tiers ordenados por minPieces ASC e sem duplicatas
     const tiers = (merged.tiers || [])
@@ -125,9 +149,15 @@ export class ProgressiveDiscountService {
       finalTotal: items.reduce((s, i) => s + i.unitPrice * i.qty, 0),
       blocksPixDiscount: false,
       nextTier: null,
+      mode: null,
+      campaignCode: null,
+      distinctProducts: 0,
+      productsToGo: 0,
+      freeItem: null,
     };
 
     if (!this.isActiveNow(cfg)) return result;
+    if (cfg.mode === 'buy_4_pay_3') return this.calculateBuyFourPayThree(items, cfg, result);
     if (!cfg.tiers.length) return result;
 
     // Filtra itens elegíveis (não em promo se configurado)
@@ -204,14 +234,64 @@ export class ProgressiveDiscountService {
     return result;
   }
 
+  private calculateBuyFourPayThree(
+    items: CartItem[],
+    cfg: ProgressiveDiscountConfig,
+    result: DiscountResult,
+  ): DiscountResult {
+    const candidates = new Map<number, CartItem>();
+
+    for (const item of items) {
+      if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0 || item.qty <= 0) continue;
+      const current = candidates.get(item.productId);
+      if (
+        !current ||
+        item.unitPrice < current.unitPrice ||
+        (item.unitPrice === current.unitPrice && (item.variationId || 0) < (current.variationId || 0))
+      ) {
+        candidates.set(item.productId, item);
+      }
+    }
+
+    const distinctProducts = candidates.size;
+    result.mode = cfg.mode;
+    result.campaignCode = cfg.campaignCode;
+    result.distinctProducts = distinctProducts;
+    result.eligiblePieces = distinctProducts;
+    result.productsToGo = Math.max(0, 4 - distinctProducts);
+    result.blocksPixDiscount = distinctProducts >= 4 && cfg.blocksPixDiscount;
+
+    if (distinctProducts < 4) return result;
+
+    const freeItem = [...candidates.values()].sort(
+      (a, b) => a.unitPrice - b.unitPrice || a.productId - b.productId || (a.variationId || 0) - (b.variationId || 0),
+    )[0];
+    if (!freeItem) return result;
+
+    result.applied = true;
+    result.tierLabel = cfg.headline;
+    result.eligibleSubtotal = result.finalTotal;
+    result.discountValue = +freeItem.unitPrice.toFixed(2);
+    result.finalTotal = +(result.finalTotal - result.discountValue).toFixed(2);
+    result.freeItem = {
+      productId: freeItem.productId,
+      variationId: freeItem.variationId || null,
+      unitPrice: +freeItem.unitPrice.toFixed(2),
+    };
+    return result;
+  }
+
   /** Versão pública pra o app — só campos visíveis ao cliente */
   async getPublicConfig() {
     const cfg = await this.getConfig();
     if (!this.isActiveNow(cfg)) {
-      return { enabled: false, tiers: [], bannerText: '' };
+      return { enabled: false, mode: cfg.mode, campaignCode: cfg.campaignCode, headline: '', tiers: [], bannerText: '' };
     }
     return {
       enabled: true,
+      mode: cfg.mode,
+      campaignCode: cfg.campaignCode,
+      headline: cfg.headline,
       tiers: cfg.tiers,
       bannerText: cfg.bannerText,
       excludePromoItems: cfg.excludePromoItems,
