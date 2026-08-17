@@ -48,6 +48,10 @@ export default async function HomePage({
   }));
   const novidadesHref = href(HOME_NEWS_PATH);
   const storesHref = href(HOME_STORES_PATH);
+  const sizeLinks = ['46', '48', '50', '52', '54', '56', '58', '60'].map((size) => ({
+    size,
+    href: href(`/tamanhos/${size}`),
+  }));
   const jsonLd = jsonLdGraph(itemListSchema(novidades, 'Novidades da semana'), ...stores.map(storeSchema));
 
   return (
@@ -116,7 +120,7 @@ export default async function HomePage({
         </Section>
       )}
 
-      <HomeSizeNav hrefFor={(size) => href(`/tamanhos/${size}`)} />
+      <HomeSizeNav sizes={sizeLinks} />
 
       <HomeComfortBanner href={href('/busca?q=conforto')} />
 

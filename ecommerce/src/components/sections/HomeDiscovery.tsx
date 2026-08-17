@@ -54,8 +54,7 @@ export function HomeCategoryNav({ categories }: { categories: HomeCategory[] }) 
   );
 }
 
-export function HomeSizeNav({ hrefFor }: { hrefFor: (size: string) => string }) {
-  const sizes = ['46', '48', '50', '52', '54', '56', '58', '60'];
+export function HomeSizeNav({ sizes }: { sizes: Array<{ size: string; href: string }> }) {
   return (
     <nav aria-labelledby="home-sizes-title" className="bg-champagne/45 py-8 sm:py-12">
       <div className="mx-auto max-w-5xl px-4 sm:px-6">
@@ -64,10 +63,10 @@ export function HomeSizeNav({ hrefFor }: { hrefFor: (size: string) => string }) 
           <h2 id="home-sizes-title" className="mt-2 font-display text-h3 text-ink">Compre do 46 ao 60</h2>
         </div>
         <ul className="mt-6 grid grid-cols-4 gap-2 sm:grid-cols-8 sm:gap-3">
-          {sizes.map((size) => (
+          {sizes.map(({ size, href }) => (
             <li key={size}>
               <AppLink
-                href={hrefFor(size)}
+                href={href}
                 className="flex min-h-12 items-center justify-center rounded-md border border-primary/25 bg-surface text-sm font-medium text-ink transition-colors hover:border-primary hover:bg-primary hover:text-light"
               >
                 {size}
