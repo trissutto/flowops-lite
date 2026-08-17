@@ -486,11 +486,22 @@ export function BuyBox({
           a fita está na outra coluna e no celular ela rola pra fora da
           vista. Esta linha confirma, ao lado do botão, qual cor vai no
           pedido — sem devolver os 158px de bolinha. */}
-      {temCor && corSelecionada && (
-        <p className="mt-6 text-small text-ink-soft">
-          Cor escolhida: <strong className="font-medium text-ink">{corSelecionada}</strong>
-          <span className="ml-2 text-ink-muted">— toque nas fotos ao lado pra trocar</span>
-        </p>
+      {/* MESMO PESO DO TAMANHO (dono, 17/08: "mais destaque pra variante
+          escolhida"). Com as bolinhas removidas, a cor tinha virado uma nota
+          de rodapé cinza ao lado de um passo com selo dourado — a tela dizia,
+          sem querer, que a cor importa menos. Agora usa o MESMO PassoLabel:
+          um selo, um número, um ✓ quando escolhida. */}
+      {temCor && (
+        <div className="mt-6">
+          <PassoLabel
+            numero={2}
+            titulo="Escolha a cor"
+            escolhido={corSelecionada ?? null}
+          />
+          <p className="mt-1.5 pl-[2.125rem] text-small text-ink-muted">
+            Toque nas fotos ao lado pra trocar.
+          </p>
+        </div>
       )}
 
       {/* SAI NA MESMA FOTO — a irmã do look colada na decisão (dono, 13/08:

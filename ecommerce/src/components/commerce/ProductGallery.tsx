@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Check } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
 import { ProductBadgeTag } from '@/components/ui/Badge';
@@ -252,8 +252,8 @@ export function ProductGallery({
                     'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
                     g.indisponivel && 'opacity-45',
                     g.ativa
-                      ? 'border-primary ring-2 ring-primary ring-offset-1 ring-offset-background opacity-100'
-                      : 'border-transparent opacity-65 hover:opacity-100',
+                      ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-background opacity-100 scale-[1.04]'
+                      : 'border-transparent opacity-50 saturate-[0.85] hover:opacity-100 hover:saturate-100',
                   )}
                 >
                   <Image
@@ -266,6 +266,15 @@ export function ProductGallery({
                     blurDataURL={BLUR_DATA_URL}
                     className="object-cover"
                   />
+                  {/* O ✓ VOLTOU (17/08). Ele existia nas bolinhas removidas, e
+                      o comentario de la explicava por que: numa peca escura a
+                      borda de selecao some contra a propria foto. O check nao
+                      some nunca. */}
+                  {g.ativa && !g.indisponivel && (
+                    <span className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-primary shadow-sm">
+                      <Check className="size-3 text-light" strokeWidth={3} />
+                    </span>
+                  )}
                   {/* A tarja — mesma convencao da grade de tamanhos. */}
                   {g.indisponivel && (
                     <span aria-hidden className="absolute inset-0 flex items-center justify-center">
