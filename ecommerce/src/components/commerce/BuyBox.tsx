@@ -325,7 +325,9 @@ export function BuyBox({
               {formatPrice(product.compareAtPrice)}
             </span>
           )}
-          <span className="tabular font-display text-[2rem] leading-none font-medium text-ink">
+          {/* Um degrau menor (dono, 17/08): o preço competia em peso com o
+              passo do tamanho logo abaixo, que é o que decide a compra. */}
+          <span className="tabular font-display text-[1.625rem] leading-none font-medium text-ink">
             {formatPrice(product.price)}
           </span>
           {discount > 0 && (
@@ -415,8 +417,12 @@ export function BuyBox({
         </div>
 
         {/* As opções ficam coladas ao rótulo do passo para a instrução e a
-            escolha formarem um único bloco visual. */}
-        <div className="mt-4 flex flex-wrap gap-2">
+            escolha formarem um único bloco visual.
+
+            CENTRALIZADA (dono, 17/08): à esquerda, uma grade de 3 ou 4
+            números deixava um vazio grande à direita e o passo parecia
+            inacabado — logo o passo que decide a compra. */}
+        <div className="mt-4 flex flex-wrap justify-center gap-2.5">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
@@ -493,9 +499,14 @@ export function BuyBox({
           um selo, um número, um ✓ quando escolhida. */}
       {temCor && (
         <div className="mt-6">
+          {/* "Cor escolhida", não "Escolha a cor" (dono, 17/08): a peça
+              SEMPRE abre numa cor — a primeira com estoque e com foto. O
+              rótulo antigo pedia uma ação que já estava feita, e o passo
+              parecia pendente mesmo com o ✓ do lado. O nome descreve o
+              estado, que é o que ela precisa conferir antes de comprar. */}
           <PassoLabel
             numero={2}
-            titulo="Escolha a cor"
+            titulo="Cor escolhida"
             escolhido={corSelecionada ?? null}
           />
           <p className="mt-1.5 pl-[2.125rem] text-small text-ink-muted">
@@ -667,7 +678,9 @@ export function BuyBox({
           </p>
           <p className="mt-4 text-body text-ink">Toque no seu número — a peça já vai pra sacola.</p>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          {/* Mesma centralização da grade da página: as duas mostram os
+              mesmos números e divergir no desenho confunde. */}
+          <div className="mt-4 flex flex-wrap justify-center gap-2.5">
             {product.sizes.map((option) => (
               <SizePill
                 key={option.label}
@@ -758,7 +771,9 @@ function PassoLabel({
       >
         {escolhido ? <Check className="size-3.5" strokeWidth={3} /> : numero}
       </span>
-      <p className="text-small font-medium text-ink">
+      {/* Um degrau maior (dono, 17/08): estes dois rótulos são A decisão da
+          página, e em `text-small` pesavam menos que a legenda de frete. */}
+      <p className="text-body font-medium text-ink">
         {titulo}
         {escolhido && (
           <span className="font-normal text-ink-soft">
