@@ -301,6 +301,34 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/importar-carrinho { wcOrderId, storeCode? }
+   *
+   * Abre uma venda online JÁ MONTADA a partir de um carrinho abandonado —
+   * peças e cliente preenchidos. A vendedora só escolhe como recebeu.
+   *
+   * Existe porque em 17/08 foram 7 carrinhos recuperados e só 2 viraram venda
+   * no sistema: remontar 11 peças à mão depois de fechar no WhatsApp não
+   * acontece. Ver `PdvService.importarCarrinho`.
+   */
+  @Post('sales/importar-carrinho')
+  importarCarrinho(@Req() req: any, @Body() body: { wcOrderId: number; storeCode?: string }) {
+    this.requireRole(req);
+    // Mesma trava do createSale: role=store não escolhe loja pelo body.
+    const userRole = req?.user?.role;
+    const userStoreCode = req?.user?.storeCode;
+    const effectiveStoreCode =
+      userRole === 'store' && userStoreCode ? userStoreCode : body?.storeCode;
+    if (!effectiveStoreCode) throw new BadRequestException('storeCode obrigatório');
+    return this.svc.importarCarrinho({
+      wcOrderId: Number(body?.wcOrderId),
+      storeCode: effectiveStoreCode,
+      vendedorUserId: req?.user?.id || req?.user?.sub,
+      vendedorName: req?.user?.name || null,
+      isTraining: isTrainingRequest(req),
+    });
+  }
+
+  /**
    * PATCH /pdv/sales/:id/seller
    * Body: { sellerId: string | null }
    * Atribui ou remove a vendedora (Seller) responsável pela venda.

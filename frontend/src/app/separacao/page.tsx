@@ -1905,6 +1905,9 @@ function CarrinhosTab() {
   const [selected, setSelected] = useState<CarrinhoAB | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // "Fechar esta venda no PDV" — importa o carrinho como venda online montada.
+  const [importando, setImportando] = useState(false);
+  const [importErro, setImportErro] = useState<string | null>(null);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   // Aviso quando os dados vêm do fallback WooCommerce (plugin WP fora do ar).
   const [warning, setWarning] = useState<string | null>(null);
@@ -1945,7 +1948,48 @@ function CarrinhosTab() {
       setDetailLoading(false);
     }
   }
-  function closeCart() { setSelected(null); setDetail(null); }
+  function closeCart() { setSelected(null); setDetail(null); setImportErro(null); }
+
+  /**
+   * Abre no PDV uma venda online já montada com as peças e a cliente deste
+   * carrinho. O backend reusa o `addItem` (preço/promo iguais ao bipe) e
+   * devolve `faltaram` com o que não resolveu — a venda abre com o que deu, em
+   * vez de falhar inteiro por causa de uma REF fora do catálogo e jogar a
+   * vendedora de volta pro caminho manual.
+   */
+  async function importarPraPdv(c: CarrinhoAB) {
+    setImportando(true);
+    setImportErro(null);
+    try {
+      const r = await api<{
+        saleId: string;
+        storeCode: string;
+        jaExistia?: boolean;
+        importados: number;
+        total?: number;
+        faltaram?: string[];
+      }>('/pdv/sales/importar-carrinho', {
+        method: 'POST',
+        body: JSON.stringify({ wcOrderId: c.order_id ?? c.id }),
+      });
+      if (r.faltaram?.length) {
+        // Avisa ANTES de sair da tela — no PDV ela não teria como saber que
+        // faltou peça, e fecharia a venda incompleta sem perceber.
+        alert(
+          `Venda aberta com ${r.importados} de ${r.total ?? r.importados} peça(s).\n\n` +
+            `NÃO entraram (bipe na mão no PDV):\n• ${r.faltaram.join('\n• ')}`,
+        );
+      }
+      // O PDV retoma venda aberta pela chave do localStorage (não aceita id na
+      // URL). Escrever aqui e navegar reusa o mecanismo que já existe.
+      try { localStorage.setItem(`lurds_pdv_sale_${r.storeCode}`, r.saleId); } catch {}
+      window.location.href = '/minha-loja/pdv';
+    } catch (e: any) {
+      setImportErro(e?.message || 'Não deu pra abrir a venda no PDV.');
+    } finally {
+      setImportando(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -2392,6 +2436,41 @@ function CarrinhosTab() {
                   </div>
                 )}
               </section>
+
+              {/* ── FECHAR A VENDA NO PDV ──────────────────────────────────
+                  Medido em 17/08: 7 carrinhos recuperados no dia, só 2 viraram
+                  venda no sistema. Os outros 5 foram pagos por fora (PIX,
+                  PayPal, link) e ninguém registrou — cada um custa estoque que
+                  não baixa, NF que não sai, dinheiro fora do caixa, comissão
+                  que a vendedora não recebe, e o carrinho seguindo como
+                  "abandonado" pra sempre.
+
+                  A causa era fricção: remontar 11 peças à mão depois de fechar
+                  no WhatsApp. Aqui a venda abre PRONTA — a vendedora só escolhe
+                  como recebeu. Só pro carrinho do site novo: é o único que tem
+                  os itens no nosso banco (os do plugin WP não têm SKU nosso). */}
+              {(selected.source === 'ecommerce' || selected.source === 'ecommerce-contact') &&
+                selected.order_status !== 'recovered' && (
+                  <section className="mt-3 rounded-lg border-2 border-teal-300 bg-teal-50 p-3">
+                    <div className="text-sm font-bold text-teal-900">Cliente já fechou com você?</div>
+                    <div className="text-xs text-teal-800 mt-1">
+                      Abre uma <b>venda online no PDV já montada</b> com as peças e os dados dela.
+                      Você só escolhe como recebeu (PIX, PayPal, link, cartão) e finaliza — aí o
+                      estoque baixa, sai NF, entra no caixa e a comissão é sua.
+                    </div>
+                    <button
+                      type="button"
+                      disabled={importando}
+                      onClick={() => importarPraPdv(selected)}
+                      className="mt-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-lg font-bold text-sm"
+                    >
+                      {importando ? 'Abrindo venda…' : '🛒 Fechar esta venda no PDV'}
+                    </button>
+                    {importErro && (
+                      <div className="mt-2 text-xs font-semibold text-rose-700">{importErro}</div>
+                    )}
+                  </section>
+                )}
 
               <section className="flex flex-wrap gap-2 pt-2 border-t border-slate-200">
                 {selected.phone && !selected.unsubscribed && (

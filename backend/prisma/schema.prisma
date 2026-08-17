@@ -1507,6 +1507,13 @@ model PdvSale {
   // Vira Order.pickupStoreCode: a engine TRAVA a separação nessa loja e o que
   // ela não tem chega por transferência antes de sair pra cliente.
   entregaStoreCode    String?  @map("entrega_store_code")
+  // CARRINHO DE ORIGEM (17/08) — `Order.id` do carrinho abandonado que virou
+  // esta venda, quando ela nasceu de "Importar carrinho pro PDV". Serve pra
+  // duas coisas no finalize: copiar a UTM/fbc do carrinho pro pedido novo (é
+  // o único lugar onde a campanha existe) e marcar o carrinho como recuperado
+  // pra ele sair do relatório de abandono. Sem isso a venda recuperada nasce
+  // sem origem e a cliente conta como perda E como receita órfã.
+  carrinhoOrderId     String?  @map("carrinho_order_id")
   // Status + valores
   status          String   @default("open")
   subtotal        Float    @default(0)

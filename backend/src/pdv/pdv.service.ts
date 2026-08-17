@@ -18,6 +18,7 @@ import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
 import { PedidoOnlineService } from './pedido-online.service';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -224,6 +225,149 @@ export class PdvService {
       },
     });
     return sale;
+  }
+
+  /**
+   * IMPORTAR CARRINHO ABANDONADO PRO PDV (17/08).
+   *
+   * O PROBLEMA MEDIDO: em 17/08 foram 7 carrinhos recuperados pelo time e só
+   * 2 viraram venda no sistema. Os outros 5 foram pagos por fora (PIX direto,
+   * PayPal, link) e NUNCA foram registrados. Cada um desses custa: estoque que
+   * não baixa (peça sai da loja e o site vende de novo), NF-e que não sai,
+   * dinheiro fora do caixa e do faturamento, comissão que a vendedora não
+   * recebe, e o carrinho seguindo eternamente como "abandonado" no relatório —
+   * a mesma cliente contada como PERDA e como receita órfã.
+   *
+   * A CAUSA NÃO É DISCIPLINA, É FRICÇÃO: o PDV já aceita "PIX recebido" e
+   * "Link externo". O que ninguém faz é remontar o carrinho à mão — a cliente
+   * do ON-000006 tinha ONZE peças. Onze buscas depois de a venda já estar
+   * fechada no WhatsApp, sete vezes por dia. Então a venda não é registrada.
+   *
+   * Aqui a venda nasce PRONTA: peças e cliente do carrinho já preenchidas, e
+   * a vendedora só escolhe como recebeu. Um clique em vez de onze buscas.
+   *
+   * REUSA `addItem` de propósito (não insere PdvSaleItem cru): preço, promoção
+   * automática, REF/cor/tamanho e o filtro de item sem estoque vivem lá. Item
+   * inserido por fora nasceria com preço de outra régua que a do bipe.
+   *
+   * Item que não resolve NÃO derruba a importação — a venda abre com o que deu
+   * e devolve a lista do que faltou, pra vendedora completar na mão. Falhar
+   * inteiro por causa de uma REF fora do catálogo levaria ela de volta pro
+   * caminho manual, que é o que este método existe pra evitar.
+   */
+  async importarCarrinho(input: {
+    /** `Order.wcOrderId` do carrinho abandonado (o número que a tela mostra). */
+    wcOrderId: number;
+    storeCode: string;
+    vendedorUserId?: string;
+    vendedorName?: string;
+    isTraining?: boolean;
+  }) {
+    const carrinho: any = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId: Number(input.wcOrderId) },
+      include: { items: true },
+    });
+    if (!carrinho) throw new NotFoundException(`Carrinho ${input.wcOrderId} não encontrado`);
+    if (carrinho.paidAt) {
+      throw new BadRequestException(
+        `Este carrinho já foi PAGO (${carrinho.wcOrderNumber}) — não é abandonado. ` +
+          'Importar criaria uma segunda venda da mesma peça.',
+      );
+    }
+    // Já importado antes: devolve a venda existente em vez de criar outra.
+    // Dois cliques no botão não podem virar duas vendas.
+    const jaImportado = await (this.prisma as any).pdvSale.findFirst({
+      where: { carrinhoOrderId: carrinho.id, status: 'open' },
+      select: { id: true, storeCode: true },
+    });
+    if (jaImportado) {
+      return {
+        saleId: jaImportado.id,
+        storeCode: jaImportado.storeCode,
+        jaExistia: true,
+        importados: 0,
+        faltaram: [] as string[],
+      };
+    }
+
+    const pecas = (carrinho.items || []).filter((it: any) => !ehItemSemEstoque(it));
+    if (!pecas.length) {
+      throw new BadRequestException('Carrinho sem nenhuma peça pra importar (só frete/manual).');
+    }
+
+    const sale = await this.createSale({
+      storeCode: input.storeCode,
+      vendedorUserId: input.vendedorUserId,
+      vendedorName: input.vendedorName,
+      isTraining: input.isTraining,
+    });
+
+    // Vincula o carrinho ANTES de qualquer coisa: se a importação falhar no
+    // meio, a venda aberta já sabe de onde veio e não vira órfã.
+    await (this.prisma as any).pdvSale.update({
+      where: { id: sale.id },
+      data: { carrinhoOrderId: carrinho.id },
+    });
+
+    const faltaram: string[] = [];
+    let importados = 0;
+    for (const it of pecas) {
+      const qtd = Math.max(1, Number(it.quantity || 1));
+      try {
+        await this.addItem({ saleId: sale.id, skuOrEan: String(it.sku), qty: qtd });
+        importados += 1;
+      } catch (e: any) {
+        const rotulo = [it.ref, it.cor, it.tamanho].filter(Boolean).join(' · ') || String(it.sku);
+        faltaram.push(`${rotulo} (${e?.message || 'não resolveu'})`);
+        this.logger.warn(
+          `[importar-carrinho] ${carrinho.wcOrderNumber} → venda ${sale.id}: ` +
+            `sku ${it.sku} falhou (${e?.message || e})`,
+        );
+      }
+    }
+
+    // Cliente do carrinho: endereço vem do shippingAddress (shape WooCommerce).
+    let end: any = {};
+    try { end = carrinho.shippingAddress ? JSON.parse(carrinho.shippingAddress) : {}; } catch { end = {}; }
+    try {
+      await this.setCustomer({
+        saleId: sale.id,
+        cpf: carrinho.customerCpf || undefined,
+        name: carrinho.customerName || undefined,
+        email: carrinho.customerEmail || undefined,
+        phone: carrinho.customerPhone || undefined,
+        cep: carrinho.shippingCep || end.postcode || undefined,
+        endereco: end.address_1 || undefined,
+        numero: end.number || undefined,
+        complemento: end.address_2 || undefined,
+        bairro: end.neighborhood || end.bairro || undefined,
+        cidade: end.city || undefined,
+        uf: end.state || undefined,
+      });
+    } catch (e: any) {
+      // Cliente incompleto não bloqueia: a venda online exige CPF no
+      // fechamento e a tela cobra ali, com o campo na frente da vendedora.
+      this.logger.warn(`[importar-carrinho] venda ${sale.id}: cliente não preencheu (${e?.message || e})`);
+    }
+
+    this.logger.log(
+      `[importar-carrinho] ${carrinho.wcOrderNumber} → venda ${sale.id} na loja ${input.storeCode}: ` +
+        `${importados}/${pecas.length} peça(s)${faltaram.length ? `, ${faltaram.length} faltou` : ''}`,
+    );
+
+    return {
+      saleId: sale.id,
+      // A tela precisa do storeCode pra retomar a venda: o PDV resume pela
+      // chave `lurds_pdv_sale_<storeCode>` do localStorage e não aceita id
+      // por querystring. Devolver aqui evita mexer no PDV (arquivo de 10k
+      // linhas) só pra abrir uma venda que já existe.
+      storeCode: sale.storeCode,
+      jaExistia: false,
+      carrinho: carrinho.wcOrderNumber,
+      importados,
+      total: pecas.length,
+      faltaram,
+    };
   }
 
   /**

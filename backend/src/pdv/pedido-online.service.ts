@@ -412,6 +412,29 @@ export class PedidoOnlineService {
         : await this.lojaTemTudo(pecas, store.code).catch(() => false);
 
       /**
+       * CARRINHO DE ORIGEM (17/08) — a venda nasceu de "Importar carrinho pro
+       * PDV"? Então o carrinho abandonado é o ÚNICO lugar onde a campanha
+       * existe: `utm*` e `trackingInfo` (fbp/fbc) são gravados no checkout do
+       * site e a venda do PDV nasce sem nada disso.
+       *
+       * Sem carregar aqui, a mesma cliente conta duas vezes errado: ABANDONO
+       * no funil (o carrinho nunca sai da lista) e RECEITA SEM ORIGEM no ROAS.
+       * Medido em 30 dias: R$ 2.133,89 de venda recuperada sem campanha.
+       */
+      const carrinho: any = sale.carrinhoOrderId
+        ? await (this.prisma as any).order
+            .findUnique({
+              where: { id: sale.carrinhoOrderId },
+              select: {
+                id: true, wcOrderNumber: true, paidAt: true,
+                utmSource: true, utmMedium: true, utmCampaign: true,
+                utmId: true, utmContent: true, trackingInfo: true,
+              },
+            })
+            .catch(() => null)
+        : null;
+
+      /**
        * A LOJA VENDEDORA ENTREGA ELA MESMA (17/08) — não vira tarefa de
        * separação pra ninguém.
        *
@@ -513,6 +536,17 @@ export class PedidoOnlineService {
               isPickup: entrega.pickup,
               pickupStoreCode: travaNaLoja ? lojaEntrega.code : null,
               wcDateCreated: new Date(),
+              // ATRIBUIÇÃO DO CARRINHO RECUPERADO: a campanha só existe no
+              // carrinho. Copiada aqui, o ROAS em cascata e o funil que já
+              // existem passam a contar esta venda sem relatório novo.
+              // `trackingInfo` traz fbp/fbc — é o que permite mandar o
+              // Purchase pro Meta CAPI com a atribuição certa depois.
+              utmSource: carrinho?.utmSource ?? null,
+              utmMedium: carrinho?.utmMedium ?? null,
+              utmCampaign: carrinho?.utmCampaign ?? null,
+              utmId: carrinho?.utmId ?? null,
+              utmContent: carrinho?.utmContent ?? null,
+              trackingInfo: carrinho?.trackingInfo ?? null,
               checkoutInfo: JSON.stringify(checkoutInfo),
               items: {
                 create: pecas.map((it) => ({
@@ -606,6 +640,46 @@ export class PedidoOnlineService {
         } catch (e: any) {
           this.logger.warn(
             `[pedido-online] ${order.wcOrderNumber}: roteamento pra ${lojaEntrega.name} falhou (${e?.message || e}) — fica pra matriz`,
+          );
+        }
+      }
+
+      /**
+       * CARRINHO SAI DO ABANDONO (17/08). O relatório de abandonados é
+       * `Order` com `source: 'ecommerce'` e `paidAt: null` — então enquanto o
+       * carrinho não é marcado, a MESMA cliente aparece como perda no funil e
+       * como venda no faturamento. Duplo desconto na leitura, e o time ainda
+       * corre atrás de quem já comprou.
+       *
+       * Marca `paidAt` (vira "recovered" na régua do `listEcommercePending`) e
+       * deixa o rastro dos dois lados no histórico. `cancelled` não serve: o
+       * carrinho não foi perdido, foi ganho por outro caminho.
+       */
+      if (carrinho && !carrinho.paidAt) {
+        try {
+          await (this.prisma as any).order.update({
+            where: { id: carrinho.id },
+            data: { status: 'cancelled', paidAt: new Date() },
+          });
+          await (this.prisma as any).orderHistory
+            .create({
+              data: {
+                orderId: carrinho.id,
+                toStatus: 'cancelled',
+                note:
+                  `Carrinho RECUPERADO: fechado no PDV pela ${store.name} como ` +
+                  `${order.wcOrderNumber}. Sai do relatório de abandono — a venda ` +
+                  `existe, só entrou por outro caminho.`,
+              },
+            })
+            .catch(() => null);
+          this.logger.log(
+            `[carrinho-recuperado] ${carrinho.wcOrderNumber} → ${order.wcOrderNumber}` +
+              `${carrinho.utmCampaign ? ` (campanha: ${carrinho.utmCampaign})` : ' (sem campanha no carrinho)'}`,
+          );
+        } catch (e: any) {
+          this.logger.warn(
+            `[carrinho-recuperado] falha ao marcar ${carrinho.wcOrderNumber}: ${e?.message || e}`,
           );
         }
       }
