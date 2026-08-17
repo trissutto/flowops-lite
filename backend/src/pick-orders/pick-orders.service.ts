@@ -2932,16 +2932,78 @@ export class PickOrdersService {
       where: { id: pickOrderId },
       include: {
         store: true,
-        order: { include: { items: true } },
+        order: {
+          include: {
+            items: true,
+            // Cards IRMÃOS deste pedido — precisa deles pra saber o que chegou
+            // aqui por transferência (bloco da PERNA 2, logo abaixo).
+            pickOrders: {
+              select: { storeId: true, isTransfer: true, transferToStoreCode: true },
+            },
+          },
+        },
       },
     });
     if (!po?.order) return;
     const order: any = po.order;
     const fromStore: any = po.store;
-    const itens: any[] = (order.items || []).filter(
+
+    /**
+     * ACERTO EM DUAS PERNAS (17/08) — quem ENTREGA cobra o pedido TODO.
+     *
+     * O filtro era só `assignedStoreId === po.storeId`: cada card acertava
+     * apenas os SEUS itens. Numa retirada com transferência isso deixava a
+     * loja que entrega no PREJUÍZO:
+     *
+     *   Sorocaba manda 5 peças pra São José (cliente retira em SJC)
+     *     perna 1 → SJC "paga" Sorocaba pelas 5          ✅ já funcionava
+     *     perna 2 → 13 paga SJC... só pelas peças DELA   ❌ faltavam as 5
+     *
+     * SJC pagava a fornecedora e não recebia por aquelas peças. Quanto mais
+     * ela ajudava a fechar o pedido, mais ela perdia — e o custo de ajudar
+     * recaía justamente em quem fez o pedido acontecer.
+     *
+     * Quem entrega pra cliente entregou o pedido inteiro, então cobra da loja
+     * vendedora o inteiro: itens próprios + os que chegaram por transferência
+     * PRA ELA. Peça que outra loja mandou DIRETO pra cliente fica de fora — o
+     * acerto daquela é da própria loja com a vendedora, e somar aqui pagaria
+     * duas vezes pela mesma peça.
+     *
+     * A régua REDE×FRANQUIA não muda: `geraCobranca` abaixo segue exigindo
+     * naturezas diferentes. Franquia→franquia e rede→rede continuam SÓ
+     * REGISTRO, sem financeiro (decisão do dono, 17/08).
+     */
+    const meusItens: any[] = (order.items || []).filter(
       (i: any) => i.assignedStoreId === po.storeId,
     );
+
+    // `isTransfer` = este card MANDA pra outra loja. Quem entrega é o outro.
+    const idsQueMeMandaram: string[] = !po.isTransfer
+      ? (order.pickOrders || [])
+          .filter(
+            (irmao: any) =>
+              irmao.isTransfer &&
+              irmao.transferToStoreCode &&
+              String(irmao.transferToStoreCode) === String(fromStore?.code) &&
+              irmao.storeId !== po.storeId,
+          )
+          .map((irmao: any) => irmao.storeId)
+      : [];
+
+    const porTransferencia: any[] = idsQueMeMandaram.length
+      ? (order.items || []).filter((i: any) => idsQueMeMandaram.includes(i.assignedStoreId))
+      : [];
+
+    const itens: any[] = [...meusItens, ...porTransferencia];
     if (!itens.length) return;
+
+    if (porTransferencia.length > 0) {
+      this.logger.log(
+        `[acerto-perna-2] ${order.wcOrderNumber}: ${fromStore?.code} entregou o pedido — ` +
+          `cobra ${meusItens.length} peça(s) própria(s) + ` +
+          `${porTransferencia.length} recebida(s) por transferência`,
+      );
+    }
 
     // ── resolve a "dona" da venda (destino do acerto) ──
     let destino: { code: string; name: string; tipo: string } | null = null;
