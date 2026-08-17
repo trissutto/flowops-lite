@@ -221,7 +221,10 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   add_shipping_info: ['shipping_tier'],
   add_payment_info: ['payment_type'],
   checkout_submission: ['method'],
-  checkout_error: ['method', 'reason'],
+  // `code`, `field`, `stage` e `attempt` entram (17/08): a Kênia falhou 14
+  // vezes com `validation_error` e ninguém sabia QUAL campo — o front mandava,
+  // o sanitizador podava. Diagnóstico às cegas custa a venda seguinte.
+  checkout_error: ['method', 'reason', 'code', 'field', 'stage', 'attempt'],
   checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
   payment_method_selected: ['method'],

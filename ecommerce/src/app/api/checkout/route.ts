@@ -43,11 +43,26 @@ export const dynamic = 'force-dynamic';
  * Validação — espelho zod do contrato CreateOrderInput (types/checkout.ts)
  * ──────────────────────────────────────────────────────────────────────────── */
 
-const imageSchema = z.object({
-  src: z.string().min(1),
-  alt: z.string(),
-  aspect: z.enum(['1/1', '3/4', '4/5', '4/3', '16/9', '21/9']).optional(),
-});
+/**
+ * FOTO NÃO BARRA VENDA (17/08).
+ *
+ * `src: min(1)` + `alt` obrigatório + `aspect` numa lista fechada — pra
+ * RECUSAR O PEDIDO INTEIRO. E a sacola põe `{ src: '', alt }` quando a peça
+ * (ou a cor escolhida) não tem foto — caso comum aqui. Resultado: cliente
+ * com a sacola cheia, CPF e PIX escolhido, e o checkout devolvendo "alguns
+ * dados não conferem" 14 vezes seguidas (Kênia, 17/08 06:25 — foi pro
+ * WhatsApp da loja dizer que não conseguiu). A imagem é enfeite do
+ * resumo; o pedido vive de sku/nome/tamanho/cor. Tudo aqui é opcional e
+ * tolerante — e o objeto inteiro pode faltar.
+ */
+const imageSchema = z
+  .object({
+    src: z.string().max(2000).optional().catch(undefined),
+    alt: z.string().max(300).optional().catch(undefined),
+    aspect: z.string().max(10).optional().catch(undefined),
+  })
+  .optional()
+  .catch(undefined);
 
 const cartLineSchema = z.object({
   id: z.string().min(1),
@@ -55,8 +70,8 @@ const cartLineSchema = z.object({
   slug: z.string().min(1),
   name: z.string().min(1).max(200),
   image: imageSchema,
-  size: z.string().min(1).max(10),
-  color: z.string().max(60).optional(),
+  size: z.string().min(1).max(20),
+  color: z.string().max(80).optional(),
   quantity: z.number().int().min(1).max(20),
   // Teto de sanidade enquanto o preço não é reconferido no catálogo (ver
   // cabeçalho): nenhuma peça da Lurd's custa R$ 0 nem R$ 10.000.
@@ -80,22 +95,33 @@ const customerSchema = z.object({
   phone: z.string().regex(/^\d{10,11}$/, 'telefone com DDD, só dígitos'),
 });
 
+/**
+ * RASTREIO NÃO BARRA VENDA (17/08).
+ *
+ * Cada campo aqui é telemetria: se vier torto, o certo é DESCARTAR O CAMPO,
+ * nunca o pedido. `fbc: max(200)` era uma bomba armada — os pedidos que
+ * passavam tinham 195 caracteres, e anúncio de catálogo do Meta gera
+ * fbclid mais longo. Cinco caracteres a mais no cookie do clique e a
+ * cliente não conseguia pagar. `.catch(undefined)` em cada um: o valor
+ * inválido some, o pedido segue.
+ */
 const trackingSchema = z
   .object({
-    anonymous_id: z.string().max(100).optional(),
-    session_id: z.string().max(100).optional(),
-    fbp: z.string().max(100).optional(),
-    fbc: z.string().max(200).optional(),
-    attribution: z.record(z.string(), z.string().optional()).optional(),
+    anonymous_id: z.string().max(200).optional().catch(undefined),
+    session_id: z.string().max(200).optional().catch(undefined),
+    fbp: z.string().max(300).optional().catch(undefined),
+    fbc: z.string().max(1000).optional().catch(undefined),
+    attribution: z.record(z.string(), z.string().optional()).optional().catch(undefined),
     /**
      * O "sim" do lembrete de WhatsApp. Faltava aqui, e zod PODA chave
      * desconhecida em silêncio: o consentimento saía do navegador, morria
      * neste schema e nunca chegava no `trackingInfo` do pedido — o cron de
      * resgate do PIX (`recovery_consent === true`) não achava ninguém.
      */
-    recovery_consent: z.boolean().optional(),
+    recovery_consent: z.boolean().optional().catch(undefined),
   })
-  .optional();
+  .optional()
+  .catch(undefined);
 
 const bodySchema = z.object({
   customer: customerSchema,
@@ -422,7 +448,12 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     customer: input.customer,
     shippingAddress: input.shippingAddress,
     shipping: quote,
-    items: input.items,
+    // A imagem virou opcional/tolerante na validação; pro tipo da resposta
+    // (que a tela de confirmação desenha) garante o mesmo shape de sempre.
+    items: input.items.map((l) => ({
+      ...l,
+      image: { src: l.image?.src ?? '', alt: l.image?.alt ?? l.name, ...(l.image?.aspect ? { aspect: l.image.aspect as never } : {}) },
+    })),
     subtotal: ack.subtotal ?? subtotal,
     discount: descontoExibido,
     couponCode: ack.couponCode ?? couponCode,
