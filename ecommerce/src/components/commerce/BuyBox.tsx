@@ -325,7 +325,9 @@ export function BuyBox({
               {formatPrice(product.compareAtPrice)}
             </span>
           )}
-          <span className="tabular font-display text-[2rem] leading-none font-medium text-ink">
+          {/* Um degrau menor (dono, 17/08): o preço competia em peso com o
+              passo do tamanho logo abaixo, que é o que decide a compra. */}
+          <span className="tabular font-display text-[1.625rem] leading-none font-medium text-ink">
             {formatPrice(product.price)}
           </span>
           {discount > 0 && (
@@ -415,8 +417,12 @@ export function BuyBox({
         </div>
 
         {/* As opções ficam coladas ao rótulo do passo para a instrução e a
-            escolha formarem um único bloco visual. */}
-        <div className="mt-4 flex flex-wrap gap-2">
+            escolha formarem um único bloco visual.
+
+            CENTRALIZADA (dono, 17/08): à esquerda, uma grade de 3 ou 4
+            números deixava um vazio grande à direita e o passo parecia
+            inacabado — logo o passo que decide a compra. */}
+        <div className="mt-4 flex flex-wrap justify-center gap-2.5">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
@@ -667,7 +673,9 @@ export function BuyBox({
           </p>
           <p className="mt-4 text-body text-ink">Toque no seu número — a peça já vai pra sacola.</p>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          {/* Mesma centralização da grade da página: as duas mostram os
+              mesmos números e divergir no desenho confunde. */}
+          <div className="mt-4 flex flex-wrap justify-center gap-2.5">
             {product.sizes.map((option) => (
               <SizePill
                 key={option.label}

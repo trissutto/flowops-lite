@@ -460,9 +460,17 @@ export default function CheckoutPage() {
                 setStep(4);
               }}
             />
-          </SectionShell>
 
-          <SectionShell step={4} title="Revisão" state={step === 4 ? 'active' : 'locked'}>
+            {/* A ETAPA 4 ENTROU AQUI DENTRO (dono, 17/08).
+
+                Eram os dados da nota — nome completo, e-mail e CPF — ocupando
+                uma ETAPA inteira entre a cliente e o pagamento. E a medicao de
+                14 a 17/08 e dura sobre passo a mais: 1 tentativa converte 71%,
+                2 convertem 25%, 3 ou mais convertem ZERO.
+
+                Agora eles aparecem logo depois de ela escolher o meio de
+                pagamento e ANTES de gerar — quando o PIX abre, ja esta tudo no
+                jeito, sem mais um clique em "Revisar meu pedido". */}
             {contact && shipping && payment && !customer && (
               <FinalIdentityStep contact={contact} onDone={(identity) => {
                 setCustomer(identity);
@@ -505,6 +513,7 @@ export default function CheckoutPage() {
               />
             )}
           </SectionShell>
+
         </div>
       </div>
     </Container>
