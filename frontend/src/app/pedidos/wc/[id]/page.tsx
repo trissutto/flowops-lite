@@ -170,6 +170,9 @@ export default function PedidoDetailPage() {
   const [separation, setSeparation] = useState<SeparationPreview | null>(null);
   const [sepLoading, setSepLoading] = useState(false);
   const [sepError, setSepError] = useState<string | null>(null);
+  // Conserto "a loja vendedora já entregou" (venda online roteada pra outra loja)
+  const [fecharLoading, setFecharLoading] = useState(false);
+  const [fecharErro, setFecharErro] = useState<string | null>(null);
   /** Override manual: storeId → novo storeId selecionado */
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   // Confirmação (cria pick-order e dispara socket pra loja)
@@ -428,6 +431,51 @@ export default function PedidoDetailPage() {
    *    pedidos ativos) e cria novo pick-order na loja correta.
    *  - Se algum pick-order já passou de "separating" → bloqueia com mensagem clara.
    */
+  /**
+   * "A loja vendedora já entregou" — conserta venda online roteada errado.
+   *
+   * Caso ON-000004 (Suzano, 15/08): a loja vendeu, mandou de motoboy pra cliente
+   * a 20 km e o pedido foi roteado pra SOROCABA (150 km) separar uma SEGUNDA
+   * peça, com o estoque de Suzano fantasma. O backend cancela o card indevido,
+   * baixa o estoque na loja que vendeu e fecha o pedido.
+   */
+  async function fecharNaLojaVendedora() {
+    const nome = order?.origemLoja?.name ?? 'a loja vendedora';
+    if (
+      !confirm(
+        `Confirmar que ${nome} JÁ ENTREGOU esta venda pra cliente?\n\n` +
+          `• o estoque da peça baixa em ${nome} (é de lá que ela saiu)\n` +
+          `• os cards de separação em aberto são cancelados\n` +
+          `• o pedido fecha como ENVIADO\n\n` +
+          `Só confirme se a peça realmente saiu dessa loja.`,
+      )
+    )
+      return;
+    setFecharLoading(true);
+    setFecharErro(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        alreadyDone?: boolean;
+        message?: string;
+        storeName?: string;
+        pecasBaixadas?: number;
+        cardsCancelados?: number;
+      }>(`/orders/wc/${wcId}/fechar-na-loja-vendedora`, { method: 'POST' });
+      if (!res.ok) {
+        setFecharErro(res.message ?? 'Não foi possível fechar o pedido.');
+        return;
+      }
+      await load();
+      const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
+      setLiveStatus(Array.isArray(fresh) ? fresh : []);
+    } catch (e: any) {
+      setFecharErro(e?.message || 'Falha ao fechar o pedido na loja vendedora.');
+    } finally {
+      setFecharLoading(false);
+    }
+  }
+
   async function loadSeparation() {
     setSepLoading(true);
     setSepError(null);
@@ -1125,6 +1173,63 @@ export default function PedidoDetailPage() {
               {order.origemLoja.code}
             </span>
           </div>
+
+          {/* CARD NA LOJA ERRADA — o card de separação está numa loja que NÃO
+              vendeu. Se ela separar, sai uma SEGUNDA peça pra mesma cliente e o
+              estoque de quem vendeu fica fantasma (caso ON-000004, Suzano →
+              Sorocaba). Só aparece quando o risco existe de verdade: alarme
+              falso aqui mata a confiança no aviso. */}
+          {(() => {
+            const vendedoraCode = order.origemLoja!.code;
+            const ativosFora = liveStatus.filter(
+              (p) => ['new', 'separating'].includes(p.status) && p.storeCode !== vendedoraCode,
+            );
+            // `order.status` aqui é o SLUG do detalhe (detalheEcommerce mapeia
+            // shipped/delivered → 'completed'), não o status cru do banco.
+            const fechavel = !['completed', 'cancelled'].includes(String(order.status || ''));
+            if (!fechavel) return null;
+
+            return (
+              <div className="mt-3 border-t border-teal-200 pt-3">
+                {ativosFora.length > 0 && (
+                  <div className="mb-2 rounded-lg border-2 border-rose-300 bg-rose-50 p-3">
+                    <div className="text-sm font-bold text-rose-800">
+                      ⚠️ A separação está em{' '}
+                      {ativosFora.map((p) => p.storeName || p.storeCode).join(', ')} — que não
+                      vendeu
+                    </div>
+                    <div className="text-xs text-rose-700 mt-1">
+                      Se essa loja separar, uma <b>segunda peça</b> vai pra cliente. Se{' '}
+                      {order.origemLoja!.name} já entregou, feche aqui: o estoque baixa nela e o
+                      card indevido é cancelado.
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={fecharNaLojaVendedora}
+                    disabled={fecharLoading}
+                    className={`rounded-lg px-4 py-2 text-sm font-bold text-white disabled:opacity-50 ${
+                      ativosFora.length > 0
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : 'bg-teal-600 hover:bg-teal-700'
+                    }`}
+                  >
+                    {fecharLoading
+                      ? 'Fechando…'
+                      : `✓ ${order.origemLoja!.name} já entregou — fechar pedido`}
+                  </button>
+                  <span className="text-[11px] text-slate-600">
+                    Baixa o estoque na loja que vendeu e encerra a separação.
+                  </span>
+                </div>
+                {fecharErro && (
+                  <div className="mt-2 text-xs text-rose-700 font-semibold">{fecharErro}</div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 

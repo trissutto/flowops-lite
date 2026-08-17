@@ -2739,14 +2739,24 @@ export class PdvService {
     // ONLINE, roteamento (ou auto-atende na própria loja) e acerto
     // fornecedora→vendedora. A venda segue normal no caixa desta loja.
     //
-    // ⚠️ TRAVA DE BAIXA DUPLA: com o Order criado, quem baixa o estoque é a
-    // loja que SEPARA (runAutoDebit no bipe do card) — o finalize marca
-    // stockDecreasedAt ANTES de enfileirar o outbox, então o passo de estoque
-    // do job vira no-op (guard idempotente do erpStepBaixarEstoque) e as redes
-    // de segurança (backlog/reconcile) também pulam. A gravação na CAIXA do
-    // Wincred segue normal. Se a criação do Order falhar, nada é marcado e o
-    // comportamento legado (baixa na própria loja) fica intacto.
-    let onlineOrder: { wcOrderNumber: string; autoAtendida: boolean; storeName: string | null } | null = null;
+    // ⚠️ TRAVA DE BAIXA DUPLA: com o Order criado, o finalize NÃO baixa aqui —
+    // marca stockDecreasedAt ANTES de enfileirar o outbox, então o passo de
+    // estoque do job vira no-op (guard idempotente do erpStepBaixarEstoque) e
+    // as redes de segurança (backlog/reconcile) também pulam. Quem baixa é:
+    //   - a PRÓPRIA loja vendedora, na hora, quando ela tem a peça e entrega
+    //     (fechadoNaLoja — `fecharNaLojaVendedora`);
+    //   - a loja que SEPARA (runAutoDebit no bipe do card), quando o pedido
+    //     precisou de outra loja pra atender.
+    // Nos dois casos a baixa acontece de verdade antes/junto da marcação — a
+    // marca nunca é uma promessa vazia. A gravação na CAIXA do Wincred segue
+    // normal. Se a criação do Order falhar, nada é marcado e o comportamento
+    // legado (baixa na própria loja) fica intacto.
+    let onlineOrder: {
+      wcOrderNumber: string;
+      autoAtendida: boolean;
+      fechadoNaLoja: boolean;
+      storeName: string | null;
+    } | null = null;
     if (isAllVendaOnline && this.pedidoOnline.enabled()) {
       onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
       if (onlineOrder) {

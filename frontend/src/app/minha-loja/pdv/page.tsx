@@ -1935,12 +1935,22 @@ function PdvPageInner() {
         `/pdv/sales/${sale.id}/finalize`,
         { method: 'POST', body: JSON.stringify(body) },
       );
-      // PEDIDO ONLINE (14/08): venda 100% Venda Online virou um pedido no
-      // trilho do site. Auto-atende = esta loja tem todas as peças e o card
-      // verde já nasceu AQUI; senão foi pra fila de roteamento da matriz.
+      /**
+       * PEDIDO ONLINE (14/08): venda 100% Venda Online virou um pedido no
+       * trilho do site. Três desfechos, e a vendedora PRECISA saber qual foi —
+       * caso Suzano/ON-000004 (15/08): ela fechou a venda, mandou a peça de
+       * motoboy e não tinha ideia de que um pedido havia nascido pra outra loja
+       * separar. O toast agora diz explicitamente se sobrou tarefa pra alguém.
+       */
       if (finResp?.onlineOrder) {
         const oo = finResp.onlineOrder;
-        if (oo.autoAtendida) {
+        if (oo.fechadoNaLoja) {
+          toast(
+            'success',
+            `Pedido ${oo.wcOrderNumber} — FECHADO AQUI`,
+            `A peça é desta loja: estoque já baixado e nada pra separar. Você entrega direto pra cliente.`,
+          );
+        } else if (oo.autoAtendida) {
           toast(
             'success',
             `${String(oo.storeName || 'Sua loja').toUpperCase()} ATENDE O PEDIDO TODO`,
@@ -1948,9 +1958,9 @@ function PdvPageInner() {
           );
         } else {
           toast(
-            'success',
-            `Pedido ${oo.wcOrderNumber} criado`,
-            'Sem todas as peças nesta loja — o pedido foi pro roteamento da matriz escolher quem envia.',
+            'warning',
+            `Pedido ${oo.wcOrderNumber} foi pra MATRIZ`,
+            'Esta loja não tem todas as peças — OUTRA loja vai separar e enviar. Não mande a peça por conta: confira o pedido antes.',
           );
         }
       }
