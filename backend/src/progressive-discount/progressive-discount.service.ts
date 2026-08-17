@@ -49,7 +49,7 @@ const DEFAULT_CONFIG: ProgressiveDiscountConfig = {
 };
 
 export type CartItem = {
-  productId: number;
+  productId: number | string;
   variationId?: number | null;
   qty: number;
   unitPrice: number;       // preço unitário
@@ -73,7 +73,7 @@ export type DiscountResult = {
   distinctProducts: number;
   productsToGo: number;
   freeItem: {
-    productId: number;
+    productId: number | string;
     variationId: number | null;
     unitPrice: number;
   } | null;
@@ -239,17 +239,18 @@ export class ProgressiveDiscountService {
     cfg: ProgressiveDiscountConfig,
     result: DiscountResult,
   ): DiscountResult {
-    const candidates = new Map<number, CartItem>();
+    const candidates = new Map<string, CartItem>();
 
     for (const item of items) {
       if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0 || item.qty <= 0) continue;
-      const current = candidates.get(item.productId);
+      const productKey = String(item.productId);
+      const current = candidates.get(productKey);
       if (
         !current ||
         item.unitPrice < current.unitPrice ||
         (item.unitPrice === current.unitPrice && (item.variationId || 0) < (current.variationId || 0))
       ) {
-        candidates.set(item.productId, item);
+        candidates.set(productKey, item);
       }
     }
 
@@ -264,7 +265,10 @@ export class ProgressiveDiscountService {
     if (distinctProducts < 4) return result;
 
     const freeItem = [...candidates.values()].sort(
-      (a, b) => a.unitPrice - b.unitPrice || a.productId - b.productId || (a.variationId || 0) - (b.variationId || 0),
+      (a, b) =>
+        a.unitPrice - b.unitPrice ||
+        String(a.productId).localeCompare(String(b.productId)) ||
+        (a.variationId || 0) - (b.variationId || 0),
     )[0];
     if (!freeItem) return result;
 

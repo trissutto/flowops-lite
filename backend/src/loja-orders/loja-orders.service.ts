@@ -10,6 +10,7 @@ import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
 import { PersonIdentityService } from '../person-identity/person-identity.service';
 import { PedidoEmailService } from './pedido-email.service';
+import { ProgressiveDiscountService, DiscountResult } from '../progressive-discount/progressive-discount.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -262,6 +263,7 @@ export class LojaOrdersService {
     private readonly frete: FreteService,
     private readonly identity: PersonIdentityService,
     private readonly pedidoEmail: PedidoEmailService,
+    private readonly progressiveDiscount: ProgressiveDiscountService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -407,9 +409,11 @@ export class LojaOrdersService {
         subtotal: number;
         descontoCupom: number;
         descontoPix: number;
+        descontoPromocao: number;
         frete: number;
         total: number;
         couponCode: string | null;
+        promocao: DiscountResult | null;
       }
   > {
     // 1) Preço, estoque e publicação, peça a peça.
@@ -459,11 +463,29 @@ export class LojaOrdersService {
     }
     const subtotal = this.dinheiro(conferencia.subtotal);
 
+    // A promoção é calculada somente depois da conferência autoritativa de
+    // preço e estoque. O cliente nunca informa qual peça deve ficar grátis.
+    const promocao = await this.progressiveDiscount.calculate(
+      input.items.map((item) => ({
+        productId: item.productId,
+        qty: Number(item.quantity) || 1,
+        unitPrice: this.dinheiro(item.unitPrice),
+      })),
+    );
+    const descontoPromocao = promocao.applied ? this.dinheiro(promocao.discountValue) : 0;
+
     // 2) Cupom recalculado (item 3).
     let descontoCupom = 0;
     let couponCode: string | null = null;
     let freteGratisPorCupom = false;
     if (input.couponCode) {
+      if (promocao.applied) {
+        return {
+          ok: false,
+          erro: 'A promoção Leve 4, Pague 3 já oferece a peça de menor valor grátis e não acumula com cupom.',
+          code: 'coupon_invalid',
+        };
+      }
       const r = await this.cupons.aplicar(input.couponCode, subtotal, {
         cpf: this.digits(input.customer.cpf),
       });
@@ -525,14 +547,14 @@ export class LojaOrdersService {
 
     // 3) Pix — o desconto que a vitrine já anunciava.
     const pct = LojaOrdersService.pixDescontoPct();
-    const baseComDesconto = Math.max(0, subtotal - descontoCupom);
+    const baseComDesconto = Math.max(0, subtotal - descontoCupom - descontoPromocao);
     const descontoPix =
-      input.payment?.method === 'pix' && pct > 0
+      input.payment?.method === 'pix' && pct > 0 && !promocao.applied
         ? this.dinheiro((baseComDesconto * pct) / 100)
         : 0;
 
     // 4) Total do zero.
-    const total = this.dinheiro(subtotal - descontoCupom - descontoPix + frete);
+    const total = this.dinheiro(subtotal - descontoCupom - descontoPix - descontoPromocao + frete);
     if (total <= 0) {
       this.logger.warn(`[loja] total recalculado <= 0 (subtotal=${subtotal} cupom=${descontoCupom})`);
       return {
@@ -598,13 +620,23 @@ export class LojaOrdersService {
     // O input passa a carregar a conta da casa — cobrança, Order e resposta
     // leem daqui pra frente uma coisa só.
     input.subtotal = subtotal;
-    input.discount = this.dinheiro(descontoCupom + descontoPix);
+    input.discount = this.dinheiro(descontoCupom + descontoPix + descontoPromocao);
     input.shippingPrice = frete;
     input.shipping.price = frete;
     input.total = total;
     input.couponCode = couponCode || undefined;
 
-    return { ok: true, subtotal, descontoCupom, descontoPix, frete, total, couponCode };
+    return {
+      ok: true,
+      subtotal,
+      descontoCupom,
+      descontoPix,
+      descontoPromocao,
+      frete,
+      total,
+      couponCode,
+      promocao: promocao.applied ? promocao : null,
+    };
   }
 
   /* ───────────────────────────── CRM ──────────────────────────────────── */
@@ -839,7 +871,12 @@ export class LojaOrdersService {
   private async criarOrder(
     input: CriarPedidoInput,
     pickup: { code: string; name: string } | null,
-    conta?: { descontoCupom: number; descontoPix: number },
+    conta?: {
+      descontoCupom: number;
+      descontoPix: number;
+      descontoPromocao?: number;
+      promocao?: DiscountResult | null;
+    },
   ): Promise<any> {
     const base = LojaOrdersService.LOJA_WC_ID_BASE;
     const shipping = this.montarShippingWc(input);
@@ -879,6 +916,14 @@ export class LojaOrdersService {
       // foi cupom ou Pix — e é a primeira pergunta de quem confere caixa.
       descontoCupom: this.dinheiro(conta?.descontoCupom ?? 0),
       descontoPix: this.dinheiro(conta?.descontoPix ?? 0),
+      descontoPromocao: this.dinheiro(conta?.descontoPromocao ?? 0),
+      promocao: conta?.promocao
+        ? {
+            campaignCode: conta.promocao.campaignCode,
+            headline: conta.promocao.tierLabel,
+            freeItem: conta.promocao.freeItem,
+          }
+        : null,
       shippingPrice: this.dinheiro(input.shippingPrice),
       couponCode: input.couponCode || null,
       items: input.items.map((it) => ({
@@ -1702,9 +1747,17 @@ export class LojaOrdersService {
          * Agora tem de onde ler a conta certa.
          */
         subtotal: this.dinheiro(conta.subtotal),
-        discount: this.dinheiro(conta.descontoCupom + conta.descontoPix),
+        discount: this.dinheiro(conta.descontoCupom + conta.descontoPix + conta.descontoPromocao),
         couponDiscount: this.dinheiro(conta.descontoCupom),
         pixDiscount: this.dinheiro(conta.descontoPix),
+        promotionDiscount: this.dinheiro(conta.descontoPromocao),
+        promotion: conta.promocao
+          ? {
+              campaignCode: conta.promocao.campaignCode,
+              headline: conta.promocao.tierLabel,
+              freeItem: conta.promocao.freeItem,
+            }
+          : null,
         shippingPrice: this.dinheiro(conta.frete),
         couponCode: conta.couponCode,
         items: input.items.map((it) => ({
