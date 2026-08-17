@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
-import { CarrinhoGuardService } from './carrinho-guard.service';
+import { CarrinhoGuardService, ItemRecusado } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
 import { PersonIdentityService } from '../person-identity/person-identity.service';
@@ -41,7 +41,9 @@ import { PedidoEmailService } from './pedido-email.service';
  *
  *  4. Confirmação de pagamento é SEMPRE por `confirmarPagamento()` —
  *     idempotente. Webhook repete, e repete MESMO. Cartão aprovado chama
- *     direto (síncrono) e o webhook que chega depois vira no-op.
+ *     direto (síncrono) e o webhook que chega depois vira no-op. Cartão EM
+ *     ANÁLISE (antifraude) NÃO chama: fica `awaiting_payment` como um PIX e o
+ *     webhook/reconcile fecha — nunca é tratado como recusa (17/08).
  *
  *  5. **O DINHEIRO É RECALCULADO AQUI, DO ZERO** (bloco A da lista de
  *     lançamento, 04/08). Nada que chega no corpo do POST vira cobrança sem
@@ -156,6 +158,7 @@ export type CheckoutErrorCode =
   | 'catalog_unavailable'
   | 'coupon_invalid'
   | 'shipping_invalid'
+  | 'shipping_changed'
   | 'validation_error'
   | 'rate_limited'
   | 'payment_unavailable'
@@ -166,6 +169,19 @@ export interface CriarPedidoResult {
   error?: string;
   code?: CheckoutErrorCode;
   order?: any;
+  /**
+   * Só em `catalog_unavailable` por PREÇO: a linha da sacola que subiu e o
+   * preço que vale agora, pra o site corrigir a linha e a cliente não cair no
+   * loop "atualize a página" (que não atualizava o preço congelado no
+   * localStorage). Opcional — site antigo ignora, site novo tolera ausência.
+   */
+  item?: ItemRecusado;
+  /**
+   * Só em `shipping_changed`: a cotação que vale agora (só o frete subiu entre
+   * a tela e o pedido). O site atualiza a entrega e pede pra confirmar — em
+   * vez do beco "atualize a página". Opcional pelo mesmo motivo do `item`.
+   */
+  quote?: { id: string; label: string; price: number; etaDays: { min: number; max: number } | null };
 }
 
 /* ─────────────────────────────── SERVICE ──────────────────────────────── */
@@ -219,6 +235,17 @@ export class LojaOrdersService {
 
   /** Teto de sanidade do frete: acima disso é erro de cotação, não entrega. */
   private static readonly FRETE_TETO = 400;
+
+  /**
+   * Cartão que NÃO chegou na operadora (erro de integração com a Pagar.me).
+   * A frase NÃO manda trocar de cartão — o cartão não tem culpa — e diz o que
+   * acontece se a cobrança tiver passado mesmo assim: como a order é
+   * procurada pelo `code` antes de desistir (`procurarOrderPagarmePorCode`),
+   * a que existir fica registrada e o webhook/reconcile confirma sozinho.
+   */
+  private static readonly MSG_CARTAO_INDISPONIVEL =
+    'Não conseguimos processar o cartão agora — foi uma falha na comunicação com a operadora, não no seu cartão. ' +
+    'Tente de novo em instantes ou pague com PIX. Se aparecer uma cobrança no seu extrato, o pedido é confirmado automaticamente. 💜';
 
   private readonly BASE_URL = 'https://api.pagar.me/core/v5';
 
@@ -374,7 +401,7 @@ export class LojaOrdersService {
    * na tela é o erro que não se desfaz com pedido de desculpas.
    */
   private async reprecificar(input: CriarPedidoInput): Promise<
-    | { ok: false; erro: string; code: CheckoutErrorCode }
+    | { ok: false; erro: string; code: CheckoutErrorCode; item?: ItemRecusado; quote?: CriarPedidoResult['quote'] }
     | {
         ok: true;
         subtotal: number;
@@ -388,7 +415,14 @@ export class LojaOrdersService {
     // 1) Preço, estoque e publicação, peça a peça.
     const conferencia = await this.guard.conferir(input.items as any);
     if (!conferencia.ok) {
-      return { ok: false, erro: conferencia.erro, code: 'catalog_unavailable' };
+      // `item` só existe na recusa por preço — vai junto pro site corrigir a
+      // linha da sacola (ver `ItemRecusado` no guard).
+      return {
+        ok: false,
+        erro: conferencia.erro,
+        code: 'catalog_unavailable',
+        ...(conferencia.item ? { item: conferencia.item } : {}),
+      };
     }
 
     for (const c of conferencia.itens) {
@@ -452,6 +486,9 @@ export class LojaOrdersService {
      * realmente não existe.
      */
     let frete = this.dinheiro(input.shippingPrice);
+    // O frete que a TELA mostrou — guardado antes de recotar, pro TETO lá
+    // embaixo distinguir "só o frete subiu" de "peça/cupom mudou".
+    const freteInformado = frete;
     if (input.shipping.kind !== 'retirada') {
       const pecas = input.items.reduce((s, it) => s + (Number(it.quantity) || 1), 0);
       const opcao = await this.frete
@@ -512,6 +549,40 @@ export class LojaOrdersService {
         `[loja] recálculo acima do informado: nosso=${total.toFixed(2)} site=${informado.toFixed(2)} ` +
           `(subtotal=${subtotal.toFixed(2)} cupom=${descontoCupom.toFixed(2)} pix=${descontoPix.toFixed(2)} frete=${frete.toFixed(2)})`,
       );
+      /**
+       * SÓ O FRETE SUBIU (17/08) — é troca de frete, não sacola mudada.
+       *
+       * Caso: o BFF cotou pela tabela local (backend lento/429 → `estimado`)
+       * com PAC 14,90; aqui a recotação real deu 17,90. Peças e cupom batem
+       * — a diferença é TODA do frete. Responder "os valores da sacola
+       * mudaram, atualize a página" era beco sem saída: F5 recotava igual e
+       * recusava de novo. Agora devolve `shipping_changed` com a cotação nova
+       * — o site já trata esse code (atualiza a entrega e pede pra confirmar)
+       * e o próximo Finalizar passa. Compara a parte SEM frete dos dois lados
+       * com a mesma tolerância; se a peça/cupom também mudou, cai no
+       * `catalog_unavailable` de sempre.
+       */
+      const nossoSemFrete = this.dinheiro(total - frete);
+      const informadoSemFrete = this.dinheiro(informado - freteInformado);
+      const soFreteSubiu =
+        input.shipping.kind !== 'retirada' &&
+        frete > freteInformado + LojaOrdersService.TOLERANCIA &&
+        Math.abs(nossoSemFrete - informadoSemFrete) <= LojaOrdersService.TOLERANCIA;
+      if (soFreteSubiu) {
+        return {
+          ok: false,
+          erro:
+            `O frete pro seu CEP ficou R$ ${frete.toFixed(2).replace('.', ',')} ` +
+            `(era R$ ${freteInformado.toFixed(2).replace('.', ',')}). Confira a entrega e finalize de novo — nada foi cobrado. 💜`,
+          code: 'shipping_changed',
+          quote: {
+            id: input.shipping.id,
+            label: input.shipping.label,
+            price: frete,
+            etaDays: input.shipping.etaDays ?? null,
+          },
+        };
+      }
       return {
         ok: false,
         erro: 'Os valores da sacola mudaram desde que você abriu o checkout. Atualize a página e confira antes de pagar. 💜',
@@ -1020,14 +1091,118 @@ export class LojaOrdersService {
   }
 
   /**
+   * O que a operadora respondeu, em TRÊS estados — não dois.
+   *
+   * Até 17/08 era `aprovado = paid`, e tudo que não fosse `paid` virava
+   * "cartão recusado": inclusive a cobrança EM ANÁLISE (antifraude assíncrono /
+   * revisão manual, que esta conta usa e reprova bastante). A cliente lia
+   * "não aprovado, tente outro cartão", pagava por PIX, e minutos depois o
+   * antifraude aprovava a primeira → webhook `charge.paid` → o pedido
+   * "recusado" virava pago. Duas cobranças pra uma sacola.
+   *
+   *  - `paid`    → dinheiro entrou; confirma na hora.
+   *  - `recusa`  → a operadora DISSE não: charge `failed`/`canceled`, ou a
+   *                transação em not_authorized/with_error/failed/voided.
+   *  - `pending` → tudo o mais (`pending`, `processing`, análise). O pedido
+   *                fica `awaiting_payment` e quem fecha é o webhook ou o
+   *                `LojaPagamentoReconcileService` — nunca uma segunda
+   *                cobrança da cliente.
+   */
+  private classificarCartao(gw: any): 'paid' | 'recusa' | 'pending' {
+    const charge = (gw?.charges || [])[0];
+    const orderStatus = String(gw?.status || '').toLowerCase();
+    const chargeStatus = String(charge?.status || '').toLowerCase();
+    const txStatus = String(charge?.last_transaction?.status || '').toLowerCase();
+
+    if (orderStatus === 'paid' || chargeStatus === 'paid') return 'paid';
+    if (['failed', 'canceled'].includes(chargeStatus)) return 'recusa';
+    if (['failed', 'canceled'].includes(orderStatus)) return 'recusa';
+    if (['not_authorized', 'with_error', 'failed', 'voided'].includes(txStatus)) return 'recusa';
+    return 'pending';
+  }
+
+  /**
+   * A ORDER QUE A GENTE NÃO VIU NASCER.
+   *
+   * Timeout (30s) ou 5xx no POST /orders é resposta AMBÍGUA: a Pagar.me pode
+   * ter criado e cobrado — só a resposta não chegou. Declarar "falhou" nesse
+   * ponto e mandar a cliente pagar por PIX é o caminho mais curto pra cobrança
+   * dupla, e como o `PagarmePayment` nunca foi gravado, o webhook que chegasse
+   * depois cairia em "order desconhecida".
+   *
+   * O corpo do POST já leva `code = LP-xxxxxx` (único por tentativa — o
+   * contador queima número), então dá pra perguntar de volta: `GET
+   * /orders?code=`. Achou → segue exatamente como se a resposta tivesse
+   * chegado. Não achou, ou o GET também falhou → aí sim é erro de integração,
+   * sem cobrança do nosso lado.
+   *
+   * Confere `code` de novo no resultado (e o `flowops_order_id` do metadata,
+   * quando vier): se o filtro da API for ignorado um dia, isto não pode pegar
+   * a order de outra cliente.
+   */
+  private async procurarOrderPagarmePorCode(apiKey: string, code: string, flowopsOrderId: string): Promise<any | null> {
+    try {
+      const resp = await firstValueFrom(
+        this.http.get(`${this.BASE_URL}/orders`, {
+          params: { code },
+          headers: { Authorization: this.authHeader(apiKey), Accept: 'application/json' },
+          // 3s (era 8s): esta busca roda DEPOIS do POST ambíguo e a soma tem
+          // que caber nos 15s do BFF (store.ts TIMEOUT_CREATE_MS) — senão o
+          // site desiste antes e a cliente lê "conexão falhou" de um pedido
+          // que o backend ainda vai decidir. 10s (POST) + 3s (GET) < 15s.
+          timeout: 3000,
+        }),
+      );
+      const lista: any[] = Array.isArray(resp?.data?.data) ? resp.data.data : [];
+      const achada = lista.find(
+        (o) =>
+          String(o?.code || '') === code &&
+          (!o?.metadata?.flowops_order_id || String(o.metadata.flowops_order_id) === flowopsOrderId),
+      );
+      return achada || null;
+    } catch (e: any) {
+      this.logger.warn(`[loja] busca da order por code=${code} também falhou: ${e?.response?.status || ''} ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /**
    * CARTÃO — cobrança síncrona com o token que o e-commerce já gerou no
    * navegador (o número do cartão NUNCA passa por aqui).
-   * Aprovado → devolve ok; recusado → devolve o motivo já traduzido.
+   *
+   * Três saídas, e a diferença entre elas é dinheiro:
+   *
+   *  - `ok:true, status:'paid'`    → aprovado; `criarPedido` confirma na hora.
+   *  - `ok:true, status:'pending'` → em análise; o pedido fica aguardando e o
+   *                                  webhook/reconcile fecha (ver
+   *                                  `classificarCartao`).
+   *  - `ok:false, kind:'recusa'`   → a operadora disse NÃO, com transação real.
+   *                                  Só aqui a cliente ouve "tente outro cartão".
+   *  - `ok:false, kind:'integracao'` → falha NOSSA ou da Pagar.me (401 chave,
+   *                                  422 payload, 5xx, timeout). Até 17/08 isto
+   *                                  saía como "cartão recusado": no incidente
+   *                                  do billing_address (14/08) 4 de 4 clientes
+   *                                  leram "confira os dados do cartão" pra um
+   *                                  erro de payload nosso — trocaram de cartão,
+   *                                  tentaram 3×, e ninguém do nosso lado viu
+   *                                  que era a gente. Agora vira
+   *                                  `payment_unavailable` + log de ALERTA.
    */
   private async cobrarCartao(
     order: any,
     input: CriarPedidoInput,
-  ): Promise<{ ok: true; gatewayOrderId: string; gatewayChargeId: string | null } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; status: 'paid' | 'pending'; gatewayOrderId: string; gatewayChargeId: string | null }
+    | {
+        ok: false;
+        kind: 'recusa' | 'integracao';
+        error: string;
+        /** Motivo técnico pro `paymentInfo.falha` (nunca vai pra tela). */
+        detalhe: string;
+        gatewayOrderId?: string | null;
+        gatewayChargeId?: string | null;
+      }
+  > {
     const storeCode = this.lojaDoDinheiro();
     const cfg = await this.configPagarme(storeCode);
     const valorCentavos = Math.round(this.dinheiro(input.total) * 100);
@@ -1108,32 +1283,99 @@ export class LojaOrdersService {
       },
     };
 
-    let resp: any;
+    let gw: any = null;
     try {
-      resp = await firstValueFrom(
+      const resp = await firstValueFrom(
         this.http.post(`${this.BASE_URL}/orders`, body, {
           headers: {
             Authorization: this.authHeader(cfg.apiKey),
             Accept: 'application/json',
             'Content-Type': 'application/json',
           },
-          timeout: 30000,
+          /**
+           * 10s (era 30s) — 17/08. O BFF do site desiste em 15s
+           * (store.ts TIMEOUT_CREATE_MS): com 30s aqui a cliente lia "a
+           * conexão falhou, nada foi cobrado" enquanto o backend AINDA ia
+           * receber o `paid` da Pagar.me e confirmar o pedido — ela tentava de
+           * novo e nascia o segundo pedido. Estourou 10s? Cai no
+           * `procurarOrderPagarmePorCode` (3s), que existe exatamente pra
+           * recuperar o POST ambíguo: 10 + 3 < 15, o backend SEMPRE responde
+           * antes do site desistir. A Pagar.me v5 costuma responder em 1-4s;
+           * quem passa de 10s é incidente do gateway, e nesse caso a busca por
+           * code é a rede.
+           */
+          timeout: 10000,
         }),
       );
+      gw = resp?.data ?? null;
     } catch (e: any) {
+      const httpStatus: number | undefined = e?.response?.status;
       const data = e?.response?.data;
-      this.logger.error(
-        `[loja] cartão HTTP ${e?.response?.status} pedido=${order.wcOrderNumber}: ${JSON.stringify(data || e?.message)}`,
-      );
-      return { ok: false, error: this.mensagemRecusa(data) };
+      const resumo = JSON.stringify(data ?? e?.message ?? String(e)).slice(0, 400);
+
+      /**
+       * ERRO HTTP NÃO É RECUSA. 4xx/5xx/timeout aqui é problema entre a gente e
+       * a Pagar.me (chave, payload, indisponibilidade) — a operadora do cartão
+       * nem foi consultada. Classificar isso como "cartão recusado" mandava a
+       * cliente trocar de cartão pra um erro que ela não tem como consertar.
+       *
+       * Não vale tentar separar "422 do payload" de "422 do cartão": a
+       * tokenização é por submit e a recusa de verdade na v5 vem 2xx com
+       * charge `failed` — tratada abaixo. Custa menos rotular um 4xx raro de
+       * dado do cartão como "indisponível" do que o inverso.
+       *
+       * Sem resposta (timeout/rede) ou 5xx a Pagar.me PODE ter cobrado:
+       * procura a order pelo `code` antes de declarar qualquer coisa. Achou →
+       * segue o fluxo normal com ela.
+       */
+      const ambigua = !e?.response || (typeof httpStatus === 'number' && httpStatus >= 500);
+      if (ambigua) {
+        gw = await this.procurarOrderPagarmePorCode(cfg.apiKey, order.wcOrderNumber, order.id);
+        if (gw) {
+          this.logger.warn(
+            `[loja] cartão pedido=${order.wcOrderNumber}: POST sem resposta (HTTP ${httpStatus ?? 'timeout/rede'}) ` +
+              `mas a order ${gw.id} EXISTE na Pagar.me (status=${gw.status}) — seguindo com ela`,
+          );
+        }
+      }
+
+      if (!gw) {
+        // ERROR com marcador fixo: é o que alguém filtra no Railway pra
+        // perceber que o cartão caiu POR NOSSA CAUSA, não por recusa.
+        this.logger.error(
+          `[loja][ALERTA] cartão: erro de integração HTTP ${httpStatus ?? 'sem resposta (timeout/rede)'} ` +
+            `pedido=${order.wcOrderNumber}: ${resumo}`,
+        );
+        return {
+          ok: false,
+          kind: 'integracao',
+          error: LojaOrdersService.MSG_CARTAO_INDISPONIVEL,
+          detalhe: `HTTP ${httpStatus ?? 'timeout/rede'}: ${resumo}`,
+        };
+      }
     }
 
-    const gw = resp.data;
+    // 2xx sem `id` de order não é resposta — sem ele o webhook e o reconcile
+    // não têm por onde achar a cobrança, e "pending" viraria pedido preso.
+    if (!gw?.id) {
+      this.logger.error(
+        `[loja][ALERTA] cartão: resposta da Pagar.me sem id de order pedido=${order.wcOrderNumber}: ${JSON.stringify(gw).slice(0, 400)}`,
+      );
+      return {
+        ok: false,
+        kind: 'integracao',
+        error: LojaOrdersService.MSG_CARTAO_INDISPONIVEL,
+        detalhe: `resposta sem id de order: ${JSON.stringify(gw).slice(0, 300)}`,
+      };
+    }
+
     const charge = (gw?.charges || [])[0];
-    const aprovado = gw?.status === 'paid' || charge?.status === 'paid';
+    const classe = this.classificarCartao(gw);
 
     // Registra no MESMO PagarmePayment do PDV/live — assim a conciliação, o
-    // painel de pagamentos e o webhook público enxergam a venda do site.
+    // painel de pagamentos e o webhook público enxergam a venda do site. Em
+    // análise fica `pending` (não `failed`): é o que o PASSO 2 do reconcile
+    // e a conciliação diária precisam ver pra ir atrás do desfecho.
     try {
       await (this.prisma as any).pagarmePayment.create({
         data: {
@@ -1143,22 +1385,37 @@ export class LojaOrdersService {
           pagarmeChargeId: charge?.id || null,
           method: 'credit_card',
           valor: this.dinheiro(input.total),
-          status: aprovado ? 'paid' : 'failed',
-          paidAt: aprovado ? new Date() : null,
+          status: classe === 'paid' ? 'paid' : classe === 'pending' ? 'pending' : 'failed',
+          paidAt: classe === 'paid' ? new Date() : null,
         },
       });
     } catch (e: any) {
       this.logger.warn(`[loja] PagarmePayment não gravado (cobrança seguiu): ${e?.message || e}`);
     }
 
-    if (!aprovado) {
+    if (classe === 'recusa') {
+      const tx = charge?.last_transaction || {};
       this.logger.warn(
-        `[loja] cartão recusado pedido=${order.wcOrderNumber} order=${gw?.id} status=${gw?.status}/${charge?.status}`,
+        `[loja] cartão recusado pedido=${order.wcOrderNumber} order=${gw?.id} status=${gw?.status}/${charge?.status}/${tx?.status}`,
       );
-      return { ok: false, error: this.mensagemRecusa(gw) };
+      return {
+        ok: false,
+        kind: 'recusa',
+        error: this.mensagemRecusa(gw),
+        detalhe: `recusa: order=${gw?.status} charge=${charge?.status} tx=${tx?.status} ${String(tx?.acquirer_message || tx?.acquirer_return_code || '').slice(0, 120)}`.trim(),
+        gatewayOrderId: gw?.id || null,
+        gatewayChargeId: charge?.id || null,
+      };
     }
 
-    return { ok: true, gatewayOrderId: gw.id, gatewayChargeId: charge?.id || null };
+    if (classe === 'pending') {
+      this.logger.warn(
+        `[loja] cartão EM ANÁLISE pedido=${order.wcOrderNumber} order=${gw?.id} status=${gw?.status}/${charge?.status}/${charge?.last_transaction?.status} ` +
+          `— pedido fica awaiting_payment; webhook/reconcile fecham`,
+      );
+    }
+
+    return { ok: true, status: classe, gatewayOrderId: gw.id, gatewayChargeId: charge?.id || null };
   }
 
   /**
@@ -1240,7 +1497,15 @@ export class LojaOrdersService {
      * (é dele que a cobrança e a etiqueta saem).
      */
     const conta = await this.reprecificar(input);
-    if (!conta.ok) return { ok: false, error: conta.erro, code: conta.code };
+    if (!conta.ok) {
+      return {
+        ok: false,
+        error: conta.erro,
+        code: conta.code,
+        ...(conta.item ? { item: conta.item } : {}),
+        ...(conta.quote ? { quote: conta.quote } : {}),
+      };
+    }
 
     // CRM antes da cobrança de propósito: mesmo que o cartão seja recusado, a
     // cliente fica cadastrada (é lead, não venda) e a próxima tentativa dela
@@ -1272,6 +1537,8 @@ export class LojaOrdersService {
       gatewayChargeId: null,
       pix: null,
     };
+    /** Cartão aprovado NA HORA — só ele chama `confirmarPagamento` abaixo. */
+    let cartaoPago = false;
 
     try {
       if (input.payment.method === 'pix') {
@@ -1299,19 +1566,56 @@ export class LojaOrdersService {
            * Tentou de novo e passou? Nasce outro pedido — o recusado fica
            * como registro da tentativa, mesmo papel do PagarmePayment
            * status='failed' que sempre ficou.
+           *
+           * O MOTIVO vai junto em `paymentInfo.falha` (17/08): só o status
+           * não dizia se foi limite, cartão vencido ou a Pagar.me fora — e a
+           * próxima investigação (como a de 14/08) precisa disso sem abrir o
+           * painel do gateway.
+           *
+           * `kind` decide o CÓDIGO que o site lê: recusa da operadora →
+           * `card_declined` ("tente outro cartão"); falha de integração →
+           * `payment_unavailable` (o texto do site pra esse código não manda
+           * trocar de cartão — porque o cartão não tem culpa).
            */
           await (this.prisma as any).order
-            .update({ where: { id: order.id }, data: { status: 'payment_failed' } })
+            .update({
+              where: { id: order.id },
+              data: {
+                status: 'payment_failed',
+                paymentInfo: JSON.stringify({
+                  ...paymentInfo,
+                  gatewayOrderId: r.gatewayOrderId ?? null,
+                  gatewayChargeId: r.gatewayChargeId ?? null,
+                  falha: r.detalhe,
+                  falhaTipo: r.kind,
+                  falhaEm: new Date().toISOString(),
+                }),
+              },
+            })
             .catch(async (e: any) => {
               this.logger.warn(`[loja] recusa não persistiu (${e?.message || e}) — descartando como antes`);
               await this.descartarPedido(order.id);
             });
-          return { ok: false, error: r.error, code: 'card_declined' };
+          return {
+            ok: false,
+            error: r.error,
+            code: r.kind === 'integracao' ? 'payment_unavailable' : 'card_declined',
+          };
         }
+        cartaoPago = r.status === 'paid';
         paymentInfo = {
           ...paymentInfo,
           gatewayOrderId: r.gatewayOrderId,
           gatewayChargeId: r.gatewayChargeId,
+          /**
+           * EM ANÁLISE (17/08): a operadora ainda não disse sim nem não. O
+           * pedido fica `awaiting_payment` como um PIX que ainda não caiu, e
+           * quem fecha é o webhook `charge.paid` ou o reconcile de 1 min
+           * (PASSO 2 consulta o gateway pelo `gatewayOrderId`). Marca aqui pra
+           * quem abrir o pedido saber que NÃO é PIX esperando a cliente — é
+           * cartão esperando a Pagar.me.
+           */
+          ...(r.status === 'pending' ? { cartaoEmAnalise: true, emAnaliseDesde: new Date().toISOString() } : {}),
         };
       }
     } catch (e: any) {
@@ -1365,10 +1669,11 @@ export class LojaOrdersService {
     );
 
     // Cartão aprovado paga na hora — o webhook que chega depois vira no-op.
-    if (input.payment.method === 'card') {
+    // Cartão EM ANÁLISE não passa aqui: confirmar sem `paid` seria liberar
+    // separação de um pagamento que o antifraude ainda pode reprovar.
+    if (input.payment.method === 'card' && cartaoPago) {
       await this.confirmarPagamento(order.id);
     }
-
 
     const fresh = await (this.prisma as any).order.findUnique({
       where: { id: order.id },
@@ -1609,6 +1914,22 @@ export class LojaOrdersService {
     });
     if (trava.count === 0) return { ok: true, already: true };
 
+    /**
+     * PAGO DEPOIS DE "RECUSADO" É CASO DE CONCILIAÇÃO, não de silêncio.
+     *
+     * Só chega aqui com `payment_failed` quando a cobrança que a gente deu
+     * como perdida entrou mesmo assim (timeout em que a Pagar.me cobrou, ou
+     * o antigo caminho que marcava análise como recusa). A cliente ouviu
+     * "não aprovado" e pode ter pago DE NOVO por outro caminho — quem
+     * concilia precisa olhar esse pedido e procurar a cobrança dobrada.
+     */
+    if (order.status === 'payment_failed') {
+      this.logger.warn(
+        `[loja][CONCILIAR] pedido ${order.wcOrderNumber} estava payment_failed e RECEBEU pagamento — ` +
+          `a cliente pode ter pago duas vezes (procurar outro pedido/cobrança dela). Liberado pra separação mesmo assim.`,
+      );
+    }
+
     const atualizado = await (this.prisma as any).order.findUnique({
       where: { id: order.id },
       include: { items: true },
@@ -1650,6 +1971,72 @@ export class LojaOrdersService {
      */
     void this.pedidoEmail.aoConfirmarPagamento(atualizado);
 
+    return { ok: true };
+  }
+
+  /**
+   * O OUTRO LADO DA ANÁLISE: a operadora disse NÃO depois de a gente ter
+   * deixado o pedido aguardando.
+   *
+   * Desde 17/08 o cartão em análise fica `awaiting_payment` (ver
+   * `classificarCartao`). Se o antifraude reprovar, ninguém mais mexe nesse
+   * pedido: o webhook grava `failed` no PagarmePayment e para aí, e o
+   * reconcile só confirma — nunca desfaz. O pedido ficaria "em processamento"
+   * pra sempre na tela da cliente e fora da aba Carrinhos.
+   *
+   * Este é o caminho pra fechar essa ponta. Quem chama: o webhook da Pagar.me
+   * (`charge.payment_failed`, `charge.antifraud_reproved`, `order.canceled`)
+   * e o reconcile quando `checkOrderStatus` voltar failed/canceled — SEMPRE
+   * com o `saleId` que veio do PagarmePayment, nunca com id vindo do payload.
+   *
+   * SÓ MEXE EM CARTÃO aguardando e sem `paidAt`, e faz isso num `updateMany`
+   * condicionado: chegou `paid` no meio do caminho, atualiza 0 linhas e sai.
+   * PIX não passa aqui de propósito — PIX vencido já vira `expired` no
+   * `statusPublico`, e "canceled" de PIX é a cliente que não pagou, não uma
+   * recusa.
+   */
+  async registrarRecusaTardia(orderId: string, motivo: string): Promise<{ ok: boolean; reason?: string }> {
+    if (!orderId) return { ok: false, reason: 'sem id' };
+
+    const order = await (this.prisma as any).order
+      .findFirst({
+        where: { id: orderId, source: 'ecommerce' },
+        select: { id: true, wcOrderNumber: true, status: true, paidAt: true, paymentInfo: true },
+      })
+      .catch(() => null);
+    if (!order) return { ok: false, reason: 'não é pedido da loja' };
+    if (order.paidAt) return { ok: false, reason: 'já pago' };
+    if (order.status !== 'awaiting_payment') return { ok: false, reason: `status ${order.status}` };
+
+    const pi = this.parseJson<any>(order.paymentInfo, {});
+    if (pi?.method !== 'card') return { ok: false, reason: 'não é cartão' };
+
+    const trava = await (this.prisma as any).order.updateMany({
+      where: { id: order.id, paidAt: null, status: 'awaiting_payment' },
+      data: {
+        status: 'payment_failed',
+        paymentInfo: JSON.stringify({
+          ...pi,
+          falha: String(motivo || 'recusa tardia').slice(0, 300),
+          falhaTipo: 'recusa',
+          falhaEm: new Date().toISOString(),
+        }),
+      },
+    });
+    if (trava.count === 0) return { ok: false, reason: 'mudou no meio do caminho' };
+
+    await (this.prisma as any).orderHistory
+      .create({
+        data: {
+          orderId: order.id,
+          fromStatus: 'awaiting_payment',
+          toStatus: 'payment_failed',
+          note: `Cartão recusado após análise (${String(motivo || '').slice(0, 120)})`,
+        },
+      })
+      .catch(() => undefined);
+
+    this.logger.warn(`[loja] pedido ${order.wcOrderNumber}: cartão em análise foi RECUSADO (${motivo}) — volta pra aba Carrinhos`);
     return { ok: true };
   }
 

@@ -59,9 +59,12 @@ export interface CotacaoFrete {
   opcoes: OpcaoFrete[];
   /** Régua vigente do frete grátis — o site desenha a barra de progresso com isto. */
   freteGratis: { ativo: boolean; minimo: number; alcancado: boolean; falta: number };
-  /** true = alguma opção saiu da estimativa (Correios não respondeu). */
+  /** true = alguma opção saiu da estimativa (Correios não responderam, ou não a tempo — `CORREIOS_ORCAMENTO_MS`). */
   estimado: boolean;
 }
+
+/** servico ('pac' | 'sedex') → preço e prazo que os Correios devolveram. */
+type MapaCotacao = Map<string, { preco: number; prazo: number | null }>;
 
 /* ───────────────────────── faixas de CEP → UF ──────────────────────────── */
 
@@ -136,6 +139,33 @@ export class FreteService {
   private cache = new Map<string, { at: number; dados: any }>();
   private static readonly CACHE_TTL = 20 * 60_000;
   private static readonly CACHE_MAX = 500;
+
+  /**
+   * ORÇAMENTO DE TEMPO da cotação dos Correios (17/08).
+   *
+   * O BFF do site (`ecommerce/src/app/api/loja/frete/route.ts`) desiste em 9 s
+   * e cai na tabela local — SEM promoção e SEM raio de retirada. Aqui não
+   * havia limite nenhum: auth 20 s + PAC 20 s + SEDEX 20 s (em série). Bastava
+   * os Correios responderem em ~6 s por chamada (o normal já é ~5 s no total,
+   * medido 17/08) pra cliente de SP ver "SEDEX R$ 24,90 estimado" no lugar do
+   * SEDEX R$ 9,99 anunciado — e a promoção NEM DEPENDE dos Correios.
+   *
+   * 7 s: fica abaixo dos 9 s do BFF com folga pra config + rede, e acima dos
+   * ~5 s normais. Estourou → devolve `null` (a `cotar` cai na estimativa
+   * marcada `estimado`), mas a chamada original continua e grava o cache
+   * quando responder — a próxima cotação desse CEP+peso já sai real.
+   */
+  private static readonly CORREIOS_ORCAMENTO_MS = 7_000;
+
+  /**
+   * Cotações EM VOO por chave (CEP+peso+altura). A tela de entrega re-dispara
+   * a cotação a cada mudança de subtotal/peças e o checkout cota de novo no
+   * clique do PIX — antes, cada uma abria OUTRA rodada nos Correios enquanto a
+   * primeira ainda rodava. Agora quem chega com a mesma chave aguarda a mesma
+   * promessa (com o seu próprio orçamento de tempo) e ela sai do mapa quando
+   * termina, de um jeito ou de outro.
+   */
+  private emVoo = new Map<string, Promise<MapaCotacao | null>>();
 
   private configCache: { at: number; cfg: any; promos: any[] } | null = null;
   private static readonly CONFIG_TTL = 60_000;
@@ -232,39 +262,98 @@ export class FreteService {
     return caixaDoSite(pecas);
   }
 
-  /** Cotação dos Correios com cache. `null` = não respondeu (cai na estimativa). */
-  private async cotarCorreios(cep: string, pecas: number): Promise<Map<string, { preco: number; prazo: number | null }> | null> {
+  /** Resposta crua do `CorreiosService` → mapa por serviço. Vazio = nada aproveitável. */
+  private montarMapa(r: any): MapaCotacao {
+    const mapa: MapaCotacao = new Map();
+    for (const o of r?.opcoes ?? []) {
+      if (o?.precoReais == null || !(Number(o.precoReais) > 0)) continue;
+      mapa.set(String(o.servico).toLowerCase(), {
+        preco: this.reais(o.precoReais),
+        prazo: o.prazoDias != null ? Number(o.prazoDias) : null,
+      });
+    }
+    return mapa;
+  }
+
+  /**
+   * A chamada COMPLETA aos Correios, sem orçamento de tempo: é ela que grava o
+   * cache quando terminar, mesmo que quem pediu já tenha desistido. NUNCA
+   * rejeita — falha vira `null` aqui dentro. Isso importa porque a promessa
+   * fica viva depois do race em `cotarCorreios`: uma rejeição tardia sem
+   * ninguém escutando viraria `unhandledRejection` e derrubaria o processo.
+   */
+  private cotarCorreiosCompleto(
+    chave: string,
+    cep: string,
+    c: { pesoGramas: number; comprimento: number; largura: number; altura: number },
+  ): Promise<MapaCotacao | null> {
+    return this.correios
+      .calcularFrete({
+        cepDestino: cep,
+        pesoGramas: c.pesoGramas,
+        comprimento: c.comprimento,
+        largura: c.largura,
+        altura: c.altura,
+      })
+      .then((r: any) => {
+        const mapa = this.montarMapa(r);
+        if (!mapa.size) return null;
+        if (this.cache.size > FreteService.CACHE_MAX) this.cache.clear();
+        this.cache.set(chave, { at: Date.now(), dados: mapa });
+        return mapa;
+      })
+      .catch((e: any) => {
+        this.logger.warn(`[frete] Correios não respondeu (${cep}): ${e?.message || e}`);
+        return null;
+      });
+  }
+
+  /**
+   * Cotação dos Correios com cache, dedupe de chamadas em voo e orçamento de
+   * tempo (`CORREIOS_ORCAMENTO_MS`). `null` = não respondeu A TEMPO (cai na
+   * estimativa) — a chamada completa segue rodando e aquece o cache.
+   */
+  private async cotarCorreios(cep: string, pecas: number): Promise<MapaCotacao | null> {
     const c = this.caixa(pecas);
     const chave = `${cep}:${c.pesoGramas}:${c.altura}`;
 
     const guardado = this.cache.get(chave);
     if (guardado && Date.now() - guardado.at < FreteService.CACHE_TTL) return guardado.dados;
 
-    try {
-      const r: any = await this.correios.calcularFrete({
-        cepDestino: cep,
-        pesoGramas: c.pesoGramas,
-        comprimento: c.comprimento,
-        largura: c.largura,
-        altura: c.altura,
+    // Já tem alguém cotando esta chave? Espera a mesma promessa em vez de
+    // abrir outra rodada nos Correios.
+    let completa = this.emVoo.get(chave);
+    if (!completa) {
+      const nova = this.cotarCorreiosCompleto(chave, cep, c);
+      this.emVoo.set(chave, nova);
+      // Sai do mapa ao terminar (só se ainda for a nossa — `invalidarCache`
+      // não mexe aqui, mas o guard custa nada). `nova` nunca rejeita, então o
+      // `.finally` encadeado também não.
+      void nova.finally(() => {
+        if (this.emVoo.get(chave) === nova) this.emVoo.delete(chave);
       });
+      completa = nova;
+    }
 
-      const mapa = new Map<string, { preco: number; prazo: number | null }>();
-      for (const o of r?.opcoes ?? []) {
-        if (o?.precoReais == null || !(Number(o.precoReais) > 0)) continue;
-        mapa.set(String(o.servico).toLowerCase(), {
-          preco: this.reais(o.precoReais),
-          prazo: o.prazoDias != null ? Number(o.prazoDias) : null,
-        });
+    const ESTOUROU = Symbol('estourou');
+    let timer: NodeJS.Timeout | undefined;
+    const orcamento = new Promise<typeof ESTOUROU>((resolve) => {
+      timer = setTimeout(() => resolve(ESTOUROU), FreteService.CORREIOS_ORCAMENTO_MS);
+    });
+
+    try {
+      const venceu = await Promise.race([completa, orcamento]);
+      if (venceu === ESTOUROU) {
+        this.logger.warn(
+          `[frete] Correios passaram de ${FreteService.CORREIOS_ORCAMENTO_MS}ms (${cep}, ${c.pesoGramas}g) ` +
+            `— respondendo com estimativa; o cache é gravado quando a cotação terminar.`,
+        );
+        return null;
       }
-      if (!mapa.size) return null;
-
-      if (this.cache.size > FreteService.CACHE_MAX) this.cache.clear();
-      this.cache.set(chave, { at: Date.now(), dados: mapa });
-      return mapa;
-    } catch (e: any) {
-      this.logger.warn(`[frete] Correios não respondeu (${cep}): ${e?.message || e}`);
-      return null;
+      return venceu;
+    } finally {
+      // A cotação venceu antes do prazo: não deixa o timer pendurado.
+      if (timer) clearTimeout(timer);
     }
   }
 

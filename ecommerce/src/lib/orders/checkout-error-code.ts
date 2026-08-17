@@ -5,6 +5,10 @@ const BACKEND_ERROR_CODES = new Set<CheckoutErrorCode>([
   'catalog_unavailable',
   'coupon_invalid',
   'shipping_invalid',
+  // 17/08: backend passa a devolver quando SÓ o frete subiu (recotação real
+  // maior que a tabela local que a tela mostrou). Sem entrar aqui caía em
+  // `api_rejected` e o site nunca reconhecia a cotação nova.
+  'shipping_changed',
   'validation_error',
   'rate_limited',
   'payment_unavailable',

@@ -14,7 +14,12 @@
  * `quoteShipping()` continua existindo e continua SÍNCRONA porque é o
  * PARAQUEDAS (item 20): backend fora do ar, a cliente ainda vê um preço e
  * fecha o pedido. O backend reconfere na hora de cobrar, então o pior caso é
- * o valor mudar entre a tela e a cobrança — nunca cobrar errado.
+ * o valor mudar entre a tela e a cobrança — nunca cobrar errado. E desde
+ * 17/08 "mudar" pra CIMA não passa calado: a tela manda o frete que mostrou
+ * (`shippingPriceSeen`) e o `POST /api/checkout` recusa criar o pedido com
+ * `shipping_changed` se o recotado subiu, devolvendo a cliente pra Entrega
+ * com o valor novo. Quando a lista sai daqui, `fetchQuotes` marca
+ * `origem: 'local'` e a etapa de entrega avisa + oferece "Recalcular".
  *
  * Retirada continua 100% local: depende de `data/stores.ts` e das faixas de
  * CEP das cidades atendidas, que o backend não tem.
@@ -221,12 +226,31 @@ export function findQuote(cep: string, subtotal: number, quoteId: string): Shipp
 
 /* ───────────────────────── cotação de verdade ──────────────────────────── */
 
+/**
+ * Por que a cotação do backend não veio (o BFF `/api/loja/frete` carimba):
+ * `rate_limit` = 429 do backend · `timeout` = 9s estourados · `backend` =
+ * respondeu sem cotação · `rede` = fetch falhou · `config` = env ausente.
+ */
+export type MotivoFalhaCotacao = 'rate_limit' | 'timeout' | 'backend' | 'rede' | 'config';
+
 export interface CotacaoDoSite {
   quotes: ShippingQuote[];
   /** Régua vigente — a barra de progresso da sacola lê daqui. */
   freteGratis: { ativo: boolean; minimo: number; alcancado: boolean; falta: number };
   /** true = veio da tabela local (backend fora) ou da estimativa do backend. */
   estimado: boolean;
+  /**
+   * DE ONDE saíram os números. `backend` é a cotação de verdade (mesmo que
+   * marcada `estimado`, porque os Correios não responderam — a promoção e a
+   * régua do frete grátis ainda são as cadastradas). `local` é o paraquedas:
+   * tabela deste arquivo, SEM promoção, e o valor pode mudar na hora de pagar.
+   * A tela precisa distinguir pra avisar — até 17/08 os dois casos eram o
+   * mesmo " · frete estimado" e a cliente de SP via SEDEX R$ 24,90 no lugar
+   * do R$ 9,99 anunciado sem nenhum aviso nem botão pra tentar de novo.
+   */
+  origem: 'backend' | 'local';
+  /** Só quando `origem === 'local'`: o motivo que o BFF viu (telemetria + retry). */
+  motivo?: MotivoFalhaCotacao;
   /** Texto da retirada em loja, cadastrado na retaguarda. */
   retirada?: { prazoHoras: number; instrucoes: string | null };
 }
@@ -234,9 +258,17 @@ export interface CotacaoDoSite {
 /**
  * As opções de entrega REAIS. Roda no navegador (a rota /api carrega o token).
  *
- * Sempre devolve algo: backend fora → tabela local marcada `estimado`. A
- * retirada é adicionada aqui nos dois casos, porque quem sabe quais lojas
- * atendem aquele CEP é o site.
+ * Sempre devolve algo: backend fora → tabela local marcada `estimado` e
+ * `origem:'local'`. A retirada é adicionada aqui nos dois casos, porque quem
+ * sabe quais lojas atendem aquele CEP é o site.
+ *
+ * UMA retentativa quando o BFF falhou por timeout/rede/backend — e NENHUMA
+ * no 429. Motivo: o abort de 9s do BFF não cancela o handler do Nest, que
+ * termina de falar com os Correios e grava o cache de 20 min; a segunda
+ * chamada volta em menos de 1s com a tabela promocional. Já o rate-limit é
+ * janela deslizante de 60s: retentar dentro do mesmo minuto só gasta o balde
+ * e atrasa a tela. `config` também não retenta (env não muda entre duas
+ * chamadas).
  */
 export async function fetchQuotes(
   cep: string,
@@ -246,7 +278,7 @@ export async function fetchQuotes(
 ): Promise<CotacaoDoSite> {
   const digits = onlyDigits(cep);
 
-  const local = (): CotacaoDoSite => ({
+  const local = (motivo?: MotivoFalhaCotacao): CotacaoDoSite => ({
     // Sem coordenada aqui de propósito: este é o caminho de EMERGÊNCIA
     // (backend fora), e ele não pode depender de mais nenhuma rede.
     quotes: quoteShipping(digits, subtotal),
@@ -257,30 +289,75 @@ export async function fetchQuotes(
       falta: Math.max(0, Math.round((FREE_SHIPPING_FROM - subtotal) * 100) / 100),
     },
     estimado: true,
+    origem: 'local',
+    ...(motivo ? { motivo } : {}),
   });
 
   if (!isValidCep(digits)) {
-    return { quotes: [], freteGratis: { ativo: false, minimo: 0, alcancado: false, falta: 0 }, estimado: false };
+    return {
+      quotes: [],
+      freteGratis: { ativo: false, minimo: 0, alcancado: false, falta: 0 },
+      estimado: false,
+      origem: 'local',
+    };
   }
 
+  const motivoDe = (dados: unknown): MotivoFalhaCotacao => {
+    const m = (dados as { motivo?: unknown } | null)?.motivo;
+    return m === 'rate_limit' || m === 'timeout' || m === 'backend' || m === 'rede' || m === 'config' ? m : 'backend';
+  };
+
+  type OpcaoBff = {
+    id?: string | number; kind?: string; label?: string;
+    price?: number | string; etaDays?: { min: number; max: number };
+    promocional?: boolean;
+  };
+  type RespostaBff = {
+    ok?: boolean;
+    opcoes?: OpcaoBff[];
+    motivo?: unknown;
+    freteGratis?: CotacaoDoSite['freteGratis'];
+    estimado?: boolean;
+    retirada?: CotacaoDoSite['retirada'];
+    coord?: Ponto | null;
+  } | null;
+
+  const chamar = async (): Promise<RespostaBff> => {
+    try {
+      const res = await fetch('/api/loja/frete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cep: digits, subtotal, pecas }),
+        signal,
+      });
+      return (await res.json().catch(() => null)) as RespostaBff;
+    } catch (err) {
+      // Cancelamento sobe (o `catch` de fora devolve a tabela local, que a
+      // tela descarta); falha de rede do celular vira `rede` e ganha a mesma
+      // retentativa única de qualquer outra falha.
+      if (signal?.aborted) throw err;
+      return { ok: false, motivo: 'rede' };
+    }
+  };
+
+  const semCotacao = (d: RespostaBff) => !d?.ok || !Array.isArray(d.opcoes) || !d.opcoes.length;
+
   try {
-    const res = await fetch('/api/loja/frete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cep: digits, subtotal, pecas }),
-      signal,
-    });
-    const dados = await res.json().catch(() => null);
-    if (!dados?.ok || !Array.isArray(dados.opcoes) || !dados.opcoes.length) return local();
+    let dados = await chamar();
+    if (semCotacao(dados)) {
+      const motivo = motivoDe(dados);
+      // Quem cancelou não quer resultado; 429 e env ausente não melhoram
+      // numa segunda chamada.
+      if (signal?.aborted || motivo === 'rate_limit' || motivo === 'config') return local(motivo);
+      dados = await chamar();
+      if (semCotacao(dados)) return local(motivoDe(dados));
+    }
+    if (!dados || !Array.isArray(dados.opcoes)) return local('backend');
 
     return {
       quotes: ordenarOpcoes([
         ...dados.opcoes.map(
-          (o: {
-            id?: string | number; kind?: string; label?: string;
-            price?: number | string; etaDays?: { min: number; max: number };
-            promocional?: boolean;
-          }): ShippingQuote => ({
+          (o: OpcaoBff): ShippingQuote => ({
             id: String(o.id),
             kind: o.kind === 'expressa' ? 'expressa' : 'correios',
             label: String(o.label),
@@ -301,12 +378,13 @@ export async function fetchQuotes(
         falta: Math.max(0, Math.round((FREE_SHIPPING_FROM - subtotal) * 100) / 100),
       },
       estimado: !!dados.estimado,
+      origem: 'backend',
       retirada: dados.retirada,
     };
   } catch {
     // AbortError incluído: quem cancelou não quer resultado, e devolver a
     // tabela local é inofensivo (a tela descarta).
-    return local();
+    return local('rede');
   }
 }
 

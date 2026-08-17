@@ -42,11 +42,44 @@ import { PromoSiteService } from '../promo-site/promo-site.service';
 
 export interface ItemCarrinho {
   sku: string;
+  /**
+   * Id da peça no e-commerce (o mesmo que o carrinho usa em `lineKey`). Não
+   * entra na conferência — só volta na recusa por preço, pra sacola achar a
+   * linha certa e atualizar sozinha (ver `ItemRecusado`).
+   */
+  productId?: string;
   name?: string;
   size?: string;
   color?: string;
   quantity: number;
   unitPrice: number;
+}
+
+/**
+ * A PEÇA QUE BARROU O PEDIDO POR PREÇO — devolvida junto com a recusa.
+ *
+ * Por que existe: o preço da sacola mora no localStorage do navegador e
+ * NINGUÉM o renova — nem F5, nem re-adicionar pela página do produto (o
+ * `add()` do carrinho só soma quantidade). Quando a promoção acaba entre o
+ * "adicionar" e o "pagar", a recusa dizia "atualize a página" e a página
+ * atualizada mandava o MESMO preço velho: recusa de novo, sem saída, até a
+ * cliente adivinhar que precisa remover a peça e colocar de volta.
+ *
+ * Com o índice, a variação e o `precoAtual` na resposta, o site corrige a
+ * linha na hora e mostra "passou de A pra B" — a compra volta a ficar a um
+ * clique. Nada disso cria pedido nem cobrança: a recusa acontece ANTES do
+ * `criarOrder`, e o preço que vale continua sendo o do catálogo.
+ */
+export interface ItemRecusado {
+  /** Índice no array que o site mandou. */
+  indice: number;
+  productId: string;
+  size: string | null;
+  color: string | null;
+  /** Preço que o catálogo cobra AGORA (o que a sacola precisa passar a mostrar). */
+  precoAtual: number;
+  /** Preço que a sacola mandou (o que a cliente viu). */
+  precoInformado: number;
 }
 
 export interface ItemConferido {
@@ -64,7 +97,9 @@ export interface ItemConferido {
 }
 
 export type ResultadoGuard =
-  | { ok: false; erro: string }
+  /** `item` só vem na recusa por PREÇO — as outras recusas (esgotou, saiu do
+   *  site, cor/tamanho sumiu) já dizem o que fazer e não têm valor a corrigir. */
+  | { ok: false; erro: string; item?: ItemRecusado }
   | { ok: true; itens: ItemConferido[]; subtotal: number };
 
 /** Linha crua do espelho. */
@@ -491,14 +526,32 @@ export class CarrinhoGuardService {
           /**
            * Catálogo MAIS CARO que a página que a cliente leu. Não cobra a
            * diferença em silêncio — isso é o que gera chargeback e reclamação.
-           * Manda recarregar e mostra o preço novo.
+           *
+           * A frase antiga mandava "atualizar a página", e atualizar não
+           * mudava nada: o preço fica congelado no localStorage da sacola
+           * (auditoria de 17/08 — só remover a peça e adicionar de novo saía
+           * do loop, e ninguém dizia isso). Agora a recusa leva o preço novo
+           * e a variação exata em `item`: o site corrige a linha sozinho e a
+           * cliente só confere o total. A frase serve de rede pra quem ainda
+           * não recebeu essa correção da sacola.
            */
           this.logger.warn(
             `[guard] REF ${ref} subiu de ${precoInformado.toFixed(2)} pra ${precoCatalogo.toFixed(2)} — pedido recusado`,
           );
+          const brl = (v: number) => v.toFixed(2).replace('.', ',');
           return {
             ok: false,
-            erro: `O preço de "${nomePeca}" foi atualizado enquanto você comprava. Atualize a página pra ver o valor certo antes de pagar. 💜`,
+            erro:
+              `O preço de "${nomePeca}" passou de R$ ${brl(precoInformado)} para R$ ${brl(precoCatalogo)} enquanto você comprava. ` +
+              `Confira o novo total antes de pagar — se a sacola não atualizar, remova a peça e adicione de novo. 💜`,
+            item: {
+              indice: i,
+              productId: String(it.productId || it.sku),
+              size: it.size ? String(it.size) : null,
+              color: it.color ? String(it.color) : null,
+              precoAtual: precoCatalogo,
+              precoInformado,
+            },
           };
         }
         /**

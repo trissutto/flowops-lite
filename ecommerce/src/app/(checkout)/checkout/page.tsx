@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ShoppingBag } from 'lucide-react';
-import { useCartStore, useCartSubtotal } from '@/store/cart';
+import { lineKey, useCartStore, useCartSubtotal } from '@/store/cart';
 import { useMounted } from '@/hooks';
 import { Container } from '@/components/layout/Container';
 import { EmptyState } from '@/components/feedback/EmptyState';
@@ -14,7 +14,6 @@ import { ShippingStep, type ShippingSelection } from '@/components/checkout/Ship
 import { PaymentStep, type PaymentSelection } from '@/components/checkout/PaymentStep';
 import { ReviewCard } from '@/components/checkout/ReviewCard';
 import { OrderSummary } from '@/components/checkout/OrderSummary';
-import { PixPanel } from '@/components/checkout/PixPanel';
 import { maskPhone } from '@/components/checkout/masks';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { PIX_DESCONTO_PCT, pixDiscount, pixTotal } from '@/lib/commerce/pix';
@@ -38,6 +37,7 @@ import {
   getMetaBrowserIds,
   getSessionId,
 } from '@/lib/tracking/identity';
+import type { CartLine } from '@/types';
 import type {
   CouponResult,
   CheckoutContact,
@@ -45,7 +45,6 @@ import type {
   CreateOrderResult,
   CustomerIdentity,
   CheckoutErrorCode,
-  Order,
 } from '@/types/checkout';
 
 /**
@@ -62,6 +61,14 @@ import type {
  * frete) e conferido de novo pelo BACKEND FlowOps, dono do pedido desde a
  * sprint 011. Se divergirem, o do backend vence — e é o que o PixPanel mostra
  * depois do pedido criado.
+ *
+ * DEPOIS DO PEDIDO CRIADO A PÁGINA NÃO GUARDA NADA (17/08). PIX ou cartão, o
+ * destino é `/checkout/confirmacao/:id`, que lê o pedido do servidor — o
+ * PixPanel vive lá. Antes o pedido PIX morava num `useState` daqui: F5,
+ * "voltar" ou a aba descartada quando a cliente ia pro app do banco
+ * zeravam o estado, e como a sacola já tinha sido limpa ela caía em "Sua
+ * sacola está vazia" sem QR, sem link, sem e-mail — pra pagar precisava
+ * remontar tudo e nascia um 2º pedido. Ver `finalizar()`.
  */
 
 type Step = 1 | 2 | 3 | 4;
@@ -104,10 +111,28 @@ const AVISO_POR_CAMPO: Record<string, string> = {
   shippingQuoteId: 'A opção de entrega expirou. Abra a seção Entrega e escolha o frete de novo.',
   item_size: 'Uma peça da sacola está com o tamanho fora do padrão. Remova e adicione ela de novo.',
   item_image_src: 'Uma peça da sacola está sem foto no cadastro. Remova e adicione ela de novo.',
-  item_unitPrice: 'O preço de uma peça mudou. Atualize a página e confira a sacola.',
+  // "Atualize a página" não atualizava nada: o preço fica congelado na sacola
+  // (localStorage) e F5 restaura o mesmo. Remover e readicionar é o que renova.
+  item_unitPrice: 'O preço de uma peça mudou. Remova a peça da sacola e adicione ela de novo.',
   total: 'Algo não fechou no total do pedido. Revise a sacola e tente novamente.',
 };
 
+/**
+ * SERVER > LOCAL > FALLBACK (17/08).
+ *
+ * A frase do servidor tem precedência: ela é específica por contrato — "o
+ * cartão não tinha limite disponível", "\"Vestido X\" no tamanho 50 acabou de
+ * esgotar", "esse vale-troca é nominal" — e o BFF só repassa texto já curado
+ * (`OrderStoreError.publico`, nunca status/stack). De 15 a 17/08 a ordem
+ * estava invertida (#899): o texto local genérico vencia SEMPRE, porque
+ * `mensagens` cobre todos os códigos do backend. Cartão sem limite virava
+ * "confira os dados, tente outro cartão" — a cliente redigitava o MESMO
+ * cartão, tomava a 2ª e a 3ª recusa, e da 3ª em diante a aprovação é zero.
+ *
+ * Os textos locais ficam como fallback pra quando o servidor não conseguiu
+ * dizer nada (rede, resposta inválida) ou mandou `error` vazio — por isso o
+ * `||` na frente: `??` deixaria a string vazia passar.
+ */
 function mensagemAcionavel(
   code: CheckoutErrorCode,
   serverMessage: string | undefined,
@@ -115,7 +140,7 @@ function mensagemAcionavel(
 ): string {
   const mensagens: Partial<Record<CheckoutErrorCode, string>> = {
     card_declined: 'O cartão não aprovou esta compra. Confira os dados, tente outro cartão ou escolha Pix.',
-    catalog_unavailable: 'Uma peça, preço ou estoque mudou enquanto você comprava. Revise a sacola antes de tentar novamente.',
+    catalog_unavailable: 'Uma peça, preço ou estoque mudou enquanto você comprava. Ajuste a sacola antes de tentar novamente.',
     coupon_invalid: 'O cupom não está mais válido para este pedido. Remova ou troque o cupom e tente novamente.',
     shipping_invalid: 'A opção de entrega mudou ou expirou. Volte à entrega e escolha o frete novamente.',
     validation_error: 'Alguns dados do pedido precisam ser revisados antes de continuar.',
@@ -125,7 +150,58 @@ function mensagemAcionavel(
     network_error: 'A conexão falhou antes da confirmação. Seus dados continuam preenchidos; tente novamente.',
     invalid_response: ERRO_GENERICO,
   };
-  return mensagens[code] ?? serverMessage ?? (method === 'card' ? ERRO_CARTAO : ERRO_GENERICO);
+  return (
+    (serverMessage?.trim() || undefined) ??
+    mensagens[code] ??
+    (method === 'card' ? ERRO_CARTAO : ERRO_GENERICO)
+  );
+}
+
+/**
+ * A peça que o backend recusou por PREÇO, com o preço de agora — vem em
+ * `item` na recusa `catalog_unavailable` do backend novo. Tipado aqui e lido
+ * de forma tolerante porque o backend (Railway) e o site (Vercel) sobem em
+ * momentos diferentes: sem o campo, o fluxo é o de sempre.
+ */
+interface ItemRecusado {
+  productId: string;
+  /** Vazio quando o backend não tinha tamanho (manda `null`). */
+  size: string;
+  color?: string;
+  precoAtual: number;
+}
+
+function itemRecusadoDe(result: CreateOrderResult | null): ItemRecusado | undefined {
+  const raw = (result as (CreateOrderResult & { item?: unknown }) | null)?.item;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.productId !== 'string' || !o.productId) return undefined;
+  if (typeof o.precoAtual !== 'number' || !Number.isFinite(o.precoAtual) || o.precoAtual <= 0) return undefined;
+  return {
+    productId: o.productId,
+    size: typeof o.size === 'string' ? o.size : '',
+    color: typeof o.color === 'string' && o.color ? o.color : undefined,
+    precoAtual: o.precoAtual,
+  };
+}
+
+/**
+ * Casa a peça recusada com a linha da sacola: pela chave exata
+ * (produto+tamanho+cor), depois produto+tamanho, depois só produto — este
+ * último SÓ se for uma linha só (duas cores/tamanhos do mesmo produto sem
+ * tamanho na resposta é ambíguo, e mexer no preço da linha errada é pior
+ * que mandar a cliente ajustar a sacola).
+ */
+function linhaRecusada(lines: CartLine[], item: ItemRecusado): CartLine | undefined {
+  if (item.size) {
+    const exata = lines.find((l) => l.id === lineKey(item.productId, item.size, item.color));
+    if (exata) return exata;
+    const porTamanho = lines.filter((l) => l.productId === item.productId && l.size === item.size);
+    if (porTamanho.length === 1) return porTamanho[0];
+    return undefined;
+  }
+  const porProduto = lines.filter((l) => l.productId === item.productId);
+  return porProduto.length === 1 ? porProduto[0] : undefined;
 }
 
 export default function CheckoutPage() {
@@ -134,6 +210,7 @@ export default function CheckoutPage() {
 
   const lines = useCartStore((s) => s.lines);
   const clearCart = useCartStore((s) => s.clear);
+  const refreshPrice = useCartStore((s) => s.refreshPrice);
   const subtotal = useCartSubtotal();
 
   /* Estado das 4 seções — a página é a dona da sequência. */
@@ -150,9 +227,31 @@ export default function CheckoutPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [failureCount, setFailureCount] = useState(0);
   const [lastErrorCode, setLastErrorCode] = useState<CheckoutErrorCode | null>(null);
-  /** Pedido criado aguardando PIX — troca a página inteira pelo PixPanel. */
-  const [pixOrder, setPixOrder] = useState<Order | null>(null);
+  /**
+   * Pedido criado no servidor, navegação pra confirmação em andamento. Segura
+   * o skeleton no lugar do "Sua sacola está vazia": a sacola é limpa ANTES do
+   * `router.replace` (senão um F5 no meio criaria pedido duplicado) e, sem
+   * esta flag, a tela piscaria vazia entre o clear e a troca de rota.
+   */
+  const [pedidoCriado, setPedidoCriado] = useState(false);
   const [draftReady, setDraftReady] = useState(false);
+  /** O bloco `role="alert"` do ReviewCard — pra rolar/focar quando o erro nasce. */
+  const erroRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * ERRO VISÍVEL, SEMPRE. O aviso nasce no ReviewCard, logo abaixo do CTA —
+   * mas no celular com o teclado aberto ou o formulário do cartão na tela
+   * ele ainda pode ficar fora da dobra. `block: 'nearest'` só rola se
+   * precisar; `failureCount` nas deps re-rola quando a MESMA mensagem repete
+   * (a string não muda, a tentativa sim). O foco leva o leitor de tela junto.
+   */
+  useEffect(() => {
+    if (!submitError) return;
+    const el = erroRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    el.focus({ preventScroll: true });
+  }, [submitError, failureCount]);
 
   useEffect(() => {
     const draft = readCheckoutDraft(window.sessionStorage);
@@ -219,7 +318,16 @@ export default function CheckoutPage() {
 
   /* Totais de EXIBIÇÃO (o server recalcula os que valem). */
   const freteGratisCupom = coupon?.ok === true && coupon.kind === 'shipping';
-  const shippingPrice = shipping ? (freteGratisCupom ? 0 : shipping.quote.price) : undefined;
+  /**
+   * A MESMA regra do BFF (api/checkout/route.ts): o cupom de frete zera o
+   * ECONÔMICO (Correios), nunca o expresso nem a retirada (que já é 0). A
+   * tela zerava qualquer opção — SEDEX + FRETEGRATIS aparecia "Grátis" e o
+   * BFF cobrava o SEDEX calado. Desde que o preço que a cliente VIU viaja
+   * no pedido (`shippingPriceSeen`), tela e BFF precisam concordar, senão o
+   * BFF recusa por "frete mudou" um frete que só a tela tinha zerado.
+   */
+  const freteZerado = (q: ShippingSelection['quote']) => freteGratisCupom && q.kind === 'correios';
+  const shippingPrice = shipping ? (freteZerado(shipping.quote) ? 0 : shipping.quote.price) : undefined;
   const discount = coupon?.ok ? coupon.discount : 0;
   /**
    * O Pix desconta de verdade a partir de 06/08 — antes a tela prometia 5% em
@@ -265,9 +373,26 @@ export default function CheckoutPage() {
     if (failureCount > 0) trackPaymentRetry(pagamento.method, failureCount + 1);
     trackCheckoutSubmission(pagamento.method);
 
+    /**
+     * O QUE ELA LEU NA TELA (17/08). Calculado AQUI, do argumento `pagamento`
+     * — o `total` de render usa `payment?.method` do estado, que no clique
+     * ainda é o velho. O BFF compara o frete recotado com `shippingPriceSeen`
+     * e recusa ANTES de criar pedido se subiu (`shipping_changed`); e manda
+     * `min(totalSeen, total dele)` como teto pro backend — o teto passa a
+     * proteger o número que ela leu, não a conta do próprio BFF. Aba antiga
+     * do BFF ignora os dois campos (zod `.optional().catch(undefined)`).
+     */
+    const arredonda = (v: number) => Math.round(v * 100) / 100;
+    const freteVisto = arredonda(freteZerado(shipping.quote) ? 0 : shipping.quote.price);
+    const totalVisto = arredonda(
+      subtotal - discount - pixDiscount(subtotal - discount, pagamento.method) + freteVisto,
+    );
+
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
     // ao GA4, fbp/fbc casam a CAPI, attribution fecha o "de onde veio".
-    const input: CreateOrderInput = {
+    const input: CreateOrderInput & { shippingPriceSeen: number; totalSeen: number } = {
+      shippingPriceSeen: freteVisto,
+      totalSeen: totalVisto,
       customer: cliente,
       shippingAddress: shipping.address,
       shippingQuoteId: shipping.quote.id,
@@ -304,14 +429,54 @@ export default function CheckoutPage() {
         const field = result?.field;
         trackCheckoutError(pagamento.method, code, { stage: 'submission', attempt, field });
         if (code === 'card_declined') trackCardDeclined(attempt);
-        // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
-        // elegante e é específica ("cartão recusado", "cupom expirou") — bem
-        // mais útil que o genérico. Os textos locais cobrem só o que acontece
-        // quando o server não conseguiu dizer nada. E o aviso POR CAMPO ganha
-        // dos dois: repetir a mesma tentativa sem saber o que corrigir é o que
-        // fazia a cliente desistir depois da sexta vez.
+
+        // O FRETE SUBIU ENTRE A TELA E O PEDIDO: o BFF recusou ANTES de criar
+        // qualquer coisa e mandou a cotação nova. Atualizamos o preço da opção
+        // já escolhida (o resumo passa a mostrar o valor que vale) e a frase
+        // do BFF diz "de R$ X pra R$ Y"; o próximo Finalizar manda o preço novo
+        // como `shippingPriceSeen` e passa. Sem isto o clique seguinte
+        // repetiria o preço velho e a recusa — em loop.
+        if ((code as string) === 'shipping_changed') {
+          const q = (result as { quote?: { price?: unknown } } | null)?.quote;
+          const novoPreco = typeof q?.price === 'number' && Number.isFinite(q.price) ? q.price : undefined;
+          if (novoPreco !== undefined) {
+            setShipping((atual) => (atual ? { ...atual, quote: { ...atual.quote, price: novoPreco } } : atual));
+          }
+          setSubmitError(
+            result?.error?.trim() ||
+              'O frete pro seu CEP foi atualizado. Confira a entrega antes de pagar — nada foi cobrado.',
+          );
+          return;
+        }
+
+        // PREÇO SUBIU ENTRE O ADD E O CHECKOUT: o backend novo diz QUAL peça e
+        // QUANTO custa agora. Reescrevemos o preço na sacola (o guard só
+        // recusa quando o catálogo está MAIOR que o informado, então mandar o
+        // preço atual é o único caminho que passa) e a compra volta a ficar a
+        // um clique — antes a frase era "atualize a página", e F5 restaurava a
+        // mesma sacola com o mesmo preço congelado. Nada foi criado no
+        // servidor: a recusa acontece antes de pedido/cobrança existirem.
+        const item = code === 'catalog_unavailable' ? itemRecusadoDe(result) : undefined;
+        if (item) {
+          const linha = linhaRecusada(lines, item);
+          if (linha && Math.abs(linha.unitPrice - item.precoAtual) > 0.009) {
+            const antes = linha.unitPrice;
+            refreshPrice(linha.id, item.precoAtual);
+            setSubmitError(
+              `O preço de ${linha.name} passou de ${formatPrice(antes)} pra ${formatPrice(item.precoAtual)} — confira o total e finalize.`,
+            );
+            return;
+          }
+        }
+
+        // SERVER > LOCAL > FALLBACK (ver `mensagemAcionavel`). O aviso POR
+        // CAMPO ganha dos dois: repetir a mesma tentativa sem saber o que
+        // corrigir é o que fazia a cliente desistir depois da sexta vez.
+        // `backend_validacao` NÃO é campo — é a marca de telemetria de que o
+        // `validation_error` nasceu no backend (route.ts); nesse caso a frase
+        // do backend já diz o campo ("O CPF informado não parece completo").
         setSubmitError(
-          (field ? AVISO_POR_CAMPO[field] : undefined) ??
+          (field && field !== 'backend_validacao' ? AVISO_POR_CAMPO[field] : undefined) ??
             mensagemAcionavel(code, result?.error, pagamento.method),
         );
         return;
@@ -319,7 +484,10 @@ export default function CheckoutPage() {
 
       // Pedido existe no server → a sacola local cumpriu o papel dela.
       // (Se o PIX expirar, o produto volta pro estoque no server; manter a
-      // sacola viva aqui criaria pedido duplicado no F5.)
+      // sacola viva aqui criaria pedido duplicado no F5.) `pedidoCriado`
+      // entra no MESMO lote de estado que o clear: a tela segura o skeleton
+      // em vez de piscar "sacola vazia" enquanto a rota troca.
+      setPedidoCriado(true);
       clearCheckoutDraft(window.sessionStorage);
       clearCart();
 
@@ -331,8 +499,11 @@ export default function CheckoutPage() {
       // Quem dispara é o SERVER, no webhook de pagamento (docs/purchase.md).
       if (result.order.payment.method === 'pix' && result.order.payment.pix) {
         trackPixCreated();
-        setPixOrder(result.order);
-        window.scrollTo({ top: 0 });
+        // A URL É O ESTADO DO PIX. `replace`, não `push`: "voltar" não pode
+        // reabrir um /checkout vazio por cima do código que ela precisa pagar.
+        // A confirmação lê o pedido pelo GET (que já traz QR + copia-e-cola)
+        // e desenha o PixPanel enquanto o status for `awaiting_payment`.
+        router.replace(`/checkout/confirmacao/${result.order.id}`);
       } else {
         router.push(`/checkout/confirmacao/${result.order.id}`);
       }
@@ -354,14 +525,9 @@ export default function CheckoutPage() {
   // e o client discordam — skeleton segura a tela sem flash de "sacola vazia".
   if (!mounted || !draftReady) return <CheckoutSkeleton />;
 
-  // Pedido PIX criado: a página vira o painel de pagamento.
-  if (pixOrder) {
-    return (
-      <Container width="page" className="py-10 lg:py-16">
-        <PixPanel order={pixOrder} />
-      </Container>
-    );
-  }
+  // Pedido criado, indo pra /checkout/confirmacao/:id — a sacola já foi
+  // limpa; sem isto a cliente veria "sacola vazia" por um instante.
+  if (pedidoCriado) return <CheckoutSkeleton />;
 
   if (lines.length === 0) {
     return (
@@ -552,6 +718,20 @@ export default function CheckoutPage() {
                   setLastErrorCode(null);
                   setPayment({ method: 'pix' });
                 }}
+                // Saídas por código, desde a 1ª falha (ver ReviewCard).
+                onRemoveCoupon={
+                  coupon
+                    ? () => {
+                        handleRemoveCoupon();
+                        setSubmitError(null);
+                      }
+                    : undefined
+                }
+                onEditShipping={() => {
+                  setSubmitError(null);
+                  setStep(2);
+                }}
+                alertRef={erroRef}
                 onSubmit={() => void finalizar()}
                 reenvioNoFormulario={payment.method === 'card'}
               />

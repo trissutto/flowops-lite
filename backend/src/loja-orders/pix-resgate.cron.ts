@@ -22,8 +22,12 @@ import { PedidoEmailService } from './pedido-email.service';
  *  - UM toque por pedido, pra sempre (`pixResgateAvisadoEm`). Lembrete
  *    ajuda; o segundo lembrete é cobrança.
  *  - Só DENTRO da validade do PIX (o copia-e-cola de pedido vencido é
- *    convite pra pagar no vazio). A janela padrão 30min–2h segue a validade
- *    do QR da Pagar.me.
+ *    convite pra pagar no vazio). A janela vai de `PIX_RESGATE_MIN` até a
+ *    validade do QR — a MESMA `PIX_EXPIRA_MIN` que a criação do PIX usa
+ *    (`LojaOrdersService`, 24h desde 16/08). Até 17/08 a validade estava
+ *    chumbada aqui em 120min, sobra da época do PIX de 2h: quando a
+ *    validade subiu pra 24h o cron não acompanhou e o único resgate morria
+ *    2h depois de um PIX que ainda valia 22h.
  *  - Carimba SÓ depois do n8n aceitar o POST — rede falhou, tenta no ciclo
  *    seguinte; a janela limita a insistência sozinha.
  *  - Pedido que pagou entre a busca e o toque não recebe (recheca `paidAt`).
@@ -36,9 +40,22 @@ export class PixResgateCron {
 
   private rodando = false;
 
-  /** Validade do PIX da Pagar.me — depois disso o código morreu. */
-  private static readonly VALIDADE_MIN = 120;
   private static readonly MAX_POR_CICLO = 20;
+
+  /**
+   * Validade do PIX da Pagar.me — depois disso o código morreu.
+   *
+   * MESMA env e MESMA expressão de `LojaOrdersService.PIX_EXPIRA_MIN`
+   * (loja-orders.service.ts), que é quem manda `expiresInMinutes` pra
+   * Pagar.me. Não é constante estática de propósito: lida a cada ciclo,
+   * pra que mudar a env no Railway (que reinicia o app) e o teste que
+   * mexe em `process.env` enxerguem o valor novo. Se um dia isso virar
+   * constante compartilhada, trocar AQUI e lá juntos — divergir os dois é
+   * exatamente o que aconteceu entre 16/08 e 17/08.
+   */
+  private get validadeMin(): number {
+    return Number(process.env.PIX_EXPIRA_MIN) || 1440;
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -70,8 +87,29 @@ export class PixResgateCron {
 
   private async varrer(): Promise<void> {
     const agora = Date.now();
-    const fimJanela = new Date(agora - this.esperaMin * 60_000);
-    const inicioJanela = new Date(agora - PixResgateCron.VALIDADE_MIN * 60_000);
+    const esperaMin = this.esperaMin;
+    const validadeMin = this.validadeMin;
+
+    // Janela invertida = `PIX_RESGATE_MIN` maior ou igual à validade do PIX
+    // (ex.: alguém sobe a espera pra 180 com o PIX de 120). O `findMany`
+    // abaixo ficaria com `gte > lte`, acharia zero pedidos e o cron pararia
+    // de resgatar EM SILÊNCIO — o mesmo defeito que este cron existe pra
+    // evitar. Avisa alto e não varre; corrige-se na env, não aqui.
+    if (esperaMin >= validadeMin) {
+      this.logger.warn(
+        `[pix-resgate] janela invertida: PIX_RESGATE_MIN=${esperaMin} >= validade do PIX ${validadeMin}min (PIX_EXPIRA_MIN) — nada varrido`,
+      );
+      return;
+    }
+
+    const fimJanela = new Date(agora - esperaMin * 60_000);
+    // Limite inferior FICA NO BANCO (createdAt >= agora − validade), não em
+    // memória: a busca traz no máximo 100 linhas em ordem de criação e só
+    // filtra o consentimento depois do parse — sem esse piso, os pedidos
+    // velhos sem opt-in (a maioria) ocupariam as 100 vagas pra sempre e os
+    // novos nunca chegariam ao toque. O `expiresAt` real de cada PIX é
+    // conferido em memória logo antes de tocar (`pixAindaVale`).
+    const inicioJanela = new Date(agora - validadeMin * 60_000);
 
     const pendentes = await (this.prisma as any).order.findMany({
       where: {
@@ -82,7 +120,15 @@ export class PixResgateCron {
         createdAt: { gte: inicioJanela, lte: fimJanela },
         // Só PIX: cartão recusado é outro fluxo (a cliente já viu o erro na
         // tela na hora — lembrete de cartão não resgata, constrange).
-        paymentInfo: { contains: '"pix"' },
+        //
+        // `"method":"pix"` e não `"pix"` (17/08): o cartão EM ANÁLISE agora
+        // fica `awaiting_payment` e o paymentInfo dele é
+        // `{"method":"card",...,"pix":null,"cartaoEmAnalise":true}` — a
+        // substring `"pix"` casava com o `"pix":null` e a cliente que já tinha
+        // pago no cartão recebia "seu Pix está esperando". `JSON.stringify`
+        // não põe espaço depois dos dois-pontos, então a chave casa em pedido
+        // novo e antigo. `pixAindaVale` reforça pelo lado de dentro.
+        paymentInfo: { contains: '"method":"pix"' },
       },
       include: { items: true },
       orderBy: { createdAt: 'asc' },
@@ -94,6 +140,11 @@ export class PixResgateCron {
 
     const consentidos = pendentes
       .filter((pedido: any) => this.temConsentimento(pedido.trackingInfo))
+      // O piso por `createdAt` é aproximação: se a env baixou depois de o
+      // PIX nascer (ou a Pagar.me devolveu outro `expiresAt`), o pedido
+      // ainda cabe na busca com o código já morto. Vencido não recebe
+      // toque — e não gasta vaga do ciclo.
+      .filter((pedido: any) => this.pixAindaVale(pedido.paymentInfo, agora))
       .slice(0, PixResgateCron.MAX_POR_CICLO);
 
     for (const pedido of consentidos) {
@@ -125,6 +176,31 @@ export class PixResgateCron {
       return JSON.parse(trackingInfo)?.recovery_consent === true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * `paymentInfo.pix.expiresAt` (ISO gravado por `cobrarPix`) ainda no
+   * futuro? Sem o campo ou com JSON quebrado responde SIM: quem barra o
+   * vencido de verdade é o piso de `createdAt` na busca — esta checagem só
+   * afina; falhar fechado aqui deixaria pedido antigo (sem `expiresAt`) sem
+   * o único toque por causa de um campo que ele nunca teve.
+   */
+  private pixAindaVale(paymentInfo: unknown, agora: number): boolean {
+    if (typeof paymentInfo !== 'string' || !paymentInfo) return true;
+    try {
+      const parsed = JSON.parse(paymentInfo);
+      // Não é PIX (cartão em análise, `pix:null`) → não é deste cron. Segunda
+      // barreira além do filtro do banco: falhar aqui é mandar "seu Pix está
+      // esperando" pra quem pagou no cartão.
+      if (parsed?.method && parsed.method !== 'pix') return false;
+      if (parsed && 'pix' in parsed && !parsed.pix) return false;
+      const expiraEm = parsed?.pix?.expiresAt;
+      if (!expiraEm) return true;
+      const ts = Date.parse(String(expiraEm));
+      return Number.isNaN(ts) ? true : ts > agora;
+    } catch {
+      return true;
     }
   }
 }

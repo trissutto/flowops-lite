@@ -31,10 +31,27 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { pixDiscount } from '@/lib/commerce/pix';
-import { resolverFrete } from '@/lib/commerce/frete-server';
+import { resolverFrete, type FreteResolvido } from '@/lib/commerce/frete-server';
 import { campoDoZod } from '@/lib/orders/campo-reprovado';
 import { getOrderStore, OrderStoreError, type NewOrderPayload } from '@/lib/orders/store';
+import { formatPrice } from '@/lib/utils';
 import type { CreateOrderResult, Order } from '@/types/checkout';
+
+/**
+ * Resposta do "o frete que você viu mudou" (17/08) — o pré-check DESTE BFF.
+ * `CheckoutErrorCode` já tem `'shipping_changed'` e `CreateOrderResult` já
+ * tem `quote` (o backend também devolve esse code quando só o frete subiu na
+ * recotação dele); aqui a `quote` é a `FreteResolvido` inteira, que carrega
+ * mais campo (kind, estimado…) e é o que a tela de Entrega consome de volta.
+ */
+type ShippingChangedResult = Omit<CreateOrderResult, 'code' | 'ok' | 'quote'> & {
+  ok: false;
+  code: 'shipping_changed';
+  /** A opção recotada agora, com o preço que VALE — a tela volta pra Entrega com ela. */
+  quote: FreteResolvido;
+  /** O que a cliente tinha lido — pro aviso "R$ X → R$ Y". */
+  shippingPriceSeen: number;
+};
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -136,6 +153,22 @@ const bodySchema = z.object({
   // por este servidor nem pelo backend). Só o token trafega.
   cardToken: z.string().min(5).max(200).optional(),
   tracking: trackingSchema,
+  /**
+   * O QUE A CLIENTE LEU NA TELA (17/08): frete já com o cupom de frete
+   * aplicado e total do resumo pro meio de pagamento escolhido.
+   *
+   * Até aqui só o `shippingQuoteId` viajava; o BFF recotava e cobrava o dele,
+   * e o TETO do backend comparava com o total DO BFF — nunca com o da tela.
+   * Se a tela tinha caído na tabela local (PAC SP 14,90) e na hora do PIX o
+   * cache do backend já estava quente (PAC real 21,xx), o QR nascia R$ 6-7
+   * acima do resumo que ela acabou de ler. No cartão é pior: cobra no ato.
+   *
+   * `.optional().catch(undefined)`: aba aberta antes do deploy não manda os
+   * campos e continua fechando pedido do jeito antigo (informado = total do
+   * BFF). Valor torto vira ausente, nunca derruba o pedido.
+   */
+  shippingPriceSeen: z.number().min(0).optional().catch(undefined),
+  totalSeen: z.number().min(0).optional().catch(undefined),
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -173,7 +206,7 @@ function clientIp(req: Request): string {
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
-export async function POST(req: Request): Promise<NextResponse<CreateOrderResult>> {
+export async function POST(req: Request): Promise<NextResponse<CreateOrderResult | ShippingChangedResult>> {
   const ip = clientIp(req);
   if (excedeuLimite(ip)) {
     return NextResponse.json(
@@ -242,12 +275,22 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   // Frete: recotado pelo CEP + subtotal + nº de peças, na MESMA fonte que a
   // tela usou (tabela promocional cadastrada + cotação do contrato). O id
   // escolhido no client precisa existir lá — senão alguém inventou frete.
+  //
+  // O IP vai junto (`x-cliente-ip`) pra esta cotação E pro POST /pedido logo
+  // abaixo gastarem o balde do rate-limit do backend DESTA cliente — sem o
+  // header, o backend via o IP de saída da Vercel e a loja inteira dividia
+  // 20 hits/min (a 21ª cotação do minuto caía na tabela local, e o pedido
+  // seguinte tomava 429 na hora de pagar). O backend já lê o header desde
+  // 10/08; faltava alguém mandar. '0.0.0.0' é "não sei" — aí não vai, e o
+  // backend cai no fallback dele.
+  const ipCliente = ip !== '0.0.0.0' ? ip : undefined;
   const pecas = input.items.reduce((soma, l) => soma + l.quantity, 0);
   const quote = await resolverFrete({
     cep: input.cep,
     subtotal,
     pecas,
     quoteId: input.shippingQuoteId,
+    clientIp: ipCliente,
   });
   if (!quote) {
     return NextResponse.json(
@@ -277,6 +320,43 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   // o econômico, nunca o expresso.
   let shippingPrice = quote.price;
   if (couponKind === 'shipping' && quote.kind === 'correios') shippingPrice = 0;
+
+  /**
+   * NUNCA CRIAR PEDIDO COM FRETE ACIMA DO QUE ELA LEU (17/08).
+   *
+   * Roda ANTES do backend: sem pedido, sem cobrança, sem PIX órfão — é o
+   * ponto mais barato pra recusar. Se o frete recotado agora passou do que a
+   * tela mostrou (mais de 1 centavo), devolve `shipping_changed` com a
+   * cotação nova e o valor que ela tinha visto; a página volta pra Entrega
+   * com a opção pré-selecionada e pede um clique de confirmação. Se ficou
+   * MENOR, segue — cobrar menos que o prometido nunca foi problema.
+   *
+   * O flip é real e não é raro: a tela cai na tabela local quando o BFF
+   * estoura 9s (tabela: PAC SP capital 14,90, sem promoção), enquanto o
+   * backend termina a cotação depois do abort e aquece o cache; no clique
+   * do PIX esta rota já acha o PAC real (17,90+). Antes, o QR nascia acima
+   * do resumo e ninguém avisava. Sem `shippingPriceSeen` (aba antiga) não
+   * há o que comparar — segue como sempre.
+   */
+  if (input.shippingPriceSeen != null && shippingPrice > input.shippingPriceSeen + 0.01) {
+    console.warn(
+      `[checkout] frete subiu entre a tela e o pedido: viu=${input.shippingPriceSeen.toFixed(2)} agora=${shippingPrice.toFixed(2)} ` +
+        `(${quote.id}${quote.estimado ? ', estimado' : ''}) — pedido NÃO criado, cliente volta pra entrega`,
+    );
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'shipping_changed',
+        error: `O frete pro seu CEP foi atualizado: de ${formatPrice(input.shippingPriceSeen)} pra ${formatPrice(shippingPrice)}. Confira a entrega antes de pagar — nada foi cobrado.`,
+        // Neste ramo o cupom de frete não zerou nada (senão shippingPrice
+        // seria 0 e não passaria do que ela viu), então `quote.price` é o
+        // preço que vale — vai a cotação inteira, com o carimbo `estimado`.
+        quote,
+        shippingPriceSeen: input.shippingPriceSeen,
+      },
+      { status: 400 },
+    );
+  }
 
   /**
    * Pix desconta de verdade (06/08). Aqui é a segunda barreira, igual ao
@@ -319,9 +399,30 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
 
   /* ── O pedido nasce NO BACKEND ── */
 
+  /**
+   * O TETO DO BACKEND PASSA A PROTEGER O QUE A CLIENTE LEU (17/08).
+   *
+   * O backend usa `input.total` só como teto ("nunca cobrar acima do
+   * informado", loja-orders.service.ts) e sobrescreve com a conta dele antes
+   * de cobrar — então mandar o MENOR entre o total da tela e o daqui nunca
+   * muda a cobrança pra baixo do que vale, só recusa quando a conta da casa
+   * passar do que ela viu. Antes o teto comparava com o total DESTE BFF, que
+   * recota na mesma fonte que o backend: nunca enxergava a divergência
+   * tela→cobrança. `totalSeen` forjado pra menos só desliga a compra da
+   * própria pessoa; pra mais, cai no `Math.min` e vira o daqui. Só entra
+   * se > 0 — zero reprovaria no `validar()` do backend.
+   */
+  const totalInformado =
+    input.totalSeen != null && input.totalSeen > 0 ? Math.min(round2(input.totalSeen), total) : total;
+  if (totalInformado < total) {
+    console.warn(`[checkout] total da tela (${totalInformado}) abaixo do recalculado (${total}) — vai como teto pro backend`);
+  }
+
   const payload: NewOrderPayload = {
     customer: input.customer,
     shippingAddress: input.shippingAddress,
+    // Leva o carimbo `estimado` quando a cotação veio da tabela local ou da
+    // estimativa do backend (ver frete-server.ts) — backend antigo ignora.
     shipping: quote,
     // `sku` é o que a separação usa na loja; enquanto o carrinho não carrega
     // SKU próprio, o productId é a identidade da peça (mesma escolha do
@@ -340,7 +441,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     subtotal,
     discount,
     shippingPrice,
-    total,
+    total: totalInformado,
     payment: {
       method: input.paymentMethod,
       installments: input.paymentMethod === 'card' ? (input.installments ?? 1) : undefined,
@@ -351,7 +452,8 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
 
   let ack;
   try {
-    ack = await getOrderStore().create(payload);
+    // Mesmo `x-cliente-ip` da cotação acima: balde do backend por cliente.
+    ack = await getOrderStore().create(payload, { clientIp: ipCliente });
   } catch (err) {
     if (err instanceof OrderStoreError) {
       console.error('[checkout] backend recusou/falhou ao criar pedido:', err.message);
@@ -364,6 +466,18 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
           // do zod daqui ou do `validar()` do backend, e a correção é em lugar
           // diferente. Sem isto o painel mostra as duas na mesma linha.
           ...(err.code === 'validation_error' ? { field: 'backend_validacao' } : {}),
+          // RECUSA POR PREÇO (17/08): o backend manda qual peça e o preço
+          // atual (`item`), o store parseia em `OrderStoreError.item`, e a
+          // página usa pra atualizar a linha da sacola e deixar a compra a um
+          // clique — em vez de "atualize a página", que não atualizava o
+          // preço congelado no localStorage. Sem repassar aqui a cadeia
+          // quebrava no meio: o navegador nunca recebia o `item`.
+          ...(err.item ? { item: err.item } : {}),
+          // SÓ O FRETE SUBIU (17/08): backend recotou maior que a tabela local
+          // que a tela mostrou → `shipping_changed` + cotação nova. A página
+          // já trata (atualiza a entrega, pede confirmação). Mesma resposta
+          // que este BFF dá no pré-check acima — a cliente não distingue.
+          ...(err.quote ? { quote: err.quote } : {}),
         },
         { status: err.status },
       );

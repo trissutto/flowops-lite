@@ -255,6 +255,9 @@ export class PdvService {
       where.status = { not: 'cancelled' };
       const esperaMin = Number(process.env.PIX_RESGATE_MIN) || 30;
       where.createdAt = { lte: new Date(Date.now() - esperaMin * 60_000) };
+      // Cartão em análise de antifraude NÃO é abandono: a cliente já pagou e
+      // está esperando a aprovação. Mesma regra da lista da retaguarda.
+      where.NOT = [{ paymentInfo: { contains: '"cartaoEmAnalise":true' } }];
     }
 
     const pedidos: any[] = await (this.prisma as any).order.findMany({
