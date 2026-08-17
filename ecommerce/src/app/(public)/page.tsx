@@ -1,147 +1,62 @@
 import { MapPin, MessageCircle } from 'lucide-react';
 import { Hero } from '@/components/sections/Hero';
-import { Manifesto } from '@/components/sections/Manifesto';
+import { HomeBenefitsAndStores, HomeCategoryNav, type HomeCategory } from '@/components/sections/HomeDiscovery';
+import { ProductCarousel } from '@/components/sections/ProductCarousel';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
-import { ProductCarousel } from '@/components/sections/ProductCarousel';
-import { CTABanner } from '@/components/sections/CTABanner';
-import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
-import { FaixaTrocaFacil } from '@/components/sections/FaixaTrocaFacil';
-import { CategoriaCard } from '@/components/cards/CategoriaCard';
-import { StoreCard } from '@/components/cards/StoreCard';
 import { InstagramCard } from '@/components/cards/InstagramCard';
+import { StoreCard } from '@/components/cards/StoreCard';
+import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { Button } from '@/components/ui/Button';
-import { manifesto, PERFIL_INSTAGRAM } from '@/data/content';
-import { getInstagram } from '@/services/instagram';
+import { PERFIL_INSTAGRAM } from '@/data/content';
+import { LINK_WHATSAPP_SITE } from '@/data/contato';
 import { featuredStores, stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
-import { getCategorias } from '@/services/categorias-menu';
+import { getInstagram } from '@/services/instagram';
 import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
-import { LINK_WHATSAPP_SITE } from '@/data/contato';
-
-/**
- * HOME — a jornada da cliente.
- *
- * A ordem não é decorativa: abre com desejo (hero), deixa ela escolher o rumo
- * (categorias), explica quem somos (manifesto), mostra o catálogo em cinco
- * vitrines, inspira (vídeo, Instagram) e fecha convidando pra loja física —
- * que é onde a conversão da Lurds acontece de verdade.
- *
- * ── O QUE SAIU EM 10/08/2026 ──
- *
- * Três seções foram desligadas de uma vez: Shop the Look, Moda por modelagem
- * e Editorial da semana. Todas tinham o mesmo defeito — eram maquete
- * apresentada como loja: foto de banco de imagem, produto inventado e botão
- * levando a página que nunca existiu. Cada uma está comentada no lugar onde
- * ficava, com o que precisa existir pra ela voltar. Decisão do dono:
- * "tudo isso vamos trazer de volta mais para frente".
- *
- * Server Component: só as seções interativas (carrosséis, cards com hover)
- * são client. Ver docs/home.md.
- */
+import { sanitizeCampaignParams, withCampaignParams } from '@/lib/campaign-links';
+import { HOME_CATEGORY_BASE, HOME_NEWS_PATH, HOME_STORES_PATH } from '@/data/home';
 
 export const metadata = buildMetadata({
   title: "Lurd's Plus Size — Moda plus size elegante do 44 ao 60",
   path: '/',
-  keywords: [
-    'moda plus size',
-    'roupas plus size',
-    'vestido plus size',
-    'loja plus size',
-    'plus size 44 ao 60',
-  ],
+  keywords: ['moda plus size', 'roupas plus size', 'vestido plus size', 'loja plus size', 'plus size 44 ao 60'],
 });
 
-export default async function HomePage() {
-  /**
-   * AS CINCO VITRINES DA HOME (dono, 10/08): Lançamentos, Blusas, Vestidos,
-   * Calças e Macacões.
-   *
-   * A primeira é por DATA (o que chegou), as outras quatro por CATEGORIA — a
-   * cliente que entra pela home sem campanha específica procura por tipo de
-   * peça, e o carrossel mostra sem obrigar ela a escolher uma categoria antes.
-   *
-   * Os slugs têm que bater com os do CRM (`SiteCategoria.slug`): `calcas` e
-   * `macacoes` são sem acento e no plural — errar o slug não dá erro, volta
-   * lista vazia e a vitrine some sem ninguém perceber.
-   *
-   * Tudo começa JUNTO. Antes, a home esperava hero → categorias → Instagram
-   * e só então iniciava as seis vitrines. Essa cascata atrasava o HTML que
-   * revela a imagem LCP, mesmo com preload correto no Hero.
-   */
-  const [
-    hero,
-    categorias,
-    posts,
-    chegouAgora,
-    emDestaque,
-    blusas,
-    vestidos,
-    calcas,
-    macacoes,
-  ] = await Promise.all([
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const raw = (await searchParams) ?? {};
+  const query = new URLSearchParams();
+  Object.entries(raw).forEach(([key, value]) => {
+    if (typeof value === 'string') query.set(key, value);
+  });
+  const campaign = sanitizeCampaignParams(query);
+  const href = (path: string) => withCampaignParams(path, campaign);
+
+  // Só o que aparece na Home é buscado. Isso evita atrasar o hero com quatro
+  // vitrines repetidas que a nova jornada não usa.
+  const [hero, novidades, posts] = await Promise.all([
     getHeroDaHome(),
-    getCategorias(),
+    fetchVitrine({ ordenar: 'novidades', limite: 10, soNovidade: true }),
     getInstagram(6),
-    fetchVitrine({ ordenar: 'novidades', limite: 12, soNovidade: true }),
-    fetchVitrine({ ordenar: 'relevancia', limite: 12 }),
-    fetchVitrine({ categoria: 'blusas', ordenar: 'novidades', limite: 12 }),
-    fetchVitrine({ categoria: 'vestidos', ordenar: 'novidades', limite: 12 }),
-    fetchVitrine({ categoria: 'calcas', ordenar: 'novidades', limite: 12 }),
-    fetchVitrine({ categoria: 'macacoes', ordenar: 'novidades', limite: 12 }),
   ]);
 
-  // As DESTACADAS têm aba própria no topo; card + aba duplicariam a entrada.
-  const categoriasHome = categorias.filter((c) => !c.destaque);
-
-  /** Categoria sem peça publicada não vira vitrine vazia — simplesmente não sai. */
-  const vitrinesPorCategoria = [
-    {
-      slug: 'blusas',
-      titulo: 'Blusas',
-      eyebrow: 'Pra todo dia',
-      descricao: 'Do básico que resolve a semana ao decote que pede saída à noite.',
-      produtos: blusas,
-    },
-    {
-      slug: 'vestidos',
-      titulo: 'Vestidos',
-      eyebrow: 'A peça que resolve',
-      descricao: 'Um vestido, look pronto — trabalho, festa ou domingo.',
-      produtos: vestidos,
-    },
-    {
-      slug: 'calcas',
-      titulo: 'Calças',
-      eyebrow: 'Modelagem que veste',
-      descricao: 'Cós que não aperta, caimento que valoriza — do jeans à alfaiataria.',
-      produtos: calcas,
-    },
-    {
-      slug: 'macacoes',
-      titulo: 'Macacões e macaquinhos',
-      eyebrow: 'Look inteiro numa peça',
-      descricao: 'Veste em um movimento e já sai pronta — sem combinar nada.',
-      produtos: macacoes,
-    },
-  ].filter((v) => v.produtos.length > 0);
-
-  const jsonLd = jsonLdGraph(
-    itemListSchema(
-      [...chegouAgora, ...emDestaque, ...vitrinesPorCategoria.flatMap((v) => v.produtos)],
-      'Destaques da home',
-    ),
-    ...stores.map(storeSchema),
-  );
+  const categories: HomeCategory[] = HOME_CATEGORY_BASE.map(({ path, ...category }) => ({
+    ...category,
+    href: href(path),
+  }));
+  const novidadesHref = href(HOME_NEWS_PATH);
+  const storesHref = href(HOME_STORES_PATH);
+  const jsonLd = jsonLdGraph(itemListSchema(novidades, 'Novidades da semana'), ...stores.map(storeSchema));
 
   return (
     <>
-      {/* O preload do LCP mora dentro do próprio <Hero> — eram dois lugares
-          emitindo o mesmo par de links (12/08/2026). */}
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
-      {/* 01 — HERO EDITORIAL */}
       <Hero
         image={hero.image}
         imageMobile={hero.imageMobile}
@@ -150,211 +65,62 @@ export default async function HomePage() {
           hero.lead || hero.emphasis ? (
             <>
               {hero.lead}
-              {hero.emphasis && (
-                <>
-                  <br />
-                  <span className="text-primary-soft italic">{hero.emphasis}</span>
-                </>
-              )}
+              {hero.emphasis && <><br /><span className="text-primary-soft italic">{hero.emphasis}</span></>}
             </>
           ) : (
             <span className="sr-only">Lurd&apos;s Plus Size — moda elegante do 44 ao 60</span>
           )
         }
         subtitle={hero.subtitle}
-        primaryAction={hero.primaria}
-        secondaryAction={hero.secundaria}
-        // Arte da retaguarda manda na altura (não recorta a campanha); a foto
-        // editorial estática segue em tela cheia.
-        height={hero.daRetaguarda ? 'arte' : 'fullscreen'}
+        primaryAction={{ label: 'Ver novidades', href: novidadesHref, variant: 'primary' }}
+        height={hero.daRetaguarda ? 'arte' : 'medium'}
         align="center"
-        // Escurecer a arte da campanha estraga a cor que o designer escolheu —
-        // o overlay só existe pra dar contraste ao texto do hero estático.
         overlay={hero.daRetaguarda ? 'none' : 'medium'}
-        showScrollHint={!hero.daRetaguarda}
         priority
       />
 
-      {/* 02 — NOSSAS CATEGORIAS, LOGO ABAIXO DO BANNER (dono 07/08, mockup).
-          É a primeira decisão que a cliente toma depois de ver a campanha:
-          "o que eu vim procurar?". Deixar isso pro meio da página obriga a
-          rolar por manifesto e carrossel antes de poder escolher.
-          Sem contagem de peças — número de item não ajuda a escolher e
-          envelhece mal. O ícone da silhueta diz o que é antes de ler. */}
-      {categoriasHome.length > 0 && (
-        <Section tone="alt" width="wide" aria-labelledby="categorias-home">
+      <HomeCategoryNav categories={categories} />
+
+      {novidades.length > 0 && (
+        <Section width="wide" aria-labelledby="novidades-titulo" className="!py-8 sm:!py-12">
           <SectionTitle
-            id="categorias-home"
-            eyebrow="Encontre seu look ideal"
-            title="Nossas categorias"
+            id="novidades-titulo"
+            eyebrow="Acabou de chegar"
+            title="Novidades da semana"
+            cta={{ label: 'Ver todas', href: novidadesHref }}
+            align="left"
           />
-          {/* 5 por linha no desktop (dono 07/08) — 9 categorias viram 5+4. */}
-          <div className="mt-12 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5 lg:gap-4">
-            {categoriasHome.map((c, index) => (
-              <CategoriaCard
-                key={c.slug}
-                index={index}
-                data={{
-                  slug: c.slug, nome: c.nome, imagemUrl: c.imagemUrl, alt: c.alt,
-                  focoX: c.focoX, focoY: c.focoY, focoZoom: c.focoZoom,
-                }}
-              />
-            ))}
+          <div className="mt-7 sm:mt-10">
+            <ProductCarousel
+              products={novidades}
+              ariaLabel="Novidades da semana"
+              progressiveImages
+              compactMobile
+            />
           </div>
         </Section>
       )}
 
-      {/* 03 — MANIFESTO */}
-      <Manifesto
-        eyebrow={manifesto.eyebrow}
-        title={manifesto.title}
-        paragraphs={manifesto.paragraphs}
-        stats={manifesto.stats}
-      />
+      <HomeBenefitsAndStores storesHref={storesHref} />
 
-      {/* 03 — LANÇAMENTOS (1ª das cinco vitrines) */}
-      <Section tone="alt" width="wide" aria-labelledby="novidades-titulo">
+      <Section tone="alt" width="wide" aria-labelledby="lojas-titulo">
         <SectionTitle
-          id="novidades-titulo"
-          eyebrow="Acabou de chegar"
-          title="Novidades da semana"
-          description="Peças novas toda semana — nas lojas e aqui, ao mesmo tempo."
-          cta={{ label: 'Ver todos os lançamentos', href: '/novidades' }}
-          align="left"
+          id="lojas-titulo"
+          eyebrow="Nossas lojas"
+          title="14 endereços, o mesmo acolhimento"
+          description="Prove com calma, converse com uma consultora e leve na hora."
         />
-        <div className="mt-14">
-          <ProductCarousel products={chegouAgora} ariaLabel="Novidades da semana" progressiveImages />
+        <div className="mt-10 grid gap-6 lg:grid-cols-3">
+          {featuredStores.map((store, index) => <StoreCard key={store.slug} store={store} index={index} />)}
+        </div>
+        <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <Button href={storesHref} size="lg"><MapPin /> Ver todas as lojas</Button>
+          <Button href={LINK_WHATSAPP_SITE} external variant="whatsapp" size="lg">
+            <MessageCircle /> Falar com uma consultora
+          </Button>
         </div>
       </Section>
 
-      {/* ── SHOP THE LOOK: FORA DO AR ATÉ TER LOOK DE VERDADE (10/08/2026)
-          ────────────────────────────────────────────────────────────────
-          A seção era bonita e estava 100% em cima de dados de MAQUETE: os
-          looks vinham de `data/content.ts`, montados com produtos fictícios
-          (p01…p08) e fotos de banco de imagem — não do catálogo.
-
-          Não era só enfeite errado, quebrava de três jeitos:
-            · cada peça do look linkava pra `/produto/<slug-inventado>` → 404;
-            · "Levar o look" jogava produto INEXISTENTE na sacola, com preço
-              inventado — a cliente só descobria que não dava pra fechar lá no
-              checkout, com a sacola montada;
-            · "Ver todos os looks" ia pra `/looks`, que nunca existiu.
-
-          Ligar de volta não é reativar esta seção: é ter de onde tirar look
-          de verdade. Hoje não existe curadoria de look no backend (nenhuma
-          tabela guarda "estas 3 REFs formam um look"), então a seção volta
-          quando esse dado existir. `LookShowcase`, `LookCard` e o tipo `Look`
-          continuam no código, prontos, esperando dado real. */}
-
-      {/* 03.5 — TROCA FÁCIL (dono 10/08).
-          Depois da PRIMEIRA vitrine, não antes: a cliente precisa ter visto
-          peça que quer pra dúvida "e se não servir?" existir — antes disso é
-          recado sobre um problema que ela ainda não tem. E antes das outras
-          quatro vitrines, porque é justamente aí que ela começa a escolher. */}
-      <FaixaTrocaFacil />
-
-      {/* 04 a 07 — AS OUTRAS QUATRO VITRINES, POR CATEGORIA (dono 10/08)
-          Alterna o fundo entre elas: três carrosséis seguidos com o mesmo tom
-          viram uma parede só, e a cliente para de perceber onde uma acaba e a
-          outra começa. */}
-      {vitrinesPorCategoria.map((v, i) => (
-        <Section
-          key={v.slug}
-          tone={i % 2 === 0 ? 'default' : 'alt'}
-          width="wide"
-          aria-labelledby={`vitrine-${v.slug}`}
-        >
-          <SectionTitle
-            id={`vitrine-${v.slug}`}
-            eyebrow={v.eyebrow}
-            title={v.titulo}
-            description={v.descricao}
-            cta={{ label: `Ver tudo em ${v.titulo}`, href: `/categoria/${v.slug}` }}
-            align="left"
-          />
-          <div className="mt-14">
-            <ProductCarousel products={v.produtos} ariaLabel={`Vitrine de ${v.titulo}`} progressiveImages />
-          </div>
-        </Section>
-      ))}
-
-      {/* ── MODA POR MODELAGEM: FORA DO AR (dono, 10/08)
-          ────────────────────────────────────────────────
-          Os seis cards ("Valoriza a cintura", "Disfarça a barriga"…) levavam a
-          `/modelagem/<slug>` — seis páginas que nunca existiram. A cliente lia
-          a promessa mais persuasiva da home ("a gente organiza a vitrine pelo
-          que você quer valorizar"), clicava em VER PEÇAS e caía num 404.
-
-          Não é só a página que falta: NENHUMA peça está classificada por
-          modelagem no cadastro ainda, então mesmo com a página pronta a
-          vitrine viria vazia. A seção volta quando o campo estiver preenchido
-          — é o mesmo motivo que tirou Ocasiões e Coleções do menu
-          (ver `data/navigation.ts`). */}
-
-      {/* ── "SELEÇÃO DA LOJA": SAIU EM 10/08.
-          O dono fechou a home em CINCO vitrines (Lançamentos, Blusas,
-          Vestidos, Calças, Macacões). Esta era a sexta, e ela não trazia um
-          eixo novo: era o catálogo por relevância, ou seja, as mesmas peças
-          das outras cinco em outra ordem. Seis carrosséis seguidos viram
-          rolagem sem fim e a cliente para de olhar antes do rodapé.
-
-          As peças continuam sendo carregadas (`emDestaque`) porque alimentam
-          o JSON-LD da home — o Google lê a lista inteira mesmo sem seção. */}
-
-      {/* ── EDITORIAL DA SEMANA: FORA DO AR (10/08)
-          ────────────────────────────────────────────
-          Mesmo defeito das duas seções acima, achado na mesma varredura: os
-          três artigos apontavam pra `/blog/<slug>` e o card de abertura pra
-          `/colecoes/atual` — nenhuma dessas páginas existe, e não há blog
-          nenhum pra apontar. As fotos também eram de banco de imagem, não da
-          marca.
-
-          Volta quando existir conteúdo editorial de verdade (com foto da
-          Lurd's e página pra ler). */}
-
-      {/* 08 — VÍDEO INSTITUCIONAL: FORA DO AR (dono, 10/08)
-          ───────────────────────────────────────────────
-          "Por dentro da Lurds — um provador sem pressa, um atendimento que
-          acolhe", ilustrado por uma foto de banco de imagem de uma loja
-          MASCULINA de streetwear: tênis, bonés, mochilas e um pôster da U.S.
-          Navy. Numa loja de moda plus size feminina, a imagem contava uma
-          história de outra marca — e logo na seção que fala do acolhimento no
-          provador, que é o argumento mais forte da Lurd's.
-
-          Volta com vídeo ou foto REAL de uma das lojas. O componente
-          `VideoBlock` segue no código, esperando o material; os dados
-          (`institutionalVideo`) saíram em 16/08 junto com todo o banco de
-          imagem — o vídeo era de banco (Pexels) e o pôster, daquela loja
-          masculina. Quando a Lurd's gravar o material, é passar a URL nossa
-          direto pro componente. */}
-
-      {/*
-        11 — DEPOIMENTOS · REMOVIDO DO AR EM 06/08/2026
-
-        Esta seção mostrava avaliações assinadas por "Cliente Lurds", com
-        ALTURA, PESO e TAMANHO COMPRADO inventados, e cinco estrelas. Não era
-        placeholder de layout: estava no ar, com cara de prova social real, sob
-        o título "Altura, peso e o tamanho que ela levou".
-
-        Duas razões pra sair, e a segunda é a que pesa:
-
-        1. É publicidade enganosa (CDC). Avaliação fabricada é infração, não
-           licença poética.
-        2. O dado de corpo é EXATAMENTE o que faz a cliente plus size confiar.
-           Inventar justo esse número é abusar da dúvida que ela veio resolver
-           — e é o tipo de coisa que, descoberta, não custa uma venda: custa a
-           marca.
-
-        A seção VOLTA quando houver depoimento de cliente de verdade. A base já
-        permite pedir: todo pedido entregue tem CPF, peça e tamanho. O
-        componente `TestimonialCarousel` continua no repositório, pronto — o
-        que falta é o dado, não a tela.
-      */}
-
-      {/* 09 — INSTAGRAM — só com post REAL da @lurdsplussize (16/08/2026).
-          Sem feed, a seção inteira não sai: o fallback era uma grade de banco
-          de imagem, ou seja, o feed de outra marca ocupando o nosso bloco de
-          prova social. Ver `services/instagram.ts`. */}
       {posts.length > 0 && (
         <Section width="wide" aria-labelledby="instagram-titulo">
           <SectionTitle
@@ -364,59 +130,13 @@ export default async function HomePage() {
             cta={{ label: 'Seguir no Instagram', href: PERFIL_INSTAGRAM }}
             align="left"
           />
-          <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            {posts.map((post) => (
-              <InstagramCard key={post.id} post={post} />
-            ))}
+          <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {posts.map((post) => <InstagramCard key={post.id} post={post} />)}
           </div>
         </Section>
       )}
 
-      {/* 10 — NOSSAS LOJAS */}
-      <Section tone="alt" width="wide" aria-labelledby="lojas-titulo">
-        <SectionTitle
-          id="lojas-titulo"
-          eyebrow="Visite a Lurds"
-          title="14 endereços, o mesmo acolhimento"
-          description="Prove com calma, converse com uma consultora e leve na hora."
-        />
-        <div className="mt-14 grid gap-6 lg:grid-cols-3">
-          {featuredStores.map((store, index) => (
-            <StoreCard key={store.slug} store={store} index={index} />
-          ))}
-        </div>
-        <div className="mt-12 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Button href="/lojas" size="lg">
-            <MapPin /> Ver todas as lojas
-          </Button>
-          <Button
-            href={LINK_WHATSAPP_SITE}
-            external
-            variant="whatsapp"
-            size="lg"
-          >
-            <MessageCircle /> Falar com uma consultora
-          </Button>
-        </div>
-      </Section>
-
-      {/* 11 — CTA FINAL + NEWSLETTER */}
-      <CTABanner
-        eyebrow="Sua próxima peça favorita"
-        title="Está esperando você em uma das nossas lojas"
-        description="Atendimento sem pressa, provador confortável e alguém que entende do seu corpo."
-        primaryAction={{ label: 'Encontrar minha loja', href: '/lojas' }}
-        secondaryAction={{
-          label: 'Falar no WhatsApp',
-          href: LINK_WHATSAPP_SITE,
-          external: true,
-        }}
-        height="md"
-      />
-
       <NewsletterBlock tone="champagne" />
-
-      {/* 12 — FOOTER vive no layout do grupo (public) */}
     </>
   );
 }
