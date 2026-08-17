@@ -743,10 +743,17 @@ export class PdvController {
    * fechado pelo cron como 'credito' antes de 17/08). Idempotente.
    */
   @Post('sales/:id/gerar-pedido-online')
-  gerarPedidoOnline(@Req() req: any, @Param('id') id: string) {
+  gerarPedidoOnline(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body?: {
+      nome?: string; cep?: string; endereco?: string; numero?: string; complemento?: string;
+      bairro?: string; cidade?: string; uf?: string; entregaTipo?: string;
+    },
+  ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
     const quem = req?.user?.name ?? req?.user?.username ?? req?.user?.sub ?? 'admin';
-    return this.svc.gerarPedidoOnlineDeVendaFinalizada(id, String(quem));
+    return this.svc.gerarPedidoOnlineDeVendaFinalizada(id, String(quem), body || undefined);
   }
 
   @Post('sales/:id/entrega')

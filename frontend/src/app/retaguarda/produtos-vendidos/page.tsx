@@ -161,6 +161,44 @@ function ProdutosVendidosContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editSeller, setEditSeller] = useState<{ itemId: string; saleId: string; currentName: string; produtoHint: string } | null>(null);
+  // Gerar pedido online de venda sem CEP/entrega — o modal completa e roteia.
+  const [gerarPedido, setGerarPedido] = useState<{ saleId: string; saleLabel: string; sale: any } | null>(null);
+
+  async function gerarPedidoOnline(saleId: string, saleLabel: string, storeCode?: string | null) {
+    let sale: any = null;
+    try { sale = await api<any>(`/pdv/sales/${saleId}`); } catch { /* segue sem — o backend valida */ }
+    const semCep = !String(sale?.customerCep || '').replace(/\D/g, '');
+    const semEntrega = !sale?.entregaTipo;
+    if (sale && (semCep || semEntrega) && String(sale?.entregaTipo || '') !== 'retirada') {
+      setGerarPedido({ saleId, saleLabel, sale });
+      return;
+    }
+    if (!confirm(
+      `📦 GERAR PEDIDO ONLINE da venda #${saleLabel}?\n\n` +
+      `Cria o pedido ON- na fila de roteamento (card pra loja separar) ` +
+      `e devolve o estoque que baixou na loja ${storeCode || '-'}.\n` +
+      `Use só pra venda online PAGA que não gerou pedido.`,
+    )) return;
+    await enviarGerarPedido(saleId, {});
+  }
+
+  async function enviarGerarPedido(saleId: string, body: Record<string, any>) {
+    try {
+      const r = await api<any>(`/pdv/sales/${saleId}/gerar-pedido-online`, { method: 'POST', body: JSON.stringify(body) });
+      alert(
+        r?.jaExistia
+          ? `Já existia: pedido ${r.wcOrderNumber} (${r.status})`
+          : `✓ Pedido ${r?.wcOrderNumber} gerado` +
+            (r?.autoAtendida ? ` — card já na loja ${r.storeName || ''}` : ' — na fila de roteamento da matriz') +
+            (r?.estoqueDevolvido ? ` · ${r.estoqueDevolvido} item(ns) devolvido(s) ao estoque da loja vendedora` : ''),
+      );
+      setGerarPedido(null);
+      return true;
+    } catch (e: any) {
+      alert(`Erro: ${e?.message || e}`);
+      return false;
+    }
+  }
 
   // Quem edita/exclui aqui: matriz + papéis de franquia (15/07). O backend
   // escopa os dados e as ações da franquia às lojas FILIAL.
@@ -663,26 +701,7 @@ function ProdutosVendidosContent() {
                                     a posteriori e devolve o estoque da loja vendedora. */}
                                 {!isReturn && isMatrix && (
                                   <button
-                                    onClick={async () => {
-                                      if (!confirm(
-                                        `📦 GERAR PEDIDO ONLINE da venda #${l.saleNumber || String(l.saleId).slice(0, 8)}?\n\n` +
-                                        `Cria o pedido ON- na fila de roteamento (card pra loja separar) ` +
-                                        `e devolve o estoque que baixou na loja ${l.storeCode || '-'}.\n` +
-                                        `Use só pra venda online PAGA que não gerou pedido.`,
-                                      )) return;
-                                      try {
-                                        const r = await api<any>(`/pdv/sales/${l.saleId}/gerar-pedido-online`, { method: 'POST' });
-                                        alert(
-                                          r?.jaExistia
-                                            ? `Já existia: pedido ${r.wcOrderNumber} (${r.status})`
-                                            : `✓ Pedido ${r?.wcOrderNumber} gerado` +
-                                              (r?.autoAtendida ? ` — card já na loja ${r.storeName || ''}` : ' — na fila de roteamento da matriz') +
-                                              (r?.estoqueDevolvido ? ` · ${r.estoqueDevolvido} item(ns) devolvido(s) ao estoque da loja vendedora` : ''),
-                                        );
-                                      } catch (e: any) {
-                                        alert(`Erro: ${e?.message || e}`);
-                                      }
-                                    }}
+                                    onClick={() => void gerarPedidoOnline(l.saleId, l.saleNumber || String(l.saleId).slice(0, 8), l.storeCode)}
                                     className="ml-1 text-[10px] font-bold bg-teal-600 hover:bg-teal-700 text-white px-2 py-0.5 rounded"
                                     title="Venda online paga que ficou sem pedido/card — gera o pedido ON- agora"
                                   >
@@ -822,6 +841,14 @@ function ProdutosVendidosContent() {
         </section>
       </main>
 
+      {gerarPedido && (
+        <GerarPedidoOnlineModal
+          saleLabel={gerarPedido.saleLabel}
+          sale={gerarPedido.sale}
+          onClose={() => setGerarPedido(null)}
+          onConfirm={(body) => enviarGerarPedido(gerarPedido.saleId, body)}
+        />
+      )}
       {editSeller && (
         <EditSellerModal
           itemId={editSeller.itemId}
@@ -1016,6 +1043,174 @@ function EditSellerModal({
             ? '⚠️ Override apenas nesta peça. Outras peças da mesma venda permanecem com a vendedora original.'
             : '⚠️ Atualiza a vendedora da venda inteira e limpa overrides individuais.'}
         </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Completa CEP/endereço/forma de entrega de uma venda online FECHADA que ficou
+ * sem pedido (17/08, Sandra Micheli: link pago, cron fechou, sem CEP na venda).
+ * Não existe outra tela que edite endereço de venda finalizada — o backend
+ * grava na venda e roteia na mesma chamada.
+ */
+function GerarPedidoOnlineModal({
+  saleLabel, sale, onClose, onConfirm,
+}: {
+  saleLabel: string;
+  sale: any;
+  onClose: () => void;
+  onConfirm: (body: Record<string, any>) => Promise<boolean>;
+}) {
+  const [f, setF] = useState({
+    nome: sale?.customerName || '',
+    cep: sale?.customerCep || '',
+    endereco: sale?.customerEndereco || '',
+    numero: sale?.customerNumero || '',
+    complemento: sale?.customerComplemento || '',
+    bairro: sale?.customerBairro || '',
+    cidade: sale?.customerCidade || '',
+    uf: sale?.customerUf || '',
+    entregaTipo: sale?.entregaTipo || 'sedex',
+  });
+  const [salvando, setSalvando] = useState(false);
+  const [buscandoCliente, setBuscandoCliente] = useState(false);
+  const set = (k: keyof typeof f) => ({
+    value: String(f[k] ?? ''),
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+      setF((a) => ({ ...a, [k]: e.target.value })),
+  });
+
+  // Endereço da ficha da cliente (CPF) — a venda não tinha, mas o CRM pode ter.
+  useEffect(() => {
+    const cpf = String(sale?.customerCpf || '').replace(/\D/g, '');
+    if (cpf.length !== 11 || f.cep) return;
+    let off = false;
+    setBuscandoCliente(true);
+    api<any>(`/pdv/customer-resume?cpf=${cpf}`)
+      .then((r) => {
+        if (off || !r?.found) return;
+        const e = r.customer?.endereco;
+        if (!e) return;
+        setF((a) => ({
+          ...a,
+          nome: a.nome || r.customer?.name || '',
+          cep: a.cep || e.cep || '',
+          endereco: a.endereco || e.logradouro || '',
+          numero: a.numero || e.numero || '',
+          complemento: a.complemento || e.complemento || '',
+          bairro: a.bairro || e.bairro || '',
+          cidade: a.cidade || e.cidade || '',
+          uf: a.uf || e.uf || '',
+        }));
+      })
+      .catch(() => {})
+      .finally(() => { if (!off) setBuscandoCliente(false); });
+    return () => { off = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function buscarCep(v: string) {
+    const cep = v.replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const d = await r.json();
+      if (d?.erro) return;
+      setF((a) => ({
+        ...a,
+        endereco: a.endereco || d.logradouro || '',
+        bairro: a.bairro || d.bairro || '',
+        cidade: a.cidade || d.localidade || '',
+        uf: a.uf || String(d.uf || '').toUpperCase(),
+      }));
+    } catch { /* ViaCEP fora — digita na mão */ }
+  }
+
+  const retirada = f.entregaTipo === 'retirada';
+  const cepOk = String(f.cep).replace(/\D/g, '').length === 8;
+  const pode = retirada || (cepOk && f.endereco && f.cidade && f.uf);
+  const campo = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-teal-500';
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-800">📦 Gerar pedido online — venda #{saleLabel}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+        </div>
+        <p className="mb-3 text-xs text-slate-500">
+          A venda fechou sem endereço/forma de entrega. Completa aqui e o pedido vai pra fila de roteamento
+          (o estoque que baixou na loja vendedora é devolvido).
+          {buscandoCliente && <span className="ml-1 text-teal-700">buscando ficha da cliente…</span>}
+        </p>
+
+        <div className="space-y-2.5">
+          <div>
+            <label className="text-[11px] uppercase tracking-wide text-slate-400">Forma de entrega</label>
+            <select {...set('entregaTipo')} className={campo}>
+              <option value="sedex">⚡ SEDEX</option>
+              <option value="pac">📦 PAC</option>
+              <option value="retirada">🏬 Retira na loja vendedora</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wide text-slate-400">Nome da destinatária</label>
+            <input {...set('nome')} className={campo} />
+          </div>
+          {!retirada && (
+            <>
+              <div>
+                <label className="text-[11px] uppercase tracking-wide text-slate-400">CEP</label>
+                <input {...set('cep')} onBlur={(e) => void buscarCep(e.target.value)} className={campo} />
+              </div>
+              <div className="grid grid-cols-[1fr_90px] gap-2">
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Rua</label>
+                  <input {...set('endereco')} className={campo} />
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Número</label>
+                  <input {...set('numero')} className={campo} />
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wide text-slate-400">Complemento</label>
+                <input {...set('complemento')} placeholder="Apto, bloco, fundos…" className={campo} />
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wide text-slate-400">Bairro</label>
+                <input {...set('bairro')} className={campo} />
+              </div>
+              <div className="grid grid-cols-[1fr_70px] gap-2">
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Cidade</label>
+                  <input {...set('cidade')} className={campo} />
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-slate-400">UF</label>
+                  <input {...set('uf')} maxLength={2} className={campo} />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50">
+            Cancelar
+          </button>
+          <button
+            onClick={async () => {
+              setSalvando(true);
+              const ok = await onConfirm({ ...f, uf: String(f.uf).toUpperCase() });
+              if (!ok) setSalvando(false);
+            }}
+            disabled={!pode || salvando}
+            className="flex-1 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-black text-white hover:bg-teal-700 disabled:opacity-50"
+          >
+            {salvando ? 'Gerando…' : 'Gerar pedido'}
+          </button>
+        </div>
       </div>
     </div>
   );
