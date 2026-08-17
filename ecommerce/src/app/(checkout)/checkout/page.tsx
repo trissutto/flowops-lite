@@ -17,7 +17,7 @@ import { OrderSummary } from '@/components/checkout/OrderSummary';
 import { PixPanel } from '@/components/checkout/PixPanel';
 import { maskPhone } from '@/components/checkout/masks';
 import { applyCoupon } from '@/lib/commerce/cupom';
-import { PIX_DESCONTO_PCT, pixDiscount } from '@/lib/commerce/pix';
+import { PIX_DESCONTO_PCT, pixDiscount, pixTotal } from '@/lib/commerce/pix';
 import { clearCheckoutDraft, readCheckoutDraft, writeCheckoutDraft } from '@/lib/commerce/checkout-draft';
 import { formatPrice } from '@/lib/utils';
 import {
@@ -228,6 +228,7 @@ export default function CheckoutPage() {
    */
   const descontoPix = pixDiscount(subtotal - discount, payment?.method);
   const total = subtotal - discount - descontoPix + (shippingPrice ?? 0);
+  const totalPix = pixTotal(subtotal - discount, shippingPrice ?? 0);
 
   function handleApplyCoupon(code: string) {
     const result = applyCoupon(code, subtotal);
@@ -474,11 +475,11 @@ export default function CheckoutPage() {
             }
             onEdit={() => setStep(3)}
           >
-            {/* UM CLIQUE SÓ, E ELE COMPRA (dono, 17/08).
+            {/* ESCOLHA PRIMEIRO, CONFIRMAÇÃO DEPOIS.
 
-                A etapa pede CPF e e-mail, libera PIX/cartão, e o clique no
-                método JÁ cria o pedido — no PIX, o QR aparece na sequência.
-                Não há mais "Continuar", "Revisar meu pedido" nem etapa 4.
+                A etapa pede CPF e e-mail e então libera PIX/cartão. Escolher
+                o método apenas revela seus detalhes; um CTA explícito cria o
+                pedido. Isso evita que explorar o PIX gere abandono artificial.
 
                 O motivo é medido: de 14 a 17/08, quem tentou UMA vez
                 converteu 71%; duas, 25%; três ou mais, ZERO. Cada botão
@@ -488,6 +489,7 @@ export default function CheckoutPage() {
                 — por isso a etapa não abre sem `contact`. */}
             <PaymentStep
               total={total}
+              pixTotal={totalPix}
               itemsTracked={itemsTracked}
               defaultsNota={customer ? { email: customer.email, cpf: customer.cpf } : null}
               // Ela corrigiu o CPF/e-mail depois de uma recusa? O painel de erro

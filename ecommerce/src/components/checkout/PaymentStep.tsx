@@ -2,9 +2,10 @@
 
 import { useEffect, useId, useState } from 'react';
 import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
 import { isValidCpf, maskCpf, onlyDigits } from './masks';
 import { CreditCard, QrCode } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatPrice } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Badge } from '@/components/ui/Badge';
 import { trackAddPaymentInfo, trackPaymentMethodSelected, type TrackedItem } from '@/lib/tracking';
@@ -46,6 +47,8 @@ export interface DadosDaNota { email: string; cpf: string }
 interface PaymentStepProps {
   /** Total estimado (subtotal − desconto + frete) — só pra exibir parcelas. */
   total: number;
+  /** Total de exibição com o desconto PIX já aplicado. */
+  pixTotal: number;
   itemsTracked: TrackedItem[];
   // `defaults` saiu em 17/08: com o clique valendo compra, deixar um método
   // pré-selecionado seria mostrar como escolhido algo que não foi enviado.
@@ -69,15 +72,15 @@ interface PaymentStepProps {
  * habilita a escolha do modo de pagamento. Se ela clicar no logotipo PIX,
  * ele abre o QR Code."
  *
- * O clique no método É o gesto de finalizar — não existe mais botão
- * depois dele, nem etapa de revisão. Por isso os dados da nota vêm ANTES:
- * quando o QR abre, não pode faltar nada.
+ * O clique no método apenas revela a confirmação correspondente; não existe
+ * etapa de revisão separada. Por isso os dados da nota vêm ANTES: quando o
+ * CTA final é acionado, não pode faltar nada.
  *
  * As abas ficam desabilitadas até CPF e e-mail válidos. Desabilitar em vez
  * de esconder é deliberado: ela VÊ que PIX e Cartão existem e entende que
  * faltam dois campos — esconder faria a etapa parecer quebrada.
  */
-export function PaymentStep({ total, itemsTracked, defaultsNota, enviando, onDone, onNotaChange }: PaymentStepProps) {
+export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange }: PaymentStepProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [tracked, setTracked] = useState<Set<PaymentMethod>>(new Set());
   const [email, setEmail] = useState(defaultsNota?.email ?? '');
@@ -108,17 +111,16 @@ export function PaymentStep({ total, itemsTracked, defaultsNota, enviando, onDon
   }
 
   /**
-   * PIX gera na hora; cartão abre o formulário (o token vem depois).
-   * O clique só passa daqui com os dados da nota prontos.
+   * Os dois métodos apenas abrem seus detalhes. O pedido só é criado no CTA
+   * explícito do PIX ou após o envio válido do formulário de cartão.
    */
   function pick(next: PaymentMethod) {
     if (!liberado) { setTocou({ cpf: true, email: true }); return; }
     setMethod(next);
     ensureTracked(next);
-    if (next === 'pix') confirm({ method: 'pix' });
   }
 
-  /** Entrega TUDO de uma vez: o pedido nasce e o PIX é gerado daqui. */
+  /** Entrega tudo após a confirmação explícita da cliente. */
   function confirm(selection: PaymentSelection) {
     ensureTracked(selection.method);
     onDone(selection, { email: email.trim().toLowerCase(), cpf: onlyDigits(cpf) });
@@ -160,9 +162,8 @@ export function PaymentStep({ total, itemsTracked, defaultsNota, enviando, onDon
       {/* NÃO É MAIS UM TABLIST (17/08).
 
           Eram abas ARIA, com seta ←/→ trocando a aba selecionada. Agora o
-          clique no método CRIA O PEDIDO — uma seta encostada sem querer
-          geraria uma compra. Dois botões comuns: Tab anda, Enter compra,
-          nada acontece por deslize. */}
+          os métodos são ações, não navegação entre abas. Dois botões comuns
+          mantêm Tab e Enter previsíveis e evitam troca acidental por setas. */}
       <div role="group" aria-label="Forma de pagamento" className="grid grid-cols-2 gap-2">
         {TABS.map(({ method: m, label, icon: Icon }) => {
           const selected = m === method;
@@ -213,6 +214,19 @@ export function PaymentStep({ total, itemsTracked, defaultsNota, enviando, onDon
             O QR Code e o copia-e-cola aparecem aqui em instantes. O código vale
             por 24 horas.
           </p>
+          <div className="rounded-sm border border-border bg-surface px-4 py-3">
+            <p className="text-small text-ink-soft">Total com desconto no PIX</p>
+            <p className="tabular text-h3 font-medium text-success">{formatPrice(pixTotal)}</p>
+          </div>
+          <Button
+            type="button"
+            block
+            size="lg"
+            disabled={enviando}
+            onClick={() => confirm({ method: 'pix' })}
+          >
+            {enviando ? 'Gerando seu código PIX…' : 'Gerar PIX e concluir pedido'}
+          </Button>
         </div>
       )}
 
