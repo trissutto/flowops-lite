@@ -104,6 +104,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     handleSubmit,
     setValue,
     setFocus,
+    watch,
     formState: { errors },
   } = useForm<AddressValues>({
     resolver: zodResolver(addressSchema),
@@ -168,12 +169,27 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
    * o frete calcula — e os campos existem quando o ViaCEP responde, que é
    * o que conserta o preenchimento automático.
    *
-   * A regra é por AUSÊNCIA: com CEP válido o endereço fica, e só some se
-   * ela escolher retirada. Amarrar em `cotando` faria o bloco piscar —
-   * apareceria durante o cálculo e sumiria quando as opções chegassem, até
-   * ela clicar numa.
+   * Com CEP válido, fica. NÃO some mais quando ela escolhe retirada: o
+   * endereço agora vem ANTES da escolha, e esconder um bloco que ela acabou
+   * de preencher faria a página encolher debaixo do dedo dela.
    */
-  const mostraEndereco = cepValido && (selectedQuote ? selectedQuote.kind !== 'retirada' : true);
+  const mostraEndereco = cepValido;
+
+  /**
+   * O PORTÃO ENTRE UMA COISA E OUTRA.
+   *
+   * As formas de entrega só abrem com o endereço de pé. `number` é o único
+   * que a cliente digita — os outros o ViaCEP preenche —, mas os quatro
+   * entram na conta porque CEP sem cobertura no ViaCEP deixa tudo em branco,
+   * e aí abrir as opções seria abrir em cima de um endereço vazio.
+   *
+   * `watch` re-renderiza a cada tecla. É aceitável num formulário de 6
+   * campos e é o que faz as opções aparecerem no instante em que ela
+   * termina o número, sem botão no meio.
+   */
+  const [rua, numero, cidade, ufAtual] = watch(['street', 'number', 'city', 'uf']);
+  const enderecoPronto =
+    !!rua?.trim() && !!numero?.trim() && !!cidade?.trim() && (ufAtual?.trim().length ?? 0) === 2;
 
   /* ViaCEP — dispara quando o CEP fica completo. */
   useEffect(() => {
@@ -300,36 +316,23 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
         />
       </div>
 
-      {/* Cotações — rádios elegantes, uma linha por opção. */}
-      {cepValido && (quotes.length > 0 || cotando) && (
-        <fieldset>
-          <legend className="eyebrow mb-3 text-ink-soft">
-            Como você quer receber {cotando && <span className="text-ink-muted">· calculando…</span>}
-          </legend>
-          <div className="flex flex-col gap-3" role="radiogroup">
-            {quotes.map((quote) => (
-              <QuoteOption
-                key={quote.id}
-                quote={quote}
-                estimado={estimado}
-                instrucoesRetirada={retirada?.instrucoes ?? null}
-                checked={quoteId === quote.id}
-                onSelect={() => {
-                  setQuoteId(quote.id);
-                  setQuoteError(null);
-                }}
-              />
-            ))}
-          </div>
-          {quoteError && (
-            <p role="alert" className="mt-3 text-small text-danger">
-              {quoteError}
-            </p>
-          )}
-        </fieldset>
-      )}
+      {/* O ENDEREÇO VEM ANTES DA ENTREGA (dono, 17/08).
 
-      {/* Endereço completo — enquanto cotamos e depois, se for entrega. */}
+          Era o contrário, e a tela pulava: o foco ia pro NÚMERO lá
+          embaixo e, quando a cotação chegava, o bloco de opções crescia
+          ACIMA dele e empurrava tudo — a cliente estava digitando o
+          número e a tela voltava sozinha pras formas de entrega.
+
+          Agora a ordem é a da cabeça dela: onde eu moro → como quero
+          receber. Nada nasce acima do cursor, então nada empurra.
+
+          Vale TAMBÉM pra quem vai retirar na loja (decisão explícita do
+          dono). Custa dois campos a mais pra essa cliente, e em troca o
+          fluxo é um só — e o endereço serve pra nota de qualquer jeito.
+
+          Bônus: a cotação sai desde o CEP e roda enquanto ela digita o
+          número, então quando as opções aparecem já estão prontas. O
+          segundo de espera do frete some dentro do preenchimento. */}
       {mostraEndereco && (
         <div className="grid gap-5 sm:grid-cols-6">
           <Input
@@ -391,6 +394,35 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             })}
           />
         </div>
+      )}
+
+      {/* Cotações — só depois do endereço pronto. */}
+      {cepValido && enderecoPronto && (quotes.length > 0 || cotando) && (
+        <fieldset>
+          <legend className="eyebrow mb-3 text-ink-soft">
+            Como você quer receber {cotando && <span className="text-ink-muted">· calculando…</span>}
+          </legend>
+          <div className="flex flex-col gap-3" role="radiogroup">
+            {quotes.map((quote) => (
+              <QuoteOption
+                key={quote.id}
+                quote={quote}
+                estimado={estimado}
+                instrucoesRetirada={retirada?.instrucoes ?? null}
+                checked={quoteId === quote.id}
+                onSelect={() => {
+                  setQuoteId(quote.id);
+                  setQuoteError(null);
+                }}
+              />
+            ))}
+          </div>
+          {quoteError && (
+            <p role="alert" className="mt-3 text-small text-danger">
+              {quoteError}
+            </p>
+          )}
+        </fieldset>
       )}
 
       {cepValido && (
@@ -461,9 +493,17 @@ function QuoteOption({
       </span>
 
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex items-center gap-2 text-body font-normal text-ink">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body font-normal text-ink">
           {retirada ? <MapPin className="size-4 text-primary-strong" /> : <Truck className="size-4 text-primary-strong" />}
           {quote.label}
+          {/* O R$ 9,99 é a TABELA DA CAMPANHA, não a cotação dos Correios —
+              e sem dizer isso ele parece só um frete barato. Dito, vira
+              motivo pra comprar agora: promoção tem fim, preço não tem. */}
+          {quote.promocional && (
+            <span className="rounded-sm bg-primary-wash px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-primary-strong">
+              Frete promocional
+            </span>
+          )}
         </span>
         {retirada ? (
           <>
