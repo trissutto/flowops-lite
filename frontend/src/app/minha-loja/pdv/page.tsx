@@ -189,6 +189,14 @@ async function saleFromResponse(r: any, saleId: string): Promise<Sale> {
 // 'auto' escolhe pelo monitor; a loja pode fixar no rodapé do PDV.
 type PdvDensityFixa = 'compacto' | 'normal' | 'grande';
 type PdvDensity = PdvDensityFixa | 'auto';
+/**
+ * Loja-canal SITE — a única com "Carrinhos" no menu do PDV (dono, 17/08).
+ *
+ * É o time que trabalha carrinho abandonado. Loja física não vê carrinho de
+ * cliente que não é dela, e a lista lá só geraria confusão.
+ */
+const CARRINHOS_STORE_CODE = '13';
+
 const PDV_DENSITY_KEY = 'lurds_pdv_densidade';
 const DENSITY_ZOOM: Record<PdvDensityFixa, number> = {
   compacto: 0.86,
@@ -1615,6 +1623,8 @@ function PdvPageInner() {
   const [showGiftVoucher, setShowGiftVoucher] = useState(false);
   // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
   const [showSimular, setShowSimular] = useState(false);
+  // Carrinhos abandonados — só no PDV da loja-canal SITE (ver CARRINHOS_STORE_CODE).
+  const [showCarrinhos, setShowCarrinhos] = useState(false);
   // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
   const [promoExpanded, setPromoExpanded] = useState(false);
   const loadOpenCount = async () => {
@@ -2394,6 +2404,28 @@ function PdvPageInner() {
                 </span>
               )}
             </Link>
+            {/* CARRINHOS ABANDONADOS DENTRO DO PDV (17/08).
+                O botão de importar existia só na retaguarda — e os PDVs NÃO
+                TÊM ACESSO À RETAGUARDA. Ou seja: a ferramenta que resolve as
+                5 vendas/dia que não entram no sistema era inalcançável por
+                quem precisa dela. Medido em 17/08: 7 carrinhos recuperados no
+                dia, 2 registrados. Aqui a menina abre a lista sem sair da tela
+                em que trabalha, clica na cliente e a venda monta pronta.
+
+                SÓ NA LOJA 13 (SITE) — decisão do dono: é o time do carrinho
+                abandonado que trabalha esses contatos. Loja física não vê
+                carrinho de cliente que não é dela. */}
+            {storeCode === CARRINHOS_STORE_CODE && (
+              <button
+                type="button"
+                onClick={() => setShowCarrinhos(true)}
+                className={`${rowBase} relative`}
+                title="Carrinhos abandonados do site — fechar a venda aqui"
+              >
+                <ShoppingCart className={rowIcon} />
+                <span className={rowLabel}>Carrinhos</span>
+              </button>
+            )}
             <Link href="/minha-loja/realinhamento" className={`${rowBase} relative`} title="Realinhamento de estoque inter-lojas">
               <Shuffle className={rowIcon} />
               <span className={rowLabel}>Realinhar</span>
@@ -3636,6 +3668,19 @@ function PdvPageInner() {
           />
         );
       })()}
+
+      {showCarrinhos && (
+        <CarrinhosAbandonadosModal
+          onClose={() => setShowCarrinhos(false)}
+          onImportado={(saleId) => {
+            // Venda montada pelo backend: grava a chave que o PDV usa pra
+            // retomar e recarrega. Não navega pra fora — ela já está na tela
+            // certa, é só a venda aparecer.
+            try { localStorage.setItem(`lurds_pdv_sale_${storeCode}`, saleId); } catch {}
+            window.location.reload();
+          }}
+        />
+      )}
 
       {/* Modal PIX Rápido (cobrança avulsa) */}
       {showPixAvulso && (
@@ -9307,6 +9352,164 @@ function ProductThumb({ sku, refCode, compact = false }: { sku: string; refCode:
 // todas as 12 parcelas em grade 2 colunas — sem scroll, sem configuração.
 // `total` já vem líquido de vale-troca/parciais; `temAbatimento` troca o
 // rótulo pra "Falta a pagar" pra vendedora não confundir com o total bruto.
+/**
+ * CARRINHOS ABANDONADOS DENTRO DO PDV (17/08) — só na loja-canal SITE.
+ *
+ * Medido em 17/08: 7 carrinhos recuperados no dia e 2 registrados no sistema.
+ * Os 5 restantes foram pagos por fora (PIX, PayPal, link) e ninguém lançou —
+ * cada um custa estoque que não baixa, NF que não sai, dinheiro fora do caixa,
+ * comissão que a vendedora não recebe e o carrinho seguindo como "abandonado".
+ *
+ * A causa era FRICÇÃO em dois níveis: remontar 11 peças à mão, e o botão de
+ * importar existir só na retaguarda — que o PDV NÃO ACESSA. Aqui a lista abre
+ * sem sair da tela de venda: clica na cliente e a venda monta pronta.
+ */
+function CarrinhosAbandonadosModal({
+  onClose,
+  onImportado,
+}: {
+  onClose: () => void;
+  onImportado: (saleId: string) => void;
+}) {
+  const { toast } = usePdvToast();
+  type Carrinho = {
+    id: number;
+    order_id?: number | null;
+    order_number?: string | null;
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+    cart_total?: number;
+    items_count?: number;
+    time?: string | null;
+    utmCampaign?: string | null;
+  };
+  const [itens, setItens] = useState<Carrinho[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
+  const [importando, setImportando] = useState<number | null>(null);
+  const [busca, setBusca] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // Só o carrinho do site NOVO: é o único cujos itens têm SKU nosso, e
+        // portanto o único que dá pra montar a venda automaticamente.
+        const r = await api<{ items?: Carrinho[] }>(
+          '/abandoned-carts/ecommerce/list?status=abandoned',
+        );
+        setItens(Array.isArray(r?.items) ? r.items : []);
+      } catch (e: any) {
+        setErro(humanizeError(e).hint || 'Não consegui carregar os carrinhos.');
+      } finally {
+        setCarregando(false);
+      }
+    })();
+  }, []);
+
+  const filtrados = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    if (!q) return itens;
+    return itens.filter((c) =>
+      [c.first_name, c.last_name, c.email, c.phone, c.order_number]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [itens, busca]);
+
+  async function importar(c: Carrinho) {
+    setImportando(c.id);
+    try {
+      const r = await api<{ saleId: string; importados: number; total?: number; faltaram?: string[] }>(
+        '/pdv/sales/importar-carrinho',
+        { method: 'POST', body: JSON.stringify({ wcOrderId: c.order_id ?? c.id }) },
+      );
+      if (r.faltaram?.length) {
+        // Avisa ANTES de abrir a venda: no PDV ela não teria como saber que
+        // faltou peça e fecharia incompleta sem perceber.
+        toast(
+          'warning',
+          `${r.importados} de ${r.total ?? r.importados} peça(s) entraram`,
+          `Bipe na mão: ${r.faltaram.slice(0, 3).join(' · ')}${r.faltaram.length > 3 ? ` e mais ${r.faltaram.length - 3}` : ''}`,
+        );
+      }
+      onImportado(r.saleId);
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, e?.message || h.hint);
+      setImportando(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-2 sm:p-4 overflow-y-auto" {...overlayClose(onClose)}>
+      <div
+        className="bg-white rounded-xl w-full max-w-2xl my-4 max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-4 border-b border-[#EDEAE1] flex items-center gap-3">
+          <ShoppingCart className="w-5 h-5 text-[#B8912B]" />
+          <div className="flex-1">
+            <div className="font-black text-[#2B2B2B]">Carrinhos abandonados</div>
+            <div className="text-[11px] text-slate-500">
+              Cliente fechou com você? Clica nela que a venda abre pronta — você só escolhe como recebeu.
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-2xl leading-none px-2">×</button>
+        </div>
+
+        <div className="p-3 border-b border-[#EDEAE1]">
+          <input
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            placeholder="Buscar por nome, telefone ou e-mail…"
+            className="w-full rounded-lg border-2 border-slate-200 px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {carregando && <div className="text-center text-sm text-slate-500 py-8">Carregando…</div>}
+          {erro && <div className="text-center text-sm text-rose-700 font-semibold py-8">{erro}</div>}
+          {!carregando && !erro && filtrados.length === 0 && (
+            <div className="text-center text-sm text-slate-500 py-8">
+              {itens.length === 0 ? 'Nenhum carrinho abandonado agora. 🎉' : 'Nada com esse termo.'}
+            </div>
+          )}
+          {filtrados.map((c) => {
+            const nome = [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email || 'Sem nome';
+            return (
+              <div key={c.id} className="rounded-lg border-2 border-slate-200 p-3 flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-[180px]">
+                  <div className="font-bold text-sm text-[#2B2B2B]">{nome}</div>
+                  <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2">
+                    {c.phone && <span>{c.phone}</span>}
+                    {c.items_count ? <span>{c.items_count} peça(s)</span> : null}
+                    {c.order_number && <span>{c.order_number}</span>}
+                    {/* Campanha de origem: é o que liga a venda ao anúncio. */}
+                    {c.utmCampaign && <span className="text-emerald-700">via {c.utmCampaign}</span>}
+                  </div>
+                </div>
+                <div className="font-black tabular-nums text-[#2E7D46]">
+                  {brl(Number(c.cart_total || 0))}
+                </div>
+                <button
+                  type="button"
+                  disabled={importando !== null}
+                  onClick={() => importar(c)}
+                  className="rounded-lg bg-[#2E7D46] hover:bg-[#256b3a] disabled:opacity-50 px-4 py-2 text-sm font-bold text-white"
+                >
+                  {importando === c.id ? 'Abrindo…' : 'Fechar venda'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SimularParcelasModal({
   total,
   temAbatimento,
