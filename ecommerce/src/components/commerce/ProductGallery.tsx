@@ -42,6 +42,17 @@ export interface GrupoDeCor {
   capa: string;
   ativa: boolean;
   onSelect: () => void;
+  /**
+   * Esta cor NAO tem o tamanho que ela escolheu (17/08).
+   *
+   * Riscada, nunca escondida: cor que some da tela parece defeito do site
+   * e a cliente fica procurando. Riscada, ela entende que existe mas nao
+   * no numero dela — e isso evita escolher pra levar um nao no fim.
+   *
+   * Continua clicavel de proposito: ela pode querer ver a peca naquela
+   * cor e depois trocar de numero.
+   */
+  indisponivel?: boolean;
 }
 
 export function ProductGallery({
@@ -215,7 +226,11 @@ export function ProductGallery({
           foto. Sem isso, cada cor a mais devolveria a rolagem que a mudança
           de 15/08 veio eliminar. */}
       {grupos && grupos.length > 1 ? (
-        <div className="relative w-14 shrink-0 lg:w-20">
+        /* 64px no celular (era 56): sem as bolinhas da coluna de compra,
+           esta fita virou o UNICO seletor de cor e precisa ser nitida.
+           Cresce pra LARGURA de proposito — altura sairia do orcamento da
+           dobra, que e o que acabou de por o botao de comprar na 1a tela. */
+        <div className="relative w-16 shrink-0 lg:w-20">
           <div
             className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
             role="tablist"
@@ -235,8 +250,9 @@ export function ProductGallery({
                 <span
                   className={cn(
                     'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
+                    g.indisponivel && 'opacity-45',
                     g.ativa
-                      ? 'border-primary opacity-100'
+                      ? 'border-primary ring-2 ring-primary ring-offset-1 ring-offset-background opacity-100'
                       : 'border-transparent opacity-65 hover:opacity-100',
                   )}
                 >
@@ -250,11 +266,17 @@ export function ProductGallery({
                     blurDataURL={BLUR_DATA_URL}
                     className="object-cover"
                   />
+                  {/* A tarja — mesma convencao da grade de tamanhos. */}
+                  {g.indisponivel && (
+                    <span aria-hidden className="absolute inset-0 flex items-center justify-center">
+                      <span className="h-px w-[140%] rotate-[38deg] bg-ink-soft/80" />
+                    </span>
+                  )}
                 </span>
                 <span
                   className={cn(
-                    'mt-1 block truncate text-center text-[0.625rem] leading-tight transition-colors',
-                    g.ativa ? 'text-ink' : 'text-ink-muted',
+                    'mt-1.5 block truncate text-center text-[0.6875rem] leading-tight transition-colors',
+                    g.ativa ? 'font-semibold text-ink' : 'text-ink-soft',
                   )}
                 >
                   {g.nome}

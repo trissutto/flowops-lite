@@ -49,7 +49,7 @@ export interface CorEscolhivel {
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, onSelecionarCor, alertaEstoque, look,
+  product, cores, corSelecionada, onSelecionarCor, alertaEstoque, look, tamanho, onTamanho,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
@@ -58,11 +58,26 @@ export function BuyBox({
   onSelecionarCor?: (nome: string) => void;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
+  /**
+   * O TAMANHO ESCOLHIDO, ERGUIDO PRA FORA (17/08).
+   *
+   * Quem precisa saber o número escolhido não e so este componente: a FITA
+   * de miniaturas, que fica na outra coluna, risca a cor que nao tem aquele
+   * tamanho. Como ela e irma e nao filha, o estado sobe pro pai.
+   *
+   * Continua funcionando sem os props (fica com o estado interno) — assim
+   * nenhum outro chamador do BuyBox precisa mudar.
+   */
+  tamanho?: string | null;
+  onTamanho?: (t: string | null) => void;
   /** As peças que saem na MESMA foto (curadoria de /retaguarda/looks). */
   look?: PecaApi['look'];
 }) {
   const irmasDoLook = (look?.pecas ?? []).filter((p) => !p.atual);
-  const [size, setSize] = useState<string | null>(null);
+  const [sizeLocal, setSizeLocal] = useState<string | null>(null);
+  // Controlado quando o pai manda o prop; senão, estado próprio.
+  const size = tamanho !== undefined ? tamanho : sizeLocal;
+  const setSize = (v: string | null) => { setSizeLocal(v); onTamanho?.(v); };
   const [sizeError, setSizeError] = useState(false);
   // A tabela abre sobre a PDP para a cliente não perder a seleção da peça.
   const [sizeChartOpen, setSizeChartOpen] = useState(false);
@@ -451,135 +466,31 @@ export function BuyBox({
         )}
       </div>
 
-      {/* COR — agora vem DEPOIS do tamanho (dono, 17/08). A ordem era o
-          contrário e a razão era boa no papel: "escolher o 48 e descobrir que
-          só existe no preto é o pior caminho". A medição mostrou um caminho
-          pior ainda — não escolher nada.
+      {/* AS BOLINHAS DE COR SAÍRAM DAQUI (dono, 17/08).
 
-          O QUE O DADO DISSE (14 a 17/08, sessões com sinal humano):
+          Eram a TERCEIRA aparição da mesma escolha: a foto grande, a fita de
+          miniaturas ao lado dela, e mais estas. E a fita já faz o trabalho
+          inteiro — marca a cor ativa (`aria-selected` + borda destacada) e
+          escreve o nome embaixo.
 
-            · tocar no tamanho  → 64% botam na sacola
-            · não tocar         → 3,5%
-            · mas 81% das visitantes NÃO ROLAM a página
-            · e o seletor de tamanho começava a 906px, 94px ABAIXO da dobra
-              de um iPhone (375×812)
+          Duplicar não ensinava nada e custava 158px na coluna de decisão,
+          empurrando o seletor de TAMANHO para baixo da dobra num iPhone
+          (medido: 866px, com a dobra em 812). E 81% das visitantes não rolam
+          a página de produto — ou seja, quatro em cada cinco nunca viam a
+          única escolha que decide a compra.
 
-          Ou seja: a única escolha que decide a compra estava escondida, e a
-          que não bloqueia nada (a cor, que a cliente já faz navegando as
-          fotos) ocupava o lugar nobre. Quatro em cada cinco nunca viam o
-          número.
+          Quem escolhe a cor é a fita (`grupos`, no ProductGallery). O aviso
+          de "esta cor não tem o seu número" mora lá, que é onde ela olha.
 
-          O risco antigo continua tratado, e melhor: escolhido o tamanho, a
-          cor que não tem aquele número aparece RISCADA — ela vê antes de
-          clicar, em vez de descobrir depois.
-
-          DIDÁTICO POR DECISÃO DO DONO (14/08): "minha cliente é lenta com
-          tecnologia". A bolinha sozinha não ensina nada — ela não se anuncia
-          como clicável e ninguém distingue vinho de marrom num círculo de
-          43px. Agora cada cor tem NOME ESCRITO embaixo, o passo é numerado
-          ("1 Escolha a cor") e a escolhida ganha um ✓. O nome já existia, mas
-          só no `title`/`aria-label`: invisível no celular, que é onde a
-          cliente compra. Contexto: 443 pessoas abriram uma peça no dia e 28
-          puseram na sacola. */}
-      {cores && cores.length > 1 && (
-        <div className="mt-9">
-          <PassoLabel numero={2} titulo="Escolha a cor" escolhido={corSelecionada ?? null} />
-          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-5">
-            {cores.map((c) => {
-              const escolhida = corSelecionada === c.nome;
-              const esgotada = c.estoque <= 0;
-              /**
-               * NÃO TEM O NÚMERO QUE ELA ESCOLHEU (dono, 17/08).
-               *
-               * Riscada, e não escondida: cor que some da tela parece defeito
-               * do site e a cliente fica procurando. Riscada ela entende que
-               * existe, mas não no número dela — que é a verdade, e é o que
-               * evita escolher pra levar "não" no fim.
-               *
-               * Só vale com tamanho JÁ escolhido e com a grade daquela cor na
-               * mão; sem um dos dois, nada é riscado.
-               */
-              const semONumero =
-                !!size && !!c.tamanhos?.length
-                  && !c.tamanhos.some((t) => t.label === size && t.disponivel);
-              const indisponivel = esgotada || semONumero;
-              // MESMO FALLBACK DA VITRINE (bug real, 07/08): sem bolinha pintada
-              // na retaguarda, o card da listagem já ADIVINHA a cor pelo nome
-              // (hexDaCor) — a PDP caía num cinza genérico #D9D4CC porque usava
-              // o hex cru da API sem esse plano B. Cliente via bolinha colorida
-              // no card e cinza ao abrir a peça, como se tivesse quebrado.
-              const estilo: React.CSSProperties =
-                c.swatch.tipo === 'foto' && c.swatch.imagem
-                  ? {
-                      backgroundImage: `url(${c.swatch.imagem})`,
-                      backgroundSize: '400%',
-                      backgroundPosition: `${(c.swatch.focoX ?? 0.5) * 100}% ${(c.swatch.focoY ?? 0.5) * 100}%`,
-                    }
-                  : { backgroundColor: c.swatch.hex || hexDaCor(c.nome) };
-
-              return (
-                <button
-                  key={c.nome}
-                  type="button"
-                  onClick={() => {
-                    onSelecionarCor?.(c.nome);
-                    trackColorSwitch(product, c.nome);
-                  }}
-                  aria-pressed={escolhida}
-                  aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : semONumero ? ` (sem o tamanho ${size})` : ''}`}
-                  // w-16 + quebra de linha: o nome inteiro aparece ("AZUL
-                  // MARINHO" em duas linhas) sem esticar o viewport no celular
-                  // — o flex-wrap acomoda, e nada de truncar justo o texto que
-                  // a gente acabou de mostrar pra ensinar.
-                  className="group flex w-16 flex-col items-center gap-2"
-                >
-                  <span
-                    className={cn(
-                      // 2,7rem = 43px: a bolinha 20% maior que os 36px originais
-                      // (dono 07/08). É o controle que decide a compra — merece
-                      // o alvo de toque maior no celular.
-                      'relative flex size-[2.7rem] items-center justify-center rounded-full border transition-all duration-[320ms]',
-                      escolhida
-                        ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
-                        : 'border-border group-hover:border-ink-soft',
-                      indisponivel && 'opacity-40',
-                    )}
-                  >
-                    <span style={estilo} className="absolute inset-[3px] rounded-full" />
-                    {/* A TARJA — convenção que a grade de tamanhos desta
-                        mesma tela já usa. Repetir o desenho é o que faz a
-                        cliente entender sem legenda. */}
-                    {indisponivel && (
-                      <span aria-hidden className="absolute inset-0 rounded-full">
-                        <span className="absolute left-1/2 top-1/2 h-px w-[3.2rem] -translate-x-1/2 -translate-y-1/2 rotate-45 bg-ink-soft" />
-                      </span>
-                    )}
-                    {/* ✓ por cima da bolinha: a borda escura sozinha some numa
-                        peça de cor escura — o check nunca some. */}
-                    {escolhida && (
-                      <Check
-                        className="relative size-4 text-light drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]"
-                        strokeWidth={3}
-                      />
-                    )}
-                  </span>
-                  <span
-                    className={cn(
-                      'text-center text-xs leading-tight break-words',
-                      escolhida ? 'font-medium text-ink' : 'text-ink-soft',
-                    )}
-                  >
-                    {c.nome}
-                    {esgotada && <span className="block text-ink-muted">esgotada</span>}
-                    {!esgotada && semONumero && (
-                      <span className="block text-ink-muted">sem o {size}</span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+          FICA UMA LINHA, porque a escolha tem que ser NÍTIDA (dono, 17/08):
+          a fita está na outra coluna e no celular ela rola pra fora da
+          vista. Esta linha confirma, ao lado do botão, qual cor vai no
+          pedido — sem devolver os 158px de bolinha. */}
+      {temCor && corSelecionada && (
+        <p className="mt-6 text-small text-ink-soft">
+          Cor escolhida: <strong className="font-medium text-ink">{corSelecionada}</strong>
+          <span className="ml-2 text-ink-muted">— toque nas fotos ao lado pra trocar</span>
+        </p>
       )}
 
       {/* SAI NA MESMA FOTO — a irmã do look colada na decisão (dono, 13/08:
