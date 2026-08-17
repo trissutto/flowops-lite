@@ -581,6 +581,136 @@ export class OrdersController {
   }
 
   /**
+   * PATCH /orders/wc/:wcId/entrega { tipo, storeCode? }
+   *
+   * TROCAR A FORMA DE ENTREGA de um pedido já criado (17/08). O "Corrigir"
+   * da tela só editava endereço; forma de entrega não tinha conserto por
+   * tela nenhuma. Caso ON-000006: nasceu "Entrega (não informada)" (o
+   * entregaTipo do PDV não gravou) pra cliente que ia RETIRAR em São José
+   * dos Campos — a matriz não tinha como dizer isso ao pedido, e sem
+   * `pickupStoreCode` a engine ia mandar as 11 peças pra cliente pelos
+   * Correios em pacotes separados.
+   *
+   * `tipo`: sedex | pac | motoboy | retirada. `storeCode` = loja que atende
+   * (obrigatório pra retirada; opcional pra motoboy). Atualiza o Order
+   * (shippingMethod/isPickup/pickupStoreCode) E o checkoutInfo.shipping —
+   * o banner da tela lê o checkoutInfo primeiro.
+   *
+   * Roteamento depois da troca:
+   *   - card ativo (new/separating) em alguma loja → recalcula (o recalcular
+   *     apaga os ativos e re-roteia lendo o pickupStoreCode novo);
+   *   - sem card e trava numa loja (retirada/motoboy) → roteia NA HORA,
+   *     igual ao pedido online nascendo (engine determinística);
+   *   - sem card, SEDEX/PAC → fica pra matriz, como sempre.
+   * RECUSA se algum card já passou de "separando": peça já saiu, trocar a
+   * entrega agora é decisão de gente.
+   */
+  @Patch('wc/:wcId/entrega')
+  async trocarEntrega(
+    @Req() req: any,
+    @Param('wcId') wcId: string,
+    @Body() body: { tipo: string; storeCode?: string | null },
+  ) {
+    const wcOrderId = Number(wcId);
+    if (!wcOrderId || isNaN(wcOrderId)) throw new BadRequestException('wcOrderId inválido');
+
+    const tipo = String(body?.tipo || '').trim().toLowerCase();
+    const FORMAS: Record<string, { id: string; kind: string; label: string; pickup: boolean }> = {
+      sedex: { id: 'sedex', kind: 'correios', label: 'SEDEX', pickup: false },
+      pac: { id: 'pac', kind: 'correios', label: 'PAC', pickup: false },
+      motoboy: { id: 'motoboy', kind: 'motoboy', label: 'MOTOBOY', pickup: false },
+      retirada: { id: 'retirada', kind: 'pickup', label: 'RETIRADA NA LOJA', pickup: true },
+    };
+    const forma = FORMAS[tipo];
+    if (!forma) throw new BadRequestException('Forma inválida (use sedex, pac, motoboy ou retirada)');
+
+    const order: any = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId },
+      include: { pickOrders: { select: { id: true, status: true } } },
+    });
+    if (!order) throw new BadRequestException(`Pedido ${wcId} não encontrado`);
+    if (['shipped', 'delivered', 'cancelled'].includes(String(order.status))) {
+      throw new BadRequestException(`Pedido já está ${order.status} — não dá pra trocar a entrega`);
+    }
+    const avancados = (order.pickOrders || []).filter((p: any) => !['new', 'separating'].includes(p.status));
+    if (avancados.length > 0) {
+      throw new BadRequestException(
+        `${avancados.length} separação(ões) já passaram de "separando" (${[...new Set(avancados.map((a: any) => a.status))].join(', ')}). ` +
+          'A peça já saiu — trocar a entrega agora não é conserto de sistema.',
+      );
+    }
+
+    // Loja que atende: retirada EXIGE (a cliente busca em algum lugar);
+    // motoboy é opcional (sem loja = a engine escolhe por estoque).
+    const storeCode = String(body?.storeCode || '').trim();
+    let loja: any = null;
+    if (forma.pickup || (tipo === 'motoboy' && storeCode)) {
+      if (!storeCode) throw new BadRequestException('Retirada precisa da loja onde a cliente busca');
+      loja = await (this.prisma as any).store.findFirst({ where: { code: storeCode, active: true } });
+      if (!loja) throw new BadRequestException(`Loja ${storeCode} não existe ou está inativa`);
+    }
+    const label = forma.pickup && loja ? `${forma.label} — ${loja.name}` : forma.label;
+
+    // checkoutInfo.shipping é o que o banner/etiqueta leem primeiro.
+    let ck: any = {};
+    try { ck = order.checkoutInfo ? JSON.parse(order.checkoutInfo) : {}; } catch { ck = {}; }
+    const antes = ck?.shipping?.label ?? order.shippingMethod ?? 'não informada';
+    ck.shipping = {
+      ...(ck.shipping || {}),
+      id: forma.id,
+      kind: forma.kind,
+      label,
+      price: Number(ck?.shipping?.price ?? 0),
+    };
+
+    await (this.prisma as any).order.update({
+      where: { id: order.id },
+      data: {
+        shippingMethod: label,
+        isPickup: forma.pickup,
+        pickupStoreCode: loja ? loja.code : null,
+        checkoutInfo: JSON.stringify(ck),
+      },
+    });
+    await (this.prisma as any).orderHistory
+      .create({
+        data: {
+          orderId: order.id,
+          userId: req?.user?.id ?? null,
+          fromStatus: order.status,
+          toStatus: order.status,
+          note: `Entrega trocada: ${antes} → ${label}${loja ? ` (loja que atende: ${loja.name})` : ''}.`,
+        },
+      })
+      .catch(() => null);
+
+    // Roteamento coerente com a entrega nova.
+    const ativos = (order.pickOrders || []).filter((p: any) => ['new', 'separating'].includes(p.status));
+    let roteamento: any = { acao: 'nenhuma' };
+    try {
+      if (ativos.length > 0) {
+        const r: any = await this.routing.recalculateForWc(order.id);
+        roteamento = { acao: 'recalculado', ok: !!r?.ok, detalhe: r?.message ?? null };
+      } else if (loja) {
+        const preview: any = await this.routing.previewRoute(order.id);
+        const r: any = await this.routing.confirmRoute(order.id, preview);
+        roteamento = { acao: 'roteado', ok: !!r?.persisted, estrategia: preview?.strategy ?? null };
+      }
+    } catch (e: any) {
+      roteamento = { acao: ativos.length > 0 ? 'recalculado' : 'roteado', ok: false, detalhe: e?.message || String(e) };
+    }
+
+    return {
+      ok: true,
+      shippingMethod: label,
+      isPickup: forma.pickup,
+      pickupStoreCode: loja?.code ?? null,
+      pickupStoreName: loja?.name ?? null,
+      roteamento,
+    };
+  }
+
+  /**
    * POST /orders/wc/:wcId/fechar-na-loja-vendedora
    *
    * A loja que VENDEU já entregou: cancela card indevido, baixa o estoque nela

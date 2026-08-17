@@ -153,6 +153,15 @@ export default function PedidoDetailPage() {
 
   const [order, setOrder] = useState<WcOrderDetail | null>(null);
   const [editandoEndereco, setEditandoEndereco] = useState(false);
+  // TROCAR FORMA DE ENTREGA (17/08) — o pedido nasceu "não informada" ou com
+  // a forma errada, e a matriz não tinha como consertar por tela (ON-000006:
+  // cliente ia RETIRAR em SJC e o pedido não sabia).
+  const [trocandoEntrega, setTrocandoEntrega] = useState(false);
+  const [entregaNova, setEntregaNova] = useState<'sedex' | 'pac' | 'motoboy' | 'retirada'>('retirada');
+  const [entregaLoja, setEntregaLoja] = useState('');
+  const [entregaLojas, setEntregaLojas] = useState<Array<{ code: string; name: string }>>([]);
+  const [entregaBusy, setEntregaBusy] = useState(false);
+  const [entregaErro, setEntregaErro] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -473,6 +482,61 @@ export default function PedidoDetailPage() {
       setFecharErro(e?.message || 'Falha ao fechar o pedido na loja vendedora.');
     } finally {
       setFecharLoading(false);
+    }
+  }
+
+  /** Abre o painel de troca de entrega já com a lista de lojas ativas. */
+  async function abrirTrocaEntrega() {
+    setEntregaErro(null);
+    setTrocandoEntrega(true);
+    if (entregaLojas.length === 0) {
+      try {
+        const lojas = await api<Array<{ code: string; name: string; active: boolean }>>('/stores');
+        setEntregaLojas(
+          (Array.isArray(lojas) ? lojas : [])
+            .filter((s) => s.active)
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((s) => ({ code: s.code, name: s.name })),
+        );
+      } catch (e: any) {
+        setEntregaErro(e?.message || 'Não consegui carregar as lojas.');
+      }
+    }
+  }
+
+  /**
+   * Troca a forma de entrega do pedido. Retirada exige a loja onde a cliente
+   * busca; motoboy aceita a loja que manda (opcional). O backend re-roteia:
+   * apaga cards ativos e recalcula, ou roteia na hora quando trava numa loja.
+   */
+  async function salvarTrocaEntrega() {
+    if (entregaNova === 'retirada' && !entregaLoja) {
+      setEntregaErro('Escolha a loja onde a cliente vai retirar.');
+      return;
+    }
+    setEntregaBusy(true);
+    setEntregaErro(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        shippingMethod: string;
+        roteamento?: { acao: string; ok?: boolean; detalhe?: string | null };
+      }>(`/orders/wc/${wcId}/entrega`, {
+        method: 'PATCH',
+        body: JSON.stringify({ tipo: entregaNova, storeCode: entregaLoja || null }),
+      });
+      setTrocandoEntrega(false);
+      await load();
+      const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
+      setLiveStatus(Array.isArray(fresh) ? fresh : []);
+      const r = res.roteamento;
+      if (r && r.acao !== 'nenhuma' && r.ok === false) {
+        setSepError(`Entrega trocada pra ${res.shippingMethod}, mas o roteamento não foi: ${r.detalhe || 'sem detalhe'}. Use "Recalcular separação".`);
+      }
+    } catch (e: any) {
+      setEntregaErro(e?.message || 'Falha ao trocar a entrega.');
+    } finally {
+      setEntregaBusy(false);
     }
   }
 
@@ -1341,14 +1405,103 @@ export default function PedidoDetailPage() {
             {/* Corrigir endereco: mesma modal da tela da loja. O endereco do
                 pedido e snapshot e a etiqueta le dele — sem isto, complemento
                 errado so se resolvia por fora do sistema. */}
-            <button
-              type="button"
-              onClick={() => setEditandoEndereco(true)}
-              className="rounded-lg border-2 border-violet-300 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50"
-            >
-              ✎ Corrigir
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Trocar a FORMA de entrega (SEDEX/PAC/motoboy/retirada + loja
+                  que atende). Só enquanto nenhuma separação passou de
+                  "separando" — depois a peça já saiu. */}
+              {!['completed', 'cancelled'].includes(String(order.status || '')) && (
+                <button
+                  type="button"
+                  onClick={() => (trocandoEntrega ? setTrocandoEntrega(false) : void abrirTrocaEntrega())}
+                  className="rounded-lg border-2 border-teal-300 px-3 py-1.5 text-xs font-bold text-teal-700 hover:bg-teal-50"
+                >
+                  🔁 Trocar entrega
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setEditandoEndereco(true)}
+                className="rounded-lg border-2 border-violet-300 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50"
+              >
+                ✎ Corrigir
+              </button>
+            </div>
           </div>
+
+          {trocandoEntrega && (
+            <div className="mb-3 rounded-lg border-2 border-teal-200 bg-teal-50 p-3">
+              <div className="text-[11px] font-bold uppercase tracking-wide text-teal-800 mb-2">
+                Nova forma de entrega
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {([
+                  { id: 'sedex', label: '⚡ SEDEX' },
+                  { id: 'pac', label: '📦 PAC' },
+                  { id: 'motoboy', label: '🛵 MOTOBOY' },
+                  { id: 'retirada', label: '🏬 RETIRADA' },
+                ] as const).map((op) => (
+                  <button
+                    key={op.id}
+                    type="button"
+                    onClick={() => { setEntregaNova(op.id); if (op.id === 'sedex' || op.id === 'pac') setEntregaLoja(''); }}
+                    className={`rounded-lg border-2 py-2 text-xs font-bold transition ${
+                      entregaNova === op.id
+                        ? 'border-teal-500 bg-teal-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300'
+                    }`}
+                  >
+                    {op.label}
+                  </button>
+                ))}
+              </div>
+              {(entregaNova === 'retirada' || entregaNova === 'motoboy') && (
+                <div className="mt-2">
+                  <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                    {entregaNova === 'retirada' ? 'Cliente retira em qual loja? *' : 'Qual loja manda o motoboy? (opcional)'}
+                  </label>
+                  <select
+                    value={entregaLoja}
+                    onChange={(e) => setEntregaLoja(e.target.value)}
+                    className="mt-1 w-full rounded-lg border-2 border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-teal-400 focus:outline-none"
+                  >
+                    <option value="">{entregaNova === 'retirada' ? '— escolha a loja —' : 'A engine escolhe (por estoque)'}</option>
+                    {entregaLojas.map((s) => (
+                      <option key={s.code} value={s.code}>{s.name} ({s.code})</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-teal-700 mt-1 font-semibold">
+                    {entregaNova === 'retirada'
+                      ? 'A separação trava nessa loja. O que ela não tiver chega por transferência antes da cliente buscar.'
+                      : entregaLoja
+                        ? 'A separação trava nessa loja: ela recebe o que faltar por transferência e manda o motoboy.'
+                        : 'Sem loja, a engine escolhe por estoque — pode cair longe da cliente.'}
+                  </p>
+                </div>
+              )}
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  disabled={entregaBusy}
+                  onClick={salvarTrocaEntrega}
+                  className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50"
+                >
+                  {entregaBusy ? 'Salvando…' : 'Salvar e re-rotear'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrocandoEntrega(false)}
+                  className="rounded-lg border-2 border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <span className="text-[11px] text-slate-600">
+                  Cards ainda em "novo/separando" são refeitos com a entrega nova.
+                </span>
+              </div>
+              {entregaErro && <div className="mt-2 text-xs font-semibold text-rose-700">{entregaErro}</div>}
+            </div>
+          )}
+
           <div className="text-sm space-y-0.5 text-slate-700">
           {editandoEndereco && (
             <EnderecoEntregaModal
