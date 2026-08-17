@@ -4082,6 +4082,11 @@ function CustomerModal({
       .then((r) => {
         if (cancelado || !r?.found) return;
         const c = r.customer || {};
+        // NOME também (17/08 — pedido ON-000009 saiu "Cliente" na etiqueta).
+        // O painel VIP mostrava o nome, o endereço vinha inteiro, e o campo
+        // Nome ficava vazio: a atendente via tudo preenchido, salvava, e a
+        // venda ia sem nome — Order, etiqueta, push e NF-e herdam "Cliente".
+        if (!name && c.name) setName(c.name);
         if (!email && c.email) setEmail(c.email);
         if (!phone && c.whatsapp) setPhone(c.whatsapp);
         const e = c.endereco;
