@@ -56,23 +56,22 @@ const TABELA: Record<Zone, { pac: { price: number; min: number; max: number }; s
 
 /** Cidades atendidas → prefixos de CEP (faixa aproximada, mesma base do CRM). */
 /**
- * ⚠️ REDE DE SEGURANÇA, NÃO A REGRA. Quem manda é o raio de 20 km
- * (`RAIO_RETIRADA_KM`); isto só vale quando não conseguimos a coordenada
- * do CEP. Duas faixas estavam se atropelando e ofereciam loja longe:
+ * ⚠️ REDE DE SEGURANÇA, NÃO A REGRA. Quem poda é o raio de 20 km
+ * (`RAIO_RETIRADA_KM`); isto só vale quando não veio coordenada do CEP.
  *
- *  · `117` apontava pra Itanhaém E Praia Grande — 40 km uma da outra. Um
- *    CEP de Itanhaém oferecia retirada em Praia Grande (caso real, 17/08).
- *  · `132` apontava pra Vinhedo E Jundiaí.
+ * ELA TEM QUE SER LARGA. Eu tinha estreitado `117` e `132` pra separar
+ * Itanhaém de Praia Grande e Jundiaí de Vinhedo — e abri buracos: 1173,
+ * 1177–1179 e 1322–1327 ficaram sem dono nenhum. Mongaguá (11730) perdeu a
+ * retirada que tinha ontem, e ela está a 17,5 km de Itanhaém — DENTRO dos
+ * 20 km que o dono pediu. Estreitar aqui não corrige nada que o raio já
+ * não corrija, e cobra o preço nos CEPs esquecidos.
  *
- * Separadas pela faixa real dos Correios: Praia Grande 11700–11729,
- * Itanhaém 11740–11769, Jundiaí 13200–13219, Vinhedo 13280–13289.
+ * Regra: aqui entra tudo que PODE ser perto. Longe demais o raio tira.
  */
 const RETIRADA_POR_PREFIXO: Array<{ prefixos: string[]; slugs: string[] }> = [
-  { prefixos: ['1174', '1175', '1176'], slugs: ['itanhaem'] },
-  { prefixos: ['1170', '1171', '1172'], slugs: ['praia-grande'] },
+  { prefixos: ['117'], slugs: ['itanhaem', 'praia-grande'] },
   { prefixos: ['110', '115'], slugs: ['santos'] },
-  { prefixos: ['1328'], slugs: ['vinhedo'] },
-  { prefixos: ['1320', '1321'], slugs: ['jundiai'] },
+  { prefixos: ['132'], slugs: ['jundiai', 'vinhedo'] },
   { prefixos: ['133'], slugs: ['indaiatuba'] },
   { prefixos: ['134'], slugs: ['piracicaba'] },
   { prefixos: ['180', '181'], slugs: ['sorocaba'] },
@@ -100,33 +99,16 @@ function distanciaEntre(a: Ponto, b: Ponto): number {
 }
 
 /**
- * Coordenada DO CEP — não do município.
+ * A coordenada do CEP vem do BFF, em `dados.coord`.
  *
- * A distinção decide a regra em São Paulo: as fontes que devolvem o
- * centroide do município dão o MESMO ponto pra Paulista, Anália Franco e
- * Berrini, e aí o raio de 20 km não separa nada numa cidade de 50 km de
- * ponta a ponta. Esta devolve a rua (medido em 17/08: Berrini a 2,9 km de
- * Moema, Anália Franco a 14,6 km — dois números diferentes, como tem que
- * ser).
+ * ELA SAIU DAQUI DE PROPÓSITO (17/08). Duas razões medidas: a fonte corta
+ * em ~40 consultas por IP, e do navegador quem paga a cota é o IP da
+ * cliente (CGNAT de 4G junta milhares de pessoas num IP só); e uma
+ * requisição pendurada no navegador não rejeita — ela segurava a lista de
+ * frete inteira, que é a armadilha do Giga descrita no CLAUDE.md.
  *
- * NUNCA REJEITA. Falhou, devolve null e a retirada cai na tabela de
- * prefixos. É informação a mais pra ordenar uma lista — não pode ser o
- * motivo de ninguém ficar sem opção de entrega.
+ * Ver `coordenadaDoCep` em app/api/loja/frete/route.ts, com cache e teto.
  */
-export async function coordenadaDoCep(cep: string, signal?: AbortSignal): Promise<Ponto | null> {
-  const digits = onlyDigits(cep);
-  if (digits.length !== 8) return null;
-  try {
-    const r = await fetch(`https://cep.awesomeapi.com.br/json/${digits}`, { signal });
-    if (!r.ok) return null;
-    const d = await r.json();
-    const lat = Number(d?.lat);
-    const lng = Number(d?.lng);
-    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * A ORDEM DA TELA, E ELA É FIXA (dono, 17/08):
@@ -264,18 +246,10 @@ export async function fetchQuotes(
 ): Promise<CotacaoDoSite> {
   const digits = onlyDigits(cep);
 
-  /**
-   * Sai JUNTO com a cotação, não depois. A cotação leva ~1s e esta ~0,3s,
-   * então em paralelo ela é de graça — em série seria 30% a mais de espera
-   * só pra ordenar uma lista.
-   *
-   * `coordenadaDoCep` nunca rejeita, então dá pra deixar a promessa solta e
-   * colher depois nos dois caminhos (backend ok e backend fora).
-   */
-  const pCoord = isValidCep(digits) ? coordenadaDoCep(digits, signal) : Promise.resolve(null);
-
-  const local = async (): Promise<CotacaoDoSite> => ({
-    quotes: quoteShipping(digits, subtotal, await pCoord),
+  const local = (): CotacaoDoSite => ({
+    // Sem coordenada aqui de propósito: este é o caminho de EMERGÊNCIA
+    // (backend fora), e ele não pode depender de mais nenhuma rede.
+    quotes: quoteShipping(digits, subtotal),
     freteGratis: {
       ativo: true,
       minimo: FREE_SHIPPING_FROM,
@@ -299,7 +273,6 @@ export async function fetchQuotes(
     const dados = await res.json().catch(() => null);
     if (!dados?.ok || !Array.isArray(dados.opcoes) || !dados.opcoes.length) return local();
 
-    const coord = await pCoord;
     return {
       quotes: ordenarOpcoes([
         ...dados.opcoes.map(
@@ -319,7 +292,7 @@ export async function fetchQuotes(
             promocional: o.promocional === true,
           }),
         ),
-        ...pickupStoresFor(digits, dados.retirada?.prazoHoras, coord),
+        ...pickupStoresFor(digits, dados.retirada?.prazoHoras, dados.coord),
       ]),
       freteGratis: dados.freteGratis ?? {
         ativo: true,

@@ -73,6 +73,8 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
   const [cepBuscando, setCepBuscando] = useState(false);
   const [quoteId, setQuoteId] = useState<string | undefined>(defaults?.quote.id);
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  /** Aviso de endereço incompleto, disparado ao escolher a entrega. */
+  const [avisoEndereco, setAvisoEndereco] = useState<string | null>(null);
 
   // Evita refetch do ViaCEP pro mesmo CEP (inclusive na volta da edição).
   const ultimoCepBuscado = useRef<string | null>(defaults ? onlyDigits(defaults.cep) : null);
@@ -105,6 +107,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     setValue,
     setFocus,
     watch,
+    trigger,
     formState: { errors },
   } = useForm<AddressValues>({
     resolver: zodResolver(addressSchema),
@@ -255,6 +258,21 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     if (mostraEndereco && !cepBuscando) setFocus('number');
   }, [mostraEndereco, cepBuscando, setFocus]);
 
+  /**
+   * Consertou? O aviso sai sozinho — ninguém deve fechar aviso na mão.
+   *
+   * O `trigger` junto não é enfeite: o formulário está em `onTouched`, que só
+   * revalida no blur. Sem ele, quem digita o número e clica DIRETO na opção
+   * de entrega continua vendo "Informe o número." embaixo de um campo que já
+   * está preenchido — erro fantasma é pior que erro nenhum, porque ela para
+   * pra entender o que fez de errado.
+   */
+  useEffect(() => {
+    if (!enderecoPronto) return;
+    setAvisoEndereco(null);
+    void trigger(['street', 'number', 'neighborhood', 'city', 'uf']);
+  }, [enderecoPronto, trigger]);
+
   function confirmar(address?: AddressValues) {
     if (!selectedQuote) {
       trackCheckoutValidationError('shipping', 'shipping_method');
@@ -300,6 +318,41 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
    * O endereço continua NÃO viajando no pedido de retirada: ele é exigido
    * pra nota e pro cadastro, não pra entregar numa peça que ela vem buscar.
    */
+  /**
+   * ESCOLHEU A ENTREGA SEM O ENDEREÇO DE PÉ.
+   *
+   * A escolha VALE (a opção fica marcada — desmarcar o clique dela faria a
+   * tela parecer quebrada). O que acontece a mais é o aviso: o campo que
+   * falta fica vermelho, o foco pula nele e uma linha explica.
+   *
+   * O foco é a parte que resolve o medo do dono: em vez de a cliente
+   * procurar o que está errado, o cursor já está no lugar de digitar.
+   *
+   * VALE PRA RETIRADA TAMBÉM (decisão do dono: "é por segurança"). Ela não
+   * recebe em casa, mas o endereço vai pra nota e pro cadastro — e é o que
+   * permite ligar pra ela se a peça não aparecer.
+   */
+  async function aoEscolher(quote: ShippingQuote) {
+    setQuoteId(quote.id);
+    setQuoteError(null);
+    if (enderecoPronto) {
+      setAvisoEndereco(null);
+      return;
+    }
+    const campos = ['street', 'number', 'neighborhood', 'city', 'uf'] as const;
+    await trigger(campos);
+    setAvisoEndereco(
+      quote.kind === 'retirada'
+        ? 'Complete o endereço antes de continuar — ele vai na nota do seu pedido.'
+        : 'Falta o endereço completo pra entregar. O número é obrigatório.',
+    );
+    // Foco no primeiro que falta — quase sempre o número, que é o único que
+    // o ViaCEP não sabe.
+    const vazios = { street: rua, number: numero, neighborhood: bairro, city: cidade, uf: ufAtual };
+    const faltando = campos.find((c) => !vazios[c]?.trim());
+    setFocus(faltando ?? 'number');
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     void handleSubmit(
@@ -415,17 +468,19 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
         </div>
       )}
 
-      {/* SEM ISTO A TELA FICA MUDA. O bloco das opções não existe enquanto
-          falta campo, e uma tela que simplesmente não avança não ensina
-          nada — ela só cansa. Uma linha resolve. */}
-      {mostraEndereco && !enderecoPronto && (
-        <p className="-mt-2 text-small text-ink-muted">
-          Complete o endereço para ver as formas de entrega.
-        </p>
-      )}
+      {/* AS OPÇÕES FICAM SEMPRE À VISTA (dono, 17/08 — e ele está certo).
 
-      {/* Cotações — só depois do endereço pronto. */}
-      {cepValido && enderecoPronto && (quotes.length > 0 || cotando) && (
+          Eu as tinha ESCONDIDO até o endereço ficar completo. O medo dele:
+          a cliente não acha as formas de entrega e vai embora. E tem um
+          motivo mais forte que eu não havia pesado: escondê-las esconde o
+          "SEDEX R$ 9,99 · FRETE PROMOCIONAL" — que é exatamente o argumento
+          que faz ela TERMINAR de preencher. Eu estava escondendo o
+          incentivo pra cobrar o formulário.
+
+          Então a sequência visual continua a mesma (endereço acima, entrega
+          abaixo), mas nada desaparece: quem escolhe sem o número preenchido
+          é avisado na hora, em `aoEscolher`. */}
+      {cepValido && (quotes.length > 0 || cotando) && (
         <fieldset>
           <legend className="eyebrow mb-3 text-ink-soft">
             Como você quer receber {cotando && <span className="text-ink-muted">· calculando…</span>}
@@ -438,16 +493,13 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
                 estimado={estimado}
                 instrucoesRetirada={retirada?.instrucoes ?? null}
                 checked={quoteId === quote.id}
-                onSelect={() => {
-                  setQuoteId(quote.id);
-                  setQuoteError(null);
-                }}
+                onSelect={() => void aoEscolher(quote)}
               />
             ))}
           </div>
-          {quoteError && (
+          {(quoteError || avisoEndereco) && (
             <p role="alert" className="mt-3 text-small text-danger">
-              {quoteError}
+              {quoteError ?? avisoEndereco}
             </p>
           )}
         </fieldset>
