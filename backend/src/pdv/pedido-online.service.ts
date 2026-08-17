@@ -139,7 +139,55 @@ export class PedidoOnlineService {
     if (!sale) return [];
     const pecas = (sale.items || []).filter((it: any) => !ehItemSemEstoque(it));
     if (!pecas.length) return [];
+
+    /**
+     * ⚠️ LOJA-CANAL NÃO ENTRA NA REGRA A (17/08).
+     *
+     * A Regra A nasceu pra loja FÍSICA (caso Suzano). Mas a venda online do
+     * SITE é fechada pela loja-canal 13 ("SITE" — o time que recupera carrinho
+     * abandonado), e essa loja NÃO TEM ESTOQUE PRÓPRIO. Aplicar a regra ali
+     * bloqueava motoboy em 100% das vendas do canal: `faltamNaLoja` devolvia
+     * a sacola inteira e o PDV recusava sempre. O time perdeu uma forma de
+     * entrega que o dono quer ofertar (SEDEX, PAC, RETIRADA e MOTOBOY).
+     *
+     * Loja sem NENHUMA linha no espelho de estoque é canal de faturamento, não
+     * loja com arara — a pergunta "você tem a peça?" não faz sentido pra ela.
+     *
+     * A trava de distância do motoboy nesse canal é do ROTEAMENTO (só loja
+     * perto da cliente pode atender um pedido motoboy), não da origem — está
+     * pendente e é o próximo passo. Sem esta exceção, porém, o canal fica
+     * parado, o que é pior.
+     */
+    if (await this.lojaSemEstoqueProprio(sale.storeCode)) {
+      this.logger.log(
+        `[motoboy] venda ${saleId}: loja ${sale.storeCode} é canal sem estoque próprio — ` +
+          `Regra A não se aplica (distância fica a cargo do roteamento)`,
+      );
+      return [];
+    }
+
     return this.faltamNaLoja(pecas, sale.storeCode);
+  }
+
+  /**
+   * A loja tem alguma linha de estoque no espelho? `false` = loja-canal (só
+   * fatura, não guarda peça). Uma linha basta — não interessa a quantidade,
+   * interessa se ela existe como loja com arara no sistema de estoque.
+   */
+  private async lojaSemEstoqueProprio(storeCode: string): Promise<boolean> {
+    const alvo = this.semZeros(storeCode);
+    // `wincred_estoque.loja` é Char(2) — a forma canônica é com zero à
+    // esquerda ("07"). As outras variantes vão junto porque code de Store nem
+    // sempre normaliza, e um falso "sem estoque" liberaria motoboy pra loja
+    // física que não tem a peça (justamente o que a Regra A existe pra evitar).
+    const variantes = Array.from(
+      new Set([String(storeCode || '').trim(), alvo, alvo.padStart(2, '0')]),
+    );
+    const qualquer = await (this.prisma as any).wincredEstoque.findFirst({
+      where: { loja: { in: variantes } },
+      select: { codigo: true },
+    });
+    return !qualquer;
   }
 
   /** SKUs (com quantidade) que a loja NÃO cobre. Vazio = tem tudo. */
@@ -341,15 +389,23 @@ export class PedidoOnlineService {
        * as redes de segurança do outbox/reconcile pulam por causa do mesmo
        * `stockDecreasedAt`. Ninguém no balcão sabia que um pedido tinha nascido.
        *
-       * Quem fecha uma venda online no PRÓPRIO caixa com a peça em mãos é quem
-       * entrega. Então o pedido nasce FECHADO nela: estoque baixa nela na hora,
-       * o registro fica de pé pra NF-e/etiqueta, e nenhum card é aberto.
+       * ⚠️ SÓ MOTOBOY — a régua NÃO é "a loja tem a peça", é "a peça precisa
+       * ser POSTADA". A primeira versão deste fix usava `!entrega.pickup` e
+       * quebrou SEDEX/PAC em produção: os botões "Gerar envio Correios",
+       * "Etiqueta + NF" e "Já postei" vivem DENTRO do card
+       * (`frontend/src/app/minha-loja/page.tsx`). Sem card, a loja não emite
+       * pré-postagem, a peça fica na arara e o pedido diz "enviado" — a cliente
+       * pagou e não recebe nada, em silêncio.
        *
-       * RETIRADA fica de fora de propósito: ali a peça precisa ser separada e
-       * guardada pro balcão (é tarefa real), e o `routePickup` já dá prioridade
-       * total à loja da retirada — nunca vaza pra outra cidade.
+       * Então o pedido nasce fechado só quando NÃO sobra artefato do sistema
+       * pra ninguém:
+       *   - MOTOBOY  → sai da mão da vendedora. Sem etiqueta, sem rastreio.
+       *   - SEDEX/PAC → card na própria loja: o card É a ferramenta de postar.
+       *   - RETIRADA  → card na própria loja: separar e guardar pro balcão é
+       *                 tarefa real, e o `routePickup` já dá prioridade total à
+       *                 loja da retirada.
        */
-      const fechaNaLoja = autoAtende && !entrega.pickup;
+      const fechaNaLoja = autoAtende && entrega.kind === 'motoboy';
 
       const checkoutInfo = {
         origem: 'pdv_online',
