@@ -3,7 +3,19 @@ const DAY = 24 * 60 * 60 * 1000;
 const CLOSED_WAIT = 60 * DAY;
 const REGISTERED_WAIT = 365 * DAY;
 
-export const COUPON_DELAY_MS = 15_000;
+/**
+ * 40 SEGUNDOS (dono, 17/08 — era 15).
+ *
+ * Aos 15s o popup pegava a cliente ainda decidindo se ficava: ela nem tinha
+ * visto uma peça direito e já tinha um formulário na frente. Aos 40s quem
+ * ainda está no site já demonstrou interesse — o cupom vira presente, não
+ * pedágio.
+ *
+ * FONTE ÚNICA. Havia uma cópia deste valor dentro de CupomBoasVindas.tsx
+ * (SEGUNDOS_ATE_APARECER), então mudar aqui não mudava lá. Agora os dois
+ * componentes leem daqui.
+ */
+export const COUPON_DELAY_MS = 40_000;
 export const BLOCKED_COUPON_ROUTES = ['/carrinho', '/checkout', '/conta', '/pedido', '/trocas'];
 
 type CouponState = { estado: 'fechado' | 'cadastrado'; em: number };
