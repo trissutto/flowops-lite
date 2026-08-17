@@ -1960,6 +1960,7 @@ export class LojaCatalogService {
       tamanhos: string[];
       cores: string[];
       topSemana: boolean;
+      lancamento: boolean;
     }>
   > {
     // REFs curadas da "Mais Top da Semana" — pra carimbar custom_label_1 no feed.
@@ -2006,6 +2007,10 @@ export class LojaCatalogService {
       tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
       cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),
       topSemana: topSemanaRefs.has(this.refKey(p.ref)),
+      // ≤30 dias desde a PRIMEIRA VENDA (a mesma flag do badge "novo"). O feed usa
+      // pra carimbar Novidade só em peça nova DE VERDADE (senão enche com peça de
+      // 60-90 dias pra completar 20 — o "peça velha como nova" que o dono pegou).
+      lancamento: Boolean(p.lancamento),
     }));
   }
 

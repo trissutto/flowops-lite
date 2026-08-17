@@ -57,6 +57,7 @@ interface PecaFeed {
   tamanhos: string[];
   cores: string[];
   topSemana?: boolean;
+  lancamento?: boolean;
 }
 
 /** `&` vira `&amp;` etc. Sem isto, um nome com "&" invalida o XML inteiro. */
@@ -122,7 +123,11 @@ function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   const carimbo = new Map<string, string>();
   for (const p of pecas) {
     const alvo = NOVIDADES_CATEGORIA[String(p.categoria || '').trim()];
-    if (!alvo || !p.disponivel) continue;
+    // SÓ peça NOVA de verdade (≤30 dias da 1ª venda, `lancamento`) e disponível.
+    // Sem a trava de lancamento o feed completava as 20 com peça de 60-90 dias
+    // (o "peça velha como nova" — dono 16/08). Com ela o conjunto varia (às vezes
+    // <20) e cresce sozinho conforme entra peça nova; peça envelhece 30d e sai.
+    if (!alvo || !p.disponivel || !p.lancamento) continue;
     const n = usadas.get(alvo) ?? 0;
     if (n >= NOVIDADES_TETO) continue;
     usadas.set(alvo, n + 1);

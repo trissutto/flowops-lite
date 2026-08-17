@@ -84,7 +84,7 @@ export default async function HomePage() {
     getHeroDaHome(),
     getCategorias(),
     getInstagram(6),
-    fetchVitrine({ ordenar: 'novidades', limite: 12 }),
+    fetchVitrine({ ordenar: 'novidades', limite: 12, soNovidade: true }),
     fetchVitrine({ ordenar: 'relevancia', limite: 12 }),
     fetchVitrine({ categoria: 'blusas', ordenar: 'novidades', limite: 12 }),
     fetchVitrine({ categoria: 'vestidos', ordenar: 'novidades', limite: 12 }),

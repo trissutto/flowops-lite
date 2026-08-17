@@ -34,7 +34,7 @@ export const revalidate = 60;
 export const metadata = buildMetadata({
   title: 'Novidades',
   description:
-    'As peças que acabaram de chegar na Lurd’s Plus Size, do 44 ao 60. Atualizamos toda semana.',
+    'As peças que acabaram de chegar na Lurd’s Plus Size, do 46 ao 60. Atualizamos toda semana.',
   path: '/novidades',
   keywords: ['novidades plus size', 'lançamentos plus size', 'roupa plus size nova'],
 });
@@ -62,7 +62,7 @@ export default function NovidadesPage() {
         <SectionTitle
           eyebrow="Acabou de chegar"
           title="Novidades"
-          description="O que entrou por último na loja, do 44 ao 60. Atualizamos toda semana."
+          description="O que entrou por último na loja, do 46 ao 60. Atualizamos toda semana."
           as="h1"
         />
       </Section>
@@ -73,6 +73,7 @@ export default function NovidadesPage() {
           categoryName="Novidades"
           ordemPadrao="novidades"
           limiteTotal={50}
+          soNovidade
         />
       </Container>
     </>

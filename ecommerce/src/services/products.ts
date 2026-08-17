@@ -239,7 +239,7 @@ function paramsDosFiltros(filters: FilterState): Record<string, string> {
 export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated<Product>> {
   const {
     category, subcategoria, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12,
-    tetoDePreco, soPromocao,
+    tetoDePreco, soPromocao, soNovidade,
   } = query;
 
   const params = new URLSearchParams({
@@ -261,6 +261,8 @@ export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated
   // Mesma chave que o controller lê ("promocao") — ver o comentário
   // equivalente em services/vitrine.ts.
   if (soPromocao) params.set('promocao', '1');
+  // Mesma chave que o controller lê (soNovidade -> filtra lancamento ≤30d).
+  if (soNovidade) params.set('novidade', '1');
   if (search && search.trim().length >= 2) params.set('busca', search.trim());
 
   const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);

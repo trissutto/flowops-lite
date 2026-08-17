@@ -129,9 +129,11 @@ export async function fetchVitrine(
     revalidate?: number;
     /** Slug da categoria — vitrine de "Blusas", "Vestidos" etc. na home. */
     categoria?: string;
+    /** Só peça NOVA de verdade (≤30d da 1ª venda) — o carrossel "Novidades" da home usa. */
+    soNovidade?: boolean;
   } = {},
 ): Promise<Product[]> {
-  const { ordenar = 'relevancia', limite = 12, revalidate = REVALIDATE_VITRINE, categoria } = opcoes;
+  const { ordenar = 'relevancia', limite = 12, revalidate = REVALIDATE_VITRINE, categoria, soNovidade } = opcoes;
 
   const params = new URLSearchParams({
     perPage: String(limite),
@@ -142,6 +144,7 @@ export async function fetchVitrine(
     disponivel: '1',
   });
   if (categoria) params.set('categoria', categoria);
+  if (soNovidade) params.set('novidade', '1');
 
   try {
     const r = await api<{ itens: PecaApi[] }>(`/public/loja/produtos?${params.toString()}`, {

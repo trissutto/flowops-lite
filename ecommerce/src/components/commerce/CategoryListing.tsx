@@ -92,6 +92,9 @@ interface CategoryListingProps {
   primeiraPagina?: { itens: Product[]; total: number; totalPages: number } | null;
   /** Só promoção — a rota /outlet usa pra listar tudo que tem desconto. */
   soPromocao?: boolean;
+  /** Só peça NOVA de verdade (≤30d da 1ª venda) — a rota /novidades usa (filtra
+   *  em vez de só ordenar; senão enche com peça de 60-90 dias). */
+  soNovidade?: boolean;
   /**
    * Filtro já aplicado ao abrir — a vitrine por tamanho (/tamanhos/52) chega
    * com o número dela marcado. A cliente continua podendo mexer na barra.
@@ -122,6 +125,7 @@ function CategoryListingInner({
   tetoDePreco,
   primeiraPagina,
   soPromocao,
+  soNovidade,
   filtrosIniciais,
   subcategoria,
 }: CategoryListingProps) {
@@ -204,7 +208,7 @@ function CategoryListingInner({
   }, [primeiraPagina]);
 
   const query = useInfiniteQuery({
-    queryKey: ['products', category, subcategoria, state.filters, state.sort, debouncedSearch, tetoDePreco, soPromocao],
+    queryKey: ['products', category, subcategoria, state.filters, state.sort, debouncedSearch, tetoDePreco, soPromocao, soNovidade],
     initialPageParam: 1,
     ...(paginasIniciais && semInterferencia ? { initialData: paginasIniciais } : {}),
     queryFn: ({ pageParam }) =>
@@ -218,6 +222,7 @@ function CategoryListingInner({
         perPage: PER_PAGE,
         tetoDePreco,
         soPromocao,
+        soNovidade,
       }),
     getNextPageParam: (last, todas) => {
       if (!last.hasMore) return undefined;

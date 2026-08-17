@@ -246,6 +246,8 @@ export interface ProductQuery {
   tetoDePreco?: number;
   /** Só peça com desconto — é o que define a vitrine do Outlet. */
   soPromocao?: boolean;
+  /** Só peça NOVA de verdade (≤30 dias da 1ª venda) — a rota /novidades usa. */
+  soNovidade?: boolean;
 }
 
 export interface Paginated<T> {
