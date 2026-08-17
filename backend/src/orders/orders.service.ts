@@ -611,9 +611,21 @@ export class OrdersService {
       .filter(([, de, para]) => String(de ?? '').trim() !== String(para ?? '').trim())
       .map(([campo, de, para]) => ({ campo, de: de ?? null, para: para ?? null }));
 
+    // NOME vai também em `customerName` — é dele que a etiqueta, o push
+    // "Pedido novo" e a NF-e leem (17/08: ON-000009 saiu "Cliente" e o modal
+    // não tinha como corrigir; gravar só no JSON do endereço não mudava nada).
+    const nomeNovo = input.nome !== undefined ? limpo(input.nome) : undefined;
+    if (nomeNovo !== undefined && String(order.customerName ?? '').trim() !== nomeNovo) {
+      mudancas.push({ campo: 'nome', de: order.customerName ?? null, para: nomeNovo || null });
+    }
+
     const atualizado = await (this.prisma as any).order.update({
       where: { wcOrderId },
-      data: { shippingAddress: JSON.stringify(novo), shippingCep: cep || null },
+      data: {
+        shippingAddress: JSON.stringify(novo),
+        shippingCep: cep || null,
+        ...(nomeNovo ? { customerName: nomeNovo } : {}),
+      },
     });
 
     // Espelho no cadastro do cliente — casa pelo CPF, que é a chave de pessoa
