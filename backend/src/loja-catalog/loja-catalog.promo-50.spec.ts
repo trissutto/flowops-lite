@@ -68,8 +68,14 @@ describe('montarPeca — promoção de 50%', () => {
     );
     expect(p.preco).toBe(149.9);
     expect(p.precoDe).toBe(199.9);
-    // A grade não pode sair pela metade enquanto a peça é vendida a 149,90.
-    expect(p.variacoes.every((v: any) => v.preco === 199.9)).toBe(true);
+    // A grade não pode sair pela metade — mas também não pode ficar no preço
+    // do ERP: quem tem `precoPromo` é vendida por ele (a trava do carrinho
+    // cobra 149,90), e a bolinha/grade mostrando 199,90 anuncia um preço que
+    // a loja não pratica. O desconto digitado chega em TODA linha, igual ao
+    // automático — só nunca em cima do outro.
+    expect(p.variacoes.every((v: any) => v.preco === 149.9)).toBe(true);
+    expect(p.cores[0].preco).toBe(149.9);
+    expect(p.cores[0].tamanhos.map((t: any) => t.preco)).toEqual([149.9, 149.9]);
   });
 
   it('a marquinha do cadastro NÃO faz mais promoção sozinha (o bug do Outlet)', () => {

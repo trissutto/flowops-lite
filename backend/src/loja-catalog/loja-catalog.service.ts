@@ -683,6 +683,27 @@ export class LojaCatalogService {
       );
     }
 
+    /**
+     * O PRECO DIGITADO TAMBEM ENTRA LINHA A LINHA — pelo mesmo motivo do
+     * bloco acima, e por um que so apareceu quando o campo foi usado de
+     * verdade pela primeira vez (18/08).
+     *
+     * Ate aqui o precoPromo trocava so o preco do TOPO da peca. A bolinha
+     * da cor, a grade de tamanho e as VARIACOES (que sao o que o carrinho
+     * le) continuavam com o preco do ERP. Na PDP da REF CHIC isso saiu
+     * assim: "de R$ 119,90 por R$ 79,90" na tela, com o R$ 59,90 digitado
+     * aparecendo so no JSON-LD do Google. A trava do carrinho (que le o
+     * MESMO campo) cobrava os 59,90 certos — ou seja, a cliente pagava
+     * MENOS do que a pagina anunciava, e a promocao que alguem sentou e
+     * digitou nao chegava a existir na tela.
+     *
+     * precoCheio ja foi calculado acima, antes de qualquer desconto, entao
+     * o "de" riscado continua ancorado no preco original.
+     */
+    if (promo != null) {
+      unicas = unicas.map((l) => (l.preco > 0 ? { ...l, preco: promo } : l));
+    }
+
     const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
     const precoErp = precos.length ? Math.min(...precos) : 0;
     const preco = promo ?? precoErp;
