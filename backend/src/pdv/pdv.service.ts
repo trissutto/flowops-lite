@@ -1656,11 +1656,29 @@ export class PdvService {
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
 
+    if (tipo === 'motoboy') await this.exigirEstoqueLocalParaMotoboy(saleId);
+
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
       data: { entregaTipo: tipo },
     });
     return { ok: true, entregaTipo: tipo };
+  }
+
+  /**
+   * REGRA A DO MOTOBOY (dono, 17/08): só sai da loja vendedora. Ver
+   * `PedidoOnlineService.faltaParaMotoboy`. A mensagem lista o que falta —
+   * "não pode" sem dizer por quê é o que faz a vendedora tentar de novo.
+   */
+  private async exigirEstoqueLocalParaMotoboy(saleId: string) {
+    const faltam = await this.pedidoOnline.faltaParaMotoboy(saleId).catch(() => [] as string[]);
+    if (!faltam.length) return;
+    throw new BadRequestException(
+      `Motoboy só sai da SUA loja, e ela não tem: ${faltam.slice(0, 6).join(
+)}` +
+        (faltam.length > 6 ? ` e mais ${faltam.length - 6}` : '') +
+        '. Escolha SEDEX/PAC (outra loja envia) ou retirada.',
+    );
   }
 
   /**
@@ -2758,6 +2776,12 @@ export class PdvService {
       storeName: string | null;
     } | null = null;
     if (isAllVendaOnline && this.pedidoOnline.enabled()) {
+      // Regra A do motoboy vale no fechamento também: a sacola pode ter
+      // mudado depois da escolha, e o front guarda a escolha mesmo quando a
+      // API recusa. Recusar aqui é ANTES de gravar qualquer coisa.
+      if (String((sale as any).entregaTipo || '').toLowerCase() === 'motoboy') {
+        await this.exigirEstoqueLocalParaMotoboy(sale.id);
+      }
       onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
       if (onlineOrder) {
         const agora = new Date();

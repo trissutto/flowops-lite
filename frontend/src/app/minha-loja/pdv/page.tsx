@@ -6351,9 +6351,18 @@ function PaymentModal({
                           body: JSON.stringify({ tipo: op.id }),
                         });
                       } catch (e: any) {
-                        // A escolha fica na tela; o finalize regrava. Nunca
-                        // travar a venda por causa do registro da entrega.
                         const h = humanizeError(e);
+                        if (op.id === 'motoboy' && (e?.status === 400 || /motoboy/i.test(String(e?.message || '')))) {
+                          // REGRA A (dono, 17/08): motoboy só sai desta loja. O
+                          // servidor disse que falta peça aqui — a escolha NÃO
+                          // fica. Deixar marcado seria fechar a venda com uma
+                          // entrega que o fechamento vai recusar de novo.
+                          setEntregaTipo(null);
+                          toast('error', 'Motoboy não disponível', e?.message || h.hint);
+                          return;
+                        }
+                        // Outros erros: a escolha fica na tela; o finalize
+                        // regrava. Nunca travar a venda por registro da entrega.
                         toast('error', h.title, h.hint);
                       }
                     }}
@@ -6370,6 +6379,11 @@ function PaymentModal({
               {entregaTipo === 'retirada' && (
                 <p className="text-[10px] text-teal-700 mt-1 font-semibold">
                   A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.
+                </p>
+              )}
+              {entregaTipo === 'motoboy' && (
+                <p className="text-[10px] text-teal-700 mt-1 font-semibold">
+                  Motoboy sai desta loja: a peça já baixa aqui e ninguém mais separa. Só vale se você tem tudo na arara.
                 </p>
               )}
             </div>

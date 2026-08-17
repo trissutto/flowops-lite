@@ -116,6 +116,58 @@ export class PedidoOnlineService {
     };
   }
 
+  /**
+   * REGRA A DO MOTOBOY (dono, 17/08): motoboy SÓ SAI DA LOJA VENDEDORA.
+   *
+   * O roteamento não sabe distância, e um pedido motoboy podia cair numa
+   * loja a 100 km (ON-000004: Suzano vendeu pra Mogi, Sorocaba recebeu o
+   * card). Então a regra é na origem: se a loja que está vendendo não tem
+   * TODAS as peças, o PDV não deixa escolher motoboy — sobra Correios ou
+   * retirada. Simples, imediato, e a vendedora sabe na hora, com a lista do
+   * que falta.
+   *
+   * Chamado em dois pontos, de propósito: na ESCOLHA (`setEntrega`, pra
+   * avisar cedo) e no FECHAMENTO (`finalize`, porque a sacola pode mudar
+   * depois da escolha e porque o front guarda a escolha mesmo se a API
+   * recusar). Devolve os SKUs que faltam pra mensagem ser útil.
+   */
+  async faltaParaMotoboy(saleId: string): Promise<string[]> {
+    const sale: any = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { storeCode: true, items: { select: { sku: true, ref: true, qty: true } } },
+    });
+    if (!sale) return [];
+    const pecas = (sale.items || []).filter((it: any) => !ehItemSemEstoque(it));
+    if (!pecas.length) return [];
+    return this.faltamNaLoja(pecas, sale.storeCode);
+  }
+
+  /** SKUs (com quantidade) que a loja NÃO cobre. Vazio = tem tudo. */
+  private async faltamNaLoja(pecas: any[], storeCode: string): Promise<string[]> {
+    const porSku = new Map<string, number>();
+    for (const it of pecas) {
+      const sku = this.semZeros(it.sku);
+      porSku.set(sku, (porSku.get(sku) || 0) + Number(it.qty || 1));
+    }
+    const lojaAlvo = this.semZeros(storeCode);
+    const est: any[] = await (this.prisma as any).wincredEstoque.findMany({
+      where: { codigo: { in: [...porSku.keys()] } },
+      select: { codigo: true, loja: true, estoque: true },
+    });
+    const disponivel = new Map<string, number>();
+    for (const r of est) {
+      if (this.semZeros(r.loja) !== lojaAlvo) continue;
+      const c = this.semZeros(r.codigo);
+      disponivel.set(c, (disponivel.get(c) || 0) + (Number(r.estoque) || 0));
+    }
+    const faltam: string[] = [];
+    for (const [sku, qtd] of porSku) {
+      const tem = disponivel.get(sku) || 0;
+      if (tem < qtd) faltam.push(qtd > 1 ? `${sku} (tem ${tem} de ${qtd})` : sku);
+    }
+    return faltam;
+  }
+
   /** A loja vendedora tem TODAS as peças da venda? (espelho wincred_estoque) */
   private async lojaTemTudo(pecas: any[], storeCode: string): Promise<boolean> {
     const porSku = new Map<string, number>();
