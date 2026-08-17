@@ -211,7 +211,9 @@ export function CardForm({ total, onDone }: CardFormProps) {
 
       <div className="pt-1">
         <Button type="submit" block className="sm:w-auto" disabled={tokenizando}>
-          {tokenizando ? 'Validando cartão…' : 'Continuar'}
+          {/* O clique aqui É a compra (17/08). "Continuar" prometia um
+              passo a mais que não existe. */}
+          {tokenizando ? 'Validando cartão…' : 'Finalizar compra'}
         </Button>
       </div>
     </form>

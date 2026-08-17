@@ -88,8 +88,10 @@ const ERRO_CARTAO =
  */
 const AVISO_POR_CAMPO: Record<string, string> = {
   name: 'Confira o nome completo em Identificação — ele não foi aceito do jeito que está.',
-  email: 'Confira o e-mail em Identificação — ele não foi aceito do jeito que está.',
-  cpf: 'Confira o CPF em Identificação — ele não foi aceito do jeito que está.',
+  // CPF e e-mail moram em PAGAMENTO desde 17/08 — apontar pra Identificação
+  // mandava a cliente procurar o campo na etapa errada.
+  email: 'Confira o e-mail em Pagamento — ele não foi aceito do jeito que está.',
+  cpf: 'Confira o CPF em Pagamento — ele não foi aceito do jeito que está.',
   phone: 'Confira o celular em Identificação — ele precisa ter DDD e só números.',
   street: 'Confira a rua em Entrega: o texto está longo demais para a etiqueta (até 160 caracteres).',
   number: 'Confira o número em Entrega: use só o número (até 20 caracteres) e leve o resto para o complemento.',
@@ -159,7 +161,10 @@ export default function CheckoutPage() {
       setCustomer(draft.customer);
       setShipping(draft.shipping);
       setPayment(draft.payment);
-      setStep(draft.contact ? (draft.shipping ? (draft.payment ? 4 : 3) : 2) : 1);
+      // A etapa 4 não existe mais (17/08): rascunho com pagamento escolhido
+      // volta pra 3. Ir pra 4 deixava TODAS as seções colapsadas, sem
+      // nenhum botão na tela — checkout morto depois de um F5.
+      setStep(draft.contact ? (draft.shipping ? 3 : 2) : 1);
     }
     setDraftReady(true);
   }, []);
@@ -414,8 +419,11 @@ export default function CheckoutPage() {
               onDone={(c) => {
                 setSubmitError(null);
                 setContact(c);
-                // Se o contato mudou, a identidade final precisa ser confirmada outra vez.
-                if (customer?.phone !== c.phone || customer?.name !== c.name) setCustomer(null);
+                // Mudou nome/telefone? Atualiza a identidade em vez de ZERAR: zerar
+                // apagava o CPF e o e-mail que ela já tinha digitado na etapa 3.
+                if (customer && (customer.phone !== c.phone || customer.name !== c.name)) {
+                  setCustomer({ ...customer, name: c.name, phone: c.phone });
+                }
                 saveRecovery(c);
                 // Editou só a identificação com o resto pronto? Volta pro
                 // pagamento — ninguém refaz etapa já concluída, e a etapa 4
@@ -448,7 +456,7 @@ export default function CheckoutPage() {
               onDone={(s) => {
                 setSubmitError(null);
                 setShipping(s);
-                setStep(!payment ? 3 : 4);
+                setStep(3);
               }}
             />
           </SectionShell>
@@ -482,6 +490,11 @@ export default function CheckoutPage() {
               total={total}
               itemsTracked={itemsTracked}
               defaultsNota={customer ? { email: customer.email, cpf: customer.cpf } : null}
+              // Ela corrigiu o CPF/e-mail depois de uma recusa? O painel de erro
+              // abaixo reenvia com `finalizar()` sem argumento, que lê o ESTADO —
+              // sem isto ele mandaria o valor velho de novo, e a cliente veria a
+              // mesma recusa por um erro que já tinha consertado.
+              onNotaChange={(nota) => setCustomer((atual) => (atual ? { ...atual, ...nota } : atual))}
               enviando={submitting}
               onDone={(p, nota) => {
                 if (!contact) return;
@@ -538,6 +551,7 @@ export default function CheckoutPage() {
                   setPayment({ method: 'pix' });
                 }}
                 onSubmit={() => void finalizar()}
+                reenvioNoFormulario={payment.method === 'card'}
               />
             )}
           </SectionShell>

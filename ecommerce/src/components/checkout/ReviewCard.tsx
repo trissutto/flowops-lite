@@ -41,6 +41,13 @@ interface ReviewCardProps {
   failureCount: number;
   errorCode: CheckoutErrorCode | null;
   onSubmit: () => void;
+  /**
+   * Cartão recusado NÃO reenvia daqui. O token da Pagar.me é de uso único e
+   * curto: mandar o mesmo de novo é recusa garantida — e a cliente acharia
+   * que o cartão dela não presta. O reenvio de cartão é pelo formulário
+   * acima (novo token). Este painel fica só com o aviso e as saídas.
+   */
+  reenvioNoFormulario?: boolean;
   onEditIdentity: () => void;
   onReviewData: () => void;
   onUsePix: () => void;
@@ -66,6 +73,7 @@ export function ReviewCard({
   failureCount,
   errorCode,
   onSubmit,
+  reenvioNoFormulario = false,
   onEditIdentity,
   onReviewData,
   onUsePix,
@@ -197,6 +205,12 @@ export function ReviewCard({
         </div>
       )}
 
+      {reenvioNoFormulario ? (
+        <p className="rounded-sm border border-border bg-surface px-4 py-3 text-center text-small text-ink-soft">
+          Confira os dados do cartão acima e clique em <strong>Finalizar compra</strong> de novo — ou pague com PIX.
+        </p>
+      ) : (
+      <>
       {/* Verde = dinheiro. A variante whatsapp é o verde oficial (#2e7d46). */}
       <Button
         type="button"
@@ -228,6 +242,8 @@ export function ReviewCard({
         </Link>
         . Seus dados ficam protegidos.
       </p>
+      </>
+      )}
     </div>
   );
 }

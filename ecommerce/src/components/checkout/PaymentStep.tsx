@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { isValidCpf, maskCpf, onlyDigits } from './masks';
 import { CreditCard, QrCode } from 'lucide-react';
@@ -54,6 +54,12 @@ interface PaymentStepProps {
   enviando?: boolean;
   /** Chamado com TUDO pronto: o pedido já pode ser criado e o PIX gerado. */
   onDone: (payment: PaymentSelection, nota: DadosDaNota) => void;
+  /**
+   * CPF/e-mail VÁLIDOS mudaram. Existe pra recuperação: depois de uma
+   * recusa, o botão do painel de erro reenvia lendo o estado da página — e
+   * o estado precisa ter o valor que ela acabou de corrigir aqui.
+   */
+  onNotaChange?: (nota: DadosDaNota) => void;
 }
 
 /**
@@ -71,7 +77,7 @@ interface PaymentStepProps {
  * de esconder é deliberado: ela VÊ que PIX e Cartão existem e entende que
  * faltam dois campos — esconder faria a etapa parecer quebrada.
  */
-export function PaymentStep({ total, itemsTracked, defaultsNota, enviando, onDone }: PaymentStepProps) {
+export function PaymentStep({ total, itemsTracked, defaultsNota, enviando, onDone, onNotaChange }: PaymentStepProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [tracked, setTracked] = useState<Set<PaymentMethod>>(new Set());
   const [email, setEmail] = useState(defaultsNota?.email ?? '');
@@ -82,6 +88,15 @@ export function PaymentStep({ total, itemsTracked, defaultsNota, enviando, onDon
   const cpfOk = isValidCpf(cpf);
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
   const liberado = cpfOk && emailOk && !enviando;
+
+  // Avisa a página só quando os dois estão válidos — meio-CPF não interessa.
+  const notaValida = cpfOk && emailOk ? `${onlyDigits(cpf)}|${email.trim().toLowerCase()}` : null;
+  useEffect(() => {
+    if (!notaValida || !onNotaChange) return;
+    const [c, e] = notaValida.split('|');
+    onNotaChange({ cpf: c, email: e });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notaValida]);
 
   /** Uma vez por método por visita à seção — evita inflar o funil. */
   function ensureTracked(m: PaymentMethod) {

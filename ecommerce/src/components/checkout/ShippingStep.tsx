@@ -282,8 +282,9 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     const selection: ShippingSelection = {
       cep: onlyDigits(cep),
       quote: selectedQuote,
+      // Vai em TODA modalidade — na retirada é o billing do cartão (ver onSubmit).
       address:
-        address && selectedQuote.kind !== 'retirada'
+        address
           ? {
               cep: onlyDigits(cep),
               street: address.street.trim(),
@@ -315,8 +316,15 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
    * erro, nenhum movimento. Agora a validação vem primeiro e o próprio
    * campo vazio acusa (o React Hook Form ainda joga o foco no primeiro).
    *
-   * O endereço continua NÃO viajando no pedido de retirada: ele é exigido
-   * pra nota e pro cadastro, não pra entregar numa peça que ela vem buscar.
+   * E O ENDEREÇO VIAJA TAMBÉM NA RETIRADA (17/08). Não é pra entregar — é
+   * o billing_address do cartão. Sem ele, o backend inventava um endereço
+   * ("Retirada em loja", cidade Mogi das Cruzes, CEP da cotação) e mandava
+   * pra Pagar.me um CEP de uma cidade com o nome de outra. O antifraude
+   * reprova dado inconsistente — já medimos isso com telefone inventado
+   * (aprovação de 63% pra 22,8%). Caso real: LP-000036, retirada em São
+   * José dos Campos, cartão de R$ 778,90 recusado com o endereço vazio.
+   * Agora que o endereço é obrigatório em toda modalidade, não há motivo
+   * pra fabricar nada: vai o da cliente.
    */
   /**
    * ESCOLHEU A ENTREGA SEM O ENDEREÇO DE PÉ.
@@ -362,7 +370,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
           setQuoteError('Escolha como você quer receber.');
           return;
         }
-        confirmar(selectedQuote.kind === 'retirada' ? undefined : values);
+        confirmar(values);
       },
       (invalid) => trackCheckoutValidationError('shipping', Object.keys(invalid)[0] ?? 'unknown'),
     )();
