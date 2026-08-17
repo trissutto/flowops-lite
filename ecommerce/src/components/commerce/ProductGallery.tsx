@@ -78,6 +78,18 @@ function ScrollableThumbnailRail({
     setCanScrollDown(rail.scrollTop + rail.clientHeight < rail.scrollHeight - 2);
   }, []);
 
+  const scrollOneFold = useCallback((direction: -1 | 1) => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    rail.scrollBy({
+      top: direction * rail.clientHeight * 0.8,
+      behavior: 'smooth',
+    });
+  }, []);
+
+  const itemName = hintLabel === 'Mais cores' ? 'cores' : 'fotos';
+
   useEffect(() => {
     const rail = railRef.current;
     if (!rail) return;
@@ -105,16 +117,26 @@ function ScrollableThumbnailRail({
       </div>
 
       {canScrollUp && (
-        <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center bg-gradient-to-b from-background via-background/90 to-transparent pb-5 pt-1">
+        <button
+          type="button"
+          aria-label={`Mostrar ${itemName} anteriores`}
+          onClick={() => scrollOneFold(-1)}
+          className="absolute inset-x-0 top-0 z-10 flex min-h-11 justify-center bg-gradient-to-b from-background via-background/90 to-transparent pb-5 pt-1 text-primary focus-visible:outline-2 focus-visible:outline-primary"
+        >
           <ChevronUp className="size-4 text-primary drop-shadow-sm" strokeWidth={2.25} />
-        </div>
+        </button>
       )}
 
       {canScrollDown && (
-        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col items-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1 pt-7 text-primary drop-shadow-sm">
+        <button
+          type="button"
+          aria-label={`Mostrar próximas ${itemName}`}
+          onClick={() => scrollOneFold(1)}
+          className="absolute inset-x-0 bottom-0 z-10 flex min-h-11 flex-col items-center justify-end bg-gradient-to-t from-background via-background/95 to-transparent pb-1 pt-7 text-primary drop-shadow-sm focus-visible:outline-2 focus-visible:outline-primary"
+        >
           <span className="text-center text-[0.55rem] font-semibold leading-none tracking-[0.04em] uppercase">{hintLabel}</span>
           <ChevronDown className="mt-0.5 size-4" strokeWidth={2.25} />
-        </div>
+        </button>
       )}
     </>
   );
