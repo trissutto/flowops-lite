@@ -9,11 +9,19 @@ import { trackCheckoutRecovered, trackPixCopied, trackPixExpired } from '@/lib/t
 import type { Order, OrderStatusResult } from '@/types/checkout';
 
 /**
- * Painel do PIX — aparece no lugar do formulário assim que o pedido é criado.
+ * Painel do PIX — QR, copia-e-cola e contagem regressiva do pedido criado.
+ *
+ * ONDE ELE MORA (17/08): em `/checkout/confirmacao/:id`, reidratado pelo
+ * `GET /api/checkout/:id`. Antes vivia só no estado React da página do
+ * checkout — F5, "voltar" ou a aba descartada pelo celular quando a cliente
+ * ia pro app do banco apagavam o QR pra sempre, e ela caía em "Sua sacola
+ * está vazia" sem link, sem e-mail, sem código. Agora a URL É o estado: o
+ * painel volta em qualquer recarga enquanto o pedido estiver aguardando.
  *
  * Confirmação por POLL no servidor: GET /api/checkout/:id/status a cada 5s.
  * O webhook do gateway grava o `paid` no banco; o poll só PERGUNTA — quando a
- * resposta vira `paid`, navegamos pra confirmação.
+ * resposta vira `paid`, avisamos quem nos montou (`onPaid`) pra ele recarregar
+ * o pedido; sem `onPaid`, navegamos pra confirmação (uso legado).
  *
  * ⚠️ NUNCA disparar `purchase` aqui (nem na página de confirmação): o evento
  * de compra é 100% do SERVIDOR, disparado pelo webhook com dedupe por
@@ -26,9 +34,22 @@ const POLL_MS = 5_000;
 
 interface PixPanelProps {
   order: Order;
+  /**
+   * Chamado quando o poll vê `paid`. A página de confirmação passa um refetch
+   * do pedido — dar `router.push` pra ela mesma não refaria o fetch (o efeito
+   * é chaveado em `params.id`) e ainda empilharia histórico.
+   */
+  onPaid?: () => void;
+  /** Chamado quando o poll vê `expired`/`cancelled` — mesma ideia do `onPaid`. */
+  onExpired?: () => void;
+  /**
+   * Embutido numa página que já tem título e número do pedido: o painel
+   * rebaixa o título pra <h2> e não repete o "Pedido Nº".
+   */
+  embutido?: boolean;
 }
 
-export function PixPanel({ order }: PixPanelProps) {
+export function PixPanel({ order, onPaid, onExpired, embutido = false }: PixPanelProps) {
   const router = useRouter();
   const pix = order.payment.pix;
 
@@ -47,6 +68,15 @@ export function PixPanel({ order }: PixPanelProps) {
       trackPixExpired(order.id);
     }
   }, [order.id]);
+
+  // Callbacks em ref: quem nos monta costuma passar closures novas a cada
+  // render, e amarrá-las no `poll` reiniciaria o setInterval a cada tick.
+  const onPaidRef = useRef(onPaid);
+  const onExpiredRef = useRef(onExpired);
+  useEffect(() => {
+    onPaidRef.current = onPaid;
+    onExpiredRef.current = onExpired;
+  });
 
   /* Contagem regressiva — 1s. Zerou = expirado (o server também expira). */
   useEffect(() => {
@@ -73,11 +103,13 @@ export function PixPanel({ order }: PixPanelProps) {
             recoveredTracked.current = true;
             trackCheckoutRecovered('pix', order.id);
           }
-          // O redirect leva pra thank you; o purchase JÁ foi disparado pelo
-          // server nesse momento — a navegação não carrega evento nenhum.
-          router.push(`/checkout/confirmacao/${order.id}`);
+          // O purchase JÁ foi disparado pelo server nesse momento — nem o
+          // callback nem a navegação carregam evento nenhum.
+          if (onPaidRef.current) onPaidRef.current();
+          else router.push(`/checkout/confirmacao/${order.id}`);
         } else if (data.ok && (data.status === 'expired' || data.status === 'cancelled')) {
           markExpired();
+          onExpiredRef.current?.();
         }
       }
     } catch {
@@ -108,13 +140,15 @@ export function PixPanel({ order }: PixPanelProps) {
 
   if (!pix) return null;
 
+  const Titulo = embutido ? 'h2' : 'h1';
+
   return (
     <div className="mx-auto flex w-full max-w-narrow flex-col items-center gap-6 rounded-md border border-border bg-surface px-6 py-10 text-center sm:px-10">
       <div>
-        <p className="eyebrow text-primary-strong">Pedido {order.number}</p>
-        <h1 className="mt-2 font-display text-h2 text-ink">
+        {!embutido && <p className="eyebrow text-primary-strong">Pedido {order.number}</p>}
+        <Titulo className={cn('font-display text-ink', embutido ? 'text-h3' : 'mt-2 text-h2')}>
           Pague com <em className="italic">PIX</em> pra confirmar
-        </h1>
+        </Titulo>
         <p className="mt-2 text-body text-ink-soft">
           Abra o app do seu banco e escaneie o código — a confirmação aparece aqui sozinha.
         </p>
@@ -131,18 +165,33 @@ export function PixPanel({ order }: PixPanelProps) {
             Voltar à loja
           </Button>
         </div>
+      ) : status === 'pago' ? (
+        // Entre o poll ver `paid` e a página recarregar o pedido, o QR não pode
+        // continuar na tela — cliente que já pagou olhando um código "vivo"
+        // liga pro WhatsApp achando que não caiu.
+        <div className="flex flex-col items-center gap-3 py-6">
+          <Check className="size-10 text-success" strokeWidth={1.5} />
+          <p className="max-w-sm text-body text-ink">Pagamento confirmado! Atualizando seu pedido…</p>
+        </div>
       ) : (
         <>
           {/* QR — dataURL do server; <img> puro com dimensão fixa (sem CLS).
-              next/image não otimiza data: URI — seria só overhead. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={pix.qrCode}
-            alt={`QR Code do PIX para o pedido ${order.number}`}
-            width={224}
-            height={224}
-            className="rounded-md border border-border bg-light p-3"
-          />
+              next/image não otimiza data: URI — seria só overhead. Sem QR (o
+              GET não conseguiu gerar), o copia-e-cola abaixo segue valendo. */}
+          {pix.qrCode ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={pix.qrCode}
+              alt={`QR Code do PIX para o pedido ${order.number}`}
+              width={224}
+              height={224}
+              className="rounded-md border border-border bg-light p-3"
+            />
+          ) : (
+            <p className="max-w-sm text-small text-ink-muted">
+              O QR não carregou — use o código copia-e-cola abaixo, ele é o mesmo pagamento.
+            </p>
+          )}
 
           <p className="tabular text-h4 font-medium text-success">{formatPrice(order.total)}</p>
 
@@ -184,6 +233,14 @@ export function PixPanel({ order }: PixPanelProps) {
 
           <p className="max-w-sm text-small text-ink-muted">
             Assim que o pagamento cair, esta página avança sozinha pra confirmação do seu pedido.
+          </p>
+
+          {/* O link é o seguro contra a aba descartada: quem sai pro app do
+              banco e volta com a página recarregada encontra o mesmo código
+              aqui — não precisa remontar sacola nenhuma. */}
+          <p className="max-w-sm text-caption font-normal tracking-normal normal-case text-ink-muted">
+            Saiu pro app do banco e voltou? É só abrir este mesmo link de novo — o código continua
+            aqui até expirar.
           </p>
         </>
       )}

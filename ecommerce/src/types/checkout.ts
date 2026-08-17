@@ -171,6 +171,8 @@ export type CheckoutErrorCode =
   | 'catalog_unavailable'
   | 'coupon_invalid'
   | 'shipping_invalid'
+  /** Só o frete subiu entre a tela e o pedido (BFF ou backend): resposta traz `quote` nova. */
+  | 'shipping_changed'
   | 'validation_error'
   | 'rate_limited'
   | 'payment_unavailable'
@@ -196,6 +198,10 @@ export interface CreateOrderResult {
    * causa (a query de diagnóstico já lê `dados->>'field'`).
    */
   field?: string;
+  /** Só em `catalog_unavailable` por preço: qual peça subiu e o preço atual (17/08). */
+  item?: { productId: string; size: string; color?: string; precoAtual: number };
+  /** Só em `shipping_changed`: a cotação que vale agora (17/08). */
+  quote?: { id: string; label: string; price: number; etaDays: { min: number; max: number } | null };
 }
 
 /** GET /api/checkout/:id/status — resposta (poll do PIX). */

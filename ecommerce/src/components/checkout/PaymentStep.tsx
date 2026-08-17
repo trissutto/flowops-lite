@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { isValidCpf, maskCpf, onlyDigits } from './masks';
@@ -76,9 +76,15 @@ interface PaymentStepProps {
  * etapa de revisão separada. Por isso os dados da nota vêm ANTES: quando o
  * CTA final é acionado, não pode faltar nada.
  *
- * As abas ficam desabilitadas até CPF e e-mail válidos. Desabilitar em vez
- * de esconder é deliberado: ela VÊ que PIX e Cartão existem e entende que
- * faltam dois campos — esconder faria a etapa parecer quebrada.
+ * As abas ficam APAGADAS até CPF e e-mail válidos — apagadas, não `disabled`
+ * (17/08). Desabilitar de verdade engolia o clique: no Chrome/Safari o toque
+ * num botão disabled é descartado antes de mudar o foco, o campo inválido
+ * nunca perdia o foco, o vermelho de erro (que só nasce no blur) não aparecia
+ * e a linha de status dizia "preencha o CPF e o e-mail" que ela ACABARA de
+ * preencher — beco sem saída no celular. Agora o clique chega no `pick`, que
+ * marca os dois campos como tocados e leva o foco pro primeiro inválido.
+ * Mostrar em vez de esconder continua deliberado: ela VÊ que PIX e Cartão
+ * existem e entende o que falta.
  */
 export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange }: PaymentStepProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null);
@@ -87,10 +93,33 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
   const [cpf, setCpf] = useState(defaultsNota?.cpf ? maskCpf(defaultsNota.cpf) : '');
   const [tocou, setTocou] = useState({ cpf: false, email: false });
   const groupId = useId();
+  const cpfRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
 
   const cpfOk = isValidCpf(cpf);
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
   const liberado = cpfOk && emailOk && !enviando;
+
+  /**
+   * A linha de status é DERIVADA do que está digitado e NOMEIA o campo — sem
+   * depender de blur. "Preencha o CPF e o e-mail" com os dois preenchidos e
+   * um deles inválido era a mensagem que contradizia o que ela via na tela.
+   */
+  const cpfVazio = onlyDigits(cpf).length === 0;
+  const emailVazio = email.trim().length === 0;
+  const statusFalta = liberado
+    ? null
+    : cpfVazio && emailVazio
+      ? 'Preencha o CPF e o e-mail para escolher como pagar.'
+      : cpfVazio
+        ? 'Falta o CPF para escolher como pagar.'
+        : !cpfOk
+          ? 'O CPF não confere — confira os números.'
+          : emailVazio
+            ? 'Falta o e-mail para escolher como pagar.'
+            : !emailOk
+              ? 'O e-mail parece incompleto (ex.: nome@gmail.com).'
+              : null;
 
   // Avisa a página só quando os dois estão válidos — meio-CPF não interessa.
   const notaValida = cpfOk && emailOk ? `${onlyDigits(cpf)}|${email.trim().toLowerCase()}` : null;
@@ -115,7 +144,14 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
    * explícito do PIX ou após o envio válido do formulário de cartão.
    */
   function pick(next: PaymentMethod) {
-    if (!liberado) { setTocou({ cpf: true, email: true }); return; }
+    if (!liberado) {
+      // Clique com dado faltando: acende o erro dos dois campos e leva o foco
+      // pro primeiro inválido. NÃO conta como add_payment_info — nada foi
+      // escolhido, e inflar o funil aqui esconderia o abandono real.
+      setTocou({ cpf: true, email: true });
+      (!cpfOk ? cpfRef : emailRef).current?.focus();
+      return;
+    }
     setMethod(next);
     ensureTracked(next);
   }
@@ -132,6 +168,7 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
           dono pediu. Sem eles, as abas abaixo não respondem. */}
       <div className="flex flex-col gap-5">
         <Input
+          ref={cpfRef}
           label="CPF" inputMode="numeric" autoComplete="off" enterKeyHint="next"
           placeholder="000.000.000-00" hint="Usado somente no pedido e na nota fiscal."
           value={cpf}
@@ -140,12 +177,13 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
           error={tocou.cpf && !cpfOk ? 'Confira o CPF — esse número não confere.' : undefined}
         />
         <Input
+          ref={emailRef}
           label="E-mail" type="email" inputMode="email" autoComplete="email" enterKeyHint="done"
           placeholder="voce@email.com" hint="A confirmação e o rastreio chegam por aqui."
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           onBlur={() => setTocou((t) => ({ ...t, email: true }))}
-          error={tocou.email && !emailOk ? 'Digite um e-mail válido.' : undefined}
+          error={tocou.email && !emailOk ? 'Digite um e-mail válido (ex.: nome@gmail.com).' : undefined}
         />
       </div>
 
@@ -153,9 +191,9 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
         <p id={`${groupId}-status`} className="text-small text-ink-soft" aria-live="polite">
           {method === 'pix' ? 'Gerando seu código PIX…' : 'Enviando seu pedido…'}
         </p>
-      ) : !liberado ? (
-        <p id={`${groupId}-status`} className="text-small text-ink-muted">
-          Preencha o CPF e o e-mail para escolher como pagar.
+      ) : statusFalta ? (
+        <p id={`${groupId}-status`} className="text-small text-ink-muted" aria-live="polite">
+          {statusFalta}
         </p>
       ) : null}
 
@@ -173,7 +211,13 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
               type="button"
               id={`${groupId}-tab-${m}`}
               aria-describedby={`${groupId}-status`}
-              disabled={!liberado}
+              // `disabled` só enquanto o pedido está em voo (aí o clique não
+              // pode fazer nada mesmo). Faltando CPF/e-mail é `aria-disabled`
+              // + visual apagado: o clique CHEGA no `pick`, que aponta o campo.
+              // Estes botões nunca criam pedido — só o CTA do PIX e o submit
+              // do cartão criam, e esses continuam `disabled={enviando}`.
+              disabled={!!enviando}
+              aria-disabled={!liberado}
               onClick={() => pick(m)}
               className={cn(
                 'relative flex flex-col items-center gap-1.5 rounded-md border px-3 py-3.5 text-small font-medium transition-colors duration-[180ms]',
@@ -230,7 +274,7 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
         </div>
       )}
 
-      {method === 'card' && <CardForm total={total} onDone={confirm} />}
+      {method === 'card' && <CardForm total={total} enviando={enviando} onDone={confirm} />}
     </div>
   );
 }

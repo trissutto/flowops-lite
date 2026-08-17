@@ -22,6 +22,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import QRCode from 'qrcode';
 import { getOrderStore, OrderStoreError } from '@/lib/orders/store';
 import type { Order } from '@/types/checkout';
 
@@ -40,6 +41,32 @@ function sanitizar(order: Order): Order {
     ...resto,
     customer: { ...order.customer, cpf: mascararCpf(order.customer.cpf) },
   };
+}
+
+/**
+ * O QR TAMBÉM NO GET (17/08).
+ *
+ * Desde que o PIX passou a viver na URL (`/checkout/confirmacao/:id`, em vez de
+ * só na memória da aba), esta rota é quem REIDRATA o painel depois de um F5,
+ * de uma troca pro app do banco ou de um link colado. O backend guarda o
+ * copia-e-cola, mas o `qrCode` chega como URL da Pagar.me ou vazio (o
+ * `normalizarOrder` transforma null em '') — e o PixPanel desenharia
+ * `<img src="">`. Mesma regra do POST /api/checkout: sem QR utilizável,
+ * geramos aqui em data URI a partir do copia-e-cola. Só enquanto o pedido
+ * está aguardando: pago/expirado não desenha PIX nenhum.
+ */
+async function comQrUtilizavel(order: Order): Promise<Order> {
+  const pix = order.payment.pix;
+  if (order.status !== 'awaiting_payment' || !pix?.copyPaste || pix.qrCode) return order;
+  try {
+    const qrCode = await QRCode.toDataURL(pix.copyPaste, { margin: 1, width: 320 });
+    return { ...order, payment: { ...order.payment, pix: { ...pix, qrCode } } };
+  } catch (err) {
+    // Sem QR a tela ainda funciona pelo copia-e-cola — o painel esconde a
+    // imagem vazia em vez de quebrar a página do pedido.
+    console.error(`[checkout] falha ao gerar QR do PIX no GET ${order.id} (segue com copia-e-cola):`, err);
+    return order;
+  }
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -64,5 +91,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ ok: false, error: 'Pedido não encontrado.' }, { status: 404 });
   }
 
-  return NextResponse.json({ ok: true, order: sanitizar(order) }, { headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json(
+    { ok: true, order: sanitizar(await comQrUtilizavel(order)) },
+    { headers: { 'Cache-Control': 'no-store' } },
+  );
 }

@@ -654,6 +654,13 @@ export class AbandonedCartsService {
       default: // abandoned
         where.paidAt = null;
         where.status = { not: 'cancelled' };
+        // CARTÃO EM ANÁLISE NÃO É ABANDONO (17/08). O cartão que o antifraude
+        // põe em análise fica `awaiting_payment` até a Pagar.me decidir — a
+        // cliente JÁ PAGOU (ou acha que pagou). Se ele entrar aqui, a lista
+        // oferece o botão de WhatsApp e a operadora liga cobrando quem está
+        // só esperando aprovação. `paymentInfo` é JSON em texto; a chave é
+        // gravada pelo `cobrarCartao` só nesse caso.
+        where.NOT = [{ paymentInfo: { contains: '"cartaoEmAnalise":true' } }];
         /**
          * IDADE MÍNIMA — sem isto o relatório cutuca quem está pagando.
          *

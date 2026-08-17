@@ -45,10 +45,18 @@ export class LojaPagamentoReconcileService {
   /** PIX vale 2h; 72h cobre o pagamento tardio e o webhook que voltou atrasado. */
   private static readonly JANELA_H = 72;
   private static readonly MAX_POR_CICLO = 40;
-  /** Consulta ao vivo no máximo 1×/3min por pedido. */
-  private static readonly THROTTLE_MS = 180_000;
+  /**
+   * Consulta ao vivo no máximo 1×/min por pedido (era 3min) e a partir de 30s
+   * de idade (era 90s) — 17/08. O webhook da Pagar.me passou a FAIL CLOSED:
+   * sem `webhookSecret` cadastrado + Basic Auth no painel, TODO webhook é
+   * recusado e a confirmação do PIX do site vira responsabilidade DESTE
+   * reconcile. Com 90s+180s a cliente ficava até ~4,5 min olhando o QR pago
+   * sem a tela virar; com 30s+60s cai pra ~1,5 min. Consulta ao gateway é
+   * barata (1 GET) e o teto por ciclo segue em 40.
+   */
+  private static readonly THROTTLE_MS = 60_000;
   /** Antes disso o webhook ainda é o caminho normal — não vale gastar consulta. */
-  private static readonly IDADE_MINIMA_MS = 90_000;
+  private static readonly IDADE_MINIMA_MS = 30_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -117,8 +125,25 @@ export class LojaPagamentoReconcileService {
         try {
           // `checkOrderStatus` já persiste o status novo no PagarmePayment.
           const r: any = await this.pagarme.checkOrderStatus(pagamento.pagarmeOrderId);
-          if (String(r?.status || '').toLowerCase() !== 'paid') continue;
-          if (await this.confirmar(o, 'gateway confirmou fora do webhook')) confirmados++;
+          const st = String(r?.status || '').toLowerCase();
+          if (st === 'paid') {
+            if (await this.confirmar(o, 'gateway confirmou fora do webhook')) confirmados++;
+            continue;
+          }
+          // RECUSA TARDIA DO CARTÃO (17/08): cartão em análise fica
+          // `awaiting_payment` até a Pagar.me decidir. Se o webhook da recusa
+          // não chegou (ou foi recusado por assinatura), é aqui que o pedido
+          // fecha como `payment_failed` — senão ele consumiria consulta ao
+          // gateway a cada ciclo por 72h e a cliente nunca saberia que
+          // precisa pagar de novo. `registrarRecusaTardia` só toca cartão,
+          // com trava atômica: PIX pendente e pedido pago passam intocados.
+          if (st === 'failed' || st === 'canceled' || st === 'cancelled') {
+            await this.orders
+              .registrarRecusaTardia(o.id, `gateway: ${st}`)
+              .catch((e: any) =>
+                this.logger.warn(`[loja-reconcile] recusa tardia falhou (${o.wcOrderNumber}): ${e?.message || e}`),
+              );
+          }
         } catch (e: any) {
           // Pedido some do gateway, rede cai: não derruba o ciclo.
           this.logger.warn(`[loja-reconcile] consulta falhou (${o.wcOrderNumber}): ${e?.message || e}`);

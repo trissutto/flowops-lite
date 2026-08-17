@@ -137,13 +137,20 @@ export class CorreiosService {
       return s.includes(',') ? Number(s.replace(/\./g, '').replace(',', '.')) : Number(s);
     };
 
+    /**
+     * PAC e SEDEX EM PARALELO (17/08). Era `for…await` — SEDEX só começava
+     * quando o PAC terminava, e cada um leva ~2,5 s: a cotação inteira dava
+     * ~5 s no dia bom e estourava os 9 s do BFF do site no dia ruim (a cliente
+     * caía na tabela local, sem a promoção). Um serviço nunca depende do outro,
+     * e o try/catch por serviço garante que a promessa de cada um NUNCA
+     * rejeita — falha vira `erro` na própria opção. Ordem de saída segue a de
+     * `this.servicos` (PAC, SEDEX), igual antes.
+     */
     const opcoes: Array<{
       servico: string; codigo: string;
       precoReais: number | null; precoComSeguro: number | null; prazoDias: number | null;
       erro?: string; raw?: any;
-    }> = [];
-
-    for (const s of this.servicos) {
+    }> = await Promise.all(this.servicos.map(async (s) => {
       let precoReais: number | null = null;
       let precoComSeguro: number | null = null;
       let prazoDias: number | null = null;
@@ -190,8 +197,8 @@ export class CorreiosService {
       } catch (e: any) {
         erro = e?.message || 'falha';
       }
-      opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, precoComSeguro, prazoDias, erro, raw });
-    }
+      return { servico: s.nome, codigo: s.codigo, precoReais, precoComSeguro, prazoDias, erro, raw };
+    }));
     // Dimensões junto: preço estranho quase sempre é caixa errada, e a tela
     // precisa mostrar o que FOI enviado, não o que se supõe ter sido.
     return { cepOrigem, cepDestino, pesoGramas: peso, comprimento, largura, altura, opcoes };

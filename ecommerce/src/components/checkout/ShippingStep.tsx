@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Clock, MapPin, Truck } from 'lucide-react';
+import { Clock, MapPin, RefreshCw, TriangleAlert, Truck } from 'lucide-react';
 import { cn, formatPrice } from '@/lib/utils';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { fetchQuotes, isValidCep } from '@/lib/commerce/frete';
+import { fetchQuotes, isValidCep, type CotacaoDoSite } from '@/lib/commerce/frete';
 import { stores } from '@/data/stores';
-import { trackAddShippingInfo, trackCheckoutValidationError, type TrackedItem } from '@/lib/tracking';
+import { trackAddShippingInfo, trackCheckoutValidationError, trackShippingQuoteFallback, type TrackedItem } from '@/lib/tracking';
 import type { Address, ShippingQuote } from '@/types/checkout';
 import { maskCep, onlyDigits } from './masks';
 
@@ -139,6 +139,23 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
   const [cotando, setCotando] = useState(false);
   const [retirada, setRetirada] = useState<{ prazoHoras: number; instrucoes: string | null } | null>(null);
   const [estimado, setEstimado] = useState(false);
+  /**
+   * A COTAÇÃO CAIU NO PARAQUEDAS — E A CLIENTE PRECISA SABER (17/08).
+   *
+   * `local` = o backend não respondeu e a lista saiu da tabela do site: sem
+   * a promoção ("SEDEX R$ 9,99") e sem a distância das lojas. Até aqui a
+   * única marca era um " · frete estimado" miúdo no prazo — cliente de SP
+   * via SEDEX R$ 24,90 no lugar do R$ 9,99 do anúncio, sem aviso e sem
+   * botão pra tentar de novo (só recotava se mexesse no CEP). E o valor
+   * pode subir na hora de pagar, porque o backend cobra a cotação dele.
+   *
+   * `backend` com `estimado` = o backend respondeu, mas os Correios não: a
+   * promoção e a régua do frete grátis estão certas, só o preço cheio dos
+   * Correios é estimativa. Aviso mais leve, mesmo botão.
+   */
+  const [origem, setOrigem] = useState<CotacaoDoSite['origem']>('backend');
+  /** Sobe a cada "Recalcular" — reroda o efeito da cotação sem mexer no CEP. */
+  const [recotacao, setRecotacao] = useState(0);
 
   useEffect(() => {
     if (!cepValido) {
@@ -152,13 +169,25 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
         if (controller.signal.aborted) return;
         setQuotes(r.quotes);
         setEstimado(r.estimado);
+        setOrigem(r.origem);
         setRetirada(r.retirada ?? null);
+        // Telemetria: quantas vezes o checkout mostrou frete sem a promoção
+        // (e por quê). É o número que decide se o rate-limit/timeout do
+        // backend ainda está mordendo — sem ele, o fallback é invisível.
+        // Evento PRÓPRIO, não `checkout_validation_error`: é falha nossa de
+        // infra, não erro da cliente — no painel do funil misturava os dois.
+        if (r.origem === 'local') trackShippingQuoteFallback(r.motivo ?? 'sem_motivo');
       })
       .finally(() => {
         if (!controller.signal.aborted) setCotando(false);
       });
     return () => controller.abort();
-  }, [cep, cepValido, subtotal, pecas]);
+  }, [cep, cepValido, subtotal, pecas, recotacao]);
+
+  // Ficam de pé DURANTE a recotação (a lista antiga continua na tela com o
+  // "calculando…"): é o que deixa o botão girar em vez do aviso sumir e voltar.
+  const cotacaoNoParaquedas = origem === 'local' && quotes.length > 0;
+  const cotacaoEstimadaBackend = origem === 'backend' && estimado && quotes.length > 0;
 
   const selectedQuote = quotes.find((q) => q.id === quoteId);
   /**
@@ -493,6 +522,47 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
           <legend className="eyebrow mb-3 text-ink-soft">
             Como você quer receber {cotando && <span className="text-ink-muted">· calculando…</span>}
           </legend>
+
+          {/* O AVISO VEM ANTES DA LISTA, NÃO DEPOIS. Quem lê de cima pra
+              baixo precisa saber que os números abaixo são provisórios
+              ANTES de escolher — e o botão de recalcular fica ao lado do
+              motivo, não escondido no fim. `role="status"`: é informação
+              de estado, não erro dela (o `role="alert"` abaixo é pra isso). */}
+          {(cotacaoNoParaquedas || cotacaoEstimadaBackend) && (
+            <div
+              role="status"
+              className={cn(
+                'mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3.5 py-3 text-small',
+                cotacaoNoParaquedas
+                  ? 'border-warning/40 bg-warning/10 text-ink'
+                  : 'border-border bg-surface-alt text-ink-soft',
+              )}
+            >
+              <span className="flex min-w-0 flex-1 items-start gap-2">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+                <span>
+                  {cotacaoNoParaquedas ? (
+                    <>
+                      <strong className="font-medium">Não conseguimos cotar o frete agora.</strong>{' '}
+                      Os valores abaixo são estimados e podem mudar na hora de pagar. Tente recalcular antes de escolher.
+                    </>
+                  ) : (
+                    <>Os Correios não responderam: preço e prazo da cotação são estimados. A promoção e a retirada estão certas.</>
+                  )}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setRecotacao((n) => n + 1)}
+                disabled={cotando}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-border-strong bg-surface px-3 py-1.5 text-small font-medium text-ink transition-colors hover:border-primary hover:text-primary-strong disabled:opacity-60"
+              >
+                <RefreshCw className={cn('size-3.5', cotando && 'animate-spin')} aria-hidden />
+                Recalcular
+              </button>
+            </div>
+          )}
+
           <div className="flex flex-col gap-3" role="radiogroup">
             {quotes.map((quote) => (
               <QuoteOption

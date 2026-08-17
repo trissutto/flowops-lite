@@ -245,6 +245,15 @@ export const trackCheckoutError = (
 });
 export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
   track('checkout_validation_error', { section, field: field.slice(0, 40) });
+/**
+ * COTAÇÃO CAIU NO PARAQUEDAS (17/08): o backend do frete não respondeu (429,
+ * timeout, fora) e o site mostrou a tabela local. É evento NOSSO, de
+ * infraestrutura — não é a cliente errando um campo. Antes ia como
+ * `checkout_validation_error` e o painel do funil, que agrupa por campo,
+ * contava "cotação caiu" como erro de validação de quem compra.
+ */
+export const trackShippingQuoteFallback = (motivo: string) =>
+  track('shipping_quote_fallback', { motivo: motivo.slice(0, 40) });
 export const trackPixCreated = () => track('pix_created', { method: 'pix' });
 export const trackPaymentMethodSelected = (method: 'pix' | 'card') =>
   track('payment_method_selected', { method });

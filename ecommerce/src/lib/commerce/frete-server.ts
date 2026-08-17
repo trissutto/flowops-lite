@@ -20,17 +20,45 @@ import type { ShippingQuote } from '@/types/checkout';
  * Backend fora do ar → cai na tabela local, igual à tela. Checkout parado por
  * causa de cotação é pior que frete aproximado, e o backend reprecifica tudo
  * antes de cobrar de qualquer jeito.
+ *
+ * QUANDO CAI NA TABELA LOCAL, A OPÇÃO SAI MARCADA `estimado: true` (17/08).
+ * O preço continua indo (> 0 — total zerado reprova no `total <= 0` da rota
+ * e no `validar()` do backend antes de chegar na reprecificação), mas o
+ * carimbo viaja no payload pra o backend saber que o número não é o dele:
+ * é o que permite tratar "só o frete subiu" como troca de frete em vez de
+ * "os valores da sacola mudaram" (caso do PAC de SP capital: local 14,90 ×
+ * estimativa 17,90 do backend → o TETO recusava com a frase de sacola).
+ * Backend antigo ignora o campo — `LojaShippingInput` é interface, não DTO.
  */
 
 const TIMEOUT_MS = 9_000;
+
+/**
+ * `ShippingQuote` + o carimbo de estimativa. Fica local até o tipo em
+ * `types/checkout.ts` ganhar `estimado?: boolean` — atribuir uma variável
+ * deste tipo onde se espera `ShippingQuote` compila sem reclamar.
+ */
+export type FreteResolvido = ShippingQuote & { estimado?: boolean };
 
 export async function resolverFrete(input: {
   cep: string;
   subtotal: number;
   pecas: number;
   quoteId: string;
-}): Promise<ShippingQuote | undefined> {
+  /**
+   * IP da CLIENTE, calculado pelo `POST /api/checkout` (x-forwarded-for /
+   * x-real-ip). Vai em `x-cliente-ip` pro rate-limit do backend contar por
+   * cliente e não por IP de saída da Vercel — sem ele, esta chamada e o
+   * `POST /pedido` logo em seguida gastavam o mesmo balde de 20/min da loja
+   * inteira, e a 21ª do minuto caía na tabela local (ou recusava o pedido).
+   */
+  clientIp?: string;
+}): Promise<FreteResolvido | undefined> {
   const cep = String(input.cep || '').replace(/\D/g, '');
+  const local = (): FreteResolvido | undefined => {
+    const q = findQuote(cep, input.subtotal, input.quoteId);
+    return q ? { ...q, estimado: true } : undefined;
+  };
 
   /**
    * Retirada não é cotação: a loja sai da tabela de lojas do próprio site.
@@ -62,7 +90,7 @@ export async function resolverFrete(input: {
 
   const baseUrl = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
   const token = process.env.LOJA_ORDER_TOKEN ?? '';
-  if (!baseUrl || !token) return findQuote(cep, input.subtotal, input.quoteId);
+  if (!baseUrl || !token) return local();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -73,6 +101,7 @@ export async function resolverFrete(input: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         'x-loja-token': token,
+        ...(input.clientIp ? { 'x-cliente-ip': input.clientIp } : {}),
       },
       body: JSON.stringify({ cep, subtotal: input.subtotal, pecas: input.pecas }),
       signal: controller.signal,
@@ -80,11 +109,17 @@ export async function resolverFrete(input: {
     });
     const dados = await res.json().catch(() => null);
     if (!dados?.ok || !Array.isArray(dados.opcoes)) {
-      return findQuote(cep, input.subtotal, input.quoteId);
+      // 429 separado no log: é carga (balde do rate-limit), não backend fora,
+      // e a correção é outra (o x-cliente-ip acima).
+      console.warn(
+        `[checkout] cotação do backend indisponível (${res.status === 429 ? 'rate-limit' : `status ${res.status}`}) — frete pela tabela local, marcado estimado`,
+      );
+      return local();
     }
     type OpcaoApi = {
       id?: string | number; kind?: string; label?: string;
       price?: number | string; etaDays?: { min: number; max: number };
+      promocional?: boolean; estimado?: boolean;
     };
     const achada = dados.opcoes.find((o: OpcaoApi) => String(o.id) === input.quoteId);
     if (!achada) return undefined;
@@ -94,9 +129,15 @@ export async function resolverFrete(input: {
       label: String(achada.label),
       price: Number(achada.price) || 0,
       etaDays: achada.etaDays,
+      // Carimbo do próprio backend (Correios fora → estimativa dele). Vai
+      // adiante pelo mesmo motivo do local(): o backend reconfere na hora de
+      // cobrar e precisa saber que este número já era aproximado.
+      ...(achada.estimado === true ? { estimado: true } : {}),
     };
-  } catch {
-    return findQuote(cep, input.subtotal, input.quoteId);
+  } catch (err) {
+    const motivo = err instanceof Error && err.name === 'AbortError' ? 'timeout' : 'rede';
+    console.warn(`[checkout] cotação do backend não respondeu (${motivo}) — frete pela tabela local, marcado estimado`);
+    return local();
   } finally {
     clearTimeout(timer);
   }

@@ -13,12 +13,46 @@
  */
 
 import { NextResponse } from 'next/server';
+import type { MotivoFalhaCotacao } from '@/lib/commerce/frete';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** O backend cria a cobrança; aqui é só leitura, então timeout curto. */
 const TIMEOUT_MS = 9_000;
+
+/**
+ * POR QUE a cotação caiu na tabela local — vai no `motivo` da resposta.
+ *
+ * Até 17/08 tudo virava `{ ok:false, error:'indisponivel' }` e o console do
+ * servidor era o único a saber se foi 429, timeout ou backend fora. Agora o
+ * navegador recebe o motivo e decide: retentar (timeout — o backend termina a
+ * cotação depois do abort e aquece o cache, a segunda vai rápida) ou NÃO
+ * retentar (rate_limit — a janela é de 60s deslizantes, tentar de novo só
+ * gasta o balde), além de mandar o motivo pra telemetria do funil.
+ * O tipo mora em `lib/commerce/frete.ts`, ao lado de quem consome.
+ */
+
+/**
+ * IP DA CLIENTE — a MESMA regra do `POST /api/checkout` (x-forwarded-for
+ * primeiro, x-real-ip depois).
+ *
+ * Vai pro backend em `x-cliente-ip` porque o rate-limit de lá (20/min por
+ * IP em `loja-orders.controller.ts`) lê esse header antes do x-forwarded-for.
+ * Sem ele, o IP que o backend vê é o de SAÍDA DA VERCEL: a PDP, a sacola
+ * (que recota a cada +/− de peça) e a etapa de entrega da loja INTEIRA
+ * dividiam um balde só de 20 cotações por minuto — e a 21ª caía calada na
+ * tabela local, sem promoção. O comentário do controller descrevia o
+ * problema desde 10/08, mas o header nunca saiu do site (só a tubulação
+ * existia em lib/api.ts e orders/store.ts, sem nenhum chamador).
+ *
+ * Vazio quando não há como saber (chamada local sem proxy) — aí o header
+ * não vai e o backend cai no fallback dele, igual antes.
+ */
+function clientIp(req: Request): string {
+  const fwd = req.headers.get('x-forwarded-for');
+  return fwd?.split(',')[0].trim() || req.headers.get('x-real-ip')?.trim() || '';
+}
 
 /**
  * ─────────────── COORDENADA DO CEP (pra retirada em loja) ───────────────
@@ -132,14 +166,21 @@ export async function POST(req: Request) {
 
   const baseUrl = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
   const token = process.env.LOJA_ORDER_TOKEN ?? '';
+  // Sempre status 200 com `ok:false`: quem chama (`fetchQuotes`) trata o
+  // corpo, e um 5xx aqui viraria "erro de rede" no navegador — que é
+  // exatamente o que a gente NÃO quer confundir com backend fora.
+  const indisponivel = (motivo: MotivoFalhaCotacao) =>
+    NextResponse.json({ ok: false, error: 'indisponivel', motivo }, { status: 200 });
+
   if (!baseUrl || !token) {
     console.warn('[frete] FLOWOPS_API_URL/LOJA_ORDER_TOKEN ausentes — site cai na tabela local');
-    return NextResponse.json({ ok: false, error: 'indisponivel' }, { status: 200 });
+    return indisponivel('config');
   }
 
   // Sai JUNTO com a cotação: ~0,2s contra ~1s, então não custa relógio.
   const pCoord = coordenadaDoCep(cep);
 
+  const ip = clientIp(req);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -149,6 +190,8 @@ export async function POST(req: Request) {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         'x-loja-token': token,
+        // Balde do rate-limit POR CLIENTE, não por IP da Vercel (ver clientIp).
+        ...(ip ? { 'x-cliente-ip': ip } : {}),
       },
       body: JSON.stringify({
         cep,
@@ -159,15 +202,23 @@ export async function POST(req: Request) {
       cache: 'no-store',
     });
     const dados = await res.json().catch(() => null);
+    if (res.status === 429) {
+      // O balde do backend estourou. Logado SEPARADO do "backend fora" de
+      // propósito: são causas diferentes (carga × indisponibilidade) e a
+      // correção também — este aqui é o que o x-cliente-ip acima resolve.
+      console.warn(`[frete] backend devolveu 429 (rate-limit) pro IP ${ip || 'desconhecido'} — site cai na tabela local`);
+      return indisponivel('rate_limit');
+    }
     if (!res.ok || !dados?.ok) {
-      return NextResponse.json({ ok: false, error: 'indisponivel' }, { status: 200 });
+      console.warn(`[frete] backend respondeu ${res.status} sem cotação — site cai na tabela local`);
+      return indisponivel('backend');
     }
     // `coord` é opcional por contrato: o site sabe viver sem ela.
     return NextResponse.json({ ...dados, coord: await pCoord }, { status: 200 });
   } catch (err) {
-    const motivo = err instanceof Error && err.name === 'AbortError' ? 'timeout' : 'rede';
+    const motivo: MotivoFalhaCotacao = err instanceof Error && err.name === 'AbortError' ? 'timeout' : 'rede';
     console.warn(`[frete] backend não respondeu (${motivo}) — site cai na tabela local`);
-    return NextResponse.json({ ok: false, error: 'indisponivel' }, { status: 200 });
+    return indisponivel(motivo);
   } finally {
     clearTimeout(timer);
   }

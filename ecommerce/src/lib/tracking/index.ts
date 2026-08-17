@@ -25,6 +25,7 @@ export {
   trackCheckoutError,
   trackCheckoutSubmission,
   trackCheckoutValidationError,
+  trackShippingQuoteFallback,
   trackCheckoutRecovered,
   trackCustom,
   trackFilterUsed,
