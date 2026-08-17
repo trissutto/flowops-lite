@@ -11,7 +11,6 @@ import { useCartStore } from '@/store/cart';
 import { useIsCartOpen, useUiStore } from '@/store/ui';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
-import { findQuote } from '@/lib/commerce/frete';
 import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
 import {
   toTrackedItem,
@@ -52,8 +51,6 @@ export function MiniCart() {
   const rawLines = useCartStore((s) => s.lines);
   const couponCode = useCartStore((s) => s.couponCode);
   const setCoupon = useCartStore((s) => s.setCoupon);
-  const cep = useCartStore((s) => s.cep);
-  const shippingQuoteId = useCartStore((s) => s.shippingQuoteId);
 
   // Antes da hidratação o localStorage ainda não falou — renderiza vazio dos
   // dois lados (server e client) pra não divergir o HTML.
@@ -90,15 +87,20 @@ export function MiniCart() {
   }
 
   /* ----------------------------------------------------------------- frete */
-  // Estimado: só quando a cliente já cotou (CEP + opção salvos na página ou
-  // no checkout). Cupom de frete zera o valor do envio, não o subtotal.
-  const freteEstimado = cep && shippingQuoteId ? findQuote(cep, subtotal, shippingQuoteId) : undefined;
-  const precoFrete =
-    freteEstimado === undefined
-      ? undefined
-      : cupomAplicado?.ok && cupomAplicado.kind === 'shipping'
-        ? 0
-        : freteEstimado.price;
+  /**
+   * O DRAWER NÃO SOMA MAIS FRETE NENHUM (17/08).
+   *
+   * Ele usava `findQuote`, que lê a tabela LOCAL congelada — a mesma que
+   * dizia SEDEX R$ 28,90 onde o checkout cobra R$ 9,99. A sacola e o
+   * checkout passaram a usar a cotação de verdade; deixar o drawer na
+   * tabela velha criaria um TERCEIRO total na mesma sessão.
+   *
+   * Cotar aqui exigiria rede a cada abertura do drawer, pra mostrar um
+   * número que a cliente vai reconferir na sacola de qualquer jeito. Então
+   * o drawer passa a mostrar o subtotal e dizer que o frete vem depois —
+   * um total honesto e incompleto vale mais que um total errado.
+   */
+  const precoFrete: number | undefined = undefined;
 
   const total = Math.max(0, subtotal - desconto) + (precoFrete ?? 0);
 
