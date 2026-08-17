@@ -1,5 +1,5 @@
 import { Hero } from '@/components/sections/Hero';
-import { HomeBenefitsAndStores, HomeCategoryNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
+import { HomeBenefitsAndStores, HomeCategoryNav, HomeComfortBanner, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
 import { ProductCarousel } from '@/components/sections/ProductCarousel';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -9,7 +9,7 @@ import { PERFIL_INSTAGRAM } from '@/data/content';
 import { stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
 import { getInstagram } from '@/services/instagram';
-import { fetchVitrine } from '@/services/vitrine';
+import { fetchMaisTopDaSemana, fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
 import { sanitizeCampaignParams, withCampaignParams } from '@/lib/campaign-links';
 import { HOME_CATEGORY_BASE, HOME_NEWS_PATH, HOME_STORES_PATH } from '@/data/home';
@@ -35,8 +35,9 @@ export default async function HomePage({
 
   // Só o que aparece na Home é buscado. Isso evita atrasar o hero com quatro
   // vitrines repetidas que a nova jornada não usa.
-  const [hero, novidades, posts] = await Promise.all([
+  const [hero, maisTop, novidades, posts] = await Promise.all([
     getHeroDaHome(),
+    fetchMaisTopDaSemana(),
     fetchVitrine({ ordenar: 'novidades', limite: 10, soNovidade: true }),
     getInstagram(6),
   ]);
@@ -84,6 +85,15 @@ export default async function HomePage({
         <HomeStoreCta storesHref={storesHref} className="flex" />
       </div>
 
+      {maisTop.length > 0 && (
+        <Section width="wide" aria-labelledby="mais-top-titulo" className="!py-7 sm:!py-12">
+          <SectionTitle id="mais-top-titulo" eyebrow="Escolhas da semana" title="Mais Top da semana" cta={{ label: 'Ver seleção', href: href('/mais-top-da-semana') }} align="left" compactMobile />
+          <div className="mt-4 sm:mt-10">
+            <ProductCarousel products={maisTop.slice(0, 10)} ariaLabel="Mais Top da semana" progressiveImages compactMobile />
+          </div>
+        </Section>
+      )}
+
       {novidades.length > 0 && (
         <Section width="wide" aria-labelledby="novidades-titulo" className="!py-5 sm:!py-12">
           <SectionTitle
@@ -105,6 +115,10 @@ export default async function HomePage({
           </div>
         </Section>
       )}
+
+      <HomeSizeNav hrefFor={(size) => href(`/tamanhos/${size}`)} />
+
+      <HomeComfortBanner href={href('/busca?q=conforto')} />
 
       <HomeBenefitsAndStores storesHref={storesHref} />
 
