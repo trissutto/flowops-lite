@@ -1258,19 +1258,53 @@ export default function PedidoDetailPage() {
             const fechavel = !['completed', 'cancelled'].includes(String(order.status || ''));
             if (!fechavel) return null;
 
+            /**
+             * ALARME FALSO — CORRIGIDO 17/08 (caso ON-000008).
+             *
+             * A primeira versão mostrava o aviso vermelho sempre que havia card
+             * em loja ≠ vendedora. Só que isso é o caso NORMAL da venda online:
+             * SJC vendeu por SEDEX sem ter a peça, o roteamento mandou pra
+             * Suzano, Suzano posta pra cliente. Certíssimo — e a tela gritava
+             * "uma segunda peça vai pra cliente".
+             *
+             * Pior que ruído: clicar no botão ali baixaria estoque em SJC (que
+             * não tem a peça) e cancelaria o card legítimo da Suzano. Arma
+             * apontada pro pé, no lugar onde a matriz mais confia na tela.
+             *
+             * Vale a regra do CLAUDE.md: alarme falso mata a confiança na fila
+             * inteira. Então o bloco só aparece quando é PLAUSÍVEL que a
+             * vendedora tenha entregado por conta:
+             *   - MOTOBOY → sai da mão dela, sem passar pelo sistema (foi o
+             *     ON-000004: Suzano mandou de moto e o card virou fantasma);
+             *   - entrega NÃO INFORMADA → ambíguo, ninguém sabe como saiu;
+             *   - SEM CARD NENHUM → nada legítimo em andamento.
+             * SEDEX/PAC com card em outra loja: silêncio. Pra postar ela
+             * PRECISA do card, então não teve como despachar por fora.
+             */
+            const entregaKind = classifyShipping(
+              order.shippingLines?.[0]?.method ?? order.pickup?.shippingMethodTitle ?? null,
+              order.shipping?.state ?? order.billing?.state ?? null,
+            ).kind;
+            const entregaIndefinida = entregaKind === 'other';
+            const podeTerEntregadoPorConta =
+              entregaKind === 'motoboy' || entregaIndefinida || liveStatus.length === 0;
+            if (!podeTerEntregadoPorConta) return null;
+
             return (
               <div className="mt-3 border-t border-teal-200 pt-3">
-                {ativosFora.length > 0 && (
+                {/* Vermelho SÓ no caso do ON-000004: entrega que sai da mão da
+                    vendedora (motoboy) e card aberto em OUTRA loja. Aí sim a
+                    peça pode ter saído duas vezes. Nos outros casos o bloco é
+                    calmo — é uma ação disponível, não um problema detectado. */}
+                {ativosFora.length > 0 && entregaKind === 'motoboy' && (
                   <div className="mb-2 rounded-lg border-2 border-rose-300 bg-rose-50 p-3">
                     <div className="text-sm font-bold text-rose-800">
-                      ⚠️ A separação está em{' '}
-                      {ativosFora.map((p) => p.storeName || p.storeCode).join(', ')} — que não
-                      vendeu
+                      ⚠️ Motoboy, e a separação está em{' '}
+                      {ativosFora.map((p) => p.storeName || p.storeCode).join(', ')}
                     </div>
                     <div className="text-xs text-rose-700 mt-1">
-                      Se essa loja separar, uma <b>segunda peça</b> vai pra cliente. Se{' '}
-                      {order.origemLoja!.name} já entregou, feche aqui: o estoque baixa nela e o
-                      card indevido é cancelado.
+                      Motoboy sai da mão de quem vendeu. Se {order.origemLoja!.name} já mandou a
+                      peça, essa loja vai separar uma <b>segunda</b> — confirme antes.
                     </div>
                   </div>
                 )}
@@ -1280,7 +1314,7 @@ export default function PedidoDetailPage() {
                     onClick={fecharNaLojaVendedora}
                     disabled={fecharLoading}
                     className={`rounded-lg px-4 py-2 text-sm font-bold text-white disabled:opacity-50 ${
-                      ativosFora.length > 0
+                      ativosFora.length > 0 && entregaKind === 'motoboy'
                         ? 'bg-rose-600 hover:bg-rose-700'
                         : 'bg-teal-600 hover:bg-teal-700'
                     }`}
@@ -1290,7 +1324,11 @@ export default function PedidoDetailPage() {
                       : `✓ ${order.origemLoja!.name} já entregou — fechar pedido`}
                   </button>
                   <span className="text-[11px] text-slate-600">
-                    Baixa o estoque na loja que vendeu e encerra a separação.
+                    {ativosFora.length > 0
+                      ? `Só clique se confirmou com ${order.origemLoja!.name}: cancela a separação de ${ativosFora
+                          .map((p) => p.storeName || p.storeCode)
+                          .join(', ')} e baixa o estoque nela.`
+                      : 'Baixa o estoque na loja que vendeu e encerra a separação.'}
                   </span>
                 </div>
                 {fecharErro && (
