@@ -16,12 +16,16 @@ import { ErpService } from '../erp/erp.service';
  * etiqueta Correios e acerto fornecedora→vendedora (Order.sellerStoreCode).
  *
  * Três caminhos na criação:
- *   - loja vendedora TEM tudo e a entrega NÃO é retirada → nasce 'shipped'
- *     NELA: o estoque baixa nela na hora e NENHUM card é aberto (ver
- *     `fecharNaLojaVendedora`).
- *   - loja vendedora TEM tudo e é RETIRADA → auto-atende: nasce 'separating'
- *     com o card na PRÓPRIA loja (a peça precisa ser separada e guardada pro
- *     balcão — decisão do dono 14/08, "PIRACICABA ATENDE O PEDIDO TODO").
+ *   - loja vendedora TEM tudo e a entrega é MOTOBOY → nasce 'shipped' NELA: o
+ *     estoque baixa nela na hora e NENHUM card é aberto (ver
+ *     `fecharNaLojaVendedora`). Motoboy sai da mão da loja: não existe etiqueta,
+ *     rastreio nem postagem pra fazer, então card ali é tarefa fantasma.
+ *   - loja vendedora TEM tudo e é SEDEX/PAC/RETIRADA → auto-atende: nasce
+ *     'separating' com o card na PRÓPRIA loja (decisão do dono 14/08,
+ *     "PIRACICABA ATENDE O PEDIDO TODO"). ⚠️ O card é a FERRAMENTA de postar —
+ *     é NELE que ficam "Gerar envio Correios", "Etiqueta + NF" e "Já postei"
+ *     (`frontend/src/app/minha-loja/page.tsx`). Tirar o card de um pedido
+ *     SEDEX/PAC deixa a loja sem como emitir etiqueta e a cliente sem rastreio.
  *   - falta peça → nasce 'processing' e cai na tela de roteamento da matriz,
  *     igual pedido do site.
  *
@@ -289,15 +293,22 @@ export class PedidoOnlineService {
        * as redes de segurança do outbox/reconcile pulam por causa do mesmo
        * `stockDecreasedAt`. Ninguém no balcão sabia que um pedido tinha nascido.
        *
-       * Quem fecha uma venda online no PRÓPRIO caixa com a peça em mãos é quem
-       * entrega. Então o pedido nasce FECHADO nela: estoque baixa nela na hora,
-       * o registro fica de pé pra NF-e/etiqueta, e nenhum card é aberto.
+       * Quem fecha uma venda online no PRÓPRIO caixa e entrega DE MOTOBOY é quem
+       * resolve tudo. Então o pedido nasce FECHADO nela: estoque baixa nela na
+       * hora e nenhum card é aberto.
        *
-       * RETIRADA fica de fora de propósito: ali a peça precisa ser separada e
-       * guardada pro balcão (é tarefa real), e o `routePickup` já dá prioridade
-       * total à loja da retirada — nunca vaza pra outra cidade.
+       * ⚠️ SÓ MOTOBOY. SEDEX/PAC e RETIRADA continuam abrindo card na própria
+       * loja de propósito — o card é a FERRAMENTA do trabalho que ainda falta:
+       *   - SEDEX/PAC → "Gerar envio Correios" / "Etiqueta + NF" / "Já postei"
+       *     vivem NO card. Sem card a loja não tem como emitir etiqueta e a
+       *     cliente não recebe rastreio.
+       *   - RETIRADA → separar e guardar a peça pro balcão é tarefa real, e o
+       *     `routePickup` já dá prioridade total à loja da retirada.
+       * Motoboy é o único caso em que a peça sai da mão da vendedora sem nenhum
+       * artefato do sistema no caminho — foi exatamente onde o card virou
+       * tarefa fantasma e alguém reportou "sem estoque" de peça já entregue.
        */
-      const fechaNaLoja = autoAtende && !entrega.pickup;
+      const fechaNaLoja = autoAtende && entrega.kind === 'motoboy';
 
       const checkoutInfo = {
         origem: 'pdv_online',

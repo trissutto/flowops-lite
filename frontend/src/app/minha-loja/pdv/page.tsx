@@ -1945,16 +1945,19 @@ function PdvPageInner() {
       if (finResp?.onlineOrder) {
         const oo = finResp.onlineOrder;
         if (oo.fechadoNaLoja) {
+          // MOTOBOY: sai da mão da loja, sem etiqueta/rastreio pra emitir.
           toast(
             'success',
             `Pedido ${oo.wcOrderNumber} — FECHADO AQUI`,
-            `A peça é desta loja: estoque já baixado e nada pra separar. Você entrega direto pra cliente.`,
+            `Motoboy desta loja: estoque já baixado e nada pra separar. Você entrega direto pra cliente.`,
           );
         } else if (oo.autoAtendida) {
+          // SEDEX/PAC/RETIRADA com estoque: o card é a ferramenta — é nele que
+          // ela gera a etiqueta dos Correios ou guarda a peça pro balcão.
           toast(
             'success',
             `${String(oo.storeName || 'Sua loja').toUpperCase()} ATENDE O PEDIDO TODO`,
-            `Separação gerada nesta unidade — pedido ${oo.wcOrderNumber} entrou na fila de pedidos da loja.`,
+            `Pedido ${oo.wcOrderNumber} entrou na fila desta loja — abra o card em Minha Loja pra gerar a etiqueta e imprimir a NF.`,
           );
         } else {
           toast(
