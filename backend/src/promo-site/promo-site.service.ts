@@ -43,6 +43,26 @@ import { refBaseOf } from '../common/ref-base';
  * velho. Errar pra esse lado só deixa de dar desconto; errar pro outro anuncia
  * metade do preço numa peça nova.
  *
+ * ── ...MENOS O SUFIXO DE COLEÇÃO, QUE É POR REF (17/08) ──
+ *
+ * A família decide pelo lado SEGURO em tudo menos numa coisa, e essa uma tinha
+ * o sinal trocado: o `-INV`/`-VER` valia se QUALQUER irmã tivesse o sufixo. Só
+ * que a REF-BASE corta o sufixo (`13050-INV` → `13050`), então uma peça NOVA
+ * caía na mesma família de uma peça de 2023 que só divide o número da REF — e
+ * herdava a coleção dela. Medido em produção: 4 peças publicadas com 50% que
+ * não era delas, entre elas um vestido de R$ 339,90 cadastrado em 05/2026
+ * anunciado por R$ 169,95 por causa da `13050-INV`, um vestido VERMELHO de
+ * 2023 a R$ 229,90 (REF reciclada — o Giga reaproveita número).
+ *
+ * Pior: o CAIXA não acompanhava. O `applyAutoDiscounts` testa o sufixo na REF
+ * do item BIPADO, não na família — a loja física cobrava os R$ 339,90 cheios
+ * na mesma peça que o site anunciava pela metade. Era exatamente a divergência
+ * que este serviço existe pra não deixar acontecer.
+ *
+ * Agora o sufixo responde pela REF da peça, igual ao caixa. Data, BÁSICO e
+ * liberação manual seguem valendo pela família — essas três erram pro lado de
+ * NÃO dar desconto, que é o lado que a gente aceita errar.
+ *
  * ── POR QUE NUM SERVIÇO SEPARADO ──
  *
  * Quem responde tem que ser o MESMO pros dois lados: a vitrine (que mostra) e
@@ -65,8 +85,12 @@ export interface PromoDaPeca {
 
 /** O que a decisão precisa saber sobre uma família — nada de banco aqui. */
 export interface FamiliaPromo {
-  /** REFs da família (a chave e as irmãs). */
-  refs: string[];
+  /**
+   * A REF de que a decisão trata: a chave da família na vitrine, ou a REF que
+   * veio na sacola. É ela — e SÓ ela — que responde pelo sufixo de coleção,
+   * senão a irmã de 2023 carimba a peça nova (ver o cabeçalho).
+   */
+  ref: string;
   /** MAIOR `dataAlt` da família em 'YYYY-MM-DD' (null = ERP não tem a peça). */
   dataCadastro: string | null;
   /** Alguma REF da família está classificada como BÁSICO. */
@@ -87,10 +111,11 @@ const FORA = 'sem promoção';
  */
 export function decidirPromo(f: FamiliaPromo): PromoDaPeca {
   const bloqueadoPorBasico = f.basico && f.excluirBasico;
-  const refColecao = f.refs.find((r) => PROMO_COLECAO_RE.test(String(r).trim()));
+  const ref = String(f.ref ?? '').trim();
+  const deColecao = PROMO_COLECAO_RE.test(ref);
 
   const elegivel = elegivelPromo({
-    ref: refColecao ?? f.refs[0] ?? '',
+    ref,
     dataCadastro: f.dataCadastro,
     isBasico: bloqueadoPorBasico,
     promoLiberada: f.liberada,
@@ -103,8 +128,8 @@ export function decidirPromo(f: FamiliaPromo): PromoDaPeca {
     motivo = 'liberada na mão na tela de Classificação';
   } else if (f.dataCadastro && f.dataCadastro <= PROMO_CUTOFF) {
     motivo = `cadastrada em ${f.dataCadastro.slice(0, 4)} (até 2023)`;
-  } else if (refColecao) {
-    motivo = `coleção ${refColecao.slice(-3).toUpperCase()}`;
+  } else if (deColecao) {
+    motivo = `coleção ${ref.slice(-3).toUpperCase()}`;
   } else if (!f.dataCadastro) {
     motivo = `${FORA} — sem data de cadastro no ERP`;
   } else {
@@ -186,7 +211,9 @@ export class PromoSiteService {
         saida.set(
           chave,
           decidirPromo({
-            refs,
+            // A REF pedida — a coleção é dela, não das irmãs. `refs` continua
+            // servindo pra data/BÁSICO/liberada, que valem pela família.
+            ref: chave,
             dataCadastro,
             basico: refs.some((r) => cls.get(this.chaveDe(r))?.basico),
             liberada: refs.some((r) => cls.get(this.chaveDe(r))?.liberada),
