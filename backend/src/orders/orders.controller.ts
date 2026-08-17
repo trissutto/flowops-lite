@@ -1011,9 +1011,11 @@ export class OrdersController {
           })
           .catch(() => {});
       }
-      // Pedido da live/loja não tem WooCommerce pra recusar nada — o cancelamento
-      // é aplicado aqui mesmo (status local + ordens de separação).
+      // Pedido da live/loja não tem WooCommerce pra recusar nada — o status
+      // é aplicado aqui mesmo (cancelar mexe nas ordens de separação;
+      // concluir/processar/separar só trocam o status do pedido).
       await this.cancelarLocalmente(wcOrderId, body.status);
+      await this.aplicarStatusLocal(wcOrderId, body.status, body.addNote?.text);
       return {
         ok: true,
         id: wcOrderId,
@@ -1088,6 +1090,53 @@ export class OrdersController {
    * Nunca lança: o status já mudou no site, e derrubar a resposta aqui faria
    * parecer que o cancelamento falhou.
    */
+  /**
+   * "CONCLUIR" EM PEDIDO LOCAL ERA UM NO-OP QUE SE DIZIA SUCESSO (17/08).
+   *
+   * O ramo `isLive` devolvia `ok: true, statusApplied: true` mas só o
+   * `cancelarLocalmente` mexia no banco — e ele sai no primeiro `if` pra
+   * qualquer status que não seja cancelado/reembolsado. Resultado na tela:
+   * a equipe selecionava os pedidos da live já enviados, clicava em
+   * "Concluído", a lista sumia com eles… e no F5 estavam todos lá de novo.
+   * Ficaram semanas presos na aba de separação (LIVE-137, 293, 260, 29,
+   * todos com rastreio) porque nenhum clique surtia efeito.
+   *
+   * Aqui o slug da aba vira o status local equivalente. `on-hold` não tem
+   * par local: fica como está (e a resposta continua honesta, ver abaixo).
+   */
+  private async aplicarStatusLocal(wcOrderId: number, statusPedido?: string, nota?: string) {
+    const s = String(statusPedido || '').toLowerCase();
+    const mapa: Record<string, string> = {
+      completed: 'shipped',
+      separacao: 'separating',
+      'em-separacao': 'separating',
+      processing: 'processing',
+    };
+    const destino = mapa[s];
+    if (!destino) return;
+    try {
+      const local = await (this.prisma as any).order.findUnique({
+        where: { wcOrderId },
+        select: { id: true, status: true },
+      });
+      if (!local || local.status === destino) return;
+      await (this.prisma as any).order.update({ where: { id: local.id }, data: { status: destino } });
+      await (this.prisma as any).orderHistory
+        .create({
+          data: {
+            orderId: local.id,
+            fromStatus: local.status,
+            toStatus: destino,
+            note: nota?.trim() || `Status alterado pra ${destino} pelo Flow`,
+          },
+        })
+        .catch(() => {});
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error(`[orders] aplicarStatusLocal falhou (wc=${wcOrderId}): ${e?.message || e}`);
+    }
+  }
+
   private async cancelarLocalmente(wcOrderId: number, statusPedido?: string) {
     const s = String(statusPedido || '').toLowerCase();
     if (!['cancelled', 'canceled', 'refunded'].includes(s)) return;
