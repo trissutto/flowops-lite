@@ -67,6 +67,7 @@ import { FitModule } from './fit/fit.module';
 import { LojaCatalogModule } from './loja-catalog/loja-catalog.module';
 import { SiteBannersModule } from './site-banners/site-banners.module';
 import { SiteCategoriasModule } from './site-categorias/site-categorias.module';
+import { SiteVitrinesModule } from './site-vitrines/site-vitrines.module';
 import { SiteLeadsModule } from './site-leads/site-leads.module';
 import { ChatModule } from './chat/chat.module';
 import { LojaOrdersModule } from './loja-orders/loja-orders.module';
@@ -168,6 +169,7 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     LojaCatalogModule,
     SiteBannersModule,
     SiteCategoriasModule,
+    SiteVitrinesModule,
     SiteLeadsModule,
     ChatModule,
     LojaOrdersModule,

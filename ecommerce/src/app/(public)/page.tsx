@@ -9,10 +9,13 @@ import { PERFIL_INSTAGRAM } from '@/data/content';
 import { stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
 import { getInstagram } from '@/services/instagram';
-import { fetchVitrine } from '@/services/vitrine';
+import { getBlocosDaHome } from '@/services/vitrines-home';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
 import { sanitizeCampaignParams, withCampaignParams } from '@/lib/campaign-links';
-import { HOME_CATEGORY_BASE, HOME_NEWS_PATH, HOME_STORES_PATH } from '@/data/home';
+// HOME_CATEGORY_BASE saiu daqui: os atalhos agora vêm da retaguarda. A
+// constante continua sendo a ARTE aprovada de cada card — quem casa foto com
+// destino é `services/vitrines-home.ts`.
+import { HOME_NEWS_PATH, HOME_STORES_PATH } from '@/data/home';
 
 export const metadata = buildMetadata({
   title: "Lurd's Plus Size — Moda plus size elegante do 44 ao 60",
@@ -33,21 +36,31 @@ export default async function HomePage({
   const campaign = sanitizeCampaignParams(query);
   const href = (path: string) => withCampaignParams(path, campaign);
 
-  // Só o que aparece na Home é buscado. Isso evita atrasar o hero com quatro
-  // vitrines repetidas que a nova jornada não usa.
-  const [hero, novidades, posts] = await Promise.all([
+  /**
+   * OS BLOCOS DA HOME VÊM DA RETAGUARDA (17/08/2026) — atalhos e vitrines,
+   * na ordem que `/retaguarda/vitrines-home` definir. Uma requisição só, e
+   * ela já traz as peças de cada carrossel; backend fora do ar cai na home
+   * que está no ar hoje. Ver `services/vitrines-home.ts`.
+   *
+   * Continua tudo JUNTO com o hero: a cascata "hero → vitrine" atrasava o
+   * HTML que revela a imagem LCP.
+   */
+  const [hero, blocos, posts] = await Promise.all([
     getHeroDaHome(),
-    fetchVitrine({ ordenar: 'novidades', limite: 10, soNovidade: true }),
+    getBlocosDaHome(),
     getInstagram(6),
   ]);
 
-  const categories: HomeCategory[] = HOME_CATEGORY_BASE.map(({ path, ...category }) => ({
-    ...category,
-    href: href(path),
+  const categories: HomeCategory[] = blocos.atalhos.map((atalho) => ({
+    ...atalho,
+    href: href(atalho.href),
   }));
   const novidadesHref = href(HOME_NEWS_PATH);
   const storesHref = href(HOME_STORES_PATH);
-  const jsonLd = jsonLdGraph(itemListSchema(novidades, 'Novidades da semana'), ...stores.map(storeSchema));
+  const jsonLd = jsonLdGraph(
+    itemListSchema(blocos.carrosseis.flatMap((v) => v.produtos), 'Destaques da home'),
+    ...stores.map(storeSchema),
+  );
 
   return (
     <>
@@ -84,27 +97,39 @@ export default async function HomePage({
         <HomeStoreCta storesHref={storesHref} className="flex" />
       </div>
 
-      {novidades.length > 0 && (
-        <Section width="wide" aria-labelledby="novidades-titulo" className="!py-5 sm:!py-12">
+      {/* AS VITRINES, NA ORDEM DA RETAGUARDA. Vitrine sem peça não chega aqui
+          (o backend já tira): carrossel vazio é pior que uma seção a menos. */}
+      {blocos.carrosseis.map((vitrine) => (
+        <Section
+          key={vitrine.id}
+          width="wide"
+          aria-labelledby={`vitrine-${vitrine.id}`}
+          className="!py-5 sm:!py-12"
+        >
           <SectionTitle
-            id="novidades-titulo"
-            eyebrow="Acabou de chegar"
-            title="Novidades da semana"
-            mobileTitle="Novidades"
-            cta={{ label: 'Ver todas', href: novidadesHref }}
+            id={`vitrine-${vitrine.id}`}
+            eyebrow={vitrine.eyebrow ?? undefined}
+            title={vitrine.titulo}
+            mobileTitle={vitrine.tituloMobile ?? undefined}
+            description={vitrine.descricao ?? undefined}
+            cta={
+              vitrine.ctaHref
+                ? { label: vitrine.ctaLabel ?? 'Ver todas', href: href(vitrine.ctaHref) }
+                : undefined
+            }
             align="left"
             compactMobile
           />
           <div className="mt-3 sm:mt-10">
             <ProductCarousel
-              products={novidades}
-              ariaLabel="Novidades da semana"
+              products={vitrine.produtos}
+              ariaLabel={vitrine.titulo}
               progressiveImages
               compactMobile
             />
           </div>
         </Section>
-      )}
+      ))}
 
       <HomeBenefitsAndStores storesHref={storesHref} />
 
