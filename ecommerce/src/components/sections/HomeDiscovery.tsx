@@ -97,7 +97,13 @@ export function HomeComfortBanner({ href }: { href: string }) {
     <section className="bg-surface px-4 py-8 sm:px-6 sm:py-14" aria-labelledby="home-comfort-title">
       <AppLink href={href} className="group mx-auto grid max-w-6xl overflow-hidden rounded-lg bg-champagne sm:grid-cols-2">
         <div className="relative min-h-64 sm:order-2 sm:min-h-80">
-          <Image src="/categorias/blusas.webp" alt="Moda plus size confortável para todos os dias" fill sizes="(max-width: 640px) 100vw, 50vw" className="object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
+          <Image
+            src="https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/produtos/403048/MUSGO/1786651420238-modelo-oficial-rosto-regata-verde-acetinada.png"
+            alt="Modelo plus size usando regata verde acetinada da Linha Conforto"
+            fill
+            sizes="(max-width: 640px) 100vw, 50vw"
+            className="object-cover object-top transition-transform duration-700 group-hover:scale-[1.03]"
+          />
         </div>
         <div className="flex flex-col items-start justify-center p-7 sm:p-12">
           <p className="eyebrow text-primary-strong">Linha conforto</p>
