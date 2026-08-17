@@ -25,7 +25,16 @@ export const STATUS_LOCAL_POR_ABA: Record<string, string[]> = {
   // 'pending' entra em Processando (17/08): o Recalcular sem loja
   // alternativa deixava o pedido nativo em pending — status que nenhuma
   // aba conhecia. O ON- sumia da fila inteira com o dinheiro já na conta.
-  processing: ['processing', 'pending'],
+  //
+  // 'awaiting_stock' e 'routing' pelo MESMO motivo (17/08, caso ON-000006):
+  // ruptura/pickup-blocked joga o pedido em awaiting_stock (`confirmRoute`
+  // com success:false) e ele saía da lista — pago, cliente esperando, só
+  // alcançável pela URL direta. Consertaram 'pending' e deixaram esses dois
+  // de fora; são todos o mesmo caso: "sem card e ninguém olhando".
+  //
+  // ⚠️ Status que não cai em nenhuma aba = PEDIDO INVISÍVEL. Ao criar status
+  // novo, mapear aqui é obrigatório.
+  processing: ['processing', 'pending', 'awaiting_stock', 'routing'],
   separacao: ['separating'],
   'em-separacao': ['separating'],
   completed: ['shipped', 'delivered'],
