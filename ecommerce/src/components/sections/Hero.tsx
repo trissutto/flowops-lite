@@ -439,6 +439,11 @@ const HeroArte = forwardRef<HTMLElement, {
   const comum = {
     alt: image?.alt ?? '',
     priority,
+    // O hero é o LCP da home. `getImageProps` usa `decoding="async"` por
+    // padrão, o que deixou a imagem já baixada esperando mais 1,36 s para ser
+    // desenhada no Lighthouse mobile. Para a única imagem prioritária acima
+    // da dobra, a decodificação síncrona mantém o paint no caminho crítico.
+    decoding: priority ? ('sync' as const) : ('async' as const),
     sizes: '100vw',
     className: cn('w-full h-auto', medido && 'arte-reservada'),
     style: reserva,
