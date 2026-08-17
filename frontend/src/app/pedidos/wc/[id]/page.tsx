@@ -881,10 +881,15 @@ export default function PedidoDetailPage() {
         `SÓ as peças que estavam com ${swapTarget.fromStoreCode} mudam de loja — ` +
         `as outras lojas deste pedido NÃO são tocadas. Se ${pickedCode} não ` +
         `tiver estoque, nada muda.`
-      : `Forçar o pedido INTEIRO pra ${pickedName} (${pickedCode})?\n\n` +
-        `O sistema vai excluir TODAS as outras lojas do roteamento. Se ` +
-        `${pickedCode} não tiver estoque suficiente do que falta, o pedido ` +
-        `fica pending.`;
+      // O caminho `forceStoreCode` do backend cria o card com TODAS as peças
+      // mesmo sem estoque (bypassa o routing). O texto antigo dizia que o
+      // pedido "fica pending" se faltasse estoque — e era justo nessa hora
+      // (ruptura) que a retaguarda precisava clicar. Assustava e travava.
+      : `Mandar o pedido INTEIRO pra ${pickedName} (${pickedCode})?\n\n` +
+        `O card nasce lá com TODAS as peças — inclusive as que ${pickedCode} ` +
+        `não tem em estoque. Ela bipa o que estiver na arara; o que faltar ` +
+        `precisa chegar por transferência antes de fechar.\n\n` +
+        `As outras lojas saem do roteamento deste pedido.`;
     if (!confirm(msg)) return;
 
     setPickStoreApplying(pickedCode);
@@ -1706,7 +1711,9 @@ export default function PedidoDetailPage() {
               </span>
             </div>
             {/* Dica: troca manual de loja (só faz sentido enquanto alguma ainda
-                está em new/separating — depois que bipou não dá mais) */}
+                está em new/separating — depois que bipou não dá mais).
+                Sem card nenhum este painel inteiro não renderiza: o caminho
+                pra escolher loja na ruptura é o painel de ruptura acima. */}
             {liveStatus.some((p) => ['new', 'separating'].includes(p.status)) && (
               <div className="mb-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
                 <span className="text-amber-700">💡</span>
@@ -1953,6 +1960,46 @@ export default function PedidoDetailPage() {
               )}
               <div className="text-xs mt-1 opacity-80">Envio: {separation.shippingMethod}</div>
             </div>
+
+            {/* ── RUPTURA: MANDAR O CARD COM TODAS AS PEÇAS ─────────────────
+                O `pickup-blocked`/ruptura devolve `assignments: []` de
+                propósito ("operação precisa decidir") — resultado: NADA é
+                criado, nem pras peças que existem, e o pedido para em
+                awaiting_stock com o dinheiro na conta.
+
+                Só que a decisão quase sempre é a mesma: manda o card inteiro
+                pra loja que vai entregar, ela bipa o que tem e o que falta
+                chega depois. O backend já sabe fazer isso (`forceStoreCode`
+                cria o card MESMO SEM ESTOQUE, bypassando o routing) — o que
+                faltava era a porta: o botão "Escolher loja manualmente" só
+                aparecia com card ativo, ou seja, nunca depois de uma ruptura.
+
+                Caso ON-000006 (17/08): retirada em São José dos Campos, 11
+                peças, 1 SKU sem estoque em loja nenhuma → separação bloqueada
+                e SJC sem card. */}
+            {!separation.success && (
+              <div className="mb-4 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+                <div className="text-sm font-bold text-amber-900">
+                  Precisa mandar o card mesmo assim?
+                </div>
+                <div className="text-xs text-amber-800 mt-1">
+                  Escolha a loja que vai <b>entregar</b>: o card nasce lá com <b>todas as peças</b>,
+                  inclusive as que ela não tem. Ela bipa o que estiver na arara e o resto chega
+                  por transferência.
+                  {separation.pickupStoreName && (
+                    <> Esta é uma <b>retirada em {separation.pickupStoreName}</b> — normalmente é essa a loja.</>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={openPickStoreModal}
+                  disabled={sepLoading}
+                  className="mt-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  🎯 Escolher a loja e mandar o card com todas
+                </button>
+              </div>
+            )}
 
             {/* ── ESCOLHER OUTRA LOJA — single-store com alternativas ────────
                  Mostra radio buttons com a sugestão automática + até 5 outras
