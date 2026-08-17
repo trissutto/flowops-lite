@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -77,6 +77,28 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
   // Evita refetch do ViaCEP pro mesmo CEP (inclusive na volta da edição).
   const ultimoCepBuscado = useRef<string | null>(defaults ? onlyDigits(defaults.cep) : null);
 
+  /**
+   * O ENDEREÇO DO ViaCEP FICA GUARDADO AQUI ANTES DE IR PRA TELA.
+   *
+   * Ele era escrito direto nos campos com `setValue` assim que a resposta
+   * chegava — e os campos ainda não existiam. O bloco de endereço só
+   * renderiza depois que a cotação chega (`precisaEndereco`), e a cotação
+   * demora segundos enquanto o ViaCEP volta em ~400ms. Escrever num campo
+   * desmontado não dá erro: o React Hook Form guarda o valor e, quando o
+   * input finalmente monta, ele restaura do `defaultValues` — não do que foi
+   * gravado no meio do caminho. Resultado: rua, bairro, cidade e UF em
+   * branco, e a cliente digitando na mão o que o sistema já sabia.
+   *
+   * Guardando em estado, quem aplica é o efeito abaixo, que só roda com os
+   * campos na tela. Quanto mais lenta a cotação, mais o bug antigo
+   * acontecia — era garantido nos 5s medidos em 17/08.
+   */
+  const [cepAuto, setCepAuto] = useState<{
+    digits: string; street: string; neighborhood: string; city: string; uf: string;
+  } | null>(null);
+  /** Já despejado nos campos — não reescreve por cima do que ela digitou. */
+  const cepAplicado = useRef<string | null>(defaults ? onlyDigits(defaults.cep) : null);
+
   const {
     register,
     handleSubmit,
@@ -135,39 +157,83 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
   }, [cep, cepValido, subtotal, pecas]);
 
   const selectedQuote = quotes.find((q) => q.id === quoteId);
-  const precisaEndereco = selectedQuote ? selectedQuote.kind !== 'retirada' : false;
+  /**
+   * O ENDEREÇO APARECE DURANTE A COTAÇÃO, NÃO DEPOIS DELA.
+   *
+   * A cotação leva ~5 segundos (medido 17/08) e nesse tempo a tela ficava
+   * parada: CEP preenchido, nada pra fazer, nenhum campo na frente dela.
+   * Segundos de espera com a tela morta é onde a cliente vai embora.
+   *
+   * Mostrando o bloco já com "calculando…", ela preenche o número enquanto
+   * o frete calcula — e os campos existem quando o ViaCEP responde, que é
+   * o que conserta o preenchimento automático.
+   *
+   * A regra é por AUSÊNCIA: com CEP válido o endereço fica, e só some se
+   * ela escolher retirada. Amarrar em `cotando` faria o bloco piscar —
+   * apareceria durante o cálculo e sumiria quando as opções chegassem, até
+   * ela clicar numa.
+   */
+  const mostraEndereco = cepValido && (selectedQuote ? selectedQuote.kind !== 'retirada' : true);
 
   /* ViaCEP — dispara quando o CEP fica completo. */
   useEffect(() => {
     const digits = onlyDigits(cep);
     if (digits.length !== 8 || ultimoCepBuscado.current === digits) return;
-    ultimoCepBuscado.current = digits;
     setCepBuscando(true);
 
     const controller = new AbortController();
     fetch(`https://viacep.com.br/ws/${digits}/json/`, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        // ViaCEP devolve { erro: true } pra CEP inexistente — também silencioso.
+        if (controller.signal.aborted) return;
+        // Só agora marca como buscado. Antes marcava ANTES de pedir, e uma
+        // busca cancelada (ela corrigiu um dígito e voltou atrás) deixava o
+        // CEP marcado pra sempre — nunca mais tentava, campos em branco.
+        ultimoCepBuscado.current = digits;
+        // ViaCEP devolve { erro: true } pra CEP inexistente — silencioso.
         if (data && !data.erro) {
-          setValue('street', data.logradouro ?? '', { shouldValidate: false });
-          setValue('neighborhood', data.bairro ?? '', { shouldValidate: false });
-          setValue('city', data.localidade ?? '', { shouldValidate: false });
-          setValue('uf', (data.uf ?? '').toUpperCase(), { shouldValidate: false });
+          setCepAuto({
+            digits,
+            street: data.logradouro ?? '',
+            neighborhood: data.bairro ?? '',
+            city: data.localidade ?? '',
+            uf: (data.uf ?? '').toUpperCase(),
+          });
         }
       })
       .catch(() => {
         /* silêncio combinado: a cliente digita na mão */
       })
-      .finally(() => setCepBuscando(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setCepBuscando(false);
+      });
 
     return () => controller.abort();
-  }, [cep, setValue]);
+  }, [cep]);
+
+  /**
+   * DESPEJA NOS CAMPOS — e só roda com eles na tela.
+   *
+   * `mostraEndereco` na dependência é o ponto todo: o efeito espera os
+   * inputs existirem. Efeito roda depois do commit do DOM, então quando
+   * `mostraEndereco` vira true nesta mesma renderização os campos já estão
+   * montados e o `setValue` acha a referência deles.
+   *
+   * Uma vez por CEP: se ela corrigir a rua na mão, nada reescreve por cima.
+   */
+  useEffect(() => {
+    if (!cepAuto || !mostraEndereco || cepAplicado.current === cepAuto.digits) return;
+    cepAplicado.current = cepAuto.digits;
+    setValue('street', cepAuto.street, { shouldValidate: false });
+    setValue('neighborhood', cepAuto.neighborhood, { shouldValidate: false });
+    setValue('city', cepAuto.city, { shouldValidate: false });
+    setValue('uf', cepAuto.uf, { shouldValidate: false });
+  }, [cepAuto, mostraEndereco, setValue]);
 
   /* Foco automático no número — o único campo que o ViaCEP não sabe. */
   useEffect(() => {
-    if (precisaEndereco && !cepBuscando) setFocus('number');
-  }, [precisaEndereco, cepBuscando, setFocus]);
+    if (mostraEndereco && !cepBuscando) setFocus('number');
+  }, [mostraEndereco, cepBuscando, setFocus]);
 
   function confirmar(address?: AddressValues) {
     if (!selectedQuote) {
@@ -263,8 +329,8 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
         </fieldset>
       )}
 
-      {/* Endereço completo — só quando a entrega vai até a casa dela. */}
-      {precisaEndereco && (
+      {/* Endereço completo — enquanto cotamos e depois, se for entrega. */}
+      {mostraEndereco && (
         <div className="grid gap-5 sm:grid-cols-6">
           <Input
             label="Rua"
