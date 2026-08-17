@@ -46,6 +46,7 @@ import { FiscalReportController } from './fiscal-report.controller';
 import { ProdutosVendidosService } from './produtos-vendidos.service';
 import { ProdutosVendidosController } from './produtos-vendidos.controller';
 import { PixPagbankReconcileService } from './pix-pagbank-reconcile.service';
+import { PagarmeLinkReconcileService } from './pagarme-link-reconcile.service';
 import { CashbackModule } from '../cashback/cashback.module';
 import { PdvStoreSummaryController } from './store-summary.controller';
 import { PdvStoreSummaryService } from './store-summary.service';
@@ -57,7 +58,12 @@ import { PdvStoreSummaryService } from './store-summary.service';
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou
   // o ciclo e impediu o backend de subir em 07/08. Ele lê a tabela do PagBank
   // pelo Prisma, que este módulo já tem.
-  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PdvStoreSummaryService],
+  //
+  // `PagarmeLinkReconcileService` (17/08) segue a MESMA regra e pelo mesmo
+  // motivo: fecha a venda quando o link Pagar.me é pago (antes ninguém
+  // fechava — venda ficava aberta pra sempre com o dinheiro na conta) e lê
+  // `pagarme_payment` pelo Prisma, sem importar o PagarmeModule.
+  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}
