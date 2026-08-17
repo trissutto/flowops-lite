@@ -3584,12 +3584,47 @@ export class PdvService {
    * Idempotente: venda que já tem Order 'pdv_online' apontando pra ela devolve
    * o número existente sem criar outro.
    */
-  async gerarPedidoOnlineDeVendaFinalizada(saleId: string, actor?: string) {
-    const sale = await this.getSale(saleId);
+  async gerarPedidoOnlineDeVendaFinalizada(
+    saleId: string,
+    actor?: string,
+    dados?: {
+      nome?: string; cep?: string; endereco?: string; numero?: string; complemento?: string;
+      bairro?: string; cidade?: string; uf?: string; entregaTipo?: string;
+    },
+  ) {
+    let sale = await this.getSale(saleId);
     if (sale.status !== 'finalized') {
       throw new BadRequestException(`Venda está ${sale.status} — só venda finalizada vira pedido online`);
     }
     if ((sale as any).isTraining) throw new BadRequestException('Venda de treinamento não vira pedido');
+
+    // Venda fechada sem CEP/entrega (caso Sandra Micheli, 17/08): a tela manda
+    // os dados junto e a gente completa a venda ANTES de rotear — não existe
+    // outra tela que edite endereço de venda finalizada, e o setEntrega recusa
+    // venda que não está aberta.
+    if (dados && Object.keys(dados).length) {
+      const limpo = (v?: string, max = 120) => String(v ?? '').trim().slice(0, max) || null;
+      const upd: any = {};
+      if (dados.nome !== undefined && limpo(dados.nome)) upd.customerName = limpo(dados.nome);
+      if (dados.cep !== undefined) upd.customerCep = String(dados.cep).replace(/\D/g, '') || null;
+      if (dados.endereco !== undefined) upd.customerEndereco = limpo(dados.endereco);
+      if (dados.numero !== undefined) upd.customerNumero = limpo(dados.numero, 20);
+      if (dados.complemento !== undefined) upd.customerComplemento = limpo(dados.complemento, 80);
+      if (dados.bairro !== undefined) upd.customerBairro = limpo(dados.bairro, 80);
+      if (dados.cidade !== undefined) upd.customerCidade = limpo(dados.cidade, 80);
+      if (dados.uf !== undefined) upd.customerUf = limpo(dados.uf, 2)?.toUpperCase() ?? null;
+      if (dados.entregaTipo !== undefined) {
+        const tipo = String(dados.entregaTipo || '').trim().toLowerCase();
+        if (!(PdvService.ENTREGA_TIPOS as readonly string[]).includes(tipo)) {
+          throw new BadRequestException(`Forma de entrega inválida (use ${PdvService.ENTREGA_TIPOS.join(', ')})`);
+        }
+        upd.entregaTipo = tipo;
+      }
+      if (Object.keys(upd).length) {
+        await (this.prisma as any).pdvSale.update({ where: { id: sale.id }, data: upd });
+        sale = await this.getSale(saleId);
+      }
+    }
 
     const existente = await (this.prisma as any).order.findFirst({
       where: { source: 'pdv_online', checkoutInfo: { contains: `"pdvSaleId":"${sale.id}"` } },
