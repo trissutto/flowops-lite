@@ -291,7 +291,15 @@ export function BuyBox({
           peça perde o nome como manchete. Quem quiser mais nomes em uma
           linha só tem um caminho, e ele é de CONTEÚDO — tirar o código da
           REF do fim do nome. */}
-      <h1 className="mt-3 font-display text-[1.375rem] leading-[1.2] text-ink sm:text-h2 sm:leading-[1.16]">
+      {/* BLOCO DE DECISÃO CENTRALIZADO NO CELULAR (dono, 17/08).
+
+          Nome, preço, os dois passos e a grade — tudo no eixo. Centralizar
+          só a grade, como ficou na primeira tentativa, deixou o conjunto
+          desalinhado: o número no meio e o preço encostado na margem.
+
+          `lg:text-left` porque no desktop a coluna de compra fica ao lado
+          da foto, estreita e alta — ali o texto centralizado vira serrilha. */}
+      <h1 className="mt-3 text-center font-display text-[1.375rem] leading-[1.2] text-ink sm:text-h2 sm:leading-[1.16] lg:text-left">
         {product.name}
       </h1>
 
@@ -319,7 +327,7 @@ export function BuyBox({
 
       {/* Preço */}
       <div className="mt-7">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div className="flex flex-wrap items-baseline justify-center gap-x-3 gap-y-1 lg:justify-start">
           {product.compareAtPrice && (
             <span className="tabular text-body text-ink-muted line-through">
               {formatPrice(product.compareAtPrice)}
@@ -422,7 +430,7 @@ export function BuyBox({
             CENTRALIZADA (dono, 17/08): à esquerda, uma grade de 3 ou 4
             números deixava um vazio grande à direita e o passo parecia
             inacabado — logo o passo que decide a compra. */}
-        <div className="mt-4 flex flex-wrap justify-center gap-2.5">
+        <div className="mt-4 flex flex-wrap justify-center gap-2.5 lg:justify-start">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
@@ -680,7 +688,7 @@ export function BuyBox({
 
           {/* Mesma centralização da grade da página: as duas mostram os
               mesmos números e divergir no desenho confunde. */}
-          <div className="mt-4 flex flex-wrap justify-center gap-2.5">
+          <div className="mt-4 flex flex-wrap justify-center gap-2.5 lg:justify-start">
             {product.sizes.map((option) => (
               <SizePill
                 key={option.label}
@@ -761,7 +769,7 @@ function PassoLabel({
   sufixoEscolhido?: string;
 }) {
   return (
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center justify-center gap-2.5 lg:justify-start">
       <span
         aria-hidden
         className={cn(
