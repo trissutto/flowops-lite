@@ -1,61 +1,40 @@
 # Home
 
-`src/app/(public)/page.tsx` — Server Component.
+`src/app/(public)/page.tsx` é um Server Component orientado à compra.
 
-## A jornada em 15 movimentos
+## Jornada principal
 
-A ordem não é decorativa: cada seção prepara a próxima.
+1. Hero real da retaguarda, com CTA único para `/novidades`.
+2. Atalhos editoriais para Vestidos, Blusas, Conjuntos, Calças e Outlet.
+3. Novidades reais do CRM, com dois cards visíveis no celular.
+4. Benefícios: Pix, parcelamento, troca e entrega.
+5. Chamada imediata para `/lojas`.
+6. Lojas em destaque, Instagram real e newsletter.
 
-| # | Seção | Papel na jornada | Componente |
-|---|---|---|---|
-| 01 | Hero editorial | desejo — "elegância não tem tamanho" | `Hero` fullscreen |
-| 02 | Manifesto | quem somos, desde 1979 + números | `Manifesto` |
-| 03 | Novidades | o que chegou (recência) | `ProductCarousel` |
-| 04 | Shop the Look | resolve a composição inteira | `LookShowcase` |
-| 05 | Compre por ocasião | como ela realmente pensa | `OccasionCard` × 8 |
-| 06 | Moda por tecido | educação de caimento | `FabricCard` × 6 |
-| 07 | Moda por modelagem | consultoria de estilo | `FitCard` × 6 |
-| 08 | Best sellers | prova social por volume | `ProductCarousel` |
-| 09 | Editorial da semana | inspiração, cara de revista | `ImageGrid` + `EditorialCard` |
-| 10 | Vídeo institucional | o provador por dentro | `VideoBlock` 21:9 |
-| 11 | Depoimentos | prova social com dados de caimento | `TestimonialCarousel` |
-| 12 | Instagram | vida real, produtos marcados | `InstagramCard` × 6 |
-| 13 | Nossas lojas | a ponte pro físico | `StoreCard` × 3 |
-| 14 | CTA final + newsletter | convite e relacionamento | `CTABanner` + `NewsletterBlock` |
-| 15 | Footer | navegação e institucional | layout do grupo `(public)` |
+Os parâmetros UTM recebidos pela Home são sanitizados e preservados nos links
+da jornada principal.
 
-## Decisões
+## Origem dos dados
 
-**Por que ocasião antes de categoria.** A cliente chega com um problema
-("casamento sábado"), não com uma taxonomia. Ocasião → tecido → modelagem é
-uma escada de consultoria: onde vou, com que material, valorizando o quê.
+- hero: `getHeroDaHome()`;
+- novidades: `fetchVitrine({ ordenar: 'novidades', soNovidade: true })`;
+- Instagram: `getInstagram(6)`;
+- lojas: `data/stores.ts`;
+- categorias editoriais: `data/home.ts`.
 
-**Por que a loja física fecha a página.** É onde a conversão da Lurds
-acontece de verdade. A home inteira é vitrine; o último movimento é um
-convite pro provador, com "Como chegar" e WhatsApp lado a lado.
+As fotos das categorias são direção de arte e não representam produtos
+específicos. Produtos, preços, promoções e disponibilidade vêm somente do CRM.
 
-**Por que os depoimentos mostram altura, peso e numeração.** É a informação
-que resolve a dúvida real de quem já comprou algo que não vestiu. Nenhum
-concorrente dá.
+## Desempenho
 
-**Alternância de tom.** `default → alt → default → champagne → dark` cria
-ritmo sem precisar de borda entre seções.
+- as três consultas reais iniciam em paralelo;
+- somente o hero é prioritário e recebe preload;
+- imagens de categoria são WebP 640 × 640, carregadas sob demanda;
+- produtos usam carregamento progressivo;
+- vitrines repetidas deixaram de ser consultadas pela Home.
 
-## Técnico
+## Estados vazios
 
-- **Estática.** Nada de dado por request; conteúdo muda por deploy.
-- **JSON-LD:** `ItemList` dos destaques + os 14 nós `ClothingStore` (SEO local).
-- **LCP:** a imagem do hero é a única com `priority`. Todo o resto é lazy.
-- **Client islands:** só os carrosséis e cards com hover. Manifesto, títulos,
-  ocasiões, tecidos e modelagem são server-rendered.
-- **Um `<h1>`** (hero). Cada seção tem `<h2>` ligado por `aria-labelledby`.
-
-## Conteúdo
-
-Vem de `data/content.ts`. **Produtos, looks, depoimentos, Instagram e vídeo
-são placeholder** — estrutura pra dar forma às seções.
-
-O que já é **real**: taxonomias (ocasiões, tecidos, modelagens), a numeração
-44–60, o texto do manifesto e as 14 lojas (`data/stores.ts`).
-
-Trocar conteúdo = editar `data/content.ts`. Nenhum componente muda.
+Se o CRM não devolver novidades, a seção não aparece. Se o Instagram estiver
+indisponível, a grade social não aparece. Hero e tarja usam os fallbacks
+oficiais existentes. Nenhum dado fictício é exibido.
