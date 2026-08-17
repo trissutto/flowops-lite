@@ -472,8 +472,15 @@ function QuoteOption({
                 {store.address.street} · {store.address.neighborhood}, {store.city}/{store.uf}
               </span>
             )}
+            {/* A DISTÂNCIA FICA À VISTA. A lista só mostra loja a até 20 km
+                (RAIO_RETIRADA_KM), e dizer "a 4 km" transforma a regra em
+                argumento: quem está perto entende na hora que buscar sai de
+                graça e hoje, em vez de pagar frete e esperar dias. */}
             <span className="flex items-center gap-1.5 text-small text-ink-muted">
               <Clock className="size-3.5" /> Pronto em ~{quote.readyInHours ?? 3}h
+              {quote.distanciaKm != null && (
+                <span>· a {quote.distanciaKm.toLocaleString('pt-BR', { maximumFractionDigits: quote.distanciaKm < 10 ? 1 : 0 })} km de você</span>
+              )}
             </span>
             {/* Item 27: o que levar e por quanto tempo a peça espera. Vai AQUI,
                 na hora da escolha — não numa página de ajuda que ninguém abre. */}

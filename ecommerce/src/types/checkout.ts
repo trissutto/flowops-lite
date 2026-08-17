@@ -59,6 +59,14 @@ export interface ShippingQuote {
   /** Slug da loja quando kind = retirada. */
   storeSlug?: string;
   storeLabel?: string;
+  /**
+   * Preço de tabela promocional (SP SEDEX R$ 9,99, RJ/MG/PR/SC/RS PAC
+   * R$ 19,99), não cotação dos Correios. Quem decide é o backend, que
+   * conhece a campanha vigente — o site só carrega o carimbo pra ordenar.
+   */
+  promocional?: boolean;
+  /** Distância da cliente até a loja, em km. Só em kind = retirada. */
+  distanciaKm?: number;
 }
 
 /* -------------------------------------------------------------------- CUPOM */

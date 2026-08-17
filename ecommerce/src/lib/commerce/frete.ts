@@ -55,21 +55,101 @@ const TABELA: Record<Zone, { pac: { price: number; min: number; max: number }; s
 };
 
 /** Cidades atendidas → prefixos de CEP (faixa aproximada, mesma base do CRM). */
+/**
+ * ⚠️ REDE DE SEGURANÇA, NÃO A REGRA. Quem manda é o raio de 20 km
+ * (`RAIO_RETIRADA_KM`); isto só vale quando não conseguimos a coordenada
+ * do CEP. Duas faixas estavam se atropelando e ofereciam loja longe:
+ *
+ *  · `117` apontava pra Itanhaém E Praia Grande — 40 km uma da outra. Um
+ *    CEP de Itanhaém oferecia retirada em Praia Grande (caso real, 17/08).
+ *  · `132` apontava pra Vinhedo E Jundiaí.
+ *
+ * Separadas pela faixa real dos Correios: Praia Grande 11700–11729,
+ * Itanhaém 11740–11769, Jundiaí 13200–13219, Vinhedo 13280–13289.
+ */
 const RETIRADA_POR_PREFIXO: Array<{ prefixos: string[]; slugs: string[] }> = [
-  { prefixos: ['117'], slugs: ['itanhaem'] },
+  { prefixos: ['1174', '1175', '1176'], slugs: ['itanhaem'] },
+  { prefixos: ['1170', '1171', '1172'], slugs: ['praia-grande'] },
   { prefixos: ['110', '115'], slugs: ['santos'] },
-  { prefixos: ['132'], slugs: ['vinhedo'] },
+  { prefixos: ['1328'], slugs: ['vinhedo'] },
+  { prefixos: ['1320', '1321'], slugs: ['jundiai'] },
   { prefixos: ['133'], slugs: ['indaiatuba'] },
   { prefixos: ['134'], slugs: ['piracicaba'] },
   { prefixos: ['180', '181'], slugs: ['sorocaba'] },
   { prefixos: ['130', '131'], slugs: ['campinas'] },
   { prefixos: ['122'], slugs: ['sao-jose-dos-campos'] },
-  { prefixos: ['132'], slugs: ['jundiai'] },
   { prefixos: ['1348'], slugs: ['limeira'] },
-  { prefixos: ['117'], slugs: ['praia-grande'] },
   { prefixos: ['04', '05', '03', '01', '02', '08'], slugs: ['moema', 'analia-franco'] },
   { prefixos: ['086', '087'], slugs: ['suzano'] },
 ];
+
+/** Raio em que buscar na loja faz sentido — decisão do dono (17/08). */
+export const RAIO_RETIRADA_KM = 20;
+
+interface Ponto { lat: number; lng: number }
+
+/** Distância em linha reta, em km (Haversine). */
+function distanciaEntre(a: Ponto, b: Ponto): number {
+  const rad = (x: number) => (x * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * Coordenada DO CEP — não do município.
+ *
+ * A distinção decide a regra em São Paulo: as fontes que devolvem o
+ * centroide do município dão o MESMO ponto pra Paulista, Anália Franco e
+ * Berrini, e aí o raio de 20 km não separa nada numa cidade de 50 km de
+ * ponta a ponta. Esta devolve a rua (medido em 17/08: Berrini a 2,9 km de
+ * Moema, Anália Franco a 14,6 km — dois números diferentes, como tem que
+ * ser).
+ *
+ * NUNCA REJEITA. Falhou, devolve null e a retirada cai na tabela de
+ * prefixos. É informação a mais pra ordenar uma lista — não pode ser o
+ * motivo de ninguém ficar sem opção de entrega.
+ */
+export async function coordenadaDoCep(cep: string, signal?: AbortSignal): Promise<Ponto | null> {
+  const digits = onlyDigits(cep);
+  if (digits.length !== 8) return null;
+  try {
+    const r = await fetch(`https://cep.awesomeapi.com.br/json/${digits}`, { signal });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const lat = Number(d?.lat);
+    const lng = Number(d?.lng);
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A ORDEM DA TELA, E ELA É FIXA (dono, 17/08):
+ *
+ *   1. FRETE PROMOCIONAL — a tabela da campanha (SP SEDEX R$ 9,99;
+ *      RJ/MG/PR/SC/RS PAC R$ 19,99). É a oferta da casa e abre a lista.
+ *   2. RETIRADA GRÁTIS EM LOJA — da mais perto pra mais longe.
+ *   3. COTAÇÃO DOS CORREIOS — o preço cheio, por último.
+ *
+ * Fixa quer dizer fixa: não é "ordenar por preço e dar sorte". Se um dia a
+ * cotação cheia sair mais barata que a promoção, a promoção continua em
+ * cima — é ela que a campanha está anunciando.
+ */
+export function ordenarOpcoes(quotes: ShippingQuote[]): ShippingQuote[] {
+  const grupo = (q: ShippingQuote) => (q.promocional ? 0 : q.kind === 'retirada' ? 1 : 2);
+  return [...quotes].sort((a, b) => {
+    const g = grupo(a) - grupo(b);
+    if (g !== 0) return g;
+    // Dentro da retirada, a loja mais perto primeiro; no resto, o mais barato.
+    if (grupo(a) === 1) return (a.distanciaKm ?? Infinity) - (b.distanciaKm ?? Infinity);
+    return a.price - b.price;
+  });
+}
 
 export function onlyDigits(v: string): string {
   return v.replace(/\D/g, '');
@@ -87,27 +167,38 @@ export function isValidCep(v: string): boolean {
  * sobre ONDE a cliente quer buscar, não sobre onde a peça está hoje — quem
  * resolve a origem é o roteamento da matriz, exatamente como já faz com
  * qualquer pedido dividido entre lojas.
+ *
+ * COM `coord`: só as lojas a até 20 km, da mais perto pra mais longe.
+ * SEM `coord`: a tabela de prefixos, que é aproximada.
  */
-export function pickupStoresFor(cep: string, prazoHoras = 3): ShippingQuote[] {
+export function pickupStoresFor(cep: string, prazoHoras = 3, coord?: Ponto | null): ShippingQuote[] {
   const digits = onlyDigits(cep);
   if (digits.length < 3) return [];
+
+  const monta = (s: (typeof stores)[number], km?: number): ShippingQuote => ({
+    id: `retirada-${s.slug}`,
+    kind: 'retirada' as const,
+    label: `Retirar na loja ${s.unit}`,
+    price: 0,
+    readyInHours: prazoHoras,
+    storeSlug: s.slug,
+    storeLabel: `${s.unit} · ${s.city}/${s.uf}`,
+    ...(km == null ? {} : { distanciaKm: Math.round(km * 10) / 10 }),
+  });
+
+  if (coord) {
+    return stores
+      .map((s) => ({ s, km: s.geo ? distanciaEntre(coord, s.geo) : Infinity }))
+      .filter((x) => x.km <= RAIO_RETIRADA_KM)
+      .sort((a, b) => a.km - b.km)
+      .map((x) => monta(x.s, x.km));
+  }
 
   const slugs = new Set<string>();
   for (const faixa of RETIRADA_POR_PREFIXO) {
     if (faixa.prefixos.some((p) => digits.startsWith(p))) faixa.slugs.forEach((s) => slugs.add(s));
   }
-
-  return stores
-    .filter((s) => slugs.has(s.slug))
-    .map((s) => ({
-      id: `retirada-${s.slug}`,
-      kind: 'retirada' as const,
-      label: `Retirar na loja ${s.unit}`,
-      price: 0,
-      readyInHours: prazoHoras,
-      storeSlug: s.slug,
-      storeLabel: `${s.unit} · ${s.city}/${s.uf}`,
-    }));
+  return stores.filter((s) => slugs.has(s.slug)).map((s) => monta(s));
 }
 
 /**
@@ -115,13 +206,15 @@ export function pickupStoresFor(cep: string, prazoHoras = 3): ShippingQuote[] {
  * quando há loja na área. Frete grátis: PAC zera acima do teto (o SEDEX
  * continua pago — grátis é o econômico, não o expresso).
  */
-export function quoteShipping(cep: string, subtotal: number): ShippingQuote[] {
+export function quoteShipping(cep: string, subtotal: number, coord?: Ponto | null): ShippingQuote[] {
   if (!isValidCep(cep)) return [];
   const digits = onlyDigits(cep);
   const zona = TABELA[zoneOf(digits)];
   const gratis = subtotal >= FREE_SHIPPING_FROM;
 
-  return [
+  // Sem promoção aqui: esta é a tabela de emergência, não a campanha. Sem
+  // ninguém marcado `promocional`, a ordem vira retirada → Correios.
+  return ordenarOpcoes([
     {
       id: 'correios-pac',
       kind: 'correios',
@@ -136,8 +229,8 @@ export function quoteShipping(cep: string, subtotal: number): ShippingQuote[] {
       price: zona.sedex.price,
       etaDays: { min: zona.sedex.min, max: zona.sedex.max },
     },
-    ...pickupStoresFor(digits),
-  ];
+    ...pickupStoresFor(digits, 3, coord),
+  ]);
 }
 
 export function findQuote(cep: string, subtotal: number, quoteId: string): ShippingQuote | undefined {
@@ -170,8 +263,19 @@ export async function fetchQuotes(
   signal?: AbortSignal,
 ): Promise<CotacaoDoSite> {
   const digits = onlyDigits(cep);
-  const local = (): CotacaoDoSite => ({
-    quotes: quoteShipping(digits, subtotal),
+
+  /**
+   * Sai JUNTO com a cotação, não depois. A cotação leva ~1s e esta ~0,3s,
+   * então em paralelo ela é de graça — em série seria 30% a mais de espera
+   * só pra ordenar uma lista.
+   *
+   * `coordenadaDoCep` nunca rejeita, então dá pra deixar a promessa solta e
+   * colher depois nos dois caminhos (backend ok e backend fora).
+   */
+  const pCoord = isValidCep(digits) ? coordenadaDoCep(digits, signal) : Promise.resolve(null);
+
+  const local = async (): Promise<CotacaoDoSite> => ({
+    quotes: quoteShipping(digits, subtotal, await pCoord),
     freteGratis: {
       ativo: true,
       minimo: FREE_SHIPPING_FROM,
@@ -195,23 +299,34 @@ export async function fetchQuotes(
     const dados = await res.json().catch(() => null);
     if (!dados?.ok || !Array.isArray(dados.opcoes) || !dados.opcoes.length) return local();
 
+    const coord = await pCoord;
     return {
-      quotes: [
+      quotes: ordenarOpcoes([
         ...dados.opcoes.map(
           (o: {
             id?: string | number; kind?: string; label?: string;
             price?: number | string; etaDays?: { min: number; max: number };
+            promocional?: boolean;
           }): ShippingQuote => ({
             id: String(o.id),
             kind: o.kind === 'expressa' ? 'expressa' : 'correios',
             label: String(o.label),
             price: Number(o.price) || 0,
             etaDays: o.etaDays,
+            // Quem carimba é o backend: ele conhece a campanha e a janela
+            // de datas. Adivinhar aqui por faixa de preço quebraria calado
+            // no dia em que a campanha mudasse.
+            promocional: o.promocional === true,
           }),
         ),
-        ...pickupStoresFor(digits, dados.retirada?.prazoHoras),
-      ],
-      freteGratis: dados.freteGratis ?? local().freteGratis,
+        ...pickupStoresFor(digits, dados.retirada?.prazoHoras, coord),
+      ]),
+      freteGratis: dados.freteGratis ?? {
+        ativo: true,
+        minimo: FREE_SHIPPING_FROM,
+        alcancado: subtotal >= FREE_SHIPPING_FROM,
+        falta: Math.max(0, Math.round((FREE_SHIPPING_FROM - subtotal) * 100) / 100),
+      },
       estimado: !!dados.estimado,
       retirada: dados.retirada,
     };

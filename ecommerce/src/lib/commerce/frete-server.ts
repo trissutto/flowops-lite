@@ -1,6 +1,7 @@
 import 'server-only';
 
-import { findQuote, pickupStoresFor } from './frete';
+import { stores } from '@/data/stores';
+import { findQuote } from './frete';
 import type { ShippingQuote } from '@/types/checkout';
 
 /**
@@ -31,9 +32,32 @@ export async function resolverFrete(input: {
 }): Promise<ShippingQuote | undefined> {
   const cep = String(input.cep || '').replace(/\D/g, '');
 
-  // Retirada não é cotação: a loja sai da tabela de lojas do próprio site.
+  /**
+   * Retirada não é cotação: a loja sai da tabela de lojas do próprio site.
+   *
+   * ⚠️ ACEITA QUALQUER LOJA DA REDE, DE PROPÓSITO — não reaplica o raio de
+   * 20 km. O raio decide o que a gente OFERECE; recusar aqui pelo mesmo
+   * critério transformaria uma regra de vitrine em motivo de pedido
+   * rejeitado. As duas pontas usam fontes diferentes (a tela tem a
+   * coordenada do CEP, o servidor não), então elas VÃO discordar em algum
+   * caso de borda — e discordar aqui custa a venda.
+   *
+   * O que se perde aceitando: nada. Retirada é R$ 0 em qualquer loja, e
+   * quem escolhe uma longe só vai ter que dirigir mais.
+   */
   if (input.quoteId.startsWith('retirada-')) {
-    return pickupStoresFor(cep).find((q) => q.id === input.quoteId);
+    const slug = input.quoteId.slice('retirada-'.length);
+    const loja = stores.find((s) => s.slug === slug);
+    if (!loja) return undefined;
+    return {
+      id: input.quoteId,
+      kind: 'retirada',
+      label: `Retirar na loja ${loja.unit}`,
+      price: 0,
+      readyInHours: 3,
+      storeSlug: loja.slug,
+      storeLabel: `${loja.unit} · ${loja.city}/${loja.uf}`,
+    };
   }
 
   const baseUrl = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
