@@ -74,7 +74,7 @@ export default async function HomePage({
         subtitle={hero.subtitle}
         primaryAction={{ label: 'Ver novidades', href: novidadesHref, variant: 'primary' }}
         height={hero.daRetaguarda ? 'arte' : 'medium'}
-        align="center"
+        align={hero.daRetaguarda ? 'center' : 'left'}
         overlay={hero.daRetaguarda ? 'none' : 'medium'}
         priority
       />

@@ -78,6 +78,18 @@ export interface HeroDaHome {
 }
 
 const HERO_ESTATICO: HeroDaHome = {
+  image: {
+    src: '/images/home-hero/moda-valoriza-desktop.webp',
+    alt: "Modelo Lurd's Plus Size usando vestido envelope preto",
+    largura: 1821,
+    altura: 864,
+  },
+  imageMobile: {
+    src: '/images/home-hero/moda-valoriza-mobile.webp',
+    alt: "Modelo Lurd's Plus Size usando vestido envelope preto",
+    largura: 992,
+    altura: 1488,
+  },
   eyebrow: homeHero.eyebrow,
   lead: homeHero.lead,
   emphasis: homeHero.emphasis,
@@ -87,11 +99,20 @@ const HERO_ESTATICO: HeroDaHome = {
   daRetaguarda: false,
 };
 
+/**
+ * Arte fechada "Indomável" que estava no ar antes da Home nova. A comparação
+ * é pelo nome imutável do objeto no R2: quando a retaguarda subir outra capa,
+ * a URL muda e o CRM volta a comandar o hero automaticamente.
+ */
+function capaAnteriorDaHome(url: string): boolean {
+  return url.includes('desktop-1786932013421-home-hero-desktop.webp');
+}
+
 export async function getHeroDaHome(): Promise<HeroDaHome> {
   const [banner] = await getBanners('home-hero');
   // Sem foto o hero não existe — título sobre fundo vazio é pior que o
   // estático. Por isso a imagem é a condição, não o título.
-  if (!banner?.imagemUrl) return HERO_ESTATICO;
+  if (!banner?.imagemUrl || capaAnteriorDaHome(banner.imagemUrl)) return HERO_ESTATICO;
 
   /**
    * O tamanho real de cada arte, pra reservar a altura certa antes de ela
