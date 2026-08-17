@@ -28,17 +28,18 @@ import { trackCheckoutValidationError } from '@/lib/tracking';
  * NF-e querem o nome como está no CPF.
  */
 const schema = z.object({
-  firstName: z.string().trim().min(2, 'Digite seu nome.'),
-  lastName: z.string().trim().min(2, 'Digite seu sobrenome.'),
+  // Nome e sobrenome saíram daqui em 17/08 — agora vêm da Identificação.
   email: z.email('Digite um e-mail válido.'),
   cpf: z.string().refine(isValidCpf, 'Confira o CPF — esse número não confere.'),
 });
 
 type FormValues = z.infer<typeof schema>;
 
-export function FinalIdentityStep({ contact, defaults, onDone }: {
+export function FinalIdentityStep({ contact, defaults, metodo, onDone }: {
   contact: CheckoutContact;
   defaults?: CustomerIdentity | null;
+  /** Só pra escrever o rótulo do botão — "Gerar PIX" diz o que vai acontecer. */
+  metodo?: 'pix' | 'card';
   onDone: (customer: CustomerIdentity) => void;
 }) {
   const { register, handleSubmit, setValue, formState: { errors } } = useForm<FormValues>({
@@ -46,8 +47,6 @@ export function FinalIdentityStep({ contact, defaults, onDone }: {
     // Nome já conhecido (etapa 1, ou uma volta atrás) entra dividido: a
     // primeira palavra no nome, o resto no sobrenome.
     defaultValues: {
-      firstName: ((defaults?.name ?? contact.name ?? '').trim().split(/\s+/)[0]) ?? '',
-      lastName: (defaults?.name ?? contact.name ?? '').trim().split(/\s+/).slice(1).join(' '),
       email: defaults?.email ?? '',
       cpf: defaults?.cpf ? maskCpf(defaults.cpf) : '',
     },
@@ -56,28 +55,25 @@ export function FinalIdentityStep({ contact, defaults, onDone }: {
 
   return (
     <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit((values) => onDone({
-      name: [values.firstName.trim(), values.lastName.trim()].join(' '), email: values.email.trim().toLowerCase(), cpf: onlyDigits(values.cpf), phone: contact.phone,
+      name: contact.name, email: values.email.trim().toLowerCase(), cpf: onlyDigits(values.cpf), phone: contact.phone,
     }), (invalid) => trackCheckoutValidationError('identification', Object.keys(invalid)[0] ?? 'unknown'))}>
       <div>
-        <h3 className="font-display text-h4 text-ink">Dados da nota e confirmação</h3>
-        <p className="mt-1 text-small text-ink-muted">Últimos dados antes de conferir e finalizar. Nada é cobrado agora.</p>
+        <h3 className="font-display text-h4 text-ink">Dados da nota</h3>
+        <p className="mt-1 text-small text-ink-muted">Só falta isso. Nada é cobrado agora.</p>
       </div>
-      {/* Lado a lado: ocupam a mesma altura de antes e já dizem, sozinhos,
-          que se espera duas coisas. */}
-      <div className="grid grid-cols-2 gap-3">
-        <Input label="Nome" autoComplete="given-name" enterKeyHint="next"
-          error={errors.firstName?.message} {...register('firstName')} />
-        <Input label="Sobrenome" autoComplete="family-name" enterKeyHint="next"
-          error={errors.lastName?.message} {...register('lastName')} />
-      </div>
-      <p className="-mt-3 text-small text-ink-muted">Como está no seu documento.</p>
+      {/* Nome e sobrenome não aparecem mais aqui: vieram na Identificação. */}
       <Input label="E-mail" type="email" autoComplete="email" inputMode="email" enterKeyHint="next"
         placeholder="voce@email.com" hint="A confirmação e o rastreio chegam por aqui."
         error={errors.email?.message} {...register('email')} />
       <Input label="CPF" inputMode="numeric" enterKeyHint="done" autoComplete="off"
         placeholder="000.000.000-00" hint="Usado somente no pedido e na nota fiscal."
         error={errors.cpf?.message} {...register('cpf', { onChange: (e) => setValue('cpf', maskCpf(e.target.value)) })} />
-      <Button type="submit" block>Revisar meu pedido</Button>
+      {/* UM BOTÃO SÓ, e ele GERA (dono, 17/08: "preencher tudo para só
+          depois gerar o PIX"). Eram dois — "Continuar para a revisão" e
+          "Revisar meu pedido" — com a palavra "revisão" ainda na tela. */}
+      <Button type="submit" block>
+        {metodo === 'pix' ? 'Gerar PIX e finalizar' : 'Finalizar compra'}
+      </Button>
     </form>
   );
 }

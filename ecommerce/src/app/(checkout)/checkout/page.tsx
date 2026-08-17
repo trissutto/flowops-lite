@@ -472,7 +472,7 @@ export default function CheckoutPage() {
                 pagamento e ANTES de gerar — quando o PIX abre, ja esta tudo no
                 jeito, sem mais um clique em "Revisar meu pedido". */}
             {contact && shipping && payment && !customer && (
-              <FinalIdentityStep contact={contact} onDone={(identity) => {
+              <FinalIdentityStep contact={contact} metodo={payment?.method} onDone={(identity) => {
                 setCustomer(identity);
                 const confirmedContact = {
                   name: identity.name,

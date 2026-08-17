@@ -137,11 +137,10 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
                   que perdeu o prazo e abandonar um pedido que ainda vale. */}
               <li>O código vale por 24 horas.</li>
             </ul>
-            <div className="pt-1">
-              <Button type="button" block className="sm:w-auto" onClick={() => confirm({ method: 'pix' })}>
-                Continuar para a revisão
-              </Button>
-            </div>
+            {/* O BOTÃO SAIU DAQUI (dono, 17/08). Ele levava pra uma etapa de
+                revisão que não existe mais: os dados da nota aparecem logo
+                abaixo e o mesmo clique que os confirma gera o PIX. Dois
+                botões em sequência eram um passo inventado. */}
           </div>
         )}
       </div>
