@@ -73,6 +73,7 @@ export default async function HomePage({
         }
         subtitle={hero.subtitle}
         primaryAction={{ label: 'Ver novidades', href: novidadesHref, variant: 'primary' }}
+        secondaryAction={{ label: 'Conhecer nossas lojas', href: storesHref, variant: 'secondary' }}
         height={hero.daRetaguarda ? 'arte' : 'medium'}
         align={hero.daRetaguarda ? 'center' : 'left'}
         overlay={hero.daRetaguarda ? 'none' : 'medium'}
