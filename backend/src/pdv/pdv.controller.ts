@@ -672,18 +672,19 @@ export class PdvController {
   }
 
   /**
-   * POST /pdv/sales/:id/entrega { tipo }
+   * POST /pdv/sales/:id/entrega { tipo, retiradaStoreCode? }
    * FORMA DE ENTREGA da venda online: sedex | pac | motoboy | retirada.
-   * Vira o método do pedido online (retirada = separa na própria loja).
+   * Vira o método do pedido online. `retiradaStoreCode` = ONDE a cliente
+   * retira (só com tipo=retirada); vazio = na própria loja vendedora.
    */
   @Post('sales/:id/entrega')
   setEntrega(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { tipo: string },
+    @Body() body: { tipo: string; entregaStoreCode?: string | null },
   ) {
     this.requireRole(req);
-    return this.svc.setEntrega(id, String(body?.tipo ?? ''));
+    return this.svc.setEntrega(id, String(body?.tipo ?? ''), body?.entregaStoreCode ?? null);
   }
 
   /**
@@ -810,13 +811,23 @@ export class PdvController {
   finalize(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { paymentMethod: string; paymentDetails?: any },
+    @Body()
+    body: {
+      paymentMethod: string;
+      paymentDetails?: any;
+      entregaTipo?: string | null;
+      entregaStoreCode?: string | null;
+    },
   ) {
     this.requireRole(req);
     return this.svc.finalize({
       saleId: id,
       paymentMethod: body?.paymentMethod,
       paymentDetails: body?.paymentDetails,
+      // Entrega da venda online regravada no fechamento — a escolha na tela
+      // é a verdade (o POST /entrega é otimista e pode nunca ter chegado).
+      entregaTipo: body?.entregaTipo ?? null,
+      entregaStoreCode: body?.entregaStoreCode ?? null,
       // Passa storeCode do JWT pra reconciliação automática quando a
       // venda foi criada com loja diferente do caixa atual.
       userStoreCode: req?.user?.storeCode,

@@ -1945,16 +1945,27 @@ function PdvPageInner() {
       if (finResp?.onlineOrder) {
         const oo = finResp.onlineOrder;
         if (oo.fechadoNaLoja) {
+          // MOTOBOY daqui: sai da mão da loja, sem etiqueta/rastreio pra emitir.
           toast(
             'success',
             `Pedido ${oo.wcOrderNumber} — FECHADO AQUI`,
-            `A peça é desta loja: estoque já baixado e nada pra separar. Você entrega direto pra cliente.`,
+            `Motoboy desta loja: estoque já baixado e nada pra separar. Você entrega direto pra cliente.`,
           );
         } else if (oo.autoAtendida) {
+          // SEDEX/PAC/RETIRADA com estoque: o card é a ferramenta — é nele que
+          // ela gera a etiqueta dos Correios ou guarda a peça pro balcão.
           toast(
             'success',
             `${String(oo.storeName || 'Sua loja').toUpperCase()} ATENDE O PEDIDO TODO`,
-            `Separação gerada nesta unidade — pedido ${oo.wcOrderNumber} entrou na fila de pedidos da loja.`,
+            `Pedido ${oo.wcOrderNumber} entrou na fila desta loja — abra o card em Minha Loja pra gerar a etiqueta e imprimir a NF.`,
+          );
+        } else if (oo.lojaEscolhida) {
+          // RETIRADA/MOTOBOY em outra loja: o card já nasceu LÁ, com
+          // transferências das lojas que têm o que faltar. Nada pra fazer aqui.
+          toast(
+            'success',
+            `Pedido ${oo.wcOrderNumber} — card na ${String(oo.lojaEscolhida.name || oo.lojaEscolhida.code).toUpperCase()}`,
+            'A loja escolhida já recebeu a separação. O que ela não tiver chega por transferência antes de entregar. Não mande peça daqui.',
           );
         } else {
           toast(
@@ -3304,6 +3315,7 @@ function PdvPageInner() {
           onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
           hasSeller={!!sale.sellerName}
           onNeedSeller={() => setShowConfirmSale(true)}
+          stores={stores}
         />
       )}
 
@@ -4573,10 +4585,13 @@ function PaymentModal({
   onAutoFlowTriggered,
   hasSeller,
   onNeedSeller,
+  stores = [],
 }: {
   saleId: string;
   total: number;
   storeCode?: string;
+  /** Lojas ativas — seletor "quem atende" da retirada/motoboy na venda online. */
+  stores?: Array<{ code: string; name: string }>;
   customerCpf: string | null;
   customerName?: string | null;
   customerEmail?: string | null;
@@ -4613,6 +4628,13 @@ function PaymentModal({
       try {
         const s = await api<any>(`/pdv/sales/${saleId}`);
         if (Array.isArray(s?.payments)) setPayments(s.payments);
+        // Entrega já gravada (modal reaberto, PIX pendente, F5): mostra o que
+        // está no banco em vez de obrigar a clicar de novo — e evita a tela
+        // dizer "escolha a entrega" com a entrega já escolhida.
+        if (s?.entregaTipo) {
+          setEntregaTipo(s.entregaTipo);
+          setEntregaStoreCode(s.entregaStoreCode || '');
+        }
       } catch { /* sem rede: mantém o estado local */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4689,6 +4711,10 @@ function PaymentModal({
   // Sem isso o pedido online nascia "Correios R$ 0,00" e a matriz não sabia
   // se emitia etiqueta, chamava motoboy ou segurava a peça pra retirada.
   const [entregaTipo, setEntregaTipo] = useState<'sedex' | 'pac' | 'motoboy' | 'retirada' | null>(null);
+  // LOJA QUE ATENDE (17/08) — só pra retirada (onde a cliente busca) e motoboy
+  // (quem sai de moto). '' = esta loja. A loja-canal SITE fecha venda pra
+  // cliente de qualquer cidade: quem atende quase nunca é quem vendeu.
+  const [entregaStoreCode, setEntregaStoreCode] = useState<string>('');
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -5044,6 +5070,24 @@ function PaymentModal({
           'Escolha a forma de entrega',
           'SEDEX, PAC, Motoboy ou Retirada em loja.',
         );
+        return;
+      }
+      /**
+       * GRAVA A ENTREGA ANTES DE CONFIRMAR (17/08). O POST do botão é
+       * otimista (fire-and-forget) — se falhou, ou a venda nem existia no
+       * clique, a tela mostra SEDEX e o banco está vazio: o pedido nascia
+       * "Entrega (não informada)" (ON-000005/006), sem loja de retirada, e a
+       * matriz roteava na mão. Aqui é AGUARDADO: se o servidor recusar (Regra
+       * A do motoboy, loja inválida), a venda não fecha com entrega errada.
+       */
+      try {
+        await api(`/pdv/sales/${saleId}/entrega`, {
+          method: 'POST',
+          body: JSON.stringify({ tipo: entregaTipo, entregaStoreCode: entregaStoreCode || null }),
+        });
+      } catch (e: any) {
+        const h = humanizeError(e);
+        toast('error', 'Entrega não gravada', e?.message || h.hint);
         return;
       }
       /**
@@ -6343,12 +6387,16 @@ function PaymentModal({
                     key={op.id}
                     type="button"
                     onClick={async () => {
+                      // Trocar de forma zera a loja escolhida — SEDEX/PAC não
+                      // têm loja que atende, e retirada→motoboy é outra escolha.
+                      const lojaAtende = op.id === entregaTipo ? entregaStoreCode : '';
                       setEntregaTipo(op.id);
+                      setEntregaStoreCode(lojaAtende);
                       if (!saleId) return;
                       try {
                         await api(`/pdv/sales/${saleId}/entrega`, {
                           method: 'POST',
-                          body: JSON.stringify({ tipo: op.id }),
+                          body: JSON.stringify({ tipo: op.id, entregaStoreCode: lojaAtende || null }),
                         });
                       } catch (e: any) {
                         const h = humanizeError(e);
@@ -6376,15 +6424,58 @@ function PaymentModal({
                   </button>
                 ))}
               </div>
-              {entregaTipo === 'retirada' && (
-                <p className="text-[10px] text-teal-700 mt-1 font-semibold">
-                  A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.
-                </p>
-              )}
-              {entregaTipo === 'motoboy' && (
-                <p className="text-[10px] text-teal-700 mt-1 font-semibold">
-                  Motoboy sai desta loja: a peça já baixa aqui e ninguém mais separa. Só vale se você tem tudo na arara.
-                </p>
+
+              {/* LOJA QUE ATENDE (17/08) — retirada: onde a cliente busca;
+                  motoboy: quem sai de moto. Padrão = esta loja. A loja-canal
+                  SITE vende pra cliente de qualquer cidade e não tem balcão
+                  nem moto — sem isto o pedido nascia "retira NA LOJA 13" e a
+                  matriz roteava na mão (ON-000006, 2 dias parado). */}
+              {(entregaTipo === 'retirada' || entregaTipo === 'motoboy') && (
+                <div className="mt-2">
+                  <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                    {entregaTipo === 'retirada' ? 'Cliente retira em qual loja?' : 'Qual loja manda o motoboy?'}
+                  </label>
+                  <select
+                    value={entregaStoreCode}
+                    onChange={async (e) => {
+                      const code = e.target.value;
+                      const anterior = entregaStoreCode;
+                      setEntregaStoreCode(code);
+                      if (!saleId) return;
+                      try {
+                        await api(`/pdv/sales/${saleId}/entrega`, {
+                          method: 'POST',
+                          body: JSON.stringify({ tipo: entregaTipo, entregaStoreCode: code || null }),
+                        });
+                      } catch (err: any) {
+                        // Voltou pra "esta loja" e o servidor recusou (Regra A
+                        // do motoboy sem estoque aqui): desfaz a escolha.
+                        setEntregaStoreCode(anterior);
+                        const h = humanizeError(err);
+                        toast('error', h.title, err?.message || h.hint);
+                      }
+                    }}
+                    className="mt-1 w-full rounded-lg border-2 border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-teal-400 focus:outline-none"
+                  >
+                    <option value="">🏬 Esta loja ({storeCode})</option>
+                    {stores
+                      .filter((s) => s.code !== storeCode)
+                      .map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {s.name} ({s.code})
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[10px] text-teal-700 mt-1 font-semibold">
+                    {entregaTipo === 'retirada'
+                      ? entregaStoreCode
+                        ? 'O card nasce na loja escolhida. O que ela não tiver chega por transferência antes da cliente buscar.'
+                        : 'A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.'
+                      : entregaStoreCode
+                        ? 'O card nasce na loja escolhida: ela separa (recebe por transferência o que faltar) e manda o motoboy.'
+                        : 'Motoboy sai desta loja: a peça já baixa aqui e ninguém mais separa. Só vale se você tem tudo na arara.'}
+                  </p>
+                </div>
               )}
             </div>
 
