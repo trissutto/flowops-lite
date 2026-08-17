@@ -33,6 +33,8 @@ import { applyCoupon } from '@/lib/commerce/cupom';
 import { pixDiscount } from '@/lib/commerce/pix';
 import { resolverFrete, type FreteResolvido } from '@/lib/commerce/frete-server';
 import { campoDoZod } from '@/lib/orders/campo-reprovado';
+import { getPublicPromotion } from '@/services/promotion';
+import { previewBuyFourPayThree } from '@/lib/commerce/buy-four-pay-three';
 import { getOrderStore, OrderStoreError, type NewOrderPayload } from '@/lib/orders/store';
 import { formatPrice } from '@/lib/utils';
 import type { CreateOrderResult, Order } from '@/types/checkout';
@@ -255,6 +257,19 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   /* ── RECÁLCULO SERVER-SIDE — a primeira barreira ── */
 
   const subtotal = round2(input.items.reduce((soma, l) => soma + l.unitPrice * l.quantity, 0));
+  const promotionConfig = await getPublicPromotion();
+  const promotionPreview = previewBuyFourPayThree(
+    input.items.map((line) => ({
+      productId: line.productId,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+    })),
+  );
+  const promotionApplied =
+    promotionConfig.enabled &&
+    promotionConfig.mode === 'buy_4_pay_3' &&
+    promotionPreview.applied;
+  const promotionDiscount = promotionApplied ? promotionPreview.discountValue : 0;
 
   // Cupom: mesma função da sacola, rodando AQUI (env CUPONS_JSON tem
   // precedência no server). Cupom inválido derruba o pedido com a mensagem
@@ -263,6 +278,16 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   let couponKind: 'percent' | 'fixed' | 'shipping' | undefined;
   let couponCode: string | undefined;
   if (input.couponCode) {
+    if (promotionApplied) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'A promoção Leve 4, Pague 3 não acumula com cupom. Remova o cupom e tente novamente.',
+          code: 'coupon_invalid',
+        },
+        { status: 400 },
+      );
+    }
     const cupom = applyCoupon(input.couponCode, subtotal);
     if (!cupom.ok) {
       return NextResponse.json({ ok: false, error: cupom.message, code: 'coupon_invalid' }, { status: 400 });
@@ -364,9 +389,11 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
    * A base é o subtotal já sem o cupom — dois descontos não se somam sobre o
    * valor cheio.
    */
-  const descontoPix = pixDiscount(subtotal - discount, input.paymentMethod);
+  const descontoPix = promotionApplied
+    ? 0
+    : pixDiscount(subtotal - discount, input.paymentMethod);
 
-  const total = round2(subtotal - discount - descontoPix + shippingPrice);
+  const total = round2(subtotal - discount - descontoPix - promotionDiscount + shippingPrice);
   if (total <= 0) {
     return NextResponse.json(
       {
@@ -439,7 +466,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     })),
     couponCode,
     subtotal,
-    discount,
+    discount: round2(discount + descontoPix + promotionDiscount),
     shippingPrice,
     total: totalInformado,
     payment: {

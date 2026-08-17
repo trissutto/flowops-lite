@@ -1,5 +1,5 @@
 import { Hero } from '@/components/sections/Hero';
-import { HomeBenefitsAndStores, HomeCategoryNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
+import { HomeBenefitsAndStores, HomeCategoryNav, HomeComfortBanner, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
 import { ProductCarousel } from '@/components/sections/ProductCarousel';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -39,8 +39,9 @@ export default async function HomePage({
   /**
    * OS BLOCOS DA HOME VÊM DA RETAGUARDA (17/08/2026) — atalhos e vitrines,
    * na ordem que `/retaguarda/vitrines-home` definir. Uma requisição só, e
-   * ela já traz as peças de cada carrossel; backend fora do ar cai na home
-   * que está no ar hoje. Ver `services/vitrines-home.ts`.
+   * ela já traz as peças de cada carrossel (antes era uma por carrossel:
+   * Mais Top + Novidades); backend fora do ar cai na home que está no ar
+   * hoje. Ver `services/vitrines-home.ts`.
    *
    * Continua tudo JUNTO com o hero: a cascata "hero → vitrine" atrasava o
    * HTML que revela a imagem LCP.
@@ -57,6 +58,12 @@ export default async function HomePage({
   }));
   const novidadesHref = href(HOME_NEWS_PATH);
   const storesHref = href(HOME_STORES_PATH);
+  const sizeLinks = ['46', '48', '50', '52', '54', '56', '58', '60'].map((size) => ({
+    size,
+    href: href(`/tamanhos/${size}`),
+  }));
+  // As peças de TODAS as vitrines que saírem — o Google lê a lista da página
+  // que existe, não a de uma seção fixa que pode nem estar mais na home.
   const jsonLd = jsonLdGraph(
     itemListSchema(blocos.carrosseis.flatMap((v) => v.produtos), 'Destaques da home'),
     ...stores.map(storeSchema),
@@ -97,8 +104,10 @@ export default async function HomePage({
         <HomeStoreCta storesHref={storesHref} className="flex" />
       </div>
 
-      {/* AS VITRINES, NA ORDEM DA RETAGUARDA. Vitrine sem peça não chega aqui
-          (o backend já tira): carrossel vazio é pior que uma seção a menos. */}
+      {/* AS VITRINES, NA ORDEM DA RETAGUARDA — hoje Mais Top da semana e
+          Novidades, que antes eram duas seções escritas à mão aqui. Vitrine
+          sem peça não chega até aqui (o backend já tira): carrossel vazio é
+          pior que uma seção a menos. */}
       {blocos.carrosseis.map((vitrine) => (
         <Section
           key={vitrine.id}
@@ -130,6 +139,10 @@ export default async function HomePage({
           </div>
         </Section>
       ))}
+
+      <HomeSizeNav sizes={sizeLinks} />
+
+      <HomeComfortBanner href={href('/busca?q=conforto')} />
 
       <HomeBenefitsAndStores storesHref={storesHref} />
 

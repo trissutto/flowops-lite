@@ -72,15 +72,23 @@ const SEMENTE: Array<VitrineInput & { bloco: BlocoHome; tipo: TipoVitrine; chave
   { bloco: 'atalho', tipo: 'categoria', chave: 'blusas', titulo: 'Blusas', ordem: 2 },
   { bloco: 'atalho', tipo: 'categoria', chave: 'conjuntos', titulo: 'Conjuntos', ordem: 3 },
   { bloco: 'atalho', tipo: 'categoria', chave: 'calcas', titulo: 'Calças', ordem: 4 },
-  { bloco: 'atalho', tipo: 'promocao', chave: '', titulo: 'Outlet', ordem: 5 },
+  { bloco: 'atalho', tipo: 'categoria', chave: 'macacoes', titulo: 'Macacões', ordem: 5 },
+  { bloco: 'atalho', tipo: 'categoria', chave: 'lingerie', titulo: 'Lingerie', ordem: 6 },
+  { bloco: 'atalho', tipo: 'categoria', chave: 'moda-praia', titulo: 'Moda praia', ordem: 7 },
+  { bloco: 'atalho', tipo: 'promocao', chave: '', titulo: 'Outlet', ordem: 8 },
 
-  // O único carrossel da home nova. As outras quatro vitrines saíram em
-  // 15/08 ("evita atrasar o hero com quatro vitrines repetidas") — voltam
-  // pelo botão "Adicionar vitrine", não por padrão.
+  // Os dois carrosséis da home nova, nesta ordem. As quatro vitrines por
+  // categoria saíram em 15/08 ("evita atrasar o hero com quatro vitrines
+  // repetidas") — voltam pelo botão "Adicionar vitrine", não por padrão.
+  {
+    bloco: 'carrossel', tipo: 'colecao', chave: 'mais-top-da-semana',
+    eyebrow: 'Escolhas da semana', titulo: 'Mais Top da semana',
+    ctaLabel: 'Ver seleção', limite: 10, ordem: 1,
+  },
   {
     bloco: 'carrossel', tipo: 'novidades', chave: '',
     eyebrow: 'Acabou de chegar', titulo: 'Novidades da semana', tituloMobile: 'Novidades',
-    ctaLabel: 'Ver todas', limite: 10, ordem: 1,
+    ctaLabel: 'Ver todas', limite: 10, ordem: 2,
   },
 ];
 

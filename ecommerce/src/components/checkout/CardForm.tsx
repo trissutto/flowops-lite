@@ -52,13 +52,7 @@ const PAGARME_TOKENS_URL = 'https://api.pagar.me/core/v5/tokens';
 interface CardFormProps {
   /** Total estimado do pedido (o server recalcula — isto é só exibição). */
   total: number;
-  /**
-   * Pedido em voo no BFF (POST /api/checkout, até 15s). Sem isto o botão
-   * voltava a "Pagar R$ X com cartão" assim que a tokenização (~1s) acabava,
-   * enquanto a cobrança ainda rodava — a cliente via "nada aconteceu", tocava
-   * de novo (re-tokenizava à toa; a página engolia calada) e, quando a recusa
-   * chegava, já tinha desistido. Ver `enviandoRef` na página do checkout.
-   */
+  /** Pedido em processamento no checkout; impede um segundo envio. */
   enviando?: boolean;
   onDone: (payment: { method: 'card'; installments: number; cardToken?: string }) => void;
 }
@@ -218,18 +212,10 @@ export function CardForm({ total, enviando = false, onDone }: CardFormProps) {
       )}
 
       <div className="pt-1">
-        {/* `finalizar()` liga `submitting` no mesmo tick em que o `finally`
-            da tokenização desliga `tokenizando` (React agrupa os dois): o
-            rótulo vai direto de "Validando cartão…" pra "Enviando pedido…"
-            sem passar pelo botão normal no meio. */}
         <Button type="submit" block className="sm:w-auto" disabled={tokenizando || enviando}>
           {/* O clique aqui É a compra (17/08). "Continuar" prometia um
               passo a mais que não existe. */}
-          {tokenizando
-            ? 'Validando cartão…'
-            : enviando
-              ? 'Enviando pedido…'
-              : `Pagar ${formatPrice(total)} com cartão`}
+          {tokenizando ? 'Validando cartão…' : enviando ? 'Finalizando pedido…' : `Pagar ${formatPrice(total)} com cartão`}
         </Button>
       </div>
     </form>

@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { CreditCard, MapPin, PackageCheck, RefreshCw, WalletCards } from 'lucide-react';
+import { ArrowRight, CreditCard, MapPin, PackageCheck, RefreshCw, WalletCards } from 'lucide-react';
 import { AppLink } from '@/components/ui/AppLink';
 import { trackStoreLocator, trackViewCollection } from '@/lib/tracking';
 import { cn } from '@/lib/utils';
@@ -32,9 +32,9 @@ export function HomeCategoryNav({ categories }: { categories: HomeCategory[] }) 
           <span className="h-px flex-1 bg-primary/35" />
         </div>
 
-        <ul className="mt-6 flex gap-4 overflow-x-scroll pb-3 sm:mx-auto sm:grid sm:max-w-4xl sm:grid-cols-5 sm:gap-5 sm:overflow-visible sm:pb-0">
+        <ul className="mt-6 flex gap-4 overflow-x-scroll pb-3 sm:mx-auto sm:flex sm:max-w-6xl sm:justify-center sm:overflow-x-auto sm:pb-3">
           {categories.map((category) => (
-            <li key={category.name} className="w-[18%] shrink-0 sm:w-auto">
+            <li key={category.name} className="w-[18%] shrink-0 sm:w-28">
               <AppLink
                 href={category.href}
                 onClick={() => trackViewCollection(`Home — ${category.name}`)}
@@ -64,6 +64,49 @@ export function HomeCategoryNav({ categories }: { categories: HomeCategory[] }) 
         </ul>
       </div>
     </nav>
+  );
+}
+
+export function HomeSizeNav({ sizes }: { sizes: Array<{ size: string; href: string }> }) {
+  return (
+    <nav aria-labelledby="home-sizes-title" className="bg-champagne/45 py-8 sm:py-12">
+      <div className="mx-auto max-w-5xl px-4 sm:px-6">
+        <div className="text-center">
+          <p className="eyebrow text-primary-strong">Encontre seu tamanho</p>
+          <h2 id="home-sizes-title" className="mt-2 font-display text-h3 text-ink">Compre do 46 ao 60</h2>
+        </div>
+        <ul className="mt-6 grid grid-cols-4 gap-2 sm:grid-cols-8 sm:gap-3">
+          {sizes.map(({ size, href }) => (
+            <li key={size}>
+              <AppLink
+                href={href}
+                className="flex min-h-12 items-center justify-center rounded-md border border-primary/25 bg-surface text-sm font-medium text-ink transition-colors hover:border-primary hover:bg-primary hover:text-light"
+              >
+                {size}
+              </AppLink>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </nav>
+  );
+}
+
+export function HomeComfortBanner({ href }: { href: string }) {
+  return (
+    <section className="bg-surface px-4 py-8 sm:px-6 sm:py-14" aria-labelledby="home-comfort-title">
+      <AppLink href={href} className="group mx-auto grid max-w-6xl overflow-hidden rounded-lg bg-champagne sm:grid-cols-2">
+        <div className="relative min-h-64 sm:order-2 sm:min-h-80">
+          <Image src="/categorias/blusas.webp" alt="Moda plus size confortável para todos os dias" fill sizes="(max-width: 640px) 100vw, 50vw" className="object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
+        </div>
+        <div className="flex flex-col items-start justify-center p-7 sm:p-12">
+          <p className="eyebrow text-primary-strong">Linha conforto</p>
+          <h2 id="home-comfort-title" className="mt-3 font-display text-h2 text-ink">Leveza para acompanhar seu dia</h2>
+          <p className="mt-4 max-w-md text-body font-light text-ink-soft">Modelagens confortáveis, tecidos macios e o caimento que valoriza você.</p>
+          <span className="mt-7 inline-flex items-center gap-2 text-xs font-medium tracking-[0.14em] text-ink uppercase">Conhecer a seleção <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" /></span>
+        </div>
+      </AppLink>
+    </section>
   );
 }
 

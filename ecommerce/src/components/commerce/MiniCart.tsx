@@ -20,6 +20,9 @@ import {
 } from '@/lib/tracking';
 import { cn, formatPrice } from '@/lib/utils';
 import type { CartLine } from '@/types';
+import type { PublicPromotionConfig } from '@/types/promotion';
+import { previewBuyFourPayThree } from '@/lib/commerce/buy-four-pay-three';
+import { PromotionProgress } from '@/components/commerce/PromotionProgress';
 
 /**
  * MINI-CART — o drawer da sacola. Abre pelo ícone do header e sozinho ao
@@ -57,6 +60,25 @@ export function MiniCart() {
   const lines = mounted ? rawLines : [];
   const count = lines.reduce((sum, l) => sum + l.quantity, 0);
   const subtotal = lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
+  const [promotion, setPromotion] = useState<PublicPromotionConfig | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetch('/api/promotion')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => active && setPromotion(data))
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+  const promotionPreview = useMemo(
+    () => previewBuyFourPayThree(lines.map((line) => ({
+      productId: line.productId,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+    }))),
+    [lines],
+  );
+  const promotionActive = Boolean(promotion?.enabled && promotion.mode === 'buy_4_pay_3');
+  const promotionApplied = promotionActive && promotionPreview.applied;
 
   /* ----------------------------------------------------------------- cupom */
   const [codigoDigitado, setCodigoDigitado] = useState('');
@@ -68,7 +90,15 @@ export function MiniCart() {
     () => (couponCode ? applyCoupon(couponCode, subtotal) : null),
     [couponCode, subtotal],
   );
-  const desconto = cupomAplicado?.ok ? cupomAplicado.discount : 0;
+  const descontoCupom = promotionApplied ? 0 : cupomAplicado?.ok ? cupomAplicado.discount : 0;
+  const descontoPromocao = promotionApplied ? promotionPreview.discountValue : 0;
+
+  useEffect(() => {
+    if (!promotionApplied || !couponCode) return;
+    trackCouponRemoved(couponCode);
+    setCoupon(null);
+    setAvisoCupom({ ok: true, texto: 'Cupom removido: esta promoção não acumula com outros descontos.' });
+  }, [promotionApplied, couponCode, setCoupon]);
 
   function aplicarCupom() {
     const resultado = applyCoupon(codigoDigitado, subtotal);
@@ -102,7 +132,7 @@ export function MiniCart() {
    */
   const precoFrete: number | undefined = undefined;
 
-  const total = Math.max(0, subtotal - desconto) + (precoFrete ?? 0);
+  const total = Math.max(0, subtotal - descontoCupom - descontoPromocao) + (precoFrete ?? 0);
 
   /* -------------------------------------------------------------- tracking */
   // view_cart no momento em que o drawer ABRE com itens — abrir é "ver a
@@ -180,6 +210,7 @@ export function MiniCart() {
         <div className="flex flex-col gap-6">
           {/* Barra do frete grátis — mesma peça usada na página da sacola. */}
           <ProgressoFreteGratis subtotal={subtotal} />
+          {promotionActive && <PromotionProgress preview={promotionPreview} />}
 
           {/* Linhas */}
           <ul className="flex flex-col divide-y divide-border">
@@ -192,7 +223,11 @@ export function MiniCart() {
 
           {/* Cupom compacto */}
           <div className="border-t border-border pt-5">
-            {couponCode && cupomAplicado ? (
+            {promotionApplied ? (
+              <p className="text-small text-ink-soft">
+                Cupom indisponível: a peça de menor valor já será grátis.
+              </p>
+            ) : couponCode && cupomAplicado ? (
               <div className="flex items-start justify-between gap-3">
                 <p
                   className={cn(
@@ -257,10 +292,16 @@ export function MiniCart() {
               <dt className="font-light text-ink-soft">Subtotal</dt>
               <dd className="tabular text-ink">{formatPrice(subtotal)}</dd>
             </div>
-            {desconto > 0 && (
+            {descontoCupom > 0 && (
               <div className="flex justify-between">
                 <dt className="font-light text-ink-soft">Desconto ({couponCode})</dt>
-                <dd className="tabular text-ink">−{formatPrice(desconto)}</dd>
+                <dd className="tabular text-ink">−{formatPrice(descontoCupom)}</dd>
+              </div>
+            )}
+            {descontoPromocao > 0 && (
+              <div className="flex justify-between text-success">
+                <dt className="font-medium">Peça grátis — Leve 4, Pague 3</dt>
+                <dd className="tabular">−{formatPrice(descontoPromocao)}</dd>
               </div>
             )}
             <div className="flex justify-between">

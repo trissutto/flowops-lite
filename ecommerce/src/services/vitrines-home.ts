@@ -1,7 +1,7 @@
 import 'server-only';
 import { api } from '@/lib/api';
 import { mapPeca, type PecaApi } from '@/services/products';
-import { fetchVitrine } from '@/services/vitrine';
+import { fetchMaisTopDaSemana, fetchVitrine } from '@/services/vitrine';
 import { HOME_CATEGORY_BASE } from '@/data/home';
 import type { Product } from '@/types';
 
@@ -81,27 +81,34 @@ function atalhosPadrao(): AtalhoHome[] {
   return HOME_CATEGORY_BASE.map(({ path, ...c }) => ({ ...c, href: path }));
 }
 
-const VITRINE_PADRAO = {
-  eyebrow: 'Acabou de chegar',
-  titulo: 'Novidades da semana',
-  tituloMobile: 'Novidades',
-  ctaLabel: 'Ver todas',
-  ctaHref: '/novidades',
-};
-
+/** Os dois carrosséis que estão no ar, na ordem: Mais Top e depois Novidades. */
 async function vitrinesPadrao(): Promise<VitrineHome[]> {
-  const produtos = await fetchVitrine({ ordenar: 'novidades', limite: 10, soNovidade: true });
-  if (!produtos.length) return [];
-  return [{
-    id: 'padrao-novidades',
-    titulo: VITRINE_PADRAO.titulo,
-    tituloMobile: VITRINE_PADRAO.tituloMobile,
-    eyebrow: VITRINE_PADRAO.eyebrow,
-    descricao: null,
-    ctaLabel: VITRINE_PADRAO.ctaLabel,
-    ctaHref: VITRINE_PADRAO.ctaHref,
-    produtos,
-  }];
+  const [maisTop, novidades] = await Promise.all([
+    fetchMaisTopDaSemana(),
+    fetchVitrine({ ordenar: 'novidades', limite: 10, soNovidade: true }),
+  ]);
+  return [
+    {
+      id: 'padrao-mais-top',
+      titulo: 'Mais Top da semana',
+      tituloMobile: null,
+      eyebrow: 'Escolhas da semana',
+      descricao: null,
+      ctaLabel: 'Ver seleção',
+      ctaHref: '/mais-top-da-semana',
+      produtos: maisTop.slice(0, 10),
+    },
+    {
+      id: 'padrao-novidades',
+      titulo: 'Novidades da semana',
+      tituloMobile: 'Novidades',
+      eyebrow: 'Acabou de chegar',
+      descricao: null,
+      ctaLabel: 'Ver todas',
+      ctaHref: '/novidades',
+      produtos: novidades,
+    },
+  ].filter((v) => v.produtos.length > 0);
 }
 
 export async function getBlocosDaHome(): Promise<{ atalhos: AtalhoHome[]; carrosseis: VitrineHome[] }> {
