@@ -192,6 +192,21 @@ export class PickOrdersService {
     if (!pick) throw new NotFoundException('Pick-order não encontrado');
     if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
     if (pick.status === 'shipped') throw new BadRequestException('Pedido já enviado.');
+    /**
+     * MOTOBOY NÃO GERA ETIQUETA (17/08). O botão azul do card era o único
+     * caminho visível e a loja clicava nele pra "sair da tela": nascia uma
+     * pré-postagem SEDEX de verdade (o serviço caía no fallback por UF) e,
+     * com NFE_ENVIO_ENABLED, uma NF-e de envio — pra um pacote que ia de
+     * moto. Custo real e etiqueta órfã. Mesmo guard que a retirada já tinha.
+     */
+    {
+      const ordemDoPick = await this.prisma.order.findUnique({ where: { id: pick.orderId }, select: { checkoutInfo: true, shippingMethod: true } });
+      let kind = '';
+      try { kind = String(JSON.parse(ordemDoPick?.checkoutInfo || '{}')?.shipping?.kind || ''); } catch { /* sem checkoutInfo */ }
+      if (kind === 'motoboy' || /motoboy/i.test(String(ordemDoPick?.shippingMethod || ''))) {
+        throw new BadRequestException('Entrega por motoboy não gera etiqueta dos Correios. Use "Entregue por motoboy" quando a peça sair.');
+      }
+    }
     // ── IDEMPOTÊNCIA (28/07: 17 pré-postagens do MESMO pedido no Mais Envios,
     // uma por clique enquanto o request anterior pendurava) ──────────────────
     // Já tem rastreio? devolve o existente — NUNCA cria outra pré-postagem.
@@ -2661,8 +2676,17 @@ export class PickOrdersService {
     if (input.status === 'shipped') {
       const code = (input.trackingCode ?? '').trim();
       const carrier = (input.carrier ?? '').trim();
-      if (!code) throw new BadRequestException('Código de rastreio é obrigatório');
       if (!carrier) throw new BadRequestException('Transportadora é obrigatória');
+      /**
+       * MOTOBOY E RETIRADA NÃO TÊM RASTREIO — e nem por isso deixam de ser
+       * entrega concluída (17/08). Até aqui o shipped exigia código sempre,
+       * então a loja que entregou de moto ou entregou na mão da cliente
+       * ficava com o card preso em "PRONTO P/ POSTAR" pra sempre — ou
+       * inventava um código ("MOTOBOY", "AAAAA") pra fechar, e a cliente
+       * recebia e-mail com rastreio falso. Caso real: ON-000003.
+       */
+      const semRastreio = /^(motoboy|retirada)$/i.test(carrier);
+      if (!code && !semRastreio) throw new BadRequestException('Código de rastreio é obrigatório');
     }
 
     const updated = await this.prisma.pickOrder.update({
@@ -3039,7 +3063,9 @@ export class PickOrdersService {
     // 'pdv_online' entra aqui junto (14/08): a venda online do PDV nasceu muda
     // — a cliente é atendida no WhatsApp da vendedora, mas o código de
     // rastreio ninguém mandava. Mesmo trilho, mesma trava.
-    if ((order.source === 'ecommerce' || order.source === 'pdv_online') && input.trackingCode) {
+    // Sem código (motoboy/retirada) não há rastreio pra avisar — o aviso de
+    // "saiu pra entrega" fica com a vendedora, que já fala com a cliente.
+    if ((order.source === 'ecommerce' || order.source === 'pdv_online') && input.trackingCode?.trim()) {
       try {
         const venceu = await (this.prisma as any).order.updateMany({
           where: { id: order.id, rastreioAvisadoEm: null },

@@ -1287,6 +1287,10 @@ export default function MinhaLojaPage() {
               onStart={() => transitionStatus(row, 'separating')}
               onBip={() => setShowBipModal(row)}
               onShip={() => setShowShippedModal(row)}
+              onEntregaSemRastreio={(modo) => {
+                const q = modo === 'Motoboy' ? 'Confirmar: a peça SAIU com o motoboy?' : 'Confirmar: a cliente RETIROU a peça na loja?';
+                if (confirm(q)) void submitShipped(row, '', modo);
+              }}
               onCorreios={() => gerarEnvioCorreios(row)}
               onReabrir={() => reabrirEnvio(row)}
               onEditarEndereco={() => setEditandoEndereco(row)}
@@ -1949,12 +1953,13 @@ function LiveBipModal({
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onPrint, onReportIssue, onSeen, onSwapItem, onEditarEndereco,
+  row, onStart, onBip, onShip, onEntregaSemRastreio, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onPrint, onReportIssue, onSeen, onSwapItem, onEditarEndereco,
 }: {
   row: PickOrderRow;
   onStart: () => void;
   onBip: () => void;
   onShip: () => void;
+  onEntregaSemRastreio: (modo: 'Motoboy' | 'Retirada') => void;
   onCorreios: () => Promise<void> | void;
   onReabrir: () => void;
   onEditarEndereco: () => void;
@@ -1969,7 +1974,16 @@ function PickOrderCard({
   const items = order.items ?? [];
   // Pode gerar envio Correios: qualquer pedido que NÃO é retirada em loja
   // (live E site). Retirada não posta.
-  const podeGerarEnvio = !order.isPickup;
+  /**
+   * MOTOBOY É O TERCEIRO MUNDO (17/08). O card só conhecia "posta nos
+   * Correios" ou "retirada", e motoboy caía no primeiro: o único botão azul
+   * gerava etiqueta SEDEX de verdade, e o outro exigia rastreio que não
+   * existe. A loja fechava inventando um código. Agora motoboy e retirada
+   * têm o botão que diz o que aconteceu, e nenhum dos dois posta.
+   */
+  const tipoEntrega = classifyShipping(order.shippingMethod ?? null, null).kind;
+  const ehMotoboy = tipoEntrega === 'motoboy';
+  const podeGerarEnvio = !order.isPickup && !ehMotoboy;
   const [corrBusy, setCorrBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
@@ -2287,8 +2301,19 @@ function PickOrderCard({
             </div>
           </div>
         )}
-        {/* Retirada em loja (não posta) OU fallback manual → envio com rastreio digitado */}
-        {(status === 'separated' || status === 'ready') && (order.isPickup || !row.trackingCode) && (
+        {/* Motoboy → saiu com o motoboy. Retirada → a cliente levou. Nenhum dos
+            dois tem rastreio, e o backend aceita shipped sem código nesses casos. */}
+        {(status === 'separated' || status === 'ready') && (ehMotoboy || order.isPickup) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onEntregaSemRastreio(ehMotoboy ? 'Motoboy' : 'Retirada'); }}
+            title={ehMotoboy ? 'A peça saiu com o motoboy — fecha o pedido sem rastreio' : 'A cliente levou a peça — fecha o pedido sem rastreio'}
+            className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
+          >
+            {ehMotoboy ? '🛵 Entregue por motoboy' : '🏬 Cliente retirou'}
+          </button>
+        )}
+        {/* Fallback manual → envio com rastreio digitado (só quem posta) */}
+        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !row.trackingCode && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
             title="Digitar o rastreio manualmente (fallback se o Gerar envio falhar)"

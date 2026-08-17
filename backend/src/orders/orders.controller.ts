@@ -22,7 +22,10 @@ import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocomm
  * discorda da lista faz a operação achar que perdeu pedido.
  */
 export const STATUS_LOCAL_POR_ABA: Record<string, string[]> = {
-  processing: ['processing'],
+  // 'pending' entra em Processando (17/08): o Recalcular sem loja
+  // alternativa deixava o pedido nativo em pending — status que nenhuma
+  // aba conhecia. O ON- sumia da fila inteira com o dinheiro já na conta.
+  processing: ['processing', 'pending'],
   separacao: ['separating'],
   'em-separacao': ['separating'],
   completed: ['shipped', 'delivered'],
