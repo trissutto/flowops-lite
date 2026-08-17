@@ -40,8 +40,14 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
     // palavra no nome, o resto no sobrenome.
     defaultValues: defaults
       ? {
-          firstName: (defaults.name ?? '').trim().split(/s+/)[0] ?? '',
-          lastName: (defaults.name ?? '').trim().split(/s+/).slice(1).join(' '),
+          // ⚠️ `/\s+/` COM A BARRA. Sem ela o regex parte na LETRA "s":
+          // "Thiago Rissutto" virava "Thiago Ri" + "utto", e o nome quebrado
+          // ia pro pedido E pro registro de carrinho abandonado. Pior ainda
+          // em nome sem "s" ("Maria Silva"): o sobrenome saía vazio e o zod
+          // travava a cliente pedindo um campo que ela já tinha preenchido.
+          // TypeScript não pega — /s+/ é regex válida. Bug de 17/08.
+          firstName: (defaults.name ?? '').trim().split(/\s+/)[0] ?? '',
+          lastName: (defaults.name ?? '').trim().split(/\s+/).slice(1).join(' '),
           phone: maskPhone(defaults.phone),
           recoveryConsent: defaults.recoveryConsent,
         }

@@ -30,7 +30,13 @@ export class AbandonedCartsService {
   private enforceCaptureLimit(key: string, max: number, windowMs = 60_000) {
     const now = Date.now();
     const recent = (this.captureHits.get(key) ?? []).filter((at) => now - at < windowMs);
-    if (recent.length >= max) throw new HttpException('Muitas tentativas', HttpStatus.TOO_MANY_REQUESTS);
+    if (recent.length >= max) {
+      // O site engole o erro pra não travar o checkout, então SEM este log
+      // um descarte em massa é invisível: o relatório só para de ganhar
+      // linhas e ninguém sabe por quê.
+      this.logger.warn(`[carrinho] captura descartada por limite: ${key} (${recent.length}/${max} em ${windowMs}ms)`);
+      throw new HttpException('Muitas tentativas', HttpStatus.TOO_MANY_REQUESTS);
+    }
     recent.push(now);
     this.captureHits.set(key, recent);
     if (this.captureHits.size > 5_000) {
@@ -40,14 +46,49 @@ export class AbandonedCartsService {
     }
   }
 
+  /**
+   * ACEITA AS DUAS FORMAS DE NOME DE CHAVE — e é por isso que existe.
+   *
+   * A lista de permitidos só tinha `utm_source`, `utm_medium`… e o site manda
+   * `{ source, medium, campaign, term, content, id, gclid, fbclid }` (é o que
+   * `captureAttribution()` monta, e é a mesma forma que o caminho do PEDIDO
+   * usa). A interseção era VAZIA: o laço nunca casava nada, a coluna
+   * `attribution` nascia e morria NULL, e a tela lia `utm_campaign` de um
+   * objeto inexistente — sempre null. Ou seja: NUNCA foi possível saber de
+   * qual campanha veio um carrinho abandonado.
+   *
+   * Mesma família do bug já catalogado em [utm-podado-antes-de-gravar]:
+   * lista de permitidos que não bate com quem manda poda tudo CALADA.
+   *
+   * Grava sempre na forma longa (`utm_*`), que é o que a tela já espera.
+   */
   private sanitizeAttribution(value: unknown): Record<string, string> | undefined {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-    const allowed = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_id', 'utm_content', 'utm_term'];
+    const v = value as Record<string, unknown>;
     const result: Record<string, string> = {};
-    for (const key of allowed) {
-      const raw = (value as any)[key];
-      if (typeof raw === 'string' && raw.trim()) result[key] = raw.trim().slice(0, 200);
-    }
+
+    const por = (destino: string, ...origens: string[]) => {
+      for (const o of origens) {
+        const raw = v[o];
+        if (typeof raw === 'string' && raw.trim()) {
+          result[destino] = raw.trim().slice(0, 200);
+          return;
+        }
+      }
+    };
+
+    por('utm_source', 'source', 'utm_source');
+    por('utm_medium', 'medium', 'utm_medium');
+    por('utm_campaign', 'campaign', 'utm_campaign');
+    por('utm_id', 'id', 'utm_id');
+    por('utm_content', 'content', 'utm_content');
+    por('utm_term', 'term', 'utm_term');
+    // Estes três são o que LIGA o carrinho ao clique do anúncio — sem eles
+      // não há como casar gasto com abandono.
+    por('gclid', 'gclid');
+    por('fbclid', 'fbclid');
+    por('landing_page', 'landing_page');
+
     return Object.keys(result).length ? result : undefined;
   }
 
@@ -58,7 +99,19 @@ export class AbandonedCartsService {
     if (sessionId.length < 8 || nome.length < 2 || !/^\d{10,11}$/.test(telefone)) {
       throw new BadRequestException('Contato inválido');
     }
-    this.enforceCaptureLimit(`ip:${clientIp}`, 30);
+    /**
+     * ⚠️ O TETO DE IP NÃO É POR PESSOA. A captura vem de um fetch
+     * server-side do BFF na Vercel, que não repassa `x-forwarded-for`, e o
+     * Nest não liga `trust proxy` — então `clientIp` é a BORDA do Railway,
+     * um valor constante. O balde era UM SÓ pro site inteiro: 30 capturas
+     * por minuto no total, e a 31ª virava 429 descartado em silêncio. Num
+     * pico de live ou promoção isso derruba captura legítima em massa.
+     *
+     * Enquanto o IP real não chega aqui, o teto sobe pra um valor que só
+     * um ataque alcança. A defesa de verdade contra uma mesma pessoa em
+     * flood é o balde de CONTATO logo abaixo, que não depende de rede.
+     */
+    this.enforceCaptureLimit(`ip:${clientIp}`, 600);
     this.enforceCaptureLimit(`contact:${sessionId}:${telefone}`, 10);
     const rawItems = Array.isArray(input?.items) ? input.items.slice(0, 50) : [];
     const items = rawItems.map((item: any) => ({
@@ -601,6 +654,27 @@ export class AbandonedCartsService {
       default: // abandoned
         where.paidAt = null;
         where.status = { not: 'cancelled' };
+        /**
+         * IDADE MÍNIMA — sem isto o relatório cutuca quem está pagando.
+         *
+         * Desde 17/08 o clique no PIX JÁ CRIA o pedido em `awaiting_payment`.
+         * Sem piso de idade, ele entrava na lista de "abandonados" segundos
+         * depois do toque, enquanto a cliente ainda estava com o QR Code na
+         * tela — e a tela (que recarrega a cada 60s) oferecia o botão de
+         * WhatsApp pra cobrar alguém no meio do pagamento. Alarme falso mata
+         * a confiança na lista inteira, do mesmo jeito que matou na fila de
+         * tarefas da loja.
+         *
+         * O piso é o MESMO do `PixResgateCron` (env `PIX_RESGATE_MIN`, 30min):
+         * o sistema já sabia qual era a espera certa e as duas telas
+         * discordavam. Vale só no ramo "abandoned" — em `all`/`recovered` o
+         * pedido recém-pago tem que continuar aparecendo.
+         */
+        {
+          const esperaMin = Number(process.env.PIX_RESGATE_MIN) || 30;
+          const teto = new Date(Date.now() - esperaMin * 60_000);
+          where.createdAt = { ...(where.createdAt ?? {}), lte: teto };
+        }
     }
     if (params.search) {
       where.OR = [
@@ -671,10 +745,44 @@ export class AbandonedCartsService {
       const orderSessions = new Set(orders.map((o: any) => {
         try { return JSON.parse(o.trackingInfo || '{}').session_id; } catch { return null; }
       }).filter(Boolean));
+      /**
+       * DEDUP TAMBÉM POR TELEFONE — a sessão não basta.
+       *
+       * O `session_id` do site morre com 30 min de inatividade, mas o
+       * rascunho do checkout sobrevive no sessionStorage. Quem preenche o
+       * contato, sai 40 minutos e volta pra tocar no PIX gera DUAS chaves:
+       * a captura com a sessão velha e o pedido com a nova. As duas linhas
+       * apareciam, e a loja abordava a mesma pessoa duas vezes.
+       *
+       * O telefone é a identidade real da cliente, e é por ele que a
+       * recuperação fala com ela. Mesma normalização da captura: só dígitos.
+       */
+      const soDigitos = (v: unknown) => String(v ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+      const orderPhones = new Set(
+        orders.map((o: any) => soDigitos(o.customerPhone)).filter((p: string) => p.length >= 10),
+      );
+      /**
+       * O OPT-IN VIROU SELO, NÃO FILTRO (17/08).
+       *
+       * A linha era DESCARTADA quando a cliente não marcava a caixinha — e a
+       * caixinha nasce DESMARCADA. Resultado: a etapa 1 capturava nome,
+       * telefone e sacola de todo mundo, e o relatório mostrava só a fatia
+       * que marcou espontaneamente. O dono perguntava "os carrinhos estão
+       * chegando no relatório?" e a resposta era "uma fração deles, sem
+       * nenhum aviso na tela".
+       *
+       * Consentimento é permissão pra CONTATAR, não pra CONTAR. Agora a
+       * linha aparece com `optin: false` e a tela esconde o botão de
+       * WhatsApp nela — a restrição vive no botão, onde ela significa algo,
+       * e não na query, onde ela apagava a informação de gestão.
+       *
+       * Isso também acaba com a assimetria que a outra metade da lista já
+       * tinha: pedido `awaiting_payment` nunca teve filtro de opt-in, então
+       * quem não marcava ficava invisível na etapa 1 e reaparecia com
+       * telefone assim que tocava no PIX.
+       */
       const recoveryItems = recoveries
-        // Contatos sem opt-in continuam salvos para retomar a sessão, mas não
-        // entram em nenhuma fila de contato ativo por WhatsApp.
-        .filter((r: any) => r.recoveryConsent === true && !orderSessions.has(r.sessionId))
+        .filter((r: any) => !orderSessions.has(r.sessionId) && !orderPhones.has(r.telefone))
         .map((r: any, index: number) => {
           const cartItems = Array.isArray(r.items) ? r.items.map((it: any) => ({
             name: it.name || it.productId, sku: it.productId, quantity: Number(it.quantity || 1),
@@ -689,7 +797,11 @@ export class AbandonedCartsService {
             items_count: cartItems.reduce((sum: number, it: any) => sum + it.quantity, 0),
             order_status: r.status === 'converted' ? 'recovered' : 'abandoned',
             time: r.updatedAt?.toISOString?.() ?? null, order_id: null, order_number: null,
-            source: 'ecommerce-contact', utmCampaign: (r.attribution as any)?.utm_campaign ?? null,
+            source: 'ecommerce-contact',
+            // Aceita as duas formas: registros gravados ANTES do conserto do
+            // sanitizeAttribution têm a coluna NULL, os novos têm `utm_*`.
+            utmCampaign: (r.attribution as any)?.utm_campaign ?? (r.attribution as any)?.campaign ?? null,
+            optin: r.recoveryConsent === true,
             cart_items: cartItems,
           };
         });

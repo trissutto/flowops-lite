@@ -248,7 +248,7 @@ export function BuyBox({
    * aquela cor ou não achou o tamanho.
    */
   const buscaSemelhantes = `/busca?q=${encodeURIComponent(
-    product.name.split(/s+/).slice(0, 4).join(' '),
+    product.name.split(/\s+/).slice(0, 4).join(' '),
   )}`;
 
   /**

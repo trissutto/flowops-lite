@@ -115,6 +115,18 @@ export interface LojaTrackingInput {
     content?: string;
     id?: string;
   };
+  /**
+   * Opt-in de WhatsApp, vindo da etapa 1 do checkout.
+   *
+   * ELE NÃO EXISTIA AQUI, e isso desligou uma feature inteira em silêncio:
+   * `PixResgateCron.temConsentimento()` exige
+   * `JSON.parse(trackingInfo).recovery_consent === true` pra mandar o
+   * lembrete de PIX não pago. Como o campo nunca era copiado pro
+   * `trackingInfo`, a condição era SEMPRE falsa — zero lembretes enviados
+   * desde 15/08, quando a feature nasceu. O BFF já tinha sido consertado
+   * pra não podar essa chave; o backend repodava logo depois.
+   */
+  recovery_consent?: boolean;
 }
 
 export interface CriarPedidoInput {
@@ -818,8 +830,44 @@ export class LojaOrdersService {
           fbp: input.tracking.fbp || null,
           fbc: input.tracking.fbc || null,
           attribution: input.tracking.attribution || null,
+          // Ver `recovery_consent` em LojaTrackingInput: sem esta linha o
+          // cron de resgate do PIX não acha ninguém pra avisar.
+          recovery_consent: input.tracking.recovery_consent === true,
         }
       : null;
+
+    /**
+     * FECHA O CICLO DO CARRINHO ABANDONADO.
+     *
+     * `checkout_recoveries.status` e `converted_at` NUNCA eram escritos —
+     * o upsert da captura exclui os dois de propósito e não havia nenhum
+     * outro escritor no backend inteiro. Consequência: a linha ficava
+     * `active` pra sempre, e a única forma de o relatório saber que a
+     * cliente comprou era um dedup em memória por `session_id`. Quando a
+     * sessão virava (30 min de inatividade), a dedup não casava e quem
+     * PAGOU continuava listada como abandono — a loja cobrando cliente que
+     * já comprou é o pior alarme falso possível.
+     *
+     * Marca por sessão E por telefone: a sessão pode ter virado, o telefone
+     * não muda. `updateMany` não estoura se não achar nada, e o try/catch
+     * garante que uma falha aqui não derrube a criação do pedido.
+     */
+    const marcarCarrinhoRecuperado = async () => {
+      const sessao = trackingInfo?.session_id || null;
+      const fone = String(input.customer?.phone ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+      const alvos: any[] = [];
+      if (sessao) alvos.push({ sessionId: sessao });
+      if (fone.length >= 10) alvos.push({ telefone: fone });
+      if (!alvos.length) return;
+      try {
+        await (this.prisma as any).checkoutRecovery.updateMany({
+          where: { OR: alvos, status: { not: 'converted' } },
+          data: { status: 'converted', convertedAt: new Date() },
+        });
+      } catch (e: any) {
+        this.logger.warn(`[loja] não consegui marcar carrinho recuperado: ${e?.message ?? e}`);
+      }
+    };
 
     // Retry em colisão de wcOrderId — rede de segurança que ficou de pé mesmo
     // com o contador transacional: número gravado à mão em produção ou
@@ -830,7 +878,7 @@ export class LojaOrdersService {
       // contador resolve: dois checkouts simultâneos chegando no mesmo LP.
       const seq = await this.proximaSequencia();
       try {
-        return await (this.prisma as any).order.create({
+        const criado = await (this.prisma as any).order.create({
           data: {
             wcOrderId: base + seq,
             wcOrderNumber: this.numeroPedido(seq),
@@ -877,6 +925,10 @@ export class LojaOrdersService {
             },
           },
         });
+        // Fora do caminho crítico: a marcação do carrinho recuperado não pode
+        // atrasar nem derrubar o pedido que já existe.
+        void marcarCarrinhoRecuperado();
+        return criado;
       } catch (e: any) {
         if (e?.code !== 'P2002') throw e; // P2002 = wcOrderId colidiu → próximo
       }

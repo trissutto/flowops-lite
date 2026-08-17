@@ -1842,6 +1842,18 @@ type CarrinhoAB = {
   order_status?: string;
   time?: string | null;
   unsubscribed?: number | boolean;
+  /**
+   * Marcou o aviso de WhatsApp no checkout?
+   *
+   * Vem so das capturas do site novo (source ecommerce-contact). Antes de
+   * 17/08 quem NAO marcava era simplesmente escondido da lista — a loja via
+   * uma fracao do abandono sem saber. Agora aparece com selo e sem botao de
+   * disparo: consentimento e permissao pra CONTATAR, nao pra CONTAR.
+   *
+   * undefined nas outras origens (pedido, plugin, WooCommerce) — por isso as
+   * comparacoes usam `=== false`, e nao falsy.
+   */
+  optin?: boolean;
   items_count?: number;
   // Origem do registro: undefined = plugin CartFlows; 'woocommerce' = pedido
   // iniciado-sem-pagar trazido pelo fallback WC pra preencher gaps de captura;
@@ -2242,6 +2254,7 @@ function CarrinhosTab() {
                     {isEcom && !isCompleted && <span className="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Pedido criado no site novo, aguardando confirmação do pagamento${c.order_number ? ` — ${c.order_number}` : ''}`}>Aguardando pagamento</span>}
                     {isEcom && isCompleted && <span className="ml-2 text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Pagamento confirmado</span>}
                     {isEcomContact && <span className="ml-2 text-[10px] bg-violet-100 text-violet-800 px-1.5 py-0.5 rounded font-bold uppercase" title="Nome e WhatsApp capturados antes de existir pedido">Contato capturado</span>}
+                    {c.optin === false && <span className="ml-2 text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase" title="Nao marcou o aviso de WhatsApp no checkout — aparece aqui para voce ver o volume real de abandono, mas nao pode receber disparo">Sem opt-in</span>}
                     {Boolean(c.unsubscribed) && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
@@ -2260,7 +2273,7 @@ function CarrinhosTab() {
                   </div>
                 </div>
                 <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(valor)}</div>
-                {!isCompleted && !c.unsubscribed && c.phone && (
+                {!isCompleted && !c.unsubscribed && c.optin !== false && c.phone && (
                   <button onClick={(e) => { e.stopPropagation(); whatsapp(c); }} className="px-3 py-2 rounded-lg font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">WhatsApp</button>
                 )}
               </div>
