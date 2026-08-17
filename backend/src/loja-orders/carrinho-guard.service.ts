@@ -211,10 +211,11 @@ export class CarrinhoGuardService {
    *
    * ── QUAIS PEDIDOS CONTAM ──
    *
-   * Pago e ainda não separado conta sempre. Aguardando pagamento conta só
-   * dentro da janela do PIX (2h, `PIX_EXPIRA_MIN`): carrinho abandonado não
-   * pode segurar peça pra sempre. Enviado/entregue não conta — ali o estoque
-   * JÁ baixou, e contar de novo tiraria a peça duas vezes.
+   * Pago e ainda não separado conta sempre. AGUARDANDO PAGAMENTO NÃO CONTA
+   * MAIS (dono, 17/08: "não separa nada, se vender eu estorno") — pedido sem
+   * dinheiro na conta não tira peça da vitrine de ninguém. Enviado/entregue
+   * não conta — ali o estoque JÁ baixou, e contar de novo tiraria a peça
+   * duas vezes.
    *
    * Kill-switch: `CARRINHO_RESERVA=0` volta ao comportamento antigo.
    */
@@ -224,8 +225,25 @@ export class CarrinhoGuardService {
     'awaiting_stock',
     'separating',
   ];
-  /** Janela do PIX + folga — igual à validade que o backend gera. */
-  private static readonly HORAS_PENDENTE = 3;
+  /**
+   * ZERO. PEDIDO NÃO PAGO NÃO SEGURA PEÇA (dono, 17/08).
+   *
+   * Eram 3 horas. A decisão do dono foi explícita: "não separa nada, se
+   * vender eu estorno".
+   *
+   * A troca, dita por quem paga a conta: peça parada na vitrine por causa de
+   * um PIX que talvez nunca seja pago é venda perdida CERTA; venda dupla é
+   * um risco que existe, é raro, e tem conserto — estorno. Entre perder
+   * venda todo dia e estornar de vez em quando, ele escolhe estornar.
+   *
+   * Vale ainda mais com a validade do PIX em 24h: reservar por um dia
+   * inteiro tiraria da vitrine boa parte do catálogo de número escasso.
+   *
+   * Zero desliga a janela: nenhum `awaiting_payment` entra na conta do
+   * reservado, em nenhum momento. O que continua reservando é só pedido
+   * PAGO e ainda não separado — esse é compromisso de verdade.
+   */
+  private static readonly HORAS_PENDENTE = 0;
 
   private async reservado(codigos: string[]): Promise<Map<string, number>> {
     const vazio = new Map<string, number>();

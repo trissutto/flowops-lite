@@ -132,10 +132,10 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
             <ul className="flex flex-col gap-2 text-body text-ink-soft">
               <li>Aprovação na hora — o QR Code aparece assim que você finalizar.</li>
               <li>Pague pelo app do seu banco, com QR Code ou copia-e-cola.</li>
-              {/* 2 horas é a validade que o backend gera (PIX_EXPIRA_MIN=120,
+              {/* 24 horas é a validade que o backend gera (PIX_EXPIRA_MIN=1440,
                   decisão do dono em 04/08). Dizer 30 min faria a cliente achar
                   que perdeu o prazo e abandonar um pedido que ainda vale. */}
-              <li>O código vale por 2 horas.</li>
+              <li>O código vale por 24 horas.</li>
             </ul>
             <div className="pt-1">
               <Button type="button" block className="sm:w-auto" onClick={() => confirm({ method: 'pix' })}>

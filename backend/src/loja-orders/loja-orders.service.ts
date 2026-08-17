@@ -167,13 +167,23 @@ export class LojaOrdersService {
 
   /** Validade do PIX. 30min é o que a cliente aguenta esperar sem desistir. */
   /**
-   * Validade do PIX: 2 HORAS (dono, 04/08 — era 30 min).
+   * Validade do PIX: 24 HORAS (dono, 17/08 — era 2h, e antes 30 min).
    *
    * 30 minutos derrubava compra boa: cliente que abre o QR, sai pra pegar o
-   * celular do banco e volta, já achava o código vencido. Duas horas cobre o
-   * "vou pagar quando chegar em casa" sem segurar a peça a noite inteira.
+   * celular do banco e volta, já achava o código vencido. As 2 horas de
+   * 04/08 cobriam o "pago quando chegar em casa", mas não o caso mais comum
+   * da loja: quem monta a sacola à noite e paga no dia seguinte.
+   *
+   * ⚠️ A VALIDADE TAMBÉM SEGURA ESTOQUE. O `CarrinhoGuardService` reserva a
+   * peça de quem gerou PIX enquanto o código vale (ver `HORAS_PENDENTE`).
+   * Em 24h, um PIX gerado e nunca pago tira a peça da vitrine por um dia.
+   * É a troca aceita: PIX não pago é recuperável (temos nome, telefone e
+   * CPF); venda perdida por código vencido não é. Se começar a faltar peça
+   * na vitrine com estoque na arara, é aqui que se mexe.
+   *
+   * Por env pra poder voltar sem deploy.
    */
-  private static readonly PIX_EXPIRA_MIN = 120;
+  private static readonly PIX_EXPIRA_MIN = Number(process.env.PIX_EXPIRA_MIN) || 1440;
 
   /** Tolerância do recálculo: 1 centavo (arredondamento de float no front). */
   private static readonly TOLERANCIA = 0.011;
