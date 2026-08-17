@@ -737,6 +737,18 @@ export class PdvController {
    * Vira o método do pedido online. `retiradaStoreCode` = ONDE a cliente
    * retira (só com tipo=retirada); vazio = na própria loja vendedora.
    */
+  /**
+   * POST /pdv/sales/:id/gerar-pedido-online — ADMIN.
+   * Resgate: venda finalizada que ficou sem pedido ON- (ex.: link Pagar.me
+   * fechado pelo cron como 'credito' antes de 17/08). Idempotente.
+   */
+  @Post('sales/:id/gerar-pedido-online')
+  gerarPedidoOnline(@Req() req: any, @Param('id') id: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const quem = req?.user?.name ?? req?.user?.username ?? req?.user?.sub ?? 'admin';
+    return this.svc.gerarPedidoOnlineDeVendaFinalizada(id, String(quem));
+  }
+
   @Post('sales/:id/entrega')
   setEntrega(
     @Req() req: any,

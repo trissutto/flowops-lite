@@ -3571,6 +3571,80 @@ export class PdvService {
   }
 
   /**
+   * GERAR PEDIDO ONLINE de uma venda JÁ FINALIZADA que ficou sem ele (17/08).
+   *
+   * Caso Audrey Baldin: link Pagar.me pago, cron fechou a venda como
+   * 'credito' → o finalize não viu venda online → sem Order ON-, sem card,
+   * estoque baixado na loja vendedora (13/SITE, que não tem estoque). A
+   * cliente pagou e ninguém separa. Este é o botão de resgate: roda o MESMO
+   * `criarDoFinalize` (roteamento, card, acerto) e, se o outbox já tinha
+   * baixado o estoque na loja vendedora, DEVOLVE lá — quem baixa é a loja
+   * que separa, no bipe do card (mesma trava do finalize online).
+   *
+   * Idempotente: venda que já tem Order 'pdv_online' apontando pra ela devolve
+   * o número existente sem criar outro.
+   */
+  async gerarPedidoOnlineDeVendaFinalizada(saleId: string, actor?: string) {
+    const sale = await this.getSale(saleId);
+    if (sale.status !== 'finalized') {
+      throw new BadRequestException(`Venda está ${sale.status} — só venda finalizada vira pedido online`);
+    }
+    if ((sale as any).isTraining) throw new BadRequestException('Venda de treinamento não vira pedido');
+
+    const existente = await (this.prisma as any).order.findFirst({
+      where: { source: 'pdv_online', checkoutInfo: { contains: `"pdvSaleId":"${sale.id}"` } },
+      select: { wcOrderNumber: true, status: true },
+    });
+    if (existente) {
+      return { ok: true, jaExistia: true, wcOrderNumber: existente.wcOrderNumber, status: existente.status };
+    }
+    if (!this.pedidoOnline.enabled()) {
+      throw new BadRequestException('Roteamento de pedido online desligado (PEDIDO_ONLINE_ROTEAMENTO)');
+    }
+
+    const onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
+    if (!onlineOrder) {
+      throw new BadRequestException(
+        'Não consegui gerar o pedido — veja o log [pedido-online] (motivos comuns: venda sem CEP e não é retirada, loja não cadastrada, só frete/manual)',
+      );
+    }
+
+    // Estoque: o finalize normal marca stockDecreasedAt ANTES do outbox e o
+    // job não baixa. Aqui o job JÁ baixou na loja vendedora — devolve o que
+    // baixou, senão a peça some duas vezes (uma na 13, outra na loja do card).
+    let estoqueDevolvido = 0;
+    const jaBaixou = (sale.items || []).filter(
+      (it: any) => it.stockDecreasedAt && this.isStockEligibleItem(it),
+    );
+    if (jaBaixou.length) {
+      try {
+        const r = await this.erp.increaseStockAsync(
+          jaBaixou.map((it: any) => ({
+            sku: String(it.sku || '').trim(),
+            qty: Math.max(1, Number(it.qty) || 1),
+            storeCode: sale.storeCode,
+          })),
+        );
+        estoqueDevolvido = r.applied?.length ?? 0;
+      } catch (e: any) {
+        this.logger.error(
+          `[pedido-online] venda ${sale.id}: pedido ${onlineOrder.wcOrderNumber} criado mas NÃO devolvi o estoque da loja ${sale.storeCode}: ${e?.message || e} — conferir na mão`,
+        );
+      }
+    }
+    // Marca como no finalize online — reconcile/backlog não voltam a baixar.
+    const agora = new Date();
+    await (this.prisma as any).pdvSale.update({ where: { id: sale.id }, data: { stockDecreasedAt: agora } }).catch(() => {});
+    await (this.prisma as any).pdvSaleItem.updateMany({ where: { saleId: sale.id }, data: { stockDecreasedAt: agora } }).catch(() => {});
+
+    this.logger.log(
+      `[pedido-online] venda ${sale.id} → pedido ${onlineOrder.wcOrderNumber} gerado a posteriori por ${actor || 'admin'} ` +
+        `(auto-atendida=${onlineOrder.autoAtendida}, estoque devolvido na ${sale.storeCode}: ${estoqueDevolvido} item(ns))`,
+    );
+    return { ok: true, jaExistia: false, ...onlineOrder, estoqueDevolvido };
+  }
+
+  /**
    * Atualiza o Customer (CRM) após uma venda finalizada com CPF.
    *
    * Comportamento:

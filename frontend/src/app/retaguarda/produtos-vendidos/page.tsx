@@ -658,6 +658,37 @@ function ProdutosVendidosContent() {
                                     🗑️ Excluir duplicada
                                   </button>
                                 )}
+                                {/* GERAR PEDIDO ONLINE (17/08) — venda online que ficou sem
+                                    card (link Pagar.me fechado pelo cron como crédito). Roteia
+                                    a posteriori e devolve o estoque da loja vendedora. */}
+                                {!isReturn && isMatrix && (
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(
+                                        `📦 GERAR PEDIDO ONLINE da venda #${l.saleNumber || String(l.saleId).slice(0, 8)}?\n\n` +
+                                        `Cria o pedido ON- na fila de roteamento (card pra loja separar) ` +
+                                        `e devolve o estoque que baixou na loja ${l.storeCode || '-'}.\n` +
+                                        `Use só pra venda online PAGA que não gerou pedido.`,
+                                      )) return;
+                                      try {
+                                        const r = await api<any>(`/pdv/sales/${l.saleId}/gerar-pedido-online`, { method: 'POST' });
+                                        alert(
+                                          r?.jaExistia
+                                            ? `Já existia: pedido ${r.wcOrderNumber} (${r.status})`
+                                            : `✓ Pedido ${r?.wcOrderNumber} gerado` +
+                                              (r?.autoAtendida ? ` — card já na loja ${r.storeName || ''}` : ' — na fila de roteamento da matriz') +
+                                              (r?.estoqueDevolvido ? ` · ${r.estoqueDevolvido} item(ns) devolvido(s) ao estoque da loja vendedora` : ''),
+                                        );
+                                      } catch (e: any) {
+                                        alert(`Erro: ${e?.message || e}`);
+                                      }
+                                    }}
+                                    className="ml-1 text-[10px] font-bold bg-teal-600 hover:bg-teal-700 text-white px-2 py-0.5 rounded"
+                                    title="Venda online paga que ficou sem pedido/card — gera o pedido ON- agora"
+                                  >
+                                    📦 Gerar pedido online
+                                  </button>
+                                )}
                               </div>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 {!isReturn && pmts.length > 0 ? (
