@@ -194,7 +194,15 @@ export function EscolhaDaPeca({
           alertaEstoque={alertaEstoque}
           look={look}
           product={pecaDaCor}
-          cores={cores.map((c) => ({ nome: c.nome, swatch: c.swatch, estoque: c.estoque }))}
+          /* `tamanhos` entra aqui (17/08) porque agora o TAMANHO vem primeiro:
+             é a grade de cada cor que decide qual bolinha sai riscada quando
+             ela já escolheu o número. */
+          cores={cores.map((c) => ({
+            nome: c.nome,
+            swatch: c.swatch,
+            estoque: c.estoque,
+            tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel })),
+          }))}
           corSelecionada={cor}
           onSelecionarCor={setCor}
         />
