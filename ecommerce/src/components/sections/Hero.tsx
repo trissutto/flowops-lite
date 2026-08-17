@@ -259,7 +259,7 @@ export function Hero({
                 sizes: '100vw',
                 placeholder: 'blur' as const,
                 blurDataURL: BLUR_DATA_URL,
-                className: 'object-cover object-center',
+                className: cn('object-cover', home ? 'object-top' : 'object-center'),
               };
               const desktop = getImageProps({ ...comum, src: image.src });
               const mobile = getImageProps({ ...comum, src: imageMobile.src });
@@ -294,7 +294,7 @@ export function Hero({
               sizes="100vw"
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}
-              className="object-cover object-center"
+              className={cn('object-cover', home ? 'object-top' : 'object-center')}
             />
           ) : (
             <div className="grain size-full bg-gradient-to-br from-champagne via-surface-alt to-background" />
@@ -305,7 +305,13 @@ export function Hero({
       {overlay !== 'none' && <div className={cn('absolute inset-0', OVERLAYS[overlay])} />}
 
       {/* Conteúdo */}
-      <Container width="page" className={cn('relative z-10', home ? 'py-8 sm:py-12 lg:py-20' : 'py-20')}>
+      <Container
+        width="page"
+        className={cn(
+          'relative z-10',
+          home ? '!max-w-none px-[clamp(2rem,7vw,8rem)] py-8 sm:py-12 lg:py-20' : 'py-20',
+        )}
+      >
         <div className={cn('flex flex-col', ALIGNMENTS[align], home && 'max-w-[54%] lg:max-w-[48%]')}>
           {above && (
             <div
