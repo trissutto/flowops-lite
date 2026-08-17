@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Check } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ZoomIn, ZoomOut, Check } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
 import { ProductBadgeTag } from '@/components/ui/Badge';
@@ -53,6 +53,71 @@ export interface GrupoDeCor {
    * cor e depois trocar de numero.
    */
   indisponivel?: boolean;
+}
+
+function ScrollableThumbnailRail({
+  children,
+  ariaLabel,
+  hintLabel,
+  itemCount,
+}: {
+  children: ReactNode;
+  ariaLabel: string;
+  hintLabel: string;
+  itemCount: number;
+}) {
+  const railRef = useRef<HTMLDivElement>(null);
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+
+  const updateScrollHints = useCallback(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    setCanScrollUp(rail.scrollTop > 2);
+    setCanScrollDown(rail.scrollTop + rail.clientHeight < rail.scrollHeight - 2);
+  }, []);
+
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    const frame = requestAnimationFrame(updateScrollHints);
+    const observer = new ResizeObserver(updateScrollHints);
+    observer.observe(rail);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [itemCount, updateScrollHints]);
+
+  return (
+    <>
+      <div
+        ref={railRef}
+        className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
+        role="tablist"
+        aria-label={ariaLabel}
+        onScroll={updateScrollHints}
+      >
+        {children}
+      </div>
+
+      {canScrollUp && (
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center bg-gradient-to-b from-background via-background/90 to-transparent pb-5 pt-1">
+          <ChevronUp className="size-4 text-primary drop-shadow-sm" strokeWidth={2.25} />
+        </div>
+      )}
+
+      {canScrollDown && (
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col items-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1 pt-7 text-primary drop-shadow-sm">
+          <span className="text-center text-[0.55rem] font-semibold leading-none tracking-[0.04em] uppercase">{hintLabel}</span>
+          <ChevronDown className="mt-0.5 size-4" strokeWidth={2.25} />
+        </div>
+      )}
+    </>
+  );
 }
 
 export function ProductGallery({
@@ -231,11 +296,7 @@ export function ProductGallery({
            Cresce pra LARGURA de proposito — altura sairia do orcamento da
            dobra, que e o que acabou de por o botao de comprar na 1a tela. */
         <div className="relative w-16 shrink-0 lg:w-20">
-          <div
-            className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
-            role="tablist"
-            aria-label="Cores da peça"
-          >
+          <ScrollableThumbnailRail ariaLabel="Cores da peça" hintLabel="Mais cores" itemCount={grupos.length}>
             {grupos.map((g) => (
               <button
                 key={g.nome}
@@ -292,15 +353,11 @@ export function ProductGallery({
                 </span>
               </button>
             ))}
-          </div>
+          </ScrollableThumbnailRail>
         </div>
       ) : safeImages.length > 1 && (
         <div className="relative w-14 shrink-0 lg:w-20">
-          <div
-            className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
-            role="tablist"
-            aria-label="Fotos do produto"
-          >
+          <ScrollableThumbnailRail ariaLabel="Fotos do produto" hintLabel="Mais fotos" itemCount={safeImages.length}>
             {safeImages.map((image, index) => (
               <button
                 key={`${image.src}-${index}`}
@@ -333,7 +390,7 @@ export function ProductGallery({
                 )}
               </button>
             ))}
-          </div>
+          </ScrollableThumbnailRail>
         </div>
       )}
     </div>
