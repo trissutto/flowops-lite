@@ -124,10 +124,22 @@ export class OrdersController {
         },
         orderBy: { createdAt: 'desc' },
       }),
-      // Pedido do site PAGO — a base pra conferir com o "Compras" do Meta.
+      /**
+       * TODO pedido PAGO — a base pra conferir com o "Compras" do Meta.
+       *
+       * ⚠️ SEM FILTRO DE SOURCE de propósito (correção 17/08). A primeira
+       * versão contava só `source: 'ecommerce'` (site novo) e deu divergência
+       * de 4,6× contra o Gerenciador (Meta R$ 1.497 × Flow R$ 324) — o que
+       * parecia bug de tracking era denominador errado: se o mesmo pixel serve
+       * o site ANTIGO (WooCommerce, `source: 'site'`), as compras de lá entram
+       * no número do Meta e não entravam no meu. Comparar métrica de fora com
+       * recorte de dentro mais estreito SEMPRE acusa inflação que não existe.
+       * Agora quebra por origem: a soma bate com o Meta, e o detalhe mostra
+       * quanto é de cada site.
+       */
       (this.prisma as any).order.findMany({
-        where: { source: 'ecommerce', paidAt: { not: null }, createdAt: { gte: desde } },
-        select: { id: true, paidAt: true, totalAmount: true, utmCampaign: true },
+        where: { paidAt: { not: null }, createdAt: { gte: desde } },
+        select: { id: true, paidAt: true, totalAmount: true, utmCampaign: true, source: true },
       }),
     ]);
 
@@ -206,13 +218,29 @@ export class OrdersController {
       porCampanha.set(k, cur);
     }
 
-    // Conferência com o Gerenciador: pedidos pagos do site por dia.
-    const porDia = new Map<string, { pedidos: number; valor: number }>();
+    // Conferência com o Gerenciador: pedidos pagos por dia, QUEBRADOS POR
+    // ORIGEM. O Meta soma tudo que o pixel dele vê; se o pixel serve os dois
+    // sites, o comparável é o TOTAL — e o detalhe por origem mostra de onde
+    // vem. `pdv_online` fica de fora do total do site: o Meta não vê venda
+    // fechada no PDV (é justamente a receita invisível que este relatório
+    // está medindo), então somar aqui esconderia o furo.
+    const porDia = new Map<
+      string,
+      { total: number; valor: number; porOrigem: Record<string, { pedidos: number; valor: number }> }
+    >();
     for (const p of pagosSite) {
       const k = new Date(p.paidAt).toISOString().slice(0, 10);
-      const cur = porDia.get(k) ?? { pedidos: 0, valor: 0 };
-      cur.pedidos += 1;
-      cur.valor += Number(p.totalAmount || 0);
+      const cur = porDia.get(k) ?? { total: 0, valor: 0, porOrigem: {} };
+      const src = String(p.source || 'desconhecido');
+      const o = cur.porOrigem[src] ?? { pedidos: 0, valor: 0 };
+      o.pedidos += 1;
+      o.valor += Number(p.totalAmount || 0);
+      cur.porOrigem[src] = o;
+      // 'pdv_online' NÃO entra no total comparável com o Meta.
+      if (src !== 'pdv_online') {
+        cur.total += 1;
+        cur.valor += Number(p.totalAmount || 0);
+      }
       porDia.set(k, cur);
     }
 
@@ -241,10 +269,24 @@ export class OrdersController {
       porCampanha: [...porCampanha.entries()]
         .map(([campanha, v]) => ({ campanha, ...v, valor: Number(v.valor.toFixed(2)) }))
         .sort((a, b) => b.valor - a.valor),
-      /** Compare com "Compras" do Gerenciador no MESMO dia. Meta > Flow =
-       *  pixel e CAPI contando a mesma venda 2x (event_id não casa). */
+      /**
+       * Compare `comparavelComMeta` com o "Compras"/"Valor de conversão" do
+       * Gerenciador no MESMO dia. Ainda maior no Meta depois disso? Então é
+       * de fora: pixel do site antigo com outro dedup, janela de atribuição
+       * (compra de hoje creditada a clique de dias atrás) ou conta de anúncio
+       * com mais de um pixel. `detalhePorOrigem` diz de qual site veio.
+       */
       conferenciaMeta: [...porDia.entries()]
-        .map(([dia, v]) => ({ dia, pedidosPagosNoFlow: v.pedidos, valor: Number(v.valor.toFixed(2)) }))
+        .map(([dia, v]) => ({
+          dia,
+          comparavelComMeta: { pedidos: v.total, valor: Number(v.valor.toFixed(2)) },
+          detalhePorOrigem: Object.fromEntries(
+            Object.entries(v.porOrigem).map(([k, o]) => [
+              k,
+              { pedidos: o.pedidos, valor: Number(o.valor.toFixed(2)) },
+            ]),
+          ),
+        }))
         .sort((a, b) => (a.dia < b.dia ? 1 : -1)),
       amostraCasados: casados.slice(0, 25),
       amostraSemCarrinho: semCarrinho.slice(0, 15),
