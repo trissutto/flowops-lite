@@ -39,6 +39,7 @@ export class TrocasCronService {
     this.running = true;
     try {
       await this.reversasPendentes();
+      await this.avisosReversaPendentes();
       await this.lembretesReversa();
       await this.autoRastreio();
     } catch (e: any) {
@@ -84,6 +85,51 @@ export class TrocasCronService {
         // motivo vai pro log; a troca continua visível na retaguarda.
         this.logger.warn(`[trocas-cron] reversa de ${formatTrocaNumero(t.numero)} falhou: ${e?.message || e}`);
       }
+    }
+  }
+
+  /**
+   * CÓDIGO GERADO MAS NUNCA ENTREGUE — reenvia até chegar.
+   *
+   * O buraco de 14/08: cinco etiquetas geradas nos Correios, cinco avisos
+   * de WhatsApp falhando, e NADA tentava de novo. `reversasPendentes` só
+   * olha troca SEM código; troca COM código e sem aviso ficava esquecida
+   * até a cliente reclamar (Débora, troca 12, reclamou duas vezes). Este
+   * passo fecha o buraco: enquanto `reversaEnviadaAt` for nulo e o código
+   * ainda valer, tenta mandar a cada ciclo. Sessão do WhatsApp caída é a
+   * causa mais provável — quando ela voltar, isto drena a fila sozinho.
+   */
+  private async avisosReversaPendentes() {
+    const pendentes = await (this.prisma as any).trocaSolicitacao.findMany({
+      where: {
+        reversaCodigo: { not: null },
+        reversaEnviadaAt: null,
+        status: { in: ['aguardando_postagem', 'solicitada', 'aguardando_envio_cliente'] },
+        OR: [{ reversaPrazo: null }, { reversaPrazo: { gte: new Date() } }],
+      },
+      select: { id: true, numero: true },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+    });
+    if (!pendentes.length) return;
+    let ok = 0;
+    let motivo = '';
+    for (const t of pendentes) {
+      const r = await this.trocas.reenviarCodigoReversa(t.id);
+      if (r.ok) ok++;
+      else motivo = r.motivo || motivo;
+      // Baileys trava se falar em paralelo — respira entre uma e outra.
+      await new Promise((res) => setTimeout(res, 1500));
+    }
+    if (ok < pendentes.length) {
+      // WARN de propósito: isto tem que aparecer. É código de postagem que a
+      // cliente está esperando — e reclamando no WhatsApp da loja.
+      this.logger.warn(
+        `[trocas-cron] ${pendentes.length - ok} código(s) de postagem AINDA não entregue(s) por WhatsApp (${motivo || 'motivo desconhecido'}). Trocas: ` +
+          pendentes.map((t: any) => formatTrocaNumero(t.numero)).join(', '),
+      );
+    } else {
+      this.logger.log(`[trocas-cron] ${ok} código(s) de postagem reenviado(s) por WhatsApp`);
     }
   }
 

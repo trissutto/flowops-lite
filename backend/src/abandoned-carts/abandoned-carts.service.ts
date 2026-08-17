@@ -784,10 +784,21 @@ export class AbandonedCartsService {
       const recoveryItems = recoveries
         .filter((r: any) => !orderSessions.has(r.sessionId) && !orderPhones.has(r.telefone))
         .map((r: any, index: number) => {
-          const cartItems = Array.isArray(r.items) ? r.items.map((it: any) => ({
-            name: it.name || it.productId, sku: it.productId, quantity: Number(it.quantity || 1),
-            price: Number(it.unitPrice || 0), line_subtotal: Number(it.unitPrice || 0) * Number(it.quantity || 1),
-          })) : [];
+          // COR E TAMANHO NA LINHA (dono, 17/08: "os itens estão sem a cor").
+          // A captura sempre gravou `color` e `size`; o mapeamento jogava fora e
+          // a loja via "Blusa Manga Curta — SMILE" sem saber qual cor nem qual
+          // número separar. Formato da casa: REF · COR TAM.
+          const cartItems = Array.isArray(r.items) ? r.items.map((it: any) => {
+            const cor = String(it.color || '').trim();
+            const tam = String(it.size || '').trim();
+            const variacao = [cor, tam].filter(Boolean).join(' ');
+            return {
+              name: (it.name || it.productId) + (variacao ? ` · ${variacao}` : ''),
+              sku: it.productId, cor: cor || null, tamanho: tam || null,
+              quantity: Number(it.quantity || 1),
+              price: Number(it.unitPrice || 0), line_subtotal: Number(it.unitPrice || 0) * Number(it.quantity || 1),
+            };
+          }) : [];
           const sp = String(r.nome).indexOf(' ');
           return {
             id: 970000000 + index, recovery_id: r.id, session_id: r.sessionId,
