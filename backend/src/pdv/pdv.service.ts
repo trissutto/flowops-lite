@@ -228,6 +228,75 @@ export class PdvService {
   }
 
   /**
+   * CARRINHOS ABANDONADOS DO SITE NOVO, pra lista do PDV (17/08).
+   *
+   * ⚠️ NÃO usa o `AbandonedCartsService`: importar o módulo dele no PdvModule
+   * criaria import de módulo novo — foi exatamente isso que derrubou o boot em
+   * 07/08 (ver o aviso no `pdv.module.ts`). Mesmo padrão do
+   * `PagarmeLinkReconcileService`: lê a tabela pelo Prisma, que este módulo já
+   * tem.
+   *
+   * Também é DE PROPÓSITO mais simples que o `listEcommercePending` da
+   * retaguarda: aquele agrega plugin do WP + contatos capturados + stats. O PDV
+   * só precisa de quem tem peça com SKU nosso — o único carrinho que dá pra
+   * montar venda automática.
+   *
+   * "Carrinho abandonado" = pedido do site novo que nunca foi pago. O piso de
+   * idade (mesma env `PIX_RESGATE_MIN` do resgate de PIX) evita cutucar quem
+   * está com o QR Code aberto na tela nesse instante — alarme falso aqui faz a
+   * vendedora ligar pra cliente no meio do pagamento.
+   */
+  async listarCarrinhosAbandonados(status = 'abandoned') {
+    const where: any = { source: 'ecommerce' };
+    if (status === 'recovered') {
+      where.paidAt = { not: null };
+    } else if (status !== 'all') {
+      where.paidAt = null;
+      where.status = { not: 'cancelled' };
+      const esperaMin = Number(process.env.PIX_RESGATE_MIN) || 30;
+      where.createdAt = { lte: new Date(Date.now() - esperaMin * 60_000) };
+    }
+
+    const pedidos: any[] = await (this.prisma as any).order.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        wcOrderId: true,
+        wcOrderNumber: true,
+        customerName: true,
+        customerEmail: true,
+        customerPhone: true,
+        totalAmount: true,
+        createdAt: true,
+        utmCampaign: true,
+        items: { select: { quantity: true } },
+      },
+    });
+
+    const items = pedidos.map((o) => {
+      const nome = String(o.customerName ?? '').trim();
+      const sp = nome.indexOf(' ');
+      return {
+        id: Number(o.wcOrderId),
+        order_id: Number(o.wcOrderId),
+        order_number: o.wcOrderNumber ?? null,
+        first_name: sp > 0 ? nome.slice(0, sp) : nome,
+        last_name: sp > 0 ? nome.slice(sp + 1) : '',
+        email: o.customerEmail ?? '',
+        phone: o.customerPhone ?? '',
+        cart_total: Number(o.totalAmount ?? 0),
+        items_count: (o.items || []).reduce((s: number, i: any) => s + Number(i.quantity ?? 1), 0),
+        time: o.createdAt ? o.createdAt.toISOString() : null,
+        // A campanha só existe no carrinho — é o que liga a venda ao anúncio.
+        utmCampaign: o.utmCampaign ?? null,
+      };
+    });
+
+    return { items, total: items.length };
+  }
+
+  /**
    * IMPORTAR CARRINHO ABANDONADO PRO PDV (17/08).
    *
    * O PROBLEMA MEDIDO: em 17/08 foram 7 carrinhos recuperados pelo time e só

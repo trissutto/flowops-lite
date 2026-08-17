@@ -9396,8 +9396,11 @@ function CarrinhosAbandonadosModal({
       try {
         // Só o carrinho do site NOVO: é o único cujos itens têm SKU nosso, e
         // portanto o único que dá pra montar a venda automaticamente.
+        // Rota do PDV, não a da retaguarda: `/abandoned-carts/*` tem
+        // AdminOnlyGuard e as meninas entram como `role: store` — batiam em
+        // "Apenas matriz". Esta é travada na loja-canal no backend.
         const r = await api<{ items?: Carrinho[] }>(
-          '/abandoned-carts/ecommerce/list?status=abandoned',
+          '/pdv/carrinhos-abandonados?status=abandoned',
         );
         setItens(Array.isArray(r?.items) ? r.items : []);
       } catch (e: any) {

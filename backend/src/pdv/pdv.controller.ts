@@ -301,6 +301,38 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/carrinhos-abandonados
+   *
+   * A lista de carrinhos do site NOVO, pro PDV da loja-canal.
+   *
+   * POR QUE NÃO USA `/abandoned-carts/ecommerce/list`: aquele controller tem
+   * `AdminOnlyGuard` e as meninas do carrinho abandonado entram como
+   * `role: store` — batiam em "Apenas matriz". E os PDVs não têm acesso à
+   * retaguarda, então não havia caminho nenhum pra elas.
+   *
+   * Também não afrouxei o guard de lá: aquilo abriria a lista inteira de
+   * clientes pras 14 lojas. Aqui a rota é do PDV (aceita `store`) e TRAVADA na
+   * loja-canal — loja física recebe 403 mesmo tentando na mão.
+   */
+  @Get('carrinhos-abandonados')
+  async carrinhosAbandonados(@Req() req: any, @Query('status') status?: string) {
+    this.requireRole(req);
+    const role = req?.user?.role;
+    const storeCode = String(req?.user?.storeCode ?? '').trim();
+    // Admin da matriz passa (usa o PDV em modo master); loja só se for a canal.
+    if (role !== 'admin' && storeCode !== PdvController.CARRINHOS_STORE_CODE) {
+      throw new ForbiddenException(
+        'Carrinhos do site são da loja SITE — sua loja não trabalha esses contatos.',
+      );
+    }
+    return this.svc.listarCarrinhosAbandonados(status || 'abandoned');
+  }
+
+  /** Loja-canal SITE — a única loja (fora da matriz) que trabalha carrinho
+   *  abandonado. Mesmo código do `CARRINHOS_STORE_CODE` do PDV no front. */
+  private static readonly CARRINHOS_STORE_CODE = '13';
+
+  /**
    * POST /pdv/sales/importar-carrinho { wcOrderId, storeCode? }
    *
    * Abre uma venda online JÁ MONTADA a partir de um carrinho abandonado —
