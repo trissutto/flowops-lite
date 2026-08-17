@@ -1,5 +1,5 @@
 import { Hero } from '@/components/sections/Hero';
-import { HomeBenefitsAndStores, HomeCategoryNav, type HomeCategory } from '@/components/sections/HomeDiscovery';
+import { HomeBenefitsAndStores, HomeCategoryNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
 import { ProductCarousel } from '@/components/sections/ProductCarousel';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -79,6 +79,10 @@ export default async function HomePage({
       />
 
       <HomeCategoryNav categories={categories} />
+
+      <div className="bg-surface px-4 pb-5 sm:hidden">
+        <HomeStoreCta storesHref={storesHref} className="flex" />
+      </div>
 
       {novidades.length > 0 && (
         <Section width="wide" aria-labelledby="novidades-titulo" className="!py-5 sm:!py-12">

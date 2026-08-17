@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { CreditCard, MapPin, PackageCheck, RefreshCw, WalletCards } from 'lucide-react';
 import { AppLink } from '@/components/ui/AppLink';
 import { trackStoreLocator, trackViewCollection } from '@/lib/tracking';
+import { cn } from '@/lib/utils';
 
 export interface HomeCategory {
   name: string;
@@ -24,9 +25,9 @@ export function HomeCategoryNav({ categories }: { categories: HomeCategory[] }) 
           <span className="h-px flex-1 bg-primary/35" />
         </div>
 
-        <ul className="mt-6 grid grid-cols-5 gap-2 sm:mx-auto sm:max-w-4xl sm:gap-5">
+        <ul className="mt-6 flex gap-4 overflow-x-scroll pb-3 sm:mx-auto sm:grid sm:max-w-4xl sm:grid-cols-5 sm:gap-5 sm:overflow-visible sm:pb-0">
           {categories.map((category) => (
-            <li key={category.name}>
+            <li key={category.name} className="w-[18%] shrink-0 sm:w-auto">
               <AppLink
                 href={category.href}
                 onClick={() => trackViewCollection(`Home — ${category.name}`)}
@@ -76,23 +77,29 @@ export function HomeBenefitsAndStores({ storesHref }: { storesHref: string }) {
           ))}
         </ul>
 
-        <div className="mt-6 flex items-center gap-4 rounded-lg bg-champagne px-5 py-5 sm:mx-auto sm:max-w-3xl sm:px-7">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-full border border-primary/35 text-primary">
-            <MapPin className="size-5" strokeWidth={1.5} aria-hidden />
-          </span>
-          <p className="min-w-0 flex-1 text-sm leading-snug text-ink">
-            <strong className="block font-medium">Prefere provar?</strong>
-            <span className="text-ink-soft">Encontre uma loja perto de você</span>
-          </p>
-          <AppLink
-            href={storesHref}
-            onClick={() => trackStoreLocator(undefined, undefined, 'home_first_journey')}
-            className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-sm border border-ink px-4 text-[0.65rem] font-medium tracking-[0.1em] text-ink uppercase transition-colors hover:bg-ink hover:text-light sm:px-7 sm:text-xs"
-          >
-            Ver lojas
-          </AppLink>
-        </div>
+        <HomeStoreCta storesHref={storesHref} className="mt-6 hidden sm:flex" />
       </div>
+    </div>
+  );
+}
+
+export function HomeStoreCta({ storesHref, className }: { storesHref: string; className?: string }) {
+  return (
+    <div className={cn('items-center gap-4 rounded-lg bg-champagne px-5 py-5 sm:mx-auto sm:max-w-3xl sm:px-7', className)}>
+      <span className="flex size-11 shrink-0 items-center justify-center rounded-full border border-primary/35 text-primary">
+        <MapPin className="size-5" strokeWidth={1.5} aria-hidden />
+      </span>
+      <p className="min-w-0 flex-1 text-sm leading-snug text-ink">
+        <strong className="block font-medium">Prefere provar?</strong>
+        <span className="text-ink-soft">Encontre uma loja perto de você</span>
+      </p>
+      <AppLink
+        href={storesHref}
+        onClick={() => trackStoreLocator(undefined, undefined, 'home_first_journey')}
+        className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-sm border border-ink px-4 text-[0.65rem] font-medium tracking-[0.1em] text-ink uppercase transition-colors hover:bg-ink hover:text-light sm:px-7 sm:text-xs"
+      >
+        Ver lojas
+      </AppLink>
     </div>
   );
 }
