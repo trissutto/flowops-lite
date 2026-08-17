@@ -59,6 +59,198 @@ export class OrdersController {
 
   // ---------- Rotas estáticas PRIMEIRO (senão o `:id` come) ----------
 
+  /**
+   * GET /orders/diagnostico/carrinho-recuperado?dias=30
+   *
+   * MEDIÇÃO ANTES DE CONSTRUIR (17/08) — duas perguntas que decidem se a
+   * atribuição de carrinho recuperado é fácil ou impossível hoje.
+   *
+   * O CONTEXTO: no site novo o "carrinho abandonado" É um Order
+   * (`source: 'ecommerce'`, `paidAt: null`) — e Order já guarda `utm*` e
+   * `trackingInfo` (fbp/fbc). As meninas recuperam por WhatsApp e fecham no
+   * PDV, o que cria um SEGUNDO Order (`source: 'pdv_online'`) com o dinheiro
+   * mas SEM campanha. Resultado: a mesma cliente conta como ABANDONO no funil
+   * e como RECEITA SEM ORIGEM no ROAS. Erra pros dois lados.
+   *
+   * O que este diagnóstico responde:
+   *   1. Quantas vendas de PDV casam com um carrinho abandonado (por
+   *      telefone/e-mail/CPF, carrinho criado ANTES)? = tamanho da ponte.
+   *   2. Desses carrinhos, quantos têm `utmCampaign` de verdade? Se vier
+   *      vazio, o elo existe mas não carrega nada — o problema é no tracking,
+   *      não na ponte (ver o histórico de UTM podada antes de gravar).
+   *   3. Quantos dias entre abandonar e recuperar? Acima de 7 o Meta não
+   *      atribui mais (janela de clique), então o CAPI ajuda pouco e o que
+   *      vale é o relatório interno.
+   *   4. `conferenciaMeta`: pedidos do site PAGOS por dia, pra comparar com o
+   *      "Compras" do Gerenciador. Divergência = pixel + CAPI contando a
+   *      mesma venda duas vezes (event_id que não casa).
+   *
+   * Read-only. Não grava nada.
+   */
+  @Get('diagnostico/carrinho-recuperado')
+  async diagnosticoCarrinhoRecuperado(@Query('dias') diasRaw?: string) {
+    const dias = Math.min(Math.max(Number(diasRaw) || 30, 1), 180);
+    const desde = new Date(Date.now() - dias * 86_400_000);
+    // Carrinho pode ser bem mais velho que a venda — a janela de busca do
+    // carrinho é maior, senão a ponte parece menor do que é.
+    const desdeCarrinho = new Date(Date.now() - (dias + 60) * 86_400_000);
+
+    const soDigitos = (v: any) => String(v ?? '').replace(/\D+/g, '');
+    /** Telefone comparável: últimos 11 dígitos (mesma régua do scanConversions). */
+    const fone = (v: any) => {
+      const d = soDigitos(v);
+      return d.length >= 10 ? d.slice(-11) : '';
+    };
+    const email = (v: any) => String(v ?? '').trim().toLowerCase();
+
+    const [vendasPdv, carrinhos, pagosSite] = await Promise.all([
+      (this.prisma as any).order.findMany({
+        where: { source: 'pdv_online', createdAt: { gte: desde } },
+        select: {
+          id: true, wcOrderNumber: true, createdAt: true, totalAmount: true,
+          customerPhone: true, customerEmail: true, customerCpf: true,
+          utmCampaign: true, utmSource: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      // Carrinho abandonado = pedido do site que nunca foi pago.
+      (this.prisma as any).order.findMany({
+        where: { source: 'ecommerce', paidAt: null, createdAt: { gte: desdeCarrinho } },
+        select: {
+          id: true, wcOrderNumber: true, createdAt: true, totalAmount: true,
+          customerPhone: true, customerEmail: true, customerCpf: true,
+          utmCampaign: true, utmSource: true, utmMedium: true, utmId: true,
+          trackingInfo: true, status: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      // Pedido do site PAGO — a base pra conferir com o "Compras" do Meta.
+      (this.prisma as any).order.findMany({
+        where: { source: 'ecommerce', paidAt: { not: null }, createdAt: { gte: desde } },
+        select: { id: true, paidAt: true, totalAmount: true, utmCampaign: true },
+      }),
+    ]);
+
+    // Índices do carrinho por telefone/e-mail/CPF — 1 passada, sem N queries.
+    const porFone = new Map<string, any[]>();
+    const porEmail = new Map<string, any[]>();
+    const porCpf = new Map<string, any[]>();
+    const empilha = (m: Map<string, any[]>, k: string, v: any) => {
+      if (!k) return;
+      const arr = m.get(k);
+      if (arr) arr.push(v);
+      else m.set(k, [v]);
+    };
+    for (const c of carrinhos) {
+      empilha(porFone, fone(c.customerPhone), c);
+      empilha(porEmail, email(c.customerEmail), c);
+      empilha(porCpf, soDigitos(c.customerCpf), c);
+    }
+
+    const casados: any[] = [];
+    const semCarrinho: any[] = [];
+    for (const v of vendasPdv) {
+      const cands = [
+        ...(porFone.get(fone(v.customerPhone)) ?? []),
+        ...(porEmail.get(email(v.customerEmail)) ?? []),
+        ...(porCpf.get(soDigitos(v.customerCpf)) ?? []),
+      ];
+      // Carrinho tem que ser ANTES da venda. Entre vários, o mais recente
+      // antes da venda é o que a cliente realmente abandonou.
+      const antes = cands
+        .filter((c) => new Date(c.createdAt) < new Date(v.createdAt))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const carrinho = antes[0];
+      if (!carrinho) {
+        semCarrinho.push({
+          pedido: v.wcOrderNumber,
+          total: Number(v.totalAmount ?? 0),
+          criadoEm: v.createdAt,
+        });
+        continue;
+      }
+      let track: any = {};
+      try { track = carrinho.trackingInfo ? JSON.parse(carrinho.trackingInfo) : {}; } catch { track = {}; }
+      casados.push({
+        pedido: v.wcOrderNumber,
+        total: Number(v.totalAmount ?? 0),
+        vendaEm: v.createdAt,
+        carrinho: carrinho.wcOrderNumber,
+        carrinhoEm: carrinho.createdAt,
+        diasEntre: Math.round(
+          (new Date(v.createdAt).getTime() - new Date(carrinho.createdAt).getTime()) / 86_400_000,
+        ),
+        // Só conta como "tem campanha" se veio nome de campanha — utmSource
+        // sozinho ("facebook") não diz qual anúncio pagou.
+        campanha: carrinho.utmCampaign ?? null,
+        utmSource: carrinho.utmSource ?? null,
+        utmId: carrinho.utmId ?? null,
+        temFbc: !!track?.fbc,
+        temFbp: !!track?.fbp,
+        // Venda já tem UTM própria? Hoje nunca tem — é o furo.
+        vendaJaTemUtm: !!v.utmCampaign,
+      });
+    }
+
+    const comCampanha = casados.filter((c) => c.campanha);
+    const dentroDe7 = comCampanha.filter((c) => c.diasEntre <= 7);
+    const soma = (arr: any[]) => arr.reduce((s, x) => s + Number(x.total || 0), 0);
+
+    // Receita recuperada por campanha — o número que falta no ROAS.
+    const porCampanha = new Map<string, { vendas: number; valor: number }>();
+    for (const c of comCampanha) {
+      const k = String(c.campanha);
+      const cur = porCampanha.get(k) ?? { vendas: 0, valor: 0 };
+      cur.vendas += 1;
+      cur.valor += Number(c.total || 0);
+      porCampanha.set(k, cur);
+    }
+
+    // Conferência com o Gerenciador: pedidos pagos do site por dia.
+    const porDia = new Map<string, { pedidos: number; valor: number }>();
+    for (const p of pagosSite) {
+      const k = new Date(p.paidAt).toISOString().slice(0, 10);
+      const cur = porDia.get(k) ?? { pedidos: 0, valor: 0 };
+      cur.pedidos += 1;
+      cur.valor += Number(p.totalAmount || 0);
+      porDia.set(k, cur);
+    }
+
+    const diasOrdenados = [...comCampanha].map((c) => c.diasEntre).sort((a, b) => a - b);
+    const mediana = diasOrdenados.length
+      ? diasOrdenados[Math.floor(diasOrdenados.length / 2)]
+      : null;
+
+    return {
+      janelaDias: dias,
+      resumo: {
+        vendasPdvOnline: vendasPdv.length,
+        casaramComCarrinho: casados.length,
+        // ⚠️ ESTE é o número que decide: sem campanha no carrinho, a ponte
+        // não carrega nada e o problema está no tracking, não aqui.
+        comCampanhaNoCarrinho: comCampanha.length,
+        semCarrinhoNenhum: semCarrinho.length,
+        receitaRecuperadaComCampanha: Number(soma(comCampanha).toFixed(2)),
+        receitaSemOrigem: Number((soma(casados) + soma(semCarrinho) - soma(comCampanha)).toFixed(2)),
+        // Fora da janela de 7 dias o Meta não atribui — CAPI não recupera.
+        dentroJanelaMeta7d: dentroDe7.length,
+        foraJanelaMeta7d: comCampanha.length - dentroDe7.length,
+        medianaDiasAteRecuperar: mediana,
+        comFbcParaCapi: comCampanha.filter((c) => c.temFbc).length,
+      },
+      porCampanha: [...porCampanha.entries()]
+        .map(([campanha, v]) => ({ campanha, ...v, valor: Number(v.valor.toFixed(2)) }))
+        .sort((a, b) => b.valor - a.valor),
+      /** Compare com "Compras" do Gerenciador no MESMO dia. Meta > Flow =
+       *  pixel e CAPI contando a mesma venda 2x (event_id não casa). */
+      conferenciaMeta: [...porDia.entries()]
+        .map(([dia, v]) => ({ dia, pedidosPagosNoFlow: v.pedidos, valor: Number(v.valor.toFixed(2)) }))
+        .sort((a, b) => (a.dia < b.dia ? 1 : -1)),
+      amostraCasados: casados.slice(0, 25),
+      amostraSemCarrinho: semCarrinho.slice(0, 15),
+    };
+  }
+
   @Get('stats/counts')
   counts() {
     return this.orders.countByStatus();
