@@ -10,7 +10,6 @@ import { EmptyState } from '@/components/feedback/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SectionShell, type SectionState } from '@/components/checkout/SectionShell';
 import { IdentificationStep } from '@/components/checkout/IdentificationStep';
-import { FinalIdentityStep } from '@/components/checkout/FinalIdentityStep';
 import { ShippingStep, type ShippingSelection } from '@/components/checkout/ShippingStep';
 import { PaymentStep, type PaymentSelection } from '@/components/checkout/PaymentStep';
 import { ReviewCard } from '@/components/checkout/ReviewCard';
@@ -139,6 +138,8 @@ export default function CheckoutPage() {
   const [step, setStep] = useState<Step>(1);
   const [contact, setContact] = useState<CheckoutContact | null>(null);
   const [customer, setCustomer] = useState<CustomerIdentity | null>(null);
+  /** Ver `finalizar()`: guarda contra pedido duplicado no clique repetido. */
+  const enviandoRef = useRef(false);
   const [shipping, setShipping] = useState<ShippingSelection | null>(null);
   const [payment, setPayment] = useState<PaymentSelection | null>(null);
   const [coupon, setCoupon] = useState<CouponResult | null>(null);
@@ -236,27 +237,42 @@ export default function CheckoutPage() {
 
   /* ------------------------------------------------------------- SUBMIT */
 
-  async function finalizar() {
-    if (!customer || !shipping || !payment || submitting) return;
+  /**
+   * RECEBE O QUE ACABOU DE SER ESCOLHIDO (17/08).
+   *
+   * Agora o mesmo clique que escolhe PIX/cartão já cria o pedido. `setState`
+   * do React não é síncrono: ler `customer`/`payment` do estado aqui pegaria
+   * os valores VELHOS (null) e a função sairia calada no primeiro `if`.
+   * Por isso os parâmetros — o estado continua sendo atualizado pra tela,
+   * mas quem manda no envio é o argumento.
+   */
+  async function finalizar(over?: { customer?: CustomerIdentity; payment?: PaymentSelection }) {
+    const cliente = over?.customer ?? customer;
+    const pagamento = over?.payment ?? payment;
+    // A trava é um REF, não o estado: dois cliques rápidos no mesmo botão
+    // rodam na mesma renderização, onde `submitting` ainda vale false —
+    // e sairiam dois pedidos. O ref muda na hora, antes do await.
+    if (!cliente || !shipping || !pagamento || enviandoRef.current) return;
+    enviandoRef.current = true;
     setSubmitting(true);
     setSubmitError(null);
-    if (failureCount > 0) trackPaymentRetry(payment.method, failureCount + 1);
-    trackCheckoutSubmission(payment.method);
+    if (failureCount > 0) trackPaymentRetry(pagamento.method, failureCount + 1);
+    trackCheckoutSubmission(pagamento.method);
 
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
     // ao GA4, fbp/fbc casam a CAPI, attribution fecha o "de onde veio".
     const input: CreateOrderInput = {
-      customer,
+      customer: cliente,
       shippingAddress: shipping.address,
       shippingQuoteId: shipping.quote.id,
       cep: shipping.cep,
       items: lines,
       couponCode: coupon?.ok ? coupon.code : undefined,
-      paymentMethod: payment.method,
-      installments: payment.installments,
+      paymentMethod: pagamento.method,
+      installments: pagamento.installments,
       // Token do cartão (quando houver): o número ficou no navegador, isto é
       // a única coisa que viaja — ver CardForm.
-      cardToken: payment.cardToken,
+      cardToken: pagamento.cardToken,
       tracking: {
         anonymous_id: getAnonymousId(),
         session_id: getSessionId(),
@@ -280,7 +296,7 @@ export default function CheckoutPage() {
         setFailureCount(attempt);
         setLastErrorCode(code);
         const field = result?.field;
-        trackCheckoutError(payment.method, code, { stage: 'submission', attempt, field });
+        trackCheckoutError(pagamento.method, code, { stage: 'submission', attempt, field });
         if (code === 'card_declined') trackCardDeclined(attempt);
         // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
         // elegante e é específica ("cartão recusado", "cupom expirou") — bem
@@ -290,7 +306,7 @@ export default function CheckoutPage() {
         // fazia a cliente desistir depois da sexta vez.
         setSubmitError(
           (field ? AVISO_POR_CAMPO[field] : undefined) ??
-            mensagemAcionavel(code, result?.error, payment.method),
+            mensagemAcionavel(code, result?.error, pagamento.method),
         );
         return;
       }
@@ -318,9 +334,10 @@ export default function CheckoutPage() {
       const attempt = failureCount + 1;
       setFailureCount(attempt);
       setLastErrorCode('network_error');
-      trackCheckoutError(payment.method, 'network_error', { stage: 'submission', attempt });
-      setSubmitError(mensagemAcionavel('network_error', undefined, payment.method));
+      trackCheckoutError(pagamento.method, 'network_error', { stage: 'submission', attempt });
+      setSubmitError(mensagemAcionavel('network_error', undefined, pagamento.method));
     } finally {
+      enviandoRef.current = false;
       setSubmitting(false);
     }
   }
@@ -400,9 +417,10 @@ export default function CheckoutPage() {
                 // Se o contato mudou, a identidade final precisa ser confirmada outra vez.
                 if (customer?.phone !== c.phone || customer?.name !== c.name) setCustomer(null);
                 saveRecovery(c);
-                // Editou só a identificação com o resto pronto? Volta direto
-                // pra revisão — ninguém refaz etapa já concluída.
-                setStep(!shipping ? 2 : !payment ? 3 : 4);
+                // Editou só a identificação com o resto pronto? Volta pro
+                // pagamento — ninguém refaz etapa já concluída, e a etapa 4
+                // (revisão) não existe mais.
+                setStep(!shipping ? 2 : 3);
               }}
             />
           </SectionShell>
@@ -448,42 +466,52 @@ export default function CheckoutPage() {
             }
             onEdit={() => setStep(3)}
           >
+            {/* UM CLIQUE SÓ, E ELE COMPRA (dono, 17/08).
+
+                A etapa pede CPF e e-mail, libera PIX/cartão, e o clique no
+                método JÁ cria o pedido — no PIX, o QR aparece na sequência.
+                Não há mais "Continuar", "Revisar meu pedido" nem etapa 4.
+
+                O motivo é medido: de 14 a 17/08, quem tentou UMA vez
+                converteu 71%; duas, 25%; três ou mais, ZERO. Cada botão
+                intermediário era uma chance de desistir sem nada acontecer.
+
+                Nome e telefone vêm da etapa 1 e completam a identidade aqui
+                — por isso a etapa não abre sem `contact`. */}
             <PaymentStep
               total={total}
               itemsTracked={itemsTracked}
-              defaults={payment}
-              onDone={(p) => {
+              defaultsNota={customer ? { email: customer.email, cpf: customer.cpf } : null}
+              enviando={submitting}
+              onDone={(p, nota) => {
+                if (!contact) return;
                 setSubmitError(null);
                 setFailureCount(0);
                 setLastErrorCode(null);
+                const identity: CustomerIdentity = {
+                  name: contact.name,
+                  phone: contact.phone,
+                  email: nota.email,
+                  cpf: nota.cpf,
+                };
                 setPayment(p);
-                setStep(4);
+                setCustomer(identity);
+                void finalizar({ customer: identity, payment: p });
               }}
             />
 
-            {/* A ETAPA 4 ENTROU AQUI DENTRO (dono, 17/08).
+            {/* SÓ APARECE SE DEU ERRADO.
 
-                Eram os dados da nota — nome completo, e-mail e CPF — ocupando
-                uma ETAPA inteira entre a cliente e o pagamento. E a medicao de
-                14 a 17/08 e dura sobre passo a mais: 1 tentativa converte 71%,
-                2 convertem 25%, 3 ou mais convertem ZERO.
+                Era a revisão obrigatória antes de comprar; virou o painel de
+                recuperação depois de uma tentativa que falhou. Mostrar o
+                pedido inteiro tem valor exatamente aqui: cartão recusado ou
+                cupom expirado é quando a cliente precisa conferir os dados,
+                trocar pro PIX ou tentar de novo — antes disso era só um
+                obstáculo entre ela e a compra.
 
-                Agora eles aparecem logo depois de ela escolher o meio de
-                pagamento e ANTES de gerar — quando o PIX abre, ja esta tudo no
-                jeito, sem mais um clique em "Revisar meu pedido". */}
-            {contact && shipping && payment && !customer && (
-              <FinalIdentityStep contact={contact} metodo={payment?.method} onDone={(identity) => {
-                setCustomer(identity);
-                const confirmedContact = {
-                  name: identity.name,
-                  phone: identity.phone,
-                  recoveryConsent: contact.recoveryConsent,
-                };
-                setContact(confirmedContact);
-                saveRecovery(confirmedContact);
-              }} />
-            )}
-            {customer && shipping && payment && (
+                Ela continua com CPF, e-mail e os dois métodos logo acima:
+                a etapa 3 não colapsa, porque `step` nunca sai do 3. */}
+            {customer && shipping && payment && submitError && (
               <ReviewCard
                 customer={customer}
                 shipping={shipping}
