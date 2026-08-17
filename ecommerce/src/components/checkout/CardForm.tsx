@@ -52,10 +52,12 @@ const PAGARME_TOKENS_URL = 'https://api.pagar.me/core/v5/tokens';
 interface CardFormProps {
   /** Total estimado do pedido (o server recalcula — isto é só exibição). */
   total: number;
+  /** Pedido em processamento no checkout; impede um segundo envio. */
+  enviando?: boolean;
   onDone: (payment: { method: 'card'; installments: number; cardToken?: string }) => void;
 }
 
-export function CardForm({ total, onDone }: CardFormProps) {
+export function CardForm({ total, enviando = false, onDone }: CardFormProps) {
   const {
     register,
     handleSubmit,
@@ -210,10 +212,10 @@ export function CardForm({ total, onDone }: CardFormProps) {
       )}
 
       <div className="pt-1">
-        <Button type="submit" block className="sm:w-auto" disabled={tokenizando}>
+        <Button type="submit" block className="sm:w-auto" disabled={tokenizando || enviando}>
           {/* O clique aqui É a compra (17/08). "Continuar" prometia um
               passo a mais que não existe. */}
-          {tokenizando ? 'Validando cartão…' : `Pagar ${formatPrice(total)} com cartão`}
+          {tokenizando ? 'Validando cartão…' : enviando ? 'Finalizando pedido…' : `Pagar ${formatPrice(total)} com cartão`}
         </Button>
       </div>
     </form>
