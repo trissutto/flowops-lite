@@ -35,3 +35,8 @@ export function pixDiscount(base: number, method?: string | null): number {
   if (method !== 'pix' || PIX_DESCONTO_PCT <= 0) return 0;
   return round2((Math.max(0, base) * PIX_DESCONTO_PCT) / 100);
 }
+
+/** Total de exibição do PIX: base já descontada do cupom + frete. */
+export function pixTotal(base: number, shipping = 0): number {
+  return round2(Math.max(0, base) - pixDiscount(base, 'pix') + Math.max(0, shipping));
+}
