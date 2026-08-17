@@ -8,6 +8,13 @@ import { cn } from '@/lib/utils';
 
 export interface HomeCategory {
   name: string;
+  /**
+   * Vazio = atalho novo cadastrado na retaguarda sem arte e sem foto de
+   * categoria. O card sai com o nome sobre o champagne da marca em vez de
+   * sumir: quem cadastrou tem que VER o que cadastrou (sumir em silêncio é o
+   * que faz a pessoa mexer de novo achando que não salvou). Nunca foto de
+   * banco de imagem no lugar.
+   */
   image: string;
   href: string;
   alt: string;
@@ -34,13 +41,19 @@ export function HomeCategoryNav({ categories }: { categories: HomeCategory[] }) 
                 className="group flex min-h-11 flex-col items-center gap-2 text-center focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
               >
                 <span className="relative aspect-square w-full overflow-hidden rounded-full border border-primary/20 bg-champagne shadow-[0_5px_18px_rgba(49,40,30,0.08)]">
-                  <Image
-                    src={category.image}
-                    alt={category.alt}
-                    fill
-                    sizes="(max-width: 640px) 18vw, 150px"
-                    className="object-cover transition-transform duration-500 group-hover:scale-[1.04]"
-                  />
+                  {category.image ? (
+                    <Image
+                      src={category.image}
+                      alt={category.alt}
+                      fill
+                      sizes="(max-width: 640px) 18vw, 150px"
+                      className="object-cover transition-transform duration-500 group-hover:scale-[1.04]"
+                    />
+                  ) : (
+                    <span className="absolute inset-0 grid place-items-center px-1 text-center font-serif text-[0.6rem] leading-tight text-primary sm:text-sm">
+                      {category.name}
+                    </span>
+                  )}
                 </span>
                 <span className="text-[0.62rem] font-medium tracking-[0.08em] text-ink uppercase sm:text-xs">
                   {category.name}

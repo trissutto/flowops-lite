@@ -266,11 +266,31 @@ function CardVitrine({
   const [salvando, setSalvando] = useState(false);
   const eAtalho = vitrine.bloco === 'atalho';
 
-  // Só reinicia o formulário quando a LINHA muda de vitrine — recarregar a
-  // lista não pode jogar o retorno do servidor por cima do que está sendo
-  // digitado (foi o bug dos banners, 07/08).
+  /**
+   * Só reinicia o formulário quando a LINHA muda de vitrine — recarregar a
+   * lista não pode jogar o retorno do servidor por cima do que está sendo
+   * digitado (foi o bug dos banners, 07/08).
+   *
+   * Mas o que o SERVIDOR resolve tem que entrar: posição, ligado/desligado,
+   * contagem de peças e o título já salvo. Sem isso, salvar "Blusas que a
+   * gente ama" gravava certo e o cabeçalho continuava escrito "Blusas" até
+   * alguém dar F5 — parece que não salvou (achado no teste da tela).
+   */
   useEffect(() => {
-    setForm((f) => (f.id !== vitrine.id ? vitrine : { ...f, posicao: vitrine.posicao, ativo: vitrine.ativo }));
+    setForm((f) =>
+      f.id !== vitrine.id
+        ? vitrine
+        : {
+            ...f,
+            posicao: vitrine.posicao,
+            ativo: vitrine.ativo,
+            tituloExibido: vitrine.tituloExibido,
+            nomeFonte: vitrine.nomeFonte,
+            href: vitrine.href,
+            qtdPecas: vitrine.qtdPecas,
+            imagemUrl: vitrine.imagemUrl,
+          },
+    );
   }, [vitrine]);
 
   const campo = <K extends keyof Vitrine>(k: K, v: Vitrine[K]) => setForm((f) => ({ ...f, [k]: v }));

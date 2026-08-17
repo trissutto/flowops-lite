@@ -112,18 +112,15 @@ export async function getBlocosDaHome(): Promise<{ atalhos: AtalhoHome[]; carros
       timeoutMs: 15000,
     });
 
-    const atalhos: AtalhoHome[] = (r?.atalhos ?? [])
-      .map((a) => {
-        const local = ARTE_LOCAL.get(a.href);
-        const image = local?.image || a.imagemUrl || '';
-        return {
-          name: a.nome,
-          href: a.href,
-          image,
-          alt: local?.alt || a.alt || `${a.nome} plus size`,
-        };
-      })
-      .filter((a) => !!a.image);
+    const atalhos: AtalhoHome[] = (r?.atalhos ?? []).map((a) => ({
+      name: a.nome,
+      href: a.href,
+      // Arte do mockup > foto da tela Categorias > nenhuma (o card sai
+      // tipográfico — ver `HomeCategory.image`). Não sumimos com o atalho:
+      // quem cadastrou precisa ver que cadastrou.
+      image: ARTE_LOCAL.get(a.href)?.image || a.imagemUrl || '',
+      alt: ARTE_LOCAL.get(a.href)?.alt || a.alt || `${a.nome} plus size`,
+    }));
 
     const carrosseis: VitrineHome[] = (r?.carrosseis ?? [])
       .map((v) => ({
