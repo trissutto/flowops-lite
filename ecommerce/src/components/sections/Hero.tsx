@@ -2,6 +2,7 @@
 
 import Image, { getImageProps } from 'next/image';
 import { forwardRef } from 'react';
+import { preload } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { Button, type ButtonVariant } from '@/components/ui/Button';
 import { Container } from '@/components/layout/Container';
@@ -112,30 +113,36 @@ function medida(m?: Media): { width: number; height: number } | null {
  * não custava banda, mas era a mesma decisão escrita duas vezes: mexer numa
  * cópia e esquecer a outra é como o hero fica sem preload de novo.
  */
-function PreloadArte({ desktop, mobile }: { desktop?: string; mobile?: string }) {
+interface ArtePreload {
+  src: string;
+  srcSet?: string;
+}
+
+function PreloadArte({ desktop, mobile }: { desktop?: ArtePreload; mobile?: ArtePreload }) {
   if (!desktop) return null;
-  return (
-    <>
-      {mobile && (
-        <link
-          rel="preload"
-          as="image"
-          media="(max-width: 1023px)"
-          imageSrcSet={mobile}
-          imageSizes="100vw"
-          fetchPriority="high"
-        />
-      )}
-      <link
-        rel="preload"
-        as="image"
-        media={mobile ? '(min-width: 1024px)' : undefined}
-        imageSrcSet={desktop}
-        imageSizes="100vw"
-        fetchPriority="high"
-      />
-    </>
-  );
+
+  // A API de recursos do React envia estes hints para o <head>. O JSX <link>
+  // ficava no corpo, depois de ~55 KB de HTML, e o Lighthouse media 580 ms
+  // até descobrir o LCP. `media` mantém a arte móvel e a desktop mutuamente
+  // exclusivas, evitando baixar as duas.
+  if (mobile) {
+    preload(mobile.src, {
+      as: 'image',
+      media: '(max-width: 1023px)',
+      imageSrcSet: mobile.srcSet,
+      imageSizes: '100vw',
+      fetchPriority: 'high',
+    });
+  }
+  preload(desktop.src, {
+    as: 'image',
+    media: mobile ? '(min-width: 1024px)' : undefined,
+    imageSrcSet: desktop.srcSet,
+    imageSizes: '100vw',
+    fetchPriority: 'high',
+  });
+
+  return null;
 }
 
 export function Hero({
@@ -251,7 +258,10 @@ export function Hero({
               return (
                 <>
                   {priority && (
-                    <PreloadArte desktop={desktop.props.srcSet} mobile={mobile.props.srcSet} />
+                    <PreloadArte
+                      desktop={{ src: desktop.props.src, srcSet: desktop.props.srcSet }}
+                      mobile={{ src: mobile.props.src, srcSet: mobile.props.srcSet }}
+                    />
                   )}
                   <picture>
                     <source media="(max-width: 1023px)" srcSet={mobile.props.srcSet} />
@@ -473,7 +483,10 @@ const HeroArte = forwardRef<HTMLElement, {
        * largura e formato (AVIF/WebP) do otimizador.
        */}
       {priority && desktop && (
-        <PreloadArte desktop={desktop.props.srcSet} mobile={mobile?.props.srcSet} />
+        <PreloadArte
+          desktop={{ src: desktop.props.src, srcSet: desktop.props.srcSet }}
+          mobile={mobile ? { src: mobile.props.src, srcSet: mobile.props.srcSet } : undefined}
+        />
       )}
 
       {desktop && (
