@@ -87,6 +87,12 @@ export class RoutingService {
       shippingCep: order.shippingCep,
       pickupStoreCode: order.pickupStoreCode, // ativa lógica de retirada em loja se preenchido
       preferStoreCode: opts?.preferStoreCode ?? null, // override manual via radio button
+      // A loja que VENDEU entra primeiro no split com o que já tem em estoque
+      // (17/08). Sem isto o greedy a deixava de fora mesmo com metade das
+      // peças na arara — pacote e frete a mais, e o acerto ÷2,5 daquelas peças
+      // indo pra outra loja. No pedido do site é o canal 13 (sem estoque), ou
+      // seja, no-op.
+      sellerStoreCode: (order as any).sellerStoreCode ?? null,
     });
 
     // enriquece assignments com dados da loja (whatsapp, contato)

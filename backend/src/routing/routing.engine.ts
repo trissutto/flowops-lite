@@ -398,6 +398,50 @@ export class RoutingEngine {
     const plan: PickAssignment[] = [];
     const usedStores = new Set<string>();
 
+    /**
+     * A LOJA QUE VENDEU ENTRA PRIMEIRO (17/08) — decisão do dono.
+     *
+     * O greedy escolhia por cobertura de SKU sem saber quem vendeu. Numa venda
+     * online dividida isso deixava a loja vendedora DE FORA mesmo com metade
+     * das peças na arara:
+     *
+     *   ela tem 5 de 10 → engine acha Piracicaba(8) + Limeira(2) → roteia pras
+     *   duas → as 5 peças dela ficam na arara, a rede posta 2 pacotes que
+     *   podiam ser 2 (um dela, um de fora), paga frete a mais, e o acerto ÷2,5
+     *   daquelas peças vai pra outra loja.
+     *
+     * Peça que já está na mão de quem vendeu tem frete ZERO e risco zero —
+     * mandar buscar em outra loja é desperdício puro. Então ela é semeada no
+     * plano antes do greedy rodar, e o greedy cobre só o que sobrou.
+     *
+     * NÃO MUDA O SITE: pedido do site tem como vendedora a loja-canal 13, que
+     * não tem estoque — `covered` sai vazio e a semeadura é no-op. Só a venda
+     * online do PDV ganha, que é onde o furo existia.
+     *
+     * Não vale pra RETIRADA: ali quem manda é o `routePickup` (REGRA 0), que
+     * roda antes e trava na loja da retirada.
+     */
+    const vendedora = ctx.sellerStoreCode
+      ? stores.find((s) => s.code === ctx.sellerStoreCode)
+      : undefined;
+    if (vendedora) {
+      const covered: OrderItemInput[] = [];
+      for (const [sku, qty] of remaining.entries()) {
+        const available = stockMap.get(this.stockKey(vendedora.code, sku)) ?? 0;
+        // REGRA 4 vale igual: SKU é 100% de uma loja ou de nenhuma.
+        if (available >= qty) covered.push({ sku, quantity: qty });
+      }
+      if (covered.length > 0) {
+        plan.push(this.buildAssignment(vendedora, covered));
+        usedStores.add(vendedora.id);
+        for (const it of covered) remaining.delete(it.sku);
+        this.logger.log(
+          `[split] loja vendedora ${vendedora.code} entra com ${covered.length} SKU(s) ` +
+            `que já estão nela — greedy cobre os ${remaining.size} restante(s)`,
+        );
+      }
+    }
+
     while (remaining.size > 0) {
       let bestStore: StoreInput | null = null;
       let bestCovered: OrderItemInput[] = [];

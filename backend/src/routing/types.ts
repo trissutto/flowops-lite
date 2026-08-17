@@ -83,6 +83,20 @@ export interface RoutingContext {
    */
   preferStoreCode?: string | null;
   /**
+   * LOJA QUE VENDEU (17/08) — `Order.sellerStoreCode`. No split (REGRA 2) ela
+   * entra no plano ANTES do greedy com as peças que já tem: peça na mão de
+   * quem vendeu tem frete zero, e mandar buscar em outra loja é desperdício.
+   *
+   * Diferente do `preferStoreCode`: aquele é override manual da retaguarda e só
+   * vale quando a loja cobre o pedido INTEIRO (single-store). Este cobre o caso
+   * PARCIAL, que era onde a loja vendedora ficava de fora mesmo tendo metade
+   * das peças.
+   *
+   * No pedido do site é a loja-canal 13 (sem estoque) → semeadura vira no-op e
+   * o comportamento do site não muda.
+   */
+  sellerStoreCode?: string | null;
+  /**
    * Kill-switch do SPLIT DE SKU entre lojas. Por padrão (undefined) o split
    * está LIGADO: quando nenhuma loja tem a quantidade inteira de um SKU, a
    * engine divide a quantidade entre várias lojas (o mínimo de pacotes) em vez
