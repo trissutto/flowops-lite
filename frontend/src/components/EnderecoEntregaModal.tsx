@@ -20,6 +20,8 @@ import { api } from '@/lib/api';
  */
 
 export interface EnderecoEntrega {
+  /** Nome da destinatária — vai pra etiqueta e pro pedido (17/08: ON-000009 saiu "Cliente"). */
+  nome?: string | null;
   cep?: string | null;
   endereco?: string | null;
   numero?: string | null;
@@ -59,6 +61,7 @@ export function enderecoDoPedido(shippingAddressJson: string | null | undefined)
   }
 
   return {
+    nome: [a.first_name, a.last_name].map((s) => String(s ?? '').trim()).filter(Boolean).join(' '),
     cep: String(a.postcode ?? '').trim(),
     endereco, numero, complemento, bairro,
     cidade: String(a.city ?? '').trim(),
@@ -76,6 +79,7 @@ export default function EnderecoEntregaModal({
   onSalvo: (shipping: any) => void;
 }) {
   const [f, setF] = useState<EnderecoEntrega>({
+    nome: inicial.nome ?? '',
     cep: inicial.cep ?? '', endereco: inicial.endereco ?? '', numero: inicial.numero ?? '',
     complemento: inicial.complemento ?? '', bairro: inicial.bairro ?? '',
     cidade: inicial.cidade ?? '', uf: inicial.uf ?? '',
@@ -140,6 +144,13 @@ export default function EnderecoEntregaModal({
         {erro && <div className="mb-3 rounded bg-rose-50 px-3 py-2 text-xs text-rose-800">{erro}</div>}
 
         <div className="space-y-2.5">
+          <div>
+            <label className="text-[11px] uppercase tracking-wide text-slate-400">Nome da destinatária</label>
+            <input {...set('nome')} placeholder="Nome completo, como vai na etiqueta" className={campo} />
+            {!String(f.nome ?? '').trim() && (
+              <p className="mt-1 text-[11px] text-rose-700">Sem nome a etiqueta sai como &quot;Cliente&quot;.</p>
+            )}
+          </div>
           <div>
             <label className="text-[11px] uppercase tracking-wide text-slate-400">CEP</label>
             <input {...set('cep')} onBlur={(e) => void buscarCep(e.target.value)} className={campo} />
