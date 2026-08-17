@@ -81,15 +81,17 @@ export default async function HomePage({
       <HomeCategoryNav categories={categories} />
 
       {novidades.length > 0 && (
-        <Section width="wide" aria-labelledby="novidades-titulo" className="!py-8 sm:!py-12">
+        <Section width="wide" aria-labelledby="novidades-titulo" className="!py-5 sm:!py-12">
           <SectionTitle
             id="novidades-titulo"
             eyebrow="Acabou de chegar"
             title="Novidades da semana"
+            mobileTitle="Novidades"
             cta={{ label: 'Ver todas', href: novidadesHref }}
             align="left"
+            compactMobile
           />
-          <div className="mt-7 sm:mt-10">
+          <div className="mt-3 sm:mt-10">
             <ProductCarousel
               products={novidades}
               ariaLabel="Novidades da semana"
