@@ -81,8 +81,23 @@ async function registrar(entry: Omit<DispatchLog, 'id' | 'created_at'>): Promise
   });
 }
 
-/** Despacha o lote pra todos os destinos servidor habilitados. */
-export async function dispatchBatch(events: TrackingEvent[], signals: MetaUserSignals): Promise<{ dispatched: number }> {
+/**
+ * Despacha o lote pros destinos servidor habilitados.
+ *
+ * `somenteDestinos` existe pra uma situação só, e é melhor declarar do que
+ * deixar implícito: a visitante que ainda NÃO decidiu o banner tem os eventos
+ * de campanha repassados à Meta (que atende por interesse legítimo de medição,
+ * anonimizada), mas NÃO ao GA4. Omitir = todos, que é o caminho do purchase.
+ */
+export async function dispatchBatch(
+  events: TrackingEvent[],
+  signals: MetaUserSignals,
+  somenteDestinos?: readonly string[],
+): Promise<{ dispatched: number }> {
+  const destinos = somenteDestinos
+    ? SERVER_DESTINATIONS.filter((d) => somenteDestinos.includes(d.id))
+    : SERVER_DESTINATIONS;
+
   const novos = events.filter((ev) => !jaDespachado(ev));
   const repetidos = events.length - novos.length;
 
@@ -102,7 +117,7 @@ export async function dispatchBatch(events: TrackingEvent[], signals: MetaUserSi
 
   // Os destinos são independentes: Meta fora do ar não pode segurar o GA4.
   await Promise.all(
-    SERVER_DESTINATIONS.map(async (dest) => {
+    destinos.map(async (dest) => {
       if (!dest.isEnabled()) {
         await registrar({
           event_id: novos[0].event_id,
