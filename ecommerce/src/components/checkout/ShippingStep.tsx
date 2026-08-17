@@ -187,9 +187,13 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
    * campos e é o que faz as opções aparecerem no instante em que ela
    * termina o número, sem botão no meio.
    */
-  const [rua, numero, cidade, ufAtual] = watch(['street', 'number', 'city', 'uf']);
+  const [rua, numero, bairro, cidade, ufAtual] = watch(['street', 'number', 'neighborhood', 'city', 'uf']);
   const enderecoPronto =
-    !!rua?.trim() && !!numero?.trim() && !!cidade?.trim() && (ufAtual?.trim().length ?? 0) === 2;
+    !!rua?.trim() &&
+    !!numero?.trim() &&
+    !!bairro?.trim() &&
+    !!cidade?.trim() &&
+    (ufAtual?.trim().length ?? 0) === 2;
 
   /* ViaCEP — dispara quando o CEP fica completo. */
   useEffect(() => {
@@ -278,20 +282,35 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     onDone(selection);
   }
 
+  /**
+   * O ENDEREÇO É VALIDADO SEMPRE, EM QUALQUER MODALIDADE (dono, 17/08:
+   * "não precisa do botão confirmar, mas os campos devem ser preenchidos").
+   *
+   * A retirada pulava a validação inteira — `confirmar()` direto, sem olhar
+   * o formulário. Com o endereço agora ANTES da escolha, isso virava um
+   * buraco: dava pra chegar no pagamento com o número da casa em branco só
+   * por ter clicado em "Retirar na loja".
+   *
+   * E tinha um beco sem saída pior: com o endereço incompleto o bloco das
+   * opções nem renderiza, e a mensagem "Escolha como você quer receber"
+   * mora DENTRO dele. Clicar em Continuar não fazia nada visível — nenhum
+   * erro, nenhum movimento. Agora a validação vem primeiro e o próprio
+   * campo vazio acusa (o React Hook Form ainda joga o foco no primeiro).
+   *
+   * O endereço continua NÃO viajando no pedido de retirada: ele é exigido
+   * pra nota e pro cadastro, não pra entregar numa peça que ela vem buscar.
+   */
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedQuote) {
-      trackCheckoutValidationError('shipping', 'shipping_method');
-      setQuoteError('Escolha como você quer receber.');
-      return;
-    }
-    if (selectedQuote.kind === 'retirada') {
-      // Retirada não valida endereço — a peça espera na loja.
-      confirmar();
-      return;
-    }
     void handleSubmit(
-      (values) => confirmar(values),
+      (values) => {
+        if (!selectedQuote) {
+          trackCheckoutValidationError('shipping', 'shipping_method');
+          setQuoteError('Escolha como você quer receber.');
+          return;
+        }
+        confirmar(selectedQuote.kind === 'retirada' ? undefined : values);
+      },
       (invalid) => trackCheckoutValidationError('shipping', Object.keys(invalid)[0] ?? 'unknown'),
     )();
   }
@@ -394,6 +413,15 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             })}
           />
         </div>
+      )}
+
+      {/* SEM ISTO A TELA FICA MUDA. O bloco das opções não existe enquanto
+          falta campo, e uma tela que simplesmente não avança não ensina
+          nada — ela só cansa. Uma linha resolve. */}
+      {mostraEndereco && !enderecoPronto && (
+        <p className="-mt-2 text-small text-ink-muted">
+          Complete o endereço para ver as formas de entrega.
+        </p>
       )}
 
       {/* Cotações — só depois do endereço pronto. */}
