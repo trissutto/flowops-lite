@@ -1637,11 +1637,22 @@ export class PdvService {
    * não haveria onde guardar.
    *
    * O pedido online lê daqui: vira o `shippingMethod` do Order (SEDEX/PAC/
-   * MOTOBOY) e, no caso de retirada, marca `isPickup` na própria loja. Antes
-   * disso todo pedido online nascia "Correios R$ 0,00" e a matriz não tinha
-   * como saber se emitia etiqueta, chamava motoboy ou segurava pra retirada.
+   * MOTOBOY) e, no caso de retirada, marca `isPickup` na loja de retirada.
+   * Antes disso todo pedido online nascia "Correios R$ 0,00" e a matriz não
+   * tinha como saber se emitia etiqueta, chamava motoboy ou segurava pra
+   * retirada.
+   *
+   * LOJA QUE ATENDE (17/08): `entregaStoreCode` diz qual loja resolve a
+   * entrega — pra RETIRADA é onde a cliente busca, pra MOTOBOY é quem sai de
+   * moto. Null = a própria loja vendedora. Caso ON-000006: a loja-canal 13
+   * (carrinho abandonado) vendeu 11 peças pra cliente de São José dos Campos
+   * que queria retirar lá — e o botão só sabia gravar "retira NA LOJA 13",
+   * que não tem balcão. A matriz teve que rotear na mão e o card em SJC nem
+   * sabia que era retirada (ia oferecer "Gerar envio Correios"). Motoboy
+   * entra na mesma regra pelo mesmo motivo: a 13 não tem moto — quem tem é
+   * a loja na cidade da cliente, e é a vendedora quem sabe qual.
    */
-  async setEntrega(saleId: string, tipoRaw: string) {
+  async setEntrega(saleId: string, tipoRaw: string, entregaStoreCodeRaw?: string | null) {
     const tipo = String(tipoRaw || '').trim().toLowerCase();
     if (!(PdvService.ENTREGA_TIPOS as readonly string[]).includes(tipo)) {
       throw new BadRequestException(
@@ -1650,19 +1661,47 @@ export class PdvService {
     }
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: saleId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, storeCode: true },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
 
-    if (tipo === 'motoboy') await this.exigirEstoqueLocalParaMotoboy(saleId);
+    const entregaStoreCode = await this.resolverLojaQueAtende(tipo, sale.storeCode, entregaStoreCodeRaw);
+
+    // REGRA A só quando o motoboy sai DAQUI, agora: a peça tem que estar na
+    // arara. Se outra loja foi escolhida pra entregar, é ela quem recebe o
+    // card (e por transferência o que não tiver) — a regra não se aplica.
+    if (tipo === 'motoboy' && !entregaStoreCode) await this.exigirEstoqueLocalParaMotoboy(saleId);
 
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
-      data: { entregaTipo: tipo },
+      data: { entregaTipo: tipo, entregaStoreCode },
     });
-    return { ok: true, entregaTipo: tipo };
+    return { ok: true, entregaTipo: tipo, entregaStoreCode };
+  }
+
+  /**
+   * Loja que atende, válida, ou null. Só faz sentido com retirada/motoboy —
+   * SEDEX/PAC zeram o campo (trocar de retirada pra SEDEX não pode deixar
+   * uma loja fantasma na venda). Loja igual à vendedora também vira null:
+   * "atende aqui" é o padrão e não precisa de código.
+   */
+  private async resolverLojaQueAtende(
+    tipo: string,
+    lojaVendedora: string,
+    raw?: string | null,
+  ): Promise<string | null> {
+    if (tipo !== 'retirada' && tipo !== 'motoboy') return null;
+    const code = String(raw ?? '').trim();
+    if (!code || code === lojaVendedora) return null;
+    const store = await this.prisma.store.findUnique({
+      where: { code },
+      select: { code: true, active: true },
+    });
+    if (!store) throw new BadRequestException(`Loja ${code} não existe`);
+    if (!store.active) throw new BadRequestException(`Loja ${code} está inativa`);
+    return store.code;
   }
 
   /**
@@ -2493,8 +2532,31 @@ export class PdvService {
      *  Vale como treino mesmo se a venda foi criada ANTES de ligar o modo
      *  (sem isTraining) — impede baixa de estoque/Wincred reais em treino. */
     trainingRequest?: boolean;
+    /** FORMA DE ENTREGA da venda online, REGRAVADA aqui (17/08). O front
+     *  marca o botão na hora e manda o POST /entrega em fire-and-forget: se o
+     *  POST falha, ou se a venda ainda nem existia no clique, ou se o cron
+     *  do PIX fecha antes, a tela mostra SEDEX e o banco está vazio — e o
+     *  pedido nasce "Entrega (não informada)" (ON-000005, ON-000006). A
+     *  escolha que está na tela no momento do fechamento é a verdade. */
+    entregaTipo?: string | null;
+    entregaStoreCode?: string | null;
   }) {
-    const sale = await this.getSale(input.saleId);
+    let sale = await this.getSale(input.saleId);
+
+    // Regrava a entrega ANTES de qualquer coisa: é o que o pedido online lê.
+    // Só quando o front mandou algo — venda fechada pelo cron do PIX não
+    // passa por aqui com body, e não pode apagar o que a vendedora escolheu.
+    if (sale.status === 'open' && input.entregaTipo) {
+      try {
+        await this.setEntrega(sale.id, input.entregaTipo, input.entregaStoreCode ?? null);
+        sale = await this.getSale(input.saleId);
+      } catch (e: any) {
+        // Regra A do motoboy ou loja de retirada inválida: erro DE VERDADE —
+        // sobe pra vendedora corrigir, não fecha venda com entrega errada.
+        if (e instanceof BadRequestException) throw e;
+        this.logger.warn(`[pdv] finalize: falha ao regravar entrega da venda ${sale.id}: ${e?.message || e}`);
+      }
+    }
     // IDEMPOTENTE: se a venda ja esta finalized, retorna OK sem refazer nada.
     // Cobre race condition de double-click no botao Finalizar + auto-finalize
     // (setTimeout 80ms dispara depois de adicionarPagamento). Antes lancava
@@ -2773,6 +2835,7 @@ export class PdvService {
       wcOrderNumber: string;
       autoAtendida: boolean;
       fechadoNaLoja: boolean;
+      lojaEscolhida: { code: string; name: string } | null;
       storeName: string | null;
     } | null = null;
     if (isAllVendaOnline && this.pedidoOnline.enabled()) {

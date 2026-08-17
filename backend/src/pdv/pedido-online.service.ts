@@ -331,6 +331,8 @@ export class PedidoOnlineService {
     autoAtendida: boolean;
     /** Loja vendedora entregou ela mesma: estoque já baixou nela, sem card. */
     fechadoNaLoja: boolean;
+    /** Retirada/motoboy em OUTRA loja: o card já nasceu nela (com transferências, se faltar peça). */
+    lojaEscolhida: { code: string; name: string } | null;
     storeName: string | null;
   } | null> {
     try {
@@ -364,16 +366,50 @@ export class PedidoOnlineService {
         return null;
       }
 
+      /**
+       * LOJA QUE ATENDE (17/08) — `PdvSale.entregaStoreCode`. Só existe pra
+       * RETIRADA (onde a cliente busca) e MOTOBOY (quem sai de moto); null =
+       * a própria vendedora. Quando é OUTRA loja, o pedido não passa por
+       * auto-atende nem por matriz: nasce travado nela (`pickupStoreCode`),
+       * a engine manda o que ela não tem por transferência e ela recebe o
+       * card na hora. Caso ON-000006: a loja-canal 13 vendeu 11 peças pra
+       * cliente de São José dos Campos retirar lá — e o pedido nasceu
+       * "Entrega (não informada)", sem SJC em lugar nenhum.
+       */
+      const lojaQueAtende: any =
+        sale.entregaStoreCode && sale.entregaStoreCode !== store.code
+          ? await (this.prisma as any).store
+              .findFirst({ where: { code: sale.entregaStoreCode, active: true } })
+              .catch(() => null)
+          : null;
+      if (sale.entregaStoreCode && sale.entregaStoreCode !== store.code && !lojaQueAtende) {
+        this.logger.warn(
+          `[pedido-online] venda ${sale.id}: loja que atende ${sale.entregaStoreCode} não achada/inativa — segue como se fosse a vendedora`,
+        );
+      }
+      const lojaEntrega = lojaQueAtende ?? store;
+
       // RETIRADA EM LOJA não tem entrega — a cliente busca no balcão. Exigir
       // CEP dela derrubaria o pedido pro fluxo legado (sem card, sem trilho)
       // justamente no caso mais simples.
-      const entrega = this.entrega(sale.entregaTipo, store.name);
+      const entrega = this.entrega(sale.entregaTipo, lojaEntrega.name);
       if (!entrega.pickup && !this.digits(sale.customerCep)) {
         this.logger.warn(`[pedido-online] venda ${sale.id} SEM CEP — não vira Order (baixa local, fluxo legado)`);
         return null;
       }
 
-      const autoAtende = await this.lojaTemTudo(pecas, store.code).catch(() => false);
+      // Trava de roteamento: retirada E motoboy travam na loja que atende
+      // (a engine trata os dois como "pickup" — a loja fica com o card e o
+      // resto chega por transferência). `isPickup` continua só pra retirada:
+      // é o que decide banner/etiqueta/"cliente retirou" no card.
+      const travaNaLoja = entrega.pickup || entrega.kind === 'motoboy';
+      const outraLojaAtende = !!lojaQueAtende;
+
+      // Auto-atende só quando é a PRÓPRIA vendedora que atende. Se outra loja
+      // foi escolhida, checar o estoque da vendedora não diz nada.
+      const autoAtende = outraLojaAtende
+        ? false
+        : await this.lojaTemTudo(pecas, store.code).catch(() => false);
 
       /**
        * A LOJA VENDEDORA ENTREGA ELA MESMA (17/08) — não vira tarefa de
@@ -469,11 +505,13 @@ export class PedidoOnlineService {
               shippingAddress: JSON.stringify(this.montarShippingWc(sale)),
               totalAmount: Number(sale.total || 0),
               // FORMA DE ENTREGA (14/08): SEDEX/PAC/MOTOBOY/RETIRADA, do jeito
-              // que a loja escolheu. Retirada marca `isPickup` — a separação
-              // trava na própria loja e a tela mostra o banner de retirada.
+              // que a loja escolheu. `pickupStoreCode` é a TRAVA da engine
+              // (retirada E motoboy travam na loja que atende); `isPickup`
+              // é só retirada — decide banner, "cliente retirou" e nada de
+              // etiqueta.
               shippingMethod: entrega.label,
               isPickup: entrega.pickup,
-              pickupStoreCode: entrega.pickup ? store.code : null,
+              pickupStoreCode: travaNaLoja ? lojaEntrega.code : null,
               wcDateCreated: new Date(),
               checkoutInfo: JSON.stringify(checkoutInfo),
               items: {
@@ -543,6 +581,35 @@ export class PedidoOnlineService {
         }
       }
 
+      /**
+       * OUTRA LOJA ATENDE (retirada/motoboy em loja escolhida) → card NELA
+       * agora, sem esperar a matriz. A engine com `pickupStoreCode` é
+       * determinística (REGRA 0): trava na loja escolhida, e o que ela não
+       * tem vira card de transferência nas lojas que têm, apontando pra ela.
+       * Não há decisão humana a tomar aqui — passar pela matriz seria só um
+       * atraso (o ON-000006 ficou 2 dias esperando alguém rotear na mão).
+       * Se nem a rede cobre (`pickup-blocked`), o confirmRoute deixa em
+       * `awaiting_stock` e aí sim a matriz olha.
+       */
+      let lojaEscolhidaOk = false;
+      if (!fechadoNaLoja && !autoOk && outraLojaAtende) {
+        try {
+          const preview: any = await this.routing.previewRoute(order.id);
+          const r = await this.routing.confirmRoute(order.id, preview as RoutingResult);
+          lojaEscolhidaOk = !!(r as any)?.persisted;
+          if (!lojaEscolhidaOk) {
+            this.logger.warn(
+              `[pedido-online] ${order.wcOrderNumber}: roteamento pra ${lojaEntrega.name} não persistiu ` +
+                `(${preview?.strategy || 'sem estratégia'}) — fica pra matriz`,
+            );
+          }
+        } catch (e: any) {
+          this.logger.warn(
+            `[pedido-online] ${order.wcOrderNumber}: roteamento pra ${lojaEntrega.name} falhou (${e?.message || e}) — fica pra matriz`,
+          );
+        }
+      }
+
       // CONFIRMAÇÃO PRA CLIENTE (14/08) — a venda online nasceu muda. A
       // vendedora já falou com ela no WhatsApp, mas ninguém mandava o número
       // do pedido nem o registro do que foi comprado. Fire-and-forget e sem
@@ -557,12 +624,15 @@ export class PedidoOnlineService {
         ? `FECHADO na ${store.name} (estoque baixado lá, sem separação)`
         : autoOk
           ? `AUTO-ATENDE na ${store.name}`
-          : 'fila de roteamento';
+          : lojaEscolhidaOk
+            ? `card na ${lojaEntrega.name} (loja escolhida, ${entrega.pickup ? 'retirada' : 'motoboy'})`
+            : 'fila de roteamento';
       this.logger.log(`[pedido-online] venda ${sale.id} → pedido ${order.wcOrderNumber} (${destino})`);
       return {
         wcOrderNumber: order.wcOrderNumber,
         autoAtendida: autoOk,
         fechadoNaLoja,
+        lojaEscolhida: lojaEscolhidaOk ? { code: lojaEntrega.code, name: lojaEntrega.name } : null,
         storeName: store.name,
       };
     } catch (e: any) {

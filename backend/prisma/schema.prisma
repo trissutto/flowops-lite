@@ -1500,6 +1500,13 @@ model PdvSale {
   // a matriz não sabia se emitia etiqueta, chamava motoboy ou segurava pra
   // retirada. 'retirada' vira isPickup no Order (separa na própria loja).
   entregaTipo         String?  @map("entrega_tipo")
+  // LOJA QUE ATENDE a venda online (17/08) — só pra RETIRADA (onde a cliente
+  // busca) e MOTOBOY (quem sai de moto). Null = a própria loja vendedora. A
+  // venda online do SITE é fechada pela loja-canal 13 (sem arara nem balcão)
+  // pra cliente de qualquer cidade — quem atende quase nunca é quem vendeu.
+  // Vira Order.pickupStoreCode: a engine TRAVA a separação nessa loja e o que
+  // ela não tem chega por transferência antes de sair pra cliente.
+  entregaStoreCode    String?  @map("entrega_store_code")
   // Status + valores
   status          String   @default("open")
   subtotal        Float    @default(0)
