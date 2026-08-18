@@ -26,6 +26,7 @@ import { api } from '@/lib/api';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
 import { getDailyQuote } from '@/lib/daily-quote';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
+import HubGrid, { type HubItem } from '@/components/HubGrid';
 
 // === Sidebar: 5 itens (Dashboard + 4 hubs) — usado quando a sidebar volta ===
 const NAV: AdminNavItem[] = [
@@ -196,6 +197,23 @@ export default function DashboardHome() {
   const firstName = userName ? userName.split(' ')[0] : '';
   const heading = firstName ? `${greeting}, ${firstName}` : greeting;
 
+  /**
+   * OS HUBS COMO DADO, não como JSX solto: é o que permite arrastar pra
+   * reordenar (o `HubGrid` mexe numa lista, não em filhos escritos à mão).
+   * Imóveis continua só pro supremo — SAI da lista, não fica escondido.
+   */
+  const HUBS: HubItem[] = useMemo(() => [
+    { href: '/site', label: 'Site', subtitle: 'E-commerce', description: 'Pedidos · Marketing · Vitrine', tone: 'teal', icon: Globe2 },
+    { href: '/loja', label: 'Loja', subtitle: 'Operação física', description: 'Estoque · Crediário · Materiais', tone: 'green', icon: Store },
+    { href: '/retaguarda/instagram-hub', label: 'Instagram', subtitle: 'Redes & Live', description: 'Inbox · Live · Conta @lurdsplussize', tone: 'rose', icon: Instagram },
+    { href: '/retaguarda', label: 'Gestão', subtitle: 'Estratégico', description: 'Inteligência · Financeiro · Cobrança', tone: 'orange', icon: BarChart3 },
+    { href: '/retaguarda/rh', label: 'RH', subtitle: 'Recursos Humanos', description: 'Funcionárias · Ponto · Comissão · Treinamento', tone: 'slate', icon: Users },
+    ...(supremo
+      ? [{ href: '/imobiliario', label: 'Imóveis', subtitle: 'Patrimônio', description: 'Cadastro · IPTU · Contas · Cartório', tone: 'amber' as const, icon: Building2 }]
+      : []),
+    { href: '/config', label: 'Config', subtitle: 'Setup técnico', description: 'NFC-e · Pagamentos · WhatsApp', tone: 'purple', icon: Settings },
+  ], [supremo]);
+
   // Frase do dia (determinística — mesma o dia inteiro)
   const quote = useMemo(() => getDailyQuote(now), [now.toDateString()]);
 
@@ -279,15 +297,22 @@ export default function DashboardHome() {
       <AlertsSection alerts={alerts} />
 
       {/* === Atalhos pros 7 hubs (cores combinadas com KPIs) === */}
-      <section className="grid grid-cols-2 lg:grid-cols-7 gap-3 sm:gap-4 mb-5">
-        <HubCard href="/site"               label="Site"      subtitle="E-commerce"      description="Pedidos · Marketing · Vitrine" tone="teal"   icon={Globe2} />
-        <HubCard href="/loja"               label="Loja"      subtitle="Operação física" description="Estoque · Crediário · Materiais" tone="green"  icon={Store} />
-        <HubCard href="/retaguarda/instagram-hub" label="Instagram" subtitle="Redes & Live"  description="Inbox · Live · Conta @lurdsplussize" tone="rose" icon={Instagram} />
-        <HubCard href="/retaguarda"         label="Gestão"    subtitle="Estratégico"     description="Inteligência · Financeiro · Cobrança" tone="orange" icon={BarChart3} />
-        <HubCard href="/retaguarda/rh"      label="RH"        subtitle="Recursos Humanos" description="Funcionárias · Ponto · Comissão · Treinamento" tone="slate" icon={Users} />
-        {supremo && <HubCard href="/imobiliario"        label="Imóveis"   subtitle="Patrimônio"      description="Cadastro · IPTU · Contas · Cartório" tone="amber" icon={Building2} />}
-        <HubCard href="/config"             label="Config"    subtitle="Setup técnico"   description="NFC-e · Pagamentos · WhatsApp" tone="purple" icon={Settings} />
-      </section>
+      {/* O card é o LOCAL (tom rose próprio); só a lógica de arrastar é do HubGrid. */}
+      <HubGrid
+        chave="home"
+        itens={HUBS}
+        className="grid grid-cols-2 lg:grid-cols-7 gap-3 sm:gap-4 mb-5"
+        renderCard={(i) => (
+          <HubCard
+            href={i.href}
+            label={i.label}
+            subtitle={i.subtitle ?? ''}
+            description={i.description ?? ''}
+            tone={i.tone as keyof typeof HUB_TONES}
+            icon={i.icon}
+          />
+        )}
+      />
 
     </AdminShell>
   );

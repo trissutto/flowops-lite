@@ -22,7 +22,8 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
-import HubCard, { type HubTone } from '@/components/HubCard';
+import { type HubTone } from '@/components/HubCard';
+import HubGrid from '@/components/HubGrid';
 
 const NAV: AdminNavItem[] = [
   { key: 'dashboard', label: 'Dashboard',  href: '/',           icon: LayoutDashboard },
@@ -94,19 +95,7 @@ export default function ConfigHub() {
         </Link>
       }
     >
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-        {CONFIG_ITEMS.map((item) => (
-          <HubCard
-            key={item.href}
-            href={item.href}
-            label={item.label}
-            subtitle={item.subtitle}
-            description={item.description}
-            tone={item.tone}
-            icon={item.icon}
-          />
-        ))}
-      </section>
+      <HubGrid chave="config" itens={CONFIG_ITEMS} />
     </AdminShell>
   );
 }
