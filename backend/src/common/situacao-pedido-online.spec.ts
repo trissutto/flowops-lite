@@ -60,6 +60,37 @@ describe('situacaoPedidoOnline', () => {
       .toBe('cancelado');
   });
 
+  test('com rastreio, "enviado" diz ONDE a peça está', () => {
+    const s = situacaoPedidoOnline({
+      picks: [{ status: 'shipped', storeName: 'PIRACICABA' }],
+      trackingCode: 'AD811933800BR',
+      rastreio: { status: 'Objeto em trânsito - por favor aguarde', local: 'CAMPINAS/SP' },
+    });
+    expect(s.chave).toBe('enviado');
+    expect(s.detalhe).toContain('PIRACICABA despachou');
+    expect(s.detalhe).toContain('CAMPINAS/SP');
+  });
+
+  test('rastreio entregue manda mais que o status do pedido (o cron fecha depois)', () => {
+    const s = situacaoPedidoOnline({
+      orderStatus: 'shipped',
+      picks: [{ status: 'shipped', storeName: 'SUZANO' }],
+      rastreio: { status: 'Objeto entregue ao destinatário', local: 'MOGI DAS CRUZES/SP', entregue: true },
+    });
+    expect(s.chave).toBe('entregue');
+    expect(s.detalhe).toContain('MOGI DAS CRUZES/SP');
+    expect(pedidoOnlineEmAndamento(s.chave)).toBe(false);
+  });
+
+  test('sem rastreio o comportamento antigo continua igual', () => {
+    const s = situacaoPedidoOnline({
+      picks: [{ status: 'shipped', storeName: 'SANTOS' }],
+      trackingCode: 'AA123456789BR',
+      rastreio: null,
+    });
+    expect(s.detalhe).toContain('AA123456789BR');
+  });
+
   test('em andamento = tudo que ainda pode dar errado', () => {
     expect(pedidoOnlineEmAndamento('matriz')).toBe(true);
     expect(pedidoOnlineEmAndamento('enviado')).toBe(true);

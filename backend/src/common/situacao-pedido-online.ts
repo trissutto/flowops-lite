@@ -55,14 +55,38 @@ function nomeLoja(p?: PickResumo | null): string {
   return String(p?.storeName || p?.storeCode || 'outra loja');
 }
 
+/** O que a transportadora está dizendo AGORA (cache `rastreio_objetos`). */
+export type RastreioResumoInput = {
+  /** Descrição do evento mais recente ("Objeto saiu para entrega ao destinatário"). */
+  status?: string | null;
+  /** "CAMPINAS/SP" */
+  local?: string | null;
+  entregue?: boolean | null;
+};
+
 export function situacaoPedidoOnline(input: {
   orderStatus?: string | null;
   picks?: PickResumo[];
   trackingCode?: string | null;
   isPickup?: boolean;
+  /**
+   * O rastreio manda mais que o status do pedido quando diz ENTREGUE: o status
+   * só vira `delivered` no ciclo seguinte do cron, e até lá o card mostraria
+   * "Enviado" pra uma peça que já está na mão da cliente.
+   *
+   * ⚠️ SEM DATA AQUI DE PROPÓSITO: este helper roda no backend (UTC) e formatar
+   * data aqui sairia 3h atrasada na tela. A frase leva o fato; a tela mostra o
+   * "há quanto tempo" a partir do ISO.
+   */
+  rastreio?: RastreioResumoInput | null;
 }): SituacaoPedidoOnline {
   const st = String(input.orderStatus || '').trim().toLowerCase();
   const picks = (input.picks || []).filter(Boolean);
+  const rastreio = input.rastreio || null;
+  const movimento = String(rastreio?.status || '').trim();
+  const ondeEsta = String(rastreio?.local || '').trim();
+  /** "Objeto em trânsito · CAMPINAS/SP" — o que a transportadora diz, curto. */
+  const frase = movimento ? `${movimento}${ondeEsta ? ` · ${ondeEsta}` : ''}` : '';
 
   if (st === 'cancelled' || st === 'canceled' || st === 'refunded') {
     return {
@@ -72,13 +96,15 @@ export function situacaoPedidoOnline(input: {
       tom: 'rose',
     };
   }
-  if (st === 'delivered') {
+  if (st === 'delivered' || rastreio?.entregue) {
     return {
       chave: 'entregue',
       rotulo: 'Entregue',
       detalhe: input.isPickup
         ? 'A cliente já retirou.'
-        : 'Os Correios registraram a entrega.',
+        : ondeEsta
+          ? `Entregue em ${ondeEsta}.`
+          : 'A transportadora confirmou a entrega.',
       tom: 'mint',
     };
   }
@@ -90,9 +116,11 @@ export function situacaoPedidoOnline(input: {
       return {
         chave: 'enviado',
         rotulo: 'Enviado',
-        detalhe: input.trackingCode
-          ? `Já saiu — rastreio ${input.trackingCode}.`
-          : 'Já saiu.',
+        detalhe: frase
+          ? `Já saiu — ${frase}.`
+          : input.trackingCode
+            ? `Já saiu — rastreio ${input.trackingCode}.`
+            : 'Já saiu.',
         tom: 'sky',
       };
     }
@@ -115,9 +143,13 @@ export function situacaoPedidoOnline(input: {
     return {
       chave: 'enviado',
       rotulo: 'Enviado',
-      detalhe: input.trackingCode
-        ? `${loja} despachou — rastreio ${input.trackingCode}.`
-        : `${loja} despachou.`,
+      // Com rastreio, o que interessa é ONDE a peça está — o código sozinho a
+      // vendedora já tem no card pra copiar.
+      detalhe: frase
+        ? `${loja} despachou — ${frase}.`
+        : input.trackingCode
+          ? `${loja} despachou — rastreio ${input.trackingCode}.`
+          : `${loja} despachou.`,
       tom: 'sky',
     };
   }

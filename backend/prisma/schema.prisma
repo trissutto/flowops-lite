@@ -459,6 +459,11 @@ model Order {
   // em silêncio justo no momento em que a cliente está com a peça na mão e o
   // prazo de troca começa a correr. Carimbo = avisada (uma vez só).
   entregaAvisadaEm    DateTime? @map("entrega_avisada_em")
+  // ENTREGA CONFIRMADA PELO RASTREIO (18/08). Distinto de `entregaAvisadaEm`
+  // (que é "já falei com a cliente"): esta é a data em que a transportadora
+  // registrou a entrega, e é o marco zero do prazo de troca. Preenchida pelo
+  // RastreioSyncCron junto com status='delivered'.
+  deliveredAt         DateTime? @map("delivered_at")
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 
@@ -955,6 +960,42 @@ model OrderHistory {
   @@index([orderId, createdAt(sort: Desc)])
   @@index([userId])
   @@map("order_history")
+}
+
+/// RASTREIO DO OBJETO — cache do que a transportadora diz (18/08).
+///
+/// A tela da loja lista dezenas de pedidos de uma vez e recarrega sozinha: se
+/// cada card consultasse a API, seriam dezenas de requests por render. Aqui o
+/// cron consulta e a tela lê do banco.
+///
+/// A chave é o CÓDIGO, não o pedido: o mesmo objeto aparece no Order e no
+/// PickOrder, e pedido dividido tem um código por caixa.
+model RastreioObjeto {
+  codigo       String    @id
+  /// correios (contrato próprio) | maisenvios — quem respondeu por último.
+  provedor     String?
+  servico      String?
+  /// Descrição do evento mais recente ("Objeto saiu para entrega ao destinatário").
+  status       String?
+  /// Cidade/UF da unidade do evento ("CAMPINAS/SP").
+  local        String?
+  eventoEm     DateTime? @map("evento_em")
+  previsaoEm   DateTime? @map("previsao_em")
+  entregue     Boolean   @default(false)
+  entregueEm   DateTime? @map("entregue_em")
+   /// O objeto JÁ ESTAVA entregue na PRIMEIRA vez que o sistema olhou pra ele.
+   /// É notícia velha: serve pra tela, mas não dispara "seu pedido chegou" —
+   /// senão o primeiro deploy manda aviso pra quem recebeu semana passada.
+  entregaNaEstreia Boolean @default(false) @map("entrega_na_estreia")
+  /// Último erro de consulta (mantém o dado velho na tela em vez de sumir).
+  erro         String?
+  consultadoEm DateTime? @map("consultado_em")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // A fila do cron: pega os não entregues, do mais desatualizado pro mais novo.
+  @@index([entregue, consultadoEm])
+  @@map("rastreio_objetos")
 }
 
 model IntegrationLog {

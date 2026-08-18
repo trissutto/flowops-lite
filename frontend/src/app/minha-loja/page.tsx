@@ -131,6 +131,20 @@ interface VendidoOnlineRow {
   criadoEm: string | null;
   entrega: { label: string | null; isPickup: boolean; pickupStoreCode: string | null };
   trackingCode: string | null;
+  /**
+   * Onde o objeto está, do cache que o cron mantém (`rastreio_objetos`). Vem
+   * cru — a data é formatada AQUI, no fuso de quem está olhando: o backend roda
+   * em UTC e formatar lá sairia 3h atrasado.
+   */
+  rastreio: {
+    status: string | null;
+    local: string | null;
+    eventoEm: string | null;
+    previsaoEm: string | null;
+    entregue: boolean;
+    entregueEm: string | null;
+    consultadoEm: string | null;
+  } | null;
   atendendo: Array<{ status: string | null; storeCode: string | null; storeName: string | null }>;
   situacao: {
     chave: 'cancelado' | 'matriz' | 'aguardando' | 'separando' | 'pronto' | 'enviado' | 'entregue';
@@ -1645,11 +1659,73 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
 }
 
 /**
+ * "há 2 h", "ontem", "há 5 d" — quando o evento aconteceu, sem obrigar ninguém
+ * a comparar datas. Tempo relativo também é imune a fuso, que é o que mais
+ * erra nesta casa.
+ */
+function quandoFoi(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '';
+  const min = Math.round((Date.now() - t) / 60000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `há ${h} h`;
+  const d = Math.round(h / 24);
+  if (d === 1) return 'ontem';
+  if (d < 30) return `há ${d} dias`;
+  return new Date(iso).toLocaleDateString('pt-BR');
+}
+
+/**
+ * ONDE A PEÇA ESTÁ — a linha que faltava no card (18/08).
+ *
+ * A loja via "Enviado + código" e não sabia dizer nada além disso; pra
+ * responder "chegou?" tinha que abrir o site dos Correios. Aqui vem o último
+ * movimento, a cidade e há quanto tempo — o que a vendedora repassa pra
+ * cliente sem sair da tela.
+ */
+function LinhaRastreio({ r }: { r: VendidoOnlineRow['rastreio'] }) {
+  if (!r) return null;
+  if (!r.status) {
+    return (
+      <div className="text-[11px] text-slate-400">
+        Etiqueta emitida — a transportadora ainda não registrou movimento.
+      </div>
+    );
+  }
+  const entregue = !!r.entregue;
+  const quando = quandoFoi(r.entregueEm ?? r.eventoEm);
+  return (
+    <div
+      className={`flex items-start gap-1.5 rounded-lg px-2 py-1 text-[11px] leading-snug ${
+        entregue ? 'bg-emerald-50 text-emerald-900' : 'bg-slate-50 text-slate-700'
+      }`}
+    >
+      <span aria-hidden>{entregue ? '✅' : '🚚'}</span>
+      <span className="min-w-0 flex-1">
+        <span className="font-semibold">{r.status}</span>
+        {r.local ? <span className="text-slate-500"> · {r.local}</span> : null}
+        {quando ? <span className="text-slate-400"> · {quando}</span> : null}
+        {/* Previsão só enquanto está em trânsito: depois de entregue vira ruído. */}
+        {!entregue && r.previsaoEm ? (
+          <span className="text-slate-500">
+            {' '}· previsão {new Date(r.previsaoEm).toLocaleDateString('pt-BR')}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+/**
  * CARD DO PEDIDO QUE ESTA LOJA VENDEU (18/08).
  *
  * Read-only de propósito: a ação (separar, postar) é da loja que atende. O que
  * a vendedora precisa daqui é responder a cliente — situação em uma frase,
- * quem está com o pedido, o rastreio pra copiar e o WhatsApp dela.
+ * onde o objeto está, quem está com o pedido, o rastreio pra copiar e o
+ * WhatsApp dela.
  */
 function VendidoOnlineCard({ v }: { v: VendidoOnlineRow }) {
   const [copiado, setCopiado] = useState(false);
@@ -1684,6 +1760,8 @@ function VendidoOnlineCard({ v }: { v: VendidoOnlineRow }) {
       </div>
 
       <p className="text-xs text-slate-600 leading-snug">{v.situacao.detalhe}</p>
+
+      {v.trackingCode && <LinhaRastreio r={v.rastreio} />}
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         {v.entrega.label && (

@@ -475,17 +475,78 @@ export class CorreiosService {
     return { ok: true, html: String(html) };
   }
 
-  /** Rastreia um objeto pelo código (SRO/CWS). Devolve os eventos. */
+  /**
+   * Rastreia um objeto pelo código (SRO/CWS). Devolve os eventos.
+   *
+   * ⚠️ `Accept-Language: pt-BR` É OBRIGATÓRIO (achado em 18/08). Sem o header o
+   * SRO devolve **HTTP 400 SRO-018** ("permitido apenas pt-BR, en e es-ES para
+   * o idioma") em TODA consulta — e o idioma não vai na query, só no header.
+   * Como os crons que dependem disto tratam falha como "sem novidade"
+   * (`if (!t?.ok) continue`), a quebra era invisível: nenhum pedido virou
+   * `delivered` em 90 dias e o aviso "seu pedido chegou" saiu 3 vezes em
+   * 22.678 pedidos.
+   *
+   * Objeto de OUTRO contrato responde 200 com `mensagem: "SRO-009: Objeto não
+   * pertence ao contrato"` e zero eventos — é o caso das etiquetas emitidas
+   * pelo Mais Envios, que o `TrackingService` cobre no fallback.
+   */
   async rastrear(codigo: string): Promise<any> {
     const c = String(codigo || '').trim().toUpperCase();
     if (!/^[A-Z]{2}\d{9}[A-Z]{2}$/.test(c)) throw new BadRequestException('Código de rastreio inválido (ex.: AD722716975BR).');
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
-    const r = await axios.get(`${base}/srorastro/v1/objetos/${c}?resultado=T`, { headers, timeout: 20000, validateStatus: () => true });
+    const r = await axios.get(`${base}/srorastro/v1/objetos/${c}?resultado=T`, {
+      headers: { ...headers, 'Accept-Language': 'pt-BR' },
+      timeout: 20000,
+      validateStatus: () => true,
+    });
     if (r.status < 200 || r.status >= 300) {
       return { ok: false, erro: r.data?.msgs?.join('; ') || `HTTP ${r.status}`, raw: r.data };
     }
     const obj = r.data?.objetos?.[0] ?? null;
-    return { ok: true, codigo: c, eventos: obj?.eventos ?? [], raw: r.data };
+    return { ok: true, codigo: c, eventos: obj?.eventos ?? [], objeto: obj, raw: r.data };
+  }
+
+  /**
+   * Rastreio em LOTE — o SRO aceita vários códigos numa chamada só
+   * (`?codigosObjetos=A,B,C`), e é assim que o cron acompanha centenas de
+   * objetos sem virar centenas de requests.
+   *
+   * Códigos fora do padrão são descartados antes de sair daqui: o campo de
+   * rastreio é texto livre na mão da loja (já apareceu "Cliente retirou !") e
+   * um item inválido derruba a chamada inteira.
+   */
+  async rastrearLote(codigos: string[]): Promise<Map<string, any>> {
+    const validos = [
+      ...new Set(
+        (codigos || [])
+          .map((c) => String(c || '').trim().toUpperCase())
+          .filter((c) => /^[A-Z]{2}\d{9}[A-Z]{2}$/.test(c)),
+      ),
+    ];
+    const out = new Map<string, any>();
+    if (!validos.length) return out;
+    const headers = await this.auth.authHeader();
+    const base = this.auth.baseUrl;
+    // 50 por chamada — o teto do SRO.
+    for (let i = 0; i < validos.length; i += 50) {
+      const fatia = validos.slice(i, i + 50);
+      const r = await axios.get(`${base}/srorastro/v1/objetos`, {
+        params: { codigosObjetos: fatia.join(','), resultado: 'T' },
+        headers: { ...headers, 'Accept-Language': 'pt-BR' },
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+      if (r.status < 200 || r.status >= 300) {
+        this.logger.warn(
+          `[correios] rastreio em lote falhou (HTTP ${r.status}): ${r.data?.msgs?.join('; ') || ''}`,
+        );
+        continue;
+      }
+      for (const obj of r.data?.objetos ?? []) {
+        if (obj?.codObjeto) out.set(String(obj.codObjeto).toUpperCase(), obj);
+      }
+    }
+    return out;
   }
 }

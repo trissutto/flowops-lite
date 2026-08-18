@@ -39,6 +39,11 @@ A venda **finaliza só no Postgres** e enfileira job em `erp_outbox`; cron de 30
 ### Pagamento da Live — SERVER-SIDE, sem polling no navegador
 O flood que derrubou a live: polling per-browser no PagBank a cada 6s empilhando ciclos → REMOVIDO. A confirmação agora é `LivePdvPayReconcileCron` (15s): lê carrinhos `awaiting_payment` (1 query, máx 50/ciclo, guard de overlap), roda `checkPayment` (DB primeiro — o webhook já gravou; gateway ao vivo só com throttle de 8s/carrinho) → `onCartPaid` → socket `live-pdv:cart-paid` + ordens de separação. Botão manual = fallback humano. **Decisão do dono (02/07): manter assim; NÃO voltar polling no front.** Evolução futura: webhook chamar `onCartPaid` direto e o cron cair pra 60s.
 
+### Rastreio do objeto — `backend/src/tracking/`
+Fonte única de "onde a peça está" e de "chegou". `TrackingService` consulta em **cascata**: SRO dos Correios (contrato próprio) → **Mais Envios** (a maioria das etiquetas) → LinkeTrack (só se houver token). Nenhum provedor cobre tudo: objeto de outro contrato volta `SRO-009` com zero eventos. `RastreioSyncCron` (30min) mantém a tabela `rastreio_objetos`, e as LISTAS leem de lá — nunca da API. Quando o rastreio confirma a entrega, o pedido vira `delivered` + `deliveredAt` (**pedido dividido só fecha quando TODAS as caixas chegam**).
+⚠️ `Accept-Language: pt-BR` é obrigatório no SRO — sem ele, HTTP 400 em 100% das chamadas. Era essa a causa de 0 pedidos entregues em 90 dias e de 3 avisos "seu pedido chegou" em 22.678 pedidos (18/08).
+⚠️ **Regra da estreia**: objeto que entra no radar JÁ entregue é notícia velha — aparece na tela mas NÃO dispara aviso pra cliente.
+
 ### GigaMirrorService (financeiro) — `backend/src/financeiro/giga-mirror.service.ts`
 Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente lê 100% do espelho.
 
@@ -69,6 +74,8 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `SITE_PROMO_50` | on | `0` desliga a promoção de 50% AUTOMÁTICA do site (peça de MODA cadastrada até 31/12/2023 — a mesma regra do caixa, `common/promo-julho.ts`). O `precoPromo` digitado por peça continua valendo. Quem decide é o `PromoSiteService`, consultado pelos DOIS lados: a vitrine que mostra e a trava do carrinho que cobra — divergir aí faz o checkout recusar o pedido |
 | `PAGARME_LINK_HORAS` | 72 | Validade do link de pagamento da loja (era 24h chumbado no front). Teto da Pagar.me = 7 dias (168). A janela da lista "links pendentes" do PDV acompanha (+24h) |
 | `PONTO_IP_CHECK` | on | `0` desliga a regra "celular só bate ponto no WiFi da loja" (batida `pwa_selfie` vs IPs do heartbeat do PDV Electron; fail-open se não há IP <48h) |
+| `RASTREIO_SYNC` | on | `0` desliga o acompanhamento do objeto (cache `rastreio_objetos` para de atualizar; a tela mostra o último dado conhecido e nenhum pedido vira ENTREGUE sozinho) |
+| `RASTREIO_SYNC_LOTE` | 60 | Teto de objetos por ciclo (cron de 30min). A escada por idade já rarefaz o que é velho: até 3 dias de hora em hora, 4-10 dias de 4h, 11-30 dias 1x/dia, entregue nunca mais |
 
 ## Convenções de trabalho (Thiago)
 
