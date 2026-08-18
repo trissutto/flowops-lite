@@ -17,13 +17,27 @@ Transformar a oferta do vestido VLM-222 no banner principal da home, com uma com
 - Fundo: cenário neutro inspirado no estúdio da foto original, com parede bege texturizada, luz suave, profundidade e piso discreto. Não usar amarelo chapado.
 - O texto “Vestido VLM-222” não aparece visualmente no banner; a referência permanece no link e nos dados do produto.
 
+## Versão mobile aprovada
+
+- Direção visual: composição editorial dividida, derivada do hero desktop.
+- Proporção: vertical e compacta, adequada à primeira dobra em telas de 360, 390 e 430 pixels.
+- Texto e oferta ficam em uma área calma no topo esquerdo, sem cobrir rosto, corpo ou vestido.
+- A modelo aparece inteira à direita e abaixo, preservando rosto, roupa, caimento, pés e barra da fotografia oficial.
+- O cenário mantém a parede bege, luz suave e profundidade do desktop; não usar fundo amarelo chapado.
+- Chancela: “Linha Conforto”.
+- Título: “Conforto em sua forma mais elegante”.
+- Oferta: preço anterior de R$ 239,90 riscado e preço atual de R$ 139,90 em destaque.
+- CTA: “Comprar agora”, com área de toque mínima de 44 pixels.
+- Todo o hero leva a `/produto/ref-vlm-222`, preservando parâmetros de campanha.
+- O navegador deve carregar somente a imagem correspondente ao breakpoint atual, protegendo o LCP e evitando download duplo.
+
 ## Integração na home
 
-- A oferta substituirá o hero principal apenas no desktop nesta etapa.
+- A oferta substituirá o hero principal no desktop e no mobile.
 - O hero deve continuar sendo carregado com prioridade para proteger o LCP.
 - Categorias e benefícios permanecem imediatamente depois da primeira tela.
 - O banner VLM-222 atualmente localizado no meio da home será removido para evitar duplicidade.
-- A configuração mobile do hero não será redesenhada nesta etapa; continuará usando a experiência já existente até a arte mobile ser aprovada.
+- A experiência anterior do hero mobile será removida depois que a versão VLM-222 estiver validada nos três tamanhos previstos.
 
 ## Vitrines no celular
 
@@ -35,6 +49,7 @@ Transformar a oferta do vestido VLM-222 no banner principal da home, com uma com
 ## Validação
 
 - Conferir o hero em desktop largo e notebook.
+- Conferir o hero mobile em 360, 390 e 430 pixels, verificando leitura, área de toque e enquadramento.
 - Verificar que a foto oficial permanece nítida e natural.
 - Confirmar que qualquer clique no hero abre `/produto/ref-vlm-222` com UTMs preservadas.
 - Confirmar ausência do banner VLM-222 duplicado no meio da home.
