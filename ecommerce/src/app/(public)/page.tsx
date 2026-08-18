@@ -1,4 +1,3 @@
-import { Hero } from '@/components/sections/Hero';
 import { HomeBenefitsAndStores, HomeCategoryNav, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
 import { HomeVlm222Hero } from '@/components/sections/HomeVlm222Hero';
 import { VitrineGrid } from '@/components/sections/VitrineGrid';
@@ -8,7 +7,6 @@ import { InstagramCard } from '@/components/cards/InstagramCard';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { PERFIL_INSTAGRAM } from '@/data/content';
 import { stores } from '@/data/stores';
-import { getHeroDaHome } from '@/services/banners';
 import { getInstagram } from '@/services/instagram';
 import { getBlocosDaHome } from '@/services/vitrines-home';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
@@ -16,7 +14,7 @@ import { sanitizeCampaignParams, withCampaignParams } from '@/lib/campaign-links
 // HOME_CATEGORY_BASE saiu daqui: os atalhos agora vêm da retaguarda. A
 // constante continua sendo a ARTE aprovada de cada card — quem casa foto com
 // destino é `services/vitrines-home.ts`.
-import { HOME_NEWS_PATH, HOME_STORES_PATH } from '@/data/home';
+import { HOME_STORES_PATH } from '@/data/home';
 
 export const metadata = buildMetadata({
   title: "Lurd's Plus Size — Moda plus size elegante do 44 ao 60",
@@ -47,8 +45,7 @@ export default async function HomePage({
    * Continua tudo JUNTO com o hero: a cascata "hero → vitrine" atrasava o
    * HTML que revela a imagem LCP.
    */
-  const [hero, blocos, posts] = await Promise.all([
-    getHeroDaHome(),
+  const [blocos, posts] = await Promise.all([
     getBlocosDaHome(),
     getInstagram(6),
   ]);
@@ -57,7 +54,6 @@ export default async function HomePage({
     ...atalho,
     href: href(atalho.href),
   }));
-  const novidadesHref = href(HOME_NEWS_PATH);
   const storesHref = href(HOME_STORES_PATH);
   const sizeLinks = ['46', '48', '50', '52', '54', '56', '58', '60'].map((size) => ({
     size,
@@ -75,32 +71,6 @@ export default async function HomePage({
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
       <HomeVlm222Hero href={href('/produto/ref-vlm-222')} />
-
-      <div className="lg:hidden">
-        <Hero
-          image={hero.image}
-          imageMobile={hero.imageMobile}
-          eyebrow={hero.eyebrow}
-          title={
-            hero.lead || hero.emphasis ? (
-              hero.daRetaguarda ? (
-                <>
-                  {hero.lead}
-                  {hero.emphasis && <><br /><span className="text-primary-soft italic">{hero.emphasis}</span></>}
-                </>
-              ) : <>{hero.lead}{hero.emphasis && ` ${hero.emphasis}`}</>
-            ) : (
-              <span className="sr-only">Lurd&apos;s Plus Size — moda elegante do 44 ao 60</span>
-            )
-          }
-          subtitle={hero.subtitle}
-          primaryAction={{ label: 'Ver novidades', href: novidadesHref, variant: 'primary' }}
-          height={hero.daRetaguarda ? 'arte' : 'home'}
-          align={hero.daRetaguarda ? 'center' : 'left'}
-          overlay="none"
-          contentTone={hero.daRetaguarda ? 'light' : 'ink'}
-        />
-      </div>
 
       <HomeCategoryNav categories={categories} />
 
