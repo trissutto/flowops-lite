@@ -17,6 +17,7 @@ import {
   ClipboardList, Megaphone, Users, Globe, ShoppingBag,
   FileSearch, MessageCircle, Store, ArrowRightLeft, ArrowLeft,
   LayoutDashboard, Globe2, BarChart3, Settings, DollarSign, UserPlus, MapPin,
+  Tags, LayoutGrid,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -45,6 +46,15 @@ const SITE_ITEMS: SiteItem[] = [
   { href: '/marketing',                label: 'Marketing',       subtitle: 'CRM',          description: 'Recuperação · campanhas', tone: 'rose',  icon: Megaphone      },
   { href: '/retaguarda/vendedoras',    label: 'Vendedoras',      subtitle: 'Atribuição',   description: 'Quem vende cada pedido',  tone: 'orange', icon: Users         },
   { href: '/retaguarda/publicar-site', label: 'Publicar no Site',subtitle: 'IA',           description: 'Cadastros automáticos',   tone: 'green',  icon: Globe         },
+  /**
+   * AS DUAS TELAS QUE DESENHAM O SITE — moravam só dentro da Gestão, e quem
+   * cuida do online não achava (pedido do dono, 18/08).
+   *
+   * São coisas diferentes e a ordem aqui conta a sequência: primeiro a
+   * CATEGORIA existe (e recebe peça), depois ela pode virar vitrine na home.
+   */
+  { href: '/retaguarda/categorias',     label: 'Categorias do Site', subtitle: 'Vitrine',     description: 'Criar categoria e subcategoria · foto · ordem · destaque', tone: 'sky', icon: Tags },
+  { href: '/retaguarda/vitrines-home',  label: 'Vitrines da Home',  subtitle: 'Página inicial', description: 'Atalhos e carrosséis da home · ordem sem deploy',        tone: 'teal', icon: LayoutGrid },
   { href: '/retaguarda/leads',         label: 'Cadastros do Site', subtitle: 'Cupom 10%',  description: 'Quem deixou contato no popup', tone: 'rose', icon: UserPlus     },
   { href: '/retaguarda/cliques-lojas', label: 'Cliques nas Lojas', subtitle: 'Site → loja', description: 'Rota · WhatsApp · Instagram por unidade', tone: 'purple', icon: MapPin },
   { href: '/produtos',                 label: 'Produtos Site',   subtitle: 'WooCommerce',  description: 'Catálogo · variações',    tone: 'purple', icon: ShoppingBag   },
