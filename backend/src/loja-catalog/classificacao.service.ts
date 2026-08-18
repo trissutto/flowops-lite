@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { avisarVitrine } from '../common/avisar-vitrine';
 import { LojaCatalogService } from './loja-catalog.service';
+import { refBaseOf } from '../common/ref-base';
 
 /**
  * CLASSIFICAÇÃO EM LOTE — pôr 773 peças na árvore do site sem enlouquecer.
@@ -318,6 +319,154 @@ export class ClassificacaoService {
     return { ok: true, atualizadas: r.count };
   }
 
+  /** Slug de taxonomia normalizado — a comparação é sempre por aqui. */
+  private normSlug(v?: string | null): string {
+    return String(v || '').trim().toLowerCase();
+  }
+
+  /**
+   * AS REFs QUE SÃO A MESMA PEÇA — a família da REF pedida.
+   *
+   * No catálogo legado a cor virou REF nova (`900887` preta, `900887B` bege) e
+   * a vitrine mostra UM card pra família inteira, montado a partir do cadastro
+   * de UMA das irmãs — o `dono` do `montarCatalogo`, que nem sempre é a REF que
+   * a pessoa abriu na tela. Gravar categoria só na REF escolhida daria
+   * "marquei e não apareceu" toda vez que a dona do card fosse outra.
+   *
+   * A chave é a MESMA do catálogo (`grupoRef` quando a retaguarda decidiu,
+   * REF-BASE quando não, e a própria REF quando alguém desagrupou à mão):
+   * critério próprio aqui divergiria da vitrine no primeiro ajuste.
+   */
+  private async refsDaFamilia(refBusca: string): Promise<string[]> {
+    const exata = String(refBusca || '').trim().toUpperCase();
+    if (!exata) return [];
+    const base = refBaseOf(exata);
+    const candidatas: any[] = await (this.prisma as any).siteProduto.findMany({
+      where: { OR: [{ ref: exata }, { ref: { startsWith: base } }, { grupoRef: base }] },
+      select: { ref: true, grupoRef: true, grupoRefManual: true },
+    });
+    // `startsWith` traz vizinho que só PARECE irmão: a base de `9008871` é ela
+    // mesma, não `900887`. Quem confere é a chave, igual ao catálogo.
+    const chave = (l: any): string => {
+      const ref = String(l.ref || '').toUpperCase();
+      if (l.grupoRefManual && !l.grupoRef) return ref;
+      return String(l.grupoRef || '').trim().toUpperCase() || refBaseOf(ref);
+    };
+    const daExata = candidatas.find((l) => String(l.ref).toUpperCase() === exata);
+    const alvo = daExata ? chave(daExata) : base;
+    return [...new Set(candidatas.filter((l) => chave(l) === alvo).map((l) => String(l.ref)))];
+  }
+
+  /**
+   * AS CATEGORIAS DE UMA PEÇA — o que o seletor do Produto Master abre.
+   *
+   * Devolve a família junto: a tela mostra em quantas REFs a escolha vai
+   * pegar, porque "esta peça" na vitrine são várias linhas aqui dentro.
+   */
+  async categoriasDaPeca(refBusca: string) {
+    const refs = await this.refsDaFamilia(refBusca);
+    if (!refs.length) return { ok: false, erro: 'Peça sem cadastro no site' };
+
+    const linhas: any[] = await (this.prisma as any).siteProduto.findMany({
+      where: { ref: { in: refs } },
+      select: {
+        ref: true, nome: true, publicado: true,
+        categoria: true, subcategoria: true, categoriasExtras: true,
+      },
+    });
+    /**
+     * A REF PEDIDA MANDA; se ela não tem cadastro, vale a primeira irmã com
+     * categoria. Família com valores divergentes é resquício de classificação
+     * em lote feita antes do agrupamento — abrir pela mais preenchida é o que
+     * evita a tela vir vazia e apagar, no primeiro Salvar, o que existia.
+     */
+    const exata = String(refBusca || '').trim().toUpperCase();
+    const dona =
+      linhas.find((l) => String(l.ref).toUpperCase() === exata) ??
+      linhas.find((l) => l.categoria) ??
+      linhas[0];
+
+    const categoria = this.normSlug(dona?.categoria) || null;
+    const extras = [
+      ...new Set(
+        linhas
+          .flatMap((l) => (l.categoriasExtras ?? []) as string[])
+          .map((c) => this.normSlug(c))
+          .filter((c) => c && c !== categoria),
+      ),
+    ];
+    return {
+      ok: true,
+      ref: dona?.ref ?? exata,
+      nome: dona?.nome ?? null,
+      publicado: linhas.some((l) => l.publicado),
+      refs: linhas.map((l) => l.ref),
+      categoria,
+      subcategoria: this.normSlug(dona?.subcategoria) || null,
+      categoriasExtras: extras,
+    };
+  }
+
+  /**
+   * GRAVA AS CATEGORIAS DE UMA PEÇA — o "Salvar" do seletor do Produto Master.
+   *
+   * Escreve na família inteira, pelo motivo do `refsDaFamilia`. Passa pelos
+   * MESMOS caches que o lote derruba: sem isso a peça muda no banco e o site
+   * segue servindo a versão de até um minuto atrás — quem classificou conclui
+   * que a tela não salvou (foi o que aconteceu em 10/08/2026).
+   */
+  async salvarCategoriasDaPeca(input: {
+    ref: string;
+    categoria: string | null;
+    subcategoria: string | null;
+    categoriasExtras: string[];
+    quem: string;
+  }) {
+    const refs = await this.refsDaFamilia(input.ref);
+    if (!refs.length) return { ok: false, erro: 'Peça sem cadastro no site' };
+
+    const categoria = this.normSlug(input.categoria) || null;
+    const subcategoria = this.normSlug(input.subcategoria) || null;
+
+    /**
+     * EXTRA SÓ DE CATEGORIA QUE EXISTE, e nunca a principal repetida: slug
+     * inventado abriria vitrine que não está no menu, e a principal repetida
+     * contaria a peça duas vezes no card da categoria.
+     */
+    const deCima = new Set<string>(
+      ((await (this.prisma as any).siteCategoria.findMany({
+        where: { paiSlug: null },
+        select: { slug: true },
+      })) as any[]).map((c) => this.normSlug(c.slug)),
+    );
+    const extras = [...new Set((input.categoriasExtras || []).map((c) => this.normSlug(c)))].filter(
+      (c) => c && c !== categoria && deCima.has(c),
+    );
+
+    const r = await (this.prisma as any).siteProduto.updateMany({
+      where: { ref: { in: refs } },
+      data: {
+        categoria,
+        subcategoria,
+        categoriasExtras: extras,
+        classificadoPor: input.quem,
+        classificadoEm: new Date(),
+      },
+    });
+    this.logger.log(
+      `[classificacao] peça ${input.ref} (${r.count} REF) → ${categoria ?? '-'}` +
+        `/${subcategoria ?? '-'} + [${extras.join(', ')}] por ${input.quem}`,
+    );
+
+    // As páginas que mudam são a da principal E a de cada extra.
+    const tags = ['categorias', 'filtros', 'catalogo'];
+    for (const slug of [categoria, ...extras]) if (slug) tags.push(`categoria:${slug}`);
+    avisarVitrine(tags, this.logger, 'classificacao');
+    this.catalogo.invalidarCache();
+
+    return { ok: true, refs, atualizadas: r.count, categoria, subcategoria, categoriasExtras: extras };
+  }
+
   /**
    * O `where` do Prisma a partir dos filtros da tela.
    *
@@ -329,7 +478,17 @@ export class ClassificacaoService {
     if (params.publicado !== undefined) where.publicado = params.publicado;
     if (params.semSubcategoria) where.subcategoria = null;
     if (params.semCategoria) where.categoria = null;
-    if (params.categoria) where.categoria = params.categoria;
+    /**
+     * Filtrar por categoria acha a peça que está lá como EXTRA também — senão
+     * a tela de lote diria "Linha Conforto tem 27" enquanto o site mostra 60,
+     * e quem confere concluiria que a vitrine está errada.
+     */
+    if (params.categoria) {
+      where.OR = [
+        { categoria: params.categoria },
+        { categoriasExtras: { has: params.categoria } },
+      ];
+    }
     if (params.subcategoria) where.subcategoria = params.subcategoria;
 
     const porTexto = await this.refsPorTexto(params.busca, params.excluir);

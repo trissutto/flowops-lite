@@ -374,6 +374,41 @@ export class LojaCatalogAdminController {
     return this.classificacao.refs(this.filtroClassificacao(q));
   }
 
+  /**
+   * AS CATEGORIAS DE UMA PEÇA — o seletor do Produto Master.
+   *
+   * A tela de lote (`classificacao`) resolve o mutirão; esta resolve o caso
+   * oposto, que o dono pediu em 18/08: abrir UMA peça e dizer em quais
+   * vitrines ela entra. Vem depois de `classificacao/refs` na ordem das rotas
+   * porque "peca" não pode ser lido como outra coisa.
+   */
+  @Get('classificacao/peca/:ref')
+  classPecaLer(@Req() req: any, @Param('ref') ref: string) {
+    this.requireAdmin(req);
+    return this.classificacao.categoriasDaPeca(ref);
+  }
+
+  @Post('classificacao/peca/:ref')
+  classPecaSalvar(
+    @Req() req: any,
+    @Param('ref') ref: string,
+    @Body() body: {
+      categoria?: string | null;
+      subcategoria?: string | null;
+      categoriasExtras?: string[];
+    },
+  ) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.classificacao.salvarCategoriasDaPeca({
+      ref,
+      categoria: body?.categoria ?? null,
+      subcategoria: body?.subcategoria ?? null,
+      categoriasExtras: Array.isArray(body?.categoriasExtras) ? body.categoriasExtras : [],
+      quem,
+    });
+  }
+
   @Post('classificacao')
   classAplicar(
     @Req() req: any,
