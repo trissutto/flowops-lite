@@ -5601,6 +5601,25 @@ model SiteCupom {
 /// linha por coleção; `refs` = array ORDENADO de REF (a mesma REF do feed/pixel). A
 /// ordem do array É a ordem na vitrine e no carimbo do feed. Alimenta: página do site,
 /// item do menu e o `custom_label_1=top-semana` do feed do Meta.
+/// A ORDEM DA VITRINE, escolhida arrastando na PRÓPRIA página da categoria
+/// (dono, 18/08/2026: "preciso mover os produtos na ordem que eu quiser
+/// arrastando na tela do site").
+///
+/// Uma linha por categoria. `refs` é a lista NA ORDEM — quem não está nela
+/// entra depois, na ordem normal da vitrine: peça nova nunca some por não ter
+/// sido arrastada, e apagar a linha devolve a categoria ao automático.
+///
+/// Tabela própria, e não uma `SiteColecao` com slug inventado: coleção tem
+/// página pública (`/curadoria/:slug`) e apareceria no site como vitrine.
+model SiteCategoriaOrdem {
+  categoria     String   @id
+  refs          Json     @default("[]")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor String?  @map("atualizado_por")
+
+  @@map("site_categoria_ordem")
+}
+
 model SiteColecao {
   slug          String   @id
   nome          String?

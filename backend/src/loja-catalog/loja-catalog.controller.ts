@@ -357,6 +357,25 @@ export class LojaCatalogAdminController {
     return this.svc.recarimbarIdadePorVenda();
   }
 
+  /**
+   * A ORDEM DA VITRINE, arrastada na própria página da categoria do site.
+   *
+   * Fica no controller de admin (e não numa rota pública) porque quem arrasta
+   * é o dono logado: o site chama daqui pelo BFF, com a sessão do editor.
+   */
+  @Get('ordem-categoria/:slug')
+  ordemLer(@Req() req: any, @Param('slug') slug: string) {
+    this.requireAdmin(req);
+    return this.svc.lerOrdemCategoria(slug).then((refs) => ({ categoria: slug, refs }));
+  }
+
+  @Put('ordem-categoria/:slug')
+  ordemSalvar(@Req() req: any, @Param('slug') slug: string, @Body() body: { refs?: string[] }) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.svc.salvarOrdemCategoria(slug, Array.isArray(body?.refs) ? body.refs : [], quem);
+  }
+
   @Get('classificacao')
   classListar(@Req() req: any, @Query() q: any) {
     this.requireAdmin(req);

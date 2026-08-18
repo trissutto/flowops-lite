@@ -15,6 +15,7 @@ import { EditorialProductGrid, type GridInterruption } from './EditorialProductG
 import { useProductFilters } from '@/hooks/useProductFilters';
 import { useDebounced, useIntersection } from '@/hooks';
 import { fetchFacetas, fetchProducts, filterGroups } from '@/services/products';
+import { OrdemDaVitrine } from '@/components/editor/OrdemDaVitrine';
 import type { FilterState, Product, SortOption } from '@/types';
 import { LINK_WHATSAPP_SITE } from '@/data/contato';
 
@@ -314,6 +315,18 @@ function CategoryListingInner({
             />
           ) : (
             <>
+              {/* Só aparece pra quem provou sessão de admin — a cliente não
+                  recebe nem o botão. Ver o cabeçalho do componente. */}
+              <OrdemDaVitrine
+                categoria={category}
+                pecas={products.map((p) => ({
+                  ref: p.sku ?? p.id,
+                  name: p.name,
+                  image: p.images?.[0]?.src ?? null,
+                }))}
+                onSalvo={() => void query.refetch()}
+              />
+
               <EditorialProductGrid
                 products={products}
                 interruptions={interruptions}

@@ -1807,6 +1807,65 @@ export class LojaCatalogService {
     return pecas.filter((p) => p.imagens.length > 0);
   }
 
+  /**
+   * A ORDEM CURADA de uma categoria (a que foi arrastada na tela do site).
+   *
+   * Cache de 60s igual ao do catálogo: a vitrine inteira já é remontada nesse
+   * ritmo, e ler a ordem a cada página do feed infinito seria uma consulta por
+   * rolagem pra um dado que muda quando alguém arrasta.
+   */
+  private cacheOrdem: { at: number; mapa: Map<string, string[]> } | null = null;
+
+  private async ordemCurada(categoria: string): Promise<string[] | null> {
+    if (!this.cacheOrdem || Date.now() - this.cacheOrdem.at >= this.TTL_CATALOGO) {
+      const mapa = new Map<string, string[]>();
+      try {
+        const linhas: any[] = await (this.prisma as any).siteCategoriaOrdem.findMany();
+        for (const l of linhas) {
+          const refs = Array.isArray(l.refs) ? l.refs.map((r: any) => this.normRef(r)) : [];
+          if (refs.length) mapa.set(this.slugTaxonomia(l.categoria), refs);
+        }
+      } catch (e: any) {
+        // Sem a tabela (deploy antigo) a vitrine segue no automático.
+        this.logger.warn(`[catalogo] ordem curada indisponível: ${e?.message || e}`);
+      }
+      this.cacheOrdem = { at: Date.now(), mapa };
+    }
+    return this.cacheOrdem.mapa.get(categoria) ?? null;
+  }
+
+  /** O que a tela de arrastar lê: a ordem salva desta categoria. */
+  async lerOrdemCategoria(categoria: string): Promise<string[]> {
+    const linha = await (this.prisma as any).siteCategoriaOrdem.findUnique({
+      where: { categoria: this.slugTaxonomia(categoria) },
+    });
+    return Array.isArray(linha?.refs) ? linha.refs.map((r: any) => this.normRef(r)) : [];
+  }
+
+  /**
+   * GRAVA a ordem arrastada. Lista vazia APAGA a linha: é como a categoria
+   * volta pro automático, sem precisar de um segundo botão pra isso.
+   */
+  async salvarOrdemCategoria(categoria: string, refs: string[], quem: string) {
+    const slug = this.slugTaxonomia(categoria);
+    const lista = [...new Set((refs || []).map((r) => this.normRef(r)).filter(Boolean))];
+    if (!lista.length) {
+      await (this.prisma as any).siteCategoriaOrdem.deleteMany({ where: { categoria: slug } });
+    } else {
+      await (this.prisma as any).siteCategoriaOrdem.upsert({
+        where: { categoria: slug },
+        update: { refs: lista, atualizadoPor: quem },
+        create: { categoria: slug, refs: lista, atualizadoPor: quem },
+      });
+    }
+    // A vitrine tem que mudar AGORA pra quem acabou de arrastar: sem isto ele
+    // solta o card, recarrega e vê a ordem velha por até um minuto.
+    this.cacheOrdem = null;
+    this.invalidarCache();
+    avisarVitrine(['catalogo', `categoria:${slug}`], this.logger, 'ordem-vitrine');
+    return { ok: true, categoria: slug, refs: lista };
+  }
+
   /** Listagem paginada — o que a página de categoria e a busca consomem. */
   async listar(params: ListarParams) {
     const page = Math.max(1, Number(params.page) || 1);
@@ -1924,7 +1983,30 @@ export class LojaCatalogService {
     if (params.soDisponivel === true) pecas = pecas.filter((p) => p.disponivel);
 
     // 4) Ordenação (peça sem foto já ficou fora na montagem do catálogo)
-    this.ordenarPecas(pecas, params.ordenar);
+    /**
+     * A ORDEM ARRASTADA MANDA — mas só quando a cliente não escolheu outra.
+     *
+     * Uma categoria só (`cats.length === 1`): "Blusas,Vestidos" no filtro
+     * lateral não tem uma ordem curada só dela, e aplicar a de uma das duas
+     * daria uma vitrine que ninguém montou.
+     */
+    const catUnica = params.categoria && !String(params.categoria).includes(',')
+      ? this.slugTaxonomia(params.categoria)
+      : null;
+    const curada = !params.ordenar && catUnica ? await this.ordemCurada(catUnica) : null;
+    if (curada?.length) {
+      const posicao = new Map(curada.map((ref, i) => [ref, i]));
+      // Quem não foi arrastado vai DEPOIS, na ordem normal — peça nova não
+      // pode sumir da vitrine só porque ninguém a moveu ainda.
+      this.ordenarPecas(pecas, 'novidades');
+      pecas.sort((a, b) => {
+        const pa = posicao.get(this.normRef(a.ref)) ?? Number.MAX_SAFE_INTEGER;
+        const pb = posicao.get(this.normRef(b.ref)) ?? Number.MAX_SAFE_INTEGER;
+        return pa - pb;
+      });
+    } else {
+      this.ordenarPecas(pecas, params.ordenar);
+    }
 
     const total = pecas.length;
     const inicio = (page - 1) * perPage;
