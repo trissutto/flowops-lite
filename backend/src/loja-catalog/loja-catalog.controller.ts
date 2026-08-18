@@ -392,19 +392,14 @@ export class LojaCatalogAdminController {
   classPecaSalvar(
     @Req() req: any,
     @Param('ref') ref: string,
-    @Body() body: {
-      categoria?: string | null;
-      subcategoria?: string | null;
-      categoriasExtras?: string[];
-    },
+    @Body() body: { categorias?: string[]; subcategorias?: string[] },
   ) {
     this.requireAdmin(req);
     const quem = req?.user?.email || req?.user?.name || 'admin';
     return this.classificacao.salvarCategoriasDaPeca({
       ref,
-      categoria: body?.categoria ?? null,
-      subcategoria: body?.subcategoria ?? null,
-      categoriasExtras: Array.isArray(body?.categoriasExtras) ? body.categoriasExtras : [],
+      categorias: Array.isArray(body?.categorias) ? body.categorias : [],
+      subcategorias: Array.isArray(body?.subcategorias) ? body.subcategorias : [],
       quem,
     });
   }
