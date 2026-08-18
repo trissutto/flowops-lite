@@ -274,6 +274,12 @@ export class SiteCategoriasService {
         return {
           id: c?.id ?? null,
           slug,
+          /**
+           * QUEM É SUBcategoria — a tela precisa saber pra não listar
+           * "Manga curta" ao lado de "Blusas" como se fossem o mesmo nível
+           * (era o que acontecia: esta lista sempre veio achatada).
+           */
+          paiSlug: c?.paiSlug ?? null,
           nome: c?.nome ?? null,
           nomeExibido,
           titulo: c?.titulo ?? null,

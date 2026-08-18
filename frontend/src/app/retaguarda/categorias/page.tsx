@@ -3,26 +3,32 @@
 /**
  * CATEGORIAS DA VITRINE — a cara de cada /categoria/<slug> do site.
  *
- * ⚠️ ESTA TELA NÃO CRIA CATEGORIA. Quem cria é o cadastro do produto: a
- * categoria existe porque tem peça publicada nela. Aqui se VESTE o que já
- * existe — foto, nome de exibição, texto e ordem no menu.
+ * CRIA E VESTE. Até 18/08 esta tela só vestia (foto, nome, texto, ordem) e
+ * criar categoria só existia escondido na tela de classificação em lote —
+ * atrás de "marque uma peça primeiro". O dono mandou trazer pra cá, que é
+ * onde ele já vem mexer em nome, ordem e foto.
  *
- * Foi decisão consciente (dono 07/08): categoria cadastrada à mão sem peça
- * dentro vira vitrine vazia — o mesmo erro do "Fitness" que estava fixo no
- * menu do site com zero peça publicada.
+ * O medo de 07/08 ("categoria à mão vira vitrine vazia, igual ao Fitness que
+ * ficava no menu com zero peça") não some — mas quem protege disso NÃO é
+ * esconder o botão: é o `doCatalogo`, que só deixa entrar no menu do site
+ * categoria COM peça publicada. Categoria nova nasce vazia, aparece aqui com
+ * o aviso "sem peça — não aparece no site", e some do site sozinha se
+ * esvaziar de novo.
  *
  * Sem foto cadastrada, o site usa a foto da PEÇA MAIS NOVA da categoria. Ou
  * seja: subir foto aqui é opcional, serve pra fixar uma arte quando a
  * automática não representar bem a categoria.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { Image as ImageIcon, Loader2, Save, Trash2, Star } from 'lucide-react';
+import { Image as ImageIcon, Loader2, Plus, Save, Trash2, Star } from 'lucide-react';
 
 type Categoria = {
   id: string | null;
   slug: string;
+  /** Preenchido = é SUBcategoria e mora embaixo deste pai. */
+  paiSlug: string | null;
   nome: string | null;
   nomeExibido: string;
   titulo: string | null;
@@ -61,16 +67,42 @@ export default function CategoriasPage() {
 
   useEffect(() => { void carregar(); }, [carregar]);
 
+  /**
+   * A LISTA VINHA ACHATADA — "Manga curta" aparecia ao lado de "Blusas" como
+   * se fossem o mesmo nível. Aqui cada categoria leva as subs dela embaixo,
+   * que é o desenho real da árvore do site (e o único jeito de "criar
+   * subcategoria" ter onde morar).
+   *
+   * `orfas` existe porque sub cujo pai sumiu não pode evaporar da tela: ela
+   * continua no banco, ainda filtra peça, e alguém precisa poder consertar.
+   */
+  const { topo, subsPorPai, orfas } = useMemo(() => {
+    const topo = lista.filter((c) => !c.paiSlug);
+    const doTopo = new Set(topo.map((c) => c.slug));
+    const subsPorPai = new Map<string, Categoria[]>();
+    const orfas: Categoria[] = [];
+    for (const c of lista) {
+      if (!c.paiSlug) continue;
+      if (!doTopo.has(c.paiSlug)) { orfas.push(c); continue; }
+      if (!subsPorPai.has(c.paiSlug)) subsPorPai.set(c.paiSlug, []);
+      subsPorPai.get(c.paiSlug)!.push(c);
+    }
+    return { topo, subsPorPai, orfas };
+  }, [lista]);
+
   return (
     <div className="max-w-[1100px] mx-auto p-4 space-y-4">
       <div>
         <h1 className="text-xl font-black text-slate-800">Categorias da vitrine</h1>
         <p className="text-xs text-slate-500 mt-1">
-          As categorias vêm do cadastro dos produtos — aqui você só ajusta como elas aparecem no
-          site. Sem foto escolhida, o site usa a <b>foto da peça mais nova</b> da categoria.
-          Mudança aparece no site em até 1 hora.
+          Crie categorias e subcategorias, e ajuste como elas aparecem no site. Categoria nova
+          <b> nasce vazia</b> e só entra no menu depois que tiver peça dentro — quem põe peça é o
+          <b> Produto Master</b> (uma peça) ou <b>Classificar Produtos</b> (em lote). Sem foto
+          escolhida, o site usa a <b>foto da peça mais nova</b> da categoria.
         </p>
       </div>
+
+      <NovaCategoria onCriou={carregar} />
 
       {erro && (
         <div className="bg-rose-50 border border-rose-300 text-rose-800 rounded-lg p-3 text-sm font-bold">
@@ -85,19 +117,166 @@ export default function CategoriasPage() {
           Nenhuma categoria com peça publicada ainda.
         </div>
       ) : (
-        <div className="space-y-2">
-          {lista.map((c) => (
-            <CardCategoria key={c.slug} categoria={c} onMudou={carregar} />
+        <div className="space-y-3">
+          {topo.map((c) => (
+            <div key={c.slug} className="space-y-2">
+              <CardCategoria categoria={c} onMudou={carregar} />
+              <div className="ml-5 pl-3 border-l-2 border-slate-200 space-y-2">
+                {(subsPorPai.get(c.slug) ?? []).map((s) => (
+                  <CardCategoria
+                    key={s.slug}
+                    categoria={s}
+                    onMudou={carregar}
+                    paiNome={c.nomeExibido}
+                  />
+                ))}
+                <NovaSubcategoria pai={c.slug} paiNome={c.nomeExibido} onCriou={carregar} />
+              </div>
+            </div>
           ))}
+
+          {orfas.length > 0 && (
+            <div className="space-y-2 pt-2">
+              <p className="text-[11px] font-bold text-amber-700">
+                Subcategorias sem categoria pai — o pai foi removido ou renomeado
+              </p>
+              {orfas.map((s) => (
+                <CardCategoria key={s.slug} categoria={s} onMudou={carregar} paiNome={s.paiSlug ?? '?'} />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
+/**
+ * CRIAR CATEGORIA DE NÍVEL DE CIMA — "Linha Praia" pra uma campanha.
+ *
+ * Nasce ativa, vazia e no fim da ordem. Vazia ela NÃO aparece no site (o
+ * menu só lista categoria com peça publicada), então criar aqui não repete o
+ * caso "Fitness" — ver o cabeçalho do arquivo.
+ */
+function NovaCategoria({ onCriou }: { onCriou: () => void }) {
+  const [nome, setNome] = useState('');
+  const [criando, setCriando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function criar() {
+    const limpo = nome.trim();
+    if (!limpo) return;
+    setCriando(true);
+    setErro(null);
+    try {
+      const r = await api<{ ok?: boolean; erro?: string }>('/loja-catalog/classificacao/categoria', {
+        method: 'POST',
+        body: JSON.stringify({ nome: limpo }),
+      });
+      if (r?.ok === false) throw new Error(r?.erro || 'Não consegui criar');
+      setNome('');
+      onCriou();
+    } catch (e: unknown) {
+      setErro((e as Error)?.message?.replace(/^\d+:\s*/, '') || 'Não consegui criar');
+    } finally {
+      setCriando(false);
+    }
+  }
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg p-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex-1 min-w-[220px]">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Nova categoria</label>
+          <input
+            value={nome}
+            onChange={(e) => setNome(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void criar(); }}
+            placeholder="Linha Conforto"
+            className="w-full px-2 py-2 border border-slate-300 rounded text-sm"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => void criar()}
+          disabled={criando || !nome.trim()}
+          className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40"
+        >
+          {criando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+          Criar categoria
+        </button>
+        <p className="text-[11px] text-slate-400 basis-full">
+          Nasce vazia — só entra no menu do site depois que tiver peça dentro.
+        </p>
+      </div>
+      {erro && <p className="text-[11px] text-rose-700 font-semibold mt-1">{erro}</p>}
+    </div>
+  );
+}
+
+/** Cria uma subcategoria DENTRO de uma categoria — "Manga curta" em "Blusas". */
+function NovaSubcategoria({
+  pai, paiNome, onCriou,
+}: { pai: string; paiNome: string; onCriou: () => void }) {
+  const [nome, setNome] = useState('');
+  const [criando, setCriando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function criar() {
+    const limpo = nome.trim();
+    if (!limpo) return;
+    setCriando(true);
+    setErro(null);
+    try {
+      const r = await api<{ ok?: boolean; erro?: string }>('/loja-catalog/classificacao/subcategoria', {
+        method: 'POST',
+        body: JSON.stringify({ pai, nome: limpo }),
+      });
+      /**
+       * O backend RECUSA sub que reaproveite slug de categoria de cima — em
+       * 13/08 criar a sub "Blusas" dentro de Linha Conforto capturou a
+       * categoria Blusas inteira (248 peças) e ela sumiu do site na hora.
+       * A mensagem dele já sugere um nome livre; mostrar é o que evita a
+       * pessoa achar que o botão não funcionou.
+       */
+      if (r?.ok === false) throw new Error(r?.erro || 'Não consegui criar');
+      setNome('');
+      onCriou();
+    } catch (e: unknown) {
+      setErro((e as Error)?.message?.replace(/^\d+:\s*/, '') || 'Não consegui criar');
+    } finally {
+      setCriando(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <input
+          value={nome}
+          onChange={(e) => setNome(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void criar(); }}
+          placeholder={`nova subcategoria em ${paiNome}`}
+          className="flex-1 min-w-0 px-2 py-1.5 border border-dashed border-slate-300 rounded text-xs bg-white"
+        />
+        <button
+          type="button"
+          onClick={() => void criar()}
+          disabled={criando || !nome.trim()}
+          className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1.5 rounded border border-violet-300 text-violet-700 hover:bg-violet-50 disabled:opacity-40"
+        >
+          {criando ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+          Criar
+        </button>
+      </div>
+      {erro && <p className="text-[11px] text-rose-700 font-semibold mt-1">{erro}</p>}
+    </div>
+  );
+}
+
 function CardCategoria({
-  categoria, onMudou,
-}: { categoria: Categoria; onMudou: () => void }) {
+  categoria, onMudou, paiNome,
+}: { categoria: Categoria; onMudou: () => void; paiNome?: string }) {
   const [form, setForm] = useState<Categoria>(categoria);
   const [salvando, setSalvando] = useState(false);
   const [subindo, setSubindo] = useState(false);
@@ -261,6 +440,11 @@ function CardCategoria({
         <div className="flex-1 min-w-0 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-xs font-bold text-violet-700">{form.slug}</span>
+            {paiNome && (
+              <span className="text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+                ↳ subcategoria de {paiNome}
+              </span>
+            )}
             <span className="text-[11px] text-slate-500">{form.qtdPecas} peça(s) no site</span>
             {form.qtdPecas === 0 && (
               <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded">
