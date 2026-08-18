@@ -63,6 +63,7 @@
 
   /* ------------------------------------------------------------ TIPOGRAFIA */
   --font-display: var(--font-playfair), 'Playfair Display', Georgia, serif;
+  --font-editorial: var(--font-cormorant), 'Cormorant Garamond', Georgia, serif;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
   /* Escala tipográfica — clamp pra fluidez sem breakpoint */

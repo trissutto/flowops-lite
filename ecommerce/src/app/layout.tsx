@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Playfair_Display } from 'next/font/google';
+import { Cormorant_Garamond, Inter, Playfair_Display } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { buildMetadata, jsonLdGraph, organizationSchema, websiteSchema } from '@/lib/seo';
@@ -14,6 +14,15 @@ const playfair = Playfair_Display({
   variable: '--font-playfair',
   weight: ['400', '500', '600', '700'],
   style: ['normal', 'italic'],
+  display: 'swap',
+});
+
+/** Cormorant Garamond — assinatura editorial exclusiva das vitrines da home. */
+const cormorant = Cormorant_Garamond({
+  subsets: ['latin'],
+  variable: '--font-cormorant',
+  weight: ['500'],
+  style: ['normal'],
   display: 'swap',
 });
 
@@ -41,7 +50,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR" className={`${playfair.variable} ${inter.variable}`}>
+    <html lang="pt-BR" className={`${playfair.variable} ${cormorant.variable} ${inter.variable}`}>
       <head>
         {/* CONSENT MODE V2 — PRECISA ser o primeiro script da página. O Google
             exige que o estado `default: denied` chegue ANTES do gtag.js; se

@@ -31,6 +31,8 @@ interface SectionTitleProps {
   id?: string;
   /** Compacta título, CTA e elementos decorativos no mobile. */
   compactMobile?: boolean;
+  /** Variação tipográfica restrita a títulos editoriais, como vitrines da home. */
+  titleFont?: 'display' | 'editorial';
 }
 
 export function SectionTitle({
@@ -47,6 +49,7 @@ export function SectionTitle({
   className,
   id,
   compactMobile = false,
+  titleFont = 'display',
 }: SectionTitleProps) {
   const centered = align === 'center';
 
@@ -71,6 +74,9 @@ export function SectionTitle({
           id={id}
           className={cn(
             compactMobile ? 'mt-0 text-h2 sm:mt-4' : 'mt-4 text-h2',
+            titleFont === 'editorial'
+              ? 'font-editorial font-medium leading-[1.05] tracking-[-0.015em]'
+              : 'font-display',
             tone === 'light' ? 'text-light' : 'text-ink',
             centered ? 'max-w-3xl' : 'max-w-2xl',
           )}

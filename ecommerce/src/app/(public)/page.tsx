@@ -109,6 +109,7 @@ export default async function HomePage({
             }
             align="left"
             compactMobile
+            titleFont="editorial"
           />
           <div className="mt-3 sm:mt-10">
             <VitrineGrid products={vitrine.produtos} listName={vitrine.titulo} />
