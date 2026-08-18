@@ -21,11 +21,12 @@
  * palavras em qualquer ordem, pedaço de palavra vale, Enter força, Esc limpa.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import {
-  AlertTriangle, Download, Loader2, Package, Search, TrendingUp, X,
+  AlertTriangle, ChevronDown, ChevronRight, Download, Loader2, Package, Search, TrendingUp, X,
 } from 'lucide-react';
+import { ordemTamanho } from '@/lib/ordem-tamanho';
 
 type Item = {
   ref: string;
@@ -51,6 +52,12 @@ type Resposta = {
   totalPages: number;
   resumo: { pecas: number; valor: number; devolvidas: number };
   itens: Item[];
+};
+
+type Grade = {
+  ref: string;
+  cor: string | null;
+  tamanhos: Array<{ tamanho: string; pecas: number; devolvidas: number; estoque: number }>;
 };
 
 const brl = (n: number) =>
@@ -94,6 +101,44 @@ export default function VendasPorProdutoPage() {
   const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
   const [marcas, setMarcas] = useState<string[]>([]);
   const campo = useRef<HTMLInputElement>(null);
+  /** Qual linha está aberta (`REF|COR`) e a grade dela, já carregada. */
+  const [aberta, setAberta] = useState<string | null>(null);
+  const [grades, setGrades] = useState<Record<string, Grade | 'carregando'>>({});
+
+  /**
+   * A grade é carregada SOB DEMANDA, uma peça por vez: são 4 fontes de venda
+   * cruzadas com o estoque, e trazer isso pras 50 linhas da página de uma vez
+   * seria 50× a consulta mais cara da tela pra mostrar o que ninguém pediu.
+   * Uma vez carregada fica em memória — reabrir não vai ao servidor de novo.
+   */
+  const abrirGrade = useCallback(async (item: Item) => {
+    const chave = `${item.ref}|${item.cor ?? ''}`;
+    if (aberta === chave) { setAberta(null); return; }
+    setAberta(chave);
+    if (grades[chave]) return;
+    setGrades((g) => ({ ...g, [chave]: 'carregando' }));
+    try {
+      const q = new URLSearchParams({ ref: item.ref, cor: item.cor ?? '' });
+      if (de) q.set('de', de);
+      if (ate) q.set('ate', ate);
+      if (loja) q.set('loja', loja);
+      const r = await api<Grade>(`/intelligence/vendas-produto/grade?${q.toString()}`);
+      setGrades((g) => ({ ...g, [chave]: r }));
+    } catch {
+      // Falhou a grade, a linha de cima continua válida: tira o "carregando"
+      // e deixa a cascata dizer que não veio, sem derrubar o relatório.
+      setGrades((g) => {
+        const copia = { ...g };
+        delete copia[chave];
+        return copia;
+      });
+      setAberta(null);
+    }
+  }, [aberta, grades, de, ate, loja]);
+
+  // Trocar filtro invalida o que estava aberto: a grade é do período/loja que
+  // estavam valendo quando ela foi buscada.
+  useEffect(() => { setAberta(null); setGrades({}); }, [de, ate, loja, marca, buscaAtiva]);
 
   useEffect(() => {
     api<Array<{ code: string; name: string }>>('/stores').then(setLojas).catch(() => {});
@@ -324,6 +369,7 @@ export default function VendasPorProdutoPage() {
           <table className="w-full">
             <thead className="bg-slate-50 border-b">
               <tr>
+                <th className={`${th} w-8`} />
                 <th className={th}>REF · cor</th>
                 <th className={th}>Produto</th>
                 <th className={th}>Marca</th>
@@ -337,8 +383,19 @@ export default function VendasPorProdutoPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {dados.itens.map((i) => (
-                <tr key={`${i.ref}|${i.cor ?? ''}`} className="hover:bg-slate-50">
+              {dados.itens.map((i) => {
+                const chave = `${i.ref}|${i.cor ?? ''}`;
+                const grade = grades[chave];
+                return (
+                <Fragment key={chave}>
+                <tr
+                  className="hover:bg-slate-50 cursor-pointer"
+                  onClick={() => void abrirGrade(i)}
+                  title="Ver a grade: quanto vendeu e quanto tem, por tamanho"
+                >
+                  <td className="pl-3 text-slate-400">
+                    {aberta === chave ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                  </td>
                   <td className={td}>
                     <span className="font-mono font-bold text-violet-700">{i.ref}</span>
                     {i.cor && <span className="text-slate-500"> · {i.cor}</span>}
@@ -370,7 +427,86 @@ export default function VendasPorProdutoPage() {
                   </td>
                   <td className={`${td} text-slate-500`}>{dia(i.ultimaVenda)}</td>
                 </tr>
-              ))}
+
+                {aberta === chave && (
+                  <tr className="bg-slate-50/70">
+                    <td colSpan={11} className="px-6 py-3">
+                      {grade === 'carregando' || !grade ? (
+                        <span className="text-xs text-slate-400 flex items-center gap-2">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Montando a grade…
+                        </span>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          {/**
+                            * VENDIDAS e ESTOQUE na MESMA grade, uma linha embaixo
+                            * da outra (pedido do dono): "vendeu 30 e tem 81" não
+                            * decide nada; "vendeu 5 no 52 e tem 0 no 52" decide.
+                            */}
+                          <table className="text-sm">
+                            <thead>
+                              <tr>
+                                <th className="px-2 py-1 text-left text-[10px] font-bold uppercase text-slate-400">
+                                  Tamanho
+                                </th>
+                                {[...grade.tamanhos]
+                                  .sort((a, b) => ordemTamanho(a.tamanho) - ordemTamanho(b.tamanho))
+                                  .map((t) => (
+                                    <th key={t.tamanho} className="px-3 py-1 text-center font-bold text-slate-700 tabular-nums">
+                                      {t.tamanho}
+                                    </th>
+                                  ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td className="px-2 py-1 text-[11px] font-bold uppercase text-slate-500">Vendidas</td>
+                                {[...grade.tamanhos]
+                                  .sort((a, b) => ordemTamanho(a.tamanho) - ordemTamanho(b.tamanho))
+                                  .map((t) => (
+                                    <td key={t.tamanho} className="px-3 py-1 text-center tabular-nums font-semibold text-slate-800">
+                                      {t.pecas}
+                                      {t.devolvidas > 0 && (
+                                        <span className="text-[10px] text-rose-600"> (-{t.devolvidas})</span>
+                                      )}
+                                    </td>
+                                  ))}
+                              </tr>
+                              <tr>
+                                <td className="px-2 py-1 text-[11px] font-bold uppercase text-slate-500">Estoque hoje</td>
+                                {[...grade.tamanhos]
+                                  .sort((a, b) => ordemTamanho(a.tamanho) - ordemTamanho(b.tamanho))
+                                  .map((t) => (
+                                    /* Tamanho que VENDEU e zerou é o que ele abriu
+                                       a cascata pra achar — por isso grita. */
+                                    <td
+                                      key={t.tamanho}
+                                      className={`px-3 py-1 text-center tabular-nums font-semibold ${
+                                        t.estoque <= 0
+                                          ? 'text-rose-700 bg-rose-50 rounded'
+                                          : t.estoque < 5
+                                            ? 'text-amber-700'
+                                            : 'text-slate-600'
+                                      }`}
+                                      title={t.estoque <= 0 && t.pecas > 0 ? 'Vendeu e acabou' : undefined}
+                                    >
+                                      {t.estoque}
+                                    </td>
+                                  ))}
+                              </tr>
+                            </tbody>
+                          </table>
+                          <p className="mt-2 text-[11px] text-slate-400">
+                            Vendidas no período escolhido{loja ? ' e na loja escolhida' : ''} · estoque é o de
+                            hoje, na rede inteira.
+                          </p>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         )}
