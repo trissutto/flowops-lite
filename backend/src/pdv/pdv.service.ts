@@ -1361,6 +1361,11 @@ export class PdvService {
         customerCpf: true, customerName: true, customerEmail: true, customerPhone: true,
         customerCep: true, customerEndereco: true, customerNumero: true,
         customerBairro: true, customerCidade: true, customerUf: true,
+        // COMO A PEÇA SAI — a régua lê daqui pra saber se cobra endereço:
+        // RETIRADA em loja fecha sem CEP (18/08). Faltando no select, vinha
+        // `undefined` e a venda de retirada era barrada por falta de um
+        // endereço que ela não precisa ter.
+        entregaTipo: true,
       },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
@@ -1436,6 +1441,12 @@ export class PdvService {
     // longe do caixa: etiqueta saindo "Cliente" (ON-000009), pedido sem CEP
     // que nem vira Order (cai no fluxo legado, sem card e sem etiqueta) e
     // cliente que ninguém consegue avisar.
+    //
+    // EXCEÇÃO: RETIRADA EM LOJA não pede endereço (dono 18/08). A peça não
+    // viaja — a cliente busca no balcão — e cobrar CEP de quem vai buscar é
+    // pedir dado que ela não quer dar. Quem decide é o `entregaTipo` da
+    // venda, que a tela grava ANTES de gerar a cobrança; contato (nome, CPF,
+    // WhatsApp, e-mail) continua obrigatório em qualquer modalidade.
     //
     // Aqui é o ÚLTIMO portão: a tela barra ANTES de gerar PIX/link, então
     // nenhuma cobrança sai sem os dados — ninguém fica com dinheiro na conta

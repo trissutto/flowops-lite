@@ -11,6 +11,15 @@
  *   - sem ENDEREÇO        → o pedido não vira Order (cai no fluxo legado,
  *                           sem card e sem etiqueta) e a peça some no limbo
  *
+ * ⚠️ RETIRADA EM LOJA NÃO PEDE ENDEREÇO (dono 18/08/2026). Todo motivo da
+ * lista acima é sobre a peça VIAJANDO — e na retirada ela não viaja: a
+ * cliente busca no balcão da loja que ela mesma escolheu. Cobrar CEP/rua de
+ * quem vai buscar é pedir dado que a cliente não quer dar (e que ela dá
+ * errado só pra passar da tela), então o endereço só é obrigatório em
+ * SEDEX/PAC/MOTOBOY. O `pedido-online.service` já nasceu assim: em
+ * `entrega.pickup` ele dispensa o CEP e cria o Order do mesmo jeito — quem
+ * estava fora do combinado era esta régua.
+ *
  * Fonte ÚNICA da regra no backend. O PDV tem o espelho em
  * `frontend/src/lib/dados-cliente-online.ts` — mexeu aqui, mexe lá (a régua
  * divergir entre a tela que valida e o servidor que cobra é como nasce o
@@ -28,6 +37,14 @@ export type ClienteVendaOnline = {
   customerBairro?: string | null;
   customerCidade?: string | null;
   customerUf?: string | null;
+  /**
+   * COMO A PEÇA SAI (`PdvSale.entregaTipo`): 'sedex' | 'pac' | 'motoboy' |
+   * 'retirada'. É o que decide se o endereço é cobrado. Ausente/nulo =
+   * a vendedora ainda não escolheu → cobra endereço (padrão SEGURO: quem
+   * esquecer de passar o campo erra pro lado de pedir demais, não de deixar
+   * uma peça viajar sem destino).
+   */
+  entregaTipo?: string | null;
 };
 
 /** CPF com dígitos verificadores — mesmo algoritmo do checkout e da live. */
@@ -75,19 +92,53 @@ export function telefoneOk(raw?: string | null): boolean {
 }
 
 /**
- * O que ainda falta pra esta venda online poder andar. Lista vazia = completo.
- * Os rótulos são os MESMOS nomes dos campos do PDV — a vendedora lê o aviso e
- * sabe onde clicar, sem tradução ("Dados incompletos" sem dizer o campo foi o
- * que travou o checkout do site em 15/08).
+ * A peça VIAJA nesta venda? Só a retirada em loja fica de fora — em SEDEX,
+ * PAC e MOTOBOY alguém tem que levar a peça até um endereço.
  *
- * `complemento` fica de fora de propósito: a maioria dos endereços não tem.
+ * Modalidade não escolhida cai no `true`: o endereço passa a ser cobrado no
+ * momento em que a vendedora declara SEDEX/PAC/MOTOBOY, e até lá o portão de
+ * entrada usa `faltandoDadosBasicosClienteOnline` (que não fala de endereço).
  */
-export function faltandoDadosClienteOnline(c: ClienteVendaOnline): string[] {
+export function pecaViaja(entregaTipo?: string | null): boolean {
+  return String(entregaTipo || '').trim().toLowerCase() !== 'retirada';
+}
+
+/**
+ * O QUE VALE PRA QUALQUER VENDA ONLINE — a peça viajando ou não.
+ *
+ * Nome, CPF, WhatsApp e e-mail não são sobre entrega: são a NF-e, o
+ * antifraude e o único jeito de avisar a cliente que o pedido está pronto.
+ * A retirada precisa deles igual.
+ *
+ * É esta a régua do portão de entrada (botão "V. Online"), onde a forma de
+ * entrega ainda NÃO foi escolhida — a escolha mora no modal de pagamento.
+ * Cobrar endereço lá na frente trancaria a vendedora do lado de fora da
+ * única tela onde ela pode dizer que é retirada.
+ */
+export function faltandoDadosBasicosClienteOnline(c: ClienteVendaOnline): string[] {
   const falta: string[] = [];
   if (!nomeCompletoOk(c.customerName)) falta.push('nome completo (nome e sobrenome)');
   if (!cpfValido(c.customerCpf)) falta.push('CPF válido');
   if (!telefoneOk(c.customerPhone)) falta.push('WhatsApp com DDD');
   if (!emailOk(c.customerEmail)) falta.push('e-mail');
+  return falta;
+}
+
+/**
+ * O que ainda falta pra esta venda online poder andar. Lista vazia = completo.
+ * Os rótulos são os MESMOS nomes dos campos do PDV — a vendedora lê o aviso e
+ * sabe onde clicar, sem tradução ("Dados incompletos" sem dizer o campo foi o
+ * que travou o checkout do site em 15/08).
+ *
+ * O endereço entra na conta só quando a peça VIAJA (`entregaTipo`): retirada
+ * em loja fecha sem CEP, que é o caso da cliente que não quer passar dado
+ * justamente porque vai buscar.
+ *
+ * `complemento` fica de fora de propósito: a maioria dos endereços não tem.
+ */
+export function faltandoDadosClienteOnline(c: ClienteVendaOnline): string[] {
+  const falta = faltandoDadosBasicosClienteOnline(c);
+  if (!pecaViaja(c.entregaTipo)) return falta;
   if (String(c.customerCep || '').replace(/\D/g, '').length !== 8) falta.push('CEP');
   if (String(c.customerEndereco || '').trim().length < 3) falta.push('rua');
   if (!String(c.customerNumero || '').trim()) falta.push('número');

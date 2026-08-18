@@ -35,9 +35,12 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
+  type DadosClienteOnline,
   checarDadosClienteOnline,
   dadosClienteDaVenda,
+  faltandoDadosBasicosClienteOnline,
   faltandoDadosClienteOnline,
+  pecaViaja,
 } from '@/lib/dados-cliente-online';
 import { loadPrinterConfig } from '@/lib/printer-router';
 // Import ESTÁTICO (igual à página DANFE de reimpressão, que sempre imprimiu
@@ -2078,24 +2081,47 @@ function PdvPageInner() {
     setShowPayment(true);
   };
   /**
-   * VENDA ONLINE — CADASTRO COMPLETO OBRIGATÓRIO (dono 18/08).
+   * VENDA ONLINE — CADASTRO OBRIGATÓRIO DA CLIENTE (dono 18/08).
    *
-   * Balcão a cliente leva a sacola na mão; venda online a peça VIAJA e a
-   * venda vira pedido no trilho do site. Faltando dado, a falha aparece
-   * longe do caixa: etiqueta "Cliente", pedido sem CEP que nem vira Order
-   * (fluxo legado, sem card e sem etiqueta) e cliente que ninguém avisa.
+   * Balcão a cliente leva a sacola na mão; venda online a venda vira pedido
+   * no trilho do site. Faltando dado, a falha aparece longe do caixa:
+   * etiqueta "Cliente", pedido sem CEP que nem vira Order (fluxo legado, sem
+   * card e sem etiqueta) e cliente que ninguém avisa.
    *
-   * Lista vazia = pode seguir. Mesma régua do servidor
-   * (`backend/src/common/dados-cliente-online.ts`) — aqui ela barra ANTES de
-   * gerar PIX/link, pra nunca existir dinheiro na conta com venda travada.
+   * A régua tem DOIS níveis, e é o `entregaTipo` da venda que escolhe:
+   *   - CONTATO (nome, CPF, WhatsApp, e-mail) — sempre, em qualquer modalidade
+   *   - ENDEREÇO — só quando a peça VIAJA (SEDEX/PAC/MOTOBOY). RETIRADA EM
+   *     LOJA fecha sem CEP: a cliente busca no balcão e não quer passar
+   *     endereço só pra sair da tela (dono 18/08).
+   *
+   * Mesma régua do servidor (`backend/src/common/dados-cliente-online.ts`),
+   * que barra ANTES de gerar PIX/link — nunca existe dinheiro na conta com a
+   * venda travada por cadastro.
    */
-  const faltaDadosOnline = useMemo(
-    () => faltandoDadosClienteOnline(dadosClienteDaVenda(sale)),
-    [sale],
+  const clienteOnline = useMemo(() => dadosClienteDaVenda(sale), [sale]);
+  /**
+   * PORTÃO DE ENTRADA — só o que vale pra QUALQUER modalidade (nome, CPF,
+   * WhatsApp, e-mail). O endereço NÃO é cobrado aqui de propósito: a forma de
+   * entrega só é escolhida no modal de pagamento, então exigir CEP no botão
+   * trancaria a vendedora do lado de fora da única tela onde ela pode dizer
+   * que é RETIRADA — e retirada não pede endereço (dono 18/08). Quem cobra o
+   * endereço é o modal, com a modalidade já na mão, antes de qualquer
+   * cobrança sair.
+   */
+  const faltaContatoOnline = useMemo(
+    () => faltandoDadosBasicosClienteOnline(clienteOnline),
+    [clienteOnline],
   );
   /** Modal de cliente aberto pelo fluxo online = campos obrigatórios. */
   const [exigirDadosOnline, setExigirDadosOnline] = useState(false);
-  const abrirCadastroOnline = () => {
+  /**
+   * Modalidade que o cadastro deve cobrar. Vem do modal de pagamento (a
+   * escolha viva) ou da venda já gravada. `null` = ainda não escolheu → o
+   * cadastro pede só o contato e deixa o endereço opcional.
+   */
+  const [entregaDoCadastro, setEntregaDoCadastro] = useState<string | null>(null);
+  const abrirCadastroOnline = (entregaTipo?: string | null) => {
+    setEntregaDoCadastro(entregaTipo ?? (sale as any)?.entregaTipo ?? null);
     setExigirDadosOnline(true);
     setShowCustomer(true);
   };
@@ -2112,14 +2138,15 @@ function PdvPageInner() {
       return;
     }
     if (method === 'venda_online') {
-      // Cadastro COMPLETO antes do pagamento (dono 18/08): nome e sobrenome,
-      // CPF, WhatsApp, e-mail e endereço inteiro. Antes bastava ter CPF — e
-      // era assim que a venda ia embora sem endereço e sem nome de verdade.
-      if (faltaDadosOnline.length) {
+      // CONTATO antes do pagamento (dono 18/08): nome e sobrenome, CPF,
+      // WhatsApp e e-mail. Antes bastava ter CPF — e era assim que a venda ia
+      // embora sem nome de verdade. O ENDEREÇO é cobrado lá dentro, no modal,
+      // porque só lá se sabe se a peça viaja: retirada em loja não pede.
+      if (faltaContatoOnline.length) {
         toast(
           'warning',
           'Complete o cadastro da cliente',
-          `Venda online exige tudo — falta: ${faltaDadosOnline.join(', ')}.`,
+          `Venda online precisa de: ${faltaContatoOnline.join(', ')}.`,
         );
         abrirCadastroOnline();
         return;
@@ -3296,6 +3323,7 @@ function PdvPageInner() {
             uf: sale.customerUf || '',
           }}
           exigirCompleto={exigirDadosOnline}
+          exigirEndereco={!!entregaDoCadastro && pecaViaja(entregaDoCadastro)}
           onClose={() => { setShowCustomer(false); setExigirDadosOnline(false); }}
           onSave={saveCustomer}
         />
@@ -3385,7 +3413,7 @@ function PdvPageInner() {
           onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
           hasSeller={!!sale.sellerName}
           onNeedSeller={() => setShowConfirmSale(true)}
-          dadosOnlineFaltando={faltaDadosOnline}
+          clienteOnline={clienteOnline}
           onNeedCustomer={abrirCadastroOnline}
           stores={stores}
         />
@@ -4111,6 +4139,7 @@ function ConfirmSaleModal({
 function CustomerModal({
   initial,
   exigirCompleto = false,
+  exigirEndereco = false,
   onClose,
   onSave,
 }: {
@@ -4128,13 +4157,21 @@ function CustomerModal({
     uf?: string;
   };
   /**
-   * VENDA ONLINE (dono 18/08): cadastro COMPLETO obrigatório — nome e
-   * sobrenome, CPF válido, WhatsApp, e-mail e endereço inteiro. Sem isso a
-   * peça viaja sem destinatário: etiqueta sai "Cliente", pedido sem CEP nem
-   * vira Order e ninguém consegue avisar a cliente. No balcão fica tudo
-   * opcional, como sempre foi.
+   * VENDA ONLINE (dono 18/08): contato obrigatório — nome e sobrenome, CPF
+   * válido, WhatsApp e e-mail. Sem isso a venda vira pedido sem destinatário
+   * de verdade: etiqueta sai "Cliente" e ninguém consegue avisar a cliente.
+   * No balcão fica tudo opcional, como sempre foi.
    */
   exigirCompleto?: boolean;
+  /**
+   * A PEÇA VIAJA nesta venda (SEDEX/PAC/MOTOBOY) → endereço obrigatório
+   * também. Em RETIRADA EM LOJA fica `false`: a cliente busca no balcão e
+   * não quer passar endereço só pra fechar (dono 18/08). Também `false`
+   * enquanto a forma de entrega não foi escolhida — aí o endereço aparece
+   * como opcional, e vira obrigatório assim que ela declarar SEDEX/PAC/
+   * MOTOBOY no modal de pagamento.
+   */
+  exigirEndereco?: boolean;
   onClose: () => void;
   onSave: (d: {
     cpf: string;
@@ -4163,9 +4200,18 @@ function CustomerModal({
   const [bairro, setBairro] = useState(initial.bairro || '');
   const [cidade, setCidade] = useState(initial.cidade || '');
   const [uf, setUf] = useState(initial.uf || '');
-  // Auto-expande se já tem algum dado de endereço preenchido
+  /**
+   * Vermelho, asterisco e "Falta:" no bloco de endereço só quando ele é
+   * cobrado — ou seja, quando a peça VIAJA. Na retirada em loja o bloco
+   * continua na tela (a vendedora pode preencher se quiser), mas não trava
+   * nada.
+   */
+  const obrigaEndereco = exigirCompleto && exigirEndereco;
+  // Já aberto quando o endereço é cobrado (a peça viaja) ou quando a cliente
+  // já tem endereço no cadastro. Na RETIRADA fica fechado: é justamente o
+  // bloco que a cliente não quer preencher.
   const [showEndereco, setShowEndereco] = useState(
-    exigirCompleto || !!(initial.cep || initial.endereco || initial.cidade),
+    obrigaEndereco || !!(initial.cep || initial.endereco || initial.cidade),
   );
   const [cepLoading, setCepLoading] = useState(false);
   const [cepError, setCepError] = useState<string | null>(null);
@@ -4175,7 +4221,12 @@ function CustomerModal({
   // campo a campo o que está de pé e o servidor recusa o pagamento com a
   // MESMA lista. Régua diferente entre quem mostra e quem cobra é como nasce
   // o "preenchi tudo e não deixa fechar".
-  const campos = { cpf, name, email, phone, cep, endereco, numero, bairro, cidade, uf };
+  const campos = {
+    cpf, name, email, phone, cep, endereco, numero, bairro, cidade, uf,
+    // RETIRADA (ou entrega ainda não escolhida) não cobra endereço — a régua
+    // é a MESMA do servidor, que decide pelo `entregaTipo` da venda.
+    entregaTipo: exigirEndereco ? 'sedex' : 'retirada',
+  };
   const okCampo = checarDadosClienteOnline(campos);
   const faltaOnline = exigirCompleto ? faltandoDadosClienteOnline(campos) : [];
   // Vermelho só depois de tentar salvar OU quando o campo já tem coisa
@@ -4183,6 +4234,11 @@ function CustomerModal({
   const [tentouSalvar, setTentouSalvar] = useState(false);
   const errado = (ok: boolean, valor: string) =>
     exigirCompleto && !ok && (tentouSalvar || !!String(valor || '').trim());
+  // Endereço na RETIRADA não pinta de vermelho nem trava — não é cobrado.
+  const erradoEndereco = (ok: boolean, valor: string) =>
+    obrigaEndereco && errado(ok, valor);
+  const clsEndereco = (ok: boolean, valor: string, base: string) =>
+    `${base} ${erradoEndereco(ok, valor) ? 'border-rose-400 bg-rose-50' : ''}`;
   const cls = (ok: boolean, valor: string, base: string) =>
     `${base} ${errado(ok, valor) ? 'border-rose-400 bg-rose-50' : ''}`;
 
@@ -4391,8 +4447,17 @@ function CustomerModal({
             </div>
             {faltaOnline.length > 0 && (
               <div className="mt-1 leading-snug">
-                A peça vai pelo correio: precisa de <b>tudo</b>. Falta{' '}
+                {obrigaEndereco ? (
+                  <>A peça vai pelo correio: precisa de <b>tudo</b>. Falta </>
+                ) : (
+                  <>Falta </>
+                )}
                 <b>{faltaOnline.join(', ')}</b>.
+              </div>
+            )}
+            {exigirCompleto && !exigirEndereco && (
+              <div className="mt-1 leading-snug opacity-80">
+                Retirada em loja: <b>endereço não é preciso</b>.
               </div>
             )}
           </div>
@@ -4638,13 +4703,18 @@ function CustomerModal({
             <div className="space-y-2 mt-2">
               <div
                 className={`rounded p-2 text-[11px] border ${
-                  exigirCompleto
+                  obrigaEndereco
                     ? 'bg-rose-50 border-rose-200 text-rose-800'
                     : 'bg-cyan-50 border-cyan-200 text-cyan-800'
                 }`}
               >
-                {exigirCompleto ? (
+                {obrigaEndereco ? (
                   <>Endereço <b>completo é obrigatório</b> nesta venda — é pra onde a peça vai.</>
+                ) : exigirCompleto ? (
+                  <>
+                    <b>Retirada em loja não precisa de endereço</b> — a cliente busca no
+                    balcão. Preencha só se ela quiser deixar registrado.
+                  </>
                 ) : (
                   <>Obrigatório pra <b>Venda Online</b> (vai pelo correio). Opcional no balcão.</>
                 )}
@@ -4660,10 +4730,10 @@ function CustomerModal({
                       setCep(v);
                       if (v.length === 8) lookupCep(v);
                     }}
-                    placeholder={exigirCompleto ? 'CEP (só números) *' : 'CEP (só números)'}
+                    placeholder={obrigaEndereco ? 'CEP (só números) *' : 'CEP (só números)'}
                     maxLength={8}
                     inputMode="numeric"
-                    className={cls(okCampo.cep, cep, 'w-full border rounded px-3 py-2 text-sm font-mono')}
+                    className={clsEndereco(okCampo.cep, cep, 'w-full border rounded px-3 py-2 text-sm font-mono')}
                   />
                 </div>
                 {cepLoading && (
@@ -4679,15 +4749,15 @@ function CustomerModal({
               <input
                 value={endereco}
                 onChange={(e) => setEndereco(e.target.value)}
-                placeholder={exigirCompleto ? 'Logradouro (rua/avenida) *' : 'Logradouro (rua/avenida)'}
-                className={cls(okCampo.endereco, endereco, 'w-full border rounded px-3 py-2 text-sm')}
+                placeholder={obrigaEndereco ? 'Logradouro (rua/avenida) *' : 'Logradouro (rua/avenida)'}
+                className={clsEndereco(okCampo.endereco, endereco, 'w-full border rounded px-3 py-2 text-sm')}
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <input
                   value={numero}
                   onChange={(e) => setNumero(e.target.value)}
-                  placeholder={exigirCompleto ? 'Nº *' : 'Nº'}
-                  className={cls(okCampo.numero, numero, 'border rounded px-3 py-2 text-sm')}
+                  placeholder={obrigaEndereco ? 'Nº *' : 'Nº'}
+                  className={clsEndereco(okCampo.numero, numero, 'border rounded px-3 py-2 text-sm')}
                 />
                 <input
                   value={complemento}
@@ -4699,22 +4769,22 @@ function CustomerModal({
               <input
                 value={bairro}
                 onChange={(e) => setBairro(e.target.value)}
-                placeholder={exigirCompleto ? 'Bairro *' : 'Bairro'}
-                className={cls(okCampo.bairro, bairro, 'w-full border rounded px-3 py-2 text-sm')}
+                placeholder={obrigaEndereco ? 'Bairro *' : 'Bairro'}
+                className={clsEndereco(okCampo.bairro, bairro, 'w-full border rounded px-3 py-2 text-sm')}
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <input
                   value={cidade}
                   onChange={(e) => setCidade(e.target.value)}
-                  placeholder={exigirCompleto ? 'Cidade *' : 'Cidade'}
-                  className={cls(okCampo.cidade, cidade, 'col-span-2 border rounded px-3 py-2 text-sm')}
+                  placeholder={obrigaEndereco ? 'Cidade *' : 'Cidade'}
+                  className={clsEndereco(okCampo.cidade, cidade, 'col-span-2 border rounded px-3 py-2 text-sm')}
                 />
                 <input
                   value={uf}
                   onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))}
-                  placeholder={exigirCompleto ? 'UF *' : 'UF'}
+                  placeholder={obrigaEndereco ? 'UF *' : 'UF'}
                   maxLength={2}
-                  className={cls(okCampo.uf, uf, 'border rounded px-3 py-2 text-sm font-mono uppercase')}
+                  className={clsEndereco(okCampo.uf, uf, 'border rounded px-3 py-2 text-sm font-mono uppercase')}
                 />
               </div>
             </div>
@@ -4770,7 +4840,7 @@ function PaymentModal({
   onAutoFlowTriggered,
   hasSeller,
   onNeedSeller,
-  dadosOnlineFaltando = [],
+  clienteOnline,
   onNeedCustomer,
   stores = [],
 }: {
@@ -4803,14 +4873,19 @@ function PaymentModal({
   /** Abre o popup de escolher vendedora no parent (sem finalizar) */
   onNeedSeller?: () => void;
   /**
-   * VENDA ONLINE — o que ainda falta no cadastro da cliente (dono 18/08).
-   * Vazio = pode gerar cobrança e fechar. A mesma lista vem do servidor no
-   * addPayment; aqui ela barra ANTES de mandar PIX/link pra cliente, pra
-   * nunca existir dinheiro na conta com a venda travada por cadastro.
+   * VENDA ONLINE — cadastro da cliente que está na venda (dono 18/08). O que
+   * FALTA é calculado aqui dentro, e não no parent, porque depende da forma
+   * de entrega escolhida NESTE modal: RETIRADA EM LOJA não pede endereço.
+   * Calcular no parent devolveria a lista da venda como ela estava no banco —
+   * a vendedora clicaria em RETIRADA e a tela continuaria pedindo o CEP até o
+   * refetch chegar.
    */
-  dadosOnlineFaltando?: string[];
-  /** Abre o cadastro da cliente no parent, em modo "completo obrigatório" */
-  onNeedCustomer?: () => void;
+  clienteOnline?: DadosClienteOnline;
+  /**
+   * Abre o cadastro da cliente no parent, em modo "obrigatório". Recebe a
+   * forma de entrega VIVA pro cadastro saber se cobra endereço.
+   */
+  onNeedCustomer?: (entregaTipo?: string | null) => void;
 }) {
   const { toast } = usePdvToast();
   // Lista de pagamentos parciais já adicionados
@@ -4911,6 +4986,32 @@ function PaymentModal({
   // (quem sai de moto). '' = esta loja. A loja-canal SITE fecha venda pra
   // cliente de qualquer cidade: quem atende quase nunca é quem vendeu.
   const [entregaStoreCode, setEntregaStoreCode] = useState<string>('');
+  /**
+   * A escolha VIVA da vendedora, ou a que já está gravada na venda enquanto o
+   * `useEffect` de cima não trouxe o estado do servidor. Sem esse fallback o
+   * modal abria uma venda JÁ marcada como retirada gritando "falta CEP" por
+   * uma fração de segundo — e a vendedora ia atrás do endereço.
+   */
+  const entregaEfetiva = entregaTipo ?? clienteOnline?.entregaTipo ?? null;
+  /**
+   * O QUE FALTA NO CADASTRO — com a forma de entrega VIVA (a que a vendedora
+   * acabou de clicar), não a que está no banco. Régua igual à do servidor
+   * (`backend/src/common/dados-cliente-online.ts`): contato sempre, endereço
+   * só quando a peça VIAJA. Vazio = pode gerar cobrança e fechar.
+   */
+  const dadosOnlineFaltando = useMemo(
+    () => faltandoDadosClienteOnline({ ...(clienteOnline || {}), entregaTipo: entregaEfetiva }),
+    [clienteOnline, entregaEfetiva],
+  );
+  /**
+   * Só o endereço está segurando a venda? Então clicar em RETIRA NA LOJA
+   * resolve sozinho — o aviso conta isso em vez de mandar a vendedora pedir
+   * um CEP que a cliente não quer dar.
+   */
+  const soFaltaEndereco = useMemo(
+    () => faltandoDadosBasicosClienteOnline(clienteOnline || {}).length === 0,
+    [clienteOnline],
+  );
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -5099,7 +5200,7 @@ function PaymentModal({
         'Complete o cadastro antes de mandar o PIX',
         `Falta: ${dadosOnlineFaltando.join(', ')}.`,
       );
-      onNeedCustomer?.();
+      onNeedCustomer?.(entregaEfetiva);
       return;
     }
     setPixOnlineLoading(true);
@@ -5261,9 +5362,9 @@ function PaymentModal({
         toast(
           'warning',
           'Complete o cadastro da cliente',
-          `Venda online exige tudo — falta: ${dadosOnlineFaltando.join(', ')}.`,
+          `Venda online precisa de: ${dadosOnlineFaltando.join(', ')}.`,
         );
-        onNeedCustomer?.();
+        onNeedCustomer?.(entregaEfetiva);
         return;
       }
       if (!vendaOnlineTipo) {
@@ -6571,19 +6672,28 @@ function PaymentModal({
                 </span>
               </button>
             </div>
-            {/* CADASTRO COMPLETO (dono 18/08) — a peça vai VIAJAR: sem nome e
-                sobrenome, CPF, WhatsApp, e-mail e endereço inteiro a etiqueta
-                sai "Cliente", o pedido sem CEP nem vira Order (fica sem card
-                e sem etiqueta) e ninguém consegue avisar a cliente. */}
+            {/* CADASTRO DA CLIENTE (dono 18/08) — sem nome e sobrenome, CPF,
+                WhatsApp e e-mail a etiqueta sai "Cliente" e ninguém consegue
+                avisar a cliente. O ENDEREÇO entra na conta só quando a peça
+                VIAJA: em RETIRADA EM LOJA a cliente busca no balcão e não
+                precisa passar CEP (dono 18/08). Enquanto a forma de entrega
+                não é escolhida a régua cobra o endereço — é o lado seguro —
+                e o aviso abaixo diz que clicar em RETIRA NA LOJA dispensa. */}
             {dadosOnlineFaltando.length > 0 ? (
               <div className="bg-rose-50 border-2 border-rose-300 text-rose-900 text-xs rounded-lg p-2.5 space-y-2">
                 <div className="font-black">⚠ Cadastro da cliente incompleto</div>
                 <div className="leading-snug">
-                  Venda online exige tudo — falta <b>{dadosOnlineFaltando.join(', ')}</b>.
+                  Falta <b>{dadosOnlineFaltando.join(', ')}</b>.
                 </div>
+                {!entregaEfetiva && soFaltaEndereco && (
+                  <div className="leading-snug bg-white/70 border border-rose-200 rounded p-1.5">
+                    🏬 Se a cliente vai <b>retirar na loja</b>, escolha a forma de
+                    entrega aqui embaixo — retirada <b>não precisa de endereço</b>.
+                  </div>
+                )}
                 <button
                   type="button"
-                  onClick={() => onNeedCustomer?.()}
+                  onClick={() => onNeedCustomer?.(entregaEfetiva)}
                   className="w-full py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold"
                 >
                   Completar cadastro da cliente
@@ -6594,7 +6704,7 @@ function PaymentModal({
                 <span>✓ Cadastro completo — {customerName}</span>
                 <button
                   type="button"
-                  onClick={() => onNeedCustomer?.()}
+                  onClick={() => onNeedCustomer?.(entregaEfetiva)}
                   className="underline font-bold shrink-0"
                 >
                   ver/editar
@@ -6925,7 +7035,7 @@ function PaymentModal({
                             'Complete o cadastro antes de gerar o link',
                             `Falta: ${dadosOnlineFaltando.join(', ')}.`,
                           );
-                          onNeedCustomer?.();
+                          onNeedCustomer?.(entregaEfetiva);
                           return;
                         }
                         setPagarmeLinkLoading(true);

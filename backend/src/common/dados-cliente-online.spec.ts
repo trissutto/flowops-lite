@@ -1,7 +1,9 @@
 import {
   cpfValido,
+  faltandoDadosBasicosClienteOnline,
   faltandoDadosClienteOnline,
   nomeCompletoOk,
+  pecaViaja,
 } from './dados-cliente-online';
 
 /** Cadastro que pode virar pedido: nada falta. */
@@ -95,5 +97,85 @@ describe('faltandoDadosClienteOnline', () => {
   test('complemento continua opcional — a maioria dos endereços não tem', () => {
     const semComplemento: any = { ...COMPLETO };
     expect(faltandoDadosClienteOnline(semComplemento)).toEqual([]);
+  });
+});
+
+/** Cadastro de quem vai BUSCAR na loja: sem uma linha de endereço. */
+const SO_CONTATO = {
+  customerName: 'Maria Aparecida Silva',
+  customerCpf: '52998224725',
+  customerPhone: '(15) 99999-1234',
+  customerEmail: 'maria@gmail.com',
+  entregaTipo: 'retirada',
+};
+
+describe('pecaViaja', () => {
+  test('SEDEX, PAC e MOTOBOY levam a peça até um endereço', () => {
+    expect(pecaViaja('sedex')).toBe(true);
+    expect(pecaViaja('pac')).toBe(true);
+    expect(pecaViaja('motoboy')).toBe(true);
+  });
+
+  test('retirada em loja não viaja (espaço/caixa alta idem)', () => {
+    expect(pecaViaja('retirada')).toBe(false);
+    expect(pecaViaja(' RETIRADA ')).toBe(false);
+  });
+
+  test('sem escolha ainda → trata como se viajasse (padrão seguro)', () => {
+    expect(pecaViaja(null)).toBe(true);
+    expect(pecaViaja('')).toBe(true);
+  });
+});
+
+describe('faltandoDadosBasicosClienteOnline', () => {
+  test('nunca fala de endereço — é a régua do botão "V. Online"', () => {
+    expect(faltandoDadosBasicosClienteOnline({})).toEqual([
+      'nome completo (nome e sobrenome)',
+      'CPF válido',
+      'WhatsApp com DDD',
+      'e-mail',
+    ]);
+  });
+
+  test('contato de pé passa mesmo sem uma linha de endereço', () => {
+    expect(faltandoDadosBasicosClienteOnline(SO_CONTATO)).toEqual([]);
+  });
+});
+
+describe('faltandoDadosClienteOnline — RETIRADA não pede endereço (dono 18/08)', () => {
+  test('retirada fecha só com contato: a cliente busca no balcão', () => {
+    expect(faltandoDadosClienteOnline(SO_CONTATO)).toEqual([]);
+  });
+
+  test('retirada ainda exige nome, CPF, WhatsApp e e-mail (NF-e e aviso)', () => {
+    expect(faltandoDadosClienteOnline({ entregaTipo: 'retirada' })).toEqual([
+      'nome completo (nome e sobrenome)',
+      'CPF válido',
+      'WhatsApp com DDD',
+      'e-mail',
+    ]);
+  });
+
+  test('a peça viajando, o endereço volta a ser cobrado', () => {
+    for (const tipo of ['sedex', 'pac', 'motoboy']) {
+      expect(faltandoDadosClienteOnline({ ...SO_CONTATO, entregaTipo: tipo })).toEqual([
+        'CEP',
+        'rua',
+        'número',
+        'bairro',
+        'cidade',
+        'UF',
+      ]);
+    }
+  });
+
+  test('endereço torto na retirada não atrapalha — nem é olhado', () => {
+    expect(
+      faltandoDadosClienteOnline({ ...SO_CONTATO, customerCep: '123', customerUf: 'CI' }),
+    ).toEqual([]);
+  });
+
+  test('venda antiga (sem entregaTipo gravado) segue cobrando tudo', () => {
+    expect(faltandoDadosClienteOnline({ ...SO_CONTATO, entregaTipo: null })).toContain('CEP');
   });
 });
