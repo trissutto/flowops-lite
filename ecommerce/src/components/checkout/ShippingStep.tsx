@@ -1,16 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Clock, MapPin, Truck } from 'lucide-react';
+import { Clock, MapPin, RefreshCw, TriangleAlert, Truck } from 'lucide-react';
 import { cn, formatPrice } from '@/lib/utils';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { fetchQuotes, isValidCep } from '@/lib/commerce/frete';
+import { fetchQuotes, isValidCep, type CotacaoDoSite } from '@/lib/commerce/frete';
 import { stores } from '@/data/stores';
-import { trackAddShippingInfo, trackCheckoutValidationError, type TrackedItem } from '@/lib/tracking';
+import { trackAddShippingInfo, trackCheckoutValidationError, trackShippingQuoteFallback, type TrackedItem } from '@/lib/tracking';
 import type { Address, ShippingQuote } from '@/types/checkout';
 import { maskCep, onlyDigits } from './masks';
 
@@ -73,15 +73,41 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
   const [cepBuscando, setCepBuscando] = useState(false);
   const [quoteId, setQuoteId] = useState<string | undefined>(defaults?.quote.id);
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  /** Aviso de endereço incompleto, disparado ao escolher a entrega. */
+  const [avisoEndereco, setAvisoEndereco] = useState<string | null>(null);
 
   // Evita refetch do ViaCEP pro mesmo CEP (inclusive na volta da edição).
   const ultimoCepBuscado = useRef<string | null>(defaults ? onlyDigits(defaults.cep) : null);
+
+  /**
+   * O ENDEREÇO DO ViaCEP FICA GUARDADO AQUI ANTES DE IR PRA TELA.
+   *
+   * Ele era escrito direto nos campos com `setValue` assim que a resposta
+   * chegava — e os campos ainda não existiam. O bloco de endereço só
+   * renderiza depois que a cotação chega (`precisaEndereco`), e a cotação
+   * demora segundos enquanto o ViaCEP volta em ~400ms. Escrever num campo
+   * desmontado não dá erro: o React Hook Form guarda o valor e, quando o
+   * input finalmente monta, ele restaura do `defaultValues` — não do que foi
+   * gravado no meio do caminho. Resultado: rua, bairro, cidade e UF em
+   * branco, e a cliente digitando na mão o que o sistema já sabia.
+   *
+   * Guardando em estado, quem aplica é o efeito abaixo, que só roda com os
+   * campos na tela. Quanto mais lenta a cotação, mais o bug antigo
+   * acontecia — era garantido nos 5s medidos em 17/08.
+   */
+  const [cepAuto, setCepAuto] = useState<{
+    digits: string; street: string; neighborhood: string; city: string; uf: string;
+  } | null>(null);
+  /** Já despejado nos campos — não reescreve por cima do que ela digitou. */
+  const cepAplicado = useRef<string | null>(defaults ? onlyDigits(defaults.cep) : null);
 
   const {
     register,
     handleSubmit,
     setValue,
     setFocus,
+    watch,
+    trigger,
     formState: { errors },
   } = useForm<AddressValues>({
     resolver: zodResolver(addressSchema),
@@ -113,6 +139,23 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
   const [cotando, setCotando] = useState(false);
   const [retirada, setRetirada] = useState<{ prazoHoras: number; instrucoes: string | null } | null>(null);
   const [estimado, setEstimado] = useState(false);
+  /**
+   * A COTAÇÃO CAIU NO PARAQUEDAS — E A CLIENTE PRECISA SABER (17/08).
+   *
+   * `local` = o backend não respondeu e a lista saiu da tabela do site: sem
+   * a promoção ("SEDEX R$ 9,99") e sem a distância das lojas. Até aqui a
+   * única marca era um " · frete estimado" miúdo no prazo — cliente de SP
+   * via SEDEX R$ 24,90 no lugar do R$ 9,99 do anúncio, sem aviso e sem
+   * botão pra tentar de novo (só recotava se mexesse no CEP). E o valor
+   * pode subir na hora de pagar, porque o backend cobra a cotação dele.
+   *
+   * `backend` com `estimado` = o backend respondeu, mas os Correios não: a
+   * promoção e a régua do frete grátis estão certas, só o preço cheio dos
+   * Correios é estimativa. Aviso mais leve, mesmo botão.
+   */
+  const [origem, setOrigem] = useState<CotacaoDoSite['origem']>('backend');
+  /** Sobe a cada "Recalcular" — reroda o efeito da cotação sem mexer no CEP. */
+  const [recotacao, setRecotacao] = useState(0);
 
   useEffect(() => {
     if (!cepValido) {
@@ -126,48 +169,138 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
         if (controller.signal.aborted) return;
         setQuotes(r.quotes);
         setEstimado(r.estimado);
+        setOrigem(r.origem);
         setRetirada(r.retirada ?? null);
+        // Telemetria: quantas vezes o checkout mostrou frete sem a promoção
+        // (e por quê). É o número que decide se o rate-limit/timeout do
+        // backend ainda está mordendo — sem ele, o fallback é invisível.
+        // Evento PRÓPRIO, não `checkout_validation_error`: é falha nossa de
+        // infra, não erro da cliente — no painel do funil misturava os dois.
+        if (r.origem === 'local') trackShippingQuoteFallback(r.motivo ?? 'sem_motivo');
       })
       .finally(() => {
         if (!controller.signal.aborted) setCotando(false);
       });
     return () => controller.abort();
-  }, [cep, cepValido, subtotal, pecas]);
+  }, [cep, cepValido, subtotal, pecas, recotacao]);
+
+  // Ficam de pé DURANTE a recotação (a lista antiga continua na tela com o
+  // "calculando…"): é o que deixa o botão girar em vez do aviso sumir e voltar.
+  const cotacaoNoParaquedas = origem === 'local' && quotes.length > 0;
+  const cotacaoEstimadaBackend = origem === 'backend' && estimado && quotes.length > 0;
 
   const selectedQuote = quotes.find((q) => q.id === quoteId);
-  const precisaEndereco = selectedQuote ? selectedQuote.kind !== 'retirada' : false;
+  /**
+   * O ENDEREÇO APARECE DURANTE A COTAÇÃO, NÃO DEPOIS DELA.
+   *
+   * A cotação leva ~5 segundos (medido 17/08) e nesse tempo a tela ficava
+   * parada: CEP preenchido, nada pra fazer, nenhum campo na frente dela.
+   * Segundos de espera com a tela morta é onde a cliente vai embora.
+   *
+   * Mostrando o bloco já com "calculando…", ela preenche o número enquanto
+   * o frete calcula — e os campos existem quando o ViaCEP responde, que é
+   * o que conserta o preenchimento automático.
+   *
+   * Com CEP válido, fica. NÃO some mais quando ela escolhe retirada: o
+   * endereço agora vem ANTES da escolha, e esconder um bloco que ela acabou
+   * de preencher faria a página encolher debaixo do dedo dela.
+   */
+  const mostraEndereco = cepValido;
+
+  /**
+   * O PORTÃO ENTRE UMA COISA E OUTRA.
+   *
+   * As formas de entrega só abrem com o endereço de pé. `number` é o único
+   * que a cliente digita — os outros o ViaCEP preenche —, mas os quatro
+   * entram na conta porque CEP sem cobertura no ViaCEP deixa tudo em branco,
+   * e aí abrir as opções seria abrir em cima de um endereço vazio.
+   *
+   * `watch` re-renderiza a cada tecla. É aceitável num formulário de 6
+   * campos e é o que faz as opções aparecerem no instante em que ela
+   * termina o número, sem botão no meio.
+   */
+  const [rua, numero, bairro, cidade, ufAtual] = watch(['street', 'number', 'neighborhood', 'city', 'uf']);
+  const enderecoPronto =
+    !!rua?.trim() &&
+    !!numero?.trim() &&
+    !!bairro?.trim() &&
+    !!cidade?.trim() &&
+    (ufAtual?.trim().length ?? 0) === 2;
 
   /* ViaCEP — dispara quando o CEP fica completo. */
   useEffect(() => {
     const digits = onlyDigits(cep);
     if (digits.length !== 8 || ultimoCepBuscado.current === digits) return;
-    ultimoCepBuscado.current = digits;
     setCepBuscando(true);
 
     const controller = new AbortController();
     fetch(`https://viacep.com.br/ws/${digits}/json/`, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        // ViaCEP devolve { erro: true } pra CEP inexistente — também silencioso.
+        if (controller.signal.aborted) return;
+        // Só agora marca como buscado. Antes marcava ANTES de pedir, e uma
+        // busca cancelada (ela corrigiu um dígito e voltou atrás) deixava o
+        // CEP marcado pra sempre — nunca mais tentava, campos em branco.
+        ultimoCepBuscado.current = digits;
+        // ViaCEP devolve { erro: true } pra CEP inexistente — silencioso.
         if (data && !data.erro) {
-          setValue('street', data.logradouro ?? '', { shouldValidate: false });
-          setValue('neighborhood', data.bairro ?? '', { shouldValidate: false });
-          setValue('city', data.localidade ?? '', { shouldValidate: false });
-          setValue('uf', (data.uf ?? '').toUpperCase(), { shouldValidate: false });
+          setCepAuto({
+            digits,
+            street: data.logradouro ?? '',
+            neighborhood: data.bairro ?? '',
+            city: data.localidade ?? '',
+            uf: (data.uf ?? '').toUpperCase(),
+          });
         }
       })
       .catch(() => {
         /* silêncio combinado: a cliente digita na mão */
       })
-      .finally(() => setCepBuscando(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setCepBuscando(false);
+      });
 
     return () => controller.abort();
-  }, [cep, setValue]);
+  }, [cep]);
+
+  /**
+   * DESPEJA NOS CAMPOS — e só roda com eles na tela.
+   *
+   * `mostraEndereco` na dependência é o ponto todo: o efeito espera os
+   * inputs existirem. Efeito roda depois do commit do DOM, então quando
+   * `mostraEndereco` vira true nesta mesma renderização os campos já estão
+   * montados e o `setValue` acha a referência deles.
+   *
+   * Uma vez por CEP: se ela corrigir a rua na mão, nada reescreve por cima.
+   */
+  useEffect(() => {
+    if (!cepAuto || !mostraEndereco || cepAplicado.current === cepAuto.digits) return;
+    cepAplicado.current = cepAuto.digits;
+    setValue('street', cepAuto.street, { shouldValidate: false });
+    setValue('neighborhood', cepAuto.neighborhood, { shouldValidate: false });
+    setValue('city', cepAuto.city, { shouldValidate: false });
+    setValue('uf', cepAuto.uf, { shouldValidate: false });
+  }, [cepAuto, mostraEndereco, setValue]);
 
   /* Foco automático no número — o único campo que o ViaCEP não sabe. */
   useEffect(() => {
-    if (precisaEndereco && !cepBuscando) setFocus('number');
-  }, [precisaEndereco, cepBuscando, setFocus]);
+    if (mostraEndereco && !cepBuscando) setFocus('number');
+  }, [mostraEndereco, cepBuscando, setFocus]);
+
+  /**
+   * Consertou? O aviso sai sozinho — ninguém deve fechar aviso na mão.
+   *
+   * O `trigger` junto não é enfeite: o formulário está em `onTouched`, que só
+   * revalida no blur. Sem ele, quem digita o número e clica DIRETO na opção
+   * de entrega continua vendo "Informe o número." embaixo de um campo que já
+   * está preenchido — erro fantasma é pior que erro nenhum, porque ela para
+   * pra entender o que fez de errado.
+   */
+  useEffect(() => {
+    if (!enderecoPronto) return;
+    setAvisoEndereco(null);
+    void trigger(['street', 'number', 'neighborhood', 'city', 'uf']);
+  }, [enderecoPronto, trigger]);
 
   function confirmar(address?: AddressValues) {
     if (!selectedQuote) {
@@ -178,8 +311,9 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     const selection: ShippingSelection = {
       cep: onlyDigits(cep),
       quote: selectedQuote,
+      // Vai em TODA modalidade — na retirada é o billing do cartão (ver onSubmit).
       address:
-        address && selectedQuote.kind !== 'retirada'
+        address
           ? {
               cep: onlyDigits(cep),
               street: address.street.trim(),
@@ -196,20 +330,77 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     onDone(selection);
   }
 
+  /**
+   * O ENDEREÇO É VALIDADO SEMPRE, EM QUALQUER MODALIDADE (dono, 17/08:
+   * "não precisa do botão confirmar, mas os campos devem ser preenchidos").
+   *
+   * A retirada pulava a validação inteira — `confirmar()` direto, sem olhar
+   * o formulário. Com o endereço agora ANTES da escolha, isso virava um
+   * buraco: dava pra chegar no pagamento com o número da casa em branco só
+   * por ter clicado em "Retirar na loja".
+   *
+   * E tinha um beco sem saída pior: com o endereço incompleto o bloco das
+   * opções nem renderiza, e a mensagem "Escolha como você quer receber"
+   * mora DENTRO dele. Clicar em Continuar não fazia nada visível — nenhum
+   * erro, nenhum movimento. Agora a validação vem primeiro e o próprio
+   * campo vazio acusa (o React Hook Form ainda joga o foco no primeiro).
+   *
+   * E O ENDEREÇO VIAJA TAMBÉM NA RETIRADA (17/08). Não é pra entregar — é
+   * o billing_address do cartão. Sem ele, o backend inventava um endereço
+   * ("Retirada em loja", cidade Mogi das Cruzes, CEP da cotação) e mandava
+   * pra Pagar.me um CEP de uma cidade com o nome de outra. O antifraude
+   * reprova dado inconsistente — já medimos isso com telefone inventado
+   * (aprovação de 63% pra 22,8%). Caso real: LP-000036, retirada em São
+   * José dos Campos, cartão de R$ 778,90 recusado com o endereço vazio.
+   * Agora que o endereço é obrigatório em toda modalidade, não há motivo
+   * pra fabricar nada: vai o da cliente.
+   */
+  /**
+   * ESCOLHEU A ENTREGA SEM O ENDEREÇO DE PÉ.
+   *
+   * A escolha VALE (a opção fica marcada — desmarcar o clique dela faria a
+   * tela parecer quebrada). O que acontece a mais é o aviso: o campo que
+   * falta fica vermelho, o foco pula nele e uma linha explica.
+   *
+   * O foco é a parte que resolve o medo do dono: em vez de a cliente
+   * procurar o que está errado, o cursor já está no lugar de digitar.
+   *
+   * VALE PRA RETIRADA TAMBÉM (decisão do dono: "é por segurança"). Ela não
+   * recebe em casa, mas o endereço vai pra nota e pro cadastro — e é o que
+   * permite ligar pra ela se a peça não aparecer.
+   */
+  async function aoEscolher(quote: ShippingQuote) {
+    setQuoteId(quote.id);
+    setQuoteError(null);
+    if (enderecoPronto) {
+      setAvisoEndereco(null);
+      return;
+    }
+    const campos = ['street', 'number', 'neighborhood', 'city', 'uf'] as const;
+    await trigger(campos);
+    setAvisoEndereco(
+      quote.kind === 'retirada'
+        ? 'Complete o endereço antes de continuar — ele vai na nota do seu pedido.'
+        : 'Falta o endereço completo pra entregar. O número é obrigatório.',
+    );
+    // Foco no primeiro que falta — quase sempre o número, que é o único que
+    // o ViaCEP não sabe.
+    const vazios = { street: rua, number: numero, neighborhood: bairro, city: cidade, uf: ufAtual };
+    const faltando = campos.find((c) => !vazios[c]?.trim());
+    setFocus(faltando ?? 'number');
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedQuote) {
-      trackCheckoutValidationError('shipping', 'shipping_method');
-      setQuoteError('Escolha como você quer receber.');
-      return;
-    }
-    if (selectedQuote.kind === 'retirada') {
-      // Retirada não valida endereço — a peça espera na loja.
-      confirmar();
-      return;
-    }
     void handleSubmit(
-      (values) => confirmar(values),
+      (values) => {
+        if (!selectedQuote) {
+          trackCheckoutValidationError('shipping', 'shipping_method');
+          setQuoteError('Escolha como você quer receber.');
+          return;
+        }
+        confirmar(values);
+      },
       (invalid) => trackCheckoutValidationError('shipping', Object.keys(invalid)[0] ?? 'unknown'),
     )();
   }
@@ -234,37 +425,24 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
         />
       </div>
 
-      {/* Cotações — rádios elegantes, uma linha por opção. */}
-      {cepValido && (quotes.length > 0 || cotando) && (
-        <fieldset>
-          <legend className="eyebrow mb-3 text-ink-soft">
-            Como você quer receber {cotando && <span className="text-ink-muted">· calculando…</span>}
-          </legend>
-          <div className="flex flex-col gap-3" role="radiogroup">
-            {quotes.map((quote) => (
-              <QuoteOption
-                key={quote.id}
-                quote={quote}
-                estimado={estimado}
-                instrucoesRetirada={retirada?.instrucoes ?? null}
-                checked={quoteId === quote.id}
-                onSelect={() => {
-                  setQuoteId(quote.id);
-                  setQuoteError(null);
-                }}
-              />
-            ))}
-          </div>
-          {quoteError && (
-            <p role="alert" className="mt-3 text-small text-danger">
-              {quoteError}
-            </p>
-          )}
-        </fieldset>
-      )}
+      {/* O ENDEREÇO VEM ANTES DA ENTREGA (dono, 17/08).
 
-      {/* Endereço completo — só quando a entrega vai até a casa dela. */}
-      {precisaEndereco && (
+          Era o contrário, e a tela pulava: o foco ia pro NÚMERO lá
+          embaixo e, quando a cotação chegava, o bloco de opções crescia
+          ACIMA dele e empurrava tudo — a cliente estava digitando o
+          número e a tela voltava sozinha pras formas de entrega.
+
+          Agora a ordem é a da cabeça dela: onde eu moro → como quero
+          receber. Nada nasce acima do cursor, então nada empurra.
+
+          Vale TAMBÉM pra quem vai retirar na loja (decisão explícita do
+          dono). Custa dois campos a mais pra essa cliente, e em troca o
+          fluxo é um só — e o endereço serve pra nota de qualquer jeito.
+
+          Bônus: a cotação sai desde o CEP e roda enquanto ela digita o
+          número, então quando as opções aparecem já estão prontas. O
+          segundo de espera do frete some dentro do preenchimento. */}
+      {mostraEndereco && (
         <div className="grid gap-5 sm:grid-cols-6">
           <Input
             label="Rua"
@@ -325,6 +503,84 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             })}
           />
         </div>
+      )}
+
+      {/* AS OPÇÕES FICAM SEMPRE À VISTA (dono, 17/08 — e ele está certo).
+
+          Eu as tinha ESCONDIDO até o endereço ficar completo. O medo dele:
+          a cliente não acha as formas de entrega e vai embora. E tem um
+          motivo mais forte que eu não havia pesado: escondê-las esconde o
+          "SEDEX R$ 9,99 · FRETE PROMOCIONAL" — que é exatamente o argumento
+          que faz ela TERMINAR de preencher. Eu estava escondendo o
+          incentivo pra cobrar o formulário.
+
+          Então a sequência visual continua a mesma (endereço acima, entrega
+          abaixo), mas nada desaparece: quem escolhe sem o número preenchido
+          é avisado na hora, em `aoEscolher`. */}
+      {cepValido && (quotes.length > 0 || cotando) && (
+        <fieldset>
+          <legend className="eyebrow mb-3 text-ink-soft">
+            Como você quer receber {cotando && <span className="text-ink-muted">· calculando…</span>}
+          </legend>
+
+          {/* O AVISO VEM ANTES DA LISTA, NÃO DEPOIS. Quem lê de cima pra
+              baixo precisa saber que os números abaixo são provisórios
+              ANTES de escolher — e o botão de recalcular fica ao lado do
+              motivo, não escondido no fim. `role="status"`: é informação
+              de estado, não erro dela (o `role="alert"` abaixo é pra isso). */}
+          {(cotacaoNoParaquedas || cotacaoEstimadaBackend) && (
+            <div
+              role="status"
+              className={cn(
+                'mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3.5 py-3 text-small',
+                cotacaoNoParaquedas
+                  ? 'border-warning/40 bg-warning/10 text-ink'
+                  : 'border-border bg-surface-alt text-ink-soft',
+              )}
+            >
+              <span className="flex min-w-0 flex-1 items-start gap-2">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+                <span>
+                  {cotacaoNoParaquedas ? (
+                    <>
+                      <strong className="font-medium">Não conseguimos cotar o frete agora.</strong>{' '}
+                      Os valores abaixo são estimados e podem mudar na hora de pagar. Tente recalcular antes de escolher.
+                    </>
+                  ) : (
+                    <>Os Correios não responderam: preço e prazo da cotação são estimados. A promoção e a retirada estão certas.</>
+                  )}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setRecotacao((n) => n + 1)}
+                disabled={cotando}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-border-strong bg-surface px-3 py-1.5 text-small font-medium text-ink transition-colors hover:border-primary hover:text-primary-strong disabled:opacity-60"
+              >
+                <RefreshCw className={cn('size-3.5', cotando && 'animate-spin')} aria-hidden />
+                Recalcular
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-3" role="radiogroup">
+            {quotes.map((quote) => (
+              <QuoteOption
+                key={quote.id}
+                quote={quote}
+                estimado={estimado}
+                instrucoesRetirada={retirada?.instrucoes ?? null}
+                checked={quoteId === quote.id}
+                onSelect={() => void aoEscolher(quote)}
+              />
+            ))}
+          </div>
+          {(quoteError || avisoEndereco) && (
+            <p role="alert" className="mt-3 text-small text-danger">
+              {quoteError ?? avisoEndereco}
+            </p>
+          )}
+        </fieldset>
       )}
 
       {cepValido && (
@@ -395,9 +651,17 @@ function QuoteOption({
       </span>
 
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex items-center gap-2 text-body font-normal text-ink">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body font-normal text-ink">
           {retirada ? <MapPin className="size-4 text-primary-strong" /> : <Truck className="size-4 text-primary-strong" />}
           {quote.label}
+          {/* O R$ 9,99 é a TABELA DA CAMPANHA, não a cotação dos Correios —
+              e sem dizer isso ele parece só um frete barato. Dito, vira
+              motivo pra comprar agora: promoção tem fim, preço não tem. */}
+          {quote.promocional && (
+            <span className="rounded-sm bg-primary-wash px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-primary-strong">
+              Frete promocional
+            </span>
+          )}
         </span>
         {retirada ? (
           <>
@@ -406,8 +670,15 @@ function QuoteOption({
                 {store.address.street} · {store.address.neighborhood}, {store.city}/{store.uf}
               </span>
             )}
+            {/* A DISTÂNCIA FICA À VISTA. A lista só mostra loja a até 20 km
+                (RAIO_RETIRADA_KM), e dizer "a 4 km" transforma a regra em
+                argumento: quem está perto entende na hora que buscar sai de
+                graça e hoje, em vez de pagar frete e esperar dias. */}
             <span className="flex items-center gap-1.5 text-small text-ink-muted">
               <Clock className="size-3.5" /> Pronto em ~{quote.readyInHours ?? 3}h
+              {quote.distanciaKm != null && (
+                <span>· a {quote.distanciaKm.toLocaleString('pt-BR', { maximumFractionDigits: quote.distanciaKm < 10 ? 1 : 0 })} km de você</span>
+              )}
             </span>
             {/* Item 27: o que levar e por quanto tempo a peça espera. Vai AQUI,
                 na hora da escolha — não numa página de ajuda que ninguém abre. */}

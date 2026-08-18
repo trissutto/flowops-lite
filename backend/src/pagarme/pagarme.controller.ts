@@ -282,16 +282,32 @@ export class PagarmeController {
     return this.svc.checkOrderStatus(orderId);
   }
 
-  // Webhook PÚBLICO — auth via HMAC
+  /**
+   * Webhook PÚBLICO — sem JWT. A prova de origem é HMAC (x-hub-signature) ou
+   * Basic Auth (Authorization) contra o webhookSecret cadastrado; quem decide
+   * é `PagarmeService.handleWebhook`, FAIL CLOSED: sem prova ele devolve
+   * `ok:false` e não grava nada. Aqui NADA pode rodar sem `result.ok`.
+   */
   @Post('webhook')
   async webhook(
     @Body() body: any,
+    @Req() req: any,
     @Headers('x-hub-signature') signature?: string,
     @Headers('x-hub-signature-256') signature256?: string,
+    @Headers('authorization') authorization?: string,
   ) {
-    const rawBody = JSON.stringify(body);
+    /**
+     * O HMAC É SOBRE OS BYTES QUE A PAGAR.ME MANDOU, não sobre
+     * `JSON.stringify(body)`: reserializar o objeto já parseado muda espaços,
+     * ordem de chaves e escapes, e a assinatura NUNCA bate (mesma lição do
+     * webhook PagBank, 12/08). O `verify` do body-parser em main.ts guarda o
+     * corpo cru em `req.rawBody`; o stringify fica só de último recurso.
+     */
+    const rawBody = req?.rawBody
+      ? Buffer.from(req.rawBody).toString('utf8')
+      : JSON.stringify(body);
     const sig = signature || signature256;
-    const result = await this.svc.handleWebhook(body, rawBody, sig);
+    const result = await this.svc.handleWebhook(body, rawBody, sig, authorization);
     const eventType = String(body?.type || '');
     const pagou = eventType === 'order.paid' || eventType === 'charge.paid';
 
@@ -307,29 +323,66 @@ export class PagarmeController {
     }
 
     // ── E-COMMERCE NOVO (sprint 011) ──────────────────────────────────
-    // Pedido da loja (Order source='loja') confirma o pagamento por aqui:
+    // Pedido do site (Order source='ecommerce') confirma o pagamento por aqui:
     // grava paidAt, joga o pedido em 'processing' (= cai na tela Pedidos &
     // Separação pro roteamento) e avisa o site pro purchase server-side.
     //
-    // Duas chaves porque as duas existem: o PIX é criado pelo próprio
-    // createPixCharge (metadata leva `saleId` = Order.id, e o PagarmePayment
-    // devolve esse saleId aqui), e o cartão é montado pelo loja-orders com
-    // `flowops_order_id` no metadata. `confirmarPagamento` é idempotente e
-    // ignora em silêncio id que não é pedido da loja (venda de PDV, live...).
+    // SÓ `result.saleId`, SÓ com `result.ok` (17/08/2026). Até aqui este bloco
+    // rodava com `if (pagou)` e aceitava também `body.data.metadata
+    // .flowops_order_id` cru — ou seja, um POST sem assinatura com
+    // `{"type":"order.paid","data":{"metadata":{"flowops_order_id":"<uuid>"}}}`
+    // marcava um PIX não pago como pago, e o UUID do pedido é público pra
+    // cliente (volta no POST /api/checkout e no link de confirmação). O
+    // pedido caía na fila de separação, disparava e-mail/WhatsApp de
+    // "pagamento confirmado", purchase no Meta/GA4 e queimava cupom — peça
+    // despachada sem dinheiro. A chave do metadata era redundante: PIX
+    // (createPixCharge via loja-orders) e cartão gravam PagarmePayment.saleId
+    // = Order.id, e o cartão já confirma inline no próprio loja-orders. Agora
+    // o gate é o mesmo do crediário logo acima: `result.ok` (origem provada +
+    // `or_` nosso) e o saleId vem do PagarmePayment, nunca do corpo.
+    // `confirmarPagamento` segue idempotente (updateMany paidAt:null) e ignora
+    // em silêncio id que não é pedido do site (venda de PDV, live...).
+    // Webhook recusado/perdido: o LojaPagamentoReconcileService (60s) confirma
+    // pelo gateway — sem cobrança dupla nem pedido duplicado.
     //
     // TRY/CATCH LARGO DE PROPÓSITO: nada aqui pode impedir o ack do webhook —
     // Pagar.me reenfileira em erro e o crediário/PDV acima já rodou.
-    if (pagou) {
-      const idsCandidatos = [result.saleId, body?.data?.metadata?.flowops_order_id].filter(
-        (v): v is string => typeof v === 'string' && !!v,
-      );
-      for (const id of Array.from(new Set(idsCandidatos))) {
-        try {
-          const r = await this.lojaOrders.confirmarPagamento(id);
-          if (r.ok) break; // achou o pedido da loja — não tenta o outro id
-        } catch (e: any) {
-          this.logger.warn(`[pagarme] confirmação do pedido da loja falhou (${id}): ${e?.message || e}`);
-        }
+    if (pagou && result.ok && result.saleId) {
+      try {
+        await this.lojaOrders.confirmarPagamento(result.saleId);
+      } catch (e: any) {
+        this.logger.warn(
+          `[pagarme] confirmação do pedido do site falhou (${result.saleId}): ${e?.message || e}`,
+        );
+      }
+    }
+
+    /**
+     * RECUSA TARDIA DO CARTÃO DO SITE (17/08). O cartão em análise de
+     * antifraude agora fica `awaiting_payment` em vez de virar recusa na hora
+     * (antes o pedido era marcado `payment_failed`, a cliente pagava por PIX,
+     * a análise aprovava e ela pagava DUAS vezes). O fechamento negativo desse
+     * estado é este bloco: quando a Pagar.me manda que a cobrança falhou /
+     * foi reprovada / o pedido foi cancelado, o pedido vira `payment_failed`
+     * pra a cliente saber que precisa tentar de novo — em vez de ficar
+     * "aguardando" pra sempre. Mesmo gate do bloco acima: só com origem
+     * provada e saleId nosso. `registrarRecusaTardia` só toca cartão em
+     * `awaiting_payment` sem paidAt (trava atômica), então PIX e pedido já
+     * pago passam intocados.
+     */
+    const recusou =
+      eventType === 'charge.payment_failed' ||
+      eventType === 'charge.antifraud_reproved' ||
+      eventType === 'order.payment_failed' ||
+      eventType === 'order.canceled' ||
+      eventType === 'charge.refused';
+    if (recusou && result.ok && result.saleId) {
+      try {
+        await this.lojaOrders.registrarRecusaTardia(result.saleId, `webhook ${eventType}`);
+      } catch (e: any) {
+        this.logger.warn(
+          `[pagarme] recusa tardia do pedido do site falhou (${result.saleId}): ${e?.message || e}`,
+        );
       }
     }
 

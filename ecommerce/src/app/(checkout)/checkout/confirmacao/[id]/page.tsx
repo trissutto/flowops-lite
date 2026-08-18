@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import {
   CircleCheck,
+  CircleX,
   Clock,
   FileText,
   MapPin,
   PackageSearch,
+  TimerReset,
   Truck,
 } from 'lucide-react';
 import { cn, formatPrice } from '@/lib/utils';
@@ -20,12 +22,19 @@ import { WhatsAppIcon } from '@/components/ui/icons';
 import { stores } from '@/data/stores';
 import { mapPeca } from '@/services/products';
 import { maskCpf } from '@/components/checkout/masks';
+import { PixPanel } from '@/components/checkout/PixPanel';
 import type { Product } from '@/types';
 import type { Order } from '@/types/checkout';
 import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
- * THANK YOU PAGE — a confirmação do pedido.
+ * THANK YOU PAGE — a confirmação do pedido. E, desde 17/08, também a PÁGINA
+ * DO PIX: o pedido aguardando pagamento chega aqui logo depois de criado
+ * (`router.replace` no checkout) e o `<PixPanel>` é desenhado com o QR e o
+ * copia-e-cola que o `GET /api/checkout/:id` devolve. A URL é o estado — F5,
+ * "voltar", aba descartada ao trocar pro app do banco, link colado: tudo
+ * volta pro mesmo código. Antes o PIX vivia só na memória da aba do checkout
+ * e qualquer recarga virava "Sua sacola está vazia" com o QR perdido.
  *
  * ⚠️ GUARDA DE RECARGA: esta página NÃO dispara NENHUM evento de compra.
  * `purchase` é exclusivo do SERVIDOR (webhook de pagamento, dedupe por
@@ -34,9 +43,15 @@ import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
  * e-commerce. Aqui é só leitura: GET /api/checkout/:id e exibição.
  *
  * O que é PLACEHOLDER honesto (sem inventar recurso que não existe):
- *   - rastreamento: o código chega por e-mail/WhatsApp (integração futura)
- *   - nota fiscal: enviada por e-mail após o faturamento
- * Ver docs/order-confirmation.md.
+ *   - rastreamento: o código chega pelo WhatsApp; e-mail é canal SECUNDÁRIO
+ *     (depende de `PEDIDO_EMAIL_PROPRIO` — em produção está LIGADO, mas o
+ *     default do código é desligado, então a página não pode DEPENDER dele
+ *     nem afirmar que ele não existe — ver memória
+ *     envs-producao-nao-sao-os-defaults)
+ *   - nota fiscal: emitida no faturamento; pedir pelo WhatsApp
+ * A página não promete "o código está no seu e-mail" como única via: até
+ * 17/08 dizia isso e, quando o e-mail não saía, a cliente ficava sem o PIX.
+ * O QR/copia-e-cola agora é desenhado AQUI. Ver docs/order-confirmation.md.
  */
 
 /**
@@ -54,23 +69,40 @@ export default function ConfirmacaoPage() {
   const params = useParams<{ id: string }>();
   const [estado, setEstado] = useState<Estado>({ fase: 'carregando' });
 
-  useEffect(() => {
-    if (!params?.id) return;
-    let ativo = true;
-    fetch(`/api/checkout/${params.id}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { ok: boolean; order?: Order } | null) => {
-        if (!ativo) return;
-        if (data?.ok && data.order) setEstado({ fase: 'ok', order: data.order });
-        else setEstado({ fase: 'nao-encontrado' });
-      })
-      .catch(() => {
-        if (ativo) setEstado({ fase: 'nao-encontrado' });
-      });
-    return () => {
-      ativo = false;
-    };
-  }, [params?.id]);
+  /**
+   * Busca o pedido. Reutilizada pelo PixPanel (`onPaid`/`onExpired`): quando
+   * o poll vê o status mudar, recarregamos o pedido em vez de navegar pra
+   * esta mesma URL — `router.push` pra rota atual não refaz este efeito.
+   * `silencioso` = recarga com o pedido já na tela: falha não derruba nada.
+   */
+  const carregar = useCallback(
+    (silencioso = false) => {
+      const id = params?.id;
+      if (!id) return () => undefined;
+      let ativo = true;
+      fetch(`/api/checkout/${id}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { ok: boolean; order?: Order } | null) => {
+          if (!ativo) return;
+          if (data?.ok && data.order) setEstado({ fase: 'ok', order: data.order });
+          // Recarga silenciosa que falhou não derruba o pedido já na tela.
+          else if (!silencioso) setEstado({ fase: 'nao-encontrado' });
+        })
+        .catch(() => {
+          if (ativo && !silencioso) setEstado({ fase: 'nao-encontrado' });
+        });
+      return () => {
+        ativo = false;
+      };
+    },
+    [params?.id],
+  );
+
+  useEffect(() => carregar(), [carregar]);
+
+  const recarregar = useCallback(() => {
+    void carregar(true);
+  }, [carregar]);
 
   if (estado.fase === 'carregando') return <ConfirmacaoSkeleton />;
 
@@ -80,7 +112,7 @@ export default function ConfirmacaoPage() {
         <EmptyState
           icon={<PackageSearch strokeWidth={1.25} />}
           title="Não encontramos esse pedido"
-          description="O link pode ter expirado ou o número estar incompleto. Confira o e-mail de confirmação — ou fale com a gente, resolvemos juntas."
+          description="O link pode estar incompleto ou o pedido ter sido feito há muito tempo. Fale com a gente no WhatsApp com o número do pedido — resolvemos juntas."
           action={{ label: 'Voltar à loja', href: '/' }}
           secondaryAction={{ label: 'Falar no WhatsApp', href: `https://wa.me/${WHATSAPP_ATENDIMENTO}` }}
         />
@@ -90,6 +122,12 @@ export default function ConfirmacaoPage() {
 
   const { order } = estado;
   const pago = order.status === 'paid';
+  // O backend separa de propósito `cancelled` (cancelado na retaguarda/gateway)
+  // de `expired` (PIX venceu). A tela colapsava os dois em "Aguardando
+  // pagamento" — cliente esperando por um pedido que já não existia.
+  const encerrado = order.status === 'cancelled' || order.status === 'expired';
+  const aguardandoPix =
+    order.status === 'awaiting_payment' && order.payment.method === 'pix' && !!order.payment.pix;
   const retirada = order.shipping.kind === 'retirada';
   const store = retirada ? stores.find((s) => s.slug === order.shipping.storeSlug) : undefined;
   const mensagemZap = encodeURIComponent(`Oi! Acabei de fazer o pedido ${order.number}`);
@@ -101,11 +139,23 @@ export default function ConfirmacaoPage() {
         <span
           className={cn(
             'inline-flex items-center gap-2 rounded-pill px-4 py-1.5 text-small font-medium',
-            pago ? 'bg-accent-wash text-success' : 'bg-primary-wash text-primary-strong',
+            pago
+              ? 'bg-accent-wash text-success'
+              : encerrado
+                ? 'bg-surface-alt text-ink-soft'
+                : 'bg-primary-wash text-primary-strong',
           )}
         >
-          {pago ? <CircleCheck className="size-4" /> : <Clock className="size-4" />}
-          {pago ? 'Pagamento confirmado' : 'Aguardando pagamento'}
+          {pago ? (
+            <CircleCheck className="size-4" />
+          ) : order.status === 'expired' ? (
+            <TimerReset className="size-4" />
+          ) : order.status === 'cancelled' ? (
+            <CircleX className="size-4" />
+          ) : (
+            <Clock className="size-4" />
+          )}
+          {statusBadge(order)}
         </span>
         <h1 className="mt-5 font-display text-h1 text-ink">
           Pedido <em className="tabular italic">{order.number}</em>
@@ -113,28 +163,53 @@ export default function ConfirmacaoPage() {
         <p className="mt-3 text-body-lg font-light text-ink-soft">
           {pago
             ? `Obrigada, ${primeiroNome(order.customer.name)}! Já estamos separando suas peças com todo o carinho.`
-            : `Quase lá, ${primeiroNome(order.customer.name)}! Assim que o pagamento for confirmado, começamos a separar suas peças.`}
+            : encerrado
+              ? `Nada foi cobrado, ${primeiroNome(order.customer.name)}. As peças voltaram pra loja — é só montar a sacola de novo, leva um minutinho.`
+              : aguardandoPix
+                ? `Quase lá, ${primeiroNome(order.customer.name)}! Pague o PIX abaixo e a confirmação aparece aqui sozinha.`
+                : `Quase lá, ${primeiroNome(order.customer.name)}! Assim que o pagamento for confirmado, começamos a separar suas peças.`}
         </p>
+        {encerrado && (
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Button href="/novidades" size="md">
+              Refazer minha sacola
+            </Button>
+            <Button href={`https://wa.me/${WHATSAPP_ATENDIMENTO}?text=${mensagemZap}`} external variant="secondary" size="md">
+              Falar no WhatsApp
+            </Button>
+          </div>
+        )}
       </header>
 
-      {/* Próximos passos */}
-      <section aria-label="Próximos passos" className="mx-auto mt-12 max-w-narrow">
-        <ol className="flex flex-col gap-4">
-          <PassoItem done label={pagoLabel(order)} />
-          <PassoItem
-            done={pago}
-            label={retirada ? 'Separamos suas peças na loja' : 'Preparamos e despachamos seu pacote'}
-          />
-          <PassoItem
-            done={false}
-            label={
-              retirada
-                ? `Você retira na loja ${store?.unit ?? ''} — fica pronto em ~${order.shipping.readyInHours ?? 3}h após a confirmação`
-                : 'Você recebe em casa e arrasa'
-            }
-          />
-        </ol>
-      </section>
+      {/* O PIX MORA AQUI. O painel polla o status e, ao pagar/expirar, pede
+          pra recarregar o pedido — a página então troca sozinha pro cabeçalho
+          de "Pagamento confirmado" (ou "PIX expirado"). */}
+      {aguardandoPix && (
+        <section aria-label="Pagamento por PIX" className="mx-auto mt-10 max-w-narrow">
+          <PixPanel order={order} embutido onPaid={recarregar} onExpired={recarregar} />
+        </section>
+      )}
+
+      {/* Próximos passos — não fazem sentido num pedido encerrado. */}
+      {!encerrado && (
+        <section aria-label="Próximos passos" className="mx-auto mt-12 max-w-narrow">
+          <ol className="flex flex-col gap-4">
+            <PassoItem done label={pagoLabel(order)} />
+            <PassoItem
+              done={pago}
+              label={retirada ? 'Separamos suas peças na loja' : 'Preparamos e despachamos seu pacote'}
+            />
+            <PassoItem
+              done={false}
+              label={
+                retirada
+                  ? `Você retira na loja ${store?.unit ?? ''} — fica pronto em ~${order.shipping.readyInHours ?? 3}h após a confirmação`
+                  : 'Você recebe em casa e arrasa'
+              }
+            />
+          </ol>
+        </section>
+      )}
 
       {/* Entrega + resumo */}
       <section className="mx-auto mt-12 grid max-w-text gap-6 sm:grid-cols-2">
@@ -209,27 +284,31 @@ export default function ConfirmacaoPage() {
         </div>
       </section>
 
-      {/* Acompanhamento + NF — placeholders HONESTOS (nada de link morto). */}
-      <section className="mx-auto mt-6 grid max-w-text gap-6 sm:grid-cols-2">
-        <div className="rounded-md bg-surface-alt p-6">
-          <h2 className="mb-2 flex items-center gap-2 font-display text-h4 text-ink">
-            <PackageSearch className="size-4 text-primary-strong" /> Acompanhe seu pedido
-          </h2>
-          <p className="text-small text-ink-soft">
-            {retirada
-              ? 'Avisamos por e-mail e WhatsApp assim que estiver tudo pronto pra retirada.'
-              : 'Você recebe o código de rastreamento por e-mail e WhatsApp assim que o pacote for despachado.'}
-          </p>
-        </div>
-        <div className="rounded-md bg-surface-alt p-6">
-          <h2 className="mb-2 flex items-center gap-2 font-display text-h4 text-ink">
-            <FileText className="size-4 text-primary-strong" /> Nota fiscal
-          </h2>
-          <p className="text-small text-ink-soft">
-            A nota fiscal é enviada pro seu e-mail após o faturamento do pedido.
-          </p>
-        </div>
-      </section>
+      {/* Acompanhamento + NF — placeholders HONESTOS (nada de link morto, e
+          nada de e-mail: o canal que existe e dispara de verdade é o WhatsApp). */}
+      {!encerrado && (
+        <section className="mx-auto mt-6 grid max-w-text gap-6 sm:grid-cols-2">
+          <div className="rounded-md bg-surface-alt p-6">
+            <h2 className="mb-2 flex items-center gap-2 font-display text-h4 text-ink">
+              <PackageSearch className="size-4 text-primary-strong" /> Acompanhe seu pedido
+            </h2>
+            <p className="text-small text-ink-soft">
+              {retirada
+                ? 'Avisamos pelo WhatsApp assim que estiver tudo pronto pra retirada.'
+                : 'Você recebe o código de rastreamento pelo WhatsApp assim que o pacote for despachado.'}
+            </p>
+          </div>
+          <div className="rounded-md bg-surface-alt p-6">
+            <h2 className="mb-2 flex items-center gap-2 font-display text-h4 text-ink">
+              <FileText className="size-4 text-primary-strong" /> Nota fiscal
+            </h2>
+            <p className="text-small text-ink-soft">
+              A nota fiscal é emitida no faturamento do pedido. Precisa dela? É só pedir pelo WhatsApp
+              com o número do pedido.
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* WhatsApp — o canal onde a Lurd's realmente atende. */}
       <div className="mt-10 text-center">
@@ -257,9 +336,30 @@ function primeiroNome(nome: string): string {
   return nome.trim().split(/\s+/)[0] ?? '';
 }
 
+function statusBadge(order: Order): string {
+  switch (order.status) {
+    case 'paid':
+      return 'Pagamento confirmado';
+    case 'expired':
+      return 'PIX expirado';
+    case 'cancelled':
+      return 'Pedido cancelado';
+    default:
+      return 'Aguardando pagamento';
+  }
+}
+
+/**
+ * Primeiro passo da lista. Não aponta o e-mail como o lugar do código: até
+ * 17/08 dizia "o código está no seu e-mail", e quando esse e-mail não saía a
+ * cliente ficava sem o PIX. O código está NESTA página, sempre — o e-mail,
+ * quando sai, é cópia.
+ */
 function pagoLabel(order: Order): string {
   if (order.status === 'paid') return 'Pagamento confirmado';
-  if (order.payment.method === 'pix') return 'Aguardando o PIX — o código está no seu e-mail';
+  if (order.payment.method === 'pix') {
+    return order.payment.pix ? 'Aguardando o PIX — o código está logo acima' : 'Aguardando o PIX';
+  }
   return 'Pagamento em processamento';
 }
 

@@ -25,6 +25,59 @@ import { avisarVitrine } from '../common/avisar-vitrine';
 export const SLOTS = ['home-hero', 'home-faixa', 'tarja-topo', 'lojas-hero'] as const;
 export type Slot = (typeof SLOTS)[number];
 
+const CACHE_IMUTAVEL = 'public, max-age=31536000, immutable';
+const LARGURA_MAXIMA = { desktop: 2216, mobile: 992 } as const;
+
+export interface BannerOtimizado {
+  buffer: Buffer;
+  originalBytes: number;
+  optimizedBytes: number;
+  width: number;
+  height: number;
+  format: 'webp';
+}
+
+/** Converte a arte antes do R2 para eliminar otimização fria no primeiro acesso. */
+export async function otimizarBanner(
+  buffer: Buffer,
+  variante: 'desktop' | 'mobile',
+): Promise<BannerOtimizado> {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw new BadRequestException('imagem vazia ou inválida');
+  }
+
+  let sharp: any;
+  try {
+    // Carregamento preguiçoso: o binário nativo só é necessário no upload.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    sharp = require('sharp');
+  } catch (e: any) {
+    throw new BadRequestException(`otimização de imagem indisponível: ${e?.message || e}`);
+  }
+
+  try {
+    const resultado = await sharp(buffer, { failOn: 'error', limitInputPixels: 80_000_000 })
+      .rotate()
+      .resize({ width: LARGURA_MAXIMA[variante], withoutEnlargement: true, fit: 'inside' })
+      .webp({ quality: 82, effort: 4, smartSubsample: true })
+      .toBuffer({ resolveWithObject: true });
+
+    if (!resultado.info.width || !resultado.info.height || !resultado.data.length) {
+      throw new Error('resultado sem dimensões');
+    }
+    return {
+      buffer: resultado.data,
+      originalBytes: buffer.length,
+      optimizedBytes: resultado.data.length,
+      width: resultado.info.width,
+      height: resultado.info.height,
+      format: 'webp',
+    };
+  } catch (e: any) {
+    throw new BadRequestException(`imagem inválida ou não suportada: ${e?.message || e}`);
+  }
+}
+
 function getR2Client(): S3Client {
   const accountId = process.env.R2_ACCOUNT_ID;
   const accessKey = process.env.R2_ACCESS_KEY_ID;
@@ -225,10 +278,14 @@ export class SiteBannersService {
       throw new BadRequestException('R2_BUCKET_NAME ou R2_PUBLIC_URL não configurado');
     }
 
-    const nome = (file.originalname || 'banner.jpg')
+    const otimizada = await otimizarBanner(file.buffer, variante);
+    const base = (file.originalname || 'banner')
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-zA-Z0-9.\-_]/g, '_');
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9\-_]/g, '_')
+      .replace(/^_+|_+$/g, '') || 'banner';
+    const nome = `${base}.webp`;
     const key = `banners/${banner.slot}/${id}/${variante}-${Date.now()}-${nome}`;
 
     try {
@@ -236,9 +293,10 @@ export class SiteBannersService {
         new PutObjectCommand({
           Bucket: bucket,
           Key: key,
-          Body: file.buffer,
-          ContentType: file.mimetype || 'image/jpeg',
+          Body: otimizada.buffer,
+          ContentType: 'image/webp',
           ContentDisposition: `inline; filename="${nome}"`,
+          CacheControl: CACHE_IMUTAVEL,
         }),
       );
     } catch (e: any) {
@@ -247,12 +305,24 @@ export class SiteBannersService {
 
     const anterior = variante === 'mobile' ? banner.objectKeyMobile : banner.objectKey;
     const url = `${publico.replace(/\/$/, '')}/${key}`;
-    const atualizado = await (this.prisma as any).siteBanner.update({
-      where: { id },
-      data: variante === 'mobile'
-        ? { imagemMobileUrl: url, objectKeyMobile: key }
-        : { imagemUrl: url, objectKey: key },
-    });
+    let atualizado: any;
+    try {
+      atualizado = await (this.prisma as any).siteBanner.update({
+        where: { id },
+        data: variante === 'mobile'
+          ? { imagemMobileUrl: url, objectKeyMobile: key }
+          : { imagemUrl: url, objectKey: key },
+      });
+    } catch (e) {
+      // O novo objeto ainda não é referenciado: removê-lo evita lixo no bucket.
+      // A arte anterior permanece intacta e continua no ar.
+      try {
+        await getR2Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      } catch (rollback: any) {
+        this.logger.warn(`R2: não desfez upload ${key}: ${rollback?.message || rollback}`);
+      }
+      throw e;
+    }
 
     // Só apaga a antiga DEPOIS que a nova está gravada — se o banco falhar, a
     // imagem que está no ar continua existindo.
@@ -264,6 +334,15 @@ export class SiteBannersService {
       }
     }
     this.avisarSite(this.tagsDoSlot(banner.slot));
-    return atualizado;
+    return {
+      ...atualizado,
+      otimizacao: {
+        originalBytes: otimizada.originalBytes,
+        optimizedBytes: otimizada.optimizedBytes,
+        width: otimizada.width,
+        height: otimizada.height,
+        format: otimizada.format,
+      },
+    };
   }
 }

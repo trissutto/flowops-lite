@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ZoomIn, ZoomOut, Check } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
 import { ProductBadgeTag } from '@/components/ui/Badge';
@@ -42,6 +42,104 @@ export interface GrupoDeCor {
   capa: string;
   ativa: boolean;
   onSelect: () => void;
+  /**
+   * Esta cor NAO tem o tamanho que ela escolheu (17/08).
+   *
+   * Riscada, nunca escondida: cor que some da tela parece defeito do site
+   * e a cliente fica procurando. Riscada, ela entende que existe mas nao
+   * no numero dela — e isso evita escolher pra levar um nao no fim.
+   *
+   * Continua clicavel de proposito: ela pode querer ver a peca naquela
+   * cor e depois trocar de numero.
+   */
+  indisponivel?: boolean;
+}
+
+function ScrollableThumbnailRail({
+  children,
+  ariaLabel,
+  hintLabel,
+  itemCount,
+}: {
+  children: ReactNode;
+  ariaLabel: string;
+  hintLabel: string;
+  itemCount: number;
+}) {
+  const railRef = useRef<HTMLDivElement>(null);
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+
+  const updateScrollHints = useCallback(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    setCanScrollUp(rail.scrollTop > 2);
+    setCanScrollDown(rail.scrollTop + rail.clientHeight < rail.scrollHeight - 2);
+  }, []);
+
+  const scrollOneFold = useCallback((direction: -1 | 1) => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    rail.scrollBy({
+      top: direction * rail.clientHeight * 0.8,
+      behavior: 'smooth',
+    });
+  }, []);
+
+  const itemName = hintLabel === 'Mais cores' ? 'cores' : 'fotos';
+
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    const frame = requestAnimationFrame(updateScrollHints);
+    const observer = new ResizeObserver(updateScrollHints);
+    observer.observe(rail);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [itemCount, updateScrollHints]);
+
+  return (
+    <>
+      <div
+        ref={railRef}
+        className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
+        role="tablist"
+        aria-label={ariaLabel}
+        onScroll={updateScrollHints}
+      >
+        {children}
+      </div>
+
+      {canScrollUp && (
+        <button
+          type="button"
+          aria-label={`Mostrar ${itemName} anteriores`}
+          onClick={() => scrollOneFold(-1)}
+          className="absolute inset-x-0 top-0 z-10 flex min-h-11 justify-center bg-gradient-to-b from-background via-background/90 to-transparent pb-5 pt-1 text-primary focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          <ChevronUp className="size-4 text-primary drop-shadow-sm" strokeWidth={2.25} />
+        </button>
+      )}
+
+      {canScrollDown && (
+        <button
+          type="button"
+          aria-label={`Mostrar próximas ${itemName}`}
+          onClick={() => scrollOneFold(1)}
+          className="absolute inset-x-0 bottom-0 z-10 flex min-h-11 flex-col items-center justify-end bg-gradient-to-t from-background via-background/95 to-transparent pb-1 pt-7 text-primary drop-shadow-sm focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          <span className="text-center text-[0.55rem] font-semibold leading-none tracking-[0.04em] uppercase">{hintLabel}</span>
+          <ChevronDown className="mt-0.5 size-4" strokeWidth={2.25} />
+        </button>
+      )}
+    </>
+  );
 }
 
 export function ProductGallery({
@@ -215,12 +313,12 @@ export function ProductGallery({
           foto. Sem isso, cada cor a mais devolveria a rolagem que a mudança
           de 15/08 veio eliminar. */}
       {grupos && grupos.length > 1 ? (
-        <div className="relative w-14 shrink-0 lg:w-20">
-          <div
-            className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
-            role="tablist"
-            aria-label="Cores da peça"
-          >
+        /* 64px no celular (era 56): sem as bolinhas da coluna de compra,
+           esta fita virou o UNICO seletor de cor e precisa ser nitida.
+           Cresce pra LARGURA de proposito — altura sairia do orcamento da
+           dobra, que e o que acabou de por o botao de comprar na 1a tela. */
+        <div className="relative w-16 shrink-0 lg:w-20">
+          <ScrollableThumbnailRail ariaLabel="Cores da peça" hintLabel="Mais cores" itemCount={grupos.length}>
             {grupos.map((g) => (
               <button
                 key={g.nome}
@@ -235,9 +333,10 @@ export function ProductGallery({
                 <span
                   className={cn(
                     'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
+                    g.indisponivel && 'opacity-45',
                     g.ativa
-                      ? 'border-primary opacity-100'
-                      : 'border-transparent opacity-65 hover:opacity-100',
+                      ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-background opacity-100 scale-[1.04]'
+                      : 'border-transparent opacity-50 saturate-[0.85] hover:opacity-100 hover:saturate-100',
                   )}
                 >
                   <Image
@@ -250,26 +349,37 @@ export function ProductGallery({
                     blurDataURL={BLUR_DATA_URL}
                     className="object-cover"
                   />
+                  {/* O ✓ VOLTOU (17/08). Ele existia nas bolinhas removidas, e
+                      o comentario de la explicava por que: numa peca escura a
+                      borda de selecao some contra a propria foto. O check nao
+                      some nunca. */}
+                  {g.ativa && !g.indisponivel && (
+                    <span className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-primary shadow-sm">
+                      <Check className="size-3 text-light" strokeWidth={3} />
+                    </span>
+                  )}
+                  {/* A tarja — mesma convencao da grade de tamanhos. */}
+                  {g.indisponivel && (
+                    <span aria-hidden className="absolute inset-0 flex items-center justify-center">
+                      <span className="h-px w-[140%] rotate-[38deg] bg-ink-soft/80" />
+                    </span>
+                  )}
                 </span>
                 <span
                   className={cn(
-                    'mt-1 block truncate text-center text-[0.625rem] leading-tight transition-colors',
-                    g.ativa ? 'text-ink' : 'text-ink-muted',
+                    'mt-1.5 block truncate text-center text-[0.6875rem] leading-tight transition-colors',
+                    g.ativa ? 'font-semibold text-ink' : 'text-ink-soft',
                   )}
                 >
                   {g.nome}
                 </span>
               </button>
             ))}
-          </div>
+          </ScrollableThumbnailRail>
         </div>
       ) : safeImages.length > 1 && (
         <div className="relative w-14 shrink-0 lg:w-20">
-          <div
-            className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
-            role="tablist"
-            aria-label="Fotos do produto"
-          >
+          <ScrollableThumbnailRail ariaLabel="Fotos do produto" hintLabel="Mais fotos" itemCount={safeImages.length}>
             {safeImages.map((image, index) => (
               <button
                 key={`${image.src}-${index}`}
@@ -302,7 +412,7 @@ export function ProductGallery({
                 )}
               </button>
             ))}
-          </div>
+          </ScrollableThumbnailRail>
         </div>
       )}
     </div>

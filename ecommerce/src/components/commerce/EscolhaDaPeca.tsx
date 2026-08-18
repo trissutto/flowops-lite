@@ -62,6 +62,14 @@ export function EscolhaDaPeca({
   }, [cores]);
 
   const [cor, setCor] = useState<string | null>(inicial);
+  /**
+   * O TAMANHO MORA AQUI (17/08), e nao dentro do BuyBox.
+   *
+   * Quem risca a cor sem o numero escolhido e a FITA de miniaturas, que
+   * vive na outra coluna. Irma, nao filha — entao o estado sobe pro pai
+   * que enxerga as duas.
+   */
+  const [tamanho, setTamanho] = useState<string | null>(null);
 
   const corAtual = cores.find((c) => c.nome === cor);
 
@@ -121,9 +129,11 @@ export function EscolhaDaPeca({
       nome: c.nomeAmigavel || c.nome,
       capa: c.fotos[0].src,
       ativa: c.nome === corAtual?.nome,
+      // Riscada quando ela ja escolheu um numero que esta cor nao tem.
+      indisponivel: !!tamanho && !c.tamanhos.some((t) => t.label === tamanho && t.disponivel),
       onSelect: () => setCor(c.nome),
     }));
-  }, [cores, corAtual]);
+  }, [cores, corAtual, tamanho]);
 
   /** Cor sem foto própria: mostra a das outras, mas AVISA — senão vira troca. */
   const fotoIlustrativa = !!corAtual && corAtual.fotos.length === 0 && galeria.length > 0;
@@ -194,9 +204,19 @@ export function EscolhaDaPeca({
           alertaEstoque={alertaEstoque}
           look={look}
           product={pecaDaCor}
-          cores={cores.map((c) => ({ nome: c.nome, swatch: c.swatch, estoque: c.estoque }))}
+          /* `tamanhos` entra aqui (17/08) porque agora o TAMANHO vem primeiro:
+             é a grade de cada cor que decide qual bolinha sai riscada quando
+             ela já escolheu o número. */
+          cores={cores.map((c) => ({
+            nome: c.nome,
+            swatch: c.swatch,
+            estoque: c.estoque,
+            tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel })),
+          }))}
           corSelecionada={cor}
           onSelecionarCor={setCor}
+          tamanho={tamanho}
+          onTamanho={setTamanho}
         />
       </div>
     </div>

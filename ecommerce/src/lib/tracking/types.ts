@@ -95,6 +95,9 @@ export const LURDS_EVENTS = [
   'checkout_submission',
   'checkout_error',
   'checkout_validation_error',
+  // Cotação de frete caiu na tabela local (backend 429/timeout/fora) — falha
+  // NOSSA, separada do erro de validação da cliente (17/08).
+  'shipping_quote_fallback',
   'pix_created',
   'payment_method_selected',
   'pix_copied',

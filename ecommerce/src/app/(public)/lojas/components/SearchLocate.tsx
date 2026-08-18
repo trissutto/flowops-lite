@@ -58,7 +58,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
   }
 
   return (
-    <section id="buscar" className="scroll-mt-8 border-t border-[var(--lj-line)] px-6 pb-10 pt-20 sm:pt-24">
+    <section id="buscar" className="scroll-mt-8 border-t border-[var(--lj-line)] bg-[var(--lj-cream)] px-6 py-10 sm:py-14">
       <div className="mx-auto max-w-3xl text-center">
         <motion.div
           initial={{ opacity: 0, y: 24 }}
@@ -66,14 +66,14 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
           viewport={{ once: true, margin: '-80px' }}
           transition={{ duration: 0.7 }}
         >
-          <h2 className="lojas-serif text-3xl font-medium sm:text-4xl">Qual cidade é a sua?</h2>
-          <div className="lojas-rule mx-auto mt-5 w-24" />
-          <p className="mt-5 text-sm font-light text-[var(--lj-ink-soft)]">
+          <h2 className="lojas-serif text-2xl font-medium sm:text-4xl">Encontre sua loja</h2>
+          <div className="lojas-rule mx-auto mt-3 w-20" />
+          <p className="mt-3 text-sm font-light text-[var(--lj-ink-soft)]">
             Busque pela cidade ou deixe a gente encontrar a unidade mais próxima de você.
           </p>
         </motion.div>
 
-        <div className="mx-auto mt-8 flex max-w-xl flex-col gap-3 sm:flex-row">
+        <div className="mx-auto mt-5 flex max-w-xl flex-col gap-3 sm:mt-7 sm:flex-row">
           {/* Autocomplete de cidade */}
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--lj-gold-strong)]" />
@@ -153,7 +153,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
               initial={{ opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ duration: 0.5 }}
-              className="mx-auto mt-10 max-w-2xl rounded-3xl border border-[var(--lj-gold)]/40 bg-white p-8 shadow-[0_20px_60px_-30px_rgba(140,115,37,0.4)]"
+              className="mx-auto mt-6 max-w-2xl rounded-3xl border border-[var(--lj-gold)]/40 bg-white p-5 shadow-[0_20px_60px_-30px_rgba(140,115,37,0.4)] sm:p-7"
             >
               <p className="text-[11px] font-medium uppercase tracking-[0.3em] text-[var(--lj-gold-strong)]">
                 Mais perto de você
@@ -165,7 +165,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
                 A cerca de <strong className="font-semibold">{formatKm(nearest.km)}</strong> de onde
                 você está · {nearest.store.address.street}, {nearest.store.address.neighborhood}
               </p>
-              <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
                 <a
                   href={directionsUrl(nearest.store)}
                   target="_blank"

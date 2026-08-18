@@ -21,7 +21,12 @@ import type { CartLine } from '@/types';
  * sozinho: o merge do persist preenche as chaves novas com os defaults.
  */
 
-function lineKey(productId: string, size: string, color?: string): string {
+/**
+ * Id da linha = produto+tamanho+cor. Exportado porque o checkout precisa
+ * casar a peça que o backend recusou (`{ productId, size, color }`) com a
+ * linha certa da sacola — ver `refreshPrice`.
+ */
+export function lineKey(productId: string, size: string, color?: string | null): string {
   return [productId, size, color ?? '-'].join('::');
 }
 
@@ -38,6 +43,18 @@ interface CartState {
   add: (line: Omit<CartLine, 'id'>) => void;
   remove: (id: string) => void;
   setQuantity: (id: string, quantity: number) => void;
+  /**
+   * Reescreve o preço unitário de UMA linha com o preço atual do catálogo.
+   *
+   * O `unitPrice` entra na sacola uma única vez (no add) e fica congelado no
+   * localStorage sem prazo. Cliente que adicionou na promoção e voltou dois
+   * dias depois mandava o preço velho; o guard do backend recusava com
+   * "atualize a página" — e F5 não atualizava nada, porque ninguém reescrevia
+   * o preço. Beco sem saída até remover e readicionar a peça. Agora, quando o
+   * backend recusa por preço e diz qual peça e quanto custa (`item.precoAtual`),
+   * o checkout chama isto e a compra volta a ficar a um clique.
+   */
+  refreshPrice: (id: string, unitPrice: number) => void;
   clear: () => void;
   setCoupon: (code: string | null) => void;
   setCep: (cep: string | null) => void;
@@ -60,15 +77,27 @@ export const useCartStore = create<CartState>()(
           const id = lineKey(line.productId, line.size, line.color);
           const existing = state.lines.find((l) => l.id === id);
           if (existing) {
+            // Readicionar a MESMA peça renova o preço com o da vitrine de agora
+            // (antes só somava a quantidade e mantinha o preço do primeiro add).
+            // Se o preço caiu, o backend já cobra o menor; se subiu, a linha
+            // velha seria recusada de qualquer jeito — o preço novo é o único
+            // que passa no guard.
             return {
               lines: state.lines.map((l) =>
-                l.id === id ? { ...l, quantity: l.quantity + line.quantity } : l,
+                l.id === id
+                  ? { ...l, quantity: l.quantity + line.quantity, unitPrice: line.unitPrice }
+                  : l,
               ),
             };
           }
           return { lines: [...state.lines, { ...line, id }] };
         }),
       remove: (id) => set((state) => ({ lines: state.lines.filter((l) => l.id !== id) })),
+      refreshPrice: (id, unitPrice) =>
+        set((state) => {
+          if (!Number.isFinite(unitPrice) || unitPrice <= 0) return state;
+          return { lines: state.lines.map((l) => (l.id === id ? { ...l, unitPrice } : l)) };
+        }),
       setQuantity: (id, quantity) =>
         set((state) => ({
           lines:

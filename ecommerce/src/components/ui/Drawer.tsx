@@ -50,7 +50,7 @@ export function Drawer({
       {header && (
         <div className="shrink-0 border-b border-border px-6 pt-7 pr-16 pb-5">{header}</div>
       )}
-      <div className="flex-1 overflow-y-auto overscroll-contain px-6 py-6">{children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6">{children}</div>
       {footer && (
         <div className="shrink-0 border-t border-border bg-surface/95 px-6 py-5 backdrop-blur">
           {footer}

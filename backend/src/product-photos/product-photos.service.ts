@@ -4,6 +4,7 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client
 import { refBaseOf, refsDeBusca } from '../common/ref-base';
 import {
   medirImagem, fotoBaixaResolucao, FOTO_LARGURA_MINIMA, FOTO_ALTURA_MINIMA,
+  FOTO_LARGURA_MAXIMA, FOTO_ALTURA_MAXIMA,
 } from '../common/medir-imagem';
 // Só os ESTÁTICOS (assinatura de formato) — não há injeção nem ciclo aqui.
 import { CorIaService } from './cor-ia.service';
@@ -352,23 +353,45 @@ export class ProductPhotosService {
   }
 
   /**
-   * NORMALIZA O ACERVO: AVIF/HEIC viram JPEG no bucket (12/08/2026).
+   * NORMALIZA O ACERVO NUM MESTRE ÚNICO: JPEG, no máximo 2000×2858.
    *
-   * O WordPress converte imagem na origem e o importador salvou os bytes como
-   * vieram, com nome `.jpg`. Duas consequências medidas na produção:
+   * Nasceu em 12/08/2026 só pra AVIF/HEIC. O WordPress converte imagem na
+   * origem e o importador salvou os bytes como vieram, com nome `.jpg`. Duas
+   * consequências medidas na produção:
    *
    *   1. A leitura de cor por IA responde `400 ... not supported` — 129 das
    *      139 capas AVIF estavam sem bolinha.
    *   2. iPhone com iOS anterior ao 16.4 não abre AVIF: a cliente vê o card
    *      vazio e conclui que o site está quebrado.
    *
-   * A conversão em memória (`CorIaService.paraFormatoDaIA`) resolve só o item
-   * 1 — o arquivo continua AVIF pra quem navega. Aqui o arquivo é REGRAVADO.
+   * ── AMPLIADO EM 16/08/2026: TODO formato que não é JPEG entra na fila ──
+   *
+   * Medição do feed em 16/08 (3.282 imagens): 50 AVIF, 52 WebP e 38 PNG.
+   * O corte anterior era `ACEITOS_PELA_IA`, que inclui PNG e WebP — então
+   * esses dois passavam batido, e cada um cobra um preço diferente:
+   *
+   * - **PNG**: as capas geradas pesam ~2 MB em 1024×1536 (medido: 1.784 KB a
+   *   2.116 KB). O mesmo quadro em JPEG q90 dá ~200 KB. São 10× de banda no
+   *   `next/image`, no rastreador do Google e na ingestão do Meta — que ainda
+   *   tem teto de arquivo por item.
+   * - **WebP**: o Google aceita, o Meta só documenta JPEG e PNG pra catálogo.
+   *   Um acervo com dois formatos é uma aposta sem prêmio: JPEG é aceito nos
+   *   dois lados e no navegador de todo mundo.
+   *
+   * GIF fica FORA de propósito — converter animado guardaria só o 1º quadro.
    *
    * Detalhes que importam:
    * - Grava numa CHAVE NOVA e só então apaga a antiga. A URL do R2 é servida
    *   por CDN: sobrescrever a mesma chave deixaria o cache antigo no ar sem
    *   jeito de saber por quanto tempo.
+   * - **Só apaga o original quando ele é AVIF/HEIC** — formato quebrado não
+   *   serve de nada. PNG/WebP FICAM no bucket: são mestre válido, ocupam
+   *   centavos e a chave volta tirando o sufixo `-jpg.jpg`. Se algum dia o
+   *   recorte 4:5 do anúncio for gerado, é deles que sai a melhor origem.
+   * - `flatten` sobre branco antes do JPEG: PNG/WebP de recorte têm alfa, e
+   *   JPEG não tem — sem isso o fundo transparente vira PRETO.
+   * - O teto de tamanho NUNCA amplia (`withoutEnlargement`): ver
+   *   `FOTO_LARGURA_MAXIMA`. Foto pequena continua pequena e marcada.
    * - Em SÉRIE e com teto por chamada. O domínio público do R2 responde 429
    *   com download paralelo (medido), e a tela chama de novo pra continuar.
    * - Erro numa foto não derruba o lote: ela fica pro próximo clique.
@@ -418,7 +441,12 @@ export class ProductPhotosService {
         const mime = CorIaService.tipoDaImagem(
           bytes, String(resposta.headers.get('content-type') || ''),
         );
-        if (CorIaService.ACEITOS_PELA_IA.includes(mime)) {
+        const tamanho = medirImagem(bytes);
+        const grandeDemais = !!tamanho
+          && (tamanho.largura > FOTO_LARGURA_MAXIMA || tamanho.altura > FOTO_ALTURA_MAXIMA);
+        // GIF fora: converter animado guardaria só o 1º quadro (ver cabeçalho).
+        const jaEhOMestre = (mime === 'image/jpeg' || mime === 'image/gif') && !grandeDemais;
+        if (jaEhOMestre) {
           jaOk++;
           // Toque no registro só pra o cursor andar (ver `inicio` acima).
           await (this.prisma as any).productPhoto.update({
@@ -427,7 +455,19 @@ export class ProductPhotosService {
           continue;
         }
 
-        const convertida: Buffer = await sharp(bytes).jpeg({ quality: 90 }).toBuffer();
+        const saida = await sharp(bytes)
+          // `inside` + `withoutEnlargement` = só encolhe, e mantém a proporção
+          // original da foto. Recortar pra uma proporção fixa é decisão de
+          // enquadramento (corta cabeça), não de normalização — fica fora.
+          .resize({
+            width: FOTO_LARGURA_MAXIMA, height: FOTO_ALTURA_MAXIMA,
+            fit: 'inside', withoutEnlargement: true,
+          })
+          // Alfa → branco ANTES do JPEG, senão o recorte transparente vira preto.
+          .flatten({ background: '#ffffff' })
+          .jpeg({ quality: 90 })
+          .toBuffer({ resolveWithObject: true });
+        const convertida: Buffer = saida.data;
         const chaveNova = `${String(foto.objectKey).replace(/\.[^./]+$/, '')}-jpg.jpg`;
         await client.send(new PutObjectCommand({
           Bucket: bucket, Key: chaveNova, Body: convertida,
@@ -435,15 +475,28 @@ export class ProductPhotosService {
         }));
         await (this.prisma as any).productPhoto.update({
           where: { id: foto.id },
-          data: { url: `${base}/${chaveNova}`, objectKey: chaveNova },
+          data: {
+            url: `${base}/${chaveNova}`,
+            objectKey: chaveNova,
+            // O arquivo mudou de tamanho: sem regravar aqui, a tela de baixa
+            // resolução seguiria julgando a peça pela medida do arquivo velho.
+            larguraPx: saida.info.width,
+            alturaPx: saida.info.height,
+          },
         });
-        // Só depois do banco apontar pro arquivo novo: se apagasse antes e o
+        // Só o formato QUEBRADO some. PNG/WebP ficam como mestre — ver cabeçalho.
+        // E só depois do banco apontar pro arquivo novo: se apagasse antes e o
         // update falhasse, a foto sumia do site.
-        await client
-          .send(new DeleteObjectCommand({ Bucket: bucket, Key: foto.objectKey }))
-          .catch((e: any) => this.logger.warn(`[fotos] sobrou o AVIF ${foto.objectKey}: ${e?.message}`));
+        if (mime === 'image/avif' || mime === 'image/heic') {
+          await client
+            .send(new DeleteObjectCommand({ Bucket: bucket, Key: foto.objectKey }))
+            .catch((e: any) => this.logger.warn(`[fotos] sobrou o AVIF ${foto.objectKey}: ${e?.message}`));
+        }
         convertidas++;
-        this.logger.log(`[fotos] ${foto.ref}/${foto.cor ?? '—'}: ${mime} → JPEG`);
+        this.logger.log(
+          `[fotos] ${foto.ref}/${foto.cor ?? '—'}: ${mime} ${tamanho?.largura ?? '?'}×${tamanho?.altura ?? '?'}`
+          + ` → JPEG ${saida.info.width}×${saida.info.height}`,
+        );
       } catch (e: any) {
         falharam++;
         if (exemplosFalha.length < 10) {

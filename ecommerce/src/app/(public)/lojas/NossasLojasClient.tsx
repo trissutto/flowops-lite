@@ -7,8 +7,6 @@ import Manifesto from './components/Manifesto';
 import SearchLocate from './components/SearchLocate';
 import StoresSection from './components/StoresSection';
 import StoreDrawer from './components/StoreDrawer';
-import WhyVisit from './components/WhyVisit';
-import Testimonials from './components/Testimonials';
 import InstagramCta from './components/InstagramCta';
 import FinalCta from './components/FinalCta';
 import OnlineShoppingSection from './components/OnlineShoppingSection';
@@ -88,7 +86,6 @@ export default function NossasLojasClient({
         onOnlineClick={() => trackStoresOnlineCta('hero', hasSelectedStore ? selected.unit : undefined)}
         imagem={heroImagem}
       />
-      <Manifesto />
       <SearchLocate
         geoState={geoState}
         nearest={nearest}
@@ -107,15 +104,14 @@ export default function NossasLojasClient({
         campaignParams={campaignParams}
         storeUnit={hasSelectedStore ? selected.unit : undefined}
       />
-      <WhyVisit />
-      <Testimonials />
+      <Manifesto />
       <InstagramCta store={selected} />
       <FinalCta store={nearest?.store ?? selected} />
       <CampaignMobileBar
         campaignParams={campaignParams}
         selectedStore={hasSelectedStore ? selected : null}
       />
-      <footer className="border-t border-[var(--lj-line)] bg-[var(--lj-cream)] px-6 py-12 text-center">
+      <footer className="border-t border-[var(--lj-line)] bg-[var(--lj-cream)] px-6 py-7 text-center">
         <p className="lojas-serif text-lg tracking-wide">Lurd&apos;s Plus Size</p>
         <p className="mt-3 text-xs uppercase tracking-[0.2em] text-[var(--lj-ink-soft)]">
           Moda plus size elegante · {stores.length} lojas em São Paulo e região ·{' '}

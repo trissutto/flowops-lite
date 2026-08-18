@@ -438,19 +438,25 @@ export class PedidoEmailService {
     if (para) {
       const nome = this.primeiroNome(order?.customerName);
       const pix = this.pixDoPedido(order);
-      const validade =
-        pix.minutosRestantes !== null && pix.minutosRestantes > 0
-          ? ` Ele vale por mais ${pix.minutosRestantes} minutos.`
-          : '';
+      // Com o PIX de 24h (17/08), "vale por mais 1380 minutos" não é frase.
+      const validade = (() => {
+        const m = pix.minutosRestantes;
+        if (m === null || m <= 0) return '';
+        if (m >= 120) return ` Ele vale por mais ${Math.floor(m / 60)} horas.`;
+        return ` Ele vale por mais ${m} minutos.`;
+      })();
       const titulo = 'Seu Pix está esperando';
+      // NÃO diz "reservadas": desde 17/08 pedido não pago NÃO segura peça
+      // (HORAS_PENDENTE = 0, decisão do dono). Prometer reserva e a peça
+      // sair pra outra cliente é pior que não prometer.
       const chamada =
-        `${nome}, suas peças estão reservadas e o Pix do pedido ainda não caiu.${validade} ` +
+        `${nome}, o Pix do seu pedido ainda não caiu.${validade} ` +
         `É só copiar o código abaixo e colar na opção "Pix copia e cola" do app do seu banco:` +
         (pix.copiaECola
           ? `<div style="margin:14px 0 0;padding:12px;background:#f6f4ef;border:1px solid #e5e0d5;border-radius:6px;font-family:monospace;font-size:12px;word-break:break-all;color:#333">${this.escapar(pix.copiaECola)}</div>`
           : '');
       const rodape =
-        'Se o Pix vencer, o pedido é liberado automaticamente e as peças voltam pro estoque — nada é cobrado. ' +
+        'Se o Pix vencer, o pedido é cancelado automaticamente — nada é cobrado. ' +
         'Qualquer dúvida, responda este e-mail ou chame uma consultora no WhatsApp.';
       emailOk = await this.enviar(
         para,

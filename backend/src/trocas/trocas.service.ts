@@ -148,15 +148,73 @@ export class TrocasService {
    * tomar — quem lê o retorno decide o que escrever no histórico.
    */
   private async avisarWhats(telefone: string | null | undefined, texto: string): Promise<boolean> {
+    return (await this.avisarWhatsDetalhado(telefone, texto)).ok;
+  }
+
+  /**
+   * A versão que DIZ POR QUÊ. Em 14/08 cinco códigos de postagem foram
+   * gerados e nenhum chegou na cliente; o histórico só dizia "WhatsApp NÃO
+   * enviado" — sem o motivo, ninguém sabia se era sessão caída, número
+   * errado ou Baileys engasgado. O `sendText` já devolve o erro; jogar fora
+   * era o problema.
+   */
+  private async avisarWhatsDetalhado(
+    telefone: string | null | undefined,
+    texto: string,
+  ): Promise<{ ok: boolean; motivo?: string }> {
     const num = String(telefone || '').replace(/\D/g, '');
-    if (num.length < 10) return false;
+    if (num.length < 10) return { ok: false, motivo: 'telefone inválido ou ausente' };
     try {
       const r = await this.whats.sendText(num, texto);
-      return !!r?.ok;
+      if (r?.ok) return { ok: true };
+      const motivo = r?.error || 'sem retorno do WhatsApp';
+      this.logger.warn(`[trocas] WhatsApp falhou pra ${num.slice(-4)}: ${motivo}`);
+      return { ok: false, motivo };
     } catch (e: any) {
-      this.logger.warn(`[trocas] WhatsApp falhou pra ${num.slice(-4)}: ${e?.message || e}`);
-      return false;
+      const motivo = e?.message || String(e);
+      this.logger.warn(`[trocas] WhatsApp falhou pra ${num.slice(-4)}: ${motivo}`);
+      return { ok: false, motivo };
     }
+  }
+
+  /** Texto do código de postagem — usado na geração e no reenvio. */
+  private textoCodigoReversa(troca: any, codigo: string, prazo: Date): string {
+    return (
+      `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
+      `Sua devolução da troca ${formatTrocaNumero(troca.numero)} está liberada.\n\n` +
+      `📮 Código de postagem: *${codigo}*\n` +
+      `É só levar a peça em QUALQUER agência dos Correios e informar esse código — ` +
+      `você não paga nada, o frete é por nossa conta.\n\n` +
+      `Válido até ${prazo.toLocaleDateString('pt-BR')}.\n\n` +
+      `Assim que a peça chegar e passar na conferência, a gente te avisa pra escolher ` +
+      `entre trocar, vale-compras ou reembolso.`
+    );
+  }
+
+  /**
+   * REENVIA O CÓDIGO QUE NÃO CHEGOU. Chamado pelo cron pra toda troca com
+   * `reversaCodigo` e sem `reversaEnviadaAt`. Não gera etiqueta nova — a
+   * que existe vale; só o aviso é que faltou.
+   */
+  async reenviarCodigoReversa(id: string): Promise<{ ok: boolean; motivo?: string }> {
+    const troca = await (this.prisma as any).trocaSolicitacao.findUnique({ where: { id } });
+    if (!troca?.reversaCodigo) return { ok: false, motivo: 'troca sem código de reversa' };
+    if (troca.reversaEnviadaAt) return { ok: true };
+    const prazo = troca.reversaPrazo ? new Date(troca.reversaPrazo) : new Date(Date.now() + 15 * 86_400_000);
+    const r = await this.avisarWhatsDetalhado(
+      troca.customerPhone,
+      this.textoCodigoReversa(troca, troca.reversaCodigo, prazo),
+    );
+    if (r.ok) {
+      await (this.prisma as any).trocaSolicitacao.update({
+        where: { id },
+        data: {
+          reversaEnviadaAt: new Date(),
+          eventos: { create: { tipo: 'reversa', descricao: `Código ${troca.reversaCodigo} enviado pra cliente por WhatsApp (reenvio automático).`, userName: 'automático (cron)' } },
+        },
+      });
+    }
+    return r;
   }
 
   // ── Config (mesma chave da tela de trocas da equipe) ────────────────
@@ -1231,17 +1289,8 @@ export class TrocasService {
     const codigo = String(resp.codigoRastreio);
     const prazo = new Date(Date.now() + 15 * 86_400_000);
 
-    const whatsOk = await this.avisarWhats(
-      troca.customerPhone,
-      `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
-        `Sua devolução da troca ${formatTrocaNumero(troca.numero)} está liberada.\n\n` +
-        `📮 Código de postagem: *${codigo}*\n` +
-        `É só levar a peça em QUALQUER agência dos Correios e informar esse código — ` +
-        `você não paga nada, o frete é por nossa conta.\n\n` +
-        `Válido até ${prazo.toLocaleDateString('pt-BR')}.\n\n` +
-        `Assim que a peça chegar e passar na conferência, a gente te avisa pra escolher ` +
-        `entre trocar, vale-compras ou reembolso.`,
-    );
+    const aviso = await this.avisarWhatsDetalhado(troca.customerPhone, this.textoCodigoReversa(troca, codigo, prazo));
+    const whatsOk = aviso.ok;
 
     const updated = await (this.prisma as any).trocaSolicitacao.update({
       where: { id: troca.id },
@@ -1259,7 +1308,7 @@ export class TrocasService {
               `Etiqueta de devolução gerada nos Correios: ${codigo} (PAC, válido até ${prazo.toLocaleDateString('pt-BR')}).` +
               (whatsOk
                 ? ' Código enviado pra cliente por WhatsApp.'
-                : ' ATENÇÃO: WhatsApp NÃO enviado — passar o código pra cliente manualmente.'),
+                : ` ATENÇÃO: WhatsApp NÃO enviado (${aviso.motivo || 'motivo desconhecido'}) — o cron reenvia sozinho enquanto a sessão não volta; se urgente, passar manualmente.`),
             userId: input.userId || null,
             userName: input.userName || null,
           },

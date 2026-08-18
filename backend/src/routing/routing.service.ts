@@ -87,6 +87,12 @@ export class RoutingService {
       shippingCep: order.shippingCep,
       pickupStoreCode: order.pickupStoreCode, // ativa lógica de retirada em loja se preenchido
       preferStoreCode: opts?.preferStoreCode ?? null, // override manual via radio button
+      // A loja que VENDEU entra primeiro no split com o que já tem em estoque
+      // (17/08). Sem isto o greedy a deixava de fora mesmo com metade das
+      // peças na arara — pacote e frete a mais, e o acerto ÷2,5 daquelas peças
+      // indo pra outra loja. No pedido do site é o canal 13 (sem estoque), ou
+      // seja, no-op.
+      sellerStoreCode: (order as any).sellerStoreCode ?? null,
     });
 
     // enriquece assignments com dados da loja (whatsapp, contato)
@@ -306,6 +312,165 @@ export class RoutingService {
     const preview = await this.previewRoute(orderId);
     await this.confirmRoute(orderId, preview as any);
     return preview;
+  }
+
+  /**
+   * CONSERTO (17/08) — pedido de venda online que a LOJA VENDEDORA já entregou,
+   * mas que foi roteado pra outra loja separar.
+   *
+   * Caso Suzano/ON-000004 (15/08): Suzano fechou a venda no caixa, escolheu
+   * MOTOBOY e mandou a peça pra cliente em Mogi das Cruzes (~20 km) no mesmo
+   * dia. O pedido passou o fim de semana na fila da matriz e na segunda foi
+   * roteado pra SOROCABA, 150 km longe, que ia separar e enviar uma SEGUNDA
+   * peça. E como a trava de baixa dupla delegou a baixa pra "quem separar", o
+   * estoque de Suzano ficou fantasma: a peça saiu e o saldo não desceu.
+   *
+   * Este método desfaz o estrago em 1 chamada:
+   *   1. apaga os cards ativos (new/separating) e tira eles do app das lojas;
+   *   2. passa os itens pra loja vendedora (dona do acerto e da auditoria);
+   *   3. baixa o estoque NELA — é de lá que a peça saiu;
+   *   4. fecha o pedido como 'shipped' com a história registrada.
+   *
+   * IDEMPOTENTE: pedido já 'shipped' volta `alreadyDone` sem baixar de novo —
+   * dois cliques no botão não podem baixar estoque duas vezes.
+   *
+   * RECUSA quando algum card já passou de "separando": se a outra loja bipou ou
+   * postou, tem uma segunda peça em trânsito e isso não é conserto de sistema,
+   * é decisão de gente (devolução/realinhamento).
+   */
+  async fecharNaLojaPedinte(orderId: string, userId?: string) {
+    const order: any = await (this.prisma as any).order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: {
+        items: { select: { id: true, sku: true, quantity: true } },
+        pickOrders: { select: { id: true, status: true, storeId: true } },
+      },
+    });
+
+    if (order.source !== 'pdv_online') {
+      return {
+        ok: false as const,
+        reason: 'nao-e-venda-online',
+        message: 'Só vale pra pedido nascido de Venda Online do PDV (source pdv_online).',
+      };
+    }
+    const sellerCode = String(order.sellerStoreCode || '').trim();
+    if (!sellerCode) {
+      return {
+        ok: false as const,
+        reason: 'sem-loja-vendedora',
+        message: 'Pedido sem sellerStoreCode — não há como saber qual loja vendeu.',
+      };
+    }
+    if (order.status === 'shipped' || order.status === 'delivered') {
+      return { ok: true as const, alreadyDone: true, message: 'Pedido já estava fechado.' };
+    }
+
+    const seller = await (this.prisma as any).store.findFirst({
+      where: { code: sellerCode },
+      select: { id: true, code: true, name: true },
+    });
+    if (!seller) {
+      return {
+        ok: false as const,
+        reason: 'loja-vendedora-nao-encontrada',
+        message: `Loja vendedora ${sellerCode} não existe mais em Store.`,
+      };
+    }
+
+    const avancados = order.pickOrders.filter(
+      (p: any) => !['new', 'separating'].includes(p.status),
+    );
+    if (avancados.length > 0) {
+      return {
+        ok: false as const,
+        reason: 'ja-separado',
+        message:
+          `Não dá pra fechar na ${seller.name}: ${avancados.length} card(s) já passaram de "separando" ` +
+          `(${[...new Set(avancados.map((a: any) => a.status))].join(', ')}). ` +
+          `Provavelmente uma SEGUNDA peça já saiu — resolva pelo fluxo de devolução/realinhamento.`,
+      };
+    }
+
+    const cancelaveis = order.pickOrders
+      .filter((p: any) => ['new', 'separating'].includes(p.status))
+      .map((p: any) => p.id);
+    const lojasNotificar = [...new Set(order.pickOrders.map((p: any) => p.storeId))] as string[];
+
+    // Só peça baixa estoque — FRETE/MANUAL não existem no estoque.
+    const pecas = order.items.filter((it: any) => !ehItemSemEstoque(it));
+
+    // 1) BAIXA PRIMEIRO. Se falhar, nada muda de status e o pedido continua do
+    //    jeito que estava — o inverso (marcar shipped e a baixa falhar) recria
+    //    exatamente o estoque fantasma que este conserto existe pra matar.
+    const baixa = await this.erp.decreaseStockAsync(
+      pecas.map((it: any) => ({
+        sku: String(it.sku),
+        qty: Number(it.quantity || 1),
+        storeCode: seller.code,
+      })),
+      { allowNegative: true, skipNotFound: true },
+    );
+    if (!baixa?.success) {
+      return {
+        ok: false as const,
+        reason: 'baixa-falhou',
+        message: `Baixa de estoque na ${seller.name} falhou: ${baixa?.error || 'sem detalhe'}. Nada foi alterado.`,
+      };
+    }
+
+    // 2) Apaga cards, passa os itens pra vendedora e fecha o pedido.
+    await this.prisma.$transaction(async (tx) => {
+      if (cancelaveis.length > 0) {
+        await tx.pickOrder.deleteMany({ where: { id: { in: cancelaveis } } });
+      }
+      await tx.orderItem.updateMany({
+        where: { orderId },
+        data: { assignedStoreId: seller.id },
+      });
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: OrderStatus.shipped, routingResult: null },
+      });
+      await tx.orderHistory.create({
+        data: {
+          orderId,
+          userId: userId ?? null,
+          fromStatus: order.status,
+          toStatus: OrderStatus.shipped,
+          note:
+            `Conserto: a ${seller.name} vendeu E entregou esta venda online. ` +
+            `${pecas.length} peça(s) baixada(s) do estoque dela` +
+            (cancelaveis.length > 0
+              ? `; ${cancelaveis.length} card(s) de separação indevido(s) cancelado(s).`
+              : '.'),
+        },
+      });
+    });
+
+    // 3) Tira o card do app das lojas que estavam com ele.
+    for (const storeId of lojasNotificar) {
+      try {
+        this.gateway.emitPickOrderRemoved?.(storeId, { orderId });
+      } catch (err: any) {
+        this.logger.warn(`Falha ao emitir remoção de pick-order: ${err?.message ?? err}`);
+      }
+    }
+
+    this.logger.log(
+      `[conserto-venda-online] ${order.wcOrderNumber} fechado na ${seller.name} — ` +
+        `${pecas.length} peça(s) baixada(s), ${cancelaveis.length} card(s) cancelado(s)`,
+    );
+
+    return {
+      ok: true as const,
+      alreadyDone: false,
+      storeCode: seller.code,
+      storeName: seller.name,
+      pecasBaixadas: pecas.length,
+      cardsCancelados: cancelaveis.length,
+      gigaEnfileirado: !!baixa.gigaEnfileirado,
+    };
   }
 
   /**

@@ -139,7 +139,12 @@ type OpcaoSegmento = {
   trafego: Trafego;
   plataforma: string | null;
   campanha: string | null;
+  /** `campaign.id` — a chave que casa gasto e receita. */
+  utmId: string | null;
   pessoas: number;
+  gasto: number;
+  receita: number;
+  pedidos: number;
 };
 type RespostaFunil = {
   de: string;
@@ -181,7 +186,59 @@ const ROTULO_PLATAFORMA: Record<string, string> = {
   whatsapp: 'WhatsApp',
 };
 
+/**
+ * O NOME DA CAMPANHA, LEGÍVEL.
+ *
+ * Duas sujeiras chegam aqui, de origens diferentes:
+ *
+ * 1. CODIFICAÇÃO DUPLA do Meta — `%7CSITENOVO%7C+Vendas+Capitais` em vez de
+ *    `|SITENOVO| Vendas Capitais`. Corrigido na origem (`decodificaUtm`, no
+ *    site), mas as linhas gravadas ANTES do conserto continuam tortas no
+ *    banco. Este decode existe pra elas: é leitura, não regravação.
+ *
+ * 2. ID NO LUGAR DO NOME — anúncio etiquetado com `utm_campaign={{campaign.id}}`
+ *    manda `52531954165766`. Aqui não dá pra adivinhar o nome, então a tela
+ *    ASSUME o buraco em vez de mostrar um número solto: quem lê entende que
+ *    falta arrumar a etiqueta daquele anúncio, e não que a campanha se chama
+ *    assim.
+ */
+function rotuloCampanha(valor: string): string {
+  let texto = valor;
+  for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(texto); i += 1) {
+    try {
+      texto = decodeURIComponent(texto.replace(/\+/g, ' '));
+    } catch {
+      break;
+    }
+  }
+  // Sobrou `+` e nenhum espaço: era espaço codificado (ver `decodificaUtm`).
+  if (texto.includes('+') && !texto.includes(' ')) texto = texto.replace(/\+/g, ' ');
+  texto = texto.trim();
+  // Só dígitos = é o ID da campanha, não o nome dela.
+  if (/^\d{6,}$/.test(texto)) return `sem nome (ID ${texto.slice(-6)})`;
+  return texto || valor;
+}
+
 /** Um degrau da cascata. Vazio some — degrau com uma opção só não é escolha. */
+/** Uma opção de degrau, com o dinheiro que ela moveu. */
+type Opcao = { valor: string; pessoas: number; gasto: number; receita: number };
+
+/**
+ * ROAS só existe onde houve gasto.
+ *
+ * Direto e orgânico não custam anúncio: mostrar "ROAS 0" ou "∞" ali seria
+ * inventar. Devolve null e a pílula só exibe a receita.
+ */
+function roasDe(o: { gasto: number; receita: number }): number | null {
+  return o.gasto > 0 ? o.receita / o.gasto : null;
+}
+
+/** R$ curto pra caber na pílula: 1.239,57 → "1,2 mil". */
+function brlCurto(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil`;
+  return n.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+}
+
 function Degrau({
   titulo,
   opcoes,
@@ -190,31 +247,58 @@ function Degrau({
   rotulo = (v: string) => v,
 }: {
   titulo: string;
-  opcoes: Array<{ valor: string; pessoas: number }>;
+  opcoes: Opcao[];
   valor: string | null;
   onEscolher: (v: string | null) => void;
   rotulo?: (v: string) => string;
 }) {
   if (!opcoes.length) return null;
-  const total = opcoes.reduce((s, o) => s + o.pessoas, 0);
+  const total = opcoes.reduce(
+    (s, o) => ({
+      valor: 'Tudo',
+      pessoas: s.pessoas + o.pessoas,
+      gasto: s.gasto + o.gasto,
+      receita: s.receita + o.receita,
+    }),
+    { valor: 'Tudo', pessoas: 0, gasto: 0, receita: 0 } as Opcao,
+  );
   const pilula = (ativo: boolean) =>
-    `px-3 py-1 rounded-full border text-sm transition ${
+    `px-3 py-1.5 rounded-xl border text-sm text-left transition ${
       ativo
         ? 'border-[#B8912B] bg-[#FBF6E6] text-[#8C7325] font-semibold'
         : 'border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
     }`;
 
+  /** A segunda linha da pílula: o dinheiro. Some quando não houve nenhum. */
+  const dinheiro = (o: Opcao) => {
+    const roas = roasDe(o);
+    if (!o.gasto && !o.receita) return null;
+    return (
+      <span className="block text-[11px] leading-tight tabular-nums text-slate-400">
+        {o.gasto > 0 && <>R$ {brlCurto(o.gasto)} → </>}
+        <span className="text-[#2E7D46] font-semibold">R$ {brlCurto(o.receita)}</span>
+        {roas !== null && (
+          <span className={`ml-1 font-bold ${roas >= 1 ? 'text-[#8C7325]' : 'text-rose-600'}`}>
+            · {roas.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}x
+          </span>
+        )}
+      </span>
+    );
+  };
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 w-20 shrink-0">
+    <div className="flex flex-wrap items-start gap-2">
+      <span className="mt-1.5 w-20 shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-400">
         {titulo}
       </span>
       <button className={pilula(valor === null)} onClick={() => onEscolher(null)}>
-        Tudo <span className="tabular-nums text-slate-400">{total}</span>
+        Tudo <span className="tabular-nums text-slate-400">{total.pessoas}</span>
+        {dinheiro(total)}
       </button>
       {opcoes.map((o) => (
         <button key={o.valor} className={pilula(valor === o.valor)} onClick={() => onEscolher(o.valor)}>
           {rotulo(o.valor)} <span className="tabular-nums text-slate-400">{o.pessoas}</span>
+          {dinheiro(o)}
         </button>
       ))}
     </div>
@@ -251,14 +335,18 @@ function Cascata({
   const somar = (
     linhas: OpcaoSegmento[],
     chave: (o: OpcaoSegmento) => string | null,
-  ): Array<{ valor: string; pessoas: number }> => {
-    const mapa = new Map<string, number>();
+  ): Opcao[] => {
+    const mapa = new Map<string, Opcao>();
     for (const o of linhas) {
       const k = chave(o);
       if (!k) continue;
-      mapa.set(k, (mapa.get(k) ?? 0) + o.pessoas);
+      const atual = mapa.get(k) ?? { valor: k, pessoas: 0, gasto: 0, receita: 0 };
+      atual.pessoas += o.pessoas;
+      atual.gasto += o.gasto;
+      atual.receita += o.receita;
+      mapa.set(k, atual);
     }
-    return Array.from(mapa, ([valor, pessoas]) => ({ valor, pessoas })).sort(
+    return Array.from(mapa.values()).sort(
       (a, b) => b.pessoas - a.pessoas || a.valor.localeCompare(b.valor),
     );
   };
@@ -312,6 +400,7 @@ function Cascata({
           titulo="Campanha"
           opcoes={nivel3}
           valor={campanha}
+          rotulo={rotuloCampanha}
           onEscolher={(v) => onMudar({ trafego, plataforma, campanha: v })}
         />
       )}
@@ -726,14 +815,35 @@ function FunilSite({
 
   const [analisando, setAnalisando] = useState(false);
 
-  let anterior: number | null = null;
-  const cards = ordem.map((o) => {
-    const dado = por.get(o.evento);
-    const pessoas = dado?.pessoas ?? 0;
-    const pct = anterior !== null && anterior > 0 ? Math.round((pessoas / anterior) * 100) : null;
-    anterior = pessoas;
-    return { ...o, pessoas, eventos: dado?.eventos ?? 0, pct, valor: dado?.valor ?? 0 };
-  });
+  /**
+   * UM FUNIL SÓ NA TELA (dono, 16/08: "pode tirar os cards").
+   *
+   * Existiam DOIS: a fileira de cards saía do `funil()` (conta o evento que
+   * de fato aconteceu) e a tabela "Onde a compra parou" sai da `jornada`
+   * (cada sessão na etapa mais avançada, IMPUTANDO as anteriores). As duas
+   * estão certas e discordam de propósito — a compra que chega pelo webhook
+   * não tem `view_item` do navegador, então a tabela assume que ela viu a
+   * peça e o card não conta. No dia 16/08 dava 153 contra 156.
+   *
+   * Duas definições de "viram peça" na mesma tela é uma a mais. Ficou a da
+   * tabela, que é a que responde "onde a compra parou", e os cards saíram.
+   *
+   * A análise de conversão passa a ler a MESMA lista — antes ela lia os
+   * cards, e teria continuado a divergir sozinha depois deles sumirem.
+   */
+  const rotuloEtapa = new Map(ordem.map((o) => [o.evento, o.titulo]));
+  const etapasAnalise = jornada.length
+    ? jornada.map((l) => ({
+        evento: l.evento,
+        titulo: rotuloEtapa.get(l.evento) ?? l.evento,
+        pessoas: l.chegaram,
+      }))
+    : ordem.map((o) => ({
+        evento: o.evento,
+        titulo: o.titulo,
+        pessoas: por.get(o.evento)?.pessoas ?? 0,
+      }));
+  const valorCompras = por.get('purchase')?.valor ?? 0;
 
   return (
     <div className="space-y-2">
@@ -755,45 +865,20 @@ function FunilSite({
 
       {analisando && (
         <AnaliseConversao
-          etapas={cards.map((c) => ({ evento: c.evento, titulo: c.titulo, pessoas: c.pessoas }))}
+          etapas={etapasAnalise}
           faturamento={faturamento}
-          valorCompras={cards.find((c) => c.evento === 'purchase')?.valor ?? 0}
+          valorCompras={valorCompras}
           aoFechar={() => setAnalisando(false)}
         />
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        {cards.map((c) => (
-          <div key={c.evento} className="bg-white border border-[#E7E2D8] rounded-xl p-4">
-            <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold uppercase tracking-wide">
-              {c.icone} {c.titulo}
-            </div>
-            <div className={`mt-2 text-2xl font-bold tabular-nums ${c.evento === 'purchase' ? 'text-[#2E7D46]' : 'text-slate-800'}`}>
-              {c.pessoas}
-            </div>
-            {/* VALOR DE CONVERSÃO (dono, 15/08): o R$ somado das compras
-                confirmadas do período, colado no card Compras. */}
-            {c.evento === 'purchase' && (
-              <div
-                className="text-sm font-bold text-[#2E7D46] tabular-nums"
-                title="Valor de conversão — R$ somado das compras confirmadas no período"
-              >
-                {brl(c.valor)}
-              </div>
-            )}
-            <div className="text-xs text-slate-400 tabular-nums">
-              {c.eventos} evento{c.eventos === 1 ? '' : 's'}
-              {c.pct !== null && <span className="ml-1 font-semibold text-[#B8912B]">· {c.pct}%</span>}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* FATURAMENTO REAL (dono, 15/08) — a Fonte B, numa linha SEPARADA do
-          valor de conversão do funil de propósito: aqui é o DINHEIRO (pedidos
-          pagos, inclusive quem veio por e-mail/orgânico e o PIX pago depois);
-          lá no card Compras é a conversão das sessões rastreadas. As duas
-          divergem e cada uma responde uma pergunta diferente. */}
+      {/* O DINHEIRO, UMA VEZ SÓ.
+          Eram dois valores na tela: este e o R$ do card Compras (a soma dos
+          eventos `purchase` rastreados). Divergiam por motivo legítimo — o PIX
+          pago hoje de um pedido de ontem conta no dia do PEDIDO aqui e no dia
+          do PAGAMENTO lá —, mas dois números em verde a três centímetros um do
+          outro só fazem duvidar dos dois. Ficou o do pedido pago, que é o
+          dinheiro que entrou. */}
       {faturamento && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#CDE9D6] bg-[#F3FAF5] px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -820,7 +905,13 @@ function FunilSite({
         — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.{' '}
         <strong className="font-semibold text-slate-600">Robô também fica de fora</strong> — o de
         user-agent conhecido (Google, IA, SEO) e o disfarçado, que se entrega por carregar a página
-        e ir embora sem rolar nem dar um segundo passo.
+        e ir embora sem rolar nem dar um segundo passo.{' '}
+        {/* Sem esta frase a tela se contradiz sozinha: o card ao vivo lá em cima
+            conta a rede inteira, este funil conta só quem veio comprar. Já
+            aconteceu de "565 visitas hoje" aparecer em cima de "173 visitas". */}
+        Por isso <strong className="font-semibold text-slate-600">este número é menor que o
+        &quot;Visitas hoje&quot; do card ao vivo</strong> — lá entra o site todo, incluindo a
+        página das lojas.
       </p>
       {jornada.length > 0 && resumo && (
         <RelatorioJornada

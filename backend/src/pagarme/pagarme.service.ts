@@ -1300,34 +1300,161 @@ export class PagarmeService {
 
   // ── Webhook ─────────────────────────────────────────────────────────
 
+  /** Comparação em tempo constante — não vaza por timing quantos bytes bateram. */
+  private static iguais(a: string, b: string): boolean {
+    const ba = Buffer.from(a, 'utf8');
+    const bb = Buffer.from(b, 'utf8');
+    return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+  }
+
   /**
-   * Valida HMAC do webhook Pagar.me.
-   * Header: x-hub-signature: "sha256=<hex>"
+   * Valida HMAC do webhook Pagar.me sobre os BYTES CRUS do request.
+   * Header: x-hub-signature: "sha256=<hex>" (aceita também "sha1=<hex>", o
+   * formato do X-Hub-Signature da v4 — custa nada e cobre conta antiga).
    */
   validateWebhookSignature(rawBody: string, signature: string | undefined, secret: string): boolean {
-    if (!signature || !secret) return false;
-    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-    const normalized = signature.replace(/^sha256=/, '').toLowerCase();
-    return normalized === expected;
+    if (!signature || !secret || !rawBody) return false;
+    const m = String(signature).trim().match(/^(sha1|sha256)=(.+)$/i);
+    const algo = m ? m[1].toLowerCase() : 'sha256';
+    const recebido = (m ? m[2] : String(signature)).trim().toLowerCase();
+    const expected = crypto.createHmac(algo, secret).update(rawBody).digest('hex');
+    return PagarmeService.iguais(recebido, expected);
+  }
+
+  /**
+   * Basic Auth do webhook (o caminho da Pagar.me v5: no painel, em Webhooks →
+   * Autenticação, cadastra-se usuário e senha e ela manda `Authorization:
+   * Basic base64(usuario:senha)` em toda notificação). Aqui a SENHA tem que
+   * ser o mesmo `webhookSecret` cadastrado em /pagarme/config (usuário é
+   * livre — sugestão `flowops`); também aceita `usuario:senha` inteiro igual
+   * ao secret, pra quem preferir colar o secret nos dois campos.
+   */
+  private validateWebhookBasicAuth(authorization: string | undefined, secret: string): boolean {
+    if (!authorization || !secret) return false;
+    const m = String(authorization).trim().match(/^Basic\s+(.+)$/i);
+    if (!m) return false;
+    let decoded = '';
+    try {
+      decoded = Buffer.from(m[1].trim(), 'base64').toString('utf8');
+    } catch {
+      return false;
+    }
+    if (!decoded) return false;
+    const idx = decoded.indexOf(':');
+    const senha = idx >= 0 ? decoded.slice(idx + 1) : decoded;
+    return PagarmeService.iguais(senha, secret) || PagarmeService.iguais(decoded, secret);
+  }
+
+  /**
+   * PROVA DE ORIGEM DO WEBHOOK — FAIL CLOSED (17/08/2026).
+   *
+   * Até aqui a regra era "se tem secret cadastrado, confere; se não tem,
+   * acredita no corpo". Como a rota é pública, qualquer POST com
+   * `type=order.paid` e um `or_` conhecido virava `pagarme_payment.status =
+   * 'paid'` — e o reconcile do site (loja-pagamento-reconcile.service.ts,
+   * PASSO 1) usa exatamente esse status local como prova pra confirmar o
+   * pedido. Ou seja: sem secret, o webhook era uma porta aberta pra marcar
+   * pedido do site como pago sem dinheiro.
+   *
+   * Agora sem prova não se grava NADA: sem secret cadastrado em lugar nenhum,
+   * ou com assinatura/Basic Auth que não confere, devolve `ok:false` e o
+   * corpo é ignorado. Isso NÃO perde pagamento legítimo: o
+   * `PagarmeReconcileService` (45s, link/PIX das lojas e crediário) e o
+   * `LojaPagamentoReconcileService` (60s, pedido do site) perguntam o status
+   * direto ao gateway e confirmam pelo caminho de sempre — só com atraso de
+   * ~1-3 minutos em vez de instantâneo.
+   *
+   * Se a Pagar.me v5 desta conta NÃO assinar (não manda x-hub-signature), o
+   * caminho pra voltar a confirmar na hora é: painel Pagar.me → Webhooks →
+   * Autenticação Basic com senha = webhookSecret de /pagarme/config. Aceita
+   * o secret da matriz (singleton) e o de qualquer PagarmeStoreConfig — as
+   * lojas com conta própria assinam com credencial própria.
+   *
+   * O motivo da recusa vai pro log (WARN) — é assim que se descobre, em
+   * produção, se a conta assina, se o header veio, e com qual esquema bateu.
+   */
+  private async autenticarWebhook(
+    rawBody: string | undefined,
+    signature: string | undefined,
+    authorization: string | undefined,
+  ): Promise<{ ok: true; esquema: string } | { ok: false; motivo: string }> {
+    let candidatos: Array<{ nome: string; secret: string }> = [];
+    try {
+      const matriz = await (this.prisma as any).pagarmeConfig.findUnique({
+        where: { id: 'singleton' },
+        select: { webhookSecret: true },
+      });
+      if (matriz?.webhookSecret) candidatos.push({ nome: 'matriz', secret: String(matriz.webhookSecret) });
+    } catch (e: any) {
+      // Antes era `catch {}` e seguia confiando no corpo. Sem conseguir ler a
+      // config não dá pra provar nada — fecha e deixa o reconcile confirmar.
+      return { ok: false, motivo: `config do webhook indisponível (${e?.message || e})` };
+    }
+    try {
+      const lojas: any[] = await (this.prisma as any).pagarmeStoreConfig.findMany({
+        where: { webhookSecret: { not: null } },
+        select: { storeCode: true, webhookSecret: true },
+      });
+      for (const l of lojas || []) {
+        if (l?.webhookSecret) candidatos.push({ nome: `loja ${l.storeCode}`, secret: String(l.webhookSecret) });
+      }
+    } catch (e: any) {
+      // Config por loja é opcional (mesma tolerância do getConfigInternalForStore):
+      // se a tabela não responder, segue só com o secret da matriz.
+      this.logger.warn(`[pagarme] PagarmeStoreConfig nao acessivel no webhook: ${e?.message || e}`);
+    }
+    candidatos = candidatos.filter((c) => c.secret.trim());
+    if (!candidatos.length) {
+      return { ok: false, motivo: 'nenhum webhookSecret cadastrado (matriz nem lojas) — cadastre em /pagarme/config' };
+    }
+
+    for (const c of candidatos) {
+      if (rawBody && signature && this.validateWebhookSignature(rawBody, signature, c.secret)) {
+        return { ok: true, esquema: `${c.nome}:hmac(x-hub-signature)` };
+      }
+      if (this.validateWebhookBasicAuth(authorization, c.secret)) {
+        return { ok: true, esquema: `${c.nome}:basic-auth` };
+      }
+    }
+
+    const veio: string[] = [];
+    if (signature) veio.push('x-hub-signature');
+    if (authorization) veio.push('authorization');
+    if (!rawBody) veio.push('SEM rawBody');
+    return {
+      ok: false,
+      motivo: veio.length
+        ? `assinatura/Basic Auth não confere com nenhum secret cadastrado (veio: ${veio.join(', ')})`
+        : 'request sem x-hub-signature e sem Authorization — a conta não está assinando; configure Basic Auth no painel Pagar.me',
+    };
   }
 
   /**
    * Processa webhook. Eventos relevantes: `order.paid`, `charge.paid`,
    * `charge.payment_failed`.
+   *
+   * Contrato do retorno (o controller depende dele): `ok:true` + `saleId` SÓ
+   * quando a origem foi provada E o `or_` é um PagarmePayment nosso. Crediário
+   * (confirmBaixaPixIfExists) e pedido do site (confirmarPagamento) só rodam
+   * em cima disso.
    */
-  async handleWebhook(payload: any, rawBody?: string, signature?: string): Promise<{ ok: boolean; saleId?: string }> {
-    try {
-      const cfg = await (this.prisma as any).pagarmeConfig.findUnique({
-        where: { id: 'singleton' },
-      });
-      if (cfg?.webhookSecret && rawBody) {
-        const ok = this.validateWebhookSignature(rawBody, signature, cfg.webhookSecret);
-        if (!ok) {
-          this.logger.warn('[pagarme] webhook signature inválida');
-          return { ok: false };
-        }
-      }
-    } catch {}
+  async handleWebhook(
+    payload: any,
+    rawBody?: string,
+    signature?: string,
+    authorization?: string,
+  ): Promise<{ ok: boolean; saleId?: string }> {
+    const auth = await this.autenticarWebhook(rawBody, signature, authorization);
+    if (!auth.ok) {
+      const tipo = String(payload?.type || '?');
+      const orRef = JSON.stringify(payload || {}).match(/\bor_[A-Za-z0-9]{8,}\b/)?.[0] || '-';
+      this.logger.warn(
+        `[pagarme] webhook RECUSADO (type=${tipo} order=${orRef}): ${auth.motivo}. ` +
+          `Nada gravado — o reconcile confirma pelo gateway se for pagamento real.`,
+      );
+      return { ok: false };
+    }
+    this.logger.debug?.(`[pagarme] webhook autenticado por ${auth.esquema}`);
 
     // Pagar.me envia 2 formatos:
     //   - order.paid:  { type, data: { id: "or_...", charges: [...] } }

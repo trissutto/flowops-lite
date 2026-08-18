@@ -8,7 +8,7 @@ import { buildMetadata } from '@/lib/seo';
  * ⚠️ Descreve o que a loja REALMENTE faz — cada regra aqui corresponde a
  * comportamento implementado: o preço reconferido no catálogo antes de cobrar,
  * o estoque sem reserva (dois pedidos podem disputar a última peça), o Pix com
- * validade de 2 horas, a tabela promocional de frete.
+ * validade de 24 horas, a tabela promocional de frete.
  *
  * O ponto do estoque é o que mais evita briga: como não há reserva (decisão do
  * dono, 03/08), duas clientes podem pagar a mesma última peça. Dizer isso ANTES
@@ -40,7 +40,7 @@ export default function TermosPage() {
       <h2>Como o pedido é fechado</h2>
       <p>
         O pedido só existe depois do pagamento confirmado. Antes disso, o que você vê é uma
-        intenção de compra: no Pix, o código vale <strong>2 horas</strong>; passou disso
+        intenção de compra: no Pix, o código vale <strong>24 horas</strong>; passou disso
         sem pagar, o pedido não segue.
       </p>
       <p>

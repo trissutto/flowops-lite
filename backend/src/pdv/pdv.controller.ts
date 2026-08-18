@@ -301,6 +301,66 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/carrinhos-abandonados
+   *
+   * A lista de carrinhos do site NOVO, pro PDV da loja-canal.
+   *
+   * POR QUE NÃO USA `/abandoned-carts/ecommerce/list`: aquele controller tem
+   * `AdminOnlyGuard` e as meninas do carrinho abandonado entram como
+   * `role: store` — batiam em "Apenas matriz". E os PDVs não têm acesso à
+   * retaguarda, então não havia caminho nenhum pra elas.
+   *
+   * Também não afrouxei o guard de lá: aquilo abriria a lista inteira de
+   * clientes pras 14 lojas. Aqui a rota é do PDV (aceita `store`) e TRAVADA na
+   * loja-canal — loja física recebe 403 mesmo tentando na mão.
+   */
+  @Get('carrinhos-abandonados')
+  async carrinhosAbandonados(@Req() req: any, @Query('status') status?: string) {
+    this.requireRole(req);
+    const role = req?.user?.role;
+    const storeCode = String(req?.user?.storeCode ?? '').trim();
+    // Admin da matriz passa (usa o PDV em modo master); loja só se for a canal.
+    if (role !== 'admin' && storeCode !== PdvController.CARRINHOS_STORE_CODE) {
+      throw new ForbiddenException(
+        'Carrinhos do site são da loja SITE — sua loja não trabalha esses contatos.',
+      );
+    }
+    return this.svc.listarCarrinhosAbandonados(status || 'abandoned');
+  }
+
+  /** Loja-canal SITE — a única loja (fora da matriz) que trabalha carrinho
+   *  abandonado. Mesmo código do `CARRINHOS_STORE_CODE` do PDV no front. */
+  private static readonly CARRINHOS_STORE_CODE = '13';
+
+  /**
+   * POST /pdv/sales/importar-carrinho { wcOrderId, storeCode? }
+   *
+   * Abre uma venda online JÁ MONTADA a partir de um carrinho abandonado —
+   * peças e cliente preenchidos. A vendedora só escolhe como recebeu.
+   *
+   * Existe porque em 17/08 foram 7 carrinhos recuperados e só 2 viraram venda
+   * no sistema: remontar 11 peças à mão depois de fechar no WhatsApp não
+   * acontece. Ver `PdvService.importarCarrinho`.
+   */
+  @Post('sales/importar-carrinho')
+  importarCarrinho(@Req() req: any, @Body() body: { wcOrderId: number; storeCode?: string }) {
+    this.requireRole(req);
+    // Mesma trava do createSale: role=store não escolhe loja pelo body.
+    const userRole = req?.user?.role;
+    const userStoreCode = req?.user?.storeCode;
+    const effectiveStoreCode =
+      userRole === 'store' && userStoreCode ? userStoreCode : body?.storeCode;
+    if (!effectiveStoreCode) throw new BadRequestException('storeCode obrigatório');
+    return this.svc.importarCarrinho({
+      wcOrderId: Number(body?.wcOrderId),
+      storeCode: effectiveStoreCode,
+      vendedorUserId: req?.user?.id || req?.user?.sub,
+      vendedorName: req?.user?.name || null,
+      isTraining: isTrainingRequest(req),
+    });
+  }
+
+  /**
    * PATCH /pdv/sales/:id/seller
    * Body: { sellerId: string | null }
    * Atribui ou remove a vendedora (Seller) responsável pela venda.
@@ -672,18 +732,38 @@ export class PdvController {
   }
 
   /**
-   * POST /pdv/sales/:id/entrega { tipo }
+   * POST /pdv/sales/:id/entrega { tipo, retiradaStoreCode? }
    * FORMA DE ENTREGA da venda online: sedex | pac | motoboy | retirada.
-   * Vira o método do pedido online (retirada = separa na própria loja).
+   * Vira o método do pedido online. `retiradaStoreCode` = ONDE a cliente
+   * retira (só com tipo=retirada); vazio = na própria loja vendedora.
    */
+  /**
+   * POST /pdv/sales/:id/gerar-pedido-online — ADMIN.
+   * Resgate: venda finalizada que ficou sem pedido ON- (ex.: link Pagar.me
+   * fechado pelo cron como 'credito' antes de 17/08). Idempotente.
+   */
+  @Post('sales/:id/gerar-pedido-online')
+  gerarPedidoOnline(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body?: {
+      nome?: string; cep?: string; endereco?: string; numero?: string; complemento?: string;
+      bairro?: string; cidade?: string; uf?: string; entregaTipo?: string;
+    },
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const quem = req?.user?.name ?? req?.user?.username ?? req?.user?.sub ?? 'admin';
+    return this.svc.gerarPedidoOnlineDeVendaFinalizada(id, String(quem), body || undefined);
+  }
+
   @Post('sales/:id/entrega')
   setEntrega(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { tipo: string },
+    @Body() body: { tipo: string; entregaStoreCode?: string | null },
   ) {
     this.requireRole(req);
-    return this.svc.setEntrega(id, String(body?.tipo ?? ''));
+    return this.svc.setEntrega(id, String(body?.tipo ?? ''), body?.entregaStoreCode ?? null);
   }
 
   /**
@@ -810,13 +890,23 @@ export class PdvController {
   finalize(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { paymentMethod: string; paymentDetails?: any },
+    @Body()
+    body: {
+      paymentMethod: string;
+      paymentDetails?: any;
+      entregaTipo?: string | null;
+      entregaStoreCode?: string | null;
+    },
   ) {
     this.requireRole(req);
     return this.svc.finalize({
       saleId: id,
       paymentMethod: body?.paymentMethod,
       paymentDetails: body?.paymentDetails,
+      // Entrega da venda online regravada no fechamento — a escolha na tela
+      // é a verdade (o POST /entrega é otimista e pode nunca ter chegado).
+      entregaTipo: body?.entregaTipo ?? null,
+      entregaStoreCode: body?.entregaStoreCode ?? null,
       // Passa storeCode do JWT pra reconciliação automática quando a
       // venda foi criada com loja diferente do caixa atual.
       userStoreCode: req?.user?.storeCode,

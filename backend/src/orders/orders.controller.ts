@@ -22,7 +22,19 @@ import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocomm
  * discorda da lista faz a operação achar que perdeu pedido.
  */
 export const STATUS_LOCAL_POR_ABA: Record<string, string[]> = {
-  processing: ['processing'],
+  // 'pending' entra em Processando (17/08): o Recalcular sem loja
+  // alternativa deixava o pedido nativo em pending — status que nenhuma
+  // aba conhecia. O ON- sumia da fila inteira com o dinheiro já na conta.
+  //
+  // 'awaiting_stock' e 'routing' pelo MESMO motivo (17/08, caso ON-000006):
+  // ruptura/pickup-blocked joga o pedido em awaiting_stock (`confirmRoute`
+  // com success:false) e ele saía da lista — pago, cliente esperando, só
+  // alcançável pela URL direta. Consertaram 'pending' e deixaram esses dois
+  // de fora; são todos o mesmo caso: "sem card e ninguém olhando".
+  //
+  // ⚠️ Status que não cai em nenhuma aba = PEDIDO INVISÍVEL. Ao criar status
+  // novo, mapear aqui é obrigatório.
+  processing: ['processing', 'pending', 'awaiting_stock', 'routing'],
   separacao: ['separating'],
   'em-separacao': ['separating'],
   completed: ['shipped', 'delivered'],
@@ -46,6 +58,240 @@ export class OrdersController {
   ) {}
 
   // ---------- Rotas estáticas PRIMEIRO (senão o `:id` come) ----------
+
+  /**
+   * GET /orders/diagnostico/carrinho-recuperado?dias=30
+   *
+   * MEDIÇÃO ANTES DE CONSTRUIR (17/08) — duas perguntas que decidem se a
+   * atribuição de carrinho recuperado é fácil ou impossível hoje.
+   *
+   * O CONTEXTO: no site novo o "carrinho abandonado" É um Order
+   * (`source: 'ecommerce'`, `paidAt: null`) — e Order já guarda `utm*` e
+   * `trackingInfo` (fbp/fbc). As meninas recuperam por WhatsApp e fecham no
+   * PDV, o que cria um SEGUNDO Order (`source: 'pdv_online'`) com o dinheiro
+   * mas SEM campanha. Resultado: a mesma cliente conta como ABANDONO no funil
+   * e como RECEITA SEM ORIGEM no ROAS. Erra pros dois lados.
+   *
+   * O que este diagnóstico responde:
+   *   1. Quantas vendas de PDV casam com um carrinho abandonado (por
+   *      telefone/e-mail/CPF, carrinho criado ANTES)? = tamanho da ponte.
+   *   2. Desses carrinhos, quantos têm `utmCampaign` de verdade? Se vier
+   *      vazio, o elo existe mas não carrega nada — o problema é no tracking,
+   *      não na ponte (ver o histórico de UTM podada antes de gravar).
+   *   3. Quantos dias entre abandonar e recuperar? Acima de 7 o Meta não
+   *      atribui mais (janela de clique), então o CAPI ajuda pouco e o que
+   *      vale é o relatório interno.
+   *   4. `conferenciaMeta`: pedidos do site PAGOS por dia, pra comparar com o
+   *      "Compras" do Gerenciador. Divergência = pixel + CAPI contando a
+   *      mesma venda duas vezes (event_id que não casa).
+   *
+   * Read-only. Não grava nada.
+   */
+  @Get('diagnostico/carrinho-recuperado')
+  async diagnosticoCarrinhoRecuperado(@Query('dias') diasRaw?: string) {
+    const dias = Math.min(Math.max(Number(diasRaw) || 30, 1), 180);
+    const desde = new Date(Date.now() - dias * 86_400_000);
+    // Carrinho pode ser bem mais velho que a venda — a janela de busca do
+    // carrinho é maior, senão a ponte parece menor do que é.
+    const desdeCarrinho = new Date(Date.now() - (dias + 60) * 86_400_000);
+
+    const soDigitos = (v: any) => String(v ?? '').replace(/\D+/g, '');
+    /** Telefone comparável: últimos 11 dígitos (mesma régua do scanConversions). */
+    const fone = (v: any) => {
+      const d = soDigitos(v);
+      return d.length >= 10 ? d.slice(-11) : '';
+    };
+    const email = (v: any) => String(v ?? '').trim().toLowerCase();
+
+    const [vendasPdv, carrinhos, pagosSite] = await Promise.all([
+      (this.prisma as any).order.findMany({
+        where: { source: 'pdv_online', createdAt: { gte: desde } },
+        select: {
+          id: true, wcOrderNumber: true, createdAt: true, totalAmount: true,
+          customerPhone: true, customerEmail: true, customerCpf: true,
+          utmCampaign: true, utmSource: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      // Carrinho abandonado = pedido do site que nunca foi pago.
+      (this.prisma as any).order.findMany({
+        where: { source: 'ecommerce', paidAt: null, createdAt: { gte: desdeCarrinho } },
+        select: {
+          id: true, wcOrderNumber: true, createdAt: true, totalAmount: true,
+          customerPhone: true, customerEmail: true, customerCpf: true,
+          utmCampaign: true, utmSource: true, utmMedium: true, utmId: true,
+          trackingInfo: true, status: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      /**
+       * TODO pedido PAGO — a base pra conferir com o "Compras" do Meta.
+       *
+       * ⚠️ SEM FILTRO DE SOURCE de propósito (correção 17/08). A primeira
+       * versão contava só `source: 'ecommerce'` (site novo) e deu divergência
+       * de 4,6× contra o Gerenciador (Meta R$ 1.497 × Flow R$ 324) — o que
+       * parecia bug de tracking era denominador errado: se o mesmo pixel serve
+       * o site ANTIGO (WooCommerce, `source: 'site'`), as compras de lá entram
+       * no número do Meta e não entravam no meu. Comparar métrica de fora com
+       * recorte de dentro mais estreito SEMPRE acusa inflação que não existe.
+       * Agora quebra por origem: a soma bate com o Meta, e o detalhe mostra
+       * quanto é de cada site.
+       */
+      (this.prisma as any).order.findMany({
+        where: { paidAt: { not: null }, createdAt: { gte: desde } },
+        select: { id: true, paidAt: true, totalAmount: true, utmCampaign: true, source: true },
+      }),
+    ]);
+
+    // Índices do carrinho por telefone/e-mail/CPF — 1 passada, sem N queries.
+    const porFone = new Map<string, any[]>();
+    const porEmail = new Map<string, any[]>();
+    const porCpf = new Map<string, any[]>();
+    const empilha = (m: Map<string, any[]>, k: string, v: any) => {
+      if (!k) return;
+      const arr = m.get(k);
+      if (arr) arr.push(v);
+      else m.set(k, [v]);
+    };
+    for (const c of carrinhos) {
+      empilha(porFone, fone(c.customerPhone), c);
+      empilha(porEmail, email(c.customerEmail), c);
+      empilha(porCpf, soDigitos(c.customerCpf), c);
+    }
+
+    const casados: any[] = [];
+    const semCarrinho: any[] = [];
+    for (const v of vendasPdv) {
+      const cands = [
+        ...(porFone.get(fone(v.customerPhone)) ?? []),
+        ...(porEmail.get(email(v.customerEmail)) ?? []),
+        ...(porCpf.get(soDigitos(v.customerCpf)) ?? []),
+      ];
+      // Carrinho tem que ser ANTES da venda. Entre vários, o mais recente
+      // antes da venda é o que a cliente realmente abandonou.
+      const antes = cands
+        .filter((c) => new Date(c.createdAt) < new Date(v.createdAt))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const carrinho = antes[0];
+      if (!carrinho) {
+        semCarrinho.push({
+          pedido: v.wcOrderNumber,
+          total: Number(v.totalAmount ?? 0),
+          criadoEm: v.createdAt,
+        });
+        continue;
+      }
+      let track: any = {};
+      try { track = carrinho.trackingInfo ? JSON.parse(carrinho.trackingInfo) : {}; } catch { track = {}; }
+      casados.push({
+        pedido: v.wcOrderNumber,
+        total: Number(v.totalAmount ?? 0),
+        vendaEm: v.createdAt,
+        carrinho: carrinho.wcOrderNumber,
+        carrinhoEm: carrinho.createdAt,
+        diasEntre: Math.round(
+          (new Date(v.createdAt).getTime() - new Date(carrinho.createdAt).getTime()) / 86_400_000,
+        ),
+        // Só conta como "tem campanha" se veio nome de campanha — utmSource
+        // sozinho ("facebook") não diz qual anúncio pagou.
+        campanha: carrinho.utmCampaign ?? null,
+        utmSource: carrinho.utmSource ?? null,
+        utmId: carrinho.utmId ?? null,
+        temFbc: !!track?.fbc,
+        temFbp: !!track?.fbp,
+        // Venda já tem UTM própria? Hoje nunca tem — é o furo.
+        vendaJaTemUtm: !!v.utmCampaign,
+      });
+    }
+
+    const comCampanha = casados.filter((c) => c.campanha);
+    const dentroDe7 = comCampanha.filter((c) => c.diasEntre <= 7);
+    const soma = (arr: any[]) => arr.reduce((s, x) => s + Number(x.total || 0), 0);
+
+    // Receita recuperada por campanha — o número que falta no ROAS.
+    const porCampanha = new Map<string, { vendas: number; valor: number }>();
+    for (const c of comCampanha) {
+      const k = String(c.campanha);
+      const cur = porCampanha.get(k) ?? { vendas: 0, valor: 0 };
+      cur.vendas += 1;
+      cur.valor += Number(c.total || 0);
+      porCampanha.set(k, cur);
+    }
+
+    // Conferência com o Gerenciador: pedidos pagos por dia, QUEBRADOS POR
+    // ORIGEM. O Meta soma tudo que o pixel dele vê; se o pixel serve os dois
+    // sites, o comparável é o TOTAL — e o detalhe por origem mostra de onde
+    // vem. `pdv_online` fica de fora do total do site: o Meta não vê venda
+    // fechada no PDV (é justamente a receita invisível que este relatório
+    // está medindo), então somar aqui esconderia o furo.
+    const porDia = new Map<
+      string,
+      { total: number; valor: number; porOrigem: Record<string, { pedidos: number; valor: number }> }
+    >();
+    for (const p of pagosSite) {
+      const k = new Date(p.paidAt).toISOString().slice(0, 10);
+      const cur = porDia.get(k) ?? { total: 0, valor: 0, porOrigem: {} };
+      const src = String(p.source || 'desconhecido');
+      const o = cur.porOrigem[src] ?? { pedidos: 0, valor: 0 };
+      o.pedidos += 1;
+      o.valor += Number(p.totalAmount || 0);
+      cur.porOrigem[src] = o;
+      // 'pdv_online' NÃO entra no total comparável com o Meta.
+      if (src !== 'pdv_online') {
+        cur.total += 1;
+        cur.valor += Number(p.totalAmount || 0);
+      }
+      porDia.set(k, cur);
+    }
+
+    const diasOrdenados = [...comCampanha].map((c) => c.diasEntre).sort((a, b) => a - b);
+    const mediana = diasOrdenados.length
+      ? diasOrdenados[Math.floor(diasOrdenados.length / 2)]
+      : null;
+
+    return {
+      janelaDias: dias,
+      resumo: {
+        vendasPdvOnline: vendasPdv.length,
+        casaramComCarrinho: casados.length,
+        // ⚠️ ESTE é o número que decide: sem campanha no carrinho, a ponte
+        // não carrega nada e o problema está no tracking, não aqui.
+        comCampanhaNoCarrinho: comCampanha.length,
+        semCarrinhoNenhum: semCarrinho.length,
+        receitaRecuperadaComCampanha: Number(soma(comCampanha).toFixed(2)),
+        receitaSemOrigem: Number((soma(casados) + soma(semCarrinho) - soma(comCampanha)).toFixed(2)),
+        // Fora da janela de 7 dias o Meta não atribui — CAPI não recupera.
+        dentroJanelaMeta7d: dentroDe7.length,
+        foraJanelaMeta7d: comCampanha.length - dentroDe7.length,
+        medianaDiasAteRecuperar: mediana,
+        comFbcParaCapi: comCampanha.filter((c) => c.temFbc).length,
+      },
+      porCampanha: [...porCampanha.entries()]
+        .map(([campanha, v]) => ({ campanha, ...v, valor: Number(v.valor.toFixed(2)) }))
+        .sort((a, b) => b.valor - a.valor),
+      /**
+       * Compare `comparavelComMeta` com o "Compras"/"Valor de conversão" do
+       * Gerenciador no MESMO dia. Ainda maior no Meta depois disso? Então é
+       * de fora: pixel do site antigo com outro dedup, janela de atribuição
+       * (compra de hoje creditada a clique de dias atrás) ou conta de anúncio
+       * com mais de um pixel. `detalhePorOrigem` diz de qual site veio.
+       */
+      conferenciaMeta: [...porDia.entries()]
+        .map(([dia, v]) => ({
+          dia,
+          comparavelComMeta: { pedidos: v.total, valor: Number(v.valor.toFixed(2)) },
+          detalhePorOrigem: Object.fromEntries(
+            Object.entries(v.porOrigem).map(([k, o]) => [
+              k,
+              { pedidos: o.pedidos, valor: Number(o.valor.toFixed(2)) },
+            ]),
+          ),
+        }))
+        .sort((a, b) => (a.dia < b.dia ? 1 : -1)),
+      amostraCasados: casados.slice(0, 25),
+      amostraSemCarrinho: semCarrinho.slice(0, 15),
+    };
+  }
 
   @Get('stats/counts')
   counts() {
@@ -466,6 +712,265 @@ export class OrdersController {
         lastPickOrderStore: order.pickOrders[order.pickOrders.length - 1]?.store?.name,
       },
     };
+  }
+
+  /**
+   * GET /orders/pdv-online/abertos
+   *
+   * MUTIRÃO DA VENDA ONLINE (17/08) — pedidos nascidos de Venda Online do PDV
+   * que ainda não fecharam, com o diagnóstico de CADA um.
+   *
+   * Por que existe: a loja fecha a venda no caixa, manda a peça pra cliente e
+   * segue a vida — ninguém no balcão sabe que um pedido nasceu e foi pra fila
+   * da matriz. Foi assim que o ON-000004 de Suzano passou o fim de semana
+   * parado e na segunda foi roteado pra Sorocaba (150 km) pra separar uma
+   * SEGUNDA peça, com o estoque de Suzano fantasma.
+   *
+   * `situacao` diz o que fazer com cada um:
+   *   - 'roteado-pra-outra' → card numa loja que NÃO vendeu. É o caso grave:
+   *     risco de peça dupla. Resolve com POST .../fechar-na-loja-vendedora.
+   *   - 'na-fila'           → sem card nenhum, esperando a matriz. Se a loja já
+   *     entregou, fecha; se não, roteia.
+   *   - 'na-vendedora'      → card na própria loja que vendeu. Normal (retirada
+   *     ou auto-atende), só precisa a loja bipar.
+   */
+  @Get('pdv-online/abertos')
+  async pdvOnlineAbertos() {
+    const pedidos = await (this.prisma as any).order.findMany({
+      where: {
+        source: 'pdv_online',
+        status: { notIn: ['shipped', 'delivered', 'cancelled'] },
+      },
+      include: {
+        items: { select: { sku: true, quantity: true, ref: true, cor: true, tamanho: true } },
+        pickOrders: {
+          select: { id: true, status: true, store: { select: { code: true, name: true } } },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const lojas = await (this.prisma as any).store.findMany({
+      select: { code: true, name: true },
+    });
+    const nomePorCode = new Map<string, string>(
+      lojas.map((s: any) => [String(s.code), String(s.name)]),
+    );
+
+    const agora = Date.now();
+    const linhas = pedidos.map((p: any) => {
+      const sellerCode = String(p.sellerStoreCode || '').trim() || null;
+      const ativos = p.pickOrders.filter((po: any) =>
+        ['new', 'separating'].includes(po.status),
+      );
+      const foraDaVendedora = ativos.filter(
+        (po: any) => sellerCode && String(po.store?.code || '') !== sellerCode,
+      );
+
+      const situacao = !sellerCode
+        ? 'sem-loja-vendedora'
+        : foraDaVendedora.length > 0
+          ? 'roteado-pra-outra'
+          : ativos.length > 0
+            ? 'na-vendedora'
+            : 'na-fila';
+
+      const criado = new Date(p.wcDateCreated ?? p.createdAt).getTime();
+      return {
+        wcOrderId: p.wcOrderId,
+        wcOrderNumber: p.wcOrderNumber,
+        status: p.status,
+        situacao,
+        // 'roteado-pra-outra' é o único que pode gerar peça dupla — a tela
+        // ordena e pinta por aqui em vez de reimplementar a regra.
+        risco: situacao === 'roteado-pra-outra',
+        diasAberto: Math.floor((agora - criado) / 86_400_000),
+        criadoEm: new Date(criado).toISOString(),
+        lojaVendedora: sellerCode
+          ? { code: sellerCode, name: nomePorCode.get(sellerCode) ?? sellerCode }
+          : null,
+        lojasComCard: ativos.map((po: any) => ({
+          code: po.store?.code ?? null,
+          name: po.store?.name ?? null,
+          status: po.status,
+        })),
+        entrega: p.shippingMethod ?? null,
+        isPickup: !!p.isPickup,
+        cliente: p.customerName ?? null,
+        cidade: (() => {
+          try {
+            const end = JSON.parse(p.shippingAddress || '{}');
+            return [end.city, end.state].filter(Boolean).join('/') || null;
+          } catch {
+            return null;
+          }
+        })(),
+        total: Number(p.totalAmount ?? 0),
+        pecas: p.items.length,
+      };
+    });
+
+    // Risco primeiro, depois o que está parado há mais tempo.
+    linhas.sort(
+      (a: any, b: any) => Number(b.risco) - Number(a.risco) || b.diasAberto - a.diasAberto,
+    );
+
+    return {
+      total: linhas.length,
+      comRisco: linhas.filter((l: any) => l.risco).length,
+      naFila: linhas.filter((l: any) => l.situacao === 'na-fila').length,
+      pedidos: linhas,
+    };
+  }
+
+  /**
+   * PATCH /orders/wc/:wcId/entrega { tipo, storeCode? }
+   *
+   * TROCAR A FORMA DE ENTREGA de um pedido já criado (17/08). O "Corrigir"
+   * da tela só editava endereço; forma de entrega não tinha conserto por
+   * tela nenhuma. Caso ON-000006: nasceu "Entrega (não informada)" (o
+   * entregaTipo do PDV não gravou) pra cliente que ia RETIRAR em São José
+   * dos Campos — a matriz não tinha como dizer isso ao pedido, e sem
+   * `pickupStoreCode` a engine ia mandar as 11 peças pra cliente pelos
+   * Correios em pacotes separados.
+   *
+   * `tipo`: sedex | pac | motoboy | retirada. `storeCode` = loja que atende
+   * (obrigatório pra retirada; opcional pra motoboy). Atualiza o Order
+   * (shippingMethod/isPickup/pickupStoreCode) E o checkoutInfo.shipping —
+   * o banner da tela lê o checkoutInfo primeiro.
+   *
+   * Roteamento depois da troca:
+   *   - card ativo (new/separating) em alguma loja → recalcula (o recalcular
+   *     apaga os ativos e re-roteia lendo o pickupStoreCode novo);
+   *   - sem card e trava numa loja (retirada/motoboy) → roteia NA HORA,
+   *     igual ao pedido online nascendo (engine determinística);
+   *   - sem card, SEDEX/PAC → fica pra matriz, como sempre.
+   * RECUSA se algum card já passou de "separando": peça já saiu, trocar a
+   * entrega agora é decisão de gente.
+   */
+  @Patch('wc/:wcId/entrega')
+  async trocarEntrega(
+    @Req() req: any,
+    @Param('wcId') wcId: string,
+    @Body() body: { tipo: string; storeCode?: string | null },
+  ) {
+    const wcOrderId = Number(wcId);
+    if (!wcOrderId || isNaN(wcOrderId)) throw new BadRequestException('wcOrderId inválido');
+
+    const tipo = String(body?.tipo || '').trim().toLowerCase();
+    const FORMAS: Record<string, { id: string; kind: string; label: string; pickup: boolean }> = {
+      sedex: { id: 'sedex', kind: 'correios', label: 'SEDEX', pickup: false },
+      pac: { id: 'pac', kind: 'correios', label: 'PAC', pickup: false },
+      motoboy: { id: 'motoboy', kind: 'motoboy', label: 'MOTOBOY', pickup: false },
+      retirada: { id: 'retirada', kind: 'pickup', label: 'RETIRADA NA LOJA', pickup: true },
+    };
+    const forma = FORMAS[tipo];
+    if (!forma) throw new BadRequestException('Forma inválida (use sedex, pac, motoboy ou retirada)');
+
+    const order: any = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId },
+      include: { pickOrders: { select: { id: true, status: true } } },
+    });
+    if (!order) throw new BadRequestException(`Pedido ${wcId} não encontrado`);
+    if (['shipped', 'delivered', 'cancelled'].includes(String(order.status))) {
+      throw new BadRequestException(`Pedido já está ${order.status} — não dá pra trocar a entrega`);
+    }
+    const avancados = (order.pickOrders || []).filter((p: any) => !['new', 'separating'].includes(p.status));
+    if (avancados.length > 0) {
+      throw new BadRequestException(
+        `${avancados.length} separação(ões) já passaram de "separando" (${[...new Set(avancados.map((a: any) => a.status))].join(', ')}). ` +
+          'A peça já saiu — trocar a entrega agora não é conserto de sistema.',
+      );
+    }
+
+    // Loja que atende: retirada EXIGE (a cliente busca em algum lugar);
+    // motoboy é opcional (sem loja = a engine escolhe por estoque).
+    const storeCode = String(body?.storeCode || '').trim();
+    let loja: any = null;
+    if (forma.pickup || (tipo === 'motoboy' && storeCode)) {
+      if (!storeCode) throw new BadRequestException('Retirada precisa da loja onde a cliente busca');
+      loja = await (this.prisma as any).store.findFirst({ where: { code: storeCode, active: true } });
+      if (!loja) throw new BadRequestException(`Loja ${storeCode} não existe ou está inativa`);
+    }
+    const label = forma.pickup && loja ? `${forma.label} — ${loja.name}` : forma.label;
+
+    // checkoutInfo.shipping é o que o banner/etiqueta leem primeiro.
+    let ck: any = {};
+    try { ck = order.checkoutInfo ? JSON.parse(order.checkoutInfo) : {}; } catch { ck = {}; }
+    const antes = ck?.shipping?.label ?? order.shippingMethod ?? 'não informada';
+    ck.shipping = {
+      ...(ck.shipping || {}),
+      id: forma.id,
+      kind: forma.kind,
+      label,
+      price: Number(ck?.shipping?.price ?? 0),
+    };
+
+    await (this.prisma as any).order.update({
+      where: { id: order.id },
+      data: {
+        shippingMethod: label,
+        isPickup: forma.pickup,
+        pickupStoreCode: loja ? loja.code : null,
+        checkoutInfo: JSON.stringify(ck),
+      },
+    });
+    await (this.prisma as any).orderHistory
+      .create({
+        data: {
+          orderId: order.id,
+          userId: req?.user?.id ?? null,
+          fromStatus: order.status,
+          toStatus: order.status,
+          note: `Entrega trocada: ${antes} → ${label}${loja ? ` (loja que atende: ${loja.name})` : ''}.`,
+        },
+      })
+      .catch(() => null);
+
+    // Roteamento coerente com a entrega nova.
+    const ativos = (order.pickOrders || []).filter((p: any) => ['new', 'separating'].includes(p.status));
+    let roteamento: any = { acao: 'nenhuma' };
+    try {
+      if (ativos.length > 0) {
+        const r: any = await this.routing.recalculateForWc(order.id);
+        roteamento = { acao: 'recalculado', ok: !!r?.ok, detalhe: r?.message ?? null };
+      } else if (loja) {
+        const preview: any = await this.routing.previewRoute(order.id);
+        const r: any = await this.routing.confirmRoute(order.id, preview);
+        roteamento = { acao: 'roteado', ok: !!r?.persisted, estrategia: preview?.strategy ?? null };
+      }
+    } catch (e: any) {
+      roteamento = { acao: ativos.length > 0 ? 'recalculado' : 'roteado', ok: false, detalhe: e?.message || String(e) };
+    }
+
+    return {
+      ok: true,
+      shippingMethod: label,
+      isPickup: forma.pickup,
+      pickupStoreCode: loja?.code ?? null,
+      pickupStoreName: loja?.name ?? null,
+      roteamento,
+    };
+  }
+
+  /**
+   * POST /orders/wc/:wcId/fechar-na-loja-vendedora
+   *
+   * A loja que VENDEU já entregou: cancela card indevido, baixa o estoque nela
+   * e fecha o pedido. Ver `RoutingService.fecharNaLojaPedinte` pro porquê.
+   */
+  @Post('wc/:wcId/fechar-na-loja-vendedora')
+  async fecharNaLojaVendedora(@Req() req: any, @Param('wcId') wcId: string) {
+    const wcOrderId = Number(wcId);
+    if (!wcOrderId || isNaN(wcOrderId)) {
+      throw new BadRequestException('wcOrderId inválido');
+    }
+    const local = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId },
+      select: { id: true },
+    });
+    if (!local) throw new BadRequestException(`Pedido ${wcId} não encontrado`);
+    return this.routing.fecharNaLojaPedinte(local.id, req?.user?.id);
   }
 
   /** Contadores por status (pra renderizar os filtros com número exato do WC). */
@@ -1011,9 +1516,11 @@ export class OrdersController {
           })
           .catch(() => {});
       }
-      // Pedido da live/loja não tem WooCommerce pra recusar nada — o cancelamento
-      // é aplicado aqui mesmo (status local + ordens de separação).
+      // Pedido da live/loja não tem WooCommerce pra recusar nada — o status
+      // é aplicado aqui mesmo (cancelar mexe nas ordens de separação;
+      // concluir/processar/separar só trocam o status do pedido).
       await this.cancelarLocalmente(wcOrderId, body.status);
+      await this.aplicarStatusLocal(wcOrderId, body.status, body.addNote?.text);
       return {
         ok: true,
         id: wcOrderId,
@@ -1088,6 +1595,53 @@ export class OrdersController {
    * Nunca lança: o status já mudou no site, e derrubar a resposta aqui faria
    * parecer que o cancelamento falhou.
    */
+  /**
+   * "CONCLUIR" EM PEDIDO LOCAL ERA UM NO-OP QUE SE DIZIA SUCESSO (17/08).
+   *
+   * O ramo `isLive` devolvia `ok: true, statusApplied: true` mas só o
+   * `cancelarLocalmente` mexia no banco — e ele sai no primeiro `if` pra
+   * qualquer status que não seja cancelado/reembolsado. Resultado na tela:
+   * a equipe selecionava os pedidos da live já enviados, clicava em
+   * "Concluído", a lista sumia com eles… e no F5 estavam todos lá de novo.
+   * Ficaram semanas presos na aba de separação (LIVE-137, 293, 260, 29,
+   * todos com rastreio) porque nenhum clique surtia efeito.
+   *
+   * Aqui o slug da aba vira o status local equivalente. `on-hold` não tem
+   * par local: fica como está (e a resposta continua honesta, ver abaixo).
+   */
+  private async aplicarStatusLocal(wcOrderId: number, statusPedido?: string, nota?: string) {
+    const s = String(statusPedido || '').toLowerCase();
+    const mapa: Record<string, string> = {
+      completed: 'shipped',
+      separacao: 'separating',
+      'em-separacao': 'separating',
+      processing: 'processing',
+    };
+    const destino = mapa[s];
+    if (!destino) return;
+    try {
+      const local = await (this.prisma as any).order.findUnique({
+        where: { wcOrderId },
+        select: { id: true, status: true },
+      });
+      if (!local || local.status === destino) return;
+      await (this.prisma as any).order.update({ where: { id: local.id }, data: { status: destino } });
+      await (this.prisma as any).orderHistory
+        .create({
+          data: {
+            orderId: local.id,
+            fromStatus: local.status,
+            toStatus: destino,
+            note: nota?.trim() || `Status alterado pra ${destino} pelo Flow`,
+          },
+        })
+        .catch(() => {});
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error(`[orders] aplicarStatusLocal falhou (wc=${wcOrderId}): ${e?.message || e}`);
+    }
+  }
+
   private async cancelarLocalmente(wcOrderId: number, statusPedido?: string) {
     const s = String(statusPedido || '').toLowerCase();
     if (!['cancelled', 'canceled', 'refunded'].includes(s)) return;

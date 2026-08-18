@@ -36,6 +36,7 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/lojas',
   '/novidades',
   '/outlet',
+  '/mais-top-da-semana',
   '/categoria',
   '/tamanhos',
   '/tamanhos/guia',

@@ -221,7 +221,10 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   add_shipping_info: ['shipping_tier'],
   add_payment_info: ['payment_type'],
   checkout_submission: ['method'],
-  checkout_error: ['method', 'reason'],
+  // `code`, `field`, `stage` e `attempt` entram (17/08): a Kênia falhou 14
+  // vezes com `validation_error` e ninguém sabia QUAL campo — o front mandava,
+  // o sanitizador podava. Diagnóstico às cegas custa a venda seguinte.
+  checkout_error: ['method', 'reason', 'code', 'field', 'stage', 'attempt'],
   checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
   payment_method_selected: ['method'],
@@ -950,33 +953,86 @@ export class SiteMetricsService {
     trafego: Trafego;
     plataforma: string | null;
     campanha: string | null;
+    /** `campaign.id` do Meta — a chave que casa gasto e receita. */
+    utmId: string | null;
     pessoas: number;
+    gasto: number;
+    receita: number;
+    pedidos: number;
   }>> {
     const linhas = await this.prisma.$queryRawUnsafe<Array<{
-      trafego: Trafego; plataforma: string | null; campanha: string | null; pessoas: number;
+      trafego: Trafego; plataforma: string | null; campanha: string | null;
+      utm_id: string | null; pessoas: number; gasto: number; receita: number; pedidos: number;
     }>>(
+      /**
+       * O DINHEIRO ENTRA AQUI JUNTO COM AS PESSOAS.
+       *
+       * `gasto` vem do espelho do Meta e `receita` vem de `orders` — pedido
+       * PAGO, não evento rastreado. As duas casam pelo **id** da campanha
+       * (`utm_id` = `campaign.id`), nunca pelo nome: nome é renomeado no
+       * Gerenciador, chega codificado duas vezes na URL e às vezes vem como
+       * número. E o rótulo passa a sair do `campanha_nome` da API, então UTM
+       * mal etiquetado deixa de sujar a tela.
+       *
+       * Receita por PEDIDO e não por evento `purchase` de propósito: ROAS é
+       * sobre dinheiro que entrou no caixa. O evento serve pro funil.
+       */
       `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
             origem AS (
               SELECT DISTINCT ON (e.session_id) e.session_id,
                      e.dados->>'campanha'   AS campanha,
                      e.dados->>'canal'      AS canal,
                      e.dados->>'plataforma' AS plataforma,
+                     e.dados->>'utm_id'     AS utm_id,
                      COALESCE(e.dados->>'pago', 'false') = 'true' AS pago
                 FROM site_eventos e
                WHERE e.criado_em >= $1 AND e.criado_em <= $2
                  AND e.session_id IS NOT NULL AND NOT e.bot
                  AND e.session_id IN (SELECT session_id FROM gente)
                ORDER BY e.session_id, (e.dados->>'canal') IS NULL, e.criado_em
+            ),
+            sessoes AS (
+              SELECT CASE WHEN pago THEN 'pago'
+                          WHEN canal IS NOT NULL THEN 'organico'
+                          ELSE 'direto' END      AS trafego,
+                     COALESCE(plataforma, canal) AS plataforma,
+                     campanha,
+                     utm_id,
+                     COUNT(*)::int               AS pessoas
+                FROM origem
+               GROUP BY 1, 2, 3, 4
+            ),
+            gasto AS (
+              SELECT campanha_id,
+                     MAX(campanha_nome)  AS nome,
+                     SUM(gasto)::float   AS gasto
+                FROM meta_ads_gasto_dia
+               WHERE dia >= $1::date AND dia <= $2::date
+               GROUP BY campanha_id
+            ),
+            receita AS (
+              SELECT utm_id,
+                     SUM(total_amount)::float AS receita,
+                     COUNT(*)::int            AS pedidos
+                FROM orders
+               WHERE source = 'ecommerce'
+                 AND status IN ('paid','separating','shipped','delivered','completed')
+                 AND created_at >= $1 AND created_at <= $2
+                 AND utm_id IS NOT NULL
+               GROUP BY utm_id
             )
-       SELECT CASE WHEN pago THEN 'pago'
-                   WHEN canal IS NOT NULL THEN 'organico'
-                   ELSE 'direto' END      AS trafego,
-              COALESCE(plataforma, canal) AS plataforma,
-              campanha,
-              COUNT(*)::int               AS pessoas
-         FROM origem
-        GROUP BY 1, 2, 3
-        ORDER BY pessoas DESC, 1, 2, 3
+       SELECT s.trafego,
+              s.plataforma,
+              COALESCE(g.nome, s.campanha)  AS campanha,
+              s.utm_id,
+              s.pessoas,
+              COALESCE(g.gasto, 0)::float   AS gasto,
+              COALESCE(r.receita, 0)::float AS receita,
+              COALESCE(r.pedidos, 0)::int   AS pedidos
+         FROM sessoes s
+         LEFT JOIN gasto   g ON g.campanha_id = s.utm_id
+         LEFT JOIN receita r ON r.utm_id      = s.utm_id
+        ORDER BY s.pessoas DESC, 1, 2, 3
         LIMIT 200`,
       de,
       ate,
@@ -985,7 +1041,11 @@ export class SiteMetricsService {
       trafego: l.trafego,
       plataforma: l.plataforma,
       campanha: l.campanha,
+      utmId: l.utm_id,
       pessoas: Number(l.pessoas),
+      gasto: Number(l.gasto) || 0,
+      receita: Number(l.receita) || 0,
+      pedidos: Number(l.pedidos) || 0,
     }));
   }
 

@@ -19,6 +19,7 @@ import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
 import { PedidoOnlineService } from './pedido-online.service';
 import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -225,6 +226,221 @@ export class PdvService {
       },
     });
     return sale;
+  }
+
+  /**
+   * CARRINHOS ABANDONADOS DO SITE NOVO, pra lista do PDV (17/08).
+   *
+   * ⚠️ NÃO usa o `AbandonedCartsService`: importar o módulo dele no PdvModule
+   * criaria import de módulo novo — foi exatamente isso que derrubou o boot em
+   * 07/08 (ver o aviso no `pdv.module.ts`). Mesmo padrão do
+   * `PagarmeLinkReconcileService`: lê a tabela pelo Prisma, que este módulo já
+   * tem.
+   *
+   * Também é DE PROPÓSITO mais simples que o `listEcommercePending` da
+   * retaguarda: aquele agrega plugin do WP + contatos capturados + stats. O PDV
+   * só precisa de quem tem peça com SKU nosso — o único carrinho que dá pra
+   * montar venda automática.
+   *
+   * "Carrinho abandonado" = pedido do site novo que nunca foi pago. O piso de
+   * idade (mesma env `PIX_RESGATE_MIN` do resgate de PIX) evita cutucar quem
+   * está com o QR Code aberto na tela nesse instante — alarme falso aqui faz a
+   * vendedora ligar pra cliente no meio do pagamento.
+   */
+  async listarCarrinhosAbandonados(status = 'abandoned') {
+    const where: any = { source: 'ecommerce' };
+    if (status === 'recovered') {
+      where.paidAt = { not: null };
+    } else if (status !== 'all') {
+      where.paidAt = null;
+      where.status = { not: 'cancelled' };
+      const esperaMin = Number(process.env.PIX_RESGATE_MIN) || 30;
+      where.createdAt = { lte: new Date(Date.now() - esperaMin * 60_000) };
+      // Cartão em análise de antifraude NÃO é abandono: a cliente já pagou e
+      // está esperando a aprovação. Mesma regra da lista da retaguarda.
+      where.NOT = [{ paymentInfo: { contains: '"cartaoEmAnalise":true' } }];
+    }
+
+    const pedidos: any[] = await (this.prisma as any).order.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        wcOrderId: true,
+        wcOrderNumber: true,
+        customerName: true,
+        customerEmail: true,
+        customerPhone: true,
+        totalAmount: true,
+        createdAt: true,
+        utmCampaign: true,
+        items: { select: { quantity: true } },
+      },
+    });
+
+    const items = pedidos.map((o) => {
+      const nome = String(o.customerName ?? '').trim();
+      const sp = nome.indexOf(' ');
+      return {
+        id: Number(o.wcOrderId),
+        order_id: Number(o.wcOrderId),
+        order_number: o.wcOrderNumber ?? null,
+        first_name: sp > 0 ? nome.slice(0, sp) : nome,
+        last_name: sp > 0 ? nome.slice(sp + 1) : '',
+        email: o.customerEmail ?? '',
+        phone: o.customerPhone ?? '',
+        cart_total: Number(o.totalAmount ?? 0),
+        items_count: (o.items || []).reduce((s: number, i: any) => s + Number(i.quantity ?? 1), 0),
+        time: o.createdAt ? o.createdAt.toISOString() : null,
+        // A campanha só existe no carrinho — é o que liga a venda ao anúncio.
+        utmCampaign: o.utmCampaign ?? null,
+      };
+    });
+
+    return { items, total: items.length };
+  }
+
+  /**
+   * IMPORTAR CARRINHO ABANDONADO PRO PDV (17/08).
+   *
+   * O PROBLEMA MEDIDO: em 17/08 foram 7 carrinhos recuperados pelo time e só
+   * 2 viraram venda no sistema. Os outros 5 foram pagos por fora (PIX direto,
+   * PayPal, link) e NUNCA foram registrados. Cada um desses custa: estoque que
+   * não baixa (peça sai da loja e o site vende de novo), NF-e que não sai,
+   * dinheiro fora do caixa e do faturamento, comissão que a vendedora não
+   * recebe, e o carrinho seguindo eternamente como "abandonado" no relatório —
+   * a mesma cliente contada como PERDA e como receita órfã.
+   *
+   * A CAUSA NÃO É DISCIPLINA, É FRICÇÃO: o PDV já aceita "PIX recebido" e
+   * "Link externo". O que ninguém faz é remontar o carrinho à mão — a cliente
+   * do ON-000006 tinha ONZE peças. Onze buscas depois de a venda já estar
+   * fechada no WhatsApp, sete vezes por dia. Então a venda não é registrada.
+   *
+   * Aqui a venda nasce PRONTA: peças e cliente do carrinho já preenchidas, e
+   * a vendedora só escolhe como recebeu. Um clique em vez de onze buscas.
+   *
+   * REUSA `addItem` de propósito (não insere PdvSaleItem cru): preço, promoção
+   * automática, REF/cor/tamanho e o filtro de item sem estoque vivem lá. Item
+   * inserido por fora nasceria com preço de outra régua que a do bipe.
+   *
+   * Item que não resolve NÃO derruba a importação — a venda abre com o que deu
+   * e devolve a lista do que faltou, pra vendedora completar na mão. Falhar
+   * inteiro por causa de uma REF fora do catálogo levaria ela de volta pro
+   * caminho manual, que é o que este método existe pra evitar.
+   */
+  async importarCarrinho(input: {
+    /** `Order.wcOrderId` do carrinho abandonado (o número que a tela mostra). */
+    wcOrderId: number;
+    storeCode: string;
+    vendedorUserId?: string;
+    vendedorName?: string;
+    isTraining?: boolean;
+  }) {
+    const carrinho: any = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId: Number(input.wcOrderId) },
+      include: { items: true },
+    });
+    if (!carrinho) throw new NotFoundException(`Carrinho ${input.wcOrderId} não encontrado`);
+    if (carrinho.paidAt) {
+      throw new BadRequestException(
+        `Este carrinho já foi PAGO (${carrinho.wcOrderNumber}) — não é abandonado. ` +
+          'Importar criaria uma segunda venda da mesma peça.',
+      );
+    }
+    // Já importado antes: devolve a venda existente em vez de criar outra.
+    // Dois cliques no botão não podem virar duas vendas.
+    const jaImportado = await (this.prisma as any).pdvSale.findFirst({
+      where: { carrinhoOrderId: carrinho.id, status: 'open' },
+      select: { id: true, storeCode: true },
+    });
+    if (jaImportado) {
+      return {
+        saleId: jaImportado.id,
+        storeCode: jaImportado.storeCode,
+        jaExistia: true,
+        importados: 0,
+        faltaram: [] as string[],
+      };
+    }
+
+    const pecas = (carrinho.items || []).filter((it: any) => !ehItemSemEstoque(it));
+    if (!pecas.length) {
+      throw new BadRequestException('Carrinho sem nenhuma peça pra importar (só frete/manual).');
+    }
+
+    const sale = await this.createSale({
+      storeCode: input.storeCode,
+      vendedorUserId: input.vendedorUserId,
+      vendedorName: input.vendedorName,
+      isTraining: input.isTraining,
+    });
+
+    // Vincula o carrinho ANTES de qualquer coisa: se a importação falhar no
+    // meio, a venda aberta já sabe de onde veio e não vira órfã.
+    await (this.prisma as any).pdvSale.update({
+      where: { id: sale.id },
+      data: { carrinhoOrderId: carrinho.id },
+    });
+
+    const faltaram: string[] = [];
+    let importados = 0;
+    for (const it of pecas) {
+      const qtd = Math.max(1, Number(it.quantity || 1));
+      try {
+        await this.addItem({ saleId: sale.id, skuOrEan: String(it.sku), qty: qtd });
+        importados += 1;
+      } catch (e: any) {
+        const rotulo = [it.ref, it.cor, it.tamanho].filter(Boolean).join(' · ') || String(it.sku);
+        faltaram.push(`${rotulo} (${e?.message || 'não resolveu'})`);
+        this.logger.warn(
+          `[importar-carrinho] ${carrinho.wcOrderNumber} → venda ${sale.id}: ` +
+            `sku ${it.sku} falhou (${e?.message || e})`,
+        );
+      }
+    }
+
+    // Cliente do carrinho: endereço vem do shippingAddress (shape WooCommerce).
+    let end: any = {};
+    try { end = carrinho.shippingAddress ? JSON.parse(carrinho.shippingAddress) : {}; } catch { end = {}; }
+    try {
+      await this.setCustomer({
+        saleId: sale.id,
+        cpf: carrinho.customerCpf || undefined,
+        name: carrinho.customerName || undefined,
+        email: carrinho.customerEmail || undefined,
+        phone: carrinho.customerPhone || undefined,
+        cep: carrinho.shippingCep || end.postcode || undefined,
+        endereco: end.address_1 || undefined,
+        numero: end.number || undefined,
+        complemento: end.address_2 || undefined,
+        bairro: end.neighborhood || end.bairro || undefined,
+        cidade: end.city || undefined,
+        uf: end.state || undefined,
+      });
+    } catch (e: any) {
+      // Cliente incompleto não bloqueia: a venda online exige CPF no
+      // fechamento e a tela cobra ali, com o campo na frente da vendedora.
+      this.logger.warn(`[importar-carrinho] venda ${sale.id}: cliente não preencheu (${e?.message || e})`);
+    }
+
+    this.logger.log(
+      `[importar-carrinho] ${carrinho.wcOrderNumber} → venda ${sale.id} na loja ${input.storeCode}: ` +
+        `${importados}/${pecas.length} peça(s)${faltaram.length ? `, ${faltaram.length} faltou` : ''}`,
+    );
+
+    return {
+      saleId: sale.id,
+      // A tela precisa do storeCode pra retomar a venda: o PDV resume pela
+      // chave `lurds_pdv_sale_<storeCode>` do localStorage e não aceita id
+      // por querystring. Devolver aqui evita mexer no PDV (arquivo de 10k
+      // linhas) só pra abrir uma venda que já existe.
+      storeCode: sale.storeCode,
+      jaExistia: false,
+      carrinho: carrinho.wcOrderNumber,
+      importados,
+      total: pecas.length,
+      faltaram,
+    };
   }
 
   /**
@@ -1660,11 +1876,22 @@ export class PdvService {
    * não haveria onde guardar.
    *
    * O pedido online lê daqui: vira o `shippingMethod` do Order (SEDEX/PAC/
-   * MOTOBOY) e, no caso de retirada, marca `isPickup` na própria loja. Antes
-   * disso todo pedido online nascia "Correios R$ 0,00" e a matriz não tinha
-   * como saber se emitia etiqueta, chamava motoboy ou segurava pra retirada.
+   * MOTOBOY) e, no caso de retirada, marca `isPickup` na loja de retirada.
+   * Antes disso todo pedido online nascia "Correios R$ 0,00" e a matriz não
+   * tinha como saber se emitia etiqueta, chamava motoboy ou segurava pra
+   * retirada.
+   *
+   * LOJA QUE ATENDE (17/08): `entregaStoreCode` diz qual loja resolve a
+   * entrega — pra RETIRADA é onde a cliente busca, pra MOTOBOY é quem sai de
+   * moto. Null = a própria loja vendedora. Caso ON-000006: a loja-canal 13
+   * (carrinho abandonado) vendeu 11 peças pra cliente de São José dos Campos
+   * que queria retirar lá — e o botão só sabia gravar "retira NA LOJA 13",
+   * que não tem balcão. A matriz teve que rotear na mão e o card em SJC nem
+   * sabia que era retirada (ia oferecer "Gerar envio Correios"). Motoboy
+   * entra na mesma regra pelo mesmo motivo: a 13 não tem moto — quem tem é
+   * a loja na cidade da cliente, e é a vendedora quem sabe qual.
    */
-  async setEntrega(saleId: string, tipoRaw: string) {
+  async setEntrega(saleId: string, tipoRaw: string, entregaStoreCodeRaw?: string | null) {
     const tipo = String(tipoRaw || '').trim().toLowerCase();
     if (!(PdvService.ENTREGA_TIPOS as readonly string[]).includes(tipo)) {
       throw new BadRequestException(
@@ -1673,17 +1900,63 @@ export class PdvService {
     }
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: saleId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, storeCode: true },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
 
+    const entregaStoreCode = await this.resolverLojaQueAtende(tipo, sale.storeCode, entregaStoreCodeRaw);
+
+    // REGRA A só quando o motoboy sai DAQUI, agora: a peça tem que estar na
+    // arara. Se outra loja foi escolhida pra entregar, é ela quem recebe o
+    // card (e por transferência o que não tiver) — a regra não se aplica.
+    if (tipo === 'motoboy' && !entregaStoreCode) await this.exigirEstoqueLocalParaMotoboy(saleId);
+
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
-      data: { entregaTipo: tipo },
+      data: { entregaTipo: tipo, entregaStoreCode },
     });
-    return { ok: true, entregaTipo: tipo };
+    return { ok: true, entregaTipo: tipo, entregaStoreCode };
+  }
+
+  /**
+   * Loja que atende, válida, ou null. Só faz sentido com retirada/motoboy —
+   * SEDEX/PAC zeram o campo (trocar de retirada pra SEDEX não pode deixar
+   * uma loja fantasma na venda). Loja igual à vendedora também vira null:
+   * "atende aqui" é o padrão e não precisa de código.
+   */
+  private async resolverLojaQueAtende(
+    tipo: string,
+    lojaVendedora: string,
+    raw?: string | null,
+  ): Promise<string | null> {
+    if (tipo !== 'retirada' && tipo !== 'motoboy') return null;
+    const code = String(raw ?? '').trim();
+    if (!code || code === lojaVendedora) return null;
+    const store = await this.prisma.store.findUnique({
+      where: { code },
+      select: { code: true, active: true },
+    });
+    if (!store) throw new BadRequestException(`Loja ${code} não existe`);
+    if (!store.active) throw new BadRequestException(`Loja ${code} está inativa`);
+    return store.code;
+  }
+
+  /**
+   * REGRA A DO MOTOBOY (dono, 17/08): só sai da loja vendedora. Ver
+   * `PedidoOnlineService.faltaParaMotoboy`. A mensagem lista o que falta —
+   * "não pode" sem dizer por quê é o que faz a vendedora tentar de novo.
+   */
+  private async exigirEstoqueLocalParaMotoboy(saleId: string) {
+    const faltam = await this.pedidoOnline.faltaParaMotoboy(saleId).catch(() => [] as string[]);
+    if (!faltam.length) return;
+    throw new BadRequestException(
+      `Motoboy só sai da SUA loja, e ela não tem: ${faltam.slice(0, 6).join(
+)}` +
+        (faltam.length > 6 ? ` e mais ${faltam.length - 6}` : '') +
+        '. Escolha SEDEX/PAC (outra loja envia) ou retirada.',
+    );
   }
 
   /**
@@ -2498,8 +2771,31 @@ export class PdvService {
      *  Vale como treino mesmo se a venda foi criada ANTES de ligar o modo
      *  (sem isTraining) — impede baixa de estoque/Wincred reais em treino. */
     trainingRequest?: boolean;
+    /** FORMA DE ENTREGA da venda online, REGRAVADA aqui (17/08). O front
+     *  marca o botão na hora e manda o POST /entrega em fire-and-forget: se o
+     *  POST falha, ou se a venda ainda nem existia no clique, ou se o cron
+     *  do PIX fecha antes, a tela mostra SEDEX e o banco está vazio — e o
+     *  pedido nasce "Entrega (não informada)" (ON-000005, ON-000006). A
+     *  escolha que está na tela no momento do fechamento é a verdade. */
+    entregaTipo?: string | null;
+    entregaStoreCode?: string | null;
   }) {
-    const sale = await this.getSale(input.saleId);
+    let sale = await this.getSale(input.saleId);
+
+    // Regrava a entrega ANTES de qualquer coisa: é o que o pedido online lê.
+    // Só quando o front mandou algo — venda fechada pelo cron do PIX não
+    // passa por aqui com body, e não pode apagar o que a vendedora escolheu.
+    if (sale.status === 'open' && input.entregaTipo) {
+      try {
+        await this.setEntrega(sale.id, input.entregaTipo, input.entregaStoreCode ?? null);
+        sale = await this.getSale(input.saleId);
+      } catch (e: any) {
+        // Regra A do motoboy ou loja de retirada inválida: erro DE VERDADE —
+        // sobe pra vendedora corrigir, não fecha venda com entrega errada.
+        if (e instanceof BadRequestException) throw e;
+        this.logger.warn(`[pdv] finalize: falha ao regravar entrega da venda ${sale.id}: ${e?.message || e}`);
+      }
+    }
     // IDEMPOTENTE: se a venda ja esta finalized, retorna OK sem refazer nada.
     // Cobre race condition de double-click no botao Finalizar + auto-finalize
     // (setTimeout 80ms dispara depois de adicionarPagamento). Antes lancava
@@ -2762,15 +3058,32 @@ export class PdvService {
     // ONLINE, roteamento (ou auto-atende na própria loja) e acerto
     // fornecedora→vendedora. A venda segue normal no caixa desta loja.
     //
-    // ⚠️ TRAVA DE BAIXA DUPLA: com o Order criado, quem baixa o estoque é a
-    // loja que SEPARA (runAutoDebit no bipe do card) — o finalize marca
-    // stockDecreasedAt ANTES de enfileirar o outbox, então o passo de estoque
-    // do job vira no-op (guard idempotente do erpStepBaixarEstoque) e as redes
-    // de segurança (backlog/reconcile) também pulam. A gravação na CAIXA do
-    // Wincred segue normal. Se a criação do Order falhar, nada é marcado e o
-    // comportamento legado (baixa na própria loja) fica intacto.
-    let onlineOrder: { wcOrderNumber: string; autoAtendida: boolean; storeName: string | null } | null = null;
+    // ⚠️ TRAVA DE BAIXA DUPLA: com o Order criado, o finalize NÃO baixa aqui —
+    // marca stockDecreasedAt ANTES de enfileirar o outbox, então o passo de
+    // estoque do job vira no-op (guard idempotente do erpStepBaixarEstoque) e
+    // as redes de segurança (backlog/reconcile) também pulam. Quem baixa é:
+    //   - a PRÓPRIA loja vendedora, na hora, quando ela tem a peça e entrega
+    //     (fechadoNaLoja — `fecharNaLojaVendedora`);
+    //   - a loja que SEPARA (runAutoDebit no bipe do card), quando o pedido
+    //     precisou de outra loja pra atender.
+    // Nos dois casos a baixa acontece de verdade antes/junto da marcação — a
+    // marca nunca é uma promessa vazia. A gravação na CAIXA do Wincred segue
+    // normal. Se a criação do Order falhar, nada é marcado e o comportamento
+    // legado (baixa na própria loja) fica intacto.
+    let onlineOrder: {
+      wcOrderNumber: string;
+      autoAtendida: boolean;
+      fechadoNaLoja: boolean;
+      lojaEscolhida: { code: string; name: string } | null;
+      storeName: string | null;
+    } | null = null;
     if (isAllVendaOnline && this.pedidoOnline.enabled()) {
+      // Regra A do motoboy vale no fechamento também: a sacola pode ter
+      // mudado depois da escolha, e o front guarda a escolha mesmo quando a
+      // API recusa. Recusar aqui é ANTES de gravar qualquer coisa.
+      if (String((sale as any).entregaTipo || '').toLowerCase() === 'motoboy') {
+        await this.exigirEstoqueLocalParaMotoboy(sale.id);
+      }
       onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
       if (onlineOrder) {
         const agora = new Date();
@@ -3281,6 +3594,115 @@ export class PdvService {
     } catch (e: any) {
       return { ok: false, error: e?.message || String(e) };
     }
+  }
+
+  /**
+   * GERAR PEDIDO ONLINE de uma venda JÁ FINALIZADA que ficou sem ele (17/08).
+   *
+   * Caso Audrey Baldin: link Pagar.me pago, cron fechou a venda como
+   * 'credito' → o finalize não viu venda online → sem Order ON-, sem card,
+   * estoque baixado na loja vendedora (13/SITE, que não tem estoque). A
+   * cliente pagou e ninguém separa. Este é o botão de resgate: roda o MESMO
+   * `criarDoFinalize` (roteamento, card, acerto) e, se o outbox já tinha
+   * baixado o estoque na loja vendedora, DEVOLVE lá — quem baixa é a loja
+   * que separa, no bipe do card (mesma trava do finalize online).
+   *
+   * Idempotente: venda que já tem Order 'pdv_online' apontando pra ela devolve
+   * o número existente sem criar outro.
+   */
+  async gerarPedidoOnlineDeVendaFinalizada(
+    saleId: string,
+    actor?: string,
+    dados?: {
+      nome?: string; cep?: string; endereco?: string; numero?: string; complemento?: string;
+      bairro?: string; cidade?: string; uf?: string; entregaTipo?: string;
+    },
+  ) {
+    let sale = await this.getSale(saleId);
+    if (sale.status !== 'finalized') {
+      throw new BadRequestException(`Venda está ${sale.status} — só venda finalizada vira pedido online`);
+    }
+    if ((sale as any).isTraining) throw new BadRequestException('Venda de treinamento não vira pedido');
+
+    // Venda fechada sem CEP/entrega (caso Sandra Micheli, 17/08): a tela manda
+    // os dados junto e a gente completa a venda ANTES de rotear — não existe
+    // outra tela que edite endereço de venda finalizada, e o setEntrega recusa
+    // venda que não está aberta.
+    if (dados && Object.keys(dados).length) {
+      const limpo = (v?: string, max = 120) => String(v ?? '').trim().slice(0, max) || null;
+      const upd: any = {};
+      if (dados.nome !== undefined && limpo(dados.nome)) upd.customerName = limpo(dados.nome);
+      if (dados.cep !== undefined) upd.customerCep = String(dados.cep).replace(/\D/g, '') || null;
+      if (dados.endereco !== undefined) upd.customerEndereco = limpo(dados.endereco);
+      if (dados.numero !== undefined) upd.customerNumero = limpo(dados.numero, 20);
+      if (dados.complemento !== undefined) upd.customerComplemento = limpo(dados.complemento, 80);
+      if (dados.bairro !== undefined) upd.customerBairro = limpo(dados.bairro, 80);
+      if (dados.cidade !== undefined) upd.customerCidade = limpo(dados.cidade, 80);
+      if (dados.uf !== undefined) upd.customerUf = limpo(dados.uf, 2)?.toUpperCase() ?? null;
+      if (dados.entregaTipo !== undefined) {
+        const tipo = String(dados.entregaTipo || '').trim().toLowerCase();
+        if (!(PdvService.ENTREGA_TIPOS as readonly string[]).includes(tipo)) {
+          throw new BadRequestException(`Forma de entrega inválida (use ${PdvService.ENTREGA_TIPOS.join(', ')})`);
+        }
+        upd.entregaTipo = tipo;
+      }
+      if (Object.keys(upd).length) {
+        await (this.prisma as any).pdvSale.update({ where: { id: sale.id }, data: upd });
+        sale = await this.getSale(saleId);
+      }
+    }
+
+    const existente = await (this.prisma as any).order.findFirst({
+      where: { source: 'pdv_online', checkoutInfo: { contains: `"pdvSaleId":"${sale.id}"` } },
+      select: { wcOrderNumber: true, status: true },
+    });
+    if (existente) {
+      return { ok: true, jaExistia: true, wcOrderNumber: existente.wcOrderNumber, status: existente.status };
+    }
+    if (!this.pedidoOnline.enabled()) {
+      throw new BadRequestException('Roteamento de pedido online desligado (PEDIDO_ONLINE_ROTEAMENTO)');
+    }
+
+    const onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
+    if (!onlineOrder) {
+      throw new BadRequestException(
+        'Não consegui gerar o pedido — veja o log [pedido-online] (motivos comuns: venda sem CEP e não é retirada, loja não cadastrada, só frete/manual)',
+      );
+    }
+
+    // Estoque: o finalize normal marca stockDecreasedAt ANTES do outbox e o
+    // job não baixa. Aqui o job JÁ baixou na loja vendedora — devolve o que
+    // baixou, senão a peça some duas vezes (uma na 13, outra na loja do card).
+    let estoqueDevolvido = 0;
+    const jaBaixou = (sale.items || []).filter(
+      (it: any) => it.stockDecreasedAt && this.isStockEligibleItem(it),
+    );
+    if (jaBaixou.length) {
+      try {
+        const r = await this.erp.increaseStockAsync(
+          jaBaixou.map((it: any) => ({
+            sku: String(it.sku || '').trim(),
+            qty: Math.max(1, Number(it.qty) || 1),
+            storeCode: sale.storeCode,
+          })),
+        );
+        estoqueDevolvido = r.applied?.length ?? 0;
+      } catch (e: any) {
+        this.logger.error(
+          `[pedido-online] venda ${sale.id}: pedido ${onlineOrder.wcOrderNumber} criado mas NÃO devolvi o estoque da loja ${sale.storeCode}: ${e?.message || e} — conferir na mão`,
+        );
+      }
+    }
+    // Marca como no finalize online — reconcile/backlog não voltam a baixar.
+    const agora = new Date();
+    await (this.prisma as any).pdvSale.update({ where: { id: sale.id }, data: { stockDecreasedAt: agora } }).catch(() => {});
+    await (this.prisma as any).pdvSaleItem.updateMany({ where: { saleId: sale.id }, data: { stockDecreasedAt: agora } }).catch(() => {});
+
+    this.logger.log(
+      `[pedido-online] venda ${sale.id} → pedido ${onlineOrder.wcOrderNumber} gerado a posteriori por ${actor || 'admin'} ` +
+        `(auto-atendida=${onlineOrder.autoAtendida}, estoque devolvido na ${sale.storeCode}: ${estoqueDevolvido} item(ns))`,
+    );
+    return { ok: true, jaExistia: false, ...onlineOrder, estoqueDevolvido };
   }
 
   /**

@@ -13,7 +13,7 @@ import { RecommendationRail } from '@/components/commerce/RecommendationRail';
 import { useCartStore } from '@/store/cart';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
-import { isValidCep, onlyDigits, quoteShipping } from '@/lib/commerce/frete';
+import { fetchQuotes, isValidCep, onlyDigits } from '@/lib/commerce/frete';
 import {
   cartStockBlocksCheckout,
   currentCartStockNotice,
@@ -23,6 +23,7 @@ import { mapPeca } from '@/services/products';
 import { toTrackedItem, trackViewCart, trackCouponApplied, trackCouponRemoved } from '@/lib/tracking';
 import { cn, formatPrice } from '@/lib/utils';
 import type { CartLine, Product } from '@/types';
+import type { ShippingQuote } from '@/types/checkout';
 import { SeloPagamentoSeguro } from '@/components/commerce/SeloPagamentoSeguro';
 
 /**
@@ -111,12 +112,36 @@ export default function CarrinhoPage() {
     if (mounted && cepSalvo) setCepInput(maskCep(cepSalvo));
   }, [mounted, cepSalvo]);
 
-  // Cotações ao vivo: recalculam quando o CEP fecha 8 dígitos OU quando o
-  // subtotal cruza o teto do frete grátis (o preço do PAC muda na hora).
-  const cotacoes = useMemo(
-    () => (isValidCep(cepInput) ? quoteShipping(cepInput, subtotal) : []),
-    [cepInput, subtotal],
-  );
+  /**
+   * A SACOLA MOSTRAVA UM FRETE QUE NÃO É O QUE SE COBRA (corrigido 17/08).
+   *
+   * Ela lia a tabela LOCAL — a de emergência, congelada no código. Pra um
+   * CEP do litoral de SP ela anunciava SEDEX R$ 28,90 enquanto o checkout
+   * cobrava R$ 9,99 pela promoção: quase 3× a mais, na tela exata em que a
+   * cliente decide se continua. E escondia justamente o "frete
+   * promocional", que é o argumento pra ela seguir.
+   *
+   * Agora é a MESMA fonte do checkout (`fetchQuotes` → /api/loja/frete):
+   * mesma promoção, mesmo raio de 20 km na retirada, mesma ordem. Duas
+   * telas com dois preços é como a cliente perde a confiança no total.
+   *
+   * `fetchQuotes` nunca rejeita — backend fora, ela mesma devolve a tabela
+   * local. Então aqui não há caminho sem cotação.
+   */
+  const [cotacoes, setCotacoes] = useState<ShippingQuote[]>([]);
+  const pecasNaSacola = lines.reduce((s, l) => s + l.quantity, 0);
+
+  useEffect(() => {
+    if (!isValidCep(cepInput)) {
+      setCotacoes([]);
+      return;
+    }
+    const controller = new AbortController();
+    void fetchQuotes(cepInput, subtotal, pecasNaSacola || 1, controller.signal).then((r) => {
+      if (!controller.signal.aborted) setCotacoes(r.quotes);
+    });
+    return () => controller.abort();
+  }, [cepInput, subtotal, pecasNaSacola]);
 
   function aoDigitarCep(value: string) {
     const mascarado = maskCep(value);

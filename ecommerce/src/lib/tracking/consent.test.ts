@@ -78,3 +78,50 @@ describe('hydrateConsent', () => {
     expect(getConsent().analytics).toBe(false);
   });
 });
+
+/**
+ * A POSTURA é o que separa "não decidiu" de "recusou" — e é a linha inteira do
+ * repasse à Meta. Antes os dois caíam no mesmo balde, e o efeito medido em
+ * 17/08/2026 foi a campanha `52531954165766` levar 1.012 sessões e o Meta
+ * saber de 8.
+ *
+ * O caso que NUNCA pode virar verde por acidente é `recusou`: registrar o não
+ * e mandar assim mesmo é má-fé. Se alguém "simplificar" isso pra
+ * `decided_at === null ? ... : ...` sem olhar as flags, este teste quebra.
+ */
+describe('posturaDe / metaServidorPodeReceber', () => {
+  const base = { necessary: true as const, personalization: false, version: 1 };
+  const naoDecidiu = { ...base, analytics: false, marketing: false, decided_at: null };
+  const recusou = { ...base, analytics: false, marketing: false, decided_at: '2026-08-17T10:00:00.000Z' };
+  const aceitou = { ...base, analytics: true, marketing: true, decided_at: '2026-08-17T10:00:00.000Z' };
+  // Aceitou SÓ analytics: continua sendo um sim, e o repasse vale.
+  const soAnalytics = { ...base, analytics: true, marketing: false, decided_at: '2026-08-17T10:00:00.000Z' };
+
+  it('classifica as três posturas', async () => {
+    const { posturaDe } = await carregarCom(null);
+    expect(posturaDe(naoDecidiu)).toBe('nao_decidiu');
+    expect(posturaDe(recusou)).toBe('recusou');
+    expect(posturaDe(aceitou)).toBe('aceitou');
+    expect(posturaDe(soAnalytics)).toBe('aceitou');
+  });
+
+  it('deixa a Meta receber de quem aceitou e de quem não decidiu', async () => {
+    const { metaServidorPodeReceber } = await carregarCom(null);
+    expect(metaServidorPodeReceber(aceitou)).toBe(true);
+    expect(metaServidorPodeReceber(naoDecidiu)).toBe(true);
+  });
+
+  it('🚨 NUNCA deixa a Meta receber de quem recusou', async () => {
+    const { metaServidorPodeReceber } = await carregarCom(null);
+    expect(metaServidorPodeReceber(recusou)).toBe(false);
+  });
+
+  it('quem recusa DEPOIS de ter aceitado para de ser repassado', async () => {
+    const { metaServidorPodeReceber, setConsent, getConsent } = await carregarCom(
+      JSON.stringify(aceitou),
+    );
+    expect(metaServidorPodeReceber(getConsent())).toBe(true);
+    setConsent({ analytics: false, marketing: false, personalization: false });
+    expect(metaServidorPodeReceber(getConsent())).toBe(false);
+  });
+});

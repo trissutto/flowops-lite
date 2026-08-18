@@ -9,8 +9,19 @@ import { isValidPhone, maskPhone, onlyDigits } from './masks';
 import type { CheckoutContact } from '@/types/checkout';
 import { trackCheckoutValidationError } from '@/lib/tracking';
 
+/**
+ * NOME E SOBRENOME AQUI, NA PRIMEIRA ETAPA (dono, 17/08).
+ *
+ * Eram pedidos só no fim, na antiga etapa 4, num campo único "Nome
+ * completo" cuja regra só aparecia depois do erro — 10 pessoas reprovadas
+ * em 14 dias, mais que CPF, e-mail e bairro somados.
+ *
+ * Subindo pra cá, a etapa 3 fica só com e-mail e CPF e pode gerar o PIX
+ * no mesmo clique: quando o QR abre, já está tudo preenchido.
+ */
 const schema = z.object({
-  name: z.string().trim().min(2, 'Digite seu nome.'),
+  firstName: z.string().trim().min(2, 'Digite seu nome.'),
+  lastName: z.string().trim().min(2, 'Digite seu sobrenome.'),
   phone: z.string().refine(isValidPhone, 'Digite o celular com DDD.'),
   recoveryConsent: z.boolean(),
 });
@@ -25,8 +36,21 @@ interface IdentificationStepProps {
 export function IdentificationStep({ defaults, onDone }: IdentificationStepProps) {
   const { register, handleSubmit, setValue, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
+    // Nome ja conhecido (voltou pra editar) entra dividido: primeira
+    // palavra no nome, o resto no sobrenome.
     defaultValues: defaults
-      ? { name: defaults.name, phone: maskPhone(defaults.phone), recoveryConsent: defaults.recoveryConsent }
+      ? {
+          // ⚠️ `/\s+/` COM A BARRA. Sem ela o regex parte na LETRA "s":
+          // "Thiago Rissutto" virava "Thiago Ri" + "utto", e o nome quebrado
+          // ia pro pedido E pro registro de carrinho abandonado. Pior ainda
+          // em nome sem "s" ("Maria Silva"): o sobrenome saía vazio e o zod
+          // travava a cliente pedindo um campo que ela já tinha preenchido.
+          // TypeScript não pega — /s+/ é regex válida. Bug de 17/08.
+          firstName: (defaults.name ?? '').trim().split(/\s+/)[0] ?? '',
+          lastName: (defaults.name ?? '').trim().split(/\s+/).slice(1).join(' '),
+          phone: maskPhone(defaults.phone),
+          recoveryConsent: defaults.recoveryConsent,
+        }
       : { recoveryConsent: false },
     mode: 'onTouched',
   });
@@ -34,7 +58,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
   return (
     <form
       onSubmit={handleSubmit((values) => onDone({
-        name: values.name.trim(),
+        name: [values.firstName.trim(), values.lastName.trim()].join(' '),
         phone: onlyDigits(values.phone),
         recoveryConsent: values.recoveryConsent,
       }), (invalid) => trackCheckoutValidationError('identification', Object.keys(invalid)[0] ?? 'unknown'))}
@@ -45,9 +69,15 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
         <strong className="font-medium text-ink">Não precisa criar conta nem senha.</strong>{' '}
         Comece apenas com seu nome e WhatsApp.
       </p>
-      <Input label="Seu nome" autoComplete="name" enterKeyHint="next"
-        placeholder="Como podemos chamar você?" hint="O nome completo será pedido somente ao finalizar."
-        error={errors.name?.message} {...register('name')} />
+      {/* Dois campos vazios pedem duas coisas sozinhos — sem a regra
+          escondida que só aparecia depois do erro. */}
+      <div className="grid grid-cols-2 gap-3">
+        <Input label="Nome" autoComplete="given-name" enterKeyHint="next"
+          error={errors.firstName?.message} {...register('firstName')} />
+        <Input label="Sobrenome" autoComplete="family-name" enterKeyHint="next"
+          error={errors.lastName?.message} {...register('lastName')} />
+      </div>
+      <p className="-mt-3 text-small text-ink-muted">Como está no seu documento.</p>
       <Input label="WhatsApp" type="tel" inputMode="numeric" enterKeyHint="done"
         autoComplete="tel-national" placeholder="(11) 98765-4321"
         hint="Usaremos para avisos do pedido e para ajudar você a retomar esta compra."

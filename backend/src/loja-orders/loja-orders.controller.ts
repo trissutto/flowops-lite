@@ -54,7 +54,20 @@ import { FreteService } from './frete.service';
  */
 const BALDE_KEY = '__flowopsLojaOrderRate__';
 const JANELA_MS = 60_000;
-const LIMITE = 20;
+/**
+ * UM BALDE POR ROTA (17/08). Até aqui frete e pedido dividiam o mesmo balde
+ * de 20/min por IP — e como o site NÃO mandava `x-cliente-ip`, esse IP era o
+ * da Vercel: a loja inteira num balde só. PDP (simulador), sacola (recota a
+ * cada +/− de peça) e etapa de entrega batem no frete o tempo todo; a 21ª
+ * cotação do minuto tomava 429, o site caía calado na tabela local (some a
+ * promoção, some a retirada com distância) e a 22ª cliente que fosse FECHAR
+ * o pedido levava "muitas tentativas seguidas" sem ter tentado nada.
+ *
+ * Agora: `frete:<ip>` com 60/min (cotação é frequente e já degrada sozinha
+ * pra tabela local) e `pedido:<ip>` com 20/min (é onde a força bruta dói).
+ * O site passou a mandar `x-cliente-ip`, então o IP é o da cliente.
+ */
+const LIMITE_POR_ROTA: Record<'frete' | 'pedido', number> = { frete: 60, pedido: 20 };
 
 function balde(): Map<string, number[]> {
   const g = globalThis as any;
@@ -62,17 +75,18 @@ function balde(): Map<string, number[]> {
   return g[BALDE_KEY];
 }
 
-function excedeuLimite(ip: string): boolean {
+function excedeuLimite(rota: 'frete' | 'pedido', ip: string): boolean {
   const agora = Date.now();
   const m = balde();
-  const hits = (m.get(ip) || []).filter((t) => agora - t < JANELA_MS);
+  const chave = `${rota}:${ip}`;
+  const hits = (m.get(chave) || []).filter((t) => agora - t < JANELA_MS);
   hits.push(agora);
-  m.set(ip, hits);
+  m.set(chave, hits);
   // Poda oportunista: sem isto o Map cresce pra sempre num scan de IPs.
   if (m.size > 5000) {
     for (const [k, v] of m) if (!v.some((t) => agora - t < JANELA_MS)) m.delete(k);
   }
-  return hits.length > LIMITE;
+  return hits.length > LIMITE_POR_ROTA[rota];
 }
 
 @Controller('public/loja')
@@ -188,7 +202,7 @@ export class LojaOrdersController {
     @Res({ passthrough: true }) res: any,
   ) {
     this.exigirToken(token);
-    if (excedeuLimite(this.ipDe(req))) {
+    if (excedeuLimite('frete', this.ipDe(req))) {
       res.status(429);
       return { ok: false, error: 'Muitas consultas seguidas. Tente de novo em instantes.' };
     }
@@ -220,9 +234,15 @@ export class LojaOrdersController {
   /**
    * POST /api/public/loja/pedido
    *  201 { ok: true, order: { id, number, status, total, payment } }
-   *  200 { ok: false, error } — recusa de negócio (cartão negado, valores
-   *      divergentes...). É 200 de propósito: o BFF trata como resposta
+   *      `status` pode vir `awaiting_payment` TAMBÉM no cartão (17/08): é a
+   *      cobrança em análise na operadora — o webhook/reconcile fecha depois.
+   *  200 { ok: false, error, code, item? } — recusa de negócio (cartão negado,
+   *      valores divergentes...). É 200 de propósito: o BFF trata como resposta
    *      esperada e mostra a mensagem, não como falha de integração.
+   *      `item` só vem em `catalog_unavailable` por PREÇO: { indice, productId,
+   *      size, color, precoAtual, precoInformado } — o site corrige a linha da
+   *      sacola em vez de mandar "atualize a página". Campo novo e opcional:
+   *      site antigo ignora. O `return r` abaixo repassa o objeto inteiro.
    */
   @Post('pedido')
   async criar(
@@ -233,7 +253,7 @@ export class LojaOrdersController {
   ) {
     this.exigirToken(token);
 
-    if (excedeuLimite(this.ipDe(req))) {
+    if (excedeuLimite('pedido', this.ipDe(req))) {
       res.status(429);
       return {
         ok: false,

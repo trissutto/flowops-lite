@@ -7,6 +7,7 @@ import { Check, Copy, X } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
+import { COUPON_DELAY_MS } from './cupomBoasVindasRules';
 
 /**
  * POPUP DO CUPOM DE BOAS-VINDAS — nome, celular e e-mail por 10% na primeira
@@ -41,7 +42,7 @@ const ESPERA_FECHADO = 60 * DIA;
 /** Já pegou o cupom: um ano sem incomodar. */
 const ESPERA_CADASTRADO = 365 * DIA;
 
-const SEGUNDOS_ATE_APARECER = 15_000;
+// O atraso mora em cupomBoasVindasRules.ts (COUPON_DELAY_MS) — uma fonte só.
 /**
  * Rolou meia tela = está lendo, não passou por acaso.
  *
@@ -130,7 +131,7 @@ export function CupomBoasVindas({ initiallyOpen = false }: { initiallyOpen?: boo
     const timer = setTimeout(() => {
       tempoCumprido = true;
       tentar();
-    }, SEGUNDOS_ATE_APARECER);
+    }, COUPON_DELAY_MS);
     window.addEventListener('scroll', aoRolar, { passive: true });
 
     return () => {

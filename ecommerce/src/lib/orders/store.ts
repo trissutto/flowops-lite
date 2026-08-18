@@ -121,9 +121,35 @@ export interface OrderStatusSnapshot {
   paidAt?: string;
 }
 
+/**
+ * Opções do `create` que NÃO fazem parte do pedido.
+ *
+ * `clientIp` é o IP real da cliente: sem ele o backend enxerga só o IP de
+ * saída da Vercel e o limite de 20 pedidos/min vira um balde só pra loja
+ * inteira — a 21ª cliente do minuto lia "muitas tentativas seguidas" na hora
+ * de pagar (o `chamar` já aceitava o header desde a sprint 011, mas nenhum
+ * chamador repassava; ver `ipDe` no `loja-orders.controller.ts`).
+ */
+export interface CreateOrderOptions {
+  clientIp?: string;
+}
+
+/**
+ * A peça que o guard do backend recusou por PREÇO, com o preço de agora.
+ * Vem em `body.item` da recusa `catalog_unavailable` (backend novo); com o
+ * backend antigo simplesmente não vem — quem lê tem que tolerar `undefined`.
+ */
+export interface CatalogItemHint {
+  productId: string;
+  /** Vazio quando o backend não tinha tamanho (manda `null`) — o site casa só por produto. */
+  size: string;
+  color?: string;
+  precoAtual: number;
+}
+
 export interface OrderStore {
   /** Cria o pedido no Postgres do Flow e devolve o que o backend decidiu. */
-  create(payload: NewOrderPayload): Promise<CreatedOrderAck>;
+  create(payload: NewOrderPayload, opts?: CreateOrderOptions): Promise<CreatedOrderAck>;
   /** Pedido completo pra tela de confirmação. `undefined` = não existe. */
   get(id: string): Promise<Order | undefined>;
   /** Só "pagou ou não pagou" — é o que o poll do PixPanel pergunta. */
@@ -144,6 +170,19 @@ export class OrderStoreError extends Error {
     readonly publico: string,
     readonly status = 502,
     readonly code: CheckoutErrorCode = 'internal_error',
+    /**
+     * Só em `catalog_unavailable` por preço: qual peça e quanto custa agora.
+     * A rota repassa pro navegador, que reescreve o preço na sacola em vez de
+     * mandar a cliente "atualizar a página" (que não atualizava o preço).
+     */
+    readonly item?: CatalogItemHint,
+    /**
+     * Só em `shipping_changed` vindo do BACKEND (só o frete subiu entre a
+     * tela e a recotação): a cotação nova. A rota repassa e a página atualiza
+     * a entrega — mesmo tratamento do `shipping_changed` que o próprio BFF já
+     * emite antes de criar o pedido.
+     */
+    readonly quote?: QuoteAtualizada,
   ) {
     super(tecnico);
     this.name = 'OrderStoreError';
@@ -202,7 +241,49 @@ type BackendEnvelope = {
   order?: unknown;
   status?: unknown;
   paidAt?: unknown;
+  /** Recusa por preço: `{ productId, size, color?, precoAtual }` — ver `CatalogItemHint`. */
+  item?: unknown;
+  /** `shipping_changed` do backend (só o frete subiu): a cotação que vale agora. */
+  quote?: unknown;
 };
+
+/** `body.quote` de `shipping_changed` → cotação nova, ou `undefined` sem o shape. */
+export interface QuoteAtualizada {
+  id: string;
+  label: string;
+  price: number;
+  /** Mesmo shape da `ShippingQuote.etaDays` do site: prazo do transportador + separação. */
+  etaDays: { min: number; max: number } | null;
+}
+function quoteAtualizada(raw: unknown): QuoteAtualizada | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const price = typeof o.price === 'number' && Number.isFinite(o.price) ? o.price : NaN;
+  const id = asString(o.id);
+  if (!id || !(price >= 0)) return undefined;
+  const eta = o.etaDays as { min?: unknown; max?: unknown } | null | undefined;
+  const etaDays =
+    eta && typeof eta === 'object' && typeof eta.min === 'number' && typeof eta.max === 'number'
+      ? { min: eta.min, max: eta.max }
+      : null;
+  return { id, label: asString(o.label) || id, price, etaDays };
+}
+
+/** `body.item` da recusa → `CatalogItemHint`, ou `undefined` se não tiver o shape. */
+function itemRecusado(raw: unknown): CatalogItemHint | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const productId = asString(o.productId);
+  const precoAtual = typeof o.precoAtual === 'number' && Number.isFinite(o.precoAtual) ? o.precoAtual : NaN;
+  if (!productId || !(precoAtual > 0)) return undefined;
+  return {
+    productId,
+    // O backend manda `null` quando não tem — vira '' e o site casa só por produto.
+    size: asString(o.size),
+    color: typeof o.color === 'string' && o.color ? o.color : undefined,
+    precoAtual,
+  };
+}
 
 async function chamar(
   path: string,
@@ -339,21 +420,27 @@ function normalizarOrder(raw: unknown): Order | undefined {
 /* ───────────────────────────────────────────────────────────────── o store */
 
 class BackendOrderStore implements OrderStore {
-  async create(payload: NewOrderPayload): Promise<CreatedOrderAck> {
+  async create(payload: NewOrderPayload, opts?: CreateOrderOptions): Promise<CreatedOrderAck> {
     const { httpStatus, body } = await chamar('/public/loja/pedido', {
       method: 'POST',
       body: payload,
       timeoutMs: TIMEOUT_CREATE_MS,
+      clientIp: opts?.clientIp,
     });
 
     // `ok:false` com 200 é o "recusa elegante" do contrato: cupom morto,
     // cartão negado, estoque acabou. A frase dele já vem pronta pra tela.
     if (body.ok === false) {
+      const code = checkoutErrorCode(body.code);
       throw new OrderStoreError(
         `backend recusou o pedido (${httpStatus}): ${body.error ?? 'sem motivo'}`,
         body.error || ERRO_PADRAO,
         400,
-        checkoutErrorCode(body.code),
+        code,
+        // Só faz sentido na recusa por preço; qualquer outro `item` é ignorado.
+        code === 'catalog_unavailable' ? itemRecusado(body.item) : undefined,
+        // Idem: cotação nova só acompanha `shipping_changed`.
+        code === 'shipping_changed' ? quoteAtualizada(body.quote) : undefined,
       );
     }
 

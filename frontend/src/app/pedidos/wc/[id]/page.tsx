@@ -153,6 +153,15 @@ export default function PedidoDetailPage() {
 
   const [order, setOrder] = useState<WcOrderDetail | null>(null);
   const [editandoEndereco, setEditandoEndereco] = useState(false);
+  // TROCAR FORMA DE ENTREGA (17/08) — o pedido nasceu "não informada" ou com
+  // a forma errada, e a matriz não tinha como consertar por tela (ON-000006:
+  // cliente ia RETIRAR em SJC e o pedido não sabia).
+  const [trocandoEntrega, setTrocandoEntrega] = useState(false);
+  const [entregaNova, setEntregaNova] = useState<'sedex' | 'pac' | 'motoboy' | 'retirada'>('retirada');
+  const [entregaLoja, setEntregaLoja] = useState('');
+  const [entregaLojas, setEntregaLojas] = useState<Array<{ code: string; name: string }>>([]);
+  const [entregaBusy, setEntregaBusy] = useState(false);
+  const [entregaErro, setEntregaErro] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,6 +179,9 @@ export default function PedidoDetailPage() {
   const [separation, setSeparation] = useState<SeparationPreview | null>(null);
   const [sepLoading, setSepLoading] = useState(false);
   const [sepError, setSepError] = useState<string | null>(null);
+  // Conserto "a loja vendedora já entregou" (venda online roteada pra outra loja)
+  const [fecharLoading, setFecharLoading] = useState(false);
+  const [fecharErro, setFecharErro] = useState<string | null>(null);
   /** Override manual: storeId → novo storeId selecionado */
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   // Confirmação (cria pick-order e dispara socket pra loja)
@@ -428,6 +440,106 @@ export default function PedidoDetailPage() {
    *    pedidos ativos) e cria novo pick-order na loja correta.
    *  - Se algum pick-order já passou de "separating" → bloqueia com mensagem clara.
    */
+  /**
+   * "A loja vendedora já entregou" — conserta venda online roteada errado.
+   *
+   * Caso ON-000004 (Suzano, 15/08): a loja vendeu, mandou de motoboy pra cliente
+   * a 20 km e o pedido foi roteado pra SOROCABA (150 km) separar uma SEGUNDA
+   * peça, com o estoque de Suzano fantasma. O backend cancela o card indevido,
+   * baixa o estoque na loja que vendeu e fecha o pedido.
+   */
+  async function fecharNaLojaVendedora() {
+    const nome = order?.origemLoja?.name ?? 'a loja vendedora';
+    if (
+      !confirm(
+        `Confirmar que ${nome} JÁ ENTREGOU esta venda pra cliente?\n\n` +
+          `• o estoque da peça baixa em ${nome} (é de lá que ela saiu)\n` +
+          `• os cards de separação em aberto são cancelados\n` +
+          `• o pedido fecha como ENVIADO\n\n` +
+          `Só confirme se a peça realmente saiu dessa loja.`,
+      )
+    )
+      return;
+    setFecharLoading(true);
+    setFecharErro(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        alreadyDone?: boolean;
+        message?: string;
+        storeName?: string;
+        pecasBaixadas?: number;
+        cardsCancelados?: number;
+      }>(`/orders/wc/${wcId}/fechar-na-loja-vendedora`, { method: 'POST' });
+      if (!res.ok) {
+        setFecharErro(res.message ?? 'Não foi possível fechar o pedido.');
+        return;
+      }
+      await load();
+      const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
+      setLiveStatus(Array.isArray(fresh) ? fresh : []);
+    } catch (e: any) {
+      setFecharErro(e?.message || 'Falha ao fechar o pedido na loja vendedora.');
+    } finally {
+      setFecharLoading(false);
+    }
+  }
+
+  /** Abre o painel de troca de entrega já com a lista de lojas ativas. */
+  async function abrirTrocaEntrega() {
+    setEntregaErro(null);
+    setTrocandoEntrega(true);
+    if (entregaLojas.length === 0) {
+      try {
+        const lojas = await api<Array<{ code: string; name: string; active: boolean }>>('/stores');
+        setEntregaLojas(
+          (Array.isArray(lojas) ? lojas : [])
+            .filter((s) => s.active)
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((s) => ({ code: s.code, name: s.name })),
+        );
+      } catch (e: any) {
+        setEntregaErro(e?.message || 'Não consegui carregar as lojas.');
+      }
+    }
+  }
+
+  /**
+   * Troca a forma de entrega do pedido. Retirada exige a loja onde a cliente
+   * busca; motoboy aceita a loja que manda (opcional). O backend re-roteia:
+   * apaga cards ativos e recalcula, ou roteia na hora quando trava numa loja.
+   */
+  async function salvarTrocaEntrega() {
+    if (entregaNova === 'retirada' && !entregaLoja) {
+      setEntregaErro('Escolha a loja onde a cliente vai retirar.');
+      return;
+    }
+    setEntregaBusy(true);
+    setEntregaErro(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        shippingMethod: string;
+        roteamento?: { acao: string; ok?: boolean; detalhe?: string | null };
+      }>(`/orders/wc/${wcId}/entrega`, {
+        method: 'PATCH',
+        body: JSON.stringify({ tipo: entregaNova, storeCode: entregaLoja || null }),
+      });
+      setTrocandoEntrega(false);
+      await load();
+      const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
+      setLiveStatus(Array.isArray(fresh) ? fresh : []);
+      const r = res.roteamento;
+      if (r && r.acao !== 'nenhuma' && r.ok === false) {
+        setSepError(`Entrega trocada pra ${res.shippingMethod}, mas o roteamento não foi: ${r.detalhe || 'sem detalhe'}. Use "Recalcular separação".`);
+      }
+    } catch (e: any) {
+      setEntregaErro(e?.message || 'Falha ao trocar a entrega.');
+    } finally {
+      setEntregaBusy(false);
+    }
+  }
+
   async function loadSeparation() {
     setSepLoading(true);
     setSepError(null);
@@ -769,10 +881,15 @@ export default function PedidoDetailPage() {
         `SÓ as peças que estavam com ${swapTarget.fromStoreCode} mudam de loja — ` +
         `as outras lojas deste pedido NÃO são tocadas. Se ${pickedCode} não ` +
         `tiver estoque, nada muda.`
-      : `Forçar o pedido INTEIRO pra ${pickedName} (${pickedCode})?\n\n` +
-        `O sistema vai excluir TODAS as outras lojas do roteamento. Se ` +
-        `${pickedCode} não tiver estoque suficiente do que falta, o pedido ` +
-        `fica pending.`;
+      // O caminho `forceStoreCode` do backend cria o card com TODAS as peças
+      // mesmo sem estoque (bypassa o routing). O texto antigo dizia que o
+      // pedido "fica pending" se faltasse estoque — e era justo nessa hora
+      // (ruptura) que a retaguarda precisava clicar. Assustava e travava.
+      : `Mandar o pedido INTEIRO pra ${pickedName} (${pickedCode})?\n\n` +
+        `O card nasce lá com TODAS as peças — inclusive as que ${pickedCode} ` +
+        `não tem em estoque. Ela bipa o que estiver na arara; o que faltar ` +
+        `precisa chegar por transferência antes de fechar.\n\n` +
+        `As outras lojas saem do roteamento deste pedido.`;
     if (!confirm(msg)) return;
 
     setPickStoreApplying(pickedCode);
@@ -1125,6 +1242,101 @@ export default function PedidoDetailPage() {
               {order.origemLoja.code}
             </span>
           </div>
+
+          {/* CARD NA LOJA ERRADA — o card de separação está numa loja que NÃO
+              vendeu. Se ela separar, sai uma SEGUNDA peça pra mesma cliente e o
+              estoque de quem vendeu fica fantasma (caso ON-000004, Suzano →
+              Sorocaba). Só aparece quando o risco existe de verdade: alarme
+              falso aqui mata a confiança no aviso. */}
+          {(() => {
+            const vendedoraCode = order.origemLoja!.code;
+            const ativosFora = liveStatus.filter(
+              (p) => ['new', 'separating'].includes(p.status) && p.storeCode !== vendedoraCode,
+            );
+            // `order.status` aqui é o SLUG do detalhe (detalheEcommerce mapeia
+            // shipped/delivered → 'completed'), não o status cru do banco.
+            const fechavel = !['completed', 'cancelled'].includes(String(order.status || ''));
+            if (!fechavel) return null;
+
+            /**
+             * ALARME FALSO — CORRIGIDO 17/08 (caso ON-000008).
+             *
+             * A primeira versão mostrava o aviso vermelho sempre que havia card
+             * em loja ≠ vendedora. Só que isso é o caso NORMAL da venda online:
+             * SJC vendeu por SEDEX sem ter a peça, o roteamento mandou pra
+             * Suzano, Suzano posta pra cliente. Certíssimo — e a tela gritava
+             * "uma segunda peça vai pra cliente".
+             *
+             * Pior que ruído: clicar no botão ali baixaria estoque em SJC (que
+             * não tem a peça) e cancelaria o card legítimo da Suzano. Arma
+             * apontada pro pé, no lugar onde a matriz mais confia na tela.
+             *
+             * Vale a regra do CLAUDE.md: alarme falso mata a confiança na fila
+             * inteira. Então o bloco só aparece quando é PLAUSÍVEL que a
+             * vendedora tenha entregado por conta:
+             *   - MOTOBOY → sai da mão dela, sem passar pelo sistema (foi o
+             *     ON-000004: Suzano mandou de moto e o card virou fantasma);
+             *   - entrega NÃO INFORMADA → ambíguo, ninguém sabe como saiu;
+             *   - SEM CARD NENHUM → nada legítimo em andamento.
+             * SEDEX/PAC com card em outra loja: silêncio. Pra postar ela
+             * PRECISA do card, então não teve como despachar por fora.
+             */
+            const entregaKind = classifyShipping(
+              order.shippingLines?.[0]?.method ?? order.pickup?.shippingMethodTitle ?? null,
+              order.shipping?.state ?? order.billing?.state ?? null,
+            ).kind;
+            const entregaIndefinida = entregaKind === 'other';
+            const podeTerEntregadoPorConta =
+              entregaKind === 'motoboy' || entregaIndefinida || liveStatus.length === 0;
+            if (!podeTerEntregadoPorConta) return null;
+
+            return (
+              <div className="mt-3 border-t border-teal-200 pt-3">
+                {/* Vermelho SÓ no caso do ON-000004: entrega que sai da mão da
+                    vendedora (motoboy) e card aberto em OUTRA loja. Aí sim a
+                    peça pode ter saído duas vezes. Nos outros casos o bloco é
+                    calmo — é uma ação disponível, não um problema detectado. */}
+                {ativosFora.length > 0 && entregaKind === 'motoboy' && (
+                  <div className="mb-2 rounded-lg border-2 border-rose-300 bg-rose-50 p-3">
+                    <div className="text-sm font-bold text-rose-800">
+                      ⚠️ Motoboy, e a separação está em{' '}
+                      {ativosFora.map((p) => p.storeName || p.storeCode).join(', ')}
+                    </div>
+                    <div className="text-xs text-rose-700 mt-1">
+                      Motoboy sai da mão de quem vendeu. Se {order.origemLoja!.name} já mandou a
+                      peça, essa loja vai separar uma <b>segunda</b> — confirme antes.
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={fecharNaLojaVendedora}
+                    disabled={fecharLoading}
+                    className={`rounded-lg px-4 py-2 text-sm font-bold text-white disabled:opacity-50 ${
+                      ativosFora.length > 0 && entregaKind === 'motoboy'
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : 'bg-teal-600 hover:bg-teal-700'
+                    }`}
+                  >
+                    {fecharLoading
+                      ? 'Fechando…'
+                      : `✓ ${order.origemLoja!.name} já entregou — fechar pedido`}
+                  </button>
+                  <span className="text-[11px] text-slate-600">
+                    {ativosFora.length > 0
+                      ? `Só clique se confirmou com ${order.origemLoja!.name}: cancela a separação de ${ativosFora
+                          .map((p) => p.storeName || p.storeCode)
+                          .join(', ')} e baixa o estoque nela.`
+                      : 'Baixa o estoque na loja que vendeu e encerra a separação.'}
+                  </span>
+                </div>
+                {fecharErro && (
+                  <div className="mt-2 text-xs text-rose-700 font-semibold">{fecharErro}</div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1236,14 +1448,103 @@ export default function PedidoDetailPage() {
             {/* Corrigir endereco: mesma modal da tela da loja. O endereco do
                 pedido e snapshot e a etiqueta le dele — sem isto, complemento
                 errado so se resolvia por fora do sistema. */}
-            <button
-              type="button"
-              onClick={() => setEditandoEndereco(true)}
-              className="rounded-lg border-2 border-violet-300 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50"
-            >
-              ✎ Corrigir
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Trocar a FORMA de entrega (SEDEX/PAC/motoboy/retirada + loja
+                  que atende). Só enquanto nenhuma separação passou de
+                  "separando" — depois a peça já saiu. */}
+              {!['completed', 'cancelled'].includes(String(order.status || '')) && (
+                <button
+                  type="button"
+                  onClick={() => (trocandoEntrega ? setTrocandoEntrega(false) : void abrirTrocaEntrega())}
+                  className="rounded-lg border-2 border-teal-300 px-3 py-1.5 text-xs font-bold text-teal-700 hover:bg-teal-50"
+                >
+                  🔁 Trocar entrega
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setEditandoEndereco(true)}
+                className="rounded-lg border-2 border-violet-300 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50"
+              >
+                ✎ Corrigir
+              </button>
+            </div>
           </div>
+
+          {trocandoEntrega && (
+            <div className="mb-3 rounded-lg border-2 border-teal-200 bg-teal-50 p-3">
+              <div className="text-[11px] font-bold uppercase tracking-wide text-teal-800 mb-2">
+                Nova forma de entrega
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {([
+                  { id: 'sedex', label: '⚡ SEDEX' },
+                  { id: 'pac', label: '📦 PAC' },
+                  { id: 'motoboy', label: '🛵 MOTOBOY' },
+                  { id: 'retirada', label: '🏬 RETIRADA' },
+                ] as const).map((op) => (
+                  <button
+                    key={op.id}
+                    type="button"
+                    onClick={() => { setEntregaNova(op.id); if (op.id === 'sedex' || op.id === 'pac') setEntregaLoja(''); }}
+                    className={`rounded-lg border-2 py-2 text-xs font-bold transition ${
+                      entregaNova === op.id
+                        ? 'border-teal-500 bg-teal-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300'
+                    }`}
+                  >
+                    {op.label}
+                  </button>
+                ))}
+              </div>
+              {(entregaNova === 'retirada' || entregaNova === 'motoboy') && (
+                <div className="mt-2">
+                  <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                    {entregaNova === 'retirada' ? 'Cliente retira em qual loja? *' : 'Qual loja manda o motoboy? (opcional)'}
+                  </label>
+                  <select
+                    value={entregaLoja}
+                    onChange={(e) => setEntregaLoja(e.target.value)}
+                    className="mt-1 w-full rounded-lg border-2 border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-teal-400 focus:outline-none"
+                  >
+                    <option value="">{entregaNova === 'retirada' ? '— escolha a loja —' : 'A engine escolhe (por estoque)'}</option>
+                    {entregaLojas.map((s) => (
+                      <option key={s.code} value={s.code}>{s.name} ({s.code})</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-teal-700 mt-1 font-semibold">
+                    {entregaNova === 'retirada'
+                      ? 'A separação trava nessa loja. O que ela não tiver chega por transferência antes da cliente buscar.'
+                      : entregaLoja
+                        ? 'A separação trava nessa loja: ela recebe o que faltar por transferência e manda o motoboy.'
+                        : 'Sem loja, a engine escolhe por estoque — pode cair longe da cliente.'}
+                  </p>
+                </div>
+              )}
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  disabled={entregaBusy}
+                  onClick={salvarTrocaEntrega}
+                  className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50"
+                >
+                  {entregaBusy ? 'Salvando…' : 'Salvar e re-rotear'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrocandoEntrega(false)}
+                  className="rounded-lg border-2 border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <span className="text-[11px] text-slate-600">
+                  Cards ainda em "novo/separando" são refeitos com a entrega nova.
+                </span>
+              </div>
+              {entregaErro && <div className="mt-2 text-xs font-semibold text-rose-700">{entregaErro}</div>}
+            </div>
+          )}
+
           <div className="text-sm space-y-0.5 text-slate-700">
           {editandoEndereco && (
             <EnderecoEntregaModal
@@ -1448,7 +1749,9 @@ export default function PedidoDetailPage() {
               </span>
             </div>
             {/* Dica: troca manual de loja (só faz sentido enquanto alguma ainda
-                está em new/separating — depois que bipou não dá mais) */}
+                está em new/separating — depois que bipou não dá mais).
+                Sem card nenhum este painel inteiro não renderiza: o caminho
+                pra escolher loja na ruptura é o painel de ruptura acima. */}
             {liveStatus.some((p) => ['new', 'separating'].includes(p.status)) && (
               <div className="mb-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
                 <span className="text-amber-700">💡</span>
@@ -1695,6 +1998,46 @@ export default function PedidoDetailPage() {
               )}
               <div className="text-xs mt-1 opacity-80">Envio: {separation.shippingMethod}</div>
             </div>
+
+            {/* ── RUPTURA: MANDAR O CARD COM TODAS AS PEÇAS ─────────────────
+                O `pickup-blocked`/ruptura devolve `assignments: []` de
+                propósito ("operação precisa decidir") — resultado: NADA é
+                criado, nem pras peças que existem, e o pedido para em
+                awaiting_stock com o dinheiro na conta.
+
+                Só que a decisão quase sempre é a mesma: manda o card inteiro
+                pra loja que vai entregar, ela bipa o que tem e o que falta
+                chega depois. O backend já sabe fazer isso (`forceStoreCode`
+                cria o card MESMO SEM ESTOQUE, bypassando o routing) — o que
+                faltava era a porta: o botão "Escolher loja manualmente" só
+                aparecia com card ativo, ou seja, nunca depois de uma ruptura.
+
+                Caso ON-000006 (17/08): retirada em São José dos Campos, 11
+                peças, 1 SKU sem estoque em loja nenhuma → separação bloqueada
+                e SJC sem card. */}
+            {!separation.success && (
+              <div className="mb-4 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+                <div className="text-sm font-bold text-amber-900">
+                  Precisa mandar o card mesmo assim?
+                </div>
+                <div className="text-xs text-amber-800 mt-1">
+                  Escolha a loja que vai <b>entregar</b>: o card nasce lá com <b>todas as peças</b>,
+                  inclusive as que ela não tem. Ela bipa o que estiver na arara e o resto chega
+                  por transferência.
+                  {separation.pickupStoreName && (
+                    <> Esta é uma <b>retirada em {separation.pickupStoreName}</b> — normalmente é essa a loja.</>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={openPickStoreModal}
+                  disabled={sepLoading}
+                  className="mt-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  🎯 Escolher a loja e mandar o card com todas
+                </button>
+              </div>
+            )}
 
             {/* ── ESCOLHER OUTRA LOJA — single-store com alternativas ────────
                  Mostra radio buttons com a sugestão automática + até 5 outras

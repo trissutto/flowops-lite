@@ -33,18 +33,16 @@ import type { InstagramPost, TaxonomyCard, Testimonial } from '@/types';
  * Hero ESTÁTICO da home — o fallback de quando a retaguarda não tem campanha
  * no slot `home-hero` (ver `services/banners.ts`).
  *
- * SEM IMAGEM desde 16/08: a foto editorial daqui era de banco de imagem. O
- * `<Hero>` sem `image` pinta o fundo champagne da marca e o texto continua —
- * é o que aparece enquanto não houver campanha cadastrada. Títulos ficam como
- * texto puro (`lead` + `emphasis`); a home monta o JSX com a palavra de
- * ênfase em itálico dourado.
+ * A imagem editorial oficial fica resolvida em `services/banners.ts`. Ela é o
+ * fallback seguro quando não existe campanha no CRM e também substitui apenas
+ * a antiga arte fechada "Indomável". Títulos ficam como texto puro (`lead` +
+ * `emphasis`), para permanecerem acessíveis, responsivos e nítidos.
  */
 export const homeHero = {
-  eyebrow: 'Nova coleção',
-  lead: 'Elegância não tem',
-  emphasis: 'tamanho',
-  subtitle:
-    'Peças pensadas pro corpo real, do 44 ao 60. Caimento que valoriza, tecido que abraça e um atendimento que acolhe.',
+  eyebrow: '',
+  lead: 'MODA QUE VALORIZA',
+  emphasis: 'VOCÊ',
+  subtitle: 'Novidades do 46 ao 60',
 };
 
 /* ---------------------------------------------------------------- MANIFESTO */

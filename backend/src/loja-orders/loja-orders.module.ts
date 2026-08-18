@@ -20,6 +20,7 @@ import { EmailModule } from '../email/email.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from './pedido-email.service';
 import { PixResgateCron } from './pix-resgate.cron';
+import { ProgressiveDiscountModule } from '../progressive-discount/progressive-discount.module';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -37,6 +38,7 @@ import { PixResgateCron } from './pix-resgate.cron';
   imports: [
     PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule, WhatsappModule,
     PromoSiteModule,
+    ProgressiveDiscountModule,
     forwardRef(() => PagarmeModule),
   ],
   controllers: [LojaOrdersController, LojaAdminController],

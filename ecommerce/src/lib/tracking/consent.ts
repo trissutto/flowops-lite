@@ -108,6 +108,46 @@ export function isAllowed(category: ConsentCategory): boolean {
   return category === 'necessary' ? true : getConsent()[category] === true;
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * Postura — três estados, não dois
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * São TRÊS posturas, e o código antigo só enxergava duas: "aceitou" e "o
+ * resto". No mesmo balde caíam quem clicou "Só o necessário" (um NÃO explícito,
+ * que a gente respeita) e quem nunca olhou o banner — que é 85% do tráfego.
+ *
+ * Medição de 17/08/2026 do que isso custava: das 1.012 sessões que chegaram
+ * pela campanha `52531954165766`, o Meta soube de **8**. Não é só relatório
+ * torto — é o algoritmo otimizando a entrega com 8 exemplos em vez de 1.012.
+ */
+export type PosturaConsentimento = 'aceitou' | 'nao_decidiu' | 'recusou';
+
+/**
+ * Função PURA de propósito: o navegador e o `/api/events` precisam chegar à
+ * mesma conclusão sobre o mesmo estado. Regra que mora em dois lugares vira
+ * duas regras — e a divergência só aparece semanas depois, no relatório.
+ */
+export function posturaDe(state: ConsentState): PosturaConsentimento {
+  if (state.analytics || state.marketing) return 'aceitou';
+  return state.decided_at === null ? 'nao_decidiu' : 'recusou';
+}
+
+/**
+ * A perna server-side da Meta pode receber este evento?
+ *
+ * Sim para quem aceitou e para quem ainda não decidiu; NUNCA para quem
+ * recusou. Registrar o "não" e ignorá-lo é má-fé documentada — é a única linha
+ * que este arquivo não cruza, e é o que separa isto do banner do site antigo,
+ * que dispara o Pixel antes de qualquer clique.
+ *
+ * O Pixel do NAVEGADOR continua trancado nas três posturas menos "aceitou":
+ * sem opt-in não gravamos cookie de terceiro no aparelho de ninguém.
+ */
+export function metaServidorPodeReceber(state: ConsentState): boolean {
+  return posturaDe(state) !== 'recusou';
+}
+
 /**
  * Grava a decisão, avisa quem estiver ouvindo e atualiza o Google.
  * `partial` permite "aceitar só analytics" sem inventar as outras chaves.

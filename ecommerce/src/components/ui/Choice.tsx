@@ -173,7 +173,10 @@ export function SizePill({
       aria-label={disabled ? `Tamanho ${label} esgotado` : `Tamanho ${label}`}
       className={cn(
         'tabular rounded-sm border font-medium transition-all duration-[180ms]',
-        size === 'lg' ? 'min-w-13 px-4 py-2.5 text-body' : 'min-w-11 px-3 py-2 text-small',
+        // `lg` cresceu (dono, 17/08): a pílula de tamanho é o controle que
+        // decide a compra — 64% de quem toca nela põe na sacola. Alvo maior
+        // é menos erro de dedo, e a grade cabe em 3 por linha no celular.
+        size === 'lg' ? 'min-w-16 px-5 py-3.5 text-h5 font-medium' : 'min-w-11 px-3 py-2 text-small',
         /* Esgotado TEM que gritar (dono, 14/08: "quase não dá pra ver"): o
            line-through fino em texto 50% passava batido. Agora a pílula
            inteira leva um traço diagonal (gradiente em currentColor — segue o

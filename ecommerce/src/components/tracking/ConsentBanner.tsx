@@ -60,18 +60,22 @@ export function ConsentBanner() {
          alcançava o "Adicionar à sacola" sem decidir o cookie primeiro.
          Consentimento nunca pode ser pedágio da compra: sobe 96px e as duas
          coisas convivem. No desktop (lg) não há barra fixa — volta pro pé. */
-      className="fixed inset-x-0 bottom-24 z-[80] p-3 sm:p-5 lg:bottom-0"
+      className="fixed inset-x-0 bottom-20 z-[80] p-2.5 sm:p-4 lg:bottom-0"
     >
       {/* Cartão da marca, não faixa de sistema: borda dourada, sombra de
           elevação e largura de leitura. É pra parecer parte da loja falando —
           a faixa cinza anterior parecia aviso de navegador e sumia no rodapé. */}
-      <div className="mx-auto max-w-xl rounded-md border border-primary/30 bg-[#fcfaf7] p-4 shadow-[0_12px_48px_rgba(0,0,0,0.18)] sm:p-6">
-        <h2 id="consent-title" className="font-serif text-lg text-ink">
+      {/* ENXUTO (dono, 17/08: "ocupa muito espaço"). Largura de leitura
+          menor, menos respiro, botão principal mais baixo. O que NÃO mudou:
+          "Só o necessário" continua a um clique, visível — encolher não
+          pode virar esconder a recusa. */}
+      <div className="mx-auto max-w-md rounded-md border border-primary/30 bg-[#fcfaf7] p-3.5 shadow-[0_12px_48px_rgba(0,0,0,0.18)] sm:p-4">
+        <h2 id="consent-title" className="font-serif text-base text-ink">
           Podemos deixar o site com a sua cara?
         </h2>
-        <p className="mt-1.5 text-small leading-relaxed text-ink/75">
-          Com a sua permissão, usamos cookies pra te mostrar peças do seu gosto e do seu número —
-          e pra saber quais anúncios valem a pena. Você escolhe, e muda quando quiser.
+        <p className="mt-1 text-xs leading-relaxed text-ink/75">
+          Com a sua permissão, usamos cookies pra mostrar peças do seu gosto e do seu número.
+          Você escolhe, e muda quando quiser.
         </p>
 
         {detalhes && (
@@ -104,14 +108,14 @@ export function ConsentBanner() {
             alto, dourado da marca. O limite que não se cruza (ANPD): recusar
             continua sendo um BOTÃO visível de UM clique logo abaixo, não um
             link escondido — destaque visual é permitido, fricção não. */}
-        <div className="mt-4 flex flex-col gap-2.5">
+        <div className="mt-3 flex flex-col gap-2">
           <button
             type="button"
             onClick={() => {
               acceptAll();
               fechar();
             }}
-            className="min-h-14 w-full rounded-sm bg-primary-strong px-4 py-3 text-[1.05rem] font-semibold tracking-wide text-light shadow-[0_4px_16px_rgba(184,145,43,0.35)] transition-all duration-[180ms] hover:bg-ink hover:shadow-none"
+            className="min-h-11 w-full rounded-sm bg-primary-strong px-4 py-2 text-[0.95rem] font-semibold tracking-wide text-light shadow-[0_4px_16px_rgba(184,145,43,0.35)] transition-all duration-[180ms] hover:bg-ink hover:shadow-none"
           >
             {/* Responde a pergunta do título — "Podemos deixar o site com a sua
                 cara?" → "Pode sim!". Conversa, não contrato. O rótulo só é
@@ -128,7 +132,7 @@ export function ConsentBanner() {
                   setConsent({ analytics, marketing, personalization });
                   fechar();
                 }}
-                className="min-h-10 rounded-sm border border-black/15 px-4 py-1.5 text-small text-ink/80 transition-colors hover:border-ink hover:text-ink"
+                className="min-h-9 rounded-sm border border-black/15 px-3 py-1 text-xs text-ink/80 transition-colors hover:border-ink hover:text-ink"
               >
                 Salvar escolhas
               </button>
@@ -139,7 +143,7 @@ export function ConsentBanner() {
                   rejectAll();
                   fechar();
                 }}
-                className="min-h-10 rounded-sm border border-black/15 px-4 py-1.5 text-small text-ink/80 transition-colors hover:border-ink hover:text-ink"
+                className="min-h-9 rounded-sm border border-black/15 px-3 py-1 text-xs text-ink/80 transition-colors hover:border-ink hover:text-ink"
               >
                 Só o necessário
               </button>

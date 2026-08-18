@@ -192,6 +192,19 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
    * As rotas /tecidos continuam de pé (link antigo e Google não quebram);
    * só o item do menu saiu. Voltar é descomentar quando o cadastro andar.
    */
+  /**
+   * MAIS TOP DA SEMANA — vitrine CURADA (não é o catálogo reordenado).
+   *
+   * Link simples, como Outlet e Troca Fácil: a lista é uma seleção pronta da
+   * retaguarda (~20 peças na ordem escolhida), não uma árvore de sub-eixos.
+   * Fica ao lado do Outlet porque os dois são recortes de destaque da mesma
+   * vitrine, não categorias.
+   */
+  {
+    label: 'Mais Top da Semana',
+    href: '/mais-top-da-semana',
+    icon: 'Flame',
+  },
   {
     label: 'Outlet',
     href: '/outlet',

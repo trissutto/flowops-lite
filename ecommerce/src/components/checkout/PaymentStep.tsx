@@ -1,11 +1,13 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+import { isValidCpf, maskCpf, onlyDigits } from './masks';
 import { CreditCard, QrCode } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatPrice } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
 import { trackAddPaymentInfo, trackPaymentMethodSelected, type TrackedItem } from '@/lib/tracking';
 import type { PaymentMethod } from '@/types/checkout';
 import { CardForm } from './CardForm';
@@ -39,18 +41,94 @@ const TABS: Array<{ method: PaymentMethod; label: string; icon: React.ElementTyp
   { method: 'card', label: 'Cartão', icon: CreditCard },
 ];
 
+/** Dados da nota, coletados AQUI antes de escolher como pagar. */
+export interface DadosDaNota { email: string; cpf: string }
+
 interface PaymentStepProps {
   /** Total estimado (subtotal − desconto + frete) — só pra exibir parcelas. */
   total: number;
+  /** Total de exibição com o desconto PIX já aplicado. */
+  pixTotal: number;
   itemsTracked: TrackedItem[];
-  defaults?: PaymentSelection | null;
-  onDone: (payment: PaymentSelection) => void;
+  // `defaults` saiu em 17/08: com o clique valendo compra, deixar um método
+  // pré-selecionado seria mostrar como escolhido algo que não foi enviado.
+  defaultsNota?: DadosDaNota | null;
+  /** Pedido em voo — trava os dois métodos e avisa que o PIX está saindo. */
+  enviando?: boolean;
+  /** Chamado com TUDO pronto: o pedido já pode ser criado e o PIX gerado. */
+  onDone: (payment: PaymentSelection, nota: DadosDaNota) => void;
+  /**
+   * CPF/e-mail VÁLIDOS mudaram. Existe pra recuperação: depois de uma
+   * recusa, o botão do painel de erro reenvia lendo o estado da página — e
+   * o estado precisa ter o valor que ela acabou de corrigir aqui.
+   */
+  onNotaChange?: (nota: DadosDaNota) => void;
 }
 
-export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentStepProps) {
-  const [method, setMethod] = useState<PaymentMethod>(defaults?.method ?? 'pix');
+/**
+ * ORDEM NOVA (dono, 17/08): CPF → e-mail → escolha do pagamento.
+ *
+ * "Ao entrar na etapa 3 a cliente preenche o CPF e o email. Após isso,
+ * habilita a escolha do modo de pagamento. Se ela clicar no logotipo PIX,
+ * ele abre o QR Code."
+ *
+ * O clique no método apenas revela a confirmação correspondente; não existe
+ * etapa de revisão separada. Por isso os dados da nota vêm ANTES: quando o
+ * CTA final é acionado, não pode faltar nada.
+ *
+ * As abas ficam APAGADAS até CPF e e-mail válidos — apagadas, não `disabled`
+ * (17/08). Desabilitar de verdade engolia o clique: no Chrome/Safari o toque
+ * num botão disabled é descartado antes de mudar o foco, o campo inválido
+ * nunca perdia o foco, o vermelho de erro (que só nasce no blur) não aparecia
+ * e a linha de status dizia "preencha o CPF e o e-mail" que ela ACABARA de
+ * preencher — beco sem saída no celular. Agora o clique chega no `pick`, que
+ * marca os dois campos como tocados e leva o foco pro primeiro inválido.
+ * Mostrar em vez de esconder continua deliberado: ela VÊ que PIX e Cartão
+ * existem e entende o que falta.
+ */
+export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange }: PaymentStepProps) {
+  const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [tracked, setTracked] = useState<Set<PaymentMethod>>(new Set());
+  const [email, setEmail] = useState(defaultsNota?.email ?? '');
+  const [cpf, setCpf] = useState(defaultsNota?.cpf ? maskCpf(defaultsNota.cpf) : '');
+  const [tocou, setTocou] = useState({ cpf: false, email: false });
   const groupId = useId();
+  const cpfRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+
+  const cpfOk = isValidCpf(cpf);
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+  const liberado = cpfOk && emailOk && !enviando;
+
+  /**
+   * A linha de status é DERIVADA do que está digitado e NOMEIA o campo — sem
+   * depender de blur. "Preencha o CPF e o e-mail" com os dois preenchidos e
+   * um deles inválido era a mensagem que contradizia o que ela via na tela.
+   */
+  const cpfVazio = onlyDigits(cpf).length === 0;
+  const emailVazio = email.trim().length === 0;
+  const statusFalta = liberado
+    ? null
+    : cpfVazio && emailVazio
+      ? 'Preencha o CPF e o e-mail para escolher como pagar.'
+      : cpfVazio
+        ? 'Falta o CPF para escolher como pagar.'
+        : !cpfOk
+          ? 'O CPF não confere — confira os números.'
+          : emailVazio
+            ? 'Falta o e-mail para escolher como pagar.'
+            : !emailOk
+              ? 'O e-mail parece incompleto (ex.: nome@gmail.com).'
+              : null;
+
+  // Avisa a página só quando os dois estão válidos — meio-CPF não interessa.
+  const notaValida = cpfOk && emailOk ? `${onlyDigits(cpf)}|${email.trim().toLowerCase()}` : null;
+  useEffect(() => {
+    if (!notaValida || !onNotaChange) return;
+    const [c, e] = notaValida.split('|');
+    onNotaChange({ cpf: c, email: e });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notaValida]);
 
   /** Uma vez por método por visita à seção — evita inflar o funil. */
   function ensureTracked(m: PaymentMethod) {
@@ -61,44 +139,89 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
     }
   }
 
+  /**
+   * Os dois métodos apenas abrem seus detalhes. O pedido só é criado no CTA
+   * explícito do PIX ou após o envio válido do formulário de cartão.
+   */
   function pick(next: PaymentMethod) {
+    if (!liberado) {
+      // Clique com dado faltando: acende o erro dos dois campos e leva o foco
+      // pro primeiro inválido. NÃO conta como add_payment_info — nada foi
+      // escolhido, e inflar o funil aqui esconderia o abandono real.
+      setTocou({ cpf: true, email: true });
+      (!cpfOk ? cpfRef : emailRef).current?.focus();
+      return;
+    }
     setMethod(next);
     ensureTracked(next);
   }
 
-  /** Continuar: garante o evento mesmo pro método padrão (PIX sem clique). */
+  /** Entrega tudo após a confirmação explícita da cliente. */
   function confirm(selection: PaymentSelection) {
     ensureTracked(selection.method);
-    onDone(selection);
+    onDone(selection, { email: email.trim().toLowerCase(), cpf: onlyDigits(cpf) });
   }
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Abas — tablist ARIA com setas ←/→. */}
-      <div
-        role="tablist"
-        aria-label="Forma de pagamento"
-        className="grid grid-cols-2 gap-2"
-        onKeyDown={(e) => {
-          const index = TABS.findIndex((t) => t.method === method);
-          if (e.key === 'ArrowRight') pick(TABS[(index + 1) % TABS.length].method);
-          if (e.key === 'ArrowLeft') pick(TABS[(index - 1 + TABS.length) % TABS.length].method);
-        }}
-      >
+      {/* OS DADOS DA NOTA VÊM PRIMEIRO. CPF antes do e-mail, na ordem que o
+          dono pediu. Sem eles, as abas abaixo não respondem. */}
+      <div className="flex flex-col gap-5">
+        <Input
+          ref={cpfRef}
+          label="CPF" inputMode="numeric" autoComplete="off" enterKeyHint="next"
+          placeholder="000.000.000-00" hint="Usado somente no pedido e na nota fiscal."
+          value={cpf}
+          onChange={(e) => setCpf(maskCpf(e.target.value))}
+          onBlur={() => setTocou((t) => ({ ...t, cpf: true }))}
+          error={tocou.cpf && !cpfOk ? 'Confira o CPF — esse número não confere.' : undefined}
+        />
+        <Input
+          ref={emailRef}
+          label="E-mail" type="email" inputMode="email" autoComplete="email" enterKeyHint="done"
+          placeholder="voce@email.com" hint="A confirmação e o rastreio chegam por aqui."
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onBlur={() => setTocou((t) => ({ ...t, email: true }))}
+          error={tocou.email && !emailOk ? 'Digite um e-mail válido (ex.: nome@gmail.com).' : undefined}
+        />
+      </div>
+
+      {enviando ? (
+        <p id={`${groupId}-status`} className="text-small text-ink-soft" aria-live="polite">
+          {method === 'pix' ? 'Gerando seu código PIX…' : 'Enviando seu pedido…'}
+        </p>
+      ) : statusFalta ? (
+        <p id={`${groupId}-status`} className="text-small text-ink-muted" aria-live="polite">
+          {statusFalta}
+        </p>
+      ) : null}
+
+      {/* NÃO É MAIS UM TABLIST (17/08).
+
+          Eram abas ARIA, com seta ←/→ trocando a aba selecionada. Agora o
+          os métodos são ações, não navegação entre abas. Dois botões comuns
+          mantêm Tab e Enter previsíveis e evitam troca acidental por setas. */}
+      <div role="group" aria-label="Forma de pagamento" className="grid grid-cols-2 gap-2">
         {TABS.map(({ method: m, label, icon: Icon }) => {
           const selected = m === method;
           return (
             <button
               key={m}
               type="button"
-              role="tab"
               id={`${groupId}-tab-${m}`}
-              aria-selected={selected}
-              aria-controls={`${groupId}-panel-${m}`}
-              tabIndex={selected ? 0 : -1}
+              aria-describedby={`${groupId}-status`}
+              // `disabled` só enquanto o pedido está em voo (aí o clique não
+              // pode fazer nada mesmo). Faltando CPF/e-mail é `aria-disabled`
+              // + visual apagado: o clique CHEGA no `pick`, que aponta o campo.
+              // Estes botões nunca criam pedido — só o CTA do PIX e o submit
+              // do cartão criam, e esses continuam `disabled={enviando}`.
+              disabled={!!enviando}
+              aria-disabled={!liberado}
               onClick={() => pick(m)}
               className={cn(
                 'relative flex flex-col items-center gap-1.5 rounded-md border px-3 py-3.5 text-small font-medium transition-colors duration-[180ms]',
+                !liberado && 'cursor-not-allowed opacity-45',
                 selected
                   ? 'border-primary bg-primary-wash text-ink'
                   : 'border-border text-ink-soft hover:border-border-strong hover:text-ink',
@@ -106,55 +229,52 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
             >
               <Icon className="size-5 text-primary-strong" strokeWidth={1.5} />
               {label}
+              {/* O desconto subiu pra cá: ele é o argumento pra escolher PIX,
+                  e ficava escondido num painel que só abria DEPOIS da
+                  escolha — quando já não servia pra decidir nada. */}
               {m === 'pix' && (
-                <span className="eyebrow text-[0.5625rem] text-primary-strong">recomendado</span>
+                <span className="eyebrow text-[0.5625rem] text-primary-strong">
+                  {PIX_DESCONTO_PCT}% off
+                </span>
               )}
             </button>
           );
         })}
       </div>
 
-      {/* PIX */}
-      <div
-        role="tabpanel"
-        id={`${groupId}-panel-pix`}
-        aria-labelledby={`${groupId}-tab-pix`}
-        hidden={method !== 'pix'}
-      >
-        {method === 'pix' && (
-          <div className="flex flex-col gap-4">
-            {/* O desconto é aplicado de verdade desde 06/08: entra como linha
-                no resumo e é recalculado pelo servidor antes de cobrar. Até
-                então esta badge prometia 5% que ninguém abatia. */}
-            <Badge tone="success" className="self-start">
-              {PIX_DESCONTO_PCT}% off já aplicado
-            </Badge>
-            <ul className="flex flex-col gap-2 text-body text-ink-soft">
-              <li>Aprovação na hora — o QR Code aparece assim que você finalizar.</li>
-              <li>Pague pelo app do seu banco, com QR Code ou copia-e-cola.</li>
-              {/* 2 horas é a validade que o backend gera (PIX_EXPIRA_MIN=120,
-                  decisão do dono em 04/08). Dizer 30 min faria a cliente achar
-                  que perdeu o prazo e abandonar um pedido que ainda vale. */}
-              <li>O código vale por 2 horas.</li>
-            </ul>
-            <div className="pt-1">
-              <Button type="button" block className="sm:w-auto" onClick={() => confirm({ method: 'pix' })}>
-                Continuar para a revisão
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* O QUE ERA O PAINEL DO PIX.
 
-      {/* Cartão */}
-      <div
-        role="tabpanel"
-        id={`${groupId}-panel-card`}
-        aria-labelledby={`${groupId}-tab-card`}
-        hidden={method !== 'card'}
-      >
-        {method === 'card' && <CardForm total={total} onDone={confirm} />}
-      </div>
+          Tinha três linhas explicando o PIX e uma badge de desconto — tudo
+          visível só DEPOIS de escolher PIX, ou seja, tarde demais pra
+          ajudar na escolha. O desconto subiu pro botão; o resto vira o que
+          é útil neste segundo: o aviso de que o código está saindo. */}
+      {method === 'pix' && (
+        <div className="flex flex-col gap-3">
+          <Badge tone="success" className="self-start">
+            {PIX_DESCONTO_PCT}% off já aplicado
+          </Badge>
+          <p className="text-body text-ink-soft">
+            {/* 24h é a validade que o backend gera (PIX_EXPIRA_MIN=1440). */}
+            O QR Code e o copia-e-cola aparecem aqui em instantes. O código vale
+            por 24 horas.
+          </p>
+          <div className="rounded-sm border border-border bg-surface px-4 py-3">
+            <p className="text-small text-ink-soft">Total com desconto no PIX</p>
+            <p className="tabular text-h3 font-medium text-success">{formatPrice(pixTotal)}</p>
+          </div>
+          <Button
+            type="button"
+            block
+            size="lg"
+            disabled={enviando}
+            onClick={() => confirm({ method: 'pix' })}
+          >
+            {enviando ? 'Gerando seu código PIX…' : 'Gerar PIX e concluir pedido'}
+          </Button>
+        </div>
+      )}
+
+      {method === 'card' && <CardForm total={total} enviando={enviando} onDone={confirm} />}
     </div>
   );
 }

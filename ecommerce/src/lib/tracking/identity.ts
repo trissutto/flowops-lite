@@ -23,6 +23,8 @@ const SESSION_KEY = 'lurds_session';
 const ATTRIBUTION_KEY = 'lurds_attribution';
 const USER_KEY = 'lurds_user_id';
 const LOJA_KEY = 'lurds_loja';
+/** `_fbc` montado à mão quando o Pixel não carregou — ver `fbcSintetico`. */
+const FBC_KEY = 'lurds_fbc';
 
 /** Janela de inatividade que encerra a sessão — igual à do GA4. */
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -213,6 +215,48 @@ export type { Attribution } from './types';
  * first-click: se ela voltou por outro anúncio, quem levou ela de volta é
  * quem fecha a venda.
  */
+/**
+ * O UTM DO META CHEGA CODIFICADO DUAS VEZES (16/08/2026).
+ *
+ * `URLSearchParams.get()` já decodifica uma vez, e isso bastaria se a
+ * plataforma codificasse uma. O Meta, ao substituir `{{campaign.name}}`,
+ * codifica o nome ANTES de montar a URL e a URL inteira depois — então uma
+ * campanha chamada `|SITENOVO| Vendas Capitais VOGUE Preta` chegava no
+ * relatório como `%7CSITENOVO%7C+Vendas+Capitais+VOGUE+Preta`.
+ *
+ * Aqui a segunda camada cai: `+` vira espaço (regra de query string, que o
+ * segundo encode escondeu atrás de `%2B`) e o `%XX` restante é decodificado.
+ *
+ * Só age se AINDA parecer codificado — nome legítimo com `%` (uma campanha
+ * "PROMO 50%") não é tocado, porque `%` solto não casa com `%XX`. E qualquer
+ * decode inválido devolve o texto como veio: nome feio é melhor que nome
+ * perdido.
+ */
+export function decodificaUtm(valor: string | null): string | undefined {
+  if (!valor) return undefined;
+  let texto = valor;
+  // Duas passadas no máximo: cobre o encode duplo e não vira loop se alguém
+  // um dia mandar três.
+  for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(texto); i += 1) {
+    try {
+      texto = decodeURIComponent(texto.replace(/\+/g, ' '));
+    } catch {
+      break; // sequência inválida — fica com o que já tem
+    }
+  }
+  /**
+   * Sobrou `+` e nenhum espaço: era espaço codificado.
+   *
+   * Nome sem caractere especial ("Linha Conforto Capitais") não deixa nenhum
+   * `%XX` pra trás depois da primeira decodificação, então o laço acima nem
+   * roda e os `+` ficariam na tela. A condição "e nenhum espaço" é o que
+   * protege o `+` legítimo: "Advantage+ Vendas" chega COM espaço e passa
+   * intacto, porque um nome que já tem espaço não precisou codificar nenhum.
+   */
+  if (texto.includes('+') && !texto.includes(' ')) texto = texto.replace(/\+/g, ' ');
+  return texto.trim() || undefined;
+}
+
 export function captureAttribution(): Attribution {
   if (typeof window === 'undefined') return {};
 
@@ -233,11 +277,11 @@ export function captureAttribution(): Attribution {
   if (guardada && !temToqueNovo) return guardada;
 
   const attr: Attribution = {
-    source: q.get('utm_source') || inferSource(ref),
-    medium: q.get('utm_medium') || (ref ? 'referral' : 'direct'),
-    campaign: q.get('utm_campaign') || undefined,
-    term: q.get('utm_term') || undefined,
-    content: q.get('utm_content') || undefined,
+    source: decodificaUtm(q.get('utm_source')) || inferSource(ref),
+    medium: decodificaUtm(q.get('utm_medium')) || (ref ? 'referral' : 'direct'),
+    campaign: decodificaUtm(q.get('utm_campaign')),
+    term: decodificaUtm(q.get('utm_term')),
+    content: decodificaUtm(q.get('utm_content')),
     // O ID da campanha existe como coluna no pedido (`utmId`) e nunca era
     // capturado aqui — se o Meta manda `utm_id={{campaign.id}}`, o dado
     // chegava e era jogado fora.
@@ -343,18 +387,41 @@ function readCookie(name: string): string | undefined {
  * `_fbp` (browser id) e `_fbc` (click id) são o que mais aumenta a taxa de
  * casamento da CAPI. O Pixel grava os dois; aqui só lemos e mandamos junto
  * pro servidor. Sem eles, evento server-side casa muito pior.
+ *
+ * ⚠️ Para quem NÃO decidiu o banner, o Pixel do navegador nunca carrega — então
+ * os dois cookies simplesmente não existem, e o `_fbc` precisa ser montado
+ * aqui. É ele, sozinho, que liga a visita à campanha.
  */
 export function getMetaBrowserIds(): { fbp?: string; fbc?: string } {
-  const fbp = readCookie('_fbp');
-  let fbc = readCookie('_fbc');
+  return { fbp: readCookie('_fbp'), fbc: readCookie('_fbc') ?? fbcSintetico() };
+}
 
-  // Chegou por anúncio nesta pageview e o Pixel ainda não gravou o _fbc:
-  // monta no formato oficial fb.1.<timestamp>.<fbclid>.
-  if (!fbc && typeof window !== 'undefined') {
-    const fbclid = new URLSearchParams(window.location.search).get('fbclid');
-    if (fbclid) fbc = `fb.1.${Date.now()}.${fbclid}`;
-  }
-  return { fbp, fbc };
+/**
+ * Monta o `_fbc` no formato oficial `fb.1.<timestamp>.<fbclid>` e GUARDA.
+ *
+ * Guardar não é detalhe: o lote só é despachado até 5s depois do evento, e
+ * nesse intervalo ela já pode ter navegado pra uma URL sem `fbclid`. Lendo só
+ * a URL do momento, o clique pago se perdia exatamente nos eventos seguintes ao
+ * primeiro — que é o que o Meta usa pra saber que a visita rendeu algo.
+ *
+ * A validade acompanha a atribuição (30 dias, [[captureAttribution]]), que é o
+ * mesmo comportamento do cookie que o Pixel gravaria.
+ */
+function fbcSintetico(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  const daUrl = new URLSearchParams(window.location.search).get('fbclid');
+  const salvo = safeGet('local', FBC_KEY);
+
+  // Clique NOVO sobrescreve o guardado — last-click, igual à atribuição.
+  if (salvo && (!daUrl || salvo.endsWith(`.${daUrl}`))) return salvo;
+
+  const fbclid = daUrl || lerAtribuicao()?.fbclid;
+  if (!fbclid) return undefined;
+
+  const fbc = `fb.1.${Date.now()}.${fbclid}`;
+  safeSet('local', FBC_KEY, fbc);
+  return fbc;
 }
 
 /* ────────────────────────────────────────────────────────────────────────────

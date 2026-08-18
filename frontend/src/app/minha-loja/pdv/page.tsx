@@ -194,6 +194,14 @@ async function saleFromResponse(r: any, saleId: string): Promise<Sale> {
 // 'auto' escolhe pelo monitor; a loja pode fixar no rodapé do PDV.
 type PdvDensityFixa = 'compacto' | 'normal' | 'grande';
 type PdvDensity = PdvDensityFixa | 'auto';
+/**
+ * Loja-canal SITE — a única com "Carrinhos" no menu do PDV (dono, 17/08).
+ *
+ * É o time que trabalha carrinho abandonado. Loja física não vê carrinho de
+ * cliente que não é dela, e a lista lá só geraria confusão.
+ */
+const CARRINHOS_STORE_CODE = '13';
+
 const PDV_DENSITY_KEY = 'lurds_pdv_densidade';
 const DENSITY_ZOOM: Record<PdvDensityFixa, number> = {
   compacto: 0.86,
@@ -1620,6 +1628,8 @@ function PdvPageInner() {
   const [showGiftVoucher, setShowGiftVoucher] = useState(false);
   // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
   const [showSimular, setShowSimular] = useState(false);
+  // Carrinhos abandonados — só no PDV da loja-canal SITE (ver CARRINHOS_STORE_CODE).
+  const [showCarrinhos, setShowCarrinhos] = useState(false);
   // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
   const [promoExpanded, setPromoExpanded] = useState(false);
   const loadOpenCount = async () => {
@@ -1943,22 +1953,43 @@ function PdvPageInner() {
         `/pdv/sales/${sale.id}/finalize`,
         { method: 'POST', body: JSON.stringify(body) },
       );
-      // PEDIDO ONLINE (14/08): venda 100% Venda Online virou um pedido no
-      // trilho do site. Auto-atende = esta loja tem todas as peças e o card
-      // verde já nasceu AQUI; senão foi pra fila de roteamento da matriz.
+      /**
+       * PEDIDO ONLINE (14/08): venda 100% Venda Online virou um pedido no
+       * trilho do site. Três desfechos, e a vendedora PRECISA saber qual foi —
+       * caso Suzano/ON-000004 (15/08): ela fechou a venda, mandou a peça de
+       * motoboy e não tinha ideia de que um pedido havia nascido pra outra loja
+       * separar. O toast agora diz explicitamente se sobrou tarefa pra alguém.
+       */
       if (finResp?.onlineOrder) {
         const oo = finResp.onlineOrder;
-        if (oo.autoAtendida) {
+        if (oo.fechadoNaLoja) {
+          // MOTOBOY daqui: sai da mão da loja, sem etiqueta/rastreio pra emitir.
+          toast(
+            'success',
+            `Pedido ${oo.wcOrderNumber} — FECHADO AQUI`,
+            `Motoboy desta loja: estoque já baixado e nada pra separar. Você entrega direto pra cliente.`,
+          );
+        } else if (oo.autoAtendida) {
+          // SEDEX/PAC/RETIRADA com estoque: o card é a ferramenta — é nele que
+          // ela gera a etiqueta dos Correios ou guarda a peça pro balcão.
           toast(
             'success',
             `${String(oo.storeName || 'Sua loja').toUpperCase()} ATENDE O PEDIDO TODO`,
-            `Separação gerada nesta unidade — pedido ${oo.wcOrderNumber} entrou na fila de pedidos da loja.`,
+            `Pedido ${oo.wcOrderNumber} entrou na fila desta loja — abra o card em Minha Loja pra gerar a etiqueta e imprimir a NF.`,
+          );
+        } else if (oo.lojaEscolhida) {
+          // RETIRADA/MOTOBOY em outra loja: o card já nasceu LÁ, com
+          // transferências das lojas que têm o que faltar. Nada pra fazer aqui.
+          toast(
+            'success',
+            `Pedido ${oo.wcOrderNumber} — card na ${String(oo.lojaEscolhida.name || oo.lojaEscolhida.code).toUpperCase()}`,
+            'A loja escolhida já recebeu a separação. O que ela não tiver chega por transferência antes de entregar. Não mande peça daqui.',
           );
         } else {
           toast(
-            'success',
-            `Pedido ${oo.wcOrderNumber} criado`,
-            'Sem todas as peças nesta loja — o pedido foi pro roteamento da matriz escolher quem envia.',
+            'warning',
+            `Pedido ${oo.wcOrderNumber} foi pra MATRIZ`,
+            'Esta loja não tem todas as peças — OUTRA loja vai separar e enviar. Não mande a peça por conta: confira o pedido antes.',
           );
         }
       }
@@ -2410,6 +2441,28 @@ function PdvPageInner() {
                 </span>
               )}
             </Link>
+            {/* CARRINHOS ABANDONADOS DENTRO DO PDV (17/08).
+                O botão de importar existia só na retaguarda — e os PDVs NÃO
+                TÊM ACESSO À RETAGUARDA. Ou seja: a ferramenta que resolve as
+                5 vendas/dia que não entram no sistema era inalcançável por
+                quem precisa dela. Medido em 17/08: 7 carrinhos recuperados no
+                dia, 2 registrados. Aqui a menina abre a lista sem sair da tela
+                em que trabalha, clica na cliente e a venda monta pronta.
+
+                SÓ NA LOJA 13 (SITE) — decisão do dono: é o time do carrinho
+                abandonado que trabalha esses contatos. Loja física não vê
+                carrinho de cliente que não é dela. */}
+            {storeCode === CARRINHOS_STORE_CODE && (
+              <button
+                type="button"
+                onClick={() => setShowCarrinhos(true)}
+                className={`${rowBase} relative`}
+                title="Carrinhos abandonados do site — fechar a venda aqui"
+              >
+                <ShoppingCart className={rowIcon} />
+                <span className={rowLabel}>Carrinhos</span>
+              </button>
+            )}
             <Link href="/minha-loja/realinhamento" className={`${rowBase} relative`} title="Realinhamento de estoque inter-lojas">
               <Shuffle className={rowIcon} />
               <span className={rowLabel}>Realinhar</span>
@@ -3334,6 +3387,7 @@ function PdvPageInner() {
           onNeedSeller={() => setShowConfirmSale(true)}
           dadosOnlineFaltando={faltaDadosOnline}
           onNeedCustomer={abrirCadastroOnline}
+          stores={stores}
         />
       )}
 
@@ -3663,6 +3717,19 @@ function PdvPageInner() {
           />
         );
       })()}
+
+      {showCarrinhos && (
+        <CarrinhosAbandonadosModal
+          onClose={() => setShowCarrinhos(false)}
+          onImportado={(saleId) => {
+            // Venda montada pelo backend: grava a chave que o PDV usa pra
+            // retomar e recarrega. Não navega pra fora — ela já está na tela
+            // certa, é só a venda aparecer.
+            try { localStorage.setItem(`lurds_pdv_sale_${storeCode}`, saleId); } catch {}
+            window.location.reload();
+          }}
+        />
+      )}
 
       {/* Modal PIX Rápido (cobrança avulsa) */}
       {showPixAvulso && (
@@ -4705,10 +4772,13 @@ function PaymentModal({
   onNeedSeller,
   dadosOnlineFaltando = [],
   onNeedCustomer,
+  stores = [],
 }: {
   saleId: string;
   total: number;
   storeCode?: string;
+  /** Lojas ativas — seletor "quem atende" da retirada/motoboy na venda online. */
+  stores?: Array<{ code: string; name: string }>;
   customerCpf: string | null;
   customerName?: string | null;
   customerEmail?: string | null;
@@ -4754,6 +4824,13 @@ function PaymentModal({
       try {
         const s = await api<any>(`/pdv/sales/${saleId}`);
         if (Array.isArray(s?.payments)) setPayments(s.payments);
+        // Entrega já gravada (modal reaberto, PIX pendente, F5): mostra o que
+        // está no banco em vez de obrigar a clicar de novo — e evita a tela
+        // dizer "escolha a entrega" com a entrega já escolhida.
+        if (s?.entregaTipo) {
+          setEntregaTipo(s.entregaTipo);
+          setEntregaStoreCode(s.entregaStoreCode || '');
+        }
       } catch { /* sem rede: mantém o estado local */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4830,6 +4907,10 @@ function PaymentModal({
   // Sem isso o pedido online nascia "Correios R$ 0,00" e a matriz não sabia
   // se emitia etiqueta, chamava motoboy ou segurava a peça pra retirada.
   const [entregaTipo, setEntregaTipo] = useState<'sedex' | 'pac' | 'motoboy' | 'retirada' | null>(null);
+  // LOJA QUE ATENDE (17/08) — só pra retirada (onde a cliente busca) e motoboy
+  // (quem sai de moto). '' = esta loja. A loja-canal SITE fecha venda pra
+  // cliente de qualquer cidade: quem atende quase nunca é quem vendeu.
+  const [entregaStoreCode, setEntregaStoreCode] = useState<string>('');
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -5200,6 +5281,24 @@ function PaymentModal({
           'Escolha a forma de entrega',
           'SEDEX, PAC, Motoboy ou Retirada em loja.',
         );
+        return;
+      }
+      /**
+       * GRAVA A ENTREGA ANTES DE CONFIRMAR (17/08). O POST do botão é
+       * otimista (fire-and-forget) — se falhou, ou a venda nem existia no
+       * clique, a tela mostra SEDEX e o banco está vazio: o pedido nascia
+       * "Entrega (não informada)" (ON-000005/006), sem loja de retirada, e a
+       * matriz roteava na mão. Aqui é AGUARDADO: se o servidor recusar (Regra
+       * A do motoboy, loja inválida), a venda não fecha com entrega errada.
+       */
+      try {
+        await api(`/pdv/sales/${saleId}/entrega`, {
+          method: 'POST',
+          body: JSON.stringify({ tipo: entregaTipo, entregaStoreCode: entregaStoreCode || null }),
+        });
+      } catch (e: any) {
+        const h = humanizeError(e);
+        toast('error', 'Entrega não gravada', e?.message || h.hint);
         return;
       }
       /**
@@ -6522,17 +6621,30 @@ function PaymentModal({
                     key={op.id}
                     type="button"
                     onClick={async () => {
+                      // Trocar de forma zera a loja escolhida — SEDEX/PAC não
+                      // têm loja que atende, e retirada→motoboy é outra escolha.
+                      const lojaAtende = op.id === entregaTipo ? entregaStoreCode : '';
                       setEntregaTipo(op.id);
+                      setEntregaStoreCode(lojaAtende);
                       if (!saleId) return;
                       try {
                         await api(`/pdv/sales/${saleId}/entrega`, {
                           method: 'POST',
-                          body: JSON.stringify({ tipo: op.id }),
+                          body: JSON.stringify({ tipo: op.id, entregaStoreCode: lojaAtende || null }),
                         });
                       } catch (e: any) {
-                        // A escolha fica na tela; o finalize regrava. Nunca
-                        // travar a venda por causa do registro da entrega.
                         const h = humanizeError(e);
+                        if (op.id === 'motoboy' && (e?.status === 400 || /motoboy/i.test(String(e?.message || '')))) {
+                          // REGRA A (dono, 17/08): motoboy só sai desta loja. O
+                          // servidor disse que falta peça aqui — a escolha NÃO
+                          // fica. Deixar marcado seria fechar a venda com uma
+                          // entrega que o fechamento vai recusar de novo.
+                          setEntregaTipo(null);
+                          toast('error', 'Motoboy não disponível', e?.message || h.hint);
+                          return;
+                        }
+                        // Outros erros: a escolha fica na tela; o finalize
+                        // regrava. Nunca travar a venda por registro da entrega.
                         toast('error', h.title, h.hint);
                       }
                     }}
@@ -6546,10 +6658,58 @@ function PaymentModal({
                   </button>
                 ))}
               </div>
-              {entregaTipo === 'retirada' && (
-                <p className="text-[10px] text-teal-700 mt-1 font-semibold">
-                  A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.
-                </p>
+
+              {/* LOJA QUE ATENDE (17/08) — retirada: onde a cliente busca;
+                  motoboy: quem sai de moto. Padrão = esta loja. A loja-canal
+                  SITE vende pra cliente de qualquer cidade e não tem balcão
+                  nem moto — sem isto o pedido nascia "retira NA LOJA 13" e a
+                  matriz roteava na mão (ON-000006, 2 dias parado). */}
+              {(entregaTipo === 'retirada' || entregaTipo === 'motoboy') && (
+                <div className="mt-2">
+                  <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                    {entregaTipo === 'retirada' ? 'Cliente retira em qual loja?' : 'Qual loja manda o motoboy?'}
+                  </label>
+                  <select
+                    value={entregaStoreCode}
+                    onChange={async (e) => {
+                      const code = e.target.value;
+                      const anterior = entregaStoreCode;
+                      setEntregaStoreCode(code);
+                      if (!saleId) return;
+                      try {
+                        await api(`/pdv/sales/${saleId}/entrega`, {
+                          method: 'POST',
+                          body: JSON.stringify({ tipo: entregaTipo, entregaStoreCode: code || null }),
+                        });
+                      } catch (err: any) {
+                        // Voltou pra "esta loja" e o servidor recusou (Regra A
+                        // do motoboy sem estoque aqui): desfaz a escolha.
+                        setEntregaStoreCode(anterior);
+                        const h = humanizeError(err);
+                        toast('error', h.title, err?.message || h.hint);
+                      }
+                    }}
+                    className="mt-1 w-full rounded-lg border-2 border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-teal-400 focus:outline-none"
+                  >
+                    <option value="">🏬 Esta loja ({storeCode})</option>
+                    {stores
+                      .filter((s) => s.code !== storeCode)
+                      .map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {s.name} ({s.code})
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[10px] text-teal-700 mt-1 font-semibold">
+                    {entregaTipo === 'retirada'
+                      ? entregaStoreCode
+                        ? 'O card nasce na loja escolhida. O que ela não tiver chega por transferência antes da cliente buscar.'
+                        : 'A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.'
+                      : entregaStoreCode
+                        ? 'O card nasce na loja escolhida: ela separa (recebe por transferência o que faltar) e manda o motoboy.'
+                        : 'Motoboy sai desta loja: a peça já baixa aqui e ninguém mais separa. Só vale se você tem tudo na arara.'}
+                  </p>
+                </div>
               )}
             </div>
 
@@ -9393,6 +9553,168 @@ function ProductThumb({ sku, refCode, compact = false }: { sku: string; refCode:
 // todas as 12 parcelas em grade 2 colunas — sem scroll, sem configuração.
 // `total` já vem líquido de vale-troca/parciais; `temAbatimento` troca o
 // rótulo pra "Falta a pagar" pra vendedora não confundir com o total bruto.
+/**
+ * CARRINHOS ABANDONADOS DENTRO DO PDV (17/08) — só na loja-canal SITE.
+ *
+ * Medido em 17/08: 7 carrinhos recuperados no dia e 2 registrados no sistema.
+ * Os 5 restantes foram pagos por fora (PIX, PayPal, link) e ninguém lançou —
+ * cada um custa estoque que não baixa, NF que não sai, dinheiro fora do caixa,
+ * comissão que a vendedora não recebe e o carrinho seguindo como "abandonado".
+ *
+ * A causa era FRICÇÃO em dois níveis: remontar 11 peças à mão, e o botão de
+ * importar existir só na retaguarda — que o PDV NÃO ACESSA. Aqui a lista abre
+ * sem sair da tela de venda: clica na cliente e a venda monta pronta.
+ */
+function CarrinhosAbandonadosModal({
+  onClose,
+  onImportado,
+}: {
+  onClose: () => void;
+  onImportado: (saleId: string) => void;
+}) {
+  const { toast } = usePdvToast();
+  type Carrinho = {
+    id: number;
+    order_id?: number | null;
+    order_number?: string | null;
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+    cart_total?: number;
+    items_count?: number;
+    time?: string | null;
+    utmCampaign?: string | null;
+  };
+  const [itens, setItens] = useState<Carrinho[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
+  const [importando, setImportando] = useState<number | null>(null);
+  const [busca, setBusca] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // Só o carrinho do site NOVO: é o único cujos itens têm SKU nosso, e
+        // portanto o único que dá pra montar a venda automaticamente.
+        //
+        // Rota do PDV, NÃO a da retaguarda: `/abandoned-carts/*` tem
+        // AdminOnlyGuard e as meninas entram como `role: store` — batiam em
+        // "Apenas matriz". Esta é travada na loja-canal no backend.
+        const r = await api<{ items?: Carrinho[] }>(
+          '/pdv/carrinhos-abandonados?status=abandoned',
+        );
+        setItens(Array.isArray(r?.items) ? r.items : []);
+      } catch (e: any) {
+        setErro(humanizeError(e).hint || 'Não consegui carregar os carrinhos.');
+      } finally {
+        setCarregando(false);
+      }
+    })();
+  }, []);
+
+  const filtrados = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    if (!q) return itens;
+    return itens.filter((c) =>
+      [c.first_name, c.last_name, c.email, c.phone, c.order_number]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [itens, busca]);
+
+  async function importar(c: Carrinho) {
+    setImportando(c.id);
+    try {
+      const r = await api<{ saleId: string; importados: number; total?: number; faltaram?: string[] }>(
+        '/pdv/sales/importar-carrinho',
+        { method: 'POST', body: JSON.stringify({ wcOrderId: c.order_id ?? c.id }) },
+      );
+      if (r.faltaram?.length) {
+        // Avisa ANTES de abrir a venda: no PDV ela não teria como saber que
+        // faltou peça e fecharia incompleta sem perceber.
+        toast(
+          'warning',
+          `${r.importados} de ${r.total ?? r.importados} peça(s) entraram`,
+          `Bipe na mão: ${r.faltaram.slice(0, 3).join(' · ')}${r.faltaram.length > 3 ? ` e mais ${r.faltaram.length - 3}` : ''}`,
+        );
+      }
+      onImportado(r.saleId);
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, e?.message || h.hint);
+      setImportando(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-2 sm:p-4 overflow-y-auto" {...overlayClose(onClose)}>
+      <div
+        className="bg-white rounded-xl w-full max-w-2xl my-4 max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-4 border-b border-[#EDEAE1] flex items-center gap-3">
+          <ShoppingCart className="w-5 h-5 text-[#B8912B]" />
+          <div className="flex-1">
+            <div className="font-black text-[#2B2B2B]">Carrinhos abandonados</div>
+            <div className="text-[11px] text-slate-500">
+              Cliente fechou com você? Clica nela que a venda abre pronta — você só escolhe como recebeu.
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-2xl leading-none px-2">×</button>
+        </div>
+
+        <div className="p-3 border-b border-[#EDEAE1]">
+          <input
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            placeholder="Buscar por nome, telefone ou e-mail…"
+            className="w-full rounded-lg border-2 border-slate-200 px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {carregando && <div className="text-center text-sm text-slate-500 py-8">Carregando…</div>}
+          {erro && <div className="text-center text-sm text-rose-700 font-semibold py-8">{erro}</div>}
+          {!carregando && !erro && filtrados.length === 0 && (
+            <div className="text-center text-sm text-slate-500 py-8">
+              {itens.length === 0 ? 'Nenhum carrinho abandonado agora. 🎉' : 'Nada com esse termo.'}
+            </div>
+          )}
+          {filtrados.map((c) => {
+            const nome = [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email || 'Sem nome';
+            return (
+              <div key={c.id} className="rounded-lg border-2 border-slate-200 p-3 flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-[180px]">
+                  <div className="font-bold text-sm text-[#2B2B2B]">{nome}</div>
+                  <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2">
+                    {c.phone && <span>{c.phone}</span>}
+                    {c.items_count ? <span>{c.items_count} peça(s)</span> : null}
+                    {c.order_number && <span>{c.order_number}</span>}
+                    {/* Campanha de origem: é o que liga a venda ao anúncio. */}
+                    {c.utmCampaign && <span className="text-emerald-700">via {c.utmCampaign}</span>}
+                  </div>
+                </div>
+                <div className="font-black tabular-nums text-[#2E7D46]">
+                  {brl(Number(c.cart_total || 0))}
+                </div>
+                <button
+                  type="button"
+                  disabled={importando !== null}
+                  onClick={() => importar(c)}
+                  className="rounded-lg bg-[#2E7D46] hover:bg-[#256b3a] disabled:opacity-50 px-4 py-2 text-sm font-bold text-white"
+                >
+                  {importando === c.id ? 'Abrindo…' : 'Fechar venda'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SimularParcelasModal({
   total,
   temAbatimento,

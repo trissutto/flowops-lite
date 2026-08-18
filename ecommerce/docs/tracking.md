@@ -11,18 +11,47 @@ Helper semântico            trackAddToCart(produto, { tamanho: '48' })
    ↓
 Event Manager               envelope + event_id + validação + dedup
    ↓
-Gate de consentimento       LGPD — sem opt-in, para aqui
+Gate de consentimento       LGPD — três posturas, ver abaixo
    ↓
 Data Layer                  histórico próprio (sempre)
    ↓                    ↘
 Destinos navegador        Fila do servidor
 (Pixel, gtag)               ↓
-                          POST /api/events
+ só com aceite            POST /api/events
                             ↓
                           Meta CAPI · GA4 MP     ← mesmo event_id
                             ↓
                           Log de despacho → painel de debug
 ```
+
+## As três posturas de consentimento
+
+Não são duas. O código tratou "não decidiu" e "recusou" como a mesma coisa até
+17/08/2026, e o preço foi medido: a campanha `52531954165766` trouxe **1.012
+sessões** e o Meta soube de **8**. Quem entrava pela `/lojas`: 1.162 → 19.
+O estrago não é o relatório, é a entrega — o algoritmo escolhe pra quem mostrar
+o anúncio com os exemplos que recebe.
+
+| Postura | Pixel no navegador | Meta (CAPI) | GA4 | Nosso Postgres |
+|---|---|---|---|---|
+| **Aceitou** | sim | tudo | tudo | tudo |
+| **Não decidiu** (~85%) | **não** | só `page_view` e `view_item`, anonimizados | não | tudo |
+| **Recusou** ("Só o necessário") | não | **nada** | não | tudo |
+
+Quem decide é `posturaDe` / `metaServidorPodeReceber`, em `consent.ts` — função
+pura, usada **pelos dois lados** (o navegador, pra anexar `fbp`/`fbc` ao lote, e
+o `/api/events`, pra escolher o destino). Regra que mora em dois lugares vira
+duas regras.
+
+Três detalhes que não são óbvios:
+
+- **`_fbc` é o que liga a visita à campanha.** Sem Pixel, o cookie não existe;
+  `fbcSintetico()` (identity.ts) monta no formato oficial a partir do `fbclid`
+  e **guarda** — o lote sai até 5s depois, quando a URL já mudou.
+- **`sem_aceite` no banco continua sendo "não aceitou"**, não "recusou". É a
+  régua que responde quanto do funil o Meta enxerga; afrouxá-la apaga a medição.
+- **Sacola e checkout ficam de fora** de quem não decidiu: quanto mais fundo no
+  funil, mais o evento fala da pessoa e menos do anúncio.
 
 ## Por que assim
 

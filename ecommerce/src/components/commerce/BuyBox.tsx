@@ -37,10 +37,19 @@ export interface CorEscolhivel {
   nome: string;
   swatch: { tipo: 'cor' | 'foto'; hex: string | null; focoX: number | null; focoY: number | null; imagem: string | null };
   estoque: number;
+  /**
+   * A grade DESTA cor. Com o tamanho vindo primeiro (17/08), é ela que decide
+   * qual bolinha aparece riscada: escolhido o 48, a cor que não tem 48 se
+   * anuncia antes do clique em vez de dar a notícia ruim depois.
+   *
+   * Opcional porque nem todo chamador tem a grade por cor — sem ela, nenhuma
+   * bolinha é riscada, que é o comportamento de antes.
+   */
+  tamanhos?: Array<{ label: string; disponivel: boolean }>;
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, onSelecionarCor, alertaEstoque, look,
+  product, cores, corSelecionada, onSelecionarCor, alertaEstoque, look, tamanho, onTamanho,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
@@ -49,11 +58,26 @@ export function BuyBox({
   onSelecionarCor?: (nome: string) => void;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
+  /**
+   * O TAMANHO ESCOLHIDO, ERGUIDO PRA FORA (17/08).
+   *
+   * Quem precisa saber o número escolhido não e so este componente: a FITA
+   * de miniaturas, que fica na outra coluna, risca a cor que nao tem aquele
+   * tamanho. Como ela e irma e nao filha, o estado sobe pro pai.
+   *
+   * Continua funcionando sem os props (fica com o estado interno) — assim
+   * nenhum outro chamador do BuyBox precisa mudar.
+   */
+  tamanho?: string | null;
+  onTamanho?: (t: string | null) => void;
   /** As peças que saem na MESMA foto (curadoria de /retaguarda/looks). */
   look?: PecaApi['look'];
 }) {
   const irmasDoLook = (look?.pecas ?? []).filter((p) => !p.atual);
-  const [size, setSize] = useState<string | null>(null);
+  const [sizeLocal, setSizeLocal] = useState<string | null>(null);
+  // Controlado quando o pai manda o prop; senão, estado próprio.
+  const size = tamanho !== undefined ? tamanho : sizeLocal;
+  const setSize = (v: string | null) => { setSizeLocal(v); onTamanho?.(v); };
   const [sizeError, setSizeError] = useState(false);
   // A tabela abre sobre a PDP para a cliente não perder a seleção da peça.
   const [sizeChartOpen, setSizeChartOpen] = useState(false);
@@ -224,7 +248,7 @@ export function BuyBox({
    * aquela cor ou não achou o tamanho.
    */
   const buscaSemelhantes = `/busca?q=${encodeURIComponent(
-    product.name.split(/s+/).slice(0, 4).join(' '),
+    product.name.split(/\s+/).slice(0, 4).join(' '),
   )}`;
 
   /**
@@ -267,7 +291,15 @@ export function BuyBox({
           peça perde o nome como manchete. Quem quiser mais nomes em uma
           linha só tem um caminho, e ele é de CONTEÚDO — tirar o código da
           REF do fim do nome. */}
-      <h1 className="mt-3 font-display text-[1.375rem] leading-[1.2] text-ink sm:text-h2 sm:leading-[1.16]">
+      {/* BLOCO DE DECISÃO CENTRALIZADO NO CELULAR (dono, 17/08).
+
+          Nome, preço, os dois passos e a grade — tudo no eixo. Centralizar
+          só a grade, como ficou na primeira tentativa, deixou o conjunto
+          desalinhado: o número no meio e o preço encostado na margem.
+
+          `lg:text-left` porque no desktop a coluna de compra fica ao lado
+          da foto, estreita e alta — ali o texto centralizado vira serrilha. */}
+      <h1 className="mt-3 text-center font-display text-[1.375rem] leading-[1.2] text-ink sm:text-h2 sm:leading-[1.16] lg:text-left">
         {product.name}
       </h1>
 
@@ -295,13 +327,15 @@ export function BuyBox({
 
       {/* Preço */}
       <div className="mt-7">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div className="flex flex-wrap items-baseline justify-center gap-x-3 gap-y-1 lg:justify-start">
           {product.compareAtPrice && (
             <span className="tabular text-body text-ink-muted line-through">
               {formatPrice(product.compareAtPrice)}
             </span>
           )}
-          <span className="tabular font-display text-[2rem] leading-none font-medium text-ink">
+          {/* Um degrau menor (dono, 17/08): o preço competia em peso com o
+              passo do tamanho logo abaixo, que é o que decide a compra. */}
+          <span className="tabular font-display text-[1.625rem] leading-none font-medium text-ink">
             {formatPrice(product.price)}
           </span>
           {discount > 0 && (
@@ -356,130 +390,6 @@ export function BuyBox({
         )}
       </div>
 
-      {/* COR — vem ANTES do tamanho: a cliente escolhe a cor e só então vê a
-          grade daquela cor (cada cor tem estoque próprio). Escolher o 48 e
-          depois descobrir que ele só existe no preto é o pior caminho.
-
-          DIDÁTICO POR DECISÃO DO DONO (14/08): "minha cliente é lenta com
-          tecnologia". A bolinha sozinha não ensina nada — ela não se anuncia
-          como clicável e ninguém distingue vinho de marrom num círculo de
-          43px. Agora cada cor tem NOME ESCRITO embaixo, o passo é numerado
-          ("1 Escolha a cor") e a escolhida ganha um ✓. O nome já existia, mas
-          só no `title`/`aria-label`: invisível no celular, que é onde a
-          cliente compra. Contexto: 443 pessoas abriram uma peça no dia e 28
-          puseram na sacola. */}
-      {cores && cores.length > 1 && (
-        <div className="mt-9">
-          <PassoLabel numero={1} titulo="Escolha a cor" escolhido={corSelecionada ?? null} />
-          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-5">
-            {cores.map((c) => {
-              const escolhida = corSelecionada === c.nome;
-              const esgotada = c.estoque <= 0;
-              // MESMO FALLBACK DA VITRINE (bug real, 07/08): sem bolinha pintada
-              // na retaguarda, o card da listagem já ADIVINHA a cor pelo nome
-              // (hexDaCor) — a PDP caía num cinza genérico #D9D4CC porque usava
-              // o hex cru da API sem esse plano B. Cliente via bolinha colorida
-              // no card e cinza ao abrir a peça, como se tivesse quebrado.
-              const estilo: React.CSSProperties =
-                c.swatch.tipo === 'foto' && c.swatch.imagem
-                  ? {
-                      backgroundImage: `url(${c.swatch.imagem})`,
-                      backgroundSize: '400%',
-                      backgroundPosition: `${(c.swatch.focoX ?? 0.5) * 100}% ${(c.swatch.focoY ?? 0.5) * 100}%`,
-                    }
-                  : { backgroundColor: c.swatch.hex || hexDaCor(c.nome) };
-
-              return (
-                <button
-                  key={c.nome}
-                  type="button"
-                  onClick={() => {
-                    onSelecionarCor?.(c.nome);
-                    trackColorSwitch(product, c.nome);
-                  }}
-                  aria-pressed={escolhida}
-                  aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : ''}`}
-                  // w-16 + quebra de linha: o nome inteiro aparece ("AZUL
-                  // MARINHO" em duas linhas) sem esticar o viewport no celular
-                  // — o flex-wrap acomoda, e nada de truncar justo o texto que
-                  // a gente acabou de mostrar pra ensinar.
-                  className="group flex w-16 flex-col items-center gap-2"
-                >
-                  <span
-                    className={cn(
-                      // 2,7rem = 43px: a bolinha 20% maior que os 36px originais
-                      // (dono 07/08). É o controle que decide a compra — merece
-                      // o alvo de toque maior no celular.
-                      'relative flex size-[2.7rem] items-center justify-center rounded-full border transition-all duration-[320ms]',
-                      escolhida
-                        ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
-                        : 'border-border group-hover:border-ink-soft',
-                      esgotada && 'opacity-40',
-                    )}
-                  >
-                    <span style={estilo} className="absolute inset-[3px] rounded-full" />
-                    {/* ✓ por cima da bolinha: a borda escura sozinha some numa
-                        peça de cor escura — o check nunca some. */}
-                    {escolhida && (
-                      <Check
-                        className="relative size-4 text-light drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]"
-                        strokeWidth={3}
-                      />
-                    )}
-                  </span>
-                  <span
-                    className={cn(
-                      'text-center text-xs leading-tight break-words',
-                      escolhida ? 'font-medium text-ink' : 'text-ink-soft',
-                    )}
-                  >
-                    {c.nome}
-                    {esgotada && <span className="block text-ink-muted">esgotada</span>}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* SAI NA MESMA FOTO — a irmã do look colada na decisão (dono, 13/08:
-          "era bom aparecer aqui a indicação da peça irmã"). A cliente está
-          literalmente vendo a outra peça na foto ao lado; o bloco grande
-          "Complete o look" continua no fim da página pra quem rolou. */}
-      {irmasDoLook.length > 0 && (
-        <div className="mt-9">
-          <p className="eyebrow text-ink">Sai na mesma foto</p>
-          <div className="mt-3 flex flex-col gap-2">
-            {irmasDoLook.map((p) => (
-              <Link
-                key={p.ref}
-                href={`/produto/${p.slug}`}
-                className="group flex items-center gap-3 rounded-sm border border-border bg-surface-alt/60 px-3 py-2.5 transition-colors duration-[320ms] hover:border-ink-soft"
-              >
-                {p.imagem && (
-                  <Image
-                    src={p.imagem}
-                    alt={p.nome}
-                    width={40}
-                    height={53}
-                    className="h-[53px] w-10 shrink-0 rounded-sm object-cover"
-                  />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-body text-ink">{p.nome}</span>
-                  <span className="block text-small font-light text-ink-soft">
-                    {formatPrice(p.preco)}
-                    {!p.disponivel && ' · esgotada'}
-                  </span>
-                </span>
-                <ArrowRight className="size-4 shrink-0 text-ink-muted transition-transform duration-[320ms] group-hover:translate-x-0.5" />
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Tamanho */}
       {/* IMPOSSÍVEL DE IGNORAR (dono, 15/08): "minha cliente é lenta com
           tecnologia". Quem clicava em "Adicionar" sem escolher o número via só
@@ -497,8 +407,9 @@ export function BuyBox({
         )}
       >
         <div className="flex items-end justify-between gap-4">
+          {/* SEMPRE o passo 1 (17/08): é ele que decide a compra. */}
           <PassoLabel
-            numero={temCor ? 2 : 1}
+            numero={1}
             titulo="Escolha o tamanho"
             escolhido={size}
             sufixoEscolhido="tamanho"
@@ -514,8 +425,12 @@ export function BuyBox({
         </div>
 
         {/* As opções ficam coladas ao rótulo do passo para a instrução e a
-            escolha formarem um único bloco visual. */}
-        <div className="mt-4 flex flex-wrap gap-2">
+            escolha formarem um único bloco visual.
+
+            CENTRALIZADA (dono, 17/08): à esquerda, uma grade de 3 ou 4
+            números deixava um vazio grande à direita e o passo parecia
+            inacabado — logo o passo que decide a compra. */}
+        <div className="mt-4 flex flex-wrap justify-center gap-2.5 lg:justify-start">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
@@ -564,6 +479,87 @@ export function BuyBox({
           </p>
         )}
       </div>
+
+      {/* AS BOLINHAS DE COR SAÍRAM DAQUI (dono, 17/08).
+
+          Eram a TERCEIRA aparição da mesma escolha: a foto grande, a fita de
+          miniaturas ao lado dela, e mais estas. E a fita já faz o trabalho
+          inteiro — marca a cor ativa (`aria-selected` + borda destacada) e
+          escreve o nome embaixo.
+
+          Duplicar não ensinava nada e custava 158px na coluna de decisão,
+          empurrando o seletor de TAMANHO para baixo da dobra num iPhone
+          (medido: 866px, com a dobra em 812). E 81% das visitantes não rolam
+          a página de produto — ou seja, quatro em cada cinco nunca viam a
+          única escolha que decide a compra.
+
+          Quem escolhe a cor é a fita (`grupos`, no ProductGallery). O aviso
+          de "esta cor não tem o seu número" mora lá, que é onde ela olha.
+
+          FICA UMA LINHA, porque a escolha tem que ser NÍTIDA (dono, 17/08):
+          a fita está na outra coluna e no celular ela rola pra fora da
+          vista. Esta linha confirma, ao lado do botão, qual cor vai no
+          pedido — sem devolver os 158px de bolinha. */}
+      {/* MESMO PESO DO TAMANHO (dono, 17/08: "mais destaque pra variante
+          escolhida"). Com as bolinhas removidas, a cor tinha virado uma nota
+          de rodapé cinza ao lado de um passo com selo dourado — a tela dizia,
+          sem querer, que a cor importa menos. Agora usa o MESMO PassoLabel:
+          um selo, um número, um ✓ quando escolhida. */}
+      {temCor && (
+        <div className="mt-6">
+          {/* "Cor escolhida", não "Escolha a cor" (dono, 17/08): a peça
+              SEMPRE abre numa cor — a primeira com estoque e com foto. O
+              rótulo antigo pedia uma ação que já estava feita, e o passo
+              parecia pendente mesmo com o ✓ do lado. O nome descreve o
+              estado, que é o que ela precisa conferir antes de comprar. */}
+          <PassoLabel
+            numero={2}
+            titulo="Cor escolhida"
+            escolhido={corSelecionada ?? null}
+          />
+          <p className="mt-1.5 pl-[2.125rem] text-small text-ink-muted">
+            Toque nas fotos ao lado pra trocar.
+          </p>
+        </div>
+      )}
+
+      {/* SAI NA MESMA FOTO — a irmã do look colada na decisão (dono, 13/08:
+          "era bom aparecer aqui a indicação da peça irmã"). A cliente está
+          literalmente vendo a outra peça na foto ao lado; o bloco grande
+          "Complete o look" continua no fim da página pra quem rolou. */}
+      {irmasDoLook.length > 0 && (
+        <div className="mt-9">
+          <p className="eyebrow text-ink">Sai na mesma foto</p>
+          <div className="mt-3 flex flex-col gap-2">
+            {irmasDoLook.map((p) => (
+              <Link
+                key={p.ref}
+                href={`/produto/${p.slug}`}
+                className="group flex items-center gap-3 rounded-sm border border-border bg-surface-alt/60 px-3 py-2.5 transition-colors duration-[320ms] hover:border-ink-soft"
+              >
+                {p.imagem && (
+                  <Image
+                    src={p.imagem}
+                    alt={p.nome}
+                    width={40}
+                    height={53}
+                    className="h-[53px] w-10 shrink-0 rounded-sm object-cover"
+                  />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body text-ink">{p.nome}</span>
+                  <span className="block text-small font-light text-ink-soft">
+                    {formatPrice(p.preco)}
+                    {!p.disponivel && ' · esgotada'}
+                  </span>
+                </span>
+                <ArrowRight className="size-4 shrink-0 text-ink-muted transition-transform duration-[320ms] group-hover:translate-x-0.5" />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
 
       {/* PROVA SOCIAL COLADA NO BOTÃO (dono, 13/08; virou linha em 14/08): é
           o último argumento antes do clique e o único da página que vem de
@@ -690,7 +686,9 @@ export function BuyBox({
           </p>
           <p className="mt-4 text-body text-ink">Toque no seu número — a peça já vai pra sacola.</p>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          {/* Mesma centralização da grade da página: as duas mostram os
+              mesmos números e divergir no desenho confunde. */}
+          <div className="mt-4 flex flex-wrap justify-center gap-2.5 lg:justify-start">
             {product.sizes.map((option) => (
               <SizePill
                 key={option.label}
@@ -771,7 +769,7 @@ function PassoLabel({
   sufixoEscolhido?: string;
 }) {
   return (
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center justify-center gap-2.5 lg:justify-start">
       <span
         aria-hidden
         className={cn(
@@ -781,7 +779,9 @@ function PassoLabel({
       >
         {escolhido ? <Check className="size-3.5" strokeWidth={3} /> : numero}
       </span>
-      <p className="text-small font-medium text-ink">
+      {/* Um degrau maior (dono, 17/08): estes dois rótulos são A decisão da
+          página, e em `text-small` pesavam menos que a legenda de frete. */}
+      <p className="text-body font-medium text-ink">
         {titulo}
         {escolhido && (
           <span className="font-normal text-ink-soft">

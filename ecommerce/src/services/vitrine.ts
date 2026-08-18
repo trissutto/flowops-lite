@@ -92,6 +92,36 @@ export async function fetchPrimeiraPagina(opcoes: {
   }
 }
 
+/**
+ * MAIS TOP DA SEMANA — a vitrine CURADA da semana.
+ *
+ * Diferente de `fetchVitrine`, aqui a ORDEM é a curadoria: o backend já devolve
+ * os `itens` na sequência escolhida na retaguarda (o MESMO dado que marca o selo
+ * `topSemana` no feed). A página só renderiza na ordem recebida — não reordena,
+ * não pagina, não faz scroll infinito.
+ *
+ * Cai em lista vazia sem quebrar, igual às outras vitrines: sem curadoria
+ * publicada a página mostra o estado vazio em vez de erro. O card é o mesmo da
+ * vitrine — os `itens` vêm na forma de `PecaApi` e passam pelo `mapPeca`.
+ */
+export async function fetchMaisTopDaSemana(
+  opcoes: { revalidate?: number } = {},
+): Promise<Product[]> {
+  const { revalidate = REVALIDATE_VITRINE } = opcoes;
+
+  try {
+    const r = await api<{ itens: PecaApi[]; total?: number }>(
+      '/public/loja/curadoria/mais-top-da-semana',
+      { revalidate, tags: ['catalogo', 'curadoria:mais-top-da-semana'], timeoutMs: 12000 },
+    );
+    // A ordem é a da curadoria — só traduz, não mexe na sequência.
+    return (r?.itens ?? []).map(mapPeca);
+  } catch {
+    // Curadoria fora do ar não derruba a página — vira estado vazio.
+    return [];
+  }
+}
+
 export async function fetchVitrine(
   opcoes: {
     ordenar?: OrdemVitrine;
@@ -99,9 +129,11 @@ export async function fetchVitrine(
     revalidate?: number;
     /** Slug da categoria — vitrine de "Blusas", "Vestidos" etc. na home. */
     categoria?: string;
+    /** Só peça NOVA de verdade (≤30d da 1ª venda) — o carrossel "Novidades" da home usa. */
+    soNovidade?: boolean;
   } = {},
 ): Promise<Product[]> {
-  const { ordenar = 'relevancia', limite = 12, revalidate = REVALIDATE_VITRINE, categoria } = opcoes;
+  const { ordenar = 'relevancia', limite = 12, revalidate = REVALIDATE_VITRINE, categoria, soNovidade } = opcoes;
 
   const params = new URLSearchParams({
     perPage: String(limite),
@@ -112,6 +144,7 @@ export async function fetchVitrine(
     disponivel: '1',
   });
   if (categoria) params.set('categoria', categoria);
+  if (soNovidade) params.set('novidade', '1');
 
   try {
     const r = await api<{ itens: PecaApi[] }>(`/public/loja/produtos?${params.toString()}`, {

@@ -11,7 +11,6 @@ import { useCartStore } from '@/store/cart';
 import { useIsCartOpen, useUiStore } from '@/store/ui';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
-import { findQuote } from '@/lib/commerce/frete';
 import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
 import {
   toTrackedItem,
@@ -21,6 +20,9 @@ import {
 } from '@/lib/tracking';
 import { cn, formatPrice } from '@/lib/utils';
 import type { CartLine } from '@/types';
+import type { PublicPromotionConfig } from '@/types/promotion';
+import { previewBuyFourPayThree } from '@/lib/commerce/buy-four-pay-three';
+import { PromotionProgress } from '@/components/commerce/PromotionProgress';
 
 /**
  * MINI-CART — o drawer da sacola. Abre pelo ícone do header e sozinho ao
@@ -52,14 +54,31 @@ export function MiniCart() {
   const rawLines = useCartStore((s) => s.lines);
   const couponCode = useCartStore((s) => s.couponCode);
   const setCoupon = useCartStore((s) => s.setCoupon);
-  const cep = useCartStore((s) => s.cep);
-  const shippingQuoteId = useCartStore((s) => s.shippingQuoteId);
 
   // Antes da hidratação o localStorage ainda não falou — renderiza vazio dos
   // dois lados (server e client) pra não divergir o HTML.
   const lines = mounted ? rawLines : [];
   const count = lines.reduce((sum, l) => sum + l.quantity, 0);
   const subtotal = lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
+  const [promotion, setPromotion] = useState<PublicPromotionConfig | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetch('/api/promotion')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => active && setPromotion(data))
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+  const promotionPreview = useMemo(
+    () => previewBuyFourPayThree(lines.map((line) => ({
+      productId: line.productId,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+    }))),
+    [lines],
+  );
+  const promotionActive = Boolean(promotion?.enabled && promotion.mode === 'buy_4_pay_3');
+  const promotionApplied = promotionActive && promotionPreview.applied;
 
   /* ----------------------------------------------------------------- cupom */
   const [codigoDigitado, setCodigoDigitado] = useState('');
@@ -71,7 +90,15 @@ export function MiniCart() {
     () => (couponCode ? applyCoupon(couponCode, subtotal) : null),
     [couponCode, subtotal],
   );
-  const desconto = cupomAplicado?.ok ? cupomAplicado.discount : 0;
+  const descontoCupom = promotionApplied ? 0 : cupomAplicado?.ok ? cupomAplicado.discount : 0;
+  const descontoPromocao = promotionApplied ? promotionPreview.discountValue : 0;
+
+  useEffect(() => {
+    if (!promotionApplied || !couponCode) return;
+    trackCouponRemoved(couponCode);
+    setCoupon(null);
+    setAvisoCupom({ ok: true, texto: 'Cupom removido: esta promoção não acumula com outros descontos.' });
+  }, [promotionApplied, couponCode, setCoupon]);
 
   function aplicarCupom() {
     const resultado = applyCoupon(codigoDigitado, subtotal);
@@ -90,17 +117,22 @@ export function MiniCart() {
   }
 
   /* ----------------------------------------------------------------- frete */
-  // Estimado: só quando a cliente já cotou (CEP + opção salvos na página ou
-  // no checkout). Cupom de frete zera o valor do envio, não o subtotal.
-  const freteEstimado = cep && shippingQuoteId ? findQuote(cep, subtotal, shippingQuoteId) : undefined;
-  const precoFrete =
-    freteEstimado === undefined
-      ? undefined
-      : cupomAplicado?.ok && cupomAplicado.kind === 'shipping'
-        ? 0
-        : freteEstimado.price;
+  /**
+   * O DRAWER NÃO SOMA MAIS FRETE NENHUM (17/08).
+   *
+   * Ele usava `findQuote`, que lê a tabela LOCAL congelada — a mesma que
+   * dizia SEDEX R$ 28,90 onde o checkout cobra R$ 9,99. A sacola e o
+   * checkout passaram a usar a cotação de verdade; deixar o drawer na
+   * tabela velha criaria um TERCEIRO total na mesma sessão.
+   *
+   * Cotar aqui exigiria rede a cada abertura do drawer, pra mostrar um
+   * número que a cliente vai reconferir na sacola de qualquer jeito. Então
+   * o drawer passa a mostrar o subtotal e dizer que o frete vem depois —
+   * um total honesto e incompleto vale mais que um total errado.
+   */
+  const precoFrete: number | undefined = undefined;
 
-  const total = Math.max(0, subtotal - desconto) + (precoFrete ?? 0);
+  const total = Math.max(0, subtotal - descontoCupom - descontoPromocao) + (precoFrete ?? 0);
 
   /* -------------------------------------------------------------- tracking */
   // view_cart no momento em que o drawer ABRE com itens — abrir é "ver a
@@ -178,6 +210,7 @@ export function MiniCart() {
         <div className="flex flex-col gap-6">
           {/* Barra do frete grátis — mesma peça usada na página da sacola. */}
           <ProgressoFreteGratis subtotal={subtotal} />
+          {promotionActive && <PromotionProgress preview={promotionPreview} />}
 
           {/* Linhas */}
           <ul className="flex flex-col divide-y divide-border">
@@ -190,7 +223,11 @@ export function MiniCart() {
 
           {/* Cupom compacto */}
           <div className="border-t border-border pt-5">
-            {couponCode && cupomAplicado ? (
+            {promotionApplied ? (
+              <p className="text-small text-ink-soft">
+                Cupom indisponível: a peça de menor valor já será grátis.
+              </p>
+            ) : couponCode && cupomAplicado ? (
               <div className="flex items-start justify-between gap-3">
                 <p
                   className={cn(
@@ -255,10 +292,16 @@ export function MiniCart() {
               <dt className="font-light text-ink-soft">Subtotal</dt>
               <dd className="tabular text-ink">{formatPrice(subtotal)}</dd>
             </div>
-            {desconto > 0 && (
+            {descontoCupom > 0 && (
               <div className="flex justify-between">
                 <dt className="font-light text-ink-soft">Desconto ({couponCode})</dt>
-                <dd className="tabular text-ink">−{formatPrice(desconto)}</dd>
+                <dd className="tabular text-ink">−{formatPrice(descontoCupom)}</dd>
+              </div>
+            )}
+            {descontoPromocao > 0 && (
+              <div className="flex justify-between text-success">
+                <dt className="font-medium">Peça grátis — Leve 4, Pague 3</dt>
+                <dd className="tabular">−{formatPrice(descontoPromocao)}</dd>
               </div>
             )}
             <div className="flex justify-between">

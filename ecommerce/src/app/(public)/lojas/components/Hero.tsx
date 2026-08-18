@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { MapPin, ShoppingBag, ChevronDown } from 'lucide-react';
+import { MapPin, ShoppingBag } from 'lucide-react';
 import { AppLink } from '@/components/ui/AppLink';
 import { site, imgSrc, BLUR_DATA_URL } from '../lib';
 
@@ -31,7 +31,7 @@ export default function Hero({ onFindStore, onlineHref, onOnlineClick, imagem }:
   const capa = imagem || (site.heroImage ? imgSrc(site.heroImage, 2000) : null);
 
   return (
-    <section className="relative flex min-h-[100svh] items-center justify-center overflow-hidden bg-[var(--lj-ink)]">
+    <section className="relative flex min-h-[55svh] items-center justify-center overflow-hidden bg-[var(--lj-ink)] py-12 sm:min-h-[70svh] sm:py-16">
       {capa ? (
         /* Fotografia editorial com zoom-out lento na entrada */
         <motion.div
@@ -83,7 +83,7 @@ export default function Hero({ onFindStore, onlineHref, onOnlineClick, imagem }:
           initial={{ opacity: 0, y: 26 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.9, delay: 0.35 }}
-          className="lojas-serif mt-7 text-4xl font-medium leading-[1.08] sm:text-6xl lg:text-7xl"
+          className="lojas-serif mt-4 text-4xl font-medium leading-[1.08] sm:mt-6 sm:text-6xl lg:text-7xl"
         >
           Encontre a Lurds
           <br />
@@ -94,17 +94,16 @@ export default function Hero({ onFindStore, onlineHref, onOnlineClick, imagem }:
           initial={{ opacity: 0, y: 26 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.9, delay: 0.5 }}
-          className="mx-auto mt-8 max-w-2xl text-base font-light leading-relaxed text-white/85 sm:text-lg"
+          className="mx-auto mt-4 max-w-xl text-sm font-light leading-relaxed text-white/85 sm:mt-6 sm:text-base"
         >
-          Mais do que lojas. Espaços criados para acolher mulheres reais, com atendimento
-          especializado, provadores confortáveis e moda plus size feita para vestir autoestima.
+          Atendimento acolhedor, provadores confortáveis e moda plus size do 46 ao 60.
         </motion.p>
 
         <motion.div
           initial={{ opacity: 0, y: 26 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.9, delay: 0.65 }}
-          className="mt-12 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
+          className="mt-6 flex flex-col items-center justify-center gap-3 sm:mt-8 sm:flex-row sm:gap-4"
         >
           <button
             onClick={onFindStore}
@@ -124,14 +123,6 @@ export default function Hero({ onFindStore, onlineHref, onOnlineClick, imagem }:
         </motion.div>
       </div>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 1.6, duration: 1 }}
-        className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2"
-      >
-        <ChevronDown className="h-6 w-6 animate-bounce text-white/80" aria-hidden />
-      </motion.div>
     </section>
   );
 }
