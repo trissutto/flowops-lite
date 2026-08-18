@@ -215,6 +215,15 @@ const args = (de: Date, ate: Date, s: Segmento) =>
   [de, ate, s.trafego, s.plataforma, s.campanha] as const;
 
 const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
+  // `item_list_name` entra em 18/08, junto com as cinco vitrines da home.
+  //
+  // O site SEMPRE mandou o nome da vitrine no `select_item` — o GA4 recebe e
+  // usa. Aqui ele era podado em silêncio: `select_item` não tinha entrada
+  // neste mapa, então `permitidos` ficava só com os campos de contexto e o
+  // nome sumia. Com duas vitrines dava pra viver sem; com cinco, os cliques
+  // ficariam indistinguíveis no banco e "qual vitrine vende" não teria
+  // resposta no painel de primeira parte. Mesma família da poda do UTM.
+  select_item: ['item_list_name'],
   color_switch: ['color'],
   size_switch: ['size'],
   add_to_cart_blocked: ['reason'],

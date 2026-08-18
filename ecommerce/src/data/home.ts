@@ -13,3 +13,21 @@ export const HOME_CATEGORY_BASE: Array<Omit<HomeCategory, 'href'> & { path: stri
 
 export const HOME_STORES_PATH = '/lojas';
 export const HOME_NEWS_PATH = '/novidades';
+
+/**
+ * Teto de peças por vitrine da home: 3 colunas × 6 linhas no celular = 6
+ * colunas × 3 linhas no desktop (dono, 18/08).
+ *
+ * ⚠️ MORA AQUI, e não junto do `VitrineGrid` que a usa, por um motivo que
+ * nenhuma verificação automática pega: `VitrineGrid` é `'use client'`, e
+ * constante exportada de módulo client NÃO é valor quando lida do servidor —
+ * vira uma referência de cliente. A home é Server Component e passa esta
+ * constante como `limite` do fetch; importando-a de lá, o `perPage` da URL
+ * virava o texto de um `throw` ("Attempted to call VITRINE_GRID_MAX() from the
+ * server...") e as quatro vitrines de categoria chegavam VAZIAS.
+ *
+ * E chegavam caladas: `tsc`, ESLint e `next build` passaram os três, porque
+ * pro TypeScript o tipo continua sendo `number`. Só apareceu olhando a URL que
+ * saiu na rede.
+ */
+export const VITRINE_GRID_MAX = 18;
