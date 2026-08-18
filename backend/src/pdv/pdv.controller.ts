@@ -343,7 +343,10 @@ export class PdvController {
    * acontece. Ver `PdvService.importarCarrinho`.
    */
   @Post('sales/importar-carrinho')
-  importarCarrinho(@Req() req: any, @Body() body: { wcOrderId: number; storeCode?: string }) {
+  importarCarrinho(
+    @Req() req: any,
+    @Body() body: { wcOrderId?: number; recoveryId?: string; storeCode?: string },
+  ) {
     this.requireRole(req);
     // Mesma trava do createSale: role=store não escolhe loja pelo body.
     const userRole = req?.user?.role;
@@ -351,8 +354,12 @@ export class PdvController {
     const effectiveStoreCode =
       userRole === 'store' && userStoreCode ? userStoreCode : body?.storeCode;
     if (!effectiveStoreCode) throw new BadRequestException('storeCode obrigatório');
+    // `recoveryId` = contato capturado no checkout (carrinho que nunca virou
+    // pedido). Vem no lugar do wcOrderId — ver `PdvService.importarCarrinho`.
+    const recoveryId = String(body?.recoveryId ?? '').trim() || undefined;
     return this.svc.importarCarrinho({
-      wcOrderId: Number(body?.wcOrderId),
+      wcOrderId: body?.wcOrderId ? Number(body.wcOrderId) : undefined,
+      recoveryId,
       storeCode: effectiveStoreCode,
       vendedorUserId: req?.user?.id || req?.user?.sub,
       vendedorName: req?.user?.name || null,

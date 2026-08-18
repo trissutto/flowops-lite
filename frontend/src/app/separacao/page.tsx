@@ -1968,16 +1968,36 @@ function CarrinhosTab() {
         importados: number;
         total?: number;
         faltaram?: string[];
+        precoMudou?: string[];
       }>('/pdv/sales/importar-carrinho', {
         method: 'POST',
-        body: JSON.stringify({ wcOrderId: c.order_id ?? c.id }),
+        // CONTATO CAPTURADO no checkout manda o `recovery_id` (uuid) — ele não
+        // tem pedido nenhum por trás. O `c.id` dessas linhas é SINTÉTICO
+        // (970.000.000 + posição na lista) e não existe em tabela nenhuma:
+        // mandá-lo como wcOrderId era o "Carrinho 970000006 não encontrado"
+        // que fazia este botão morrer justo no carrinho mais comum.
+        body: JSON.stringify(
+          c.recovery_id
+            ? { recoveryId: c.recovery_id }
+            : { wcOrderId: c.order_id ?? c.id },
+        ),
       });
+      // Avisa ANTES de sair da tela — no PDV ela não teria como saber, e
+      // fecharia a venda incompleta (ou por outro valor) sem perceber.
       if (r.faltaram?.length) {
-        // Avisa ANTES de sair da tela — no PDV ela não teria como saber que
-        // faltou peça, e fecharia a venda incompleta sem perceber.
         alert(
           `Venda aberta com ${r.importados} de ${r.total ?? r.importados} peça(s).\n\n` +
             `NÃO entraram (bipe na mão no PDV):\n• ${r.faltaram.join('\n• ')}`,
+        );
+      }
+      // Preço da VITRINE ≠ preço do CAIXA: duas réguas de preço diferentes de
+      // propósito, que podem não bater na mesma peça. Ela combinou um valor no
+      // WhatsApp; quem decide o que cobrar é ela, mas não em silêncio.
+      if (r.precoMudou?.length) {
+        alert(
+          `ATENÇÃO — o caixa cobra outro valor que o site nesta(s) peça(s):\n\n` +
+            `• ${r.precoMudou.join('\n• ')}\n\n` +
+            `Confira com a cliente o valor combinado antes de finalizar.`,
         );
       }
       // O PDV retoma venda aberta pela chave do localStorage (não aceita id na

@@ -9577,6 +9577,14 @@ function CarrinhosAbandonadosModal({
     id: number;
     order_id?: number | null;
     order_number?: string | null;
+    /**
+     * Contato capturado no checkout (`CheckoutRecovery.id`). Quando vem, é
+     * ELE que importa a venda — a linha não tem pedido por trás, e o `id`
+     * numérico dela é sintético (970.000.000 + posição).
+     */
+    recovery_id?: string;
+    /** 'ecommerce' = chegou a tocar no pagamento · 'ecommerce-contact' = parou na etapa 1. */
+    source?: string;
     first_name?: string;
     last_name?: string;
     email?: string;
@@ -9626,10 +9634,33 @@ function CarrinhosAbandonadosModal({
   async function importar(c: Carrinho) {
     setImportando(c.id);
     try {
-      const r = await api<{ saleId: string; importados: number; total?: number; faltaram?: string[] }>(
+      const r = await api<{
+        saleId: string;
+        importados: number;
+        total?: number;
+        faltaram?: string[];
+        precoMudou?: string[];
+      }>(
         '/pdv/sales/importar-carrinho',
-        { method: 'POST', body: JSON.stringify({ wcOrderId: c.order_id ?? c.id }) },
+        {
+          method: 'POST',
+          body: JSON.stringify(
+            c.recovery_id ? { recoveryId: c.recovery_id } : { wcOrderId: c.order_id ?? c.id },
+          ),
+        },
       );
+      // PREÇO DA VITRINE ≠ PREÇO DO CAIXA. São duas réguas diferentes de
+      // propósito e podem não bater na mesma peça. Ela combinou um valor no
+      // WhatsApp — não pode descobrir a diferença só quando a cliente
+      // reclamar. Quem decide o que cobrar é ela, o sistema só não deixa
+      // passar em silêncio.
+      if (r.precoMudou?.length) {
+        toast(
+          'warning',
+          'Preço do caixa é diferente do site',
+          `${r.precoMudou.slice(0, 3).join(' · ')}${r.precoMudou.length > 3 ? ` e mais ${r.precoMudou.length - 3}` : ''}`,
+        );
+      }
       if (r.faltaram?.length) {
         // Avisa ANTES de abrir a venda: no PDV ela não teria como saber que
         // faltou peça e fecharia incompleta sem perceber.
@@ -9683,6 +9714,11 @@ function CarrinhosAbandonadosModal({
           )}
           {filtrados.map((c) => {
             const nome = [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email || 'Sem nome';
+            // Parou na etapa 1 do checkout: a captura pede NOME e WHATSAPP e
+            // mais nada. A venda online exige cadastro completo pra fechar, e
+            // é melhor ela já pedir CPF/e-mail/endereço no telefone do que
+            // descobrir na hora de gerar o PIX.
+            const soContato = c.source === 'ecommerce-contact';
             return (
               <div key={c.id} className="rounded-lg border-2 border-slate-200 p-3 flex items-center gap-3 flex-wrap">
                 <div className="flex-1 min-w-[180px]">
@@ -9694,6 +9730,11 @@ function CarrinhosAbandonadosModal({
                     {/* Campanha de origem: é o que liga a venda ao anúncio. */}
                     {c.utmCampaign && <span className="text-emerald-700">via {c.utmCampaign}</span>}
                   </div>
+                  {soContato && (
+                    <div className="text-[11px] text-violet-700 font-semibold mt-0.5">
+                      Só nome e WhatsApp — peça CPF, e-mail e endereço pra fechar
+                    </div>
+                  )}
                 </div>
                 <div className="font-black tabular-nums text-[#2E7D46]">
                   {brl(Number(c.cart_total || 0))}

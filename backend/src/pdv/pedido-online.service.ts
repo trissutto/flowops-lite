@@ -421,7 +421,7 @@ export class PedidoOnlineService {
        * no funil (o carrinho nunca sai da lista) e RECEITA SEM ORIGEM no ROAS.
        * Medido em 30 dias: R$ 2.133,89 de venda recuperada sem campanha.
        */
-      const carrinho: any = sale.carrinhoOrderId
+      let carrinho: any = sale.carrinhoOrderId
         ? await (this.prisma as any).order
             .findUnique({
               where: { id: sale.carrinhoOrderId },
@@ -433,6 +433,41 @@ export class PedidoOnlineService {
             })
             .catch(() => null)
         : null;
+
+      /**
+       * MESMA HISTÓRIA, OUTRA TABELA (18/08): a venda nasceu de um CONTATO
+       * capturado no checkout (`CheckoutRecovery`), que nunca virou pedido —
+       * é metade do abandono do site. A campanha existe ali, em
+       * `attribution`, e sem copiar daqui a venda recuperada nasce sem origem
+       * exatamente como nascia antes do bloco acima.
+       *
+       * `trackingInfo` fica null: a captura não guarda fbp/fbc, então o
+       * Purchase pro Meta CAPI vai sem os cookies do navegador. A campanha
+       * (utm) é o que dá pra recuperar, e é o que a cascata de ROAS usa.
+       */
+      if (!carrinho && (sale as any).carrinhoRecoveryId) {
+        const captura: any = await (this.prisma as any).checkoutRecovery
+          .findUnique({
+            where: { id: (sale as any).carrinhoRecoveryId },
+            select: { attribution: true },
+          })
+          .catch(() => null);
+        const at: any = captura?.attribution || null;
+        if (at) {
+          carrinho = {
+            // Sem `id`/`paidAt` de propósito — não é um `Order`. É o que o if
+            // lá embaixo usa pra NÃO tentar marcar pedido que não existe.
+            id: null,
+            paidAt: null,
+            utmSource: at.utm_source ?? at.source ?? null,
+            utmMedium: at.utm_medium ?? at.medium ?? null,
+            utmCampaign: at.utm_campaign ?? at.campaign ?? null,
+            utmId: at.utm_id ?? at.id ?? null,
+            utmContent: at.utm_content ?? at.content ?? null,
+            trackingInfo: null,
+          };
+        }
+      }
 
       /**
        * A LOJA VENDEDORA ENTREGA ELA MESMA (17/08) — não vira tarefa de
@@ -654,8 +689,12 @@ export class PedidoOnlineService {
        * Marca `paidAt` (vira "recovered" na régua do `listEcommercePending`) e
        * deixa o rastro dos dois lados no histórico. `cancelled` não serve: o
        * carrinho não foi perdido, foi ganho por outro caminho.
+       *
+       * ⚠️ `carrinho.id` no if, não `carrinho`: o objeto pode ser o da CAPTURA
+       * do checkout (só atribuição, sem `Order` nenhum por trás). Esse sai do
+       * abandono na `checkout_recoveries` — quem marca é o `finalize`.
        */
-      if (carrinho && !carrinho.paidAt) {
+      if (carrinho?.id && !carrinho.paidAt) {
         try {
           await (this.prisma as any).order.update({
             where: { id: carrinho.id },
