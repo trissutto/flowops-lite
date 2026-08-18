@@ -1,6 +1,6 @@
 import { Hero } from '@/components/sections/Hero';
 import { HomeBenefitsAndStores, HomeCategoryNav, HomeComfortBanner, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
-import { ProductCarousel } from '@/components/sections/ProductCarousel';
+import { VitrineGrid } from '@/components/sections/VitrineGrid';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { InstagramCard } from '@/components/cards/InstagramCard';
@@ -107,7 +107,14 @@ export default async function HomePage({
       {/* AS VITRINES, NA ORDEM DA RETAGUARDA — hoje Mais Top da semana e
           Novidades, que antes eram duas seções escritas à mão aqui. Vitrine
           sem peça não chega até aqui (o backend já tira): carrossel vazio é
-          pior que uma seção a menos. */}
+          pior que uma seção a menos.
+
+          EM GRADE, NÃO CARROSSEL (dono, 18/08): 6 colunas x 3 linhas no
+          desktop, 3 x 6 no celular. O carrossel mostrava 2,5 peças e exigia
+          arrastar pra ver o resto — a vitrine virava enfeite. QUANTAS peças
+          cada uma mostra continua sendo o `limite` da própria vitrine em
+          /retaguarda/vitrines-home (teto 24); a grade corta em 18 pra fechar
+          3 linhas exatas. */}
       {blocos.carrosseis.map((vitrine) => (
         <Section
           key={vitrine.id}
@@ -130,12 +137,7 @@ export default async function HomePage({
             compactMobile
           />
           <div className="mt-3 sm:mt-10">
-            <ProductCarousel
-              products={vitrine.produtos}
-              ariaLabel={vitrine.titulo}
-              progressiveImages
-              compactMobile
-            />
+            <VitrineGrid products={vitrine.produtos} listName={vitrine.titulo} />
           </div>
         </Section>
       ))}

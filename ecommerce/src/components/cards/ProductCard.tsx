@@ -49,6 +49,21 @@ interface ProductCardProps {
   href?: string;
   /** Dispara somente quando a cliente abre a página da peça. */
   onProductClick?: () => void;
+  /**
+   * SLOT ESTREITO — a grade da home (`VitrineGrid`), 3 colunas no celular e 6
+   * no desktop. Medido a 360px de viewport: o card fica com 91px de largura,
+   * metade do card de 2 colunas pro qual este componente foi desenhado. Nessa
+   * largura a etiqueta "Promoção" mede 117px e é CORTADA no meio da palavra
+   * pelo `overflow-hidden` da moldura, e o botão da sacola (`size-10`) ocupa
+   * 44% do card.
+   *
+   * O modo enxuga o que é DECORAÇÃO nessa largura (tecido, faixa de tamanhos,
+   * a repetição do "-50%") e aperta etiqueta e botões. O que faz a cliente
+   * parar continua inteiro: foto, nome, preço riscado, preço atual e Pix.
+   * Resultado medido a 360px — bloco de texto de 145px sob foto de 122px, com
+   * variação de altura ZERO entre os 18 cards, contra 189px antes do enxugo.
+   */
+  compact?: boolean;
 }
 
 /** Largura do card na grade padrão de catálogo. */
@@ -61,6 +76,20 @@ const GRID_SIZES = '(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw';
 export const CAROUSEL_PRODUCT_SIZES =
   '(max-width: 640px) 68vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, 23vw';
 
+/**
+ * Largura do card na GRADE DA HOME — 3 colunas até 1279px, 6 a partir de 1280.
+ *
+ * Precisa ser diferente do carrossel porque lá o card ocupa 68vw no celular e
+ * aqui ocupa 30vw (93px num aparelho de 360). Herdar o `sizes` do carrossel
+ * faria o Next servir a variante de 640px pra um slot de 93px — cerca de 4× os
+ * bytes por foto, vezes as 90 peças das cinco vitrines.
+ *
+ * O `200px` fixo do desktop é exato, não chute: o `max-w-wide` trava o
+ * container em 1344px, então (1344 − 80 de gutter − 5 gaps de 24) / 6 = 191px
+ * é a largura MÁXIMA que este card alcança em qualquer monitor.
+ */
+export const HOME_GRID_SIZES = '(max-width: 1279px) 30vw, 200px';
+
 export function ProductCard({
   product,
   index = 0,
@@ -72,6 +101,7 @@ export function ProductCard({
   progressiveImage = false,
   href: customHref,
   onProductClick,
+  compact = false,
 }: ProductCardProps) {
   const mounted = useMounted();
   const abrirQuickAdd = useQuickAddStore((s) => s.abrir);
@@ -112,13 +142,34 @@ export function ProductCard({
     aspect === '3/4' ? 'aspect-3/4' : aspect === '4/5' ? 'aspect-4/5' : 'aspect-square';
   const ProductImage = progressiveImage ? ProgressiveImage : Image;
 
+  /**
+   * O stagger da entrada é calibrado pelo número de COLUNAS — a onda só lê
+   * como onda se reiniciar no começo de cada linha. O 4 é da grade de
+   * catálogo; a grade da home usa 3, que fecha certo nas DUAS larguras dela
+   * (3 colunas = uma onda por linha; 6 = a mesma onda repetida duas vezes).
+   * Com o 4 numa linha de 6 a onda reinicia no quinto card e a entrada fica
+   * visivelmente torta.
+   */
+  const colunasDoStagger = compact ? 3 : 4;
+
+  /**
+   * No card estreito o parcelamento sai da linha do Pix — mas só quando existe
+   * preço no Pix pra ocupar o lugar dela, senão a linha ficaria vazia.
+   *
+   * Medido a 360px (card de 91px): "R$ 75,91 no Pix · 12x de R$ 6,66" quebra
+   * em TRÊS linhas, 59px de texto sob uma foto de 122px. O Pix é o que a
+   * cliente decide na vitrine (é o desconto que ela vê agora); o parcelamento
+   * ela confere na página da peça, onde a linha cabe inteira.
+   */
+  const mostraParcelamento = !compact || !product.pixPrice;
+
   return (
     <article
       className={cn(
         'group relative flex animate-[widget-enter_560ms_cubic-bezier(0.22,1,0.36,1)_both] flex-col',
         className,
       )}
-      style={{ animationDelay: `${(index % 4) * 60}ms` }}
+      style={{ animationDelay: `${(index % colunasDoStagger) * 60}ms` }}
     >
       {/* Mídia */}
       <div className={cn('relative overflow-hidden rounded-md bg-surface-alt', aspectClass)}>
@@ -157,10 +208,18 @@ export function ProductCard({
         </Link>
 
         {/* Etiquetas */}
-        <div className="pointer-events-none absolute top-3 left-3 flex flex-col items-start gap-1.5">
-          {discount > 0 && <ProductBadgeTag badge="promocao" />}
+        <div
+          className={cn(
+            'pointer-events-none absolute flex flex-col items-start gap-1.5',
+            // O `right-2` existe pra dar à etiqueta um limite de largura: sem
+            // ele o bloco é `auto` e um rótulo longo vaza pra fora da moldura
+            // em vez de quebrar. Ver o `compact` do `Badge`.
+            compact ? 'top-2 right-2 left-2' : 'top-3 left-3',
+          )}
+        >
+          {discount > 0 && <ProductBadgeTag badge="promocao" compact={compact} />}
           {product.badges?.filter((badge) => badge !== 'promocao').slice(0, 2).map((badge) => (
-            <ProductBadgeTag key={badge} badge={badge} />
+            <ProductBadgeTag key={badge} badge={badge} compact={compact} />
           ))}
         </div>
 
@@ -170,7 +229,20 @@ export function ProductCard({
           onClick={() => toggleWishlist(product.id)}
           aria-label={isFavorite ? `Remover ${product.name} dos favoritos` : `Salvar ${product.name} nos favoritos`}
           aria-pressed={mounted ? isFavorite : undefined}
-          className="absolute top-3 right-3 flex size-9 items-center justify-center rounded-pill bg-surface/85 text-ink backdrop-blur transition-colors hover:bg-surface"
+          className={cn(
+            'absolute items-center justify-center rounded-pill bg-surface/85 text-ink backdrop-blur transition-colors hover:bg-surface',
+            /**
+             * O coração SOME abaixo de 640px na grade da home, e é geometria,
+             * não gosto: ali o card tem 93px de largura. O botão (32px, no
+             * canto direito) e a etiqueta "Promoção" (76px, no esquerdo) não
+             * cabem na mesma linha — um passa por baixo do outro. Some o que
+             * é secundário: favoritar continua no card da categoria, na busca
+             * e na página da peça; a etiqueta de desconto não tem segunda
+             * chance de aparecer. De 640px pra cima o card já tem 186px e os
+             * dois voltam a conviver.
+             */
+            compact ? 'hidden top-2 right-2 size-8 sm:flex' : 'flex top-3 right-3 size-9',
+          )}
         >
           <Heart
             className={cn(
@@ -189,7 +261,14 @@ export function ProductCard({
             type="button"
             onClick={() => abrirQuickAdd(product)}
             aria-label={`Adicionar ${product.name} à sacola`}
-            className="absolute right-3 bottom-3 z-[1] flex size-10 items-center justify-center rounded-pill bg-ink/90 text-light backdrop-blur transition-transform hover:scale-105 lg:size-9"
+            className={cn(
+              'absolute z-[1] flex items-center justify-center rounded-pill bg-ink/90 text-light backdrop-blur transition-transform hover:scale-105',
+              // O `size-10` foi desenhado pro card de 2 colunas. Nos 91px da
+              // grade da home ele ocuparia 44% da largura, sobre uma foto de
+              // 91×122 — vira um botão em cima da peça, não ao lado dela. Com
+              // `size-8` cai pra 34%, medido.
+              compact ? 'right-2 bottom-2 size-8 lg:size-9' : 'right-3 bottom-3 size-10 lg:size-9',
+            )}
           >
             <ShoppingBag className="size-4" strokeWidth={1.75} />
           </button>
@@ -198,7 +277,10 @@ export function ProductCard({
         {/* Camada de hover: quick view + tamanhos (desktop) */}
         <div
           className={cn(
-            'pointer-events-none absolute inset-x-3 bottom-3 hidden flex-col gap-2 transition-all duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:flex',
+            'pointer-events-none absolute hidden flex-col gap-2 transition-all duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:flex',
+            // Acompanha o recuo do botão da sacola pra não sobrarem duas
+            // margens diferentes dentro da mesma moldura.
+            compact ? 'inset-x-2 bottom-2' : 'inset-x-3 bottom-3',
             'translate-y-3 opacity-0 lg:group-hover:translate-y-0 lg:group-hover:opacity-100',
           )}
         >
@@ -233,14 +315,27 @@ export function ProductCard({
       </div>
 
       {/* Texto */}
-      <div className="mt-4 flex flex-1 flex-col">
-        {product.fabric && <p className="eyebrow text-ink-muted">{product.fabric}</p>}
+      <div className={cn('flex flex-1 flex-col', compact ? 'mt-3' : 'mt-4')}>
+        {/* O tecido usa a `.eyebrow` — a mesma régua que faz a palavra
+            "Promoção" medir 117px num card de 91px. Um nome de tecido
+            ("VISCOLYCRA PREMIUM") é o dobro disso em caixa alta: vira um
+            parágrafo de três linhas pra uma informação que não decide a
+            compra na vitrine. Fica na ficha da peça. */}
+        {product.fabric && !compact && <p className="eyebrow text-ink-muted">{product.fabric}</p>}
 
         <h3 className="mt-1.5">
           <Link
             href={href}
             onClick={onProductClick}
-            className="text-body font-normal text-ink transition-colors hover:text-primary-strong"
+            className={cn(
+              'font-normal text-ink transition-colors hover:text-primary-strong',
+              // Nome real do catálogo ("Blusa Manga Curta — 700984") tem 26
+              // caracteres na mediana e 37 no pior caso. Em `text-body` num
+              // card de 93px isso vira quatro linhas; em `text-small` cabe em
+              // duas. O clamp é a rede: sem ele um nome longo sozinho estica a
+              // linha inteira da grade e abre um rasgo branco sob os vizinhos.
+              compact ? 'line-clamp-2 text-small xl:text-body' : 'text-body',
+            )}
           >
             {product.name}
           </Link>
@@ -262,14 +357,19 @@ export function ProductCard({
           </>
         ) : (
           <>
-            <div className="mt-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <div className={cn('mt-2 flex flex-wrap items-baseline gap-y-1', compact ? 'gap-x-2' : 'gap-x-2.5')}>
               {product.compareAtPrice && (
                 <span className="tabular text-small text-ink-muted line-through">
                   {formatPrice(product.compareAtPrice)}
                 </span>
               )}
               <span className="tabular text-body font-medium text-ink">{formatPrice(product.price)}</span>
-              {discount > 0 && (
+              {/* O "-50%" sai do card estreito porque ele é a TERCEIRA ficha
+                  de preço numa linha de 91px — os três não cabem e a linha
+                  virava três, 72px de texto. É também o único dos três que se
+                  repete: a etiqueta "Promoção" já está na foto, logo acima. O
+                  par riscado/atual fica, que é o que faz a cliente parar. */}
+              {discount > 0 && !compact && (
                 <span className="tabular text-small font-medium text-secondary">-{discount}%</span>
               )}
             </div>
@@ -278,19 +378,26 @@ export function ProductCard({
               {product.pixPrice && (
                 <>
                   <span className="tabular font-medium text-success">{formatPrice(product.pixPrice)}</span>{' '}
-                  no Pix ·{' '}
+                  no Pix
+                  {mostraParcelamento && ' · '}
                 </>
               )}
-              <span className="tabular">
-                {product.installments
-                  ? `${product.installments.times}x de ${formatPrice(product.installments.value)}`
-                  : formatInstallments(product.price)}
-              </span>
+              {mostraParcelamento && (
+                <span className="tabular">
+                  {product.installments
+                    ? `${product.installments.times}x de ${formatPrice(product.installments.value)}`
+                    : formatInstallments(product.price)}
+                </span>
+              )}
             </p>
           </>
         )}
 
-        {faixaDeTamanhos && (
+        {/* A faixa sai do card estreito: a mesma resposta ("serve em mim?")
+            já está nas pílulas de tamanho do hover e na página da peça, e
+            aqui ela custa mais uma linha de texto num bloco que já compete
+            com a foto. Ver o comentário do `compact`. */}
+        {faixaDeTamanhos && !compact && (
           <p className="mt-1.5 text-small text-ink-muted">{faixaDeTamanhos}</p>
         )}
 

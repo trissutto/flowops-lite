@@ -33,7 +33,30 @@ function texto(valor: unknown): string | null {
   return t || null;
 }
 
+/**
+ * ⚠️ ESTA LISTA TEM UMA GÊMEA NO BACKEND — e a poda acontece nas DUAS.
+ *
+ * O que passa por aqui ainda enfrenta `CAMPOS_DIAGNOSTICOS`
+ * (`site-metrics.service.ts`) antes de virar linha em `site_eventos`. São dois
+ * filtros em série, então campo novo só chega ao banco se entrar nos dois:
+ * ampliar só o de lá é ampliar nada — o dado já morreu aqui, e morre em
+ * silêncio (nenhum erro, nenhum log, a coluna `dados` só vem sem a chave).
+ *
+ * Quem duvidar compare `checkout_error` nos dois arquivos: `code`, `stage` e
+ * `attempt` entraram na lista do backend em 17/08 e nunca foram acrescentados
+ * aqui — os três seguem descartados antes de sair do site.
+ */
 const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
+  /**
+   * `item_list_name` é a VITRINE de onde a peça foi clicada ("Mais Top da
+   * semana", "Blusas"). Entra em 18/08 junto com as cinco vitrines da home:
+   * com duas dava pra viver sem, com cinco os cliques ficam indistinguíveis no
+   * banco e "qual vitrine vende" não tem resposta de primeira parte.
+   *
+   * O nome já viajava no evento (ver `trackSelectItem`) e o GA4 sempre o
+   * recebeu — o que faltava era ele sobreviver à poda no caminho de casa.
+   */
+  select_item: ['item_list_name'],
   color_switch: ['color'],
   size_switch: ['size'],
   add_to_cart_blocked: ['reason'],
