@@ -8,6 +8,7 @@ import { RoutingService } from '../routing/routing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
+import { PickScanService } from '../pick-orders/pick-scan.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
@@ -55,6 +56,8 @@ export class OrdersController {
     private readonly prisma: PrismaService,
     private readonly wc: WooCommerceService,
     private readonly erp: ErpService,
+    // Estorno dos bipes quando o pedido é cancelado/reembolsado no site.
+    private readonly pickScans: PickScanService,
   ) {}
 
   // ---------- Rotas estáticas PRIMEIRO (senão o `:id` come) ----------
@@ -1658,9 +1661,24 @@ export class OrdersController {
       });
 
       // Ordens de separação que ainda não saíram: não há mais o que separar.
+      // Lê os ids ANTES do update — depois de cancelados, o filtro por status
+      // não acha mais quem eram, e é deles que vêm as peças a devolver.
+      const cancelaveis = await (this.prisma as any).pickOrder.findMany({
+        where: { orderId: local.id, status: { notIn: ['shipped', 'cancelled'] } },
+        select: { id: true },
+      });
       const picks = await (this.prisma as any).pickOrder.updateMany({
         where: { orderId: local.id, status: { notIn: ['shipped', 'cancelled'] } },
         data: { status: 'cancelled' },
+      });
+
+      // DEVOLVE o que a loja já tinha bipado. Desde 18/08 o bipe baixa o
+      // estoque na hora: sem este estorno, o pedido cancelado no site deixava
+      // as peças separadas fora do estoque pra sempre — invisíveis no balcão e
+      // no site, sem ninguém pra reclamar delas.
+      const estorno = await this.pickScans.revertOrderStock(local.id, {
+        reason: 'order_cancelled',
+        pickOrderIds: cancelaveis.map((p: any) => p.id),
       });
 
       await (this.prisma as any).orderHistory
@@ -1671,7 +1689,8 @@ export class OrdersController {
             toStatus: 'cancelled',
             note:
               `Pedido ${s === 'refunded' ? 'REEMBOLSADO' : 'CANCELADO'} pelo Flow` +
-              (picks.count ? ` · ${picks.count} ordem(ns) de separação cancelada(s)` : ''),
+              (picks.count ? ` · ${picks.count} ordem(ns) de separação cancelada(s)` : '') +
+              (estorno.pecas ? ` · ${estorno.pecas} peça(s) bipada(s) devolvida(s) ao estoque` : ''),
           },
         })
         .catch(() => {});

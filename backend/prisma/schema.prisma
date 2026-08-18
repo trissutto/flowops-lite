@@ -878,6 +878,63 @@ model PickOrder {
   @@map("pick_orders")
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  BIPE DA SEPARAÇÃO — uma linha por PEÇA que a loja encostou no leitor.
+//
+//  Existe por causa do pedido 960000006 (São José, 17/08): a atendente bipou
+//  5 das 11 peças, separou, e o estoque não baixou. O bipe vivia só no
+//  navegador e só chegava ao backend inteiro no finish-separation, que EXIGE
+//  100% bipado — com 5 na mão ela não conseguia finalizar, a baixa nunca
+//  rodava, e as 5 peças já separadas continuavam vendendo no balcão e no site.
+//
+//  Cada linha é gravada NA MESMA transação Postgres que aplica o delta de
+//  estoque. Não existe janela entre "registrei o bipe" e "baixei a peça".
+//
+//  NÃO tem relation/FK pro PickOrder DE PROPÓSITO: removePickOrder e o
+//  recalculateForWc DELETAM o card. Com cascade, a prova de que 5 peças
+//  saíram do estoque morreria junto com ele — que é exatamente o buraco que
+//  este trabalho fecha. Linha órfã é EVIDÊNCIA.
+// ════════════════════════════════════════════════════════════════════════
+model PickOrderScan {
+  id          String  @id @default(uuid())
+  pickOrderId String  @map("pick_order_id")
+  orderId     String  @map("order_id")
+  storeId     String  @map("store_id")
+  // Código da loja NA HORA do bipe (08). É pra ESTA loja que a peça volta no
+  // estorno — `orderItem.assignedStoreId` é zerado pelo removePickOrder e pelo
+  // reroteamento, então depois do fato ele não sabe mais de quem era a peça.
+  storeCode   String  @map("store_code")
+  // SKU congelado: o swapItem reescreve o `sku` do OrderItem in-place, e quem
+  // saiu do estoque foi a peça de ANTES da troca.
+  sku         String
+  ean         String?
+  // UUID gerado NO NAVEGADOR antes do POST. Torna o reenvio (rede caiu, botão
+  // clicado 2x) um no-op: o unique abaixo recusa a segunda gravação da MESMA
+  // peça em vez de baixar estoque de novo. O teto por SKU (bipado < esperado)
+  // é a segunda trava, pro caso da resposta ter se perdido e a tela ter
+  // gerado um uid novo.
+  scanUid     String   @map("scan_uid")
+  scannedAt   DateTime @default(now()) @map("scanned_at")
+  scannedBy   String?  @map("scanned_by")
+  // Par baixa/estorno no molde do RealignmentShipment: a linha só pode ir de
+  // "baixada" pra "devolvida" UMA vez, e é o WHERE do estorno que garante isso.
+  stockDecreasedAt DateTime? @map("stock_decreased_at")
+  stockIncreasedAt DateTime? @map("stock_increased_at")
+  // Null = baixa aplicada. 'shadow' = ERP_WRITE_ENABLED off na hora do bipe;
+  // 'killswitch' = PICK_SCAN_DEBIT=0. Nesses casos a peça CONTA na tela (a loja
+  // não fica travada) e a diferença vira "faltando" pro settle no finish.
+  debitSkippedReason String? @map("debit_skipped_reason")
+  revertedAt   DateTime? @map("reverted_at")
+  // undo | swap | issue | remove_card | reroute | order_cancelled | store_swap
+  revertReason String?   @map("revert_reason")
+  revertedBy   String?   @map("reverted_by")
+
+  @@unique([pickOrderId, scanUid])
+  @@index([pickOrderId, sku])
+  @@index([orderId])
+  @@map("pick_order_scans")
+}
+
 model OrderHistory {
   id         String   @id @default(uuid())
   orderId    String   @map("order_id")

@@ -5,20 +5,36 @@ import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 /**
  * BipModal — tela de bipagem por código de barras (EAN13) pra finalizar separação.
  *
+ * O BIPE É A BAIXA DE ESTOQUE (18/08). Cada peça bipada vai pro servidor na
+ * hora (`POST /pick-orders/:id/scan`), que grava o bipe e tira a peça do
+ * estoque na MESMA transação. A peça só fica verde aqui depois do 200 — se o
+ * estoque não baixou, ela NÃO está bipada, e a atendente bipa de novo.
+ *
+ * Por que mudou: no pedido 960000006 (São José, 17/08) a atendente bipou 5 das
+ * 11 peças e separou. O bipe vivia só neste navegador e o único gatilho de
+ * baixa era o "Finalizar separação", que EXIGE 100% bipado — ela não conseguia
+ * finalizar, a baixa nunca rodava, e as 5 peças já separadas continuavam
+ * vendendo no balcão e no site.
+ *
  * FLUXO:
  *  1. Abre quando separadora clica "Iniciar Bipagem" no card do pedido.
- *  2. Faz GET /pick-orders/:id/scan-data → recebe itens + EAN de cada um.
+ *  2. GET /pick-orders/:id/scan-data → itens + EAN de cada um + OS BIPES JÁ
+ *     REGISTRADOS (a separação continua de qualquer PC, não só neste).
  *  3. Input fica auto-focado pro leitor USB (scanner emula teclado + Enter).
- *  4. Cada bip:
- *     - Bate com EAN esperado E qty restante > 0 → verde, soma no contador
- *     - Bate com EAN mas qty estourou → vermelho "Já bipou X de Y"
- *     - Não bate com nenhum EAN → vermelho "EAN não pertence a esse pedido"
- *  5. Quando 100% bipado → habilita "Finalizar separação" → POST /pick-orders/:id/finish-separation
- *  6. Status do pick-order vira `separated` → matriz recebe na retaguarda
+ *  4. Cada bip: POST /scan → verde e conta; erro → vermelho, NÃO conta, e a
+ *     mensagem FICA na tela até o próximo bipe (erro que some sozinho em 2,5s
+ *     vira peça separada que ninguém registrou).
+ *  5. "Desfazer último bip" → POST /scan-undo, que DEVOLVE a peça pro estoque.
+ *  6. 100% bipado → "Finalizar separação" (que segue exigindo tudo bipado).
  *
- * PERSISTÊNCIA: bips ficam em localStorage (chave por pick-order-id).
- * Se operadora fechar o browser e reabrir, continua de onde parou.
- * Key é limpa quando finaliza.
+ * QUEM MANDA NA CONTAGEM É O SERVIDOR. Sempre que ele recusa um bipe, ou o
+ * total dele não bate com o daqui, a tela recarrega o /scan-data em vez de
+ * teimar: a lista local pode estar ATRÁS (resposta perdida, outro PC no mesmo
+ * pedido), e teimar trava o progresso abaixo de 100% com o "Finalizar" cinza.
+ *
+ * PERSISTÊNCIA: no BANCO, não mais no localStorage. A chave antiga
+ * `flowops_scan_<id>` é apagada na abertura — ela sobrevivia a
+ * report-issue/cancelamento e virava lixo permanente no navegador da loja.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -58,12 +74,70 @@ interface ScanData {
   pickOrderId: string;
   status: string;
   items: ScanItem[];
+  /** Bipes já registrados NO SERVIDOR (peças que já saíram do estoque). */
+  scans?: Scan[];
 }
 
 interface Scan {
+  /** Identidade da PEÇA bipada, gerada aqui antes do POST. É o que faz o
+   *  reenvio do mesmo bipe não baixar estoque duas vezes. */
+  scanUid: string;
   sku: string;
   ean: string;
   timestamp: string;
+}
+
+interface ScanResponse {
+  ok: boolean;
+  duplicate: boolean;
+  scanUid: string;
+  sku: string;
+  ean: string | null;
+  debitSkippedReason: string | null;
+  scanned: Array<{ sku: string; count: number }>;
+  totalScanned: number;
+}
+
+/** Mensagem do SERVIDOR, não o "400: {json}" cru. A atendente precisa ler
+ *  "Já bipou 2 de 2 dessa peça", não um status HTTP. */
+function msgErro(e: any): string {
+  const doCorpo = e?.body?.message;
+  if (Array.isArray(doCorpo) && doCorpo.length) return String(doCorpo[0]);
+  if (typeof doCorpo === 'string' && doCorpo.trim()) return doCorpo;
+  const cru = String(e?.message ?? '').replace(/^\d{3}:\s*/, '').trim();
+  // 502/504 do proxy do Railway (o backend reinicia ~30s a cada deploy) vêm
+  // como PÁGINA HTML, não JSON. Despejar a página na faixa de aviso não diz
+  // nada pra quem está com a peça na mão.
+  if (!cru || /^</.test(cru)) return 'o servidor não respondeu';
+  return cru.length > 160 ? `${cru.slice(0, 160)}…` : cru;
+}
+
+/** A resposta se PERDEU (não sabemos se a peça baixou) × o servidor RECUSOU
+ *  (regra de negócio, a peça não baixou). Rede sem resposta não tem `status`;
+ *  5xx tem — mas 502/504 do restart de deploy é a mesma incerteza, e cair no
+ *  ramo de "recusa" fazia a tela pintar de amarelo um bipe que pode ter saído
+ *  do estoque. */
+function semResposta(e: any): boolean {
+  const s = e?.status;
+  return s === undefined || s === null || Number(s) >= 500;
+}
+
+/** Motivo técnico da baixa pulada → português de loja. 'shadow'/'killswitch'
+ *  são nomes de env; a atendente não tem o que fazer com eles. */
+function motivoSemBaixa(r: string | null | undefined): string {
+  if (r === 'shadow') return 'o sistema está em modo de teste';
+  if (r === 'killswitch') return 'a baixa no bipe está desligada';
+  return r ? String(r) : 'motivo não informado';
+}
+
+/** UUID por peça. `crypto.randomUUID` não existe em contexto inseguro (o app
+ *  da loja roda em http://IP:3000 na LAN), então tem fallback. */
+function novoScanUid(): string {
+  try {
+    const c: any = typeof crypto !== 'undefined' ? crypto : null;
+    if (c?.randomUUID) return c.randomUUID();
+  } catch {}
+  return `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 interface BipModalProps {
@@ -93,12 +167,24 @@ export default function BipModal({
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [undoing, setUndoing] = useState(false);
+  /** Erro do "Finalizar separação". Mora separado do `err` (falha de carga)
+   *  porque é mostrado NO RODAPÉ, colado no botão: o corpo do modal rola, e um
+   *  erro no topo depois de um clique lá embaixo é erro que ninguém lê. */
+  const [erroFinal, setErroFinal] = useState<string | null>(null);
+  /** Bipes esperando resposta do servidor. A tela não pode ficar muda enquanto
+   *  a peça está no ar: antes o bipe era instantâneo (localStorage) e agora é
+   *  uma ida à rede — sem este contador a atendente bipa, não vê nada mudar e
+   *  conclui que o leitor falhou. */
+  const [naFila, setNaFila] = useState(0);
   const [debug, setDebug] = useState<ResolveResponse | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Espelho dos bipes pra ler dentro da fila (o callback enfileirado roda
+  // depois do render que o criou — ler `scans` ali daria lista velha).
+  const scansRef = useRef<Scan[]>([]);
+  useEffect(() => { scansRef.current = scans; }, [scans]);
 
-  const storageKey = `flowops_scan_${pickOrderId}`;
-
-  // Carrega scan-data + restaura bips do localStorage
+  // Carrega scan-data + os bipes JÁ REGISTRADOS no servidor
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -106,14 +192,12 @@ export default function BipModal({
         const res = await api<ScanData>(`/pick-orders/${pickOrderId}/scan-data`);
         if (!alive) return;
         setData(res);
-        // Restaura bips salvos
-        try {
-          const raw = localStorage.getItem(storageKey);
-          if (raw) {
-            const saved = JSON.parse(raw) as Scan[];
-            if (Array.isArray(saved)) setScans(saved);
-          }
-        } catch {}
+        const doServidor = Array.isArray(res.scans) ? res.scans : [];
+        scansRef.current = doServidor;
+        setScans(doServidor);
+        // Lixo da era do localStorage: a chave sobrevivia a report-issue,
+        // remoção pela matriz e cancelamento do pedido, e ficava pra sempre.
+        try { localStorage.removeItem(`flowops_scan_${pickOrderId}`); } catch {}
       } catch (e: any) {
         if (!alive) return;
         setErr(e?.message ?? 'Erro ao carregar itens');
@@ -122,7 +206,33 @@ export default function BipModal({
       }
     })();
     return () => { alive = false; };
-  }, [pickOrderId, storageKey]);
+  }, [pickOrderId]);
+
+  /**
+   * PUXA A VERDADE DO SERVIDOR quando a lista daqui pode ter ficado pra trás.
+   *
+   * Acontece de verdade: o POST chega, o estoque baixa e a RESPOSTA se perde
+   * (a rede da loja cai — é a premissa deste trabalho). A tela mostra "não
+   * bipou", a atendente bipa de novo, e o teto por SKU do servidor recusa com
+   * "Já bipou 1 de 1 dessa peça" — numa peça que a tela exibe zerada. Sem
+   * ressincronizar, o progresso trava abaixo de 100%, o "Finalizar" nunca
+   * habilita e a separação morre exatamente como morreu no pedido 960000006.
+   * Também cobre o outro PC bipando o mesmo pedido.
+   */
+  const ressincronizar = useCallback(async (): Promise<number | null> => {
+    try {
+      const res = await api<ScanData>(`/pick-orders/${pickOrderId}/scan-data`);
+      setData(res);
+      const doServidor = Array.isArray(res.scans) ? res.scans : [];
+      scansRef.current = doServidor;
+      setScans(doServidor);
+      return doServidor.length;
+    } catch {
+      // Ressincronizar é conserto, não operação: se a rede ainda está fora, a
+      // mensagem de erro do bipe já está na tela e é ela que vale.
+      return null;
+    }
+  }, [pickOrderId]);
 
   // Mantém o input focado (se operadora clicar fora, volta o foco)
   useEffect(() => {
@@ -135,12 +245,15 @@ export default function BipModal({
     return () => clearInterval(timer);
   }, []);
 
-  // Auto-limpa feedback depois de 2.5s
+  // Auto-limpa SÓ o "deu certo", depois de 2.5s. Erro e aviso ficam na tela
+  // até o próximo bipe: a atendente olha pra peça e pra arara, não pro monitor,
+  // e um "NÃO BIPOU" que some sozinho em 2,5s vira peça separada que ninguém
+  // registrou — o buraco que este trabalho existe pra fechar.
   useEffect(() => {
-    if (!feedback) return;
+    if (!feedback || feedback.type !== 'ok') return;
     const t = setTimeout(() => setFeedback(null), 2500);
     return () => clearTimeout(t);
-  }, [feedback?.ts]); // eslint-disable-line
+  }, [feedback?.ts, feedback?.type]); // eslint-disable-line
 
   // Mapas derivados: cada EAN (e o próprio SKU) + TODAS suas variantes de padding
   // apontam pro mesmo SKU — tolera divergência entre scanner e cadastro do ERP,
@@ -195,12 +308,31 @@ export default function BipModal({
   const totalScanned = scans.length;
   const allDone = totalExpected > 0 && totalScanned >= totalExpected;
 
-  const persistScans = useCallback(
-    (next: Scan[]) => {
-      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
-    },
-    [storageKey],
-  );
+  /**
+   * FILA DE UMA VIA. Cada bip agora é uma ida ao servidor, e o leitor USB
+   * dispara muito mais rápido que a rede. Sem enfileirar, dois bipes voam
+   * juntos e a tela mostra contagem de antes. Desabilitar o input resolveria a
+   * corrida e criaria outra: o scanner é um teclado, e o que ele digita com o
+   * campo desabilitado se perde — peça separada que ninguém registrou.
+   */
+  const filaRef = useRef<Promise<unknown>>(Promise.resolve());
+  const enfileirar = useCallback((fn: () => Promise<void>) => {
+    setNaFila((n) => n + 1);
+    // O `catch` aqui não é enfeite: sem ele um erro inesperado no meio da fila
+    // sumia no console do PC da loja e a peça ficava sem registro NENHUM na
+    // tela — o pior desfecho possível, porque parece que nada aconteceu.
+    const rodar = async () => {
+      try {
+        await fn();
+      } catch (e: any) {
+        setFeedback({ type: 'err', msg: `NÃO BIPOU — ${msgErro(e)}. Bipe a peça de novo.`, ts: Date.now() });
+      } finally {
+        setNaFila((n) => Math.max(0, n - 1));
+      }
+    };
+    filaRef.current = filaRef.current.then(rodar, rodar);
+    return filaRef.current;
+  }, []);
 
   const beep = useCallback((type: 'ok' | 'err') => {
     // Som curto via Web Audio — não depende de arquivo
@@ -217,37 +349,106 @@ export default function BipModal({
     } catch {}
   }, []);
 
-  // Aceita o bip pro SKU resolvido (de qualquer fonte — mapa local ou fallback).
+  /**
+   * REGISTRA A PEÇA NO SERVIDOR — e é o servidor que baixa o estoque.
+   *
+   * A peça só entra na lista (fica verde, conta no progresso) depois do 200.
+   * O TETO por SKU ("já bipou 2 de 2") também é decisão do servidor: aqui a
+   * contagem pode estar velha, lá ela está travada na linha do pedido.
+   *
+   * Rede caiu: tenta UMA vez mais com o MESMO scanUid. Se o primeiro POST
+   * tinha chegado e só a resposta se perdeu, o servidor responde
+   * `duplicate: true` e a peça é contada uma vez só.
+   *
+   * Se as DUAS tentativas se perderem, ou se o servidor recusar, a tela
+   * RESSINCRONIZA antes de dar o veredito: o que ela tem na mão pode estar
+   * atrás do que já está gravado lá, e teimar nisso trava a separação em 10/11
+   * com o "Finalizar" cinza pra sempre.
+   */
   const acceptScanForSku = useCallback(
-    (sku: string, ean: string) => {
+    async (sku: string, ean: string) => {
       const expected = expectedBySku.get(sku) ?? 0;
-      const got = scannedBySku.get(sku) ?? 0;
       if (expected === 0) {
         setFeedback({ type: 'err', msg: `SKU ${sku} não está na lista do pedido`, ts: Date.now() });
         beep('err');
         return;
       }
-      if (got >= expected) {
-        setFeedback({
-          type: 'warn',
-          msg: `Já bipou ${got} de ${expected} dessa peça`,
-          ts: Date.now(),
+
+      const scanUid = novoScanUid();
+      const enviar = () =>
+        api<ScanResponse>(`/pick-orders/${pickOrderId}/scan`, {
+          method: 'POST',
+          body: JSON.stringify({ scanUid, sku, ean }),
         });
-        beep('err');
-        return;
+
+      let res: ScanResponse;
+      try {
+        res = await enviar();
+      } catch (e: any) {
+        if (semResposta(e)) {
+          try {
+            res = await enviar();
+          } catch (e2: any) {
+            // As DUAS tentativas se perderam: pode ser que a primeira tenha
+            // chegado e baixado a peça. Quem sabe é o servidor — pergunta pra
+            // ele antes de mandar a atendente bipar de novo, senão ela cai no
+            // teto por SKU com a tela zerada e a separação não fecha nunca.
+            const doServidor = await ressincronizar();
+            const jaEntrou = scansRef.current.some((s) => s.sku === sku && s.scanUid === scanUid);
+            if (jaEntrou) {
+              setFeedback({ type: 'ok', msg: `✓ ${sku} — registrado (a resposta demorou)`, ts: Date.now() });
+              beep('ok');
+              return;
+            }
+            setFeedback({
+              type: 'err',
+              msg:
+                doServidor === null
+                  ? `NÃO BIPOU — ${msgErro(e2)}. Sem conexão com o servidor: espere voltar e bipe de novo.`
+                  : `NÃO BIPOU — ${msgErro(e2)}. Bipe a peça de novo.`,
+              ts: Date.now(),
+            });
+            beep('err');
+            return;
+          }
+        } else {
+          // 4xx do servidor: teto do SKU estourado, card já baixado, pedido com
+          // problema reportado. A recusa é definitiva — mas a contagem daqui
+          // pode ser justamente o que está errado, então recarrega do servidor
+          // antes de deixar a tela discutindo com ele.
+          setFeedback({ type: 'warn', msg: msgErro(e), ts: Date.now() });
+          beep('err');
+          await ressincronizar();
+          return;
+        }
       }
-      const newScan: Scan = { sku, ean, timestamp: new Date().toISOString() };
-      const next = [...scans, newScan];
-      setScans(next);
-      persistScans(next);
+
+      // Atualiza o ref JUNTO com o state: o próximo item da fila lê o ref, e o
+      // state só chega no render seguinte. Sem isso, dois "desfazer" seguidos
+      // olhariam pro mesmo último bipe.
+      const jaTem = scansRef.current.some((s) => s.scanUid === res.scanUid);
+      if (!jaTem) {
+        const next = [...scansRef.current, { scanUid: res.scanUid, sku, ean, timestamp: new Date().toISOString() }];
+        scansRef.current = next;
+        setScans(next);
+      }
+      const got = res.scanned?.find((s) => s.sku === sku)?.count ?? 0;
       setFeedback({
-        type: 'ok',
-        msg: `✓ ${sku} (${got + 1}/${expected})`,
+        type: res.debitSkippedReason ? 'warn' : 'ok',
+        msg: res.debitSkippedReason
+          ? `✓ ${sku} (${got}/${expected}) — peça contada, mas o estoque NÃO saiu agora: ${motivoSemBaixa(res.debitSkippedReason)}. Avise a matriz.`
+          : `✓ ${sku} (${got}/${expected})`,
         ts: Date.now(),
       });
       beep('ok');
+
+      // O servidor devolve o total DELE. Se não bate com o que a tela tem, a
+      // tela está errada — e é ela que decide se o "Finalizar" habilita.
+      if (typeof res.totalScanned === 'number' && res.totalScanned !== scansRef.current.length) {
+        await ressincronizar();
+      }
     },
-    [expectedBySku, scannedBySku, scans, persistScans, beep],
+    [expectedBySku, pickOrderId, beep, ressincronizar],
   );
 
   const handleBip = useCallback(
@@ -268,7 +469,7 @@ export default function BipModal({
       }
 
       if (sku) {
-        acceptScanForSku(sku, ean);
+        await acceptScanForSku(sku, ean);
         return;
       }
 
@@ -281,7 +482,7 @@ export default function BipModal({
           body: JSON.stringify({ ean }),
         });
         if (res.found && res.sku) {
-          acceptScanForSku(res.sku, ean);
+          await acceptScanForSku(res.sku, ean);
         } else {
           setFeedback({ type: 'err', msg: `EAN ${ean} não pertence a esse pedido`, ts: Date.now() });
           beep('err');
@@ -300,33 +501,70 @@ export default function BipModal({
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (bipInput.trim()) {
-        handleBip(bipInput);
+      const valor = bipInput.trim();
+      if (valor) {
+        // Entra na fila em vez de disparar solto: o campo continua livre pro
+        // próximo bipe e nenhum se perde.
+        enfileirar(() => handleBip(valor));
         setBipInput('');
       }
     }
   };
 
+  /**
+   * DESFAZ o último bipe — e o servidor DEVOLVE a peça pro estoque. Some da
+   * lista só depois do 200: sumir aqui com a peça ainda baixada lá é
+   * exatamente o descasamento que este trabalho existe pra matar.
+   */
   const removeLast = () => {
-    if (!scans.length) return;
-    const next = scans.slice(0, -1);
-    setScans(next);
-    persistScans(next);
+    enfileirar(async () => {
+      const ultimo = scansRef.current[scansRef.current.length - 1];
+      if (!ultimo) return;
+      setUndoing(true);
+      try {
+        await api(`/pick-orders/${pickOrderId}/scan-undo`, {
+          method: 'POST',
+          body: JSON.stringify({ scanUid: ultimo.scanUid }),
+        });
+        const next = scansRef.current.filter((s) => s.scanUid !== ultimo.scanUid);
+        scansRef.current = next;
+        setScans(next);
+        setFeedback({ type: 'warn', msg: `Bipe desfeito — ${ultimo.sku} voltou pro estoque`, ts: Date.now() });
+      } catch (e: any) {
+        setFeedback({
+          type: 'err',
+          msg: `NÃO desfez — ${msgErro(e)}. A peça continua baixada do estoque.`,
+          ts: Date.now(),
+        });
+        beep('err');
+        // Pode ter desfeito e só a resposta ter se perdido: quem sabe é o
+        // servidor. Sem isso a peça some da lista OU sobra nela, e nos dois
+        // casos a tela mente sobre o estoque.
+        await ressincronizar();
+      } finally {
+        setUndoing(false);
+      }
+    });
   };
 
   const submit = async () => {
-    if (!allDone || submitting) return;
+    if (!allDone || submitting || naFila > 0) return;
     setSubmitting(true);
+    setErroFinal(null);
     try {
+      // O servidor conta pelos bipes que ele mesmo gravou; `scans` vai junto
+      // só como fallback pros cards abertos antes deste deploy.
       await api(`/pick-orders/${pickOrderId}/finish-separation`, {
         method: 'POST',
         body: JSON.stringify({ scans }),
       });
-      // Limpa storage do pick-order (já foi finalizado)
-      try { localStorage.removeItem(storageKey); } catch {}
       onFinished();
     } catch (e: any) {
-      setErr(e?.message ?? 'Erro ao finalizar. Tenta de novo.');
+      setErroFinal(`Não finalizou: ${msgErro(e)}`);
+      // O finish é quem carimba a baixa que faltou e passa o card pra matriz.
+      // Se ele recusou, a contagem daqui é suspeita — recarrega antes de ela
+      // clicar de novo no mesmo botão.
+      await ressincronizar();
     } finally {
       setSubmitting(false);
     }
@@ -383,12 +621,15 @@ export default function BipModal({
                     onKeyDown={handleInputKeyDown}
                     placeholder="Foque aqui e bipe a peça…"
                     autoFocus
-                    disabled={resolving}
-                    className="w-full text-lg font-mono px-4 py-3 border-2 border-brand rounded focus:outline-none focus:ring-2 focus:ring-brand-light disabled:opacity-50"
+                    /* NUNCA desabilitar: o scanner é um teclado, e o que ele
+                       digita num campo morto se perde — peça separada que
+                       ninguém registrou. Ordem e corrida são resolvidas pela
+                       fila, não por travar a digitação. */
+                    className="w-full text-lg font-mono px-4 py-3 border-2 border-brand rounded focus:outline-none focus:ring-2 focus:ring-brand-light"
                   />
-                  {resolving && (
+                  {(resolving || naFila > 0) && (
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 animate-pulse">
-                      validando…
+                      {resolving ? 'validando…' : `enviando ${naFila}…`}
                     </span>
                   )}
                 </div>
@@ -414,13 +655,19 @@ export default function BipModal({
                 <div className="flex items-center justify-between text-sm mb-1">
                   <span className="font-medium text-slate-700">
                     Progresso: {totalScanned} / {totalExpected}
+                    {naFila > 0 && (
+                      <span className="ml-2 text-amber-700 font-normal animate-pulse">
+                        · {naFila} no ar (baixando estoque)
+                      </span>
+                    )}
                   </span>
                   <button
                     onClick={removeLast}
-                    disabled={!scans.length}
+                    disabled={!scans.length || undoing}
+                    title="Devolve a peça pro estoque da loja"
                     className="text-xs text-slate-500 hover:text-slate-800 disabled:opacity-30"
                   >
-                    ← Desfazer último bip
+                    {undoing ? 'devolvendo…' : '← Desfazer último bip'}
                   </button>
                 </div>
                 <div className="w-full h-3 bg-slate-200 rounded overflow-hidden">
@@ -485,26 +732,40 @@ export default function BipModal({
         </div>
 
         {/* Footer */}
-        <footer className="p-4 border-t bg-slate-50 flex gap-2">
-          <button
-            onClick={onClose}
-            disabled={submitting}
-            className="flex-1 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium rounded disabled:opacity-50"
-          >
-            Pausar (manter bips)
-          </button>
-          <button
-            onClick={submit}
-            disabled={!allDone || submitting}
-            className={`flex-1 py-3 font-semibold rounded flex items-center justify-center gap-2 ${
-              allDone
-                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-            }`}
-          >
-            <Send className="w-5 h-5" />
-            {submitting ? 'Enviando...' : 'Finalizar separação'}
-          </button>
+        <footer className="p-4 border-t bg-slate-50">
+          {/* Erro do finalizar fica AQUI, colado no botão que falhou: o corpo
+              do modal rola, e um pedido de 11 peças empurra qualquer aviso do
+              topo pra fora da vista de quem acabou de clicar embaixo. */}
+          {erroFinal && (
+            <div className="mb-2 bg-red-50 border border-red-300 text-red-800 px-3 py-2 rounded flex items-start gap-2 text-sm">
+              <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+              <div>{erroFinal}</div>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              disabled={submitting}
+              className="flex-1 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium rounded disabled:opacity-50"
+            >
+              Pausar (bips já registrados)
+            </button>
+            <button
+              onClick={submit}
+              /* Trava enquanto tem bipe no ar: o estoque da última peça ainda
+                 está saindo, e finalizar em cima disso é a matriz recebendo um
+                 card que o servidor ainda não terminou de fechar. */
+              disabled={!allDone || submitting || naFila > 0}
+              className={`flex-1 py-3 font-semibold rounded flex items-center justify-center gap-2 ${
+                allDone && naFila === 0
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+              }`}
+            >
+              <Send className="w-5 h-5" />
+              {submitting ? 'Enviando...' : naFila > 0 ? 'aguarde o bipe…' : 'Finalizar separação'}
+            </button>
+          </div>
         </footer>
       </div>
 
