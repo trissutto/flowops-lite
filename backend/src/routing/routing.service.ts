@@ -10,6 +10,7 @@ import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util'
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { ErpService } from '../erp/erp.service';
 import { PushService } from '../push/push.service';
+import { PickScanService } from '../pick-orders/pick-scan.service';
 
 @Injectable()
 export class RoutingService {
@@ -23,6 +24,10 @@ export class RoutingService {
     private readonly salesStats: SalesStatsService,
     private readonly erp: ErpService,
     private readonly push: PushService,
+    // Estorno dos bipes: desde 18/08 a peça sai do estoque no bipe, então TODO
+    // caminho daqui que apaga ou reatribui um card tem que devolver o que a
+    // loja já tinha separado.
+    private readonly pickScans: PickScanService,
   ) {}
 
   /**
@@ -419,6 +424,15 @@ export class RoutingService {
       };
     }
 
+    // 1.5) Devolve o que as OUTRAS lojas já tinham bipado. A peça saiu do
+    //      estoque da vendedora no passo 1; se um card indevido tinha bipes,
+    //      a mesma peça está baixada duas vezes até este estorno rodar.
+    const estornoBipes = await this.pickScans.revertOrderStock(orderId, {
+      reason: 'reroute',
+      userId: userId ?? null,
+      pickOrderIds: cancelaveis,
+    });
+
     // 2) Apaga cards, passa os itens pra vendedora e fecha o pedido.
     await this.prisma.$transaction(async (tx) => {
       if (cancelaveis.length > 0) {
@@ -442,7 +456,10 @@ export class RoutingService {
             `Conserto: a ${seller.name} vendeu E entregou esta venda online. ` +
             `${pecas.length} peça(s) baixada(s) do estoque dela` +
             (cancelaveis.length > 0
-              ? `; ${cancelaveis.length} card(s) de separação indevido(s) cancelado(s).`
+              ? `; ${cancelaveis.length} card(s) de separação indevido(s) cancelado(s)`
+              : '') +
+            (estornoBipes.pecas
+              ? `; ${estornoBipes.pecas} peça(s) já bipada(s) devolvida(s) ao estoque da(s) loja(s) de origem.`
               : '.'),
         },
       });
@@ -469,6 +486,7 @@ export class RoutingService {
       storeName: seller.name,
       pecasBaixadas: pecas.length,
       cardsCancelados: cancelaveis.length,
+      pecasEstornadas: estornoBipes.pecas,
       gigaEnfileirado: !!baixa.gigaEnfileirado,
     };
   }
@@ -573,6 +591,15 @@ export class RoutingService {
         .map((p) => p.storeId),
     )];
 
+    // 0) DEVOLVE o que essas lojas já tinham bipado. Tem que ser ANTES: o
+    //    `assignedStoreId` dos itens é zerado logo abaixo e a peça vai pra
+    //    outra loja — sem estorno, a peça fica baixada na loja antiga E na
+    //    nova, e some do estoque da rede.
+    const estornoBipes = await this.pickScans.revertOrderStock(orderId, {
+      reason: 'reroute',
+      pickOrderIds: cancellableIds,
+    });
+
     // 1) Cancela pick-orders cancelaveis + limpa assignedStoreId APENAS dos
     //    items que estavam neles. Items dos pick-orders avançados (já enviados)
     //    ficam intocados. Order volta pra pending pra reatribuir.
@@ -609,7 +636,8 @@ export class RoutingService {
           fromStatus: OrderStatus.separating,
           toStatus: OrderStatus.pending,
           note: `Recalcular separação: ${cancellableIds.length} pick-order(s) cancelado(s) pra reatribuir` +
-                (advanced.length > 0 ? ` (${advanced.length} já avançado(s) preservado(s))` : '') + '.',
+                (advanced.length > 0 ? ` (${advanced.length} já avançado(s) preservado(s))` : '') +
+                (estornoBipes.pecas ? ` · ${estornoBipes.pecas} peça(s) já bipada(s) devolvida(s) ao estoque` : '') + '.',
         },
       });
     });
@@ -796,7 +824,14 @@ export class RoutingService {
     });
 
     if (itemsAssigned.length === 0) {
-      // Pick-order existe mas sem items vinculados — só apaga o pick-order
+      // Pick-order existe mas sem items vinculados — só apaga o pick-order.
+      // ESTORNA MESMO ASSIM: item desatribuído não quer dizer peça não bipada
+      // (o vínculo com a loja some no reroteamento, o bipe não). Sem isto o
+      // card é apagado com as peças fora do estoque e a linha do bipe vira
+      // órfã — ninguém mais tem como saber que a loja tinha peça pra devolver.
+      const estornoOrfao = await this.pickScans.revertPickOrderStock(pickOrderId, {
+        reason: 'store_swap',
+      });
       await this.prisma.pickOrder.delete({ where: { id: pickOrderId } });
       try {
         this.gateway.emitPickOrderRemoved?.(oldStoreId, { orderId });
@@ -804,7 +839,11 @@ export class RoutingService {
       return {
         ok: false as const,
         reason: 'no-items',
-        message: 'Esta loja não tinha items atribuídos. Pick-order removido sem realocação.',
+        message:
+          'Esta loja não tinha items atribuídos. Pick-order removido sem realocação.' +
+          (estornoOrfao.pecas
+            ? ` ${estornoOrfao.pecas} peça(s) já bipada(s) foram devolvidas ao estoque da ${oldStoreCode}.`
+            : ''),
       };
     }
 
@@ -863,6 +902,16 @@ export class RoutingService {
       }
     }
 
+    // 1.1) Bipes da loja antiga. Quando o passo acima já devolveu o pedido
+    //      INTEIRO (shipped/delivered), aqui só carimba as linhas —
+    //      `jaEstornadoPeloCaller` existe pra isso: devolver de novo criaria
+    //      peça que não existe. Nos demais status o estorno sai daqui, e é o
+    //      único: o card vai ser apagado logo abaixo.
+    const estornoBipes = await this.pickScans.revertPickOrderStock(pickOrderId, {
+      reason: 'store_swap',
+      jaEstornadoPeloCaller: needsErpReverse,
+    });
+
     // 1) Cancela o pick-order alvo + desatribui SOMENTE os items dele
     await this.prisma.$transaction(async (tx) => {
       await tx.pickOrder.delete({ where: { id: pickOrderId } });
@@ -881,6 +930,7 @@ export class RoutingService {
             (needsErpReverse
               ? `Estorno Giga: ${erpReverseResult?.success ? 'OK' : 'FALHOU (' + (erpReverseResult?.error || 'erro') + ')'}. `
               : '') +
+            (estornoBipes.pecas ? `${estornoBipes.pecas} peça(s) bipada(s) devolvida(s) ao estoque da ${oldStoreCode}. ` : '') +
             `Outros pick-orders intactos.`,
         },
       });

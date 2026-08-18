@@ -329,10 +329,51 @@ export class PickOrdersController {
   }
 
   /**
+   * UMA PEÇA BIPADA — registra o bipe E BAIXA O ESTOQUE, na mesma transação.
+   * Body: { scanUid, sku, ean? }
+   *
+   * `scanUid` é gerado pela TELA antes do POST: é ele que faz o reenvio do
+   * mesmo bipe (rede caiu, clique duplo) responder `duplicate: true` em vez de
+   * tirar outra peça do estoque. A tela só pinta a peça de verde depois do
+   * 200 — se o estoque não baixou, a peça não está bipada.
+   */
+  @Post(':id/scan')
+  registerScan(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { scanUid: string; sku: string; ean?: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja bipam peça');
+    }
+    return this.svc.registerScan(id, user.storeId, user.userId, body ?? ({} as any));
+  }
+
+  /**
+   * DESFAZ um bipe e DEVOLVE a peça pro estoque da loja. Body: { scanUid }.
+   * Idempotente: chamar duas vezes devolve uma peça só.
+   */
+  @Post(':id/scan-undo')
+  undoScan(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { scanUid: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja desfazem bipe');
+    }
+    return this.svc.undoScan(id, user.storeId, user.userId, body?.scanUid ?? '');
+  }
+
+  /**
    * Filial terminou a bipagem — transiciona pick-order pra `separated`.
-   * Body: { scans: Array<{ sku, ean, timestamp }> }
-   * Valida que bipou tudo que era esperado antes de confirmar.
-   * NÃO toca em Gigasistemas. Apenas muda status + log de auditoria.
+   * Body: { scans: [...] } — só FALLBACK pros cards que já estavam abertos
+   * quando a baixa-no-bipe subiu (18/08); a contagem oficial vem dos bipes
+   * gravados no servidor.
+   * Continua EXIGINDO 100% bipado. O estoque já saiu peça a peça no bipe —
+   * aqui só fecha a diferença (bipe em shadow, card legado).
    */
   @Post(':id/finish-separation')
   finishSeparation(

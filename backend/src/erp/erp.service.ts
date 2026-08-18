@@ -247,7 +247,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     items: Array<{ sku: string; qty: number; storeCode: string }>,
     sign: 1 | -1,
     allowNegative: boolean,
+    db?: any,
   ): Promise<Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>> {
+    // `db` = cliente de TRANSAÇÃO (applyStockDeltaInTx). Nesse modo o erro NÃO
+    // pode ser engolido: no Postgres a transação já está abortada e, pior, quem
+    // chamou ia gravar o fato ("bipei a peça") sem o estoque ter saído.
+    const inTx = !!db;
+    const client = db ?? (this.prismaFlow as any);
     const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> = [];
     for (const it of items) {
       try {
@@ -259,7 +265,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
         const variants = this.skuVariants(sku);
 
-        const row: any = await (this.prismaFlow as any).gigaEstoque.findFirst({
+        const row: any = await client.gigaEstoque.findFirst({
           where: { codigo: { in: variants }, loja: { in: lojas } },
         });
         const previousStock = Number(row?.estoque) || 0;
@@ -267,26 +273,55 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         if (newStock < 0 && !allowNegative) newStock = 0;
 
         if (row) {
-          await (this.prismaFlow as any).gigaEstoque.update({
+          await client.gigaEstoque.update({
             where: { id: row.id },
             data: { estoque: newStock, syncedAt: new Date() },
           });
         } else {
-          await (this.prismaFlow as any).gigaEstoque.create({
+          await client.gigaEstoque.create({
             data: { codigo: sku, loja: loja2, estoque: newStock },
           });
         }
         const codNorm = this.wincredCodigo(sku);
-        await (this.prismaFlow as any).wincredEstoque.upsert({
+        await client.wincredEstoque.upsert({
           where: { codigo_loja: { codigo: codNorm, loja: loja2 } },
           create: { codigo: codNorm, loja: loja2, estoque: newStock },
           update: { estoque: newStock, syncedAt: new Date() },
         });
         applied.push({ sku, storeCode: loja2, qty, previousStock, newStock });
       } catch (e) {
+        if (inTx) throw e;
         this.logger.warn(`[flow-estoque] delta ${it.sku}/${it.storeCode}: ${(e as Error).message}`);
       }
     }
+    return applied;
+  }
+
+  /**
+   * DELTA DE ESTOQUE DENTRO DE UMA TRANSAÇÃO DO CALLER.
+   *
+   * Mesma mecânica do `decreaseStockAsync`/`increaseStockAsync` (Flow é a
+   * fonte, Giga recebe réplica pelo outbox) — a diferença é que TUDO roda no
+   * cliente de transação que o caller passa, junto com o registro que
+   * justifica o movimento. Foi feito pro bipe da separação: a linha do
+   * `pick_order_scans` e a saída da peça do estoque commitam juntas ou não
+   * acontecem. Sem isso sobra a janela em que o sistema diz "bipada" e a peça
+   * continua vendável.
+   *
+   * Erro AQUI derruba a transação do caller de propósito — é assim que o
+   * registro do bipe deixa de existir quando o estoque não saiu.
+   * Não faz réplica INLINE no MySQL: chamada de rede dentro de transação
+   * Postgres é exatamente o que pendura o app quando o Giga trava.
+   */
+  async applyStockDeltaInTx(
+    tx: any,
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    sign: 1 | -1,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>> {
+    if (!items.length) return [];
+    const applied = await this.mirrorStockApplyDelta(items, sign, !!opts?.allowNegative, tx);
+    await this.enqueueStockDelta(sign === -1 ? 'dec' : 'inc', items, opts, undefined, true, tx);
     return applied;
   }
 
@@ -299,9 +334,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     opts?: { allowNegative?: boolean; skipNotFound?: boolean },
     lastError?: string,
     deferred = false,
+    db?: any,
   ): Promise<void> {
+    // Com `db` (transação do caller) o erro sobe: perder a réplica do Giga em
+    // silêncio quando o próprio delta está commitando junto é o tipo de furo
+    // que só aparece semanas depois, na conferência.
+    const inTx = !!db;
+    const client = db ?? (this.prismaFlow as any);
     try {
-      await (this.prismaFlow as any).erpOutbox.create({
+      await client.erpOutbox.create({
         data: {
           kind: 'estoque_delta',
           saleId: `stk-${randomUUID()}`,
@@ -320,6 +361,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
       }
     } catch (e) {
+      if (inTx) throw e;
       this.logger.error(`[flow-estoque] falha ao enfileirar ${op}: ${(e as Error).message}`);
     }
   }

@@ -8,6 +8,7 @@ import { LivePdvService } from '../live-pdv/live-pdv.service';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { CorreiosService } from '../correios/correios.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { PickScanService } from './pick-scan.service';
 import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
@@ -97,6 +98,7 @@ export class PickOrdersService {
     private readonly nfe: NfeTransferService,
     private readonly danfePdf: DanfePdfService,
     private readonly pedidoEmail: PedidoEmailService,
+    private readonly scans: PickScanService,
   ) {}
 
   /**
@@ -1059,6 +1061,12 @@ export class PickOrdersService {
       authorizedByNome = auth.byNome;
     }
 
+    // A peça VELHA pode já ter sido bipada — e o bipe já tirou ela do estoque.
+    // O OrderItem é reescrito in-place, então depois deste update não existe
+    // mais quem diga que a saída foi do SKU antigo. Devolve agora; a atendente
+    // bipa a peça nova e o estoque acompanha a troca.
+    const estorno = await this.scans.revertScansForSku(pickOrderId, oldSku, 'swap', userId ?? null);
+
     const newName = this.buildItemName(input, newInfo);
     const updated = await this.prisma.orderItem.update({
       where: { id: item.id },
@@ -1087,6 +1095,7 @@ export class PickOrdersService {
           diff,
           authorizedByCpf,
           authorizedByNome,
+          pecasEstornadas: estorno.pecas,
         }),
         status: 200,
       },
@@ -1099,6 +1108,7 @@ export class PickOrdersService {
       oldPrice,
       newPrice,
       diff,
+      pecasEstornadas: estorno.pecas,
       authorizedBy: authorizedByNome,
       item: {
         id: updated.id,
@@ -1126,6 +1136,11 @@ export class PickOrdersService {
   /**
    * Retorna os items desse pick-order com o EAN resolvido do ERP.
    * Usado pela tela de bipagem da filial — frontend monta mapa EAN→SKU.
+   *
+   * Devolve TAMBÉM os bipes já registrados (`scans`). Desde 18/08 o bipe é um
+   * fato do servidor — antes ele vivia no `localStorage` daquele navegador, e
+   * a mesma separação aberta em outro PC começava do zero (e o estoque
+   * baixaria de novo).
    */
   async getScanData(pickOrderId: string, storeId: string) {
     const po = await this.prisma.pickOrder.findUnique({
@@ -1151,10 +1166,18 @@ export class PickOrdersService {
 
     const skus = items.map((i) => i.sku).filter(Boolean);
     const eanMap = skus.length ? await this.erp.getEansBySkus(skus) : {};
+    const scans = await this.scans.listActiveScans(pickOrderId);
 
     return {
       pickOrderId: po.id,
       status: po.status,
+      scans: scans.map((s) => ({
+        scanUid: s.scanUid,
+        sku: s.sku,
+        ean: s.ean,
+        timestamp: s.scannedAt.toISOString(),
+        debitSkippedReason: s.debitSkippedReason,
+      })),
       items: items.map((i) => {
         const ean = eanMap[i.sku] ?? null;
         // Variantes pra tolerar zeros à esquerda do scanner (ex: "0789..." vs "789...")
@@ -1228,12 +1251,42 @@ export class PickOrdersService {
   }
 
   /**
-   * Transiciona pick-order de `separating` → `separated`.
-   * Recebe no body a lista de scans pra auditoria (armazena em integration_logs).
+   * UMA PEÇA BIPADA — registra e baixa o estoque na mesma transação.
+   * Delega pro PickScanService (que também é quem os cancelamentos chamam pra
+   * estornar).
    *
-   * IMPORTANTE: essa operação AINDA NÃO toca no Gigasistemas. Apenas muda
-   * status interno. A baixa real de estoque acontece na matriz, quando operadora
-   * da retaguarda aprova.
+   * NÃO emite socket de propósito: `pick-order:status` faz as telas
+   * refetcharem, e num pedido de 11 peças seriam 11 refetches em rajada, na
+   * mão da atendente. O status do card não mudou — só o contador dentro do
+   * modal, que é resposta do próprio POST.
+   */
+  async registerScan(
+    pickOrderId: string,
+    storeId: string,
+    userId: string,
+    input: { scanUid: string; sku: string; ean?: string | null },
+  ) {
+    return this.scans.registerScan(pickOrderId, storeId, userId, input);
+  }
+
+  /** Desfaz UM bipe e devolve a peça pro estoque da loja. */
+  async undoScan(pickOrderId: string, storeId: string, userId: string, scanUid: string) {
+    return this.scans.undoScan(pickOrderId, storeId, userId, scanUid);
+  }
+
+  /**
+   * Transiciona pick-order de `separating` → `separated`.
+   *
+   * A EXIGÊNCIA DE 100% BIPADO CONTINUA (relaxar isso é outro pedido, ainda
+   * não autorizado). O que mudou em 18/08 é de ONDE vem a contagem: dos bipes
+   * gravados no servidor (`pick_order_scans`), não mais do array que o
+   * navegador mandava. O array do body ainda é aceito como fallback pros cards
+   * que já estavam abertos quando este deploy subiu — a loja não pode perder a
+   * separação no meio por causa da virada.
+   *
+   * A baixa de estoque agora acontece PEÇA A PEÇA no bipe; o `runAutoDebit`
+   * daqui só fecha a diferença (bipe em shadow, card legado) e carimba o
+   * `debitApprovedAt`.
    */
   async finishSeparation(
     pickOrderId: string,
@@ -1260,8 +1313,12 @@ export class PickOrdersService {
     for (const it of items) {
       expected.set(it.sku, (expected.get(it.sku) ?? 0) + it.quantity);
     }
+    const scansGravados = await this.scans.listActiveScans(pickOrderId);
+    const fonteScans = scansGravados.length
+      ? scansGravados.map((s) => ({ sku: s.sku, ean: s.ean ?? '', timestamp: s.scannedAt.toISOString() }))
+      : scans;
     const scannedCount = new Map<string, number>();
-    for (const s of scans) {
+    for (const s of fonteScans) {
       scannedCount.set(s.sku, (scannedCount.get(s.sku) ?? 0) + 1);
     }
     for (const [sku, qty] of expected.entries()) {
@@ -1273,21 +1330,51 @@ export class PickOrdersService {
       }
     }
 
-    // Log de auditoria — fica pra sempre no integration_logs
+    // VIRA O STATUS COM O CARD TRAVADO — mesma fila do bipe.
+    //
+    // As checagens acima leram o card ANTES de qualquer trava. Dois "Finalizar"
+    // simultâneos (clique duplo na rede lenta da loja, ou os dois PCs que desde
+    // 18/08 enxergam a MESMA separação) passavam os dois, viravam o status os
+    // dois e chamavam o `runAutoDebit` os dois — e como nenhum via o
+    // `debitApprovedAt` do outro, o que ainda faltava baixar (card aberto antes
+    // deste deploy, bipe que rodou em shadow) saía do estoque DUAS vezes.
+    // Justo na virada é o pior momento: card legado é exatamente o que a rede
+    // inteira vai finalizar nas primeiras horas depois do deploy.
+    // Quem perde a corrida leva 400 e não baixa nada.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.scans.lockPickOrder(tx, pickOrderId);
+      const atual = await tx.pickOrder.findUnique({
+        where: { id: pickOrderId },
+        select: { status: true },
+      });
+      if (!atual) throw new NotFoundException('Pick-order não encontrado');
+      if (atual.status !== 'separating' && atual.status !== 'new') {
+        throw new BadRequestException(
+          `Status atual é "${atual.status}" — essa separação já foi finalizada.`,
+        );
+      }
+      return tx.pickOrder.update({
+        where: { id: pickOrderId },
+        data: { status: 'separated' },
+        include: { order: { select: { wcOrderId: true } } },
+      });
+    });
+
+    // Log de auditoria — fica pra sempre no integration_logs. Depois da
+    // transação de propósito: gravar antes fazia o "Finalizar" recusado
+    // deixar um `separation.finished` na auditoria como se tivesse valido.
     await this.prisma.integrationLog.create({
       data: {
         source: 'pick-order',
         direction: 'internal',
         event: 'separation.finished',
-        payload: JSON.stringify({ pickOrderId, userId, storeId, scans }),
+        payload: JSON.stringify({
+          pickOrderId, userId, storeId,
+          scans: fonteScans,
+          fonteBipes: scansGravados.length ? 'servidor' : 'navegador-legado',
+        }),
         status: 200,
       },
-    });
-
-    const updated = await this.prisma.pickOrder.update({
-      where: { id: pickOrderId },
-      data: { status: 'separated' },
-      include: { order: { select: { wcOrderId: true } } },
     });
 
     // Notifica matriz em tempo real — retaguarda vê a nova fila
@@ -1296,12 +1383,12 @@ export class PickOrdersService {
       status: 'separated',
     });
 
-    // BAIXA AUTOMÁTICA NO GIGA — após bipar tudo, dispara decreaseStock
-    // sem precisar de aprovação manual da matriz. Usa allowNegative +
-    // skipNotFound pra não travar a separação por divergências de estoque
-    // (peça já está separada fisicamente). Erro NÃO bloqueia a resposta —
-    // só loga e segue: a separação aconteceu, baixa pode ser retentada
-    // depois pelo retry de baixas falhadas.
+    // FECHA A DIFERENÇA. Com a baixa no bipe, o normal aqui é não sobrar nada
+    // (runAutoDebit só carimba o debitApprovedAt). Sobra quando o bipe rodou
+    // em shadow/killswitch ou quando o card vinha do fluxo antigo. Usa
+    // allowNegative + skipNotFound pra não travar a separação por divergência
+    // de saldo (a peça já está separada fisicamente). Erro NÃO bloqueia a
+    // resposta — a separação aconteceu; a baixa é retentável.
     try {
       await this.runAutoDebit(pickOrderId, userId);
     } catch (e: any) {
@@ -1314,15 +1401,21 @@ export class PickOrdersService {
       id: updated.id,
       status: updated.status,
       wcOrderId: updated.order?.wcOrderId ?? null,
-      itemsScanned: scans.length,
+      itemsScanned: fonteScans.length,
     };
   }
 
   /**
-   * Baixa automática chamada após finishSeparation. Espelha o fluxo do
-   * approveDebit mas com allowNegative + skipNotFound (a peça já está em
-   * mãos, não bloqueamos por divergência do Giga). Marca debitApprovedAt
-   * pra não duplicar caso a matriz tente aprovar manualmente depois.
+   * FECHA A DIFERENÇA da baixa depois do finishSeparation.
+   *
+   * Antes de 18/08 ele baixava o card INTEIRO — era o único gatilho de baixa
+   * que existia. Agora a peça sai do estoque no bipe, então aqui só desce o
+   * que ainda NÃO saiu (`pendingDebitItems`): bipe que rodou em shadow, card
+   * que já estava aberto antes deste deploy, item que ninguém bipa (linha de
+   * FRETE). Baixar o card inteiro de novo tiraria a mesma peça duas vezes.
+   *
+   * Marca `debitApprovedAt` mesmo quando não sobrou nada — é o carimbo que
+   * impede a matriz de aprovar a mesma baixa manualmente depois.
    */
   private async runAutoDebit(pickOrderId: string, userId: string): Promise<void> {
     const po = await this.prisma.pickOrder.findUnique({
@@ -1359,15 +1452,39 @@ export class PickOrdersService {
       return;
     }
 
-    const items = await this.prisma.orderItem.findMany({
-      where: { orderId: po.orderId, assignedStoreId: po.storeId },
-      select: { sku: true, quantity: true, productName: true },
-    });
-
-    const result = await this.erp.decreaseStockAsync(
-      items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
-      { allowNegative: true, skipNotFound: true },
+    // SÓ O QUE FALTA — o que já saiu no bipe não desce de novo.
+    const items = await this.scans.pendingDebitItems(
+      pickOrderId,
+      (po as any).orderId,
+      (po as any).storeId,
+      storeCode,
     );
+
+    if (!items.length) {
+      // Caminho NORMAL desde 18/08: as 11 peças saíram uma a uma no leitor.
+      await this.prisma.pickOrder.update({
+        where: { id: pickOrderId },
+        data: { debitApprovedAt: new Date() } as any,
+      });
+      await this.prisma.integrationLog.create({
+        data: {
+          source: 'erp',
+          direction: 'out',
+          event: 'debit.real.auto.applied',
+          payload: JSON.stringify({
+            pickOrderId, userId, storeCode, mode: 'auto', applied: [],
+            note: 'nada a baixar — estoque já saiu peça a peça no bipe',
+          }),
+          status: 200,
+        },
+      });
+      return;
+    }
+
+    const result = await this.erp.decreaseStockAsync(items, {
+      allowNegative: true,
+      skipNotFound: true,
+    });
 
     if (!result.success) {
       await this.prisma.integrationLog.create({
@@ -1379,7 +1496,7 @@ export class PickOrdersService {
             pickOrderId,
             userId,
             storeCode,
-            items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+            items,
             error: result.error,
           }),
           status: 500,
@@ -1843,9 +1960,23 @@ export class PickOrdersService {
         );
       }
 
-      const result = await this.erp.decreaseStockAsync(
-        items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
+      // SÓ O QUE FALTA: a peça que já saiu no bipe não desce de novo quando a
+      // matriz aprova na mão. `applied: []` aqui significa "nada a fazer, o
+      // estoque já está certo" — não significa que a baixa falhou.
+      const pendentes = await this.scans.pendingDebitItems(
+        pickOrderId,
+        (po as any).orderId,
+        (po as any).storeId,
+        storeCode,
       );
+
+      const result: {
+        success: boolean;
+        applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+        error?: string;
+      } = pendentes.length
+        ? await this.erp.decreaseStockAsync(pendentes)
+        : { success: true, applied: [] };
 
       if (!result.success) {
         // Log de falha pra auditoria (tabela integration_logs)
@@ -1859,6 +1990,7 @@ export class PickOrdersService {
               approvedBy: operatorUserId,
               storeCode,
               items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+              pendentes,
               error: result.error,
             }),
             status: 500,
@@ -1883,6 +2015,7 @@ export class PickOrdersService {
             approvedBy: operatorUserId,
             storeCode,
             applied: result.applied,
+            ...(pendentes.length ? {} : { note: 'nada a baixar — estoque já saiu peça a peça no bipe' }),
           }),
           status: 200,
         },
@@ -2476,6 +2609,7 @@ export class PickOrdersService {
     storeCode: string;
     storeName: string;
     itemsLiberados: number;
+    pecasEstornadas: number;
   }> {
     const po = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
@@ -2504,6 +2638,15 @@ export class PickOrdersService {
       where: { orderId, assignedStoreId: storeId },
     });
 
+    // ESTORNO ANTES DE APAGAR: a linha do bipe não tem FK pro card (ela é a
+    // prova de que a peça saiu), mas o `assignedStoreId` dos itens é zerado
+    // logo abaixo — depois disso ninguém mais sabe quantas peças a loja tinha
+    // pra devolver. Ordem importa.
+    const estorno = await this.scans.revertPickOrderStock(pickOrderId, {
+      reason: 'remove_card',
+      userId: null,
+    });
+
     await this.prisma.$transaction(async (tx) => {
       // Libera items
       await tx.orderItem.updateMany({
@@ -2521,6 +2664,7 @@ export class PickOrdersService {
           note:
             `Pick-order da loja ${storeCode} REMOVIDO manualmente pela retaguarda. ` +
             `${itemsLiberados} item(ns) liberado(s) (sem reatribuição). ` +
+            (estorno.pecas ? `${estorno.pecas} peça(s) já bipada(s) devolvida(s) ao estoque da ${storeCode}. ` : '') +
             (po.issueReason ? `Motivo do problema reportado: ${po.issueReason}.` : ''),
         },
       });
@@ -2533,7 +2677,7 @@ export class PickOrdersService {
       this.logger.warn(`Falha ao emitir socket: ${e?.message}`);
     }
 
-    return { ok: true, pickOrderId, storeCode, storeName, itemsLiberados };
+    return { ok: true, pickOrderId, storeCode, storeName, itemsLiberados, pecasEstornadas: estorno.pecas };
   }
 
   async forceCreateForStore(storeCode: string, orderId?: string) {
@@ -3305,9 +3449,17 @@ export class PickOrdersService {
         return { attempted: true, applied: false, skipped: false, shadow: false, reason: 'loja sem código configurado' };
       }
 
-      const result = await this.erp.decreaseStockAsync(
-        items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
+      // SÓ O QUE FALTA — o que já saiu no bipe não desce de novo no envio.
+      const pendentes = await this.scans.pendingDebitItems(
+        pickOrderId,
+        (po as any).orderId,
+        (po as any).storeId,
+        storeCode,
       );
+
+      const result: { success: boolean; applied: any[]; error?: string } = pendentes.length
+        ? await this.erp.decreaseStockAsync(pendentes)
+        : { success: true, applied: [] };
 
       if (!result.success) {
         await this.prisma.integrationLog.create({
@@ -3321,6 +3473,7 @@ export class PickOrdersService {
               approvedBy: operatorUserId,
               storeCode,
               items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+              pendentes,
               error: result.error,
             }),
             status: 500,
@@ -3343,6 +3496,7 @@ export class PickOrdersService {
             approvedBy: operatorUserId,
             storeCode,
             applied: result.applied,
+            ...(pendentes.length ? {} : { note: 'nada a baixar — estoque já saiu peça a peça no bipe' }),
           }),
           status: 200,
         },
@@ -3427,6 +3581,15 @@ export class PickOrdersService {
     const note = (input.note ?? '').toString().trim().slice(0, 500) || null;
     const now = new Date();
 
+    // O card sai da fila da loja e a matriz vai mandar o pedido pra OUTRA loja.
+    // As peças que já tinham sido bipadas voltam pro estoque daqui — senão
+    // somem do sistema exatamente na hora em que a loja precisa vendê-las de
+    // volta no balcão.
+    const estorno = await this.scans.revertPickOrderStock(pickOrderId, {
+      reason: 'issue',
+      userId,
+    });
+
     const updated = await this.prisma.pickOrder.update({
       where: { id: pickOrderId },
       data: {
@@ -3443,7 +3606,9 @@ export class PickOrdersService {
         userId,
         fromStatus: po.status,
         toStatus: po.status,
-        note: `Loja ${po.store?.code ?? ''} reportou problema: ${reason}${note ? ' — ' + note : ''}`,
+        note:
+          `Loja ${po.store?.code ?? ''} reportou problema: ${reason}${note ? ' — ' + note : ''}` +
+          (estorno.pecas ? ` · ${estorno.pecas} peça(s) bipada(s) devolvida(s) ao estoque da loja.` : ''),
       },
     });
 
@@ -3459,6 +3624,7 @@ export class PickOrdersService {
           storeCode: po.store?.code,
           reason,
           note,
+          pecasEstornadas: estorno.pecas,
         }),
         status: 200,
       },
@@ -3496,6 +3662,7 @@ export class PickOrdersService {
       issueNote: (updated as any).issueNote,
       reasonLabel: reasonLabels[reason],
       reportedAt: now.toISOString(),
+      pecasEstornadas: estorno.pecas,
     };
   }
 
