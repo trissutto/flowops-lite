@@ -144,7 +144,7 @@ export default async function HomePage({
 
       <HomeSizeNav sizes={sizeLinks} />
 
-      <HomeComfortBanner href={href('/busca?q=conforto')} />
+      <HomeComfortBanner href={href('/produto/ref-vlm-222')} />
 
       <HomeBenefitsAndStores storesHref={storesHref} />
 

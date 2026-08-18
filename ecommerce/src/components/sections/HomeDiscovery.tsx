@@ -95,21 +95,30 @@ export function HomeSizeNav({ sizes }: { sizes: Array<{ size: string; href: stri
 export function HomeComfortBanner({ href }: { href: string }) {
   return (
     <section className="bg-surface px-4 py-8 sm:px-6 sm:py-14" aria-labelledby="home-comfort-title">
-      <AppLink href={href} className="group mx-auto grid max-w-6xl overflow-hidden rounded-lg bg-champagne sm:grid-cols-2">
-        <div className="relative min-h-64 sm:order-2 sm:min-h-80">
+      <AppLink href={href} className="group mx-auto grid max-w-6xl overflow-hidden rounded-lg bg-champagne sm:grid-cols-[1.08fr_0.92fr]">
+        <div className="relative min-h-64 bg-[#e9ded0] sm:order-2 sm:min-h-[27rem]">
           <Image
-            src="https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/produtos/403048/MUSGO/1786651420238-modelo-oficial-rosto-regata-verde-acetinada.png"
-            alt="Modelo plus size usando regata verde acetinada da Linha Conforto"
+            src="https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/produtos/VLM-222/PRETO/1786674440424-modelo-oficial-vestido-preto-pele-textura-natural-700x1000.png"
+            alt="Modelo usando Vestido Longo Manga Curta preto VLM-222"
             fill
-            sizes="(max-width: 640px) 100vw, 50vw"
-            className="object-cover object-top transition-transform duration-700 group-hover:scale-[1.03]"
+            sizes="(max-width: 640px) 100vw, 46vw"
+            quality={95}
+            className="object-contain object-center transition-transform duration-700 group-hover:scale-[1.015]"
           />
         </div>
         <div className="flex flex-col items-start justify-center p-7 sm:p-12">
           <p className="eyebrow text-primary-strong">Linha conforto</p>
-          <h2 id="home-comfort-title" className="mt-3 font-display text-h2 text-ink">Leveza para acompanhar seu dia</h2>
-          <p className="mt-4 max-w-md text-body font-light text-ink-soft">Modelagens confortáveis, tecidos macios e o caimento que valoriza você.</p>
-          <span className="mt-7 inline-flex items-center gap-2 text-xs font-medium tracking-[0.14em] text-ink uppercase">Conhecer a seleção <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" /></span>
+          <h2 id="home-comfort-title" className="mt-3 font-display text-h2 text-ink">Vestido VLM-222</h2>
+          <p className="mt-3 text-sm font-medium tracking-[0.08em] text-ink-soft uppercase">
+            De <span className="line-through">R$ 239,90</span>
+          </p>
+          <p className="mt-1 font-display text-5xl font-medium leading-none text-ink sm:text-6xl">
+            <span className="mr-2 text-xl font-sans font-semibold sm:text-2xl">por R$</span>139,90
+          </p>
+          <p className="mt-4 max-w-md text-body font-light text-ink-soft">Conforto, leveza e elegância em um vestido que acompanha o dia inteiro.</p>
+          <span className="mt-7 inline-flex min-h-12 items-center gap-2 rounded-sm bg-ink px-7 text-xs font-medium tracking-[0.14em] text-light uppercase transition-colors group-hover:bg-primary-strong">
+            Comprar agora <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+          </span>
         </div>
       </AppLink>
     </section>
