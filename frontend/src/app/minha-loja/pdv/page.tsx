@@ -34,6 +34,11 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import {
+  checarDadosClienteOnline,
+  dadosClienteDaVenda,
+  faltandoDadosClienteOnline,
+} from '@/lib/dados-cliente-online';
 import { loadPrinterConfig } from '@/lib/printer-router';
 // Import ESTÁTICO (igual à página DANFE de reimpressão, que sempre imprimiu
 // QR) — o import dinâmico devolvia o módulo sem .default em alguns bundles
@@ -1809,6 +1814,9 @@ function PdvPageInner() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
       setShowCustomer(false);
+      // Sai do modo "venda online exige tudo" — senão a próxima abertura do
+      // cadastro (balcão, outra venda) continuaria cobrando cadastro completo.
+      setExigirDadosOnline(false);
       toast('success', 'Cliente identificado', data.name || data.cpf);
     } catch (e: any) {
       const h = humanizeError(e);
@@ -2038,6 +2046,29 @@ function PdvPageInner() {
     setPaymentFilter('cartao');
     setShowPayment(true);
   };
+  /**
+   * VENDA ONLINE — CADASTRO COMPLETO OBRIGATÓRIO (dono 18/08).
+   *
+   * Balcão a cliente leva a sacola na mão; venda online a peça VIAJA e a
+   * venda vira pedido no trilho do site. Faltando dado, a falha aparece
+   * longe do caixa: etiqueta "Cliente", pedido sem CEP que nem vira Order
+   * (fluxo legado, sem card e sem etiqueta) e cliente que ninguém avisa.
+   *
+   * Lista vazia = pode seguir. Mesma régua do servidor
+   * (`backend/src/common/dados-cliente-online.ts`) — aqui ela barra ANTES de
+   * gerar PIX/link, pra nunca existir dinheiro na conta com venda travada.
+   */
+  const faltaDadosOnline = useMemo(
+    () => faltandoDadosClienteOnline(dadosClienteDaVenda(sale)),
+    [sale],
+  );
+  /** Modal de cliente aberto pelo fluxo online = campos obrigatórios. */
+  const [exigirDadosOnline, setExigirDadosOnline] = useState(false);
+  const abrirCadastroOnline = () => {
+    setExigirDadosOnline(true);
+    setShowCustomer(true);
+  };
+
   const venderOutro = (method: string) => {
     if (method === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
     if (method === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
@@ -2050,10 +2081,16 @@ function PdvPageInner() {
       return;
     }
     if (method === 'venda_online') {
-      // Venda online sempre exige identificação da cliente antes do pagamento.
-      if (!sale?.customerCpf) {
-        toast('warning', 'Identifique a cliente primeiro', 'Venda online sempre exige CPF (F6)');
-        setShowCustomer(true);
+      // Cadastro COMPLETO antes do pagamento (dono 18/08): nome e sobrenome,
+      // CPF, WhatsApp, e-mail e endereço inteiro. Antes bastava ter CPF — e
+      // era assim que a venda ia embora sem endereço e sem nome de verdade.
+      if (faltaDadosOnline.length) {
+        toast(
+          'warning',
+          'Complete o cadastro da cliente',
+          `Venda online exige tudo — falta: ${faltaDadosOnline.join(', ')}.`,
+        );
+        abrirCadastroOnline();
         return;
       }
       setPresetMethod('venda_online');
@@ -3205,7 +3242,8 @@ function PdvPageInner() {
             cidade: sale.customerCidade || '',
             uf: sale.customerUf || '',
           }}
-          onClose={() => setShowCustomer(false)}
+          exigirCompleto={exigirDadosOnline}
+          onClose={() => { setShowCustomer(false); setExigirDadosOnline(false); }}
           onSave={saveCustomer}
         />
       )}
@@ -3294,6 +3332,8 @@ function PdvPageInner() {
           onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
           hasSeller={!!sale.sellerName}
           onNeedSeller={() => setShowConfirmSale(true)}
+          dadosOnlineFaltando={faltaDadosOnline}
+          onNeedCustomer={abrirCadastroOnline}
         />
       )}
 
@@ -3454,11 +3494,20 @@ function PdvPageInner() {
                                 const restantes = onlinePending.filter((o) => o.saleId !== p.saleId);
                                 if (restantes.length === 0) setShowOnlinePending(false);
                               } catch (e: any) {
-                                toast(
-                                  'error',
-                                  'Erro ao finalizar venda',
-                                  e?.message || 'Tente reabrir manualmente.',
-                                );
+                                const msg = String(e?.message || '');
+                                if (/cadastro completo/i.test(msg)) {
+                                  toast(
+                                    'warning',
+                                    `Venda #${p.saleCode} — cadastro incompleto`,
+                                    `${msg} Retome a venda em "Pausadas" e complete antes de finalizar.`,
+                                  );
+                                } else {
+                                  toast(
+                                    'error',
+                                    'Erro ao finalizar venda',
+                                    msg || 'Tente reabrir manualmente.',
+                                  );
+                                }
                               }
                             }}
                             className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded shadow-md"
@@ -3994,6 +4043,7 @@ function ConfirmSaleModal({
 
 function CustomerModal({
   initial,
+  exigirCompleto = false,
   onClose,
   onSave,
 }: {
@@ -4010,6 +4060,14 @@ function CustomerModal({
     cidade?: string;
     uf?: string;
   };
+  /**
+   * VENDA ONLINE (dono 18/08): cadastro COMPLETO obrigatório — nome e
+   * sobrenome, CPF válido, WhatsApp, e-mail e endereço inteiro. Sem isso a
+   * peça viaja sem destinatário: etiqueta sai "Cliente", pedido sem CEP nem
+   * vira Order e ninguém consegue avisar a cliente. No balcão fica tudo
+   * opcional, como sempre foi.
+   */
+  exigirCompleto?: boolean;
   onClose: () => void;
   onSave: (d: {
     cpf: string;
@@ -4040,10 +4098,26 @@ function CustomerModal({
   const [uf, setUf] = useState(initial.uf || '');
   // Auto-expande se já tem algum dado de endereço preenchido
   const [showEndereco, setShowEndereco] = useState(
-    !!(initial.cep || initial.endereco || initial.cidade),
+    exigirCompleto || !!(initial.cep || initial.endereco || initial.cidade),
   );
   const [cepLoading, setCepLoading] = useState(false);
   const [cepError, setCepError] = useState<string | null>(null);
+
+  // ── O QUE AINDA FALTA (só cobra em venda online) ──────────────────────
+  // Mesma régua do backend (`common/dados-cliente-online.ts`): a tela mostra
+  // campo a campo o que está de pé e o servidor recusa o pagamento com a
+  // MESMA lista. Régua diferente entre quem mostra e quem cobra é como nasce
+  // o "preenchi tudo e não deixa fechar".
+  const campos = { cpf, name, email, phone, cep, endereco, numero, bairro, cidade, uf };
+  const okCampo = checarDadosClienteOnline(campos);
+  const faltaOnline = exigirCompleto ? faltandoDadosClienteOnline(campos) : [];
+  // Vermelho só depois de tentar salvar OU quando o campo já tem coisa
+  // digitada — abrir o modal com tudo pintado de erro é ruído.
+  const [tentouSalvar, setTentouSalvar] = useState(false);
+  const errado = (ok: boolean, valor: string) =>
+    exigirCompleto && !ok && (tentouSalvar || !!String(valor || '').trim());
+  const cls = (ok: boolean, valor: string, base: string) =>
+    `${base} ${errado(ok, valor) ? 'border-rose-400 bg-rose-50' : ''}`;
 
   // ── FOCO NA BUSCA AO ABRIR ────────────────────────────────────────────
   // A vendedora abre o modal e já digita o CPF, sem clicar. Vai na BUSCA e não
@@ -4187,6 +4261,18 @@ function CustomerModal({
   }, [searchTerm]);
 
   function pickResult(c: { codCliente: string; nome: string; cpf: string; telefone: string }) {
+    // VENDA ONLINE: clicar no resultado PREENCHE, não salva. Salvar aqui
+    // fechava o modal com nome+telefone só — e o resto (e-mail, endereço)
+    // continuava faltando, agora com a tela fechada. Preenchido, o CPF ainda
+    // dispara a busca da ficha e traz e-mail e endereço do CRM.
+    if (exigirCompleto) {
+      if (c.cpf) setCpf(c.cpf);
+      if (c.nome) setName(c.nome);
+      if (c.telefone) setPhone(c.telefone);
+      setSearchTerm('');
+      setShowResults(false);
+      return;
+    }
     // CLICK NO RESULTADO = JÁ IDENTIFICA. Não precisa clicar em "Salvar" depois.
     // Se o cliente não tem CPF no Giga, ainda salva nome+telefone — mas avisa.
     if (!c.cpf || c.cpf.length < 11) {
@@ -4209,7 +4295,7 @@ function CustomerModal({
   const backdropClose = useSmartBackdropClose(onClose);
   return (
     <div
-      className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4"
+      className="fixed inset-0 bg-black/60 z-[65] flex items-end sm:items-center justify-center p-4"
       onMouseDown={backdropClose.onMouseDown}
       onClick={backdropClose.onClick}
     >
@@ -4220,6 +4306,30 @@ function CustomerModal({
           </h2>
           <button onClick={onClose}><X className="w-4 h-4" /></button>
         </div>
+
+        {/* VENDA ONLINE — o que ainda falta. A peça vai VIAJAR: sem cadastro
+            completo a etiqueta sai "Cliente", o pedido sem CEP nem vira Order
+            e ninguém consegue avisar a cliente. */}
+        {exigirCompleto && (
+          <div
+            className={`rounded-lg border-2 p-2.5 text-xs ${
+              faltaOnline.length
+                ? 'border-rose-300 bg-rose-50 text-rose-900'
+                : 'border-emerald-300 bg-emerald-50 text-emerald-900'
+            }`}
+          >
+            <div className="font-black flex items-center gap-1.5">
+              <Globe className="w-3.5 h-3.5" />
+              {faltaOnline.length ? 'Venda online — cadastro incompleto' : 'Venda online — cadastro completo ✓'}
+            </div>
+            {faltaOnline.length > 0 && (
+              <div className="mt-1 leading-snug">
+                A peça vai pelo correio: precisa de <b>tudo</b>. Falta{' '}
+                <b>{faltaOnline.join(', ')}</b>.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* TYPEAHEAD — busca rápida por CPF ou nome (puxa do Giga) */}
         <div className="relative">
@@ -4414,26 +4524,26 @@ function CustomerModal({
           <input
             value={cpf}
             onChange={(e) => setCpf(e.target.value)}
-            placeholder="CPF"
-            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder={exigirCompleto ? 'CPF *' : 'CPF'}
+            className={cls(okCampo.cpf, cpf, 'w-full border rounded px-3 py-2 text-sm')}
           />
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Nome"
-            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder={exigirCompleto ? 'Nome e sobrenome *' : 'Nome'}
+            className={cls(okCampo.name, name, 'w-full border rounded px-3 py-2 text-sm')}
           />
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="E-mail (pra mandar nota)"
-            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder={exigirCompleto ? 'E-mail *' : 'E-mail (pra mandar nota)'}
+            className={cls(okCampo.email, email, 'w-full border rounded px-3 py-2 text-sm')}
           />
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            placeholder="WhatsApp"
-            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder={exigirCompleto ? 'WhatsApp com DDD *' : 'WhatsApp'}
+            className={cls(okCampo.phone, phone, 'w-full border rounded px-3 py-2 text-sm')}
           />
         </div>
 
@@ -4459,8 +4569,18 @@ function CustomerModal({
 
           {showEndereco && (
             <div className="space-y-2 mt-2">
-              <div className="bg-cyan-50 border border-cyan-200 rounded p-2 text-[11px] text-cyan-800">
-                Obrigatório pra <b>Venda Online</b> (vai pelo correio). Opcional no balcão.
+              <div
+                className={`rounded p-2 text-[11px] border ${
+                  exigirCompleto
+                    ? 'bg-rose-50 border-rose-200 text-rose-800'
+                    : 'bg-cyan-50 border-cyan-200 text-cyan-800'
+                }`}
+              >
+                {exigirCompleto ? (
+                  <>Endereço <b>completo é obrigatório</b> nesta venda — é pra onde a peça vai.</>
+                ) : (
+                  <>Obrigatório pra <b>Venda Online</b> (vai pelo correio). Opcional no balcão.</>
+                )}
               </div>
 
               {/* CEP + lookup ViaCEP */}
@@ -4473,10 +4593,10 @@ function CustomerModal({
                       setCep(v);
                       if (v.length === 8) lookupCep(v);
                     }}
-                    placeholder="CEP (só números)"
+                    placeholder={exigirCompleto ? 'CEP (só números) *' : 'CEP (só números)'}
                     maxLength={8}
                     inputMode="numeric"
-                    className="w-full border rounded px-3 py-2 text-sm font-mono"
+                    className={cls(okCampo.cep, cep, 'w-full border rounded px-3 py-2 text-sm font-mono')}
                   />
                 </div>
                 {cepLoading && (
@@ -4492,15 +4612,15 @@ function CustomerModal({
               <input
                 value={endereco}
                 onChange={(e) => setEndereco(e.target.value)}
-                placeholder="Logradouro (rua/avenida)"
-                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder={exigirCompleto ? 'Logradouro (rua/avenida) *' : 'Logradouro (rua/avenida)'}
+                className={cls(okCampo.endereco, endereco, 'w-full border rounded px-3 py-2 text-sm')}
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <input
                   value={numero}
                   onChange={(e) => setNumero(e.target.value)}
-                  placeholder="Nº"
-                  className="border rounded px-3 py-2 text-sm"
+                  placeholder={exigirCompleto ? 'Nº *' : 'Nº'}
+                  className={cls(okCampo.numero, numero, 'border rounded px-3 py-2 text-sm')}
                 />
                 <input
                   value={complemento}
@@ -4512,36 +4632,51 @@ function CustomerModal({
               <input
                 value={bairro}
                 onChange={(e) => setBairro(e.target.value)}
-                placeholder="Bairro"
-                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder={exigirCompleto ? 'Bairro *' : 'Bairro'}
+                className={cls(okCampo.bairro, bairro, 'w-full border rounded px-3 py-2 text-sm')}
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <input
                   value={cidade}
                   onChange={(e) => setCidade(e.target.value)}
-                  placeholder="Cidade"
-                  className="col-span-2 border rounded px-3 py-2 text-sm"
+                  placeholder={exigirCompleto ? 'Cidade *' : 'Cidade'}
+                  className={cls(okCampo.cidade, cidade, 'col-span-2 border rounded px-3 py-2 text-sm')}
                 />
                 <input
                   value={uf}
                   onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))}
-                  placeholder="UF"
+                  placeholder={exigirCompleto ? 'UF *' : 'UF'}
                   maxLength={2}
-                  className="border rounded px-3 py-2 text-sm font-mono uppercase"
+                  className={cls(okCampo.uf, uf, 'border rounded px-3 py-2 text-sm font-mono uppercase')}
                 />
               </div>
             </div>
           )}
         </div>
 
+        {/* Em venda online o Salvar não passa incompleto: o que a vendedora
+            digitou fica na tela (nada se perde) e a lista acima diz o que
+            falta. Deixar salvar pela metade só empurra o erro pro fim — com a
+            cobrança já mandada pra cliente. */}
         <button
-          onClick={() => onSave({
-            cpf, name, email, phone,
-            cep, endereco, numero, complemento, bairro, cidade, uf,
-          })}
-          className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded"
+          onClick={() => {
+            if (exigirCompleto && faltaOnline.length) {
+              setTentouSalvar(true);
+              setShowEndereco(true);
+              return;
+            }
+            onSave({
+              cpf, name, email, phone,
+              cep, endereco, numero, complemento, bairro, cidade, uf,
+            });
+          }}
+          className={`w-full px-3 py-2 text-white font-bold rounded ${
+            exigirCompleto && faltaOnline.length
+              ? 'bg-slate-400 hover:bg-slate-500'
+              : 'bg-emerald-600 hover:bg-emerald-700'
+          }`}
         >
-          Salvar
+          {exigirCompleto && faltaOnline.length ? `Falta: ${faltaOnline.join(', ')}` : 'Salvar'}
         </button>
       </div>
     </div>
@@ -4568,6 +4703,8 @@ function PaymentModal({
   onAutoFlowTriggered,
   hasSeller,
   onNeedSeller,
+  dadosOnlineFaltando = [],
+  onNeedCustomer,
 }: {
   saleId: string;
   total: number;
@@ -4595,6 +4732,15 @@ function PaymentModal({
   hasSeller?: boolean;
   /** Abre o popup de escolher vendedora no parent (sem finalizar) */
   onNeedSeller?: () => void;
+  /**
+   * VENDA ONLINE — o que ainda falta no cadastro da cliente (dono 18/08).
+   * Vazio = pode gerar cobrança e fechar. A mesma lista vem do servidor no
+   * addPayment; aqui ela barra ANTES de mandar PIX/link pra cliente, pra
+   * nunca existir dinheiro na conta com a venda travada por cadastro.
+   */
+  dadosOnlineFaltando?: string[];
+  /** Abre o cadastro da cliente no parent, em modo "completo obrigatório" */
+  onNeedCustomer?: () => void;
 }) {
   const { toast } = usePdvToast();
   // Lista de pagamentos parciais já adicionados
@@ -4864,6 +5010,17 @@ function PaymentModal({
 
   const gerarPixOnline = async () => {
     if (pixOnlineLoading || !saleId) return;
+    // Cadastro completo ANTES da cobrança: PIX pago com cadastro pela metade
+    // vira dinheiro na conta e venda que não fecha.
+    if (dadosOnlineFaltando.length) {
+      toast(
+        'warning',
+        'Complete o cadastro antes de mandar o PIX',
+        `Falta: ${dadosOnlineFaltando.join(', ')}.`,
+      );
+      onNeedCustomer?.();
+      return;
+    }
     setPixOnlineLoading(true);
     setPixOnlineErro(null);
     setPixOnlinePago(false);
@@ -5016,12 +5173,16 @@ function PaymentModal({
         onNeedSeller?.();
         return;
       }
-      if (!customerCpf) {
+      // CADASTRO COMPLETO (dono 18/08) — nome e sobrenome, CPF, WhatsApp,
+      // e-mail e endereço inteiro. Só CPF, como era antes, deixava a peça
+      // viajar sem destinatário de verdade.
+      if (dadosOnlineFaltando.length) {
         toast(
           'warning',
-          'CPF obrigatório',
-          'Venda online sempre identifica a cliente (F5).',
+          'Complete o cadastro da cliente',
+          `Venda online exige tudo — falta: ${dadosOnlineFaltando.join(', ')}.`,
         );
+        onNeedCustomer?.();
         return;
       }
       if (!vendaOnlineTipo) {
@@ -6116,9 +6277,7 @@ function PaymentModal({
                 .map((p) => {
                 const Icon = p.icon;
                 const isSelected = selected === p.id;
-                const disabled =
-                  (p.id === 'crediario' && !customerCpf) ||
-                  (p.id === 'venda_online' && !customerCpf);
+                const disabled = p.id === 'crediario' && !customerCpf;
                 // Venda online tem visual diferente (teal) pra destacar
                 const isVendaOnline = p.id === 'venda_online';
                 return (
@@ -6138,10 +6297,10 @@ function PaymentModal({
                     }`}
                     title={
                       disabled
-                        ? p.id === 'crediario'
-                          ? 'Crediário exige CPF do cliente'
-                          : 'Venda online exige CPF do cliente (F5)'
-                        : ''
+                        ? 'Crediário exige CPF do cliente'
+                        : p.id === 'venda_online' && dadosOnlineFaltando.length
+                          ? `Cadastro da cliente incompleto — falta: ${dadosOnlineFaltando.join(', ')}`
+                          : ''
                     }
                   >
                     <Icon className="w-4 h-4" />
@@ -6313,9 +6472,34 @@ function PaymentModal({
                 </span>
               </button>
             </div>
-            {!customerCpf && (
-              <div className="bg-rose-50 border border-rose-300 text-rose-800 text-xs rounded p-2 font-semibold">
-                ⚠ CPF do cliente é obrigatório. Aperte F5 pra identificar.
+            {/* CADASTRO COMPLETO (dono 18/08) — a peça vai VIAJAR: sem nome e
+                sobrenome, CPF, WhatsApp, e-mail e endereço inteiro a etiqueta
+                sai "Cliente", o pedido sem CEP nem vira Order (fica sem card
+                e sem etiqueta) e ninguém consegue avisar a cliente. */}
+            {dadosOnlineFaltando.length > 0 ? (
+              <div className="bg-rose-50 border-2 border-rose-300 text-rose-900 text-xs rounded-lg p-2.5 space-y-2">
+                <div className="font-black">⚠ Cadastro da cliente incompleto</div>
+                <div className="leading-snug">
+                  Venda online exige tudo — falta <b>{dadosOnlineFaltando.join(', ')}</b>.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onNeedCustomer?.()}
+                  className="w-full py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold"
+                >
+                  Completar cadastro da cliente
+                </button>
+              </div>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs rounded p-2 font-semibold flex items-center justify-between gap-2">
+                <span>✓ Cadastro completo — {customerName}</span>
+                <button
+                  type="button"
+                  onClick={() => onNeedCustomer?.()}
+                  className="underline font-bold shrink-0"
+                >
+                  ver/editar
+                </button>
               </div>
             )}
 
@@ -6571,8 +6755,19 @@ function PaymentModal({
                   <>
                     <button
                       type="button"
-                      disabled={pagarmeLinkLoading || !linkEmailOk || !linkPhoneOk}
+                      disabled={pagarmeLinkLoading || !linkEmailOk || !linkPhoneOk || dadosOnlineFaltando.length > 0}
                       onClick={async () => {
+                        // Mesma trava do PIX: link pago com cadastro pela
+                        // metade = dinheiro na conta e venda travada.
+                        if (dadosOnlineFaltando.length) {
+                          toast(
+                            'warning',
+                            'Complete o cadastro antes de gerar o link',
+                            `Falta: ${dadosOnlineFaltando.join(', ')}.`,
+                          );
+                          onNeedCustomer?.();
+                          return;
+                        }
                         setPagarmeLinkLoading(true);
                         try {
                           const r = await api<{
@@ -7346,6 +7541,7 @@ function PaymentModal({
                   !valorParcial ||
                   (needsBandeira && !bandeira) ||
                   (selected === 'crediario' && !customerCpf) ||
+                  (selected === 'venda_online' && dadosOnlineFaltando.length > 0) ||
                   (selected === 'convenio' && !convMembro)
                 }
                 className={`w-full px-3 py-4 font-black rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-all shadow-md ${
