@@ -50,7 +50,7 @@ export function EditorialProductGrid({
   return (
     <div
       className={cn(
-        'grid gap-x-4 gap-y-10 lg:gap-x-6 lg:gap-y-14',
+        'grid gap-x-2 gap-y-6 lg:gap-x-6 lg:gap-y-14',
         view === 'editorial'
           ? 'grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
           : 'grid-cols-2 lg:grid-cols-4 xl:grid-cols-5',

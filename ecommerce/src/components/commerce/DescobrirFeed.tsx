@@ -281,7 +281,7 @@ function BlocoDoFeed({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-10 lg:grid-cols-4 lg:gap-x-6 lg:gap-y-14">
+      <div className="grid grid-cols-2 gap-x-2 gap-y-6 lg:grid-cols-4 lg:gap-x-6 lg:gap-y-14">
         {itens.map((item, j) => (
           <div key={item.product.id} onClickCapture={aoClicar(item.product, indiceBase + j)}>
             <ProductCard product={item.product} index={j} />

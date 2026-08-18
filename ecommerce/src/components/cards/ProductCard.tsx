@@ -267,7 +267,9 @@ export function ProductCard({
               // grade da home ele ocuparia 44% da largura, sobre uma foto de
               // 91×122 — vira um botão em cima da peça, não ao lado dela. Com
               // `size-8` cai pra 34%, medido.
-              compact ? 'right-2 bottom-2 size-8 lg:size-9' : 'right-3 bottom-3 size-10 lg:size-9',
+              compact
+                ? 'right-2 bottom-2 size-8 lg:size-9'
+                : 'right-3 bottom-3 hidden size-10 lg:flex lg:size-9',
             )}
           >
             <ShoppingBag className="size-4" strokeWidth={1.75} />
@@ -315,15 +317,17 @@ export function ProductCard({
       </div>
 
       {/* Texto */}
-      <div className={cn('flex flex-1 flex-col', compact ? 'mt-3' : 'mt-4')}>
+      <div className={cn('flex flex-1 flex-col', compact ? 'mt-3' : 'mt-2.5 lg:mt-4')}>
         {/* O tecido usa a `.eyebrow` — a mesma régua que faz a palavra
             "Promoção" medir 117px num card de 91px. Um nome de tecido
             ("VISCOLYCRA PREMIUM") é o dobro disso em caixa alta: vira um
             parágrafo de três linhas pra uma informação que não decide a
             compra na vitrine. Fica na ficha da peça. */}
-        {product.fabric && !compact && <p className="eyebrow text-ink-muted">{product.fabric}</p>}
+        {product.fabric && !compact && (
+          <p className="eyebrow hidden text-ink-muted lg:block">{product.fabric}</p>
+        )}
 
-        <h3 className="mt-1.5">
+        <h3 className={cn(compact ? 'mt-1.5' : 'lg:mt-1.5')}>
           <Link
             href={href}
             onClick={onProductClick}
@@ -334,7 +338,10 @@ export function ProductCard({
               // card de 93px isso vira quatro linhas; em `text-small` cabe em
               // duas. O clamp é a rede: sem ele um nome longo sozinho estica a
               // linha inteira da grade e abre um rasgo branco sob os vizinhos.
-              compact ? 'line-clamp-2 text-small xl:text-body' : 'text-body',
+              // No celular o nome fica em UMA linha: a segunda linha do
+              // nome empurra preço e botão pra baixo em metade dos cards e
+              // desalinha a grade inteira. No computador ele volta inteiro.
+              compact ? 'line-clamp-2 text-small xl:text-body' : 'line-clamp-1 text-small lg:line-clamp-none lg:text-body',
             )}
           >
             {product.name}
@@ -348,22 +355,41 @@ export function ProductCard({
             exatamente a lista de espera que queremos. */}
         {esgotado ? (
           <>
-            <div className="mt-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-              <span className="tabular text-body text-ink-muted line-through">
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 lg:mt-2">
+              <span className="tabular text-small text-ink-muted line-through lg:text-body">
                 {formatPrice(product.price)}
               </span>
             </div>
-            <p className="mt-1 text-small font-medium text-ink-soft">Esgotado por enquanto</p>
+            <p className="mt-0.5 text-[0.6875rem] font-medium text-ink-soft lg:mt-1 lg:text-small">
+              Esgotado por enquanto
+            </p>
           </>
         ) : (
           <>
-            <div className={cn('mt-2 flex flex-wrap items-baseline gap-y-1', compact ? 'gap-x-2' : 'gap-x-2.5')}>
+            <div
+              className={cn(
+                'flex flex-wrap items-baseline gap-y-1',
+                compact ? 'mt-2 gap-x-2' : 'mt-1 gap-x-2 lg:mt-2 lg:gap-x-2.5',
+              )}
+            >
               {product.compareAtPrice && (
-                <span className="tabular text-small text-ink-muted line-through">
+                <span
+                  className={cn(
+                    'tabular text-ink-muted line-through',
+                    compact ? 'text-small' : 'text-[0.6875rem] lg:text-small',
+                  )}
+                >
                   {formatPrice(product.compareAtPrice)}
                 </span>
               )}
-              <span className="tabular text-body font-medium text-ink">{formatPrice(product.price)}</span>
+              <span
+                className={cn(
+                  'tabular font-medium text-ink',
+                  compact ? 'text-body' : 'text-small lg:text-body',
+                )}
+              >
+                {formatPrice(product.price)}
+              </span>
               {/* O "-50%" sai do card estreito porque ele é a TERCEIRA ficha
                   de preço numa linha de 91px — os três não cabem e a linha
                   virava três, 72px de texto. É também o único dos três que se
@@ -374,13 +400,18 @@ export function ProductCard({
               )}
             </div>
 
-            <p className="mt-1 text-small font-light text-ink-soft">
+            <p
+              className={cn(
+                'font-light text-ink-soft',
+                compact ? 'mt-1 text-small' : 'mt-0.5 text-[0.6875rem] lg:mt-1 lg:text-small',
+              )}
+            >
               {product.pixPrice && (
-                <>
+                <span className={compact ? undefined : 'hidden lg:inline'}>
                   <span className="tabular font-medium text-success">{formatPrice(product.pixPrice)}</span>{' '}
                   no Pix
                   {mostraParcelamento && ' · '}
-                </>
+                </span>
               )}
               {mostraParcelamento && (
                 <span className="tabular">
@@ -398,12 +429,15 @@ export function ProductCard({
             aqui ela custa mais uma linha de texto num bloco que já compete
             com a foto. Ver o comentário do `compact`. */}
         {faixaDeTamanhos && !compact && (
-          <p className="mt-1.5 text-small text-ink-muted">{faixaDeTamanhos}</p>
+          <p className="mt-1.5 hidden text-small text-ink-muted lg:block">{faixaDeTamanhos}</p>
         )}
 
         {/* Cores disponíveis */}
         {product.colors && product.colors.length > 1 && (
-          <div className="mt-3 flex items-center gap-1.5" aria-label="Cores disponíveis">
+          <div
+            className={cn('flex items-center gap-1.5', compact ? 'mt-3' : 'mt-2 lg:mt-3')}
+            aria-label="Cores disponíveis"
+          >
             {product.colors.slice(0, 5).map((color) => (
               <span
                 key={color.name}
@@ -416,6 +450,18 @@ export function ProductCard({
               <span className="text-[0.625rem] text-ink-muted">+{product.colors.length - 5}</span>
             )}
           </div>
+        )}
+
+        {temEstoque && !compact && (
+          <button
+            type="button"
+            onClick={() => abrirQuickAdd(product)}
+            aria-label={`Comprar ${product.name}`}
+            className="mt-auto flex w-full items-center justify-center gap-1.5 rounded-xs bg-ink px-3 pt-2.5 pb-2.5 text-[0.6875rem] font-medium tracking-[0.14em] text-light uppercase transition-colors active:bg-ink-soft lg:hidden"
+          >
+            <ShoppingBag className="size-3.5" strokeWidth={1.75} />
+            Comprar
+          </button>
         )}
       </div>
     </article>

@@ -112,7 +112,7 @@ export function RecommendationRail({
             role="status"
             aria-live="polite"
             aria-label="Carregando recomendações"
-            className="grid grid-cols-2 gap-x-4 gap-y-10 lg:grid-cols-4 lg:gap-x-6"
+            className="grid grid-cols-2 gap-x-2 gap-y-6 lg:grid-cols-4 lg:gap-x-6"
           >
             {Array.from({ length: 4 }, (_, i) => (
               <ProductCardSkeleton key={i} />
