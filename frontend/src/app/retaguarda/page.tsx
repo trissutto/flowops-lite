@@ -22,6 +22,7 @@ import {
   Mail,
   MessageCircle,
   Trophy,
+  ListOrdered,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -60,6 +61,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/whatsapp-inbox',       label: 'WhatsApp Conversas', subtitle: 'Inbox no sistema', description: 'Ler e responder as clientes do PC — celular fica na loja', tone: 'green', icon: MessageCircle },
   { href: '/retaguarda/looks',                label: 'Looks',             subtitle: 'Complete o look', description: 'Peças da mesma foto se puxam na PDP', tone: 'rose',   icon: Layers      },
   { href: '/retaguarda/top-da-semana',        label: 'Mais Top da Semana', subtitle: 'Curadoria vitrine', description: 'Escolher e ordenar os 20 destaques da semana', tone: 'amber', icon: Trophy      },
+  { href: '/retaguarda/vitrines-home',        label: 'Vitrines da home',  subtitle: 'Ordem do site',  description: 'Quais carrosséis saem na home e em que ordem', tone: 'purple', icon: ListOrdered },
   { href: '/retaguarda/relatorio-fiscal',     label: 'Relatório Fiscal',  subtitle: 'NFC-e',          description: 'Auditoria por CNPJ/série + inconsistências', tone: 'purple', icon: ClipboardList },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',      subtitle: 'Estoque',       description: 'Análise de produto + venda',    tone: 'purple', icon: BarChart3       },
   { href: '/retaguarda/distribuicao-estoque', label: 'Distribuição',      subtitle: 'Estoque PLUS',  description: 'Detecta desequilíbrios entre lojas', tone: 'rose',   icon: Package         },

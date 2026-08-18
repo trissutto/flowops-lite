@@ -5560,6 +5560,72 @@ model SiteColecao {
   @@map("site_colecao")
 }
 
+/// AS VITRINES DA HOME — quais blocos saem, em que ORDEM, com que texto.
+///
+/// Até 17/08/2026 os dois blocos da home eram arrays CHUMBADOS no código do
+/// site (`app/(public)/page.tsx` e `data/home.ts`): trocar a ordem — ou subir
+/// Moda praia no verão — exigia commit + deploy na Vercel. Mesma história do
+/// banner e da categoria, resolvida do mesmo jeito: vira dado, a retaguarda
+/// edita, o site lê.
+///
+/// `bloco` diz QUAL das duas listas da home é:
+///   'atalho'    → a fileira de cards com foto logo abaixo do banner
+///   'carrossel' → as vitrines de produto que rolam na horizontal
+///
+/// `tipo` é DE ONDE vêm as peças; `chave` completa quando o tipo precisa:
+///   'novidades'  → o que chegou por último (chave vazia)     → /novidades
+///   'destaques'  → catálogo por relevância (chave vazia)     → /categoria
+///   'promocao'   → só peça em promoção (chave vazia)         → /outlet
+///   'categoria'  → uma categoria; chave = slug ('blusas')    → /categoria/<slug>
+///   'colecao'    → coleção curada; chave = slug da SiteColecao → /mais-top-da-semana
+///
+/// ⚠️ TABELA VAZIA NÃO É "HOME SEM VITRINE": o service semeia as cinco atuais
+/// na primeira leitura e o site tem a mesma lista como padrão no código. Vazio
+/// tratado como resposta já derrubou tela nesta casa — aqui derrubaria a home
+/// inteira.
+model SiteHomeVitrine {
+  id            String   @id @default(uuid())
+
+  /// 'carrossel' (vitrine de produto) ou 'atalho' (card com foto). Ver acima.
+  bloco         String   @default("carrossel")
+
+  tipo          String   @default("categoria")
+  /// Slug da categoria ou da coleção. Vazio nos tipos que não precisam.
+  chave         String   @default("")
+
+  /// Textos do cabeçalho da seção. Vazio = o padrão que o site já usa (o nome
+  /// da categoria), pra ninguém ser obrigado a escrever nada pra publicar.
+  titulo        String?
+  /// Versão curta pro celular, onde o título comprido quebra em duas linhas e
+  /// come a altura do carrossel ("Novidades da semana" → "Novidades"). Vazio =
+  /// usa o título normal. 81% do tráfego é mobile — não é detalhe.
+  tituloMobile  String?  @map("titulo_mobile")
+  eyebrow       String?
+  descricao     String?  @db.Text
+  /// Rótulo do link "Ver tudo em…". O destino é derivado do tipo/chave — link
+  /// digitado à mão é 404 esperando acontecer.
+  ctaLabel      String?
+
+  /// Quantas peças o carrossel carrega. Ignorado no atalho (card é um só).
+  limite        Int      @default(12)
+
+  ordem         Int      @default(0)
+  /// Desligada continua na tela (com o texto preservado) e some do site —
+  /// é como se guarda a vitrine de Natal em janeiro sem perder o que foi escrito.
+  ativo         Boolean  @default(true)
+
+  atualizadoPor String?  @map("atualizado_por")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  /// A mesma vitrine duas vezes no MESMO bloco é sempre engano de quem
+  /// cadastrou. Nos dois blocos é legítimo: "Vestidos" pode ser atalho no topo
+  /// e carrossel no meio da página.
+  @@unique([bloco, tipo, chave])
+  @@index([bloco, ativo, ordem])
+  @@map("site_home_vitrines")
+}
+
 model SiteCategoria {
   id            String   @id @default(uuid())
 

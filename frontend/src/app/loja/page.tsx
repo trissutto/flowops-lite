@@ -16,7 +16,7 @@ import {
   Shuffle, CreditCard, Boxes, CheckCircle2, Package2, Store,
   FileSearch, Truck, BarChart3, Percent, ArrowLeft,
   LayoutDashboard, Globe2, Settings, ShoppingCart, Tags, KeyRound, Map, Zap,
-  Shirt, GalleryHorizontal, ClipboardList,
+  Shirt, GalleryHorizontal, ClipboardList, ListOrdered,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -54,6 +54,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/cadastros/classificacao-peca',    label: 'Classificação Peça', subtitle: 'Cadastros', description: 'Ocasião · tecido · modelagem · coleção', tone: 'purple', icon: Shirt },
   { href: '/retaguarda/banners',              label: 'Banners',        subtitle: 'Vitrine',     description: 'Hero da home · faixas · tarja do topo', tone: 'purple', icon: GalleryHorizontal },
   { href: '/retaguarda/categorias',           label: 'Categorias',     subtitle: 'Vitrine',     description: 'Foto, nome e ordem no menu do site', tone: 'purple', icon: Tags },
+  { href: '/retaguarda/vitrines-home',        label: 'Vitrines da home', subtitle: 'Vitrine',   description: 'Quais carrosséis saem na home e em que ordem', tone: 'purple', icon: ListOrdered },
   { href: '/retaguarda/classificar-produtos', label: 'Classificar Produtos', subtitle: 'Catálogo', description: 'Categoria e subcategoria do site, em lote', tone: 'purple', icon: Tags },
   { href: '/retaguarda/modulo-produtos', label: 'Módulo Produtos (triagem)', subtitle: 'Reorganização', description: 'As 43 telas de produto numeradas, com uso real — teste e responda pelo número', tone: 'purple', icon: Tags },
   { href: '/retaguarda/categorias-mapa',      label: 'Vincular Categorias', subtitle: 'Catálogo', description: 'De-para WooCommerce → categoria do site', tone: 'purple', icon: Tags },
