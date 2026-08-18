@@ -9,14 +9,14 @@ import { trackSelectItem } from '@/lib/tracking';
  * VITRINE EM GRADE — as vitrines de produto da home.
  *
  * Pedido do dono (18/08): "no DESKTOP, cada linha da vitrine deve ter 6
- * COLUNAS e devemos ter 3 LINHAS. No CELULAR, 3 COLUNAS com 6 LINHAS." Ou
+ * COLUNAS e devemos ter 3 LINHAS. No CELULAR, 2 COLUNAS com 9 LINHAS." Ou
  * seja: 18 posições por vitrine, em grade — o carrossel esconde peça atrás de
  * uma seta, a grade mostra as 18 de uma vez.
  *
  * Não existe "componente de grade" neste projeto: toda grade de produto é um
  * `div.grid` com a mesma string de classe repetida (SearchResults,
  * DescobrirFeed, ListaDeDesejos, RecommendationRail). Este arquivo só existe
- * porque a home tem CINCO delas e porque a grade da home é a única de 3/6
+ * porque a home tem CINCO delas e porque a grade da home é a única de 2/6
  * colunas — não é abstração nova, é a mesma linha escrita num lugar só.
  */
 
@@ -70,7 +70,7 @@ export function VitrineGrid({
        * 1024 é o que toda outra grade de produto do projeto já faz
        * (SearchResults, DescobrirFeed, RecommendationRail, ListaDeDesejos).
        */
-      className="grid grid-cols-3 gap-x-4 gap-y-8 lg:gap-x-6 xl:grid-cols-6 xl:gap-y-12"
+      className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:gap-x-6 xl:grid-cols-6 xl:gap-y-12"
     >
       {products.slice(0, VITRINE_GRID_MAX).map((product, index) => (
         <ProductCard

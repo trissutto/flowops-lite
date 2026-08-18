@@ -1,5 +1,6 @@
 import { Hero } from '@/components/sections/Hero';
-import { HomeBenefitsAndStores, HomeCategoryNav, HomeComfortBanner, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
+import { HomeBenefitsAndStores, HomeCategoryNav, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
+import { HomeVlm222Hero } from '@/components/sections/HomeVlm222Hero';
 import { VitrineGrid } from '@/components/sections/VitrineGrid';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -73,30 +74,33 @@ export default async function HomePage({
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
-      <Hero
-        image={hero.image}
-        imageMobile={hero.imageMobile}
-        eyebrow={hero.eyebrow}
-        title={
-          hero.lead || hero.emphasis ? (
-            hero.daRetaguarda ? (
-              <>
-                {hero.lead}
-                {hero.emphasis && <><br /><span className="text-primary-soft italic">{hero.emphasis}</span></>}
-              </>
-            ) : <>{hero.lead}{hero.emphasis && ` ${hero.emphasis}`}</>
-          ) : (
-            <span className="sr-only">Lurd&apos;s Plus Size — moda elegante do 44 ao 60</span>
-          )
-        }
-        subtitle={hero.subtitle}
-        primaryAction={{ label: 'Ver novidades', href: novidadesHref, variant: 'primary' }}
-        height={hero.daRetaguarda ? 'arte' : 'home'}
-        align={hero.daRetaguarda ? 'center' : 'left'}
-        overlay="none"
-        contentTone={hero.daRetaguarda ? 'light' : 'ink'}
-        priority
-      />
+      <HomeVlm222Hero href={href('/produto/ref-vlm-222')} />
+
+      <div className="lg:hidden">
+        <Hero
+          image={hero.image}
+          imageMobile={hero.imageMobile}
+          eyebrow={hero.eyebrow}
+          title={
+            hero.lead || hero.emphasis ? (
+              hero.daRetaguarda ? (
+                <>
+                  {hero.lead}
+                  {hero.emphasis && <><br /><span className="text-primary-soft italic">{hero.emphasis}</span></>}
+                </>
+              ) : <>{hero.lead}{hero.emphasis && ` ${hero.emphasis}`}</>
+            ) : (
+              <span className="sr-only">Lurd&apos;s Plus Size — moda elegante do 44 ao 60</span>
+            )
+          }
+          subtitle={hero.subtitle}
+          primaryAction={{ label: 'Ver novidades', href: novidadesHref, variant: 'primary' }}
+          height={hero.daRetaguarda ? 'arte' : 'home'}
+          align={hero.daRetaguarda ? 'center' : 'left'}
+          overlay="none"
+          contentTone={hero.daRetaguarda ? 'light' : 'ink'}
+        />
+      </div>
 
       <HomeCategoryNav categories={categories} />
 
@@ -110,7 +114,7 @@ export default async function HomePage({
           pior que uma seção a menos.
 
           EM GRADE, NÃO CARROSSEL (dono, 18/08): 6 colunas x 3 linhas no
-          desktop, 3 x 6 no celular. O carrossel mostrava 2,5 peças e exigia
+          desktop, 2 x 9 no celular. O carrossel mostrava 2,5 peças e exigia
           arrastar pra ver o resto — a vitrine virava enfeite. QUANTAS peças
           cada uma mostra continua sendo o `limite` da própria vitrine em
           /retaguarda/vitrines-home (teto 24); a grade corta em 18 pra fechar
@@ -143,8 +147,6 @@ export default async function HomePage({
       ))}
 
       <HomeSizeNav sizes={sizeLinks} />
-
-      <HomeComfortBanner href={href('/produto/ref-vlm-222')} />
 
       <HomeBenefitsAndStores storesHref={storesHref} />
 

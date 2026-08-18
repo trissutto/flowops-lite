@@ -50,12 +50,10 @@ interface ProductCardProps {
   /** Dispara somente quando a cliente abre a página da peça. */
   onProductClick?: () => void;
   /**
-   * SLOT ESTREITO — a grade da home (`VitrineGrid`), 3 colunas no celular e 6
-   * no desktop. Medido a 360px de viewport: o card fica com 91px de largura,
-   * metade do card de 2 colunas pro qual este componente foi desenhado. Nessa
-   * largura a etiqueta "Promoção" mede 117px e é CORTADA no meio da palavra
-   * pelo `overflow-hidden` da moldura, e o botão da sacola (`size-10`) ocupa
-   * 44% do card.
+   * SLOT DA HOME — hoje 2 colunas no celular e 6 no desktop. O modo nasceu
+   * quando a home ainda usava 3 colunas no celular e preserva a apresentação
+   * mais enxuta: evita que etiqueta, sacola e textos secundários disputem
+   * atenção com foto, nome e preço.
    *
    * O modo enxuga o que é DECORAÇÃO nessa largura (tecido, faixa de tamanhos,
    * a repetição do "-50%") e aperta etiqueta e botões. O que faz a cliente
@@ -77,18 +75,19 @@ export const CAROUSEL_PRODUCT_SIZES =
   '(max-width: 640px) 68vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, 23vw';
 
 /**
- * Largura do card na GRADE DA HOME — 3 colunas até 1279px, 6 a partir de 1280.
+ * Largura do card na GRADE DA HOME — 2 colunas no celular, 3 até 1279px e 6
+ * a partir de 1280.
  *
  * Precisa ser diferente do carrossel porque lá o card ocupa 68vw no celular e
- * aqui ocupa 30vw (93px num aparelho de 360). Herdar o `sizes` do carrossel
- * faria o Next servir a variante de 640px pra um slot de 93px — cerca de 4× os
- * bytes por foto, vezes as 90 peças das cinco vitrines.
+ * aqui ocupa 47vw no celular e 30vw no tablet. Herdar o `sizes` do carrossel
+ * faria o Next servir uma variante maior que o slot real, multiplicando bytes
+ * por foto em todas as vitrines.
  *
  * O `200px` fixo do desktop é exato, não chute: o `max-w-wide` trava o
  * container em 1344px, então (1344 − 80 de gutter − 5 gaps de 24) / 6 = 191px
  * é a largura MÁXIMA que este card alcança em qualquer monitor.
  */
-export const HOME_GRID_SIZES = '(max-width: 1279px) 30vw, 200px';
+export const HOME_GRID_SIZES = '(max-width: 639px) 47vw, (max-width: 1279px) 30vw, 200px';
 
 export function ProductCard({
   product,
