@@ -358,10 +358,18 @@ export class ClassificacaoService {
   }
 
   /**
-   * AS CATEGORIAS DE UMA PEÇA — o que o seletor do Produto Master abre.
+   * AS VITRINES DE UMA PEÇA — o que o painel do Produto Master abre.
    *
-   * Devolve a família junto: a tela mostra em quantas REFs a escolha vai
-   * pegar, porque "esta peça" na vitrine são várias linhas aqui dentro.
+   * Devolve LISTA PLANA (categorias e subcategorias marcadas) porque é assim
+   * que a tela pensa: uma árvore de checkbox, sem "principal" pra escolher.
+   * A principal existe no banco — a PDP precisa de UMA pra breadcrumb e pro
+   * "você também pode gostar" — mas ela é DERIVADA na gravação, não
+   * perguntada. Perguntar era o desenho anterior, e o dono cortou: "só marco
+   * o checkbox de todas as categorias que eu quero".
+   *
+   * A família inteira é lida junta: peça classificada em lote antes do
+   * agrupamento pode ter irmãs divergentes, e a união é o que evita a tela
+   * abrir sem marcas e apagar tudo no primeiro Salvar.
    */
   async categoriasDaPeca(refBusca: string) {
     const refs = await this.refsDaFamilia(refBusca);
@@ -371,100 +379,135 @@ export class ClassificacaoService {
       where: { ref: { in: refs } },
       select: {
         ref: true, nome: true, publicado: true,
-        categoria: true, subcategoria: true, categoriasExtras: true,
+        categoria: true, subcategoria: true,
+        categoriasExtras: true, subcategoriasExtras: true,
       },
     });
-    /**
-     * A REF PEDIDA MANDA; se ela não tem cadastro, vale a primeira irmã com
-     * categoria. Família com valores divergentes é resquício de classificação
-     * em lote feita antes do agrupamento — abrir pela mais preenchida é o que
-     * evita a tela vir vazia e apagar, no primeiro Salvar, o que existia.
-     */
     const exata = String(refBusca || '').trim().toUpperCase();
     const dona =
       linhas.find((l) => String(l.ref).toUpperCase() === exata) ??
       linhas.find((l) => l.categoria) ??
       linhas[0];
 
-    const categoria = this.normSlug(dona?.categoria) || null;
-    const extras = [
+    const uniao = (principal: string, extras: string): string[] => [
       ...new Set(
         linhas
-          .flatMap((l) => (l.categoriasExtras ?? []) as string[])
+          .flatMap((l) => [l[principal], ...((l[extras] ?? []) as string[])])
           .map((c) => this.normSlug(c))
-          .filter((c) => c && c !== categoria),
+          .filter(Boolean),
       ),
     ];
+
     return {
       ok: true,
       ref: dona?.ref ?? exata,
       nome: dona?.nome ?? null,
       publicado: linhas.some((l) => l.publicado),
       refs: linhas.map((l) => l.ref),
-      categoria,
-      subcategoria: this.normSlug(dona?.subcategoria) || null,
-      categoriasExtras: extras,
+      categorias: uniao('categoria', 'categoriasExtras'),
+      subcategorias: uniao('subcategoria', 'subcategoriasExtras'),
+      /** Só pra tela poder mostrar qual é a que manda na PDP. */
+      principal: this.normSlug(dona?.categoria) || null,
     };
   }
 
   /**
-   * GRAVA AS CATEGORIAS DE UMA PEÇA — o "Salvar" do seletor do Produto Master.
+   * GRAVA AS VITRINES DE UMA PEÇA — o "Salvar" do painel de checkbox.
    *
-   * Escreve na família inteira, pelo motivo do `refsDaFamilia`. Passa pelos
-   * MESMOS caches que o lote derruba: sem isso a peça muda no banco e o site
-   * segue servindo a versão de até um minuto atrás — quem classificou conclui
-   * que a tela não salvou (foi o que aconteceu em 10/08/2026).
+   * Recebe o que foi MARCADO e resolve o resto:
+   *
+   * 1. **Sub marcada arrasta o pai.** Subcategoria é filtro DENTRO da página
+   *    do pai; marcada sozinha, a peça apareceria num chip de um menu que não
+   *    a lista.
+   * 2. **A principal é derivada, não perguntada** — a que já era continua
+   *    sendo (se seguir marcada), senão vale a primeira na ORDEM DO MENU.
+   *    Trocar a principal sem motivo mexeria no breadcrumb e no "você também
+   *    pode gostar" de uma peça que ninguém pediu pra mudar.
+   * 3. **Só slug que existe na árvore entra**: inventado abriria vitrine que
+   *    não está no menu.
+   *
+   * Escreve na família inteira (ver `refsDaFamilia`) e passa pelos MESMOS
+   * caches que o lote derruba — sem isso a peça muda no banco e o site segue
+   * servindo a versão de até um minuto atrás, e quem classificou conclui que a
+   * tela não salvou (foi o que aconteceu em 10/08/2026).
    */
   async salvarCategoriasDaPeca(input: {
     ref: string;
-    categoria: string | null;
-    subcategoria: string | null;
-    categoriasExtras: string[];
+    categorias: string[];
+    subcategorias: string[];
     quem: string;
   }) {
     const refs = await this.refsDaFamilia(input.ref);
     if (!refs.length) return { ok: false, erro: 'Peça sem cadastro no site' };
 
-    const categoria = this.normSlug(input.categoria) || null;
-    const subcategoria = this.normSlug(input.subcategoria) || null;
+    const arvore: any[] = await (this.prisma as any).siteCategoria.findMany({
+      select: { slug: true, paiSlug: true },
+      orderBy: [{ ordem: 'asc' }, { slug: 'asc' }],
+    });
+    const deCima = arvore.filter((c) => !c.paiSlug).map((c) => this.normSlug(c.slug));
+    const paiDaSub = new Map<string, string>(
+      arvore
+        .filter((c) => c.paiSlug)
+        .map((c) => [this.normSlug(c.slug), this.normSlug(c.paiSlug)]),
+    );
 
-    /**
-     * EXTRA SÓ DE CATEGORIA QUE EXISTE, e nunca a principal repetida: slug
-     * inventado abriria vitrine que não está no menu, e a principal repetida
-     * contaria a peça duas vezes no card da categoria.
-     */
-    const deCima = new Set<string>(
-      ((await (this.prisma as any).siteCategoria.findMany({
-        where: { paiSlug: null },
-        select: { slug: true },
-      })) as any[]).map((c) => this.normSlug(c.slug)),
+    const pedidasSub = new Set(
+      (input.subcategorias || []).map((s) => this.normSlug(s)).filter((s) => paiDaSub.has(s)),
     );
-    const extras = [...new Set((input.categoriasExtras || []).map((c) => this.normSlug(c)))].filter(
-      (c) => c && c !== categoria && deCima.has(c),
+    const pedidasCat = new Set(
+      (input.categorias || []).map((c) => this.normSlug(c)).filter((c) => deCima.includes(c)),
     );
+    for (const s of pedidasSub) pedidasCat.add(paiDaSub.get(s) as string);
+
+    // Na ORDEM DO MENU, não na ordem em que a tela mandou: é ela que decide a
+    // principal, e a mesma marcação tem que dar sempre o mesmo resultado.
+    const categorias = deCima.filter((c) => pedidasCat.has(c));
+    const subcategorias = arvore
+      .filter((c) => c.paiSlug && pedidasSub.has(this.normSlug(c.slug)))
+      .map((c) => this.normSlug(c.slug));
+
+    const atualLinha = await (this.prisma as any).siteProduto.findFirst({
+      where: { ref: { in: refs }, categoria: { not: null } },
+      select: { categoria: true },
+    });
+    const atual = this.normSlug(atualLinha?.categoria);
+    const categoria = (atual && categorias.includes(atual) ? atual : categorias[0]) ?? null;
+    const categoriasExtras = categorias.filter((c) => c !== categoria);
+
+    const subcategoria = subcategorias.find((s) => paiDaSub.get(s) === categoria) ?? null;
+    const subcategoriasExtras = subcategorias.filter((s) => s !== subcategoria);
 
     const r = await (this.prisma as any).siteProduto.updateMany({
       where: { ref: { in: refs } },
       data: {
         categoria,
         subcategoria,
-        categoriasExtras: extras,
+        categoriasExtras,
+        subcategoriasExtras,
         classificadoPor: input.quem,
         classificadoEm: new Date(),
       },
     });
     this.logger.log(
-      `[classificacao] peça ${input.ref} (${r.count} REF) → ${categoria ?? '-'}` +
-        `/${subcategoria ?? '-'} + [${extras.join(', ')}] por ${input.quem}`,
+      `[classificacao] peça ${input.ref} (${r.count} REF) → ` +
+        `[${categorias.join(', ') || '-'}] / [${subcategorias.join(', ') || '-'}] ` +
+        `principal=${categoria ?? '-'} por ${input.quem}`,
     );
 
-    // As páginas que mudam são a da principal E a de cada extra.
+    // Muda a página de CADA vitrine marcada, não só a da principal.
     const tags = ['categorias', 'filtros', 'catalogo'];
-    for (const slug of [categoria, ...extras]) if (slug) tags.push(`categoria:${slug}`);
+    for (const slug of categorias) tags.push(`categoria:${slug}`);
     avisarVitrine(tags, this.logger, 'classificacao');
     this.catalogo.invalidarCache();
 
-    return { ok: true, refs, atualizadas: r.count, categoria, subcategoria, categoriasExtras: extras };
+    return {
+      ok: true,
+      refs,
+      atualizadas: r.count,
+      categorias,
+      subcategorias,
+      principal: categoria,
+    };
   }
 
   /**
@@ -479,17 +522,31 @@ export class ClassificacaoService {
     if (params.semSubcategoria) where.subcategoria = null;
     if (params.semCategoria) where.categoria = null;
     /**
-     * Filtrar por categoria acha a peça que está lá como EXTRA também — senão
-     * a tela de lote diria "Linha Conforto tem 27" enquanto o site mostra 60,
-     * e quem confere concluiria que a vitrine está errada.
+     * Filtrar por categoria/subcategoria acha a peça que está lá como EXTRA
+     * também — senão a tela de lote diria "Linha Conforto tem 27" enquanto o
+     * site mostra 60, e quem confere concluiria que a vitrine está errada.
+     *
+     * `AND` de dois `OR` porque o Prisma só aceita UM `OR` no mesmo nível e os
+     * dois filtros podem vir na mesma busca.
      */
+    const recortes: any[] = [];
     if (params.categoria) {
-      where.OR = [
-        { categoria: params.categoria },
-        { categoriasExtras: { has: params.categoria } },
-      ];
+      recortes.push({
+        OR: [
+          { categoria: params.categoria },
+          { categoriasExtras: { has: params.categoria } },
+        ],
+      });
     }
-    if (params.subcategoria) where.subcategoria = params.subcategoria;
+    if (params.subcategoria) {
+      recortes.push({
+        OR: [
+          { subcategoria: params.subcategoria },
+          { subcategoriasExtras: { has: params.subcategoria } },
+        ],
+      });
+    }
+    if (recortes.length) where.AND = recortes;
 
     const porTexto = await this.refsPorTexto(params.busca, params.excluir);
     if (porTexto) {

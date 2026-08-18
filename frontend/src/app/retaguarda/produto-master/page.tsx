@@ -609,6 +609,9 @@ export default function ProdutoMasterPage() {
                 />
               </div>
 
+              {/* NÍVEL 1 — as vitrines do site: é o que o dono abre primeiro */}
+              {abertaComum && <VitrinesDoSite ref_={grupo.ref} arvore={arvore} />}
+
               {/* NÍVEL 1 aberto — o que é COMUM */}
               {abertaComum && (
                 <FichaComum
@@ -622,8 +625,6 @@ export default function ProdutoMasterPage() {
                 />
               )}
 
-              {/* NÍVEL 1 — as vitrines do site (categoria principal + extras) */}
-              {abertaComum && <CategoriasDoSite ref_={grupo.ref} arvore={arvore} />}
 
               {/* NÍVEL 2 — cores */}
               <div className="border-t border-slate-100">
@@ -791,38 +792,42 @@ type ArvoreSite = {
   subcategorias: Array<{ slug: string; nome: string; pai: string; ativo: boolean }>;
 };
 
-type CategoriasPeca = {
+type VitrinesPeca = {
   ok?: boolean;
   erro?: string;
   refs?: string[];
   publicado?: boolean;
-  categoria: string | null;
-  subcategoria: string | null;
-  categoriasExtras: string[];
+  categorias: string[];
+  subcategorias: string[];
+  principal?: string | null;
 };
 
 /**
- * EM QUE VITRINES ESTA PEÇA APARECE (pedido do dono, 18/08/2026).
+ * EM QUE VITRINES ESTA PEÇA APARECE — árvore de checkbox (dono, 18/08/2026).
  *
  * A categoria sempre foi UMA só, e o efeito colateral era silencioso: mandar
  * uma blusa pra "Linha Conforto" a TIRAVA de "Blusas" — a cliente que navega
  * por Blusas deixava de achar a peça no dia em que ela entrou na campanha.
  *
- * Aqui a PRINCIPAL continua sendo uma (é ela que manda na subcategoria, no
- * "você também pode gostar" e no que a PDP mostra) e as OUTRAS entram como
- * vitrine a mais. A tela de lote (/retaguarda/classificar-produtos) segue
- * servindo o mutirão; esta resolve o caso oposto — uma peça, várias vitrines.
+ * O primeiro desenho pedia "categoria principal" num select e as outras em
+ * chips; o dono cortou na hora — "só marco o checkbox de todas as categorias e
+ * subcategorias que eu quero". Então aqui NÃO se escolhe principal: marca-se
+ * tudo, e o backend deriva qual manda na PDP (a que já era, se seguir marcada;
+ * senão a primeira na ordem do menu).
+ *
+ * Duas regras que a tela aplica na hora, pra marcação impossível não existir:
+ *   · marcar SUBcategoria marca o pai — sub é filtro DENTRO da página do pai;
+ *   · desmarcar a categoria desmarca as subs dela.
  *
  * Vale pra FAMÍLIA inteira (todas as cores): o site mostra um card por peça,
- * montado a partir do cadastro de uma das REFs irmãs, e gravar só na REF
+ * montado a partir do cadastro de UMA das REFs irmãs, e gravar só na REF
  * aberta daria "marquei e não apareceu" toda vez que a dona do card fosse
- * outra. O backend resolve a família pela mesma chave do catálogo.
+ * outra.
  */
-function CategoriasDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreSite | null }) {
-  const [dados, setDados] = useState<CategoriasPeca | null>(null);
-  const [principal, setPrincipal] = useState('');
-  const [sub, setSub] = useState('');
-  const [extras, setExtras] = useState<string[]>([]);
+function VitrinesDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreSite | null }) {
+  const [dados, setDados] = useState<VitrinesPeca | null>(null);
+  const [cats, setCats] = useState<string[]>([]);
+  const [subs, setSubs] = useState<string[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -833,16 +838,15 @@ function CategoriasDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreSite |
     setCarregando(true);
     setErro(null);
     setSalvo(false);
-    api<CategoriasPeca>(`/loja-catalog/classificacao/peca/${encodeURIComponent(ref_)}`)
+    api<VitrinesPeca>(`/loja-catalog/classificacao/peca/${encodeURIComponent(ref_)}`)
       .then((d) => {
         if (!vivo) return;
         setDados(d);
-        setPrincipal(d?.categoria ?? '');
-        setSub(d?.subcategoria ?? '');
-        setExtras(d?.categoriasExtras ?? []);
+        setCats(d?.categorias ?? []);
+        setSubs(d?.subcategorias ?? []);
       })
       .catch((e: unknown) => {
-        if (vivo) setErro((e as Error)?.message || 'Não consegui ler as categorias');
+        if (vivo) setErro((e as Error)?.message || 'Não consegui ler as vitrines');
       })
       .finally(() => {
         if (vivo) setCarregando(false);
@@ -852,40 +856,48 @@ function CategoriasDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreSite |
     };
   }, [ref_]);
 
-  // As subcategorias são filhas da PRINCIPAL: extra é vitrine a mais, não muda
-  // a árvore em que a peça vive.
-  const subsDaPrincipal = useMemo(
-    () => (arvore?.subcategorias ?? []).filter((s) => s.pai === principal),
-    [arvore, principal],
-  );
+  // As subcategorias de cada categoria, na ordem do menu — o desenho da árvore.
+  const subsPorPai = useMemo(() => {
+    const m = new Map<string, Array<{ slug: string; nome: string }>>();
+    for (const s of arvore?.subcategorias ?? []) {
+      if (!m.has(s.pai)) m.set(s.pai, []);
+      m.get(s.pai)!.push({ slug: s.slug, nome: s.nome });
+    }
+    return m;
+  }, [arvore]);
 
-  function alternarExtra(slug: string) {
+  function alternarCategoria(slug: string) {
     setSalvo(false);
-    setExtras((atual) =>
-      atual.includes(slug) ? atual.filter((c) => c !== slug) : [...atual, slug],
-    );
+    const marcando = !cats.includes(slug);
+    setCats((a) => (marcando ? [...a, slug] : a.filter((c) => c !== slug)));
+    // Desmarcar a categoria leva as subs dela junto: sub órfã apareceria num
+    // chip de um menu que não lista a peça.
+    if (!marcando) {
+      const filhas = new Set((subsPorPai.get(slug) ?? []).map((s) => s.slug));
+      setSubs((a) => a.filter((s) => !filhas.has(s)));
+    }
+  }
+
+  function alternarSub(slug: string, pai: string) {
+    setSalvo(false);
+    const marcando = !subs.includes(slug);
+    setSubs((a) => (marcando ? [...a, slug] : a.filter((s) => s !== slug)));
+    // Marcar a sub marca o pai — é dentro da página dele que o chip vive.
+    if (marcando) setCats((a) => (a.includes(pai) ? a : [...a, pai]));
   }
 
   async function salvar() {
     setSalvando(true);
     setErro(null);
     try {
-      const r = await api<CategoriasPeca>(
+      const r = await api<VitrinesPeca>(
         `/loja-catalog/classificacao/peca/${encodeURIComponent(ref_)}`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            categoria: principal || null,
-            subcategoria: sub || null,
-            // A principal nunca vai junto como extra: repetida, ela contaria a
-            // peça duas vezes no card da categoria.
-            categoriasExtras: extras.filter((c) => c && c !== principal),
-          }),
-        },
+        { method: 'POST', body: JSON.stringify({ categorias: cats, subcategorias: subs }) },
       );
       if (r?.ok === false) throw new Error(r?.erro || 'Não consegui salvar');
       setDados(r);
-      setExtras(r?.categoriasExtras ?? []);
+      setCats(r?.categorias ?? []);
+      setSubs(r?.subcategorias ?? []);
       setSalvo(true);
     } catch (e: unknown) {
       setErro((e as Error)?.message || 'Não consegui salvar');
@@ -896,120 +908,97 @@ function CategoriasDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreSite |
 
   if (carregando) {
     return (
-      <div className="px-10 pb-4 flex items-center gap-2 text-xs text-slate-400">
-        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando categorias…
+      <div className="px-10 py-3 flex items-center gap-2 text-xs text-slate-400 bg-sky-50/50">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando vitrines…
       </div>
     );
   }
 
-  const semCadastro = dados?.ok === false;
-  const qtdRefs = dados?.refs?.length ?? 0;
+  if (dados?.ok === false) {
+    return (
+      <div className="px-10 py-3 bg-sky-50/50 text-xs text-slate-500">
+        Esta peça ainda não tem cadastro no site — publique a REF antes de escolher as vitrines.
+      </div>
+    );
+  }
+
+  const marcadas = cats.length + subs.length;
 
   return (
-    <div className="px-10 pb-4 bg-sky-50/50 pt-3 space-y-3 border-t border-sky-100">
+    <div className="px-10 py-3 bg-sky-50/50 space-y-3">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <p className="text-[10px] font-bold text-sky-700 uppercase">Vitrines do site</p>
         <p className="text-[10px] text-slate-400">
-          {semCadastro
-            ? 'esta peça ainda não tem cadastro no site'
-            : `vale pras ${qtdRefs} REF(s) desta peça${dados?.publicado ? '' : ' · peça não publicada'}`}
+          marque TUDO onde esta peça deve aparecer · vale pras {dados?.refs?.length ?? 0} REF(s) da
+          peça{dados?.publicado ? '' : ' · peça não publicada'}
         </p>
       </div>
 
-      {semCadastro ? (
-        <p className="text-xs text-slate-500">
-          A peça precisa estar no catálogo do site pra receber categoria. Publique a REF primeiro.
-        </p>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <div>
-              <label className="text-[10px] font-bold text-slate-600 uppercase">
-                Categoria principal{' '}
-                <span className="text-slate-400 normal-case font-normal">
-                  (é ela que manda na subcategoria)
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
+        {(arvore?.categorias ?? []).map((c) => {
+          const marcada = cats.includes(c.slug);
+          const filhas = subsPorPai.get(c.slug) ?? [];
+          return (
+            <div key={c.slug} className="min-w-0">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={marcada}
+                  onChange={() => alternarCategoria(c.slug)}
+                  className="w-4 h-4 accent-sky-600"
+                />
+                <span className={`text-sm truncate ${marcada ? 'font-bold text-sky-900' : 'text-slate-700'}`}>
+                  {c.nome}
                 </span>
+                {dados?.principal === c.slug && (
+                  <span
+                    title="É a categoria que a página do produto mostra"
+                    className="text-[9px] font-bold uppercase text-sky-600 bg-sky-100 rounded px-1 py-0.5 shrink-0"
+                  >
+                    principal
+                  </span>
+                )}
               </label>
-              <select
-                value={principal}
-                onChange={(e) => {
-                  setPrincipal(e.target.value);
-                  setSub('');
-                  setSalvo(false);
-                }}
-                className="w-full px-2 py-2 border rounded text-sm bg-white"
-              >
-                <option value="">— sem categoria —</option>
-                {(arvore?.categorias ?? []).map((c) => (
-                  <option key={c.slug} value={c.slug}>{c.nome}</option>
-                ))}
-              </select>
+              {filhas.length > 0 && (
+                <div className="ml-6 mt-0.5 space-y-0.5">
+                  {filhas.map((s) => (
+                    <label key={s.slug} className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={subs.includes(s.slug)}
+                        onChange={() => alternarSub(s.slug, c.slug)}
+                        className="w-3.5 h-3.5 accent-sky-600"
+                      />
+                      <span
+                        className={`text-xs truncate ${
+                          subs.includes(s.slug) ? 'text-sky-900 font-semibold' : 'text-slate-500'
+                        }`}
+                      >
+                        {s.nome}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
-            <div>
-              <label className="text-[10px] font-bold text-slate-600 uppercase">Subcategoria</label>
-              <select
-                value={sub}
-                onChange={(e) => {
-                  setSub(e.target.value);
-                  setSalvo(false);
-                }}
-                disabled={!principal || subsDaPrincipal.length === 0}
-                className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50"
-              >
-                <option value="">— nenhuma —</option>
-                {subsDaPrincipal.map((s) => (
-                  <option key={s.slug} value={s.slug}>{s.nome}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+          );
+        })}
+      </div>
 
-          <div>
-            <label className="text-[10px] font-bold text-slate-600 uppercase">
-              Também aparece em{' '}
-              <span className="text-slate-400 normal-case font-normal">
-                (clique pra marcar — a peça continua na principal)
-              </span>
-            </label>
-            <div className="flex flex-wrap gap-1.5 mt-1">
-              {(arvore?.categorias ?? [])
-                .filter((c) => c.slug !== principal)
-                .map((c) => {
-                  const marcada = extras.includes(c.slug);
-                  return (
-                    <button
-                      key={c.slug}
-                      type="button"
-                      onClick={() => alternarExtra(c.slug)}
-                      className={`px-2.5 py-1 rounded-full border text-xs transition ${
-                        marcada
-                          ? 'bg-sky-600 border-sky-600 text-white font-semibold'
-                          : 'bg-white border-slate-300 text-slate-600 hover:border-sky-400'
-                      }`}
-                    >
-                      {c.nome}
-                    </button>
-                  );
-                })}
-            </div>
-          </div>
+      {erro && <p className="text-xs text-rose-700">{erro}</p>}
 
-          {erro && <p className="text-xs text-rose-700">{erro}</p>}
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void salvar()}
-              disabled={salvando}
-              className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
-            >
-              {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-              Salvar vitrines
-            </button>
-            {salvo && <span className="text-xs text-emerald-700 font-semibold">Salvo — o site já mudou</span>}
-          </div>
-        </>
-      )}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void salvar()}
+          disabled={salvando}
+          className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
+        >
+          {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Salvar vitrines ({marcadas})
+        </button>
+        {salvo && <span className="text-xs text-emerald-700 font-semibold">Salvo — o site já mudou</span>}
+      </div>
     </div>
   );
 }

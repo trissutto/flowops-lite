@@ -1031,6 +1031,13 @@ export class LojaCatalogService {
           .filter((c: string) => c && c !== this.slugTaxonomia(categoria)),
       ),
     ];
+    const subcategoriasExtras = [
+      ...new Set(
+        (Array.isArray(site?.subcategoriasExtras) ? site.subcategoriasExtras : [])
+          .map((c: any) => this.slugTaxonomia(c))
+          .filter((c: string) => c && c !== this.slugTaxonomia(subcategoria)),
+      ),
+    ];
 
     return {
       ref,
@@ -1069,8 +1076,9 @@ export class LojaCatalogService {
        * a cliente está vendo — sem este campo ela não saberia onde está.
        */
       subcategoria,
-      /** As vitrines EXTRAS desta peça — ver `listar`, que filtra pelas duas. */
+      /** As vitrines EXTRAS desta peça — ver `listar`, que filtra por todas. */
       categoriasExtras,
+      subcategoriasExtras,
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
@@ -1846,7 +1854,12 @@ export class LojaCatalogService {
      */
     if (params.subcategoria) {
       const sub = this.slugTaxonomia(params.subcategoria);
-      pecas = pecas.filter((p) => this.slugTaxonomia(p.subcategoria) === sub);
+      // Igual à categoria: o chip acha quem está nele como EXTRA.
+      pecas = pecas.filter((p) => {
+        if (this.slugTaxonomia(p.subcategoria) === sub) return true;
+        const extras: string[] = Array.isArray(p.subcategoriasExtras) ? p.subcategoriasExtras : [];
+        return extras.some((c) => this.slugTaxonomia(c) === sub);
+      });
     }
     if (params.soPromocao) pecas = pecas.filter((p) => p.promocao);
     if (params.soNovidade) pecas = pecas.filter((p) => p.lancamento);

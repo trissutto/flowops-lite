@@ -6661,6 +6661,18 @@ model SiteProduto {
   /// dono no mesmo dia: **esquecer o Giga** — a taxonomia da vitrine nasce e
   /// vive no Flow, com nome que a cliente entende.
   subcategoria      String?  @db.VarChar(40)
+
+  /// AS OUTRAS SUBCATEGORIAS da peça — o par de `categoriasExtras`.
+  ///
+  /// O painel do Produto Master é uma árvore de checkbox: quem classifica
+  /// marca TODAS as vitrines onde a peça deve aparecer, categoria e
+  /// subcategoria juntas. `subcategoria` guarda a que pertence à categoria
+  /// PRINCIPAL (é ela que a PDP mostra); as demais ficam aqui.
+  ///
+  /// Marcar subcategoria SEM o pai não existe: sub é filtro DENTRO da página
+  /// do pai, então o pai entra junto na gravação — senão a peça apareceria no
+  /// chip de um menu que não a lista.
+  subcategoriasExtras String[] @default([]) @map("subcategorias_extras")
   /// Quem classificou e quando — classificar 797 peças é trabalho manual caro,
   /// e saber o que já foi feito evita refazer.
   classificadoPor   String?  @map("classificado_por")

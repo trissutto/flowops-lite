@@ -304,14 +304,26 @@ export class SiteCategoriasService {
   private async pecasPorSubcategoria(): Promise<Map<string, number>> {
     const m = new Map<string, number>();
     try {
-      const linhas: Array<{ subcategoria: string | null; _count: { _all: number } }> =
-        await (this.prisma as any).siteProduto.groupBy({
-          by: ['subcategoria'],
-          where: { publicado: true, subcategoria: { not: null } },
-          _count: { _all: true },
+      /**
+       * Conta EM MEMÓRIA, não por `groupBy`: a peça agora pode estar em mais
+       * de uma subcategoria (`subcategoriasExtras` é array, e `groupBy` não
+       * enxerga dentro dele). Sem isto o chip da vitrine de campanha diria
+       * zero e sumiria do menu com peça dentro.
+       */
+      const linhas: Array<{ subcategoria: string | null; subcategoriasExtras: string[] }> =
+        await (this.prisma as any).siteProduto.findMany({
+          where: { publicado: true },
+          select: { subcategoria: true, subcategoriasExtras: true },
         });
       for (const l of linhas) {
-        if (l.subcategoria) m.set(this.normSlug(l.subcategoria), l._count._all);
+        const slugs = new Set<string>();
+        const principal = this.normSlug(l.subcategoria);
+        if (principal) slugs.add(principal);
+        for (const extra of l.subcategoriasExtras ?? []) {
+          const s = this.normSlug(extra);
+          if (s) slugs.add(s);
+        }
+        for (const s of slugs) m.set(s, (m.get(s) || 0) + 1);
       }
     } catch (e: any) {
       // Coluna ainda não existe (deploy antigo): o site segue com um nível só.
