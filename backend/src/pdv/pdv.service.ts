@@ -18,6 +18,7 @@ import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
 import { PedidoOnlineService } from './pedido-online.service';
+import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 
 /**
@@ -947,7 +948,15 @@ export class PdvService {
 
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
-      select: { id: true, status: true, total: true, customerCpf: true, storeCode: true },
+      select: {
+        id: true, status: true, total: true, storeCode: true,
+        // Cadastro da cliente INTEIRO: a venda online exige tudo (guarda de
+        // 'venda_online' logo abaixo). Com o select curto os outros campos
+        // vinham `undefined` e passariam na régua como se estivessem lá.
+        customerCpf: true, customerName: true, customerEmail: true, customerPhone: true,
+        customerCep: true, customerEndereco: true, customerNumero: true,
+        customerBairro: true, customerCidade: true, customerUf: true,
+      },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open') {
@@ -1013,13 +1022,51 @@ export class PdvService {
     }
 
     // VENDA ONLINE — pagamento já recebido por fora (PIX direto / link externo).
-    // CPF obrigatório pra rastreabilidade (cliente sempre identificado em venda
-    // online de WhatsApp/Instagram). NFC-e NÃO é emitida automaticamente —
-    // venda online geralmente não exige nota.
-    if (input.method === 'venda_online' && !sale.customerCpf) {
-      throw new BadRequestException(
-        'Venda online exige CPF do cliente. Identifique a cliente antes de fechar.',
-      );
+    // NFC-e NÃO é emitida automaticamente (venda online geralmente não pede
+    // nota).
+    //
+    // CADASTRO COMPLETO OBRIGATÓRIO (dono 18/08): nome e sobrenome, CPF
+    // válido, WhatsApp, e-mail e endereço inteiro. A régua antiga era só
+    // "tem CPF?" e deixava fechar com o resto vazio — o estrago aparecia
+    // longe do caixa: etiqueta saindo "Cliente" (ON-000009), pedido sem CEP
+    // que nem vira Order (cai no fluxo legado, sem card e sem etiqueta) e
+    // cliente que ninguém consegue avisar.
+    //
+    // Aqui é o ÚLTIMO portão: a tela barra ANTES de gerar PIX/link, então
+    // nenhuma cobrança sai sem os dados — ninguém fica com dinheiro na conta
+    // e a venda travada aqui.
+    if (input.method === 'venda_online') {
+      const faltando = faltandoDadosClienteOnline(sale);
+      if (faltando.length) {
+        /**
+         * ⚠️ DINHEIRO QUE JÁ ENTROU NUNCA É BARRADO AQUI.
+         *
+         * O `PagarmeLinkReconcileService` (cron de 30s, 17/08) fecha a venda
+         * do link pago chamando este addPayment com `venda_online`. Se a
+         * guarda derrubasse esse caminho, a venda paga ficaria aberta pra
+         * sempre — que é EXATAMENTE o furo que aquele cron foi feito pra
+         * tapar (caso Sandra Micheli: peça não sai, sem NF-e, fora do caixa
+         * e cliente que pagou sem receber nada).
+         *
+         * Então: se existe pagamento PAGO no gateway lastreando este
+         * registro, fecha e AVISA no log. Vale pras vendas que nasceram
+         * antes desta regra e pro cadastro que envelheceu torto — a trava de
+         * verdade está antes da cobrança (o PDV não gera PIX/link sem os
+         * dados).
+         */
+        const gateway = await this.pagamentoJaPagoNoGateway(input.details);
+        if (!gateway) {
+          throw new BadRequestException(
+            `Venda online exige o cadastro completo da cliente — falta: ${faltando.join(', ')}. ` +
+              'Abra o cadastro da cliente (F6) e complete antes de fechar.',
+          );
+        }
+        this.logger.warn(
+          `[pdv] venda ${sale.id} fechando com CADASTRO INCOMPLETO (falta: ${faltando.join(', ')}) — ` +
+            `${gateway} já está PAGO, barrar aqui deixaria dinheiro na conta com venda aberta. ` +
+            'Sem endereço/CPF o pedido online NÃO vira Order (sem card e sem etiqueta): conferir o cadastro.',
+        );
+      }
     }
 
     // VALE-TROCA: valida o código antes de aceitar como pagamento.
@@ -2554,6 +2601,39 @@ export class PdvService {
   // ═══════════════════════════════════════════════════════════════════════
   // CLIENTE
   // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Existe pagamento PAGO no gateway por trás destes `details`? Devolve o
+   * rótulo ("Pagar.me <id>") ou null.
+   *
+   * Lê do NOSSO banco (o que o webhook/reconciliador já persistiu) — nunca
+   * bate na API do gateway: caminho de venda não pode depender de rede de
+   * terceiro. Falha de leitura devolve null (segue a regra normal).
+   */
+  private async pagamentoJaPagoNoGateway(details: any): Promise<string | null> {
+    try {
+      const pagarmeId = String(details?.pagarmeOrderId || '').trim();
+      if (pagarmeId) {
+        const r = await (this.prisma as any).pagarmePayment.findFirst({
+          where: { pagarmeOrderId: pagarmeId, status: 'paid' },
+          select: { pagarmeOrderId: true },
+        });
+        if (r) return `Pagar.me ${pagarmeId}`;
+      }
+      // Venda online por PIX grava o id do PagBank em pagbankOrderId E pixTxid.
+      const pagbankId = String(details?.pagbankOrderId || details?.pixTxid || '').trim();
+      if (pagbankId) {
+        const r = await (this.prisma as any).pagbankPayment.findFirst({
+          where: { pagbankOrderId: pagbankId, status: 'paid' },
+          select: { pagbankOrderId: true },
+        });
+        if (r) return `PagBank ${pagbankId}`;
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] não deu pra conferir pagamento no gateway: ${e?.message || e}`);
+    }
+    return null;
+  }
 
   async setCustomer(input: {
     saleId: string;
