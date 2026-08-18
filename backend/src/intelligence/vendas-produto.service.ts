@@ -72,6 +72,25 @@ export class VendasProdutoService {
   /** Teto de linhas agregadas. Acima disso a tela avisa em vez de mentir. */
   private static readonly TETO = 5000;
 
+  /**
+   * REFs QUE NÃO SÃO PRODUTO — o PDV usa como linha de serviço/ajuste.
+   *
+   * Achado com a tela já no ar (dono, 18/08: "o que é este MANUAL?"). Medido
+   * em 2026:
+   *
+   *   · MANUAL  — 415 linhas, **−R$ 24.343**. É o item digitado à mão. A loja
+   *     registra TROCA assim: a peça devolvida entra como linha NEGATIVA pra
+   *     venda fechar em zero ("Troca cliente Fulana Jaqueta jeans ref 15315
+   *     tam 52", −419,90, pagamento `troca_par`, venda total 0). São 248
+   *     linhas negativas contra 167 positivas.
+   *   · FRETE   — 113 linhas. O relatório dizia "vendeu 113 peças de FRETE".
+   *   · MARCADO — 12 linhas. Marcado não é venda em lugar nenhum do sistema.
+   *
+   * Ficavam no topo da lista e ainda puxavam o VALOR do período pro negativo.
+   * Some daqui, não da venda: o caixa continua fechando com elas.
+   */
+  private static readonly NAO_E_PRODUTO = ['MANUAL', 'FRETE', 'MARCADO'];
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -247,7 +266,7 @@ export class VendasProdutoService {
         palavras
           .map(
             (_, i) =>
-              `(ref ILIKE $${7 + i} OR COALESCE(nome,'') ILIKE $${7 + i} OR cor ILIKE $${7 + i})`,
+              `(ref ILIKE $${8 + i} OR COALESCE(nome,'') ILIKE $${8 + i} OR cor ILIKE $${8 + i})`,
           )
           .join(' AND ')
       : '';
@@ -266,6 +285,8 @@ export class VendasProdutoService {
                MAX(ultima) AS ultima
           FROM bruto
          WHERE ref IS NOT NULL AND ref <> ''
+           -- Linha de serviço do PDV fora: ver NAO_E_PRODUTO.
+           AND ref <> ALL($7::text[])
          GROUP BY ref, cor
       )
       SELECT * FROM agregado
@@ -280,6 +301,7 @@ export class VendasProdutoService {
       sql,
       ...params,
       f.marca || null,
+      VendasProdutoService.NAO_E_PRODUTO,
       ...palavras.map((w) => `%${w}%`),
     );
 
