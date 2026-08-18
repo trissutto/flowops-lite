@@ -11,6 +11,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { IntelligenceService } from './intelligence.service';
 import { ErpService } from '../erp/erp.service';
 import { WincredMirrorService } from '../wincred-mirror/wincred-mirror.service';
+import { VendasProdutoService } from './vendas-produto.service';
 
 /**
  * /intelligence — admin-only. Endpoints pra dashboard de inteligência de
@@ -26,6 +27,7 @@ export class IntelligenceController {
     private readonly svc: IntelligenceService,
     private readonly erp: ErpService,
     private readonly mirror: WincredMirrorService,
+    private readonly vendasProduto: VendasProdutoService,
   ) {}
 
   private requireAdmin(req: any) {
@@ -34,6 +36,36 @@ export class IntelligenceController {
 
   private parseBool(v?: string): boolean {
     return v === 'true' || v === '1';
+  }
+
+  /**
+   * VENDAS POR PRODUTO (REF + COR) — o relatório de 18/08/2026.
+   *
+   * Vem ANTES de `overview` só por organização; o que importa é que ele NÃO
+   * usa o `getTopRefsBySales` das outras telas: aquele lê só o caixa antigo e
+   * não desconta a réplica do PDV. Ver o cabeçalho do `VendasProdutoService`.
+   */
+  @Get('vendas-produto')
+  vendasProdutoListar(@Req() req: any, @Query() q: any) {
+    this.requireAdmin(req);
+    return this.vendasProduto.listar({
+      de: q.de || undefined,
+      ate: q.ate || undefined,
+      loja: q.loja || undefined,
+      marca: q.marca || undefined,
+      busca: q.busca || undefined,
+      refs: q.refs ? String(q.refs).split(',').map((r: string) => r.trim()).filter(Boolean) : undefined,
+      ordenar: q.ordenar || undefined,
+      page: q.page ? Number(q.page) : 1,
+      perPage: q.perPage ? Number(q.perPage) : 50,
+    });
+  }
+
+  /** As marcas que existem no cadastro — alimenta o seletor da tela. */
+  @Get('vendas-produto/marcas')
+  vendasProdutoMarcas(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.vendasProduto.marcas();
   }
 
   @Get('overview')

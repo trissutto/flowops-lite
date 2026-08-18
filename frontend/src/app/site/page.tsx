@@ -17,7 +17,7 @@ import {
   ClipboardList, Megaphone, Users, Globe, ShoppingBag,
   FileSearch, MessageCircle, Store, ArrowRightLeft, ArrowLeft,
   LayoutDashboard, Globe2, BarChart3, Settings, DollarSign, UserPlus, MapPin,
-  Tags, LayoutGrid,
+  Tags, LayoutGrid, TrendingUp,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -54,6 +54,7 @@ const SITE_ITEMS: SiteItem[] = [
    * São coisas diferentes e a ordem aqui conta a sequência: primeiro a
    * CATEGORIA existe (e recebe peça), depois ela pode virar vitrine na home.
    */
+  { href: '/retaguarda/vendas-por-produto', label: 'Vendas por Produto', subtitle: 'Relatório', description: 'Quanto vendeu cada REF+cor · marca · período · estoque hoje', tone: 'orange', icon: TrendingUp },
   { href: '/retaguarda/categorias',     label: 'Categorias do Site', subtitle: 'Vitrine',     description: 'Criar categoria e subcategoria · foto · ordem · destaque', tone: 'sky', icon: Tags },
   { href: '/retaguarda/vitrines-home',  label: 'Vitrines da Home',  subtitle: 'Página inicial', description: 'Atalhos e carrosséis da home · ordem sem deploy',        tone: 'teal', icon: LayoutGrid },
   { href: '/retaguarda/leads',         label: 'Cadastros do Site', subtitle: 'Cupom 10%',  description: 'Quem deixou contato no popup', tone: 'rose', icon: UserPlus     },
