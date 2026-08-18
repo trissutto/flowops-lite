@@ -1038,9 +1038,33 @@ export class PdvService {
     if (input.method === 'venda_online') {
       const faltando = faltandoDadosClienteOnline(sale);
       if (faltando.length) {
-        throw new BadRequestException(
-          `Venda online exige o cadastro completo da cliente — falta: ${faltando.join(', ')}. ` +
-            'Abra o cadastro da cliente (F6) e complete antes de fechar.',
+        /**
+         * ⚠️ DINHEIRO QUE JÁ ENTROU NUNCA É BARRADO AQUI.
+         *
+         * O `PagarmeLinkReconcileService` (cron de 30s, 17/08) fecha a venda
+         * do link pago chamando este addPayment com `venda_online`. Se a
+         * guarda derrubasse esse caminho, a venda paga ficaria aberta pra
+         * sempre — que é EXATAMENTE o furo que aquele cron foi feito pra
+         * tapar (caso Sandra Micheli: peça não sai, sem NF-e, fora do caixa
+         * e cliente que pagou sem receber nada).
+         *
+         * Então: se existe pagamento PAGO no gateway lastreando este
+         * registro, fecha e AVISA no log. Vale pras vendas que nasceram
+         * antes desta regra e pro cadastro que envelheceu torto — a trava de
+         * verdade está antes da cobrança (o PDV não gera PIX/link sem os
+         * dados).
+         */
+        const gateway = await this.pagamentoJaPagoNoGateway(input.details);
+        if (!gateway) {
+          throw new BadRequestException(
+            `Venda online exige o cadastro completo da cliente — falta: ${faltando.join(', ')}. ` +
+              'Abra o cadastro da cliente (F6) e complete antes de fechar.',
+          );
+        }
+        this.logger.warn(
+          `[pdv] venda ${sale.id} fechando com CADASTRO INCOMPLETO (falta: ${faltando.join(', ')}) — ` +
+            `${gateway} já está PAGO, barrar aqui deixaria dinheiro na conta com venda aberta. ` +
+            'Sem endereço/CPF o pedido online NÃO vira Order (sem card e sem etiqueta): conferir o cadastro.',
         );
       }
     }
@@ -2577,6 +2601,39 @@ export class PdvService {
   // ═══════════════════════════════════════════════════════════════════════
   // CLIENTE
   // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Existe pagamento PAGO no gateway por trás destes `details`? Devolve o
+   * rótulo ("Pagar.me <id>") ou null.
+   *
+   * Lê do NOSSO banco (o que o webhook/reconciliador já persistiu) — nunca
+   * bate na API do gateway: caminho de venda não pode depender de rede de
+   * terceiro. Falha de leitura devolve null (segue a regra normal).
+   */
+  private async pagamentoJaPagoNoGateway(details: any): Promise<string | null> {
+    try {
+      const pagarmeId = String(details?.pagarmeOrderId || '').trim();
+      if (pagarmeId) {
+        const r = await (this.prisma as any).pagarmePayment.findFirst({
+          where: { pagarmeOrderId: pagarmeId, status: 'paid' },
+          select: { pagarmeOrderId: true },
+        });
+        if (r) return `Pagar.me ${pagarmeId}`;
+      }
+      // Venda online por PIX grava o id do PagBank em pagbankOrderId E pixTxid.
+      const pagbankId = String(details?.pagbankOrderId || details?.pixTxid || '').trim();
+      if (pagbankId) {
+        const r = await (this.prisma as any).pagbankPayment.findFirst({
+          where: { pagbankOrderId: pagbankId, status: 'paid' },
+          select: { pagbankOrderId: true },
+        });
+        if (r) return `PagBank ${pagbankId}`;
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] não deu pra conferir pagamento no gateway: ${e?.message || e}`);
+    }
+    return null;
+  }
 
   async setCustomer(input: {
     saleId: string;
