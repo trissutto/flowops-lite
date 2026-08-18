@@ -61,6 +61,22 @@ export class IntelligenceController {
     });
   }
 
+  /**
+   * A GRADE de uma peça — vendidas e estoque, tamanho a tamanho.
+   *
+   * Vem ANTES de `vendas-produto/marcas` na ordem? Não importa: as duas são
+   * rotas fixas, sem `:param` que possa capturar a outra.
+   */
+  @Get('vendas-produto/grade')
+  vendasProdutoGrade(@Req() req: any, @Query() q: any) {
+    this.requireAdmin(req);
+    return this.vendasProduto.grade(q.ref || '', q.cor || '', {
+      de: q.de || undefined,
+      ate: q.ate || undefined,
+      loja: q.loja || undefined,
+    });
+  }
+
   /** As marcas que existem no cadastro — alimenta o seletor da tela. */
   @Get('vendas-produto/marcas')
   vendasProdutoMarcas(@Req() req: any) {

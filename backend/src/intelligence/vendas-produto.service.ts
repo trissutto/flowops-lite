@@ -82,11 +82,20 @@ export class VendasProdutoService {
    *
    * `$1` de · `$2` ate · `$3` loja · `$4` só-site · `$5` refs (array)
    */
-  private sqlUniao(): string {
+  private sqlUniao(comTamanho = false): string {
     // Recortes que se repetem nas quatro fontes. `$1`/`$2` nulos = desde sempre.
     const janela = (col: string) => `($1::date IS NULL OR ${col} >= $1::date)
         AND ($2::date IS NULL OR ${col} <= $2::date)`;
     const porRef = (col: string) => `($5::text[] IS NULL OR ${col} = ANY($5::text[]))`;
+
+    /**
+     * O TAMANHO só entra como chave quando a grade é pedida. Fora dela ele nem
+     * é lido: agrupar por algo que a tela não mostra multiplicaria as linhas do
+     * relatório por 9 (a grade da casa vai do 44 ao 60) e o teto de 5.000
+     * estouraria com um punhado de peças.
+     */
+    const tam = (expr: string) => (comTamanho ? expr : `''`);
+    const grupo = comTamanho ? 'GROUP BY 1, 2, 3' : 'GROUP BY 1, 2';
 
     return `
       -- 1) HISTORICO DO ERP ANTIGO.
@@ -99,6 +108,7 @@ export class VendasProdutoService {
       -- tem coluna em camelCase, e sem aspas o Postgres procura minuscula.
       SELECT UPPER(TRIM(w.ref)) AS ref,
              UPPER(TRIM(COALESCE(w.cor, ''))) AS cor,
+             ${tam(`UPPER(TRIM(COALESCE(w.tamanho, '')))`)} AS tamanho,
              MAX(COALESCE(w."descricaoCompleta", w."descricaoPdv")) AS nome,
              MAX(NULLIF(TRIM(COALESCE(w.marca, '')), '')) AS marca,
              SUM(COALESCE(m.quantidade, 0))::numeric AS pecas,
@@ -114,7 +124,7 @@ export class VendasProdutoService {
          AND ($3::text IS NULL OR TRIM(m.loja) = $3::text)
          AND $4::boolean IS NOT TRUE
          AND ${porRef('UPPER(TRIM(w.ref))')}
-       GROUP BY 1, 2
+       ${grupo}
 
       UNION ALL
 
@@ -122,6 +132,7 @@ export class VendasProdutoService {
       -- entra só pra completar marca/descrição quando o item foi gravado cru.
       SELECT UPPER(TRIM(COALESCE(i.ref, w.ref))),
              UPPER(TRIM(COALESCE(i.cor, w.cor, ''))),
+             ${tam(`UPPER(TRIM(COALESCE(i.tamanho, w.tamanho, '')))`)},
              MAX(COALESCE(i.descricao, w."descricaoCompleta", w."descricaoPdv")),
              MAX(NULLIF(TRIM(COALESCE(w.marca, '')), '')),
              SUM(i.qty)::numeric,
@@ -139,7 +150,7 @@ export class VendasProdutoService {
          AND ($3::text IS NULL OR s.store_code = $3::text)
          AND $4::boolean IS NOT TRUE
          AND ${porRef('UPPER(TRIM(COALESCE(i.ref, w.ref)))')}
-       GROUP BY 1, 2
+       ${grupo}
 
       UNION ALL
 
@@ -148,6 +159,7 @@ export class VendasProdutoService {
       -- mesmo tendo vendido bem.
       SELECT UPPER(TRIM(COALESCE(i.ref, w.ref))),
              UPPER(TRIM(COALESCE(i.cor, w.cor, ''))),
+             ${tam(`UPPER(TRIM(COALESCE(i.tamanho, w.tamanho, '')))`)},
              MAX(COALESCE(i.descricao, w."descricaoCompleta", w."descricaoPdv")),
              MAX(NULLIF(TRIM(COALESCE(w.marca, '')), '')),
              -SUM(i.qty)::numeric,
@@ -162,7 +174,7 @@ export class VendasProdutoService {
          AND ($3::text IS NULL OR r.store_code = $3::text)
          AND $4::boolean IS NOT TRUE
          AND ${porRef('UPPER(TRIM(COALESCE(i.ref, w.ref)))')}
-       GROUP BY 1, 2
+       ${grupo}
 
       UNION ALL
 
@@ -170,6 +182,7 @@ export class VendasProdutoService {
       -- criação: pedido criado e não pago não é venda.
       SELECT UPPER(TRIM(COALESCE(i.ref, w.ref))),
              UPPER(TRIM(COALESCE(i.cor, w.cor, ''))),
+             ${tam(`UPPER(TRIM(COALESCE(i.tamanho, w.tamanho, '')))`)},
              MAX(COALESCE(i.product_name, w."descricaoCompleta", w."descricaoPdv")),
              MAX(NULLIF(TRIM(COALESCE(w.marca, '')), '')),
              SUM(i.quantity)::numeric,
@@ -185,7 +198,7 @@ export class VendasProdutoService {
          AND ${janela('o.paid_at')}
          AND ($3::text IS NULL OR $4::boolean IS TRUE)
          AND ${porRef('UPPER(TRIM(COALESCE(i.ref, w.ref)))')}
-       GROUP BY 1, 2
+       ${grupo}
     `;
   }
 
@@ -310,6 +323,73 @@ export class VendasProdutoService {
         };
       }),
     };
+  }
+
+  /**
+   * A GRADE DE UMA PEÇA — quanto vendeu de cada TAMANHO e quanto tem hoje.
+   *
+   * É a cascata que abre ao clicar na linha (pedido do dono, 18/08). Ele pediu
+   * as DUAS coisas juntas de propósito: vendeu 30 e tem 81 não diz nada; vendeu
+   * 12 no 52 e tem ZERO no 52 diz o que comprar amanhã.
+   *
+   * Reusa o MESMO `sqlUniao` do relatório, só ligando o tamanho como chave —
+   * uma segunda query com regra própria acabaria divergindo da linha de cima,
+   * e aí a soma da grade não bateria com o total que a pessoa acabou de ler.
+   */
+  async grade(ref: string, cor: string, f: FiltroVendasProduto) {
+    const alvoRef = String(ref || '').trim().toUpperCase();
+    const alvoCor = String(cor || '').trim().toUpperCase();
+    if (!alvoRef) return { tamanhos: [] };
+
+    const soSite = String(f.loja || '').toUpperCase() === 'SITE';
+    const loja = soSite ? null : (f.loja || null) || null;
+    // A REF entra no `$5` pra união já nascer estreita: sem isso o Postgres
+    // agregaria o catálogo inteiro por tamanho pra devolver 9 linhas.
+    const params = [f.de || null, f.ate || null, loja, soSite, [alvoRef], alvoRef, alvoCor];
+
+    const vendas: Array<{ tamanho: string; pecas: number; devolvidas: number }> =
+      await this.prisma.$queryRawUnsafe(
+        `WITH bruto AS (${this.sqlUniao(true)})
+         SELECT tamanho,
+                SUM(pecas)::int AS pecas,
+                SUM(devolvidas)::int AS devolvidas
+           FROM bruto
+          WHERE ref = $6::text AND cor = $7::text
+          GROUP BY tamanho`,
+        ...params,
+      );
+
+    const estoque: Array<{ tamanho: string; estoque: number }> = await this.prisma.$queryRawUnsafe(
+      `SELECT UPPER(TRIM(COALESCE(w.tamanho, ''))) AS tamanho,
+              COALESCE(SUM(e.estoque), 0)::int AS estoque
+         FROM wincred_estoque e
+         JOIN wincred_produtos w ON w.codigo = e.codigo
+        WHERE UPPER(TRIM(w.ref)) = $1::text
+          AND UPPER(TRIM(COALESCE(w.cor, ''))) = $2::text
+        GROUP BY 1`,
+      alvoRef,
+      alvoCor,
+    );
+
+    /**
+     * A união dos dois lados: tamanho que VENDEU e zerou tem que aparecer com
+     * estoque 0 (é o caso mais importante da tela), e tamanho que só existe no
+     * estoque aparece com venda 0 (é o encalhe).
+     */
+    const mapa = new Map<string, { tamanho: string; pecas: number; devolvidas: number; estoque: number }>();
+    const pegar = (t: string) => {
+      const chave = t || '—';
+      if (!mapa.has(chave)) mapa.set(chave, { tamanho: chave, pecas: 0, devolvidas: 0, estoque: 0 });
+      return mapa.get(chave)!;
+    };
+    for (const v of vendas) {
+      const l = pegar(v.tamanho);
+      l.pecas += Number(v.pecas) || 0;
+      l.devolvidas += Number(v.devolvidas) || 0;
+    }
+    for (const e of estoque) pegar(e.tamanho).estoque = Number(e.estoque) || 0;
+
+    return { ref: alvoRef, cor: alvoCor || null, tamanhos: [...mapa.values()] };
   }
 
   /**
