@@ -1514,6 +1514,13 @@ model PdvSale {
   // pra ele sair do relatório de abandono. Sem isso a venda recuperada nasce
   // sem origem e a cliente conta como perda E como receita órfã.
   carrinhoOrderId     String?  @map("carrinho_order_id")
+  // CONTATO CAPTURADO NO CHECKOUT (18/08) — `CheckoutRecovery.id` de quando a
+  // venda nasceu de um carrinho que NUNCA virou pedido. É metade do abandono
+  // do site: a cliente digita nome e WhatsApp na etapa 1 e sai antes de tocar
+  // no PIX, então não existe `Order` nenhum pra apontar em `carrinhoOrderId`.
+  // Serve pras MESMAS duas coisas: copiar a campanha (que só existe na
+  // captura) e marcar o carrinho como recuperado no fechamento.
+  carrinhoRecoveryId  String?  @map("carrinho_recovery_id")
   // Status + valores
   status          String   @default("open")
   subtotal        Float    @default(0)

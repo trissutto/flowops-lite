@@ -35,6 +35,35 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
  * Pra emitir de verdade, integrar com FocusNFe/WebMania OU implementar
  * cliente SEFAZ direto (Fase 3).
  */
+
+/**
+ * Uma linha da lista "Carrinhos" do PDV.
+ *
+ * As DUAS fontes de abandono do site preenchem o MESMO shape de propósito — a
+ * tela mostra as duas juntas numa lista só e ramifica apenas no `source`:
+ *
+ *   'ecommerce'         → `Order` não pago. Tem `order_id` e número LP-xxxxxx.
+ *   'ecommerce-contact' → `CheckoutRecovery`: a cliente informou nome e
+ *                         WhatsApp na etapa 1 e saiu antes de criar pedido.
+ *                         Sem `order_id`; quem importa a venda é `recovery_id`.
+ */
+type CarrinhoDoPdv = {
+  /** ⚠️ Sintético (970.000.000 + posição) nas linhas de contato — só `key` de tela. */
+  id: number;
+  order_id: number | null;
+  order_number: string | null;
+  recovery_id?: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  cart_total: number;
+  items_count: number;
+  time: string | null;
+  utmCampaign: string | null;
+  source: 'ecommerce' | 'ecommerce-contact';
+};
+
 @Injectable()
 export class PdvService {
   private readonly logger = new Logger(PdvService.name);
@@ -238,14 +267,31 @@ export class PdvService {
    * tem.
    *
    * Também é DE PROPÓSITO mais simples que o `listEcommercePending` da
-   * retaguarda: aquele agrega plugin do WP + contatos capturados + stats. O PDV
-   * só precisa de quem tem peça com SKU nosso — o único carrinho que dá pra
-   * montar venda automática.
+   * retaguarda: aquele agrega plugin do WP + stats. O PDV só precisa de quem
+   * tem peça com SKU nosso — o único carrinho que dá pra montar venda
+   * automática.
    *
    * "Carrinho abandonado" = pedido do site novo que nunca foi pago. O piso de
    * idade (mesma env `PIX_RESGATE_MIN` do resgate de PIX) evita cutucar quem
    * está com o QR Code aberto na tela nesse instante — alarme falso aqui faz a
    * vendedora ligar pra cliente no meio do pagamento.
+   *
+   * ⚠️ SÃO DUAS FONTES, NÃO UMA (18/08). Esta lista nasceu só com `Order` e
+   * escondia METADE do abandono do site:
+   *
+   *   `Order` (source='ecommerce')  → a cliente chegou a tocar no PIX/cartão.
+   *   `CheckoutRecovery`            → a cliente digitou nome e WhatsApp na
+   *                                   etapa 1 e saiu antes de gerar pedido.
+   *
+   * A segunda é a que a loja MAIS trabalha — é a que responde no WhatsApp — e
+   * ela não existia aqui. A vendedora abria "Carrinhos", não achava a cliente
+   * com quem estava conversando, e ia fechar por fora (o buraco que este modal
+   * existe pra tapar). Foi o caso relatado pelo dono em 18/08: contato
+   * capturado, cliente querendo finalizar, nome que não aparecia no PDV.
+   *
+   * Dedup igual ao da retaguarda: fora quem já tem pedido na MESMA sessão ou
+   * no MESMO telefone — senão a mesma cliente aparece duas vezes e é abordada
+   * duas vezes.
    */
   async listarCarrinhosAbandonados(status = 'abandoned') {
     const where: any = { source: 'ecommerce' };
@@ -274,11 +320,12 @@ export class PdvService {
         totalAmount: true,
         createdAt: true,
         utmCampaign: true,
+        trackingInfo: true,
         items: { select: { quantity: true } },
       },
     });
 
-    const items = pedidos.map((o) => {
+    const items: CarrinhoDoPdv[] = pedidos.map((o) => {
       const nome = String(o.customerName ?? '').trim();
       const sp = nome.indexOf(' ');
       return {
@@ -294,10 +341,102 @@ export class PdvService {
         time: o.createdAt ? o.createdAt.toISOString() : null,
         // A campanha só existe no carrinho — é o que liga a venda ao anúncio.
         utmCampaign: o.utmCampaign ?? null,
+        source: 'ecommerce' as const,
       };
     });
 
+    const contatos = await this.listarContatosCapturados(status, pedidos);
+    // Contato vem PRIMEIRO: é o abandono mais fresco (etapa 1 do checkout) e
+    // o que a loja está trabalhando no WhatsApp agora.
+    items.unshift(...contatos);
+
     return { items, total: items.length };
+  }
+
+  /**
+   * A OUTRA METADE DO ABANDONO: a cliente que informou nome e WhatsApp na
+   * etapa 1 do checkout e saiu antes de criar pedido (`CheckoutRecovery`).
+   *
+   * Não tem `Order`, então não tem `order_id` — a venda é importada pelo
+   * `recovery_id` (uuid). ⚠️ O `id` numérico daqui é SINTÉTICO e derivado da
+   * POSIÇÃO na lista (mesma convenção da retaguarda, faixa 970.000.000+): ele
+   * serve de `key` na tela e NADA MAIS. Usar esse número pra buscar no banco
+   * pega outra pessoa assim que a ordenação mudar.
+   */
+  private async listarContatosCapturados(
+    status: string,
+    pedidos: any[],
+  ): Promise<CarrinhoDoPdv[]> {
+    const where: any = {};
+    if (status === 'recovered') where.status = 'converted';
+    else if (status !== 'all') where.status = 'active';
+
+    const capturas: any[] = await (this.prisma as any).checkoutRecovery.findMany({
+      where,
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    });
+    if (!capturas.length) return [];
+
+    // Dedup contra os pedidos que já estão na lista — mesma sessão OU mesmo
+    // telefone. A sessão do site morre em 30min de inatividade mas o rascunho
+    // do checkout sobrevive: quem volta 40 minutos depois pra pagar gera duas
+    // chaves, e as duas apareceriam. O telefone é a identidade real.
+    const soDigitos = (v: unknown) =>
+      String(v ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+    const sessoes = new Set(
+      pedidos
+        .map((o: any) => {
+          try { return JSON.parse(o.trackingInfo || '{}').session_id; } catch { return null; }
+        })
+        .filter(Boolean),
+    );
+    const fones = new Set(
+      pedidos.map((o: any) => soDigitos(o.customerPhone)).filter((p: string) => p.length >= 10),
+    );
+
+    // Já virou venda no PDV (importada antes) → sai da lista de pendências. A
+    // venda existe e está na tela dela; repetir aqui é alarme falso, e alarme
+    // falso mata a confiança na lista inteira.
+    const jaImportados = new Set(
+      (
+        await (this.prisma as any).pdvSale.findMany({
+          where: { carrinhoRecoveryId: { in: capturas.map((r: any) => r.id) } },
+          select: { carrinhoRecoveryId: true },
+        })
+      ).map((s: any) => s.carrinhoRecoveryId),
+    );
+
+    return capturas
+      .filter(
+        (r: any) =>
+          !sessoes.has(r.sessionId) &&
+          !fones.has(soDigitos(r.telefone)) &&
+          !jaImportados.has(r.id),
+      )
+      .map((r: any, index: number) => {
+        const nome = String(r.nome ?? '').trim();
+        const sp = nome.indexOf(' ');
+        const itens = Array.isArray(r.items) ? r.items : [];
+        return {
+          id: 970_000_000 + index,
+          recovery_id: r.id,
+          order_id: null,
+          order_number: null,
+          first_name: sp > 0 ? nome.slice(0, sp) : nome,
+          last_name: sp > 0 ? nome.slice(sp + 1) : '',
+          // A captura pede nome e WhatsApp e mais nada — e-mail, CPF e
+          // endereço a vendedora vai ter que pedir pra fechar venda online.
+          email: '',
+          phone: r.telefone ?? '',
+          cart_total: Number(r.subtotal ?? 0),
+          items_count: itens.reduce((s: number, i: any) => s + Number(i.quantity ?? 1), 0),
+          time: r.updatedAt?.toISOString?.() ?? null,
+          utmCampaign:
+            (r.attribution as any)?.utm_campaign ?? (r.attribution as any)?.campaign ?? null,
+          source: 'ecommerce-contact' as const,
+        };
+      });
   }
 
   /**
@@ -330,12 +469,29 @@ export class PdvService {
    */
   async importarCarrinho(input: {
     /** `Order.wcOrderId` do carrinho abandonado (o número que a tela mostra). */
-    wcOrderId: number;
+    wcOrderId?: number;
+    /**
+     * `CheckoutRecovery.id` — o carrinho que NUNCA virou pedido (a cliente
+     * digitou nome e WhatsApp na etapa 1 e saiu). Chega no lugar do
+     * `wcOrderId`, nunca junto.
+     *
+     * ⚠️ Tem que ser o UUID. O número que a lista mostra nessas linhas é
+     * sintético (970.000.000 + posição) e não existe em tabela nenhuma —
+     * mandá-lo como `wcOrderId` é o que dava "Carrinho 970000006 não
+     * encontrado" no botão da retaguarda.
+     */
+    recoveryId?: string;
     storeCode: string;
     vendedorUserId?: string;
     vendedorName?: string;
     isTraining?: boolean;
   }) {
+    if (input.recoveryId) {
+      return this.importarContatoCapturado({ ...input, recoveryId: input.recoveryId });
+    }
+    if (!input.wcOrderId) {
+      throw new BadRequestException('Informe o carrinho (wcOrderId ou recoveryId).');
+    }
     const carrinho: any = await (this.prisma as any).order.findFirst({
       where: { wcOrderId: Number(input.wcOrderId) },
       include: { items: true },
@@ -441,6 +597,255 @@ export class PdvService {
       total: pecas.length,
       faltaram,
     };
+  }
+
+  /**
+   * IMPORTA O CONTATO CAPTURADO NO CHECKOUT (18/08) — o carrinho que nunca
+   * virou pedido.
+   *
+   * Mesmo destino do `importarCarrinho`: venda montada no PDV, a vendedora só
+   * escolhe como recebeu. A diferença está em DUAS coisas, e as duas são o
+   * motivo de este caminho existir separado:
+   *
+   * 1. NÃO EXISTE `Order`. A captura mora em `CheckoutRecovery` e a identidade
+   *    é o UUID dela — o número da tela é sintético (ver aviso no `input`).
+   *
+   * 2. O ITEM NÃO TEM CÓDIGO DE PEÇA. A sacola do site carrega
+   *    `productId = product.id`, que é a **REF** ("CHIC"), com cor e tamanho
+   *    em campos separados. REF não bipa: o PDV, o estoque e a etiqueta falam
+   *    `codigo` (REF+COR+TAMANHO). É a mesma pegadinha que fez o `#LP-000002`
+   *    nascer impossível de separar em 06/08 — lá o `CarrinhoGuardService`
+   *    passou a gravar o código que já tinha resolvido. Aqui a resolução é
+   *    feita na hora, por `resolverCodigoDaVariacao`.
+   *
+   * ⚠️ NÃO reusa o `conferir()` do guard de propósito: aquele RECUSA por preço
+   * defasado, estoque zerado e peça despublicada — regras de quem está
+   * comprando pelo site. Aqui a cliente já fechou no WhatsApp e a vendedora
+   * tem a peça na mão; recusar seria mandá-la de volta pro caminho manual, que
+   * é justamente o que produz a venda por fora. O preço quem dá é o `addItem`,
+   * na régua do caixa — igual ao bipe.
+   */
+  private async importarContatoCapturado(input: {
+    recoveryId: string;
+    storeCode: string;
+    vendedorUserId?: string;
+    vendedorName?: string;
+    isTraining?: boolean;
+  }) {
+    const captura: any = await (this.prisma as any).checkoutRecovery.findUnique({
+      where: { id: input.recoveryId },
+    });
+    if (!captura) throw new NotFoundException('Carrinho não encontrado');
+
+    // Já importado antes: devolve a venda existente. Dois cliques no botão não
+    // podem virar duas vendas. Diferente do caminho do `Order`, aqui vale
+    // TAMBÉM pra venda já finalizada — a captura não tem `paidAt` pra avisar
+    // que a peça já foi vendida, então a única defesa contra vender duas vezes
+    // é o vínculo.
+    const jaImportado = await (this.prisma as any).pdvSale.findFirst({
+      where: { carrinhoRecoveryId: captura.id },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, storeCode: true, status: true },
+    });
+    if (jaImportado) {
+      if (jaImportado.status !== 'open') {
+        throw new BadRequestException(
+          'Este carrinho JÁ virou venda no PDV — importar de novo venderia a mesma peça duas vezes.',
+        );
+      }
+      return {
+        saleId: jaImportado.id,
+        storeCode: jaImportado.storeCode,
+        jaExistia: true,
+        importados: 0,
+        faltaram: [] as string[],
+      };
+    }
+
+    const pecas: any[] = Array.isArray(captura.items) ? captura.items : [];
+    if (!pecas.length) {
+      throw new BadRequestException('Carrinho sem nenhuma peça pra importar.');
+    }
+
+    const sale = await this.createSale({
+      storeCode: input.storeCode,
+      vendedorUserId: input.vendedorUserId,
+      vendedorName: input.vendedorName,
+      isTraining: input.isTraining,
+    });
+
+    // Vincula ANTES de qualquer coisa: se a importação falhar no meio, a venda
+    // aberta já sabe de onde veio e não vira órfã.
+    await (this.prisma as any).pdvSale.update({
+      where: { id: sale.id },
+      data: { carrinhoRecoveryId: captura.id },
+    });
+
+    const faltaram: string[] = [];
+    /**
+     * 💰 A PEÇA ENTROU POR OUTRO PREÇO QUE O DA VITRINE.
+     *
+     * O site cobra pelas regras do SITE (`precoPromo` digitado na retaguarda,
+     * promoção automática de 50%) e o PDV cobra pelas regras do CAIXA — as
+     * duas réguas existem, são diferentes de propósito, e ninguém garante que
+     * batem numa peça específica. Medido na cliente que motivou este fix:
+     * sacola R$ 59,90, caixa R$ 79,90 na MESMA blusa.
+     *
+     * Não corrijo o preço aqui: preço é decisão de quem paga a conta, e
+     * chumbar "vale o da sacola" no código daria desconto automático em toda
+     * venda recuperada, sem ninguém decidir isso. O que o sistema DEVE fazer é
+     * não deixar a vendedora descobrir sozinha — ela combinou um valor no
+     * WhatsApp e vai fechar outro na tela.
+     */
+    const precoMudou: string[] = [];
+    let importados = 0;
+    for (const it of pecas) {
+      const qtd = Math.max(1, Number(it.quantity || 1));
+      const ref = String(it.productId ?? '').trim();
+      const rotulo = [ref, it.color, it.size].filter(Boolean).join(' · ') || String(it.name || '?');
+      try {
+        const codigo = await this.resolverCodigoDaVariacao(ref, it.color, it.size);
+        // Sem variação no espelho, tenta o `productId` cru: o dia que a sacola
+        // do site passar a mandar código (a grade por cor já expõe), isto aqui
+        // continua funcionando sem tocar em nada.
+        const r: any = await this.addItem({ saleId: sale.id, skuOrEan: codigo || ref, qty: qtd });
+        importados += 1;
+
+        // Preço COBRADO = depois dos descontos automáticos do caixa (que é o
+        // que a cliente vai pagar), não o de tabela.
+        const linha = (r?.sale?.items || []).find((i: any) => i.id === r?.item?.id);
+        const noSite = Number(it.unitPrice || 0);
+        const noCaixa = linha
+          ? Number(linha.total || 0) / Math.max(1, Number(linha.qty || 1))
+          : Number(r?.item?.precoUnit || 0);
+        if (noSite > 0 && Math.abs(noCaixa - noSite) >= 0.01) {
+          precoMudou.push(
+            `${rotulo}: site R$ ${noSite.toFixed(2)} → caixa R$ ${noCaixa.toFixed(2)}`,
+          );
+        }
+      } catch (e: any) {
+        faltaram.push(`${rotulo} (${e?.message || 'não resolveu'})`);
+        this.logger.warn(
+          `[importar-carrinho] captura ${captura.id} → venda ${sale.id}: ` +
+            `${rotulo} falhou (${e?.message || e})`,
+        );
+      }
+    }
+
+    // A captura tem NOME e WHATSAPP e mais nada — não pede e-mail, CPF nem
+    // endereço na etapa 1. O resto a vendedora completa no PDV: a venda online
+    // exige cadastro COMPLETO no fechamento e a tela cobra ali, com o campo na
+    // frente dela.
+    try {
+      await this.setCustomer({
+        saleId: sale.id,
+        name: String(captura.nome || '').trim() || undefined,
+        phone: String(captura.telefone || '').trim() || undefined,
+      });
+    } catch (e: any) {
+      this.logger.warn(`[importar-carrinho] venda ${sale.id}: cliente não preencheu (${e?.message || e})`);
+    }
+
+    this.logger.log(
+      `[importar-carrinho] captura ${captura.id} (${captura.nome}) → venda ${sale.id} na loja ` +
+        `${input.storeCode}: ${importados}/${pecas.length} peça(s)` +
+        `${faltaram.length ? `, ${faltaram.length} faltou` : ''}` +
+        `${precoMudou.length ? `, ${precoMudou.length} com preço diferente do site` : ''}`,
+    );
+
+    return {
+      saleId: sale.id,
+      storeCode: sale.storeCode,
+      jaExistia: false,
+      carrinho: String(captura.nome || '').trim() || null,
+      importados,
+      total: pecas.length,
+      faltaram,
+      precoMudou,
+    };
+  }
+
+  /**
+   * REF + COR + TAMANHO → `codigo` da peça, pelo espelho Wincred.
+   *
+   * Mesma junção e a MESMA regra de desempate do `CarrinhoGuardService`
+   * (dedupe do catálogo): quando a mesma cor+tamanho existe em códigos
+   * diferentes — erro de cadastro que acontece —, vale o de MAIOR estoque, e
+   * no empate o código menor, pra resposta ser sempre a mesma. Somar inflaria
+   * o estoque do erro; pegar qualquer um faria a mesma peça bipar diferente a
+   * cada importação.
+   *
+   * Devolve `null` quando não acha (REF fora do catálogo, cor/tamanho que
+   * sumiu) — quem chama decide, e no caso da importação a peça vai pra lista
+   * de "bipe na mão" em vez de derrubar a venda inteira.
+   */
+  private async resolverCodigoDaVariacao(
+    ref: string,
+    cor?: string | null,
+    tamanho?: string | null,
+  ): Promise<string | null> {
+    const alvo = String(ref || '').trim();
+    if (!alvo) return null;
+    // Cor e tamanho são comparados aqui, dos DOIS lados com a mesma régua —
+    // acento cai ("MARROM"/"MARRÓM" é a mesma cor no cadastro).
+    const norm = (v: any) =>
+      String(v ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '') // marcas de acento soltas pelo NFD
+        .trim()
+        .toUpperCase();
+
+    const linhas = await this.prisma.$queryRawUnsafe<
+      Array<{ codigo: string; cor: string | null; tamanho: string | null; estoque: number }>
+    >(
+      `
+      SELECT p.codigo                     AS codigo,
+             NULLIF(TRIM(p.cor), '')      AS cor,
+             NULLIF(TRIM(p.tamanho), '')  AS tamanho,
+             COALESCE(e.total, 0)::int    AS estoque
+        FROM wincred_produtos p
+        LEFT JOIN (
+          SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
+            FROM wincred_estoque GROUP BY codigo
+        ) e ON e.codigo = p.codigo
+       WHERE UPPER(TRIM(p.ref)) = $1
+      `,
+      // Exatamente a régua do WHERE — o SQL não tira acento nem espaço
+      // interno, então normalizar a mais aqui só faria a REF deixar de casar.
+      alvo.toUpperCase(),
+    );
+    if (!linhas.length) return null;
+
+    const querCor = norm(cor);
+    const querTam = norm(tamanho);
+    const candidatas = linhas.filter(
+      (l) =>
+        (!querCor || norm(l.cor) === querCor) && (!querTam || norm(l.tamanho) === querTam),
+    );
+    if (!candidatas.length) return null;
+
+    /**
+     * 🔴 NA DÚVIDA, NÃO CHUTA.
+     *
+     * Sobrou mais de uma VARIAÇÃO (cor+tamanho diferentes)? Então a captura
+     * não disse qual peça é — cor em branco, tamanho que não bate com o
+     * cadastro — e qualquer escolha aqui seria adivinhação. Peça errada na
+     * venda é estoque errado baixado, NF errada emitida e cliente recebendo
+     * outro número: muito pior que a peça cair na lista de "bipe na mão",
+     * onde a vendedora resolve em 5 segundos com a etiqueta na frente.
+     *
+     * Mais de um CÓDIGO pra MESMA variação é outra coisa — é erro de cadastro
+     * duplicado, e aí vale a régua do catálogo (maior estoque, empate no
+     * código menor), a mesma do `CarrinhoGuardService`.
+     */
+    const variacoes = new Set(candidatas.map((l) => `${norm(l.cor)}|${norm(l.tamanho)}`));
+    if (variacoes.size > 1) return null;
+
+    candidatas.sort(
+      (a, b) =>
+        (b.estoque || 0) - (a.estoque || 0) || String(a.codigo).localeCompare(String(b.codigo)),
+    );
+    return String(candidatas[0].codigo);
   }
 
   /**
@@ -3046,6 +3451,32 @@ export class PdvService {
     this.logger.log(
       `[pdv] Venda ${sale.id} finalizada: R$${sale.total.toFixed(2)} via ${finalMethod} (${(payments as any[]).length} pagamento(s))`,
     );
+
+    /**
+     * CARRINHO RECUPERADO SAI DA LISTA DE ABANDONO (18/08).
+     *
+     * A venda nasceu de um contato capturado no checkout? Então ele foi
+     * RECUPERADO — e precisa parar de aparecer como pendência, senão a mesma
+     * cliente é abordada de novo depois de já ter pago, e conta como PERDA no
+     * funil ao mesmo tempo que conta como receita.
+     *
+     * Mesma marcação que o checkout do site faz (`marcarCarrinhoRecuperado` do
+     * LojaOrdersService), best-effort de propósito: se falhar, a venda já está
+     * fechada e o pior caso é uma linha a mais na lista — nunca travar o
+     * caixa por causa de um relatório.
+     */
+    if ((sale as any).carrinhoRecoveryId) {
+      void (this.prisma as any).checkoutRecovery
+        .updateMany({
+          where: { id: (sale as any).carrinhoRecoveryId, status: { not: 'converted' } },
+          data: { status: 'converted', convertedAt: new Date() },
+        })
+        .catch((e: any) =>
+          this.logger.warn(
+            `[pdv] venda ${sale.id}: não consegui marcar o carrinho recuperado (${e?.message || e})`,
+          ),
+        );
+    }
 
     // ── SKIP MODO TREINAMENTO ──
     // Venda marcada como treinamento NÃO grava no Wincred nem decrementa estoque
