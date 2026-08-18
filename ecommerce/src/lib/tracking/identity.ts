@@ -23,6 +23,8 @@ const SESSION_KEY = 'lurds_session';
 const ATTRIBUTION_KEY = 'lurds_attribution';
 const USER_KEY = 'lurds_user_id';
 const LOJA_KEY = 'lurds_loja';
+/** `_fbc` montado à mão quando o Pixel não carregou — ver `fbcSintetico`. */
+const FBC_KEY = 'lurds_fbc';
 
 /** Janela de inatividade que encerra a sessão — igual à do GA4. */
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -385,18 +387,41 @@ function readCookie(name: string): string | undefined {
  * `_fbp` (browser id) e `_fbc` (click id) são o que mais aumenta a taxa de
  * casamento da CAPI. O Pixel grava os dois; aqui só lemos e mandamos junto
  * pro servidor. Sem eles, evento server-side casa muito pior.
+ *
+ * ⚠️ Para quem NÃO decidiu o banner, o Pixel do navegador nunca carrega — então
+ * os dois cookies simplesmente não existem, e o `_fbc` precisa ser montado
+ * aqui. É ele, sozinho, que liga a visita à campanha.
  */
 export function getMetaBrowserIds(): { fbp?: string; fbc?: string } {
-  const fbp = readCookie('_fbp');
-  let fbc = readCookie('_fbc');
+  return { fbp: readCookie('_fbp'), fbc: readCookie('_fbc') ?? fbcSintetico() };
+}
 
-  // Chegou por anúncio nesta pageview e o Pixel ainda não gravou o _fbc:
-  // monta no formato oficial fb.1.<timestamp>.<fbclid>.
-  if (!fbc && typeof window !== 'undefined') {
-    const fbclid = new URLSearchParams(window.location.search).get('fbclid');
-    if (fbclid) fbc = `fb.1.${Date.now()}.${fbclid}`;
-  }
-  return { fbp, fbc };
+/**
+ * Monta o `_fbc` no formato oficial `fb.1.<timestamp>.<fbclid>` e GUARDA.
+ *
+ * Guardar não é detalhe: o lote só é despachado até 5s depois do evento, e
+ * nesse intervalo ela já pode ter navegado pra uma URL sem `fbclid`. Lendo só
+ * a URL do momento, o clique pago se perdia exatamente nos eventos seguintes ao
+ * primeiro — que é o que o Meta usa pra saber que a visita rendeu algo.
+ *
+ * A validade acompanha a atribuição (30 dias, [[captureAttribution]]), que é o
+ * mesmo comportamento do cookie que o Pixel gravaria.
+ */
+function fbcSintetico(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  const daUrl = new URLSearchParams(window.location.search).get('fbclid');
+  const salvo = safeGet('local', FBC_KEY);
+
+  // Clique NOVO sobrescreve o guardado — last-click, igual à atribuição.
+  if (salvo && (!daUrl || salvo.endsWith(`.${daUrl}`))) return salvo;
+
+  const fbclid = daUrl || lerAtribuicao()?.fbclid;
+  if (!fbclid) return undefined;
+
+  const fbc = `fb.1.${Date.now()}.${fbclid}`;
+  safeSet('local', FBC_KEY, fbc);
+  return fbc;
 }
 
 /* ────────────────────────────────────────────────────────────────────────────

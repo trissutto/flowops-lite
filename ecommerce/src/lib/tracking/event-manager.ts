@@ -13,14 +13,17 @@
  * O QUE ESTE MÓDULO NÃO FAZ, de propósito:
  *   • não dispara `purchase` nem `refund` — esses nascem no servidor, depois do
  *     pagamento confirmado (o console do navegador é território hostil);
- *   • não confia em consentimento implícito — sem opt-in, nada sai daqui.
+ *   • não carrega script de terceiro sem opt-in — nenhum destino de NAVEGADOR
+ *     inicializa antes do aceite, e isso não mudou. O que atravessa daqui pra
+ *     fora sem aceite é a perna SERVIDOR, e só pra quem não decidiu: a política
+ *     inteira mora em `metaServidorPodeReceber` (consent.ts).
  */
 
 'use client';
 
 import { BROWSER_DESTINATIONS, type Destination } from './destinations';
 import { pushToDataLayer } from './data-layer';
-import { getConsent, isAllowed, subscribeConsent } from './consent';
+import { getConsent, isAllowed, metaServidorPodeReceber, subscribeConsent } from './consent';
 import { buildContext, getMetaBrowserIds, uuid } from './identity';
 import {
   ALL_EVENTS,
@@ -280,11 +283,15 @@ function enqueueForServer(event: TrackingEvent): void {
    * cliques registrados — para todo o site"). Quem decide o destino é o
    * `/api/events`, pelo estado de consentimento que viaja no lote:
    *
-   *   · COM aceite → Meta/GA4 + cópia de primeira parte (FlowOps).
-   *   · SEM aceite → SÓ a cópia de primeira parte — e o evento sai daqui já
-   *     ANONIMIZADO: sem user_id (e os fbp/fbc da Meta nem são anexados ao
-   *     lote, ver `flush`). Medir o próprio site é interesse legítimo;
-   *     repassar a terceiro sem opt-in continua proibido.
+   *   · ACEITOU     → Meta/GA4 + cópia de primeira parte (FlowOps).
+   *   · NÃO DECIDIU → cópia de primeira parte + Meta pela CAPI, só os eventos
+   *     de campanha e já ANONIMIZADO: sem user_id. Quem manda no recorte é o
+   *     `/api/events`; aqui a única diferença é que os fbp/fbc passam a ser
+   *     anexados ao lote (ver `flush`) — sem eles a campanha não é atribuída.
+   *   · RECUSOU     → SÓ a cópia de primeira parte, como sempre foi.
+   *
+   * A anonimização continua valendo para os dois últimos: medir o próprio site
+   * é interesse legítimo, mandar a pessoa IDENTIFICADA sem opt-in não é.
    */
   const consentido = isAllowed('analytics') || isAllowed('marketing');
   const pronto = consentido
@@ -316,11 +323,14 @@ async function flush(): Promise<void> {
     const res = await fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // fbp/fbc são identificadores de anúncio: sem aceite, nem saem daqui.
+      // `_fbc` é o identificador do CLIQUE no anúncio. Sem ele o Meta recebe o
+      // evento e não consegue ligá-lo à campanha — a "Visualização da página de
+      // destino" continua zerada mesmo com tudo chegando. Só não sai pra quem
+      // recusou.
       body: JSON.stringify({
         events: ready.map((r) => r.event),
         consent: getConsent(),
-        meta: isAllowed('analytics') || isAllowed('marketing') ? getMetaBrowserIds() : undefined,
+        meta: metaServidorPodeReceber(getConsent()) ? getMetaBrowserIds() : undefined,
       }),
       keepalive: true,
     });
@@ -362,7 +372,7 @@ function flushBeacon(): void {
     const blob = new Blob([JSON.stringify({
       events,
       consent: getConsent(),
-      meta: isAllowed('analytics') || isAllowed('marketing') ? getMetaBrowserIds() : undefined,
+      meta: metaServidorPodeReceber(getConsent()) ? getMetaBrowserIds() : undefined,
     })], {
       type: 'application/json',
     });
