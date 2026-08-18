@@ -1015,6 +1015,23 @@ export class LojaCatalogService {
       site?.subcategoria ??
       (derivada && derivada.categoria === categoria ? derivada.subcategoria : null);
 
+    /**
+     * CATEGORIAS EXTRAS — a peça também aparece nestas (campo `categoriasExtras`
+     * do `SiteProduto`). Só o que o cadastro disser: aqui NÃO existe derivação
+     * por nome como na principal, porque extra é decisão de campanha e
+     * adivinhar encheria vitrine curada de peça avulsa.
+     *
+     * A principal sai da lista: repetida, ela faria a peça ser contada duas
+     * vezes no card da categoria.
+     */
+    const categoriasExtras = [
+      ...new Set(
+        (Array.isArray(site?.categoriasExtras) ? site.categoriasExtras : [])
+          .map((c: any) => this.slugTaxonomia(c))
+          .filter((c: string) => c && c !== this.slugTaxonomia(categoria)),
+      ),
+    ];
+
     return {
       ref,
       slug: site?.slug || `ref-${ref.toLowerCase()}`,
@@ -1052,6 +1069,8 @@ export class LojaCatalogService {
        * a cliente está vendo — sem este campo ela não saberia onde está.
        */
       subcategoria,
+      /** As vitrines EXTRAS desta peça — ver `listar`, que filtra pelas duas. */
+      categoriasExtras,
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
@@ -1807,7 +1826,18 @@ export class LojaCatalogService {
         .split(',')
         .map((c) => c.trim().toLowerCase())
         .filter(Boolean);
-      if (cats.length) pecas = pecas.filter((p) => cats.includes(this.slugTaxonomia(p.categoria)));
+      /**
+       * PRINCIPAL **OU** EXTRA (18/08/2026): a peça pode viver em mais de uma
+       * vitrine sem sair da sua. Antes daqui, mandar uma blusa pra "Linha
+       * Conforto" a tirava de "Blusas" — a categoria era uma só.
+       */
+      if (cats.length) {
+        pecas = pecas.filter((p) => {
+          if (cats.includes(this.slugTaxonomia(p.categoria))) return true;
+          const extras: string[] = Array.isArray(p.categoriasExtras) ? p.categoriasExtras : [];
+          return extras.some((c) => cats.includes(this.slugTaxonomia(c)));
+        });
+      }
     }
     /**
      * SUBCATEGORIA — o segundo nível da árvore do site ("Blusas" → "Manga
@@ -2576,9 +2606,16 @@ export class LojaCatalogService {
     // Categoria vem do cadastro comercial, não do grupo fiscal do Giga
     const cadastros: any[] = await (this.prisma as any).siteProduto.findMany({
       where: { ref: { in: Array.from(refsVistas) } },
-      select: { categoria: true },
+      select: { categoria: true, categoriasExtras: true },
     });
-    for (const c of cadastros) conta(categorias, c.categoria);
+    for (const c of cadastros) {
+      conta(categorias, c.categoria);
+      // A extra conta igual à principal: senão a pílula da campanha diria
+      // "3 peças" numa vitrine que abre com 30.
+      for (const extra of (c.categoriasExtras ?? []) as string[]) {
+        if (extra && extra !== c.categoria) conta(categorias, extra);
+      }
+    }
 
     const fits: any[] = await (this.prisma as any).fitProduct.findMany({
       where: { ref: { in: Array.from(refsVistas) } },

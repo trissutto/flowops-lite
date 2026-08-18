@@ -6605,6 +6605,24 @@ model SiteProduto {
   /// do Giga: `nomeGrupo` é classificação fiscal/interna, quase sempre vazia
   /// e com valor tipo "BLUSA FEMININA" — nunca casaria com o menu do site.
   categoria         String?  @db.VarChar(30)
+
+  /// A PEÇA EM MAIS DE UMA CATEGORIA (dono, 18/08/2026).
+  ///
+  /// `categoria` é UMA só — foi assim desde sempre, e o efeito colateral era
+  /// que mandar uma blusa pra "Linha Conforto" a TIRAVA de "Blusas". Campanha
+  /// e taxonomia querem coisas diferentes da mesma peça: quem navega por
+  /// Blusas tem que continuar achando, e a campanha precisa da vitrine própria.
+  ///
+  /// Aqui ficam as categorias ADICIONAIS (slugs de `SiteCategoria` de nível de
+  /// cima). A peça aparece na página de cada uma e conta pro menu/card de
+  /// todas — ver `LojaCatalogService.listar` e `SiteCategoriasService`, os
+  /// lugares que decidem isso.
+  ///
+  /// A PRINCIPAL continua sendo `categoria`: é ela que manda na `subcategoria`,
+  /// no "você também pode gostar" e no que a PDP exibe. Extra é vitrine a
+  /// mais, não mudança de família.
+  categoriasExtras  String[] @default([]) @map("categorias_extras")
+
   colecao           String?  @db.VarChar(60)
   linha             String?  @db.VarChar(60)
 

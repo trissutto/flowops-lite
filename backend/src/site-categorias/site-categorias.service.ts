@@ -87,15 +87,27 @@ export class SiteCategoriasService {
 
   /** Slugs que EXISTEM de verdade, com quantas peças publicadas cada um tem. */
   private async doCatalogo(): Promise<Map<string, number>> {
-    const linhas: Array<{ categoria: string | null }> = await (this.prisma as any).siteProduto.findMany({
-      where: { publicado: true },
-      select: { categoria: true },
-    });
+    const linhas: Array<{ categoria: string | null; categoriasExtras: string[] }> =
+      await (this.prisma as any).siteProduto.findMany({
+        where: { publicado: true },
+        select: { categoria: true, categoriasExtras: true },
+      });
     const mapa = new Map<string, number>();
     for (const l of linhas) {
-      const c = this.normSlug(l.categoria);
-      if (!c) continue;
-      mapa.set(c, (mapa.get(c) || 0) + 1);
+      /**
+       * PRINCIPAL + EXTRAS. Esta contagem é quem decide se a categoria
+       * aparece no menu e com quantas peças no card — categoria só com peça
+       * EXTRA ficaria invisível, que é justamente o caso de uma vitrine de
+       * campanha montada por cima do catálogo ("Linha Conforto").
+       */
+      const slugs = new Set<string>();
+      const principal = this.normSlug(l.categoria);
+      if (principal) slugs.add(principal);
+      for (const extra of l.categoriasExtras ?? []) {
+        const s = this.normSlug(extra);
+        if (s) slugs.add(s);
+      }
+      for (const s of slugs) mapa.set(s, (mapa.get(s) || 0) + 1);
     }
     return mapa;
   }
@@ -109,7 +121,12 @@ export class SiteCategoriasService {
     // Prisma LANÇA em orderBy de campo inexistente — o catch de cima engolia
     // o erro e TODA categoria voltava sem foto (bug real, 07/08).
     const produtos: Array<{ ref: string; nome: string | null }> = await (this.prisma as any).siteProduto.findMany({
-      where: { categoria: slug, publicado: true },
+      // A extra também vale de capa: categoria de campanha pode não ter
+      // nenhuma peça com ela de principal, e ficaria sem foto nenhuma.
+      where: {
+        publicado: true,
+        OR: [{ categoria: slug }, { categoriasExtras: { has: slug } }],
+      },
       orderBy: { syncedAt: 'desc' },
       select: { ref: true, nome: true },
       take: 10,
