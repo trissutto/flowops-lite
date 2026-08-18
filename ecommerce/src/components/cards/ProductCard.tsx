@@ -317,7 +317,17 @@ export function ProductCard({
       </div>
 
       {/* Texto */}
-      <div className={cn('flex flex-1 flex-col', compact ? 'mt-3' : 'mt-2.5 lg:mt-4')}>
+      <div
+        className={cn(
+          'flex flex-1 flex-col',
+          // Centralizado NO CELULAR (dono, 18/08: "está deslocado para a
+          // esquerda"). Com o COMPRAR de largura cheia embaixo, texto à
+          // esquerda deixa o card com dois eixos — o preço num canto e o botão
+          // ocupando tudo. No computador não existe o botão, e a leitura em
+          // coluna alinhada à esquerda continua sendo a certa.
+          compact ? 'mt-3' : 'mt-2.5 text-center lg:mt-4 lg:text-left',
+        )}
+      >
         {/* O tecido usa a `.eyebrow` — a mesma régua que faz a palavra
             "Promoção" medir 117px num card de 91px. Um nome de tecido
             ("VISCOLYCRA PREMIUM") é o dobro disso em caixa alta: vira um
@@ -355,7 +365,7 @@ export function ProductCard({
             exatamente a lista de espera que queremos. */}
         {esgotado ? (
           <>
-            <div className="mt-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 lg:mt-2">
+            <div className="mt-1 flex flex-wrap items-baseline justify-center gap-x-2.5 gap-y-1 lg:mt-2 lg:justify-start">
               <span className="tabular text-small text-ink-muted line-through lg:text-body">
                 {formatPrice(product.price)}
               </span>
@@ -369,7 +379,9 @@ export function ProductCard({
             <div
               className={cn(
                 'flex flex-wrap items-baseline gap-y-1',
-                compact ? 'mt-2 gap-x-2' : 'mt-1 gap-x-2 lg:mt-2 lg:gap-x-2.5',
+                compact
+                  ? 'mt-2 gap-x-2'
+                  : 'mt-1 justify-center gap-x-2 lg:mt-2 lg:justify-start lg:gap-x-2.5',
               )}
             >
               {product.compareAtPrice && (
@@ -435,7 +447,10 @@ export function ProductCard({
         {/* Cores disponíveis */}
         {product.colors && product.colors.length > 1 && (
           <div
-            className={cn('flex items-center gap-1.5', compact ? 'mt-3' : 'mt-2 lg:mt-3')}
+            className={cn(
+              'flex items-center gap-1.5',
+              compact ? 'mt-3' : 'mt-2 justify-center lg:mt-3 lg:justify-start',
+            )}
             aria-label="Cores disponíveis"
           >
             {product.colors.slice(0, 5).map((color) => (
@@ -453,15 +468,21 @@ export function ProductCard({
         )}
 
         {temEstoque && !compact && (
-          <button
-            type="button"
-            onClick={() => abrirQuickAdd(product)}
-            aria-label={`Comprar ${product.name}`}
-            className="mt-auto flex w-full items-center justify-center gap-1.5 rounded-xs bg-ink px-3 pt-2.5 pb-2.5 text-[0.6875rem] font-medium tracking-[0.14em] text-light uppercase transition-colors active:bg-ink-soft lg:hidden"
-          >
-            <ShoppingBag className="size-3.5" strokeWidth={1.75} />
-            Comprar
-          </button>
+          /* O `mt-auto` fica NO WRAPPER e o respiro é o `pt-3`: sozinho no
+             botão, o `mt-auto` vira 0 quando não sobra espaço no card e a
+             parcela cola no COMPRAR (foi o que ele viu no ar). Assim o botão
+             continua alinhado com o dos vizinhos e nunca encosta no texto. */
+          <div className="mt-auto pt-3 lg:hidden">
+            <button
+              type="button"
+              onClick={() => abrirQuickAdd(product)}
+              aria-label={`Comprar ${product.name}`}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xs bg-ink px-3 py-2.5 text-[0.6875rem] font-medium tracking-[0.14em] text-light uppercase transition-colors active:bg-ink-soft"
+            >
+              <ShoppingBag className="size-3.5" strokeWidth={1.75} />
+              Comprar
+            </button>
+          </div>
         )}
       </div>
     </article>
