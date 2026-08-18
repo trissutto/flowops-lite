@@ -18,6 +18,7 @@ import { EmailModule } from '../email/email.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { PickScanModule } from './pick-scan.module';
+import { TrackingModule } from '../tracking/tracking.module';
 
 @Module({
   // LivePdvModule → ManychatService (WhatsApp de rastreio pra cliente da LIVE)
@@ -28,9 +29,10 @@ import { PickScanModule } from './pick-scan.module';
   // EmailModule/HttpModule → PedidoEmailService registrado AQUI de novo (instância
   // própria, deps são só Email/Config/Http): o aviso de rastreio do site novo
   // dispara do afterShipped sem criar ciclo com o LojaOrdersModule.
+  // TrackingModule → onde o objeto está (cache de rastreio) pra tela "Vendi online"
   // PickScanModule → bipe que baixa estoque + estorno (compartilhado com
   // routing e orders, por isso mora em módulo próprio).
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule, PickScanModule],
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule, PickScanModule, TrackingModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService, CorreiosPostagemReconcileCron, EntregaAvisoCron, PedidoEmailService],
   exports: [PickOrdersService],

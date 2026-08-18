@@ -9,6 +9,7 @@ import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { CorreiosService } from '../correios/correios.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PickScanService } from './pick-scan.service';
+import { TrackingService } from '../tracking/tracking.service';
 import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
@@ -100,6 +101,7 @@ export class PickOrdersService {
     private readonly danfePdf: DanfePdfService,
     private readonly pedidoEmail: PedidoEmailService,
     private readonly scans: PickScanService,
+    private readonly tracking: TrackingService,
   ) {}
 
   /**
@@ -1724,6 +1726,15 @@ export class PickOrdersService {
       },
     });
 
+    // Onde cada objeto está AGORA — do cache `rastreio_objetos`, numa consulta
+    // só pra lista inteira. Perguntar pra transportadora aqui seria um request
+    // por card, a cada refresh da tela.
+    const codigos = orders.flatMap((o: any) => [
+      o.trackingCode,
+      ...(o.pickOrders || []).map((p: any) => p.trackingCode),
+    ]);
+    const rastreios = await this.tracking.resumoDoCache(codigos).catch(() => new Map());
+
     return orders.map((o: any) => {
       const picks = (o.pickOrders || []).map((p: any) => ({
         status: p.status,
@@ -1735,11 +1746,15 @@ export class PickOrdersService {
         o.trackingCode ||
         (o.pickOrders || []).map((p: any) => p.trackingCode).find((t: any) => !!t) ||
         null;
+      const movimento = rastreio
+        ? rastreios.get(String(rastreio).trim().toUpperCase()) ?? null
+        : null;
       const situacao = situacaoPedidoOnline({
         orderStatus: o.status,
         picks,
         trackingCode: rastreio,
         isPickup: !!o.isPickup,
+        rastreio: movimento,
       });
       return {
         id: o.id,
@@ -1758,6 +1773,19 @@ export class PickOrdersService {
           pickupStoreCode: o.pickupStoreCode ?? null,
         },
         trackingCode: rastreio,
+        // O que a transportadora diz, cru — a tela formata a data no fuso de
+        // quem está olhando (o backend roda em UTC).
+        rastreio: movimento
+          ? {
+              status: movimento.status,
+              local: movimento.local,
+              eventoEm: movimento.eventoEm,
+              previsaoEm: movimento.previsaoEm,
+              entregue: movimento.entregue,
+              entregueEm: movimento.entregueEm,
+              consultadoEm: movimento.consultadoEm,
+            }
+          : null,
         atendendo: picks,
         situacao,
         emAndamento: pedidoOnlineEmAndamento(situacao.chave),
@@ -3042,6 +3070,14 @@ export class PickOrdersService {
       this.afterShippedSideEffects(id, input).catch((e) =>
         this.logger.warn(`[shipped-effects] pick ${id}: ${e?.message || e}`),
       );
+      // Primeira leitura do rastreio JÁ, sem esperar o ciclo do cron (até 30
+      // min): o card da loja que vendeu mostra "Objeto postado" na hora em vez
+      // de "ainda sem movimento" logo depois de ela postar. Best-effort.
+      if (input.trackingCode) {
+        this.tracking
+          .fetchTracking(input.trackingCode, input.carrier)
+          .catch((e) => this.logger.warn(`[rastreio] 1ª leitura de ${input.trackingCode}: ${e?.message || e}`));
+      }
     }
 
     const wcOrderId =

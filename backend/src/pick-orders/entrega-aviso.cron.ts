@@ -1,21 +1,28 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
-import { CorreiosService } from '../correios/correios.service';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 
 /**
  * "SEU PEDIDO CHEGOU" — o fim do ciclo, que acontecia em silêncio.
  *
- * O sistema já sabia da entrega (o rastreio é consultado na tela de status do
- * pedido) e nunca dizia nada. É o momento mais útil pra falar: a peça está na
- * mão da cliente, o prazo de troca começa a correr AGORA, e é a única hora em
- * que pedir opinião não soa fora de contexto.
+ * O sistema já sabia da entrega e nunca dizia nada. É o momento mais útil pra
+ * falar: a peça está na mão da cliente, o prazo de troca começa a correr AGORA,
+ * e é a única hora em que pedir opinião não soa fora de contexto.
  *
- * Só olha pedido despachado há pouco (`ENTREGA_AVISO_DIAS`, default 10). Um
- * pedido entregue há três semanas não pode receber "chegou!" hoje — a janela
- * curta é o que impede o backlog de virar constrangimento no primeiro deploy.
+ * ⚠️ ESTE CRON NUNCA FUNCIONOU (achado 18/08): ele consultava os Correios
+ * direto e a chamada respondia HTTP 400 em 100% das vezes por falta do header
+ * `Accept-Language` — como a falha é tratada como "sem novidade", o silêncio
+ * parecia normal. Foram 3 avisos em 22.678 pedidos.
  *
+ * Agora a fonte é o cache `rastreio_objetos`, alimentado pelo `RastreioSyncCron`:
+ *   - uma fonte só de verdade sobre "chegou" (a tela e o aviso não divergem);
+ *   - zero request de API aqui dentro;
+ *   - e a REGRA DA ESTREIA vem junto: objeto que entrou no radar já entregue
+ *     não dispara aviso. É o que impediu o primeiro deploy de mandar "chegou!"
+ *     pra 46 clientes que receberam dias atrás.
+ *
+ * Janela curta continua valendo (`ENTREGA_AVISO_DIAS`, default 10).
  * Kill-switch `ENTREGA_AVISO=0`.
  */
 @Injectable()
@@ -23,12 +30,11 @@ export class EntregaAvisoCron {
   private readonly logger = new Logger(EntregaAvisoCron.name);
   private running = false;
 
-  /** Teto por ciclo — a API dos Correios é por objeto, um request cada. */
+  /** Teto por ciclo — cada aviso é uma mensagem pra cliente, não um request. */
   private static readonly LOTE = 30;
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly correios: CorreiosService,
     private readonly pedidoEmail: PedidoEmailService,
   ) {}
 
@@ -41,26 +47,10 @@ export class EntregaAvisoCron {
     return Number.isFinite(n) && n > 0 ? n : 10;
   }
 
-  /**
-   * "Objeto entregue ao destinatário" — e só isso.
-   *
-   * `/entreg/i` casaria com "saiu para ENTREGA" (ainda no carro do carteiro) e
-   * `/entregue/i` sozinho casaria com "Objeto NÃO entregue - carteiro não
-   * atendido", que é tentativa falha. Dizer "chegou!" pra quem não recebeu é
-   * pior que não dizer nada.
-   */
-  private foiEntregue(eventos: any[]): boolean {
-    if (!Array.isArray(eventos)) return false;
-    return eventos.some((ev) => {
-      const t = String(ev?.descricao || ev?.status || '');
-      return /entregue/i.test(t) && !/n[ãa]o\s+entregue/i.test(t);
-    });
-  }
-
   @Cron('20 */2 * * *', { name: 'entrega-aviso' })
   async run(): Promise<void> {
     if (!this.enabled) return;
-    if (this.running) return; // ciclo anterior ainda rodando (API dos Correios é lenta)
+    if (this.running) return; // ciclo anterior ainda rodando
     this.running = true;
     try {
       const desde = new Date(Date.now() - this.janelaDias * 24 * 60 * 60 * 1000);
@@ -82,11 +72,29 @@ export class EntregaAvisoCron {
       });
       if (!pendentes.length) return;
 
+      const codigos = [
+        ...new Set(pendentes.map((o) => String(o.trackingCode || '').trim().toUpperCase())),
+      ];
+      const rastreios: any[] = await (this.prisma as any).rastreioObjeto.findMany({
+        where: { codigo: { in: codigos }, entregue: true },
+        select: { codigo: true, entregaNaEstreia: true },
+      });
+      const entregues = new Map(rastreios.map((r) => [r.codigo, r]));
+
       let avisados = 0;
       for (const o of pendentes) {
         try {
-          const t: any = await this.correios.rastrear(o.trackingCode);
-          if (!t?.ok || !this.foiEntregue(t.eventos)) continue;
+          const r = entregues.get(String(o.trackingCode || '').trim().toUpperCase());
+          if (!r) continue;
+          if (r.entregaNaEstreia) {
+            // Notícia velha: carimba como avisado (sem mandar nada) pra não
+            // ficar rodando esse pedido em todo ciclo.
+            await (this.prisma as any).order.updateMany({
+              where: { id: o.id, entregaAvisadaEm: null },
+              data: { entregaAvisadaEm: new Date() },
+            });
+            continue;
+          }
 
           // Reivindicação atômica ANTES de mandar: dois processos (o cron
           // reentrando após restart) não podem avisar o mesmo pedido.
