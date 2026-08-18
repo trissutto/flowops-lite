@@ -98,6 +98,28 @@ export class PickOrdersController {
   }
 
   /**
+   * Loja — o que ELA VENDEU online (não o que ela separa). `/mine` é a fila de
+   * quem ATENDE; esta é a de quem VENDEU: a vendedora fecha no WhatsApp, o
+   * card nasce em outra loja e ela precisa saber em que pé está pra responder
+   * a cliente sem ligar pra matriz.
+   *
+   * Query: ?from=YYYY-MM-DD&to=YYYY-MM-DD (opcionais — sem eles, 30 dias +
+   * tudo que ainda está em aberto).
+   */
+  @Get('vendi-online')
+  vendiOnline(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja acessam /pick-orders/vendi-online');
+    }
+    return this.svc.listVendidosOnline(user.storeId, { from, to });
+  }
+
+  /**
    * Matriz — lista pick-orders aguardando aprovação da baixa de estoque.
    * Status `separated` = filial bipou tudo, aguardando operadora matriz aprovar.
    * Ordenação FIFO (mais antigo primeiro).

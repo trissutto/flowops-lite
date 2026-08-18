@@ -16,6 +16,7 @@ import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -1648,6 +1649,118 @@ export class PickOrdersService {
           ...r.order,
           items: itemsByOrder.get(r.orderId) ?? [],
         },
+      };
+    });
+  }
+
+  /**
+   * O QUE ESTA LOJA VENDEU ONLINE E AINDA ESTÁ RODANDO (18/08).
+   *
+   * `listMine` mostra o que a loja ATENDE (pick-orders atribuídos a ela). Quem
+   * VENDE online e não atende — a vendedora fecha no WhatsApp e o card nasce em
+   * outra loja ([[venda-online-canal-loja-que-atende]]) — não tinha tela
+   * NENHUMA: via o aviso no momento da venda e depois ficava no escuro, com a
+   * cliente perguntando "cadê?" e só a matriz sabendo responder.
+   *
+   * Aqui a chave é `Order.sellerStoreCode` (a loja que vendeu), não o
+   * `storeId` do pick (a que separa).
+   *
+   * Janela: sem De/Até traz os ÚLTIMOS 30 DIAS **mais** tudo que ainda está em
+   * aberto de qualquer data — pedido travado há 45 dias é justamente o que ela
+   * não pode deixar de ver. Com De/Até, só o período (pela data do pedido).
+   *
+   * É tela de ACOMPANHAMENTO, não de tarefa: nada aqui entra na fila "O que
+   * fazer agora" — a ação é da loja que atende, e alarme falso mata a fila.
+   */
+  async listVendidosOnline(storeId: string, opts?: { from?: string; to?: string }) {
+    const loja = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { code: true },
+    });
+    if (!loja?.code) return [];
+
+    const de = opts?.from ? new Date(`${opts.from}T00:00:00`) : null;
+    const ate = opts?.to ? new Date(`${opts.to}T23:59:59.999`) : null;
+    const ENCERRADOS = ['delivered', 'cancelled', 'canceled', 'refunded'];
+
+    const where: any = { sellerStoreCode: loja.code };
+    if (de || ate) {
+      where.createdAt = { ...(de ? { gte: de } : {}), ...(ate ? { lte: ate } : {}) };
+    } else {
+      const trintaDias = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+      where.OR = [
+        { createdAt: { gte: trintaDias } },
+        { status: { notIn: ENCERRADOS } },
+      ];
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        wcOrderId: true,
+        wcOrderNumber: true,
+        source: true,
+        status: true,
+        customerName: true,
+        customerPhone: true,
+        totalAmount: true,
+        trackingCode: true,
+        isPickup: true,
+        pickupStoreCode: true,
+        shippingMethod: true,
+        createdAt: true,
+        paidAt: true,
+        items: { select: { quantity: true } },
+        pickOrders: {
+          select: {
+            status: true,
+            trackingCode: true,
+            store: { select: { code: true, name: true } },
+          },
+        },
+      },
+    });
+
+    return orders.map((o: any) => {
+      const picks = (o.pickOrders || []).map((p: any) => ({
+        status: p.status,
+        storeCode: p.store?.code ?? null,
+        storeName: p.store?.name ?? null,
+      }));
+      // Rastreio: o do pedido, ou o da separação que despachou.
+      const rastreio =
+        o.trackingCode ||
+        (o.pickOrders || []).map((p: any) => p.trackingCode).find((t: any) => !!t) ||
+        null;
+      const situacao = situacaoPedidoOnline({
+        orderStatus: o.status,
+        picks,
+        trackingCode: rastreio,
+        isPickup: !!o.isPickup,
+      });
+      return {
+        id: o.id,
+        wcOrderId: o.wcOrderId,
+        wcOrderNumber: o.wcOrderNumber,
+        source: o.source,
+        status: o.status,
+        customerName: o.customerName,
+        customerPhone: o.customerPhone,
+        totalAmount: o.totalAmount,
+        pecas: (o.items || []).reduce((n: number, it: any) => n + (Number(it.quantity) || 0), 0),
+        criadoEm: o.paidAt ?? o.createdAt,
+        entrega: {
+          label: o.shippingMethod ?? null,
+          isPickup: !!o.isPickup,
+          pickupStoreCode: o.pickupStoreCode ?? null,
+        },
+        trackingCode: rastreio,
+        atendendo: picks,
+        situacao,
+        emAndamento: pedidoOnlineEmAndamento(situacao.chave),
       };
     });
   }

@@ -38,6 +38,7 @@ import {
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
   Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone, AlertTriangle,
+  Globe, Copy,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -108,6 +109,36 @@ interface PickOrderRow {
     shippingMethod?: string | null;
     items?: PickOrderItem[];
   };
+}
+
+/**
+ * PEDIDO QUE ESTA LOJA VENDEU ONLINE (GET /pick-orders/vendi-online).
+ *
+ * Não é fila de trabalho: quem separa é outra loja. É acompanhamento — a
+ * vendedora fechou no WhatsApp e precisa responder "cadê o meu pedido?" sem
+ * ligar pra matriz.
+ */
+interface VendidoOnlineRow {
+  id: string;
+  wcOrderNumber: string | null;
+  wcOrderId: number | null;
+  source?: string | null;
+  status: string;
+  customerName: string | null;
+  customerPhone: string | null;
+  totalAmount: number | null;
+  pecas: number;
+  criadoEm: string | null;
+  entrega: { label: string | null; isPickup: boolean; pickupStoreCode: string | null };
+  trackingCode: string | null;
+  atendendo: Array<{ status: string | null; storeCode: string | null; storeName: string | null }>;
+  situacao: {
+    chave: 'cancelado' | 'matriz' | 'aguardando' | 'separando' | 'pronto' | 'enviado' | 'entregue';
+    rotulo: string;
+    detalhe: string;
+    tom: 'rose' | 'amber' | 'sky' | 'mint' | 'slate';
+  };
+  emAndamento: boolean;
 }
 
 // ── Pedido da LIVE na fila desta loja (GET /live-pdv/store-queue) ──
@@ -198,7 +229,7 @@ export default function MinhaLojaPage() {
     | null
   >(null);
   // Filtro de aba: null = todos | 'new' | 'separating' | 'ready' (separados+ready)
-  const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | 'shipped' | null>(null);
+  const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | 'shipped' | 'vendi' | null>(null);
   // Recorte da aba ENVIADOS. De/Ate + atalhos e a convencao da casa pra tela
   // com recorte de tempo — nunca dropdown de periodo fixo.
   const hojeISO = new Date().toISOString().slice(0, 10);
@@ -206,6 +237,11 @@ export default function MinhaLojaPage() {
   const [envDe, setEnvDe] = useState(seteDiasISO);
   const [envAte, setEnvAte] = useState(hojeISO);
   const [enviados, setEnviados] = useState<PickOrderRow[]>([]);
+  // VENDI ONLINE (18/08): o que ESTA loja vendeu, separado por outra. Sem
+  // De/Até o backend traz 30 dias + tudo que ainda está em aberto.
+  const [vendDe, setVendDe] = useState('');
+  const [vendAte, setVendAte] = useState('');
+  const [vendidos, setVendidos] = useState<VendidoOnlineRow[]>([]);
   // Pedido com o endereco aberto pra correcao (modal compartilhado com a retaguarda).
   const [editandoEndereco, setEditandoEndereco] = useState<PickOrderRow | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
@@ -367,6 +403,17 @@ export default function MinhaLojaPage() {
   }, [envDe, envAte]);
 
   useEffect(() => { if (filterTab === 'shipped') void loadEnviados(); }, [filterTab, loadEnviados]);
+
+  const loadVendidos = useCallback(async () => {
+    try {
+      const q = vendDe && vendAte ? '?' + new URLSearchParams({ from: vendDe, to: vendAte }).toString() : '';
+      setVendidos(await api<VendidoOnlineRow[]>('/pick-orders/vendi-online' + q));
+    } catch {
+      // Loja que não vende online (ou rota velha no ar) segue sem a aba.
+      setVendidos([]);
+    }
+  }, [vendDe, vendAte]);
+  useEffect(() => { void loadVendidos(); }, [loadVendidos]);
 
   // Pedidos da LIVE pra esta loja (silencioso: loja sem live não vê nada).
   // Pedido FINALIZADO (todas as peças enviadas) sai da home — igual ao site;
@@ -624,9 +671,12 @@ export default function MinhaLojaPage() {
     if (!me) return;
     const t = window.setInterval(() => {
       loadTasksData();
+      // A vendedora deixa a home aberta o dia todo: sem isso o "Vendi online"
+      // congelava no que estava quando ela abriu o PC de manhã.
+      void loadVendidos();
     }, 60_000);
     return () => window.clearInterval(t);
-  }, [me, loadTasksData]);
+  }, [me, loadTasksData, loadVendidos]);
 
   // ── Monta a fila "O que fazer agora" (vermelho = parado, amarelo = a fazer) ──
   const storeTasks = useMemo(() => {
@@ -929,9 +979,17 @@ export default function MinhaLojaPage() {
     return c;
   }, [rows]);
 
+  // Em andamento = tudo que ainda pode dar errado (fora entregue/cancelado).
+  const vendidosAndamento = useMemo(
+    () => vendidos.filter((v) => v.emAndamento).length,
+    [vendidos],
+  );
+
   // Lista filtrada pela aba ativa (clique nos cards do topo).
   // null = mostra todos os ativos (default).
   const visibleRows = useMemo(() => {
+    // "Vendi online" é outra lista (pedido, não pick-order) — renderiza à parte.
+    if (filterTab === 'vendi') return [];
     if (!filterTab) return activeRows;
     if (filterTab === 'new') return activeRows.filter((r) => r.status === 'new');
     if (filterTab === 'separating') return activeRows.filter((r) => r.status === 'separating');
@@ -1073,11 +1131,45 @@ export default function MinhaLojaPage() {
             active={filterTab === 'shipped'}
             onClick={() => setFilterTab(filterTab === 'shipped' ? null : 'shipped')} />
         </div>
+        {/* VENDI ONLINE (18/08) — linha PRÓPRIA, fora das 4 abas de trabalho.
+            As de cima são o que ESTA loja tem pra fazer; esta é o que ela
+            VENDEU e outra loja está atendendo: acompanhamento, não tarefa (por
+            isso também não entra na fila "O que fazer agora" — alarme falso
+            sobre pedido que não é dela mataria a confiança na fila). */}
+        {(vendidos.length > 0 || filterTab === 'vendi') && (
+          <div className="px-4 pb-3 max-w-3xl mx-auto">
+            <button
+              type="button"
+              onClick={() => setFilterTab(filterTab === 'vendi' ? null : 'vendi')}
+              className={`w-full rounded-2xl border-2 px-4 py-2.5 flex items-center justify-between gap-2 transition ${
+                filterTab === 'vendi'
+                  ? 'border-green-600 bg-green-100 text-green-900'
+                  : 'border-green-300 bg-green-50 text-green-800 hover:border-green-400'
+              }`}
+            >
+              <span className="font-bold text-sm flex items-center gap-2">
+                <Globe className="w-4 h-4" /> Vendi online
+              </span>
+              <span className="text-xs font-semibold">
+                {vendidosAndamento > 0
+                  ? `${vendidosAndamento} em andamento`
+                  : 'nada em andamento — ver histórico'}
+              </span>
+            </button>
+          </div>
+        )}
         {filterTab && (
           <div className="px-4 pb-2 max-w-3xl mx-auto flex items-center justify-between gap-2">
             <span className="text-[11px] text-slate-500">
-              Filtrando: <strong>{filterTab === 'new' ? 'Novos' : filterTab === 'separating' ? 'Separando' : 'Pronto p/ postar'}</strong>
-              {' · '}{visibleRows.length} {visibleRows.length === 1 ? 'pedido' : 'pedidos'}
+              Filtrando: <strong>{
+                filterTab === 'new' ? 'Novos'
+                  : filterTab === 'separating' ? 'Separando'
+                  : filterTab === 'ready' ? 'Pronto p/ postar'
+                  : filterTab === 'shipped' ? 'Enviados'
+                  : 'Vendi online'
+              }</strong>
+              {' · '}{(filterTab === 'vendi' ? vendidos.length : visibleRows.length)}{' '}
+              {(filterTab === 'vendi' ? vendidos.length : visibleRows.length) === 1 ? 'pedido' : 'pedidos'}
             </span>
             <button
               type="button"
@@ -1185,8 +1277,9 @@ export default function MinhaLojaPage() {
             </button>
           </div>
         )}
-        {/* Pedidos da LIVE — mesma lista, mesmo formato, com a tag vermelha */}
-        {liveRows.map((g) => (
+        {/* Pedidos da LIVE — mesma lista, mesmo formato, com a tag vermelha.
+            Fora da aba "Vendi online", que é acompanhamento e não fila. */}
+        {filterTab !== 'vendi' && liveRows.map((g) => (
           <LiveOrderCard
             key={g.cartId}
             group={g}
@@ -1277,7 +1370,69 @@ export default function MinhaLojaPage() {
           </div>
         )}
 
-        {visibleRows.length === 0 && liveRows.length === 0 ? (
+        {/* ══ VENDI ONLINE — o que ESTA loja vendeu e outra está atendendo ══ */}
+        {filterTab === 'vendi' && (
+          <>
+            <div className="no-print mb-3 rounded-2xl border border-green-200 bg-white p-3 space-y-2">
+              <p className="text-[11px] text-slate-500 leading-snug">
+                Pedidos que <b>esta loja vendeu online</b>. Quem separa e posta é a loja do card —
+                aqui é só pra você saber em que pé está e responder a cliente.
+              </p>
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="text-xs font-bold text-slate-500">
+                  De
+                  <input type="date" value={vendDe} onChange={(e) => setVendDe(e.target.value)}
+                    className="ml-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal" />
+                </label>
+                <label className="text-xs font-bold text-slate-500">
+                  Até
+                  <input type="date" value={vendAte} onChange={(e) => setVendAte(e.target.value)}
+                    className="ml-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal" />
+                </label>
+                <button type="button" onClick={() => void loadVendidos()}
+                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-bold text-white hover:bg-slate-900">
+                  Buscar
+                </button>
+                <span className="ml-auto text-xs text-slate-500">{vendidos.length} pedido(s)</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {([['Hoje', 0, 0], ['Ontem', 1, 1], ['7 dias', 6, 0], ['30 dias', 29, 0]] as Array<[string, number, number]>)
+                  .map(([rotulo, deDias, ateDias]) => (
+                    <button
+                      key={rotulo}
+                      type="button"
+                      onClick={() => {
+                        const d = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+                        setVendDe(d(deDias));
+                        setVendAte(d(ateDias));
+                      }}
+                      className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      {rotulo}
+                    </button>
+                  ))}
+                {/* Sem período = 30 dias + TUDO que ainda está em aberto (pedido
+                    travado há 45 dias é o que ela mais precisa ver). */}
+                <button
+                  type="button"
+                  onClick={() => { setVendDe(''); setVendAte(''); }}
+                  className="rounded-full border border-green-300 bg-green-50 px-3 py-1 text-xs font-bold text-green-800 hover:bg-green-100"
+                >
+                  Em aberto + 30 dias
+                </button>
+              </div>
+            </div>
+            {vendidos.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
+                Nenhuma venda online desta loja no período.
+              </div>
+            ) : (
+              vendidos.map((v) => <VendidoOnlineCard key={v.id} v={v} />)
+            )}
+          </>
+        )}
+
+        {filterTab === 'vendi' ? null : visibleRows.length === 0 && liveRows.length === 0 ? (
           <EmptyState />
         ) : (
           visibleRows.map((row) => (
@@ -1486,6 +1641,98 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
         );
       })}
     </div>
+  );
+}
+
+/**
+ * CARD DO PEDIDO QUE ESTA LOJA VENDEU (18/08).
+ *
+ * Read-only de propósito: a ação (separar, postar) é da loja que atende. O que
+ * a vendedora precisa daqui é responder a cliente — situação em uma frase,
+ * quem está com o pedido, o rastreio pra copiar e o WhatsApp dela.
+ */
+function VendidoOnlineCard({ v }: { v: VendidoOnlineRow }) {
+  const [copiado, setCopiado] = useState(false);
+  const TOM: Record<string, string> = {
+    rose:  'bg-rose-100 text-rose-900 border-rose-300',
+    amber: 'bg-amber-100 text-amber-900 border-amber-300',
+    sky:   'bg-blue-100 text-blue-900 border-blue-300',
+    mint:  'bg-emerald-100 text-emerald-900 border-emerald-300',
+    slate: 'bg-slate-200 text-slate-700 border-slate-300',
+  };
+  const zap = String(v.customerPhone || '').replace(/\D/g, '');
+  return (
+    <article className="bg-white rounded-xl border-2 border-green-200 shadow-sm p-3 space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-lg font-black text-slate-900">
+              #{v.wcOrderNumber ?? v.wcOrderId ?? '—'}
+            </span>
+            <span className={`text-[11px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${TOM[v.situacao.tom] ?? TOM.slate}`}>
+              {v.situacao.rotulo}
+            </span>
+          </div>
+          <div className="text-sm font-medium text-slate-700 truncate">{v.customerName ?? '—'}</div>
+        </div>
+        <div className="text-right shrink-0">
+          {v.totalAmount != null && (
+            <div className="text-base font-bold text-slate-900">R$ {Number(v.totalAmount).toFixed(2)}</div>
+          )}
+          <div className="text-[11px] text-slate-500">{v.pecas} peça(s)</div>
+        </div>
+      </div>
+
+      <p className="text-xs text-slate-600 leading-snug">{v.situacao.detalhe}</p>
+
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        {v.entrega.label && (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-600">
+            {v.entrega.label}
+          </span>
+        )}
+        {v.atendendo.map((a, i) => (
+          <span key={`${a.storeCode ?? i}-${i}`} className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 font-semibold text-green-800">
+            {a.storeName ?? a.storeCode ?? 'loja'} · {STATUS_LABEL[(a.status ?? '') as PickStatus] ?? a.status ?? '—'}
+          </span>
+        ))}
+        {v.criadoEm && (
+          <span className="text-slate-400">
+            {new Date(v.criadoEm).toLocaleDateString('pt-BR')}
+          </span>
+        )}
+      </div>
+
+      {(v.trackingCode || zap) && (
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
+          {v.trackingCode && (
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard?.writeText(v.trackingCode || '');
+                setCopiado(true);
+                window.setTimeout(() => setCopiado(false), 2000);
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-mono font-bold text-slate-700 hover:bg-slate-50"
+              title="Copiar rastreio pra mandar pra cliente"
+            >
+              <Copy className="w-3 h-3" />
+              {copiado ? 'copiado!' : v.trackingCode}
+            </button>
+          )}
+          {zap && (
+            <a
+              href={`https://wa.me/55${zap}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-700"
+            >
+              Falar com a cliente
+            </a>
+          )}
+        </div>
+      )}
+    </article>
   );
 }
 

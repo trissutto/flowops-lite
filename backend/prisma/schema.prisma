@@ -475,6 +475,9 @@ model Order {
   // Ficha do cliente no CRM busca as compras online por CPF (histórico
   // unificado, 10/08/2026). Sem este índice cada abertura de drawer varre a
   // tabela inteira de pedidos.
+  // Quem VENDEU online (tela "Vendi online" da loja, 18/08) — sem índice a
+  // consulta virava varredura da tabela de pedidos a cada 60s, por loja.
+  @@index([sellerStoreCode])
   @@index([customerCpf])
   @@index([personId])
   @@map("orders")
