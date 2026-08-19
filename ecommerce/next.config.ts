@@ -35,6 +35,10 @@ const nextConfig: NextConfig = {
       // domínio próprio, informe em R2_PUBLIC_HOST na Vercel (sem https://),
       // senão o next/image recusa a URL e o banner some da home.
       { protocol: 'https', hostname: '**.r2.dev' },
+      // Capa do vídeo do YouTube (o slide de vídeo da PDP). Sem este host o
+      // next/image RECUSA a URL e o slide vira quadro vazio — o vídeo estaria
+      // lá e ninguém veria o ▶.
+      { protocol: 'https', hostname: 'i.ytimg.com' },
       ...(process.env.R2_PUBLIC_HOST
         ? [{ protocol: 'https' as const, hostname: process.env.R2_PUBLIC_HOST }]
         : []),

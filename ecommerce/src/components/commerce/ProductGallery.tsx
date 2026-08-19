@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ZoomIn, ZoomOut, Check } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Play, ZoomIn, ZoomOut, Check } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
+import { youtubeCapa, youtubeEmbed } from '@/lib/youtube';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import type { Media, ProductBadge } from '@/types';
 
@@ -53,6 +54,91 @@ export interface GrupoDeCor {
    * cor e depois trocar de numero.
    */
   indisponivel?: boolean;
+}
+
+/**
+ * VÍDEO DA PEÇA — o último slide da galeria (19/08).
+ *
+ * O link é cadastrado POR COR na tela master e vinha sendo salvo desde então
+ * sem nada na página que o mostrasse. Entra aqui, junto das fotos, porque é
+ * onde a cliente já está olhando: no fim da página, com 81% que não rolam, o
+ * vídeo seria cadastrado pra ninguém.
+ */
+export interface VideoDaPeca {
+  /** Id do YouTube JÁ extraído — a galeria não conhece formato de URL. */
+  id: string;
+  /**
+   * A cor DE QUEM é o vídeo, quando não é a cor escolhida. Fica escrito sobre
+   * a capa pela mesma razão do aviso de foto ilustrativa: peça gravada em
+   * PRETO e comprada achando que era a VINHO volta como troca.
+   */
+  corDoVideo?: string | null;
+}
+
+/**
+ * O SLIDE DO VÍDEO — capa primeiro, player só no clique.
+ *
+ * O iframe do YouTube carrega ~700 KB e abre conexão com três domínios; posto
+ * junto com a página, disputa banda com a foto do produto, que é o LCP da
+ * PDP. Aqui o primeiro render leva só a capa (~15 KB) e o player nasce quando
+ * ela pede — e morre sozinho ao trocar de slide, porque o componente desmonta
+ * (é o que impede o som de continuar tocando atrás da foto).
+ */
+function VideoSlide({ id, corDoVideo, name }: VideoDaPeca & { name: string }) {
+  const [tocando, setTocando] = useState(false);
+
+  if (tocando) {
+    return (
+      /* O player OCUPA O QUADRO INTEIRO, e não um 16:9 centralizado.
+         O vídeo da loja é gravado no celular, em pé — o link que chegou na
+         primeira peça é um `/shorts/`. Num player 16:9 dentro de um quadro
+         3/4, um vídeo vertical vira uma tirinha no meio de duas barras
+         pretas. Ocupando tudo, o vertical enche a moldura e o horizontal
+         fica do mesmo tamanho que ficaria: a largura é a mesma, o YouTube só
+         desenha a borda por dentro. */
+      <div className="absolute inset-0 bg-ink">
+        <iframe
+          src={youtubeEmbed(id)}
+          title={`Vídeo de ${name}`}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+          className="absolute inset-0 size-full border-0"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setTocando(true)}
+      aria-label={`Ver o vídeo de ${name}`}
+      className="group absolute inset-0 flex items-center justify-center bg-ink"
+    >
+      <Image
+        src={youtubeCapa(id)}
+        alt=""
+        aria-hidden
+        fill
+        /* 640px fixo, e não a largura do quadro: a capa do YouTube tem 480px
+           de largura e ponto. Declarar `100vw` fazia o Next pedir w=2400 de
+           um arquivo que não tem — largura nova é transformação nova na
+           Vercel, paga pra devolver exatamente os mesmos 10 KB. */
+        sizes="640px"
+        placeholder="blur"
+        blurDataURL={BLUR_DATA_URL}
+        className="object-cover opacity-75 transition-opacity duration-500 group-hover:opacity-90"
+      />
+      <span className="relative flex size-16 items-center justify-center rounded-pill bg-surface/90 text-ink backdrop-blur transition-transform duration-300 group-hover:scale-105">
+        <Play className="size-6 translate-x-0.5 fill-current" strokeWidth={1.5} />
+      </span>
+      {corDoVideo && (
+        <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/85 to-transparent px-4 pt-8 pb-4 text-center text-small text-light">
+          Vídeo gravado na cor {corDoVideo}
+        </span>
+      )}
+    </button>
+  );
 }
 
 function ScrollableThumbnailRail({
@@ -148,6 +234,7 @@ export function ProductGallery({
   autoPlay = false,
   grupos,
   badges,
+  video,
 }: {
   images: Media[];
   name: string;
@@ -164,16 +251,32 @@ export function ProductGallery({
    * isso — fundo opaco e `backdrop-blur`.
    */
   badges?: ProductBadge[];
+  /** O vídeo da peça, quando a ficha da cor tem um. Vira o ÚLTIMO slide. */
+  video?: VideoDaPeca | null;
 }) {
   const [active, setActive] = useState(0);
   const [parado, setParado] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const safeImages = images.length > 0 ? images : [{ src: '', alt: name }];
-  const current = safeImages[active];
+  /**
+   * O vídeo fica FORA de `safeImages` de propósito: aquela lista alimenta o
+   * autoplay e a lupa, e nenhum dos dois faz sentido em vídeo. Aqui ele é só
+   * mais um índice — `total` é o que a cliente vê no contador.
+   */
+  const iVideo = video ? safeImages.length : -1;
+  const total = safeImages.length + (video ? 1 : 0);
+  const noVideo = active === iVideo;
+  /** Índice de vídeo não tem foto: sem isto, `current.src` quebra a página. */
+  const current = safeImages[active] ?? safeImages[0];
 
   function step(delta: number) {
     setZoomed(false);
-    setActive((i) => (i + delta + safeImages.length) % safeImages.length);
+    setActive((i) => (i + delta + total) % total);
+  }
+
+  function irPara(indice: number) {
+    setZoomed(false);
+    setActive(indice);
   }
 
   /**
@@ -188,7 +291,9 @@ export function ProductGallery({
   useEffect(() => {
     if (!autoPlay || parado || safeImages.length < 2) return;
     const timer = setInterval(() => {
-      setActive((i) => (i + 1) % safeImages.length);
+      // Só pelas FOTOS: carrossel que entra sozinho no vídeo tira a peça da
+      // frente de quem está passando o olho pra mostrar um botão de play.
+      setActive((i) => (i >= safeImages.length ? i : (i + 1) % safeImages.length));
     }, 4500);
     return () => clearInterval(timer);
   }, [autoPlay, parado, safeImages.length]);
@@ -201,7 +306,9 @@ export function ProductGallery({
     >
       {/* Foto principal */}
       <div className="relative aspect-3/4 flex-1 overflow-hidden rounded-lg bg-surface-alt">
-        {current.src ? (
+        {video && noVideo ? (
+          <VideoSlide id={video.id} corDoVideo={video.corDoVideo} name={name} />
+        ) : current.src ? (
           <motion.div
             key={current.src}
             initial={{ opacity: 0 }}
@@ -268,7 +375,8 @@ export function ProductGallery({
           </div>
         )}
 
-        {current.src && (
+        {/* Lupa nunca sobre o vídeo: ampliar iframe não amplia nada. */}
+        {current.src && !noVideo && (
           <button
             type="button"
             onClick={() => setZoomed((value) => !value)}
@@ -280,7 +388,27 @@ export function ProductGallery({
           </button>
         )}
 
-        {safeImages.length > 1 && (
+        {/* PORTA DE ENTRADA DO VÍDEO. Existe mesmo com o trilho mostrando
+            fotos, e é a ÚNICA em peça de várias cores: ali o trilho vira um
+            seletor de cor (uma miniatura por cor) e não lista foto nenhuma —
+            sem este botão o vídeo só apareceria pra quem clicasse a seta até
+            o fim. Canto de baixo à esquerda: o de cima é da lupa, o de cima à
+            direita dos selos, o de baixo à direita do contador. */}
+        {video && !noVideo && (
+          <button
+            type="button"
+            onClick={() => irPara(iVideo)}
+            /* Menor no celular: a foto ali tem 251px de largura e a pílula
+               de 116px comia quase metade dela. Os 44px de altura ficam —
+               é o alvo mínimo de toque. */
+            className="absolute bottom-3 left-3 z-[2] flex min-h-11 items-center gap-1.5 rounded-pill bg-surface/90 px-3 text-[0.6875rem] font-semibold text-ink backdrop-blur transition-colors hover:bg-surface sm:bottom-4 sm:left-4 sm:gap-2 sm:px-4 sm:text-small"
+          >
+            <Play className="size-4 fill-current" strokeWidth={1.5} />
+            Ver vídeo
+          </button>
+        )}
+
+        {total > 1 && (
           <>
             <button
               type="button"
@@ -299,7 +427,7 @@ export function ProductGallery({
               <ChevronRight className="size-4" strokeWidth={1.75} />
             </button>
             <span className="tabular absolute right-4 bottom-4 rounded-pill bg-ink/70 px-3 py-1 text-[0.625rem] text-light backdrop-blur">
-              {active + 1}/{safeImages.length}
+              {active + 1}/{total}
             </span>
           </>
         )}
@@ -377,9 +505,9 @@ export function ProductGallery({
             ))}
           </ScrollableThumbnailRail>
         </div>
-      ) : safeImages.length > 1 && (
+      ) : total > 1 && (
         <div className="relative w-14 shrink-0 lg:w-20">
-          <ScrollableThumbnailRail ariaLabel="Fotos do produto" hintLabel="Mais fotos" itemCount={safeImages.length}>
+          <ScrollableThumbnailRail ariaLabel="Fotos do produto" hintLabel="Mais fotos" itemCount={total}>
             {safeImages.map((image, index) => (
               <button
                 key={`${image.src}-${index}`}
@@ -412,6 +540,40 @@ export function ProductGallery({
                 )}
               </button>
             ))}
+
+            {/* O vídeo por último, com o ▶ na miniatura: sem a marca ele
+                pareceria mais uma foto e ninguém clicaria. */}
+            {video && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={noVideo}
+                aria-label="Ver o vídeo da peça"
+                onClick={() => irPara(iVideo)}
+                className={cn(
+                  'relative aspect-3/4 w-full shrink-0 overflow-hidden rounded-md border bg-ink transition-all duration-[320ms]',
+                  noVideo
+                    ? 'border-primary opacity-100'
+                    : 'border-transparent opacity-65 hover:opacity-100',
+                )}
+              >
+                <Image
+                  src={youtubeCapa(video.id)}
+                  alt=""
+                  aria-hidden
+                  fill
+                  sizes="80px"
+                  placeholder="blur"
+                  blurDataURL={BLUR_DATA_URL}
+                  className="object-cover opacity-70"
+                />
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <span className="flex size-7 items-center justify-center rounded-pill bg-surface/90 text-ink">
+                    <Play className="size-3 translate-x-px fill-current" strokeWidth={1.5} />
+                  </span>
+                </span>
+              </button>
+            )}
           </ScrollableThumbnailRail>
         </div>
       )}
