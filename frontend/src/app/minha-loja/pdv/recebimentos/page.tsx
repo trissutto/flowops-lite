@@ -115,6 +115,35 @@ function hiddenIframe(url: string) {
 }
 
 export default function RecebimentosPage() {
+  // ── Loja do recebimento ─────────────────────────────────────
+  // A baixa PRECISA de uma loja (o caixa dela recebe o valor). Vendedora tem
+  // a loja no JWT e o backend usa de lá. ADMIN não tem — e o backend devolve
+  // 400 "storeCode obrigatório pra admin" na hora (caso real 19/08: 3 cliques
+  // no PIX por LINK, 3 erros 400 em 4ms). Aqui carregamos o perfil e, quando
+  // o token não tem loja, mostramos um seletor e mandamos storeCode no body.
+  const [perfil, setPerfil] = useState<{ role: string; storeCode: string | null; storeName: string | null } | null>(null);
+  const [lojas, setLojas] = useState<Array<{ id: string; code: string; name: string }>>([]);
+  const [lojaEscolhida, setLojaEscolhida] = useState<string>('');
+  const precisaEscolherLoja = !!perfil && perfil.role !== 'store' && !perfil.storeCode;
+  const lojaSemVinculo = !!perfil && perfil.role === 'store' && !perfil.storeCode;
+  // Loja efetiva que vai no body das baixas (JWT primeiro; seletor pro admin)
+  const lojaDoRecebimento = perfil?.storeCode || lojaEscolhida || '';
+
+  function exigirLoja(): boolean {
+    if (perfil && !lojaDoRecebimento) {
+      // Volta pros botões de forma de pagamento (o clique seta `forma` antes
+      // de chamar aqui — sem o reset o modal ficava "travado" sem botões)
+      setForma(null);
+      alert(
+        lojaSemVinculo
+          ? 'Teu usuário está sem loja vinculada — pede pro admin corrigir o cadastro em Lojas.'
+          : 'Escolhe primeiro a LOJA do recebimento (seletor amarelo).',
+      );
+      return false;
+    }
+    return true;
+  }
+
   // Lista de clientes (carrega 1x)
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loadingClientes, setLoadingClientes] = useState(true);
@@ -165,6 +194,24 @@ export default function RecebimentosPage() {
   useEffect(() => {
     loadClientes();
     inputRef.current?.focus();
+    // Perfil: descobre se o token tem loja. Sem loja (admin no navegador),
+    // carrega a lista de lojas pro seletor e restaura a última escolhida.
+    (async () => {
+      try {
+        const me = await api<{ role: string; storeCode: string | null; storeName: string | null }>('/auth/me');
+        setPerfil({ role: me.role, storeCode: me.storeCode, storeName: me.storeName });
+        if (me.role !== 'store' && !me.storeCode) {
+          try {
+            const salva = localStorage.getItem('recebimentos_loja_admin');
+            if (salva) setLojaEscolhida(salva);
+          } catch {}
+          const ls = await api<Array<{ id: string; code: string; name: string }>>('/stores');
+          setLojas((ls || []).filter((s) => s.code).sort((a, b) => a.code.localeCompare(b.code)));
+        }
+      } catch {
+        /* sem perfil (token estranho) — segue como antes, backend valida */
+      }
+    })();
   }, []);
 
   // ── Filtro local ────────────────────────────────────────────
@@ -261,37 +308,41 @@ export default function RecebimentosPage() {
   const clienteAtual = clientes.find((c) => c.codCliente === expandedCod) || null;
 
   async function aplicarDinheiro() {
+    if (!exigirLoja()) return;
     setAplicando(true);
     try {
       const r = await api<{ baixaId: string }>('/crediarios/baixa/dinheiro', {
         method: 'POST',
         body: JSON.stringify({
           parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
+          storeCode: lojaDoRecebimento || undefined,
         }),
       });
       printReceipt(r.baixaId);
       finalizarTudo();
     } catch (e: any) {
-      alert('Erro ao registrar baixa: ' + (e?.message || e));
+      alert('Erro ao registrar baixa: ' + (e?.body?.message || e?.message || e));
     } finally {
       setAplicando(false);
     }
   }
 
   async function gerarPix() {
+    if (!exigirLoja()) return;
     setAplicando(true);
     try {
       const r = await api<PixCharge>('/crediarios/baixa/pix', {
         method: 'POST',
         body: JSON.stringify({
           parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
+          storeCode: lojaDoRecebimento || undefined,
           customerName: clienteAtual?.nome || undefined,
           customerPhone: clienteAtual?.telefone || undefined,
         }),
       });
       setPixCharge(r);
     } catch (e: any) {
-      alert('Erro ao gerar PIX: ' + (e?.message || e));
+      alert('Erro ao gerar PIX: ' + (e?.body?.message || e?.message || e));
     } finally {
       setAplicando(false);
     }
@@ -301,6 +352,7 @@ export default function RecebimentosPage() {
   // Backend cria 1 baixa única com formaPagamento='misto'. Parcelas só são
   // marcadas como pagas no Wincred quando o PIX confirma.
   async function gerarSplit() {
+    if (!exigirLoja()) return;
     const valorDinheiro = Math.round((Number((splitDinheiro || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
     const valorPix = Math.round((Number((splitPix || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
     if (valorDinheiro <= 0 || valorPix <= 0) {
@@ -320,25 +372,28 @@ export default function RecebimentosPage() {
           parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
           valorDinheiro,
           valorPix,
+          storeCode: lojaDoRecebimento || undefined,
           customerName: clienteAtual?.nome || undefined,
           customerPhone: clienteAtual?.telefone || undefined,
         }),
       });
       setPixCharge(r);
     } catch (e: any) {
-      alert('Erro ao gerar split: ' + (e?.message || e));
+      alert('Erro ao gerar split: ' + (e?.body?.message || e?.message || e));
     } finally {
       setAplicando(false);
     }
   }
 
   async function gerarPixLink() {
+    if (!exigirLoja()) return;
     setAplicando(true);
     try {
       const r = await api<PixCharge>('/crediarios/baixa/pix-link', {
         method: 'POST',
         body: JSON.stringify({
           parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
+          storeCode: lojaDoRecebimento || undefined,
           customerName: clienteAtual?.nome || undefined,
           customerPhone: clienteAtual?.telefone || undefined,
         }),
@@ -348,7 +403,7 @@ export default function RecebimentosPage() {
       setPixLinkUrl(url);
       setPixCharge(r); // pra polling reaproveitar
     } catch (e: any) {
-      alert('Erro ao gerar link PIX: ' + (e?.message || e));
+      alert('Erro ao gerar link PIX: ' + (e?.body?.message || e?.message || e));
     } finally {
       setAplicando(false);
     }
@@ -462,6 +517,39 @@ export default function RecebimentosPage() {
           </button>
         </div>
       </header>
+
+      {/* Admin sem loja no token: escolher a LOJA que recebe (vai pro caixa dela).
+          Sem isso o backend recusa a baixa (400 storeCode obrigatório). */}
+      {precisaEscolherLoja && (
+        <div className="bg-amber-50 border-b-2 border-amber-300">
+          <div className="max-w-4xl mx-auto px-4 py-2 flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-bold text-amber-900">Recebendo pela loja:</span>
+            <select
+              value={lojaEscolhida}
+              onChange={(e) => {
+                setLojaEscolhida(e.target.value);
+                try { localStorage.setItem('recebimentos_loja_admin', e.target.value); } catch {}
+              }}
+              className="px-3 py-1.5 rounded-lg border-2 border-amber-300 bg-white text-sm font-bold text-amber-900"
+            >
+              <option value="">— escolhe a loja —</option>
+              {lojas.map((l) => (
+                <option key={l.id} value={l.code}>{l.code} · {l.name}</option>
+              ))}
+            </select>
+            {!lojaEscolhida && (
+              <span className="text-xs text-amber-800">obrigatório pra registrar baixa / gerar PIX</span>
+            )}
+          </div>
+        </div>
+      )}
+      {lojaSemVinculo && (
+        <div className="bg-rose-50 border-b-2 border-rose-300">
+          <div className="max-w-4xl mx-auto px-4 py-2 text-sm font-bold text-rose-900">
+            Teu usuário está sem loja vinculada — recebimentos vão falhar. Pede pro admin corrigir o cadastro em Lojas.
+          </div>
+        </div>
+      )}
 
       <main className="max-w-4xl mx-auto w-full p-4 md:p-6">
         {loadingClientes && clientes.length === 0 && (
@@ -721,6 +809,26 @@ export default function RecebimentosPage() {
                   <span className="tabular-nums text-emerald-700">{brl(totalPago)}</span>
                 </div>
               </div>
+
+              {/* Admin sem loja: escolhe aqui mesmo, sem fechar o modal */}
+              {precisaEscolherLoja && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-amber-900">Loja do recebimento:</span>
+                  <select
+                    value={lojaEscolhida}
+                    onChange={(e) => {
+                      setLojaEscolhida(e.target.value);
+                      try { localStorage.setItem('recebimentos_loja_admin', e.target.value); } catch {}
+                    }}
+                    className="px-2 py-1 rounded-lg border-2 border-amber-300 bg-white text-sm font-bold text-amber-900 flex-1 min-w-[160px]"
+                  >
+                    <option value="">— escolhe a loja —</option>
+                    {lojas.map((l) => (
+                      <option key={l.id} value={l.code}>{l.code} · {l.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {!forma && !pixCharge && (
                 <>
