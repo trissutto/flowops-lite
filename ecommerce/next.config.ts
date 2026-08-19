@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next';
+import { redirectsLegado } from './redirects-legado';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -128,6 +129,90 @@ const nextConfig: NextConfig = {
       { source: '/meus-pedidos', destination: `${FLOWOPS}/meus-pedidos`, permanent: false },
       // Cadastro da live (a cliente se inscreve pra participar).
       { source: '/cadastro-live', destination: `${FLOWOPS}/cadastro-live`, permanent: false },
+
+      /**
+       * ── AS URLs DO SITE ANTIGO (WooCommerce) ──
+       *
+       * Ficam DEPOIS das regras acima de propósito: o Next usa a primeira que
+       * casa, e nenhuma delas pode ser atropelada por uma regra de museu.
+       *
+       * O mapa inteiro, com o porquê de cada destino, está em
+       * `redirects-legado.ts`. Resumo: produto não precisa de regra (o slug do
+       * WooCommerce já é o mesmo daqui), categoria precisa de mapa na mão, e
+       * `/tree` é uma ponte que o WordPress carregava e agora é nossa.
+       */
+      ...redirectsLegado,
+
+      /**
+       * ── O DOMÍNIO ANTIGO DESTA LOJA, DEPOIS DA VIRADA ──
+       *
+       * Quando `lurds.com.br` passar a servir esta loja, `lurdsplussize.com.br`
+       * vira endereço secundário — e o mesmo site em dois domínios é conteúdo
+       * duplicado, com o Google dividindo o sinal entre os dois.
+       *
+       * Sai por ÚLTIMO na lista porque as regras de caminho acima (pagamento
+       * da live, cadastro da live, PIX do crediário) precisam continuar
+       * resolvendo em UM pulo, no domínio em que a cliente clicou.
+       *
+       * ⚠️ LIGADO POR ENV, não por deploy. `VIRADA_LURDS=1` só entra depois que
+       * o DNS já aponta pra cá: ligar antes jogaria as clientes num domínio que
+       * ainda serve o WordPress. É o interruptor da virada — e desligar volta
+       * tudo sem precisar de build.
+       */
+      ...(process.env.VIRADA_LURDS === '1'
+        ? [
+            {
+              source: '/:caminho*',
+              has: [{ type: 'host' as const, value: 'www.lurdsplussize.com.br' }],
+              destination: `https://lurds.com.br/:caminho*`,
+              permanent: true,
+            },
+            {
+              source: '/:caminho*',
+              has: [{ type: 'host' as const, value: 'lurdsplussize.com.br' }],
+              destination: `https://lurds.com.br/:caminho*`,
+              permanent: true,
+            },
+          ]
+        : []),
+    ];
+  },
+
+  /**
+   * ── AS FOTOS QUE AINDA MORAM NO WORDPRESS ──
+   *
+   * 49 produtos ainda servem imagem de `lurds.com.br/wp-content/uploads/...`
+   * (medido no feed do Meta em 19/08/2026: 673 no R2, 49 aqui). Enquanto o
+   * domínio servia o WordPress isso funcionava sozinho. No segundo em que o
+   * DNS apontar pra Vercel, essas URLs passariam a bater aqui — e a peça
+   * ficaria sem foto no site E no catálogo de anúncio ao mesmo tempo.
+   *
+   * `rewrite` e não `redirect`: a URL continua sendo `lurds.com.br/wp-content/...`
+   * pra quem olha de fora, então o que o Google Imagens tem indexado segue
+   * valendo.
+   *
+   * ⚠️ O DESTINO É `www.lurds.com.br`, E ISSO NÃO É DESCUIDO.
+   *
+   * O servidor do WordPress faz vhost POR NOME: provado na origem
+   * (172.234.18.137) em 19/08/2026 — com `Host: lurds.com.br` ou
+   * `Host: www.lurds.com.br` a foto vem em 200; com qualquer outro nome ele
+   * devolve o 404 do vhost padrão. Um subdomínio novo (`legado.`) só
+   * funcionaria com override de cabeçalho Host, que na Cloudflare é recurso
+   * de plano Enterprise, ou com alias no cPanel.
+   *
+   * Por isso a virada move SÓ O APEX pra Vercel e deixa o `www` apontando pro
+   * WordPress: ele continua fazendo o 301 de www pro apex que já fazia (ou
+   * seja, página nenhuma fica presa no site velho), e os arquivos estáticos de
+   * `/wp-content` continuam sendo servidos direto pelo Apache, sem passar por
+   * redirect.
+   *
+   * É rede de segurança com prazo: quando as 49 fotos estiverem no R2, o `www`
+   * vai pra Vercel junto e este bloco inteiro sai.
+   */
+  async rewrites() {
+    const LEGADO = process.env.WP_LEGADO_URL || 'https://www.lurds.com.br';
+    return [
+      { source: '/wp-content/:caminho*', destination: `${LEGADO}/wp-content/:caminho*` },
     ];
   },
 };
