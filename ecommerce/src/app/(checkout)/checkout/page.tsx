@@ -548,10 +548,12 @@ export default function CheckoutPage() {
     step === n ? 'active' : hasData ? 'done' : 'locked';
 
   return (
-    <Container width="wide" className="py-8 lg:py-12">
+    /* py-4 no celular (era py-8): 32px de respiro que não cabiam mais no
+       orçamento da dobra — no desktop, onde sobra tela, o py-12 continua. */
+    <Container width="wide" className="py-4 lg:py-12">
       <h1 className="sr-only">Finalizar compra</h1>
 
-      <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start lg:gap-12">
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start lg:gap-12">
         {/* Resumo — primeiro no DOM de propósito: no mobile ele é o bloco
             colapsável do topo; no desktop o grid o coloca na coluna direita
             (sticky). Uma fonte, duas posições, zero duplicação. */}
@@ -749,8 +751,8 @@ export default function CheckoutPage() {
 /** Silhueta da página — mesmas larguras do layout final (zero salto). */
 function CheckoutSkeleton() {
   return (
-    <Container width="wide" className="py-8 lg:py-12">
-      <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start lg:gap-12">
+    <Container width="wide" className="py-4 lg:py-12">
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start lg:gap-12">
         <Skeleton className="h-14 rounded-md lg:col-start-2 lg:row-start-1 lg:h-[420px]" />
         <div className="flex flex-col gap-4 lg:col-start-1 lg:row-start-1">
           <Skeleton className="h-64 rounded-md" />

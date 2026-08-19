@@ -25,9 +25,26 @@
  */
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { acceptAll, getConsent, hydrateConsent, needsDecision, rejectAll, setConsent } from '@/lib/tracking/consent';
 
+/**
+ * O checkout é a ÚNICA tela onde o banner não aparece (19/08).
+ *
+ * O cartão tem 237px e fica `fixed` a 80px do pé — offset escolhido pra
+ * escapar da barra de compra da PDP. O checkout não tem barra nenhuma, então
+ * ele pousava em cheio sobre o campo CPF (y=564 num iPhone 15, banner de
+ * 418 a 654). E como 85% das sessões nunca decidem o cookie, a maioria das
+ * clientes chegava pra pagar com ele de pé.
+ *
+ * Consentimento nunca pode ser pedágio da compra — a mesma regra que em 14/08
+ * subiu o cartão 96px por causa da PDP. Aqui ela vai até o fim: no checkout
+ * ele some, e volta a pedir a decisão na próxima tela de loja.
+ */
+const ROTAS_SEM_BANNER = ['/checkout'];
+
 export function ConsentBanner() {
+  const pathname = usePathname();
   const [visivel, setVisivel] = useState(false);
   const [detalhes, setDetalhes] = useState(false);
   const [analytics, setAnalytics] = useState(false);
@@ -45,7 +62,10 @@ export function ConsentBanner() {
     setPersonalization(atual.personalization);
   }, []);
 
-  if (!visivel) return null;
+  const noCheckout = ROTAS_SEM_BANNER.some(
+    (rota) => pathname === rota || pathname?.startsWith(`${rota}/`),
+  );
+  if (!visivel || noCheckout) return null;
 
   const fechar = () => setVisivel(false);
 

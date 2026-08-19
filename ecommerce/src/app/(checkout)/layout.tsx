@@ -27,7 +27,10 @@ export default function CheckoutLayout({ children }: { children: React.ReactNode
   return (
     <div className="flex min-h-dvh flex-col bg-background">
       <header className="border-b border-border bg-surface">
-        <div className="relative mx-auto flex h-20 max-w-page items-center justify-center px-gutter lg:px-gutter-lg">
+        {/* h-14 no celular (era h-20 em toda tela): 24px que a barra do logo
+            tomava da dobra sem entregar nada além do próprio logo — o selo
+            "Compra segura" já é `hidden` abaixo de sm. */}
+        <div className="relative mx-auto flex h-14 max-w-page items-center justify-center px-gutter sm:h-20 lg:px-gutter-lg">
           <Logo variant="horizontal" />
           <span className="absolute right-gutter hidden items-center gap-2 text-small text-ink-muted sm:flex lg:right-gutter-lg">
             <LockKeyhole className="size-4 text-primary-strong" strokeWidth={1.5} />

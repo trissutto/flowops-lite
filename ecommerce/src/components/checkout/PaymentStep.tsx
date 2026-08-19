@@ -163,10 +163,13 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    /* gaps menores no celular (19/08): esta é a última etapa da página e a
+       única que diz COMO PAGAR — cada respiro aqui empurra os botões pra
+       fora da dobra. No desktop, onde sobra tela, o gap-6 continua. */
+    <div className="flex flex-col gap-4 sm:gap-6">
       {/* OS DADOS DA NOTA VÊM PRIMEIRO. CPF antes do e-mail, na ordem que o
           dono pediu. Sem eles, as abas abaixo não respondem. */}
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-4 sm:gap-5">
         <Input
           ref={cpfRef}
           label="CPF" inputMode="numeric" autoComplete="off" enterKeyHint="next"
@@ -220,7 +223,7 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
               aria-disabled={!liberado}
               onClick={() => pick(m)}
               className={cn(
-                'relative flex flex-col items-center gap-1.5 rounded-md border px-3 py-3.5 text-small font-medium transition-colors duration-[180ms]',
+                'relative flex flex-col items-center gap-1 rounded-md border px-3 py-3 text-small font-medium transition-colors duration-[180ms]',
                 !liberado && 'cursor-not-allowed opacity-45',
                 selected
                   ? 'border-primary bg-primary-wash text-ink'
@@ -228,15 +231,22 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
               )}
             >
               <Icon className="size-5 text-primary-strong" strokeWidth={1.5} />
-              {label}
               {/* O desconto subiu pra cá: ele é o argumento pra escolher PIX,
                   e ficava escondido num painel que só abria DEPOIS da
-                  escolha — quando já não servia pra decidir nada. */}
-              {m === 'pix' && (
-                <span className="eyebrow text-[0.5625rem] text-primary-strong">
-                  {PIX_DESCONTO_PCT}% off
-                </span>
-              )}
+                  escolha — quando já não servia pra decidir nada.
+
+                  Desde 19/08 ele fica na MESMA linha do rótulo em vez de numa
+                  terceira linha: o tile caía de 98px pra ~74px sem esconder o
+                  argumento, e cada pixel aqui é pixel de dobra — este era o
+                  último bloco da tela e o único que diz COMO PAGAR. */}
+              <span className="flex items-baseline gap-1.5">
+                {label}
+                {m === 'pix' && (
+                  <span className="eyebrow text-[0.5625rem] text-primary-strong">
+                    {PIX_DESCONTO_PCT}% off
+                  </span>
+                )}
+              </span>
             </button>
           );
         })}
