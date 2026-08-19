@@ -111,13 +111,17 @@ export class CorreiosService {
    */
   async calcularFrete(input: {
     cepDestino: string;
+    /** CEP de ORIGEM (loja remetente). Sem ele, cai no CEP da env (matriz). */
+    cepOrigem?: string;
     pesoGramas?: number;
     comprimento?: number;
     largura?: number;
     altura?: number;
+    /** Só cota estes serviços (ex.: ['SEDEX']). Default: todos. */
+    servicos?: Array<'PAC' | 'SEDEX'>;
   }) {
     const cepDestino = String(input.cepDestino || '').replace(/\D/g, '');
-    const cepOrigem = this.auth.cepOrigem;
+    const cepOrigem = String(input.cepOrigem || '').replace(/\D/g, '') || this.auth.cepOrigem;
     if (cepDestino.length !== 8) throw new BadRequestException('CEP destino inválido (8 dígitos).');
     if (cepOrigem.length !== 8) throw new BadRequestException('CEP de origem não configurado (CORREIOS_CEP_ORIGEM).');
 
@@ -143,7 +147,8 @@ export class CorreiosService {
       erro?: string; raw?: any;
     }> = [];
 
-    for (const s of this.servicos) {
+    const lista = input.servicos?.length ? this.servicos.filter((x) => input.servicos!.includes(x.nome as any)) : this.servicos;
+    for (const s of lista) {
       let precoReais: number | null = null;
       let precoComSeguro: number | null = null;
       let prazoDias: number | null = null;
@@ -310,15 +315,46 @@ export class CorreiosService {
         const msg = resp.data?.msgs?.join('; ') || resp.data?.message || `HTTP ${resp.status}`;
         throw new BadRequestException(`Correios recusou a pré-postagem: ${msg}`);
       }
+      // CUSTO do envio (tela Gestão › Frete): a pré-postagem não devolve
+      // preço, então cota o MESMO serviço/caixa/peso a partir do CEP do
+      // remetente — é o pcFinal que a fatura dos Correios vai cobrar da loja.
+      // Best-effort: falha na cotação NUNCA derruba a etiqueta já criada.
+      const precoReais = await this.cotarCustoEnvio({
+        servico: input.servico, cepOrigem: input.remetente.cep, cepDestino: input.destinatario.cep,
+        pesoGramas: input.pesoGramas, comprimento: input.comprimento, largura: input.largura, altura: input.altura,
+      });
       return {
         ok: true,
         idPrepostagem: resp.data?.id ?? resp.data?.idPrePostagem ?? null,
         codigoRastreio: resp.data?.codigoObjeto ?? resp.data?.codigoRastreio ?? null,
+        precoReais,
         raw: resp.data,
       };
     } catch (e: any) {
       if (e instanceof BadRequestException) throw e;
       throw new BadRequestException(`Falha ao criar pré-postagem: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * Cota o custo de UM serviço (origem→destino) e devolve só o preço em reais
+   * (pcFinal). Null se a API falhar — quem chama decide o que fazer.
+   */
+  async cotarCustoEnvio(input: {
+    servico: 'PAC' | 'SEDEX'; cepOrigem?: string; cepDestino: string;
+    pesoGramas?: number; comprimento?: number; largura?: number; altura?: number;
+  }): Promise<number | null> {
+    try {
+      const cot = await this.calcularFrete({
+        cepDestino: input.cepDestino, cepOrigem: input.cepOrigem, pesoGramas: input.pesoGramas,
+        comprimento: input.comprimento, largura: input.largura, altura: input.altura, servicos: [input.servico],
+      });
+      const op = (cot.opcoes || []).find((o) => o.servico === input.servico);
+      const v = op?.precoReais;
+      return v != null && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null;
+    } catch (e: any) {
+      this.logger.warn(`[frete] cotação do custo falhou (${input.servico} →${input.cepDestino}): ${e?.message || e}`);
+      return null;
     }
   }
 

@@ -41,6 +41,7 @@ import { CarrinhosAbandonadosModule } from './carrinhos-abandonados/carrinhos-ab
 import { EtiquetaConfigModule } from './etiqueta-config/etiqueta-config.module';
 import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
+import { FreteModule } from './frete/frete.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { NfeModule } from './nfe/nfe.module';
@@ -191,6 +192,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     AccessPolicyModule,
     OperadorPinModule,
     ReportsModule,
+    FreteModule,
     TelemetriaModule,
     SiteMetricsModule,
   ],

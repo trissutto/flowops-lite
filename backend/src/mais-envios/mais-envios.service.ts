@@ -271,6 +271,8 @@ export class MaisEnviosService {
       ok: true,
       tag: String(tag),
       idPrepostagem: d2.id ?? d2.data?.id ?? null,
+      // CUSTO do envio (tela Gestão › Frete) = o pricetable cotado acima.
+      precoReais: pricetable > 0 ? pricetable : null,
       raw: d2,
     };
   }

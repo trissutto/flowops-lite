@@ -368,6 +368,10 @@ export class PickOrdersService {
         correiosGeneratedAt: new Date(),
         // Etiqueta baixada AGORA (na geração funciona) — reimpressão usa daqui
         ...(r.etiquetaPdf ? { etiquetaPdf: String(r.etiquetaPdf) } : {}),
+        // CUSTO do envio (Gestão › Frete): preço cotado junto da etiqueta.
+        ...(r.precoReais != null && Number(r.precoReais) > 0
+          ? { fretePagoCents: Math.round(Number(r.precoReais) * 100), fretePagoOrigem: 'cotacao', fretePagoEm: new Date() }
+          : {}),
       },
     });
 
@@ -646,7 +650,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf, precoReais: resp.precoReais ?? null };
   }
 
   /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
@@ -708,7 +712,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf, precoReais: resp.precoReais ?? null };
   }
 
   /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */
@@ -785,6 +789,7 @@ export class PickOrdersService {
     if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);
     return {
       codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Correios ${servico}`,
+      precoReais: resp.precoReais ?? null,
       // Destinatário já normalizado (CEP-authoritative) pra DC-e usar o MESMO endereço da etiqueta
       destDce: {
         nome: order.customerName || 'Cliente',

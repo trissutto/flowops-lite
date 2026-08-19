@@ -316,6 +316,10 @@ model RealignmentShipment {
   carrier               String?
   correiosPrepostagemId String?   @map("correios_prepostagem_id")
   envioGeneratedAt      DateTime? @map("envio_generated_at")
+  // Custo do SEDEX da remessa (mesma semântica de PickOrder.fretePago*)
+  fretePagoCents        Int?      @map("frete_pago_cents")
+  fretePagoOrigem       String?   @map("frete_pago_origem")
+  fretePagoEm           DateTime? @map("frete_pago_em")
   // Meio de transporte da remessa: 'correios' | 'proprio'. Null = regra
   // automática (até 10 peças → correios; acima → próprio). Dono 29/07.
   transportMode         String?   @map("transport_mode")
@@ -850,6 +854,14 @@ model PickOrder {
   // o pedido FICA na lista da loja (aguardando postagem).
   correiosPrepostagemId String?   @map("correios_prepostagem_id")
   correiosGeneratedAt   DateTime? @map("correios_generated_at")
+  // ── CUSTO do frete (tela Gestão › Frete, 19/08) ──
+  // fretePagoCents = o que a LOJA paga ao transportador (Correios pcFinal /
+  // Mais Envios pricetable), capturado na geração da etiqueta (origem
+  // 'cotacao'). Envio antigo sem valor pode ser recotado depois (origem
+  // 'recotacao' = preço de HOJE, estimado) ou digitado da fatura ('manual').
+  fretePagoCents        Int?      @map("frete_pago_cents")
+  fretePagoOrigem       String?   @map("frete_pago_origem")
+  fretePagoEm           DateTime? @map("frete_pago_em")
   // PDF da etiqueta (base64) capturado NA GERAÇÃO do envio — a reimpressão
   // usa isso e não depende de re-baixar da API do provedor (Mais Envios
   // falha/atrasa no re-print; 28/07)

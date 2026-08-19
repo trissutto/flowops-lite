@@ -353,7 +353,7 @@ export class RemessaEnvioService {
         itens: itensDeclaracao.map((i) => ({ conteudo: i.conteudo, quantidade: Number(i.quantidade) || 1 })),
       });
       if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou a remessa: ${resp?.erro || 'sem tag'}`);
-      r = { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, carrier: 'Mais Envios SEDEX', etiquetaPdf: null };
+      r = { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, carrier: 'Mais Envios SEDEX', etiquetaPdf: null, precoReais: resp.precoReais ?? null };
       try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) r.etiquetaPdf = et.pdfBase64; } catch { /* opcional */ }
     } else {
       const resp: any = await this.correios.criarPrepostagem({
@@ -372,7 +372,7 @@ export class RemessaEnvioService {
         itensDeclaracao,
       });
       if (!resp?.ok) throw new BadRequestException(`Correios recusou a remessa: ${resp?.erro || 'erro'}`);
-      r = { codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, carrier: 'Correios SEDEX', etiquetaPdf: null };
+      r = { codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, carrier: 'Correios SEDEX', etiquetaPdf: null, precoReais: resp.precoReais ?? null };
     }
 
     await this.prisma.realignmentShipment.update({
@@ -382,6 +382,10 @@ export class RemessaEnvioService {
         carrier: r.carrier,
         correiosPrepostagemId: r.idPrepostagem ? String(r.idPrepostagem) : null,
         envioGeneratedAt: new Date(),
+        // CUSTO do SEDEX (Gestão › Frete): preço cotado junto da etiqueta.
+        ...(r.precoReais != null && Number(r.precoReais) > 0
+          ? { fretePagoCents: Math.round(Number(r.precoReais) * 100), fretePagoOrigem: 'cotacao', fretePagoEm: new Date() }
+          : {}),
       },
     });
     this.logger.log(`[remessa-envio] ${shipment.code}: ${r.carrier} ${r.codigoRastreio} (NF-e ${doc.numero}, chave ...${chave.slice(-8)})`);

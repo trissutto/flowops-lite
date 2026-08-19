@@ -157,7 +157,7 @@ export class LivePdvService {
     if (rastreio) {
       await (this.prisma as any).livePdvItem.updateMany({ where: { cartId }, data: { trackingCode: rastreio } });
     }
-    return { ok: true, codigoRastreio: rastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, pesoGramas, totalPecas };
+    return { ok: true, codigoRastreio: rastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, pesoGramas, totalPecas, precoReais: resp.precoReais ?? null };
   }
 
   /** FILTRO DE LIVE (13/07, decisão do dono): a live é SÓ plus size feminino.

@@ -74,6 +74,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/editor-produtos',      label: 'Editor Produtos',   subtitle: 'Padronizar',    description: 'REF, preço e descrição em bloco', tone: 'amber', icon: Package         },
   { href: '/retaguarda/conferidor-estoque',   label: 'Conferir Estoque',  subtitle: 'Flow × Giga',  description: 'Lista só o que diverge entre os dois', tone: 'amber', icon: Package         },
   { href: '/retaguarda/remessas',             label: 'Remessas',          subtitle: 'Em trânsito',   description: 'Caixas + comprovantes PDF',     tone: 'sky',    icon: Truck           },
+  { href: '/retaguarda/frete',                label: 'Frete',             subtitle: 'Cobrado × pago', description: 'SEDEX/PAC pra clientes e entre lojas', tone: 'sky', icon: Truck       },
   { href: '/retaguarda/correios',             label: 'Correios',          subtitle: 'Envios',        description: 'Frete + pré-postagem (diagnóstico)', tone: 'sky', icon: Truck           },
   { href: '/retaguarda/mais-envios',          label: 'Mais Envios',       subtitle: 'Envios',        description: 'Frete + descoberta de conta (diagnóstico)', tone: 'purple', icon: Truck   },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',     subtitle: 'Criar',         description: 'Rebalancear estoque',           tone: 'amber',  icon: Shuffle         },
