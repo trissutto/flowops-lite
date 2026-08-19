@@ -5,6 +5,7 @@ import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
+import { youtubeId } from '@/lib/youtube';
 import type { CorApi, PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
@@ -135,6 +136,27 @@ export function EscolhaDaPeca({
     }));
   }, [cores, corAtual, tamanho]);
 
+  /**
+   * VÍDEO DA PEÇA — último slide da galeria (19/08).
+   *
+   * O campo "Vídeo (YouTube)" existe na tela master desde sempre e é POR COR;
+   * o backend já mandava o link em `cores[].youtubeUrl` e a página
+   * simplesmente não tinha onde mostrar — cadastrava e não aparecia.
+   *
+   * ORDEM: o vídeo da cor escolhida ganha. Não tendo, vale o de QUALQUER cor
+   * da peça — a peça é a mesma e o caimento é o que a cliente quer ver — mas
+   * então a capa diz de qual cor ele é. Vídeo de outra cor sem esse aviso é a
+   * mesma armadilha da foto ilustrativa: ela compra achando que a cor é
+   * aquela e a peça volta como troca.
+   */
+  const video = useMemo(() => {
+    const daEscolhida = youtubeId(corAtual?.youtubeUrl);
+    if (daEscolhida) return { id: daEscolhida, corDoVideo: null };
+    const outra = cores.find((c) => c.nome !== corAtual?.nome && youtubeId(c.youtubeUrl));
+    const id = youtubeId(outra?.youtubeUrl);
+    return id ? { id, corDoVideo: outra!.nomeAmigavel || outra!.nome } : null;
+  }, [cores, corAtual]);
+
   /** Cor sem foto própria: mostra a das outras, mas AVISA — senão vira troca. */
   const fotoIlustrativa = !!corAtual && corAtual.fotos.length === 0 && galeria.length > 0;
 
@@ -191,6 +213,7 @@ export function EscolhaDaPeca({
           autoPlay
           grupos={grupos}
           badges={pecaDaCor.badges}
+          video={video}
         />
         {fotoIlustrativa && (
           <p className="mt-3 text-small text-ink-muted">
