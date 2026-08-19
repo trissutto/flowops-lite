@@ -45,6 +45,12 @@ export class AvaliacoesController {
     return this.svc.criar(req.customer.id, body || {});
   }
 
+  /** POST /resgatar — { pontos } vira um cupom nominal, só do CPF dela. */
+  @Post('resgatar')
+  async resgatar(@Req() req: any, @Body() body: any) {
+    return this.svc.resgatar(req.customer.id, Number(body?.pontos) || 0);
+  }
+
   /**
    * POST /foto — sobe UMA foto e devolve a URL.
    *

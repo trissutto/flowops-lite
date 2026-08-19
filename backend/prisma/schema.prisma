@@ -470,6 +470,9 @@ model Order {
   items      OrderItem[]
   pickOrders PickOrder[]
   history    OrderHistory[]
+  // Convite de avaliacao pos-venda (D+5 da entrega). A LINHA e a marca: pedido
+  // entregue SEM convite ainda nao foi chamado pra avaliar.
+  avaliacaoConvite AvaliacaoConvite?
   seller     Seller? @relation(fields: [sellerId], references: [id])
   person     Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
@@ -7511,4 +7514,52 @@ model CustomerPointsTx {
 
   @@index([accountId, createdAt])
   @@map("customer_points_tx")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// O CONVITE PRA AVALIAR — o que faltava pra fila de avaliação encher
+//
+// O centro de avaliação (`/conta/avaliacoes`) existe e funciona, mas ele é
+// PASSIVO: só descobre a fila quem entra na conta. A maioria das clientes
+// compra como visitante e não volta ao site depois de receber a peça — a
+// avaliação ficava esperando alguém aparecer.
+//
+// Este convite é o toque ativo: no 5º dia depois da ENTREGA CONFIRMADA pelo
+// rastreio, a cliente recebe um link no WhatsApp que abre o mesmo formulário
+// SEM LOGIN. O token é a credencial; quem tem o link tem aquele pedido, e nada
+// além dele.
+//
+// A LINHA É A MARCA: pedido entregue SEM convite é pedido que ninguém chamou.
+// Sem isso, "ninguém avalia" e "ninguém foi convidado" viram o mesmo silêncio —
+// e são problemas opostos (um é de mensagem, o outro é de produto).
+// ═══════════════════════════════════════════════════════════════════════
+model AvaliacaoConvite {
+  id           String    @id @default(uuid())
+  orderId      String    @unique @map("order_id")
+  /// Token do link (aleatório, 32+ chars). É a única credencial da página.
+  token        String    @unique @db.VarChar(64)
+  /// CPF da cliente — é por ele que o convite acha (ou cria) a conta do site
+  /// na hora de gravar a avaliação. Sem CPF o link ainda abre e pergunta.
+  cpf          String?   @db.VarChar(11)
+  telefone     String?   @db.VarChar(20)
+  nomeCliente  String?   @map("nome_cliente") @db.VarChar(120)
+  /// Quando a transportadora confirmou a entrega (o marco zero do D+5).
+  entregueEm   DateTime? @map("entregue_em")
+  enviadoEm    DateTime? @map("enviado_em")
+  /// whatsapp | manual — de onde saiu o toque, pra medir o que funciona.
+  canal        String?   @db.VarChar(16)
+  /// Reenvios feitos pela retaguarda. Teto na service — insistir vira spam.
+  tentativas   Int       @default(0)
+  abertoEm     DateTime? @map("aberto_em")
+  respondidoEm DateTime? @map("respondido_em")
+  expiraEm     DateTime  @map("expira_em")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// A fila do cron e a lista da retaguarda leem por estes dois.
+  @@index([enviadoEm])
+  @@index([respondidoEm])
+  @@map("avaliacao_convites")
 }
