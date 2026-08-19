@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
 import { PreferenciasLgpd } from '@/components/conta/PreferenciasLgpd';
@@ -37,10 +36,8 @@ export default async function MeusDadosPage() {
   if (!cliente) {
     return (
       <Section space="lg">
-        <Container>
-          <h1 className="mb-8 text-center text-h2">Meus dados</h1>
-          <AcessoConta voltarPara="/conta/dados" />
-        </Container>
+        <h1 className="mb-8 text-center text-h2">Meus dados</h1>
+        <AcessoConta voltarPara="/conta/dados" />
       </Section>
     );
   }
@@ -54,36 +51,34 @@ export default async function MeusDadosPage() {
 
   return (
     <Section space="lg">
-      <Container>
-        <header className="mb-8">
-          <p className="eyebrow text-muted">
-            <Link href="/conta" className="link-underline">Minha conta</Link>
-          </p>
-          <h1 className="text-h2">Meus dados</h1>
-        </header>
-
-        <dl className="divide-y divide-border border-y border-border">
-          {campos.map(([rotulo, valor]) => (
-            <div key={rotulo} className="flex items-baseline justify-between gap-4 py-4">
-              <dt className="text-small text-muted">{rotulo}</dt>
-              <dd className="text-body">{valor}</dd>
-            </div>
-          ))}
-        </dl>
-
-        <h2 className="mt-10 mb-3 text-h4">O que você quer receber</h2>
-        <PreferenciasLgpd />
-
-        <h2 className="mt-10 mb-3 text-h4">Seus direitos</h2>
-        <p className="text-body text-muted">
-          Você pode pedir uma cópia dos seus dados ou apagar sua conta quando quiser.
-          Fale com a gente em{' '}
-          <a href="mailto:privacidade@lurdsplussize.com.br" className="link-underline text-ink">
-            privacidade@lurdsplussize.com.br
-          </a>{' '}
-          — respondemos em até 15 dias.
+      <header className="mb-8">
+        <p className="eyebrow text-ink-muted">
+          <Link href="/conta" className="link-underline">Minha conta</Link>
         </p>
-      </Container>
+        <h1 className="text-h2">Meus dados</h1>
+      </header>
+
+      <dl className="divide-y divide-border border-y border-border">
+        {campos.map(([rotulo, valor]) => (
+          <div key={rotulo} className="flex items-baseline justify-between gap-4 py-4">
+            <dt className="text-small text-ink-muted">{rotulo}</dt>
+            <dd className="text-body">{valor}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <h2 className="mt-10 mb-3 text-h4">O que você quer receber</h2>
+      <PreferenciasLgpd />
+
+      <h2 className="mt-10 mb-3 text-h4">Seus direitos</h2>
+      <p className="text-body text-ink-muted">
+        Você pode pedir uma cópia dos seus dados ou apagar sua conta quando quiser.
+        Fale com a gente em{' '}
+        <a href="mailto:privacidade@lurdsplussize.com.br" className="link-underline text-ink">
+          privacidade@lurdsplussize.com.br
+        </a>{' '}
+        — respondemos em até 15 dias.
+      </p>
     </Section>
   );
 }

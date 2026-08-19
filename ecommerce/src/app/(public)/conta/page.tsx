@@ -1,10 +1,10 @@
 import Link from 'next/link';
-import { Package, MapPin, Wallet, Heart, RefreshCw, ShieldCheck, LogOut } from 'lucide-react';
-import { Container } from '@/components/layout/Container';
+import { Package, MapPin, Wallet, Heart, RefreshCw, ShieldCheck, LogOut, Star } from 'lucide-react';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
 import { SairDaConta } from '@/components/conta/SairDaConta';
-import { getClienteLogada } from '@/lib/conta';
+import { BarraTarefas, type BlocoDaConta } from '@/components/conta/BarraTarefas';
+import { comoCliente, getClienteLogada } from '@/lib/conta';
 import { buildMetadata } from '@/lib/seo';
 
 /**
@@ -13,6 +13,9 @@ import { buildMetadata } from '@/lib/seo';
  * Não existe base de clientes do site: o CRM do FlowOps é a base, e o login
  * é por CPF. Quem já comprou na loja entra com o CPF que já está lá e vê o
  * histórico junto. Ver [[clientes-pessoa-vs-cadastro]].
+ *
+ * A tela abre pela BARRA DE PENDÊNCIAS — o que está esperando por ela — e só
+ * depois pelo menu. Ver `BarraTarefas`.
  */
 
 export const metadata = buildMetadata({
@@ -29,17 +32,24 @@ export default async function ContaPage() {
   if (!cliente) {
     return (
       <Section space="lg">
-        <Container>
-          <h1 className="mb-8 text-center text-h2">Minha conta</h1>
-          <AcessoConta />
-        </Container>
+        <h1 className="mb-8 text-center text-h2">Minha conta</h1>
+        <AcessoConta />
       </Section>
     );
   }
 
+  // A barra é um bônus da tela, não a tela: se o resumo falhar, a conta abre
+  // do mesmo jeito com o menu. Contador é sempre o primeiro que pode faltar.
+  const resumo = await comoCliente<{ blocos: BlocoDaConta[] }>('/customers/app/resumo').catch(
+    () => null,
+  );
+
   const primeiroNome = String(cliente.name || '').split(' ')[0] || 'Bem-vinda';
   const atalhos = [
     { href: '/conta/pedidos', icon: Package, titulo: 'Meus pedidos', texto: 'Acompanhe e rastreie o que você comprou' },
+    // Avaliar é atalho fixo, e não só bloco da barra: o programa de pontos
+    // precisa de uma porta que continue existindo com a fila zerada.
+    { href: '/conta/avaliacoes', icon: Star, titulo: 'Avaliar peças', texto: 'Conte como serviu e ganhe pontos' },
     // O saldo já era creditado a cada compra e nunca teve tela: cashback que a
     // cliente não vê não muda comportamento nenhum — é custo sem retorno.
     { href: '/conta/cashback', icon: Wallet, titulo: 'Meu cashback', texto: 'Seu saldo e de onde ele veio' },
@@ -51,31 +61,35 @@ export default async function ContaPage() {
 
   return (
     <Section space="lg">
-      <Container>
-        <header className="mb-10">
-          <p className="eyebrow text-muted">Minha conta</p>
-          <h1 className="text-h2">Olá, {primeiroNome}</h1>
-        </header>
+      <header className="mb-6">
+        <p className="eyebrow text-ink-muted">Minha conta</p>
+        <h1 className="text-h2">Olá, {primeiroNome}</h1>
+      </header>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          {atalhos.map(({ href, icon: Icone, titulo, texto }) => (
-            <Link
-              key={href}
-              href={href}
-              className="group rounded-sm border border-border p-6 transition-colors hover:border-primary"
-            >
-              <Icone className="mb-3 size-5 text-primary" strokeWidth={1.5} />
-              <p className="text-body font-medium">{titulo}</p>
-              <p className="mt-1 text-small text-muted">{texto}</p>
-            </Link>
-          ))}
+      {resumo?.blocos?.length ? (
+        <div className="mb-10">
+          <BarraTarefas blocos={resumo.blocos} />
         </div>
+      ) : null}
 
-        <div className="mt-10 flex items-center gap-2 text-small text-muted">
-          <LogOut className="size-4" strokeWidth={1.5} />
-          <SairDaConta />
-        </div>
-      </Container>
+      <div className="grid gap-4 sm:grid-cols-3">
+        {atalhos.map(({ href, icon: Icone, titulo, texto }) => (
+          <Link
+            key={href}
+            href={href}
+            className="group rounded-sm border border-border p-6 transition-colors hover:border-primary"
+          >
+            <Icone className="mb-3 size-5 text-primary" strokeWidth={1.5} />
+            <p className="text-body font-medium">{titulo}</p>
+            <p className="mt-1 text-small text-ink-muted">{texto}</p>
+          </Link>
+        ))}
+      </div>
+
+      <div className="mt-10 flex items-center gap-2 text-small text-ink-muted">
+        <LogOut className="size-4" strokeWidth={1.5} />
+        <SairDaConta />
+      </div>
     </Section>
   );
 }

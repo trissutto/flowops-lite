@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
 import { comoCliente } from '@/lib/conta';
@@ -50,10 +49,8 @@ export default async function EnderecosPage() {
   if (dados === null) {
     return (
       <Section space="lg">
-        <Container>
-          <h1 className="mb-8 text-center text-h2">Meus endereços</h1>
-          <AcessoConta voltarPara="/conta/enderecos" />
-        </Container>
+        <h1 className="mb-8 text-center text-h2">Meus endereços</h1>
+        <AcessoConta voltarPara="/conta/enderecos" />
       </Section>
     );
   }
@@ -62,32 +59,30 @@ export default async function EnderecosPage() {
 
   return (
     <Section space="lg">
-      <Container>
-        <header className="mb-8">
-          <p className="eyebrow text-muted">
-            <Link href="/conta" className="link-underline">Minha conta</Link>
-          </p>
-          <h1 className="text-h2">Meus endereços</h1>
-        </header>
+      <header className="mb-8">
+        <p className="eyebrow text-ink-muted">
+          <Link href="/conta" className="link-underline">Minha conta</Link>
+        </p>
+        <h1 className="text-h2">Meus endereços</h1>
+      </header>
 
-        {enderecos.length === 0 ? (
-          <p className="text-body text-muted">
-            Nenhum endereço guardado ainda — o primeiro é salvo quando você fecha um pedido.
-          </p>
-        ) : (
-          <ul className="divide-y divide-border border-y border-border">
-            {enderecos.map((e) => (
-              <li key={e.id} className="py-5">
-                <p className="text-body">
-                  {e.label || 'Endereço'}
-                  {e.isPrimary && <span className="ml-2 text-small text-primary">principal</span>}
-                </p>
-                <p className="text-small text-muted">{linha(e)}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Container>
+      {enderecos.length === 0 ? (
+        <p className="text-body text-ink-muted">
+          Nenhum endereço guardado ainda — o primeiro é salvo quando você fecha um pedido.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border border-y border-border">
+          {enderecos.map((e) => (
+            <li key={e.id} className="py-5">
+              <p className="text-body">
+                {e.label || 'Endereço'}
+                {e.isPrimary && <span className="ml-2 text-small text-primary">principal</span>}
+              </p>
+              <p className="text-small text-ink-muted">{linha(e)}</p>
+            </li>
+          ))}
+        </ul>
+      )}
     </Section>
   );
 }
