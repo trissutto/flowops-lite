@@ -1,6 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AtributosPecaService } from '../atributos-peca/atributos-peca.service';
+import { LojaCatalogService } from '../loja-catalog/loja-catalog.service';
+import { avisarVitrine } from '../common/avisar-vitrine';
 import { refBaseOf, refsDeBusca } from '../common/ref-base';
 
 /**
@@ -69,10 +71,37 @@ export interface FaltaDaFicha {
 
 @Injectable()
 export class ProdutoFichaService {
+  private readonly logger = new Logger(ProdutoFichaService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly atributos: AtributosPecaService,
+    private readonly catalogo: LojaCatalogService,
   ) {}
+
+  /**
+   * O SITE PRECISA SABER NA HORA (19/08/2026).
+   *
+   * A tela master é a porta pela qual a peça entra e sai do site, e nada aqui
+   * avisava ninguém: o catálogo do backend tem cache de 60s e a borda do site
+   * revalida sozinha em 60-300s. Quem marcava "fora do site", salvava e
+   * conferia no mesmo minuto via a peça no ar e concluía que não tinha
+   * salvado — foi exatamente o relato do dono em 19/08 (a 701501 saiu, mas só
+   * depois). Mesma cura da tela de cores (`coresSemFotoRecarregar`): derruba o
+   * cache do backend e avisa a vitrine.
+   *
+   * O aviso pra vitrine é uma chamada de rede, então só sai quando a
+   * PUBLICAÇÃO muda — que é o que a cliente vê. Título e bolinha derrubam só o
+   * cache daqui e chegam no site na revalidação normal; sem isso, arrastar o
+   * conta-gotas (que salva sozinho, com debounce) viraria uma rajada de
+   * revalidações no site inteiro.
+   */
+  private aposEditar(mudouPublicacao: boolean) {
+    this.catalogo.invalidarCache();
+    if (mudouPublicacao) {
+      avisarVitrine(['catalogo', 'categorias', 'filtros', 'vitrine'], this.logger, 'produto-ficha');
+    }
+  }
 
   /**
    * FILA DE TRABALHO DA FICHA (item 24 de docs/MELHORIAS-SITE.md).
@@ -298,6 +327,34 @@ export class ProdutoFichaService {
     return { ref: r, marca: m };
   }
 
+  /**
+   * MARCA VAZIA E "SEM MARCA" SÃO A MESMA PEÇA (19/08/2026).
+   *
+   * Peça sem marca no ERP recebe dois nomes de chave, dependendo de quem
+   * grava primeiro: o importador de fotos escreve marca VAZIA
+   * (`wc-fotos-import`) e a tela master escreve "SEM MARCA" (a tela mostra
+   * `row.marca || 'SEM MARCA'` e manda isso de volta). Eram 62 REFs com ficha
+   * de marca vazia na produção. Duas fichas pra mesma REF fazem a edição da
+   * retaguarda cair numa linha e a vitrine ler a outra — foi assim que a
+   * 350842/CHOCOLATE ficou marcada "fora do site" e seguiu à venda.
+   *
+   * Aqui a tela ADOTA a ficha que já existe em vez de criar a segunda. Só
+   * vale pro par vazio/"SEM MARCA": marca de verdade continua separando peça
+   * de fornecedores diferentes, que é pra isso que ela está na chave.
+   */
+  private async chaveDaFicha(refRaw: string, marcaRaw: string) {
+    const { ref, marca } = this.chave(refRaw, marcaRaw);
+    if (marca !== 'SEM MARCA') return { ref, marca };
+
+    const fichas: Array<{ marca: string }> = await (this.prisma as any).produtoFicha.findMany({
+      where: { ref, marca: { in: ['SEM MARCA', ''] } },
+      select: { marca: true },
+    });
+    // A explícita ganha; a vazia só é adotada quando é a única que existe.
+    if (fichas.some((f) => f.marca === 'SEM MARCA') || !fichas.length) return { ref, marca };
+    return { ref, marca: '' };
+  }
+
   private parseJson<T>(valor: string | null | undefined, padrao: T): T {
     if (!valor) return padrao;
     try { return JSON.parse(valor) as T; } catch { return padrao; }
@@ -314,7 +371,7 @@ export class ProdutoFichaService {
 
   /** Ficha completa pra tela master. Não cria nada — REF sem ficha volta null. */
   async get(refRaw: string, marcaRaw: string) {
-    const { ref, marca } = this.chave(refRaw, marcaRaw);
+    const { ref, marca } = await this.chaveDaFicha(refRaw, marcaRaw);
 
     const ficha = await (this.prisma as any).produtoFicha.findUnique({
       where: { ref_marca: { ref, marca } },
@@ -435,7 +492,7 @@ export class ProdutoFichaService {
 
   /** Cria ou atualiza o nível REF. Campo ausente = não mexeu. */
   async upsert(refRaw: string, marcaRaw: string, dados: FichaInput, usuario?: string) {
-    const { ref, marca } = this.chave(refRaw, marcaRaw);
+    const { ref, marca } = await this.chaveDaFicha(refRaw, marcaRaw);
 
     const patch: Record<string, unknown> = { atualizadoPor: usuario ?? null };
     if (dados.nomeCurto !== undefined) patch.nomeCurto = dados.nomeCurto?.trim() || null;
@@ -485,6 +542,8 @@ export class ProdutoFichaService {
       create: { ref, marca, ...patch },
       update: patch,
     });
+    // Tudo daqui (nome, descrição, tecido, medidas) aparece no card e na PDP.
+    this.aposEditar(false);
     return this.get(ref, marca);
   }
 
@@ -495,7 +554,7 @@ export class ProdutoFichaService {
   async upsertCor(
     refRaw: string, marcaRaw: string, corRaw: string, dados: FichaCorInput, usuario?: string,
   ) {
-    const { ref, marca } = this.chave(refRaw, marcaRaw);
+    const { ref, marca } = await this.chaveDaFicha(refRaw, marcaRaw);
     const cor = String(corRaw || '').trim().toUpperCase();
     if (!cor) throw new BadRequestException('COR obrigatória');
 
@@ -551,6 +610,7 @@ export class ProdutoFichaService {
       create: { fichaId: ficha.id, cor, ...patch },
       update: patch,
     });
+    this.aposEditar(patch.statusPublicacao !== undefined);
     return this.get(ref, marca);
   }
 

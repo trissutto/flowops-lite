@@ -1412,6 +1412,7 @@ function FichaDaCor({
     swatchFocoY: fichaCor?.swatchFocoY ?? null,
   });
   const [swatchSave, setSwatchSave] = useState<'salvando' | 'ok' | null>(null);
+  const [statusSalvo, setStatusSalvo] = useState<'salvando' | 'ok' | null>(null);
   const semFotos = fotos.length === 0;
 
   const urlCor = `/produto-ficha/${encodeURIComponent(ref_)}/cor/${encodeURIComponent(cor)}?marca=${encodeURIComponent(marca)}`;
@@ -1472,19 +1473,29 @@ function FichaDaCor({
     }, 600);
   }
 
-  /** Publicação vale no clique — era o "mudei e esqueci de salvar" clássico. */
+  /**
+   * Publicação vale no clique — era o "mudei e esqueci de salvar" clássico.
+   *
+   * E DIZ QUE AVISOU O SITE: o salvamento invisível é o que fez o dono trocar
+   * pra "Fora do site", olhar a vitrine no mesmo minuto e concluir que não
+   * tinha salvado (19/08). O backend derruba o cache e avisa a borda do site
+   * neste PATCH; a tela agora conta isso em vez de deixar em silêncio.
+   */
   async function mudarStatus(novo: string) {
     const anterior = status;
     setStatus(novo);
     setErro(null);
+    setStatusSalvo('salvando');
     try {
       const f = await api<Ficha>(urlCor, {
         method: 'PATCH',
         body: JSON.stringify({ statusPublicacao: novo }),
       });
       aplicarFicha(f);
+      setStatusSalvo('ok');
     } catch (e: any) {
       setStatus(anterior);
+      setStatusSalvo(null);
       setErro(e?.message || 'Não consegui mudar a publicação');
     }
   }
@@ -1556,6 +1567,18 @@ function FichaDaCor({
             <option value="publicado">No ar</option>
           </select>
         </div>
+
+        {statusSalvo && (
+          <p className="text-[11px] text-slate-500 pb-2">
+            {statusSalvo === 'salvando' ? (
+              'Salvando…'
+            ) : (
+              <span className="text-emerald-700 font-bold">
+                Salvo — já avisei o site (leva alguns segundos pra atualizar a vitrine)
+              </span>
+            )}
+          </p>
+        )}
 
         <div className="flex items-center gap-1.5">
           <ImageIcon className="w-3.5 h-3.5 text-slate-400" />

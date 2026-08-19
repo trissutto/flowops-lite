@@ -536,11 +536,26 @@ export class WcFotosImportService {
        * não casa). Bolinha pintada numa ficha sem marca é melhor que cor cinza
        * esperando um cadastro que ninguém vai preencher hoje.
        */
-      const marca = (await this.marcaDaFamilia(ref)) ?? '';
+      /**
+       * ⚠️ E QUANDO NÃO HÁ MARCA, VALE A FICHA QUE JÁ EXISTE (19/08/2026).
+       *
+       * Marca vazia aqui e "SEM MARCA" na tela master (é o rótulo que ela
+       * mostra e devolve) são a MESMA peça com dois nomes de chave — e criavam
+       * DUAS fichas pra mesma REF. A retaguarda editava uma, a vitrine lia a
+       * outra: a 350842/CHOCOLATE foi marcada "fora do site" e seguiu à venda.
+       * Reaproveitar a linha existente mantém uma ficha só por REF.
+       */
+      let marca = (await this.marcaDaFamilia(ref)) ?? '';
       if (!marca) {
+        const existente = await (this.prisma as any).produtoFicha.findFirst({
+          where: { ref, marca: { in: ['SEM MARCA', ''] } },
+          select: { marca: true },
+          orderBy: { marca: 'desc' }, // "SEM MARCA" antes da vazia
+        });
+        marca = existente?.marca ?? '';
         this.logger.warn(
           `[wc-fotos] bolinha ${ref}/${cor}: família sem MARCA no catálogo — ` +
-            `gravando a ficha com marca vazia. Vale preencher a marca no cadastro.`,
+            `gravando na ficha "${marca || '(vazia)'}". Vale preencher a marca no cadastro.`,
         );
       }
 

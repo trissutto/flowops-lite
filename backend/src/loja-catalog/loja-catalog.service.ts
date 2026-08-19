@@ -475,6 +475,33 @@ export class LojaCatalogService {
   `;
 
   /**
+   * DUAS LINHAS DE FICHA DA MESMA COR VIRAM UMA (ver o bloco do `fichaPorCor`).
+   *
+   * `base` é quem chegou primeiro — a ficha escolhida — e manda no conteúdo;
+   * `extra` só preenche o que estiver vazio, porque a retaguarda pode ter
+   * digitado o título numa ficha e a bolinha na outra sem saber que eram duas.
+   * O STATUS é a exceção: "fora do site" de qualquer uma vence, sempre.
+   */
+  private fundirFichaCor(base: any, extra: any) {
+    const escondida =
+      base?.statusPublicacao === 'nao_publicar' || extra?.statusPublicacao === 'nao_publicar';
+    // A bolinha vem em BLOCO: tipo, hex e foco são a mesma decisão. Misturar o
+    // hex de uma com o recorte da outra pinta uma cor que ninguém escolheu.
+    const temBolinha = (c: any) => Boolean(c?.corHex) || c?.swatchTipo === 'foto';
+    const bolinha = temBolinha(base) || !temBolinha(extra) ? base : extra;
+    return {
+      ...base,
+      statusPublicacao: escondida ? 'nao_publicar' : base?.statusPublicacao,
+      tituloComercial: base?.tituloComercial || extra?.tituloComercial || null,
+      youtubeUrl: base?.youtubeUrl || extra?.youtubeUrl || null,
+      swatchTipo: bolinha?.swatchTipo,
+      corHex: bolinha?.corHex ?? null,
+      swatchFocoX: bolinha?.swatchFocoX ?? null,
+      swatchFocoY: bolinha?.swatchFocoY ?? null,
+    };
+  }
+
+  /**
    * Peça montada a partir das variações de uma REF.
    *
    * A PÁGINA DO SITE É UMA SÓ POR REF (decisão do dono, 03/08): a cliente
@@ -774,13 +801,28 @@ export class LojaCatalogService {
      * PRO SITE". A ficha (`produto_ficha_cor`) traz a bolinha — hex do
      * conta-gotas ou recorte da foto pra estampa.
      */
-    // A ficha ESCOLHIDA entra primeiro e ganha no empate; as das irmãs
-    // completam as cores que só existem nelas.
+    /**
+     * A ficha ESCOLHIDA entra primeiro e manda no conteúdo; as das irmãs
+     * completam as cores — e os campos — que só existem nelas.
+     *
+     * ⚠️ MAS "FORA DO SITE" É VETO, NÃO EMPATE (19/08/2026). A MESMA COR pode
+     * ter DUAS linhas de ficha quando a REF tem DUAS fichas — o caso de toda
+     * peça SEM MARCA no ERP: o importador de fotos grava a ficha com marca
+     * VAZIA (`wc-fotos-import`) e a tela master grava com "SEM MARCA"
+     * (`produto-master`: `row.marca || 'SEM MARCA'`). Eram 62 REFs assim na
+     * produção. Com o primeiro-ganha puro, esconder a cor na tela virava um
+     * `nao_publicar` gravado numa linha que a vitrine não lia: a
+     * **350842/CHOCOLATE foi marcada "fora do site" em 18/08 e seguiu à
+     * venda** — sem nem aparecer em `coresOcultas`, então nem a tela de cores
+     * denunciava. Esconder é decisão humana explícita; publicar é o default.
+     * Por isso o "não publicar" de QUALQUER ficha da família vale.
+     */
     const fichaPorCor = new Map<string, any>();
     for (const fx of [ficha, ...fichasTodas]) {
       for (const c of ((fx?.cores ?? []) as any[])) {
         const k = String(c.cor || '').toUpperCase();
-        if (!fichaPorCor.has(k)) fichaPorCor.set(k, c);
+        const atual = fichaPorCor.get(k);
+        fichaPorCor.set(k, atual ? this.fundirFichaCor(atual, c) : { ...c });
       }
     }
     // `fotosPorCor` já foi montado LÁ EM CIMA, antes das contas — é ele que
@@ -897,6 +939,26 @@ export class LojaCatalogService {
       }
       return true;
     });
+
+    /**
+     * A PEÇA INTEIRA SAI DO SITE quando não sobra NENHUMA cor e pelo menos uma
+     * foi escondida A MÃO (19/08/2026).
+     *
+     * Sem isto, marcar a única cor como "fora do site" tirava a bolinha e
+     * zerava a grade, mas o CARD continuava na vitrine: a galeria cai no
+     * acervo cru quando não sobra foto vendável (logo abaixo), e a listagem só
+     * corta peça sem imagem. Dava um card fantasma — sem tamanho, sem preço
+     * pra escolher — anunciando o que a retaguarda acabou de tirar do ar. Foi
+     * o "coloquei fora do site, salvei, e não saiu" (dono, 19/08).
+     *
+     * ESGOTADO É OUTRA COISA: peça que zerou (ou cujas cores caíram abaixo do
+     * piso) SEGUE na vitrine, riscada — decisão de 15/08, ver `soDisponivel`
+     * em `listar`. Aqui só sai o que uma pessoa mandou sair.
+     */
+    const foraDoSite =
+      coresDetalhadas.length > 0 &&
+      coresVisiveis.length === 0 &&
+      coresOcultas.some((c) => c.motivo === 'nao_publicar');
 
     /**
      * Com cor escondida, TOTAL e GRADE exibidos têm que ser o que dá pra
@@ -1093,6 +1155,13 @@ export class LojaCatalogService {
       cores: coresVisiveis,
       /** Cores escondidas (ficha ou estoque mínimo) — a tela de cores lista. */
       coresOcultas,
+      /**
+       * Peça tirada do ar pela retaguarda (nenhuma cor sobrou e alguém marcou
+       * "fora do site"). Fica NO catálogo montado de propósito — a tela de
+       * cores precisa listá-la pra dar como republicar, e a PDP abre por link
+       * direto —, mas `catalogoDaVitrine()` a corta de tudo que é vitrine.
+       */
+      foraDoSite,
       tamanhos: tamanhosExibidos,
       estoqueTotal: estoqueExibido,
       disponivel: estoqueExibido > 0,
@@ -1383,6 +1452,20 @@ export class LojaCatalogService {
         this.catalogoEmVoo = null;
       });
     return this.catalogoEmVoo;
+  }
+
+  /**
+   * O QUE A VITRINE MOSTRA — o catálogo montado MENOS as peças que a
+   * retaguarda tirou do ar (`foraDoSite`: nenhuma cor sobrou e alguém marcou
+   * "fora do site" na ficha).
+   *
+   * Vale pra tudo que EXIBE peça pra cliente: listagem/busca, feed da PDP,
+   * coleção curada, look. Fica de fora de propósito quem precisa VER o que
+   * está escondido — a tela de cores (é lá que se republica) e a PDP por link
+   * direto, que sempre abriu peça fora da vitrine pra conferência.
+   */
+  private async catalogoDaVitrine(): Promise<any[]> {
+    return (await this.catalogoPublicado()).filter((p: any) => !p.foraDoSite);
   }
 
   /**
@@ -1815,7 +1898,7 @@ export class LojaCatalogService {
     // Cópia: o array do cache é compartilhado entre requisições, e a ordenação
     // abaixo é in-place — ordenar o cache embaralharia a lista de quem estiver
     // lendo ao mesmo tempo.
-    let pecas = [...(await this.catalogoPublicado())];
+    let pecas = [...(await this.catalogoDaVitrine())];
     if (!pecas.length) {
       return { itens: [], total: 0, page, perPage, totalPages: 0, fonte: 'erp', aviso: 'nenhuma REF publicada — rode o sync de conteúdo' };
     }
@@ -2113,7 +2196,7 @@ export class LojaCatalogService {
   async curadoriaProdutos(slug: string): Promise<{ itens: any[]; total: number }> {
     const refs = await this.colecaoRefs(slug);
     if (!refs.length) return { itens: [], total: 0 };
-    const catalogo = await this.catalogoPublicado();
+    const catalogo = await this.catalogoDaVitrine();
     const porRef = new Map<string, any>();
     for (const p of catalogo) {
       const k = this.refKey(p.ref);
@@ -2196,6 +2279,10 @@ export class LojaCatalogService {
      * Agora a PDP procura no catálogo já montado (cache de 60s, o mesmo TTL da
      * borda) e só cai no caminho REF a REF quando a peça não está na vitrine —
      * que é o que permite conferir por link direto uma peça ainda sem foto.
+     *
+     * Lê o catálogo CRU (`catalogoPublicado`), não o da vitrine: peça marcada
+     * "fora do site" continua abrindo por link direto — é assim que se confere
+     * o que foi escondido antes de republicar. Ela só sai das LISTAS.
      */
     const refPedida = this.normRef(chave.replace(/^ref-/i, ''));
     const daVitrine = (await this.catalogoPublicado()).find(
@@ -2303,7 +2390,7 @@ export class LojaCatalogService {
       });
       if (!look) return null;
 
-      const catalogo = await this.catalogoPublicado();
+      const catalogo = await this.catalogoDaVitrine();
       const vistos = new Set<string>();
       const pecas = (look.pecas as any[])
         .map((m) => {
@@ -2327,7 +2414,7 @@ export class LojaCatalogService {
       include: { pecas: true },
       orderBy: { criadoEm: 'desc' },
     });
-    const catalogo = await this.catalogoPublicado();
+    const catalogo = await this.catalogoDaVitrine();
     return looks.map((l) => ({
       id: l.id,
       nome: l.nome,
@@ -2434,7 +2521,7 @@ export class LojaCatalogService {
     const pagina = Math.max(1, Number(page) || 1);
     const porPagina = Math.min(48, Math.max(1, Number(perPage) || 12));
 
-    const catalogo = await this.catalogoPublicado();
+    const catalogo = await this.catalogoDaVitrine();
     // A peça-semente sai do próprio catálogo (custo zero); só quando ela não
     // está na vitrine — sem foto, por exemplo — é que vale uma consulta.
     const semente =
