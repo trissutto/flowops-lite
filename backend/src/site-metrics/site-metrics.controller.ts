@@ -185,15 +185,22 @@ export class SiteMetricsController {
     };
     const filtrado = Boolean(seg.trafego || seg.plataforma || seg.campanha);
 
+    // Os anúncios marcados como "de lojas" (dono, 19/08): lidos UMA vez e
+    // passados a todas as queries que recortam esse público — funil, jornada
+    // e o quadro do tráfego de lojas leem a mesma lista, senão a tela se
+    // contradiz (sessão fora do funil num quadro e dentro no outro).
+    const campanhasDeLojas = await this.service.campanhasDeLojas();
+
     const [etapas, diagnosticos, faturamento, alertasCheckout, trafegoLojas, jornadaCompra, segmentos] =
       await Promise.all([
-        this.service.funil(inicio, fim, seg),
+        this.service.funil(inicio, fim, seg, campanhasDeLojas),
         this.service.diagnosticosFunil(inicio, fim, seg),
         filtrado ? Promise.resolve(undefined) : this.service.faturamentoSite(inicio, fim),
         this.service.alertasCheckout(inicio, fim, seg),
-        // Quem entrou pela /lojas saiu do funil acima — este é o quadro dela.
-        this.service.trafegoDeLojas(inicio, fim, seg),
-        this.service.jornadaCompra(inicio, fim, seg),
+        // Quem entrou pela /lojas (ou veio de anúncio de lojas) saiu do funil
+        // acima — este é o quadro dela.
+        this.service.trafegoDeLojas(inicio, fim, seg, campanhasDeLojas),
+        this.service.jornadaCompra(inicio, fim, seg, campanhasDeLojas),
         // As opções da cascata saem do período INTEIRO, nunca do recorte atual:
         // se saíssem do recorte, escolher uma campanha apagaria as outras da
         // lista e não teria como voltar.
@@ -204,6 +211,7 @@ export class SiteMetricsController {
       ate: fim.toISOString(),
       segmento: seg,
       segmentos,
+      campanhasDeLojas,
       etapas,
       diagnosticos,
       faturamento,
@@ -211,6 +219,22 @@ export class SiteMetricsController {
       trafegoLojas,
       ...jornadaCompra,
     };
+  }
+
+  /**
+   * QUAIS ANÚNCIOS SÃO "DE LOJAS" — a lista que o dono mantém na tela.
+   *
+   * Sessão que veio de uma campanha daqui é tratada como tráfego de lojas
+   * (fora do funil do site, dentro do quadro "o que ele converte") mesmo
+   * entrando pela home. Substitui a lista inteira a cada salvamento: é um
+   * punhado de nomes, e "lista = o que está na tela" é mais fácil de confiar
+   * que adicionar/remover um a um.
+   */
+  @Post('campanhas-lojas')
+  async salvarCampanhasLojas(@Req() req: any, @Body() body: { campanhas?: string[] }) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const campanhas = await this.service.salvarCampanhasDeLojas(body?.campanhas);
+    return { campanhas };
   }
 
   private hoje(): string {

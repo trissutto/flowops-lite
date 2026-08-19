@@ -214,6 +214,15 @@ export const SEM_SEGMENTO: Segmento = { trafego: null, plataforma: null, campanh
 const args = (de: Date, ate: Date, s: Segmento) =>
   [de, ate, s.trafego, s.plataforma, s.campanha] as const;
 
+/**
+ * Os MESMOS cinco + a lista de anúncios de lojas ($6) — pras queries que
+ * declaram a CTE `lojas`. Só elas: o Postgres recusa bind com parâmetro
+ * sobrando ("bind message supplies 6 parameters, but ... requires 5"), então
+ * query sem `lojas` continua com `args()` e não com este.
+ */
+const argsLojas = (de: Date, ate: Date, s: Segmento, campanhasLojas: readonly string[]) =>
+  [de, ate, s.trafego, s.plataforma, s.campanha, [...campanhasLojas]] as const;
+
 const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   // `item_list_name` entra em 18/08, junto com as cinco vitrines da home.
   //
@@ -384,6 +393,57 @@ export class SiteMetricsService {
   private readonly logger = new Logger(SiteMetricsService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  // ── ANÚNCIOS DE LOJAS — a lista que tira campanha do funil do site ──────
+  //
+  // Chave em `app_config` (mesmo padrão do cashback e do desconto
+  // progressivo): lista de NOMES de campanha, como aparecem na cascata da
+  // tela. Sessão cuja origem é uma delas vira "tráfego de lojas" mesmo
+  // entrando pela home (ver `SESSOES_DE_LOJA`).
+  //
+  // PADRÃO enquanto o dono não salva nada: a campanha que motivou isto
+  // (19/08/2026) — ela já está no ar apontando pra home, e esperar um clique
+  // na tela pra voltar a separar seria deixar o funil mentindo um dia a mais.
+  // A primeira gravação pela tela substitui o padrão por inteiro.
+  static readonly CHAVE_CAMPANHAS_DE_LOJAS = 'site_metrics.campanhas_de_lojas';
+  static readonly CAMPANHAS_DE_LOJAS_PADRAO: readonly string[] = [
+    '|SITE NOVO| Tráfego Home / Nossas Lojas',
+  ];
+
+  async campanhasDeLojas(): Promise<string[]> {
+    try {
+      const row = await (this.prisma as any).appConfig?.findUnique({
+        where: { key: SiteMetricsService.CHAVE_CAMPANHAS_DE_LOJAS },
+      });
+      if (row?.valueJson) {
+        const lista = JSON.parse(row.valueJson);
+        if (Array.isArray(lista)) {
+          return lista.map((c) => String(c).trim()).filter(Boolean);
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(`[campanhas-de-lojas] ler app_config falhou: ${e?.message}`);
+    }
+    return [...SiteMetricsService.CAMPANHAS_DE_LOJAS_PADRAO];
+  }
+
+  /** Substitui a lista inteira. Nome vazio cai fora; repetido conta uma vez. */
+  async salvarCampanhasDeLojas(lista: unknown): Promise<string[]> {
+    const limpa = Array.from(
+      new Set(
+        (Array.isArray(lista) ? lista : [])
+          .map((c) => String(c ?? '').trim().slice(0, 200))
+          .filter(Boolean),
+      ),
+    ).slice(0, 100);
+    await (this.prisma as any).appConfig.upsert({
+      where: { key: SiteMetricsService.CHAVE_CAMPANHAS_DE_LOJAS },
+      create: { key: SiteMetricsService.CHAVE_CAMPANHAS_DE_LOJAS, valueJson: JSON.stringify(limpa) },
+      update: { valueJson: JSON.stringify(limpa) },
+    });
+    this.logger.log(`[campanhas-de-lojas] lista atualizada: ${JSON.stringify(limpa)}`);
+    return limpa;
+  }
 
   /** Corta no tamanho da coluna. Texto maior que o VarChar derruba o INSERT
    *  inteiro no Postgres, e derrubar um lote de cliques por causa de um path
@@ -564,22 +624,60 @@ export class SiteMetricsService {
    *
    * Quem contatou a loja nunca cai fora: `whatsapp_click` e companhia não são
    * `page_view`, então a sessão passa na régua por definição.
+   *
+   * ── O ANÚNCIO DE LOJAS QUE CAI NA HOME (dono, 19/08/2026) ──
+   *
+   * O corte por página de entrada cobria o anúncio enquanto ele apontava pra
+   * `/lojas`. Em 18/08 o dono apontou a campanha "Tráfego Home / Nossas Lojas"
+   * pra HOME — e no dia seguinte ~700 sessões/dia desse público (metade das
+   * visitas) entraram no funil do site: conversão 0,3% contra faixa de 1-2,5%,
+   * e a /lojas "esvaziou". A intenção dessas pessoas não mudou, só a porta.
+   *
+   * Por isso o segundo ramo: sessão cuja ORIGEM (mesmo critério da cascata —
+   * primeiro evento com `canal`) é uma campanha MARCADA como "anúncio de
+   * lojas" ($6, lista que o dono mantém na tela) também é tráfego de lojas,
+   * entre por onde entrar. Casa pelo nome gravado no UTM OU pelo nome que o
+   * espelho do Meta dá ao `utm_id` — o rótulo que a tela mostra pode vir de
+   * qualquer um dos dois, e marcar pelo rótulo tem que funcionar.
+   *
+   * A ressalva dos 30 dias (comentário acima) vale aqui: quem clicou no
+   * anúncio de lojas e voltar direto em 5 dias continua carimbada e fica
+   * neste quadro — inclusive se comprar (o quadro mostra "compraram" e o
+   * valor; a venda não some, muda de quadro). É o mesmo last-click do Meta.
    */
   private static readonly SESSOES_DE_LOJA = `
     SELECT session_id FROM (
-      SELECT DISTINCT ON (session_id) session_id, path
-        FROM site_eventos
-       WHERE criado_em >= $1 AND criado_em <= $2
-         AND session_id IS NOT NULL AND path IS NOT NULL AND NOT bot
-       ORDER BY session_id, criado_em
-    ) entrada
-     WHERE (path ILIKE '/lojas%' OR path ILIKE '/nossaslojas%')
-       AND session_id IN (${SQL_SESSOES_DE_GENTE})`;
+      SELECT session_id FROM (
+        SELECT DISTINCT ON (session_id) session_id, path
+          FROM site_eventos
+         WHERE criado_em >= $1 AND criado_em <= $2
+           AND session_id IS NOT NULL AND path IS NOT NULL AND NOT bot
+         ORDER BY session_id, criado_em
+      ) entrada
+       WHERE (path ILIKE '/lojas%' OR path ILIKE '/nossaslojas%')
+      UNION
+      SELECT o.session_id FROM (
+        SELECT DISTINCT ON (session_id) session_id,
+               dados->>'campanha' AS campanha,
+               dados->>'utm_id'   AS utm_id
+          FROM site_eventos
+         WHERE criado_em >= $1 AND criado_em <= $2
+           AND session_id IS NOT NULL AND NOT bot
+         ORDER BY session_id, (dados->>'canal') IS NULL, criado_em
+      ) o
+       LEFT JOIN (SELECT campanha_id, MAX(campanha_nome) AS nome
+                    FROM meta_ads_gasto_dia GROUP BY campanha_id) g
+              ON g.campanha_id = o.utm_id
+       WHERE (o.campanha = ANY($6::text[]) OR g.nome = ANY($6::text[]))
+    ) de_loja
+     WHERE session_id IN (${SQL_SESSOES_DE_GENTE})`;
 
   async funil(
     de: Date,
     ate: Date,
     seg: Segmento = SEM_SEGMENTO,
+    /** Anúncios marcados como "de lojas" — sessão deles sai do funil (ver `SESSOES_DE_LOJA`). */
+    campanhasLojas: readonly string[] = [],
   ): Promise<Array<{ evento: string; eventos: number; pessoas: number; valor: number }>> {
     const linhas = await this.prisma.$queryRawUnsafe<
       Array<{ evento: string; eventos: number; pessoas: number; valor: number }>
@@ -611,7 +709,7 @@ export class SiteMetricsService {
                    AND e.session_id IN (SELECT session_id FROM segmento)
                    AND e.session_id NOT IN (SELECT session_id FROM lojas)))
         GROUP BY evento`,
-      ...args(de, ate, seg),
+      ...argsLojas(de, ate, seg, campanhasLojas),
     );
     return linhas.map((l) => ({
       evento: l.evento,
@@ -625,7 +723,12 @@ export class SiteMetricsService {
   }
 
   /** Jornada real: uma sessão ocupa somente a etapa mais avançada que alcançou. */
-  async jornadaCompra(de: Date, ate: Date, seg: Segmento = SEM_SEGMENTO): Promise<{
+  async jornadaCompra(
+    de: Date,
+    ate: Date,
+    seg: Segmento = SEM_SEGMENTO,
+    campanhasLojas: readonly string[] = [],
+  ): Promise<{
     jornada: LinhaJornada[];
     problemas: Array<{
       evento: string; codigo: string; campo: string | null;
@@ -664,7 +767,7 @@ export class SiteMetricsService {
               )
          SELECT etapa_maxima, COUNT(*)::int AS pessoas
            FROM sessoes GROUP BY etapa_maxima ORDER BY etapa_maxima`,
-        ...args(de, ate, seg),
+        ...argsLojas(de, ate, seg, campanhasLojas),
       ),
       this.prisma.$queryRawUnsafe<Array<{
         evento: string; codigo: string; campo: string | null;
@@ -722,7 +825,7 @@ export class SiteMetricsService {
           GROUP BY f.evento, f.codigo, f.campo
           ORDER BY pessoas DESC, ocorrencias DESC
           LIMIT 100`,
-        ...args(de, ate, seg),
+        ...argsLojas(de, ate, seg, campanhasLojas),
       ),
       this.prisma.$queryRawUnsafe<Array<{
         evento: string; codigo: string; campo: string | null; pessoas: number; interacoes: number;
@@ -746,7 +849,7 @@ export class SiteMetricsService {
           GROUP BY e.evento, codigo
           ORDER BY interacoes DESC, e.evento, codigo
           LIMIT 100`,
-        ...args(de, ate, seg),
+        ...argsLojas(de, ate, seg, campanhasLojas),
       ),
       this.prisma.$queryRawUnsafe<Array<{
         sessoes_problema: number; sessoes_recuperadas: number; pix_pendente: number;
@@ -806,7 +909,7 @@ export class SiteMetricsService {
          SELECT (SELECT COUNT(DISTINCT session_id) FROM falhas)::int AS sessoes_problema,
                 (SELECT COUNT(*) FROM recuperadas)::int AS sessoes_recuperadas,
                 (SELECT COUNT(*) FROM pix)::int AS pix_pendente`,
-        ...args(de, ate, seg),
+        ...argsLojas(de, ate, seg, campanhasLojas),
       ),
     ]);
 
@@ -854,7 +957,12 @@ export class SiteMetricsService {
    * que trouxe e o que elas fizeram no site apesar de tudo (parte compra, e
    * isso precisa aparecer em algum lugar).
    */
-  async trafegoDeLojas(de: Date, ate: Date, seg: Segmento = SEM_SEGMENTO): Promise<{
+  async trafegoDeLojas(
+    de: Date,
+    ate: Date,
+    seg: Segmento = SEM_SEGMENTO,
+    campanhasLojas: readonly string[] = [],
+  ): Promise<{
     pessoas: number;
     contataram: number;
     contatos: { whatsapp: number; comoChegar: number; telefone: number; instagram: number };
@@ -883,7 +991,7 @@ export class SiteMetricsService {
          JOIN segmento sg ON sg.session_id = l.session_id
          LEFT JOIN site_eventos e
                 ON e.session_id = l.session_id AND e.criado_em >= $1 AND e.criado_em <= $2`,
-      ...args(de, ate, seg),
+      ...argsLojas(de, ate, seg, campanhasLojas),
     );
 
     const porUnidade = await this.prisma.$queryRawUnsafe<Array<{ loja: string; contatos: number }>>(
@@ -894,7 +1002,7 @@ export class SiteMetricsService {
         WHERE e.criado_em >= $1 AND e.criado_em <= $2 AND e.evento IN ${CONTATO}
           AND ${doSegmento('e')}
         GROUP BY 1 ORDER BY contatos DESC LIMIT 20`,
-      ...args(de, ate, seg),
+      ...argsLojas(de, ate, seg, campanhasLojas),
     );
 
     // A campanha vem do UTM gravado desde 16/08 (`dados->>'campanha'`). Sessão
@@ -916,7 +1024,7 @@ export class SiteMetricsService {
             )
        SELECT campanha, canal, COUNT(*)::int AS pessoas
          FROM marca GROUP BY 1, 2 ORDER BY pessoas DESC LIMIT 12`,
-      ...args(de, ate, seg),
+      ...argsLojas(de, ate, seg, campanhasLojas),
     );
 
     return {

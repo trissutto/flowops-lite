@@ -150,6 +150,8 @@ type RespostaFunil = {
   de: string;
   ate: string;
   segmentos?: OpcaoSegmento[];
+  /** Anúncios marcados como "de lojas" — sessão deles é tráfego de lojas, entre por onde entrar. */
+  campanhasDeLojas?: string[];
   etapas: EtapaFunil[];
   diagnosticos?: DiagnosticoFunil[];
   faturamento?: { pedidos: number; valor: number };
@@ -503,6 +505,27 @@ export default function CliquesLojasPage() {
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  /**
+   * MARCAR/DESMARCAR ANÚNCIO DE LOJAS (dono, 19/08). Salva a lista inteira e
+   * recarrega o relatório — funil, jornada e quadro de lojas mudam juntos, e
+   * é isso que a pessoa quer ver na hora: "saiu do funil?".
+   */
+  const [salvandoLojas, setSalvandoLojas] = useState(false);
+  const salvarCampanhasDeLojas = useCallback(async (campanhas: string[]) => {
+    setSalvandoLojas(true);
+    try {
+      await api('/site-metrics/campanhas-lojas', {
+        method: 'POST',
+        body: JSON.stringify({ campanhas }),
+      });
+      await carregar();
+    } catch (e: any) {
+      setErroFunil(e?.body?.message || e?.message || 'não consegui salvar a lista de anúncios de lojas');
+    } finally {
+      setSalvandoLojas(false);
+    }
+  }, [carregar]);
+
   /** Atalhos olham pra TRÁS — aqui o passado é que interessa, ao contrário da
    *  tela de contas a pagar, onde "7 dias" são os vencimentos que vêm. */
   const atalho = (qual: number | 'hoje' | 'ontem' | 'mes') => {
@@ -693,6 +716,18 @@ export default function CliquesLojasPage() {
       {/* Logo abaixo do funil, e não numa aba escondida: é aqui que a pessoa
           entende POR QUE o número do funil mudou de tamanho. */}
       {funil?.trafegoLojas && <TrafegoDeLojas dados={funil.trafegoLojas} />}
+
+      {/* QUAIS ANÚNCIOS SÃO "DE LOJAS" — fica colado no quadro acima porque é
+          a regra que o alimenta. Aparece mesmo sem ninguém no quadro: é daqui
+          que se marca o primeiro. */}
+      {funil && (
+        <AnunciosDeLojas
+          marcadas={funil.campanhasDeLojas ?? []}
+          opcoes={funil.segmentos ?? []}
+          salvando={salvandoLojas}
+          onSalvar={salvarCampanhasDeLojas}
+        />
+      )}
 
       {erro && (
         <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">{erro}</div>
@@ -900,7 +935,7 @@ function FunilSite({
         desde 13/08/2026; período anterior aparece zerado. O % é sobre a etapa anterior.
         Compras = pagamento confirmado; o número fiscal é o da tela de Pedidos.{' '}
         <strong className="font-semibold text-slate-600">
-          Quem entrou pela página das lojas fica FORA desta conta
+          Quem entrou pela página das lojas — ou chegou por um anúncio marcado como &quot;de lojas&quot; — fica FORA desta conta
         </strong>{' '}
         — veio pra achar a loja, não pra comprar no site; está no quadro logo abaixo.{' '}
         <strong className="font-semibold text-slate-600">Robô também fica de fora</strong> — o de
@@ -1182,7 +1217,9 @@ function TrafegoDeLojas({ dados }: { dados: TrafegoLojas }) {
 
   const pct = (n: number) => (pessoas > 0 ? Math.round((n / pessoas) * 100) : 0);
   const blocos = [
-    { titulo: 'Chegaram pela /lojas', valor: pessoas, sub: 'fora do funil do site' },
+    // Desde 19/08 entra aqui também quem veio de anúncio marcado como "de
+    // lojas", mesmo caindo na home — a porta mudou, a intenção não.
+    { titulo: 'Chegaram', valor: pessoas, sub: 'pela /lojas ou por anúncio de lojas · fora do funil' },
     { titulo: 'Falaram com a loja', valor: contataram, sub: `${pct(contataram)}% de quem chegou` },
     { titulo: 'Olharam peça', valor: navegaram.viramPeca, sub: `${pct(navegaram.viramPeca)}% passearam no catálogo` },
     { titulo: 'Compraram no site', valor: navegaram.compraram, sub: valorComprado > 0 ? brl(valorComprado) : 'mesmo sem ser o objetivo' },
@@ -1259,6 +1296,120 @@ function TrafegoDeLojas({ dados }: { dados: TrafegoLojas }) {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ═══════════ ANÚNCIOS DE LOJAS — a lista que tira campanha do funil ═══════════
+ *
+ * Dono, 19/08/2026: a campanha "Tráfego Home / Nossas Lojas" passou a cair na
+ * HOME em vez da /lojas, e de um dia pro outro ~700 sessões/dia desse público
+ * (que vem procurar loja física, não comprar online) entraram no funil do
+ * site: conversão "caiu" pra 0,3%. O corte por página de entrada não alcança
+ * mais essa gente — o corte por ANÚNCIO alcança.
+ *
+ * Marcar uma campanha aqui = a sessão dela vira tráfego de lojas entre por
+ * onde entrar: sai do funil/jornada e entra no quadro acima. A lista é do
+ * dono, salva no servidor (vale pra todo mundo que abrir a tela).
+ */
+function AnunciosDeLojas({
+  marcadas,
+  opcoes,
+  salvando,
+  onSalvar,
+}: {
+  marcadas: string[];
+  opcoes: OpcaoSegmento[];
+  salvando: boolean;
+  onSalvar: (campanhas: string[]) => void;
+}) {
+  const [escolha, setEscolha] = useState('');
+
+  // Candidatas: campanhas PAGAS do período, com o tamanho delas, menos as já
+  // marcadas. Só pagas porque "anúncio de lojas" é anúncio — orgânico e
+  // direto não têm campanha pra marcar.
+  const candidatas = (() => {
+    const mapa = new Map<string, number>();
+    for (const o of opcoes) {
+      if (o.trafego !== 'pago' || !o.campanha || marcadas.includes(o.campanha)) continue;
+      mapa.set(o.campanha, (mapa.get(o.campanha) ?? 0) + o.pessoas);
+    }
+    return Array.from(mapa.entries())
+      .map(([campanha, pessoas]) => ({ campanha, pessoas }))
+      .sort((a, b) => b.pessoas - a.pessoas || a.campanha.localeCompare(b.campanha));
+  })();
+
+  const marcar = () => {
+    if (!escolha || marcadas.includes(escolha)) return;
+    onSalvar([...marcadas, escolha]);
+    setEscolha('');
+  };
+
+  return (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl p-4 space-y-3">
+      <div>
+        <h3 className="font-semibold text-slate-800 text-sm">Anúncios de lojas</h3>
+        <p className="text-xs text-slate-500">
+          Quem chega por um anúncio marcado aqui é tratado como tráfego de lojas
+          <strong> mesmo caindo na home</strong>: sai do funil e da jornada do site e entra no
+          quadro acima. Vale pra campanha que vende visita à loja física, não compra online.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {marcadas.length === 0 && (
+          <span className="text-xs text-slate-400">Nenhum anúncio marcado — só a página /lojas separa esse público.</span>
+        )}
+        {marcadas.map((c) => (
+          <span
+            key={c}
+            className="inline-flex items-center gap-1.5 pl-3 pr-1.5 py-1 rounded-full bg-[#FBF6E6] border border-[#E7D9A8] text-sm text-slate-800"
+          >
+            {rotuloCampanha(c)}
+            <button
+              type="button"
+              onClick={() => onSalvar(marcadas.filter((m) => m !== c))}
+              disabled={salvando}
+              className="w-5 h-5 rounded-full hover:bg-[#E7D9A8] text-slate-600 disabled:opacity-50 leading-none"
+              title="Deixar de tratar como anúncio de lojas"
+              aria-label={`Desmarcar ${rotuloCampanha(c)}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={escolha}
+          onChange={(e) => setEscolha(e.target.value)}
+          disabled={salvando}
+          className="text-sm border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white text-slate-700 max-w-full"
+        >
+          <option value="">— marcar uma campanha paga do período —</option>
+          {candidatas.map((c) => (
+            <option key={c.campanha} value={c.campanha}>
+              {rotuloCampanha(c.campanha)} ({c.pessoas})
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={marcar}
+          disabled={salvando || !escolha}
+          className="px-3 py-1.5 rounded-lg bg-[#D4AF37] hover:bg-[#B8912B] text-white text-sm font-semibold disabled:opacity-50"
+        >
+          {salvando ? 'Salvando…' : 'Marcar como anúncio de lojas'}
+        </button>
+        {candidatas.length === 0 && marcadas.length > 0 && (
+          <span className="text-xs text-slate-400">Todas as campanhas pagas do período já estão marcadas.</span>
+        )}
+      </div>
+      <p className="text-xs text-slate-400">
+        A origem vale por 30 dias no navegador (último clique): quem clicou no anúncio de lojas e
+        voltar direto continua neste quadro — inclusive se comprar. A venda não some, muda de quadro.
+      </p>
     </div>
   );
 }

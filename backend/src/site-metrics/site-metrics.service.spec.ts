@@ -240,6 +240,94 @@ describe('jornadaCompra', () => {
   });
 });
 
+/**
+ * O ANÚNCIO DE LOJAS QUE PASSOU A CAIR NA HOME (19/08/2026).
+ *
+ * O corte do funil era só por página de entrada (/lojas). Quando a campanha
+ * "Tráfego Home / Nossas Lojas" passou a apontar pra home, ~700 sessões/dia
+ * desse público entraram no funil do site e a conversão "caiu" pra 0,3%.
+ * A regra passou a ter um segundo ramo: origem da sessão = campanha marcada
+ * como "de lojas" ($6). Estes testes seguram três coisas: o ramo existe em
+ * TODA query que declara `lojas`, a lista viaja como 6º bind (e só nelas —
+ * bind sobrando derruba a query no Postgres), e o padrão cobre a campanha
+ * que motivou tudo enquanto o dono não salva a própria lista.
+ */
+describe('campanhas de lojas (anúncio de lojas fora do funil)', () => {
+  const de = new Date('2026-08-19T00:00:00-03:00');
+  const ate = new Date('2026-08-19T23:59:59-03:00');
+  const seg = { trafego: null, plataforma: null, campanha: null };
+  const lojas = ['|SITE NOVO| Tráfego Home / Nossas Lojas'];
+
+  it('toda query com a CTE `lojas` casa a origem da sessão com a lista e recebe ela como $6', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+
+    await service.funil(de, ate, seg, lojas);
+    await service.jornadaCompra(de, ate, seg, lojas);
+    await service.trafegoDeLojas(de, ate, seg, lojas);
+
+    expect(query.mock.calls.length).toBeGreaterThanOrEqual(8);
+    for (const chamada of query.mock.calls) {
+      const sql = String(chamada[0]);
+      expect(sql).toContain('lojas AS (');
+      expect(sql).toContain("o.campanha = ANY($6::text[])");
+      // O rótulo da tela pode vir do espelho do Meta, não do UTM — os dois casam.
+      expect(sql).toContain('g.nome = ANY($6::text[])');
+      // Mesmo critério de origem da cascata: primeiro evento com canal.
+      expect(sql).toContain("ORDER BY session_id, (dados->>'canal') IS NULL, criado_em");
+      expect(chamada.length).toBe(7); // sql + $1..$6
+      expect(chamada[6]).toEqual(lojas);
+    }
+  });
+
+  it('query sem a CTE `lojas` continua com 5 binds — parâmetro sobrando é erro no Postgres', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+
+    await service.diagnosticosFunil(de, ate, seg);
+    await service.alertasCheckout(de, ate, seg);
+
+    for (const chamada of query.mock.calls) {
+      expect(String(chamada[0])).not.toContain('$6');
+      expect(chamada.length).toBe(6); // sql + $1..$5
+    }
+  });
+
+  it('sem lista salva, o padrão é a campanha que motivou a regra; lista salva substitui por inteiro', async () => {
+    const semConfig = new SiteMetricsService({
+      $queryRawUnsafe: jest.fn(),
+      appConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+    } as any);
+    expect(await semConfig.campanhasDeLojas()).toEqual(['|SITE NOVO| Tráfego Home / Nossas Lojas']);
+
+    const comConfig = new SiteMetricsService({
+      $queryRawUnsafe: jest.fn(),
+      appConfig: { findUnique: jest.fn().mockResolvedValue({ valueJson: JSON.stringify(['Outra campanha']) }) },
+    } as any);
+    expect(await comConfig.campanhasDeLojas()).toEqual(['Outra campanha']);
+
+    // Lista vazia salva = "nenhuma": o padrão não volta por baixo dos panos.
+    const vazia = new SiteMetricsService({
+      $queryRawUnsafe: jest.fn(),
+      appConfig: { findUnique: jest.fn().mockResolvedValue({ valueJson: '[]' }) },
+    } as any);
+    expect(await vazia.campanhasDeLojas()).toEqual([]);
+  });
+
+  it('salvar limpa vazios e repetidos e grava a lista inteira', async () => {
+    const upsert = jest.fn().mockResolvedValue({});
+    const service = new SiteMetricsService({ $queryRawUnsafe: jest.fn(), appConfig: { upsert } } as any);
+
+    const salvo = await service.salvarCampanhasDeLojas([' A ', '', 'B', 'A', null]);
+
+    expect(salvo).toEqual(['A', 'B']);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { key: 'site_metrics.campanhas_de_lojas' },
+      update: { valueJson: JSON.stringify(['A', 'B']) },
+    }));
+  });
+});
+
 describe('montarJornada', () => {
   it('conta cada sessão apenas na etapa máxima e reconstrói etapas ausentes', () => {
     const jornada = montarJornada([
