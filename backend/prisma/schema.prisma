@@ -2078,6 +2078,12 @@ model PagbankPayment {
   valor           Float
   // Status: pending | paid | expired | cancelled | failed
   status          String   @default("pending")
+  /// DE ONDE A COBRANÇA NASCEU (19/08). 'venda_online' = PIX gerado no painel
+  /// "Venda Online" do PDV (cliente no WhatsApp/Instagram, peça vai por
+  /// SEDEX/PAC/motoboy/retirada). Null = PIX de balcão. O reconciliador lê
+  /// isto pra fechar a venda como `venda_online` (pedido de separação, sem
+  /// NFC-e) em vez de `pix` de balcão — caso Ivone/Moema, venda 95052462.
+  origem          String?  @db.VarChar(32)
   // PIX
   qrCodeText      String?  @map("qr_code_text") @db.Text   // copia-e-cola
   qrCodeImageB64  String?  @map("qr_code_image_b64") @db.Text  // PNG base64

@@ -4330,7 +4330,7 @@ export class PdvService {
     try {
       const sale = await (this.prisma as any).pdvSale.findUnique({
         where: { id: input.saleId },
-        select: { id: true, status: true, total: true },
+        select: { id: true, status: true, total: true, entregaTipo: true },
       });
       // saleId da tabela do PagBank também é usado por baixa de crediário —
       // se não é uma venda de PDV, não é problema nosso: ignora em silêncio.
@@ -4398,23 +4398,66 @@ export class PdvService {
         }
       }
 
+      /**
+       * VENDA ONLINE FECHADA PELO CRON É `venda_online`, NÃO `pix` (19/08/2026).
+       *
+       * Caso Ivone / Moema (venda 95052462, 13:59): PIX gerado no painel
+       * "Venda Online" (SEDEX, CEP da cliente), a cliente pagou, e este cron
+       * chegou antes da vendedora — ele registrou `pix` de balcão e finalizou.
+       * O finalize só abre pedido online quando TODOS os pagamentos são
+       * `venda_online`, então: sem Order ON-, sem card pra separar, NFC-e
+       * tentada numa venda que não pede nota e estoque baixado na vendedora.
+       * A retaguarda só soube porque o dono foi lá apertar "Gerar pedido
+       * online" na mão (ON-000034, 14:11).
+       *
+       * E esse "cron chega antes" não é azar: desde 12/08 a tela só deixa a
+       * vendedora FINALIZAR depois do PIX confirmado — o mesmo sinal que
+       * dispara este cron. Na prática TODA venda online por PIX PagBank paga
+       * caía aqui como balcão. O link Pagar.me já tinha ganhado esta mesma
+       * correção em 17/08 (caso Audrey Baldin); o PIX ficou pra trás.
+       *
+       * Como sabe que é venda online: a cobrança nasceu com `origem=
+       * 'venda_online'` (o PDV marca ao gerar o PIX naquele painel) OU a
+       * venda já tem forma de entrega — `entregaTipo` só existe nesse fluxo.
+       * O segundo sinal cobre as cobranças criadas antes desta versão.
+       */
+      const cobranca: any = await (this.prisma as any).pagbankPayment
+        .findUnique({ where: { pagbankOrderId: input.pagbankOrderId }, select: { origem: true } })
+        .catch(() => null);
+      const vendaOnline =
+        cobranca?.origem === 'venda_online' || !!String(sale.entregaTipo || '').trim();
+
       await this.addPayment({
         saleId: sale.id,
-        method: 'pix',
+        method: vendaOnline ? 'venda_online' : 'pix',
         valor: input.valor,
-        details: {
-          pixTxid: input.pagbankOrderId,
-          pixChave: 'PagBank',
-          pixProvider: 'pagbank',
-          pixPaidByWebhook: true,
-          reconciliadoPeloCron: true,
-        },
+        details: vendaOnline
+          ? {
+              // O MESMO registro que o botão FINALIZAR da tela grava pra
+              // "Gerar PIX" — o finalize e os relatórios leem igual.
+              tipo: 'pix_gerar',
+              origem: 'whatsapp_instagram',
+              pixTxid: input.pagbankOrderId,
+              pixChave: 'PagBank',
+              pixProvider: 'pagbank',
+              pagbankOrderId: input.pagbankOrderId,
+              pixPaidByWebhook: true,
+              reconciliadoPeloCron: true,
+            }
+          : {
+              pixTxid: input.pagbankOrderId,
+              pixChave: 'PagBank',
+              pixProvider: 'pagbank',
+              pixPaidByWebhook: true,
+              reconciliadoPeloCron: true,
+            },
       });
 
       try {
         await this.finalize({ saleId: sale.id });
         this.logger.log(
-          `[pdv] reconciliador fechou a venda ${sale.id} (PagBank ${input.pagbankOrderId})`,
+          `[pdv] reconciliador fechou a venda ${sale.id} (PagBank ${input.pagbankOrderId}` +
+            `${vendaOnline ? ', VENDA ONLINE → pedido de separação' : ''})`,
         );
         return { handled: true };
       } catch (e: any) {
