@@ -64,14 +64,14 @@ export default async function EnderecosPage() {
     <Section space="lg">
       <Container>
         <header className="mb-8">
-          <p className="eyebrow text-muted">
+          <p className="eyebrow text-ink-muted">
             <Link href="/conta" className="link-underline">Minha conta</Link>
           </p>
           <h1 className="text-h2">Meus endereços</h1>
         </header>
 
         {enderecos.length === 0 ? (
-          <p className="text-body text-muted">
+          <p className="text-body text-ink-muted">
             Nenhum endereço guardado ainda — o primeiro é salvo quando você fecha um pedido.
           </p>
         ) : (
@@ -82,7 +82,7 @@ export default async function EnderecosPage() {
                   {e.label || 'Endereço'}
                   {e.isPrimary && <span className="ml-2 text-small text-primary">principal</span>}
                 </p>
-                <p className="text-small text-muted">{linha(e)}</p>
+                <p className="text-small text-ink-muted">{linha(e)}</p>
               </li>
             ))}
           </ul>

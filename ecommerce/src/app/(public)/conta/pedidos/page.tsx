@@ -13,6 +13,9 @@ import { buildMetadata } from '@/lib/seo';
  * O backend cruza por CPF, então aparece tudo que é daquela pessoa,
  * independente de onde ela comprou. É o argumento do login: quem compra na
  * loja física também tem o que ver aqui.
+ *
+ * A barra da conta entra aqui com `?situacao=` — clicar em "A pagar" e cair
+ * numa lista com tudo obrigaria a cliente a filtrar de novo na mão.
  */
 
 export const metadata = buildMetadata({
@@ -55,7 +58,21 @@ const STATUS_LEGADO: Record<string, string> = {
   failed: 'Não concluído',
 };
 
-export default async function PedidosPage() {
+/** As mesmas chaves da barra da conta (common/situacao-pedido.ts no backend). */
+const FILTROS = [
+  { chave: '', rotulo: 'Todos' },
+  { chave: 'aguardando_pagamento', rotulo: 'A pagar' },
+  { chave: 'preparando', rotulo: 'Preparando' },
+  { chave: 'enviado', rotulo: 'A caminho' },
+  { chave: 'entregue', rotulo: 'Entregues' },
+];
+
+export default async function PedidosPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ situacao?: string }>;
+}) {
+  const { situacao: filtro = '' } = await searchParams;
   const dados = await comoCliente<{ orders: Pedido[] }>('/customers/app/orders');
 
   if (dados === null) {
@@ -69,22 +86,63 @@ export default async function PedidosPage() {
     );
   }
 
-  const pedidos = dados.orders ?? [];
+  const todos = dados.orders ?? [];
+  const valido = FILTROS.some((f) => f.chave === filtro) ? filtro : '';
+  const pedidos = valido ? todos.filter((p) => p.situacao?.chave === valido) : todos;
+  const rotuloFiltro = FILTROS.find((f) => f.chave === valido)?.rotulo ?? 'Todos';
 
   return (
     <Section space="lg">
       <Container>
-        <header className="mb-8">
-          <p className="eyebrow text-muted">
+        <header className="mb-6">
+          <p className="eyebrow text-ink-muted">
             <Link href="/conta" className="link-underline">Minha conta</Link>
           </p>
           <h1 className="text-h2">Meus pedidos</h1>
         </header>
 
+        {/* Filtro só aparece se houver pedido — chip vazio em tela vazia é ruído. */}
+        {todos.length > 0 && (
+          <nav aria-label="Filtrar por situação" className="mb-8 flex flex-wrap gap-2">
+            {FILTROS.map((f) => {
+              const quantos = f.chave
+                ? todos.filter((p) => p.situacao?.chave === f.chave).length
+                : todos.length;
+              const ativo = f.chave === valido;
+              return (
+                <Link
+                  key={f.chave || 'todos'}
+                  href={f.chave ? `/conta/pedidos?situacao=${f.chave}` : '/conta/pedidos'}
+                  aria-current={ativo ? 'page' : undefined}
+                  className={`rounded-pill border px-4 py-2 text-small transition-colors ${
+                    ativo
+                      ? 'border-ink bg-ink text-light'
+                      : 'border-border text-ink-soft hover:border-primary hover:text-ink'
+                  }`}
+                >
+                  {f.rotulo}
+                  <span className={ativo ? 'ml-1.5 text-light/70' : 'ml-1.5 text-ink-muted'}>
+                    {quantos}
+                  </span>
+                </Link>
+              );
+            })}
+          </nav>
+        )}
+
         {pedidos.length === 0 ? (
-          <p className="text-body text-muted">
-            Você ainda não tem pedidos por aqui.{' '}
-            <Link href="/novidades" className="link-underline text-ink">Ver novidades</Link>
+          <p className="text-body text-ink-muted">
+            {todos.length === 0 ? (
+              <>
+                Você ainda não tem pedidos por aqui.{' '}
+                <Link href="/novidades" className="link-underline text-ink">Ver novidades</Link>
+              </>
+            ) : (
+              <>
+                Nenhum pedido em “{rotuloFiltro}”.{' '}
+                <Link href="/conta/pedidos" className="link-underline text-ink">Ver todos</Link>
+              </>
+            )}
           </p>
         ) : (
           <ul className="divide-y divide-border border-y border-border">
@@ -94,10 +152,10 @@ export default async function PedidosPage() {
                   <p className="text-body font-medium">
                     {p.firstItem || 'Pedido'}
                     {p.itemsCount > 1 && (
-                      <span className="text-muted"> +{p.itemsCount - 1}</span>
+                      <span className="text-ink-muted"> +{p.itemsCount - 1}</span>
                     )}
                   </p>
-                  <p className="text-small text-muted">
+                  <p className="text-small text-ink-muted">
                     {p.number ? `Nº ${p.number} · ` : ''}
                     {p.date ? new Date(p.date).toLocaleDateString('pt-BR') : ''}
                     {/* `situacao` primeiro: é a tradução completa. O mapa
@@ -109,7 +167,7 @@ export default async function PedidosPage() {
                         : ''}
                   </p>
                   {p.tracking && (
-                    <p className="text-small text-muted">
+                    <p className="text-small text-ink-muted">
                       Rastreio {p.tracking.code}
                       {p.tracking.carrier ? ` · ${p.tracking.carrier}` : ''}
                     </p>
@@ -117,16 +175,28 @@ export default async function PedidosPage() {
                   {p.pix && (
                     <PixSegundaVia copyPaste={p.pix.copyPaste} expiresAt={p.pix.expiresAt} />
                   )}
-                  {/* Atalho pra troca (10/08). O portal decide prazo e direito;
-                      aqui é só o caminho — e ele existe porque procurar "como
-                      trocar" no rodapé é onde a cliente desiste e vai pro
-                      WhatsApp. Quem está logada não digita nada lá. */}
-                  <Link
-                    href="/trocas"
-                    className="link-underline mt-1 inline-block text-small text-ink-soft hover:text-ink"
-                  >
-                    Precisa trocar?
-                  </Link>
+                  <div className="mt-1 flex flex-wrap gap-4">
+                    {/* Entregue = peça na mão: é aqui que a avaliação faz
+                        sentido, e é daqui que sai a maior parte delas. */}
+                    {p.situacao?.chave === 'entregue' && (
+                      <Link
+                        href="/conta/avaliacoes"
+                        className="link-underline inline-block text-small text-ink-soft hover:text-ink"
+                      >
+                        Avaliar as peças
+                      </Link>
+                    )}
+                    {/* Atalho pra troca (10/08). O portal decide prazo e direito;
+                        aqui é só o caminho — e ele existe porque procurar "como
+                        trocar" no rodapé é onde a cliente desiste e vai pro
+                        WhatsApp. Quem está logada não digita nada lá. */}
+                    <Link
+                      href="/trocas"
+                      className="link-underline inline-block text-small text-ink-soft hover:text-ink"
+                    >
+                      Precisa trocar?
+                    </Link>
+                  </div>
                 </div>
                 <p className="text-body tabular-nums">{formatPrice(p.total)}</p>
               </li>

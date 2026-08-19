@@ -102,7 +102,7 @@ export function AcessoConta({ voltarPara = '/conta' }: { voltarPara?: string }) 
 
   const campo =
     'w-full rounded-sm border border-border bg-background px-3 py-3 text-body outline-none focus:border-primary';
-  const rotulo = 'eyebrow mb-1 block text-[0.625rem] text-muted';
+  const rotulo = 'eyebrow mb-1 block text-[0.625rem] text-ink-muted';
 
   return (
     <div className="mx-auto w-full max-w-md">
@@ -116,7 +116,7 @@ export function AcessoConta({ voltarPara = '/conta' }: { voltarPara?: string }) 
             type="button"
             onClick={() => { setModo(id); setErro(null); setAviso(null); }}
             className={`-mb-px border-b-2 pb-3 text-small transition-colors ${
-              modo === id ? 'border-primary text-ink' : 'border-transparent text-muted hover:text-ink'
+              modo === id ? 'border-primary text-ink' : 'border-transparent text-ink-muted hover:text-ink'
             }`}
           >
             {texto}
@@ -150,7 +150,7 @@ export function AcessoConta({ voltarPara = '/conta' }: { voltarPara?: string }) 
               />
             </div>
             <div>
-              <label className={rotulo} htmlFor="email">E-mail <span className="text-muted">(opcional)</span></label>
+              <label className={rotulo} htmlFor="email">E-mail <span className="text-ink-muted">(opcional)</span></label>
               <input id="email" type="email" className={campo} value={email} autoComplete="email"
                 onChange={(e) => setEmail(e.target.value)} />
             </div>
@@ -180,7 +180,7 @@ export function AcessoConta({ voltarPara = '/conta' }: { voltarPara?: string }) 
         )}
 
         {erro && <p className="text-small text-[#B3261E]">{erro}</p>}
-        {aviso && <p className="text-small text-muted">{aviso}</p>}
+        {aviso && <p className="text-small text-ink-muted">{aviso}</p>}
 
         <Button type="submit" disabled={enviando} className="w-full">
           {enviando && <Loader2 className="mr-2 size-4 animate-spin" />}
@@ -194,13 +194,13 @@ export function AcessoConta({ voltarPara = '/conta' }: { voltarPara?: string }) 
             setErro(null);
             setAviso(null);
           }}
-          className="link-underline mx-auto block text-small text-muted"
+          className="link-underline mx-auto block text-small text-ink-muted"
         >
           {modo === 'esqueci' ? 'Voltar para entrar' : 'Esqueci minha senha'}
         </button>
       </form>
 
-      <p className="mt-6 text-center text-small text-muted">
+      <p className="mt-6 text-center text-small text-ink-muted">
         Sua conta é a mesma da loja física: pedidos, cashback e trocas no mesmo lugar.
       </p>
     </div>

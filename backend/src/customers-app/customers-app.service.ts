@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { situacaoPublica, SituacaoPublica } from '../common/situacao-pedido';
 import { EmailService } from '../email/email.service';
 import { AppLoginDto, AppRegisterDto } from './dto/app-auth.dto';
 
@@ -497,31 +498,18 @@ export class CustomersAppService {
   }
 
   /**
-   * O status do pedido no vocabulário da cliente (item 64).
+   * O status do pedido no vocabulario da cliente (item 64).
    *
-   * A operação tem uma dúzia de estados (routing, separating, picking...); a
-   * cliente tem quatro perguntas: pagou? separou? saiu? chegou? Qualquer
-   * estado intermediário vira "preparando" — detalhar a fila interna só gera
-   * ligação perguntando o que "roteamento" quer dizer.
+   * A regra mora em `common/situacao-pedido.ts` desde que a barra de tarefas
+   * da conta passou a CONTAR pedidos por situacao: duas traducoes levariam
+   * contador e lista a discordarem na mesma tela.
    */
   private situacaoPublica(o: {
     status: string | null;
     paidAt: Date | null;
     trackingCode: string | null;
-  }): { chave: string; rotulo: string } {
-    const s = String(o.status || '').toLowerCase();
-
-    if (s === 'cancelled' || s === 'canceled') {
-      return { chave: 'cancelado', rotulo: 'Cancelado' };
-    }
-    if (s === 'delivered') return { chave: 'entregue', rotulo: 'Entregue' };
-    if (s === 'shipped' || o.trackingCode) {
-      return { chave: 'enviado', rotulo: 'A caminho' };
-    }
-    if (!o.paidAt) {
-      return { chave: 'aguardando_pagamento', rotulo: 'Aguardando pagamento' };
-    }
-    return { chave: 'preparando', rotulo: 'Preparando seu pedido' };
+  }): SituacaoPublica {
+    return situacaoPublica(o);
   }
 
   /**

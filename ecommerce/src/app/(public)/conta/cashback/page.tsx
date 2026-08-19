@@ -79,7 +79,7 @@ export default async function CashbackPage() {
     <Section space="lg">
       <Container>
         <header className="mb-8">
-          <p className="eyebrow text-muted">
+          <p className="eyebrow text-ink-muted">
             <Link href="/conta" className="link-underline">Minha conta</Link>
           </p>
           <h1 className="text-h2">Meu cashback</h1>
@@ -88,7 +88,7 @@ export default async function CashbackPage() {
         {/* Saldo — o único número grande da página, em verde (a convenção da
             casa reserva verde pra dinheiro). */}
         <div className="rounded-sm border border-border p-6">
-          <p className="eyebrow text-muted">Disponível pra usar</p>
+          <p className="eyebrow text-ink-muted">Disponível pra usar</p>
           <p className="mt-1 text-h2 tabular-nums text-success">{formatPrice(extrato.balance)}</p>
 
           {extrato.nextExpiration && (
@@ -102,7 +102,7 @@ export default async function CashbackPage() {
             </p>
           )}
 
-          <p className="mt-3 text-small text-muted">
+          <p className="mt-3 text-small text-ink-muted">
             Você recebe {extrato.rate}% de volta em cada compra. O crédito vale por{' '}
             {extrato.ttlDays} dias.
           </p>
@@ -111,7 +111,7 @@ export default async function CashbackPage() {
         <h2 className="mt-10 mb-3 text-h4">Extrato</h2>
 
         {movimentos.length === 0 ? (
-          <p className="text-body text-muted">
+          <p className="text-body text-ink-muted">
             Ainda não há movimento por aqui.{' '}
             <Link href="/novidades" className="link-underline text-ink">Ver novidades</Link>
           </p>
@@ -125,12 +125,12 @@ export default async function CashbackPage() {
                 <li key={m.id} className="flex flex-wrap items-baseline justify-between gap-3 py-4">
                   <div className="min-w-0">
                     <p className="text-body">{m.description || TIPO[m.type] || 'Movimento'}</p>
-                    <p className="text-small text-muted">
+                    <p className="text-small text-ink-muted">
                       {m.date ? new Date(m.date).toLocaleDateString('pt-BR') : ''}
                       {m.description && TIPO[m.type] ? ` · ${TIPO[m.type]}` : ''}
                     </p>
                   </div>
-                  <p className={`text-body tabular-nums ${saiu ? 'text-muted' : 'text-success'}`}>
+                  <p className={`text-body tabular-nums ${saiu ? 'text-ink-muted' : 'text-success'}`}>
                     {saiu ? '−' : '+'}
                     {formatPrice(Math.abs(m.amount))}
                   </p>

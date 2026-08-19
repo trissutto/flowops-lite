@@ -56,7 +56,7 @@ export default async function MeusDadosPage() {
     <Section space="lg">
       <Container>
         <header className="mb-8">
-          <p className="eyebrow text-muted">
+          <p className="eyebrow text-ink-muted">
             <Link href="/conta" className="link-underline">Minha conta</Link>
           </p>
           <h1 className="text-h2">Meus dados</h1>
@@ -65,7 +65,7 @@ export default async function MeusDadosPage() {
         <dl className="divide-y divide-border border-y border-border">
           {campos.map(([rotulo, valor]) => (
             <div key={rotulo} className="flex items-baseline justify-between gap-4 py-4">
-              <dt className="text-small text-muted">{rotulo}</dt>
+              <dt className="text-small text-ink-muted">{rotulo}</dt>
               <dd className="text-body">{valor}</dd>
             </div>
           ))}
@@ -75,7 +75,7 @@ export default async function MeusDadosPage() {
         <PreferenciasLgpd />
 
         <h2 className="mt-10 mb-3 text-h4">Seus direitos</h2>
-        <p className="text-body text-muted">
+        <p className="text-body text-ink-muted">
           Você pode pedir uma cópia dos seus dados ou apagar sua conta quando quiser.
           Fale com a gente em{' '}
           <a href="mailto:privacidade@lurdsplussize.com.br" className="link-underline text-ink">

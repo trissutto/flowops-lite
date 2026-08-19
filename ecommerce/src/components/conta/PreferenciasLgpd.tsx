@@ -75,7 +75,7 @@ export function PreferenciasLgpd() {
 
   if (canais === null) {
     return (
-      <p className="flex items-center gap-2 text-small text-muted">
+      <p className="flex items-center gap-2 text-small text-ink-muted">
         <Loader2 className="size-4 animate-spin" /> Carregando…
       </p>
     );
@@ -89,7 +89,7 @@ export function PreferenciasLgpd() {
             <div className="min-w-0">
               <p className="text-body">{c.rotulo}</p>
               {c.em && (
-                <p className="text-small text-muted">
+                <p className="text-small text-ink-muted">
                   {c.granted ? 'Autorizado' : 'Recusado'} em{' '}
                   {new Date(c.em).toLocaleDateString('pt-BR')}
                 </p>
@@ -123,7 +123,7 @@ export function PreferenciasLgpd() {
         </p>
       )}
 
-      <p className="mt-4 text-small text-muted">
+      <p className="mt-4 text-small text-ink-muted">
         Avisos do seu pedido e nota fiscal continuam chegando — eles fazem parte da
         compra e não dependem desta escolha.
       </p>

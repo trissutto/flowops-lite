@@ -22,6 +22,7 @@ import {
   Mail,
   MessageCircle,
   Trophy,
+  Star,
   ListOrdered,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -60,6 +61,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/email-marketing',      label: 'Campanha de E-mail', subtitle: 'Disparo via Mautic', description: 'Escolher público, escrever e enviar/agendar', tone: 'amber',  icon: Mail        },
   { href: '/retaguarda/whatsapp-campanhas',   label: 'Campanha de WhatsApp', subtitle: 'Disparo via Evolution', description: 'Público, mensagem e disparo pausado c/ kill-switch', tone: 'green', icon: MessageCircle },
   { href: '/retaguarda/whatsapp-inbox',       label: 'WhatsApp Conversas', subtitle: 'Inbox no sistema', description: 'Ler e responder as clientes do PC — celular fica na loja', tone: 'green', icon: MessageCircle },
+  { href: '/retaguarda/avaliacoes',           label: 'Avaliações',        subtitle: 'Prova social do site', description: 'Régua de pontos + moderar o que sai na PDP', tone: 'amber',  icon: Star        },
   { href: '/retaguarda/looks',                label: 'Looks',             subtitle: 'Complete o look', description: 'Peças da mesma foto se puxam na PDP', tone: 'rose',   icon: Layers      },
   { href: '/retaguarda/top-da-semana',        label: 'Mais Top da Semana', subtitle: 'Curadoria vitrine', description: 'Escolher e ordenar os 20 destaques da semana', tone: 'amber', icon: Trophy      },
   { href: '/retaguarda/vitrines-home',        label: 'Vitrines da home',  subtitle: 'Ordem do site',  description: 'Quais carrosséis saem na home e em que ordem', tone: 'purple', icon: ListOrdered },
