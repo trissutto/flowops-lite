@@ -36,6 +36,23 @@ export interface AvaliacoesConfig {
    * o rastreio confirma a entrega.
    */
   diasAposEntrega: number;
+
+  /**
+   * Dias depois da ENTREGA ate o CONVITE sair no WhatsApp.
+   *
+   * Separado do `diasAposEntrega` de proposito, ainda que os dois contem da
+   * mesma data. Sao duas perguntas diferentes:
+   *   · `diasAposEntrega` = a partir de quando a peca PODE ser avaliada. Zero
+   *     esta certo ali: se ela entrar na conta no dia da entrega, a peca tem
+   *     que estar la esperando.
+   *   · `diasConvite` = quando a gente PUXA o assunto. No dia da entrega ela
+   *     ainda nao vestiu, e "conta como ficou" sem ter usado nao rende
+   *     avaliacao — rende uma mensagem ignorada e um convite queimado.
+   *
+   * Amarrar os dois no mesmo numero fazia o convite sair junto com a entrega
+   * (o pedido do dono era CINCO DIAS).
+   */
+  diasConvite: number;
   /**
    * Prazo alternativo pra quando a entrega nunca é confirmada (rastreio de
    * outro contrato, retirada em loja): N dias depois do pedido pago a peça
@@ -79,6 +96,7 @@ export const AVALIACOES_CONFIG_PADRAO: AvaliacoesConfig = {
   pontosMedidas: 2,
   maxFotos: 5,
   diasAposEntrega: 0,
+  diasConvite: 5,
   diasAposPedido: 20,
   janelaDias: 90,
   moderacao: false,
@@ -132,6 +150,7 @@ export class AvaliacoesConfigService {
     novo.minPalavras = inteiro(novo.minPalavras, AVALIACOES_CONFIG_PADRAO.minPalavras, 1);
     novo.maxFotos = Math.min(inteiro(novo.maxFotos, AVALIACOES_CONFIG_PADRAO.maxFotos, 1), 10);
     novo.diasAposEntrega = inteiro(novo.diasAposEntrega, AVALIACOES_CONFIG_PADRAO.diasAposEntrega);
+    novo.diasConvite = inteiro(novo.diasConvite, AVALIACOES_CONFIG_PADRAO.diasConvite);
     novo.diasAposPedido = inteiro(novo.diasAposPedido, AVALIACOES_CONFIG_PADRAO.diasAposPedido, 1);
     novo.janelaDias = inteiro(novo.janelaDias, AVALIACOES_CONFIG_PADRAO.janelaDias, 1);
     novo.pontosPorReal = inteiro(novo.pontosPorReal, AVALIACOES_CONFIG_PADRAO.pontosPorReal, 1);

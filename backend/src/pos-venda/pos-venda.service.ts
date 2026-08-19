@@ -17,8 +17,8 @@ import { AvaliacoesConfigService } from '../avaliacoes/avaliacoes-config.service
  * esperando alguém aparecer.
  *
  * Aqui está a parte ativa:
- *   · **D+5 da ENTREGA CONFIRMADA** (`cfg.diasAposEntrega`, a mesma régua da
- *     tela da matriz). O marco é o `deliveredAt` que o `RastreioSyncCron`
+ *   · **D+5 da ENTREGA CONFIRMADA** (`cfg.diasConvite`, régua da tela da
+ *     matriz, padrão 5). O marco é o `deliveredAt` que o `RastreioSyncCron`
  *     carimba — pedido dividido só chega nesse estado quando TODAS as caixas
  *     chegam, então o convite nunca sai com peça ainda no caminhão.
  *   · **link SEM LOGIN**. O link chega no WhatsApp e vai ser aberto no
@@ -327,7 +327,7 @@ export class PosVendaService {
         source: { in: ORIGENS_POS_VENDA },
         deliveredAt: {
           gte: new Date(agora - PosVendaService.JANELA_DIAS * 86_400_000),
-          lte: new Date(agora - cfg.diasAposEntrega * 86_400_000),
+          lte: new Date(agora - cfg.diasConvite * 86_400_000),
         },
         // Sem convite, ou com convite que nunca saiu — os dois são "ninguém
         // chamou essa cliente ainda".
@@ -402,7 +402,7 @@ export class PosVendaService {
       porPedido.set(r.orderId, lista);
     }
 
-    const prazo = cfg.diasAposEntrega * 86_400_000;
+    const prazo = cfg.diasConvite * 86_400_000;
     const linhas = pedidos.map((p) => {
       const c = p.avaliacaoConvite;
       const avaliacoes = porPedido.get(p.id) ?? [];
@@ -450,7 +450,7 @@ export class PosVendaService {
     return {
       config: {
         ativo: cfg.ativo,
-        diasAposEntrega: cfg.diasAposEntrega,
+        diasConvite: cfg.diasConvite,
         pontosEnvio: cfg.pontosEnvio,
         pontosTexto: cfg.pontosTexto,
         pontosFoto: cfg.pontosFoto,

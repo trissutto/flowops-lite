@@ -76,7 +76,7 @@ interface LinhaPosVenda {
 interface Resposta {
   config: {
     ativo: boolean;
-    diasAposEntrega: number;
+    diasConvite: number;
     pontosEnvio: number;
     pontosTexto: number;
     pontosFoto: number;
@@ -235,7 +235,7 @@ export default function PosVenda() {
           <p className="text-sm text-slate-500 mt-0.5">
             {cfg ? (
               <>
-                A cliente é chamada <strong>{cfg.diasAposEntrega} dia{cfg.diasAposEntrega === 1 ? '' : 's'}</strong> depois
+                A cliente é chamada <strong>{cfg.diasConvite} dia{cfg.diasConvite === 1 ? '' : 's'}</strong> depois
                 da entrega confirmada pelo rastreio, e ganha <strong>até {teto} pontos</strong> por peça
                 ({cfg.pontosEnvio} pelas estrelas, +{cfg.pontosTexto} pelo texto, +{cfg.pontosFoto} pela
                 foto, +{cfg.pontosMedidas} pelas medidas) — {cfg.pontosPorReal} pontos valem R$ 1,00.

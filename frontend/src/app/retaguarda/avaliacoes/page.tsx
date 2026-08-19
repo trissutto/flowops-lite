@@ -32,6 +32,7 @@ interface Config {
   pontosMedidas: number;
   maxFotos: number;
   diasAposEntrega: number;
+  diasConvite: number;
   diasAposPedido: number;
   janelaDias: number;
   moderacao: boolean;
@@ -78,6 +79,7 @@ const PADRAO: Config = {
   pontosMedidas: 2,
   maxFotos: 5,
   diasAposEntrega: 0,
+  diasConvite: 5,
   diasAposPedido: 20,
   janelaDias: 90,
   moderacao: false,
@@ -331,6 +333,13 @@ export default function AvaliacoesAdminPage() {
                   '0 = assim que o rastreio confirma que chegou.',
                   cfg.diasAposEntrega,
                   (n) => setCfg({ ...cfg, diasAposEntrega: n }),
+                  'dias',
+                )}
+                {campo(
+                  'Convite no WhatsApp',
+                  'Quantos dias depois da entrega a gente CHAMA a cliente pra avaliar. É outro número do de cima de propósito: no dia da entrega ela ainda não vestiu, e "conta como ficou" sem ter usado vira mensagem ignorada e convite queimado.',
+                  cfg.diasConvite,
+                  (n) => setCfg({ ...cfg, diasConvite: Math.max(0, n) }),
                   'dias',
                 )}
                 {campo(

@@ -11,9 +11,11 @@ import { ORIGENS_POS_VENDA, PosVendaService } from './pos-venda.service';
  *
  * No dia da entrega ela ainda não vestiu. A avaliação útil — serviu? o tecido é
  * o que parecia? a cor é a da foto? — só existe depois de usar. O prazo é o
- * `diasAposEntrega` da tela da matriz (a MESMA régua que libera a peça no
- * centro de avaliação: convidar antes de liberar seria mandar a cliente pra uma
- * tela vazia).
+ * `diasConvite` da tela da matriz (padrão 5, pedido do dono) — que é OUTRO
+ * número do `diasAposEntrega`: esse diz quando a peça LIBERA pra avaliação, e
+ * zero está certo lá (se ela entrar na conta no dia da entrega, a peça tem que
+ * estar esperando). Amarrar os dois no mesmo número fazia o convite sair junto
+ * com a entrega.
  *
  * ── A FONTE É O RASTREIO ──
  *
@@ -59,7 +61,7 @@ export class PosVendaConviteCron {
           source: { in: ORIGENS_POS_VENDA },
           deliveredAt: {
             gte: new Date(agora - PosVendaConviteCron.JANELA_DIAS * 86_400_000),
-            lte: new Date(agora - cfg.diasAposEntrega * 86_400_000),
+            lte: new Date(agora - cfg.diasConvite * 86_400_000),
           },
           // Sem convite ainda. A linha da tabela É a marca — não existe coluna
           // "já convidei" no pedido pra sair de sincronia com ela.
