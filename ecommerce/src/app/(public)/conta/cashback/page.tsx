@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
 import { comoCliente } from '@/lib/conta';
@@ -65,10 +64,8 @@ export default async function CashbackPage() {
   if (extrato === null) {
     return (
       <Section space="lg">
-        <Container>
-          <h1 className="mb-8 text-center text-h2">Meu cashback</h1>
-          <AcessoConta voltarPara="/conta/cashback" />
-        </Container>
+        <h1 className="mb-8 text-center text-h2">Meu cashback</h1>
+        <AcessoConta voltarPara="/conta/cashback" />
       </Section>
     );
   }
@@ -77,69 +74,67 @@ export default async function CashbackPage() {
 
   return (
     <Section space="lg">
-      <Container>
-        <header className="mb-8">
-          <p className="eyebrow text-ink-muted">
-            <Link href="/conta" className="link-underline">Minha conta</Link>
+      <header className="mb-8">
+        <p className="eyebrow text-ink-muted">
+          <Link href="/conta" className="link-underline">Minha conta</Link>
+        </p>
+        <h1 className="text-h2">Meu cashback</h1>
+      </header>
+
+      {/* Saldo — o único número grande da página, em verde (a convenção da
+          casa reserva verde pra dinheiro). */}
+      <div className="rounded-sm border border-border p-6">
+        <p className="eyebrow text-ink-muted">Disponível pra usar</p>
+        <p className="mt-1 text-h2 tabular-nums text-success">{formatPrice(extrato.balance)}</p>
+
+        {extrato.nextExpiration && (
+          <p className="mt-3 text-small text-ink">
+            {formatPrice(extrato.nextExpiration.amount)} expira em{' '}
+            <span className="font-medium">
+              {extrato.nextExpiration.daysLeft} dia
+              {extrato.nextExpiration.daysLeft === 1 ? '' : 's'}
+            </span>
+            .
           </p>
-          <h1 className="text-h2">Meu cashback</h1>
-        </header>
-
-        {/* Saldo — o único número grande da página, em verde (a convenção da
-            casa reserva verde pra dinheiro). */}
-        <div className="rounded-sm border border-border p-6">
-          <p className="eyebrow text-ink-muted">Disponível pra usar</p>
-          <p className="mt-1 text-h2 tabular-nums text-success">{formatPrice(extrato.balance)}</p>
-
-          {extrato.nextExpiration && (
-            <p className="mt-3 text-small text-ink">
-              {formatPrice(extrato.nextExpiration.amount)} expira em{' '}
-              <span className="font-medium">
-                {extrato.nextExpiration.daysLeft} dia
-                {extrato.nextExpiration.daysLeft === 1 ? '' : 's'}
-              </span>
-              .
-            </p>
-          )}
-
-          <p className="mt-3 text-small text-ink-muted">
-            Você recebe {extrato.rate}% de volta em cada compra. O crédito vale por{' '}
-            {extrato.ttlDays} dias.
-          </p>
-        </div>
-
-        <h2 className="mt-10 mb-3 text-h4">Extrato</h2>
-
-        {movimentos.length === 0 ? (
-          <p className="text-body text-ink-muted">
-            Ainda não há movimento por aqui.{' '}
-            <Link href="/novidades" className="link-underline text-ink">Ver novidades</Link>
-          </p>
-        ) : (
-          <ul className="divide-y divide-border border-y border-border">
-            {movimentos.map((m) => {
-              // `spend` e `expire` chegam com o sinal do banco; o que importa
-              // pra leitura é entrar ou sair, então o sinal vem do TIPO.
-              const saiu = m.type === 'spend' || m.type === 'expire';
-              return (
-                <li key={m.id} className="flex flex-wrap items-baseline justify-between gap-3 py-4">
-                  <div className="min-w-0">
-                    <p className="text-body">{m.description || TIPO[m.type] || 'Movimento'}</p>
-                    <p className="text-small text-ink-muted">
-                      {m.date ? new Date(m.date).toLocaleDateString('pt-BR') : ''}
-                      {m.description && TIPO[m.type] ? ` · ${TIPO[m.type]}` : ''}
-                    </p>
-                  </div>
-                  <p className={`text-body tabular-nums ${saiu ? 'text-ink-muted' : 'text-success'}`}>
-                    {saiu ? '−' : '+'}
-                    {formatPrice(Math.abs(m.amount))}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
         )}
-      </Container>
+
+        <p className="mt-3 text-small text-ink-muted">
+          Você recebe {extrato.rate}% de volta em cada compra. O crédito vale por{' '}
+          {extrato.ttlDays} dias.
+        </p>
+      </div>
+
+      <h2 className="mt-10 mb-3 text-h4">Extrato</h2>
+
+      {movimentos.length === 0 ? (
+        <p className="text-body text-ink-muted">
+          Ainda não há movimento por aqui.{' '}
+          <Link href="/novidades" className="link-underline text-ink">Ver novidades</Link>
+        </p>
+      ) : (
+        <ul className="divide-y divide-border border-y border-border">
+          {movimentos.map((m) => {
+            // `spend` e `expire` chegam com o sinal do banco; o que importa
+            // pra leitura é entrar ou sair, então o sinal vem do TIPO.
+            const saiu = m.type === 'spend' || m.type === 'expire';
+            return (
+              <li key={m.id} className="flex flex-wrap items-baseline justify-between gap-3 py-4">
+                <div className="min-w-0">
+                  <p className="text-body">{m.description || TIPO[m.type] || 'Movimento'}</p>
+                  <p className="text-small text-ink-muted">
+                    {m.date ? new Date(m.date).toLocaleDateString('pt-BR') : ''}
+                    {m.description && TIPO[m.type] ? ` · ${TIPO[m.type]}` : ''}
+                  </p>
+                </div>
+                <p className={`text-body tabular-nums ${saiu ? 'text-ink-muted' : 'text-success'}`}>
+                  {saiu ? '−' : '+'}
+                  {formatPrice(Math.abs(m.amount))}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Section>
   );
 }

@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
 import { CentroDeAvaliacao, type DadosCentro } from '@/components/conta/CentroDeAvaliacao';
@@ -32,30 +31,26 @@ export default async function AvaliacoesPage() {
   if (dados === null) {
     return (
       <Section space="lg">
-        <Container>
-          <h1 className="mb-8 text-center text-h2">Avaliar peças</h1>
-          <AcessoConta voltarPara="/conta/avaliacoes" />
-        </Container>
+        <h1 className="mb-8 text-center text-h2">Avaliar peças</h1>
+        <AcessoConta voltarPara="/conta/avaliacoes" />
       </Section>
     );
   }
 
   return (
-    <Section space="lg">
-      <Container width="text">
-        <header className="mb-8">
-          <p className="eyebrow text-ink-muted">
-            <Link href="/conta" className="link-underline">Minha conta</Link>
-          </p>
-          <h1 className="text-h2">Avaliar peças</h1>
-          <p className="mt-2 text-body text-ink-soft">
-            Conte como a peça serviu. Sua avaliação aparece na página do produto e ajuda quem
-            está na dúvida do tamanho.
-          </p>
-        </header>
+    <Section space="lg" width="text">
+      <header className="mb-8">
+        <p className="eyebrow text-ink-muted">
+          <Link href="/conta" className="link-underline">Minha conta</Link>
+        </p>
+        <h1 className="text-h2">Avaliar peças</h1>
+        <p className="mt-2 text-body text-ink-soft">
+          Conte como a peça serviu. Sua avaliação aparece na página do produto e ajuda quem
+          está na dúvida do tamanho.
+        </p>
+      </header>
 
-        <CentroDeAvaliacao dados={dados} />
-      </Container>
+      <CentroDeAvaliacao dados={dados} />
     </Section>
   );
 }
