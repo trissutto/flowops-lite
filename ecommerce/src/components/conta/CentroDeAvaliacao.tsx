@@ -480,15 +480,19 @@ function FormularioAvaliacao({
         </div>
       </div>
 
-      <fieldset className="border-t border-border py-6">
-        <legend className="sr-only">Sua nota</legend>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-body font-medium">
-            Sua nota <span className="text-danger">*</span>
-          </p>
-          <Estrelas nota={nota} onChange={setNota} />
-        </div>
-      </fieldset>
+      {/* `role="group"` em vez de fieldset/legend: o legend visível só pra
+          leitor de tela repetia "Sua nota" duas vezes, e legend dentro de flex
+          tem renderização própria que briga com o alinhamento. */}
+      <div
+        role="group"
+        aria-labelledby="rotulo-nota"
+        className="flex flex-wrap items-center justify-between gap-3 border-t border-border py-6"
+      >
+        <p id="rotulo-nota" className="text-body font-medium">
+          Sua nota <span className="text-danger">*</span>
+        </p>
+        <Estrelas nota={nota} onChange={setNota} />
+      </div>
 
       <div className="border-t border-border py-6">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
