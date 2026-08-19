@@ -470,6 +470,9 @@ model Order {
   items      OrderItem[]
   pickOrders PickOrder[]
   history    OrderHistory[]
+  // Convite de avaliacao pos-venda (D+5 da entrega). A LINHA e a marca: pedido
+  // entregue SEM convite ainda nao foi chamado pra avaliar.
+  avaliacaoConvite AvaliacaoConvite?
   seller     Seller? @relation(fields: [sellerId], references: [id])
   person     Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
@@ -7443,4 +7446,184 @@ model WhatsappMessage {
 
   @@index([conversationJid, ts])
   @@map("whatsapp_messages")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PÓS-VENDA — a avaliação que fecha o ciclo (19/08/2026)
+//
+// O ciclo do pedido terminava em "entregue" e morria ali. A peça está na mão
+// da cliente, ela sabe se serviu, se a cor é a da foto e se o tecido é o que
+// ela imaginou — e essa informação, que é justamente a que a PRÓXIMA cliente
+// procura, não era pedida a ninguém.
+//
+// A PDP tem um slot reservado pra isto desde 06/08, quando os depoimentos
+// falsos ("Cliente Lurds", altura e peso inventados, as mesmas 4 frases em
+// toda peça) saíram do ar. O compromisso escrito lá era: volta quando houver
+// avaliação REAL, amarrada ao pedido entregue e à REF certa. É o que estas
+// tabelas guardam.
+//
+// ── POR QUE TRÊS TABELAS E NÃO UMA ──
+//
+//   AvaliacaoConvite  → o CONVITE (1 por pedido). Guarda o token do link, se
+//                       saiu, se ela abriu e se respondeu. Sem ele não dá pra
+//                       distinguir "ninguém quis avaliar" de "ninguém foi
+//                       chamado" — e são problemas opostos.
+//   ProdutoAvaliacao  → a RESPOSTA, uma por PEÇA (refBase+cor). O pedido tem
+//                       3 peças, a cliente ama uma e odeia outra; nota única
+//                       por pedido não serve pra PDP nenhuma.
+//   PontosSaldo/Tx    → o PRÊMIO. Extrato separado do cashback de propósito:
+//                       cashback é DINHEIRO da compra e nasce desligado no
+//                       banco; ponto de avaliação é benefício de engajamento e
+//                       não pode depender do interruptor do outro.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// O convite pra avaliar — 1 por pedido, com o token que abre a página sem login.
+///
+/// SEM LOGIN de propósito: o link chega no WhatsApp e vai ser aberto no celular,
+/// muitas vezes por cliente que comprou como visitante. Parede de senha na
+/// frente de um pedido de favor é o jeito mais rápido de não receber resposta.
+/// O token é longo, aleatório e tem prazo — quem tem o link tem aquele pedido,
+/// e nada além dele.
+model AvaliacaoConvite {
+  id           String    @id @default(uuid())
+  orderId      String    @unique @map("order_id")
+  /// Token do link (aleatório, 32+ chars). É a única credencial da página.
+  token        String    @unique @db.VarChar(64)
+  /// CPF da cliente — a chave dos pontos (a PESSOA, igual ao cashback da rede).
+  cpf          String?   @db.VarChar(11)
+  telefone     String?   @db.VarChar(20)
+  nomeCliente  String?   @map("nome_cliente") @db.VarChar(120)
+  /// Quando a transportadora confirmou a entrega (marco zero do D+5).
+  entregueEm   DateTime? @map("entregue_em")
+  enviadoEm    DateTime? @map("enviado_em")
+  /// whatsapp | manual — de onde saiu o toque, pra medir o que funciona.
+  canal        String?   @db.VarChar(16)
+  /// Reenvios feitos pela retaguarda. Teto na service — insistir vira spam.
+  tentativas   Int       @default(0)
+  abertoEm     DateTime? @map("aberto_em")
+  respondidoEm DateTime? @map("respondido_em")
+  expiraEm     DateTime  @map("expira_em")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  order      Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  avaliacoes ProdutoAvaliacao[]
+
+  /// A fila do cron e a lista da retaguarda leem por estes dois.
+  @@index([enviadoEm])
+  @@index([respondidoEm])
+  @@map("avaliacao_convites")
+}
+
+/// A avaliação de UMA peça. A chave é a REF-BASE (a família), não a REF crua:
+/// as cores da mesma peça são REFs irmãs e a cliente lê "esta peça" na PDP —
+/// a mesma regra que catálogo, fotos e busca já usam (refBaseOf).
+///
+/// NASCE pending E NÃO APARECE NO SITE (decisão do dono, 19/08): nota, texto e
+/// foto passam pela fila de moderação da retaguarda. Foto de cliente vai direto
+/// pra página do produto — o custo de uma foto errada no ar é maior que o de
+/// aprovar em lote uma vez por dia.
+model ProdutoAvaliacao {
+  id          String  @id @default(uuid())
+  conviteId   String  @map("convite_id")
+  orderId     String? @map("order_id")
+  orderItemId String? @map("order_item_id")
+  /// CPF de quem avaliou — é por ele que o ponto é creditado.
+  cpf         String? @db.VarChar(11)
+  personId    String? @map("person_id")
+
+  /// Família da peça (refBaseOf) — é o que a PDP consulta.
+  refBase     String  @map("ref_base") @db.VarChar(40)
+  /// REF como veio no pedido — snapshot, pra auditoria de REF reciclada.
+  ref         String? @db.VarChar(40)
+  /// NAO E NULAVEL de proposito, e `conviteId` tambem nao: no Postgres um
+  /// UNIQUE com coluna NULA nao trava nada (NULL nunca e igual a NULL). Com
+  /// `cor` opcional, a peca sem cor cadastrada driblaria o
+  /// @@unique(conviteId, refBase, cor) e viraria uma avaliacao nova a cada vez
+  /// que a cliente reabrisse o link. Vazio = sem cor.
+  cor         String  @default("") @db.VarChar(40)
+  tamanho     String? @db.VarChar(10)
+  produtoNome String? @map("produto_nome") @db.VarChar(160)
+
+  nota       Int
+  comentario String? @db.Text
+  /// URL pública da foto (Cloudflare Images) e o id, pra poder apagar depois.
+  fotoUrl    String? @map("foto_url")
+  fotoId     String? @map("foto_id") @db.VarChar(128)
+
+  /// Como assina na PDP: PRIMEIRO NOME e cidade/UF. Nome inteiro na vitrine
+  /// expõe a cliente sem necessidade — e ninguém pediu pra ser identificada.
+  autorNome   String? @map("autor_nome") @db.VarChar(40)
+  autorCidade String? @map("autor_cidade") @db.VarChar(60)
+
+  /// pending | approved | rejected
+  status      String    @default("pending") @db.VarChar(10)
+  motivo      String?   @db.VarChar(160)
+  moderadoEm  DateTime? @map("moderado_em")
+  moderadoPor String?   @map("moderado_por") @db.VarChar(80)
+
+  /// Pontos creditados. Só sai do zero na APROVAÇÃO — avaliação reprovada não
+  /// paga, e assim ninguém precisa estornar saldo (nem fica devendo).
+  pontos   Int       @default(0)
+  pontosEm DateTime? @map("pontos_em")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  convite AvaliacaoConvite @relation(fields: [conviteId], references: [id], onDelete: Cascade)
+
+  /// Uma avaliação por peça+cor em cada convite — reabrir o link não duplica.
+  @@unique([conviteId, refBase, cor])
+  /// A consulta da PDP: as aprovadas desta família.
+  @@index([refBase, status])
+  /// A fila de moderação da retaguarda.
+  @@index([status, createdAt])
+  @@index([cpf])
+  @@map("produto_avaliacoes")
+}
+
+/// SALDO DE PONTOS — chave é o CPF, a PESSOA (mesma decisão do cashback da rede).
+///
+/// Não é CustomerAccount.id de propósito: a conta do site exige senha, e a
+/// maioria das clientes compra como visitante. O CPF, esse o checkout já exige
+/// (é a nota fiscal) — então todo pedido do site tem por onde creditar.
+model PontosSaldo {
+  cpf       String   @id @db.VarChar(11)
+  personId  String?  @map("person_id")
+  nome      String?  @db.VarChar(80)
+  telefone  String?  @db.VarChar(20)
+  saldo     Int      @default(0)
+  ganhos    Int      @default(0)
+  gastos    Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  transacoes PontosTransacao[]
+
+  @@map("pontos_saldos")
+}
+
+/// O EXTRATO. Existe pelo mesmo motivo que o do cashback: saldo sem extrato é
+/// um número que a cliente não sabe de onde veio — e número que ela não entende
+/// ela não gasta.
+model PontosTransacao {
+  id        String    @id @default(uuid())
+  cpf       String    @db.VarChar(11)
+  /// Positivo = ganhou · negativo = resgatou.
+  pontos    Int
+  saldoApos Int       @map("saldo_apos")
+  /// avaliacao | avaliacao_foto | resgate | ajuste
+  tipo      String    @db.VarChar(20)
+  descricao String?   @db.VarChar(160)
+  /// Quem originou (ex: avaliacao:ID). Junto com o tipo forma a trava de
+  /// idempotência: aprovar a mesma avaliação duas vezes não credita duas vezes.
+  origem    String?   @db.VarChar(80)
+  expiraEm  DateTime? @map("expira_em")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  conta PontosSaldo @relation(fields: [cpf], references: [cpf], onDelete: Cascade)
+
+  @@unique([tipo, origem])
+  @@index([cpf, createdAt])
+  @@map("pontos_transacoes")
 }

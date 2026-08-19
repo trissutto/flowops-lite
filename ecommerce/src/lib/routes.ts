@@ -51,6 +51,7 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/conta/enderecos',
   '/conta/favoritos',
   '/conta/pedidos',
+  '/conta/pontos',
   '/debug/search',
   '/debug/tracking',
   /^\/ate\/[^/]+$/,
@@ -59,6 +60,8 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   /^\/pedido\/[^/]+$/,
   /^\/tamanhos\/[^/]+$/,
   /^\/checkout\/confirmacao\/[^/]+$/,
+  // Página POR PEDIDO, aberta pelo link do WhatsApp (token na URL).
+  /^\/avaliar\/[^/]+$/,
 ];
 
 type Href = string | UrlObject;

@@ -55,6 +55,7 @@ import { SitePublishModule } from './site-publish/site-publish.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { IntegrationLogsModule } from './integration-logs/integration-logs.module';
 import { TrackingModule } from './tracking/tracking.module';
+import { PosVendaModule } from './pos-venda/pos-venda.module';
 import { CorreiosModule } from './correios/correios.module';
 import { MaisEnviosModule } from './mais-envios/mais-envios.module';
 import { PilotModule } from './pilot/pilot.module';
@@ -157,6 +158,7 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     WhatsappModule,
     IntegrationLogsModule,
     TrackingModule,
+    PosVendaModule,
     CorreiosModule,
     MaisEnviosModule,
     PilotModule,

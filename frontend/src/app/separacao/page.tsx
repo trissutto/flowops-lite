@@ -29,6 +29,7 @@ import { classifyShipping } from '@/lib/shipping-method';
 import { autoSendOrderToStore } from '@/lib/auto-send-order';
 import SellerTag from '@/components/SellerTag';
 import EnviadosByStore from '@/components/EnviadosByStore';
+import PosVenda from '@/components/PosVenda';
 import {
   RefreshCw,
   Send,
@@ -49,6 +50,7 @@ import {
   Zap,
   Truck,
   Plane,
+  Star,
   ArrowLeft,
   LayoutDashboard,
   Globe2,
@@ -93,6 +95,21 @@ interface WcOrderListItem {
   // Marketing: nome da campanha de origem (Order Attribution do WC). Só vem
   // preenchido se o anúncio carregou UTM na URL. null = direto/sem campanha.
   utmCampaign?: string | null;
+  // ── Aba "Em trânsito" ──
+  // Último evento conhecido do objeto, lido do cache `rastreio_objetos` (o
+  // backend só preenche nessa aba). null = o cron ainda não olhou pra ele —
+  // e "sem movimento" é diferente de "sem dado".
+  rastreio?: {
+    status: string | null;
+    local: string | null;
+    eventoEm: string | null;
+    previsaoEm: string | null;
+    entregue: boolean;
+    consultadoEm: string | null;
+  } | null;
+  /** Quantas caixas o pedido tem — dividido só fecha quando TODAS chegam. */
+  volumes?: number;
+  entregueEm?: string | null;
 }
 
 interface SeparationGroup {
@@ -152,12 +169,16 @@ const FILTROS = [
   // (tracking do dia por filial). Reaproveitamos a aba pra evitar que a matriz
   // precise ir pra /retaguarda/enviados-hoje só pra ver quem despachou.
   { slug: 'enviados',    label: 'Enviados por Loja',   color: 'bg-emerald-100 text-emerald-800' },
-  // Em trânsito: pedidos com tracking ativo e ainda não entregues. Quando a
-  // integração Correios ficar pronta, esses pedidos receberão atualizações
-  // em tempo real (postado → saiu pra entrega → entregue).
+  // Em trânsito: a loja despachou E colocou o rastreio, e o objeto ainda não
+  // chegou. Sai daqui sozinho — quando o rastreio confirma a entrega, o
+  // `RastreioSyncCron` fecha o pedido e ele aparece em Concluídos.
   { slug: 'em-transito', label: 'Em trânsito',         color: 'bg-sky-100 text-sky-800' },
-  // Concluídos = WC status=completed (entregue/finalizado).
+  // Concluídos = entregue (rastreio confirmou) + o que não tem o que rastrear
+  // (retirada, motoboy) + o WC completed do site antigo.
   { slug: 'completed',   label: 'Concluídos',          color: 'bg-slate-100 text-slate-700' },
+  // Pós-venda: o que acontece DEPOIS que chegou — convite pra avaliar (D+5),
+  // avaliações esperando aprovação e os pontos que a cliente ganhou.
+  { slug: 'pos-venda',   label: 'Pós-venda',           color: 'bg-violet-100 text-violet-800' },
   // Cancelados/reembolsados — pra conferir o que saiu da fila e não ficar sem
   // rastro depois de cancelar.
   { slug: 'cancelled',   label: 'Cancelados',          color: 'bg-rose-100 text-rose-800' },
@@ -273,7 +294,10 @@ function SeparacaoPageInner() {
       next['pending']     = r.byStatus['pending']?.total ?? 0;
       next['on-hold']     = r.byStatus['on-hold']?.total ?? 0;
       next['separacao']   = r.byStatus['separacao']?.total ?? 0;
-      next['em-transito'] = r.byStatus['shipped']?.total ?? 0;
+      // O backend passou a devolver a aba pronta (regra: shipped + rastreio +
+      // dentro da janela). Ler 'shipped' do WC dava 0 pra sempre — lá o pedido
+      // despachado vira 'completed'.
+      next['em-transito'] = r.byStatus['em-transito']?.total ?? 0;
       next['completed']   = r.byStatus['completed']?.total ?? 0;
       next['cancelled']   = r.byStatus['cancelled']?.total ?? 0;
       // merge (não substitui) pra não apagar o contador de carrinhos,
@@ -290,6 +314,20 @@ function SeparacaoPageInner() {
       const by = raw.by_status || {};
       const abandoned = Number(raw.abandoned ?? by.abandoned?.qty ?? by.abandoned?.count ?? 0) || 0;
       setTabCounts((prev) => ({ ...prev, carrinhos: abandoned }));
+    } catch { /* silencioso */ }
+    // Pós-venda: o badge conta só o que EXIGE alguém — avaliação esperando
+    // aprovação + entrega que já passou do prazo e ninguém convidou. Contar
+    // "entregues no mês" faria um número grande e permanente, que é como se
+    // ensina a operação a ignorar a aba.
+    try {
+      // Endpoint SÓ do badge: puxar a fila inteira (300 pedidos com as
+      // avaliações aninhadas) a cada 30s, em todo PC de matriz aberto, seria
+      // gastar banco pra desenhar um número de dois dígitos.
+      const r = await api<{ aModerar?: number; aEnviar?: number }>('/pos-venda/resumo');
+      setTabCounts((prev) => ({
+        ...prev,
+        'pos-venda': (r?.aModerar ?? 0) + (r?.aEnviar ?? 0),
+      }));
     } catch { /* silencioso */ }
   }
   useEffect(() => {
@@ -798,17 +836,13 @@ function SeparacaoPageInner() {
   }
 
   async function load() {
-    // Aba "enviados" não usa a lista de pedidos WC — ela renderiza o componente
-    // EnviadosByStore que busca dados próprios. Pula fetch pra não poluir a rede.
-    if (status === 'enviados') {
+    // Abas com painel PRÓPRIO não usam a lista de pedidos WC — elas renderizam
+    // um componente que busca os dados dele. Pula fetch pra não poluir a rede.
+    if (status === 'enviados' || status === 'pos-venda') {
       setOrders([]);
       setLoading(false);
       return;
     }
-    // "em-transito" mapeia pro status custom WC "shipped" (plugin Correios BR
-    // — ícone roxo no admin do WP). Quando a integração de tracking em tempo
-    // real ficar pronta, esses pedidos receberão atualizações automáticas
-    // (postado → saiu pra entrega → entregue) via webhook dos Correios.
     // Filtra localmente caso backend não suporte o query param.
     // Match flexível: normaliza removendo acentos/case e compara code OU name.
     const normalize = (s: any) =>
@@ -836,9 +870,16 @@ function SeparacaoPageInner() {
       return filtered;
     };
 
+    // EM TRÂNSITO (19/08): quem responde é o Postgres, não o WooCommerce.
+    //
+    // A aba pedia `status=shipped` no WC e por isso vivia zerada: quando a loja
+    // despacha, o pedido vira **completed** lá (é o hook que dispara o WhatsApp
+    // do plugin). Agora o slug vai cru pro backend, que monta a regra de
+    // verdade — despachado, COM rastreio e ainda dentro da janela de 30 dias —
+    // e devolve junto o último evento do objeto.
     if (status === 'em-transito') {
       try {
-        const q = new URLSearchParams({ status: 'shipped', per_page: '50' });
+        const q = new URLSearchParams({ status: 'em-transito', per_page: '50' });
         if (search) q.set('search', search);
         if (storeCode) q.set('storeCode', storeCode);
         const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
@@ -1055,6 +1096,7 @@ function SeparacaoPageInner() {
               {f.slug === 'enviados' && <Truck className="w-3.5 h-3.5" />}
               {f.slug === 'em-transito' && <Plane className="w-3.5 h-3.5" />}
               {f.slug === 'completed' && <CheckCircle2 className="w-3.5 h-3.5" />}
+              {f.slug === 'pos-venda' && <Star className="w-3.5 h-3.5" />}
               <span>{f.label}</span>
               {count != null && f.slug !== 'enviados' && (
                 <span
@@ -1074,11 +1116,13 @@ function SeparacaoPageInner() {
         })}
       </div>
 
-      {/* Aba "Enviados por Loja" — mostra tracking do dia agrupado por filial,
-          em vez do fluxo normal de emissão de separações. Early-return aqui
-          mantém o header/filtros no topo mas pula toda a UI de pedidos. */}
+      {/* Abas com PAINEL PRÓPRIO — "Enviados por Loja" (tracking do dia por
+          filial) e "Pós-venda" (avaliações). Early-return aqui mantém o
+          header/filtros no topo mas pula toda a UI de pedidos. */}
       {status === 'enviados' ? (
         <EnviadosByStore />
+      ) : status === 'pos-venda' ? (
+        <PosVenda />
       ) : (
       <>
       {/* Busca */}
@@ -1472,6 +1516,40 @@ function SeparacaoPageInner() {
                           {orderIssues.length === 1
                             ? orderIssues[0].reasonLabel
                             : `${orderIssues.length} problemas`}
+                        </span>
+                      )}
+
+                      {/* ONDE O OBJETO ESTÁ (aba Em trânsito).
+                          Vem do cache `rastreio_objetos`, NUNCA da API dos
+                          Correios: a lista tem que abrir mesmo com a
+                          transportadora fora do ar, e é a mesma leitura que
+                          dispara o "seu pedido chegou" pra cliente — divergir
+                          aqui faria a tela dizer uma coisa e ela ouvir outra. */}
+                      {o.rastreio && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-sky-50 text-sky-900 border border-sky-200 text-[10px] font-semibold rounded align-middle max-w-[340px] truncate"
+                          title={[
+                            o.rastreio.status,
+                            o.rastreio.local,
+                            o.rastreio.eventoEm
+                              ? `em ${new Date(o.rastreio.eventoEm).toLocaleString('pt-BR')}`
+                              : null,
+                            o.volumes && o.volumes > 1 ? `${o.volumes} volumes` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        >
+                          <Plane className="w-3 h-3" />
+                          {o.rastreio.status || 'sem movimento ainda'}
+                          {o.rastreio.local ? ` · ${o.rastreio.local}` : ''}
+                        </span>
+                      )}
+                      {status === 'em-transito' && !o.rastreio && o.trackingCode && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-slate-50 text-slate-500 border border-slate-200 text-[10px] font-semibold rounded align-middle"
+                          title="O objeto entrou na fila do rastreio e ainda não foi consultado (o ciclo roda de 30 em 30 minutos)."
+                        >
+                          aguardando 1ª leitura
                         </span>
                       )}
                     </div>

@@ -11,11 +11,13 @@ import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
 import { DescricaoDaPeca } from '@/components/commerce/DescricaoDaPeca';
 import { DescobrirFeed } from '@/components/commerce/DescobrirFeed';
 import { CompleteOLook } from '@/components/commerce/CompleteOLook';
+import { AvaliacoesProduto } from '@/components/commerce/AvaliacoesProduto';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
+import { buscarAvaliacoesDoProduto } from '@/lib/avaliacoes';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { ProductVisualEditor } from '@/components/editor/ProductVisualEditor';
 
@@ -94,6 +96,14 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
   const shortDescription =
     'descricaoCurta' in result ? result.descricaoCurta : result.shortDescription;
   const cores = peca?.cores ?? [];
+
+  // AVALIAÇÕES da FAMÍLIA da peça (REF-BASE). As cores são REFs irmãs e a
+  // cliente lê "esta peça", não "esta cor" — a mesma regra do card da vitrine.
+  // Falha aqui não pode derrubar a página: o bloco some, a peça continua
+  // vendendo. Página que não abre não vende nenhuma.
+  const avaliacoes = await buscarAvaliacoesDoProduto(
+    peca?.editorIdentity?.ref ?? product.sku ?? product.slug,
+  );
 
   const categoryLabel = product.category
     .replace(/-/g, ' ')
@@ -207,20 +217,23 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
       </Section>
 
       {/*
-        PROVA SOCIAL · REMOVIDA DO AR EM 06/08/2026
+        PROVA SOCIAL · VOLTOU EM 19/08/2026 — agora REAL.
 
-        Mostrava depoimentos assinados por "Cliente Lurds" com ALTURA, PESO e
-        TAMANHO COMPRADO inventados, sob o título "direto de quem comprou".
+        Este espaço ficou vazio desde 06/08, quando saíram do ar os depoimentos
+        assinados "Cliente Lurds" com altura, peso e tamanho inventados: as
+        mesmas quatro frases em TODAS as peças, bem ao lado da peça que a
+        cliente estava decidindo comprar.
 
-        Aqui era pior que na home: ficava na página do produto, ao lado da peça
-        que a cliente está decidindo, e **as mesmas quatro frases apareciam em
-        TODAS as peças** — a "avaliação" não tinha relação nenhuma com o produto
-        que ela estava olhando.
+        O compromisso escrito aqui era "volta quando houver avaliação real,
+        amarrada ao pedido entregue e à REF certa" — e é exatamente o que
+        `avaliacoes` traz: pedido que o rastreio confirmou entregue, convite
+        mandado pra aquela cliente no 5º dia, resposta lida e aprovada uma a
+        uma na retaguarda.
 
-        Volta quando houver avaliação real. O caminho já existe: todo pedido
-        entregue tem CPF, peça e tamanho — dá pra pedir por e-mail/WhatsApp
-        depois da entrega e amarrar a resposta à REF certa.
+        `null` = nenhuma avaliação aprovada ainda, e o bloco simplesmente não
+        existe. Silêncio vende mais que "1 avaliação".
       */}
+      {avaliacoes && <AvaliacoesProduto dados={avaliacoes} />}
 
       {/*
         AQUI HAVIA TRÊS CARROSSÉIS (12/08/2026).

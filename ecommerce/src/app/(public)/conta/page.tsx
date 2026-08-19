@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Package, MapPin, Wallet, Heart, RefreshCw, ShieldCheck, LogOut } from 'lucide-react';
+import { Package, MapPin, Wallet, Heart, RefreshCw, ShieldCheck, LogOut, Star } from 'lucide-react';
 import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
@@ -43,6 +43,10 @@ export default async function ContaPage() {
     // O saldo já era creditado a cada compra e nunca teve tela: cashback que a
     // cliente não vê não muda comportamento nenhum — é custo sem retorno.
     { href: '/conta/cashback', icon: Wallet, titulo: 'Meu cashback', texto: 'Seu saldo e de onde ele veio' },
+    // Pontos são o OUTRO bolso, e por isso têm tela própria: cashback é dinheiro
+    // da COMPRA, ponto é o que ela ganha por avaliar o que recebeu. Somar os dois
+    // num card só faria a cliente achar que tem o que não tem.
+    { href: '/conta/pontos', icon: Star, titulo: 'Meus pontos', texto: 'O que você ganhou avaliando' },
     { href: '/conta/enderecos', icon: MapPin, titulo: 'Endereços', texto: 'Onde a gente entrega' },
     { href: '/conta/favoritos', icon: Heart, titulo: 'Lista de desejos', texto: 'As peças que você guardou' },
     { href: '/conta/dados', icon: ShieldCheck, titulo: 'Meus dados', texto: 'O que a gente tem e o que você autoriza' },
