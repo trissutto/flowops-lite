@@ -234,7 +234,10 @@ export class OrdersService {
     if (to < from) throw new Error('to deve ser >= from');
 
     const whereDate = {
-      source: 'site',
+      // Os DOIS sites: 'site' = WooCommerce (antigo), 'ecommerce' = site novo
+      // (950M+). Sem o segundo, campanha que vendeu no site novo aparecia
+      // zerada — mesmo furo que o card SITE do Faturamento tinha.
+      source: { in: ['site', 'ecommerce'] },
       OR: [
         { wcDateCreated: { gte: from, lte: to } },
         { AND: [{ wcDateCreated: null }, { createdAt: { gte: from, lte: to } }] },
