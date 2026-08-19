@@ -230,8 +230,14 @@ export function EscolhaDaPeca({
           /* `tamanhos` entra aqui (17/08) porque agora o TAMANHO vem primeiro:
              é a grade de cada cor que decide qual bolinha sai riscada quando
              ela já escolheu o número. */
+          /* `capa` e `nomeAmigavel` entram em 19/08 pela FOLHA DE CORES do
+             BuyBox: ela mostra a mesma foto que a fita de miniaturas mostra
+             (a primeira da cor) e o nome que a cliente lê — o cru do ERP
+             ("VD MUSGO ESC") segue sendo só a chave da seleção. */
           cores={cores.map((c) => ({
             nome: c.nome,
+            nomeAmigavel: c.nomeAmigavel,
+            capa: c.fotos[0]?.src ?? null,
             swatch: c.swatch,
             estoque: c.estoque,
             tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel })),
