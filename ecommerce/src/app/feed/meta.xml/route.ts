@@ -117,6 +117,78 @@ const NOVIDADES_CATEGORIA: Record<string, string> = {
   macacoes: 'novidades-macacoes',
 };
 
+/**
+ * AS 30 MAIS RECENTES DE CADA CATEGORIA — `custom_label_3` e `custom_label_4`.
+ *
+ * Pedido do dono em 19/08/2026: sete vitrines rotativas — blusas, vestidos,
+ * moda praia, lingerie, macacões, linha conforto e uma geral — cada uma com
+ * "os últimos 30 itens cadastrados, e conforme entram novos saem os velhos".
+ *
+ * ── POR QUE ISTO CONVIVE COM O CARIMBO DE CIMA, EM VEZ DE SUBSTITUÍ-LO ──
+ *
+ * São perguntas diferentes, e a diferença já custou caro uma vez. `novidades-*`
+ * (acima) responde "o que é NOVO DE VERDADE": exige `lancamento`, ou seja peça
+ * com ≤30 dias, e por isso às vezes devolve menos de 20 — foi a trava que o
+ * dono pediu em 16/08 justamente porque o conjunto se enchia de peça de 60-90
+ * dias fingindo ser lançamento.
+ *
+ * `top30-*` responde outra coisa: "as 30 mais recentes que EXISTEM nesta
+ * categoria", tenha a loja recebido novidade ou não. Sempre cheio, sempre
+ * rotativo. É vitrine, não é anúncio de lançamento — e por isso o nome do
+ * conjunto no Meta diz "30 mais recentes", nunca "novidades".
+ *
+ * ── POR QUE DOIS CAMPOS E NÃO UM ──
+ *
+ * Uma peça pode estar entre as 30 mais recentes da categoria dela E entre as 30
+ * mais recentes do site inteiro. `custom_label` guarda UM valor por campo, então
+ * o recorte da categoria vai no 3 e o geral no 4. Os slots 0, 1 e 2 já têm dono
+ * (subcategoria, top-semana, novidades) — estes eram os dois que sobravam, e
+ * agora os cinco estão ocupados: o próximo recorte precisa de outra estratégia.
+ *
+ * A ordem da lista É o dado (o backend devolve por `publicado_em desc`), então
+ * basta contar de cima. Esgotado não ocupa vaga: gastaria vitrine com peça que
+ * não vende e encolheria o conjunto na prática.
+ */
+const TOP30_TETO = 30;
+const TOP30_CATEGORIA: Record<string, string> = {
+  blusas: 'top30-blusas',
+  vestidos: 'top30-vestidos',
+  'moda-praia': 'top30-moda-praia',
+  lingerie: 'top30-lingerie',
+  macacoes: 'top30-macacoes',
+  'linha-conforto': 'top30-linha-conforto',
+};
+/** A vitrine geral: as 30 mais recentes do site, de qualquer categoria. */
+const TOP30_GERAL = 'top30-novidades';
+
+interface CarimboTop30 {
+  /** REF → carimbo da categoria (`custom_label_3`). */
+  categoria: Map<string, string>;
+  /** REFs entre as 30 mais recentes do site inteiro (`custom_label_4`). */
+  geral: Set<string>;
+}
+
+function carimbarTop30(pecas: PecaFeed[]): CarimboTop30 {
+  const usadas = new Map<string, number>();
+  const categoria = new Map<string, string>();
+  const geral = new Set<string>();
+
+  for (const p of pecas) {
+    if (!p.disponivel) continue;
+
+    if (geral.size < TOP30_TETO) geral.add(p.ref);
+
+    const alvo = TOP30_CATEGORIA[String(p.categoria || '').trim()];
+    if (!alvo) continue;
+    const n = usadas.get(alvo) ?? 0;
+    if (n >= TOP30_TETO) continue;
+    usadas.set(alvo, n + 1);
+    categoria.set(p.ref, alvo);
+  }
+
+  return { categoria, geral };
+}
+
 /** REF → carimbo, pras `NOVIDADES_TETO` primeiras disponíveis de cada categoria. */
 function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   const usadas = new Map<string, number>();
@@ -136,7 +208,7 @@ function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   return carimbo;
 }
 
-function item(p: PecaFeed, novidade?: string): string {
+function item(p: PecaFeed, novidade?: string, top30?: string, top30Geral?: boolean): string {
   const link = `${SITE.url}/produto/${p.slug}`;
   const [capa, ...resto] = p.imagens;
 
@@ -169,6 +241,9 @@ function item(p: PecaFeed, novidade?: string): string {
   // carimbo entra no `custom_label_1` (o que estava de reserva). Vira conjunto
   // de produtos no Meta com um `eq "top-semana"`, igual às novidades.
   if (p.topSemana) campos.push(`<g:custom_label_1>top-semana</g:custom_label_1>`);
+  // As 30 mais recentes da categoria e do site — ver `carimbarTop30`.
+  if (top30) campos.push(`<g:custom_label_3>${escapar(top30)}</g:custom_label_3>`);
+  if (top30Geral) campos.push(`<g:custom_label_4>${TOP30_GERAL}</g:custom_label_4>`);
 
   if (capa) campos.push(`<g:image_link>${escapar(capa)}</g:image_link>`);
   // Até 10 fotos extras — o carrossel do anúncio dinâmico usa estas.
@@ -213,6 +288,7 @@ export async function GET() {
   // primeiro) e o carimbo das 20 depende disso — nunca reordenar aqui.
   const validas = pecas.filter((p) => p.ref && p.slug && p.preco > 0);
   const novidades = carimbarNovidades(validas);
+  const top30 = carimbarTop30(validas);
 
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -220,7 +296,7 @@ export async function GET() {
     `<title>${escapar(SITE.name)}</title>` +
     `<link>${escapar(SITE.url)}</link>` +
     `<description>${escapar(SITE.description)}</description>` +
-    validas.map((p) => item(p, novidades.get(p.ref))).join('') +
+    validas.map((p) => item(p, novidades.get(p.ref), top30.categoria.get(p.ref), top30.geral.has(p.ref))).join('') +
     `</channel></rss>`;
 
   return new Response(xml, {
