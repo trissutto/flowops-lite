@@ -6,6 +6,8 @@ import {
   Query,
   Req,
   UseGuards,
+  Body,
+  Post,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { IntelligenceService } from './intelligence.service';
@@ -67,6 +69,21 @@ export class IntelligenceController {
    * Vem ANTES de `vendas-produto/marcas` na ordem? Não importa: as duas são
    * rotas fixas, sem `:param` que possa capturar a outra.
    */
+  /** Grava o mínimo/ideal de um tamanho — a semente da reposição automática. */
+  @Post('vendas-produto/meta')
+  vendasProdutoMeta(@Req() req: any, @Body() body: any) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.vendasProduto.salvarMeta({
+      ref: body?.ref || '',
+      cor: body?.cor || '',
+      tamanho: body?.tamanho || '',
+      minimo: body?.minimo,
+      ideal: body?.ideal,
+      quem,
+    });
+  }
+
   @Get('vendas-produto/grade')
   vendasProdutoGrade(@Req() req: any, @Query() q: any) {
     this.requireAdmin(req);

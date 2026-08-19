@@ -411,7 +411,83 @@ export class VendasProdutoService {
     }
     for (const e of estoque) pegar(e.tamanho).estoque = Number(e.estoque) || 0;
 
-    return { ref: alvoRef, cor: alvoCor || null, tamanhos: [...mapa.values()] };
+    /**
+     * MÍNIMO e IDEAL — digitados pelo dono, valendo pra REDE INTEIRA. Vêm junto
+     * da grade porque é ali que ele decide: olha "vendeu 59 no 52 e tem -1" e
+     * escreve o mínimo na mesma linha, sem abrir outra tela.
+     *
+     * `null` (e não zero) quando não há linha: zero seria "nunca repor", e o
+     * alerta dispararia pro catálogo inteiro no dia em que fosse ligado.
+     */
+    const metas: Array<{ tamanho: string; minimo: number; ideal: number }> =
+      await (this.prisma as any).produtoEstoqueMeta.findMany({
+        where: { ref: alvoRef, cor: alvoCor },
+        select: { tamanho: true, minimo: true, ideal: true },
+      });
+    const porTam = new Map(metas.map((m) => [String(m.tamanho).toUpperCase(), m]));
+
+    return {
+      ref: alvoRef,
+      cor: alvoCor || null,
+      tamanhos: [...mapa.values()].map((t) => {
+        const meta = porTam.get(t.tamanho.toUpperCase());
+        const ideal = meta?.ideal ?? null;
+        const minimo = meta?.minimo ?? null;
+        return {
+          ...t,
+          minimo,
+          ideal,
+          /**
+           * O QUE COMPRAR pra voltar ao ideal — a conta que ele descreveu
+           * ("chegou em 10, põe 20 na ordem de compra"). Já sai pronta daqui
+           * pra que a reposição automática, quando vier, não recalcule de
+           * outro jeito e divirja do que a tela mostrou.
+           */
+          repor: ideal != null && ideal > t.estoque ? ideal - t.estoque : 0,
+          abaixoDoMinimo: minimo != null && t.estoque <= minimo,
+        };
+      }),
+    };
+  }
+
+  /**
+   * GRAVA o mínimo/ideal de UM tamanho.
+   *
+   * Célula a célula porque é assim que ele digita: bate o número, sai do campo,
+   * já valeu — sem um botão "salvar a grade toda" que ficaria esquecido.
+   *
+   * Os dois zerados APAGAM a linha: é como se desfaz uma meta sem inventar um
+   * botão de excluir, e mantém verdadeiro o "sem linha = sem meta".
+   */
+  async salvarMeta(input: {
+    ref: string;
+    cor?: string;
+    tamanho: string;
+    minimo?: number | null;
+    ideal?: number | null;
+    quem: string;
+  }) {
+    const ref = String(input.ref || '').trim().toUpperCase();
+    const cor = String(input.cor || '').trim().toUpperCase();
+    const tamanho = String(input.tamanho || '').trim().toUpperCase();
+    if (!ref || !tamanho) return { ok: false, erro: 'REF e tamanho sao obrigatorios' };
+
+    const minimo = Math.max(0, Math.trunc(Number(input.minimo) || 0));
+    const ideal = Math.max(0, Math.trunc(Number(input.ideal) || 0));
+
+    if (!minimo && !ideal) {
+      await (this.prisma as any).produtoEstoqueMeta.deleteMany({ where: { ref, cor, tamanho } });
+      return { ok: true, ref, cor, tamanho, minimo: null, ideal: null };
+    }
+    await (this.prisma as any).produtoEstoqueMeta.upsert({
+      where: { ref_cor_tamanho: { ref, cor, tamanho } },
+      update: { minimo, ideal, atualizadoPor: input.quem },
+      create: { ref, cor, tamanho, minimo, ideal, atualizadoPor: input.quem },
+    });
+    this.logger.log(
+      `[meta-estoque] ${ref}/${cor || '-'}/${tamanho} min=${minimo} ideal=${ideal} por ${input.quem}`,
+    );
+    return { ok: true, ref, cor, tamanho, minimo, ideal };
   }
 
   /**

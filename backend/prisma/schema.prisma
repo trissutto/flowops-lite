@@ -5601,6 +5601,32 @@ model SiteCupom {
 /// linha por coleção; `refs` = array ORDENADO de REF (a mesma REF do feed/pixel). A
 /// ordem do array É a ordem na vitrine e no carimbo do feed. Alimenta: página do site,
 /// item do menu e o `custom_label_1=top-semana` do feed do Meta.
+/// ESTOQUE MÍNIMO e IDEAL por PEÇA + COR + TAMANHO, na REDE INTEIRA.
+///
+/// Digitados pelo dono (18/08/2026), não calculados: "mínimo 10 no tamanho 46
+/// e o ideal seria sempre ter 30 no 46 em todas as lojas; aí quando chegar em
+/// 10 o sistema avisa e já coloca em ordem de compra 20 peças".
+///
+/// Ou seja: `minimo` é o gatilho do alerta e `ideal - estoque` é a quantidade
+/// a comprar. É a semente da reposição automática — por isso mora numa tabela
+/// própria, e não num campo solto do cadastro do produto.
+///
+/// Sem linha aqui = peça sem meta definida. Não é zero: zero seria "nunca
+/// repor", e o alerta dispararia pra todo o catálogo no dia em que ligasse.
+model ProdutoEstoqueMeta {
+  ref           String   @db.VarChar(20)
+  /// Vazio quando a peça não tem cor no cadastro — a mesma chave da grade.
+  cor           String   @default("") @db.VarChar(30)
+  tamanho       String   @db.VarChar(20)
+  minimo        Int      @default(0)
+  ideal         Int      @default(0)
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+  atualizadoPor String?  @map("atualizado_por")
+
+  @@id([ref, cor, tamanho])
+  @@map("produto_estoque_meta")
+}
+
 model SiteColecao {
   slug          String   @id
   nome          String?

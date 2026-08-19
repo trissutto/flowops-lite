@@ -57,7 +57,18 @@ type Resposta = {
 type Grade = {
   ref: string;
   cor: string | null;
-  tamanhos: Array<{ tamanho: string; pecas: number; devolvidas: number; estoque: number }>;
+  tamanhos: Array<{
+    tamanho: string;
+    pecas: number;
+    devolvidas: number;
+    estoque: number;
+    /** Digitados por ele, valendo pra rede. `null` = ainda sem meta. */
+    minimo: number | null;
+    ideal: number | null;
+    /** `ideal - estoque` — o que entraria na ordem de compra. */
+    repor: number;
+    abaixoDoMinimo: boolean;
+  }>;
 };
 
 const brl = (n: number) =>
@@ -179,6 +190,35 @@ export default function VendasPorProdutoPage() {
   }, [de, ate, loja, marca, buscaAtiva, ordenar, page]);
 
   useEffect(() => { void carregar(); }, [carregar]);
+
+  /**
+   * Grava o mínimo/ideal de UM tamanho ao sair do campo.
+   *
+   * Salva na hora, sem botão: ele digita o número da grade inteira de uma vez,
+   * e um "salvar" no fim seria o clique que ele esqueceria depois de sair da
+   * linha. A resposta do servidor volta pra grade pra o "repor" e o alerta
+   * serem os que o backend calculou — não uma conta paralela do navegador.
+   */
+  const salvarMeta = useCallback(
+    async (chave: string, ref: string, cor: string | null, tamanho: string, minimo: number, ideal: number) => {
+      try {
+        await api('/intelligence/vendas-produto/meta', {
+          method: 'POST',
+          body: JSON.stringify({ ref, cor: cor ?? '', tamanho, minimo, ideal }),
+        });
+        const q = new URLSearchParams({ ref, cor: cor ?? '' });
+        if (de) q.set('de', de);
+        if (ate) q.set('ate', ate);
+        if (loja) q.set('loja', loja);
+        const r = await api<Grade>(`/intelligence/vendas-produto/grade?${q.toString()}`);
+        setGrades((g) => ({ ...g, [chave]: r }));
+      } catch {
+        // Deu erro? A grade fica como está e ele vê o número não mudar —
+        // melhor que fingir que salvou.
+      }
+    },
+    [de, ate, loja],
+  );
 
   /**
    * O CSV sai do que está NA TELA, não de uma segunda consulta: relatório que
@@ -493,7 +533,75 @@ export default function VendasPorProdutoPage() {
                                     </td>
                                   ))}
                               </tr>
-                            </tbody>
+                                {/**
+                                * MÍNIMO e IDEAL, digitados (decisão dele,
+                                * 18/08): "mínimo 10 no 46, ideal sempre ter 30
+                                * no 46 em todas as lojas; quando chegar em 10 o
+                                * sistema avisa e põe 20 na ordem de compra".
+                                * Por isso são campos, e não conta automática.
+                                */}
+                              {([['minimo', 'Estoque mínimo'], ['ideal', 'Ideal']] as const).map(
+                                ([campoMeta, rotulo]) => (
+                                  <tr key={campoMeta}>
+                                    <td className="px-2 py-1 text-[11px] font-bold uppercase text-slate-500">
+                                      {rotulo}
+                                    </td>
+                                    {[...grade.tamanhos]
+                                      .sort((a, b) => ordemTamanho(a.tamanho) - ordemTamanho(b.tamanho))
+                                      .map((t) => (
+                                        <td key={t.tamanho} className="px-1 py-1 text-center">
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            defaultValue={t[campoMeta] ?? ''}
+                                            placeholder="—"
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                                            }}
+                                            onBlur={(e) => {
+                                              const v = Math.max(0, Number(e.target.value) || 0);
+                                              const atual = t[campoMeta] ?? 0;
+                                              if (v === atual) return;
+                                              void salvarMeta(
+                                                chave, i.ref, i.cor, t.tamanho,
+                                                campoMeta === 'minimo' ? v : (t.minimo ?? 0),
+                                                campoMeta === 'ideal' ? v : (t.ideal ?? 0),
+                                              );
+                                            }}
+                                            className="w-14 rounded border border-slate-300 px-1 py-0.5 text-center text-sm tabular-nums focus:border-violet-500 focus:outline-none"
+                                          />
+                                        </td>
+                                      ))}
+                                  </tr>
+                                ),
+                              )}
+
+                              {/* A ORDEM DE COMPRA que ele descreveu: só
+                                  aparece onde o estoque bateu no mínimo, e o
+                                  número é `ideal - estoque`, calculado no
+                                  servidor pra não divergir da reposição
+                                  automática quando ela vier. */}
+                              {grade.tamanhos.some((t) => t.abaixoDoMinimo && t.repor > 0) && (
+                                <tr>
+                                  <td className="px-2 py-1 text-[11px] font-bold uppercase text-rose-700">
+                                    Repor
+                                  </td>
+                                  {[...grade.tamanhos]
+                                    .sort((a, b) => ordemTamanho(a.tamanho) - ordemTamanho(b.tamanho))
+                                    .map((t) => (
+                                      <td key={t.tamanho} className="px-3 py-1 text-center tabular-nums">
+                                        {t.abaixoDoMinimo && t.repor > 0 ? (
+                                          <span className="rounded bg-rose-600 px-1.5 py-0.5 text-xs font-bold text-white">
+                                            +{t.repor}
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-300">—</span>
+                                        )}
+                                      </td>
+                                    ))}
+                                </tr>
+                              )}
+                          </tbody>
                           </table>
                           <p className="mt-2 text-[11px] text-slate-400">
                             Vendidas no período escolhido{loja ? ' e na loja escolhida' : ''} · estoque é o de
