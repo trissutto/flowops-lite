@@ -71,7 +71,13 @@ interface Regras {
 
 export interface DadosCentro {
   ativo: boolean;
-  pontos: { saldo: number; pontosPorReal: number; equivaleReais: number };
+  pontos: {
+    saldo: number;
+    pontosPorReal: number;
+    equivaleReais: number;
+    /** Piso do resgate, em pontos (régua da matriz). */
+    minimoResgate: number;
+  };
   regras: Regras;
   pendentes: Pendente[];
   avaliadas: Avaliada[];
@@ -151,7 +157,28 @@ function FotoDaPeca({ url, nome }: { url: string | null; nome: string }) {
   );
 }
 
-export function CentroDeAvaliacao({ dados }: { dados: DadosCentro }) {
+/**
+ * MESMO FORMULÁRIO, DUAS PORTAS (19/08).
+ *
+ * A cliente chega aqui de dois jeitos: logada em `/conta/avaliacoes`, ou pelo
+ * LINK que o convite manda no WhatsApp cinco dias depois da entrega
+ * (`/avaliar/<token>`, sem login — a maioria compra como visitante e não
+ * voltaria pra criar senha só pra avaliar).
+ *
+ * O que muda entre as duas é SÓ o endereço que prova quem ela é. Duplicar a
+ * tela pra isso daria duas telas com duas réguas de pontos divergindo na
+ * primeira mudança — então o caminho entra por parâmetro e o formulário é um
+ * só. O padrão é a conta logada, então quem já usava não muda nada.
+ */
+const BASE_PADRAO = '/api/conta/avaliacoes';
+
+export function CentroDeAvaliacao({
+  dados,
+  endpointBase = BASE_PADRAO,
+}: {
+  dados: DadosCentro;
+  endpointBase?: string;
+}) {
   const router = useRouter();
   const [aba, setAba] = useState<'pendentes' | 'avaliadas'>(
     dados.pendentes.length ? 'pendentes' : 'avaliadas',
@@ -172,6 +199,7 @@ export function CentroDeAvaliacao({ dados }: { dados: DadosCentro }) {
       <FormularioAvaliacao
         item={avaliando}
         regras={dados.regras}
+        endpointBase={endpointBase}
         onCancelar={() => setAvaliando(null)}
         onPronto={(pontos) => {
           setAvaliando(null);
@@ -250,11 +278,105 @@ function PlacarDePontos({
           Cada peça avaliada vale até <strong className="font-medium">{regras.teto}</strong> pontos
         </p>
       </div>
-      {/* Nada de "vale R$ X" sem resgate no ar: promessa que a tela não cumpre
-          é o tipo de coisa que a cliente cobra no WhatsApp. */}
+      {/* O RESGATE ENTROU NO AR (19/08). Antes daqui a tela dizia "em breve
+          você vai poder trocar por desconto" — honesto enquanto não havia como
+          trocar, e uma promessa vencida no dia seguinte. Agora ou ela troca, ou
+          vê exatamente quanto falta. */}
+      <ResgatarPontos pontos={pontos} />
+    </div>
+  );
+}
+
+/**
+ * TROCAR PONTOS POR CUPOM.
+ *
+ * O cupom é NOMINAL — só o CPF dela usa. Quem confere saldo, mínimo e cotação é
+ * o backend; aqui é só a escolha de quanto trocar.
+ */
+function ResgatarPontos({ pontos }: { pontos: DadosCentro['pontos'] }) {
+  const router = useRouter();
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [cupom, setCupom] = useState<{ code: string; valor: number } | null>(null);
+
+  const passo = Math.max(1, pontos.pontosPorReal);
+  const maximo = Math.floor(pontos.saldo / passo) * passo;
+  const [quanto, setQuanto] = useState(maximo);
+
+  if (cupom) {
+    return (
+      <div className="mt-4 rounded-sm border border-primary bg-primary-wash px-4 py-4">
+        <p className="text-small text-ink-soft">Seu cupom de R$ {cupom.valor},00</p>
+        <p className="mt-1 select-all font-mono text-h3 tracking-wider">{cupom.code}</p>
+        <p className="mt-2 text-small text-ink-soft">
+          É só digitar no carrinho. Ele é seu — funciona só no seu CPF, e vale por 90 dias.
+        </p>
+      </div>
+    );
+  }
+
+  if (pontos.saldo < pontos.minimoResgate) {
+    const faltam = pontos.minimoResgate - pontos.saldo;
+    return (
       <p className="mt-2 text-small text-ink-muted">
-        Os pontos ficam guardados na sua conta. Em breve você vai poder trocar por desconto.
+        Faltam <strong className="font-medium">{faltam} pontos</strong> pra você trocar por
+        desconto (mínimo {pontos.minimoResgate}).
       </p>
+    );
+  }
+
+  async function resgatar() {
+    setErro(null);
+    setEnviando(true);
+    try {
+      const res = await fetch('/api/conta/avaliacoes/resgatar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pontos: quanto }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.erro || 'Não consegui gerar seu cupom.');
+      setCupom({ code: d.code, valor: d.valor });
+      router.refresh(); // o saldo desce na hora
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Não consegui gerar seu cupom.');
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  const opcoes: number[] = [];
+  for (let p = maximo; p >= pontos.minimoResgate; p -= passo) opcoes.push(p);
+
+  return (
+    <div className="mt-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <label htmlFor="resgate-pontos" className="text-small text-ink-soft">
+          Trocar
+        </label>
+        <select
+          id="resgate-pontos"
+          value={quanto}
+          onChange={(e) => setQuanto(Number(e.target.value))}
+          className="rounded-sm border border-border bg-surface px-3 py-2 text-body"
+        >
+          {opcoes.map((p) => (
+            <option key={p} value={p}>
+              {p} pontos · R$ {Math.floor(p / passo)},00
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={resgatar}
+          disabled={enviando}
+          className="inline-flex items-center gap-2 rounded-full bg-ink px-6 py-3 text-button uppercase tracking-widest text-light transition hover:bg-primary-strong disabled:opacity-40"
+        >
+          {enviando && <Loader2 className="size-4 animate-spin" />}
+          Gerar cupom
+        </button>
+      </div>
+      {erro && <p className="mt-2 text-small text-secondary">{erro}</p>}
     </div>
   );
 }
@@ -367,11 +489,14 @@ function ListaAvaliadas({ itens }: { itens: Avaliada[] }) {
 function FormularioAvaliacao({
   item,
   regras,
+  endpointBase,
   onCancelar,
   onPronto,
 }: {
   item: Pendente;
   regras: Regras;
+  /** `/api/conta/avaliacoes` (logada) ou `/api/avaliar/<token>` (link). */
+  endpointBase: string;
   onCancelar: () => void;
   onPronto: (pontos: number) => void;
 }) {
@@ -410,7 +535,7 @@ function FormularioAvaliacao({
         corpo.append('file', arquivo);
         // Sem Content-Type na mão: o navegador precisa escrever o boundary do
         // multipart, e defini-lo aqui quebra o upload em silêncio.
-        const res = await fetch('/api/conta/avaliacoes/foto', { method: 'POST', body: corpo });
+        const res = await fetch(`${endpointBase}/foto`, { method: 'POST', body: corpo });
         const d = await res.json().catch(() => null);
         if (!res.ok || !d?.url) throw new Error(d?.erro || 'Não consegui enviar a foto.');
         setFotos((f) => [...f, d.url]);
@@ -431,7 +556,7 @@ function FormularioAvaliacao({
     setErro(null);
     setEnviando(true);
     try {
-      const res = await fetch('/api/conta/avaliacoes', {
+      const res = await fetch(endpointBase, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

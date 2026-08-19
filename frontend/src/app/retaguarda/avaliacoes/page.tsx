@@ -36,6 +36,7 @@ interface Config {
   janelaDias: number;
   moderacao: boolean;
   pontosPorReal: number;
+  minimoResgate: number;
 }
 
 interface Resumo {
@@ -81,6 +82,7 @@ const PADRAO: Config = {
   janelaDias: 90,
   moderacao: false,
   pontosPorReal: 100,
+  minimoResgate: 500,
 };
 
 const ROTULO_CAIMENTO: Record<string, string> = {
@@ -367,12 +369,12 @@ export default function AvaliacoesAdminPage() {
             <section className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4">
               <h2 className="font-bold text-slate-800">Cotação do ponto</h2>
               <div className="text-xs text-slate-500">
-                Quantos pontos equivalem a R$ 1 de desconto. <b>O resgate ainda não existe</b> —
-                o site diz à cliente que os pontos ficam guardados, sem prometer valor. Feche
-                esta régua antes da primeira cliente juntar pontos: mudar depois é quebra de
-                promessa.
+                Quantos pontos equivalem a R$ 1 de desconto e a partir de quanto ela pode trocar.
+                <b> O resgate está NO AR</b>: a cliente gera um cupom nominal (só o CPF dela usa,
+                vale 90 dias) direto na conta. Feche esta régua com calma — mudar a cotação
+                depois de a cliente juntar saldo é quebra de promessa.
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="number"
                   min={1}
@@ -384,9 +386,24 @@ export default function AvaliacoesAdminPage() {
                 />
                 <span className="text-sm font-bold text-slate-600">pontos = R$ 1</span>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  value={cfg.minimoResgate}
+                  onChange={(e) =>
+                    setCfg({ ...cfg, minimoResgate: Math.max(1, Number(e.target.value) || 1) })
+                  }
+                  className="w-28 border-2 rounded px-3 py-2 text-lg font-bold text-center"
+                />
+                <span className="text-sm font-bold text-slate-600">
+                  pontos = resgate mínimo (R$ {Math.floor(cfg.minimoResgate / Math.max(cfg.pontosPorReal, 1))})
+                </span>
+              </div>
               <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
                 Com a régua atual, {Math.ceil(cfg.pontosPorReal / Math.max(teto, 1))} peças
-                avaliadas por completo viram R$ 1 de desconto.
+                avaliadas por completo viram R$ 1 de desconto — e ela precisa de{' '}
+                {Math.ceil(cfg.minimoResgate / Math.max(teto, 1))} pra fazer o primeiro resgate.
                 {resumo ? ` Já foram distribuídos ${resumo.pontosDistribuidos} pontos.` : ''}
               </div>
             </section>

@@ -61,6 +61,13 @@ export interface AvaliacoesConfig {
    * juntar pontos, porque mudar a cotação depois é quebra de promessa.
    */
   pontosPorReal: number;
+
+  /**
+   * Piso do resgate, em pontos. Cupom de R$ 1 dá trabalho pra todo mundo e
+   * não muda comportamento nenhum; o piso é o que faz o saldo virar motivo
+   * pra voltar.
+   */
+  minimoResgate: number;
 }
 
 export const AVALIACOES_CONFIG_PADRAO: AvaliacoesConfig = {
@@ -76,6 +83,7 @@ export const AVALIACOES_CONFIG_PADRAO: AvaliacoesConfig = {
   janelaDias: 90,
   moderacao: false,
   pontosPorReal: 100,
+  minimoResgate: 500,
 };
 
 @Injectable()
@@ -127,6 +135,7 @@ export class AvaliacoesConfigService {
     novo.diasAposPedido = inteiro(novo.diasAposPedido, AVALIACOES_CONFIG_PADRAO.diasAposPedido, 1);
     novo.janelaDias = inteiro(novo.janelaDias, AVALIACOES_CONFIG_PADRAO.janelaDias, 1);
     novo.pontosPorReal = inteiro(novo.pontosPorReal, AVALIACOES_CONFIG_PADRAO.pontosPorReal, 1);
+    novo.minimoResgate = inteiro(novo.minimoResgate, AVALIACOES_CONFIG_PADRAO.minimoResgate, 1);
 
     await (this.prisma as any).appConfig.upsert({
       where: { key: APP_CONFIG_KEY },

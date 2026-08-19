@@ -16,6 +16,6 @@ import { AvaliacoesAdminController } from './avaliacoes-admin.controller';
   imports: [PrismaModule, CustomersAppModule],
   controllers: [AvaliacoesController, AvaliacoesPublicController, AvaliacoesAdminController],
   providers: [AvaliacoesService, AvaliacoesConfigService, AvaliacoesFotosService],
-  exports: [AvaliacoesService, AvaliacoesConfigService],
+  exports: [AvaliacoesService, AvaliacoesConfigService, AvaliacoesFotosService],
 })
 export class AvaliacoesModule {}

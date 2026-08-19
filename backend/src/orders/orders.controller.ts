@@ -38,13 +38,91 @@ export const STATUS_LOCAL_POR_ABA: Record<string, string[]> = {
   processing: ['processing', 'pending', 'awaiting_stock', 'routing'],
   separacao: ['separating'],
   'em-separacao': ['separating'],
-  completed: ['shipped', 'delivered'],
+  // 'shipped' saiu daqui em 19/08 e virou a aba "Em trânsito" — ver
+  // `whereNativoDaAba`. Despachado e ENTREGUE moravam na mesma aba: a matriz
+  // via "Concluído" no pedido que ainda estava no caminhão.
+  completed: ['delivered'],
 };
 
 /** As origens que a fila mostra junto com o WooCommerce.
  *  'pdv_online' (14/08): venda online do PDV que virou pedido — faixa 960M,
  *  mesma vida do pedido do site (roteamento → card → envio), sem WooCommerce. */
 export const ORIGENS_NATIVAS = ['live', 'ecommerce', 'pdv_online'];
+
+/**
+ * A JANELA DO RASTREIO — a MESMA do `RastreioSyncCron.candidatos()` (30 dias).
+ *
+ * Passou disso, os Correios não têm mais o que dizer e o objeto nunca vai ser
+ * confirmado como entregue. Sem esta janela, "Em trânsito" viraria o depósito
+ * de todo pedido despachado antes de 18/08 — data em que o rastreio começou a
+ * funcionar de verdade (faltava o header `Accept-Language`) e por isso NENHUM
+ * pedido virou `delivered` em 90 dias. Aba cheia de pedido que nunca sai é
+ * exatamente o alarme falso que faz a operação parar de olhar pra fila.
+ */
+export const RASTREIO_JANELA_DIAS = 30;
+
+/** Pedido com código de rastreio — no próprio pedido ou em algum card da loja. */
+const TEM_RASTREIO = {
+  OR: [
+    { trackingCode: { not: null } },
+    { pickOrders: { some: { trackingCode: { not: null } } } },
+  ],
+};
+
+/**
+ * O `where` do pedido NATIVO por aba da tela de separação.
+ *
+ * Existe pelo mesmo motivo que o `STATUS_LOCAL_POR_ABA` mora neste arquivo: a
+ * LISTA e o CONTADOR precisam ler a MESMA regra. "Em trânsito" e "Concluídos"
+ * não cabem num mapa de status porque dependem de ter rastreio e de quando o
+ * pedido foi despachado — se a lista calcular de um jeito e o badge de outro,
+ * a operação acha que perdeu pedido (foi o defeito de 13/08).
+ *
+ * ⚠️ As duas abas são COMPLEMENTARES de propósito: todo pedido `shipped` ou
+ * `delivered` cai em uma delas e em uma só. Pedido que não cai em aba nenhuma
+ * é pedido invisível.
+ */
+export function whereNativoDaAba(slug: string): Record<string, any> | null {
+  const desde = new Date(Date.now() - RASTREIO_JANELA_DIAS * 86_400_000);
+
+  // EM TRÂNSITO = a loja despachou E colocou o rastreio, e o objeto ainda está
+  // dentro da janela em que dá pra saber onde ele está.
+  if (slug === 'em-transito') {
+    return { AND: [{ status: 'shipped' }, { updatedAt: { gte: desde } }, TEM_RASTREIO] };
+  }
+
+  // CONCLUÍDOS = entregue (o rastreio confirmou e o cron fechou o pedido) OU
+  // despachado sem nada pra rastrear: retirada, motoboy, loja que não colou o
+  // código, e o que envelheceu fora da janela. Escrito por extenso em vez de
+  // um NOT do bloco de cima — negação com campo nulo no meio é onde o Postgres
+  // some com linha sem avisar.
+  if (slug === 'completed') {
+    return {
+      OR: [
+        { status: 'delivered' },
+        {
+          AND: [
+            { status: 'shipped' },
+            {
+              OR: [
+                { updatedAt: { lt: desde } },
+                {
+                  AND: [
+                    { trackingCode: null },
+                    { pickOrders: { none: { trackingCode: { not: null } } } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  const statuses = STATUS_LOCAL_POR_ABA[slug];
+  return statuses?.length ? { status: { in: statuses } } : null;
+}
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
@@ -361,14 +439,30 @@ export class OrdersController {
       ? Math.min(100, Number(perPage || 50) * 2)
       : (perPage ? Number(perPage) : 50);
 
-    const res = await this.wc.listOrders({
-      status,
-      page: page ? Number(page) : 1,
-      perPage: effectivePerPage,
-      search,
-      after,
-      before,
-    });
+    /**
+     * "Em trânsito" NÃO pergunta pro WooCommerce (19/08).
+     *
+     * A aba existia desde sempre e vivia zerada, e a razão estava a um arquivo
+     * de distância: quando a loja despacha, o pick-order marca o pedido no WC
+     * como **`completed`**, não `shipped` — de propósito, porque só o hook
+     * nativo `order_status_completed` dispara o WhatsApp do plugin
+     * (`WC_STATUS_SHIPPED` em pick-orders.service.ts). Ou seja: a aba pedia um
+     * status que o sistema nunca escreve, e a chamada só gastava HTTP.
+     *
+     * Quem sabe o que está viajando é o Postgres — `Order` + `rastreio_objetos`
+     * — pra TODAS as origens, WooCommerce incluído.
+     */
+    const ehEmTransito = status === 'em-transito';
+    const res = ehEmTransito
+      ? { data: [] as any[], total: 0, totalPages: 0 }
+      : await this.wc.listOrders({
+          status,
+          page: page ? Number(page) : 1,
+          perPage: effectivePerPage,
+          search,
+          after,
+          before,
+        });
 
     // Enriquecimento: pra cada pedido retornado, anexa
     //   - loja(s) responsável(is) pela separação (via PickOrder local)
@@ -458,25 +552,33 @@ export class OrdersController {
     // Pedido do e-commerce só entra aqui depois de PAGO: ele nasce
     // 'awaiting_payment' e vira 'processing' na confirmação — separar o que
     // não foi pago seria pedir prejuízo.
-    const liveStatuses = status ? STATUS_LOCAL_POR_ABA[status] : undefined;
+    const whereAba = status ? whereNativoDaAba(status) : null;
     let liveRows: any[] = [];
-    if (liveStatuses?.length) {
+    if (whereAba) {
+      // Composto com AND explícito: a regra da aba e a busca livre usam `OR`
+      // no mesmo nível, e duas chaves `OR` no mesmo objeto — uma sobrescreve a
+      // outra em silêncio. Filtro que some sem erro é o pior tipo de filtro.
+      const filtros: any[] = [whereAba];
+      // "Em trânsito" é a ÚNICA aba que também traz o pedido do site ANTIGO:
+      // quem sabe onde o objeto está é o Postgres (`rastreio_objetos`), não o
+      // WooCommerce — e a loja despacha os dois pelo mesmo card, com o mesmo
+      // código de rastreio.
+      if (!ehEmTransito) filtros.push({ source: { in: ORIGENS_NATIVAS } });
+      if (search) {
+        filtros.push({
+          OR: [
+            { wcOrderNumber: { contains: search, mode: 'insensitive' } },
+            { customerName: { contains: search, mode: 'insensitive' } },
+            { customerPhone: { contains: search } },
+            { trackingCode: { contains: search, mode: 'insensitive' } },
+          ],
+        });
+      }
+      if (after) filtros.push({ wcDateCreated: { gte: new Date(after) } });
+      if (before) filtros.push({ wcDateCreated: { lte: new Date(before) } });
+
       const liveOrders = await (this.prisma as any).order.findMany({
-        where: {
-          source: { in: ORIGENS_NATIVAS },
-          status: { in: liveStatuses },
-          ...(search
-            ? {
-                OR: [
-                  { wcOrderNumber: { contains: search, mode: 'insensitive' } },
-                  { customerName: { contains: search, mode: 'insensitive' } },
-                  { customerPhone: { contains: search } },
-                ],
-              }
-            : {}),
-          ...(after ? { wcDateCreated: { gte: new Date(after) } } : {}),
-          ...(before ? { wcDateCreated: { lte: new Date(before) } } : {}),
-        },
+        where: { AND: filtros },
         include: {
           pickOrders: {
             select: {
@@ -488,8 +590,35 @@ export class OrdersController {
           },
         },
         orderBy: { wcDateCreated: 'desc' },
-        take: 100,
+        take: ehEmTransito ? 200 : 100,
       });
+
+      // ── Onde o objeto está AGORA ──
+      // Uma consulta só no cache que o `RastreioSyncCron` mantém — nunca na API
+      // dos Correios: a lista tem que abrir mesmo com a transportadora fora, e
+      // é a mesma leitura que alimenta o aviso "seu pedido chegou" (divergir
+      // aí faria a tela dizer uma coisa e a cliente ouvir outra).
+      const eventos = new Map<string, any>();
+      if (ehEmTransito) {
+        const codigos = [
+          ...new Set(
+            liveOrders
+              .flatMap((o: any) => [o.trackingCode, ...(o.pickOrders || []).map((p: any) => p.trackingCode)])
+              .map((c: any) => String(c || '').trim().toUpperCase())
+              .filter(Boolean),
+          ),
+        ];
+        if (codigos.length) {
+          const objetos: any[] = await (this.prisma as any).rastreioObjeto.findMany({
+            where: { codigo: { in: codigos } },
+            select: {
+              codigo: true, status: true, local: true, eventoEm: true,
+              previsaoEm: true, entregue: true, consultadoEm: true,
+            },
+          });
+          for (const r of objetos) eventos.set(r.codigo, r);
+        }
+      }
       liveRows = liveOrders.map((o: any) => {
         const pickOrders = (o.pickOrders || []).map((p: any) => ({
           storeCode: p.store?.code ?? null,
@@ -503,6 +632,8 @@ export class OrdersController {
         const firstTracking = pickOrders.find((p: any) => !!p.trackingCode);
         let addrState: string | null = null;
         try { addrState = JSON.parse(o.shippingAddress || '{}')?.state ?? null; } catch {}
+        const codigo = String(o.trackingCode || firstTracking?.trackingCode || '').trim().toUpperCase();
+        const evento = codigo ? eventos.get(codigo) : null;
         return {
           id: o.wcOrderId,
           number: o.wcOrderNumber,
@@ -515,15 +646,37 @@ export class OrdersController {
           shippingState: addrState,
           pickOrders,
           shipped: allShipped,
-          trackingCode: firstTracking?.trackingCode ?? null,
-          trackingCarrier: firstTracking?.carrier ?? null,
+          trackingCode: o.trackingCode ?? firstTracking?.trackingCode ?? null,
+          trackingCarrier: o.carrier ?? firstTracking?.carrier ?? null,
+          // Volumes: pedido dividido despacha uma caixa por loja, e ele só vira
+          // ENTREGUE quando TODAS chegam (regra do `RastreioSyncCron`).
+          volumes: pickOrders.filter((p: any) => !!p.trackingCode).length || (o.trackingCode ? 1 : 0),
+          // Último evento conhecido (cache, não API). Null = objeto que o cron
+          // ainda não visitou — e "sem movimento" é diferente de "sem dado".
+          rastreio: evento
+            ? {
+                status: evento.status ?? null,
+                local: evento.local ?? null,
+                eventoEm: evento.eventoEm?.toISOString?.() ?? null,
+                previsaoEm: evento.previsaoEm?.toISOString?.() ?? null,
+                entregue: !!evento.entregue,
+                consultadoEm: evento.consultadoEm?.toISOString?.() ?? null,
+              }
+            : null,
+          entregueEm: o.deliveredAt?.toISOString?.() ?? null,
           sellerId: o.sellerId ?? null,
           sellerName: o.sellerName ?? null,
           // A origem sai do REGISTRO, não fixa: a mesma consulta agora traz
           // live e e-commerce, e a tela filtra/pinta por este campo.
           orderSource: o.source,
           origem:
-            o.source === 'ecommerce' ? 'Site (novo)' : o.source === 'pdv_online' ? 'Venda Online' : 'Live Commerce',
+            o.source === 'ecommerce'
+              ? 'Site (novo)'
+              : o.source === 'pdv_online'
+                ? 'Venda Online'
+                : o.source === 'live'
+                  ? 'Live Commerce'
+                  : 'Site',
         };
       });
     }
@@ -1010,6 +1163,30 @@ export class OrdersController {
         // os dois no grand total contaria o pedido duas vezes.
         if (slug !== 'em-separacao') grand += n;
       }
+
+      /**
+       * "Em trânsito" e "Concluídos" contam pelo MESMO `where` da lista.
+       *
+       * Um `groupBy` por status não serve pras duas: elas dependem de ter
+       * rastreio e de estar dentro da janela de 30 dias — e badge que discorda
+       * da lista é o defeito de 13/08 se repetindo ("Processando 2" com 5
+       * pedidos na fila). Duas contagens a mais por ciclo de 30s é barato
+       * perto de a operação achar que perdeu pedido.
+       */
+      const [emTransito, concluidosNativos] = await Promise.all([
+        (this.prisma as any).order.count({ where: whereNativoDaAba('em-transito')! }),
+        (this.prisma as any).order.count({
+          where: { AND: [{ source: { in: ORIGENS_NATIVAS } }, whereNativoDaAba('completed')!] },
+        }),
+      ]);
+      byStatus['em-transito'] = { name: 'Em trânsito', total: emTransito };
+      grand += emTransito;
+      // `completed` já pode ter vindo do laço acima (delivered) — aqui ele é
+      // recalculado pela regra completa e substitui aquele número.
+      byStatus['completed'] = {
+        name: byStatus['completed']?.name ?? 'completed',
+        total: (totals.find((t: any) => t.slug === 'completed')?.total ?? 0) + concluidosNativos,
+      };
     } catch { /* badge sem pedido nativo é melhor que quebrar a tela */ }
     return { byStatus, grand };
   }

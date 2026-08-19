@@ -546,12 +546,27 @@ export class AvaliacoesService {
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
-    const saldo = linhas.reduce((s, l) => s + (Number(l.pontos) || 0), 0);
+
+    /**
+     * ⚠️ O SALDO SOMA O BANCO, NÃO A PÁGINA.
+     *
+     * O `take: 50` acima é do EXTRATO — é quanto a tela mostra. Somar essas 50
+     * linhas dava o saldo certo só até a 51ª movimentação; da 51ª em diante a
+     * cliente perderia pontos em silêncio (as linhas mais antigas caem fora da
+     * página e somem da conta). Enquanto não havia resgate isso era um número
+     * errado na tela; com resgate no ar, vira dinheiro.
+     */
+    const total = await (this.prisma as any).customerPointsTx.aggregate({
+      where: { accountId },
+      _sum: { pontos: true },
+    });
+    const saldo = Number(total?._sum?.pontos ?? 0);
+
     return {
       saldo,
       pontosPorReal: cfg.pontosPorReal,
-      // Quanto o saldo já vale, com a cotação de hoje. Resgate ainda NÃO
-      // existe — a tela diz isso com todas as letras em vez de prometer.
+      minimoResgate: cfg.minimoResgate,
+      /** Quanto o saldo vale hoje — a conta feita pra ela, sem calculadora. */
       equivaleReais: cfg.pontosPorReal > 0 ? Math.floor(saldo / cfg.pontosPorReal) : 0,
       extrato: linhas.map((l) => ({
         pontos: l.pontos,
@@ -560,6 +575,67 @@ export class AvaliacoesService {
         data: l.createdAt,
       })),
     };
+  }
+
+  /**
+   * RESGATE — os pontos viram um cupom NOMINAL, do CPF dela e de mais ninguém.
+   *
+   * Reaproveita a máquina do vale-troca (`site_cupons` com `cpf` preenchido),
+   * que o `CupomService` já confere no carrinho E no fechamento — quem cobra é
+   * quem recalcula. Inventar um segundo tipo de desconto seria criar uma
+   * segunda regra de dinheiro pra manter em dia.
+   *
+   * ── A ORDEM IMPORTA ──
+   *
+   * O cupom nasce ANTES do débito. Se a criação falhar, ela não perde ponto; o
+   * contrário — debitar e não conseguir criar — deixaria a cliente sem saldo E
+   * sem desconto, que é o pior dos dois lados.
+   */
+  async resgatar(accountId: string, pontosPedidos: number) {
+    const cfg = await this.cfgSvc.get();
+    const acc = await this.conta(accountId);
+
+    const pedidos = Math.trunc(Number(pontosPedidos) || 0);
+    if (pedidos < cfg.minimoResgate) {
+      throw new BadRequestException(`O resgate mínimo é de ${cfg.minimoResgate} pontos.`);
+    }
+    // Múltiplos exatos: ninguém perde fração de ponto no arredondamento.
+    if (pedidos % cfg.pontosPorReal !== 0) {
+      throw new BadRequestException(`Resgate em múltiplos de ${cfg.pontosPorReal} pontos.`);
+    }
+
+    const { saldo } = await this.pontos(accountId);
+    if (saldo < pedidos) throw new BadRequestException('Saldo insuficiente.');
+
+    const valor = Math.floor(pedidos / cfg.pontosPorReal);
+    const code = `PONTOS${acc.cpf.slice(-4)}${Date.now().toString(36).toUpperCase().slice(-5)}`;
+
+    await (this.prisma as any).siteCupom.create({
+      data: {
+        code,
+        label: `Seus pontos: R$ ${valor},00 de desconto`,
+        tipo: 'fixed',
+        valor,
+        cpf: acc.cpf,
+        origem: 'pontos',
+        usoMaximo: 1,
+        ativo: true,
+        // 90 dias: prazo curto vira reclamação, eterno vira passivo esquecido.
+        fimEm: new Date(Date.now() + 90 * 86_400_000),
+      },
+    });
+
+    await (this.prisma as any).customerPointsTx.create({
+      data: {
+        accountId,
+        pontos: -pedidos,
+        motivo: 'resgate',
+        descricao: `Cupom ${code} — R$ ${valor},00`,
+      },
+    });
+
+    this.logger.log(`[avaliacoes] resgate ${pedidos} pontos -> ${code} (R$ ${valor})`);
+    return { ok: true, code, valor, saldo: saldo - pedidos };
   }
 
   /* ────────────────────── o que o site mostra ────────────────────── */
