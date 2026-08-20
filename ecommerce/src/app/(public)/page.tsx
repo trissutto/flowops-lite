@@ -10,11 +10,18 @@ import { stores } from '@/data/stores';
 import { getInstagram } from '@/services/instagram';
 import { getBlocosDaHome } from '@/services/vitrines-home';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
-import { sanitizeCampaignParams, withCampaignParams } from '@/lib/campaign-links';
 // HOME_CATEGORY_BASE saiu daqui: os atalhos agora vêm da retaguarda. A
 // constante continua sendo a ARTE aprovada de cada card — quem casa foto com
 // destino é `services/vitrines-home.ts`.
 import { HOME_STORES_PATH } from '@/data/home';
+
+/**
+ * A Home não depende da requisição individual da visitante. As vitrines são
+ * renovadas a cada minuto e o HTML pode ser entregue pronto pela CDN.
+ * A atribuição de campanhas continua sendo capturada no navegador pelo
+ * TrackingProvider, sem transformar esta rota em renderização dinâmica.
+ */
+export const revalidate = 60;
 
 export const metadata = buildMetadata({
   title: "Lurd's Plus Size — Moda plus size elegante do 44 ao 60",
@@ -22,19 +29,7 @@ export const metadata = buildMetadata({
   keywords: ['moda plus size', 'roupas plus size', 'vestido plus size', 'loja plus size', 'plus size 44 ao 60'],
 });
 
-export default async function HomePage({
-  searchParams,
-}: {
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const raw = (await searchParams) ?? {};
-  const query = new URLSearchParams();
-  Object.entries(raw).forEach(([key, value]) => {
-    if (typeof value === 'string') query.set(key, value);
-  });
-  const campaign = sanitizeCampaignParams(query);
-  const href = (path: string) => withCampaignParams(path, campaign);
-
+export default async function HomePage() {
   /**
    * OS BLOCOS DA HOME VÊM DA RETAGUARDA (17/08/2026) — atalhos e vitrines,
    * na ordem que `/retaguarda/vitrines-home` definir. Uma requisição só, e
@@ -52,12 +47,12 @@ export default async function HomePage({
 
   const categories: HomeCategory[] = blocos.atalhos.map((atalho) => ({
     ...atalho,
-    href: href(atalho.href),
+    href: atalho.href,
   }));
-  const storesHref = href(HOME_STORES_PATH);
+  const storesHref = HOME_STORES_PATH;
   const sizeLinks = ['46', '48', '50', '52', '54', '56', '58', '60'].map((size) => ({
     size,
-    href: href(`/tamanhos/${size}`),
+    href: `/tamanhos/${size}`,
   }));
   // As peças de TODAS as vitrines que saírem — o Google lê a lista da página
   // que existe, não a de uma seção fixa que pode nem estar mais na home.
@@ -70,7 +65,7 @@ export default async function HomePage({
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
-      <HomeVlm222Hero href={href('/produto/ref-vlm-222')} />
+      <HomeVlm222Hero href="/produto/ref-vlm-222" />
 
       <HomeCategoryNav categories={categories} />
 
@@ -104,7 +99,7 @@ export default async function HomePage({
             description={vitrine.descricao ?? undefined}
             cta={
               vitrine.ctaHref
-                ? { label: vitrine.ctaLabel ?? 'Ver todas', href: href(vitrine.ctaHref) }
+                ? { label: vitrine.ctaLabel ?? 'Ver todas', href: vitrine.ctaHref }
                 : undefined
             }
             align="left"
