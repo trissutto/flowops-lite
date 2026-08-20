@@ -450,6 +450,11 @@ model Order {
   // n8n. Preenchido = nunca mais toca esse pedido (um lembrete só — segundo
   // toque vira cobrança). Null com o PIX vencido = janela passou em silêncio.
   pixResgateAvisadoEm DateTime? @map("pix_resgate_avisado_em")
+  // ── CONFERÊNCIA DE VENDAS (20/08): venda online fechada por "PIX recebido"/
+  // "Link externo" não tem gateway conferindo (24 pedidos/R$ 5,4k em 6 dias).
+  // A matriz confere o extrato na tela Conferência de Vendas e carimba aqui.
+  vendaConferidaEm  DateTime? @map("venda_conferida_em")
+  vendaConferidaPor String?   @map("venda_conferida_por")
   // Aviso de rastreio (14/08): pedido dividido despacha um pacote por loja e
   // cada um chama o afterShipped — sem esta trava a cliente receberia um
   // "saiu pra entrega" por pacote. Guard atômico: updateMany com null.

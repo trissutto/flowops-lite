@@ -21,6 +21,7 @@ import { validateMinLevel } from '../auth/auth-levels.util';
 import { isValidTrainingPassword, isTrainingRequest } from './training.util';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
+import { ConferenciaVendasService } from './conferencia-vendas.service';
 import { ErpService } from '../erp/erp.service';
 import { SombraService } from '../erp/sombra.service';
 import { CrediarioCriacaoService } from '../crediario-nativo/crediario-criacao.service';
@@ -47,6 +48,7 @@ export class PdvController {
   constructor(
     private readonly svc: PdvService,
     private readonly outbox: ErpOutboxService,
+    private readonly conferencia: ConferenciaVendasService,
     private readonly erp: ErpService,
     private readonly catalog: WincredCatalogService,
     private readonly pix: PixService,
@@ -272,6 +274,33 @@ export class PdvController {
     const role = req?.user?.role;
     if (role !== 'admin') throw new ForbiddenException('Apenas admin');
     return this.outbox.retryFailed();
+  }
+
+  /**
+   * GET /pdv/conferencia-vendas?de=YYYY-MM-DD&ate=YYYY-MM-DD — pedidos da
+   * venda online do PDV com a prova de pagamento de cada um (admin).
+   */
+  @Get('conferencia-vendas')
+  conferenciaVendas(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.conferencia.listar(de, ate);
+  }
+
+  /**
+   * POST /pdv/conferencia-vendas/:orderId/conferir { desfazer? } — carimbo
+   * humano de "dinheiro conferido no extrato" (admin).
+   */
+  @Post('conferencia-vendas/:orderId/conferir')
+  conferenciaConferir(
+    @Req() req: any,
+    @Param('orderId') orderId: string,
+    @Body() body: { desfazer?: boolean },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const usuario = req?.user?.name || req?.user?.email || 'matriz';
+    return this.conferencia.conferir(orderId, usuario, !!body?.desfazer);
   }
 
   /**
