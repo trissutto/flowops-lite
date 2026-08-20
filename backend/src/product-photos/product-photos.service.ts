@@ -396,7 +396,7 @@ export class ProductPhotosService {
    *   com download paralelo (medido), e a tela chama de novo pra continuar.
    * - Erro numa foto não derruba o lote: ela fica pro próximo clique.
    */
-  async normalizarFormatos(limite = 150): Promise<{
+  async normalizarFormatos(limite = 150, apenasForasteiras = false): Promise<{
     olhadas: number; convertidas: number; jaOk: number; falharam: number;
     restantes: number; exemplosFalha: string[];
   }> {
@@ -421,7 +421,27 @@ export class ProductPhotosService {
      * `bolinha-auto` (ordem fixa + nada marcando o que já passou).
      */
     const inicio = new Date();
-    const aOlhar = { objectKey: { not: null }, updatedAt: { lt: inicio } };
+    const nossoDominio = publicUrl.endsWith('/') ? publicUrl.slice(0, -1) : publicUrl;
+    /**
+     * SEM `objectKey: { not: null }` (20/08).
+     *
+     * O filtro antigo só olhava foto que já estava NO NOSSO BUCKET — e foto
+     * importada do WooCommerce nunca subiu pra lá: ela é uma URL apontando
+     * pro WordPress velho, com `objectKey` nulo. Ou seja, o mutirão feito pra
+     * consertar formato quebrado pulava exatamente as fotos quebradas.
+     * Custou 25 peças reprovadas no Merchant Center ("tipo de imagem não
+     * aceito"), todas em AVIF/WebP de `lurds.com.br/wp-content`.
+     */
+    /**
+     * `apenasForasteiras` ataca só a foto hospedada FORA do nosso bucket.
+     *
+     * Sem o recorte o mutirão varre o acervo inteiro de 150 em 150, e as
+     * poucas dezenas que estão reprovadas no Merchant Center só apareceriam
+     * depois de dezenas de cliques. Com ele, resolve numa passada.
+     */
+    const aOlhar: any = apenasForasteiras
+      ? { updatedAt: { lt: inicio }, NOT: { url: { startsWith: nossoDominio } } }
+      : { updatedAt: { lt: inicio } };
     const fotos: any[] = await (this.prisma as any).productPhoto.findMany({
       where: aOlhar,
       orderBy: { updatedAt: 'asc' },
@@ -431,7 +451,7 @@ export class ProductPhotosService {
     let convertidas = 0, jaOk = 0, falharam = 0;
     const exemplosFalha: string[] = [];
     const client = getR2Client();
-    const base = publicUrl.replace(/\/$/, '');
+    const base = nossoDominio;
 
     for (const foto of fotos) {
       try {
@@ -445,7 +465,12 @@ export class ProductPhotosService {
         const grandeDemais = !!tamanho
           && (tamanho.largura > FOTO_LARGURA_MAXIMA || tamanho.altura > FOTO_ALTURA_MAXIMA);
         // GIF fora: converter animado guardaria só o 1º quadro (ver cabeçalho).
-        const jaEhOMestre = (mime === 'image/jpeg' || mime === 'image/gif') && !grandeDemais;
+        // Hospedada FORA conta como pendente mesmo ja sendo JPEG: a foto
+        // que mora no WordPress velho segura o desligamento do servidor
+        // antigo e depende dele pra aparecer no site e no Google.
+        const nossa = typeof foto.url === 'string' && foto.url.startsWith(nossoDominio);
+        const jaEhOMestre =
+          (mime === 'image/jpeg' || mime === 'image/gif') && !grandeDemais && nossa;
         if (jaEhOMestre) {
           jaOk++;
           // Toque no registro só pra o cursor andar (ver `inicio` acima).
@@ -468,7 +493,16 @@ export class ProductPhotosService {
           .jpeg({ quality: 90 })
           .toBuffer({ resolveWithObject: true });
         const convertida: Buffer = saida.data;
-        const chaveNova = `${String(foto.objectKey).replace(/\.[^./]+$/, '')}-jpg.jpg`;
+        // Foto vinda de fora não tem chave pra derivar: nasce uma no mesmo
+        // padrão do upload manual (`produtos/REF/COR/...`). O id entra no
+        // nome porque duas fotos da mesma cor caem no mesmo milissegundo.
+        const corPath = foto.cor
+          ? String(foto.cor).toUpperCase().replace(/[^a-zA-Z0-9]/g, '_')
+          : 'GENERICA';
+        const chaveNova = foto.objectKey
+          ? `${String(foto.objectKey).replace(/\.[^./]+$/, '')}-jpg.jpg`
+          : `produtos/${String(foto.ref).toUpperCase()}/${corPath}/` +
+            `${Date.now()}-${String(foto.id).slice(0, 8)}-repatriada.jpg`;
         await client.send(new PutObjectCommand({
           Bucket: bucket, Key: chaveNova, Body: convertida,
           ContentType: 'image/jpeg', ContentDisposition: 'inline',
@@ -487,7 +521,8 @@ export class ProductPhotosService {
         // Só o formato QUEBRADO some. PNG/WebP ficam como mestre — ver cabeçalho.
         // E só depois do banco apontar pro arquivo novo: se apagasse antes e o
         // update falhasse, a foto sumia do site.
-        if (mime === 'image/avif' || mime === 'image/heic') {
+        // `foto.objectKey` nulo = arquivo hospedado fora; nao e nosso pra apagar.
+        if (foto.objectKey && (mime === 'image/avif' || mime === 'image/heic')) {
           await client
             .send(new DeleteObjectCommand({ Bucket: bucket, Key: foto.objectKey }))
             .catch((e: any) => this.logger.warn(`[fotos] sobrou o AVIF ${foto.objectKey}: ${e?.message}`));
