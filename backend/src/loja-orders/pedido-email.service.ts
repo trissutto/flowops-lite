@@ -505,6 +505,54 @@ export class PedidoEmailService {
     await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
   }
 
+  /**
+   * PEDIDO REGISTRADO SEM PROVA DE PAGAMENTO (20/08 — caso ON-000049).
+   *
+   * A venda online do PDV também fecha por "PIX recebido" e "Link externo" —
+   * registro no braço, sem nenhum gateway confirmando (decisão do dono de
+   * 01/08: esses botões ficam). Nesses casos o sistema NÃO SABE se o dinheiro
+   * entrou, e mandar "Recebemos o seu pagamento" é mentira em potencial: a
+   * Claudia (ON-000049, 19/08) recebeu a confirmação às 17:26 e respondeu
+   * "Nao paguei ainda" às 17:27 — a vendedora finalizou antes do Pix cair.
+   *
+   * Então o pedido sem prova ganha ESTA mensagem: registra o número e as
+   * peças (o motivo do aviso existir desde 14/08) sem afirmar pagamento.
+   *
+   * ⚠️ NUNCA sai pelo n8n: o `avisarN8n` manda `order.status`, que no pedido
+   * do PDV é 'processing' — exatamente o gatilho do IF do fluxo "Pedido
+   * Pago". Qualquer evento pro webhook com esse status vira "recebemos o seu
+   * pagamento" no WhatsApp da cliente. Por isso o canal é o WhatsApp direto
+   * (mesmo kill-switch `WHATS_PEDIDO_DIRETO`).
+   */
+  async aoRegistrarPedidoOnlineSemProva(order: any): Promise<void> {
+    if (!this.whatsDiretoLigado) return;
+    const telefone = String(order?.customerPhone || '').replace(/\D/g, '');
+    if (telefone.length < 10) return;
+
+    const nome = this.primeiroNome(order?.customerName);
+    const numero = order?.wcOrderNumber ? ` ${order.wcOrderNumber}` : '';
+    const itens = this.itensDoPedido(order);
+    const qtd = itens.reduce((s, i) => s + (Number(i.quantidade) || 1), 0);
+    const texto =
+      `Oi, ${nome}! 💛\n\nSeu pedido${numero} foi registrado com a nossa equipe: ` +
+      `${qtd} peça(s), total ${this.moeda(order?.totalAmount)}.\n\n` +
+      `Qualquer dúvida é só responder por aqui — e assim que o pedido sair, ` +
+      `mandamos o código de rastreio.`;
+
+    try {
+      const r = await this.whats.sendText(telefone, texto);
+      if (!r?.ok) {
+        this.logger.warn(
+          `[pedido-whats] registro sem prova não saiu (pedido ${order?.wcOrderNumber}): ${r?.error}`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `[pedido-whats] registro sem prova falhou (pedido ${order?.wcOrderNumber}): ${e?.message || e}`,
+      );
+    }
+  }
+
   /** Pagamento confirmado — a mensagem que a cliente realmente espera. */
   async aoConfirmarPagamento(order: any): Promise<void> {
     void this.avisarN8n('pagamento_confirmado', order);
