@@ -10,7 +10,7 @@ import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
 import { youtubeId } from '@/lib/youtube';
 import { trackColorSwitch } from '@/lib/tracking';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
-import { hexDaCor, type CorApi, type PecaApi } from '@/services/products';
+import { hexDaCor, rotuloDaCor, type CorApi, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
@@ -86,6 +86,19 @@ export function EscolhaDaPeca({
   const [cor, setCor] = useState<string | null>(inicial);
   /** Ela tentou o tamanho (ou o botão) sem cor: o passo da cor acende. */
   const [corError, setCorError] = useState(false);
+
+  /**
+   * O `?cor=` MUDOU COM A PÁGINA JÁ ABERTA (20/08): a sugestão de cores da
+   * SACOLA navega pra esta mesma PDP com outra cor — sem key no componente,
+   * o estado não renasce. Então a cor do link é adotada quando chega.
+   */
+  useEffect(() => {
+    if (corInicial && corInicial !== cor && cores.some((c) => c.nome === corInicial)) {
+      trocarCor(corInicial, { silencioso: true });
+    }
+    // Só o link é gatilho — reagir a `cor` desfaria a troca manual seguinte.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corInicial]);
 
   /**
    * TODA troca de cor passa por aqui (20/08): muda o estado (instantâneo,
@@ -263,6 +276,24 @@ export function EscolhaDaPeca({
           pra 620px e a PDP INTEIRA cortava à direita — grade de tamanhos,
           "Adicionar à sacola", tudo. Quanto mais cores a peça ganhava, pior. */}
       <div id="galeria-da-peca" className="min-w-0 scroll-mt-24">
+        {/* A LINHA DA COR NO TOPO, ACIMA DA FOTO (dono, 20/08: "descrição bem
+            menor e no topo"). A primeira versão punha o rótulo grande entre a
+            foto e a grade — e um nomeAmigavel poluído do cadastro estourou em
+            três linhas. Aqui é uma linha discreta; quem grita é a grade. */}
+        {temVariasCores && (
+          <p className="mb-2 text-center text-small text-ink-soft lg:text-left" aria-live="polite">
+            {corAtual ? (
+              <>
+                Cor escolhida:{' '}
+                <span className="font-semibold uppercase tracking-wide text-ink">
+                  {rotuloDaCor(corAtual)}
+                </span>
+              </>
+            ) : (
+              'Escolha a cor abaixo da foto'
+            )}
+          </p>
+        )}
         <ProductGallery
           key={cor ?? 'unica'}
           images={galeria}
@@ -370,34 +401,24 @@ function GradeDeCores({
     <div
       id="grade-de-cores"
       className={cn(
-        'mt-5 scroll-mt-28 rounded-lg transition-all duration-300',
+        'mt-4 scroll-mt-28 rounded-lg transition-all duration-300',
         erro && 'bg-danger/5 p-3 ring-2 ring-danger ring-offset-2 ring-offset-background',
       )}
     >
-      <div className="flex items-center justify-center gap-2.5 lg:justify-start">
+      {/* Rótulo do passo, ENXUTO (dono, 20/08: "descrição bem menor") — a
+          confirmação em voz alta mora ACIMA da foto; aqui só o convite. */}
+      <div className="flex items-center justify-center gap-2 lg:justify-start">
         <span
           aria-hidden
           className={cn(
-            'tabular flex size-6 shrink-0 items-center justify-center rounded-pill border text-xs font-medium transition-colors duration-[320ms]',
+            'tabular flex size-5 shrink-0 items-center justify-center rounded-pill border text-[0.6875rem] font-medium transition-colors duration-[320ms]',
             atual ? 'border-primary bg-primary text-light' : 'border-ink-soft text-ink',
           )}
         >
-          {atual ? <Check className="size-3.5" strokeWidth={3} /> : 1}
+          {atual ? <Check className="size-3" strokeWidth={3} /> : 1}
         </span>
-        {/* "COR ESCOLHIDA: GOIABA" GRANDE (pedido literal do dono, 20/08) — a
-            confirmação da vendedora no balcão, em caixa alta e um degrau
-            acima do corpo do texto. Enquanto falta, o verbo no imperativo. */}
-        <p className="text-body font-medium text-ink" aria-live="polite">
-          {atual ? (
-            <>
-              Cor escolhida:{' '}
-              <span className="text-[1.125rem] font-semibold tracking-wide uppercase">
-                {atual.nomeAmigavel || atual.nome}
-              </span>
-            </>
-          ) : (
-            'Escolha a cor'
-          )}
+        <p className="text-small font-medium text-ink">
+          {atual ? 'Cor escolhida' : 'Escolha a cor'}
         </p>
       </div>
 
@@ -428,7 +449,7 @@ function GradeDeCores({
               href={`/produto/${slug}?cor=${encodeURIComponent(c.nome)}`}
               role="radio"
               aria-checked={ativa}
-              aria-label={`Cor ${c.nomeAmigavel || c.nome}`}
+              aria-label={`Cor ${rotuloDaCor(c)}`}
               onClick={(e) => {
                 e.preventDefault();
                 onEscolher(c.nome);
@@ -481,7 +502,7 @@ function GradeDeCores({
                   ativa ? 'font-semibold text-ink' : 'text-ink-soft',
                 )}
               >
-                {c.nomeAmigavel || c.nome}
+                {rotuloDaCor(c)}
               </span>
             </a>
           );
