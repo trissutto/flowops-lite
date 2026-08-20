@@ -2,39 +2,36 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
+import { AlertCircle, Check } from 'lucide-react';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
 import { youtubeId } from '@/lib/youtube';
 import { trackColorSwitch } from '@/lib/tracking';
-import { BLUR_DATA_URL, formatPrice } from '@/lib/utils';
+import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { hexDaCor, type CorApi, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
  * ESCOLHA DA PEÇA — galeria + decisão de compra compartilhando a MESMA cor.
  *
- * A página do site é uma só por REF, mas desde 20/08 ela abre ANCORADA numa
- * cor: o link pode trazer `?cor=` (card de vitrine, anúncio, WhatsApp) e é
- * nela que galeria, grade e preço abrem. Trocar de cor continua instantâneo
- * (estado client), só que agora TODA troca reescreve a URL — o link que a
- * cliente compartilha e o analytics passam a saber QUAL cor ela viu, o que
- * antes se perdia (a bolinha não deixava rastro nenhum).
+ * O FLUXO (dono, 20/08 à noite): a cor é o PASSO 1, escolhida na GRADE DE
+ * CORES embaixo da foto principal — todas as cores em linhas de 4, sem
+ * rolagem (a régua lateral escondia metade das cores atrás do "MAIS CORES").
+ * Só depois vem o tamanho (passo 2, no BuyBox). A página abre SEM cor
+ * escolhida; tentar o tamanho ou o botão antes disso rola até a grade e
+ * pede a escolha. Tocou numa cor: "Cor escolhida: GOIABA" em destaque, ✓ na
+ * miniatura e a foto principal vira junto.
  *
- * Por que a mudança: medição do funil mostrou 16% de trava na compra em peça
- * multicor contra 5% na de cor única — o PASSO da cor consumia a decisão.
- * A cor saiu do fluxo do BuyBox (lá virou confirmação) e as outras cores
- * viraram CARDS de peça depois do botão (`OutrasCoresDaPeca`), que é também
- * a venda casada: "temos esta mesma peça em...".
+ * O link pode trazer `?cor=` (card de vitrine, anúncio, WhatsApp) — aí a
+ * página abre ancorada naquela cor, já escolhida. Toda troca reescreve a
+ * URL sem navegar: o link compartilhado e o analytics sabem qual cor ela viu.
  *
  * Por que este componente existe: galeria e buy box são irmãos no layout, e
  * estado compartilhado entre irmãos precisa morar no pai. Server Component
  * não guarda estado, então o pai tem que ser client — mas só ele: as duas
  * peças pesadas continuam as mesmas.
- *
- * Cor inicial sem `?cor=` no link: a primeira COM ESTOQUE. Abrir na cor
- * esgotada é convidar a cliente a bater na parede logo no primeiro clique.
  */
 export function EscolhaDaPeca({
   product,
@@ -61,29 +58,34 @@ export function EscolhaDaPeca({
   const cores = useEstoqueAoVivo(product.slug, coresDoServidor);
 
   /**
-   * COR DE ABERTURA: a primeira com estoque **E COM FOTO PRÓPRIA**.
+   * A PÁGINA ABRE SEM COR ESCOLHIDA (dono, 20/08 à noite): "a pessoa escolhe
+   * a cor, DEPOIS o tamanho". Escolher a cor pela cliente — que era o
+   * comportamento desde sempre (abrir na primeira com estoque) — fazia o
+   * passo parecer resolvido e ela nem via que existiam outras 7 cores.
    *
-   * O "com estoque" é de sempre — abrir na cor esgotada é convidar a cliente a
-   * bater na parede no primeiro clique. O "com foto" entrou em 13/08, junto com
-   * a liberação das cores sem foto: as cores vêm em ordem alfabética, então a
-   * VOGUE passaria a abrir em BEGE — que não tem foto — e a primeira coisa que
-   * a cliente veria seria "as fotos acima são das outras cores". A cor sem foto
-   * é ótima como escolha dela; é ruim como cartão de visita da peça.
+   * A EXCEÇÃO é o link que já traz a cor (`?cor=`): quem chegou por card de
+   * vitrine, anúncio ou WhatsApp pediu AQUELA cor — aí ela abre escolhida.
    *
-   * Duas redes, nesta ordem: se nenhuma cor com estoque tem foto, vale a com
-   * estoque; se nem isso, a primeira que existir.
+   * A heurística antiga (primeira com estoque E com foto) continua viva como
+   * `melhorCor`, mas só como REDE: é pra onde a página vai quando a cor
+   * escolhida esgota debaixo do dedo dela.
    */
-  const inicial = useMemo(() => {
-    // A cor do LINK ganha da heurística (20/08): quem chegou por um card de
-    // cor, anúncio ou link de WhatsApp pediu AQUELA cor — abrir em outra é
-    // trocar a peça antes do primeiro toque. O server já validou que existe.
-    if (corInicial && cores.some((c) => c.nome === corInicial)) return corInicial;
+  const melhorCor = useMemo(() => {
     const comEstoque = cores.filter((c) => c.estoque > 0);
     const comFoto = comEstoque.find((c) => c.fotos.length > 0);
     return (comFoto ?? comEstoque[0] ?? cores[0])?.nome ?? null;
+  }, [cores]);
+
+  const inicial = useMemo(() => {
+    if (corInicial && cores.some((c) => c.nome === corInicial)) return corInicial;
+    // Peça de UMA cor não tem escolha a fazer — já abre nela.
+    if (cores.length === 1) return cores[0].nome;
+    return null;
   }, [cores, corInicial]);
 
   const [cor, setCor] = useState<string | null>(inicial);
+  /** Ela tentou o tamanho (ou o botão) sem cor: o passo da cor acende. */
+  const [corError, setCorError] = useState(false);
 
   /**
    * TODA troca de cor passa por aqui (20/08): muda o estado (instantâneo,
@@ -94,6 +96,7 @@ export function EscolhaDaPeca({
    */
   function trocarCor(nome: string, opts?: { silencioso?: boolean }) {
     setCor(nome);
+    setCorError(false);
     if (!opts?.silencioso) trackColorSwitch(product, nome);
     try {
       const url = new URL(window.location.href);
@@ -102,6 +105,21 @@ export function EscolhaDaPeca({
     } catch {
       /* URL é conveniência — a troca de cor nunca pode falhar por causa dela. */
     }
+  }
+
+  /**
+   * ELA PULOU DIRETO PRO TAMANHO (ou pro botão) SEM ESCOLHER A COR.
+   *
+   * Regra do dono (20/08): não escolher por ela — PEDIR. A página rola até a
+   * grade de cores e o passo acende, com a mesma moldura vermelha que o
+   * tamanho usa quando falta. O toque dela não é perdido: assim que tocar
+   * numa cor, o erro apaga e a grade de tamanhos passa a valer.
+   */
+  function pedirCor() {
+    setCorError(true);
+    document
+      .getElementById('grade-de-cores')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   /**
    * O TAMANHO MORA AQUI (17/08), e nao dentro do BuyBox.
@@ -132,7 +150,7 @@ export function EscolhaDaPeca({
   useEffect(() => {
     if (!corSumiu) return;
     const perdida = cor;
-    if (inicial) trocarCor(inicial, { silencioso: true });
+    if (melhorCor) trocarCor(melhorCor, { silencioso: true });
     else setCor(null);
     toast({
       message: `A cor ${perdida} esgotou`,
@@ -163,21 +181,17 @@ export function EscolhaDaPeca({
     return resto.length ? resto : product.images;
   }, [cores, corAtual, product]);
 
-  /** Barra lateral: uma miniatura por cor COM foto; clicar = trocar a cor. */
-  const grupos = useMemo(() => {
-    const comFoto = cores.filter((c) => c.fotos.length > 0);
-    if (comFoto.length < 2) return undefined;
-    return comFoto.map((c) => ({
-      nome: c.nomeAmigavel || c.nome,
-      capa: c.fotos[0].src,
-      ativa: c.nome === corAtual?.nome,
-      // Riscada quando ela ja escolheu um numero que esta cor nao tem.
-      indisponivel: !!tamanho && !c.tamanhos.some((t) => t.label === tamanho && t.disponivel),
-      onSelect: () => trocarCor(c.nome),
-    }));
-    // `trocarCor` é estável na prática (só usa setters); fora das deps de propósito.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cores, corAtual, tamanho]);
+  /**
+   * A GRADE DE CORES (dono, 20/08 à noite) — o seletor único de cor.
+   *
+   * Substituiu a régua lateral de miniaturas, que em peça de 8 cores mostrava
+   * 3 e escondia 5 atrás do "MAIS CORES". Aqui TODAS aparecem de uma vez,
+   * em linhas de 4, sem rolagem — 8 cores são 2 linhas, 12 seriam 3.
+   *
+   * Toda cor entra, COM ou SEM foto (a sem foto vira swatch chapado): cor
+   * escondida foi exatamente o defeito que matou a régua.
+   */
+  const temVariasCores = cores.length > 1;
 
   /**
    * VÍDEO DA PEÇA — último slide da galeria (19/08).
@@ -254,7 +268,6 @@ export function EscolhaDaPeca({
           images={galeria}
           name={pecaDaCor.name}
           autoPlay
-          grupos={grupos}
           badges={pecaDaCor.badges}
           video={video}
         />
@@ -263,6 +276,20 @@ export function EscolhaDaPeca({
             Ainda não temos foto de <strong>{corAtual!.nome}</strong> — as fotos acima são das
             outras cores desta mesma peça.
           </p>
+        )}
+        {/* A GRADE DE CORES mora AQUI, colada na foto que ela muda (dono,
+            20/08): miniaturas embaixo da foto principal, todas de uma vez,
+            sem rolagem. É o passo 1 da compra — o tamanho (passo 2) fica na
+            coluna ao lado. */}
+        {temVariasCores && (
+          <GradeDeCores
+            slug={product.slug}
+            cores={cores}
+            corAtualNome={corAtual?.nome ?? null}
+            tamanho={tamanho}
+            erro={corError}
+            onEscolher={trocarCor}
+          />
         )}
       </div>
       <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
@@ -288,23 +315,12 @@ export function EscolhaDaPeca({
           corSelecionada={cor}
           tamanho={tamanho}
           onTamanho={setTamanho}
-          outrasCores={
-            <OutrasCoresDaPeca
-              slug={product.slug}
-              cores={cores}
-              corAtualNome={corAtual?.nome ?? null}
-              onTrocar={(nome) => {
-                trocarCor(nome);
-                /* A prova de que algo aconteceu é a FOTO virar — então a
-                   página rola até a galeria. No celular os cards ficam bem
-                   abaixo dela; trocar sem subir seria de novo uma mudança
-                   fora da vista (a raiz do "nem percebi que escolhi"). */
-                document
-                  .getElementById('galeria-da-peca')
-                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-            />
-          }
+          /* A cor ainda não foi escolhida: o BuyBox trava o tamanho e o
+             botão, e qualquer tentativa cai no `pedirCor` — que rola até a
+             grade e acende o passo (dono, 20/08: "se a pessoa clicar no
+             tamanho sem escolher a cor, o site pede para escolher a cor"). */
+          corPendente={temVariasCores && !cor}
+          onPedirCor={pedirCor}
         />
       </div>
     </div>
@@ -314,78 +330,159 @@ export function EscolhaDaPeca({
 /* ────────────────────────────────────────────────────────────────────────── */
 
 /**
- * TEMOS TAMBÉM NESTAS CORES — as outras cores como CARDS de peça (20/08).
+ * A GRADE DE CORES — o seletor único de cor da PDP (dono, 20/08 à noite).
  *
- * É o que sobrou (e cresceu) da folha de cores: em vez de um seletor no meio
- * do fluxo de compra, cada cor vira um mini-card com a foto grande, nome e
- * preço — a mesma peça oferecida de novo, que é a venda casada que a
- * vendedora faz no balcão ("esse modelo também veio no preto, quer ver?").
+ * Linhas de 4, SEM rolagem: 8 cores = 2 linhas, todas visíveis de uma vez.
+ * Nasceu da morte da régua lateral, que em peça de 8 cores mostrava 3 e
+ * escondia 5 atrás do "MAIS CORES" — "cortou as cores que temos".
+ *
+ * O rótulo é o passo 1 da compra: "Escolha a cor" enquanto falta, e a
+ * confirmação em voz alta — "Cor escolhida: GOIABA" — quando ela toca.
+ * A miniatura tocada ganha borda + ✓ e a foto principal vira junto.
  *
  * O href é REAL (`?cor=`): o Google enxerga um link por cor, e cmd+clique /
  * abrir em nova aba funcionam. O clique normal é interceptado e troca a cor
- * na hora, sem recarregar — com a rolagem até a galeria feita pelo chamador.
+ * na hora, sem recarregar.
  *
  * Cor SEM foto própria mostra o swatch chapado, nunca a foto de outra cor:
- * card com foto errada é a mesma armadilha da "foto ilustrativa" sem aviso.
+ * miniatura com foto errada é a armadilha da "foto ilustrativa" sem aviso.
  */
-function OutrasCoresDaPeca({
+function GradeDeCores({
   slug,
   cores,
   corAtualNome,
-  onTrocar,
+  tamanho,
+  erro,
+  onEscolher,
 }: {
   slug: string;
   cores: CorApi[];
   corAtualNome: string | null;
-  onTrocar: (nome: string) => void;
+  /** O número já escolhido — risca a cor que não tem ele (nunca esconde). */
+  tamanho: string | null;
+  /** Ela tentou tamanho/botão sem cor: o passo inteiro acende. */
+  erro: boolean;
+  onEscolher: (nome: string) => void;
 }) {
-  const outras = cores.filter((c) => c.nome !== corAtualNome);
-  if (!outras.length) return null;
+  const atual = cores.find((c) => c.nome === corAtualNome) ?? null;
 
   return (
-    <div id="outras-cores-da-peca" className="mt-9 scroll-mt-28">
-      <p className="eyebrow text-ink">
-        {outras.length === 1 ? 'Temos também nesta cor' : 'Temos também nestas cores'}
-      </p>
-      <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-3">
-        {outras.map((c) => {
+    <div
+      id="grade-de-cores"
+      className={cn(
+        'mt-5 scroll-mt-28 rounded-lg transition-all duration-300',
+        erro && 'bg-danger/5 p-3 ring-2 ring-danger ring-offset-2 ring-offset-background',
+      )}
+    >
+      <div className="flex items-center justify-center gap-2.5 lg:justify-start">
+        <span
+          aria-hidden
+          className={cn(
+            'tabular flex size-6 shrink-0 items-center justify-center rounded-pill border text-xs font-medium transition-colors duration-[320ms]',
+            atual ? 'border-primary bg-primary text-light' : 'border-ink-soft text-ink',
+          )}
+        >
+          {atual ? <Check className="size-3.5" strokeWidth={3} /> : 1}
+        </span>
+        {/* "COR ESCOLHIDA: GOIABA" GRANDE (pedido literal do dono, 20/08) — a
+            confirmação da vendedora no balcão, em caixa alta e um degrau
+            acima do corpo do texto. Enquanto falta, o verbo no imperativo. */}
+        <p className="text-body font-medium text-ink" aria-live="polite">
+          {atual ? (
+            <>
+              Cor escolhida:{' '}
+              <span className="text-[1.125rem] font-semibold tracking-wide uppercase">
+                {atual.nomeAmigavel || atual.nome}
+              </span>
+            </>
+          ) : (
+            'Escolha a cor'
+          )}
+        </p>
+      </div>
+
+      {erro && !atual && (
+        <p
+          role="alert"
+          className="mt-3 flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2.5 text-small font-semibold text-danger"
+        >
+          <AlertCircle className="size-4 shrink-0" strokeWidth={2} />
+          Toque numa cor abaixo 👇 pra depois escolher o tamanho.
+        </p>
+      )}
+
+      {/* 4 por linha, sem rolagem — o catálogo de cores INTEIRO na tela.
+          `grid` em vez de fita: era a rolagem escondendo cor que matou a
+          régua lateral. */}
+      <div role="radiogroup" aria-label="Cores da peça" className="mt-3 grid grid-cols-4 gap-2">
+        {cores.map((c) => {
+          const ativa = c.nome === corAtualNome;
           const foto = c.fotos[0]?.src ?? c.swatch.imagem;
+          // Já tem número escolhido e esta cor não tem ele: riscada, nunca
+          // escondida — e segue clicável (ela pode trocar o número depois).
+          const indisponivel =
+            !!tamanho && !c.tamanhos.some((t) => t.label === tamanho && t.disponivel);
           return (
             <a
               key={c.nome}
               href={`/produto/${slug}?cor=${encodeURIComponent(c.nome)}`}
+              role="radio"
+              aria-checked={ativa}
+              aria-label={`Cor ${c.nomeAmigavel || c.nome}`}
               onClick={(e) => {
                 e.preventDefault();
-                onTrocar(c.nome);
+                onEscolher(c.nome);
               }}
-              className="group rounded-md border border-border p-1.5 transition-colors duration-[180ms] hover:border-ink-soft"
+              className="group min-w-0"
             >
-              <span className="relative block aspect-3/4 overflow-hidden rounded-sm bg-surface-alt">
+              <span
+                className={cn(
+                  'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
+                  indisponivel && 'opacity-45',
+                  ativa
+                    ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-background'
+                    : 'border-border group-hover:border-ink-soft',
+                )}
+              >
                 {foto ? (
                   <Image
                     src={foto}
-                    alt={`${c.nomeAmigavel || c.nome}`}
+                    alt=""
+                    aria-hidden
                     fill
-                    sizes="200px"
+                    sizes="120px"
                     placeholder="blur"
                     blurDataURL={BLUR_DATA_URL}
-                    className="object-cover transition-transform duration-[320ms] group-hover:scale-[1.03]"
+                    className="object-cover"
                   />
                 ) : (
                   <span
+                    aria-hidden
                     className="absolute inset-0"
                     style={{ background: c.swatch.hex ?? hexDaCor(c.nome) }}
                   />
                 )}
+                {/* O ✓ não some nunca — em peça escura a borda de seleção
+                    desaparece contra a própria foto. */}
+                {ativa && !indisponivel && (
+                  <span className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-primary shadow-sm">
+                    <Check className="size-3 text-light" strokeWidth={3} />
+                  </span>
+                )}
+                {indisponivel && (
+                  <span aria-hidden className="absolute inset-0 flex items-center justify-center">
+                    <span className="h-px w-[140%] rotate-[38deg] bg-ink-soft/80" />
+                  </span>
+                )}
               </span>
-              <span className="mt-1.5 block truncate text-small font-medium text-ink">
+              <span
+                className={cn(
+                  'mt-1 block truncate text-center text-[0.6875rem] leading-tight transition-colors',
+                  ativa ? 'font-semibold text-ink' : 'text-ink-soft',
+                )}
+              >
                 {c.nomeAmigavel || c.nome}
               </span>
-              {c.preco > 0 && (
-                <span className="tabular block text-small font-light text-ink-soft">
-                  {formatPrice(c.preco)}
-                </span>
-              )}
             </a>
           );
         })}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { AlertCircle, ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Star } from 'lucide-react';
@@ -60,23 +60,24 @@ export interface CorEscolhivel {
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, outrasCores,
+  product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, corPendente, onPedirCor,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
   cores?: CorEscolhivel[];
   corSelecionada?: string | null;
   /**
-   * A COR DEIXOU DE SER UM PASSO DA COMPRA (dono, 20/08).
+   * A COR VOLTOU A SER O PASSO 1 — e AGORA É PEDIDA, NÃO ESCOLHIDA POR NÓS
+   * (dono, 20/08 à noite: "a pessoa escolhe a cor, depois o tamanho").
    *
-   * Medido no funil: em peça multicor 16% de quem tenta comprar trava, contra
-   * 5% na de cor única — o passo da cor consumia a decisão, mesmo depois da
-   * fita, da folha e da linha "Cor escolhida". Agora a página abre ANCORADA
-   * numa cor (a da URL, quando o link traz `?cor=`) e o BuyBox só CONFIRMA
-   * qual é. As outras cores viram cards de peça — este slot, montado pelo
-   * pai — que trocam a página inteira em vez de trocar um estado invisível.
+   * `corPendente` = peça multicor SEM cor escolhida ainda. Nesse estado o
+   * tamanho não aceita toque e o botão pede a cor: qualquer tentativa cai no
+   * `onPedirCor`, que rola até a GRADE DE CORES (embaixo da foto, na outra
+   * coluna) e acende o passo. O seletor de cor em si mora lá — aqui só a
+   * trava e a confirmação.
    */
-  outrasCores?: ReactNode;
+  corPendente?: boolean;
+  onPedirCor?: () => void;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
   /**
@@ -202,6 +203,13 @@ export function BuyBox({
    * fecha a folha e volta pra página.
    */
   function handleAdd() {
+    // A COR VEM ANTES (dono, 20/08): sem ela nem a folha de tamanhos abre —
+    // escolher número de uma cor que não existe é comprar no escuro.
+    if (corPendente) {
+      trackAddToCartBlocked(product, 'color_missing');
+      onPedirCor?.();
+      return;
+    }
     if (!size) {
       trackAddToCartBlocked(product, soldOut ? 'sold_out' : 'size_missing');
       setSizeError(true);
@@ -443,9 +451,11 @@ export function BuyBox({
         )}
       >
         <div className="flex items-end justify-between gap-4">
-          {/* SEMPRE o passo 1 (17/08): é ele que decide a compra. */}
+          {/* Passo 2 quando a peça tem cores (20/08): a COR é o passo 1, na
+              grade embaixo da foto. Peça de cor única segue com o tamanho
+              como único passo. */}
           <PassoLabel
-            numero={1}
+            numero={temCor ? 2 : 1}
             titulo="Escolha o tamanho"
             escolhido={size}
             sufixoEscolhido="tamanho"
@@ -475,6 +485,13 @@ export function BuyBox({
               selected={size === option.label}
               disabled={!option.available}
               onSelect={() => {
+                // TAMANHO SEM COR NÃO EXISTE (dono, 20/08): o toque não é
+                // perdido nem vira erro mudo — a página rola até a grade de
+                // cores e pede a escolha que falta.
+                if (corPendente) {
+                  onPedirCor?.();
+                  return;
+                }
                 setSize(option.label);
                 trackSizeSwitch(product, option.label);
                 setSizeError(false);
@@ -573,7 +590,7 @@ export function BuyBox({
             type="button"
             onClick={() =>
               document
-                .getElementById('outras-cores-da-peca')
+                .getElementById('grade-de-cores')
                 ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
             }
             className="shrink-0 whitespace-nowrap text-small font-medium text-ink underline decoration-border underline-offset-4 transition-colors hover:text-ink-soft"
@@ -655,9 +672,11 @@ export function BuyBox({
           <Button size="lg" block onClick={handleAdd} className="h-14 text-[1.05rem]">
             <ShoppingBag />
             <span className="min-w-0 truncate">
-              {size
-                ? `Adicionar · ${temCor && corLabel ? `${corLabel} ${size}` : `tamanho ${size}`}`
-                : 'Escolha o tamanho'}
+              {corPendente
+                ? 'Escolha a cor'
+                : size
+                  ? `Adicionar · ${temCor && corLabel ? `${corLabel} ${size}` : `tamanho ${size}`}`
+                  : 'Escolha o tamanho'}
             </span>
           </Button>
         )}
@@ -691,14 +710,6 @@ export function BuyBox({
           </a>
         </div>
       </div>
-
-      {/* OUTRAS CORES COMO CARDS DE PEÇA (dono, 20/08) — a venda casada.
-          Ficam DEPOIS do botão de propósito: acima dele viravam de novo um
-          passo no meio do fluxo (a lição dos 158px de bolinha de 17/08). Quem
-          está decidida compra sem passar por aqui; quem quer outra cor acha
-          um card com foto grande, nome e preço — e clicar troca a página
-          inteira, não um estado invisível. */}
-      {outrasCores}
 
       {/* Frete de verdade, pro CEP dela (item 28). Substituiu o texto fixo
           "frete grátis acima de R$ 399", que envelheceu junto com a régua — o
@@ -815,16 +826,19 @@ export function BuyBox({
                   segundo — 36 das 41 clientes travadas tentaram comprar por
                   aqui sem nunca ter subido até os seletores. */}
               <p className="tabular truncate text-xs text-ink-soft">
-                {size
-                  ? temCor && corLabel
-                    ? `${corLabel} · ${size}`
-                    : `Tamanho ${size}`
-                  : 'Escolha o tamanho'}{' '}
+                {corPendente
+                  ? 'Escolha a cor'
+                  : size
+                    ? temCor && corLabel
+                      ? `${corLabel} · ${size}`
+                      : `Tamanho ${size}`
+                    : 'Escolha o tamanho'}{' '}
                 · {formatPrice(product.price)}
               </p>
             </div>
             <Button onClick={handleAdd} className="shrink-0">
-              <ShoppingBag /> {size ? 'Adicionar' : 'Escolher tamanho'}
+              <ShoppingBag />{' '}
+              {corPendente ? 'Escolher cor' : size ? 'Adicionar' : 'Escolher tamanho'}
             </Button>
           </div>
         </div>
