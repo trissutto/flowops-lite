@@ -172,7 +172,22 @@ const TOP30_CATEGORIA: Record<string, string> = {
   macacoes: 'top30-macacoes',
   'linha-conforto': 'top30-linha-conforto',
 };
-/** A vitrine geral: as 30 de maior estoque do site, de qualquer categoria. */
+/**
+ * A VITRINE DO RESTO — as 30 de maior estoque que NÃO entraram em nenhuma
+ * vitrine de categoria.
+ *
+ * Nasceu como "as 30 do site inteiro" e o dono achou o defeito na mesma noite:
+ * as de maior estoque do catálogo SÃO as blusas, vestidos e macacões, que já
+ * têm conjunto próprio. Os quatro anúncios disputavam as mesmas peças.
+ *
+ * Filtrar isso no Meta não resolveria: as 30 vagas já teriam sido gastas
+ * justamente nas peças a excluir, e o conjunto sairia vazio. A exclusão tem
+ * que acontecer no CARIMBO — por isso `carimbarTop30` dá `continue` em quem
+ * já ganhou vitrine de categoria.
+ *
+ * O que sobra aqui é o resto do catálogo: calças, saias, shorts, conjuntos,
+ * jaquetas e as peças sem categoria — que hoje não aparecem em anúncio nenhum.
+ */
 const TOP30_GERAL = 'top30-novidades';
 
 interface CarimboTop30 {
@@ -197,14 +212,21 @@ function carimbarTop30(pecas: PecaFeed[]): CarimboTop30 {
     .sort((a, b) => (Number(b.estoqueTotal) || 0) - (Number(a.estoqueTotal) || 0));
 
   for (const p of porEstoque) {
-    if (geral.size < TOP30_TETO) geral.add(p.ref);
-
     const alvo = TOP30_CATEGORIA[String(p.categoria || '').trim()];
-    if (!alvo) continue;
-    const n = usadas.get(alvo) ?? 0;
-    if (n >= TOP30_TETO) continue;
-    usadas.set(alvo, n + 1);
-    categoria.set(p.ref, alvo);
+
+    if (alvo) {
+      const n = usadas.get(alvo) ?? 0;
+      if (n < TOP30_TETO) {
+        usadas.set(alvo, n + 1);
+        categoria.set(p.ref, alvo);
+        // Já tem vitrine própria: NÃO entra na geral. Ver o cabeçalho.
+        continue;
+      }
+    }
+
+    // Sobrou: categoria sem vitrine própria (calças, saias, shorts, conjuntos,
+    // jaquetas), peça sem categoria nenhuma, ou a 31ª de uma vitrine cheia.
+    if (geral.size < TOP30_TETO) geral.add(p.ref);
   }
 
   return { categoria, geral };
