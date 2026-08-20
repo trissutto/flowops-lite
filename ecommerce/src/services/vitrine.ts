@@ -122,6 +122,31 @@ export async function fetchMaisTopDaSemana(
   }
 }
 
+/**
+ * OS MAIS VENDIDOS NAS LOJAS — coleção AUTOMÁTICA (dono, 19/08).
+ *
+ * Irmã da "Mais Top da Semana", mas sem curadoria: o backend ranqueia pelo
+ * caixa das lojas físicas e só deixa entrar peça que aguenta a demanda que o
+ * selo cria (estoque ≥ 30 e nenhum tamanho zerado). A ordem já vem pronta —
+ * 1º lugar primeiro — e muda sozinha conforme venda e reposição.
+ */
+export async function fetchMaisVendidosNasLojas(
+  opcoes: { revalidate?: number } = {},
+): Promise<Product[]> {
+  const { revalidate = REVALIDATE_VITRINE } = opcoes;
+
+  try {
+    const r = await api<{ itens: PecaApi[]; total?: number }>(
+      '/public/loja/mais-vendidos-lojas',
+      { revalidate, tags: ['catalogo', 'mais-vendidos-lojas'], timeoutMs: 12000 },
+    );
+    return (r?.itens ?? []).map(mapPeca);
+  } catch {
+    // Ranking fora do ar não derruba a página — vira estado vazio.
+    return [];
+  }
+}
+
 export async function fetchVitrine(
   opcoes: {
     ordenar?: OrdemVitrine;

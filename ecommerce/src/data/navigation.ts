@@ -205,6 +205,17 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
     href: '/mais-top-da-semana',
     icon: 'Flame',
   },
+  /**
+   * OS MAIS VENDIDOS NAS LOJAS — vitrine AUTOMÁTICA (dono, 19/08): top 30 do
+   * caixa das lojas físicas com estoque ≥ 30 e grade de tamanhos cheia. Sem
+   * curadoria — o ranking se mantém sozinho. Ao lado da Top da Semana porque
+   * são os dois recortes de destaque: um escolhido a dedo, outro pelo caixa.
+   */
+  {
+    label: 'Os Mais Vendidos nas Lojas',
+    href: '/mais-vendidos-nas-lojas',
+    icon: 'Trophy',
+  },
   {
     label: 'Outlet',
     href: '/outlet',

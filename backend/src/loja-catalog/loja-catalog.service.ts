@@ -2226,6 +2226,94 @@ export class LojaCatalogService {
     return { itens, total: itens.length };
   }
 
+  // ── OS MAIS VENDIDOS NAS LOJAS (dono, 19/08) ───────────────────────────────
+  // Coleção AUTOMÁTICA, irmã da curada: em vez de tela de curadoria, o ranking
+  // é o caixa das lojas físicas. Zero manutenção — peça que esgota (ou fura a
+  // grade) sai sozinha na próxima remontagem, e quem repõe volta a concorrer.
+
+  /**
+   * VENDAS POR FAMÍLIA, SÓ LOJA FÍSICA — gêmeo de `vendasPorFamilia` sem a
+   * fonte do site/live (`order_items`): "mais vendidos NAS LOJAS" é o caixa
+   * da loja, não o pedido do site. Mesmas exclusões de lá (dupla contagem
+   * `flowops%`, marcado, treino) — divergir do critério do resto do sistema
+   * faria este ranking não bater com nenhuma outra tela. Cache próprio de
+   * 10 min, como o gêmeo.
+   */
+  private cacheVendasLoja: { at: number; mapa: Map<string, number> } | null = null;
+
+  private async vendasLojaPorFamilia(): Promise<Map<string, number>> {
+    if (this.cacheVendasLoja && Date.now() - this.cacheVendasLoja.at < this.TTL_VENDAS) {
+      return this.cacheVendasLoja.mapa;
+    }
+    const total = new Map<string, number>();
+    try {
+      const [historico, pdv] = await Promise.all([
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; unidades: number }>>(
+          `SELECT UPPER(TRIM(p.ref)) AS ref, COALESCE(SUM(m.quantidade), 0)::int AS unidades
+             FROM giga_caixa_mov m
+             JOIN wincred_produtos p ON p.codigo = TRIM(m.codigo)
+            WHERE COALESCE(m.obs_pedido, '') NOT LIKE 'flowops%'
+              AND (m.marcado IS NULL OR TRIM(m.marcado) = '')
+            GROUP BY 1`,
+        ),
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; unidades: number }>>(
+          `SELECT UPPER(TRIM(i.ref)) AS ref, COALESCE(SUM(i.qty), 0)::int AS unidades
+             FROM pdv_sale_items i
+             JOIN pdv_sales s ON s.id = i.sale_id
+            WHERE i.ref IS NOT NULL
+              AND s.status = 'finalized'
+              AND s.is_training = false
+              AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+            GROUP BY 1`,
+        ),
+      ]);
+      for (const l of [...historico, ...pdv]) {
+        const base = refBaseOf(l.ref);
+        if (!base) continue;
+        total.set(base, (total.get(base) ?? 0) + (Number(l.unidades) || 0));
+      }
+      this.cacheVendasLoja = { at: Date.now(), mapa: total };
+    } catch (e: any) {
+      // Ranking indisponível = vitrine vazia (a página tem estado vazio) — não
+      // cacheia o erro, a próxima chamada tenta de novo.
+      this.logger.warn(`[catalogo] vendas de loja por família indisponíveis: ${e?.message || e}`);
+    }
+    return total;
+  }
+
+  /**
+   * A VITRINE "OS MAIS VENDIDOS NAS LOJAS": top 30 do caixa físico que ainda
+   * aguentam a demanda que o selo vai criar. Régua do dono (19/08):
+   *
+   *   · estoque comprável ≥ 30 peças (`estoqueTotal` já desconta cor oculta);
+   *   · NENHUM tamanho zerado — best-seller com grade furada só gera "não tem
+   *     meu número", então peça sem a grade cheia espera repor pra entrar.
+   *
+   * Peça sem grade de tamanho (linha do ERP sem tamanho) fica de fora: não há
+   * como provar a grade cheia do que não tem grade.
+   */
+  async maisVendidosNasLojas(): Promise<{ itens: any[]; total: number }> {
+    const MIN_ESTOQUE = 30;
+    const TOP = 30;
+    const [catalogo, vendas] = await Promise.all([
+      this.catalogoDaVitrine(),
+      this.vendasLojaPorFamilia(),
+    ]);
+    const unidades = (p: any) => vendas.get(refBaseOf(this.refKey(p.ref))) ?? 0;
+    const itens = catalogo
+      .filter(
+        (p: any) =>
+          (p.estoqueTotal ?? 0) >= MIN_ESTOQUE &&
+          (p.tamanhos ?? []).length > 0 &&
+          (p.tamanhos as any[]).every((t: any) => t.disponivel) &&
+          unidades(p) > 0,
+      )
+      .sort((a: any, b: any) => unidades(b) - unidades(a))
+      .slice(0, TOP)
+      .map((p: any) => ({ ...p, vendidasNasLojas: unidades(p) }));
+    return { itens, total: itens.length };
+  }
+
   /**
    * RADAR da tela /retaguarda/cores-sem-foto.
    *

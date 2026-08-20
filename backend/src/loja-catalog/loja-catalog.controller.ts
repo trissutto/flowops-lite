@@ -67,6 +67,16 @@ export class LojaCatalogPublicController {
   }
 
   /**
+   * GET /api/public/loja/mais-vendidos-lojas — a coleção AUTOMÁTICA "Os Mais
+   * Vendidos nas Lojas": top 30 do caixa físico com estoque ≥ 30 e a grade de
+   * tamanhos cheia. Irmã da curadoria, mas sem tela — o ranking é o caixa.
+   */
+  @Get('mais-vendidos-lojas')
+  maisVendidosLojas() {
+    return this.svc.maisVendidosNasLojas();
+  }
+
+  /**
    * GET /api/public/loja/instagram — os posts REAIS da @lurdsplussize.
    *
    * A grade da home mostrava foto de banco de imagem: bonita, e de outra
