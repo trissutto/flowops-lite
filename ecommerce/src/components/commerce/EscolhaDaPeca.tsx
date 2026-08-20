@@ -1,39 +1,56 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
 import { youtubeId } from '@/lib/youtube';
-import type { CorApi, PecaApi } from '@/services/products';
+import { trackColorSwitch } from '@/lib/tracking';
+import { BLUR_DATA_URL, formatPrice } from '@/lib/utils';
+import { hexDaCor, type CorApi, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
  * ESCOLHA DA PEÇA — galeria + decisão de compra compartilhando a MESMA cor.
  *
- * A página do site é uma só por REF. A cliente escolhe a COR na bolinha e,
- * no mesmo instante, a galeria vira as fotos daquela cor, a grade passa a
- * mostrar só os tamanhos que existem nela e o preço acompanha (liso e
- * estampado da mesma REF costumam custar diferente).
+ * A página do site é uma só por REF, mas desde 20/08 ela abre ANCORADA numa
+ * cor: o link pode trazer `?cor=` (card de vitrine, anúncio, WhatsApp) e é
+ * nela que galeria, grade e preço abrem. Trocar de cor continua instantâneo
+ * (estado client), só que agora TODA troca reescreve a URL — o link que a
+ * cliente compartilha e o analytics passam a saber QUAL cor ela viu, o que
+ * antes se perdia (a bolinha não deixava rastro nenhum).
+ *
+ * Por que a mudança: medição do funil mostrou 16% de trava na compra em peça
+ * multicor contra 5% na de cor única — o PASSO da cor consumia a decisão.
+ * A cor saiu do fluxo do BuyBox (lá virou confirmação) e as outras cores
+ * viraram CARDS de peça depois do botão (`OutrasCoresDaPeca`), que é também
+ * a venda casada: "temos esta mesma peça em...".
  *
  * Por que este componente existe: galeria e buy box são irmãos no layout, e
  * estado compartilhado entre irmãos precisa morar no pai. Server Component
  * não guarda estado, então o pai tem que ser client — mas só ele: as duas
  * peças pesadas continuam as mesmas.
  *
- * Cor inicial: a primeira COM ESTOQUE. Abrir na cor esgotada é convidar a
- * cliente a bater na parede logo no primeiro clique.
+ * Cor inicial sem `?cor=` no link: a primeira COM ESTOQUE. Abrir na cor
+ * esgotada é convidar a cliente a bater na parede logo no primeiro clique.
  */
 export function EscolhaDaPeca({
   product,
   cores: coresDoServidor,
   look,
+  corInicial,
 }: {
   product: Product;
   cores: CorApi[];
   /** As peças que saem na MESMA foto — repassado direto pro BuyBox. */
   look?: PecaApi['look'];
+  /**
+   * A cor que o LINK pediu (`?cor=`), já validada pelo server component
+   * contra a lista de cores à venda. Nula = link sem cor, vale a heurística.
+   */
+  corInicial?: string | null;
 }) {
   /**
    * ESTOQUE VIVO (13/08): o HTML é uma fotografia do instante em que a página
@@ -57,12 +74,35 @@ export function EscolhaDaPeca({
    * estoque; se nem isso, a primeira que existir.
    */
   const inicial = useMemo(() => {
+    // A cor do LINK ganha da heurística (20/08): quem chegou por um card de
+    // cor, anúncio ou link de WhatsApp pediu AQUELA cor — abrir em outra é
+    // trocar a peça antes do primeiro toque. O server já validou que existe.
+    if (corInicial && cores.some((c) => c.nome === corInicial)) return corInicial;
     const comEstoque = cores.filter((c) => c.estoque > 0);
     const comFoto = comEstoque.find((c) => c.fotos.length > 0);
     return (comFoto ?? comEstoque[0] ?? cores[0])?.nome ?? null;
-  }, [cores]);
+  }, [cores, corInicial]);
 
   const [cor, setCor] = useState<string | null>(inicial);
+
+  /**
+   * TODA troca de cor passa por aqui (20/08): muda o estado (instantâneo,
+   * como sempre foi) E reescreve o `?cor=` da URL sem navegar — replaceState
+   * não recarrega nada e não empilha histórico (voltar do navegador continua
+   * saindo da peça, não desfazendo cores). É o que faz o link compartilhado
+   * abrir na cor que ela estava vendo e o funil saber qual cor foi vista.
+   */
+  function trocarCor(nome: string, opts?: { silencioso?: boolean }) {
+    setCor(nome);
+    if (!opts?.silencioso) trackColorSwitch(product, nome);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('cor', nome);
+      window.history.replaceState(null, '', url);
+    } catch {
+      /* URL é conveniência — a troca de cor nunca pode falhar por causa dela. */
+    }
+  }
   /**
    * O TAMANHO MORA AQUI (17/08), e nao dentro do BuyBox.
    *
@@ -92,7 +132,8 @@ export function EscolhaDaPeca({
   useEffect(() => {
     if (!corSumiu) return;
     const perdida = cor;
-    setCor(inicial);
+    if (inicial) trocarCor(inicial, { silencioso: true });
+    else setCor(null);
     toast({
       message: `A cor ${perdida} esgotou`,
       description: 'Levaram a última enquanto você olhava. Veja as outras cores desta peça.',
@@ -132,8 +173,10 @@ export function EscolhaDaPeca({
       ativa: c.nome === corAtual?.nome,
       // Riscada quando ela ja escolheu um numero que esta cor nao tem.
       indisponivel: !!tamanho && !c.tamanhos.some((t) => t.label === tamanho && t.disponivel),
-      onSelect: () => setCor(c.nome),
+      onSelect: () => trocarCor(c.nome),
     }));
+    // `trocarCor` é estável na prática (só usa setters); fora das deps de propósito.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cores, corAtual, tamanho]);
 
   /**
@@ -205,7 +248,7 @@ export function EscolhaDaPeca({
           grid se recusava a encolher. O viewport de layout do celular esticava
           pra 620px e a PDP INTEIRA cortava à direita — grade de tamanhos,
           "Adicionar à sacola", tudo. Quanto mais cores a peça ganhava, pior. */}
-      <div className="min-w-0">
+      <div id="galeria-da-peca" className="min-w-0 scroll-mt-24">
         <ProductGallery
           key={cor ?? 'unica'}
           images={galeria}
@@ -243,10 +286,109 @@ export function EscolhaDaPeca({
             tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel })),
           }))}
           corSelecionada={cor}
-          onSelecionarCor={setCor}
           tamanho={tamanho}
           onTamanho={setTamanho}
+          outrasCores={
+            <OutrasCoresDaPeca
+              slug={product.slug}
+              cores={cores}
+              corAtualNome={corAtual?.nome ?? null}
+              onTrocar={(nome) => {
+                trocarCor(nome);
+                /* A prova de que algo aconteceu é a FOTO virar — então a
+                   página rola até a galeria. No celular os cards ficam bem
+                   abaixo dela; trocar sem subir seria de novo uma mudança
+                   fora da vista (a raiz do "nem percebi que escolhi"). */
+                document
+                  .getElementById('galeria-da-peca')
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            />
+          }
         />
+      </div>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * TEMOS TAMBÉM NESTAS CORES — as outras cores como CARDS de peça (20/08).
+ *
+ * É o que sobrou (e cresceu) da folha de cores: em vez de um seletor no meio
+ * do fluxo de compra, cada cor vira um mini-card com a foto grande, nome e
+ * preço — a mesma peça oferecida de novo, que é a venda casada que a
+ * vendedora faz no balcão ("esse modelo também veio no preto, quer ver?").
+ *
+ * O href é REAL (`?cor=`): o Google enxerga um link por cor, e cmd+clique /
+ * abrir em nova aba funcionam. O clique normal é interceptado e troca a cor
+ * na hora, sem recarregar — com a rolagem até a galeria feita pelo chamador.
+ *
+ * Cor SEM foto própria mostra o swatch chapado, nunca a foto de outra cor:
+ * card com foto errada é a mesma armadilha da "foto ilustrativa" sem aviso.
+ */
+function OutrasCoresDaPeca({
+  slug,
+  cores,
+  corAtualNome,
+  onTrocar,
+}: {
+  slug: string;
+  cores: CorApi[];
+  corAtualNome: string | null;
+  onTrocar: (nome: string) => void;
+}) {
+  const outras = cores.filter((c) => c.nome !== corAtualNome);
+  if (!outras.length) return null;
+
+  return (
+    <div id="outras-cores-da-peca" className="mt-9 scroll-mt-28">
+      <p className="eyebrow text-ink">
+        {outras.length === 1 ? 'Temos também nesta cor' : 'Temos também nestas cores'}
+      </p>
+      <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-3">
+        {outras.map((c) => {
+          const foto = c.fotos[0]?.src ?? c.swatch.imagem;
+          return (
+            <a
+              key={c.nome}
+              href={`/produto/${slug}?cor=${encodeURIComponent(c.nome)}`}
+              onClick={(e) => {
+                e.preventDefault();
+                onTrocar(c.nome);
+              }}
+              className="group rounded-md border border-border p-1.5 transition-colors duration-[180ms] hover:border-ink-soft"
+            >
+              <span className="relative block aspect-3/4 overflow-hidden rounded-sm bg-surface-alt">
+                {foto ? (
+                  <Image
+                    src={foto}
+                    alt={`${c.nomeAmigavel || c.nome}`}
+                    fill
+                    sizes="200px"
+                    placeholder="blur"
+                    blurDataURL={BLUR_DATA_URL}
+                    className="object-cover transition-transform duration-[320ms] group-hover:scale-[1.03]"
+                  />
+                ) : (
+                  <span
+                    className="absolute inset-0"
+                    style={{ background: c.swatch.hex ?? hexDaCor(c.nome) }}
+                  />
+                )}
+              </span>
+              <span className="mt-1.5 block truncate text-small font-medium text-ink">
+                {c.nomeAmigavel || c.nome}
+              </span>
+              {c.preco > 0 && (
+                <span className="tabular block text-small font-light text-ink-soft">
+                  {formatPrice(c.preco)}
+                </span>
+              )}
+            </a>
+          );
+        })}
       </div>
     </div>
   );
