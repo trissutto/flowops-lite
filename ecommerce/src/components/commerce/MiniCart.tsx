@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { ShoppingBag, Ticket, X } from 'lucide-react';
+import Image from 'next/image';
+import { Plus, ShoppingBag, Ticket, X } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { CartLineRow } from '@/components/commerce/CartLineRow';
 import { useCartStore } from '@/store/cart';
+import { useLookOfferStore } from '@/store/look-offer';
+import { useQuickAddStore } from '@/store/quick-add';
 import { useIsCartOpen, useUiStore } from '@/store/ui';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
@@ -55,9 +58,27 @@ export function MiniCart() {
   const couponCode = useCartStore((s) => s.couponCode);
   const setCoupon = useCartStore((s) => s.setCoupon);
 
+  /**
+   * A IRMÃ DO LOOK — a peça que sai na MESMA foto da que acabou de entrar.
+   *
+   * A BuyBox registra o look no momento do adicionar; aqui ela vira um card
+   * de oferta. O toque abre o QUICK ADD (Modal, z 70) por cima deste drawer
+   * (z 60): a cliente escolhe o tamanho na janelinha e a calça cai na sacola
+   * sem sair de onde está — era o buraco do fluxo (dono, 20/08: "ela compra
+   * o kimono, sai da página e não volta mais"). Quem já está na sacola some
+   * da oferta na hora, pela própria reatividade das lines.
+   */
+  const irmasDoLook = useLookOfferStore((s) => s.irmas);
+  const abrirQuickAdd = useQuickAddStore((s) => s.abrir);
+
   // Antes da hidratação o localStorage ainda não falou — renderiza vazio dos
   // dois lados (server e client) pra não divergir o HTML.
   const lines = mounted ? rawLines : [];
+  // Irmã que a cliente já levou sai da oferta — oferecer o que já está na
+  // sacola soaria como insistência de vendedor.
+  const ofertasDoLook = irmasDoLook.filter(
+    (irma) => !lines.some((l) => String(l.productId) === irma.ref || l.slug === irma.slug),
+  );
   const count = lines.reduce((sum, l) => sum + l.quantity, 0);
   const subtotal = lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
   const [promotion, setPromotion] = useState<PublicPromotionConfig | null>(null);
@@ -220,6 +241,57 @@ export function MiniCart() {
               </li>
             ))}
           </ul>
+
+          {/* Sai na mesma foto — a irmã do look, a um toque de tamanho. */}
+          {ofertasDoLook.length > 0 && (
+            <div className="flex flex-col gap-3 border-t border-border pt-5">
+              <p className="eyebrow text-primary-strong">Sai na mesma foto</p>
+              {ofertasDoLook.map((irma) => (
+                <div
+                  key={irma.ref}
+                  className="flex items-center gap-3 rounded-lg border border-border bg-surface-alt p-3"
+                >
+                  <div className="relative aspect-[3/4] w-16 shrink-0 overflow-hidden rounded-sm bg-surface">
+                    {irma.imagem && (
+                      <Image
+                        src={irma.imagem}
+                        alt={irma.nome}
+                        fill
+                        sizes="64px"
+                        className="object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-small text-ink">{irma.nome}</p>
+                    <p className="mt-0.5 text-small font-medium tabular text-ink">
+                      {formatPrice(irma.preco)}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      // O Quick Add busca a grade real por slug ao abrir —
+                      // este objeto mínimo só precisa apresentar a peça.
+                      abrirQuickAdd({
+                        id: irma.ref,
+                        slug: irma.slug,
+                        name: irma.nome,
+                        category: '',
+                        price: irma.preco,
+                        pixPrice: irma.precoPix ?? undefined,
+                        images: irma.imagem ? [{ src: irma.imagem, alt: irma.nome }] : [],
+                        sizes: [],
+                      })
+                    }
+                  >
+                    <Plus className="mr-1 size-3.5" strokeWidth={2} /> Levar junto
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Cupom compacto */}
           <div className="border-t border-border pt-5">

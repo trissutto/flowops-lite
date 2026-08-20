@@ -68,7 +68,10 @@ export function Overlay({
     if (inertRef.current) inertRef.current.inert = !open;
   }, [open]);
 
-  const zBackdrop = layer === 'modal' ? 'z-[var(--z-overlay)]' : 'z-[var(--z-overlay)]';
+  // O backdrop do MODAL fica ACIMA do drawer (65 > 60): quando a janelinha do
+  // Quick Add abre por cima do mini-cart, o clique fora dela tem que fechar o
+  // modal — não apertar um botão da sacola que está por baixo.
+  const zBackdrop = layer === 'modal' ? 'z-[var(--z-modal-backdrop)]' : 'z-[var(--z-overlay)]';
   const zPanel = layer === 'modal' ? 'z-[var(--z-modal)]' : 'z-[var(--z-drawer)]';
 
   return (

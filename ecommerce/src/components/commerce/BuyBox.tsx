@@ -11,6 +11,7 @@ import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
+import { useLookOfferStore } from '@/store/look-offer';
 import { useUiStore } from '@/store/ui';
 import { useWishlistStore } from '@/store/wishlist';
 import { trackAddToCart, trackAddToCartBlocked, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
@@ -106,6 +107,7 @@ export function BuyBox({
   const { toast } = useToast();
   const mounted = useMounted();
   const addToCart = useCartStore((s) => s.add);
+  const oferecerLook = useLookOfferStore((s) => s.oferecer);
   const openOverlay = useUiStore((s) => s.openOverlay);
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
@@ -251,6 +253,10 @@ export function BuyBox({
       message: 'Adicionado à sacola',
       description: `${product.name} · ${cor ? `${cor} · ` : ''}tamanho ${tamanho}`,
     });
+    // A irmã do look vai junto pro mini-cart (dono, 20/08): a faixa "Sai na
+    // mesma foto" só leva pra outra página, e quem adiciona e vai embora não
+    // volta. Peça sem look limpa a oferta — nada de irmã de outra família.
+    oferecerLook(look);
     // Abre o mini-cart: a cliente VÊ a peça entrar na sacola sem sair da
     // página — e o próximo passo (finalizar) já está na mão dela.
     openOverlay('cart');

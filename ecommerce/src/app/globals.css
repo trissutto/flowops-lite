@@ -191,6 +191,9 @@
   --z-dropdown: 40;
   --z-overlay: 50;
   --z-drawer: 60;
+  /* Backdrop do MODAL: acima do drawer, abaixo do próprio modal — o Quick Add
+     abre por cima do mini-cart e o clique fora precisa achar o backdrop. */
+  --z-modal-backdrop: 65;
   --z-modal: 70;
   --z-toast: 80;
   --z-tooltip: 90;
