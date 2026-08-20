@@ -87,7 +87,10 @@ export class ProductPhotosController {
    *   - substituirId (form field, opcional)
    */
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  // 25MB: o front comprime antes de subir (comprimir-foto.ts), mas quando a
+  // compressão falha (formato exótico) o original vem inteiro — 10MB barrava
+  // foto de celular com 413 "File too large" (20/08).
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async upload(
     @Req() req: any,
     @UploadedFile() file: any,
