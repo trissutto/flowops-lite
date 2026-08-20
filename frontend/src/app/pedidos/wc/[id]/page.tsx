@@ -841,6 +841,9 @@ export default function PedidoDetailPage() {
       setPreviewExcludes([]);
       setPreviewPins([]);
       setPreviewSwapTarget(null);
+      // Zera o radio também — senão o confirm mandava um preferStoreCode que
+      // o preview desfeito já não mostra.
+      setPreferredStoreCode(null);
       setSplitApproved(false);
     } catch (e: any) {
       setSepError(e?.message || 'Falha ao voltar pra sugestão automática.');

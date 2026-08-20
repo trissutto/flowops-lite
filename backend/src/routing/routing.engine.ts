@@ -111,15 +111,18 @@ export class RoutingEngine {
       // OVERRIDE MANUAL: se o usuário escolheu uma loja específica (via radio
       // button no frontend) E ela cobre tudo, usa ela em vez do pickBestStore.
       let best: StoreInput | null = null;
-      // Loja FIXADA na troca manual do preview vence até o preferStoreCode:
-      // o operador acabou de apontar "quero essa" no modal.
-      for (const code of ctx.pinStoreCodes ?? []) {
-        const pinned = fullCoverage.find((s) => s.code === code);
-        if (pinned) { best = pinned; break; }
-      }
-      if (!best && ctx.preferStoreCode) {
+      // `preferStoreCode` (radio da tela) vence a loja FIXADA da troca manual:
+      // o clique no radio é a ação mais recente do operador — se o pin
+      // vencesse, o radio marcava Z e o preview/confirm criavam Y em silêncio.
+      if (ctx.preferStoreCode) {
         const preferred = fullCoverage.find((s) => s.code === ctx.preferStoreCode);
         if (preferred) best = preferred;
+      }
+      if (!best) {
+        for (const code of ctx.pinStoreCodes ?? []) {
+          const pinned = fullCoverage.find((s) => s.code === code);
+          if (pinned) { best = pinned; break; }
+        }
       }
       if (!best) best = this.pickBestStore(fullCoverage, ctx, stockMap);
       return {
