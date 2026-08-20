@@ -133,7 +133,20 @@ function item(p: PecaFeed): string {
   if (p.precoPromocional && p.precoPromocional < p.preco) {
     campos.push(`<g:sale_price>${dinheiro(p.precoPromocional)}</g:sale_price>`);
   }
-  if (p.marca) campos.push(`<g:brand>${escapar(p.marca)}</g:brand>`);
+  /**
+   * MARCA SEMPRE SAI — mesma regra do feed da Meta (`meta.xml`).
+   *
+   * 49 das 722 peças não têm marca no cadastro e saíam SEM a tag: o Google
+   * pede `brand` em vestuário e, sem ela, o item entra limitado. Quando não
+   * há fabricante conhecido, o próprio Google manda usar o nome de quem
+   * vende — e quem vende é a loja.
+   *
+   * ⚠️ O buraco é DE FEED, não de cadastro: não preencher `marca` no banco.
+   * Lá ela é o discriminador que separa produto diferente na mesma REF
+   * (`bucketKey` = `${ref}|${marca}` na Consulta). Carimbar "Lurd's" em
+   * todas jogaria peças distintas no mesmo balde — o bug da REF reciclada.
+   */
+  campos.push(`<g:brand>${escapar(p.marca || "Lurd's Plus Size")}</g:brand>`);
   if (p.cores[0]) campos.push(`<g:color>${escapar(p.cores[0])}</g:color>`);
 
   const categoria = CATEGORIA_GOOGLE[String(p.categoria || '').trim()];
