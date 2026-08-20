@@ -2,6 +2,7 @@ import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards 
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { ClientesGigaService } from './clientes-giga.service';
+import { ClientesLimpezaService } from './clientes-limpeza.service';
 
 /**
  * /admin/clientes-giga — importação completa da tabela `clientes` do Giga.
@@ -11,7 +12,10 @@ import { ClientesGigaService } from './clientes-giga.service';
 @Controller('admin/clientes-giga')
 @UseGuards(JwtAuthGuard)
 export class ClientesGigaController {
-  constructor(private readonly svc: ClientesGigaService) {}
+  constructor(
+    private readonly svc: ClientesGigaService,
+    private readonly limpeza: ClientesLimpezaService,
+  ) {}
 
   private requireAdmin(req: any) {
     const role = req?.user?.role;
@@ -38,6 +42,44 @@ export class ClientesGigaController {
   vincular(@Req() req: any) {
     this.requireAdmin(req);
     return this.svc.vincular();
+  }
+
+  // ── LIMPEZA DE CLIENTES (painel, 20/08) ──
+
+  /** Grupos de fichas duplicadas na MESMA loja (mesmo CPF), com sugestão. */
+  @Get('limpeza/duplicatas')
+  limpezaDuplicatas(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.limpeza.duplicatas();
+  }
+
+  /** Mantém uma ficha do grupo e arquiva as demais (copia o valioso antes). */
+  @Post('limpeza/duplicatas/resolver')
+  limpezaResolver(
+    @Req() req: any,
+    @Body() body: { loja: string; cpf: string; manterCodigo: string },
+  ) {
+    this.requireAdmin(req);
+    const usuario = req?.user?.name || req?.user?.email || 'matriz';
+    return this.limpeza.resolverDuplicata({ ...body, usuario });
+  }
+
+  /** Fichas sem CPF + candidatos do CRM (telefone/nome). */
+  @Get('limpeza/sem-cpf')
+  limpezaSemCpf(@Req() req: any, @Query('page') page?: string) {
+    this.requireAdmin(req);
+    return this.limpeza.semCpf(Number(page) || 1);
+  }
+
+  /** Copia o CPF da pessoa do CRM pra ficha (caso Rafaela). */
+  @Post('limpeza/copiar-cpf')
+  limpezaCopiarCpf(
+    @Req() req: any,
+    @Body() body: { loja: string; codigo: string; customerId: string },
+  ) {
+    this.requireAdmin(req);
+    const usuario = req?.user?.name || req?.user?.email || 'matriz';
+    return this.limpeza.copiarCpf({ ...body, usuario });
   }
 
   @Get('sample')

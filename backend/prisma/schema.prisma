@@ -4596,6 +4596,11 @@ model GigaCliente {
   bloqueado       String?   @db.VarChar(5)
   avaliacao       String?   @db.VarChar(4)
   situacao        String?   @db.VarChar(30)
+  // ── LIMPEZA (20/08): ficha duplicada arquivada pelo painel Clientes →
+  // Limpeza. Arquivada = fora da busca, do marcado e da consulta; a linha
+  // fica (crediário/histórico antigos ainda apontam pro código dela).
+  arquivadoEm     DateTime? @map("arquivado_em")
+  arquivadoMotivo String?   @map("arquivado_motivo")
   pontos          Decimal?  @db.Decimal(12, 2)
   limiteCompras   Decimal?  @map("limite_compras") @db.Decimal(12, 2)
   aberturaCredito DateTime? @map("abertura_credito") @db.Date

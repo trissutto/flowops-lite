@@ -116,7 +116,13 @@ export default function ConsultaClientesPage() {
 
         {/* Nova cliente — nasce NO FLOW (código 500001+), replica pro Giga */}
         {!ficha && (
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Link
+              href="/retaguarda/clientes-limpeza"
+              className="rounded-lg border border-[#E7E2D8] bg-white hover:bg-[#FBF6E6] text-slate-700 text-sm font-bold px-4 py-2 flex items-center gap-1.5"
+            >
+              🧹 Limpeza
+            </Link>
             <button
               onClick={() => setNovaAberta(true)}
               className="rounded-lg bg-[#B8912B] hover:bg-[#8C7325] text-white text-sm font-bold px-4 py-2 flex items-center gap-1.5"

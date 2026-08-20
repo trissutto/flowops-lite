@@ -4,8 +4,8 @@
  * /clientes — DEPRECATED
  *
  * Essa tela antiga agregava clientes a partir da tabela Order (WooCommerce)
- * — sem perfil, cashback ou tier. Foi substituída pelo CRM completo em
- * /clientes-crm que tem todos esses dados + Giga + cadastros PDV unificados.
+ * — sem perfil, cashback ou tier. Foi substituída pela lista consolidada por
+ * PESSOA em /beta/clientes (site + lojas + live = uma pessoa).
  *
  * Aqui só redireciona automaticamente. URL antiga mantida pra não quebrar
  * links salvos em favoritos.
@@ -22,7 +22,7 @@ export default function ClientesLegacyRedirect() {
   useEffect(() => {
     // Auto-redirect após 1.5s (dá tempo do user ler a mensagem)
     const t = setTimeout(() => {
-      router.replace('/clientes-crm');
+      router.replace('/beta/clientes');
     }, 1500);
     return () => clearTimeout(t);
   }, [router]);
@@ -39,8 +39,8 @@ export default function ClientesLegacyRedirect() {
         </h1>
 
         <p className="text-sm text-slate-600 mb-6">
-          O CRM completo está em <code className="bg-slate-100 px-1.5 py-0.5 rounded text-purple-700 font-mono">/clientes-crm</code> com perfil,
-          cashback, tier, histórico unificado (Giga + Site + PDV) e segmentação.
+          A lista oficial agora é <code className="bg-slate-100 px-1.5 py-0.5 rounded text-purple-700 font-mono">/beta/clientes</code> — consolidada
+          por pessoa (site + lojas + live), com cashback, tier e histórico unificado.
         </p>
 
         <div className="flex items-center justify-center gap-2 text-xs text-slate-500 mb-5">
@@ -49,7 +49,7 @@ export default function ClientesLegacyRedirect() {
         </div>
 
         <Link
-          href="/clientes-crm"
+          href="/beta/clientes"
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-purple-700 hover:bg-purple-800 text-white font-bold text-sm rounded-lg"
         >
           Ir agora <ArrowRight className="w-4 h-4" />
