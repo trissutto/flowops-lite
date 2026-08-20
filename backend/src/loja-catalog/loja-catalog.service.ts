@@ -2069,6 +2069,20 @@ export class LojaCatalogService {
       preco: Number(p.precoDe ?? p.preco) || 0,
       precoPromocional: p.precoDe != null && p.precoDe > p.preco ? Number(p.preco) : null,
       disponivel: Boolean(p.disponivel),
+      /**
+       * QUANTIDADE EM ESTOQUE — pedida pelo dono em 19/08/2026 pro feed do Meta.
+       *
+       * O feed carimba as vitrines rotativas ("as 30 de cada categoria") e até
+       * aqui o critério era a ORDEM da lista, que é `publicadoEm desc`. Só que
+       * `publicadoEm` foi preenchido de trás pra frente no catálogo legado (a
+       * data da primeira foto no R2), então peça de 2023 fotografada mês
+       * passado subia como lançamento — a reclamação do dono na mesma noite.
+       *
+       * Estoque não tem esse problema: é dado do Flow, medido, e responde uma
+       * pergunta melhor pro anúncio — peça com grade cheia atende mais gente e
+       * não frustra quem clica e descobre que o tamanho dela acabou.
+       */
+      estoqueTotal: Number(p.estoqueTotal) || 0,
       imagens: (p.imagens ?? []).map((i: any) => i.src).filter(Boolean),
       tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
       cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),

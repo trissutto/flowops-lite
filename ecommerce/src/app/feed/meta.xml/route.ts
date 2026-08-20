@@ -58,6 +58,8 @@ interface PecaFeed {
   cores: string[];
   topSemana?: boolean;
   lancamento?: boolean;
+  /** Quantidade em estoque somada — o critério das vitrines. Ver `carimbarTop30`. */
+  estoqueTotal?: number;
 }
 
 /** `&` vira `&amp;` etc. Sem isto, um nome com "&" invalida o XML inteiro. */
@@ -118,24 +120,37 @@ const NOVIDADES_CATEGORIA: Record<string, string> = {
 };
 
 /**
- * AS 30 MAIS RECENTES DE CADA CATEGORIA — `custom_label_3` e `custom_label_4`.
+ * AS 30 DE MAIOR ESTOQUE DE CADA CATEGORIA — `custom_label_3` e `custom_label_4`.
  *
- * Pedido do dono em 19/08/2026: sete vitrines rotativas — blusas, vestidos,
- * moda praia, lingerie, macacões, linha conforto e uma geral — cada uma com
- * "os últimos 30 itens cadastrados, e conforme entram novos saem os velhos".
+ * Sete vitrines rotativas — blusas, vestidos, moda praia, lingerie, macacões,
+ * linha conforto e uma geral — que alimentam os conjuntos de anúncio.
  *
- * ── POR QUE ISTO CONVIVE COM O CARIMBO DE CIMA, EM VEZ DE SUBSTITUÍ-LO ──
+ * ── POR QUE ESTOQUE, E NÃO "AS MAIS NOVAS" (INCIDENTE DE 19/08/2026) ──
  *
- * São perguntas diferentes, e a diferença já custou caro uma vez. `novidades-*`
- * (acima) responde "o que é NOVO DE VERDADE": exige `lancamento`, ou seja peça
- * com ≤30 dias, e por isso às vezes devolve menos de 20 — foi a trava que o
- * dono pediu em 16/08 justamente porque o conjunto se enchia de peça de 60-90
- * dias fingindo ser lançamento.
+ * Nasceu como "as 30 mais recentes", contando de cima da lista, que o backend
+ * devolve por `publicadoEm desc`. Foi pro ar e o dono pausou a campanha em
+ * minutos: **peça velha aparecendo como novidade** (REF 13014, 13015, 700927).
  *
- * `top30-*` responde outra coisa: "as 30 mais recentes que EXISTEM nesta
- * categoria", tenha a loja recebido novidade ou não. Sempre cheio, sempre
- * rotativo. É vitrine, não é anúncio de lançamento — e por isso o nome do
- * conjunto no Meta diz "30 mais recentes", nunca "novidades".
+ * A causa: `publicadoEm` é quando a peça entrou no ar NO SITE, e no catálogo
+ * legado esse campo foi preenchido de trás pra frente — a data da primeira
+ * foto no R2. Peça de 2023 fotografada mês passado sobe como lançamento.
+ * Ordem de publicação não é idade de peça, e o feed não carrega data nenhuma
+ * pra desempatar.
+ *
+ * Pior: a trava contra isso JÁ EXISTIA — o carimbo `novidades-*` abaixo exige
+ * `lancamento` (≤30 dias) exatamente porque o dono reclamou da mesma coisa em
+ * 16/08. Ela foi removida aqui de propósito, com um comentário justificando.
+ * O comentário estava errado e o bug voltou. Lição: quando existe uma trava
+ * com dono e data, ela é resposta a um incidente — não a remova sem descobrir
+ * qual foi.
+ *
+ * `estoqueTotal` não tem esse problema: é dado do Flow, medido, e responde uma
+ * pergunta melhor pro anúncio — peça com grade cheia atende mais gente e não
+ * frustra quem clica e descobre que o tamanho dela acabou. Se um dia a vitrine
+ * precisar mesmo ser por novidade, primeiro exponha a data real no feed.
+ *
+ * `novidades-*` (abaixo) continua respondendo "o que é NOVO DE VERDADE", com a
+ * trava de `lancamento` intacta. São perguntas diferentes e convivem.
  *
  * ── POR QUE DOIS CAMPOS E NÃO UM ──
  *
@@ -173,9 +188,16 @@ function carimbarTop30(pecas: PecaFeed[]): CarimboTop30 {
   const categoria = new Map<string, string>();
   const geral = new Set<string>();
 
-  for (const p of pecas) {
-    if (!p.disponivel) continue;
+  /**
+   * DA MAIOR QUANTIDADE PRA MENOR — e a cópia antes de ordenar não é capricho:
+   * a lista original vem por `publicadoEm desc` e o carimbo de novidades acima
+   * DEPENDE dessa ordem. Ordenar no lugar quebraria o outro carimbo em silêncio.
+   */
+  const porEstoque = [...pecas]
+    .filter((p) => p.disponivel)
+    .sort((a, b) => (Number(b.estoqueTotal) || 0) - (Number(a.estoqueTotal) || 0));
 
+  for (const p of porEstoque) {
     if (geral.size < TOP30_TETO) geral.add(p.ref);
 
     const alvo = TOP30_CATEGORIA[String(p.categoria || '').trim()];
