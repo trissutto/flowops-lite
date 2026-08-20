@@ -83,6 +83,15 @@ export interface RoutingContext {
    */
   preferStoreCode?: string | null;
   /**
+   * TROCA MANUAL NO PREVIEW (20/08) — lojas FIXADAS pelo operador no botão
+   * "↔ Trocar loja" da tela do pedido. Diferente do `preferStoreCode` (que só
+   * vale quando a loja cobre o pedido INTEIRO), a loja fixada entra no plano
+   * ANTES de qualquer heurística com as peças que ela tem por inteiro — mesmo
+   * cobertura parcial — e o greedy resolve o resto. Combinado com
+   * `excludeStoreCodes` (na service) implementa "tira a loja X, põe a Y".
+   */
+  pinStoreCodes?: string[];
+  /**
    * LOJA QUE VENDEU (17/08) — `Order.sellerStoreCode`. No split (REGRA 2) ela
    * entra no plano ANTES do greedy com as peças que já tem: peça na mão de
    * quem vendeu tem frete zero, e mandar buscar em outra loja é desperdício.

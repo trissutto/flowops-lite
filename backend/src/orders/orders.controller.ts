@@ -2110,8 +2110,20 @@ export class OrdersController {
   async prepareSeparation(
     @Param('wcId') wcId: string,
     @Query('preferStoreCode') preferStoreCode?: string,
+    // Troca manual no preview ("↔ Trocar loja"): CSV de lojas excluídas do
+    // roteamento + CSV de lojas fixadas (entram primeiro no split).
+    @Query('excludeStoreCodes') excludeStoreCodesCsv?: string,
+    @Query('pinStoreCodes') pinStoreCodesCsv?: string,
   ) {
     const wcOrderId = Number(wcId);
+    const excludeStoreCodes = (excludeStoreCodesCsv ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const pinStoreCodes = (pinStoreCodesCsv ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     /**
      * Pedido com wcOrderId SINTÉTICO monta o preview do Order local — ele não
@@ -2154,6 +2166,8 @@ export class OrdersController {
         isPickup: !!local.isPickup,
         pickupStoreCode: local.pickupStoreCode ?? null,
         preferStoreCode: preferStoreCode?.trim() || null,
+        excludeStoreCodes,
+        pinStoreCodes,
         address: {
           street: addr.address_1 ?? null,
           number: null, // já embutido em address_1 ("Rua X, 123")
@@ -2211,6 +2225,8 @@ export class OrdersController {
       isPickup: pickup.isPickup,
       pickupStoreCode: pickup.pickupStoreCode,
       preferStoreCode: preferStoreCode?.trim() || null,
+      excludeStoreCodes,
+      pinStoreCodes,
       address: {
         street: shipping.address_1 ?? billing.address_1 ?? null,
         number: shipping.number ?? billing.number ?? null,
@@ -2534,7 +2550,15 @@ export class OrdersController {
   @Post('wc/:wcId/confirm-separation')
   async confirmSeparation(
     @Param('wcId') wcId: string,
-    @Body() body?: { preferStoreCode?: string | null },
+    @Body()
+    body?: {
+      preferStoreCode?: string | null;
+      // Troca manual feita no preview: o confirm re-roda o routing, então
+      // precisa receber as mesmas exclusões/fixações pra separação criada
+      // bater com a que o operador revisou na tela.
+      excludeStoreCodes?: string[];
+      pinStoreCodes?: string[];
+    },
   ) {
     const wcOrderId = Number(wcId);
 
@@ -2579,6 +2603,12 @@ export class OrdersController {
     //    frontend — a engine força essa loja se ela cobrir o pedido inteiro.
     const preview = await this.routing.previewRoute(orderId, {
       preferStoreCode: body?.preferStoreCode?.trim() || null,
+      excludeStoreCodes: Array.isArray(body?.excludeStoreCodes)
+        ? body!.excludeStoreCodes.filter(Boolean)
+        : undefined,
+      pinStoreCodes: Array.isArray(body?.pinStoreCodes)
+        ? body!.pinStoreCodes.filter(Boolean)
+        : undefined,
     });
 
     if (!preview.success) {

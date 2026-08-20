@@ -222,6 +222,18 @@ export default function PedidoDetailPage() {
     fromStoreName: string | null;
     fromStatus: string;
   } | null>(null);
+  // Modo TROCA NO PREVIEW — botão "↔ Trocar loja" de um GRUPO da sugestão,
+  // ANTES de existir pick-order (nada foi enviado pra loja ainda). A troca
+  // refaz o preview excluindo a loja rejeitada e FIXANDO a escolhida
+  // (pinStoreCodes), e o Confirmar manda as mesmas listas pro backend —
+  // sem isso o confirm re-roda o routing do zero e desfaz a troca.
+  const [previewSwapTarget, setPreviewSwapTarget] = useState<{
+    storeCode: string;
+    storeName: string | null;
+    skus: string[];
+  } | null>(null);
+  const [previewExcludes, setPreviewExcludes] = useState<string[]>([]);
+  const [previewPins, setPreviewPins] = useState<string[]>([]);
   const [pickStoreLoading, setPickStoreLoading] = useState(false);
   const [pickStoreError, setPickStoreError] = useState<string | null>(null);
   const [pickStoreApplying, setPickStoreApplying] = useState<string | null>(null);
@@ -589,6 +601,10 @@ export default function PedidoDetailPage() {
       setPreferredStoreCode(null);
       setOverrides({});
       setSplitApproved(false); // reset gate a cada novo preview
+      // Gerar/recalcular volta pra sugestão automática — troca manual zera
+      setPreviewExcludes([]);
+      setPreviewPins([]);
+      setPreviewSwapTarget(null);
     } catch (e: any) {
       setSepError(e.message);
     } finally {
@@ -715,9 +731,13 @@ export default function PedidoDetailPage() {
     setSwitchingStore(true);
     setSepError(null);
     try {
-      const url = newStoreCode
-        ? `/orders/wc/${wcId}/prepare-separation?preferStoreCode=${encodeURIComponent(newStoreCode)}`
-        : `/orders/wc/${wcId}/prepare-separation`;
+      const params = new URLSearchParams();
+      if (newStoreCode) params.set('preferStoreCode', newStoreCode);
+      // Preserva trocas manuais já aplicadas no preview
+      if (previewExcludes.length) params.set('excludeStoreCodes', previewExcludes.join(','));
+      if (previewPins.length) params.set('pinStoreCodes', previewPins.join(','));
+      const qs = params.toString();
+      const url = `/orders/wc/${wcId}/prepare-separation${qs ? `?${qs}` : ''}`;
       const res = await api<SeparationPreview>(url);
       setSeparation(res);
       setPreferredStoreCode(newStoreCode);
@@ -732,16 +752,104 @@ export default function PedidoDetailPage() {
   function swapStore(storeCode: string, storeName: string | null) {
     const targetPickOrder = liveStatus.find((p) => p.storeCode === storeCode);
     if (!targetPickOrder) {
-      alert(`Não encontrei pick-order pra loja ${storeCode}.`);
+      // Ainda é PREVIEW (nenhum card criado): troca manual refaz a sugestão
+      // excluindo esta loja e fixando a escolhida — nada é enviado pra loja.
+      const group = separation?.groups.find((g) => g.storeCode === storeCode);
+      const pTarget = {
+        storeCode,
+        storeName,
+        skus: (group?.items ?? []).map((it) => it.sku),
+      };
+      setSwapTarget(null);
+      setPreviewSwapTarget(pTarget);
+      // Passa o alvo por parâmetro: o setState acima ainda não refletiu no
+      // closure desta render — ler o estado aqui pegaria o valor velho.
+      openPickStoreModal({ previewSwap: pTarget });
       return;
     }
-    setSwapTarget({
+    const sTarget = {
       pickOrderId: targetPickOrder.id,
       fromStoreCode: storeCode,
       fromStoreName: storeName,
       fromStatus: targetPickOrder.status,
-    });
-    openPickStoreModal();
+    };
+    setPreviewSwapTarget(null);
+    setSwapTarget(sTarget);
+    openPickStoreModal({ swap: sTarget });
+  }
+
+  /**
+   * Aplica a troca manual NO PREVIEW: refaz o prepare-separation excluindo a
+   * loja rejeitada e fixando (pin) a escolhida. Nada é criado/enviado — o
+   * operador revisa o novo preview e clica em "Confirmar e enviar pras lojas",
+   * que manda as mesmas listas pro backend.
+   */
+  async function applyPreviewSwap(pickedCode: string, pickedName: string) {
+    const from = previewSwapTarget;
+    if (!from) return;
+    if (pickedCode === from.storeCode) {
+      setPickStoreOpen(false);
+      setPreviewSwapTarget(null);
+      return;
+    }
+    if (!confirm(
+      `Trocar ${from.storeName || from.storeCode} por ${pickedName} (${pickedCode}) na sugestão?\n\n` +
+      `O sistema refaz a divisão SEM ${from.storeCode}, priorizando ${pickedCode} nas peças ` +
+      `que ela tem em estoque.\n\n` +
+      `Nada é enviado pras lojas ainda — revise o resultado e clique em ` +
+      `"Confirmar e enviar pras lojas".`,
+    )) return;
+
+    setPickStoreApplying(pickedCode);
+    setPickStoreError(null);
+    try {
+      const excludes = Array.from(new Set([...previewExcludes, from.storeCode]))
+        .filter((c) => c !== pickedCode);
+      const pins = Array.from(
+        new Set([...previewPins.filter((c) => c !== from.storeCode), pickedCode]),
+      ).filter((c) => !excludes.includes(c));
+
+      const params = new URLSearchParams();
+      if (excludes.length) params.set('excludeStoreCodes', excludes.join(','));
+      if (pins.length) params.set('pinStoreCodes', pins.join(','));
+      const res = await api<SeparationPreview>(
+        `/orders/wc/${wcId}/prepare-separation?${params.toString()}`,
+      );
+      setSeparation(res);
+      setPreviewExcludes(excludes);
+      setPreviewPins(pins);
+      setPreferredStoreCode(null);
+      setSplitApproved(false);
+      setPickStoreOpen(false);
+      setPreviewSwapTarget(null);
+      setFlash(`✓ Sugestão refeita: ${from.storeCode} → ${pickedCode}. Revise e confirme.`);
+      setTimeout(() => setFlash(null), 5000);
+    } catch (e: any) {
+      setPickStoreError(e?.message || 'Falha ao refazer o preview com a troca.');
+    } finally {
+      setPickStoreApplying(null);
+    }
+  }
+
+  /** Desfaz TODAS as trocas manuais do preview e volta pra sugestão automática. */
+  async function desfazerTrocaManual() {
+    setSepLoading(true);
+    setSepError(null);
+    try {
+      const res = await api<SeparationPreview>(`/orders/wc/${wcId}/prepare-separation`);
+      setSeparation(res);
+      setPreviewExcludes([]);
+      setPreviewPins([]);
+      setPreviewSwapTarget(null);
+      // Zera o radio também — senão o confirm mandava um preferStoreCode que
+      // o preview desfeito já não mostra.
+      setPreferredStoreCode(null);
+      setSplitApproved(false);
+    } catch (e: any) {
+      setSepError(e?.message || 'Falha ao voltar pra sugestão automática.');
+    } finally {
+      setSepLoading(false);
+    }
   }
 
   /**
@@ -758,7 +866,14 @@ export default function PedidoDetailPage() {
    *  4. Exibe lojas que reportaram problema com marcador vermelho (pra evitar
    *     escolher de volta a mesma que falhou)
    */
-  async function openPickStoreModal() {
+  async function openPickStoreModal(alvo?: {
+    swap?: { pickOrderId: string; fromStoreCode: string; fromStoreName: string | null; fromStatus: string };
+    previewSwap?: { storeCode: string; storeName: string | null; skus: string[] };
+  }) {
+    // Alvo recém-setado chega por parâmetro (setState não reflete no closure
+    // da mesma render); sem parâmetro, usa o estado (reaberturas, modo geral).
+    const swapAlvo = alvo?.swap ?? swapTarget;
+    const previewAlvo = alvo?.swap ? null : (alvo?.previewSwap ?? previewSwapTarget);
     setPickStoreOpen(true);
     setPickStoreLoading(true);
     setPickStoreError(null);
@@ -789,9 +904,13 @@ export default function PedidoDetailPage() {
       // nem vão mudar), e uma loja que cobre 100% do que será trocado aparecia
       // como "⚠ cobre 6/9". Fallback: sem os SKUs da loja, usa o pedido inteiro.
       let relevantSkus = allSkus;
-      if (swapTarget?.pickOrderId) {
-        const po = liveStatus.find((p) => p.id === swapTarget.pickOrderId);
+      if (swapAlvo?.pickOrderId) {
+        const po = liveStatus.find((p) => p.id === swapAlvo.pickOrderId);
         const swapSkus = (po?.skus ?? []).filter((s) => allSkus.has(s));
+        if (swapSkus.length) relevantSkus = new Set(swapSkus);
+      } else if (previewAlvo) {
+        // Troca no PREVIEW: cobertura medida só contra os SKUs do grupo trocado.
+        const swapSkus = previewAlvo.skus.filter((s) => allSkus.has(s));
         if (swapSkus.length) relevantSkus = new Set(swapSkus);
       }
 
@@ -874,6 +993,11 @@ export default function PedidoDetailPage() {
    * excluindo-loja e matriz decide.
    */
   async function applyPickStore(pickedCode: string, pickedName: string) {
+    // MODO PREVIEW: ainda não existe pick-order — a troca só refaz a sugestão.
+    if (previewSwapTarget && !swapTarget) {
+      await applyPreviewSwap(pickedCode, pickedName);
+      return;
+    }
     // Texto do confirm reflete o MODO: swap cirúrgico (só a loja de origem
     // muda) × recalculate total (pedido inteiro forçado pra loja escolhida).
     const msg = swapTarget
@@ -962,9 +1086,14 @@ export default function PedidoDetailPage() {
         message?: string;
       }>(`/orders/wc/${wcId}/confirm-separation`, {
         method: 'POST',
-        // Manda a loja escolhida no radio button (se houver) pra backend
-        // forçar essa loja em vez de re-rodar a sugestão automática.
-        body: JSON.stringify({ preferStoreCode: preferredStoreCode || null }),
+        // Manda a loja escolhida no radio button (se houver) + as trocas
+        // manuais do preview (excluídas/fixadas) — o backend re-roda o routing
+        // no confirm, então sem essas listas a troca era desfeita na criação.
+        body: JSON.stringify({
+          preferStoreCode: preferredStoreCode || null,
+          excludeStoreCodes: previewExcludes,
+          pinStoreCodes: previewPins,
+        }),
       });
       setConfirmResult(res);
       if (res.ok) {
@@ -1760,7 +1889,7 @@ export default function PedidoDetailPage() {
                   card (automático) ou <b>escolha manualmente</b> da lista de lojas.
                 </span>
                 <button
-                  onClick={openPickStoreModal}
+                  onClick={() => openPickStoreModal()}
                   disabled={sepLoading}
                   className="text-xs px-2 py-1 bg-white border border-amber-400 text-amber-900 rounded hover:bg-amber-100 font-semibold disabled:opacity-60"
                 >
@@ -1999,6 +2128,30 @@ export default function PedidoDetailPage() {
               <div className="text-xs mt-1 opacity-80">Envio: {separation.shippingMethod}</div>
             </div>
 
+            {/* Troca manual ativa no preview — mostra o que foi trocado e permite
+                voltar pra sugestão automática antes de confirmar. */}
+            {(previewExcludes.length > 0 || previewPins.length > 0) && !confirmResult?.ok && (
+              <div className="bg-amber-50 border border-amber-300 rounded p-3 mb-4 text-sm text-amber-900 flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  ↔ <b>Troca manual aplicada</b>
+                  {previewExcludes.length > 0 && (
+                    <> — sem <b>{previewExcludes.join(', ')}</b></>
+                  )}
+                  {previewPins.length > 0 && (
+                    <>, priorizando <b>{previewPins.join(', ')}</b></>
+                  )}
+                  . Essa escolha vale no "Confirmar e enviar pras lojas".
+                </div>
+                <button
+                  onClick={desfazerTrocaManual}
+                  disabled={sepLoading}
+                  className="px-3 py-1.5 bg-white border border-amber-400 text-amber-800 rounded text-xs font-semibold hover:bg-amber-100 disabled:opacity-60"
+                >
+                  Desfazer (sugestão automática)
+                </button>
+              </div>
+            )}
+
             {/* ── RUPTURA: MANDAR O CARD COM TODAS AS PEÇAS ─────────────────
                 O `pickup-blocked`/ruptura devolve `assignments: []` de
                 propósito ("operação precisa decidir") — resultado: NADA é
@@ -2030,7 +2183,7 @@ export default function PedidoDetailPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={openPickStoreModal}
+                  onClick={() => openPickStoreModal()}
                   disabled={sepLoading}
                   className="mt-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50"
                 >
@@ -2302,16 +2455,21 @@ export default function PedidoDetailPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap justify-end">
-                      {/* Botão trocar loja: só faz sentido pra loja FONTE de transferência.
-                          Na pickup-lock, trocar não adianta (loja destino é fixa).
-                          Na multi-store/single-store, também oferecemos porque pode ser
-                          ruptura local, divergência, etc. */}
-                      {g.isTransfer && g.storeCode && (
+                      {/* Botão trocar loja: vale pra loja FONTE de transferência e pra
+                          qualquer grupo de single/multi-store (troca manual no preview).
+                          Na pickup-lock e na loja DESTINO da retirada, trocar não
+                          adianta (destino é fixo). Antes do confirmar, a troca só
+                          refaz o preview (nada é enviado); depois, faz swap cirúrgico
+                          do pick-order via modal. */}
+                      {g.storeCode &&
+                        (g.isTransfer ||
+                          separation.strategy === 'multi-store' ||
+                          separation.strategy === 'single-store') && (
                         <button
                           onClick={() => swapStore(g.storeCode!, g.storeName)}
                           disabled={sepLoading}
                           className="inline-flex items-center gap-1 px-3 py-2 rounded text-sm border bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 disabled:opacity-60"
-                          title={`Escolher outra loja no lugar de ${g.storeCode}. O sistema re-roteia excluindo esta.`}
+                          title={`Escolher outra loja no lugar de ${g.storeCode}.`}
                         >
                           ↔ Trocar loja
                         </button>
@@ -2516,7 +2674,7 @@ export default function PedidoDetailPage() {
       {pickStoreOpen && (
         <div
           className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
-          {...overlayClose(() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null)))}
+          {...overlayClose(() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null), setPreviewSwapTarget(null)))}
         >
           <div
             className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col"
@@ -2524,7 +2682,18 @@ export default function PedidoDetailPage() {
           >
             <div className="p-4 border-b flex items-center justify-between">
               <div>
-                {swapTarget ? (
+                {!swapTarget && previewSwapTarget ? (
+                  <>
+                    <h3 className="font-bold text-lg text-slate-800">
+                      Trocar loja: {previewSwapTarget.storeName || previewSwapTarget.storeCode}
+                    </h3>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      Troca na <b>sugestão</b> (nada foi enviado pra loja ainda): o sistema refaz
+                      a divisão sem {previewSwapTarget.storeCode}, priorizando a loja escolhida.
+                      Depois é só revisar e clicar em <b>Confirmar e enviar pras lojas</b>.
+                    </p>
+                  </>
+                ) : swapTarget ? (
                   <>
                     <h3 className="font-bold text-lg text-slate-800">
                       Trocar loja: {swapTarget.fromStoreName || swapTarget.fromStoreCode}
@@ -2547,7 +2716,7 @@ export default function PedidoDetailPage() {
                 )}
               </div>
               <button
-                onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null))}
+                onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null), setPreviewSwapTarget(null))}
                 className="text-slate-400 hover:text-slate-700 text-2xl leading-none p-1"
                 disabled={!!pickStoreApplying}
               >
@@ -2581,6 +2750,8 @@ export default function PedidoDetailPage() {
                     Ordenado por <b>maior cobertura</b> (mais SKUs disponíveis)
                     {swapTarget
                       ? <> — <b>só dos itens de {swapTarget.fromStoreName || swapTarget.fromStoreCode}</b> (as outras lojas do pedido não entram na conta).</>
+                      : previewSwapTarget
+                      ? <> — <b>só dos itens de {previewSwapTarget.storeName || previewSwapTarget.storeCode}</b> (as outras lojas do pedido não entram na conta).</>
                       : ' do pedido.'}
                     {' '}A loja <b>✓ verde</b> cobre tudo. <b>⚠ amarelo</b> cobre parcialmente
                     (vai faltar peça — ia precisar transferir ou quebrar de novo).
@@ -2589,7 +2760,9 @@ export default function PedidoDetailPage() {
                     const full = c.skusCovered >= c.skusTotal && c.skusTotal > 0;
                     const partial = c.skusCovered > 0 && !full;
                     const none = c.skusCovered === 0;
-                    const isCurrentAssigned = liveStatus.some((p) => p.storeCode === c.code && ['new', 'separating'].includes(p.status));
+                    const isCurrentAssigned =
+                      liveStatus.some((p) => p.storeCode === c.code && ['new', 'separating'].includes(p.status)) ||
+                      (!swapTarget && previewSwapTarget?.storeCode === c.code);
                     return (
                       <div
                         key={c.code}
@@ -2692,7 +2865,7 @@ export default function PedidoDetailPage() {
             <div className="p-3 border-t bg-slate-50 text-xs text-slate-500 flex items-center justify-between">
               <span>Dica: se nenhuma loja cobre tudo, volte e use <b>Recalcular</b> pra dividir automático.</span>
               <button
-                onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null))}
+                onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null), setPreviewSwapTarget(null))}
                 disabled={!!pickStoreApplying}
                 className="px-3 py-1.5 border rounded hover:bg-white text-slate-700 disabled:opacity-60"
               >
