@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { AlertCircle, ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Star } from 'lucide-react';
@@ -13,10 +13,10 @@ import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
 import { useUiStore } from '@/store/ui';
 import { useWishlistStore } from '@/store/wishlist';
-import { trackAddToCart, trackAddToCartBlocked, trackColorSwitch, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
+import { trackAddToCart, trackAddToCartBlocked, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
-import { BLUR_DATA_URL, cn, discountPercent, formatPrice } from '@/lib/utils';
-import { hexDaCor, type PecaApi } from '@/services/products';
+import { cn, discountPercent, formatPrice } from '@/lib/utils';
+import type { PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
@@ -59,13 +59,23 @@ export interface CorEscolhivel {
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, onSelecionarCor, alertaEstoque, look, tamanho, onTamanho,
+  product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, outrasCores,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
   cores?: CorEscolhivel[];
   corSelecionada?: string | null;
-  onSelecionarCor?: (nome: string) => void;
+  /**
+   * A COR DEIXOU DE SER UM PASSO DA COMPRA (dono, 20/08).
+   *
+   * Medido no funil: em peça multicor 16% de quem tenta comprar trava, contra
+   * 5% na de cor única — o passo da cor consumia a decisão, mesmo depois da
+   * fita, da folha e da linha "Cor escolhida". Agora a página abre ANCORADA
+   * numa cor (a da URL, quando o link traz `?cor=`) e o BuyBox só CONFIRMA
+   * qual é. As outras cores viram cards de peça — este slot, montado pelo
+   * pai — que trocam a página inteira em vez de trocar um estado invisível.
+   */
+  outrasCores?: ReactNode;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
   /**
@@ -93,8 +103,6 @@ export function BuyBox({
   const [sizeChartOpen, setSizeChartOpen] = useState(false);
   /** Folha de tamanhos — sobe quando ela tenta comprar sem ter escolhido. */
   const [folhaTamanho, setFolhaTamanho] = useState(false);
-  /** Folha de cores — sobe no toque da linha "Cor escolhida". */
-  const [folhaCor, setFolhaCor] = useState(false);
   const { toast } = useToast();
   const mounted = useMounted();
   const addToCart = useCartStore((s) => s.add);
@@ -131,18 +139,11 @@ export function BuyBox({
   const corAtual = cores?.find((c) => c.nome === corSelecionada) ?? null;
   /**
    * O nome que a CLIENTE lê. O cru do ERP ("VD MUSGO ESC") continua sendo a
-   * chave que vai pro carrinho e pro `onSelecionarCor` — trocar os dois de
-   * lugar quebraria a seleção; aqui é só rótulo.
+   * chave que vai pro carrinho e pra URL (`?cor=`) — trocar os dois de lugar
+   * quebraria a seleção; aqui é só rótulo.
    */
   const rotuloDaCor = (c: CorEscolhivel) => c.nomeAmigavel || c.nome;
   const corLabel = corAtual ? rotuloDaCor(corAtual) : (corSelecionada ?? null);
-  /**
-   * Esta cor tem o número que ela já escolheu? Sem grade por cor (chamador
-   * antigo), assume que sim — é o comportamento de antes, e prometer menos do
-   * que se sabe é melhor que riscar cor à toa.
-   */
-  const corTemTamanho = (c: CorEscolhivel, t: string | null) =>
-    !t || !c.tamanhos?.length || c.tamanhos.some((x) => x.label === t && x.disponivel);
 
   /**
    * O TAMANHO ESCOLHIDO ACABOU ENQUANTO ELA OLHAVA (dono, 13/08).
@@ -269,30 +270,6 @@ export function BuyBox({
   }
 
   /**
-   * Escolher a cor NA FOLHA — e dar a notícia certa quando ela não tem o
-   * número escolhido.
-   *
-   * A limpeza da seleção acontece AQUI, e não no efeito `escolhidoEsgotou`,
-   * por causa do texto: aquele efeito avisa "alguém levou a última enquanto
-   * você olhava", que é verdade quando o estoque vira sozinho e é mentira
-   * quando foi ela quem trocou de cor. Zerando o tamanho antes da grade
-   * mudar, o efeito nem dispara — e a frase que ela lê é a do que aconteceu.
-   */
-  function escolherCor(c: CorEscolhivel) {
-    if (size && !corTemTamanho(c, size)) {
-      const perdido = size;
-      setSize(null);
-      toast({
-        message: `${rotuloDaCor(c)} não tem o ${perdido}`,
-        description: 'Escolha outro número pra esta cor.',
-      });
-    }
-    onSelecionarCor?.(c.nome);
-    trackColorSwitch(product, c.nome);
-    setFolhaCor(false);
-  }
-
-  /**
    * "Ver peças parecidas" — joga na busca as primeiras palavras do nome, que
    * é onde mora o CORTE da peça ("Blusa Feminina Manga Curta"). Cor e REF
    * ficam de fora de propósito: quem clica aqui é justamente quem NÃO quis
@@ -317,7 +294,9 @@ export function BuyBox({
     [
       `Olá! Tenho interesse na peça "${product.name}" (Ref ${refPeca}${corDaDuvida ? `, cor ${corDaDuvida}` : ''}).`,
       `Vocês têm no tamanho ${size ?? '__'}?`,
-      `${SITE.url}/produto/${product.slug}`,
+      // O link leva a COR (20/08): a atendente abre a página já na variação
+      // da dúvida, e a prévia do WhatsApp monta com a foto certa.
+      `${SITE.url}/produto/${product.slug}${corDaDuvida ? `?cor=${encodeURIComponent(corDaDuvida)}` : ''}`,
     ].join('\n'),
   );
 
@@ -556,40 +535,44 @@ export function BuyBox({
           de rodapé cinza ao lado de um passo com selo dourado — a tela dizia,
           sem querer, que a cor importa menos. Agora usa o MESMO PassoLabel:
           um selo, um número, um ✓ quando escolhida. */}
-      {temCor && (
-        <div className="mt-6">
-          {/* "Cor escolhida", não "Escolha a cor" (dono, 17/08): a peça
-              SEMPRE abre numa cor — a primeira com estoque e com foto. O
-              rótulo antigo pedia uma ação que já estava feita, e o passo
-              parecia pendente mesmo com o ✓ do lado. O nome descreve o
-              estado, que é o que ela precisa conferir antes de comprar.
+      {/* A COR VIROU UM FATO, NÃO UM PASSO (dono, 20/08).
 
-              A LINHA VIROU BOTÃO (dono, 19/08: "deixe mais clara a escolha
-              da cliente"). Ela dizia "toque nas fotos ao lado pra trocar" e
-              não era tocável: no celular a fita de miniaturas já rolou pra
-              fora da tela quando a cliente chega aqui, então a instrução
-              apontava pra um controle que ela não estava vendo. Agora o
-              toque abre a MESMA folha de rodapé que já resolve o tamanho —
-              a escolha vai até o dedo dela em vez de mandar rolar de volta.
+          Histórico curto de por que este bloco já foi bolinhas (até 17/08),
+          linha de texto (17/08) e botão que abria folha de cores (19/08): em
+          peça multicor 16% de quem tentava comprar travava, contra 5% na de
+          cor única — CADA versão do seletor continuou consumindo a decisão.
 
-              As bolinhas continuam FORA (17/08): elas custavam 158px e
-              empurravam o seletor de tamanho pra baixo da dobra do iPhone,
-              e 81% das visitantes não rolam. Esta linha custa o mesmo que a
-              linha de texto que ela substituiu.
-
-              O rótulo do botão conta QUANTAS cores existem: a cliente que
-              não reparou na fita não sabe nem que a peça tem outra cor. */}
+          Agora a página abre ancorada numa cor e esta linha só CONFIRMA qual
+          é, como a vendedora no balcão ("o vinho, certo?"). Quem quiser outra
+          cor troca de PÁGINA pelos cards logo abaixo do botão — o link rola
+          até eles. Nenhuma escolha de cor acontece mais entre o tamanho e o
+          "Adicionar": sobrou UMA decisão na coluna. */}
+      {temCor && corLabel && (
+        <div className="mt-6 flex items-center gap-3 rounded-md border border-border bg-surface-alt/50 px-3 py-2.5">
+          {corAtual?.capa && (
+            <Image
+              src={corAtual.capa}
+              alt=""
+              aria-hidden
+              width={32}
+              height={42}
+              className="h-[42px] w-8 shrink-0 rounded-sm object-cover"
+            />
+          )}
+          <p className="min-w-0 flex-1 truncate text-body text-ink">
+            <span className="font-medium">Cor:</span>{' '}
+            <span className="font-medium">{corLabel}</span>
+          </p>
           <button
             type="button"
-            onClick={() => setFolhaCor(true)}
-            aria-haspopup="dialog"
-            aria-label={`Cor escolhida: ${corLabel ?? ''}. Toque para ver as outras cores desta peça.`}
-            className="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-surface-alt/50 px-3 py-2.5 text-left transition-colors duration-[320ms] hover:border-ink-soft"
+            onClick={() =>
+              document
+                .getElementById('outras-cores-da-peca')
+                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }
+            className="shrink-0 whitespace-nowrap text-small font-medium text-ink underline decoration-border underline-offset-4 transition-colors hover:text-ink-soft"
           >
-            <PassoLabel numero={2} titulo="Cor escolhida" escolhido={corLabel} className="min-w-0" />
-            <span className="shrink-0 whitespace-nowrap text-small font-medium text-ink underline decoration-border underline-offset-4">
-              Ver as {cores!.length} cores
-            </span>
+            Ver as {cores!.length} cores
           </button>
         </div>
       )}
@@ -703,6 +686,14 @@ export function BuyBox({
         </div>
       </div>
 
+      {/* OUTRAS CORES COMO CARDS DE PEÇA (dono, 20/08) — a venda casada.
+          Ficam DEPOIS do botão de propósito: acima dele viravam de novo um
+          passo no meio do fluxo (a lição dos 158px de bolinha de 17/08). Quem
+          está decidida compra sem passar por aqui; quem quer outra cor acha
+          um card com foto grande, nome e preço — e clicar troca a página
+          inteira, não um estado invisível. */}
+      {outrasCores}
+
       {/* Frete de verdade, pro CEP dela (item 28). Substituiu o texto fixo
           "frete grátis acima de R$ 399", que envelheceu junto com a régua — o
           valor agora é config e muda sem deploy. */}
@@ -806,101 +797,6 @@ export function BuyBox({
           </button>
         </div>
       </Overlay>
-
-      {/* FOLHA DE CORES — a mesma mecânica da folha de tamanhos (19/08).
-
-          A escolha de cor morava só na fita de miniaturas, na OUTRA coluna:
-          no celular ela sai da tela assim que a cliente desce pro tamanho, e
-          voltar rolando é um pedido que a maioria não atende. Aqui a cor sobe
-          até o dedo dela, com a FOTO grande de cada uma — bolinha de 24px não
-          mostra estampa, e peça plus size vende pelo caimento.
-
-          A cor que não tem o número escolhido aparece ANUNCIADA, nunca
-          escondida: cor que some da tela parece defeito do site (mesma regra
-          da fita). Ela pode escolher assim mesmo — aí o número é que cai, com
-          a frase certa em `escolherCor`. */}
-      {temCor && (
-        <Overlay
-          open={folhaCor}
-          onClose={() => setFolhaCor(false)}
-          side="bottom"
-          label="Escolha a cor"
-          className="rounded-t-lg pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:mx-auto sm:w-[min(480px,92vw)]"
-        >
-          <div className="px-6 pt-7">
-            <h2 className="font-display text-h4 text-ink">Escolha a cor</h2>
-            <p className="mt-1 text-small text-ink-soft">
-              {size ? `${product.name} · tamanho ${size}` : product.name}
-            </p>
-
-            {/* Rola DENTRO da folha: peça de 8 cores não pode empurrar a
-                última opção pra fora da tela do celular. */}
-            <div className="mt-5 flex max-h-[52vh] flex-col gap-2 overflow-y-auto">
-              {(cores ?? []).map((c) => {
-                const ativa = c.nome === corSelecionada;
-                const tem = corTemTamanho(c, size);
-                const foto = c.capa ?? c.swatch.imagem;
-                return (
-                  <button
-                    key={c.nome}
-                    type="button"
-                    onClick={() => escolherCor(c)}
-                    aria-current={ativa}
-                    className={cn(
-                      'flex items-center gap-3 rounded-md border p-2 text-left transition-colors duration-[180ms]',
-                      ativa
-                        ? 'border-ink bg-surface-alt'
-                        : 'border-border hover:border-ink-soft',
-                    )}
-                  >
-                    <span className="relative aspect-3/4 w-14 shrink-0 overflow-hidden rounded-sm bg-surface-alt">
-                      {foto ? (
-                        <Image
-                          src={foto}
-                          alt=""
-                          aria-hidden
-                          fill
-                          /* Mesmos 80px da fita de miniaturas: largura nova no
-                             next/image é variante nova pra reencodar. */
-                          sizes="80px"
-                          placeholder="blur"
-                          blurDataURL={BLUR_DATA_URL}
-                          className={cn('object-cover', !tem && 'opacity-60')}
-                        />
-                      ) : (
-                        <span
-                          className="absolute inset-0"
-                          style={{ background: c.swatch.hex ?? hexDaCor(c.nome) }}
-                        />
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-body font-medium text-ink">
-                        {rotuloDaCor(c)}
-                      </span>
-                      {!tem && size && (
-                        <span className="mt-0.5 block text-small text-ink-muted">
-                          Sem o {size} nesta cor
-                        </span>
-                      )}
-                      {ativa && tem && (
-                        <span className="mt-0.5 block text-small text-ink-soft">
-                          É esta que você está vendo
-                        </span>
-                      )}
-                    </span>
-                    {ativa && (
-                      <span className="flex size-6 shrink-0 items-center justify-center rounded-pill bg-primary text-light">
-                        <Check className="size-3.5" strokeWidth={3} />
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </Overlay>
-      )}
 
       {!soldOut && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">

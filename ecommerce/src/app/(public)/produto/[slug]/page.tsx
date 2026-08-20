@@ -36,6 +36,31 @@ import { ProductVisualEditor } from '@/components/editor/ProductVisualEditor';
 export const dynamicParams = true;
 
 /**
+ * A COR QUE O LINK PEDIU (`?cor=`) — validada contra as cores À VENDA (20/08).
+ *
+ * A PDP abre ancorada nela: galeria, grade e preço daquela cor, e o BuyBox
+ * confirma em vez de pedir escolha. Tolerante a acento e caixa porque o valor
+ * viaja por anúncio, WhatsApp e digitação — "Poá Marrom", "POA MARROM" e
+ * "poá marrom" são a mesma cor. Cor que não existe (esgotou, saiu do piso,
+ * link velho) devolve null e a página abre na heurística de sempre — link
+ * quebrado NUNCA pode quebrar a peça.
+ */
+function achaCorDaUrl<T extends { nome: string; nomeAmigavel?: string | null }>(
+  cores: T[],
+  cor?: string,
+): T | null {
+  if (!cor?.trim()) return null;
+  const norm = (s: string) =>
+    s.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+  const alvo = norm(cor);
+  return (
+    cores.find(
+      (c) => norm(c.nome) === alvo || (c.nomeAmigavel && norm(c.nomeAmigavel) === alvo),
+    ) ?? null
+  );
+}
+
+/**
  * DINÂMICA DE VERDADE (dono, 14/08/2026). A intenção sempre foi no-store (o
  * fetch da peça é `revalidate: 0`), MAS sem isto o Vercel guardava o HTML da
  * PÁGINA no Full Route Cache e servia preço/estoque velhos: setei o VLM-222
@@ -47,10 +72,13 @@ export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{ cor?: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
+  const { cor } = await searchParams;
   // Mesma ordem de fontes da página — título e OG têm que descrever o que a
   // cliente vai ver, não o que o catálogo antigo tinha.
   const peca = await fetchPeca(slug);
@@ -64,22 +92,31 @@ export async function generateMetadata({
   const shortDescription =
     'descricaoCurta' in result ? result.descricaoCurta : result.shortDescription;
 
+  /**
+   * LINK COM COR: título e FOTO da variação (20/08). É o que faz a prévia do
+   * WhatsApp mostrar a peça na cor da conversa — antes toda cor compartilhava
+   * a capa da primeira. O `path` continua SEM a cor de propósito: o canônico
+   * é um só por peça, e as URLs `?cor=` não competem entre si no Google.
+   */
+  const corDaUrl = peca ? achaCorDaUrl(peca.cores, cor) : null;
+  const corLabel = corDaUrl ? corDaUrl.nomeAmigavel || corDaUrl.nome : null;
+
   return buildMetadata({
-    title: product.name,
+    title: corLabel ? `${product.name} — ${corLabel}` : product.name,
     description:
       shortDescription ||
       `${product.name} — moda plus size do 44 ao 60 na Lurd's. Caimento que valoriza, tecido que abraça.`,
     path: `/produto/${product.slug}`,
-    image: product.images[0]?.src,
+    image: corDaUrl?.fotos?.[0]?.src ?? product.images[0]?.src,
     keywords: [product.name, `${product.name} plus size`, product.fabric ?? '', 'plus size 44 ao 60'].filter(
       Boolean,
     ),
   });
 }
 
-export default async function ProductPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ editar?: string }> }) {
+export default async function ProductPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ editar?: string; cor?: string }> }) {
   const { slug } = await params;
-  const { editar } = await searchParams;
+  const { editar, cor } = await searchParams;
 
   // CATÁLOGO NOVO primeiro (ficha do CRM: cor com foto, grade e preço por
   // cor). A vitrine antiga do WooCommerce fica como rede enquanto a migração
@@ -131,7 +168,12 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
       {/* Galeria + decisão de compra */}
       <Container width="wide" className="pb-16">
         {cores.length > 0 ? (
-          <EscolhaDaPeca product={product} cores={cores} look={peca?.look ?? null} />
+          <EscolhaDaPeca
+            product={product}
+            cores={cores}
+            look={peca?.look ?? null}
+            corInicial={achaCorDaUrl(cores, cor)?.nome ?? null}
+          />
         ) : (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
             <div className="min-w-0">
