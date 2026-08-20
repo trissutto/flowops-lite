@@ -727,10 +727,26 @@ export class PedidoOnlineService {
       // vendedora já falou com ela no WhatsApp, mas ninguém mandava o número
       // do pedido nem o registro do que foi comprado. Fire-and-forget e sem
       // e-mail no cadastro simplesmente não sai (o `destinatario` filtra).
-      // O pedido já nasce PAGO, então a mensagem certa é a de pagamento
-      // confirmado, não a de "aguardando".
-      void this.pedidoEmail
-        .aoConfirmarPagamento({ ...order, items: order.items ?? [] })
+      //
+      // ⚠️ "O pedido já nasce PAGO" era MENTIRA em parte dos casos (20/08,
+      // ON-000049): "PIX recebido" e "Link externo" finalizam no braço, sem
+      // gateway nenhum conferindo — a vendedora fechou, a cliente recebeu
+      // "Recebemos o seu pagamento" às 17:26 e respondeu "Nao paguei ainda"
+      // às 17:27. Então a mensagem de PAGAMENTO CONFIRMADO só sai quando um
+      // gateway PAGO lastreia a venda (Link Pagar.me / PIX gerado PagBank);
+      // sem prova, sai o registro do pedido SEM afirmar pagamento.
+      void this.pagamentoTemProva(sale.id)
+        .then((temProva) => {
+          if (temProva) {
+            return this.pedidoEmail.aoConfirmarPagamento({ ...order, items: order.items ?? [] });
+          }
+          this.logger.warn(
+            `[pedido-online] ${order.wcOrderNumber}: venda ${sale.id} finalizada SEM prova de ` +
+              `pagamento no gateway (PIX recebido/Link externo) — aviso "pagamento confirmado" ` +
+              `retido; enviado registro neutro do pedido.`,
+          );
+          return this.pedidoEmail.aoRegistrarPedidoOnlineSemProva({ ...order, items: order.items ?? [] });
+        })
         .catch((e: any) => this.logger.warn(`[pedido-online] aviso ao cliente falhou: ${e?.message || e}`));
 
       const destino = fechadoNaLoja
@@ -752,5 +768,56 @@ export class PedidoOnlineService {
       this.logger.error(`[pedido-online] venda ${sale?.id}: ${e?.message || e} — fluxo legado (baixa local)`);
       return null;
     }
+  }
+
+  /**
+   * A venda tem PROVA de pagamento num gateway? (20/08 — caso ON-000049)
+   *
+   * Mesma régua do `pagamentoJaPagoNoGateway` do PdvService: existe registro
+   * PAGO em `pagarme_payments`/`pagbank_payments` casando com os ids que o
+   * payment guardou. Os tipos com trava ("Link Pagar.me", "Gerar PIX") sempre
+   * carregam esses ids; "PIX recebido" e "Link externo" não carregam nada —
+   * são a palavra da vendedora, e a palavra dela não sustenta um "recebemos o
+   * seu pagamento" automático no WhatsApp da cliente.
+   *
+   * TODOS os payments precisam de prova (split com metade sem prova = sem
+   * prova): na dúvida, a mensagem erra pro lado de NÃO afirmar pagamento.
+   */
+  private async pagamentoTemProva(saleId: string): Promise<boolean> {
+    const payments: any[] = await (this.prisma as any).pdvSalePayment.findMany({
+      where: { saleId },
+      select: { details: true },
+    });
+    if (!payments.length) return false;
+
+    for (const p of payments) {
+      let det: any = null;
+      try {
+        det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+      } catch {
+        det = null;
+      }
+
+      const pagarmeId = String(det?.pagarmeOrderId || '').trim();
+      if (pagarmeId) {
+        const r = await (this.prisma as any).pagarmePayment.findFirst({
+          where: { pagarmeOrderId: pagarmeId, status: 'paid' },
+          select: { pagarmeOrderId: true },
+        });
+        if (r) continue;
+      }
+
+      const pagbankId = String(det?.pagbankOrderId || det?.pixTxid || '').trim();
+      if (pagbankId) {
+        const r = await (this.prisma as any).pagbankPayment.findFirst({
+          where: { pagbankOrderId: pagbankId, status: 'paid' },
+          select: { pagbankOrderId: true },
+        });
+        if (r) continue;
+      }
+
+      return false;
+    }
+    return true;
   }
 }
