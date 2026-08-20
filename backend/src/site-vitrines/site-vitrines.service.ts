@@ -83,12 +83,12 @@ const SEMENTE: Array<VitrineInput & { bloco: BlocoHome; tipo: TipoVitrine; chave
   {
     bloco: 'carrossel', tipo: 'colecao', chave: 'mais-top-da-semana',
     eyebrow: 'Escolhas da semana', titulo: 'Mais Top da semana',
-    ctaLabel: 'Ver seleção', limite: 10, ordem: 1,
+    ctaLabel: 'Ver seleção', limite: 12, ordem: 1,
   },
   {
     bloco: 'carrossel', tipo: 'novidades', chave: '',
     eyebrow: 'Acabou de chegar', titulo: 'Novidades da semana', tituloMobile: 'Novidades',
-    ctaLabel: 'Ver todas', limite: 10, ordem: 2,
+    ctaLabel: 'Ver todas', limite: 12, ordem: 2,
   },
 ];
 
@@ -515,7 +515,11 @@ export class SiteVitrinesService {
 
   /** As peças de UM carrossel, conforme o tipo. */
   private async pecasDa(v: { tipo: string; chave: string; limite: number }): Promise<any[]> {
-    const perPage = Math.min(24, Math.max(4, Number(v.limite) || 12));
+    // Piso 12 na LEITURA (dono 20/08: "no PC pelo menos 12 produtos em 4
+    // colunas") — as vitrines seeded com limite 10 mostravam 10 e a grade de
+    // 4 colunas fechava em 2,5 linhas. O clamp de escrita (4–24) fica como
+    // está: o número salvo continua valendo quando for ≥12.
+    const perPage = Math.min(24, Math.max(12, Number(v.limite) || 12));
 
     if (v.tipo === 'colecao') {
       const r = await this.catalogo.curadoriaProdutos(this.normSlug(v.chave));

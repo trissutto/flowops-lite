@@ -8,10 +8,11 @@ import { trackSelectItem } from '@/lib/tracking';
 /**
  * VITRINE EM GRADE — as vitrines de produto da home.
  *
- * Pedido do dono (18/08): "no DESKTOP, cada linha da vitrine deve ter 6
- * COLUNAS e devemos ter 3 LINHAS. No CELULAR, 2 COLUNAS com 9 LINHAS." Ou
- * seja: 18 posições por vitrine, em grade — o carrossel esconde peça atrás de
- * uma seta, a grade mostra as 18 de uma vez.
+ * Pedido do dono (20/08, revisando o de 18/08): "no PC pelo menos 12
+ * produtos divididos em 4 COLUNAS". No celular seguem as 2 colunas. O teto
+ * continua VITRINE_GRID_MAX (18) — quantas peças cada vitrine mostra é o
+ * `limite` dela em /retaguarda/vitrines-home; a grade mostra tudo de uma vez
+ * (o carrossel escondia peça atrás de seta).
  *
  * Não existe "componente de grade" neste projeto: toda grade de produto é um
  * `div.grid` com a mesma string de classe repetida (SearchResults,
@@ -41,36 +42,20 @@ export function VitrineGrid({
      */
     <div
       /**
-       * A virada é `xl:` (1280) e NÃO `lg:` (1024) por medição: a 1024 o
-       * container tem 929px, então 6 colunas dariam um card de 135px — mais
-       * estreito que um card de celular em 2 colunas, e é justamente ali que a
-       * camada de hover (que é `lg:`) já está ligada. Com 3 colunas valendo
-       * até 1279, o card a 1024 fica com 288px, do tamanho do card de 4
-       * colunas que está no ar hoje.
+       * 4 colunas a partir de `lg:` (1024): a 1024 o container tem 929px e o
+       * card sai com ~214px — confortável, e é onde a camada de hover (`lg:`)
+       * liga. O layout anterior (6 colunas só em `xl:`) tinha um degrau
+       * medido na faixa 1024–1279 (card inflava pra 288px e a vitrine quase
+       * triplicava de altura); com 4 colunas valendo de 1024 em diante o
+       * degrau some.
        *
        * `grid-cols-N` (frações fixas) e não `auto-fit/minmax`: a vitrine
-       * curada tem ~10 peças, então a última linha vem incompleta de
-       * propósito. Com fração fixa a linha incompleta apenas sobra à direita e
-       * o card mantém a largura dos vizinhos; com `auto-fit` os poucos que
-       * restam esticariam pra preencher a linha e a peça curada apareceria
-       * maior que as outras.
-       *
-       * NÃO existe passo intermediário de 4 ou 5 colunas porque o dono pediu
-       * dois layouts, 3 e 6 — não porque 4 ou 5 quebrariam a grade (não
-       * quebram: com 18 peças a linha incompleta cairia no fim de qualquer
-       * jeito, 4+4+4+4+2). O preço dessa escolha está MEDIDO e é a faixa de
-       * 1024 a 1279: a 1024 o card infla pra 288px e UMA vitrine fica com
-       * 3.240px de altura; a 1280 o mesmo card cai pra 174px e a vitrine
-       * inteira mede 1.264px. São 1px de janela pra quase 3× de rolagem —
-       * quem for mexer nessa faixa mexe sabendo disso.
-       *
-       * O `lg:gap-x-6` existe justamente por causa dela: é onde o card é o
-       * MAIOR do site (288px a 1024, ~379px a 1279) e a calha ainda era a de
-       * celular, 16px — cards enormes quase se encostando. 24px a partir de
-       * 1024 é o que toda outra grade de produto do projeto já faz
-       * (SearchResults, DescobrirFeed, RecommendationRail, ListaDeDesejos).
+       * curada pode vir com contagem quebrada (ex.: 18 peças em 4 colunas =
+       * 4+4+4+4+2) e a última linha incompleta é de propósito. Com fração
+       * fixa ela apenas sobra à direita; com `auto-fit` os poucos que restam
+       * esticariam e a peça curada apareceria maior que as outras.
        */
-      className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:gap-x-6 xl:grid-cols-6 xl:gap-y-12"
+      className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 lg:gap-x-6 lg:gap-y-12"
     >
       {products.slice(0, VITRINE_GRID_MAX).map((product, index) => (
         <ProductCard
