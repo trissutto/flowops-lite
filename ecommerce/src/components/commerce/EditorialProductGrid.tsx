@@ -60,7 +60,10 @@ export function EditorialProductGrid({
       {products.map((product, index) => {
         const interruption = byPosition.get(index);
         return (
-          <Fragment key={product.id}>
+          // O id sozinho colide desde o card por cor (20/08): a mesma REF sai
+          // em até 2 cards. A cor desambigua; o index cobre lista curada com
+          // repetição — mesma regra do VitrineGrid.
+          <Fragment key={`${product.id}-${product.corDoCard?.nome ?? ''}-${index}`}>
             {interruption && <Interruption block={interruption} />}
             <ProductCard
               product={product}

@@ -108,7 +108,21 @@ export function ProductCard({
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
 
-  const href = customHref ?? `/produto/${product.slug}`;
+  /**
+   * CARD ANCORADO NUMA COR (Fase 2, 20/08): o link leva `?cor=` e a PDP abre
+   * naquela cor com UM passo só (a Fase 1). O `customHref` continua ganhando
+   * — quem passa href próprio (atribuição) sabe o que está fazendo.
+   */
+  const href =
+    customHref ??
+    (product.corDoCard
+      ? `/produto/${product.slug}?cor=${encodeURIComponent(product.corDoCard.nome)}`
+      : `/produto/${product.slug}`);
+  /** Nome COM a cor pros leitores de tela — dois cards da mesma peça na
+      grade precisam de rótulos diferentes. */
+  const nomeAcessivel = product.corDoCard
+    ? `${product.name} — ${product.corDoCard.rotulo}`
+    : product.name;
   const cover = product.images[0];
   const alternate = product.images[1];
   const discount = product.compareAtPrice
@@ -173,7 +187,7 @@ export function ProductCard({
     >
       {/* Mídia */}
       <div className={cn('relative overflow-hidden rounded-md bg-surface-alt', aspectClass)}>
-        <Link href={href} onClick={onProductClick} className="absolute inset-0" aria-label={product.name}>
+        <Link href={href} onClick={onProductClick} className="absolute inset-0" aria-label={nomeAcessivel}>
           <ProductImage
             src={cover.src}
             alt={cover.alt}
@@ -222,6 +236,23 @@ export function ProductCard({
             <ProductBadgeTag key={badge} badge={badge} compact={compact} />
           ))}
         </div>
+
+        {/* "+N cores" — a peça tem mais cor do que o card mostra (20/08).
+            Canto inferior ESQUERDO: o direito é da sacola do quick-add, e as
+            etiquetas moram em cima. `pointer-events-none` pra não roubar o
+            clique do link que cobre a foto. */}
+        {!!product.maisCores && (
+          <span
+            className={cn(
+              'pointer-events-none absolute rounded-pill bg-surface/90 font-medium text-ink backdrop-blur',
+              compact
+                ? 'bottom-2 left-2 px-2 py-0.5 text-[0.625rem]'
+                : 'bottom-3 left-3 px-2.5 py-1 text-[0.6875rem]',
+            )}
+          >
+            +{product.maisCores} {product.maisCores === 1 ? 'cor' : 'cores'}
+          </span>
+        )}
 
         {/* Favoritar */}
         <button
@@ -355,6 +386,13 @@ export function ProductCard({
             )}
           >
             {product.name}
+            {/* A cor do card, em tom rebaixado: dois cards da mesma peça lado
+                a lado precisam se apresentar como produtos diferentes — que é
+                a proposta da Fase 2. O sufixo é só de TELA: `product.name`
+                (tracking, sacola) continua limpo, sem cor. */}
+            {product.corDoCard && (
+              <span className="font-light text-ink-soft"> · {product.corDoCard.rotulo}</span>
+            )}
           </Link>
         </h3>
 

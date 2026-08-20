@@ -1,6 +1,6 @@
 import 'server-only';
 import { api } from '@/lib/api';
-import { mapPeca, type PecaApi } from '@/services/products';
+import { explodirVitrine, mapPeca, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
@@ -85,7 +85,11 @@ export async function fetchPrimeiraPagina(opcoes: {
       `/public/loja/produtos?${params.toString()}`,
       { revalidate, tags: ['catalogo', categoria ? `categoria:${categoria}` : 'vitrine'], timeoutMs: 12000 },
     );
-    const itens = (r?.itens ?? []).map(mapPeca);
+    // CARD POR COR (20/08): explode em até 2 cards por peça — mesma regra do
+    // caminho client (`fetchProducts`), que assume o scroll a partir daqui.
+    // `total`/`totalPages` seguem contando PEÇAS: é o número do backend e é o
+    // que a paginação usa; a diferença pro nº de cards é cosmética.
+    const itens = explodirVitrine(r?.itens ?? []);
     return { itens, total: r?.total ?? itens.length, totalPages: r?.totalPages ?? 1 };
   } catch {
     return null;
@@ -177,7 +181,10 @@ export async function fetchVitrine(
       tags: ['catalogo', categoria ? `categoria:${categoria}` : 'vitrine'],
       timeoutMs: 12000,
     });
-    return (r?.itens ?? []).map(mapPeca);
+    // CARD POR COR (20/08) também na home: cada cor com foto e estoque vira
+    // um card (teto 2/peça). O `limite` segue contando PEÇAS pedidas ao
+    // backend — a vitrine pode render até o dobro de cards.
+    return explodirVitrine(r?.itens ?? []);
   } catch {
     // Catálogo fora do ar não derruba a home — a seção simplesmente não sai.
     return [];

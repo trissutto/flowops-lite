@@ -77,6 +77,15 @@ export interface Product {
   installments?: { times: number; value: number };
   images: Media[];
   colors?: ProductColor[];
+  /**
+   * CARD ANCORADO NUMA COR (Fase 2, 20/08): a vitrine explode a peça em até
+   * 2 cards, um por cor — foto, preço e grade DAQUELA cor, e o link leva
+   * `?cor=` pra PDP abrir nela. `nome` é a chave crua do ERP (a mesma da
+   * URL e do carrinho); `rotulo` é o que a cliente lê.
+   */
+  corDoCard?: { nome: string; rotulo: string };
+  /** Quantas OUTRAS cores à venda existem além da mostrada — o selo "+N cores". */
+  maisCores?: number;
   sizes: ProductSize[];
   /** REF/SKU da peça — chave da ficha de caimento do Lurds Fit AI. */
   sku?: string;

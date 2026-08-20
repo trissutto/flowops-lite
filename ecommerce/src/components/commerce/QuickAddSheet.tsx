@@ -56,6 +56,16 @@ export function QuickAddSheet() {
         if (!vivo) return;
         const lista = peca?.cores ?? [];
         setCores(lista);
+        // A COR DO CARD já vem escolhida (Fase 2, 20/08): quem clicou no card
+        // do Marrom decidiu a cor ali — pedir de novo aqui recriaria o passo
+        // que a PDP acabou de matar. Card sem cor ancorada segue como antes.
+        const doCard = produto.corDoCard
+          ? lista.find((c) => c.nome === produto.corDoCard!.nome && c.estoque > 0)
+          : null;
+        if (doCard) {
+          setCor(doCard.nome);
+          return;
+        }
         // Cor única: já escolhe. A cliente não deve clicar no óbvio.
         const comEstoque = lista.filter((c) => c.estoque > 0);
         if (comEstoque.length === 1) setCor(comEstoque[0].nome);

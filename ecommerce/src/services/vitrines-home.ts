@@ -1,6 +1,6 @@
 import 'server-only';
 import { api } from '@/lib/api';
-import { mapPeca, type PecaApi } from '@/services/products';
+import { explodirVitrine, type PecaApi } from '@/services/products';
 import { fetchMaisTopDaSemana, fetchVitrine } from '@/services/vitrine';
 import { HOME_CATEGORY_BASE } from '@/data/home';
 import type { Product } from '@/types';
@@ -139,7 +139,9 @@ export async function getBlocosDaHome(): Promise<{ atalhos: AtalhoHome[]; carros
         descricao: v.descricao ?? null,
         ctaLabel: v.ctaLabel ?? null,
         ctaHref: v.ctaHref ?? null,
-        produtos: (v.itens ?? []).map(mapPeca),
+        // CARD POR COR (20/08): a curadoria escolhe as PEÇAS; cada uma vira
+        // até 2 cards (as cores de maior estoque) + selo "+N cores".
+        produtos: explodirVitrine(v.itens ?? []),
       }))
       .filter((v) => v.produtos.length > 0);
 

@@ -161,8 +161,72 @@ export function mapPeca(p: PecaApi): Product {
     // Prova social REAL — quantas peças desta família já saíram. Quem decide a
     // partir de quanto o número aparece é o `SeloVendas`.
     sold: Number(p.vendas) || undefined,
+    // "+N cores" no card: a cliente que só vê a capa não sabe nem que a peça
+    // tem outra cor (a mesma lição da PDP, 19/08). Conta as ALÉM da mostrada.
+    maisCores: (p.cores?.length ?? 0) > 1 ? p.cores!.length - 1 : undefined,
     availability: { online: p.disponivel, stores: [], pickup: p.disponivel },
   };
+}
+
+/* ------------------------------------------------- CARD POR COR (Fase 2) */
+
+/**
+ * O CARD DE UMA COR — a mesma peça vista por uma variação (20/08).
+ *
+ * Herda tudo do card da família e troca o que é DA COR: foto, preço (com Pix
+ * e parcela recalculados), grade e o link — que leva `?cor=` pra PDP abrir
+ * ancorada nela (Fase 1). O "de/por" da família só fica quando o preço da cor
+ * é o mesmo da família: cor com preço próprio diferente não pode herdar um
+ * risco que inventaria promoção.
+ */
+function cardDaCor(base: Product, p: PecaApi, c: CorApi): Product {
+  const rotulo = c.nomeAmigavel || c.nome;
+  const preco = c.preco > 0 ? c.preco : base.price;
+  const precoProprio = c.preco > 0 && c.preco !== p.preco;
+  return {
+    ...base,
+    price: preco,
+    pixPrice: preco > 0 ? Number((preco * 0.95).toFixed(2)) : base.pixPrice,
+    installments: preco > 0 ? { times: 12, value: Number((preco / 12).toFixed(2)) } : base.installments,
+    compareAtPrice: precoProprio ? undefined : base.compareAtPrice,
+    images: c.fotos.map((f) => ({ src: f.src, alt: f.alt ?? `${base.name} ${rotulo}` })),
+    sizes: c.tamanhos.map((t) => ({ label: t.label, available: t.disponivel })),
+    corDoCard: { nome: c.nome, rotulo },
+  };
+}
+
+/**
+ * A PEÇA EXPLODIDA EM CARDS POR COR — a Fase 2 da decisão de 20/08 (a Fase 1
+ * ancorou a PDP; ver `EscolhaDaPeca`).
+ *
+ * Em moda a cliente compra a COR, não a REF: cada cor com foto própria e
+ * estoque vira um card, até o TETO de 2 por peça — mais que isso e um modelo
+ * de 8 cores domina a página inteira (o selo "+N cores" conta o resto). As
+ * duas de MAIOR ESTOQUE ganham as vagas: grade cheia atende mais gente e não
+ * frustra o clique (o mesmo critério do top30 do feed).
+ *
+ * Cor SEM FOTO PRÓPRIA nunca vira card: card com foto de outra cor é a
+ * armadilha da "foto ilustrativa" sem aviso, e card de swatch chapado na
+ * vitrine é buraco. Com 0 ou 1 cor elegível a peça continua UM card (com o
+ * link ancorado quando a cor é conhecida).
+ *
+ * `id` fica a REF nos cards TODOS, de propósito: é o id que o pixel e os
+ * feeds conhecem (mudar aqui poluiria o `content_ids` — ver feed/meta.xml).
+ * As grades já usam `key={id}-{index}`, então card repetido não colide.
+ */
+export function cardsDeVitrine(p: PecaApi, teto = 2): Product[] {
+  const base = mapPeca(p);
+  const elegiveis = (p.cores ?? [])
+    .filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0)
+    .sort((a, b) => b.estoque - a.estoque);
+  if (elegiveis.length === 0) return [base];
+  if (elegiveis.length === 1) return [cardDaCor(base, p, elegiveis[0])];
+  return elegiveis.slice(0, teto).map((c) => cardDaCor(base, p, c));
+}
+
+/** A listagem inteira explodida — o `map(mapPeca)` das vitrines vira isto. */
+export function explodirVitrine(itens: PecaApi[], teto = 2): Product[] {
+  return (itens ?? []).flatMap((p) => cardsDeVitrine(p, teto));
 }
 
 /** Ordenação do site → parâmetro que o backend entende. */
@@ -272,7 +336,10 @@ export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated
     return { items: [], total: 0, page, perPage, hasMore: false };
   }
   const dados = await resposta.json();
-  const items: Product[] = (dados.itens ?? []).map(mapPeca);
+  // CARD POR COR (20/08): a listagem explode cada peça em até 2 cards — a
+  // mesma regra do SSR da página 1 (`fetchPrimeiraPagina`), senão a página 2
+  // do scroll infinito chegaria com outro desenho.
+  const items: Product[] = explodirVitrine(dados.itens ?? []);
 
   return {
     items,
