@@ -1,4 +1,3 @@
-import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { ListaDeDesejos } from '@/components/conta/ListaDeDesejos';
 import { buildMetadata } from '@/lib/seo';
@@ -24,13 +23,11 @@ export const metadata = buildMetadata({
 export default function FavoritosPage() {
   return (
     <Section space="lg">
-      <Container>
-        <header className="mb-8">
-          <p className="eyebrow text-muted">Minha conta</p>
-          <h1 className="text-h2">Lista de desejos</h1>
-        </header>
-        <ListaDeDesejos />
-      </Container>
+      <header className="mb-8">
+        <p className="eyebrow text-ink-muted">Minha conta</p>
+        <h1 className="text-h2">Lista de desejos</h1>
+      </header>
+      <ListaDeDesejos />
     </Section>
   );
 }

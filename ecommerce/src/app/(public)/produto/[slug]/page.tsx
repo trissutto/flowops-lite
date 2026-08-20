@@ -10,6 +10,7 @@ import { BuyBox } from '@/components/commerce/BuyBox';
 import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
 import { DescricaoDaPeca } from '@/components/commerce/DescricaoDaPeca';
 import { DescobrirFeed } from '@/components/commerce/DescobrirFeed';
+import { AvaliacoesDaPeca } from '@/components/commerce/AvaliacoesDaPeca';
 import { CompleteOLook } from '@/components/commerce/CompleteOLook';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
@@ -207,20 +208,17 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
       </Section>
 
       {/*
-        PROVA SOCIAL · REMOVIDA DO AR EM 06/08/2026
+        PROVA SOCIAL · SAIU DO AR EM 06/08/2026, VOLTOU REAL EM 19/08/2026
 
-        Mostrava depoimentos assinados por "Cliente Lurds" com ALTURA, PESO e
-        TAMANHO COMPRADO inventados, sob o título "direto de quem comprou".
+        A versão antiga mostrava depoimentos assinados por "Cliente Lurds" com
+        ALTURA, PESO e TAMANHO COMPRADO inventados, sob o título "direto de
+        quem comprou" — e as mesmas quatro frases em TODAS as peças.
 
-        Aqui era pior que na home: ficava na página do produto, ao lado da peça
-        que a cliente está decidindo, e **as mesmas quatro frases apareciam em
-        TODAS as peças** — a "avaliação" não tinha relação nenhuma com o produto
-        que ela estava olhando.
-
-        Volta quando houver avaliação real. O caminho já existe: todo pedido
-        entregue tem CPF, peça e tamanho — dá pra pedir por e-mail/WhatsApp
-        depois da entrega e amarrar a resposta à REF certa.
+        O que entrou no lugar é o que faltava: avaliação amarrada a um item de
+        pedido ENTREGUE, escrita pela cliente no /conta/avaliacoes. Peça sem
+        avaliação não rende seção nenhuma — a página segue como estava.
       */}
+      <AvaliacoesDaPeca slug={product.slug} />
 
       {/*
         AQUI HAVIA TRÊS CARROSSÉIS (12/08/2026).

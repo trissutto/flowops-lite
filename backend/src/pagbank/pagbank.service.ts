@@ -265,6 +265,8 @@ export class PagbankService {
     customerCpf?: string;
     customerEmail?: string;
     expiresInMinutes?: number;
+    /** 'venda_online' = PIX do painel Venda Online do PDV (ver coluna `origem`). */
+    origem?: string | null;
   }): Promise<{
     pagbankOrderId: string;
     qrCodeText: string;
@@ -433,6 +435,8 @@ export class PagbankService {
         method: 'pix',
         valor: input.valor,
         status: 'pending',
+        // Só o valor conhecido entra; qualquer outra coisa vira null (balcão).
+        origem: input.origem === 'venda_online' ? 'venda_online' : null,
         qrCodeText,
         qrCodeImageB64,
         expiresAt,
@@ -440,7 +444,8 @@ export class PagbankService {
     });
 
     this.logger.log(
-      `[pagbank] PIX criado: order=${orderId} sale=${input.saleId} loja=${input.storeCode} R$${input.valor.toFixed(2)}`,
+      `[pagbank] PIX criado: order=${orderId} sale=${input.saleId} loja=${input.storeCode} R$${input.valor.toFixed(2)}` +
+        (input.origem === 'venda_online' ? ' (venda online)' : ''),
     );
 
     return {

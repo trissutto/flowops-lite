@@ -49,10 +49,16 @@ export interface ListarParams {
   soPromocao?: boolean;
   soNovidade?: boolean;
   /**
-   * `true` esconde o esgotado. Vazio/`false` MOSTRA (item 37): a cliente vê
-   * que a peça existe e acabou, em vez de achar que o site quebrou.
+   * Redundante desde 19/08: esgotado já não entra na vitrine (ver
+   * `catalogoDaVitrine`). Mantido porque o front antigo ainda manda.
    */
   soDisponivel?: boolean;
+  /**
+   * USO INTERNO (feed do Meta): traz também as peças esgotadas. O feed
+   * precisa do catálogo COMPLETO com `disponivel: false` — peça que SOME do
+   * feed vira produto morto pro Meta e recomeça o aprendizado do zero.
+   */
+  incluirEsgotado?: boolean;
   ordenar?: 'relevancia' | 'novidades' | 'preco-asc' | 'preco-desc' | 'nome';
 }
 
@@ -475,6 +481,33 @@ export class LojaCatalogService {
   `;
 
   /**
+   * DUAS LINHAS DE FICHA DA MESMA COR VIRAM UMA (ver o bloco do `fichaPorCor`).
+   *
+   * `base` é quem chegou primeiro — a ficha escolhida — e manda no conteúdo;
+   * `extra` só preenche o que estiver vazio, porque a retaguarda pode ter
+   * digitado o título numa ficha e a bolinha na outra sem saber que eram duas.
+   * O STATUS é a exceção: "fora do site" de qualquer uma vence, sempre.
+   */
+  private fundirFichaCor(base: any, extra: any) {
+    const escondida =
+      base?.statusPublicacao === 'nao_publicar' || extra?.statusPublicacao === 'nao_publicar';
+    // A bolinha vem em BLOCO: tipo, hex e foco são a mesma decisão. Misturar o
+    // hex de uma com o recorte da outra pinta uma cor que ninguém escolheu.
+    const temBolinha = (c: any) => Boolean(c?.corHex) || c?.swatchTipo === 'foto';
+    const bolinha = temBolinha(base) || !temBolinha(extra) ? base : extra;
+    return {
+      ...base,
+      statusPublicacao: escondida ? 'nao_publicar' : base?.statusPublicacao,
+      tituloComercial: base?.tituloComercial || extra?.tituloComercial || null,
+      youtubeUrl: base?.youtubeUrl || extra?.youtubeUrl || null,
+      swatchTipo: bolinha?.swatchTipo,
+      corHex: bolinha?.corHex ?? null,
+      swatchFocoX: bolinha?.swatchFocoX ?? null,
+      swatchFocoY: bolinha?.swatchFocoY ?? null,
+    };
+  }
+
+  /**
    * Peça montada a partir das variações de uma REF.
    *
    * A PÁGINA DO SITE É UMA SÓ POR REF (decisão do dono, 03/08): a cliente
@@ -774,13 +807,28 @@ export class LojaCatalogService {
      * PRO SITE". A ficha (`produto_ficha_cor`) traz a bolinha — hex do
      * conta-gotas ou recorte da foto pra estampa.
      */
-    // A ficha ESCOLHIDA entra primeiro e ganha no empate; as das irmãs
-    // completam as cores que só existem nelas.
+    /**
+     * A ficha ESCOLHIDA entra primeiro e manda no conteúdo; as das irmãs
+     * completam as cores — e os campos — que só existem nelas.
+     *
+     * ⚠️ MAS "FORA DO SITE" É VETO, NÃO EMPATE (19/08/2026). A MESMA COR pode
+     * ter DUAS linhas de ficha quando a REF tem DUAS fichas — o caso de toda
+     * peça SEM MARCA no ERP: o importador de fotos grava a ficha com marca
+     * VAZIA (`wc-fotos-import`) e a tela master grava com "SEM MARCA"
+     * (`produto-master`: `row.marca || 'SEM MARCA'`). Eram 62 REFs assim na
+     * produção. Com o primeiro-ganha puro, esconder a cor na tela virava um
+     * `nao_publicar` gravado numa linha que a vitrine não lia: a
+     * **350842/CHOCOLATE foi marcada "fora do site" em 18/08 e seguiu à
+     * venda** — sem nem aparecer em `coresOcultas`, então nem a tela de cores
+     * denunciava. Esconder é decisão humana explícita; publicar é o default.
+     * Por isso o "não publicar" de QUALQUER ficha da família vale.
+     */
     const fichaPorCor = new Map<string, any>();
     for (const fx of [ficha, ...fichasTodas]) {
       for (const c of ((fx?.cores ?? []) as any[])) {
         const k = String(c.cor || '').toUpperCase();
-        if (!fichaPorCor.has(k)) fichaPorCor.set(k, c);
+        const atual = fichaPorCor.get(k);
+        fichaPorCor.set(k, atual ? this.fundirFichaCor(atual, c) : { ...c });
       }
     }
     // `fotosPorCor` já foi montado LÁ EM CIMA, antes das contas — é ele que
@@ -897,6 +945,27 @@ export class LojaCatalogService {
       }
       return true;
     });
+
+    /**
+     * A PEÇA INTEIRA SAI DO SITE quando não sobra NENHUMA cor e pelo menos uma
+     * foi escondida A MÃO (19/08/2026).
+     *
+     * Sem isto, marcar a única cor como "fora do site" tirava a bolinha e
+     * zerava a grade, mas o CARD continuava na vitrine: a galeria cai no
+     * acervo cru quando não sobra foto vendável (logo abaixo), e a listagem só
+     * corta peça sem imagem. Dava um card fantasma — sem tamanho, sem preço
+     * pra escolher — anunciando o que a retaguarda acabou de tirar do ar. Foi
+     * o "coloquei fora do site, salvei, e não saiu" (dono, 19/08).
+     *
+     * ESGOTADO É OUTRA COISA: peça que zerou (ou cujas cores caíram abaixo do
+     * piso) não vira `foraDoSite` — ela sai da vitrine pelo filtro de
+     * `disponivel` na `catalogoDaVitrine` (dono, 19/08) e VOLTA SOZINHA quando
+     * repõe. Aqui só se marca o que uma pessoa mandou sair.
+     */
+    const foraDoSite =
+      coresDetalhadas.length > 0 &&
+      coresVisiveis.length === 0 &&
+      coresOcultas.some((c) => c.motivo === 'nao_publicar');
 
     /**
      * Com cor escondida, TOTAL e GRADE exibidos têm que ser o que dá pra
@@ -1093,6 +1162,13 @@ export class LojaCatalogService {
       cores: coresVisiveis,
       /** Cores escondidas (ficha ou estoque mínimo) — a tela de cores lista. */
       coresOcultas,
+      /**
+       * Peça tirada do ar pela retaguarda (nenhuma cor sobrou e alguém marcou
+       * "fora do site"). Fica NO catálogo montado de propósito — a tela de
+       * cores precisa listá-la pra dar como republicar, e a PDP abre por link
+       * direto —, mas `catalogoDaVitrine()` a corta de tudo que é vitrine.
+       */
+      foraDoSite,
       tamanhos: tamanhosExibidos,
       estoqueTotal: estoqueExibido,
       disponivel: estoqueExibido > 0,
@@ -1383,6 +1459,28 @@ export class LojaCatalogService {
         this.catalogoEmVoo = null;
       });
     return this.catalogoEmVoo;
+  }
+
+  /**
+   * O QUE A VITRINE MOSTRA — o catálogo montado MENOS as peças que a
+   * retaguarda tirou do ar (`foraDoSite`: nenhuma cor sobrou e alguém marcou
+   * "fora do site" na ficha) e MENOS as esgotadas.
+   *
+   * ESGOTADO SAI (ordem do dono, 19/08 — reverte o item 37 de 04/08, que
+   * mostrava a peça riscada por último). `SITE_MOSTRA_ESGOTADO=1` volta o
+   * comportamento antigo sem deploy. Quando a peça repõe estoque ela volta
+   * sozinha — o corte é dinâmico, ninguém precisa republicar.
+   *
+   * Vale pra tudo que EXIBE peça pra cliente: listagem/busca, feed da PDP,
+   * coleção curada, look. Fica de fora de propósito quem precisa VER o que
+   * está escondido — a tela de cores (é lá que se republica), a PDP por link
+   * direto (cliente que guardou o link vê "esgotado", não um 404) e o feed do
+   * Meta (`incluirEsgotado`, que manda a peça como out-of-stock).
+   */
+  private async catalogoDaVitrine(opts?: { incluirEsgotado?: boolean }): Promise<any[]> {
+    const pecas = (await this.catalogoPublicado()).filter((p: any) => !p.foraDoSite);
+    if (opts?.incluirEsgotado || process.env.SITE_MOSTRA_ESGOTADO === '1') return pecas;
+    return pecas.filter((p: any) => p.disponivel);
   }
 
   /**
@@ -1815,7 +1913,7 @@ export class LojaCatalogService {
     // Cópia: o array do cache é compartilhado entre requisições, e a ordenação
     // abaixo é in-place — ordenar o cache embaralharia a lista de quem estiver
     // lendo ao mesmo tempo.
-    let pecas = [...(await this.catalogoPublicado())];
+    let pecas = [...(await this.catalogoDaVitrine({ incluirEsgotado: params.incluirEsgotado }))];
     if (!pecas.length) {
       return { itens: [], total: 0, page, perPage, totalPages: 0, fonte: 'erp', aviso: 'nenhuma REF publicada — rode o sync de conteúdo' };
     }
@@ -1907,19 +2005,10 @@ export class LojaCatalogService {
     if (params.colecao) pecas = pecas.filter((p) => norm(p.colecao) === norm(params.colecao));
 
     /**
-     * ESGOTADO NÃO SOME (item 37 — decisão do dono, 04/08).
-     *
-     * O filtro era `soDisponivel !== false`, ou seja, **esconder era o padrão**:
-     * a peça esgotada sumia da vitrine sem explicação. A cliente que viu a peça
-     * no Instagram voltava e achava que o site estava quebrado.
-     *
-     * Agora ela aparece, com `disponivel: false` pro card riscar e escrever
-     * "esgotado" — a cliente vê que a peça EXISTE e que acabou, o que também
-     * alimenta a lista de espera. Esconder só quando pedido explicitamente
-     * (`soDisponivel: true`).
-     *
-     * A ordenação abaixo empurra o esgotado pro fim: aparecer não é o mesmo
-     * que competir com quem tem estoque.
+     * ESGOTADO JÁ NÃO CHEGA AQUI (dono, 19/08 — reverte o item 37): o corte é
+     * na `catalogoDaVitrine`, num lugar só pra vitrine inteira. O filtro
+     * abaixo continua valendo pro caminho do feed (`incluirEsgotado: true`),
+     * onde a peça esgotada segue presente com `disponivel: false`.
      */
     if (params.soDisponivel === true) pecas = pecas.filter((p) => p.disponivel);
 
@@ -2041,11 +2130,11 @@ export class LojaCatalogService {
      */
     const PAGINA = 60;
     const MAX_PAGINAS = 84;
-    const primeira = await this.listar({ page: 1, perPage: PAGINA, ordenar: 'novidades' });
+    const primeira = await this.listar({ page: 1, perPage: PAGINA, ordenar: 'novidades', incluirEsgotado: true });
     const itens = [...(primeira.itens as any[])];
     const totalPaginas = Math.min(Number(primeira.totalPages) || 1, MAX_PAGINAS);
     for (let pagina = 2; pagina <= totalPaginas; pagina++) {
-      const r = await this.listar({ page: pagina, perPage: PAGINA, ordenar: 'novidades' });
+      const r = await this.listar({ page: pagina, perPage: PAGINA, ordenar: 'novidades', incluirEsgotado: true });
       if (!(r.itens as any[]).length) break;
       itens.push(...(r.itens as any[]));
     }
@@ -2069,6 +2158,20 @@ export class LojaCatalogService {
       preco: Number(p.precoDe ?? p.preco) || 0,
       precoPromocional: p.precoDe != null && p.precoDe > p.preco ? Number(p.preco) : null,
       disponivel: Boolean(p.disponivel),
+      /**
+       * QUANTIDADE EM ESTOQUE — pedida pelo dono em 19/08/2026 pro feed do Meta.
+       *
+       * O feed carimba as vitrines rotativas ("as 30 de cada categoria") e até
+       * aqui o critério era a ORDEM da lista, que é `publicadoEm desc`. Só que
+       * `publicadoEm` foi preenchido de trás pra frente no catálogo legado (a
+       * data da primeira foto no R2), então peça de 2023 fotografada mês
+       * passado subia como lançamento — a reclamação do dono na mesma noite.
+       *
+       * Estoque não tem esse problema: é dado do Flow, medido, e responde uma
+       * pergunta melhor pro anúncio — peça com grade cheia atende mais gente e
+       * não frustra quem clica e descobre que o tamanho dela acabou.
+       */
+      estoqueTotal: Number(p.estoqueTotal) || 0,
       imagens: (p.imagens ?? []).map((i: any) => i.src).filter(Boolean),
       tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
       cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),
@@ -2113,13 +2216,101 @@ export class LojaCatalogService {
   async curadoriaProdutos(slug: string): Promise<{ itens: any[]; total: number }> {
     const refs = await this.colecaoRefs(slug);
     if (!refs.length) return { itens: [], total: 0 };
-    const catalogo = await this.catalogoPublicado();
+    const catalogo = await this.catalogoDaVitrine();
     const porRef = new Map<string, any>();
     for (const p of catalogo) {
       const k = this.refKey(p.ref);
       if (k && !porRef.has(k)) porRef.set(k, p);
     }
     const itens = refs.map((r) => porRef.get(r)).filter(Boolean);
+    return { itens, total: itens.length };
+  }
+
+  // ── OS MAIS VENDIDOS NAS LOJAS (dono, 19/08) ───────────────────────────────
+  // Coleção AUTOMÁTICA, irmã da curada: em vez de tela de curadoria, o ranking
+  // é o caixa das lojas físicas. Zero manutenção — peça que esgota (ou fura a
+  // grade) sai sozinha na próxima remontagem, e quem repõe volta a concorrer.
+
+  /**
+   * VENDAS POR FAMÍLIA, SÓ LOJA FÍSICA — gêmeo de `vendasPorFamilia` sem a
+   * fonte do site/live (`order_items`): "mais vendidos NAS LOJAS" é o caixa
+   * da loja, não o pedido do site. Mesmas exclusões de lá (dupla contagem
+   * `flowops%`, marcado, treino) — divergir do critério do resto do sistema
+   * faria este ranking não bater com nenhuma outra tela. Cache próprio de
+   * 10 min, como o gêmeo.
+   */
+  private cacheVendasLoja: { at: number; mapa: Map<string, number> } | null = null;
+
+  private async vendasLojaPorFamilia(): Promise<Map<string, number>> {
+    if (this.cacheVendasLoja && Date.now() - this.cacheVendasLoja.at < this.TTL_VENDAS) {
+      return this.cacheVendasLoja.mapa;
+    }
+    const total = new Map<string, number>();
+    try {
+      const [historico, pdv] = await Promise.all([
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; unidades: number }>>(
+          `SELECT UPPER(TRIM(p.ref)) AS ref, COALESCE(SUM(m.quantidade), 0)::int AS unidades
+             FROM giga_caixa_mov m
+             JOIN wincred_produtos p ON p.codigo = TRIM(m.codigo)
+            WHERE COALESCE(m.obs_pedido, '') NOT LIKE 'flowops%'
+              AND (m.marcado IS NULL OR TRIM(m.marcado) = '')
+            GROUP BY 1`,
+        ),
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; unidades: number }>>(
+          `SELECT UPPER(TRIM(i.ref)) AS ref, COALESCE(SUM(i.qty), 0)::int AS unidades
+             FROM pdv_sale_items i
+             JOIN pdv_sales s ON s.id = i.sale_id
+            WHERE i.ref IS NOT NULL
+              AND s.status = 'finalized'
+              AND s.is_training = false
+              AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+            GROUP BY 1`,
+        ),
+      ]);
+      for (const l of [...historico, ...pdv]) {
+        const base = refBaseOf(l.ref);
+        if (!base) continue;
+        total.set(base, (total.get(base) ?? 0) + (Number(l.unidades) || 0));
+      }
+      this.cacheVendasLoja = { at: Date.now(), mapa: total };
+    } catch (e: any) {
+      // Ranking indisponível = vitrine vazia (a página tem estado vazio) — não
+      // cacheia o erro, a próxima chamada tenta de novo.
+      this.logger.warn(`[catalogo] vendas de loja por família indisponíveis: ${e?.message || e}`);
+    }
+    return total;
+  }
+
+  /**
+   * A VITRINE "OS MAIS VENDIDOS NAS LOJAS": top 30 do caixa físico que ainda
+   * aguentam a demanda que o selo vai criar. Régua do dono (19/08):
+   *
+   *   · estoque comprável ≥ 30 peças (`estoqueTotal` já desconta cor oculta);
+   *   · NENHUM tamanho zerado — best-seller com grade furada só gera "não tem
+   *     meu número", então peça sem a grade cheia espera repor pra entrar.
+   *
+   * Peça sem grade de tamanho (linha do ERP sem tamanho) fica de fora: não há
+   * como provar a grade cheia do que não tem grade.
+   */
+  async maisVendidosNasLojas(): Promise<{ itens: any[]; total: number }> {
+    const MIN_ESTOQUE = 30;
+    const TOP = 30;
+    const [catalogo, vendas] = await Promise.all([
+      this.catalogoDaVitrine(),
+      this.vendasLojaPorFamilia(),
+    ]);
+    const unidades = (p: any) => vendas.get(refBaseOf(this.refKey(p.ref))) ?? 0;
+    const itens = catalogo
+      .filter(
+        (p: any) =>
+          (p.estoqueTotal ?? 0) >= MIN_ESTOQUE &&
+          (p.tamanhos ?? []).length > 0 &&
+          (p.tamanhos as any[]).every((t: any) => t.disponivel) &&
+          unidades(p) > 0,
+      )
+      .sort((a: any, b: any) => unidades(b) - unidades(a))
+      .slice(0, TOP)
+      .map((p: any) => ({ ...p, vendidasNasLojas: unidades(p) }));
     return { itens, total: itens.length };
   }
 
@@ -2196,6 +2387,10 @@ export class LojaCatalogService {
      * Agora a PDP procura no catálogo já montado (cache de 60s, o mesmo TTL da
      * borda) e só cai no caminho REF a REF quando a peça não está na vitrine —
      * que é o que permite conferir por link direto uma peça ainda sem foto.
+     *
+     * Lê o catálogo CRU (`catalogoPublicado`), não o da vitrine: peça marcada
+     * "fora do site" continua abrindo por link direto — é assim que se confere
+     * o que foi escondido antes de republicar. Ela só sai das LISTAS.
      */
     const refPedida = this.normRef(chave.replace(/^ref-/i, ''));
     const daVitrine = (await this.catalogoPublicado()).find(
@@ -2303,7 +2498,7 @@ export class LojaCatalogService {
       });
       if (!look) return null;
 
-      const catalogo = await this.catalogoPublicado();
+      const catalogo = await this.catalogoDaVitrine();
       const vistos = new Set<string>();
       const pecas = (look.pecas as any[])
         .map((m) => {
@@ -2327,7 +2522,7 @@ export class LojaCatalogService {
       include: { pecas: true },
       orderBy: { criadoEm: 'desc' },
     });
-    const catalogo = await this.catalogoPublicado();
+    const catalogo = await this.catalogoDaVitrine();
     return looks.map((l) => ({
       id: l.id,
       nome: l.nome,
@@ -2434,7 +2629,7 @@ export class LojaCatalogService {
     const pagina = Math.max(1, Number(page) || 1);
     const porPagina = Math.min(48, Math.max(1, Number(perPage) || 12));
 
-    const catalogo = await this.catalogoPublicado();
+    const catalogo = await this.catalogoDaVitrine();
     // A peça-semente sai do próprio catálogo (custo zero); só quando ela não
     // está na vitrine — sem foto, por exemplo — é que vale uma consulta.
     const semente =

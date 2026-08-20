@@ -5224,6 +5224,12 @@ function PaymentModal({
           customerEmail: customerEmail || undefined,
           // Venda online: a cliente não está no balcão pra pagar em 15min.
           expiresInMinutes: 60,
+          // MARCA A COBRANÇA COMO VENDA ONLINE (19/08). Quem fecha esta venda
+          // quase sempre é o reconciliador do servidor (o PIX cai antes da
+          // vendedora clicar em FINALIZAR) — e ele precisa saber que é venda
+          // online pra registrar `venda_online` e abrir o pedido de separação,
+          // em vez de fechar como PIX de balcão (caso Ivone/Moema).
+          origem: 'venda_online',
         }),
       });
       setPixOnline({

@@ -311,28 +311,62 @@ export class FaturamentoService {
     const dFimExclusive = this.parseDate(to, true);
 
     // SITE = pedidos do WC/flowops Order (não PdvSale)
+    //
+    // MESMA RÉGUA DO CARD (19/08): status que contam como venda, pela data da
+    // COMPRA e só as origens do SITE. Antes era `status='completed'` por
+    // `createdAt` — quem clicava pra conferir o card via uma lista que não
+    // explicava o número. O que continua fora daqui, por ter fonte própria:
+    // Giga SITE (WhatsApp, caixa do Wincred) e LIVE (LivePdvCart).
+    // Atenção: `total` é o que a cliente PAGOU (com frete); o card soma só
+    // produtos — a coluna não fecha com o card por isso, e é de propósito.
     if (storeCode === 'SITE' || storeCode.toUpperCase() === 'SITE') {
+      // wc_date_created é TIMESTAMP → dia no fuso BR, senão a compra das
+      // 21h cai no dia seguinte e o detalhe discorda do card (ver brInstant).
+      const dIniBR = this.brInstant(dInicio);
+      const dFimBR = this.brInstant(dFimExclusive);
       const orders = await (this.prisma as any).order.findMany({
         where: {
-          status: 'completed',
-          createdAt: { gte: dInicio, lt: dFimExclusive },
+          status: { in: FaturamentoService.FATURAMENTO_STATUSES },
+          source: { in: FaturamentoService.SITE_SOURCES },
+          OR: [
+            { wcDateCreated: { gte: dIniBR, lt: dFimBR } },
+            { AND: [{ wcDateCreated: null }, { createdAt: { gte: dIniBR, lt: dFimBR } }] },
+          ],
         },
+        // CAMPOS QUE EXISTEM (19/08): o select pedia `paymentMethod` no Order e
+        // `descricao/qty/total` no OrderItem — nenhum dos quatro existe no
+        // schema. Como a chamada é `(this.prisma as any)`, o TS não reclamava e
+        // o Prisma derrubava a rota em runtime: abrir o detalhe do SITE dava
+        // 500. Agora lê o que o model tem e monta o resto no map.
         select: {
           id: true,
           wcOrderId: true,
           status: true,
           totalAmount: true,
           createdAt: true,
+          wcDateCreated: true,
           customerCpf: true,
           customerName: true,
-          paymentMethod: true,
+          paymentInfo: true,
           items: {
-            select: { sku: true, descricao: true, qty: true, unitPrice: true, total: true },
+            select: { sku: true, productName: true, quantity: true, unitPrice: true },
           },
         },
         orderBy: { createdAt: 'desc' },
         take: 500,
       });
+      /** PIX ou CARTÃO do site novo (JSON do gateway). Pedido do WooCommerce
+       *  não guarda isso no Order — a coluna segue mostrando '—', como antes. */
+      const formaPagamento = (raw: any): string | null => {
+        try {
+          const pi = raw ? JSON.parse(String(raw)) : null;
+          if (pi?.method === 'pix') return 'PIX';
+          if (pi?.method === 'card') return `CARTÃO${pi?.installments ? ` ${pi.installments}x` : ''}`;
+          return pi?.method || null;
+        } catch {
+          return null;
+        }
+      };
       return {
         storeCode: 'SITE',
         source: 'flowops_order',
@@ -340,15 +374,22 @@ export class FaturamentoService {
           id: o.id,
           number: `#${o.wcOrderId || o.id.slice(0, 8)}`,
           status: o.status,
-          createdAt: o.createdAt,
+          // Data da COMPRA (a mesma que o card usa pra jogar o pedido no dia).
+          createdAt: o.wcDateCreated || o.createdAt,
           total: o.totalAmount,
           customerCpf: o.customerCpf,
           customerName: o.customerName,
-          paymentMethod: o.paymentMethod,
+          paymentMethod: formaPagamento(o.paymentInfo),
           sellerName: null,
           nfceStatus: null,
           nfceNumber: null,
-          items: o.items,
+          items: (o.items || []).map((it: any) => ({
+            sku: it.sku,
+            descricao: it.productName,
+            qty: it.quantity,
+            unitPrice: it.unitPrice,
+            total: (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0),
+          })),
           payments: [],
           canEstornar: false,  // pedidos site têm fluxo separado de cancelamento
         })),
@@ -754,6 +795,22 @@ export class FaturamentoService {
   ];
 
   /**
+   * ORIGENS que somam no SITE.
+   *
+   *   site       WooCommerce (site ANTIGO) — o único que entrava até 19/08.
+   *   ecommerce  site NOVO (`loja-orders`, wcOrderId 950M+). Nasce e morre no
+   *              Postgres: não gera PdvSale e não existe no Giga — fora daqui
+   *              ele não aparecia em soma NENHUMA (nem Faturamento, nem DRE).
+   *
+   * FORA de propósito:
+   *   live        componente próprio do SITE (getLiveFaturamento, fonte
+   *               LivePdvCart, que cobre o legado pré-trilho) — duplicaria.
+   *   pdv_online  pedido online da loja (960M+): já é venda da loja física no
+   *               PdvSale, contar aqui somaria a mesma venda duas vezes.
+   */
+  private static readonly SITE_SOURCES = ['site', 'ecommerce'];
+
+  /**
    * Soma totalAmount de Order com status que conta como venda dentro do período.
    * RESPEITA O CUTOFF: só conta vendas a partir de FLOWOPS_SITE_CUTOFF_DATE.
    * Antes do cutoff, as vendas eram lançadas no Giga (já contadas lá).
@@ -781,10 +838,9 @@ export class FaturamentoService {
       where: {
         status: { in: FaturamentoService.FATURAMENTO_STATUSES },
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
-        // Pedido da LIVE (source='live') NÃO entra aqui — a live é um
-        // componente próprio do SITE (getLiveFaturamento, fonte LivePdvCart,
-        // que cobre também o legado pré-trilho). Somar os dois duplicaria.
-        source: 'site',
+        // Site ANTIGO (WooCommerce) + site NOVO. Live e pedido online da
+        // loja ficam de fora — ver SITE_SOURCES.
+        source: { in: FaturamentoService.SITE_SOURCES },
       },
       select: {
         // Só ITENS — totalAmount inclui frete (sedex/PAC) e a regra é
@@ -896,7 +952,8 @@ export class FaturamentoService {
       where: {
         status: { in: FaturamentoService.FATURAMENTO_STATUSES },
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
-        source: 'site', // live tem série própria (getLiveTimeseries)
+        // Mesmas origens da soma acima (live tem série própria).
+        source: { in: FaturamentoService.SITE_SOURCES },
       },
       // Mesmo critério da função acima: SUM(quantity * unitPrice) — sem frete.
       select: {

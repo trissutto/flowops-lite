@@ -470,6 +470,9 @@ model Order {
   items      OrderItem[]
   pickOrders PickOrder[]
   history    OrderHistory[]
+  // Convite de avaliacao pos-venda (D+5 da entrega). A LINHA e a marca: pedido
+  // entregue SEM convite ainda nao foi chamado pra avaliar.
+  avaliacaoConvite AvaliacaoConvite?
   seller     Seller? @relation(fields: [sellerId], references: [id])
   person     Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
@@ -2078,6 +2081,12 @@ model PagbankPayment {
   valor           Float
   // Status: pending | paid | expired | cancelled | failed
   status          String   @default("pending")
+  /// DE ONDE A COBRANÇA NASCEU (19/08). 'venda_online' = PIX gerado no painel
+  /// "Venda Online" do PDV (cliente no WhatsApp/Instagram, peça vai por
+  /// SEDEX/PAC/motoboy/retirada). Null = PIX de balcão. O reconciliador lê
+  /// isto pra fechar a venda como `venda_online` (pedido de separação, sem
+  /// NFC-e) em vez de `pix` de balcão — caso Ivone/Moema, venda 95052462.
+  origem          String?  @db.VarChar(32)
   // PIX
   qrCodeText      String?  @map("qr_code_text") @db.Text   // copia-e-cola
   qrCodeImageB64  String?  @map("qr_code_image_b64") @db.Text  // PNG base64
@@ -7437,4 +7446,120 @@ model WhatsappMessage {
 
   @@index([conversationJid, ts])
   @@map("whatsapp_messages")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// AVALIAÇÃO DE PEÇA — a prova social REAL, escrita por quem comprou.
+//
+// Decisão de 12/08/2026: nunca depoimento inventado. Só avalia quem tem a
+// peça em pedido ENTREGUE (ou passado o prazo do config), e o que ela
+// escreve fica atrelado ao item do pedido — é isso que impede review
+// plantada e é isso que dá o "compra verificada".
+//
+// A chave é a REF-BASE (família), não o cadastro: as cores da mesma peça
+// são REFs irmãs e a cliente lê "esta peça". Ver common/ref-base.ts.
+// ═══════════════════════════════════════════════════════════════════════
+
+model ProductReview {
+  id          String  @id @default(uuid())
+  // CustomerAccount.id — a conta do site (1 por CPF)
+  accountId   String  @map("account_id")
+  // De onde veio a peça (snapshot: pedido some do radar, avaliação fica)
+  orderId     String? @map("order_id")
+  orderItemId String? @map("order_item_id")
+  refBase     String  @map("ref_base")
+  ref         String?
+  cor         String?
+  tamanho     String?
+  produtoNome String? @map("produto_nome")
+  // 1 a 5 estrelas — único campo realmente obrigatório
+  nota        Int
+  texto       String? @db.Text
+  // URLs no R2, JSON array. Coluna de texto é a convenção da casa.
+  fotos       String? @db.Text
+  // Como serviu: 'pequeno' | 'fiel' | 'grande' — alimenta o Fit AI
+  caimento    String?
+  alturaCm    Int?    @map("altura_cm")
+  pesoKg      Int?    @map("peso_kg")
+  // A cliente decide se altura/peso dela aparecem pra quem lê
+  publicarMedidas Boolean @default(false) @map("publicar_medidas")
+  // 'publicada' | 'oculta' (moderação da matriz)
+  status      String  @default("publicada")
+  // Pontos creditados no envio — congelados, config muda depois
+  pontos      Int     @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  // Uma avaliação por peça comprada (a mesma peça em 2 pedidos = 2 avaliações)
+  @@unique([accountId, orderItemId])
+  @@index([refBase, status, createdAt])
+  @@index([accountId, createdAt])
+  @@map("product_reviews")
+}
+
+// Extrato de PONTOS da cliente. Append-only: saldo é a soma das linhas.
+// Os valores de quanto vale cada coisa vivem no AppConfig 'avaliacoes-config'
+// (tela /retaguarda/avaliacoes) — nada de número chumbado no código.
+model CustomerPointsTx {
+  id        String   @id @default(uuid())
+  accountId String   @map("account_id")
+  // Positivo credita, negativo debita
+  pontos    Int
+  // 'avaliacao' | 'ajuste'
+  motivo    String
+  // id da avaliação que gerou (auditoria)
+  refId     String?  @map("ref_id")
+  descricao String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([accountId, createdAt])
+  @@map("customer_points_tx")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// O CONVITE PRA AVALIAR — o que faltava pra fila de avaliação encher
+//
+// O centro de avaliação (`/conta/avaliacoes`) existe e funciona, mas ele é
+// PASSIVO: só descobre a fila quem entra na conta. A maioria das clientes
+// compra como visitante e não volta ao site depois de receber a peça — a
+// avaliação ficava esperando alguém aparecer.
+//
+// Este convite é o toque ativo: no 5º dia depois da ENTREGA CONFIRMADA pelo
+// rastreio, a cliente recebe um link no WhatsApp que abre o mesmo formulário
+// SEM LOGIN. O token é a credencial; quem tem o link tem aquele pedido, e nada
+// além dele.
+//
+// A LINHA É A MARCA: pedido entregue SEM convite é pedido que ninguém chamou.
+// Sem isso, "ninguém avalia" e "ninguém foi convidado" viram o mesmo silêncio —
+// e são problemas opostos (um é de mensagem, o outro é de produto).
+// ═══════════════════════════════════════════════════════════════════════
+model AvaliacaoConvite {
+  id           String    @id @default(uuid())
+  orderId      String    @unique @map("order_id")
+  /// Token do link (aleatório, 32+ chars). É a única credencial da página.
+  token        String    @unique @db.VarChar(64)
+  /// CPF da cliente — é por ele que o convite acha (ou cria) a conta do site
+  /// na hora de gravar a avaliação. Sem CPF o link ainda abre e pergunta.
+  cpf          String?   @db.VarChar(11)
+  telefone     String?   @db.VarChar(20)
+  nomeCliente  String?   @map("nome_cliente") @db.VarChar(120)
+  /// Quando a transportadora confirmou a entrega (o marco zero do D+5).
+  entregueEm   DateTime? @map("entregue_em")
+  enviadoEm    DateTime? @map("enviado_em")
+  /// whatsapp | manual — de onde saiu o toque, pra medir o que funciona.
+  canal        String?   @db.VarChar(16)
+  /// Reenvios feitos pela retaguarda. Teto na service — insistir vira spam.
+  tentativas   Int       @default(0)
+  abertoEm     DateTime? @map("aberto_em")
+  respondidoEm DateTime? @map("respondido_em")
+  expiraEm     DateTime  @map("expira_em")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// A fila do cron e a lista da retaguarda leem por estes dois.
+  @@index([enviadoEm])
+  @@index([respondidoEm])
+  @@map("avaliacao_convites")
 }

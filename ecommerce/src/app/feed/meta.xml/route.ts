@@ -58,6 +58,8 @@ interface PecaFeed {
   cores: string[];
   topSemana?: boolean;
   lancamento?: boolean;
+  /** Quantidade em estoque somada — o critério das vitrines. Ver `carimbarTop30`. */
+  estoqueTotal?: number;
 }
 
 /** `&` vira `&amp;` etc. Sem isto, um nome com "&" invalida o XML inteiro. */
@@ -117,6 +119,119 @@ const NOVIDADES_CATEGORIA: Record<string, string> = {
   macacoes: 'novidades-macacoes',
 };
 
+/**
+ * AS 30 DE MAIOR ESTOQUE DE CADA CATEGORIA — `custom_label_3` e `custom_label_4`.
+ *
+ * Sete vitrines rotativas — blusas, vestidos, moda praia, lingerie, macacões,
+ * linha conforto e uma geral — que alimentam os conjuntos de anúncio.
+ *
+ * ── POR QUE ESTOQUE, E NÃO "AS MAIS NOVAS" (INCIDENTE DE 19/08/2026) ──
+ *
+ * Nasceu como "as 30 mais recentes", contando de cima da lista, que o backend
+ * devolve por `publicadoEm desc`. Foi pro ar e o dono pausou a campanha em
+ * minutos: **peça velha aparecendo como novidade** (REF 13014, 13015, 700927).
+ *
+ * A causa: `publicadoEm` é quando a peça entrou no ar NO SITE, e no catálogo
+ * legado esse campo foi preenchido de trás pra frente — a data da primeira
+ * foto no R2. Peça de 2023 fotografada mês passado sobe como lançamento.
+ * Ordem de publicação não é idade de peça, e o feed não carrega data nenhuma
+ * pra desempatar.
+ *
+ * Pior: a trava contra isso JÁ EXISTIA — o carimbo `novidades-*` abaixo exige
+ * `lancamento` (≤30 dias) exatamente porque o dono reclamou da mesma coisa em
+ * 16/08. Ela foi removida aqui de propósito, com um comentário justificando.
+ * O comentário estava errado e o bug voltou. Lição: quando existe uma trava
+ * com dono e data, ela é resposta a um incidente — não a remova sem descobrir
+ * qual foi.
+ *
+ * `estoqueTotal` não tem esse problema: é dado do Flow, medido, e responde uma
+ * pergunta melhor pro anúncio — peça com grade cheia atende mais gente e não
+ * frustra quem clica e descobre que o tamanho dela acabou. Se um dia a vitrine
+ * precisar mesmo ser por novidade, primeiro exponha a data real no feed.
+ *
+ * `novidades-*` (abaixo) continua respondendo "o que é NOVO DE VERDADE", com a
+ * trava de `lancamento` intacta. São perguntas diferentes e convivem.
+ *
+ * ── POR QUE DOIS CAMPOS E NÃO UM ──
+ *
+ * Uma peça pode estar entre as 30 de maior estoque da categoria dela E entre as
+ * 30 de maior estoque do site inteiro. `custom_label` guarda UM valor por campo, então
+ * o recorte da categoria vai no 3 e o geral no 4. Os slots 0, 1 e 2 já têm dono
+ * (subcategoria, top-semana, novidades) — estes eram os dois que sobravam, e
+ * agora os cinco estão ocupados: o próximo recorte precisa de outra estratégia.
+ *
+ * Esgotado não ocupa vaga: gastaria vitrine com peça que não vende e
+ * encolheria o conjunto na prática.
+ */
+const TOP30_TETO = 30;
+const TOP30_CATEGORIA: Record<string, string> = {
+  blusas: 'top30-blusas',
+  vestidos: 'top30-vestidos',
+  'moda-praia': 'top30-moda-praia',
+  lingerie: 'top30-lingerie',
+  macacoes: 'top30-macacoes',
+  'linha-conforto': 'top30-linha-conforto',
+};
+/**
+ * A VITRINE DO RESTO — as 30 de maior estoque que NÃO entraram em nenhuma
+ * vitrine de categoria.
+ *
+ * Nasceu como "as 30 do site inteiro" e o dono achou o defeito na mesma noite:
+ * as de maior estoque do catálogo SÃO as blusas, vestidos e macacões, que já
+ * têm conjunto próprio. Os quatro anúncios disputavam as mesmas peças.
+ *
+ * Filtrar isso no Meta não resolveria: as 30 vagas já teriam sido gastas
+ * justamente nas peças a excluir, e o conjunto sairia vazio. A exclusão tem
+ * que acontecer no CARIMBO — por isso `carimbarTop30` dá `continue` em quem
+ * já ganhou vitrine de categoria.
+ *
+ * O que sobra aqui é o resto do catálogo: calças, saias, shorts, conjuntos,
+ * jaquetas e as peças sem categoria — que hoje não aparecem em anúncio nenhum.
+ */
+const TOP30_GERAL = 'top30-novidades';
+
+interface CarimboTop30 {
+  /** REF → carimbo da categoria (`custom_label_3`). */
+  categoria: Map<string, string>;
+  /** REFs entre as 30 de maior estoque do site (`custom_label_4`). */
+  geral: Set<string>;
+}
+
+function carimbarTop30(pecas: PecaFeed[]): CarimboTop30 {
+  const usadas = new Map<string, number>();
+  const categoria = new Map<string, string>();
+  const geral = new Set<string>();
+
+  /**
+   * DA MAIOR QUANTIDADE PRA MENOR — e a cópia antes de ordenar não é capricho:
+   * a lista original vem por `publicadoEm desc` e o carimbo de novidades acima
+   * DEPENDE dessa ordem. Ordenar no lugar quebraria o outro carimbo em silêncio.
+   */
+  const porEstoque = [...pecas]
+    .filter((p) => p.disponivel)
+    .sort((a, b) => (Number(b.estoqueTotal) || 0) - (Number(a.estoqueTotal) || 0));
+
+  for (const p of porEstoque) {
+    const alvo = TOP30_CATEGORIA[String(p.categoria || '').trim()];
+
+    if (alvo) {
+      const n = usadas.get(alvo) ?? 0;
+      if (n < TOP30_TETO) {
+        usadas.set(alvo, n + 1);
+        categoria.set(p.ref, alvo);
+        // Já tem vitrine própria: NÃO entra na geral. Ver o cabeçalho.
+        continue;
+      }
+    }
+
+    // Sobrou: categoria sem vitrine própria (calças, saias, shorts, conjuntos,
+    // jaquetas), peça sem categoria nenhuma, ou a 31ª de uma vitrine cheia.
+    if (geral.size < TOP30_TETO) geral.add(p.ref);
+  }
+
+  return { categoria, geral };
+}
+
 /** REF → carimbo, pras `NOVIDADES_TETO` primeiras disponíveis de cada categoria. */
 function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   const usadas = new Map<string, number>();
@@ -136,7 +251,7 @@ function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   return carimbo;
 }
 
-function item(p: PecaFeed, novidade?: string): string {
+function item(p: PecaFeed, novidade?: string, top30?: string, top30Geral?: boolean): string {
   const link = `${SITE.url}/produto/${p.slug}`;
   const [capa, ...resto] = p.imagens;
 
@@ -169,6 +284,9 @@ function item(p: PecaFeed, novidade?: string): string {
   // carimbo entra no `custom_label_1` (o que estava de reserva). Vira conjunto
   // de produtos no Meta com um `eq "top-semana"`, igual às novidades.
   if (p.topSemana) campos.push(`<g:custom_label_1>top-semana</g:custom_label_1>`);
+  // As 30 mais recentes da categoria e do site — ver `carimbarTop30`.
+  if (top30) campos.push(`<g:custom_label_3>${escapar(top30)}</g:custom_label_3>`);
+  if (top30Geral) campos.push(`<g:custom_label_4>${TOP30_GERAL}</g:custom_label_4>`);
 
   if (capa) campos.push(`<g:image_link>${escapar(capa)}</g:image_link>`);
   // Até 10 fotos extras — o carrossel do anúncio dinâmico usa estas.
@@ -202,7 +320,7 @@ export async function GET() {
     // sobrevive a deploy — trocar revalidate/tags no código não alcança a
     // entrada já gravada (config de cache não entra na chave). O backend
     // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
-    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=3', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=4', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
   } catch {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o
@@ -213,6 +331,7 @@ export async function GET() {
   // primeiro) e o carimbo das 20 depende disso — nunca reordenar aqui.
   const validas = pecas.filter((p) => p.ref && p.slug && p.preco > 0);
   const novidades = carimbarNovidades(validas);
+  const top30 = carimbarTop30(validas);
 
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -220,7 +339,7 @@ export async function GET() {
     `<title>${escapar(SITE.name)}</title>` +
     `<link>${escapar(SITE.url)}</link>` +
     `<description>${escapar(SITE.description)}</description>` +
-    validas.map((p) => item(p, novidades.get(p.ref))).join('') +
+    validas.map((p) => item(p, novidades.get(p.ref), top30.categoria.get(p.ref), top30.geral.has(p.ref))).join('') +
     `</channel></rss>`;
 
   return new Response(xml, {

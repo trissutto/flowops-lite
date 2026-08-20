@@ -37,6 +37,7 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/novidades',
   '/outlet',
   '/mais-top-da-semana',
+  '/mais-vendidos-nas-lojas',
   '/categoria',
   '/tamanhos',
   '/tamanhos/guia',
@@ -46,6 +47,10 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   // Tela nativa desde 10/08/2026 (antes era redirect pro FlowOps).
   '/trocas',
   '/conta',
+  // Registradas em 19/08: a de avaliações nasceu na sprint do centro de
+  // avaliação e não foi anotada aqui — sem isso o prefetch dela fica desligado
+  // e ela some de qualquer menu filtrado por `filtrarLinksVivos`.
+  '/conta/avaliacoes',
   '/conta/cashback',
   '/conta/dados',
   '/conta/enderecos',
@@ -59,6 +64,8 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   /^\/pedido\/[^/]+$/,
   /^\/tamanhos\/[^/]+$/,
   /^\/checkout\/confirmacao\/[^/]+$/,
+  // Página POR PEDIDO, aberta pelo link que o convite manda no WhatsApp.
+  /^\/avaliar\/[^/]+$/,
 ];
 
 type Href = string | UrlObject;

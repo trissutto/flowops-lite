@@ -166,6 +166,8 @@ export class PagbankController {
       customerCpf?: string;
       customerEmail?: string;
       expiresInMinutes?: number;
+      /** 'venda_online' quando o PIX nasce no painel Venda Online do PDV. */
+      origem?: string;
     },
   ) {
     const role = req?.user?.role;
@@ -201,7 +203,10 @@ export class PagbankController {
         `Esta venda já está ${venda.status === 'finalized' ? 'finalizada' : venda.status}. Abra uma venda nova antes de gerar o PIX.`,
       );
     }
-    return this.svc.createPixCharge(body);
+    return this.svc.createPixCharge({
+      ...body,
+      origem: body.origem === 'venda_online' ? 'venda_online' : null,
+    });
   }
 
   /** GET /pagbank/pix/status/:saleId — frontend faz polling rápido */

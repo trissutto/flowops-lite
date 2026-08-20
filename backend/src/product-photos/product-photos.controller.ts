@@ -223,9 +223,12 @@ export class ProductPhotosController {
    * chama de novo enquanto `restantes` for maior que zero.
    */
   @Post('normalizar-formatos')
-  async normalizarFormatos(@Req() req: any, @Body() body: { limite?: number }) {
+  async normalizarFormatos(@Req() req: any, @Body() body: { limite?: number; apenasForasteiras?: boolean }) {
     this.requireWrite(req);
-    return this.svc.normalizarFormatos(Number(body?.limite) || 150);
+    return this.svc.normalizarFormatos(
+      Number(body?.limite) || 150,
+      Boolean(body?.apenasForasteiras),
+    );
   }
 
   /**

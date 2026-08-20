@@ -42,9 +42,14 @@ function texto(valor: unknown): string | null {
  * ampliar só o de lá é ampliar nada — o dado já morreu aqui, e morre em
  * silêncio (nenhum erro, nenhum log, a coluna `dados` só vem sem a chave).
  *
- * Quem duvidar compare `checkout_error` nos dois arquivos: `code`, `stage` e
- * `attempt` entraram na lista do backend em 17/08 e nunca foram acrescentados
- * aqui — os três seguem descartados antes de sair do site.
+ * Foi o que aconteceu com `checkout_error`: `stage` e `attempt` entraram na
+ * lista do backend em 17/08 e ninguém os acrescentou aqui, então os dois
+ * morriam antes de sair do site. O que doeu foi o `attempt`: sem ele não dá
+ * pra ver a cliente falhando 6 vezes seguidas pelo mesmo motivo — só 6
+ * erros soltos. (`reason` sempre passou, então a CAUSA nunca se perdeu;
+ * `stage` hoje é constante em "submission" nos dois pontos de disparo e só
+ * passa a valer quando houver outro estágio. `code` está na lista do
+ * backend mas o site nunca emite esse nome — manda a causa em `reason`.)
  */
 const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
   /**
@@ -63,7 +68,7 @@ const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
   add_shipping_info: ['shipping_tier'],
   add_payment_info: ['payment_type'],
   checkout_submission: ['method'],
-  checkout_error: ['method', 'reason', 'field'],
+  checkout_error: ['method', 'reason', 'code', 'field', 'stage', 'attempt'],
   checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
   payment_method_selected: ['method'],

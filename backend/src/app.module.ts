@@ -9,6 +9,9 @@ import { OrdersModule } from './orders/orders.module';
 import { CustomersModule } from './customers/customers.module';
 import { CustomersAppModule } from './customers-app/customers-app.module';
 import { SizeFeedbackModule } from './size-feedback/size-feedback.module';
+import { AvaliacoesModule } from './avaliacoes/avaliacoes.module';
+import { PosVendaModule } from './pos-venda/pos-venda.module';
+import { ContaResumoModule } from './conta-resumo/conta-resumo.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { ProgressiveDiscountModule } from './progressive-discount/progressive-discount.module';
 import { StockMirrorModule } from './stock-mirror/stock-mirror.module';
@@ -112,6 +115,9 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     CustomersModule,
     CustomersAppModule,
     SizeFeedbackModule,
+    AvaliacoesModule,
+    PosVendaModule,
+    ContaResumoModule,
     CatalogModule,
     ProgressiveDiscountModule,
     StockMirrorModule,
