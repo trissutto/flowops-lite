@@ -531,13 +531,24 @@ export class PedidoEmailService {
 
     const nome = this.primeiroNome(order?.customerName);
     const numero = order?.wcOrderNumber ? ` ${order.wcOrderNumber}` : '';
-    const itens = this.itensDoPedido(order);
-    const qtd = itens.reduce((s, i) => s + (Number(i.quantidade) || 1), 0);
+    // Lista das peças PRA CONFERÊNCIA (pedido do dono, 20/08): a cliente
+    // confere na hora se a vendedora registrou o que ela pediu — REF, cor e
+    // tamanho errados aparecem AQUI, antes de a peça viajar.
+    const linhas = (Array.isArray(order?.items) ? order.items : [])
+      .map((i: any) => {
+        const desc = [i?.ref || i?.productName, i?.cor, i?.tamanho]
+          .filter(Boolean)
+          .join(' · ');
+        const qtd = Number(i?.quantity) || 1;
+        return `• ${desc || i?.sku || 'Peça'}${qtd > 1 ? ` ×${qtd}` : ''} — ${this.moeda(i?.unitPrice)}`;
+      })
+      .join('\n');
     const texto =
-      `Oi, ${nome}! 💛\n\nSeu pedido${numero} foi registrado com a nossa equipe: ` +
-      `${qtd} peça(s), total ${this.moeda(order?.totalAmount)}.\n\n` +
-      `Qualquer dúvida é só responder por aqui — e assim que o pedido sair, ` +
-      `mandamos o código de rastreio.`;
+      `Oi, ${nome}! 💛\n\nSeu pedido${numero} foi registrado com a nossa equipe:\n\n` +
+      (linhas ? `${linhas}\n\n` : '') +
+      `Total: ${this.moeda(order?.totalAmount)}\n\n` +
+      `Confere se está tudo certinho? Qualquer coisa é só responder por aqui — ` +
+      `e assim que o pedido sair, mandamos o código de rastreio.`;
 
     try {
       const r = await this.whats.sendText(telefone, texto);
