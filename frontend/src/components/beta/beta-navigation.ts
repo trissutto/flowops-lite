@@ -17,6 +17,7 @@ export const BETA_NAV: BetaNavGroup[] = [
   { key: 'clientes', label: 'Clientes', icon: Users, items: [
     { label: 'Lista de clientes', href: '/beta/clientes' },
     { label: 'Cadastrar cliente', href: '/clientes-crm?new=1', legacy: true },
+    { label: 'Fichas de loja (crediário/marcado)', href: '/retaguarda/clientes', legacy: true },
     { label: 'Revisão de identidade', href: '/retaguarda/revisao-identidade', legacy: true },
   ]},
   { key: 'produtos', label: 'Produtos', icon: Package, items: [

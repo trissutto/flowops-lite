@@ -488,7 +488,8 @@ export class MarcadosService {
         ? { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] }
         : { codigo: { in: this.codVariants(codArg) }, ...(temLoja ? { loja: lojaArg } : {}) };
       const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
-        where: whereFicha,
+        // Ficha arquivada (painel de Limpeza) não conta pra marcado.
+        where: { ...whereFicha, arquivadoEm: null },
       });
       fichasPessoa = fichas;
       if (fichas.length) {
@@ -730,6 +731,7 @@ export class MarcadosService {
     const lojaFiltro = lojaScope ? String(lojaScope).replace(/\D/g, '').padStart(2, '0') : null;
     const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
       where: {
+        arquivadoEm: null,
         ...(lojaFiltro ? { loja: lojaFiltro } : {}),
         ...(isCpfLike
           ? { OR: [{ personKey: { contains: onlyDigits } }, { cpf: { contains: onlyDigits } }] }

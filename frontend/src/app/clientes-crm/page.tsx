@@ -284,6 +284,15 @@ export default function ClientesCrmPage() {
       url.searchParams.delete('openId');
       window.history.replaceState({}, '', url.toString());
     }
+    // ?create=1 / ?new=1 — os botões "Cadastrar cliente" do beta apontam pra cá:
+    // abre o modal de criação direto (mesmo estado do botão da tela).
+    if (params.get('create') === '1' || params.get('new') === '1') {
+      setShowCreate(true);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('create');
+      url.searchParams.delete('new');
+      window.history.replaceState({}, '', url.toString());
+    }
   }, []);
 
   // ETL state — só lemos pra mostrar badge "rodando" no botão Sincronizações.

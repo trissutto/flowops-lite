@@ -334,7 +334,8 @@ export class ClientesGigaService {
       or.push({ codigo: digits });
     }
     const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
-      where: { OR: or },
+      // Ficha arquivada pelo painel de Limpeza fica fora da busca.
+      where: { OR: or, arquivadoEm: null },
       select: {
         loja: true, codigo: true, nome: true, cpf: true, foneCel: true,
         cidade: true, bloqueado: true, avaliacao: true, personKey: true, customerId: true,
@@ -371,7 +372,7 @@ export class ClientesGigaService {
 
     const fichas: any[] = base.personKey
       ? await (this.prisma as any).gigaCliente.findMany({
-          where: { personKey: base.personKey },
+          where: { personKey: base.personKey, arquivadoEm: null },
           orderBy: { loja: 'asc' },
         })
       : [base];
@@ -696,7 +697,7 @@ export class ClientesGigaService {
     });
     if (!base) return { found: false, itens: [] };
     const fichas: any[] = base.personKey
-      ? await (this.prisma as any).gigaCliente.findMany({ where: { personKey: base.personKey } })
+      ? await (this.prisma as any).gigaCliente.findMany({ where: { personKey: base.personKey, arquivadoEm: null } })
       : [base];
     const digits = String(base.cpf || '').replace(/\D/g, '');
     const itens: any[] = await (this.prisma as any).marcado.findMany({
@@ -737,7 +738,7 @@ export class ClientesGigaService {
     });
     if (!base) return { found: false };
     const fichas: any[] = base.personKey
-      ? await (this.prisma as any).gigaCliente.findMany({ where: { personKey: base.personKey } })
+      ? await (this.prisma as any).gigaCliente.findMany({ where: { personKey: base.personKey, arquivadoEm: null } })
       : [base];
 
     // Crediário em aberto — NATIVO primeiro (crediário nativo fase 1),
@@ -898,7 +899,7 @@ export class ClientesGigaService {
     if (!base) return { found: false, eventos: [] };
     const fichas: any[] = base.personKey
       ? await (this.prisma as any).gigaCliente.findMany({
-          where: { personKey: base.personKey },
+          where: { personKey: base.personKey, arquivadoEm: null },
           select: { loja: true, codigo: true },
         })
       : [{ loja: base.loja, codigo: base.codigo }];
