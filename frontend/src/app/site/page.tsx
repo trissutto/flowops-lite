@@ -17,7 +17,7 @@ import {
   ClipboardList, Megaphone, Users, Globe, ShoppingBag,
   FileSearch, MessageCircle, Store, ArrowRightLeft, ArrowLeft,
   LayoutDashboard, Globe2, BarChart3, Settings, DollarSign, UserPlus, MapPin,
-  Tags, LayoutGrid, TrendingUp,
+  Tags, LayoutGrid, TrendingUp, ShieldCheck,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -43,6 +43,10 @@ interface SiteItem {
 
 const SITE_ITEMS: SiteItem[] = [
   { href: '/separacao',                label: 'Pedidos',         subtitle: 'WooCommerce',  description: 'Separação e envio',     tone: 'teal',   icon: ClipboardList  },
+  // Venda online do PDV fechada por "PIX recebido"/"Link externo" não tem
+  // gateway conferindo (caso ON-000049, 19/08) — esta tela é a conferência
+  // humana: o que está vermelho, ninguém provou que foi pago.
+  { href: '/retaguarda/conferencia-vendas', label: 'Conferência de Vendas', subtitle: 'Pagamento', description: 'Venda online sem prova · envio · rastreio', tone: 'rose', icon: ShieldCheck },
   { href: '/financeiro',               label: 'Financeiro',      subtitle: 'Analítico WC', description: 'Faturamento · ticket médio · KPIs', tone: 'green', icon: DollarSign },
   { href: '/marketing',                label: 'Marketing',       subtitle: 'CRM',          description: 'Recuperação · campanhas', tone: 'rose',  icon: Megaphone      },
   { href: '/retaguarda/vendedoras',    label: 'Vendedoras',      subtitle: 'Atribuição',   description: 'Quem vende cada pedido',  tone: 'orange', icon: Users         },
