@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Play, ZoomIn, ZoomOut, Check } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Play, ZoomIn, ZoomOut } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
 import { youtubeCapa, youtubeEmbed } from '@/lib/youtube';
@@ -11,50 +11,22 @@ import { ProductBadgeTag } from '@/components/ui/Badge';
 import type { Media, ProductBadge } from '@/types';
 
 /**
- * Galeria do produto — miniaturas verticais à esquerda + foto grande, NO
- * CELULAR TAMBÉM (dono, 15/08).
+ * Galeria do produto — foto grande + miniaturas de FOTO na lateral.
  *
- * Antes a fileira de miniaturas ficava DEITADA embaixo da foto no mobile, e
- * isso custava 209px de rolagem: os 102px da própria fileira mais o respiro,
- * empurrando "Escolha o tamanho" para 1.216px (1,5 tela abaixo da foto) e o
- * botão Adicionar para 1.419px. Medido na PDP da SMILE em 375×812.
+ * A RÉGUA LATERAL DE CORES MORREU AQUI (dono, 20/08 à noite: "cortou as
+ * cores que temos"). Em peça de 8 cores a coluna mostrava 3 miniaturas e
+ * escondia 5 atrás do "MAIS CORES" — metade do catálogo de cores invisível,
+ * justamente o que a régua existia pra mostrar. O seletor de cor agora é a
+ * GRADE DE CORES embaixo da foto (ver `GradeDeCores` no EscolhaDaPeca):
+ * todas as cores visíveis de uma vez, sem rolagem.
  *
- * Pior que a rolagem: em peça de várias cores essa fileira é **uma miniatura
- * por cor** e clicar nela TROCA a cor — o mesmo que a bolinha do passo "1
- * Escolha a cor" faz 435px mais abaixo. A cliente escolhia a cor em cima e o
- * site pedia a cor de novo lá embaixo, sem ela saber se a primeira valeu.
- *
- * Em pé, a coluna encosta na foto: a cor deixa de ser um bloco separado no
- * caminho e a decisão inteira sobe uma tela. O preço é a foto ficar mais
- * estreita (~259px em vez de 327px) — troca aceita pelo dono.
+ * A lateral segue existindo só pro caso de SEMPRE: peça de cor única com
+ * várias fotos. As fotos extras da cor escolhida continuam nas setas +
+ * contador sobre a foto grande.
  *
  * A foto é o argumento de venda: proporção 3/4 e `priority` na primeira,
  * que é o LCP da página.
  */
-
-/**
- * Miniatura POR COR (pedido do dono, 06/08): em peça com várias cores, a
- * barra lateral deixa de listar foto por foto — vira uma miniatura por cor,
- * e clicar TROCA A COR INTEIRA (galeria, preço e grade), igual à bolinha.
- * As demais fotos da cor ficam nas setas/contador da foto grande.
- */
-export interface GrupoDeCor {
-  nome: string;
-  capa: string;
-  ativa: boolean;
-  onSelect: () => void;
-  /**
-   * Esta cor NAO tem o tamanho que ela escolheu (17/08).
-   *
-   * Riscada, nunca escondida: cor que some da tela parece defeito do site
-   * e a cliente fica procurando. Riscada, ela entende que existe mas nao
-   * no numero dela — e isso evita escolher pra levar um nao no fim.
-   *
-   * Continua clicavel de proposito: ela pode querer ver a peca naquela
-   * cor e depois trocar de numero.
-   */
-  indisponivel?: boolean;
-}
 
 /**
  * VÍDEO DA PEÇA — o último slide da galeria (19/08).
@@ -232,7 +204,6 @@ export function ProductGallery({
   images,
   name,
   autoPlay = false,
-  grupos,
   badges,
   video,
 }: {
@@ -240,8 +211,6 @@ export function ProductGallery({
   name: string;
   /** Passa as fotos sozinha a cada 4,5s — e para no primeiro sinal de interesse. */
   autoPlay?: boolean;
-  /** Presente (2+) = barra lateral vira "uma miniatura por cor". */
-  grupos?: GrupoDeCor[];
   /**
    * "Novo", "Promoção", "Últimas peças" — SOBRE a foto, canto superior
    * direito (dono, 15/08: "tem um carimbo NOVO ocupando um espaço absurdo").
@@ -433,79 +402,13 @@ export function ProductGallery({
         )}
       </div>
 
-      {/* Miniaturas: uma POR COR quando a peça tem variações; senão, por foto.
+      {/* Miniaturas POR FOTO — só quando a peça não tem grade de cores
+          embaixo (a grade mostra uma capa por cor; aqui é foto a foto).
 
           A coluna é um trilho que ROLA DENTRO da altura da foto: o `absolute`
-          tira as miniaturas do cálculo de altura, então uma peça de 8 cores
-          não estica a galeria pra baixo — ela rola ali mesmo, ao lado da
-          foto. Sem isso, cada cor a mais devolveria a rolagem que a mudança
-          de 15/08 veio eliminar. */}
-      {grupos && grupos.length > 1 ? (
-        /* 64px no celular (era 56): sem as bolinhas da coluna de compra,
-           esta fita virou o UNICO seletor de cor e precisa ser nitida.
-           Cresce pra LARGURA de proposito — altura sairia do orcamento da
-           dobra, que e o que acabou de por o botao de comprar na 1a tela. */
-        <div className="relative w-16 shrink-0 lg:w-20">
-          <ScrollableThumbnailRail ariaLabel="Cores da peça" hintLabel="Mais cores" itemCount={grupos.length}>
-            {grupos.map((g) => (
-              <button
-                key={g.nome}
-                type="button"
-                role="tab"
-                aria-selected={g.ativa}
-                aria-label={`Cor ${g.nome}`}
-                title={g.nome}
-                onClick={g.onSelect}
-                className="w-full shrink-0"
-              >
-                <span
-                  className={cn(
-                    'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
-                    g.indisponivel && 'opacity-45',
-                    g.ativa
-                      ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-background opacity-100 scale-[1.04]'
-                      : 'border-transparent opacity-50 saturate-[0.85] hover:opacity-100 hover:saturate-100',
-                  )}
-                >
-                  <Image
-                    src={g.capa}
-                    alt=""
-                    aria-hidden
-                    fill
-                    sizes="80px"
-                    placeholder="blur"
-                    blurDataURL={BLUR_DATA_URL}
-                    className="object-cover"
-                  />
-                  {/* O ✓ VOLTOU (17/08). Ele existia nas bolinhas removidas, e
-                      o comentario de la explicava por que: numa peca escura a
-                      borda de selecao some contra a propria foto. O check nao
-                      some nunca. */}
-                  {g.ativa && !g.indisponivel && (
-                    <span className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-primary shadow-sm">
-                      <Check className="size-3 text-light" strokeWidth={3} />
-                    </span>
-                  )}
-                  {/* A tarja — mesma convencao da grade de tamanhos. */}
-                  {g.indisponivel && (
-                    <span aria-hidden className="absolute inset-0 flex items-center justify-center">
-                      <span className="h-px w-[140%] rotate-[38deg] bg-ink-soft/80" />
-                    </span>
-                  )}
-                </span>
-                <span
-                  className={cn(
-                    'mt-1.5 block truncate text-center text-[0.6875rem] leading-tight transition-colors',
-                    g.ativa ? 'font-semibold text-ink' : 'text-ink-soft',
-                  )}
-                >
-                  {g.nome}
-                </span>
-              </button>
-            ))}
-          </ScrollableThumbnailRail>
-        </div>
-      ) : total > 1 && (
+          tira as miniaturas do cálculo de altura, então muitas fotos não
+          esticam a galeria pra baixo — rolam ali mesmo, ao lado da foto. */}
+      {total > 1 && (
         <div className="relative w-14 shrink-0 lg:w-20">
           <ScrollableThumbnailRail ariaLabel="Fotos do produto" hintLabel="Mais fotos" itemCount={total}>
             {safeImages.map((image, index) => (

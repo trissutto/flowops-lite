@@ -224,7 +224,7 @@ export const trackColorSwitch = (product: TrackableProduct, cor: string) =>
   track('color_switch', { color: cor }, { items: [toTrackedItem(product, { cor })] });
 export const trackSizeSwitch = (product: TrackableProduct, tamanho: string) =>
   track('size_switch', { size: tamanho }, { items: [toTrackedItem(product, { tamanho })] });
-export const trackAddToCartBlocked = (product: TrackableProduct, reason: 'size_missing' | 'sold_out') =>
+export const trackAddToCartBlocked = (product: TrackableProduct, reason: 'size_missing' | 'sold_out' | 'color_missing') =>
   track('add_to_cart_blocked', { reason }, { items: [toTrackedItem(product)] });
 export const trackCheckoutSubmission = (method: 'pix' | 'card') =>
   track('checkout_submission', { method });
