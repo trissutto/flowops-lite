@@ -3,7 +3,6 @@ import { Footer } from '@/components/layout/Footer';
 import { MiniCart } from '@/components/commerce/MiniCart';
 import { QuickAddSheet } from '@/components/commerce/QuickAddSheet';
 import { DeferredAssistenteWidget } from '@/components/chat/DeferredAssistenteWidget';
-import { DeferredCupomBoasVindas } from '@/components/marketing/DeferredCupomBoasVindas';
 import { getTarjaDoTopo } from '@/services/banners';
 import { getNavegacao } from '@/services/categorias-menu';
 
@@ -30,9 +29,9 @@ export default async function PublicLayout({ children }: { children: React.React
       <QuickAddSheet />
       {/* Atendimento: bolha fixa em todas as páginas da vitrine. */}
       <DeferredAssistenteWidget />
-      {/* Cupom de boas-vindas. Ele mesmo se cala no carrinho, no checkout e na
-          conta — quem está comprando não pode ser interrompido. */}
-      <DeferredCupomBoasVindas />
+      {/* Cupom de boas-vindas REMOVIDO do ar (20/08 — travava a tela em
+          produção). Os componentes seguem em components/marketing/ caso o
+          dono queira reativar depois de corrigir. */}
     </>
   );
 }
