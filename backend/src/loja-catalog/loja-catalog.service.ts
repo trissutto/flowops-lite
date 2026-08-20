@@ -49,10 +49,16 @@ export interface ListarParams {
   soPromocao?: boolean;
   soNovidade?: boolean;
   /**
-   * `true` esconde o esgotado. Vazio/`false` MOSTRA (item 37): a cliente vê
-   * que a peça existe e acabou, em vez de achar que o site quebrou.
+   * Redundante desde 19/08: esgotado já não entra na vitrine (ver
+   * `catalogoDaVitrine`). Mantido porque o front antigo ainda manda.
    */
   soDisponivel?: boolean;
+  /**
+   * USO INTERNO (feed do Meta): traz também as peças esgotadas. O feed
+   * precisa do catálogo COMPLETO com `disponivel: false` — peça que SOME do
+   * feed vira produto morto pro Meta e recomeça o aprendizado do zero.
+   */
+  incluirEsgotado?: boolean;
   ordenar?: 'relevancia' | 'novidades' | 'preco-asc' | 'preco-desc' | 'nome';
 }
 
@@ -952,8 +958,9 @@ export class LojaCatalogService {
      * o "coloquei fora do site, salvei, e não saiu" (dono, 19/08).
      *
      * ESGOTADO É OUTRA COISA: peça que zerou (ou cujas cores caíram abaixo do
-     * piso) SEGUE na vitrine, riscada — decisão de 15/08, ver `soDisponivel`
-     * em `listar`. Aqui só sai o que uma pessoa mandou sair.
+     * piso) não vira `foraDoSite` — ela sai da vitrine pelo filtro de
+     * `disponivel` na `catalogoDaVitrine` (dono, 19/08) e VOLTA SOZINHA quando
+     * repõe. Aqui só se marca o que uma pessoa mandou sair.
      */
     const foraDoSite =
       coresDetalhadas.length > 0 &&
@@ -1457,15 +1464,23 @@ export class LojaCatalogService {
   /**
    * O QUE A VITRINE MOSTRA — o catálogo montado MENOS as peças que a
    * retaguarda tirou do ar (`foraDoSite`: nenhuma cor sobrou e alguém marcou
-   * "fora do site" na ficha).
+   * "fora do site" na ficha) e MENOS as esgotadas.
+   *
+   * ESGOTADO SAI (ordem do dono, 19/08 — reverte o item 37 de 04/08, que
+   * mostrava a peça riscada por último). `SITE_MOSTRA_ESGOTADO=1` volta o
+   * comportamento antigo sem deploy. Quando a peça repõe estoque ela volta
+   * sozinha — o corte é dinâmico, ninguém precisa republicar.
    *
    * Vale pra tudo que EXIBE peça pra cliente: listagem/busca, feed da PDP,
    * coleção curada, look. Fica de fora de propósito quem precisa VER o que
-   * está escondido — a tela de cores (é lá que se republica) e a PDP por link
-   * direto, que sempre abriu peça fora da vitrine pra conferência.
+   * está escondido — a tela de cores (é lá que se republica), a PDP por link
+   * direto (cliente que guardou o link vê "esgotado", não um 404) e o feed do
+   * Meta (`incluirEsgotado`, que manda a peça como out-of-stock).
    */
-  private async catalogoDaVitrine(): Promise<any[]> {
-    return (await this.catalogoPublicado()).filter((p: any) => !p.foraDoSite);
+  private async catalogoDaVitrine(opts?: { incluirEsgotado?: boolean }): Promise<any[]> {
+    const pecas = (await this.catalogoPublicado()).filter((p: any) => !p.foraDoSite);
+    if (opts?.incluirEsgotado || process.env.SITE_MOSTRA_ESGOTADO === '1') return pecas;
+    return pecas.filter((p: any) => p.disponivel);
   }
 
   /**
@@ -1898,7 +1913,7 @@ export class LojaCatalogService {
     // Cópia: o array do cache é compartilhado entre requisições, e a ordenação
     // abaixo é in-place — ordenar o cache embaralharia a lista de quem estiver
     // lendo ao mesmo tempo.
-    let pecas = [...(await this.catalogoDaVitrine())];
+    let pecas = [...(await this.catalogoDaVitrine({ incluirEsgotado: params.incluirEsgotado }))];
     if (!pecas.length) {
       return { itens: [], total: 0, page, perPage, totalPages: 0, fonte: 'erp', aviso: 'nenhuma REF publicada — rode o sync de conteúdo' };
     }
@@ -1990,19 +2005,10 @@ export class LojaCatalogService {
     if (params.colecao) pecas = pecas.filter((p) => norm(p.colecao) === norm(params.colecao));
 
     /**
-     * ESGOTADO NÃO SOME (item 37 — decisão do dono, 04/08).
-     *
-     * O filtro era `soDisponivel !== false`, ou seja, **esconder era o padrão**:
-     * a peça esgotada sumia da vitrine sem explicação. A cliente que viu a peça
-     * no Instagram voltava e achava que o site estava quebrado.
-     *
-     * Agora ela aparece, com `disponivel: false` pro card riscar e escrever
-     * "esgotado" — a cliente vê que a peça EXISTE e que acabou, o que também
-     * alimenta a lista de espera. Esconder só quando pedido explicitamente
-     * (`soDisponivel: true`).
-     *
-     * A ordenação abaixo empurra o esgotado pro fim: aparecer não é o mesmo
-     * que competir com quem tem estoque.
+     * ESGOTADO JÁ NÃO CHEGA AQUI (dono, 19/08 — reverte o item 37): o corte é
+     * na `catalogoDaVitrine`, num lugar só pra vitrine inteira. O filtro
+     * abaixo continua valendo pro caminho do feed (`incluirEsgotado: true`),
+     * onde a peça esgotada segue presente com `disponivel: false`.
      */
     if (params.soDisponivel === true) pecas = pecas.filter((p) => p.disponivel);
 
@@ -2124,11 +2130,11 @@ export class LojaCatalogService {
      */
     const PAGINA = 60;
     const MAX_PAGINAS = 84;
-    const primeira = await this.listar({ page: 1, perPage: PAGINA, ordenar: 'novidades' });
+    const primeira = await this.listar({ page: 1, perPage: PAGINA, ordenar: 'novidades', incluirEsgotado: true });
     const itens = [...(primeira.itens as any[])];
     const totalPaginas = Math.min(Number(primeira.totalPages) || 1, MAX_PAGINAS);
     for (let pagina = 2; pagina <= totalPaginas; pagina++) {
-      const r = await this.listar({ page: pagina, perPage: PAGINA, ordenar: 'novidades' });
+      const r = await this.listar({ page: pagina, perPage: PAGINA, ordenar: 'novidades', incluirEsgotado: true });
       if (!(r.itens as any[]).length) break;
       itens.push(...(r.itens as any[]));
     }

@@ -111,10 +111,43 @@ describe('montarPeca — peça sem cor nenhuma no ar sai da vitrine', () => {
     expect(p.foraDoSite).toBe(false);
   });
 
-  it('ESGOTADO não é "fora do site": cor abaixo do piso deixa a peça na vitrine, riscada', () => {
+  it('ESGOTADO não vira "fora do site" na montagem — quem corta é a vitrine', () => {
+    // `foraDoSite` continua reservado pra decisão HUMANA: esgotado sai da
+    // vitrine pelo filtro de `disponivel` (dono, 19/08) e volta sozinho quando
+    // repõe — sem precisar de republicação.
     const p = montar([linha({ estoque: 4 })], [foto('CHOCOLATE', 'chocolate.jpg')]);
     expect(p.cores).toHaveLength(0);
     expect(p.disponivel).toBe(false);
     expect(p.foraDoSite).toBe(false);
+  });
+});
+
+describe('catalogoDaVitrine — esgotado sai da vitrine (dono, 19/08)', () => {
+  const pecas = [
+    { ref: 'A1', disponivel: true, foraDoSite: false },
+    { ref: 'B2', disponivel: false, foraDoSite: false }, // esgotada
+    { ref: 'C3', disponivel: true, foraDoSite: true },   // tirada à mão
+  ];
+
+  beforeEach(() => {
+    svc.cacheCatalogo = { at: Date.now(), pecas };
+    delete process.env.SITE_MOSTRA_ESGOTADO;
+  });
+
+  it('corta esgotado E fora-do-site da vitrine', async () => {
+    const v = await svc.catalogoDaVitrine();
+    expect(v.map((p: any) => p.ref)).toEqual(['A1']);
+  });
+
+  it('o feed do Meta continua vendo o esgotado (incluirEsgotado)', async () => {
+    const v = await svc.catalogoDaVitrine({ incluirEsgotado: true });
+    expect(v.map((p: any) => p.ref)).toEqual(['A1', 'B2']);
+  });
+
+  it('SITE_MOSTRA_ESGOTADO=1 volta o comportamento antigo sem deploy', async () => {
+    process.env.SITE_MOSTRA_ESGOTADO = '1';
+    const v = await svc.catalogoDaVitrine();
+    expect(v.map((p: any) => p.ref)).toEqual(['A1', 'B2']);
+    delete process.env.SITE_MOSTRA_ESGOTADO;
   });
 });
