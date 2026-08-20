@@ -111,7 +111,13 @@ export class RoutingEngine {
       // OVERRIDE MANUAL: se o usuário escolheu uma loja específica (via radio
       // button no frontend) E ela cobre tudo, usa ela em vez do pickBestStore.
       let best: StoreInput | null = null;
-      if (ctx.preferStoreCode) {
+      // Loja FIXADA na troca manual do preview vence até o preferStoreCode:
+      // o operador acabou de apontar "quero essa" no modal.
+      for (const code of ctx.pinStoreCodes ?? []) {
+        const pinned = fullCoverage.find((s) => s.code === code);
+        if (pinned) { best = pinned; break; }
+      }
+      if (!best && ctx.preferStoreCode) {
         const preferred = fullCoverage.find((s) => s.code === ctx.preferStoreCode);
         if (preferred) best = preferred;
       }
@@ -399,6 +405,31 @@ export class RoutingEngine {
     const usedStores = new Set<string>();
 
     /**
+     * TROCA MANUAL DO PREVIEW (20/08) — loja FIXADA pelo operador entra antes
+     * de qualquer heurística (inclusive da loja vendedora): ele acabou de
+     * apontar "quero essa" no modal. Cobre por inteiro os SKUs que ela tem
+     * (REGRA 4 vale igual); o greedy resolve o restante.
+     */
+    for (const code of ctx.pinStoreCodes ?? []) {
+      const pinned = stores.find((s) => s.code === code);
+      if (!pinned || usedStores.has(pinned.id)) continue;
+      const covered: OrderItemInput[] = [];
+      for (const [sku, qty] of remaining.entries()) {
+        const available = stockMap.get(this.stockKey(pinned.code, sku)) ?? 0;
+        if (available >= qty) covered.push({ sku, quantity: qty });
+      }
+      if (covered.length > 0) {
+        plan.push(this.buildAssignment(pinned, covered));
+        usedStores.add(pinned.id);
+        for (const it of covered) remaining.delete(it.sku);
+        this.logger.log(
+          `[split] loja fixada ${pinned.code} (troca manual) entra com ${covered.length} SKU(s) — ` +
+            `greedy cobre os ${remaining.size} restante(s)`,
+        );
+      }
+    }
+
+    /**
      * A LOJA QUE VENDEU ENTRA PRIMEIRO (17/08) — decisão do dono.
      *
      * O greedy escolhia por cobertura de SKU sem saber quem vendeu. Numa venda
@@ -424,7 +455,7 @@ export class RoutingEngine {
     const vendedora = ctx.sellerStoreCode
       ? stores.find((s) => s.code === ctx.sellerStoreCode)
       : undefined;
-    if (vendedora) {
+    if (vendedora && !usedStores.has(vendedora.id)) {
       const covered: OrderItemInput[] = [];
       for (const [sku, qty] of remaining.entries()) {
         const available = stockMap.get(this.stockKey(vendedora.code, sku)) ?? 0;
@@ -704,6 +735,23 @@ export class RoutingEngine {
     const sourceItemsCtx: OrderItemInput[] = Array.from(remaining.entries()).map(
       ([sku, quantity]) => ({ sku, quantity }),
     );
+
+    // TROCA MANUAL DO PREVIEW (20/08): loja-fonte FIXADA pelo operador é a
+    // primeira a receber os itens de transferência que ela cobre por inteiro.
+    for (const code of ctx.pinStoreCodes ?? []) {
+      if (assignmentsByStore.has(code)) continue;
+      const pinned = sourceStores.find((s) => s.code === code);
+      if (!pinned) continue;
+      const covered = sourceItemsCtx.filter(
+        (it) => (stockMap.get(this.stockKey(pinned.code, it.sku)) ?? 0) >= it.quantity,
+      );
+      if (covered.length === 0) continue;
+      assignmentsByStore.set(pinned.code, { store: pinned, items: covered });
+      const takenSkus = new Set(covered.map((i) => i.sku));
+      for (let i = sourceItemsCtx.length - 1; i >= 0; i--) {
+        if (takenSkus.has(sourceItemsCtx[i].sku)) sourceItemsCtx.splice(i, 1);
+      }
+    }
 
     while (sourceItemsCtx.length > 0) {
       let bestStore: StoreInput | null = null;

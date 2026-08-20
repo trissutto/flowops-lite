@@ -40,6 +40,8 @@ export class RoutingService {
     opts?: {
       excludeStoreCodes?: string[];
       preferStoreCode?: string | null;
+      /** Troca manual do preview: lojas fixadas entram primeiro no split. */
+      pinStoreCodes?: string[];
       // SWAP cirúrgico: roteia SÓ estes itens (os órfãos da loja trocada), não o
       // pedido inteiro. Sem isso, re-rotear "só São José" re-roteava as 5 peças
       // (Limeira inclusa) porque o engine recebia order.items completo.
@@ -93,6 +95,7 @@ export class RoutingService {
       shippingCep: order.shippingCep,
       pickupStoreCode: order.pickupStoreCode, // ativa lógica de retirada em loja se preenchido
       preferStoreCode: opts?.preferStoreCode ?? null, // override manual via radio button
+      pinStoreCodes: opts?.pinStoreCodes ?? [], // troca manual do preview
       // A loja que VENDEU entra primeiro no split com o que já tem em estoque
       // (17/08). Sem isto o greedy a deixava de fora mesmo com metade das
       // peças na arara — pacote e frete a mais, e o acerto ÷2,5 daquelas peças
@@ -1214,6 +1217,13 @@ export class RoutingService {
      * itens, vira a loja escolhida em vez do pickBest automático.
      */
     preferStoreCode?: string | null;
+    /**
+     * Troca manual do preview ("↔ Trocar loja" no card): lojas EXCLUÍDAS saem
+     * do roteamento; lojas FIXADAS entram primeiro no split com o que cobrem.
+     * A loja de retirada nunca é excluída (destino é fixo).
+     */
+    excludeStoreCodes?: string[];
+    pinStoreCodes?: string[];
     address: {
       street?: string | null;
       number?: string | null;
@@ -1253,9 +1263,19 @@ export class RoutingService {
     const committed = await this.getCommittedStock(skus, storeCodes, ownPickOrderIds);
     const liquidStock = this.subtractCommitted(stockEntries, committed);
 
+    // Troca manual do preview: a loja excluída sai SÓ do roteamento — a lista
+    // completa (`stores`) continua alimentando alternativesBySku, senão a loja
+    // sumia do próprio modal de troca. Loja de retirada nunca sai (destino fixo).
+    const excludeCodes = (input.excludeStoreCodes ?? []).filter(
+      (c) => c && c !== input.pickupStoreCode,
+    );
+    const routableStores = excludeCodes.length
+      ? stores.filter((s) => !excludeCodes.includes(s.code))
+      : stores;
+
     const result = this.engine.route({
       items: validItems.map((i) => ({ sku: i.sku, quantity: i.quantity })),
-      stores: stores.map((s) => ({
+      stores: routableStores.map((s) => ({
         id: s.id,
         code: s.code,
         name: s.name,
@@ -1267,6 +1287,7 @@ export class RoutingService {
       shippingCep: input.address.postcode ?? undefined,
       pickupStoreCode: input.pickupStoreCode ?? null,
       preferStoreCode: input.preferStoreCode ?? null,
+      pinStoreCodes: input.pinStoreCodes ?? [],
     });
 
     // Enriquece cada grupo com dados da loja + itens completos + mensagem WhatsApp
