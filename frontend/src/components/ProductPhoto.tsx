@@ -17,6 +17,7 @@ import { overlayClose } from '@/lib/overlayClose';
 import { useEffect, useRef, useState } from 'react';
 import { Camera, Trash2, Loader2, ImageOff } from 'lucide-react';
 import { api } from '@/lib/api';
+import { comprimirFotoProduto } from '@/lib/comprimir-foto';
 
 type Photo = {
   id: string;
@@ -102,8 +103,11 @@ export default function ProductPhoto({
     if (!refUp) return;
     setUploading(true);
     try {
+      // Mesmo motivo da galeria (FotosDaCor): foto de celular estourava os
+      // 10MB do multer → 413. Comprime no navegador antes de subir.
+      const otimizado = await comprimirFotoProduto(file);
       const form = new FormData();
-      form.append('file', file);
+      form.append('file', otimizado);
       form.append('ref', refUp);
       if (corUp) form.append('cor', corUp);
       // Este componente mostra UMA foto (a capa). Desde que o upload passou a

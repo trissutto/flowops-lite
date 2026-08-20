@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, Crop, Loader2, Pipette, Sparkles, Star, Trash2 } from 'lucide-react';
 import { api, API_URL } from '@/lib/api';
+import { comprimirFotoProduto } from '@/lib/comprimir-foto';
 
 export const MAX_FOTOS_POR_COR = 6;
 
@@ -229,8 +230,11 @@ export default function FotosDaCor({
       // Em série de propósito: a ordem da galeria é a ordem que a pessoa
       // escolheu os arquivos, e upload paralelo embaralha.
       for (const arquivo of lista.slice(0, cabem)) {
+        // Comprime no navegador (lado maior 2000px, JPEG): foto de celular
+        // estourava os 10MB do multer → 413 "File too large" (20/08).
+        const otimizado = await comprimirFotoProduto(arquivo);
         const form = new FormData();
-        form.append('file', arquivo);
+        form.append('file', otimizado);
         form.append('ref', refSku);
         form.append('cor', cor);
         await api(`/product-photos/upload`, {
@@ -250,7 +254,11 @@ export default function FotosDaCor({
         void detectarCor(galeria[0].url, true);
       }
     } catch (e: any) {
-      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui subir a foto');
+      if (e?.status === 413) {
+        setErro('Foto grande demais pro servidor — tente de novo (a compressão automática deve resolver) ou reduza a foto.');
+      } else {
+        setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui subir a foto');
+      }
     } finally {
       setOcupado(false);
     }
