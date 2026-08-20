@@ -17,7 +17,7 @@ import { useWishlistStore } from '@/store/wishlist';
 import { trackAddToCart, trackAddToCartBlocked, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
-import type { PecaApi } from '@/services/products';
+import { rotuloDaCor, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
@@ -145,7 +145,8 @@ export function BuyBox({
    * chave que vai pro carrinho e pra URL (`?cor=`) — trocar os dois de lugar
    * quebraria a seleção; aqui é só rótulo.
    */
-  const rotuloDaCor = (c: CorEscolhivel) => c.nomeAmigavel || c.nome;
+  // `rotuloDaCor` (services/products) tem a guarda contra cadastro poluído:
+  // nomeAmigavel com o nome da PEÇA colado estourava o botão e a barra fixa.
   const corLabel = corAtual ? rotuloDaCor(corAtual) : (corSelecionada ?? null);
 
   /**

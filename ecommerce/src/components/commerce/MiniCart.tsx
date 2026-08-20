@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { usePathname, useRouter } from 'next/navigation';
 import { Plus, ShoppingBag, Ticket, X } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
+import { AppLink } from '@/components/ui/AppLink';
+import { hexDaCor, rotuloDaCor, type CorApi } from '@/services/products';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { CartLineRow } from '@/components/commerce/CartLineRow';
 import { useCartStore } from '@/store/cart';
@@ -36,6 +38,93 @@ import { PromotionProgress } from '@/components/commerce/PromotionProgress';
  * página precisa saber que ele existe. Segue o padrão do repo de overlay
  * sempre montado (prop `open` + inert) — nada de AnimatePresence.
  */
+
+/**
+ * OUTRAS CORES DA PEÇA QUE ACABOU DE ENTRAR (dono, 20/08: "sugira outra cor
+ * da referência escolhida nesta tela").
+ *
+ * Olha a ÚLTIMA linha da sacola (a que acabou de ser adicionada — é ela que
+ * está fresca na cabeça da cliente), busca a ficha da peça no mesmo BFF da
+ * PDP e mostra até 4 outras cores COM estoque, tirando as que já estão na
+ * sacola. Clicar leva pra PDP já ancorada naquela cor (`?cor=`).
+ *
+ * Sem foto própria a cor mostra o swatch chapado — nunca a foto de outra cor
+ * (a armadilha da "foto ilustrativa" sem aviso). Falhou a busca? O bloco
+ * simplesmente não aparece: sugestão é bônus, nunca pode quebrar a sacola.
+ */
+function OutrasCoresDaRef({ lines, onNavegar }: { lines: CartLine[]; onNavegar: () => void }) {
+  const ultima = lines[lines.length - 1];
+  const slug = ultima?.slug ?? null;
+  const [cores, setCores] = useState<CorApi[] | null>(null);
+
+  useEffect(() => {
+    if (!slug) {
+      setCores(null);
+      return;
+    }
+    let vivo = true;
+    fetch(`/api/loja/produto/${encodeURIComponent(slug)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((peca) => {
+        if (vivo) setCores(Array.isArray(peca?.cores) ? peca.cores : null);
+      })
+      .catch(() => vivo && setCores(null));
+    return () => {
+      vivo = false;
+    };
+  }, [slug]);
+
+  if (!ultima || !slug || !cores) return null;
+
+  // Não oferecer o que ela já levou: cores desta MESMA peça já na sacola.
+  const naSacola = new Set(
+    lines.filter((l) => l.slug === slug).map((l) => (l.color ?? '').toUpperCase()),
+  );
+  const outras = cores
+    .filter((c) => c.estoque > 0 && !naSacola.has(c.nome.toUpperCase()))
+    .slice(0, 4);
+  if (outras.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-border bg-surface-alt/50 p-4">
+      <p className="eyebrow text-ink">Esta peça também tem estas cores</p>
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        {outras.map((c) => {
+          const foto = c.fotos[0]?.src ?? c.swatch.imagem;
+          return (
+            <AppLink
+              key={c.nome}
+              href={`/produto/${slug}?cor=${encodeURIComponent(c.nome)}`}
+              onClick={onNavegar}
+              className="group min-w-0"
+            >
+              <span className="relative block aspect-3/4 overflow-hidden rounded-sm bg-surface-alt">
+                {foto ? (
+                  <Image
+                    src={foto}
+                    alt={`${ultima.name} na cor ${rotuloDaCor(c)}`}
+                    fill
+                    sizes="96px"
+                    className="object-cover transition-transform duration-[320ms] group-hover:scale-[1.03]"
+                  />
+                ) : (
+                  <span
+                    aria-hidden
+                    className="absolute inset-0"
+                    style={{ background: c.swatch.hex ?? hexDaCor(c.nome) }}
+                  />
+                )}
+              </span>
+              <span className="mt-1 block truncate text-center text-[0.6875rem] leading-tight text-ink-soft group-hover:text-ink">
+                {rotuloDaCor(c)}
+              </span>
+            </AppLink>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /** CartLine → item de tracking (a sacola não guarda categoria/coleção). */
 function itensRastreados(lines: CartLine[]) {
@@ -203,13 +292,13 @@ export function MiniCart() {
             <Button block variant="secondary" href="/carrinho" onClick={closeOverlay}>
               Ver sacola completa
             </Button>
-            <button
-              type="button"
-              onClick={closeOverlay}
-              className="link-underline mx-auto mt-1 text-small font-light text-ink-soft"
-            >
+            {/* BOTÃO DE VERDADE (dono, 20/08: "destaque o Continuar
+                comprando"). Era um link cinza de rodapé — quem adicionou uma
+                peça e quer seguir olhando a loja não achava a saída, e fechar
+                no X parece cancelar. Vira botão do mesmo tamanho dos outros. */}
+            <Button block variant="secondary" onClick={closeOverlay}>
               Continuar comprando
-            </button>
+            </Button>
           </div>
         )
       }
@@ -292,6 +381,12 @@ export function MiniCart() {
               ))}
             </div>
           )}
+
+          {/* A VENDA CASADA NA SACOLA (dono, 20/08: "sugira outra cor da
+              referência escolhida nesta tela") — as outras cores da peça que
+              acabou de entrar, com foto. É a vendedora do balcão: "esse
+              modelo também veio no preto, quer ver?" */}
+          <OutrasCoresDaRef lines={lines} onNavegar={closeOverlay} />
 
           {/* Cupom compacto */}
           <div className="border-t border-border pt-5">

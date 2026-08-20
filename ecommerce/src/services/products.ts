@@ -33,6 +33,21 @@ export function hexDaCor(nome: string): string {
 }
 
 /**
+ * O NOME DA COR QUE A CLIENTE LÊ — com guarda contra cadastro poluído.
+ *
+ * Na estreia da grade de cores (20/08) a BMM-100 mostrou "Cor escolhida:
+ * BLUSA MANGA CURTA CONFORTO BMM-100 MANTEIGA": o `nomeAmigavel` daquela cor
+ * veio com o NOME DA PEÇA inteiro colado na frente. Nome amigável com mais de
+ * 24 caracteres não é nome de cor — aí vale o cru do ERP ("MANTEIGA"),
+ * title-case pra tela. O cru continua sendo a chave de seleção/carrinho.
+ */
+export function rotuloDaCor(c: { nome: string; nomeAmigavel?: string | null }): string {
+  const amigavel = c.nomeAmigavel?.trim();
+  if (amigavel && amigavel.length <= 24) return amigavel;
+  return c.nome.toLowerCase().replace(/(^|[\s-])\S/g, (m) => m.toUpperCase());
+}
+
+/**
  * COR como variação escolhível — o que muda quando a cliente clica na bolinha:
  * fotos, grade e preço daquela cor. Vem da ficha do CRM (`produto_ficha_cor`).
  */
