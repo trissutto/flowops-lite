@@ -5,6 +5,7 @@ import { RoutingEngine } from './routing.engine';
 import { SalesStatsService } from './sales-stats.service';
 import { OrderStatus, PickStatus } from '../common/enums';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
@@ -138,6 +139,31 @@ export class RoutingService {
    * Recebe o result pra garantir que o que o usuário viu é o que foi gravado.
    */
   async confirmRoute(orderId: string, result: RoutingResult) {
+    /**
+     * TRAVA DE CONFERÊNCIA (20/08, decisão do dono — caso ON-000049 e os 24
+     * pedidos sem prova): venda online do PDV fechada por "PIX recebido"/
+     * "Link externo" NÃO vira card de separação enquanto ninguém provar o
+     * dinheiro — ou o gateway registra PAGO, ou a matriz carimba a
+     * conferência na tela Conferência de Vendas (hub SITE). Peça só viaja
+     * com dinheiro provado. `CONFERENCIA_TRAVA=0` desliga.
+     *
+     * Vale pra TODOS os gatilhos (auto-atende do finalize, loja escolhida,
+     * 1-CLIQUE da matriz) porque todos passam por aqui. O motoboy que fecha
+     * na própria loja vendedora não passa (a peça já saiu fisicamente) — a
+     * tela de conferência continua mostrando ele em vermelho.
+     */
+    const orderGate = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { source: true, vendaConferidaEm: true, checkoutInfo: true, wcOrderNumber: true } as any,
+    });
+    if (orderGate && !(await pedidoOnlineLiberado(this.prisma, orderGate as any))) {
+      throw new BadRequestException(
+        `Pedido ${(orderGate as any).wcOrderNumber || orderId} está AGUARDANDO CONFERÊNCIA DE PAGAMENTO — ` +
+          `a venda fechou sem prova no gateway (PIX recebido/Link externo). ` +
+          `Confira o dinheiro no extrato e carimbe em SITE → Conferência de Vendas; aí a separação libera.`,
+      );
+    }
+
     if (!result.success) {
       await this.prisma.order.update({
         where: { id: orderId },

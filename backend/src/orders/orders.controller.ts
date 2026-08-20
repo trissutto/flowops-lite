@@ -3,6 +3,7 @@ import { startOfDayBR } from '../lib/date-br';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
+import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { StockService } from '../stock/stock.service';
 import { RoutingService } from '../routing/routing.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -1682,6 +1683,22 @@ export class OrdersController {
     }
 
     if (isLive) {
+      // TRAVA DO "CONCLUÍDO" NA MÃO (20/08 — caso ON-000049): marcado ENVIADO
+      // com o card intocado e sem rastreio = pedido some das filas sem peça
+      // sair. Só deixa concluir quando houve separação OU há rastreio (o caso
+      // das LIVE presas que o fix de 17/08 destravou). Kill-switch:
+      // conferenciaTravaLigada().
+      const travaConcluido = await this.bloquearConcluidoSemSeparacao(wcOrderId, body.status);
+      if (travaConcluido) {
+        return {
+          ok: false,
+          id: wcOrderId,
+          status: localForSource!.status,
+          requestedStatus: body.status,
+          statusApplied: false,
+          warning: travaConcluido,
+        };
+      }
       // Nota vira histórico local; status já foi aplicado pelo confirmRoute
       // (processing→separating). Nada de WooCommerce.
       if (body.addNote?.text?.trim()) {
@@ -1789,6 +1806,36 @@ export class OrdersController {
    * Aqui o slug da aba vira o status local equivalente. `on-hold` não tem
    * par local: fica como está (e a resposta continua honesta, ver abaixo).
    */
+  /**
+   * O "Concluído" manual pode rodar? Devolve a MENSAGEM do bloqueio quando
+   * não pode (nenhuma peça separada e sem rastreio), ou null quando pode.
+   */
+  private async bloquearConcluidoSemSeparacao(
+    wcOrderId: number,
+    statusPedido?: string,
+  ): Promise<string | null> {
+    if (String(statusPedido || '').toLowerCase() !== 'completed') return null;
+    if (!conferenciaTravaLigada()) return null;
+    const gate = await (this.prisma as any).order.findUnique({
+      where: { wcOrderId },
+      select: { id: true, trackingCode: true, wcOrderNumber: true },
+    });
+    if (!gate) return null;
+    if (String(gate.trackingCode || '').trim()) return null; // rastreio = saiu de verdade
+    const picks: any[] = await (this.prisma as any).pickOrder.findMany({
+      where: { orderId: gate.id },
+      select: { status: true },
+    });
+    const nadaSeparado = picks.length === 0 || picks.every((p) => p.status === 'new');
+    if (!nadaSeparado) return null;
+    return (
+      `Nenhuma peça do pedido ${gate.wcOrderNumber || wcOrderId} foi separada e não há rastreio — ` +
+      `marcar CONCLUÍDO na mão esconderia o pedido das filas sem a peça ter saído (caso ON-000049). ` +
+      `Separe pelo card da loja ou registre o envio; se a peça já saiu por fora, use o ` +
+      `"fechar na loja vendedora" do pedido.`
+    );
+  }
+
   private async aplicarStatusLocal(wcOrderId: number, statusPedido?: string, nota?: string) {
     const s = String(statusPedido || '').toLowerCase();
     const mapa: Record<string, string> = {

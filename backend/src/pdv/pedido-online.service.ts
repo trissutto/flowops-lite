@@ -5,6 +5,7 @@ import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
+import { vendaOnlineTemProva } from '../common/prova-pagamento';
 import { ErpService } from '../erp/erp.service';
 
 /**
@@ -735,7 +736,7 @@ export class PedidoOnlineService {
       // às 17:27. Então a mensagem de PAGAMENTO CONFIRMADO só sai quando um
       // gateway PAGO lastreia a venda (Link Pagar.me / PIX gerado PagBank);
       // sem prova, sai o registro do pedido SEM afirmar pagamento.
-      void this.pagamentoTemProva(sale.id)
+      void vendaOnlineTemProva(this.prisma, sale.id)
         .then((temProva) => {
           if (temProva) {
             return this.pedidoEmail.aoConfirmarPagamento({ ...order, items: order.items ?? [] });
@@ -770,54 +771,7 @@ export class PedidoOnlineService {
     }
   }
 
-  /**
-   * A venda tem PROVA de pagamento num gateway? (20/08 — caso ON-000049)
-   *
-   * Mesma régua do `pagamentoJaPagoNoGateway` do PdvService: existe registro
-   * PAGO em `pagarme_payments`/`pagbank_payments` casando com os ids que o
-   * payment guardou. Os tipos com trava ("Link Pagar.me", "Gerar PIX") sempre
-   * carregam esses ids; "PIX recebido" e "Link externo" não carregam nada —
-   * são a palavra da vendedora, e a palavra dela não sustenta um "recebemos o
-   * seu pagamento" automático no WhatsApp da cliente.
-   *
-   * TODOS os payments precisam de prova (split com metade sem prova = sem
-   * prova): na dúvida, a mensagem erra pro lado de NÃO afirmar pagamento.
-   */
-  private async pagamentoTemProva(saleId: string): Promise<boolean> {
-    const payments: any[] = await (this.prisma as any).pdvSalePayment.findMany({
-      where: { saleId },
-      select: { details: true },
-    });
-    if (!payments.length) return false;
-
-    for (const p of payments) {
-      let det: any = null;
-      try {
-        det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
-      } catch {
-        det = null;
-      }
-
-      const pagarmeId = String(det?.pagarmeOrderId || '').trim();
-      if (pagarmeId) {
-        const r = await (this.prisma as any).pagarmePayment.findFirst({
-          where: { pagarmeOrderId: pagarmeId, status: 'paid' },
-          select: { pagarmeOrderId: true },
-        });
-        if (r) continue;
-      }
-
-      const pagbankId = String(det?.pagbankOrderId || det?.pixTxid || '').trim();
-      if (pagbankId) {
-        const r = await (this.prisma as any).pagbankPayment.findFirst({
-          where: { pagbankOrderId: pagbankId, status: 'paid' },
-          select: { pagbankOrderId: true },
-        });
-        if (r) continue;
-      }
-
-      return false;
-    }
-    return true;
-  }
+  // A régua de "prova de pagamento" mora em common/prova-pagamento.ts —
+  // compartilhada com a trava de separação (confirmRoute) e a tela
+  // Conferência de Vendas, pra nunca divergirem.
 }

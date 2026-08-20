@@ -1,5 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 /**
  * CONFERÊNCIA DE VENDAS (20/08 — caso ON-000049 e os 24 sem prova).
@@ -22,7 +24,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export class ConferenciaVendasService {
   private readonly logger = new Logger(ConferenciaVendasService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly whats: WhatsappService,
+  ) {}
 
   private tipoLabel(tipo: string): string {
     switch (tipo) {
@@ -188,6 +193,69 @@ export class ConferenciaVendasService {
       pendentes: pendentes.length,
       pendentesValor: Math.round(pendentes.reduce((s, r) => s + (Number(r.total) || 0), 0) * 100) / 100,
     };
+  }
+
+  /**
+   * ALERTA DIÁRIO (9h BRT = 12h UTC no Railway): pedidos sem prova de
+   * pagamento há mais de 24h e sem conferência viram mensagem no WhatsApp
+   * dos números em `CONFERENCIA_ALERTA_WHATS` (separados por vírgula, com
+   * DDD). Sem a env, só loga — ninguém é acordado por engano.
+   */
+  @Cron('0 12 * * *', { name: 'conferencia-vendas-alerta' })
+  async alertaDiario(): Promise<void> {
+    try {
+      const destinos = String(process.env.CONFERENCIA_ALERTA_WHATS || '')
+        .split(',')
+        .map((n) => n.replace(/\D/g, ''))
+        .filter((n) => n.length >= 10);
+
+      const hoje = new Date();
+      const de = new Date(hoje.getTime() - 30 * 24 * 3600 * 1000);
+      const { rows } = await this.listar(
+        de.toISOString().slice(0, 10),
+        hoje.toISOString().slice(0, 10),
+      );
+      const limite = Date.now() - 24 * 3600 * 1000;
+      const pendentes = rows.filter(
+        (r: any) =>
+          !r.prova &&
+          !r.conferida &&
+          r.status !== 'cancelled' &&
+          new Date(r.criadoEm).getTime() < limite,
+      );
+      if (!pendentes.length) {
+        this.logger.log('[conferencia] alerta diário: nenhum pedido sem prova >24h 🎉');
+        return;
+      }
+      const valor = pendentes.reduce((s: number, r: any) => s + (Number(r.total) || 0), 0);
+      const linhas = pendentes
+        .slice(0, 15)
+        .map(
+          (r: any) =>
+            `• ${r.numero} · R$ ${Number(r.total || 0).toFixed(2)} · ${r.loja?.name || ''} · ` +
+            `${(r.cliente?.nome || '').split(' ')[0]} · ${new Date(r.criadoEm).toLocaleDateString('pt-BR')}`,
+        )
+        .join('\n');
+      const texto =
+        `⚠️ CONFERÊNCIA DE VENDAS — ${pendentes.length} pedido(s) sem prova de pagamento há mais de 24h ` +
+        `(R$ ${valor.toFixed(2)}):\n\n${linhas}` +
+        (pendentes.length > 15 ? `\n… e mais ${pendentes.length - 15}.` : '') +
+        `\n\nConfira o extrato e carimbe em SITE → Conferência de Vendas. ` +
+        `Sem carimbo, esses pedidos não entram na separação.`;
+
+      if (!destinos.length) {
+        this.logger.warn(
+          `[conferencia] alerta diário: ${pendentes.length} pendente(s) mas CONFERENCIA_ALERTA_WHATS vazia — só log`,
+        );
+        return;
+      }
+      for (const numero of destinos) {
+        const r = await this.whats.sendText(numero, texto).catch((e: any) => ({ ok: false, error: e?.message }));
+        if (!r?.ok) this.logger.warn(`[conferencia] alerta não saiu pra ${numero}: ${(r as any)?.error}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[conferencia] alerta diário falhou: ${e?.message || e}`);
+    }
   }
 
   /**

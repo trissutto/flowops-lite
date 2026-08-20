@@ -24,6 +24,7 @@ import { PedidoOnlineService } from './pedido-online.service';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { ConferenciaVendasService } from './conferencia-vendas.service';
+import { ConferenciaExtratoService } from './conferencia-extrato.service';
 import { PdvController } from './pdv.controller';
 import { PixService } from './pix.service';
 import { CashService } from './cash.service';
@@ -64,7 +65,7 @@ import { PdvStoreSummaryService } from './store-summary.service';
   // motivo: fecha a venda quando o link Pagar.me é pago (antes ninguém
   // fechava — venda ficava aberta pra sempre com o dinheiro na conta) e lê
   // `pagarme_payment` pelo Prisma, sem importar o PagarmeModule.
-  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService],
+  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}
