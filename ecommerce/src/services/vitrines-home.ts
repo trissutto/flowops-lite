@@ -85,7 +85,8 @@ function atalhosPadrao(): AtalhoHome[] {
 async function vitrinesPadrao(): Promise<VitrineHome[]> {
   const [maisTop, novidades] = await Promise.all([
     fetchMaisTopDaSemana(),
-    fetchVitrine({ ordenar: 'novidades', limite: 10, soNovidade: true }),
+    // 12 e não 10: a grade do desktop é 4 colunas (dono 20/08) — piso de 12.
+    fetchVitrine({ ordenar: 'novidades', limite: 12, soNovidade: true }),
   ]);
   return [
     {

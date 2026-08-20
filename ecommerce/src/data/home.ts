@@ -15,8 +15,9 @@ export const HOME_STORES_PATH = '/lojas';
 export const HOME_NEWS_PATH = '/novidades';
 
 /**
- * Teto de peças por vitrine da home: 3 colunas × 6 linhas no celular = 6
- * colunas × 3 linhas no desktop (dono, 18/08).
+ * Teto de peças por vitrine da home: 9 linhas de 2 no celular; no desktop a
+ * grade é 4 colunas (dono, 20/08 — "pelo menos 12 produtos em 4 colunas"),
+ * então 18 sai como 4+4+4+4+2.
  *
  * ⚠️ MORA AQUI, e não junto do `VitrineGrid` que a usa, por um motivo que
  * nenhuma verificação automática pega: `VitrineGrid` é `'use client'`, e

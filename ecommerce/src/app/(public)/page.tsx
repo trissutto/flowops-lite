@@ -78,12 +78,12 @@ export default async function HomePage() {
           sem peça não chega até aqui (o backend já tira): carrossel vazio é
           pior que uma seção a menos.
 
-          EM GRADE, NÃO CARROSSEL (dono, 18/08): 6 colunas x 3 linhas no
-          desktop, 2 x 9 no celular. O carrossel mostrava 2,5 peças e exigia
-          arrastar pra ver o resto — a vitrine virava enfeite. QUANTAS peças
-          cada uma mostra continua sendo o `limite` da própria vitrine em
-          /retaguarda/vitrines-home (teto 24); a grade corta em 18 pra fechar
-          3 linhas exatas. */}
+          EM GRADE, NÃO CARROSSEL (dono, 18/08; 4 colunas desde 20/08):
+          4 colunas no desktop ("pelo menos 12 produtos"), 2 no celular. O
+          carrossel mostrava 2,5 peças e exigia arrastar pra ver o resto — a
+          vitrine virava enfeite. QUANTAS peças cada uma mostra continua sendo
+          o `limite` da própria vitrine em /retaguarda/vitrines-home (teto
+          24); a grade corta em VITRINE_GRID_MAX (18). */}
       {blocos.carrosseis.map((vitrine) => (
         <Section
           key={vitrine.id}

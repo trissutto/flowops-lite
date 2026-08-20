@@ -83,11 +83,12 @@ export const CAROUSEL_PRODUCT_SIZES =
  * faria o Next servir uma variante maior que o slot real, multiplicando bytes
  * por foto em todas as vitrines.
  *
- * O `200px` fixo do desktop é exato, não chute: o `max-w-wide` trava o
- * container em 1344px, então (1344 − 80 de gutter − 5 gaps de 24) / 6 = 191px
- * é a largura MÁXIMA que este card alcança em qualquer monitor.
+ * O `300px` fixo do desktop é exato, não chute: o `max-w-wide` trava o
+ * container em 1344px, então (1344 − 80 de gutter − 3 gaps de 24) / 4 = 298px
+ * é a largura MÁXIMA que este card alcança em qualquer monitor (grade da home
+ * é 4 colunas a partir de `lg:` desde 20/08).
  */
-export const HOME_GRID_SIZES = '(max-width: 639px) 47vw, (max-width: 1279px) 30vw, 200px';
+export const HOME_GRID_SIZES = '(max-width: 639px) 47vw, (max-width: 1023px) 30vw, 300px';
 
 export function ProductCard({
   product,
