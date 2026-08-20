@@ -154,15 +154,14 @@ const NOVIDADES_CATEGORIA: Record<string, string> = {
  *
  * ── POR QUE DOIS CAMPOS E NÃO UM ──
  *
- * Uma peça pode estar entre as 30 mais recentes da categoria dela E entre as 30
- * mais recentes do site inteiro. `custom_label` guarda UM valor por campo, então
+ * Uma peça pode estar entre as 30 de maior estoque da categoria dela E entre as
+ * 30 de maior estoque do site inteiro. `custom_label` guarda UM valor por campo, então
  * o recorte da categoria vai no 3 e o geral no 4. Os slots 0, 1 e 2 já têm dono
  * (subcategoria, top-semana, novidades) — estes eram os dois que sobravam, e
  * agora os cinco estão ocupados: o próximo recorte precisa de outra estratégia.
  *
- * A ordem da lista É o dado (o backend devolve por `publicado_em desc`), então
- * basta contar de cima. Esgotado não ocupa vaga: gastaria vitrine com peça que
- * não vende e encolheria o conjunto na prática.
+ * Esgotado não ocupa vaga: gastaria vitrine com peça que não vende e
+ * encolheria o conjunto na prática.
  */
 const TOP30_TETO = 30;
 const TOP30_CATEGORIA: Record<string, string> = {
@@ -173,13 +172,13 @@ const TOP30_CATEGORIA: Record<string, string> = {
   macacoes: 'top30-macacoes',
   'linha-conforto': 'top30-linha-conforto',
 };
-/** A vitrine geral: as 30 mais recentes do site, de qualquer categoria. */
+/** A vitrine geral: as 30 de maior estoque do site, de qualquer categoria. */
 const TOP30_GERAL = 'top30-novidades';
 
 interface CarimboTop30 {
   /** REF → carimbo da categoria (`custom_label_3`). */
   categoria: Map<string, string>;
-  /** REFs entre as 30 mais recentes do site inteiro (`custom_label_4`). */
+  /** REFs entre as 30 de maior estoque do site (`custom_label_4`). */
   geral: Set<string>;
 }
 
@@ -299,7 +298,7 @@ export async function GET() {
     // sobrevive a deploy — trocar revalidate/tags no código não alcança a
     // entrada já gravada (config de cache não entra na chave). O backend
     // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
-    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=3', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=4', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
   } catch {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o
