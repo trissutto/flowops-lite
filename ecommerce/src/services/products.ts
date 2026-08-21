@@ -218,7 +218,15 @@ export function explodirPorCor(p: PecaApi): Product[] {
       installments:
         c.preco > 0 ? { times: 12, value: Number((c.preco / 12).toFixed(2)) } : base.installments,
       images: c.fotos.map((f) => ({ src: f.src, alt: f.alt ?? `${p.nome} ${c.nome}` })),
-      sizes: c.tamanhos.map((t) => ({ label: t.label, available: t.disponivel })),
+      /**
+       * ⚠️ GRADE COM REDE (21/08): alguns endpoints (blocos da HOME) mandam
+       * as cores SEM a grade de tamanhos — payload leve. Grade vazia fazia o
+       * card explodido parecer esgotado e o botão COMPRAR sumia ("cadê o
+       * botão comprar?"). Sem grade por cor, vale a grade da peça.
+       */
+      sizes: c.tamanhos?.length
+        ? c.tamanhos.map((t) => ({ label: t.label, available: t.disponivel }))
+        : base.sizes,
       colors: undefined,
       badges: badges.length ? badges : undefined,
       vitrineCor: { nome: c.nome, rotulo: rotuloDaCor(c) },
