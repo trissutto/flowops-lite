@@ -437,32 +437,21 @@ function GradeDeCores({
         className,
       )}
     >
-      {/* "Cor escolhida: MARINHO" — a confirmação da vendedora, com o nome um
-          degrau acima do corpo (preview aprovado 20/08). O `rotuloDaCor` tem
-          a guarda contra cadastro poluído. */}
-      <div className="flex items-center justify-center gap-2 lg:justify-start" aria-live="polite">
-        <span
-          aria-hidden
-          className={cn(
-            'tabular flex size-5 shrink-0 items-center justify-center rounded-pill border text-[0.6875rem] font-medium transition-colors duration-[320ms]',
-            atual ? 'border-primary bg-primary text-light' : 'border-ink-soft text-ink',
-          )}
-        >
-          {atual ? <Check className="size-3" strokeWidth={3} /> : 1}
-        </span>
-        <p className="text-small font-medium text-ink">
-          {atual ? (
-            <>
-              Cor escolhida:{' '}
-              <span className="text-[1rem] font-semibold uppercase tracking-wide">
-                {rotuloDaCor(atual)}
-              </span>
-            </>
-          ) : (
-            'Escolha a cor'
-          )}
-        </p>
-      </div>
+      {/* O convite fica ACIMA da grade só enquanto falta escolher; a
+          CONFIRMAÇÃO mora ABAIXO das miniaturas (dono, 20/08: "coloque a
+          cor escolhida abaixo das miniaturas e com um pouco mais de
+          destaque"). */}
+      {!atual && (
+        <div className="flex items-center justify-center gap-2 lg:justify-start">
+          <span
+            aria-hidden
+            className="tabular flex size-5 shrink-0 items-center justify-center rounded-pill border border-ink-soft text-[0.6875rem] font-medium text-ink"
+          >
+            1
+          </span>
+          <p className="text-small font-medium text-ink">Escolha a cor</p>
+        </div>
+      )}
 
       {erro && !atual && (
         <p
@@ -502,9 +491,14 @@ function GradeDeCores({
                 className={cn(
                   'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
                   indisponivel && 'opacity-45',
+                  /* MAIS MARCADA (dono, 20/08): borda dupla + anel + leve
+                     zoom + sombra. A não escolhida perde um pouco de força
+                     quando já existe escolha — o contraste é o destaque. */
                   ativa
-                    ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-background'
-                    : 'border-border group-hover:border-ink-soft',
+                    ? 'scale-[1.03] border-2 border-primary shadow-md ring-2 ring-primary ring-offset-2 ring-offset-background'
+                    : corAtualNome
+                      ? 'border-border opacity-70 saturate-[0.9] group-hover:opacity-100 group-hover:saturate-100'
+                      : 'border-border group-hover:border-ink-soft',
                 )}
               >
                 {foto ? (
@@ -528,8 +522,8 @@ function GradeDeCores({
                 {/* O ✓ não some nunca — em peça escura a borda de seleção
                     desaparece contra a própria foto. */}
                 {ativa && !indisponivel && (
-                  <span className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-primary shadow-sm">
-                    <Check className="size-3 text-light" strokeWidth={3} />
+                  <span className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-primary shadow-sm">
+                    <Check className="size-3.5 text-light" strokeWidth={3} />
                   </span>
                 )}
                 {indisponivel && (
@@ -541,7 +535,7 @@ function GradeDeCores({
               <span
                 className={cn(
                   'mt-1 block truncate text-center text-[0.6875rem] leading-tight transition-colors',
-                  ativa ? 'font-semibold text-ink' : 'text-ink-soft',
+                  ativa ? 'font-semibold text-primary-strong' : 'text-ink-soft',
                 )}
               >
                 {rotuloDaCor(c)}
@@ -550,6 +544,28 @@ function GradeDeCores({
           );
         })}
       </div>
+
+      {/* A CONFIRMAÇÃO, ABAIXO DAS MINIATURAS E COM DESTAQUE (dono, 20/08:
+          "para a cliente saber qual cor de fato escolheu"). É a vendedora
+          repetindo em voz alta — nome grande, caixa alta, sublinhado
+          dourado. */}
+      {atual && (
+        <p
+          className="mt-3 flex items-center justify-center gap-2 text-body font-medium text-ink lg:justify-start"
+          aria-live="polite"
+        >
+          <span
+            aria-hidden
+            className="flex size-6 shrink-0 items-center justify-center rounded-pill bg-primary text-light"
+          >
+            <Check className="size-3.5" strokeWidth={3} />
+          </span>
+          Cor escolhida:{' '}
+          <span className="border-b-2 border-primary pb-0.5 text-[1.1875rem] font-semibold uppercase tracking-wide leading-none">
+            {rotuloDaCor(atual)}
+          </span>
+        </p>
+      )}
     </div>
   );
 }
