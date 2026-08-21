@@ -95,12 +95,51 @@ interface SeparationPreview {
   isPickup?: boolean;
   pickupStoreCode?: string | null;
   pickupStoreName?: string | null;
+  /**
+   * JUNTADA automática (trio litoral): o plano já nasce juntando as peças numa
+   * loja âncora — os groups com isTransfer apontam pra ela. Diferente da
+   * retirada: aqui a âncora ENVIA o pacote único pra cliente.
+   */
+  consolidateStoreCode?: string | null;
+  consolidateStoreName?: string | null;
   customer?: {
     name: string;
     cpf: string | null;
     email: string | null;
     phone: string | null;
   };
+}
+
+/**
+ * Raio-X da JUNTADA (GET /orders/wc/:id/juntada) — pedido dividido com loja
+ * ÂNCORA: as outras lojas mandam caixa pra ela e só ela envia pra cliente.
+ * `caixa: null` = a feeder ainda está separando (a caixa nasce quando ela
+ * finaliza a bipagem).
+ */
+interface JuntadaInfo {
+  juntando: boolean;
+  ancoraStoreCode?: string | null;
+  ancoraStoreName?: string | null;
+  ancoraPickId?: string | null;
+  ancoraPickStatus?: string | null;
+  totalCaixas?: number;
+  recebidas?: number;
+  completa?: boolean;
+  caixas?: Array<{
+    pickOrderId: string;
+    storeCode: string | null;
+    storeName: string | null;
+    pickStatus: string;
+    caixa: {
+      code: string;
+      status: string; // in_transit | received
+      trackingCode: string | null;
+      carrier: string | null;
+      transporte: 'correios' | 'proprio' | null;
+      sentAt: string | null;
+      receivedAt: string | null;
+    } | null;
+  }>;
 }
 
 interface WcOrderDetail {
@@ -262,13 +301,26 @@ export default function PedidoDetailPage() {
   // qualquer loja muda status ou põe rastreio).
   const [liveStatus, setLiveStatus] = useState<Array<{
     id: string;
-    status: 'new' | 'separating' | 'ready' | 'shipped';
+    status: 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
     trackingCode: string | null;
     carrier: string | null;
     storeId: string;
     storeCode: string | null;
     storeName: string | null;
     storeCity: string | null;
+    // JUNTADA: feeder (isTransfer num pedido não-retirada) + a caixa dele,
+    // se já nasceu — a tela mostra "em trânsito"/"chegou" no card da loja.
+    isTransfer?: boolean;
+    transferToStoreCode?: string | null;
+    caixaJuntada?: {
+      code: string;
+      status: string;
+      trackingCode: string | null;
+      carrier: string | null;
+      transportMode: string | null;
+      sentAt?: string | null;
+      receivedAt?: string | null;
+    } | null;
     // SKUs desta loja — usados pra medir a cobertura do "Trocar loja" só
     // contra os itens que realmente vão mudar de loja.
     skus?: string[];
@@ -317,6 +369,20 @@ export default function PedidoDetailPage() {
       .then((d) => setItemReports(Array.isArray(d) ? d : []))
       .catch(() => {});
   };
+  // ── JUNTADA (21/08): pedido dividido com loja ÂNCORA ──
+  // As lojas feeder mandam caixa pra âncora e SÓ ela envia o pacote único.
+  const [juntada, setJuntada] = useState<JuntadaInfo | null>(null);
+  const [juntarOpen, setJuntarOpen] = useState(false);
+  const [juntarBusy, setJuntarBusy] = useState<string | null>(null);
+  const [juntarErro, setJuntarErro] = useState<string | null>(null);
+  const [desfazendoJuntada, setDesfazendoJuntada] = useState(false);
+  const loadJuntada = () => {
+    if (!wcId) return;
+    api<JuntadaInfo>(`/orders/wc/${wcId}/juntada`)
+      .then((d) => setJuntada(d ?? { juntando: false }))
+      .catch(() => {});
+  };
+
   const resolverItemReport = async (id: string) => {
     setResolvendoReport(id);
     try {
@@ -338,6 +404,7 @@ export default function PedidoDetailPage() {
       .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
       .catch((e) => console.warn('Falha ao carregar pick-orders:', e?.message));
     loadItemReports();
+    loadJuntada();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wcId]);
 
@@ -363,6 +430,9 @@ export default function PedidoDetailPage() {
             : r,
         );
       });
+      // A feeder que finaliza a bipagem faz a CAIXA da juntada nascer — o
+      // evento de status é a deixa pra faixa "JUNTANDO PEÇAS" atualizar.
+      loadJuntada();
       // Flash visual (linha pisca verde por 3s)
       setLiveStatusFlash((prev) => ({ ...prev, [payload.id]: Date.now() }));
       setTimeout(() => {
@@ -379,6 +449,7 @@ export default function PedidoDetailPage() {
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
       loadItemReports(); // re-rotear pode ter dado destino à peça reportada
+      loadJuntada();
     };
     const onNew = () => {
       // Idem — pick-order novo apareceu (recalcular ou primeira confirmação)
@@ -386,6 +457,7 @@ export default function PedidoDetailPage() {
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
       loadItemReports();
+      loadJuntada();
     };
     // Reporte novo (do card inteiro OU por peça) — atualiza o banner na hora.
     const onIssue = () => loadItemReports();
@@ -896,6 +968,60 @@ export default function PedidoDetailPage() {
       setSepError(e?.message || 'Falha ao voltar pra sugestão automática.');
     } finally {
       setSepLoading(false);
+    }
+  }
+
+  /**
+   * JUNTADA MANUAL: marca a loja âncora — as outras lojas do pedido viram
+   * feeder (isTransfer) e mandam caixa pra ela; só a âncora envia pra cliente.
+   * O backend só aceita loja que já tem card ativo neste pedido.
+   */
+  async function aplicarJuntada(anchorStoreCode: string, anchorStoreName: string | null) {
+    const nome = anchorStoreName || anchorStoreCode;
+    if (!confirm(
+      `Juntar o pedido na LOJA ${nome}?\n\n` +
+      `As outras lojas mandam as peças pra ela (caixa com NF de transferência + ` +
+      `etiqueta pra loja, ou carro da rede no litoral) e SÓ ${nome} envia o ` +
+      `pacote pra cliente.`,
+    )) return;
+    setJuntarBusy(anchorStoreCode);
+    setJuntarErro(null);
+    try {
+      await api(`/orders/wc/${wcId}/juntar`, {
+        method: 'POST',
+        body: JSON.stringify({ anchorStoreCode }),
+      });
+      setJuntarOpen(false);
+      setFlash(`🧲 Juntada criada — as peças se encontram em ${nome} e saem num pacote só.`);
+      setTimeout(() => setFlash(null), 5000);
+      loadJuntada();
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      // BadRequest do backend já vem com a mensagem pronta pra mostrar
+      setJuntarErro(e?.body?.message || e?.message || 'Falha ao juntar o pedido.');
+    } finally {
+      setJuntarBusy(null);
+    }
+  }
+
+  /** Desfaz a juntada — o backend recusa se alguma caixa já nasceu. */
+  async function desfazerJuntada() {
+    if (!confirm('Desfazer a juntada? Cada loja volta a enviar direto pra cliente.')) return;
+    setDesfazendoJuntada(true);
+    try {
+      await api(`/orders/wc/${wcId}/juntar/desfazer`, { method: 'POST' });
+      setFlash('✓ Juntada desfeita — cada loja envia direto pra cliente.');
+      setTimeout(() => setFlash(null), 5000);
+      loadJuntada();
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setSepError(e?.body?.message || e?.message || 'Não deu pra desfazer a juntada.');
+    } finally {
+      setDesfazendoJuntada(false);
     }
   }
 
@@ -1829,6 +1955,58 @@ export default function PedidoDetailPage() {
           </button>
         </div>
 
+        {/* ── FAIXA "JUNTANDO PEÇAS" ─────────────────────────────────────
+            Pedido dividido com loja ÂNCORA: as caixas das feeders viajam pra
+            ela e o envio final só libera com o pedido completo. A faixa é o
+            raio-X — uma linha por caixa, do "separando" ao "chegou". */}
+        {juntada?.juntando && (
+          <div className="mb-4 rounded-lg border-2 border-violet-400 bg-violet-50 p-4">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="font-bold text-violet-900 text-base">
+                🧲 JUNTANDO PEÇAS na LOJA {juntada.ancoraStoreName || juntada.ancoraStoreCode}
+                <span className="ml-2 text-sm font-semibold text-violet-700">
+                  — {juntada.recebidas ?? 0} de {juntada.totalCaixas ?? 0} caixa(s) chegaram
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={desfazerJuntada}
+                disabled={desfazendoJuntada}
+                className="px-3 py-1.5 rounded text-xs font-semibold bg-white border border-violet-300 text-violet-800 hover:bg-violet-100 disabled:opacity-60"
+                title="Cada loja volta a enviar direto pra cliente (só dá antes de alguma caixa nascer)"
+              >
+                {desfazendoJuntada ? 'Desfazendo…' : 'Desfazer juntada'}
+              </button>
+            </div>
+            <ul className="mt-2 space-y-1 text-sm text-violet-900">
+              {(juntada.caixas ?? []).map((c) => (
+                <li key={c.pickOrderId} className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold">{c.storeName || c.storeCode}</span>
+                  <span className="text-violet-400">→</span>
+                  {!c.caixa ? (
+                    <span>⏳ separando</span>
+                  ) : c.caixa.status === 'received' ? (
+                    <span>✅ chegou</span>
+                  ) : (
+                    <span>
+                      📦 caixa <span className="font-mono font-semibold">{c.caixa.code}</span> em trânsito
+                      {c.caixa.transporte === 'proprio' && <> · 🚚 carro da rede</>}
+                      {c.caixa.trackingCode && (
+                        <span className="font-mono ml-1 text-violet-700">{c.caixa.trackingCode}</span>
+                      )}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <div className={`mt-2 text-xs font-semibold ${juntada.completa ? 'text-emerald-700' : 'text-violet-700'}`}>
+              {juntada.completa
+                ? '✅ Pedido completo na âncora — o envio dela está liberado.'
+                : 'O envio final libera quando todas as caixas chegarem.'}
+            </div>
+          </div>
+        )}
+
         {/* Header de resumo — aparece SEMPRE que já houver pick-order criado, mesmo
              que o user não tenha clicado em "Gerar separação" nessa aba (ex: chegou
              via bulk WhatsApp). Mostra em qual loja o pedido ficou alocado. */}
@@ -1985,6 +2163,32 @@ export default function PedidoDetailPage() {
                 </button>
               </div>
             )}
+            {/* JUNTAR NUMA LOJA — só com 2+ cards ativos, pedido de ENTREGA
+                (retirada tem o próprio trilho de transferência) e sem juntada
+                em andamento. As feeders mandam caixa pra âncora e só ela
+                posta o pacote único pra cliente. */}
+            {(() => {
+              const cardsAtivos = liveStatus.filter((p) =>
+                ['new', 'separating', 'separated', 'ready'].includes(p.status),
+              );
+              if (cardsAtivos.length < 2 || juntada?.juntando === true || order.pickup?.isPickup) return null;
+              return (
+                <div className="mb-2 text-xs bg-violet-50 border border-violet-200 text-violet-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
+                  <span>🧲</span>
+                  <span className="flex-1 min-w-[180px]">
+                    Pedido dividido em {cardsAtivos.length} lojas = {cardsAtivos.length} fretes.
+                    Dá pra <b>juntar tudo numa loja</b> e mandar um pacote só pra cliente.
+                  </span>
+                  <button
+                    onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
+                    disabled={sepLoading}
+                    className="text-xs px-2 py-1 bg-white border border-violet-400 text-violet-900 rounded hover:bg-violet-100 font-semibold disabled:opacity-60"
+                  >
+                    🧲 Juntar numa loja
+                  </button>
+                </div>
+              );
+            })()}
             <div className="space-y-2">
               {liveStatus.map((r) => {
                 const flash = !!liveStatusFlash[r.id];
@@ -2017,6 +2221,20 @@ export default function PedidoDetailPage() {
                       <span className={`text-xs px-2 py-0.5 rounded font-medium ${badgeColor}`}>
                         {label}
                       </span>
+                      {/* JUNTADA: papel deste card — feeder manda caixa pra
+                          âncora; âncora envia o pacote completo pra cliente. */}
+                      {r.isTransfer && !order.pickup?.isPickup && r.transferToStoreCode && (
+                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-violet-100 text-violet-800 border border-violet-300">
+                          🧲 manda pra {juntada?.ancoraStoreName
+                            || liveStatus.find((x) => x.storeCode === r.transferToStoreCode)?.storeName
+                            || r.transferToStoreCode}
+                        </span>
+                      )}
+                      {juntada?.juntando && !r.isTransfer && r.storeCode === juntada.ancoraStoreCode && (
+                        <span className="text-xs px-2 py-0.5 rounded font-bold bg-violet-600 text-white">
+                          🧲 ÂNCORA — envia o pedido completo
+                        </span>
+                      )}
                       {flash && (
                         <span className="text-xs text-emerald-600 font-semibold animate-pulse">
                           ✓ atualizado agora
@@ -2104,6 +2322,22 @@ export default function PedidoDetailPage() {
                             </li>
                           ))}
                         </ul>
+                      </div>
+                    )}
+                    {/* Caixa da JUNTADA deste feeder — nasce quando a loja
+                        finaliza a bipagem (antes disso a linha nem aparece). */}
+                    {r.caixaJuntada && (
+                      <div className="mt-1 pl-6 text-xs text-violet-800">
+                        📦 Caixa <span className="font-mono font-semibold">{r.caixaJuntada.code}</span>
+                        {' · '}
+                        {r.caixaJuntada.status === 'received' ? '✅ chegou na âncora' : 'em trânsito'}
+                        {r.caixaJuntada.transportMode === 'proprio' && <> · 🚚 carro da rede</>}
+                        {r.caixaJuntada.trackingCode && (
+                          <span className="font-mono ml-1.5">{r.caixaJuntada.trackingCode}</span>
+                        )}
+                        {r.caixaJuntada.carrier && (
+                          <span className="text-violet-600 ml-1">via {r.caixaJuntada.carrier}</span>
+                        )}
                       </div>
                     )}
                     {r.status === 'shipped' && r.trackingCode && (
@@ -2213,6 +2447,21 @@ export default function PedidoDetailPage() {
                   <b>Ruptura:</b> {separation.missing.length} SKU(s) sem estoque em nenhuma loja ativa.
                 </>
               )}
+              {/* JUNTADA no preview: a regra automática (trio litoral) devolve a
+                  âncora no nível raiz; fallback deriva do primeiro grupo
+                  isTransfer — só em pedido de ENTREGA (retirada tem copy própria). */}
+              {separation.success && !separation.isPickup && (() => {
+                const nomeAncora = separation.consolidateStoreName
+                  ?? separation.groups.find((g) => g.isTransfer)?.transferToStoreName
+                  ?? null;
+                if (!nomeAncora) return null;
+                return (
+                  <div className="mt-1 font-semibold">
+                    🧲 JUNTANDO: as peças se encontram na LOJA {nomeAncora} e saem num
+                    pacote só pra cliente (carro da rede no litoral).
+                  </div>
+                );
+              })()}
               <div className="text-xs mt-1 opacity-80">Envio: {separation.shippingMethod}</div>
             </div>
 
@@ -2526,9 +2775,17 @@ export default function PedidoDetailPage() {
                     <div>
                       <div className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
                         {g.storeName} <span className="text-xs font-mono text-slate-500">({g.storeCode})</span>
+                        {/* Copy por tipo: RETIRADA = cliente busca na loja destino;
+                            JUNTADA (entrega) = a âncora envia o pacote único. */}
                         {g.isTransfer && g.transferToStoreName && (
-                          <span className="px-2 py-0.5 bg-orange-200 text-orange-900 rounded text-xs font-semibold">
-                            🚚 TRANSFERIR PRA {g.transferToStoreName}
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                            separation.isPickup
+                              ? 'bg-orange-200 text-orange-900'
+                              : 'bg-violet-200 text-violet-900'
+                          }`}>
+                            {separation.isPickup
+                              ? <>🚚 TRANSFERIR PRA {g.transferToStoreName}</>
+                              : <>🧲 MANDA PRA {g.transferToStoreName}</>}
                           </span>
                         )}
                       </div>
@@ -2537,8 +2794,12 @@ export default function PedidoDetailPage() {
                         {g.whatsapp ? ` · 📱 ${g.whatsapp}` : ' · sem WhatsApp cadastrado'}
                       </div>
                       {g.isTransfer && (
-                        <div className="text-xs text-orange-800 mt-1 font-medium">
-                          ⚠ Separar e enviar pra loja {g.transferToStoreName} — cliente vai retirar lá.
+                        <div className={`text-xs mt-1 font-medium ${
+                          separation.isPickup ? 'text-orange-800' : 'text-violet-800'
+                        }`}>
+                          {separation.isPickup
+                            ? <>⚠ Separar e enviar pra loja {g.transferToStoreName} — cliente vai retirar lá.</>
+                            : <>🧲 Manda as peças pra LOJA {g.transferToStoreName}, que envia tudo junto pra cliente.</>}
                         </div>
                       )}
                     </div>
@@ -2955,6 +3216,92 @@ export default function PedidoDetailPage() {
               <button
                 onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null), setPreviewSwapTarget(null))}
                 disabled={!!pickStoreApplying}
+                className="px-3 py-1.5 border rounded hover:bg-white text-slate-700 disabled:opacity-60"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL — Juntar numa loja (escolher a ÂNCORA da juntada). Mesmo padrão
+          visual do "Escolher loja manualmente" acima, mas a lista é SÓ das
+          lojas com card ativo neste pedido — o backend recusa qualquer outra. */}
+      {juntarOpen && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+          {...overlayClose(() => !juntarBusy && setJuntarOpen(false))}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-lg text-slate-800">🧲 Juntar numa loja</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  As outras lojas vão mandar as peças pra loja escolhida, que envia TUDO
+                  num pacote só pra cliente. Sai NF de transferência e etiqueta pra loja
+                  (Itanhaém/Praia Grande/Santos vai de carro).
+                </p>
+              </div>
+              <button
+                onClick={() => !juntarBusy && setJuntarOpen(false)}
+                className="text-slate-400 hover:text-slate-700 text-2xl leading-none p-1"
+                disabled={!!juntarBusy}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 space-y-2">
+              {juntarErro && (
+                <div className="bg-red-50 text-red-700 p-3 rounded text-sm flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <div>{juntarErro}</div>
+                </div>
+              )}
+              {liveStatus
+                .filter((p) => ['new', 'separating', 'separated', 'ready'].includes(p.status))
+                .map((p) => {
+                  const pecas = (p.items ?? []).reduce((s, it) => s + (it.qty || 1), 0);
+                  return (
+                    <div
+                      key={p.id}
+                      className="border border-slate-200 rounded-lg p-3 flex items-center gap-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-800">
+                          {p.storeName}{' '}
+                          <span className="text-xs font-mono text-slate-500">({p.storeCode})</span>
+                        </div>
+                        <div className="text-xs text-slate-500">{pecas} peça(s) neste card</div>
+                      </div>
+                      <button
+                        onClick={() => p.storeCode && aplicarJuntada(p.storeCode, p.storeName)}
+                        disabled={!!juntarBusy || !p.storeCode}
+                        className="px-3 py-2 rounded text-xs font-semibold bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60 flex items-center gap-1 flex-shrink-0"
+                        title={`As outras lojas mandam as peças pra ${p.storeName || p.storeCode}`}
+                      >
+                        {juntarBusy === p.storeCode ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Juntando…
+                          </>
+                        ) : (
+                          'Juntar aqui'
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+            </div>
+
+            <div className="p-3 border-t bg-slate-50 text-xs text-slate-500 flex items-center justify-between">
+              <span>O envio final da âncora só libera quando todas as caixas chegarem.</span>
+              <button
+                onClick={() => !juntarBusy && setJuntarOpen(false)}
+                disabled={!!juntarBusy}
                 className="px-3 py-1.5 border rounded hover:bg-white text-slate-700 disabled:opacity-60"
               >
                 Fechar
