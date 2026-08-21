@@ -156,6 +156,7 @@ export function SizePill({
   disabled,
   onSelect,
   size = 'md',
+  className,
 }: {
   label: string;
   selected?: boolean;
@@ -163,6 +164,8 @@ export function SizePill({
   onSelect?: () => void;
   /** `lg` na PDP: é a decisão principal da página e merece alvo maior. */
   size?: 'md' | 'lg';
+  /** A PDP põe a grade inteira numa linha: `w-full min-w-0` pra encolher. */
+  className?: string;
 }) {
   return (
     <button
@@ -189,6 +192,7 @@ export function SizePill({
         !disabled &&
           !selected &&
           'border-border-strong text-ink hover:border-primary hover:text-primary-strong',
+        className,
       )}
     >
       {label}

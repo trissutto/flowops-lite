@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Play, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Play, ZoomIn, ZoomOut } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
 import { youtubeCapa, youtubeEmbed } from '@/lib/youtube';
@@ -11,18 +11,14 @@ import { ProductBadgeTag } from '@/components/ui/Badge';
 import type { Media, ProductBadge } from '@/types';
 
 /**
- * Galeria do produto — foto grande + miniaturas de FOTO na lateral.
+ * Galeria do produto — SÓ a foto grande. Setas + contador navegam as fotos.
  *
- * A RÉGUA LATERAL DE CORES MORREU AQUI (dono, 20/08 à noite: "cortou as
- * cores que temos"). Em peça de 8 cores a coluna mostrava 3 miniaturas e
- * escondia 5 atrás do "MAIS CORES" — metade do catálogo de cores invisível,
- * justamente o que a régua existia pra mostrar. O seletor de cor agora é a
- * GRADE DE CORES embaixo da foto (ver `GradeDeCores` no EscolhaDaPeca):
- * todas as cores visíveis de uma vez, sem rolagem.
- *
- * A lateral segue existindo só pro caso de SEMPRE: peça de cor única com
- * várias fotos. As fotos extras da cor escolhida continuam nas setas +
- * contador sobre a foto grande.
+ * A RÉGUA LATERAL MORREU INTEIRA AQUI (dono, 20/08 à noite, em dois atos):
+ * primeiro a de CORES ("cortou as cores que temos" — em peça de 8 cores ela
+ * mostrava 3 e escondia 5 atrás do "MAIS CORES"), depois a de FOTOS ("tira
+ * as miniaturas laterais"). O seletor de cor é a GRADE DE CORES do
+ * EscolhaDaPeca — embaixo da foto no celular, na coluna de compra no PC —
+ * e as fotos extras da cor vivem nas setas + contador sobre a foto grande.
  *
  * A foto é o argumento de venda: proporção 3/4 e `priority` na primeira,
  * que é o LCP da página.
@@ -110,93 +106,6 @@ function VideoSlide({ id, corDoVideo, name }: VideoDaPeca & { name: string }) {
         </span>
       )}
     </button>
-  );
-}
-
-function ScrollableThumbnailRail({
-  children,
-  ariaLabel,
-  hintLabel,
-  itemCount,
-}: {
-  children: ReactNode;
-  ariaLabel: string;
-  hintLabel: string;
-  itemCount: number;
-}) {
-  const railRef = useRef<HTMLDivElement>(null);
-  const [canScrollUp, setCanScrollUp] = useState(false);
-  const [canScrollDown, setCanScrollDown] = useState(false);
-
-  const updateScrollHints = useCallback(() => {
-    const rail = railRef.current;
-    if (!rail) return;
-
-    setCanScrollUp(rail.scrollTop > 2);
-    setCanScrollDown(rail.scrollTop + rail.clientHeight < rail.scrollHeight - 2);
-  }, []);
-
-  const scrollOneFold = useCallback((direction: -1 | 1) => {
-    const rail = railRef.current;
-    if (!rail) return;
-
-    rail.scrollBy({
-      top: direction * rail.clientHeight * 0.8,
-      behavior: 'smooth',
-    });
-  }, []);
-
-  const itemName = hintLabel === 'Mais cores' ? 'cores' : 'fotos';
-
-  useEffect(() => {
-    const rail = railRef.current;
-    if (!rail) return;
-
-    const frame = requestAnimationFrame(updateScrollHints);
-    const observer = new ResizeObserver(updateScrollHints);
-    observer.observe(rail);
-
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [itemCount, updateScrollHints]);
-
-  return (
-    <>
-      <div
-        ref={railRef}
-        className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
-        role="tablist"
-        aria-label={ariaLabel}
-        onScroll={updateScrollHints}
-      >
-        {children}
-      </div>
-
-      {canScrollUp && (
-        <button
-          type="button"
-          aria-label={`Mostrar ${itemName} anteriores`}
-          onClick={() => scrollOneFold(-1)}
-          className="absolute inset-x-0 top-0 z-10 flex min-h-11 justify-center bg-gradient-to-b from-background via-background/90 to-transparent pb-5 pt-1 text-primary focus-visible:outline-2 focus-visible:outline-primary"
-        >
-          <ChevronUp className="size-4 text-primary drop-shadow-sm" strokeWidth={2.25} />
-        </button>
-      )}
-
-      {canScrollDown && (
-        <button
-          type="button"
-          aria-label={`Mostrar próximas ${itemName}`}
-          onClick={() => scrollOneFold(1)}
-          className="absolute inset-x-0 bottom-0 z-10 flex min-h-11 flex-col items-center justify-end bg-gradient-to-t from-background via-background/95 to-transparent pb-1 pt-7 text-primary drop-shadow-sm focus-visible:outline-2 focus-visible:outline-primary"
-        >
-          <span className="text-center text-[0.55rem] font-semibold leading-none tracking-[0.04em] uppercase">{hintLabel}</span>
-          <ChevronDown className="mt-0.5 size-4" strokeWidth={2.25} />
-        </button>
-      )}
-    </>
   );
 }
 
@@ -402,84 +311,10 @@ export function ProductGallery({
         )}
       </div>
 
-      {/* Miniaturas POR FOTO — só quando a peça não tem grade de cores
-          embaixo (a grade mostra uma capa por cor; aqui é foto a foto).
-
-          A coluna é um trilho que ROLA DENTRO da altura da foto: o `absolute`
-          tira as miniaturas do cálculo de altura, então muitas fotos não
-          esticam a galeria pra baixo — rolam ali mesmo, ao lado da foto. */}
-      {total > 1 && (
-        <div className="relative w-14 shrink-0 lg:w-20">
-          <ScrollableThumbnailRail ariaLabel="Fotos do produto" hintLabel="Mais fotos" itemCount={total}>
-            {safeImages.map((image, index) => (
-              <button
-                key={`${image.src}-${index}`}
-                type="button"
-                role="tab"
-                aria-selected={index === active}
-                aria-label={`Ver foto ${index + 1}`}
-                onClick={() => {
-                  setZoomed(false);
-                  setActive(index);
-                }}
-                className={cn(
-                  'relative aspect-3/4 w-full shrink-0 overflow-hidden rounded-md border transition-all duration-[320ms]',
-                  index === active
-                    ? 'border-primary opacity-100'
-                    : 'border-transparent opacity-65 hover:opacity-100',
-                )}
-              >
-                {image.src && (
-                  <Image
-                    src={image.src}
-                    alt=""
-                    aria-hidden
-                    fill
-                    sizes="80px"
-                    placeholder="blur"
-                    blurDataURL={BLUR_DATA_URL}
-                    className="object-cover"
-                  />
-                )}
-              </button>
-            ))}
-
-            {/* O vídeo por último, com o ▶ na miniatura: sem a marca ele
-                pareceria mais uma foto e ninguém clicaria. */}
-            {video && (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={noVideo}
-                aria-label="Ver o vídeo da peça"
-                onClick={() => irPara(iVideo)}
-                className={cn(
-                  'relative aspect-3/4 w-full shrink-0 overflow-hidden rounded-md border bg-ink transition-all duration-[320ms]',
-                  noVideo
-                    ? 'border-primary opacity-100'
-                    : 'border-transparent opacity-65 hover:opacity-100',
-                )}
-              >
-                <Image
-                  src={youtubeCapa(video.id)}
-                  alt=""
-                  aria-hidden
-                  fill
-                  sizes="80px"
-                  placeholder="blur"
-                  blurDataURL={BLUR_DATA_URL}
-                  className="object-cover opacity-70"
-                />
-                <span className="absolute inset-0 flex items-center justify-center">
-                  <span className="flex size-7 items-center justify-center rounded-pill bg-surface/90 text-ink">
-                    <Play className="size-3 translate-x-px fill-current" strokeWidth={1.5} />
-                  </span>
-                </span>
-              </button>
-            )}
-          </ScrollableThumbnailRail>
-        </div>
-      )}
+      {/* AS MINIATURAS LATERAIS SAÍRAM (dono, 20/08: "tira as miniaturas
+          laterais"). A navegação pelas fotos é setas + contador sobre a
+          própria foto; o vídeo tem a pílula "Ver vídeo". A foto grande fica
+          com a largura inteira da coluna. */}
     </div>
   );
 }
