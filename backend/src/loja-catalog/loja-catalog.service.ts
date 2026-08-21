@@ -789,8 +789,10 @@ export class LojaCatalogService {
       }
     }
     const ordemTam = (t: string) => {
-      const n = parseInt(String(t).replace(/\D/g, ''), 10);
-      return Number.isFinite(n) ? n : 999;
+      // Híbrido ordena pelo PRIMEIRO número: "46/48" fica em 46, antes do 50.
+      // (Colar todos os dígitos virava 4648 e mandava o híbrido pro fim.)
+      const m = String(t).match(/\d+/);
+      return m ? parseInt(m[0], 10) : 999;
     };
     const tamanhos = Array.from(porTamanho.entries())
       .sort((a, b) => ordemTam(a[0]) - ordemTam(b[0]))

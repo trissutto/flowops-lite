@@ -1086,7 +1086,7 @@ function FichaComum({
           Descrição de venda <span className="text-slate-400">(uma só, serve todas as cores)</span>
         </label>
         <textarea
-          rows={3}
+          rows={15}
           value={form.descricao}
           onChange={(e) => setForm((f) => ({ ...f, descricao: e.target.value }))}
           className="w-full px-2 py-2 border rounded text-sm"
