@@ -11,6 +11,7 @@ import { ruaComNumero } from '@/lib/format-address';
 import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
+import SwapModal, { type SwapPayload, type SwapResponse } from '@/app/minha-loja/SwapModal';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -174,6 +175,8 @@ interface WcOrderDetail {
   };
   sellerId?: string | null;
   sellerName?: string | null;
+  /** true = pedido nativo (item no Postgres) → a tabela de itens mostra "Trocar". */
+  canEditItems?: boolean;
 }
 
 /**
@@ -237,6 +240,11 @@ export default function PedidoDetailPage() {
 
   // Diagnóstico de SKU (modal)
   const [diagnoseSku, setDiagnoseSku] = useState<string | null>(null);
+
+  // TROCA MANUAL DE ITEM (21/08) — botão "Trocar" na tabela de ITENS. Depois
+  // de confirmar, o pedido é re-roteado inteiro (decisão do dono). O valor
+  // cobrado da cliente NÃO muda — diferença se acerta por fora.
+  const [trocaItem, setTrocaItem] = useState<{ id: string; label: string } | null>(null);
 
   // Gate de quebra — pedido dividido em N lojas exige o operador marcar
   // "ciente da divisão" antes do botão Confirmar habilitar. Zera sempre que
@@ -488,6 +496,62 @@ export default function PedidoDetailPage() {
       setError(`Falha ao carregar pedido: ${e.message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  /**
+   * TROCA MANUAL DE ITEM — o SwapModal manda a peça nova, o backend troca o
+   * OrderItem mantendo o valor pago (POST /orders/wc/:id/swap-item).
+   */
+  async function trocarItemDoPedido(payload: SwapPayload): Promise<SwapResponse> {
+    if (!trocaItem) return { ok: false };
+    return api<SwapResponse>(`/orders/wc/${wcId}/swap-item`, {
+      method: 'POST',
+      body: JSON.stringify({ orderItemId: trocaItem.id, ...payload }),
+    });
+  }
+
+  /**
+   * Depois da troca confirmada: recarrega o pedido e RE-ROTEIA a separação
+   * INTEIRA (decisão do dono, 21/08) — mesma chamada do botão "Recalcular
+   * separação", que estorna bipes e cancela os cards antigos. Sem card ativo
+   * (separação ainda não gerada), não tem o que re-rotear.
+   */
+  async function reRotearAposTroca() {
+    void load();
+    const temCardAtivo = liveStatus.some((p) => ['new', 'separating'].includes(p.status));
+    if (!temCardAtivo) {
+      setFlash('✓ Peça trocada. Gere a separação quando quiser.');
+      setTimeout(() => setFlash(null), 5000);
+      return;
+    }
+    setSepLoading(true);
+    setSepError(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        message?: string;
+        cancelledCount?: number;
+        pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
+      }>(`/orders/wc/${wcId}/recalculate-separation`, { method: 'POST' });
+      if (!res.ok) {
+        setSepError(
+          `Peça trocada, mas o re-roteio não passou: ${res.message ?? 'use "Recalcular separação".'}`,
+        );
+        return;
+      }
+      setFlash(
+        `✓ Peça trocada e pedido re-roteado: ${res.cancelledCount ?? 0} card(s) antigo(s) cancelado(s), ` +
+        `novo(s) em ${res.pickOrders?.map((p) => p.storeCode).join(', ') || '—'}.`,
+      );
+      setTimeout(() => setFlash(null), 6000);
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setSepError(e?.message || 'Peça trocada, mas o re-roteio falhou — use "Recalcular separação".');
+    } finally {
+      setSepLoading(false);
     }
   }
 
@@ -1417,6 +1481,9 @@ export default function PedidoDetailPage() {
   const ehLinhaFrete = (li: { sku?: string | null; ref?: string | null }) =>
     [li.sku, li.ref].some((v) => String(v ?? '').trim().toUpperCase() === 'FRETE');
   const pecasDoPedido = order.lineItems.filter((li) => !ehLinhaFrete(li));
+  // "Trocar" só em pedido nativo (item no Postgres) e antes de enviar/encerrar.
+  const podeTrocarItem =
+    !!order.canEditItems && !['completed', 'cancelled', 'refunded'].includes(status);
   const freteDoPedido = {
     // Valor: o que o pedido guarda no método de envio; se o frete ainda estiver
     // como item (pedido de antes desta correção), soma a linha.
@@ -1889,6 +1956,7 @@ export default function PedidoDetailPage() {
               <th className="text-right p-3">Qtd</th>
               <th className="text-right p-3">Preço</th>
               <th className="text-right p-3">Total</th>
+              {podeTrocarItem && <th className="p-3" />}
             </tr>
           </thead>
           <tbody>
@@ -1906,12 +1974,23 @@ export default function PedidoDetailPage() {
                 <td className="p-3 text-right">{li.quantity}</td>
                 <td className="p-3 text-right">{fmtMoney(li.price)}</td>
                 <td className="p-3 text-right font-medium">{fmtMoney(li.total)}</td>
+                {podeTrocarItem && (
+                  <td className="p-3 text-right">
+                    <button
+                      onClick={() => setTrocaItem({ id: String(li.id), label: tituloPeca(li) })}
+                      className="rounded-lg border border-[#E6DFC8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#8C7325] hover:bg-[#FBF6E6]"
+                      title="Trocar esta peça por outra — o valor cobrado da cliente não muda e o pedido é re-roteado."
+                    >
+                      Trocar
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
           <tfoot className="border-t-2 bg-slate-50 text-slate-700">
             <tr>
-              <td className="p-3 text-xs uppercase tracking-wide" colSpan={4}>
+              <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 5 : 4}>
                 Frete cobrado da cliente{freteDoPedido.metodo ? ` · ${freteDoPedido.metodo}` : ''}
               </td>
               <td className="p-3 text-right font-bold tabular-nums">
@@ -3324,6 +3403,17 @@ export default function PedidoDetailPage() {
         <SkuDiagnoseModal
           sku={diagnoseSku}
           onClose={() => setDiagnoseSku(null)}
+        />
+      )}
+
+      {/* Troca manual de item — confirma antes de trocar; depois re-roteia tudo */}
+      {trocaItem && (
+        <SwapModal
+          currentLabel={trocaItem.label}
+          requireConfirm
+          onSwap={trocarItemDoPedido}
+          onDone={() => void reRotearAposTroca()}
+          onClose={() => setTrocaItem(null)}
         />
       )}
     </div>

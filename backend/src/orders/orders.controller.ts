@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { startOfDayBR } from '../lib/date-br';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
@@ -11,6 +11,7 @@ import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
 import { JuntadaService } from '../pick-orders/juntada.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
@@ -140,6 +141,8 @@ export class OrdersController {
     private readonly pickScans: PickScanService,
     // Juntada de pedido dividido: loja âncora envia tudo (21/08).
     private readonly juntada: JuntadaService,
+    // Troca manual de item: dados canônicos da peça nova via espelho.
+    private readonly catalog: WincredCatalogService,
   ) {}
 
   // ---------- Rotas estáticas PRIMEIRO (senão o `:id` come) ----------
@@ -1385,6 +1388,8 @@ export class OrdersController {
         : null,
       sellerId: pedido.sellerId ?? null,
       sellerName: pedido.sellerName ?? null,
+      // Item vive no Postgres → a tela pode oferecer "Trocar" por item.
+      canEditItems: true,
     };
   }
 
@@ -1521,6 +1526,8 @@ export class OrdersController {
         attribution: { origem: 'Live Commerce', source: '(Live) ()' },
         sellerId: liveLocal.sellerId ?? null,
         sellerName: liveLocal.sellerName ?? null,
+        // Item vive no Postgres → a tela pode oferecer "Trocar" por item.
+        canEditItems: true,
       };
     }
 
@@ -2576,6 +2583,123 @@ export class OrdersController {
   @Get('wc/:wcId/juntada')
   async statusJuntada(@Param('wcId') wcId: string) {
     return (await this.juntada.statusJuntada(Number(wcId))) ?? { juntando: false };
+  }
+
+  /**
+   * POST /orders/wc/:wcId/swap-item — TROCA MANUAL de item do pedido (retaguarda).
+   *
+   * A cliente pediu outra peça (ou a comprada acabou) e a matriz troca direto
+   * na tela do pedido, ANTES ou DEPOIS de gerar a separação. Regras (decisão
+   * do dono, 21/08):
+   *   - MANTÉM o valor pago: unitPrice/baseUnitPrice não mudam — a diferença,
+   *     se houver, é acertada por fora. (Diferente do swap da loja em
+   *     /pick-orders/:id/swap-item, que grava o preço novo e exige senha.)
+   *   - Só pedido NATIVO (live 900M, site novo 950M, pdv_online 960M): o item
+   *     vive no Postgres. Pedido do WooCommerce legado edita lá.
+   *   - Depois da troca o frontend re-roteia a separação inteira via
+   *     /recalculate-separation — que já estorna bipes e cancela os cards.
+   */
+  @Post('wc/:wcId/swap-item')
+  async swapOrderItem(
+    @Param('wcId') wcId: string,
+    @Body()
+    body: {
+      orderItemId: string;
+      codigo: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      descricao?: string | null;
+    },
+  ) {
+    const local = await this.prisma.order.findFirst({
+      where: { wcOrderId: Number(wcId) },
+      include: {
+        items: true,
+        pickOrders: { select: { id: true, status: true } },
+      },
+    });
+    if (!local || !this.origemSintetica((local as any).source)) {
+      throw new BadRequestException(
+        'Troca de item só vale pra pedido nascido no Flow (site novo, live, PDV online). Pedido do site antigo se edita no WooCommerce.',
+      );
+    }
+    if (['shipped', 'delivered', 'cancelled'].includes(local.status)) {
+      throw new BadRequestException(
+        'Pedido já enviado/encerrado — troca de peça agora é Devolução/Troca.',
+      );
+    }
+
+    const newSku = String(body?.codigo || '').trim();
+    if (!newSku) throw new BadRequestException('Selecione a peça nova');
+    const item = (local.items || []).find((i: any) => String(i.id) === String(body?.orderItemId));
+    if (!item) throw new NotFoundException('Item não encontrado neste pedido');
+    const oldSku = item.sku;
+    if (newSku === oldSku) throw new BadRequestException('É a mesma peça — nada pra trocar');
+
+    const newInfo = await this.catalog.getPdvProductInfo(newSku).catch(() => null);
+    if (!newInfo) {
+      throw new BadRequestException('Peça nova não encontrada no catálogo — confira o código.');
+    }
+
+    const desc = String(body?.descricao || newInfo.descricao || '').trim();
+    const ref = String(body?.ref || newInfo.ref || '').trim() || null;
+    const cor = String(body?.cor || newInfo.cor || '').trim() || null;
+    const tamanho = String(body?.tamanho || newInfo.tamanho || '').trim() || null;
+    const newName = desc || [ref || newSku, cor, tamanho].filter(Boolean).join(' ');
+
+    const updated = await this.prisma.orderItem.update({
+      where: { id: item.id },
+      data: {
+        sku: newInfo.sku || newSku,
+        productName: newName,
+        ref,
+        cor,
+        tamanho,
+        // unitPrice/baseUnitPrice ficam: a cliente já pagou esse valor.
+      },
+    });
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'orders',
+        direction: 'internal',
+        event: 'order.item.swap',
+        payload: JSON.stringify({
+          wcOrderId: local.wcOrderId,
+          orderId: local.id,
+          orderItemId: item.id,
+          oldSku,
+          oldName: item.productName,
+          newSku: updated.sku,
+          newName,
+          precoMantido: item.unitPrice ?? null,
+          precoCatalogoNovo: newInfo.preco ?? null,
+        }),
+        status: 200,
+      },
+    });
+
+    return {
+      ok: true,
+      oldSku,
+      newSku: updated.sku,
+      newDescricao: newName,
+      // Preço NÃO mudou — informativo pra tela avisar se a peça nova custa outra coisa.
+      precoMantido: item.unitPrice ?? null,
+      precoCatalogoNovo: newInfo.preco ?? null,
+      // Tem card ativo em loja? → o frontend re-roteia a separação inteira.
+      hasActivePickOrders: (local.pickOrders || []).some((p: any) =>
+        ['new', 'separating'].includes(p.status),
+      ),
+      item: {
+        id: updated.id,
+        sku: updated.sku,
+        productName: updated.productName,
+        quantity: updated.quantity,
+        unitPrice: updated.unitPrice,
+      },
+    };
   }
 
   @Post('wc/:wcId/confirm-separation')
