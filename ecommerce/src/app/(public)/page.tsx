@@ -17,11 +17,11 @@ import { HOME_STORES_PATH } from '@/data/home';
 
 /**
  * A Home não depende da requisição individual da visitante. As vitrines são
- * renovadas a cada minuto e o HTML pode ser entregue pronto pela CDN.
+ * renovadas a cada cinco minutos e o HTML pode ser entregue pronto pela CDN.
  * A atribuição de campanhas continua sendo capturada no navegador pelo
  * TrackingProvider, sem transformar esta rota em renderização dinâmica.
  */
-export const revalidate = 60;
+export const revalidate = 300;
 
 export const metadata = buildMetadata({
   title: "Lurd's Plus Size — Moda plus size elegante do 44 ao 60",
