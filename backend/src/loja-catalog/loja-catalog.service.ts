@@ -2015,6 +2015,36 @@ export class LojaCatalogService {
     // 4) Ordenação (peça sem foto já ficou fora na montagem do catálogo)
     this.ordenarPecas(pecas, params.ordenar);
 
+    /**
+     * 4b) ORDEM MANUAL DA CATEGORIA (dono, 20/08) — a tela
+     * `/retaguarda/ordem-vitrine` grava uma `SiteColecao` de slug
+     * `ordem-categoria-<categoria>`; quando ela existe, as REFs posicionadas
+     * ABREM a vitrine na ordem gravada e o resto segue atrás na ordenação
+     * normal (sort estável — não embaralha o que o dono não posicionou).
+     *
+     * Só vale na listagem de UMA categoria, sem busca e na ordenação padrão:
+     * se a cliente pediu "menor preço", a escolha DELA manda — curadoria não
+     * atropela filtro.
+     */
+    const catsDaOrdem =
+      params.categoria && !params.busca && (!params.ordenar || params.ordenar === 'relevancia')
+        ? String(params.categoria).split(',').map((c) => c.trim().toLowerCase()).filter(Boolean)
+        : [];
+    if (catsDaOrdem.length === 1) {
+      const manual = await this.colecaoRefs(`ordem-categoria-${catsDaOrdem[0]}`);
+      if (manual.length) {
+        const pos = new Map(manual.map((r, i) => [r, i] as const));
+        pecas.sort((a, b) => {
+          const pa = pos.get(this.refKey(a.ref));
+          const pb = pos.get(this.refKey(b.ref));
+          if (pa != null && pb != null) return pa - pb;
+          if (pa != null) return -1;
+          if (pb != null) return 1;
+          return 0;
+        });
+      }
+    }
+
     const total = pecas.length;
     const inicio = (page - 1) * perPage;
     return {
