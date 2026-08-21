@@ -1,5 +1,6 @@
 'use client';
 
+import { chaveDoCard } from '@/services/products';
 import { useEffect, useRef, useState } from 'react';
 import { Section, type SectionTone } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -121,7 +122,7 @@ export function RecommendationRail({
         ) : (
           <LuxuryCarousel ariaLabel={title} perView={{ base: 1.35, sm: 2, lg: 3, xl: 4 }} gap="md" arrows>
             {products.map((product, index) => (
-              <div key={product.id} onClickCapture={aoClicar(product, index)}>
+              <div key={chaveDoCard(product)} onClickCapture={aoClicar(product, index)}>
                 <ProductCard product={product} index={index} sizes={CAROUSEL_PRODUCT_SIZES} />
               </div>
             ))}

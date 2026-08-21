@@ -78,6 +78,13 @@ export interface Product {
   images: Media[];
   colors?: ProductColor[];
   sizes: ProductSize[];
+  /**
+   * CARD POR COR NA VITRINE (dono, 20/08): quando presente, este Product é
+   * UMA COR da peça — foto, preço e grade daquela cor — e o link leva pra
+   * PDP ancorada nela (`?cor=`). O `id` segue sendo a REF (o tracking e o
+   * catálogo do Meta casam por ela); a unicidade do card vem daqui.
+   */
+  vitrineCor?: { nome: string; rotulo: string };
   /** REF/SKU da peça — chave da ficha de caimento do Lurds Fit AI. */
   sku?: string;
   badges?: ProductBadge[];

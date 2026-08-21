@@ -180,6 +180,59 @@ export function mapPeca(p: PecaApi): Product {
   };
 }
 
+/**
+ * CADA COR VIRA UM CARD NA VITRINE (dono, 20/08: "na vitrine acho melhor
+ * colocar cada cor como um produto... na home, nas categorias, etc — NÃO
+ * mexer na tela de produto").
+ *
+ * Regras:
+ * - Só cor COM foto própria e COM estoque vira card ([[so-foto-oficial]]:
+ *   card com foto de outra cor é armadilha; esgotado não vai à vitrine).
+ * - Menos de 2 cores com foto = card único de sempre (nada muda pros 76%
+ *   do catálogo que é cor única).
+ * - O `id` NÃO muda (tracking e catálogo do Meta casam pela REF); quem
+ *   distingue o card é `vitrineCor`, e o link leva `?cor=` — a PDP abre
+ *   com a cor escolhida como principal e as miniaturas presentes.
+ * - As bolinhas de cor somem do card (colors: undefined): o card JÁ É uma
+ *   cor — bolinha em cima disso seria o seletor duplicado de sempre.
+ */
+export function explodirPorCor(p: PecaApi): Product[] {
+  const base = mapPeca(p);
+  const vendaveis = (p.cores ?? [])
+    .filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0)
+    /* A ORDEM DENTRO DA REF (dono, 20/08: "iniciar com a BMM-100 PRETO e na
+       sequência todas as cores da REF com estoque"): a cor com MAIS peça
+       abre a família — é a que aguenta a demanda que a vitrine cria — e as
+       demais vêm atrás, sempre juntas, antes da próxima REF. */
+    .sort((a, b) => b.estoque - a.estoque);
+  if (vendaveis.length < 2) return [base];
+  return vendaveis.map((c) => {
+    const badges: Product['badges'] = (base.badges ?? []).filter((b) => b !== 'ultimas-pecas');
+    // "Últimas peças" honesto por COR — é o estoque dela que conta aqui.
+    if (c.estoque > 0 && c.estoque <= 3) badges.push('ultimas-pecas');
+    return {
+      ...base,
+      name: `${base.name} · ${rotuloDaCor(c)}`,
+      price: c.preco > 0 ? c.preco : base.price,
+      pixPrice: c.preco > 0 ? Number((c.preco * 0.95).toFixed(2)) : base.pixPrice,
+      installments:
+        c.preco > 0 ? { times: 12, value: Number((c.preco / 12).toFixed(2)) } : base.installments,
+      images: c.fotos.map((f) => ({ src: f.src, alt: f.alt ?? `${p.nome} ${c.nome}` })),
+      sizes: c.tamanhos.map((t) => ({ label: t.label, available: t.disponivel })),
+      colors: undefined,
+      badges: badges.length ? badges : undefined,
+      vitrineCor: { nome: c.nome, rotulo: rotuloDaCor(c) },
+    };
+  });
+}
+
+/** A lista da vitrine inteira, já explodida por cor. */
+export const mapPecasDaVitrine = (itens: PecaApi[]): Product[] => itens.flatMap(explodirPorCor);
+
+/** Chave de lista estável pro card (o `id` repete entre cores da mesma REF). */
+export const chaveDoCard = (p: Product): string =>
+  p.vitrineCor ? `${p.id}~${p.vitrineCor.nome}` : String(p.id);
+
 /** Ordenação do site → parâmetro que o backend entende. */
 const ORDENACAO: Record<SortOption, string> = {
   relevancia: 'relevancia',
@@ -287,7 +340,9 @@ export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated
     return { items: [], total: 0, page, perPage, hasMore: false };
   }
   const dados = await resposta.json();
-  const items: Product[] = (dados.itens ?? []).map(mapPeca);
+  // Explodida por cor: cada cor com foto vira um card (dono, 20/08). O
+  // `total`/paginação seguem contando por REF — o backend pagina por peça.
+  const items: Product[] = mapPecasDaVitrine(dados.itens ?? []);
 
   return {
     items,

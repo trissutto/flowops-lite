@@ -1,5 +1,6 @@
 'use client';
 
+import { chaveDoCard } from '@/services/products';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
@@ -313,7 +314,7 @@ export function SearchOverlay({ open, onClose }: { open: boolean; onClose: () =>
                       {produtos.map((product, index) => {
                         const active = cursor === index;
                         return (
-                          <li key={product.id}>
+                          <li key={chaveDoCard(product)}>
                             <button
                               type="button"
                               role="option"
@@ -517,7 +518,7 @@ export function SearchOverlay({ open, onClose }: { open: boolean; onClose: () =>
                   <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
                     {populares.map((product, index) => (
                       <button
-                        key={product.id}
+                        key={chaveDoCard(product)}
                         type="button"
                         onClick={() => {
                           trackSelectItem(product, 'busca-populares', index);

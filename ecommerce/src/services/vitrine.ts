@@ -1,6 +1,6 @@
 import 'server-only';
 import { api } from '@/lib/api';
-import { mapPeca, type PecaApi } from '@/services/products';
+import { mapPecasDaVitrine, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
@@ -85,7 +85,7 @@ export async function fetchPrimeiraPagina(opcoes: {
       `/public/loja/produtos?${params.toString()}`,
       { revalidate, tags: ['catalogo', categoria ? `categoria:${categoria}` : 'vitrine'], timeoutMs: 12000 },
     );
-    const itens = (r?.itens ?? []).map(mapPeca);
+    const itens = mapPecasDaVitrine(r?.itens ?? []);
     return { itens, total: r?.total ?? itens.length, totalPages: r?.totalPages ?? 1 };
   } catch {
     return null;
@@ -115,7 +115,7 @@ export async function fetchMaisTopDaSemana(
       { revalidate, tags: ['catalogo', 'curadoria:mais-top-da-semana'], timeoutMs: 12000 },
     );
     // A ordem é a da curadoria — só traduz, não mexe na sequência.
-    return (r?.itens ?? []).map(mapPeca);
+    return mapPecasDaVitrine(r?.itens ?? []);
   } catch {
     // Curadoria fora do ar não derruba a página — vira estado vazio.
     return [];
@@ -140,7 +140,7 @@ export async function fetchMaisVendidosNasLojas(
       '/public/loja/mais-vendidos-lojas',
       { revalidate, tags: ['catalogo', 'mais-vendidos-lojas'], timeoutMs: 12000 },
     );
-    return (r?.itens ?? []).map(mapPeca);
+    return mapPecasDaVitrine(r?.itens ?? []);
   } catch {
     // Ranking fora do ar não derruba a página — vira estado vazio.
     return [];
@@ -177,7 +177,7 @@ export async function fetchVitrine(
       tags: ['catalogo', categoria ? `categoria:${categoria}` : 'vitrine'],
       timeoutMs: 12000,
     });
-    return (r?.itens ?? []).map(mapPeca);
+    return mapPecasDaVitrine(r?.itens ?? []);
   } catch {
     // Catálogo fora do ar não derruba a home — a seção simplesmente não sai.
     return [];
