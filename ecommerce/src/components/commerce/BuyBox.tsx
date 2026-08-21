@@ -510,18 +510,33 @@ export function BuyBox({
             de decisão — nem aqui, nem na barra fixa — e a linha da cor fica
             acima, fora do olhar de quem já está com o dedo no botão. É a
             conferência que a vendedora faz no balcão: "o manteiga, 48, isso?" */}
-        {!soldOut && (
-          <Button size="lg" block onClick={handleAdd} className="h-14 text-[1.05rem]">
-            <ShoppingBag />
-            <span className="min-w-0 truncate">
-              {corPendente
-                ? 'Escolha a cor'
-                : size
-                  ? `Adicionar · ${temCor && corLabel ? `${corLabel} ${size}` : `tamanho ${size}`}`
-                  : 'Escolha o tamanho'}
-            </span>
-          </Button>
-        )}
+        {!soldOut && (() => {
+          /**
+           * O CARIMBO NÃO PODE CORTAR (dono, 21/08: "o botão não mostra o
+           * que a pessoa está comprando — corta"). O pill é caixa-alta com
+           * tracking 0.16em, e "ADICIONAR · MARINHO · 52" estourava os
+           * 327px do celular virando "MARINH...". Aqui o tracking aperta e
+           * a fonte se adapta ao comprimento — cor longa ("Verde Musgo
+           * Escuro") desce um degrau em vez de perder o fim do nome.
+           */
+          const rotulo = corPendente
+            ? 'Escolha a cor'
+            : size
+              ? `Adicionar · ${temCor && corLabel ? `${corLabel} · ${size}` : `tamanho ${size}`}`
+              : 'Escolha o tamanho';
+          const longo = rotulo.length > 24;
+          return (
+            <Button
+              size="lg"
+              block
+              onClick={handleAdd}
+              className={cn('h-14 tracking-[0.06em]', longo ? 'text-[0.82rem]' : 'text-[1rem]')}
+            >
+              <ShoppingBag className="shrink-0" />
+              <span className="min-w-0 truncate">{rotulo}</span>
+            </Button>
+          );
+        })()}
 
         <div className="flex items-center justify-center gap-8">
           <button

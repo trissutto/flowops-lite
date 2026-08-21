@@ -213,14 +213,17 @@ export function ProductCard({
           )}
         </Link>
 
-        {/* Etiquetas */}
+        {/* Etiquetas — EMBAIXO da foto (dono, 21/08: "a etiqueta cobre o
+            rosto da modelo"). No topo elas caíam exatamente onde o rosto
+            fica no enquadramento 3/4; embaixo à esquerda ficam sobre a
+            barra/pernas, e o canto de baixo à direita segue da sacolinha. */}
         <div
           className={cn(
             'pointer-events-none absolute flex flex-col items-start gap-1.5',
             // O `right-2` existe pra dar à etiqueta um limite de largura: sem
             // ele o bloco é `auto` e um rótulo longo vaza pra fora da moldura
             // em vez de quebrar. Ver o `compact` do `Badge`.
-            compact ? 'top-2 right-2 left-2' : 'top-3 left-3',
+            compact ? 'bottom-2 right-2 left-2' : 'bottom-3 left-3',
           )}
         >
           {discount > 0 && <ProductBadgeTag badge="promocao" compact={compact} />}
