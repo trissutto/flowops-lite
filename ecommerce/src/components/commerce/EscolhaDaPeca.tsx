@@ -39,11 +39,18 @@ export function EscolhaDaPeca({
   cores: coresDoServidor,
   look,
   corInicial,
+  irmas,
+  irmasHref,
+  irmasLabel,
 }: {
   product: Product;
   cores: CorApi[];
   /** As peças que saem na MESMA foto — repassado direto pro BuyBox. */
   look?: PecaApi['look'];
+  /** Outras peças da família — a faixa abaixo do botão (repassada ao BuyBox). */
+  irmas?: Product[];
+  irmasHref?: string;
+  irmasLabel?: string;
   /**
    * A cor que o LINK pediu (`?cor=`), já validada pelo server component
    * contra a lista de cores à venda. Nula = link sem cor, vale a heurística.
@@ -380,6 +387,9 @@ export function EscolhaDaPeca({
               />
             ) : null
           }
+          irmas={irmas}
+          irmasHref={irmasHref}
+          irmasLabel={irmasLabel}
         />
       </div>
     </div>

@@ -93,6 +93,69 @@ export async function fetchPrimeiraPagina(opcoes: {
 }
 
 /**
+ * AS IRMÃS DA PEÇA, pra faixa que fica logo abaixo do botão de compra
+ * (dono, 21/08 — a peça de cor única terminava no botão e não oferecia nada).
+ *
+ * A ordem do pedido dele: **mesma família primeiro** (as outras t-shirts),
+ * completando com a categoria quando a subcategoria não enche a faixa. Peça
+ * nova e com estoque saudável na frente — quem decide isso é o `relevancia`
+ * do backend, o mesmo da vitrine.
+ *
+ * Duas chamadas no PIOR caso, as duas em cache de 60s do servidor (o mesmo
+ * TTL do catálogo). Na prática a segunda quase nunca sai: subcategoria de
+ * blusas tem dezenas de peças.
+ *
+ * A PEÇA ATUAL SAI DA LISTA pelo `id` (a REF) — sem isso a cliente veria a
+ * própria peça se oferecendo, inclusive nas outras cores dela, que é
+ * exatamente o que a grade de cores logo acima já mostra.
+ */
+export async function fetchIrmasDaPeca(opcoes: {
+  /** REF da peça aberta — ela e as cores dela ficam de fora. */
+  excluirId: string | number;
+  categoria?: string;
+  subcategoria?: string;
+  /** Quantas peças a faixa mostra. */
+  limite?: number;
+  revalidate?: number;
+}): Promise<Product[]> {
+  const { excluirId, categoria, subcategoria, limite = 6, revalidate = REVALIDATE_VITRINE } = opcoes;
+  if (!categoria && !subcategoria) return [];
+
+  const mesmaPeca = (p: Product) => String(p.id) === String(excluirId);
+  // Pede folga: a peça atual sai da lista e cor repetida também, então pedir
+  // exatamente `limite` deixaria a faixa curta.
+  const perPage = limite + 6;
+
+  const colhidas: Product[] = [];
+  const vistas = new Set<string>();
+  const juntar = (itens: Product[]) => {
+    for (const p of itens) {
+      if (colhidas.length >= limite) return;
+      if (mesmaPeca(p)) continue;
+      // Sem foto não entra numa faixa que é feita de foto.
+      if (!p.images?.[0]?.src) continue;
+      const chave = p.vitrineCor ? `${p.id}~${p.vitrineCor.nome}` : String(p.id);
+      if (vistas.has(chave)) continue;
+      // Uma cor por REF: a faixa mostra VARIEDADE, não a mesma blusa 4 vezes.
+      if (vistas.has(`ref:${p.id}`)) continue;
+      vistas.add(chave);
+      vistas.add(`ref:${p.id}`);
+      colhidas.push(p);
+    }
+  };
+
+  if (subcategoria) {
+    const r = await fetchPrimeiraPagina({ categoria, subcategoria, perPage, revalidate });
+    juntar(r?.itens ?? []);
+  }
+  if (colhidas.length < limite && categoria) {
+    const r = await fetchPrimeiraPagina({ categoria, perPage, revalidate });
+    juntar(r?.itens ?? []);
+  }
+  return colhidas;
+}
+
+/**
  * MAIS TOP DA SEMANA — a vitrine CURADA da semana.
  *
  * Diferente de `fetchVitrine`, aqui a ORDEM é a curadoria: o backend já devolve
