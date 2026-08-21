@@ -1,29 +1,39 @@
 'use client';
 
 /**
- * Aba ESTOQUE da ficha — a grade cor × tamanho por loja, e o ajuste.
+ * Aba ESTOQUE da ficha — a grade cor × tamanho por loja.
  *
  * É a ABA INICIAL: quando o dono abre uma peça, a primeira pergunta é onde ela
  * está.
  *
- * ⚠️ MOTIVO OBRIGATÓRIO. O backend (`/products-editor/movimentar`) sempre
- * exigiu — "Motivo é obrigatório em todo movimento" — mas a tela antiga
- * mandava a constante `'AJUSTE'` em todo ajuste, o que passava na validação e
- * enchia a auditoria de linhas que não explicam nada. Aqui a pessoa escolhe, e
- * o botão de salvar fica travado até escolher: sem motivo de verdade, o
- * histórico vira ruído em três meses.
+ * ── DUAS CORREÇÕES DE 21/08, depois de ver a tela em produção ──
+ *
+ * 1. LEITURA PRIMEIRO, AJUSTE POR BOTÃO. A primeira versão punha um `<input>`
+ *    em toda célula: 10 lojas × 30 variações = 300 caixinhas, e o número — que
+ *    é o que se vem olhar — sumia no meio da moldura. Agora a grade é texto, e
+ *    ajustar é um modo em que você entra de propósito. É o mesmo motivo do
+ *    `modo: 'mover' | 'ajustar'` que a tela antiga já tinha.
+ *
+ * 2. ZERO NÃO É ALARME. A primeira versão dava faixa âmbar em toda linha sem
+ *    estoque — mas tamanho esgotado é o normal de uma peça de moda, não
+ *    pendência. Alarme falso mata a confiança na faixa inteira (foi o que
+ *    derrubou a tarefa "Gerar etiqueta" em 11/08). Agora só ESTOQUE NEGATIVO
+ *    ganha faixa, porque negativo é defeito de verdade: alguém vendeu o que
+ *    não tinha, ou uma baixa rodou duas vezes.
+ *
+ * ⚠️ MOTIVO OBRIGATÓRIO no ajuste. O backend sempre exigiu — "Motivo é
+ * obrigatório em todo movimento" — mas a tela antiga mandava a constante
+ * 'AJUSTE' sempre, o que passava na validação e enchia a auditoria de linha que
+ * não explica nada.
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { AlertTriangle, Save } from 'lucide-react';
+import { AlertTriangle, Pencil, Save, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Badge, Button, Card, Select, Table, TabelaVazia, Td, Th, Tr } from '@/components/ui';
+import { cn } from '@/lib/cn';
 import type { SkuRow } from '../types';
 
-/**
- * Motivos de ajuste. Texto do jeito que a loja fala — quem lê a auditoria
- * depois precisa entender sem manual.
- */
 const MOTIVOS: Array<{ valor: string; label: string }> = [
   { valor: '', label: '— escolha o motivo —' },
   { valor: 'CONTAGEM', label: 'Contagem física — a prateleira tem outra quantidade' },
@@ -34,43 +44,56 @@ const MOTIVOS: Array<{ valor: string; label: string }> = [
   { valor: 'CORRECAO_SISTEMA', label: 'Correção de erro do sistema' },
 ];
 
+/** Colunas que ficam paradas quando a grade rola de lado. */
+const FIXA = 'sticky bg-surface z-10';
+
 export default function AbaEstoque({
   skus,
+  lojas,
   lojaNomes,
   podeAjustar,
   onMudou,
 }: {
   skus: SkuRow[];
+  /** TODAS as lojas da rede, na ordem — não só as que têm peça */
+  lojas: string[];
   lojaNomes: Map<string, string>;
-  /** só matriz ajusta; loja lê */
   podeAjustar: boolean;
   onMudou: () => void;
 }) {
+  const [editando, setEditando] = useState(false);
   const [ajustes, setAjustes] = useState<Record<string, number>>({});
   const [motivo, setMotivo] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
 
-  /** Lojas que aparecem: as que têm estoque de alguma variação. */
-  const lojas = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of skus) for (const l of Object.keys(s.estoqueLojas ?? {})) set.add(l);
-    return [...set].sort();
-  }, [skus]);
-
   const linhas = useMemo(
     () => [...skus].sort(
-      (a, b) => (a.cor || '').localeCompare(b.cor || '') || (a.tamanho || '').localeCompare(b.tamanho || ''),
+      (a, b) => (a.cor || '').localeCompare(b.cor || '')
+        || (a.tamanho || '').localeCompare(b.tamanho || '', 'pt-BR', { numeric: true }),
     ),
     [skus],
   );
+
+  /** Total da rede por variação. */
+  const totalDe = useCallback(
+    (s: SkuRow) => Object.values(s.estoqueLojas ?? {}).reduce((a, b) => a + b, 0),
+    [],
+  );
+
+  /** Negativo em qualquer loja = defeito. É a ÚNICA coisa que ganha faixa. */
+  const temNegativo = useCallback(
+    (s: SkuRow) => Object.values(s.estoqueLojas ?? {}).some((q) => q < 0),
+    [],
+  );
+
+  const negativas = linhas.filter(temNegativo).length;
 
   const definirAjuste = useCallback((codigo: string, loja: string, base: number, valor: number) => {
     const chave = `${codigo}|${loja}`;
     setAjustes((a) => {
       const proximo = { ...a };
-      /* voltou pro valor original = não é mais ajuste */
       if (!Number.isFinite(valor) || valor < 0 || valor === base) delete proximo[chave];
       else proximo[chave] = valor;
       return proximo;
@@ -78,6 +101,12 @@ export default function AbaEstoque({
   }, []);
 
   const pendentes = Object.entries(ajustes);
+
+  function cancelar() {
+    setEditando(false);
+    setAjustes({});
+    setMotivo('');
+  }
 
   async function salvar() {
     if (!pendentes.length || !motivo) return;
@@ -104,8 +133,7 @@ export default function AbaEstoque({
         method: 'POST',
         body: JSON.stringify({ movimentos }),
       });
-      setAjustes({});
-      setMotivo('');
+      cancelar();
       setAviso(
         `${r?.aplicados ?? movimentos.length} de ${r?.total ?? movimentos.length} ajuste(s) gravado(s). ` +
         'A aba Histórico já mostra quem fez e por quê.',
@@ -120,22 +148,41 @@ export default function AbaEstoque({
 
   return (
     <div className="flex flex-col gap-3">
-      {aviso && (
-        <Card className="border-ok bg-ok-soft px-4 py-3 text-[13px] text-ok">{aviso}</Card>
-      )}
-      {erro && (
-        <Card className="border-crit bg-crit-soft px-4 py-3 text-[13px] text-crit">{erro}</Card>
-      )}
+      <div className="flex flex-wrap items-center gap-3">
+        {negativas > 0 && (
+          <span className="flex items-center gap-1.5 text-[13px] font-semibold text-crit">
+            <AlertTriangle className="h-4 w-4" />
+            {negativas} variação(ões) com estoque negativo
+          </span>
+        )}
+        {podeAjustar && !editando && (
+          <Button variant="primary" className="ml-auto" onClick={() => setEditando(true)}>
+            <Pencil className="h-3.5 w-3.5" /> Ajustar estoque
+          </Button>
+        )}
+        {editando && (
+          <Button variant="ghost" className="ml-auto" onClick={cancelar}>
+            <X className="h-3.5 w-3.5" /> Cancelar
+          </Button>
+        )}
+      </div>
+
+      {aviso && <Card className="border-ok bg-ok-soft px-4 py-3 text-[13px] text-ok">{aviso}</Card>}
+      {erro && <Card className="border-crit bg-crit-soft px-4 py-3 text-[13px] text-crit">{erro}</Card>}
 
       <Table>
         <thead>
           <tr>
-            <Th>Cor</Th>
-            <Th>Tam.</Th>
+            <Th className={cn(FIXA, 'left-0')}>Cor</Th>
+            <Th className={cn(FIXA, 'left-[104px]')}>Tam.</Th>
+            {/* a rede vem ANTES das lojas: é o número que se vem olhar, e no fim
+                da linha ele saía da tela nas redes com muitas lojas */}
+            <Th align="right" className={cn(FIXA, 'left-[160px]')}>Rede</Th>
             {lojas.map((l) => (
-              <Th key={l} align="right">{lojaNomes.get(l) || l}</Th>
+              <Th key={l} align="right" className="whitespace-nowrap">
+                {lojaNomes.get(l) || l}
+              </Th>
             ))}
-            <Th align="right">Total</Th>
           </tr>
         </thead>
         <tbody>
@@ -145,47 +192,63 @@ export default function AbaEstoque({
             </TabelaVazia>
           )}
           {linhas.map((s) => {
-            const total = Object.values(s.estoqueLojas ?? {}).reduce((a, b) => a + b, 0);
+            const total = totalDe(s);
             return (
-              <Tr key={s.codigo} estado={total > 0 ? undefined : 'warn'}>
-                <Td className="font-medium">{s.cor || '—'}</Td>
-                <Td className="text-ink-soft">{s.tamanho || '—'}</Td>
+              <Tr key={s.codigo} estado={temNegativo(s) ? 'crit' : undefined}>
+                <Td className={cn(FIXA, 'left-0 font-medium')}>{s.cor || '—'}</Td>
+                <Td className={cn(FIXA, 'left-[104px] text-ink-soft')}>{s.tamanho || '—'}</Td>
+                <Td
+                  align="right"
+                  num
+                  className={cn(
+                    FIXA, 'left-[160px] border-r border-line font-bold',
+                    total > 0 ? 'text-ink' : 'text-ink-faint',
+                  )}
+                >
+                  {total}
+                </Td>
+
                 {lojas.map((l) => {
                   const base = s.estoqueLojas?.[l] ?? 0;
                   const chave = `${s.codigo}|${l}`;
-                  const novo = ajustes[chave];
-                  const mudou = novo !== undefined;
+                  const mudou = ajustes[chave] !== undefined;
                   return (
                     <Td key={l} align="right" num>
-                      {podeAjustar ? (
+                      {editando ? (
                         <input
                           type="number"
                           min={0}
                           aria-label={`Estoque de ${s.cor} ${s.tamanho} em ${lojaNomes.get(l) || l}`}
                           defaultValue={base}
                           onChange={(e) => definirAjuste(s.codigo, l, base, Number(e.target.value))}
-                          className={
-                            'w-16 rounded-field border bg-surface px-2 py-1 text-right text-[13px] tabular-nums ' +
-                            'focus:outline-none focus:ring-2 focus:ring-action ' +
-                            (mudou ? 'border-warn text-warn font-bold' : 'border-line text-ink')
-                          }
+                          className={cn(
+                            'w-14 rounded-field border bg-surface px-1.5 py-1 text-right text-[13px] tabular-nums',
+                            'focus:outline-none focus:ring-2 focus:ring-action',
+                            mudou ? 'border-warn font-bold text-warn' : 'border-line text-ink',
+                          )}
                         />
                       ) : (
-                        <span className={base > 0 ? 'text-ink' : 'text-ink-faint'}>{base}</span>
+                        /* zero fica apagado pra o número que existe saltar */
+                        <span
+                          className={cn(
+                            base < 0 ? 'font-bold text-crit'
+                              : base > 0 ? 'text-ink'
+                              : 'text-ink-faint',
+                          )}
+                        >
+                          {base}
+                        </span>
                       )}
                     </Td>
                   );
                 })}
-                <Td align="right" num className="font-bold">
-                  {total > 0 ? total : <Badge tom="warn">zerado</Badge>}
-                </Td>
               </Tr>
             );
           })}
         </tbody>
       </Table>
 
-      {podeAjustar && pendentes.length > 0 && (
+      {editando && pendentes.length > 0 && (
         <Card className="flex flex-wrap items-end gap-3 border-warn bg-warn-soft p-4">
           <div className="flex items-center gap-2 text-[13px] font-semibold text-warn">
             <AlertTriangle className="h-4 w-4" />
@@ -213,11 +276,16 @@ export default function AbaEstoque({
         </Card>
       )}
 
-      {!podeAjustar && (
-        <p className="px-1 text-[12px] text-ink-faint">
-          Ajustar estoque é da matriz. Aqui a grade é só leitura.
-        </p>
-      )}
+      <p className="px-1 text-[12px] leading-relaxed text-ink-faint">
+        Todas as lojas da rede aparecem, mesmo sem peça — coluna vazia é informação.{' '}
+        {negativas > 0 && (
+          <>
+            <Badge tom="crit">Faixa vermelha</Badge> é estoque negativo: alguém vendeu o que não
+            tinha, ou uma baixa rodou duas vezes. Esgotado não ganha faixa, porque esgotar é normal.
+          </>
+        )}
+        {!podeAjustar && ' Ajustar estoque é da matriz; aqui a grade é só leitura.'}
+      </p>
     </div>
   );
 }

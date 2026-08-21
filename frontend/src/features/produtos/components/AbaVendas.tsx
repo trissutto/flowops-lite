@@ -3,48 +3,52 @@
 /**
  * Aba VENDAS da ficha — o que ESTA peça vendeu.
  *
- * Reaproveita `GET /pdv/produtos-vendidos`, que já aceita `sku` (casa com SKU
- * **ou** REF), `from`, `to` e `storeCode`. Nenhum backend novo: o relatório da
- * rede continua existindo em `/retaguarda/produtos-vendidos`, porque responde
- * outra pergunta — o que mais vendeu no período, sem escolher peça antes.
+ * Reaproveita `GET /pdv/produtos-vendidos`, que já aceita `sku` (casa com SKU,
+ * REF **ou** EAN), `from`, `to` e `storeCode`. Nenhum backend novo.
+ *
+ * ⚠️ A RESPOSTA VEM EM `linhas`, não em `rows`. A primeira versão desta aba
+ * procurava `rows`/`itens`/`produtos`, caía no array vazio e a tela dizia "não
+ * vendeu no período" pra peça que tinha vendido — erro pior que erro visível,
+ * porque parece resposta. Cada linha é UM ITEM DE VENDA:
+ * `{ data, hora, sku, ref, cor, tamanho, qty, precoUnit, total, storeCode,
+ *    storeName, sellerName }`.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
-  Badge, Card, FiltroData, PERIODO_PADRAO, Table, TabelaVazia, Td, Th, Tr,
-  type Periodo,
+  Card, FiltroData, PERIODO_PADRAO, Table, TabelaVazia, Tabs, Td, Th, Tr,
+  type Aba, type Periodo,
 } from '@/components/ui';
 
-type LinhaVenda = {
-  sku?: string;
-  ref?: string | null;
-  cor?: string | null;
-  tamanho?: string | null;
-  storeCode?: string | null;
-  qtd?: number;
-  quantidade?: number;
-  total?: number;
-  valor?: number;
-  data?: string;
-  createdAt?: string;
-};
+interface LinhaVendida {
+  data: string;
+  hora: string;
+  sku: string;
+  ref: string | null;
+  cor: string | null;
+  tamanho: string | null;
+  descricao: string;
+  qty: number;
+  precoUnit: number;
+  total: number;
+  storeCode: string;
+  storeName: string;
+  sellerName: string | null;
+}
+
+type Corte = 'loja' | 'variacao' | 'vendedora';
 
 function brl(n: number | null | undefined): string {
   return n == null ? '—' : n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-export default function AbaVendas({
-  ref_,
-  lojaNomes,
-}: {
-  ref_: string;
-  lojaNomes: Map<string, string>;
-}) {
+export default function AbaVendas({ ref_ }: { ref_: string }) {
   const [periodo, setPeriodo] = useState<Periodo>(PERIODO_PADRAO);
-  const [linhas, setLinhas] = useState<LinhaVenda[] | null>(null);
+  const [linhas, setLinhas] = useState<LinhaVendida[] | null>(null);
+  const [corte, setCorte] = useState<Corte>('loja');
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -58,12 +62,15 @@ export default function AbaVendas({
         to: periodo.ate,
         includeReturns: '1',
       });
-      const r = await api<any>(`/pdv/produtos-vendidos?${qs.toString()}`);
-      /* a resposta pode vir como array puro ou embrulhada — normaliza aqui */
-      const lista: LinhaVenda[] = Array.isArray(r) ? r : (r?.rows ?? r?.itens ?? r?.produtos ?? []);
-      setLinhas(lista);
+      const r = await api<{ linhas?: LinhaVendida[] }>(`/pdv/produtos-vendidos?${qs.toString()}`);
+      setLinhas(r?.linhas ?? []);
     } catch (e: any) {
-      setErro(e?.message || 'Não deu pra carregar as vendas.');
+      const msg = String(e?.message || e);
+      setErro(
+        /403/.test(msg)
+          ? 'Você não tem acesso ao relatório de vendas.'
+          : `Não deu pra carregar as vendas: ${msg}`,
+      );
       setLinhas([]);
     } finally {
       setCarregando(false);
@@ -72,30 +79,44 @@ export default function AbaVendas({
 
   useEffect(() => { void carregar(); }, [carregar]);
 
-  const qtdDe = (l: LinhaVenda) => l.qtd ?? l.quantidade ?? 0;
-  const valorDe = (l: LinhaVenda) => l.total ?? l.valor ?? null;
+  const totalQtd = (linhas || []).reduce((s, l) => s + (l.qty || 0), 0);
+  const totalValor = (linhas || []).reduce((s, l) => s + (l.total || 0), 0);
 
-  const totalQtd = (linhas || []).reduce((s, l) => s + qtdDe(l), 0);
-  const totalValor = (linhas || []).reduce((s, l) => s + (valorDe(l) ?? 0), 0);
+  /** Agrupa pelo corte escolhido — a mesma venda vista de três ângulos. */
+  const grupos = useMemo(() => {
+    const m = new Map<string, { rotulo: string; qtd: number; valor: number }>();
+    for (const l of linhas || []) {
+      let chave: string;
+      let rotulo: string;
+      if (corte === 'loja') {
+        chave = l.storeCode || '—';
+        rotulo = l.storeName || `Loja ${l.storeCode}`;
+      } else if (corte === 'variacao') {
+        chave = `${l.cor || '—'}|${l.tamanho || '—'}`;
+        rotulo = [l.cor, l.tamanho].filter(Boolean).join(' · ') || l.sku;
+      } else {
+        chave = l.sellerName || '—';
+        rotulo = l.sellerName || 'sem vendedora';
+      }
+      const atual = m.get(chave) || { rotulo, qtd: 0, valor: 0 };
+      atual.qtd += l.qty || 0;
+      atual.valor += l.total || 0;
+      m.set(chave, atual);
+    }
+    return [...m.values()].sort((a, b) => b.qtd - a.qtd);
+  }, [linhas, corte]);
 
-  /* quebra por loja — a pergunta que a matriz faz primeiro */
-  const porLoja = new Map<string, { qtd: number; valor: number }>();
-  for (const l of linhas || []) {
-    const loja = String(l.storeCode || '—');
-    const atual = porLoja.get(loja) || { qtd: 0, valor: 0 };
-    atual.qtd += qtdDe(l);
-    atual.valor += valorDe(l) ?? 0;
-    porLoja.set(loja, atual);
-  }
-  const lojas = [...porLoja.entries()].sort((a, b) => b[1].qtd - a[1].qtd);
+  const abas: Aba<Corte>[] = [
+    { id: 'loja', label: 'Por loja' },
+    { id: 'variacao', label: 'Por cor e tamanho' },
+    { id: 'vendedora', label: 'Por vendedora' },
+  ];
 
   return (
     <div className="flex flex-col gap-3">
       <FiltroData valor={periodo} onChange={setPeriodo} onAplicar={carregar} carregando={carregando} />
 
-      {erro && (
-        <Card className="border-crit bg-crit-soft px-4 py-3 text-[13px] text-crit">{erro}</Card>
-      )}
+      {erro && <Card className="border-crit bg-crit-soft px-4 py-3 text-[13px] text-crit">{erro}</Card>}
 
       <Card className="grid grid-cols-2 divide-x divide-line sm:grid-cols-3">
         <div className="px-4 py-3">
@@ -104,45 +125,47 @@ export default function AbaVendas({
         </div>
         <div className="px-4 py-3">
           <div className="text-[11px] font-bold uppercase tracking-[.13em] text-ink-soft">Faturado</div>
-          {/* dinheiro é grafite, não verde — verde agora significa "em dia" */}
+          {/* dinheiro é grafite — no Semáforo verde significa "em dia" */}
           <div className="mt-1 text-[24px] font-extrabold leading-none tabular-nums text-ink">{brl(totalValor)}</div>
         </div>
         <div className="px-4 py-3">
-          <div className="text-[11px] font-bold uppercase tracking-[.13em] text-ink-soft">Lojas que venderam</div>
-          <div className="mt-1 text-[24px] font-extrabold leading-none tabular-nums text-ink">{lojas.length}</div>
+          <div className="text-[11px] font-bold uppercase tracking-[.13em] text-ink-soft">Itens de venda</div>
+          <div className="mt-1 text-[24px] font-extrabold leading-none tabular-nums text-ink">{linhas?.length ?? 0}</div>
         </div>
       </Card>
+
+      <Tabs abas={abas} valor={corte} onChange={setCorte} />
 
       <Table>
         <thead>
           <tr>
-            <Th>Loja</Th>
+            <Th>{corte === 'loja' ? 'Loja' : corte === 'variacao' ? 'Cor e tamanho' : 'Vendedora'}</Th>
             <Th align="right">Peças</Th>
             <Th align="right">Faturado</Th>
           </tr>
         </thead>
         <tbody>
           {carregando && <TabelaVazia colSpan={3}>Carregando as vendas…</TabelaVazia>}
-          {!carregando && !lojas.length && (
+          {!carregando && !grupos.length && (
             <TabelaVazia colSpan={3}>
-              Esta peça não vendeu no período. Tente um intervalo maior.
+              Esta peça não vendeu entre {periodo.de.split('-').reverse().join('/')} e{' '}
+              {periodo.ate.split('-').reverse().join('/')}. Tente um intervalo maior.
             </TabelaVazia>
           )}
-          {!carregando && lojas.map(([loja, v]) => (
-            <Tr key={loja}>
-              <Td>
-                {lojaNomes.get(loja) || `Loja ${loja}`}
-                {v.qtd < 0 && <Badge tom="warn" className="ml-2">devolução</Badge>}
+          {!carregando && grupos.map((g) => (
+            <Tr key={g.rotulo}>
+              <Td>{g.rotulo}</Td>
+              <Td align="right" num className={g.qtd < 0 ? 'font-bold text-crit' : undefined}>
+                {g.qtd}
               </Td>
-              <Td align="right" num>{v.qtd}</Td>
-              <Td align="right" num className="font-semibold">{brl(v.valor)}</Td>
+              <Td align="right" num className="font-semibold">{brl(g.valor)}</Td>
             </Tr>
           ))}
         </tbody>
       </Table>
 
       <p className="px-1 text-[12px] text-ink-faint">
-        Devolução entra com sinal negativo.{' '}
+        Devolução entra com sinal negativo e aparece em vermelho.{' '}
         <Link
           href="/retaguarda/produtos-vendidos"
           className="inline-flex items-center gap-1 text-ink-soft underline-offset-2 hover:text-ink hover:underline"

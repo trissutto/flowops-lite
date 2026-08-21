@@ -58,6 +58,8 @@ export default function FichaProdutoPage() {
   const [candidatas, setCandidatas] = useState<Peca[]>([]);
   const [classificacao, setClassificacao] = useState<Array<{ ref: string; tipoProduto: number }>>([]);
   const [lojaNomes, setLojaNomes] = useState<Map<string, string>>(new Map());
+  /** TODAS as lojas da rede, na ordem — a grade mostra loja sem peça também. */
+  const [lojas, setLojas] = useState<string[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -95,6 +97,7 @@ export default function FichaProdutoPage() {
           if (code) m.set(code, String(l.name ?? l.nome ?? code));
         }
         setLojaNomes(m);
+        setLojas([...m.keys()].sort());
       } catch { /* nome de loja é enfeite — código serve */ }
     })();
   }, []);
@@ -278,13 +281,14 @@ export default function FichaProdutoPage() {
         {peca && aba === 'estoque' && (
           <AbaEstoque
             skus={peca.skus}
+            lojas={lojas.length ? lojas : [...new Set(peca.skus.flatMap((s) => Object.keys(s.estoqueLojas ?? {})))].sort()}
             lojaNomes={lojaNomes}
             podeAjustar={ehMatriz}
             onMudou={carregarPeca}
           />
         )}
 
-        {peca && aba === 'vendas' && <AbaVendas ref_={peca.ref} lojaNomes={lojaNomes} />}
+        {peca && aba === 'vendas' && <AbaVendas ref_={peca.ref} />}
 
         {peca && aba === 'historico' && (
           <AbaHistorico
