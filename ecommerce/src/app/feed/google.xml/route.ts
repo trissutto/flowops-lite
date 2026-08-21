@@ -23,7 +23,15 @@ import { SITE } from '@/lib/seo';
  *
  * ── A DECISÃO DO `id`, QUE É A PARTE QUE NÃO DÁ PRA ERRAR ──
  *
- * `<g:id>` = REF, e nada mais. É o que a conta 496061684 já usa hoje
+ * `<g:id>` = a REF crua NA COR PRINCIPAL (a de maior estoque), e sufixo
+ * `-COR` nas demais (21/08). Antes era uma REF por item; a peça multicor
+ * virava um anúncio só, rotulado com a primeira cor e com as fotos das
+ * outras embaralhadas — e para vestuário o Google ESPERA a variação.
+ *
+ * A herança do id é o que torna a virada barata: pro Google o item da cor
+ * principal continua sendo o mesmo de sempre ("1134269", "S237791" seguem
+ * existindo), o histórico do Shopping não recomeça, e o `content_ids` do
+ * pixel continua casando. Só as cores adicionais são itens novos.
  * ("1134269", "S237791" são REFs), é o que o feed do Meta usa, e é o que o
  * pixel manda em `content_ids`. Id novo não é "só um identificador": o Google
  * trata como produto novo, joga fora o histórico do item e o aprendizado do
@@ -65,6 +73,14 @@ interface PecaFeed {
   imagens: string[];
   tamanhos: string[];
   cores: string[];
+  /** Estoque, fotos, preço e grade POR COR — a matéria-prima da explosão. */
+  coresDetalhe?: Array<{
+    nome: string;
+    estoque: number;
+    preco: number;
+    fotos: string[];
+    tamanhos: string[];
+  }>;
 }
 
 /** `&` vira `&amp;` etc. Um nome com "&" invalidaria o XML inteiro. */
@@ -101,16 +117,73 @@ const CATEGORIA_GOOGLE: Record<string, string> = {
   'linha-conforto': 'Vestuário e acessórios > Roupas > Roupas de dormir e loungewear',
 };
 
-function item(p: PecaFeed): string {
+function slugCor(nome: string): string {
+  return String(nome ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+interface Variante {
+  id: string;
+  cor: string;
+  fotos: string[];
+  tamanhos: string[];
+  /** `item_group_id`. Nulo = peça de cor única, item solto como antes. */
+  grupo: string | null;
+}
+
+/**
+ * UM ITEM POR COR — a mesma regra da vitrine e do feed do Meta.
+ *
+ * Para vestuário o Google ESPERA variação: peça multicor num item só é
+ * estrutura incompleta pra ele, e a cliente via um anúncio "PRETO" cuja
+ * segunda foto era bege.
+ *
+ * 🔑 A COR DE MAIOR ESTOQUE HERDA O `id` DA REF — ver o cabeçalho.
+ *
+ * Só entra cor COM foto própria e COM estoque. Peça que ainda serve foto do
+ * acervo antigo não tem foto por cor e sai como item único, exatamente como
+ * antes: a virada não multiplica item reprovado.
+ */
+function variantes(p: PecaFeed): Variante[] {
+  const unica: Variante = {
+    id: p.ref,
+    cor: p.cores[0] ?? "",
+    fotos: p.imagens.filter(Boolean),
+    tamanhos: p.tamanhos,
+    grupo: null,
+  };
+  const vendaveis = (p.coresDetalhe ?? [])
+    .filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0)
+    .sort((a, b) => b.estoque - a.estoque);
+  if (vendaveis.length < 2) return [unica];
+  return vendaveis.map((c, n) => ({
+    id: n === 0 ? p.ref : `${p.ref}-${slugCor(c.nome)}`,
+    cor: c.nome,
+    fotos: c.fotos.filter(Boolean),
+    tamanhos: c.tamanhos?.length ? c.tamanhos : p.tamanhos,
+    grupo: p.ref,
+  }));
+}
+
+function item(p: PecaFeed, v: Variante): string {
   // A URL TEM que ser a canônica da PDP — a mesma do sitemap e a que tem
   // histórico no Google. Divergir aqui gera "página de destino não encontrada"
   // ou, pior, um segundo endereço competindo com o primeiro.
-  const link = `${SITE.url}/produto/${p.slug}`;
-  const [capa, ...resto] = p.imagens.filter(Boolean);
+  const link = v.grupo
+    ? `${SITE.url}/produto/${p.slug}?cor=${encodeURIComponent(v.cor)}`
+    : `${SITE.url}/produto/${p.slug}`;
+  const [capa, ...resto] = v.fotos;
 
   const campos: string[] = [
-    `<g:id>${escapar(p.ref)}</g:id>`,
-    `<g:title>${escapar(p.nome)}</g:title>`,
+    `<g:id>${escapar(v.id)}</g:id>`,
+    ...(v.grupo ? [`<g:item_group_id>${escapar(v.grupo)}</g:item_group_id>`] : []),
+    // Com a COR no nome: sem isto a peça de 8 cores vira 8 anúncios de
+    // título idêntico e a cliente não sabe qual é qual.
+    `<g:title>${escapar(v.grupo ? `${p.nome} · ${v.cor}` : p.nome)}</g:title>`,
     // Descrição vazia reprova o item. O nome é um fallback honesto: descreve a
     // peça, mesmo que sem charme.
     `<g:description>${escapar(p.descricao || p.nome)}</g:description>`,
@@ -147,7 +220,7 @@ function item(p: PecaFeed): string {
    * todas jogaria peças distintas no mesmo balde — o bug da REF reciclada.
    */
   campos.push(`<g:brand>${escapar(p.marca || "Lurd's Plus Size")}</g:brand>`);
-  if (p.cores[0]) campos.push(`<g:color>${escapar(p.cores[0])}</g:color>`);
+  if (v.cor) campos.push(`<g:color>${escapar(v.cor)}</g:color>`);
 
   const categoria = CATEGORIA_GOOGLE[String(p.categoria || '').trim()];
   campos.push(
@@ -161,7 +234,7 @@ function item(p: PecaFeed): string {
   }
   // A grade inteira num campo só: o Google usa `size` pra filtrar, e mandar a
   // lista é melhor que omitir — quem procura 54 precisa saber que existe 54.
-  if (p.tamanhos.length) campos.push(`<g:size>${escapar(p.tamanhos.join(', '))}</g:size>`);
+  if (v.tamanhos.length) campos.push(`<g:size>${escapar(v.tamanhos.join(", "))}</g:size>`);
 
   return `<item>${campos.join('')}</item>`;
 }
@@ -169,7 +242,7 @@ function item(p: PecaFeed): string {
 export async function GET() {
   let pecas: PecaFeed[] = [];
   try {
-    pecas = (await api<PecaFeed[]>('/public/loja/feed', {
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=1', {
       revalidate,
       tags: ['catalogo'],
       timeoutMs: 25000,
@@ -188,7 +261,7 @@ export async function GET() {
     `<title>${escapar(SITE.name)}</title>` +
     `<link>${escapar(SITE.url)}</link>` +
     `<description>${escapar(SITE.description)}</description>` +
-    validas.map(item).join('') +
+    validas.flatMap((p) => variantes(p).map((v) => item(p, v))).join("") +
     `</channel></rss>`;
 
   return new Response(xml, {
