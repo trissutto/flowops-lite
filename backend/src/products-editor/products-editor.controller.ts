@@ -31,6 +31,35 @@ export class ProductsEditorController {
     return this.svc.searchProdutos(String(q || ''));
   }
 
+  /** Matriz vê custo e margem; loja vê venda e estoque. */
+  private ehMatriz(req: any): boolean {
+    return ['admin', 'operator', 'supervisor'].includes(String(req?.user?.role || ''));
+  }
+
+  /**
+   * GET /products-editor/ficha-search?q= — a MESMA busca, para a tela de
+   * Produtos (`/retaguarda/produtos`).
+   *
+   * Existe separada da `search` acima por um motivo de segurança: aquela é
+   * `requireAdmin` porque vive num controller que também apaga e movimenta
+   * estoque. A tela de Produtos precisa abrir pra gerente de loja, e afrouxar
+   * o guard do controller inteiro pra isso abriria junto o que não deve.
+   *
+   * ⚠️ CUSTO E MARGEM SÃO PODADOS NO SERVIDOR pra quem não é matriz. Esconder
+   * só no front deixaria o número viajando na resposta, visível em qualquer
+   * aba de rede.
+   */
+  @Get('ficha-search')
+  async fichaSearch(@Req() req: any, @Query('q') q?: string) {
+    const resp: any = await this.svc.searchProdutos(String(q || ''));
+    if (this.ehMatriz(req)) return resp;
+    const rows = (resp?.rows || []).map((r: any) => {
+      const { custo, margem, ...semCusto } = r || {};
+      return semCusto;
+    });
+    return { ...resp, rows };
+  }
+
   /**
    * GET /products-editor/ref-info?ref=&exclude=cod1,cod2
    * Checa colisão antes de renomear REF (destino já usada por outro produto?).

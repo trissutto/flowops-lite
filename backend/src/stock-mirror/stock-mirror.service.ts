@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 
@@ -275,14 +275,33 @@ export class StockMirrorService {
     return { ok: true, decremented: movements.length, warnings };
   }
 
-  /** Histórico de movimentações (auditoria). */
+  /**
+   * Histórico de movimentações (auditoria).
+   *
+   * `storeCode` é OPCIONAL desde 21/08: a ficha do produto pergunta "o que
+   * aconteceu com esta peça na REDE", e exigir uma loja obrigava a tela a
+   * varrer loja por loja. Com `sku` sozinho o índice
+   * `[storeCode, sku, createdAt]` não serve, então existe um índice por `sku`
+   * pra esse caminho — ver `@@index([sku, createdAt])` no schema.
+   */
   async historicoMovimentacoes(input: {
-    storeCode: string;
+    storeCode?: string;
     sku?: string;
+    skus?: string[];
     limit?: number;
   }) {
-    const where: any = { storeCode: input.storeCode.toUpperCase() };
-    if (input.sku) where.sku = input.sku.toUpperCase();
+    const where: any = {};
+    if (input.storeCode) where.storeCode = input.storeCode.toUpperCase();
+
+    /* a peça é uma REF com N códigos (cor × tamanho) — a ficha manda todos */
+    const lista = (input.skus || []).map((s) => String(s).toUpperCase()).filter(Boolean);
+    if (lista.length) where.sku = { in: lista };
+    else if (input.sku) where.sku = input.sku.toUpperCase();
+
+    if (!where.storeCode && !where.sku) {
+      throw new BadRequestException('Informe storeCode ou sku');
+    }
+
     return (this.prisma as any).stockMovement.findMany({
       where,
       orderBy: { createdAt: 'desc' },

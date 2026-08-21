@@ -4371,6 +4371,9 @@ model StockMovement {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([storeCode, sku, createdAt(sort: Desc)])
+  // a ficha do produto pergunta pela peça na REDE, sem loja — o índice acima
+  // começa por store_code e não serve pra esse caminho
+  @@index([sku, createdAt(sort: Desc)])
   @@index([reason, createdAt(sort: Desc)])
   @@index([refId])
   @@map("stock_movements")

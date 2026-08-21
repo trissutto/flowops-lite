@@ -62,21 +62,30 @@ export class StockMirrorController {
   }
 
   /**
-   * GET /admin/stock-mirror/movements?storeCode=X&sku=Y
-   * Histórico de mudanças (auditoria).
+   * GET /admin/stock-mirror/movements?storeCode=X&sku=Y&skus=a,b,c
+   *
+   * Histórico de mudanças (auditoria). `storeCode` deixou de ser obrigatório em
+   * 21/08: a ficha do produto pergunta pela PEÇA na rede toda, e um dos dois —
+   * loja ou SKU — basta. `skus` aceita a lista de códigos de uma REF (cor ×
+   * tamanho) numa chamada só, em vez de uma por variação.
    */
   @Get('movements')
   async movements(
     @Req() req: any,
-    @Query('storeCode') storeCode: string,
+    @Query('storeCode') storeCode?: string,
     @Query('sku') sku?: string,
+    @Query('skus') skus?: string,
     @Query('limit') limit?: string,
   ) {
     this.requireAdmin(req);
-    if (!storeCode) return { error: 'storeCode obrigatório' };
+    const lista = (skus || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!storeCode && !sku && !lista.length) {
+      return { error: 'Informe storeCode ou sku' };
+    }
     return this.svc.historicoMovimentacoes({
       storeCode,
       sku,
+      skus: lista,
       limit: limit ? Number(limit) : undefined,
     });
   }

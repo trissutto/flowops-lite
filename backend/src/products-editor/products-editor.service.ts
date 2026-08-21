@@ -195,12 +195,49 @@ export class ProductsEditorService {
       }
     } catch { /* informativo */ }
 
+    /**
+     * ── Custo e margem (espelho) ──
+     *
+     * Consulta à parte de propósito: o enriquecimento acima tem três caminhos
+     * (tabela nativa, Giga ao vivo, espelho) e acrescentar dois campos nos três
+     * multiplicaria a chance de divergirem. Custo não muda por caminho — sai
+     * sempre do espelho.
+     *
+     * ⚠️ `custo` e `margem` já estão em REAIS, mesma regra do `vendaUn`:
+     * NUNCA dividir por 100. Dividir o Decimal do Prisma foi o que derrubou
+     * preços 100× em 01/07.
+     *
+     * Quem pode VER isso é decidido no controller (`ficha-search` poda pra quem
+     * não é matriz) — aqui só é buscado.
+     */
+    const custoPorCodigo = new Map<string, { custo: number | null; margem: number | null }>();
+    try {
+      const norm = codigos.map((c) => this.normalizeCodigo(c)).filter(Boolean) as string[];
+      if (norm.length) {
+        const wrows: any[] = await (this.prisma as any).wincredProduto.findMany({
+          where: { codigo: { in: norm } },
+          select: { codigo: true, custo: true, margem: true },
+        });
+        const byNorm = new Map(wrows.map((w) => [w.codigo, w]));
+        for (const c of codigos) {
+          const w = byNorm.get(this.normalizeCodigo(c) as string);
+          if (w) {
+            custoPorCodigo.set(c, {
+              custo: w.custo != null ? Number(w.custo) : null,
+              margem: w.margem != null ? Number(w.margem) : null,
+            });
+          }
+        }
+      }
+    } catch { /* custo é informativo — nunca derruba a busca */ }
+
     // ── Monta linhas: Giga fresco > espelho ──
     const rows = base
       .filter((r: any) => String(r.codigo || '').trim() && codigos.includes(String(r.codigo).trim()))
       .map((r: any) => {
         const codigo = String(r.codigo).trim();
         const ex = extra.get(codigo);
+        const cm = custoPorCodigo.get(codigo);
         return {
           codigo,
           ref: (ex?.ref ?? (r.ref != null ? String(r.ref).trim() : '')) || '',
@@ -209,6 +246,8 @@ export class ProductsEditorService {
           cor: ex?.cor ?? (r.cor != null ? String(r.cor).trim() : ''),
           tamanho: ex?.tamanho ?? (r.tamanho != null ? String(r.tamanho).trim() : ''),
           preco: ex?.vendaUn ?? (r as any).vendaUn ?? null,
+          custo: cm?.custo ?? null,
+          margem: cm?.margem ?? null,
           estoque: estoquePorCodigo.get(codigo) ?? null,
           estoqueLojas: estoqueLojasPorCodigo.get(codigo) ?? {},
         };
@@ -1344,6 +1383,44 @@ export class ProductsEditorService {
         };
       }),
     }).catch(() => null);
+
+    /**
+     * O ajuste manual entra TAMBÉM em `stock_movements` (21/08).
+     *
+     * Antes ele vivia só em `productEditAudit`, enquanto `stock_movements`
+     * recebia venda, conferência e sync. Nenhuma das duas era o histórico
+     * completo da peça, e a aba Histórico da ficha nasceria mostrando meia
+     * verdade — justamente sem os ajustes que a própria tela cria.
+     *
+     * Só entra o que foi APLICADO de fato: `qtyBefore/qtyAfter` vêm do
+     * resultado do ERP, não do que a tela pediu. Movimento que falhou fica na
+     * auditoria com `applied: false` e não polui o histórico de estoque.
+     *
+     * Não propaga erro: histórico que derruba a operação é pior que histórico
+     * incompleto — mesma postura da telemetria.
+     */
+    const paraHistorico = movs.flatMap((m) => {
+      const ap = aplicadoPorChave.get(`${m.tipo}|${m.codigo}|${m.loja}`);
+      if (!ap) return [];
+      return [{
+        storeCode: m.loja,
+        sku: m.codigo,
+        delta: m.tipo === 'entrada' ? m.qtd : -m.qtd,
+        qtyBefore: ap.previousStock,
+        qtyAfter: ap.newStock,
+        reason: 'ajuste_manual',
+        refId: batchId,
+        note: m.motivo,
+        userId: input.userName || null,
+      }];
+    });
+    if (paraHistorico.length) {
+      await (this.prisma as any).stockMovement
+        .createMany({ data: paraHistorico })
+        .catch((e: any) =>
+          this.logger.warn(`[editor] histórico de estoque não gravou: ${e?.message || e}`),
+        );
+    }
 
     const aplicados = resultados.filter((r) => r.ok).length;
     this.logger.log(`[editor] movimentação: ${aplicados}/${movs.length} aplicado(s) (por ${input.userName || '?'})`);
