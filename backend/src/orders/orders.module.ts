@@ -7,11 +7,14 @@ import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { ErpModule } from '../erp/erp.module';
 import { PickScanModule } from '../pick-orders/pick-scan.module';
 import { PickOrdersModule } from '../pick-orders/pick-orders.module';
+import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 
 @Module({
   // PickScanModule → estorno dos bipes no cancelamento/reembolso do pedido.
   // PickOrdersModule (forwardRef) → JuntadaService dos endpoints /juntar.
-  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
+  // WincredMirrorModule → WincredCatalogService (troca manual de item lê a
+  // peça nova pelo espelho, mesmo caminho do bipe do PDV).
+  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
   providers: [OrdersService],
   controllers: [OrdersController],
   exports: [OrdersService],

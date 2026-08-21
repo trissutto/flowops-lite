@@ -59,16 +59,24 @@ export default function SwapModal({
   onSwap,
   onDone,
   onClose,
+  requireConfirm = false,
 }: {
   currentLabel: string;
   onSwap: (payload: SwapPayload) => Promise<SwapResponse>;
   onDone: () => void;
   onClose: () => void;
+  /**
+   * true = clicar no resultado NÃO troca ainda: mostra "sai X → entra Y" e um
+   * botão Confirmar (retaguarda, onde a troca re-roteia o pedido inteiro).
+   * false (default) = comportamento da loja, troca no clique.
+   */
+  requireConfirm?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<ErpSearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ErpSearchHit | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [diffInfo, setDiffInfo] = useState<SwapResponse | null>(null);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -150,6 +158,10 @@ export default function SwapModal({
     setDiffInfo(null);
     setPassword('');
     setError(null);
+    if (requireConfirm) {
+      setConfirming(true); // troca só depois do Confirmar
+      return;
+    }
     void attempt(hit); // 1ª tentativa sem senha
   }
 
@@ -209,8 +221,41 @@ export default function SwapModal({
               />
             </div>
 
-            {/* Resultados — some quando já escolheu e está no passo da senha */}
-            {!needsPwd && (
+            {/* Confirmação (retaguarda) — sai X, entra Y */}
+            {confirming && selected && (
+              <div className="rounded-lg border border-[#E6DFC8] bg-white p-3 space-y-3">
+                <div className="text-sm text-slate-700">
+                  <div>Sai: <span className="font-semibold text-slate-800">{currentLabel}</span></div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <ArrowRight className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span>Entra: <span className="font-semibold text-slate-800">{selectedLabel}</span></span>
+                  </div>
+                </div>
+                <div className="text-xs text-slate-500">
+                  O valor cobrado da cliente NÃO muda. Depois da troca o pedido é re-roteado
+                  e a separação recalculada.
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { setConfirming(false); setSelected(null); }}
+                    disabled={busy}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    onClick={() => { if (selected) { setConfirming(false); void attempt(selected); } }}
+                    disabled={busy}
+                    className="flex-1 rounded-lg bg-[#B8912B] px-3 py-2 text-sm font-bold text-white hover:bg-[#8C7325] disabled:opacity-50"
+                  >
+                    {busy ? 'Trocando…' : 'Confirmar troca'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Resultados — some quando já escolheu (senha ou confirmação) */}
+            {!needsPwd && !confirming && (
               <div className="max-h-64 overflow-y-auto rounded-lg border border-[#E6DFC8] bg-white divide-y divide-slate-50">
                 {loading && (
                   <div className="px-3 py-4 text-sm text-slate-400">Buscando…</div>
@@ -224,7 +269,8 @@ export default function SwapModal({
                   </div>
                 )}
                 {results.map((r) => {
-                  const estoque = Number(r.qtyMyStore ?? r.ESTOQUE) || 0;
+                  // Loja vê o estoque DELA; retaguarda (sem loja) vê o total da rede.
+                  const estoque = Number(r.qtyMyStore ?? r.ESTOQUE ?? r.qtyTotal) || 0;
                   const isSel = selected?.CODIGO === r.CODIGO;
                   return (
                     <button
