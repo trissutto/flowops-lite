@@ -951,6 +951,57 @@ model PickOrderScan {
   @@map("pick_order_scans")
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  PEÇA REPORTADA NA BIPAGEM — "não achei a peça" SEM travar o pedido.
+//
+//  Caso ON-000006 (21/08): 10 de 11 bipadas, a última (PRETO 52) não existia
+//  fisicamente. O finish exige 100% bipado, então a separação morria na tela
+//  — e o estoque fantasma da peça continuava vendendo no site.
+//
+//  O reporte tira o item do card (OrderItem volta a ficar SEM loja, esperando
+//  decisão da matriz), e — quando o motivo é "sem estoque físico" — tira a
+//  quantidade fantasma do estoque da loja NA MESMA transação, pra vitrine
+//  parar de vender peça que não existe.
+//
+//  Sem FK pro PickOrder de propósito, igual pick_order_scans: a linha é a
+//  EVIDÊNCIA de que a loja reportou e de quanto saiu do estoque, e sobrevive
+//  ao delete do card.
+// ════════════════════════════════════════════════════════════════════════
+model PickOrderItemReport {
+  id          String  @id @default(uuid())
+  pickOrderId String  @map("pick_order_id")
+  orderId     String  @map("order_id")
+  storeId     String  @map("store_id")
+  // Loja congelada na linha — é DELA que a quantidade fantasma saiu.
+  storeCode   String  @map("store_code")
+  orderItemId String? @map("order_item_id")
+  // Snapshot da peça na hora do reporte (o item pode ser re-roteado depois).
+  sku         String
+  productName String? @map("product_name")
+  ref         String?
+  cor         String?
+  tamanho     String?
+  qtyMissing  Int     @map("qty_missing")
+  // out_of_stock | defective | divergence | other
+  reason      String
+  note        String?
+  reportedAt  DateTime @default(now()) @map("reported_at")
+  reportedBy  String?  @map("reported_by")
+  // Baixa da quantidade fantasma (só reason=out_of_stock). Mesmo par
+  // baixa/estorno dos scans — hoje ninguém estorna automático; se a peça
+  // aparecer depois, a entrada é pelo realinhamento/consulta.
+  stockDecreasedAt   DateTime? @map("stock_decreased_at")
+  stockIncreasedAt   DateTime? @map("stock_increased_at")
+  debitSkippedReason String?   @map("debit_skipped_reason")
+  resolvedAt DateTime? @map("resolved_at")
+  resolvedBy String?   @map("resolved_by")
+
+  @@index([pickOrderId])
+  @@index([orderId])
+  @@index([resolvedAt])
+  @@map("pick_order_item_reports")
+}
+
 model OrderHistory {
   id         String   @id @default(uuid())
   orderId    String   @map("order_id")

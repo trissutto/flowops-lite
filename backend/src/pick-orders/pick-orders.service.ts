@@ -1170,10 +1170,19 @@ export class PickOrdersService {
     const skus = items.map((i) => i.sku).filter(Boolean);
     const eanMap = skus.length ? await this.erp.getEansBySkus(skus) : {};
     const scans = await this.scans.listActiveScans(pickOrderId);
+    // Peças que ESTA loja reportou neste card ("não achei") — a tela mostra a
+    // linha apagada com "reportada", em vez de sumir com ela sem explicação.
+    const reports = await this.autoResolveReports(
+      await this.prisma.pickOrderItemReport.findMany({
+        where: { pickOrderId, resolvedAt: null },
+        orderBy: { reportedAt: 'desc' },
+      }),
+    );
 
     return {
       pickOrderId: po.id,
       status: po.status,
+      reports,
       scans: scans.map((s) => ({
         scanUid: s.scanUid,
         sku: s.sku,
@@ -2025,7 +2034,7 @@ export class PickOrdersService {
       other: 'Outro',
     };
 
-    return rows.map((r) => {
+    const cards = rows.map((r) => {
       const reason = (r as any).issueReason as string;
       return {
         pickOrderId: r.id,
@@ -2037,8 +2046,51 @@ export class PickOrdersService {
         reasonLabel: reasonLabels[reason] ?? reason,
         note: (r as any).issueNote ?? null,
         reportedAt: (r as any).issueReportedAt ?? null,
+        itemLevel: false,
       };
     });
+
+    // Reportes POR PEÇA ("não achei na bipagem") — o card seguiu com o resto,
+    // mas a peça está sem loja esperando a matriz. Mesmo shape do badge.
+    const abertos = await this.autoResolveReports(
+      await this.prisma.pickOrderItemReport.findMany({
+        where: { resolvedAt: null },
+        orderBy: { reportedAt: 'desc' },
+        take: 200,
+      }),
+    );
+    if (abertos.length) {
+      const orderIds = [...new Set(abertos.map((r: any) => r.orderId))];
+      const orders = await this.prisma.order.findMany({
+        where: { id: { in: orderIds }, status: { notIn: ['cancelled', 'refunded'] as any } },
+        select: { id: true, wcOrderId: true, wcOrderNumber: true },
+      });
+      const orderById = new Map(orders.map((o) => [o.id, o]));
+      const storeCodes = [...new Set(abertos.map((r: any) => r.storeCode))];
+      const stores = await this.prisma.store.findMany({
+        where: { code: { in: storeCodes } },
+        select: { code: true, name: true },
+      });
+      const storeByCode = new Map(stores.map((s) => [s.code, s.name]));
+      for (const r of abertos) {
+        const o = orderById.get(r.orderId);
+        if (!o) continue; // pedido cancelado/apagado — reporte não interessa mais
+        const peca = [r.ref, r.cor, r.tamanho].filter(Boolean).join(' · ') || r.sku;
+        cards.push({
+          pickOrderId: r.pickOrderId,
+          wcOrderId: o.wcOrderId ?? null,
+          wcOrderNumber: o.wcOrderNumber ?? null,
+          storeCode: r.storeCode,
+          storeName: storeByCode.get(r.storeCode) ?? r.storeCode,
+          reason: r.reason,
+          reasonLabel: `Peça faltou: ${peca} (${r.qtyMissing} un) — ${r.reasonLabel}`,
+          note: r.note,
+          reportedAt: r.reportedAt,
+          itemLevel: true,
+        });
+      }
+    }
+    return cards;
   }
 
   /**
@@ -3813,6 +3865,360 @@ export class PickOrdersService {
       reportedAt: now.toISOString(),
       pecasEstornadas: estorno.pecas,
     };
+  }
+
+  /** `0` desliga a baixa da quantidade fantasma no reporte por item. */
+  private get itemReportDebitEnabled(): boolean {
+    return String(process.env.PICK_ITEM_REPORT_DEBIT ?? '1').trim() !== '0';
+  }
+
+  private static readonly ITEM_REPORT_REASON_LABELS: Record<string, string> = {
+    out_of_stock: 'Sem estoque físico',
+    defective: 'Peça com defeito',
+    divergence: 'Divergência (cor/tamanho)',
+    other: 'Outro',
+  };
+
+  /**
+   * LOJA REPORTA UMA PEÇA na bipagem ("não achei a peça") — SEM travar o resto.
+   *
+   * Caso ON-000006 (21/08): 10 de 11 bipadas, a última não existia fisicamente.
+   * O finish exige 100% bipado, então a separação morria na tela com o
+   * "Finalizar" cinza — e a única saída era o report-issue do CARD inteiro,
+   * que devolve os 10 bipes e manda TUDO pra outra loja.
+   *
+   * O que acontece aqui, numa transação com o card travado:
+   *   1. As unidades que FALTAM do SKU saem do card: o OrderItem fica sem loja
+   *      (`assignedStoreId = null`), que é o estado "matriz precisa decidir" —
+   *      o mesmo da ruptura. Unidade já bipada FICA no card (se o SKU tinha 2
+   *      e bipou 1, a linha é dividida e só a que falta sai).
+   *   2. Com motivo "sem estoque físico", a quantidade fantasma SAI do estoque
+   *      da loja — é ela que faz o site continuar vendendo peça que não
+   *      existe. Defeito NÃO baixa aqui (o fluxo de Defeitos é quem dá o
+   *      destino da peça); divergência/outro também não.
+   *   3. A evidência vira linha em `pick_order_item_reports` (órfã de
+   *      propósito, como os bipes).
+   *
+   * Com o item fora do card, o esperado da bipagem encolhe sozinho
+   * (`getScanData`/`finishSeparation` leem por `assignedStoreId`) e o
+   * "Finalizar separação" destrava com o resto bipado.
+   */
+  async reportItem(
+    pickOrderId: string,
+    storeId: string,
+    userId: string,
+    input: { orderItemId: string; reason: string; note?: string },
+  ) {
+    const reason = String(input?.reason ?? '').trim();
+    const validReasons = Object.keys(PickOrdersService.ITEM_REPORT_REASON_LABELS);
+    if (!validReasons.includes(reason)) {
+      throw new BadRequestException(`reason inválido. Use: ${validReasons.join(' | ')}`);
+    }
+    const orderItemId = String(input?.orderItemId ?? '').trim();
+    if (!orderItemId) throw new BadRequestException('orderItemId obrigatório');
+    const note = (input?.note ?? '').toString().trim().slice(0, 500) || null;
+    if (reason === 'other' && (!note || note.length < 5)) {
+      throw new BadRequestException('Motivo "Outro" exige uma observação (mín. 5 letras)');
+    }
+
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: {
+        store: { select: { code: true, name: true } },
+        order: { select: { id: true, wcOrderId: true, wcOrderNumber: true } },
+      },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
+    const storeCode = String(po.store?.code ?? '').trim();
+    if (!storeCode) throw new BadRequestException('Loja sem código configurado');
+
+    // Baixa fantasma só no "sem estoque físico" — e respeitando as mesmas
+    // portas da baixa do bipe (shadow/killswitch).
+    const debitSkippedReason =
+      reason !== 'out_of_stock'
+        ? `reason:${reason}`
+        : !this.itemReportDebitEnabled
+          ? 'killswitch'
+          : !this.erp.isWriteEnabled
+            ? 'shadow'
+            : null;
+
+    const out = await this.prisma.$transaction(async (tx) => {
+      await this.scans.lockPickOrder(tx, pickOrderId);
+
+      // Reconfere DEPOIS da trava — cancelamento/issue pode ter commitado no meio.
+      const atual: any = await tx.pickOrder.findUnique({
+        where: { id: pickOrderId },
+        select: { status: true, debitApprovedAt: true, issueReason: true } as any,
+      });
+      if (!atual) throw new BadRequestException('Este pedido saiu da sua fila.');
+      if (atual.status !== 'new' && atual.status !== 'separating') {
+        throw new BadRequestException(`Status atual é "${atual.status}" — só dá pra reportar peça em "new"/"separating"`);
+      }
+      if (atual.issueReason) {
+        throw new BadRequestException('Este pedido já está com problema reportado — fale com a matriz.');
+      }
+      if (atual.debitApprovedAt) {
+        throw new BadRequestException('Estoque deste pedido já foi baixado por inteiro — fale com a matriz.');
+      }
+
+      const item = await tx.orderItem.findUnique({ where: { id: orderItemId } });
+      if (!item || item.orderId !== po.orderId || item.assignedStoreId !== storeId) {
+        throw new BadRequestException('Esse item não está (mais) neste pedido da sua loja.');
+      }
+      if (ehItemSemEstoque(item)) {
+        throw new BadRequestException('Esse item não é peça de estoque (frete/linha manual).');
+      }
+      const sku = item.sku;
+
+      // O bipe conta por SKU, não por linha — então o reporte também trabalha
+      // por SKU: soma o esperado de TODAS as linhas do SKU nesta loja e
+      // desconta o que já foi bipado.
+      const linhasDoSku = await tx.orderItem.findMany({
+        where: { orderId: po.orderId, assignedStoreId: storeId, sku },
+        orderBy: { id: 'asc' },
+      });
+      const esperadoSku = linhasDoSku.reduce((a, b) => a + b.quantity, 0);
+      const bipadoSku = await tx.pickOrderScan.count({
+        where: { pickOrderId, sku, revertedAt: null },
+      });
+      const faltam = esperadoSku - bipadoSku;
+      if (faltam <= 0) {
+        throw new BadRequestException('Todas as unidades dessa peça já foram bipadas — nada pra reportar.');
+      }
+
+      const todasLinhas = await tx.orderItem.findMany({
+        where: { orderId: po.orderId, assignedStoreId: storeId },
+        select: { quantity: true },
+      });
+      const esperadoCard = todasLinhas.reduce((a, b) => a + b.quantity, 0);
+      if (esperadoCard - faltam <= 0) {
+        throw new BadRequestException(
+          'Essa é a única peça do pedido — use o "Reportar problema" do card, que manda o pedido inteiro pra matriz.',
+        );
+      }
+
+      // Divide/desatribui as linhas do SKU: as unidades JÁ BIPADAS ficam na
+      // loja, as que faltam saem do card (sem loja = matriz decide).
+      let manterBipadas = bipadoSku;
+      let idLinhaReportada: string | null = null;
+      for (const linha of linhasDoSku) {
+        const fica = Math.min(linha.quantity, manterBipadas);
+        manterBipadas -= fica;
+        const sai = linha.quantity - fica;
+        if (sai <= 0) continue;
+        if (fica === 0) {
+          await tx.orderItem.update({
+            where: { id: linha.id },
+            data: { assignedStoreId: null },
+          });
+          idLinhaReportada = idLinhaReportada ?? linha.id;
+        } else {
+          await tx.orderItem.update({
+            where: { id: linha.id },
+            data: { quantity: fica },
+          });
+          const nova = await tx.orderItem.create({
+            data: {
+              orderId: linha.orderId,
+              sku: linha.sku,
+              productName: linha.productName,
+              ref: linha.ref,
+              cor: linha.cor,
+              tamanho: linha.tamanho,
+              quantity: sai,
+              unitPrice: linha.unitPrice,
+              baseUnitPrice: linha.baseUnitPrice,
+              assignedStoreId: null,
+            },
+          });
+          idLinhaReportada = idLinhaReportada ?? nova.id;
+        }
+      }
+
+      if (!debitSkippedReason) {
+        // allowNegative: o objetivo É corrigir o saldo que está mentindo.
+        await this.erp.applyStockDeltaInTx(
+          tx,
+          [{ sku, qty: faltam, storeCode }],
+          -1,
+          { allowNegative: true, skipNotFound: true },
+        );
+      }
+
+      const report = await tx.pickOrderItemReport.create({
+        data: {
+          pickOrderId,
+          orderId: po.orderId,
+          storeId,
+          storeCode,
+          orderItemId: idLinhaReportada,
+          sku,
+          productName: item.productName,
+          ref: item.ref,
+          cor: item.cor,
+          tamanho: item.tamanho,
+          qtyMissing: faltam,
+          reason,
+          note,
+          reportedBy: userId || null,
+          stockDecreasedAt: debitSkippedReason ? null : new Date(),
+          debitSkippedReason,
+        },
+      });
+      return { report, faltam, sku, esperadoRestante: esperadoCard - faltam };
+    });
+
+    const reasonLabel = PickOrdersService.ITEM_REPORT_REASON_LABELS[reason];
+    const peca = [out.report.ref, out.report.cor, out.report.tamanho].filter(Boolean).join(' · ') || out.sku;
+
+    await this.prisma.orderHistory.create({
+      data: {
+        orderId: po.orderId,
+        userId,
+        fromStatus: po.status,
+        toStatus: po.status,
+        note:
+          `Loja ${storeCode} reportou peça na bipagem: ${peca} (${out.faltam} un) — ${reasonLabel}` +
+          (note ? ` — "${note}"` : '') +
+          (out.report.stockDecreasedAt
+            ? '. Quantidade fantasma baixada do estoque da loja.'
+            : '.') +
+          ' Item aguardando decisão da matriz (mandar de outra loja ou reembolsar).',
+      },
+    });
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'item.issue.reported',
+        payload: JSON.stringify({
+          pickOrderId,
+          orderId: po.orderId,
+          reportId: out.report.id,
+          storeId,
+          storeCode,
+          sku: out.sku,
+          qtyMissing: out.faltam,
+          reason,
+          note,
+          reportedBy: userId,
+          stockDecreased: !!out.report.stockDecreasedAt,
+          debitSkippedReason,
+        }),
+        status: 200,
+      },
+    });
+
+    // Mesmo evento que o report do card — /separacao e /pedidos já destacam.
+    // `itemLevel` deixa o front distinguir (o card NÃO saiu da fila da loja).
+    this.gateway.emitPickOrderIssue(storeId, {
+      pickOrderId,
+      orderId: po.orderId,
+      wcOrderId: po.order?.wcOrderId ?? null,
+      storeId,
+      storeCode,
+      storeName: po.store?.name ?? null,
+      reason,
+      reasonLabel: `Peça faltou na bipagem: ${peca} (${out.faltam} un) — ${reasonLabel}`,
+      note,
+      reportedAt: out.report.reportedAt.toISOString(),
+      itemLevel: true,
+      sku: out.sku,
+      qtyMissing: out.faltam,
+    });
+
+    return {
+      ok: true,
+      reportId: out.report.id,
+      sku: out.sku,
+      qtyMissing: out.faltam,
+      reasonLabel,
+      stockDecreased: !!out.report.stockDecreasedAt,
+      debitSkippedReason,
+      esperadoRestante: out.esperadoRestante,
+    };
+  }
+
+  /**
+   * Reportes de peça AINDA SEM DESTINO de um pedido. "Resolvido" é derivado:
+   * se a linha reportada sumiu (pedido apagado) ou voltou a ter loja (matriz
+   * re-roteou), o reporte se resolve sozinho — e o carimbo `resolvedAt` é
+   * gravado aqui mesmo, na leitura, pra lista parar de consultar o item.
+   */
+  private async listItemReportsForOrder(orderId: string) {
+    const abertos = await this.prisma.pickOrderItemReport.findMany({
+      where: { orderId, resolvedAt: null },
+      orderBy: { reportedAt: 'desc' },
+    });
+    return this.autoResolveReports(abertos);
+  }
+
+  private async autoResolveReports(abertos: Array<any>) {
+    if (!abertos.length) return [];
+    const itemIds = abertos.map((r) => r.orderItemId).filter(Boolean) as string[];
+    const itens = itemIds.length
+      ? await this.prisma.orderItem.findMany({
+          where: { id: { in: itemIds } },
+          select: { id: true, assignedStoreId: true },
+        })
+      : [];
+    const porId = new Map(itens.map((i) => [i.id, i]));
+
+    const vivos: any[] = [];
+    for (const r of abertos) {
+      const item = r.orderItemId ? porId.get(r.orderItemId) : null;
+      const resolvido = r.orderItemId ? !item || item.assignedStoreId !== null : false;
+      if (resolvido) {
+        await this.prisma.pickOrderItemReport.updateMany({
+          where: { id: r.id, resolvedAt: null },
+          data: { resolvedAt: new Date(), resolvedBy: 'auto:rerouted' },
+        });
+        continue;
+      }
+      vivos.push({
+        id: r.id,
+        pickOrderId: r.pickOrderId,
+        orderId: r.orderId,
+        storeCode: r.storeCode,
+        sku: r.sku,
+        productName: r.productName,
+        ref: r.ref,
+        cor: r.cor,
+        tamanho: r.tamanho,
+        qtyMissing: r.qtyMissing,
+        reason: r.reason,
+        reasonLabel: PickOrdersService.ITEM_REPORT_REASON_LABELS[r.reason] ?? r.reason,
+        note: r.note,
+        reportedAt: r.reportedAt,
+        stockDecreased: !!r.stockDecreasedAt,
+      });
+    }
+    return vivos;
+  }
+
+  /** Matriz: reportes de peça de um pedido WC (banner do /pedidos/wc/[id]). */
+  async listItemReportsByWc(wcOrderId: number) {
+    const order = await this.prisma.order.findFirst({
+      where: { wcOrderId },
+      select: { id: true },
+    });
+    if (!order) return [];
+    return this.listItemReportsForOrder(order.id);
+  }
+
+  /** Matriz marca um reporte de peça como resolvido na mão (ex.: reembolsou). */
+  async resolveItemReport(reportId: string, userId: string) {
+    const r = await this.prisma.pickOrderItemReport.findUnique({ where: { id: reportId } });
+    if (!r) throw new NotFoundException('Reporte não encontrado');
+    if (r.resolvedAt) return { ok: true, alreadyResolved: true };
+    await this.prisma.pickOrderItemReport.update({
+      where: { id: reportId },
+      data: { resolvedAt: new Date(), resolvedBy: userId || 'admin' },
+    });
+    return { ok: true, alreadyResolved: false };
   }
 
   /**
