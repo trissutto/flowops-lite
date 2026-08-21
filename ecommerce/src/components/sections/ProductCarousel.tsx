@@ -1,5 +1,6 @@
 'use client';
 
+import { chaveDoCard } from '@/services/products';
 import { LuxuryCarousel } from '@/components/ui/LuxuryCarousel';
 import { CAROUSEL_PRODUCT_SIZES, ProductCard } from '@/components/cards/ProductCard';
 import type { Product } from '@/types';
@@ -31,7 +32,7 @@ export function ProductCarousel({
     >
       {products.map((product, index) => (
         <ProductCard
-          key={product.id}
+          key={chaveDoCard(product)}
           product={product}
           index={index}
           onQuickView={onQuickView}

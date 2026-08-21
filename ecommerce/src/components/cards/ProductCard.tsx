@@ -108,7 +108,13 @@ export function ProductCard({
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
 
-  const href = customHref ?? `/produto/${product.slug}`;
+  // Card de UMA COR (dono, 20/08): o link já leva a cor — a PDP abre com
+  // ela como principal e as miniaturas de todas as cores presentes.
+  const href =
+    customHref ??
+    `/produto/${product.slug}${
+      product.vitrineCor ? `?cor=${encodeURIComponent(product.vitrineCor.nome)}` : ''
+    }`;
   const cover = product.images[0];
   const alternate = product.images[1];
   const discount = product.compareAtPrice

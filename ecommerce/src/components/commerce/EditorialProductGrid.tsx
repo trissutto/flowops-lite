@@ -1,5 +1,6 @@
 'use client';
 
+import { chaveDoCard } from '@/services/products';
 import { Fragment } from 'react';
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
@@ -60,7 +61,7 @@ export function EditorialProductGrid({
       {products.map((product, index) => {
         const interruption = byPosition.get(index);
         return (
-          <Fragment key={product.id}>
+          <Fragment key={chaveDoCard(product)}>
             {interruption && <Interruption block={interruption} />}
             <ProductCard
               product={product}

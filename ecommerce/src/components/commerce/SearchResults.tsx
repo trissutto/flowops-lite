@@ -1,5 +1,6 @@
 'use client';
 
+import { chaveDoCard } from '@/services/products';
 import { useEffect, useRef, useState } from 'react';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { Search, Sparkles } from 'lucide-react';
@@ -188,7 +189,7 @@ export function SearchResults({ term }: { term: string }) {
             )}
             <div className="grid grid-cols-2 gap-x-2 gap-y-6 lg:grid-cols-4 lg:gap-x-6">
               {produtos.map((product, index) => (
-                <div key={product.id} onClickCapture={aoClicar(product, index)}>
+                <div key={chaveDoCard(product)} onClickCapture={aoClicar(product, index)}>
                   <ProductCard product={product} index={index} priority={index < 4} />
                 </div>
               ))}
@@ -232,7 +233,7 @@ export function SearchResults({ term }: { term: string }) {
           </p>
           <div className="mt-8 grid grid-cols-2 gap-x-2 gap-y-6 lg:grid-cols-4 lg:gap-x-6">
             {populares.map((product, index) => (
-              <div key={product.id} onClickCapture={aoClicarPopular(product, index)}>
+              <div key={chaveDoCard(product)} onClickCapture={aoClicarPopular(product, index)}>
                 <ProductCard product={product} index={index} />
               </div>
             ))}

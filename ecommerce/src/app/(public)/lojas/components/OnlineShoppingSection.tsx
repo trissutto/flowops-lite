@@ -1,5 +1,6 @@
 'use client';
 
+import { chaveDoCard } from '@/services/products';
 import { ArrowRight } from 'lucide-react';
 import { ProductCard } from '@/components/cards/ProductCard';
 import { AppLink } from '@/components/ui/AppLink';
@@ -35,7 +36,7 @@ export default function OnlineShoppingSection({
           <div className="mt-7 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-6 lg:gap-x-5">
             {products.map((product, index) => (
               <ProductCard
-                key={product.id}
+                key={chaveDoCard(product)}
                 product={product}
                 index={index}
                 sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 17vw"
