@@ -7,7 +7,7 @@ import {
   rankSearch,
   type SearchOutcome,
 } from '@/lib/search';
-import { mapPeca } from '@/services/products';
+import { mapPeca, mapPecasDaVitrine } from '@/services/products';
 import type { Product, SearchResult, SearchResultKind } from '@/types';
 
 /**
@@ -249,7 +249,7 @@ export async function searchProducts(term: string, limit = 24): Promise<SearchOu
     const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);
     if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
     const dados = await resposta.json();
-    const produtos: Product[] = (dados.itens ?? []).map(mapPeca);
+    const produtos: Product[] = mapPecasDaVitrine(dados.itens ?? []);
 
     const outcome = rankSearch(createSearchIndex(produtos), { term, limit });
     reportSearch(term, outcome.results.length);
@@ -279,7 +279,7 @@ export async function fetchPopularProducts(): Promise<Product[]> {
       const resposta = await fetch('/api/loja/produtos?ordenar=relevancia&perPage=4&page=1');
       if (!resposta.ok) return [];
       const dados = await resposta.json();
-      popularCache = ((dados.itens ?? []) as Parameters<typeof mapPeca>[0][]).map(mapPeca);
+      popularCache = mapPecasDaVitrine((dados.itens ?? []) as Parameters<typeof mapPeca>[0][]);
       return popularCache;
     } catch {
       // Sem populares não é erro de UX — a seção simplesmente não aparece.

@@ -1,4 +1,4 @@
-import { mapPeca, type PecaApi } from './products';
+import { explodirPorCor, type PecaApi } from './products';
 import type { Product } from '@/types';
 
 /**
@@ -59,10 +59,16 @@ export async function fetchDescobrir({
     const itens: Array<PecaApi & { contexto?: TrechoDoFeed }> = dados.itens ?? [];
 
     return {
-      items: itens.map((item) => ({
-        product: mapPeca(item),
-        trecho: item.contexto ?? { grupo: 'catalogo', rotulo: '', tipo: 'outra-categoria' },
-      })),
+      // Cada cor é um card TAMBÉM no feed (dono, 21/08) — as cores da peça
+      // saem em sequência dentro do mesmo trecho.
+      items: itens.flatMap((item) => {
+        const trecho = item.contexto ?? {
+          grupo: 'catalogo',
+          rotulo: '',
+          tipo: 'outra-categoria' as const,
+        };
+        return explodirPorCor(item).map((product) => ({ product, trecho }));
+      }),
       total: dados.total ?? itens.length,
       page: dados.page ?? page,
       hasMore: (dados.page ?? page) < (dados.totalPages ?? 1),
