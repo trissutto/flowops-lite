@@ -276,8 +276,13 @@ export function ProductCard({
               // grade da home ele ocuparia 44% da largura, sobre uma foto de
               // 91×122 — vira um botão em cima da peça, não ao lado dela. Com
               // `size-8` cai pra 34%, medido.
+              // E some no CELULAR nos dois modos: com o COMPRAR de volta
+              // embaixo do card, o redondo sobre a foto virava um segundo
+              // botão de sacola no mesmo card. É a regra que o catálogo já
+              // seguia — no celular quem adiciona é o COMPRAR, o redondo é o
+              // atalho de quem tem mouse.
               compact
-                ? 'right-2 bottom-2 size-8 lg:size-9'
+                ? 'right-2 bottom-2 hidden size-8 lg:flex lg:size-9'
                 : 'right-3 bottom-3 hidden size-10 lg:flex lg:size-9',
             )}
           >
@@ -334,7 +339,7 @@ export function ProductCard({
           // esquerda deixa o card com dois eixos — o preço num canto e o botão
           // ocupando tudo. No computador não existe o botão, e a leitura em
           // coluna alinhada à esquerda continua sendo a certa.
-          compact ? 'mt-3' : 'mt-2.5 text-center lg:mt-4 lg:text-left',
+          compact ? 'mt-3 text-center lg:text-left' : 'mt-2.5 text-center lg:mt-4 lg:text-left',
         )}
       >
         {/* O tecido usa a `.eyebrow` — a mesma régua que faz a palavra
@@ -462,14 +467,21 @@ export function ProductCard({
           <p
             className={cn(
               'text-[0.6875rem] text-ink-muted',
-              compact ? 'mt-2' : 'mt-1.5 text-center lg:text-left',
+              compact ? 'mt-2 text-center lg:text-left' : 'mt-1.5 text-center lg:text-left',
             )}
           >
             +{product.colors.length - 1} {product.colors.length - 1 === 1 ? 'cor' : 'cores'}
           </p>
         )}
 
-        {temEstoque && !compact && (
+        {/* ⚠️ O `!compact` saiu daqui (21/08). Ele foi escrito em 18/08, quando
+            a HOME tinha 3 colunas no celular e o card media 91px — botão de
+            largura cheia não cabia. Em 20/08 a home virou 2 colunas e o card
+            passou a medir 152px, contra 156px do catálogo que SEMPRE teve o
+            COMPRAR: a mesma largura, o mesmo botão. Enquanto a condição ficou
+            de pé, a home inteira (137 cards) ficou sem botão de comprar e
+            /novidades com ele — medido no ar. */}
+        {temEstoque && (
           /* O `mt-auto` fica NO WRAPPER e o respiro é o `pt-3`: sozinho no
              botão, o `mt-auto` vira 0 quando não sobra espaço no card e a
              parcela cola no COMPRAR (foi o que ele viu no ar). Assim o botão
