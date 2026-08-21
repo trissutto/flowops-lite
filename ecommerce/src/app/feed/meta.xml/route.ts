@@ -16,7 +16,11 @@ import { SITE } from '@/lib/seo';
  *
  * ── A REGRA QUE FAZ ISSO FUNCIONAR OU NÃO ──
  *
- * O `<g:id>` daqui TEM que ser idêntico ao `content_ids` que o pixel dispara.
+ * O `<g:id>` da cor PRINCIPAL é a REF crua, idêntico ao `content_ids` que o
+ * pixel dispara — é o que mantém evento e catálogo casando depois que a peça
+ * passou a sair uma vez por cor (21/08). As cores adicionais levam sufixo e
+ * não recebem evento do site; quem representa a família no retargeting é a
+ * principal. Ver `variantes()`.
  * O pixel manda `sku || product_id`, e `mapPeca` preenche os dois com a REF —
  * então o id do feed é a REF, e nada mais. Se divergir, o Meta recebe os
  * eventos, recebe o catálogo, e não casa um com o outro: o anúncio dinâmico
@@ -56,6 +60,14 @@ interface PecaFeed {
   imagens: string[];
   tamanhos: string[];
   cores: string[];
+  /** Estoque, fotos, preço e grade POR COR — a matéria-prima da explosão. */
+  coresDetalhe?: Array<{
+    nome: string;
+    estoque: number;
+    preco: number;
+    fotos: string[];
+    tamanhos: string[];
+  }>;
   topSemana?: boolean;
   lancamento?: boolean;
   /** Quantidade em estoque somada — o critério das vitrines. Ver `carimbarTop30`. */
@@ -251,14 +263,81 @@ function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   return carimbo;
 }
 
-function item(p: PecaFeed, novidade?: string, top30?: string, top30Geral?: boolean): string {
-  const link = `${SITE.url}/produto/${p.slug}`;
-  const [capa, ...resto] = p.imagens;
+/** `MARROM DOURADO` → `MARROM-DOURADO`, pra caber num id de item. */
+function slugCor(nome: string): string {
+  return String(nome ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+interface Variante {
+  id: string;
+  cor: string;
+  fotos: string[];
+  tamanhos: string[];
+  /** `item_group_id`. Nulo = peça de cor única, item solto como antes. */
+  grupo: string | null;
+}
+
+/**
+ * CADA COR VIRA UM ITEM — a mesma regra que a vitrine do site já aplica
+ * (`explodirPorCor` em `services/products.ts`), agora no catálogo do Meta.
+ *
+ * Antes uma peça de 8 cores era UM anúncio: rotulado com a primeira cor e
+ * com as fotos das outras sete embaralhadas na galeria — a cliente via um
+ * anúncio "PRETO" cuja segunda foto era bege.
+ *
+ * 🔑 A COR DE MAIOR ESTOQUE HERDA O `id` DA REF.
+ *
+ * É o que impede a virada de zerar tudo: para o Meta aquele item continua
+ * sendo o mesmo de sempre (aprendizado, prova social e desempenho seguem),
+ * e só as cores adicionais entram como itens novos. Serve também pro pixel:
+ * o site dispara `content_ids` com a REF crua, então o evento continua
+ * casando — com a cor principal, que é a que tem mais peça em estoque.
+ *
+ * Só entra cor COM foto própria e COM estoque: cor sem foto viraria anúncio
+ * com a foto de outra cor, e esgotada frustra quem clica.
+ */
+function variantes(p: PecaFeed): Variante[] {
+  const unica: Variante = {
+    id: p.ref,
+    cor: p.cores[0] ?? "",
+    fotos: p.imagens,
+    tamanhos: p.tamanhos,
+    grupo: null,
+  };
+  const vendaveis = (p.coresDetalhe ?? [])
+    .filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0)
+    .sort((a, b) => b.estoque - a.estoque);
+  if (vendaveis.length < 2) return [unica];
+  return vendaveis.map((c, i) => ({
+    id: i === 0 ? p.ref : `${p.ref}-${slugCor(c.nome)}`,
+    cor: c.nome,
+    fotos: c.fotos,
+    tamanhos: c.tamanhos?.length ? c.tamanhos : p.tamanhos,
+    grupo: p.ref,
+  }));
+}
+
+function item(p: PecaFeed, v: Variante, novidade?: string, top30?: string, top30Geral?: boolean): string {
+  // `?cor=` faz a PDP abrir já na cor do anúncio — sem isso a cliente clica
+  // no bege e cai na página mostrando o preto.
+  const link = v.grupo
+    ? `${SITE.url}/produto/${p.slug}?cor=${encodeURIComponent(v.cor)}`
+    : `${SITE.url}/produto/${p.slug}`;
+  const [capa, ...resto] = v.fotos;
 
   const campos: string[] = [
-    // A REF, e só a REF — ver o cabeçalho.
-    `<g:id>${escapar(p.ref)}</g:id>`,
-    `<g:title>${escapar(p.nome)}</g:title>`,
+    // A cor de MAIOR estoque herda a REF crua; as outras ganham sufixo.
+    // Ver `variantes()`.
+    `<g:id>${escapar(v.id)}</g:id>`,
+    ...(v.grupo ? [`<g:item_group_id>${escapar(v.grupo)}</g:item_group_id>`] : []),
+    // Com a COR no nome, igual ao card do site: sem isto a peça de 8 cores
+    // vira 8 anúncios de título idêntico e a cliente não sabe qual é qual.
+    `<g:title>${escapar(v.grupo ? `${p.nome} · ${v.cor}` : p.nome)}</g:title>`,
     // Descrição é obrigatória no Meta. Sem ficha cadastrada, o nome da peça
     // com a categoria é honesto e melhor que deixar o item ser recusado.
     `<g:description>${escapar(p.descricao || `${p.nome} — ${rotulo(p.categoria)} plus size do 44 ao 60.`)}</g:description>`,
@@ -301,8 +380,8 @@ function item(p: PecaFeed, novidade?: string, top30?: string, top30Geral?: boole
   // Cor e tamanho no nível da REF: a peça tem uma página só, e a cliente
   // escolhe a variação dentro dela. Manda a primeira cor e a grade que existe
   // — serve pro Meta filtrar e segmentar, sem fingir que são itens separados.
-  if (p.cores[0]) campos.push(`<g:color>${escapar(p.cores[0])}</g:color>`);
-  if (p.tamanhos.length) campos.push(`<g:size>${escapar(p.tamanhos.join(', '))}</g:size>`);
+  if (v.cor) campos.push(`<g:color>${escapar(v.cor)}</g:color>`);
+  if (v.tamanhos.length) campos.push(`<g:size>${escapar(v.tamanhos.join(", "))}</g:size>`);
 
   return `<item>${campos.join('')}</item>`;
 }
@@ -320,7 +399,7 @@ export async function GET() {
     // sobrevive a deploy — trocar revalidate/tags no código não alcança a
     // entrada já gravada (config de cache não entra na chave). O backend
     // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
-    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=4', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=5', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
   } catch {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o
@@ -339,7 +418,13 @@ export async function GET() {
     `<title>${escapar(SITE.name)}</title>` +
     `<link>${escapar(SITE.url)}</link>` +
     `<description>${escapar(SITE.description)}</description>` +
-    validas.map((p) => item(p, novidades.get(p.ref), top30.categoria.get(p.ref), top30.geral.has(p.ref))).join('') +
+    validas
+      .flatMap((p) =>
+        variantes(p).map((v) =>
+          item(p, v, novidades.get(p.ref), top30.categoria.get(p.ref), top30.geral.has(p.ref)),
+        ),
+      )
+      .join("") +
     `</channel></rss>`;
 
   return new Response(xml, {

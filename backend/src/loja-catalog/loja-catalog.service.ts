@@ -2150,6 +2150,22 @@ export class LojaCatalogService {
       imagens: string[];
       tamanhos: string[];
       cores: string[];
+      /**
+       * O MESMO detalhe por cor que a vitrine usa (`explodirPorCor`).
+       *
+       * `listar` já devolve estoque, fotos, preço e grade POR COR — este mapa
+       * jogava tudo fora e mandava só o nome. Sem isso o feed do Meta não tem
+       * como virar um item por cor: uma peça de 8 cores saía como UM anúncio,
+       * rotulado com a primeira cor e com as fotos das outras 7 embaralhadas
+       * na galeria.
+       */
+      coresDetalhe: Array<{
+        nome: string;
+        estoque: number;
+        preco: number;
+        fotos: string[];
+        tamanhos: string[];
+      }>;
       topSemana: boolean;
       lancamento: boolean;
     }>
@@ -2211,6 +2227,14 @@ export class LojaCatalogService {
       imagens: (p.imagens ?? []).map((i: any) => i.src).filter(Boolean),
       tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
       cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),
+      // Cru, por cor — quem decide o que vira item é o feed (ver `meta.xml`).
+      coresDetalhe: (p.cores ?? []).map((c: any) => ({
+        nome: String(c.nome ?? ""),
+        estoque: Number(c.estoque) || 0,
+        preco: Number(c.preco) || 0,
+        fotos: (c.fotos ?? []).map((f: any) => f?.src).filter(Boolean),
+        tamanhos: (c.tamanhos ?? []).filter((t: any) => t?.disponivel).map((t: any) => t.label),
+      })).filter((c: any) => c.nome),
       topSemana: topSemanaRefs.has(this.refKey(p.ref)),
       // ≤30 dias desde a PRIMEIRA VENDA (a mesma flag do badge "novo"). O feed usa
       // pra carimbar Novidade só em peça nova DE VERDADE (senão enche com peça de
