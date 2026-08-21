@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Overlay } from '@/components/ui/Overlay';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
+import { MaisDaFamilia } from '@/components/commerce/MaisDaFamilia';
 import { SizePill } from '@/components/ui/Choice';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
@@ -61,8 +62,17 @@ export interface CorEscolhivel {
 
 export function BuyBox({
   product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, corPendente, onPedirCor, seletorCores,
+  irmas, irmasHref, irmasLabel,
 }: {
   product: Product;
+  /**
+   * AS IRMÃS DA PEÇA — outras peças da mesma família/categoria, buscadas no
+   * SERVIDOR e passadas prontas (nenhuma chamada sai do navegador por causa
+   * disso). Vazio/ausente = a faixa não aparece.
+   */
+  irmas?: Product[];
+  irmasHref?: string;
+  irmasLabel?: string;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
   cores?: CorEscolhivel[];
   corSelecionada?: string | null;
@@ -569,6 +579,14 @@ export function BuyBox({
           </a>
         </div>
       </div>
+
+      {/* AS IRMÃS DA PEÇA (dono, 21/08) — vem logo depois da decisão de
+          compra e ANTES do frete: a cliente que não se convenceu desta peça
+          tem outra ali, sem rolar a página. O feed lá embaixo continua, mas
+          embaixo de tudo nada é alcançado. */}
+      {irmas && irmas.length > 0 && (
+        <MaisDaFamilia pecas={irmas} verTudoHref={irmasHref} verTudoLabel={irmasLabel} />
+      )}
 
       {/* Frete de verdade, pro CEP dela (item 28). Substituiu o texto fixo
           "frete grátis acima de R$ 399", que envelheceu junto com a régua — o

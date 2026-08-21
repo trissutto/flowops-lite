@@ -15,6 +15,7 @@ import { CompleteOLook } from '@/components/commerce/CompleteOLook';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
+import { fetchIrmasDaPeca } from '@/services/vitrine';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
 import { STORE_POLICIES } from '@/data/store-policies';
@@ -137,6 +138,19 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
     .replace(/-/g, ' ')
     .replace(/^\w/, (c) => c.toUpperCase());
 
+  /**
+   * AS IRMÃS DA PEÇA (dono, 21/08) — a faixa que fica abaixo do botão de
+   * compra. Buscada AQUI, no servidor: a PDP é a página mais visitada do
+   * site e não podia ganhar mais uma chamada saindo do navegador. Catálogo
+   * fora do ar devolve lista vazia e o bloco simplesmente não aparece.
+   */
+  const irmas = await fetchIrmasDaPeca({
+    excluirId: product.id,
+    categoria: product.category,
+    subcategoria: product.subcategory,
+    limite: 6,
+  });
+
   const trail = [
     { name: 'Início', path: '/' },
     { name: categoryLabel, path: `/categoria/${product.category}` },
@@ -173,6 +187,9 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
             cores={cores}
             look={peca?.look ?? null}
             corInicial={achaCorDaUrl(cores, cor)?.nome ?? null}
+            irmas={irmas}
+            irmasHref={`/categoria/${product.category}`}
+            irmasLabel={`Ver tudo em ${categoryLabel}`}
           />
         ) : (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
@@ -180,7 +197,14 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
               <ProductGallery images={product.images} name={product.name} badges={product.badges} />
             </div>
             <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
-              <BuyBox product={product} />
+              {/* Peça de COR ÚNICA — é aqui que a faixa mais faz falta: sem
+                  grade de cores, a coluna terminava no botão. */}
+              <BuyBox
+                product={product}
+                irmas={irmas}
+                irmasHref={`/categoria/${product.category}`}
+                irmasLabel={`Ver tudo em ${categoryLabel}`}
+              />
             </div>
           </div>
         )}

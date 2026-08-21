@@ -78,6 +78,14 @@ export interface PecaApi {
   ref: string; slug: string; nome: string;
   descricaoCurta: string | null; descricaoCompleta: string | null;
   marca: string | null; categoria: string | null;
+  /**
+   * SEGUNDO NÍVEL da árvore do site ('manga-curta' dentro de 'blusas'). O
+   * backend sempre mandou (`montarPeca`), mas ninguém lia: `Product.subcategory`
+   * existia no tipo e nascia vazio. Quem precisa disso é quem quer as IRMÃS da
+   * peça — pedir "outras blusas" traz a categoria inteira, pedir "outras de
+   * manga curta" traz o que se parece com esta.
+   */
+  subcategoria?: string | null;
   preco: number; precoPix: number | null;
   /**
    * "De" riscado quando há promoção — o `precoPromo` digitado na retaguarda ou
@@ -158,6 +166,7 @@ export function mapPeca(p: PecaApi): Product {
     slug: p.slug,
     name: nomeComReferencia(p.nome, p.ref),
     category: p.categoria ?? '',
+    subcategory: p.subcategoria ?? undefined,
     price: p.preco,
     compareAtPrice: oferta.compareAtPrice,
     pixPrice: p.precoPix ?? undefined,
