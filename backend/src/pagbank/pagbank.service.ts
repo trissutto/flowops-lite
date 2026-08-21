@@ -273,6 +273,15 @@ export class PagbankService {
     qrCodeImageB64: string;
     expiresAt: Date;
     valor: number;
+    /**
+     * Link público /qr/<token> — é ELE que vai no WhatsApp, não o
+     * copia-e-cola cru. O EMV da PagBank tem uma URL no meio
+     * (api.pagseguro.com/pix/v2/...) que o WhatsApp pinta de azul; a
+     * cliente toca no azul em vez de copiar o código inteiro e não paga.
+     * No link curto, tocar é justamente o caminho certo. (/pix/<token>
+     * já era do crediário — por isso /qr/.)
+     */
+    shortUrl: string;
   }> {
     if (!input.saleId) throw new BadRequestException('saleId obrigatório');
     if (!input.valor || input.valor <= 0)
@@ -426,6 +435,10 @@ export class PagbankService {
       }
     }
 
+    // Token do link público /pix/<token> — 10 chars sorteados (não dá pra
+    // enumerar), mesmo padrão do linkToken do Pagar.me.
+    const linkToken = crypto.randomBytes(8).toString('base64url').slice(0, 10);
+
     // Persiste registro
     await (this.prisma as any).pagbankPayment.create({
       data: {
@@ -439,6 +452,7 @@ export class PagbankService {
         origem: input.origem === 'venda_online' ? 'venda_online' : null,
         qrCodeText,
         qrCodeImageB64,
+        linkToken,
         expiresAt,
       },
     });
@@ -454,7 +468,100 @@ export class PagbankService {
       qrCodeImageB64,
       expiresAt,
       valor: input.valor,
+      shortUrl: `${this.baseUrlPublica()}/qr/${linkToken}`,
     };
+  }
+
+  /** Domínio das páginas públicas (o mesmo do /pg/<token> do Pagar.me). */
+  private baseUrlPublica(): string {
+    return (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app')
+      .split(',')[0]
+      .trim()
+      .replace(/\/$/, '');
+  }
+
+  /**
+   * ESTADO DO LINK PÚBLICO /qr/<token> — o que a página aberta pela cliente
+   * mostra e o que ela consulta no polling.
+   *
+   * LÊ SÓ DO NOSSO POSTGRES, nunca da PagBank ao vivo. Quem mantém o status
+   * fresco é o webhook + o PagbankPixReconcileService (backoff por idade).
+   * Página pública com polling por navegador batendo no gateway foi
+   * exatamente o flood que derrubou a live de 01/07 — não reabrir essa porta.
+   *
+   * Só expõe o que a cliente precisa: valor, QR, copia-e-cola, nome/WhatsApp
+   * da loja. Nada de CPF, telefone da cliente ou itens.
+   */
+  async estadoDoPix(token: string): Promise<{
+    estado: 'aguardando' | 'pago' | 'vencido' | 'cancelado' | 'inexistente';
+    /**
+     * Só no estado `vencido`: true quando o reconciliador JÁ confirmou com a
+     * PagBank que não houve pagamento (`status='expired'`). Vencido só pelo
+     * relógio (`pending` + expiresAt passado) NÃO é definitivo — a cliente
+     * pode ter pago na boca do vencimento e o webhook ainda estar a caminho.
+     * A página usa isto pra decidir se para o polling e se pode afirmar
+     * "nada foi cobrado".
+     */
+    definitivo?: boolean;
+    valor?: number;
+    qrCodeText?: string;
+    qrCodeImageB64?: string;
+    lojaNome?: string;
+    lojaWhatsapp?: string | null;
+    expiraEm?: Date | null;
+    pagoEm?: Date | null;
+  }> {
+    const t = String(token || '').trim();
+    if (!t) return { estado: 'inexistente' };
+
+    const p: any = await (this.prisma as any).pagbankPayment.findUnique({
+      where: { linkToken: t },
+    });
+    if (!p) return { estado: 'inexistente' };
+
+    const loja = await this.dadosDaLoja(p.storeCode);
+    const base = {
+      valor: Number(p.valor) || 0,
+      lojaNome: loja.nome,
+      lojaWhatsapp: loja.whatsapp,
+      expiraEm: p.expiresAt ?? null,
+      pagoEm: p.paidAt ?? null,
+    };
+
+    const status = String(p.status || 'pending');
+    if (status === 'paid') return { estado: 'pago', ...base };
+    if (status === 'cancelled' || status === 'failed') return { estado: 'cancelado', ...base };
+    // `expired` = o reconciliador confirmou com a PagBank que não foi pago.
+    if (status === 'expired') return { estado: 'vencido', definitivo: true, ...base };
+    // Vencido só pelo relógio: `pending` com expiresAt passado. Pagamento na
+    // boca do vencimento ainda pode virar `paid` (webhook/reconciliador a
+    // caminho) — a página segue no polling e não afirma "nada foi cobrado".
+    if (p.expiresAt && new Date(p.expiresAt).getTime() < Date.now()) {
+      return { estado: 'vencido', definitivo: false, ...base };
+    }
+    return {
+      estado: 'aguardando',
+      ...base,
+      qrCodeText: String(p.qrCodeText || ''),
+      qrCodeImageB64: String(p.qrCodeImageB64 || ''),
+    };
+  }
+
+  /** Nome e WhatsApp da loja — a página pública precisa dar pra quem falar. */
+  private async dadosDaLoja(storeCode: string): Promise<{ nome: string; whatsapp: string | null }> {
+    try {
+      const s: any = await this.prisma.store.findFirst({
+        where: { code: String(storeCode) },
+        select: { name: true, whatsapp: true } as any,
+      });
+      return {
+        nome: String(s?.name || 'Lurd’s Plus Size'),
+        // Já vem em E.164 sem "+" (ex: 5511999999999) — é o que o wa.me quer.
+        whatsapp: String(s?.whatsapp || '').replace(/\D/g, '') || null,
+      };
+    } catch {
+      return { nome: 'Lurd’s Plus Size', whatsapp: null };
+    }
   }
 
   /**

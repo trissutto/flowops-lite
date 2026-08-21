@@ -2146,6 +2146,13 @@ model PagbankPayment {
   // PIX
   qrCodeText      String?  @map("qr_code_text") @db.Text   // copia-e-cola
   qrCodeImageB64  String?  @map("qr_code_image_b64") @db.Text  // PNG base64
+  /// Token do link público /qr/<token> (21/08). O copia-e-cola cru no
+  /// WhatsApp vira link azul no meio (a URL da PagBank dentro do EMV) e a
+  /// cliente toca nele em vez de copiar tudo — não paga. O link curto leva
+  /// pra uma página nossa com QR + botão "Copiar código PIX". 10 chars
+  /// sorteados, mesmo padrão do linkToken da Pagar.me. Null = cobrança de
+  /// balcão antiga (nunca ganhou link).
+  linkToken       String?  @unique @map("link_token")
   expiresAt       DateTime? @map("expires_at")
   // Auditoria
   createdAt       DateTime @default(now()) @map("created_at")

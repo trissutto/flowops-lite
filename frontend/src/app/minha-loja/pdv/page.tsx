@@ -5147,6 +5147,14 @@ function PaymentModal({
     qrCodeDataUrl: string;
     expiresAt: string;
     valor: number;
+    /**
+     * Link público /qr/<token> — é ELE que vai no WhatsApp. O copia-e-cola
+     * cru tem a URL da PagBank no meio e o WhatsApp pinta o trecho de azul:
+     * a cliente tocava no azul em vez de copiar o código inteiro e não
+     * pagava (caso Itanhaém 21/08). Vazio = backend antigo, cai na mensagem
+     * com o código cru.
+     */
+    shortUrl: string;
   } | null>(null);
   const [pixOnlineLoading, setPixOnlineLoading] = useState(false);
   const [pixOnlineCopiado, setPixOnlineCopiado] = useState(false);
@@ -5213,6 +5221,7 @@ function PaymentModal({
         qrCodeImageB64: string;
         expiresAt: string;
         valor: number;
+        shortUrl?: string;
       }>('/pagbank/pix/create', {
         method: 'POST',
         body: JSON.stringify({
@@ -5238,6 +5247,7 @@ function PaymentModal({
         qrCodeDataUrl: pb.qrCodeImageB64 ? `data:image/png;base64,${pb.qrCodeImageB64}` : '',
         expiresAt: pb.expiresAt,
         valor: pb.valor,
+        shortUrl: pb.shortUrl || '',
       });
     } catch (e: any) {
       const msg = String(e?.message || e);
@@ -6915,6 +6925,24 @@ function PaymentModal({
                         </p>
                       </div>
                     </div>
+                    {pixOnline.shortUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(pixOnline.shortUrl).catch(() => {});
+                          toast('success', 'Link copiado!', 'Cole no Instagram ou onde a cliente estiver.');
+                        }}
+                        className="w-full text-left rounded-lg bg-white border border-emerald-200 px-2.5 py-1.5 hover:bg-emerald-50"
+                        title="Copiar o link da página de pagamento"
+                      >
+                        <span className="text-[9px] font-bold text-emerald-800 uppercase tracking-wider block">
+                          Link pra mandar (clica pra copiar)
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-700 break-all">
+                          {pixOnline.shortUrl}
+                        </span>
+                      </button>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -6935,7 +6963,14 @@ function PaymentModal({
                         href={`https://api.whatsapp.com/send?${
                           customerPhone ? `phone=55${customerPhone.replace(/\D/g, '')}&` : ''
                         }text=${encodeURIComponent(
-                          `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só copiar o código abaixo e colar no seu banco (PIX copia e cola):\n\n${pixOnline.payload}\n\nAssim que o pagamento cair a gente já separa tudo!`,
+                          // COM shortUrl a mensagem leva SÓ o nosso link. O copia-e-cola
+                          // cru tem a URL da PagBank no meio e o WhatsApp pinta o trecho
+                          // de azul — a cliente tocava no azul em vez de copiar o código
+                          // inteiro e não pagava (caso Itanhaém 21/08). Na página /qr/
+                          // tocar É o caminho certo: valor + QR + botão "Copiar código".
+                          pixOnline.shortUrl
+                            ? `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só tocar no link abaixo e apertar COPIAR CÓDIGO PIX:\n\n${pixOnline.shortUrl}\n\nAssim que o pagamento cair a gente já separa tudo!`
+                            : `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só copiar o código abaixo e colar no seu banco (PIX copia e cola):\n\n${pixOnline.payload}\n\nAssim que o pagamento cair a gente já separa tudo!`,
                         )}`}
                         target="_blank"
                         rel="noopener noreferrer"
