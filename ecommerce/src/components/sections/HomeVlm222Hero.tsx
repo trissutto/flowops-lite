@@ -8,7 +8,26 @@ const VLM_222_IMAGE =
 /** Oferta principal responsiva da home, com uma única foto nos dois layouts. */
 export function HomeVlm222Hero({ href }: { href: string }) {
   return (
-    <section className="relative min-h-[31rem] overflow-hidden bg-[#eee5da] lg:min-h-[34rem]" aria-labelledby="vlm222-hero-title">
+    <>
+      <section className="relative hidden aspect-[12/5] w-full overflow-hidden bg-[#eee5da] lg:block" aria-labelledby="vlm222-desktop-hero-title">
+        <h1 id="vlm222-desktop-hero-title" className="sr-only">
+          Elegância em movimento — Vestido Longo VLM-222
+        </h1>
+        <AppLink href={href} className="group absolute inset-0 block focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-primary">
+          <Image
+            src="/banners/vlm-222-home-1920x800.jpg"
+            alt="Vestido longo VLM-222 nas cores marrom, preto, rosa queimado e royal"
+            fill
+            quality={95}
+            priority
+            fetchPriority="high"
+            sizes="100vw"
+            className="object-cover transition-transform duration-700 group-hover:scale-[1.005]"
+          />
+        </AppLink>
+      </section>
+
+    <section className="relative min-h-[31rem] overflow-hidden bg-[#eee5da] lg:hidden" aria-labelledby="vlm222-hero-title">
       <AppLink href={href} className="group absolute inset-0 block focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-primary">
         <div className="absolute inset-0 bg-[linear-gradient(105deg,#f5efe8_0%,#eee4d8_52%,#ddd0c1_100%)]" />
         <div className="absolute inset-y-0 left-[47%] hidden w-px bg-white/65 shadow-[30px_0_75px_35px_rgba(255,255,255,0.32)] lg:block" />
@@ -54,5 +73,6 @@ export function HomeVlm222Hero({ href }: { href: string }) {
         </div>
       </AppLink>
     </section>
+    </>
   );
 }
