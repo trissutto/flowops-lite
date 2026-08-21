@@ -48,6 +48,12 @@ type SearchResult = {
 
 type StoreOpt = { code: string; name: string; active?: boolean };
 
+/** Quem está logado — usado pra JÁ VIR PREENCHIDA a loja que está recebendo a
+ *  peça. Antes o campo caía em `stores[0]` (= 01 ITANHAÉM pra todo mundo, por
+ *  ordem alfabética) e a peça entrava no estoque da loja errada: a cliente
+ *  entregava no balcão de Campinas e o sistema dava a peça pra Itanhaém. */
+type Me = { role: string; storeCode: string | null; storeName: string | null };
+
 const fmt = (n: number) =>
   (n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -58,6 +64,7 @@ export default function TrocasSitePage() {
   const [err, setErr] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<SearchResult | null>(null);
   const [stores, setStores] = useState<StoreOpt[]>([]);
+  const [me, setMe] = useState<Me | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [prazoConfig, setPrazoConfig] = useState(7);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -66,6 +73,9 @@ export default function TrocasSitePage() {
     inputRef.current?.focus();
     api<StoreOpt[]>('/stores')
       .then((s) => setStores(s.filter((x) => x.active !== false)))
+      .catch(() => {});
+    api<Me>('/auth/me')
+      .then(setMe)
       .catch(() => {});
     api<{ dias: number }>('/wc-returns/prazo')
       .then((r) => setPrazoConfig(r.dias))
@@ -111,7 +121,7 @@ export default function TrocasSitePage() {
           Trocas/Devoluções do Site
         </h1>
         <p className="text-sm text-gray-600 mb-6">
-          Aceitar peças que voltaram pra loja física e estornar pro estoque Giga.
+          Aceitar peças que voltaram pra loja física e devolver pro estoque da loja.
         </p>
 
         {/* BUSCA */}
@@ -161,6 +171,7 @@ export default function TrocasSitePage() {
           <OrderDetail
             order={selectedOrder}
             stores={stores}
+            me={me}
             onBack={() => setSelectedOrder(null)}
             onAccepted={() => {
               setSelectedOrder(null);
@@ -263,11 +274,13 @@ function PrazoBadge({ order }: { order: SearchResult }) {
 function OrderDetail({
   order,
   stores,
+  me,
   onBack,
   onAccepted,
 }: {
   order: SearchResult;
   stores: StoreOpt[];
+  me: Me | null;
   onBack: () => void;
   onAccepted: () => void;
 }) {
@@ -275,7 +288,10 @@ function OrderDetail({
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [receivingStore, setReceivingStore] = useState('');
-  const [modo, setModo] = useState<'devolucao' | 'troca' | 'credito'>('devolucao');
+  // TROCA é o caso normal do balcão (a cliente veio levar outra peça). Antes o
+  // default era 'devolucao' — o botão mais aceso da tela — e a loja registrava
+  // devolução sem vale sem perceber: 96 dos 126 registros da tabela.
+  const [modo, setModo] = useState<'devolucao' | 'troca' | 'credito'>('troca');
   const [motivo, setMotivo] = useState('');
   const [obs, setObs] = useState('');
   const [validade, setValidade] = useState(90);
@@ -289,20 +305,28 @@ function OrderDetail({
       try {
         const d = await api<SearchResult>(`/wc-returns/order/${order.wcOrderId}`);
         setDetail(d);
-        // Pré-seleciona última loja escolhida
-        const saved = typeof window !== 'undefined' ? localStorage.getItem('lurds_trocas_loja') : null;
-        if (saved && stores.some((s) => s.code === saved)) {
-          setReceivingStore(saved);
-        } else if (stores[0]) {
-          setReceivingStore(stores[0].code);
-        }
       } catch (e: any) {
         setErr(e?.message || 'Falha ao carregar detalhes');
       } finally {
         setLoading(false);
       }
     })();
-  }, [order.wcOrderId, stores]);
+  }, [order.wcOrderId]);
+
+  // LOJA QUE ESTÁ RECEBENDO — já vem preenchida com a própria loja de quem está
+  // logado. Só cai no localStorage/primeira da lista pra quem NÃO tem loja
+  // (matriz/admin), que é quem de fato precisa escolher.
+  const minhaLoja = me?.storeCode && stores.some((s) => s.code === me.storeCode) ? me.storeCode : '';
+  useEffect(() => {
+    if (receivingStore) return;
+    if (minhaLoja) {
+      setReceivingStore(minhaLoja);
+      return;
+    }
+    if (!stores.length) return;
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('lurds_trocas_loja') : null;
+    setReceivingStore(saved && stores.some((s) => s.code === saved) ? saved : stores[0].code);
+  }, [minhaLoja, stores, receivingStore]);
 
   function toggle(sku: string, max: number) {
     setSelected((prev) => {
@@ -383,7 +407,7 @@ function OrderDetail({
         </div>
 
         <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-4 text-emerald-800 text-sm">
-          <strong>✓ Estoque estornado no Giga</strong> da loja {success.receivingStoreName}.
+          <strong>✓ Peça de volta no estoque</strong> da loja {success.receivingStoreName}.
           <br />
           A peça já está disponível pra venda novamente.
         </div>
@@ -403,8 +427,8 @@ function OrderDetail({
 
         {(success.items || []).some((it: any) => it.stockError) && (
           <div className="bg-red-50 rounded-lg p-3 mb-4 text-red-800 text-sm">
-            ⚠️ Atenção: estoque Giga não foi estornado em uma ou mais peças. Faça a entrada
-            manual no Gigasistemas.
+            ⚠️ Atenção: o estoque não voltou em uma ou mais peças. Avise a matriz pra fazer a entrada
+            manual.
           </div>
         )}
 
@@ -419,77 +443,51 @@ function OrderDetail({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       <button
         onClick={onBack}
-        className="inline-flex items-center gap-2 text-rose-700 hover:text-rose-900 text-sm font-semibold"
+        className="inline-flex items-center gap-1.5 text-rose-700 hover:text-rose-900 text-sm font-semibold"
       >
-        <ArrowLeft size={16} /> Voltar pra busca
+        <ArrowLeft size={15} /> Voltar pra busca
       </button>
 
-      {/* Cabeçalho do pedido */}
-      <div className="bg-white rounded-2xl shadow-sm p-5">
-        <div className="flex items-start justify-between flex-wrap gap-3 mb-3">
-          <div>
-            <div className="font-mono font-black text-rose-900 text-lg">#{detail.wcOrderNumber}</div>
-            <div className="font-bold text-gray-800">{detail.customerName}</div>
-            {detail.customerCpf && <div className="text-xs text-gray-500">CPF {detail.customerCpf}</div>}
-          </div>
-          <div>
-            <PrazoBadge order={detail} />
-          </div>
+      {/* Cabeçalho do pedido — uma linha só */}
+      <div className="bg-white rounded-xl shadow-sm px-4 py-3 flex items-center flex-wrap gap-x-5 gap-y-1">
+        <div className="font-mono font-black text-rose-900">#{detail.wcOrderNumber}</div>
+        <div className="font-bold text-gray-800">{detail.customerName}</div>
+        <div className="text-xs text-gray-500">
+          {detail.customerCpf && <>CPF {detail.customerCpf} · </>}
+          {detail.shippingCity ? `${detail.shippingCity}/${detail.shippingState} · ` : ''}
+          {detail.status.toUpperCase()}
         </div>
-        <div className="text-sm text-gray-600 grid grid-cols-2 md:grid-cols-4 gap-2">
-          <div>
-            <div className="text-[10px] uppercase font-bold text-gray-400">Total pedido</div>
-            <div className="font-bold text-rose-900">R$ {fmt(detail.total)}</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase font-bold text-gray-400">Pago em</div>
-            <div className="font-mono text-xs">
-              {detail.datePaid ? new Date(detail.datePaid).toLocaleDateString('pt-BR') : '—'}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase font-bold text-gray-400">Cidade</div>
-            <div className="text-xs">
-              {detail.shippingCity ? `${detail.shippingCity}/${detail.shippingState}` : '—'}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase font-bold text-gray-400">Status WC</div>
-            <div className="text-xs uppercase">{detail.status}</div>
-          </div>
+        <div className="ml-auto flex items-center gap-3">
+          <div className="text-sm font-bold text-rose-900">R$ {fmt(detail.total)}</div>
+          <PrazoBadge order={detail} />
         </div>
       </div>
 
-      {/* Aviso fora do prazo */}
+      {/* Aviso fora do prazo — faixa fina */}
       {!detail.dentroDoPrazo && (
-        <div className="bg-red-50 border-2 border-red-300 rounded-2xl p-4 flex items-start gap-3">
-          <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={20} />
-          <div className="flex-1">
-            <div className="font-bold text-red-900">Pedido fora do prazo de troca</div>
-            <div className="text-sm text-red-800 mt-1">
-              {detail.diasDesde} dias desde o envio (prazo: {detail.prazoDias} dias). Aceite só se for
-              decisão da matriz.
-            </div>
-            <label className="inline-flex items-center gap-2 mt-2 text-sm font-bold text-red-900 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={forceOutOfPrazo}
-                onChange={(e) => setForceOutOfPrazo(e.target.checked)}
-                className="w-4 h-4"
-              />
-              Aceitar mesmo fora do prazo
-            </label>
-          </div>
-        </div>
+        <label className="bg-red-50 border border-red-300 rounded-xl px-4 py-2.5 flex items-center gap-2.5 cursor-pointer">
+          <AlertTriangle className="text-red-600 shrink-0" size={16} />
+          <span className="text-sm text-red-800 flex-1">
+            <strong>Fora do prazo</strong> — {detail.diasDesde} dias desde o envio (prazo{' '}
+            {detail.prazoDias}). Aceite só se for decisão da matriz.
+          </span>
+          <input
+            type="checkbox"
+            checked={forceOutOfPrazo}
+            onChange={(e) => setForceOutOfPrazo(e.target.checked)}
+            className="w-4 h-4 shrink-0"
+          />
+          <span className="text-sm font-bold text-red-900 shrink-0">Aceitar assim mesmo</span>
+        </label>
       )}
 
       {/* Itens */}
-      <div className="bg-white rounded-2xl shadow-sm p-5">
-        <h3 className="font-bold text-rose-900 mb-3">Selecione as peças que estão voltando</h3>
-        <div className="space-y-2">
+      <div className="bg-white rounded-xl shadow-sm p-4">
+        <h3 className="font-bold text-rose-900 text-sm mb-2">Peças que estão voltando</h3>
+        <div className="space-y-1.5">
           {detail.items.map((it) => {
             const isSel = !!selected[it.sku];
             const sel = selected[it.sku] || 0;
@@ -497,7 +495,7 @@ function OrderDetail({
             return (
               <div
                 key={it.sku}
-                className={`rounded-lg p-3 transition border-2 ${
+                className={`rounded-lg px-3 py-2 transition border-2 ${
                   disabled
                     ? 'bg-gray-100 border-gray-200 opacity-50'
                     : isSel
@@ -505,17 +503,17 @@ function OrderDetail({
                     : 'bg-white border-gray-200 hover:border-rose-300'
                 }`}
               >
-                <div className="flex items-start gap-3">
+                <div className="flex items-center gap-3">
                   <input
                     type="checkbox"
                     checked={isSel}
                     disabled={disabled}
                     onChange={() => toggle(it.sku, it.disponivel)}
-                    className="mt-1 w-5 h-5 cursor-pointer"
+                    className="w-5 h-5 cursor-pointer shrink-0"
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-gray-800">{it.productName}</div>
-                    <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-2">
+                    <div className="font-semibold text-gray-800 text-sm leading-tight">{it.productName}</div>
+                    <div className="text-xs text-gray-500 flex flex-wrap gap-2">
                       <span className="font-mono">SKU {it.sku}</span>
                       <span>R$ {fmt(it.precoUnit)} unit</span>
                       <span>Comprou {it.qty}</span>
@@ -551,16 +549,16 @@ function OrderDetail({
 
       {/* Form de aceitar */}
       {Object.keys(selected).length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm p-5 space-y-4">
-          {/* LOJA RECEPTORA */}
-          <div>
-            <label className="block text-sm font-bold text-rose-900 mb-2 flex items-center gap-1.5">
-              <StoreIcon size={16} /> Loja que está RECEBENDO a peça (estorna o estoque pra ela)
+        <div className="bg-white rounded-xl shadow-sm p-4 space-y-3">
+          {/* LOJA RECEPTORA — já vem com a própria loja de quem está logado */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-sm font-bold text-rose-900 flex items-center gap-1.5 shrink-0">
+              <StoreIcon size={15} /> Loja que está recebendo a peça
             </label>
             <select
               value={receivingStore}
               onChange={(e) => setReceivingStore(e.target.value)}
-              className="w-full p-3 border-2 border-rose-200 rounded-xl font-semibold text-rose-900 focus:border-rose-400 focus:outline-none"
+              className="flex-1 min-w-[220px] px-3 py-2 border-2 border-rose-200 rounded-lg font-bold text-rose-900 focus:border-rose-400 focus:outline-none"
             >
               <option value="">Selecione...</option>
               {stores.map((s) => (
@@ -569,39 +567,61 @@ function OrderDetail({
                 </option>
               ))}
             </select>
+            {minhaLoja && receivingStore !== minhaLoja && (
+              <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1.5">
+                ⚠️ Não é a sua loja — a peça vai pro estoque de outra
+              </span>
+            )}
           </div>
 
-          {/* MODO */}
-          <div>
-            <label className="block text-sm font-bold text-rose-900 mb-2">Modo</label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <ModoBtn
-                active={modo === 'devolucao'}
-                onClick={() => setModo('devolucao')}
-                icon={<Banknote size={18} />}
-                title="Devolução"
-                sub="Estorna $"
-              />
-              <ModoBtn
-                active={modo === 'troca'}
-                onClick={() => setModo('troca')}
-                icon={<ArrowRightLeft size={18} />}
-                title="Troca"
-                sub="Vale 1 dia"
-              />
+          {/* MODO — troca na loja em destaque, é o caso normal do balcão */}
+          <div className="space-y-2">
+            <button
+              onClick={() => setModo('troca')}
+              className={`w-full rounded-xl px-4 py-3 flex items-center gap-3 transition border-2 ${
+                modo === 'troca'
+                  ? 'bg-emerald-600 border-emerald-700 text-white shadow-md'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100'
+              }`}
+            >
+              <ArrowRightLeft size={22} className="shrink-0" />
+              <div className="text-left leading-tight">
+                <div className="font-black text-lg">TROCAR AGORA NA LOJA</div>
+                <div className={`text-xs ${modo === 'troca' ? 'text-emerald-50' : 'text-emerald-700'}`}>
+                  Gera o vale na hora pra cliente levar outra peça hoje
+                </div>
+              </div>
+              {modo === 'troca' && <Check size={22} className="ml-auto shrink-0" />}
+            </button>
+
+            <div className="grid grid-cols-2 gap-2">
               <ModoBtn
                 active={modo === 'credito'}
                 onClick={() => setModo('credito')}
-                icon={<CreditCard size={18} />}
-                title="Crédito"
-                sub="Vale longo"
+                icon={<CreditCard size={16} />}
+                title="Crédito pra depois"
+                sub="Vale de 90 dias"
+              />
+              <ModoBtn
+                active={modo === 'devolucao'}
+                onClick={() => setModo('devolucao')}
+                icon={<Banknote size={16} />}
+                title="Só devolver a peça"
+                sub="Sem vale — o dinheiro se resolve fora"
               />
             </div>
           </div>
 
+          {modo === 'devolucao' && (
+            <div className="text-xs bg-amber-50 border border-amber-300 text-amber-900 rounded-lg px-3 py-2">
+              Isso <strong>não estorna dinheiro nenhum</strong> — só devolve a peça pro estoque.
+              A cliente sai sem vale e sem reembolso pelo sistema.
+            </div>
+          )}
+
           {modo === 'credito' && (
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-bold text-gray-700 uppercase shrink-0">
                 Validade do vale (dias)
               </label>
               <input
@@ -610,39 +630,26 @@ function OrderDetail({
                 onChange={(e) => setValidade(parseInt(e.target.value, 10) || 90)}
                 min={1}
                 max={365}
-                className="w-full p-2 border rounded-lg"
+                className="w-24 p-1.5 border rounded-lg"
               />
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
-              Motivo (opcional)
-            </label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <input
               type="text"
               value={motivo}
               onChange={(e) => setMotivo(e.target.value)}
-              placeholder="Tamanho errado, defeito, arrependimento..."
-              className="w-full p-2 border rounded-lg"
+              placeholder="Motivo: tamanho errado, defeito…"
+              className="w-full px-3 py-2 border rounded-lg text-sm"
             />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
-              Observação interna (opcional)
-            </label>
-            <textarea
+            <input
+              type="text"
               value={obs}
               onChange={(e) => setObs(e.target.value)}
-              rows={2}
-              className="w-full p-2 border rounded-lg"
+              placeholder="Observação interna (opcional)"
+              className="w-full px-3 py-2 border rounded-lg text-sm"
             />
-          </div>
-
-          <div className="bg-rose-50 rounded-lg p-4 text-center">
-            <div className="text-sm text-rose-700">Valor total da troca</div>
-            <div className="text-3xl font-black text-rose-900">R$ {fmt(totalDevolucao)}</div>
           </div>
 
           {err && <div className="text-sm text-red-600">{err}</div>}
@@ -650,9 +657,19 @@ function OrderDetail({
           <button
             onClick={accept}
             disabled={busy || !receivingStore}
-            className="w-full py-4 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white font-black text-lg disabled:opacity-50 shadow-md"
+            className={`w-full py-3.5 rounded-xl text-white font-black text-lg disabled:opacity-50 shadow-md flex items-center justify-center gap-3 ${
+              modo === 'troca'
+                ? 'bg-emerald-600 hover:bg-emerald-700'
+                : 'bg-rose-600 hover:bg-rose-700'
+            }`}
           >
-            {busy ? 'Processando…' : 'Aceitar Troca e Estornar Estoque'}
+            {busy
+              ? 'Processando…'
+              : modo === 'troca'
+              ? `TROCAR AGORA NA LOJA · R$ ${fmt(totalDevolucao)}`
+              : modo === 'credito'
+              ? `Gerar crédito de R$ ${fmt(totalDevolucao)}`
+              : `Só devolver a peça · R$ ${fmt(totalDevolucao)}`}
           </button>
         </div>
       )}
@@ -676,15 +693,19 @@ function ModoBtn({
   return (
     <button
       onClick={onClick}
-      className={`p-3 rounded-xl text-center transition ${
+      className={`px-3 py-2 rounded-lg text-left transition border-2 ${
         active
-          ? 'bg-rose-600 text-white shadow-lg scale-105'
-          : 'bg-rose-50 hover:bg-rose-100 text-rose-900'
+          ? 'bg-rose-600 border-rose-700 text-white shadow'
+          : 'bg-gray-50 border-gray-200 hover:bg-gray-100 text-gray-700'
       }`}
     >
-      <div className="flex justify-center mb-1">{icon}</div>
-      <div className="font-bold text-sm">{title}</div>
-      <div className={`text-xs ${active ? 'text-rose-100' : 'text-gray-500'}`}>{sub}</div>
+      <div className="flex items-center gap-1.5">
+        {icon}
+        <span className="font-bold text-sm">{title}</span>
+      </div>
+      <div className={`text-[11px] leading-tight ${active ? 'text-rose-100' : 'text-gray-500'}`}>
+        {sub}
+      </div>
     </button>
   );
 }
