@@ -27,7 +27,7 @@ export function HomeVlm222Hero({ href }: { href: string }) {
         </AppLink>
       </section>
 
-    <section className="relative min-h-[31rem] overflow-hidden bg-[#eee5da] lg:hidden" aria-labelledby="vlm222-hero-title">
+      <section className="relative min-h-[31rem] overflow-hidden bg-[#eee5da] lg:hidden" aria-labelledby="vlm222-hero-title">
       <AppLink href={href} className="group absolute inset-0 block focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-primary">
         <div className="absolute inset-0 bg-[linear-gradient(105deg,#f5efe8_0%,#eee4d8_52%,#ddd0c1_100%)]" />
         <div className="absolute inset-y-0 left-[47%] hidden w-px bg-white/65 shadow-[30px_0_75px_35px_rgba(255,255,255,0.32)] lg:block" />
@@ -72,7 +72,7 @@ export function HomeVlm222Hero({ href }: { href: string }) {
           </div>
         </div>
       </AppLink>
-    </section>
+      </section>
     </>
   );
 }
