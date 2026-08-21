@@ -9,17 +9,37 @@ import { ErpService } from '../erp/erp.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 
 /**
- * Troca/devolução de pedido feito no SITE (WooCommerce).
+ * Troca/devolução de QUALQUER venda online, no balcão da loja física.
  *
  * Cenário de uso real:
- *   Cliente comprou pelo lurds.com.br → recebeu em casa → tamanho errado →
- *   manda de volta → loja física recebe a peça → registra a troca aqui →
- *   estoque entra no Giga DAQUELA loja (a que recebeu fisicamente).
+ *   Cliente comprou online → recebeu (ou retirou) → tamanho errado → leva
+ *   numa loja física → a loja registra a troca aqui → o estoque entra na
+ *   loja QUE RECEBEU a peça.
  *
- * Diferente do PDV (que é venda balcão), aqui:
- *   - A venda original NÃO está em PdvSale, está só no WooCommerce
- *   - Estoque já saiu da loja que separou (talvez outra loja)
- *   - A peça pode voltar pra QUALQUER loja física (a mais perto do cliente)
+ * ⚠️ A BUSCA LÊ A TABELA `orders` DO FLOW, NÃO O WOOCOMMERCE.
+ *
+ * Até 21/08/2026 `search`/`getOrderForReturn` batiam 100% na API do
+ * WooCommerce. Só que hoje existem QUATRO origens de venda online e três
+ * delas têm `wcOrderId` SINTÉTICO — não existem no WooCommerce
+ * ([[wcorderid-sintetico-guarda]]):
+ *
+ *   | source       | número     | faixa wcOrderId | existe no WC? |
+ *   |--------------|------------|-----------------|---------------|
+ *   | site         | 198143     | real            | sim (site velho) |
+ *   | ecommerce    | LP-000123  | 950.000.000+    | NÃO (site novo)  |
+ *   | pdv_online   | ON-000085  | 960.000.000+    | NÃO              |
+ *   | live         | LIVE-74    | 900.000.000+    | NÃO              |
+ *
+ * Buscar essas no WC dá 404, o catch engolia e a tela dizia "nenhum pedido
+ * encontrado" — falha silenciosa. Depois da virada de 19/08 o WooCommerce
+ * parou de receber pedido novo, então 100% das trocas futuras cairiam nesse
+ * buraco. O Flow tem TODAS as quatro origens com itens e SKU, então a busca
+ * passou a ler de lá e o WC virou só rede de segurança pra pedido antigo.
+ *
+ * ⚠️ `wcOrderNumber` NÃO é único: a live grava o número da LIVE em toda
+ * sacolinha daquela transmissão (42 números repetidos cobrindo 102 pedidos —
+ * "LIVE-57" são 4 clientes diferentes). Por isso a busca devolve LISTA e quem
+ * identifica o pedido é o `wcOrderId`, esse sim único.
  *
  * Prazo de troca: configurável via SystemSetting `troca.prazoDias`
  * (default 7 dias do recebimento — fallback: 30 dias do envio).
@@ -73,64 +93,79 @@ export class WcReturnsService {
   async search(input: { q: string; limit?: number }) {
     const q = String(input.q || '').trim();
     if (!q || q.length < 2) {
-      throw new BadRequestException('Busque por nome ou nº do pedido (mínimo 2 caracteres)');
+      throw new BadRequestException('Busque por nome, CPF ou nº do pedido (mínimo 2 caracteres)');
     }
 
     const prazoDias = await this.getPrazoDias();
+    const limit = Math.min(50, Math.max(5, input.limit || 20));
+    const digitos = q.replace(/\D/g, '');
 
-    // Estratégia 1: se for só dígitos, tenta como número de pedido (mais rápido)
-    const isNumeric = /^\d+$/.test(q);
-    let wcOrders: any[] = [];
+    // Nome · nº do pedido (LP-000123, ON-000085, LIVE-74, 198143) · CPF ·
+    // telefone. CPF e telefone são comparados só por DÍGITOS: a mesma coluna
+    // guarda '041.895.178-01' e '32721881850'.
+    const rows: any[] = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT o.id, o.wc_order_id, o.wc_order_number, o.status, o.source,
+              o.customer_name, o.customer_cpf, o.customer_email, o.customer_phone,
+              o.shipping_cep, o.shipping_address, o.total_amount, o.tracking_code,
+              o.is_pickup, o.pickup_store_code,
+              o.wc_date_created, o.paid_at, o.delivered_at
+         FROM orders o
+        WHERE o.status NOT IN ('cancelled', 'payment_failed')
+          AND ( o.customer_name    ILIKE $1
+             OR o.wc_order_number  ILIKE $1
+             OR ($2 <> '' AND regexp_replace(coalesce(o.customer_cpf, ''),   '\\D', '', 'g') = $2)
+             OR ($2 <> '' AND regexp_replace(coalesce(o.customer_phone, ''), '\\D', '', 'g') LIKE $3) )
+        ORDER BY o.wc_date_created DESC NULLS LAST
+        LIMIT ${limit}`,
+      `%${q}%`,
+      digitos.length >= 8 ? digitos : '',
+      `%${digitos}%`,
+    );
 
-    if (isNumeric) {
-      try {
-        const o = await this.wc.getOrder(parseInt(q, 10));
-        if (o) wcOrders = [o];
-      } catch {
-        // não achou por ID — segue pra busca por nome
-      }
+    if (!rows.length) return [];
+
+    const orderIds = rows.map((r) => r.id);
+    const wcOrderIds = rows.map((r) => Number(r.wc_order_id)).filter(Boolean);
+
+    const [items, previousReturns] = await Promise.all([
+      (this.prisma as any).orderItem.findMany({ where: { orderId: { in: orderIds } } }),
+      (this.prisma as any).wcReturnRequest.findMany({
+        where: { wcOrderId: { in: wcOrderIds } },
+        include: { items: true },
+      }),
+    ]);
+
+    const itemsByOrder = new Map<string, any[]>();
+    for (const it of items as any[]) {
+      const list = itemsByOrder.get(it.orderId) || [];
+      list.push(it);
+      itemsByOrder.set(it.orderId, list);
     }
-
-    // Estratégia 2: busca textual no WC (search aceita nome/email/nº)
-    if (wcOrders.length === 0) {
-      try {
-        const res = await this.wc.listOrders({
-          search: q,
-          perPage: Math.min(50, Math.max(5, input.limit || 20)),
-          status: 'any',
-        });
-        wcOrders = res.data || [];
-      } catch (e: any) {
-        this.logger.warn(`WC search falhou pra "${q}": ${e?.message || e}`);
-        wcOrders = [];
-      }
-    }
-
-    // Devoluções já registradas pra esses pedidos (evita duplo crédito)
-    const wcOrderIds = wcOrders.map((o) => Number(o.id)).filter(Boolean);
-    const previousReturns: any[] = wcOrderIds.length
-      ? await (this.prisma as any).wcReturnRequest.findMany({
-          where: { wcOrderId: { in: wcOrderIds } },
-          include: { items: true },
-        })
-      : [];
     const returnsByOrder = new Map<number, any[]>();
-    for (const r of previousReturns) {
+    for (const r of previousReturns as any[]) {
       const list = returnsByOrder.get(r.wcOrderId) || [];
       list.push(r);
       returnsByOrder.set(r.wcOrderId, list);
     }
 
-    return wcOrders.map((o) => this.formatOrder(o, prazoDias, returnsByOrder.get(Number(o.id)) || []));
+    return rows.map((o) =>
+      this.formatFlowOrder(
+        o,
+        itemsByOrder.get(o.id) || [],
+        prazoDias,
+        returnsByOrder.get(Number(o.wc_order_id)) || [],
+      ),
+    );
   }
 
   /**
-   * Detalhe de UM pedido WC pra tela de troca (com itens disponíveis).
+   * Detalhe de UM pedido pra tela de troca (com itens disponíveis).
+   *
+   * Lê o Flow primeiro. O WooCommerce só entra como rede de segurança pra
+   * pedido REAL antigo que por algum motivo não esteja na tabela `orders` —
+   * e nunca pra faixa sintética, onde a chamada só produziria 404 → 500.
    */
   async getOrderForReturn(wcOrderId: number) {
-    const o = await this.wc.getOrder(wcOrderId);
-    if (!o) throw new NotFoundException(`Pedido WC ${wcOrderId} não encontrado`);
-
     const prazoDias = await this.getPrazoDias();
 
     const previousReturns = await (this.prisma as any).wcReturnRequest.findMany({
@@ -138,7 +173,138 @@ export class WcReturnsService {
       include: { items: true },
     });
 
+    const flow = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId },
+      include: { items: true },
+    });
+
+    if (flow) {
+      const row = {
+        id: flow.id,
+        wc_order_id: flow.wcOrderId,
+        wc_order_number: flow.wcOrderNumber,
+        status: flow.status,
+        source: flow.source,
+        customer_name: flow.customerName,
+        customer_cpf: flow.customerCpf,
+        customer_email: flow.customerEmail,
+        customer_phone: flow.customerPhone,
+        shipping_cep: flow.shippingCep,
+        shipping_address: flow.shippingAddress,
+        total_amount: flow.totalAmount,
+        tracking_code: flow.trackingCode,
+        is_pickup: flow.isPickup,
+        pickup_store_code: flow.pickupStoreCode,
+        wc_date_created: flow.wcDateCreated,
+        paid_at: flow.paidAt,
+        delivered_at: flow.deliveredAt,
+      };
+      return this.formatFlowOrder(row, flow.items || [], prazoDias, previousReturns, true);
+    }
+
+    if (wcOrderId >= 900_000_000) {
+      throw new NotFoundException(
+        `Pedido ${wcOrderId} não está no Flow. Pedido de live/site novo/online não existe no WooCommerce — não há onde buscar.`,
+      );
+    }
+
+    const o = await this.wc.getOrder(wcOrderId).catch(() => null);
+    if (!o) throw new NotFoundException(`Pedido ${wcOrderId} não encontrado`);
     return this.formatOrder(o, prazoDias, previousReturns, /*detailed*/ true);
+  }
+
+  /**
+   * Formata pedido da tabela `orders` do Flow no MESMO shape que a tela já
+   * consumia do WooCommerce — a tela não sabe (nem precisa saber) de onde veio.
+   */
+  private formatFlowOrder(
+    o: any,
+    orderItems: any[],
+    prazoDias: number,
+    previousReturns: any[],
+    detailed = false,
+  ) {
+    // Base do prazo: a ENTREGA quando o rastreio confirmou (é o que a política
+    // promete — "7 dias do recebimento"), senão o pagamento, senão a data do
+    // pedido. Retirada em loja não tem rastreio e cai no pagamento.
+    const baseDate = o.delivered_at
+      ? new Date(o.delivered_at)
+      : o.paid_at
+      ? new Date(o.paid_at)
+      : o.wc_date_created
+      ? new Date(o.wc_date_created)
+      : null;
+    const diasDesde = baseDate
+      ? Math.floor((Date.now() - baseDate.getTime()) / 86_400_000)
+      : null;
+
+    const devolvidoBySku = new Map<string, number>();
+    for (const r of previousReturns as any[]) {
+      for (const it of r.items || []) {
+        devolvidoBySku.set(it.sku, (devolvidoBySku.get(it.sku) || 0) + (it.qty || 0));
+      }
+    }
+
+    const items = (orderItems || []).map((it: any) => {
+      const sku = String(it.sku ?? '').trim();
+      const qty = Number(it.quantity ?? it.qty) || 1;
+      const jaDev = devolvidoBySku.get(sku) || 0;
+      const precoUnit = Number(it.unitPrice ?? it.unit_price) || 0;
+      const nome = it.productName ?? it.product_name ?? sku;
+      const variacao = [it.cor, it.tamanho].filter(Boolean).join(' · ');
+      return {
+        sku,
+        productName: variacao && !String(nome).includes(variacao) ? `${nome} · ${variacao}` : nome,
+        qty,
+        precoUnit: Math.round(precoUnit * 100) / 100,
+        total: Math.round(precoUnit * qty * 100) / 100,
+        jaDevolvido: jaDev,
+        disponivel: Math.max(0, qty - jaDev),
+      };
+    });
+
+    // shipping_address é JSON em texto — cidade/UF são só pra vendedora
+    // conferir que é a cliente certa, então falha de parse não pode derrubar.
+    let cidade: string | null = null;
+    let uf: string | null = null;
+    try {
+      const end =
+        typeof o.shipping_address === 'string'
+          ? JSON.parse(o.shipping_address)
+          : o.shipping_address || {};
+      cidade = end?.city || end?.cidade || null;
+      uf = end?.state || end?.uf || null;
+    } catch {
+      /* endereço fora do formato — segue sem cidade */
+    }
+
+    return {
+      wcOrderId: Number(o.wc_order_id),
+      wcOrderNumber: String(o.wc_order_number || o.wc_order_id),
+      status: o.status,
+      source: o.source,
+      total: Number(o.total_amount) || 0,
+      dateCreated: o.wc_date_created || null,
+      datePaid: o.paid_at || null,
+      dateCompleted: o.delivered_at || null,
+      diasDesde,
+      prazoDias,
+      dentroDoPrazo: diasDesde != null ? diasDesde <= prazoDias : true,
+      diasRestantes: diasDesde != null ? Math.max(0, prazoDias - diasDesde) : null,
+      customerName: o.customer_name || null,
+      customerCpf: o.customer_cpf || null,
+      customerEmail: o.customer_email || null,
+      customerPhone: o.customer_phone || null,
+      shippingCity: cidade,
+      shippingState: uf,
+      items: detailed ? items : items.slice(0, 5),
+      itemCount: items.length,
+      previousReturnsCount: previousReturns.length,
+      previousReturnsValor: (previousReturns as any[]).reduce(
+        (s, r) => s + (Number(r.valorTotal) || 0),
+        0,
+      ),
+    };
   }
 
   /**
@@ -387,6 +553,54 @@ export class WcReturnsService {
         (creditoCode ? `código=${creditoCode}` : ''),
     );
 
+    // ── O VALE PRECISA EXISTIR ONDE A CLIENTE VAI GASTAR ──────────────
+    //
+    // Até 21/08/2026 o vale desta tela só virava CUPOM DO WOOCOMMERCE. Ele
+    // não funcionava em lugar nenhum que importa hoje:
+    //   · no PDV, `addPayment` procura em `pdv_returns` e depois em
+    //     `site_cupons` com origem='troca' — nunca em `wc_return_requests`;
+    //   · no site NOVO, o CupomService lê `site_cupons`;
+    //   · o site VELHO (único que lia o cupom WC) parou de vender em 19/08.
+    // Ou seja: a loja entregava um código que ela mesma não conseguia
+    // aceitar no caixa. Agora o vale nasce em `site_cupons` — o MESMO
+    // caminho do portal de trocas ([[vale-troca-so-apos-conferencia]]).
+    //
+    // `origem: 'troca'` é obrigatório: é o único valor que o PDV aceita.
+    // O vale é NOMINAL — sem CPF na venda original ele não passa, de
+    // propósito (código que vaza em print vira compra de outra pessoa).
+    let valeNoCaixaOk = false;
+    if (creditoCode && (modo === 'troca' || modo === 'credito')) {
+      const cpfVale = String(detail.customerCpf || '').replace(/\D/g, '');
+      try {
+        await (this.prisma as any).siteCupom.create({
+          data: {
+            code: creditoCode,
+            label: `Vale-troca pedido ${detail.wcOrderNumber || wcOrderId}`,
+            tipo: 'fixed',
+            valor: valorTotal,
+            fimEm: creditoValidade,
+            usoMaximo: 1,
+            ativo: true,
+            cpf: cpfVale.length === 11 ? cpfVale : null,
+            origem: 'troca',
+            atualizadoPor: `troca loja ${receivingStoreCode}`,
+          },
+        });
+        valeNoCaixaOk = true;
+      } catch (e: any) {
+        // Não derruba a troca com a cliente no balcão — mas grita no log,
+        // porque vale que não entra em site_cupons é promessa quebrada.
+        this.logger.error(
+          `[wc-return ${ret.id.slice(0, 8)}] vale ${creditoCode} NÃO entrou em site_cupons: ${e?.message || e}`,
+        );
+      }
+      if (!cpfVale || cpfVale.length !== 11) {
+        this.logger.warn(
+          `[wc-return ${ret.id.slice(0, 8)}] vale ${creditoCode} sem CPF — não vai passar no caixa nem no site`,
+        );
+      }
+    }
+
     // CUPOM WC: cria cupom de desconto no WooCommerce com o mesmo codigo
     // TROCA-XXXX, valido por 30 dias (independente do creditoValidadeDias
     // local — no site da pra dar mais tempo pra cliente usar). Cliente
@@ -420,7 +634,9 @@ export class WcReturnsService {
       }
     }
 
-    return ret;
+    // `valeNoCaixaOk` sobe pra tela avisar a vendedora ANTES de ela mandar a
+    // cliente pro caixa com um código que não vai passar.
+    return { ...ret, valeNoCaixaOk };
   }
 
   // ── Listagem ────────────────────────────────────────────────────────
