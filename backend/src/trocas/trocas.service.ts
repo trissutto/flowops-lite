@@ -1228,6 +1228,10 @@ export class TrocasService {
       // Pedido antigo grava "Rua X, 123" num campo só.
       const m = endereco.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
       if (m) { endereco = m[1].trim(); numero = m[2]; }
+    } else if (numero && endereco.endsWith(numero)) {
+      // Checkout novo grava "Rua X, 44" no address_1 E o 44 no campo próprio —
+      // sem este corte a etiqueta sai "Rua X, 44, 44".
+      endereco = endereco.slice(0, endereco.length - numero.length).replace(/[,\s]+$/, '').trim() || endereco;
     }
     let cidade = String(addr.city || addr.cidade || '').trim();
     let uf = String(addr.state || addr.uf || '').trim().toUpperCase();

@@ -201,6 +201,82 @@ export class TrocasCronService {
       const r = await this.tracking.fetchTracking(code);
       if (r.error || !r.events.length) continue;
 
+      /**
+       * "Etiqueta emitida"/"Etiqueta cancelada pelo sistema de captação" NÃO
+       * são movimento do objeto — a pré-postagem NASCE com um desses eventos,
+       * antes de a cliente sequer saber o código. Tratar isso como transporte
+       * (bug até 21/08) empurrava a troca pra 'em_transporte' no primeiro
+       * ciclo, e o reenvio do código (`avisosReversaPendentes`, que só olha
+       * aguardando_postagem/solicitada) parava de tentar: TODAS as trocas com
+       * código ficaram sem WhatsApp.
+       */
+      const ehDaReversa = !t.clienteTrackingCode && code === t.reversaCodigo;
+      const movimentos = r.events.filter((e) => !/^\s*etiqueta\b/i.test(e.description || ''));
+      const etiquetaCancelada = r.events.some((e) => /etiqueta cancelada/i.test(e.description || ''));
+
+      /**
+       * Etiqueta CANCELADA pelos Correios sem o objeto nunca ter andado =
+       * código morto na mão da cliente (dá "inválido" no balcão — as trocas
+       * 15–20, itens com "—"/"·" na declaração de conteúdo). Descarta o código
+       * e gera outro na hora; se os Correios falharem agora, o
+       * `reversasPendentes` do próximo ciclo termina o serviço.
+       */
+      if (ehDaReversa && etiquetaCancelada && !movimentos.length) {
+        await (this.prisma as any).trocaSolicitacao.update({
+          where: { id: t.id },
+          data: {
+            reversaCodigo: null,
+            reversaPrazo: null,
+            reversaEnviadaAt: null,
+            reversaLembreteAt: null,
+            status: 'aguardando_postagem',
+            eventos: {
+              create: {
+                tipo: 'reversa',
+                descricao: `Código ${code} estava CANCELADO nos Correios (etiqueta recusada pelo sistema de captação) — descartado. Gerando um novo código pra cliente.`,
+                userName: 'cron-rastreio',
+              },
+            },
+          },
+        });
+        try {
+          const novo: any = await this.trocas.gerarReversaCorreios({ id: t.id, userName: 'automático (cron)' });
+          this.logger.warn(
+            `[trocas-cron] ${formatTrocaNumero(t.numero)}: código ${code} CANCELADO nos Correios → novo ${novo?.codigo}`,
+          );
+        } catch (e: any) {
+          this.logger.warn(
+            `[trocas-cron] ${formatTrocaNumero(t.numero)}: código ${code} cancelado e a regeração falhou (${e?.message || e}) — reversasPendentes tenta no próximo ciclo`,
+          );
+        }
+        continue;
+      }
+
+      if (!movimentos.length) {
+        // Só "Etiqueta emitida": a cliente ainda não postou. Se um ciclo do
+        // bug antigo já tinha empurrado pra em_transporte, volta — senão o
+        // reenvio do código nunca mais olha esta troca.
+        if (ehDaReversa && t.status === 'em_transporte') {
+          await (this.prisma as any).trocaSolicitacao.update({
+            where: { id: t.id },
+            data: {
+              status: 'aguardando_postagem',
+              eventos: {
+                create: {
+                  tipo: 'status',
+                  descricao: `Rastreio ${code}: etiqueta emitida mas SEM postagem — a peça ainda não foi levada aos Correios. Status corrigido.`,
+                  statusDe: t.status,
+                  statusPara: 'aguardando_postagem',
+                  userName: 'cron-rastreio',
+                },
+              },
+            },
+          });
+          this.logger.log(`[trocas-cron] ${formatTrocaNumero(t.numero)} em_transporte → aguardando_postagem (só etiqueta emitida)`);
+        }
+        continue;
+      }
+
       let novoStatus: string | null = null;
       if (r.delivered) novoStatus = 'recebida';
       else if (t.status !== 'em_transporte') novoStatus = 'em_transporte';

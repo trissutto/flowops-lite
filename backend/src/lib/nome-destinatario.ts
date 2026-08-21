@@ -65,8 +65,33 @@ const ABREV_ENDERECO: Array<[RegExp, string]> = [
   [/\bAPARTAMENTO\b/gi, 'Ap.'], [/\bBLOCO\b/gi, 'Bl.'], [/\bEDIF[IÍ]CIO\b/gi, 'Ed.'],
 ];
 
+/**
+ * Texto SEGURO pro sistema de captação dos Correios.
+ *
+ * A causa das trocas com código "inválido" (21/08): a declaração de conteúdo
+ * com o nome novo do catálogo ("Blusa Manga Curta — CHIC · PRETO · 54") faz o
+ * sistema de captação CANCELAR a etiqueta no ato da criação — o SRO registra
+ * "Etiqueta cancelada pelo sistema de captação" e a cliente ouve "código
+ * inválido" no balcão. O em-dash chega lá corrompido em "¿"; acento português
+ * comum ("Calça", "Cardigã") passa sem problema, então a limpeza preserva
+ * Latin-1 e só translitera a pontuação tipográfica (—, ·, aspas curvas…) pra
+ * ASCII, descartando o resto.
+ */
+export function limparTextoTransporte(bruto: any): string {
+  return String(bruto || '')
+    .replace(/[‐-―−]/g, '-') // hífens tipográficos (‐ – — −)
+    .replace(/[·•‧]/g, '-')  // · • ‧ (separador do "REF · COR TAM")
+    .replace(/[‘’‚′]/g, "'")
+    .replace(/[“”„″]/g, '"')
+    .replace(/…/g, '...')
+    .replace(/[  -​ 　]/g, ' ') // espaços exóticos (NBSP etc.)
+    .replace(/[^\x20-\x7EªºÀ-ÿ]/g, ' ') // fora de ASCII+Latin-1 → espaço
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function encurtarCampoEndereco(bruto: any, max: number): string {
-  let s = String(bruto || '').replace(/\s+/g, ' ').trim();
+  let s = limparTextoTransporte(bruto);
   if (s.length <= max) return s;
   for (const [re, abrev] of ABREV_ENDERECO) {
     s = s.replace(re, abrev);
@@ -76,7 +101,7 @@ export function encurtarCampoEndereco(bruto: any, max: number): string {
 }
 
 export function encurtarNomeDestinatario(bruto: any, max: number): string {
-  const limpo = String(bruto || '').replace(/\s+/g, ' ').trim();
+  const limpo = limparTextoTransporte(bruto);
   if (limpo.length <= max) return limpo;
 
   const partes = limpo.split(' ').filter(Boolean);
