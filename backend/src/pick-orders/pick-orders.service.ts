@@ -1817,6 +1817,67 @@ export class PickOrdersService {
       caixasDoPedido.set(c.orderId, arr);
     }
 
+    /**
+     * ⚠️ A ÂNCORA PRECISA SABER ANTES DA CAIXA EXISTIR (21/08).
+     *
+     * A faixa "JUNTANDO PEÇAS" nascia das CAIXAS — e a caixa do feeder só
+     * nasce no Finalizar da bipagem dele. Enquanto a outra loja não terminava,
+     * a âncora via um card comum: separava as peças dela e ia mandar sozinha,
+     * que é exatamente o que a juntada existe pra impedir (o backend recusa o
+     * envio, mas aí ela já embalou e não entende o erro).
+     *
+     * Fonte certa é o PICK-ORDER FEEDER, que existe desde a hora em que a
+     * juntada foi decidida: `isTransfer` + `transferToStoreCode` = minha loja.
+     * A caixa, quando nasce, só enriquece a linha com código e rastreio.
+     */
+    const feedersDoPedido = new Map<string, any[]>();
+    if (orderIds.length && minhaLoja?.code) {
+      const feeders: any[] = await this.prisma.pickOrder.findMany({
+        where: {
+          orderId: { in: orderIds },
+          isTransfer: true,
+          transferToStoreCode: minhaLoja.code,
+          status: { not: 'cancelled' },
+        },
+        select: {
+          id: true,
+          orderId: true,
+          status: true,
+          // A loja feeder pode ter REPORTADO problema: o card sai da fila dela
+          // (o `listMine` esconde `issueReason`), e a âncora ficaria vendo
+          // "ainda separando" pra sempre, sem ninguém separando nada. Fila que
+          // mente é pior que fila vazia — aqui a âncora vê a verdade.
+          issueReason: true,
+          store: { select: { id: true, name: true, code: true } },
+        },
+      });
+      // QUANTAS PEÇAS vêm de cada loja — é o que faz a âncora entender que o
+      // pedido é COMPOSTO (ela vê 4 na tela e o pedido tem 6). Também é a
+      // conferência de quando a caixa chegar.
+      const pecasPorLojaPedido = new Map<string, number>();
+      if (feeders.length) {
+        const grupos = await this.prisma.orderItem.groupBy({
+          by: ['orderId', 'assignedStoreId'],
+          where: {
+            orderId: { in: [...new Set(feeders.map((f) => f.orderId))] },
+            assignedStoreId: { in: [...new Set(feeders.map((f) => f.store?.id).filter(Boolean))] },
+          },
+          _sum: { quantity: true },
+        });
+        for (const g of grupos) {
+          pecasPorLojaPedido.set(`${g.orderId}~${g.assignedStoreId}`, g._sum.quantity ?? 0);
+        }
+      }
+      for (const f of feeders) {
+        const arr = feedersDoPedido.get(f.orderId) ?? [];
+        arr.push({
+          ...f,
+          pecas: pecasPorLojaPedido.get(`${f.orderId}~${f.store?.id}`) ?? 0,
+        });
+        feedersDoPedido.set(f.orderId, arr);
+      }
+    }
+
     return rows.map((r) => {
       const transferToStore = r.transferToStoreCode
         ? storeByCode.get(r.transferToStoreCode) ?? null
@@ -1833,10 +1894,46 @@ export class PickOrdersService {
       // JUNTADA: feeder = isTransfer num pedido que NÃO é retirada.
       const ehFeederJuntada = r.isTransfer && !r.order?.isPickup;
       const caixa = ehFeederJuntada ? caixaDoPick.get(r.id) ?? null : null;
-      const chegando = !r.isTransfer
+      /**
+       * Sou ÂNCORA? Card próprio (não-transferência) de pedido que NÃO é
+       * retirada — a MESMA fronteira do `ehFeederJuntada` acima. Pedido de
+       * RETIRADA dividido também tem card `isTransfer` apontando pra loja de
+       * retirada, e aquilo é o pickup-transfer de sempre, não juntada:
+       * mostrar "esta loja junta e envia" ali seria alarme falso (a cliente
+       * é que vem buscar).
+       */
+      const souAncora = !r.isTransfer && !r.order?.isPickup;
+      // As caixas que JÁ nasceram (só existem depois do Finalizar do feeder).
+      const caixasChegando = souAncora
         ? (caixasDoPedido.get(r.orderId) ?? []).filter(
             (c) => c.toStoreCode === minhaLoja?.code && c.pickOrderId !== r.id,
           )
+        : [];
+      const caixaPorPick = new Map(caixasChegando.map((c) => [c.pickOrderId, c]));
+      /**
+       * Uma linha POR FEEDER — existe desde que a juntada foi decidida, com ou
+       * sem caixa. O estágio conta a história pra loja: a outra ainda está
+       * separando, já fechou a caixa, ou a caixa chegou aqui.
+       */
+      const chegando = souAncora
+        ? (feedersDoPedido.get(r.orderId) ?? []).map((f: any) => {
+            const caixa = caixaPorPick.get(f.id) ?? null;
+            const etapa = caixa
+              ? caixa.status === 'received'
+                ? 'chegou'
+                : 'a_caminho'
+              : f.issueReason
+                ? 'problema'
+                : 'separando';
+            return {
+              code: caixa?.code ?? null,
+              status: caixa?.status ?? f.status,
+              etapa,
+              fromStoreName: caixa?.fromStoreName ?? f.store?.name ?? null,
+              trackingCode: caixa?.trackingCode ?? null,
+              pecas: f.pecas ?? 0,
+            };
+          })
         : [];
       return {
         id: r.id,
@@ -1866,12 +1963,19 @@ export class PickOrdersService {
         juntadaChegando: chegando.length
           ? {
               total: chegando.length,
-              recebidas: chegando.filter((c) => c.status === 'received').length,
+              // "Recebidas" conta CAIXA QUE CHEGOU — é o que libera o envio.
+              // Feeder ainda separando (sem caixa) não conta, de propósito.
+              recebidas: chegando.filter((c) => c.etapa === 'chegou').length,
+              // Quantas peças vêm de fora: com as da própria loja, é o total
+              // do pedido composto que a âncora vai despachar.
+              pecasChegando: chegando.reduce((s, c) => s + (c.pecas ?? 0), 0),
               caixas: chegando.map((c) => ({
                 code: c.code,
                 status: c.status,
+                etapa: c.etapa,
                 fromStoreName: c.fromStoreName,
                 trackingCode: c.trackingCode,
+                pecas: c.pecas,
               })),
             }
           : null,
