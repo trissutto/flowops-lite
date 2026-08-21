@@ -59,30 +59,32 @@ export function EscolhaDaPeca({
   const cores = useEstoqueAoVivo(product.slug, coresDoServidor);
 
   /**
-   * A PÁGINA ABRE SEM COR ESCOLHIDA (dono, 20/08 à noite): "a pessoa escolhe
-   * a cor, DEPOIS o tamanho". Escolher a cor pela cliente — que era o
-   * comportamento desde sempre (abrir na primeira com estoque) — fazia o
-   * passo parecer resolvido e ela nem via que existiam outras 7 cores.
+   * A PRÉ-SELEÇÃO VOLTOU (dono, 21/08 de manhã, com DADO): a versão "abre
+   * sem cor e o site pede" durou uma noite — até as 9h da manhã seguinte,
+   * 32 pessoas bateram na trava `color_missing` (só 12 se recuperaram),
+   * porque TODO link sem `?cor=` (Google, anúncio, WhatsApp antigo, busca)
+   * caía numa página que exigia um passo que antes não existia. A trava de
+   * tamanho caiu (50→21), mas a soma ficou pior.
    *
-   * A EXCEÇÃO é o link que já traz a cor (`?cor=`): quem chegou por card de
-   * vitrine, anúncio ou WhatsApp pediu AQUELA cor — aí ela abre escolhida.
-   *
-   * A heurística antiga (primeira com estoque E com foto) continua viva como
-   * `melhorCor`, mas só como REDE: é pra onde a página vai quando a cor
-   * escolhida esgota debaixo do dedo dela.
+   * Regra atual: **a página abre na cor que apareceu no catálogo** — a de
+   * MAIOR ESTOQUE com foto, a mesma que abre a família na vitrine explodida
+   * (ver `explodirPorCor`). A grade continua inteira na tela com o
+   * "✓ Cor escolhida: X" embaixo; trocar é um toque. O link com `?cor=`
+   * continua ganhando de tudo.
    */
   const melhorCor = useMemo(() => {
+    const comFotoEEstoque = cores
+      .filter((c) => c.estoque > 0 && c.fotos.length > 0)
+      .sort((a, b) => b.estoque - a.estoque);
     const comEstoque = cores.filter((c) => c.estoque > 0);
-    const comFoto = comEstoque.find((c) => c.fotos.length > 0);
-    return (comFoto ?? comEstoque[0] ?? cores[0])?.nome ?? null;
+    return (comFotoEEstoque[0] ?? comEstoque[0] ?? cores[0])?.nome ?? null;
   }, [cores]);
 
   const inicial = useMemo(() => {
     if (corInicial && cores.some((c) => c.nome === corInicial)) return corInicial;
-    // Peça de UMA cor não tem escolha a fazer — já abre nela.
-    if (cores.length === 1) return cores[0].nome;
-    return null;
-  }, [cores, corInicial]);
+    // Sem cor no link: abre na cor do catálogo (maior estoque com foto).
+    return melhorCor;
+  }, [cores, corInicial, melhorCor]);
 
   const [cor, setCor] = useState<string | null>(inicial);
   /** Ela tentou o tamanho (ou o botão) sem cor: o passo da cor acende. */
