@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
+import { JuntadaService } from '../pick-orders/juntada.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
@@ -137,6 +138,8 @@ export class OrdersController {
     private readonly erp: ErpService,
     // Estorno dos bipes quando o pedido é cancelado/reembolsado no site.
     private readonly pickScans: PickScanService,
+    // Juntada de pedido dividido: loja âncora envia tudo (21/08).
+    private readonly juntada: JuntadaService,
   ) {}
 
   // ---------- Rotas estáticas PRIMEIRO (senão o `:id` come) ----------
@@ -2545,6 +2548,34 @@ export class OrdersController {
         : undefined,
       forceStoreCode: body?.forceStoreCode,
     });
+  }
+
+  /**
+   * JUNTADA (21/08): escolhe a LOJA ÂNCORA de um pedido dividido já
+   * confirmado — os outros cards passam a mandar as peças PRA ELA (caixa
+   * com NF de transferência + etiqueta pra loja), e só ela envia pra
+   * cliente, com o pedido completo numa NF só.
+   */
+  @Post('wc/:wcId/juntar')
+  async juntarPedido(
+    @Param('wcId') wcId: string,
+    @Body() body: { anchorStoreCode?: string },
+    @Req() req?: any,
+  ) {
+    if (!body?.anchorStoreCode) throw new BadRequestException('anchorStoreCode é obrigatório');
+    return this.juntada.juntarPedido(Number(wcId), String(body.anchorStoreCode), req?.user?.userId ?? null);
+  }
+
+  /** Desfaz a juntada (só enquanto nenhuma caixa nasceu). */
+  @Post('wc/:wcId/juntar/desfazer')
+  async desfazerJuntada(@Param('wcId') wcId: string) {
+    return this.juntada.desfazerJuntada(Number(wcId));
+  }
+
+  /** Raio-X da juntada: âncora, caixas por loja e se o envio final liberou. */
+  @Get('wc/:wcId/juntada')
+  async statusJuntada(@Param('wcId') wcId: string) {
+    return (await this.juntada.statusJuntada(Number(wcId))) ?? { juntando: false };
   }
 
   @Post('wc/:wcId/confirm-separation')

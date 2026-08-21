@@ -188,4 +188,114 @@ describe('RoutingEngine', () => {
     const result = engine.route(ctx);
     expect(result.success).toBe(false);
   });
+
+  // ── REGRA 1.5 — JUNTADA DA ROTA PRÓPRIA (Itanhaém/PG/Santos, 21/08) ──────
+  describe('juntada da rota própria', () => {
+    // ITA/PG/Santos + uma loja de fora (Campinas) que também teria estoque.
+    const litoral: StoreInput[] = [
+      { id: 'i1', code: '01', name: 'Itanhaém',     cep: '11740-000', priorityScore: 50, active: true },
+      { id: 'i2', code: '14', name: 'Praia Grande', cep: '11700-000', priorityScore: 50, active: true },
+      { id: 'i3', code: '02', name: 'Santos',       cep: '11000-000', priorityScore: 50, active: true },
+      { id: 'i4', code: '07', name: 'Campinas',     cep: '13000-000', priorityScore: 90, active: true },
+    ];
+    const GRUPO = ['01', '14', '02'];
+
+    test('trio cobre entre si → junta na loja com MAIS peças; as outras mandam pra ela', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 2 }, // só PG tem
+          { sku: 'B', quantity: 1 }, // só Santos tem
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '14', sku: 'A', availableQty: 3 },
+          { storeCode: '02', sku: 'B', availableQty: 1 },
+          // Campinas cobriria o B também — mas o trio resolve sozinho.
+          { storeCode: '07', sku: 'B', availableQty: 9 },
+        ],
+        shippingCep: '80000-000', // cliente fora do estado — caso clássico
+        juntadaGroup: GRUPO,
+      };
+      const r = engine.route(ctx);
+      expect(r.success).toBe(true);
+      expect(r.strategy).toBe('multi-store');
+      // PG tem 2 peças, Santos 1 → âncora = Praia Grande.
+      expect(r.consolidateStoreCode).toBe('14');
+      const ancora = r.assignments.find((a) => a.storeCode === '14');
+      const feeder = r.assignments.find((a) => a.storeCode === '02');
+      expect(ancora?.isTransfer ?? false).toBe(false);
+      expect(feeder?.isTransfer).toBe(true);
+      expect(feeder?.transferToStoreCode).toBe('14');
+      // Campinas fica de fora do plano.
+      expect(r.assignments.some((a) => a.storeCode === '07')).toBe(false);
+    });
+
+    test('empate de peças → âncora é quem vem primeiro no grupo (Itanhaém)', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 1 },
+          { sku: 'B', quantity: 1 },
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '01', sku: 'A', availableQty: 1 },
+          { storeCode: '02', sku: 'B', availableQty: 1 },
+        ],
+        juntadaGroup: GRUPO,
+      };
+      const r = engine.route(ctx);
+      expect(r.consolidateStoreCode).toBe('01');
+    });
+
+    test('trio NÃO cobre → segue o greedy normal, sem juntada', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 1 },
+          { sku: 'C', quantity: 1 }, // só Campinas tem
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '01', sku: 'A', availableQty: 1 },
+          { storeCode: '07', sku: 'C', availableQty: 5 },
+        ],
+        juntadaGroup: GRUPO,
+      };
+      const r = engine.route(ctx);
+      expect(r.success).toBe(true);
+      expect(r.consolidateStoreCode ?? null).toBeNull();
+      expect(r.assignments.every((a) => !a.isTransfer)).toBe(true);
+    });
+
+    test('uma loja cobre tudo sozinha → single-store normal (REGRA 1 vence)', () => {
+      const ctx: RoutingContext = {
+        items: [{ sku: 'A', quantity: 1 }],
+        stores: litoral,
+        stock: [{ storeCode: '02', sku: 'A', availableQty: 5 }],
+        juntadaGroup: GRUPO,
+      };
+      const r = engine.route(ctx);
+      expect(r.strategy).toBe('single-store');
+      expect(r.consolidateStoreCode ?? null).toBeNull();
+    });
+
+    test('operador fixou loja (pin) → a juntada automática NÃO passa por cima', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 1 },
+          { sku: 'B', quantity: 1 },
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '01', sku: 'A', availableQty: 1 },
+          { storeCode: '02', sku: 'B', availableQty: 1 },
+          { storeCode: '07', sku: 'A', availableQty: 5 },
+          { storeCode: '07', sku: 'B', availableQty: 5 },
+        ],
+        juntadaGroup: GRUPO,
+        pinStoreCodes: ['07'],
+      };
+      const r = engine.route(ctx);
+      expect(r.consolidateStoreCode ?? null).toBeNull();
+    });
+  });
 });

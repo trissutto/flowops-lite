@@ -106,6 +106,16 @@ export interface RoutingContext {
    */
   sellerStoreCode?: string | null;
   /**
+   * JUNTADA AUTOMÁTICA DA ROTA PRÓPRIA (21/08) — códigos das lojas que trocam
+   * caixa DE CARRO (Itanhaém/Praia Grande/Santos), NA ORDEM de prioridade.
+   * Quando nenhuma loja cobre o pedido sozinha mas o GRUPO cobre entre si, a
+   * separação nasce JUNTANDO: a loja do grupo com MAIS peças vira a ÂNCORA
+   * (envia pra cliente) e as outras mandam as delas de carro pra ela
+   * (`isTransfer` → âncora). Empate de peças → quem vem primeiro na lista.
+   * Vazio/ausente desliga a regra.
+   */
+  juntadaGroup?: string[];
+  /**
    * Kill-switch do SPLIT DE SKU entre lojas. Por padrão (undefined) o split
    * está LIGADO: quando nenhuma loja tem a quantidade inteira de um SKU, a
    * engine divide a quantidade entre várias lojas (o mínimo de pacotes) em vez
@@ -144,6 +154,13 @@ export interface RoutingResult {
   /** Quando estratégia é pickup-*, código da loja de retirada (pra UI) */
   pickupStoreCode?: string | null;
   pickupStoreName?: string | null;
+  /**
+   * JUNTADA (21/08): quando o plano nasce juntando as peças numa loja âncora
+   * (rota própria), código/nome dela — as demais assignments saem com
+   * `isTransfer=true` apontando pra cá. A UI mostra "JUNTANDO PEÇAS".
+   */
+  consolidateStoreCode?: string | null;
+  consolidateStoreName?: string | null;
   scoreBreakdown?: Array<{
     storeCode: string;
     storeName: string;

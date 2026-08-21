@@ -18,6 +18,7 @@ import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
+import { JuntadaService } from './juntada.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -102,6 +103,10 @@ export class PickOrdersService {
     private readonly pedidoEmail: PedidoEmailService,
     private readonly scans: PickScanService,
     private readonly tracking: TrackingService,
+    // Juntada de pedido dividido (21/08) — forwardRef porque a JuntadaService
+    // também chama de volta (marcarCaixaJuntadaRecebida) quando a caixa chega.
+    @Inject(forwardRef(() => JuntadaService))
+    private readonly juntada: JuntadaService,
   ) {}
 
   /**
@@ -212,6 +217,28 @@ export class PickOrdersService {
         throw new BadRequestException('Entrega por motoboy não gera etiqueta dos Correios. Use "Entregue por motoboy" quando a peça sair.');
       }
     }
+    /**
+     * JUNTADA DE PEDIDO DIVIDIDO (21/08):
+     *  - Card FEEDER (isTransfer sem retirada) manda a caixa pra LOJA ÂNCORA,
+     *    não pra cliente — etiqueta de cliente aqui seria pacote duplicado.
+     *  - Card ÂNCORA só despacha quando TODAS as caixas das outras lojas
+     *    chegaram (entrada dada) — senão o pacote sai incompleto.
+     */
+    {
+      const ordemJ = await this.prisma.order.findUnique({
+        where: { id: pick.orderId },
+        select: { id: true, isPickup: true },
+      });
+      if (pick.isTransfer && ordemJ && !ordemJ.isPickup) {
+        throw new BadRequestException(
+          'Esta caixa é da JUNTADA: ela vai pra LOJA ÂNCORA, não pra cliente. ' +
+            'Use "Documentos da caixa" no card — sai a etiqueta pra loja (ou o aviso de carro da rede), a NF de transferência e o romaneio do pedido.',
+        );
+      }
+      if (ordemJ && !ordemJ.isPickup && !pick.isTransfer) {
+        await this.travarEnvioAncoraSeFaltamCaixas(pick);
+      }
+    }
     // ── IDEMPOTÊNCIA (28/07: 17 pré-postagens do MESMO pedido no Mais Envios,
     // uma por clique enquanto o request anterior pendurava) ──────────────────
     // Já tem rastreio? devolve o existente — NUNCA cria outra pré-postagem.
@@ -271,6 +298,72 @@ export class PickOrdersService {
     } catch (e) {
       await this.prisma.pickOrder.updateMany({ where: { id, trackingCode: null }, data: { correiosGeneratedAt: null } }).catch(() => undefined);
       throw e;
+    }
+  }
+
+  /**
+   * A loja deste pick é a ÂNCORA de uma juntada? (= existe card irmão
+   * `isTransfer` apontando pra ela, num pedido que NÃO é retirada.)
+   */
+  private async souAncoraDaJuntada(order: any, pick: any): Promise<boolean> {
+    if (!order || order.isPickup) return false;
+    const store = await this.prisma.store.findUnique({
+      where: { id: pick.storeId },
+      select: { code: true },
+    });
+    if (!store?.code) return false;
+    const feeders = await this.prisma.pickOrder.count({
+      where: {
+        orderId: order.id,
+        id: { not: pick.id },
+        isTransfer: true,
+        transferToStoreCode: store.code,
+      },
+    });
+    return feeders > 0;
+  }
+
+  /**
+   * ÂNCORA da juntada só gera o envio final quando TODAS as caixas das
+   * lojas feeder chegaram (remessa `received`). Feeder que nem terminou de
+   * bipar ainda não tem caixa — conta como pendente do mesmo jeito.
+   */
+  private async travarEnvioAncoraSeFaltamCaixas(pick: any): Promise<void> {
+    const store = await this.prisma.store.findUnique({
+      where: { id: pick.storeId },
+      select: { code: true },
+    });
+    if (!store?.code) return;
+    const feeders = await this.prisma.pickOrder.findMany({
+      where: {
+        orderId: pick.orderId,
+        id: { not: pick.id },
+        isTransfer: true,
+        transferToStoreCode: store.code,
+      },
+      select: { id: true, storeId: true },
+    });
+    if (!feeders.length) return; // não é juntada
+    const shipments: any[] = await (this.prisma as any).realignmentShipment.findMany({
+      where: { pickOrderId: { in: feeders.map((f) => f.id) }, status: { not: 'cancelled' } },
+      select: { pickOrderId: true, status: true, code: true, fromStoreName: true },
+    });
+    const porPick = new Map(shipments.map((s) => [s.pickOrderId, s]));
+    const pendentes: string[] = [];
+    for (const f of feeders) {
+      const cx = porPick.get(f.id);
+      if (!cx) {
+        const loja = await this.prisma.store.findUnique({ where: { id: f.storeId }, select: { name: true } });
+        pendentes.push(`${loja?.name ?? 'loja'} (ainda separando)`);
+      } else if (cx.status !== 'received') {
+        pendentes.push(`${cx.fromStoreName} (caixa ${cx.code} ${cx.status === 'in_transit' ? 'em trânsito' : cx.status})`);
+      }
+    }
+    if (pendentes.length) {
+      throw new BadRequestException(
+        `JUNTANDO PEÇAS — ainda falta(m) ${pendentes.length} caixa(s) chegar: ${pendentes.join(' · ')}. ` +
+          'Dê entrada nas caixas quando chegarem e o envio libera com o pedido completo.',
+      );
     }
   }
 
@@ -475,6 +568,11 @@ export class PickOrdersService {
     // única mantém o comportamento de sempre (todos os itens).
     const qtdPicks = await this.prisma.pickOrder.count({ where: { orderId: order.id } });
     const dividido = qtdPicks > 1;
+    // JUNTADA (21/08): a ÂNCORA despacha o pedido INTEIRO num pacote só — a
+    // nota dela cobre TODAS as peças (as próprias + as que chegaram de caixa
+    // de outra loja, que já viajaram com NF de transferência) e leva o frete
+    // cheio. Feeder nunca chega aqui (o gerarEnvio bloqueia antes).
+    const ancoraJuntada = dividido && (await this.souAncoraDaJuntada(order, pick));
     const normLoja = (s: any) => String(s || '').trim().toUpperCase().replace(/^LJ/, '').replace(/^0+/, '');
 
     if (order.source === 'live' && order.liveCartId) {
@@ -521,7 +619,7 @@ export class PickOrdersService {
         }
       }
 
-      const itens = dividido ? daLoja : (daLoja.length ? daLoja : todos);
+      const itens = ancoraJuntada ? todos : dividido ? daLoja : (daLoja.length ? daLoja : todos);
       if (!itens.length) {
         // Causa clássica: o originStoreCode dos itens não bate com o código da
         // loja do pick (pedido dividido entre lojas). Loga os dois lados
@@ -569,7 +667,7 @@ export class PickOrdersService {
       });
       let ck: any = {};
       try { ck = JSON.parse(order.checkoutInfo || '{}'); } catch { /* snapshot cru */ }
-      if (!dividido || primeiroPick?.id === pick.id) {
+      if (!dividido || ancoraJuntada || primeiroPick?.id === pick.id) {
         vFrete =
           Math.round((Number(ck?.shipping?.price ?? ck?.shippingPrice ?? 0) || 0) * 100) / 100 ||
           Math.round(
@@ -585,9 +683,12 @@ export class PickOrdersService {
       const semDono = pecas.filter((i: any) => !i.assignedStoreId);
       // Dividido: SÓ os itens atribuídos a esta loja. Loja única: mantém o
       // comportamento antigo (atribuídos + sem dono; sem nada, o pedido todo).
-      const lista = dividido
-        ? atribuidos
-        : (atribuidos.length ? [...atribuidos, ...semDono] : (order.items || []));
+      // Âncora da JUNTADA: todas as peças do pedido (o pacote leva tudo).
+      const lista = ancoraJuntada
+        ? pecas
+        : dividido
+          ? atribuidos
+          : (atribuidos.length ? [...atribuidos, ...semDono] : (order.items || []));
       if (!lista.length) {
         this.logger.warn(
           `[nfe-envio] SEM NOTA: pedido ${order.id} sem itens atribuídos à loja ${storeCode} ` +
@@ -686,7 +787,10 @@ export class PickOrdersService {
     }
     // SITE: o gerarEnvioCorreiosSite devolve destDce (endereço já CEP-authoritative)
     if (!r?.destDce) return null;
-    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    // Âncora da JUNTADA: o pacote leva o pedido INTEIRO (peso e declaração).
+    const itensLoja = (await this.souAncoraDaJuntada(order, pick))
+      ? (order.items || [])
+      : (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
     const lista = itensLoja.length ? itensLoja : (order.items || []);
     if (!lista.length) return null;
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
@@ -803,7 +907,10 @@ export class PickOrdersService {
       }
     } catch { /* ViaCEP fora → usa o do pedido */ }
 
-    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    // Âncora da JUNTADA: o pacote leva o pedido INTEIRO (peso e declaração).
+    const itensLoja = (await this.souAncoraDaJuntada(order, pick))
+      ? (order.items || [])
+      : (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
     const lista = itensLoja.length ? itensLoja : (order.items || []);
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
@@ -871,7 +978,10 @@ export class PickOrdersService {
       }
     } catch { /* ViaCEP fora → usa o do pedido */ }
 
-    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    // Âncora da JUNTADA: o pacote leva o pedido INTEIRO (peso e declaração).
+    const itensLoja = (await this.souAncoraDaJuntada(order, pick))
+      ? (order.items || [])
+      : (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
     const lista = itensLoja.length ? itensLoja : (order.items || []);
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
@@ -1409,12 +1519,58 @@ export class PickOrdersService {
       );
     }
 
+    // JUNTADA (21/08): card FEEDER terminou de bipar → a caixa pra loja
+    // âncora nasce sozinha (remessa em trânsito + NF de transferência +
+    // etiqueta quando o trecho é Correios). Falha aqui NÃO desfaz a
+    // separação — a loja gera os documentos pelo botão do card.
+    let caixaJuntada: any = null;
+    try {
+      caixaJuntada = await this.juntada.criarCaixaDoFeederSePreciso(pickOrderId, userId);
+    } catch (e: any) {
+      this.logger.warn(
+        `[juntada] caixa do feeder ${pickOrderId} não nasceu no finish: ${e?.message || e} — a loja pode gerar pelos Documentos da caixa.`,
+      );
+    }
+
     return {
       id: updated.id,
       status: updated.status,
       wcOrderId: updated.order?.wcOrderId ?? null,
       itemsScanned: fonteScans.length,
+      caixaJuntada: caixaJuntada
+        ? {
+            code: caixaJuntada.shipment?.code ?? null,
+            transporte: caixaJuntada.transporte ?? null,
+            trackingCode: caixaJuntada.shipment?.trackingCode ?? null,
+          }
+        : null,
     };
+  }
+
+  /**
+   * JUNTADA — a caixa do FEEDER chegou na loja âncora (remessa `received`).
+   * Fecha o ciclo do card: vira `shipped` (sem rastreio de cliente — o
+   * pacote final é da âncora) e roda os efeitos do envio, que é onde nasce
+   * o acerto ÷2,5 da perna feeder→âncora. Sem trackingCode, nenhum aviso de
+   * "pedido enviado" chega na cliente por este card — como deve ser.
+   * Idempotente: card já shipped só retorna.
+   */
+  async marcarCaixaJuntadaRecebida(pickOrderId: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id: pickOrderId } });
+    if (!pick) return { ok: false as const, motivo: 'pick não existe' };
+    if (pick.status === 'shipped') return { ok: true as const, jaEnviado: true };
+    await this.prisma.pickOrder.update({
+      where: { id: pickOrderId },
+      data: { status: 'shipped', carrier: pick.carrier ?? 'Juntada entre lojas' },
+    });
+    this.afterShippedSideEffects(pickOrderId, {}).catch((e) =>
+      this.logger.warn(`[juntada] afterShipped do feeder ${pickOrderId} falhou: ${e?.message || e}`),
+    );
+    try {
+      this.gateway.emitPickOrderStatus(pick.storeId, { id: pick.id, status: 'shipped' });
+    } catch { /* socket é best-effort */ }
+    this.logger.log(`[juntada] card feeder ${pickOrderId} fechado — caixa recebida na âncora`);
+    return { ok: true as const };
   }
 
   /**
@@ -1629,6 +1785,38 @@ export class PickOrdersService {
       : [];
     const storeByCode = new Map(transferStores.map((s) => [s.code, s]));
 
+    // ── JUNTADA (21/08): estado das caixas pros cards ─────────────────────
+    // Card FEEDER mostra a própria caixa (código/rastreio/transporte); card
+    // ÂNCORA mostra quantas caixas estão vindo e quantas já chegaram.
+    const minhaLoja = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { code: true },
+    });
+    const caixasJuntada: any[] = rows.length
+      ? await (this.prisma as any).realignmentShipment.findMany({
+          where: {
+            status: { not: 'cancelled' },
+            OR: [
+              { pickOrderId: { in: rows.map((r) => r.id) } },
+              { orderId: { in: orderIds }, pickOrderId: { not: null } },
+            ],
+          },
+          select: {
+            id: true, code: true, status: true, trackingCode: true, carrier: true,
+            transportMode: true, orderId: true, pickOrderId: true, toStoreCode: true,
+            fromStoreName: true, receivedAt: true,
+          },
+        })
+      : [];
+    const caixaDoPick = new Map(caixasJuntada.map((c) => [c.pickOrderId, c]));
+    const caixasDoPedido = new Map<string, any[]>();
+    for (const c of caixasJuntada) {
+      if (!c.orderId) continue;
+      const arr = caixasDoPedido.get(c.orderId) ?? [];
+      arr.push(c);
+      caixasDoPedido.set(c.orderId, arr);
+    }
+
     return rows.map((r) => {
       const transferToStore = r.transferToStoreCode
         ? storeByCode.get(r.transferToStoreCode) ?? null
@@ -1642,6 +1830,14 @@ export class PickOrdersService {
           customerSnapshotObj = null;
         }
       }
+      // JUNTADA: feeder = isTransfer num pedido que NÃO é retirada.
+      const ehFeederJuntada = r.isTransfer && !r.order?.isPickup;
+      const caixa = ehFeederJuntada ? caixaDoPick.get(r.id) ?? null : null;
+      const chegando = !r.isTransfer
+        ? (caixasDoPedido.get(r.orderId) ?? []).filter(
+            (c) => c.toStoreCode === minhaLoja?.code && c.pickOrderId !== r.id,
+          )
+        : [];
       return {
         id: r.id,
         status: r.status,
@@ -1656,6 +1852,29 @@ export class PickOrdersService {
         transferToStoreName: transferToStore?.name ?? null,
         transferToStoreCity: transferToStore?.city ?? null,
         customerSnapshot: customerSnapshotObj,
+        // ── JUNTADA (21/08) ──
+        juntadaFeeder: ehFeederJuntada,
+        caixaJuntada: caixa
+          ? {
+              code: caixa.code,
+              status: caixa.status,
+              trackingCode: caixa.trackingCode,
+              carrier: caixa.carrier,
+              transportMode: caixa.transportMode ?? null,
+            }
+          : null,
+        juntadaChegando: chegando.length
+          ? {
+              total: chegando.length,
+              recebidas: chegando.filter((c) => c.status === 'received').length,
+              caixas: chegando.map((c) => ({
+                code: c.code,
+                status: c.status,
+                fromStoreName: c.fromStoreName,
+                trackingCode: c.trackingCode,
+              })),
+            }
+          : null,
         order: {
           ...r.order,
           items: itemsByOrder.get(r.orderId) ?? [],
@@ -2672,6 +2891,16 @@ export class PickOrdersService {
         tamanho: (i as any).tamanho || null,
         qty: Number(i.quantity) || 1,
       }));
+    // JUNTADA (21/08): caixa de cada card feeder pra tela do pedido mostrar
+    // o progresso ("caixa em trânsito", "chegou").
+    const caixasJuntada: any[] = await (this.prisma as any).realignmentShipment.findMany({
+      where: { pickOrderId: { in: rows.map((r) => r.id) }, status: { not: 'cancelled' } },
+      select: {
+        code: true, status: true, trackingCode: true, carrier: true,
+        transportMode: true, pickOrderId: true, sentAt: true, receivedAt: true,
+      },
+    });
+    const caixaDoPick = new Map(caixasJuntada.map((c) => [c.pickOrderId, c]));
     const reasonLabels: Record<string, string> = {
       out_of_stock: 'Sem estoque físico',
       defective: 'Peça com defeito',
@@ -2709,6 +2938,8 @@ export class PickOrdersService {
         items: itemsPorStore(r.storeId),
         isTransfer: (r as any).isTransfer ?? false,
         transferToStoreCode: (r as any).transferToStoreCode ?? null,
+        // ── JUNTADA (21/08): a caixa deste feeder, se existir ──
+        caixaJuntada: caixaDoPick.get(r.id) ?? null,
         issueReason,
         issueReasonLabel: issueReason ? reasonLabels[issueReason] ?? issueReason : null,
         issueNote: (r as any).issueNote ?? null,

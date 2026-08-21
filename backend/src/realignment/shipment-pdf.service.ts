@@ -53,6 +53,22 @@ export class ShipmentPdfService {
       orderBy: [{ refCode: 'asc' }, { cor: 'asc' }, { tamanho: 'asc' }],
     });
 
+    // CAIXA DE JUNTADA (21/08): o romaneio precisa GRITAR que essas peças são
+    // de um pedido de cliente sendo juntado na loja destino — quem abre a
+    // caixa não pode pendurar as peças na arara.
+    if (shipment.orderId) {
+      const order: any = await (this.prisma as any).order
+        .findUnique({
+          where: { id: shipment.orderId },
+          select: { wcOrderNumber: true, customerName: true },
+        })
+        .catch(() => null);
+      (shipment as any).__juntada = {
+        pedido: order?.wcOrderNumber || shipment.orderId,
+        cliente: order?.customerName || '',
+      };
+    }
+
     const buffer = await this.buildPdf(shipment, items);
     const safeCode = String(shipment.code || shipmentId).replace(/[^A-Za-z0-9-_]/g, '');
     const filename = `remessa-${safeCode}.pdf`;
@@ -91,6 +107,24 @@ export class ShipmentPdfService {
           0,
         );
         this.drawCover(doc, shipment, totalPecasCapa);
+
+        // Faixa da JUNTADA na capa: a caixa NÃO é reposição de estoque.
+        if ((shipment as any).__juntada) {
+          const j = (shipment as any).__juntada;
+          doc
+            .fontSize(16)
+            .fillColor('#b91c1c')
+            .font('Helvetica-Bold')
+            .text(
+              // Sem emoji: as fontes padrão do pdfkit (WinAnsi) não têm o
+              // glifo e a geração inteira morre com "glyph not found".
+              `ATENÇÃO: PEÇAS DO PEDIDO #${j.pedido}${j.cliente ? ` — ${j.cliente}` : ''} · ` +
+                `JUNTANDO NA LOJA ${shipment.toStoreName} · NÃO COLOCAR NA ARARA`,
+              40,
+              doc.page.height - 70,
+              { width: doc.page.width - 80, align: 'center' },
+            );
+        }
 
         // ── PÁGINA 2+: ROMANEIO (A4 RETRATO) ─────────────────────
         // pdfkit: quebras AUTOMÁTICAS de página (lista comprida) chamam
@@ -133,6 +167,36 @@ export class ShipmentPdfService {
           .fillColor(this.statusColor(shipment.status))
           .font('Helvetica-Bold')
           .text(statusLabel[shipment.status] || shipment.status.toUpperCase(), { align: 'center' });
+
+        // Bloco da JUNTADA no romaneio: explica de qual pedido a caixa faz
+        // parte e o que a loja destino deve fazer com ela.
+        if ((shipment as any).__juntada) {
+          const j = (shipment as any).__juntada;
+          doc.moveDown(0.4);
+          const bx = 40;
+          const bw = doc.page.width - 80;
+          const by = doc.y;
+          doc.roundedRect(bx, by, bw, 46, 6).fillAndStroke('#fee2e2', '#b91c1c');
+          doc
+            .fillColor('#b91c1c')
+            .fontSize(11)
+            .font('Helvetica-Bold')
+            .text(`ATENÇÃO: ESTA CAIXA FAZ PARTE DO PEDIDO #${j.pedido}${j.cliente ? ` (${j.cliente})` : ''}`, bx + 10, by + 8, {
+              width: bw - 20,
+            });
+          doc
+            .fillColor('#7f1d1d')
+            .fontSize(9)
+            .font('Helvetica')
+            .text(
+              `As peças estão VENDIDAS e vão ser JUNTADAS na loja ${shipment.toStoreName} pra envio à cliente. ` +
+                `Não colocar na arara, não dar entrada como estoque — conferir e juntar ao pedido.`,
+              bx + 10,
+              by + 24,
+              { width: bw - 20 },
+            );
+          doc.y = by + 52;
+        }
 
         doc.moveDown(0.4);
         doc

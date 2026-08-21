@@ -4,6 +4,7 @@ import { CorreiosService } from '../correios/correios.service';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
+import { lojasDaRotaPropria } from '../common/rota-propria';
 
 // Lojas que despacham pelo Mais Envios (mesma regra dos pedidos): mapa fixo da
 // rede + extensão por env MAISENVIOS_STORES_JSON (franquias etc.).
@@ -114,41 +115,12 @@ export class RemessaEnvioService {
 
   /**
    * ROTA PRÓPRIA — lojas que trocam mercadoria de CARRO, entre si.
-   *
-   * Itanhaém, Praia Grande e Santos são vizinhas e a mercadoria vai no carro da
-   * rede (dono, 04/08). Etiqueta dos Correios pra esse trecho é papel jogado
-   * fora — e pior, é pré-postagem aberta que ninguém vai postar.
-   *
-   * Configurável em `SystemSetting['realignment_rota_propria']` (códigos de
-   * loja separados por vírgula) porque a rota do carro muda com o tempo e não
-   * pode exigir deploy. Sem config, o padrão resolve pelo NOME das lojas — o
-   * código de cada uma eu não tenho como saber daqui sem inventar, e chutar
-   * código de loja é mandar caixa pro lugar errado.
-   *
-   * Config com valor VAZIO desliga a regra (mesma convenção do filtro de
-   * tamanhos plus size).
+   * A lista mora em `common/rota-propria.ts` desde 21/08, porque o ROUTING da
+   * juntada de pedido dividido usa a MESMA rota — divergir as duas listas
+   * mandaria caixa de carro pra loja onde o carro não passa.
    */
-  private static readonly ROTA_PROPRIA_PADRAO = ['ITANHAEM', 'PRAIA GRANDE', 'SANTOS'];
-
   async lojasDaRotaPropria(): Promise<Set<string>> {
-    const cfg: any = await (this.prisma as any).systemSetting
-      .findUnique({ where: { key: 'realignment_rota_propria' } })
-      .catch(() => null);
-
-    if (cfg && cfg.value !== null && cfg.value !== undefined) {
-      return new Set(
-        String(cfg.value).split(',').map((c) => c.trim().toUpperCase()).filter(Boolean),
-      );
-    }
-
-    const semAcento = (v: any) =>
-      String(v ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
-    const lojas: any[] = await this.prisma.store.findMany({ select: { code: true, name: true } as any });
-    return new Set(
-      lojas
-        .filter((l) => RemessaEnvioService.ROTA_PROPRIA_PADRAO.includes(semAcento(l.name)))
-        .map((l) => String(l.code).toUpperCase()),
-    );
+    return new Set(await lojasDaRotaPropria(this.prisma as any));
   }
 
   /**

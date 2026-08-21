@@ -48,6 +48,8 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
     ShipmentPdfService,
     RealignmentReportService,
     RealignmentPricingService,
+    // JuntadaService (pick-orders) gera etiqueta/NF da caixa de juntada por aqui
+    RemessaEnvioService,
   ],
 })
 export class RealignmentModule {}

@@ -6,6 +6,7 @@ import { SalesStatsService } from './sales-stats.service';
 import { OrderStatus, PickStatus } from '../common/enums';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pedidoOnlineLiberado } from '../common/prova-pagamento';
+import { lojasDaRotaPropria } from '../common/rota-propria';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
@@ -102,6 +103,7 @@ export class RoutingService {
       // indo pra outra loja. No pedido do site é o canal 13 (sem estoque), ou
       // seja, no-op.
       sellerStoreCode: (order as any).sellerStoreCode ?? null,
+      juntadaGroup: await this.grupoJuntada(!!order.pickupStoreCode),
     });
 
     // enriquece assignments com dados da loja (whatsapp, contato)
@@ -1071,6 +1073,21 @@ export class RoutingService {
   }
 
   /**
+   * Grupo da JUNTADA automática = a rota própria do carro (Itanhaém/Praia
+   * Grande/Santos, configurável em SystemSetting). Retirada não junta (a
+   * REGRA 0 do pickup manda). Kill-switch: ROUTING_JUNTADA_TRIO=0.
+   */
+  private async grupoJuntada(isPickup: boolean): Promise<string[]> {
+    if (isPickup) return [];
+    if (String(process.env.ROUTING_JUNTADA_TRIO || '').trim() === '0') return [];
+    try {
+      return await lojasDaRotaPropria(this.prisma as any);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * ESTOQUE COMPROMETIDO em pick-orders ATIVOS (status new/separating/separated).
    *
    * Pra cada (storeCode, sku), retorna a soma de quantidades já alocadas em
@@ -1288,6 +1305,7 @@ export class RoutingService {
       pickupStoreCode: input.pickupStoreCode ?? null,
       preferStoreCode: input.preferStoreCode ?? null,
       pinStoreCodes: input.pinStoreCodes ?? [],
+      juntadaGroup: await this.grupoJuntada(!!input.pickupStoreCode),
     });
 
     // Enriquece cada grupo com dados da loja + itens completos + mensagem WhatsApp
@@ -1388,6 +1406,10 @@ export class RoutingService {
       isPickup: input.isPickup ?? false,
       pickupStoreCode: result.pickupStoreCode ?? input.pickupStoreCode ?? null,
       pickupStoreName: result.pickupStoreName ?? null,
+      // JUNTADA automática (21/08): o trio da rota própria cobre o pedido →
+      // as peças se encontram nesta loja âncora e saem num pacote só.
+      consolidateStoreCode: result.consolidateStoreCode ?? null,
+      consolidateStoreName: result.consolidateStoreName ?? null,
       customer: {
         name: input.customerName,
         cpf: input.customerCpf ?? null,
