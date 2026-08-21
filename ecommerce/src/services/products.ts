@@ -134,6 +134,13 @@ export interface PecaApi {
       ref: string; slug: string; nome: string;
       preco: number; precoPix: number | null;
       imagem: string | null; disponivel: boolean; atual: boolean;
+      /**
+       * Cores vendáveis da irmã, com a foto de cada uma. É o que deixa o
+       * "Levar junto" abrir na MESMA cor que a cliente escolheu — o look é a
+       * mesma foto. Ausente em resposta antiga (backend não deployado): o
+       * site cai no comportamento de antes.
+       */
+      cores?: Array<{ nome: string; imagem: string | null }>;
     }>;
   } | null;
 }

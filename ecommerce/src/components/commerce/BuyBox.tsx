@@ -269,7 +269,9 @@ export function BuyBox({
     // A irmã do look vai junto pro mini-cart (dono, 20/08): a faixa "Sai na
     // mesma foto" só leva pra outra página, e quem adiciona e vai embora não
     // volta. Peça sem look limpa a oferta — nada de irmã de outra família.
-    oferecerLook(look);
+    // A cor vai junto: o look é a MESMA foto, então a irmã tem que ser
+    // oferecida na cor que ela acabou de escolher.
+    oferecerLook(look, cor);
     // Abre o mini-cart: a cliente VÊ a peça entrar na sacola sem sair da
     // página — e o próximo passo (finalizar) já está na mão dela.
     openOverlay('cart');

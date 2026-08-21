@@ -2507,6 +2507,21 @@ export class LojaCatalogService {
       precoPix: c.precoPix,
       imagem: c.imagens?.[0]?.src ?? null,
       disponivel: !!c.disponivel,
+      /**
+       * AS CORES VENDÁVEIS DA IRMÃ, com a foto de cada uma (21/08).
+       *
+       * O look guarda REF crua — ninguém cadastrou "esta calça, nesta cor".
+       * Mas o look É a mesma foto: quem leva o kimono ESTAMPA AZUL quer a
+       * calça ESTAMPA AZUL. Com esta lista o site casa a cor escolhida com a
+       * da irmã e abre a janelinha do "Levar junto" já nela — sem isso a
+       * cliente escolhia a cor de novo, no escuro, e podia levar a BEGE
+       * junto da AZUL (a foto do card mostrava sempre a primeira cor).
+       *
+       * Enxuta de propósito (nome + 1 foto): o payload da PDP carrega isto.
+       */
+      cores: (c.cores ?? [])
+        .filter((x: any) => x?.nome && x.estoque > 0 && x.fotos?.length)
+        .map((x: any) => ({ nome: String(x.nome), imagem: x.fotos[0]?.src ?? null })),
     };
   }
 
