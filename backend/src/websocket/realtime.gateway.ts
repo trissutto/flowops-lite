@@ -197,6 +197,11 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     reasonLabel: string;
     note?: string | null;
     reportedAt: string;
+    // Reporte POR PEÇA (21/08): o card CONTINUA na fila da loja com o resto —
+    // só a peça reportada saiu (sem loja, esperando a matriz).
+    itemLevel?: boolean;
+    sku?: string | null;
+    qtyMissing?: number;
   }) {
     this.server.to(`store:${storeId}`).emit('pick-order:issue', payload);
     this.server.to('admin').emit('pick-order:issue', payload);

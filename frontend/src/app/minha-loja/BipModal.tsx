@@ -70,13 +70,36 @@ interface ResolveResponse {
   debug?: ResolveDebugRow[];
 }
 
+/** Peça que a loja reportou ("não achei") — saiu do card e espera a matriz. */
+interface ItemReport {
+  id: string;
+  sku: string;
+  productName: string | null;
+  ref?: string | null;
+  cor?: string | null;
+  tamanho?: string | null;
+  qtyMissing: number;
+  reason: string;
+  reasonLabel: string;
+  stockDecreased: boolean;
+}
+
 interface ScanData {
   pickOrderId: string;
   status: string;
   items: ScanItem[];
   /** Bipes já registrados NO SERVIDOR (peças que já saíram do estoque). */
   scans?: Scan[];
+  /** Peças reportadas neste card (ficam visíveis, apagadas, com o motivo). */
+  reports?: ItemReport[];
 }
+
+const REPORT_REASONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: 'out_of_stock', label: 'Não achei a peça', hint: 'Procurou e ela não está na loja — sai do estoque pro site parar de vender' },
+  { value: 'defective', label: 'Peça com defeito', hint: 'Existe mas não dá pra enviar — registre depois no fluxo de Defeitos' },
+  { value: 'divergence', label: 'Divergência (cor/tamanho)', hint: 'A peça física não bate com o que o pedido diz' },
+  { value: 'other', label: 'Outro', hint: 'Explique na observação (obrigatória)' },
+];
 
 interface Scan {
   /** Identidade da PEÇA bipada, gerada aqui antes do POST. É o que faz o
@@ -172,6 +195,17 @@ export default function BipModal({
    *  porque é mostrado NO RODAPÉ, colado no botão: o corpo do modal rola, e um
    *  erro no topo depois de um clique lá embaixo é erro que ninguém lê. */
   const [erroFinal, setErroFinal] = useState<string | null>(null);
+  /** Item sendo reportado ("não achei") — abre o mini-modal de motivo. */
+  const [reportCtx, setReportCtx] = useState<ScanItem | null>(null);
+  const [reportReason, setReportReason] = useState<string>('out_of_stock');
+  const [reportNote, setReportNote] = useState('');
+  const [reportSending, setReportSending] = useState(false);
+  const [reportErr, setReportErr] = useState<string | null>(null);
+  // Espelho pro interval de refocus (montado UMA vez, closure vazia): com o
+  // mini-modal aberto o roubo de foco mandaria a observação digitada pro campo
+  // de bipe — e um Enter reflexo viraria "bipe" de texto solto.
+  const reportCtxRef = useRef<ScanItem | null>(null);
+  useEffect(() => { reportCtxRef.current = reportCtx; }, [reportCtx]);
   /** Bipes esperando resposta do servidor. A tela não pode ficar muda enquanto
    *  a peça está no ar: antes o bipe era instantâneo (localStorage) e agora é
    *  uma ida à rede — sem este contador a atendente bipa, não vê nada mudar e
@@ -219,14 +253,14 @@ export default function BipModal({
    * habilita e a separação morre exatamente como morreu no pedido 960000006.
    * Também cobre o outro PC bipando o mesmo pedido.
    */
-  const ressincronizar = useCallback(async (): Promise<number | null> => {
+  const ressincronizar = useCallback(async (): Promise<ScanData | null> => {
     try {
       const res = await api<ScanData>(`/pick-orders/${pickOrderId}/scan-data`);
       setData(res);
       const doServidor = Array.isArray(res.scans) ? res.scans : [];
       scansRef.current = doServidor;
       setScans(doServidor);
-      return doServidor.length;
+      return res;
     } catch {
       // Ressincronizar é conserto, não operação: se a rede ainda está fora, a
       // mensagem de erro do bipe já está na tela e é ela que vale.
@@ -237,6 +271,8 @@ export default function BipModal({
   // Mantém o input focado (se operadora clicar fora, volta o foco)
   useEffect(() => {
     const refocus = () => {
+      // Mini-modal de reporte aberto = ela está DIGITANDO no textarea.
+      if (reportCtxRef.current) return;
       if (inputRef.current && document.activeElement !== inputRef.current) {
         inputRef.current.focus();
       }
@@ -547,6 +583,63 @@ export default function BipModal({
     });
   };
 
+  /**
+   * REPORTA uma peça que não dá pra bipar ("não achei" / defeito): ela SAI
+   * deste card (a matriz decide se manda de outra loja ou reembolsa) e, no
+   * "não achei", a quantidade fantasma SAI do estoque — é ela que faz o site
+   * continuar vendendo peça que não existe. Depois do 200 a tela
+   * ressincroniza: o esperado encolhe e o "Finalizar" destrava com o resto.
+   */
+  const submitReport = async () => {
+    if (!reportCtx || reportSending) return;
+    if (reportReason === 'other' && reportNote.trim().length < 5) {
+      setReportErr('Explique o motivo na observação (mínimo 5 letras).');
+      return;
+    }
+    setReportSending(true);
+    setReportErr(null);
+    try {
+      const res = await api<any>(`/pick-orders/${pickOrderId}/report-item`, {
+        method: 'POST',
+        body: JSON.stringify({
+          orderItemId: reportCtx.id,
+          reason: reportReason,
+          note: reportNote.trim() || undefined,
+        }),
+      });
+      setReportCtx(null);
+      setReportNote('');
+      setReportReason('out_of_stock');
+      setFeedback({
+        type: 'warn',
+        msg: res?.stockDecreased
+          ? 'Peça reportada — saiu do pedido E do estoque da loja. A matriz foi avisada.'
+          : 'Peça reportada — saiu do pedido. A matriz foi avisada.',
+        ts: Date.now(),
+      });
+      await ressincronizar();
+    } catch (e: any) {
+      // A recusa pode ser a tela estando atrás (peça bipada em outro PC), OU o
+      // reporte pode ter ENTRADO e só a resposta se perdido (502 do deploy) —
+      // recarrega e olha: se o item saiu da lista, o reporte valeu.
+      const fresh = await ressincronizar();
+      if (fresh && reportCtx && !fresh.items.some((i) => i.id === reportCtx.id)) {
+        setReportCtx(null);
+        setReportNote('');
+        setReportReason('out_of_stock');
+        setFeedback({
+          type: 'warn',
+          msg: 'Peça reportada (a resposta demorou) — saiu do pedido. A matriz foi avisada.',
+          ts: Date.now(),
+        });
+      } else {
+        setReportErr(msgErro(e));
+      }
+    } finally {
+      setReportSending(false);
+    }
+  };
+
   const submit = async () => {
     if (!allDone || submitting || naFila > 0) return;
     setSubmitting(true);
@@ -712,6 +805,23 @@ export default function BipModal({
                             ⚠ Sem código cadastrado — avisa o admin
                           </div>
                         )}
+                        {/* Válvula de escape POR PEÇA: sem ela, uma peça que
+                            não existe fisicamente travava o pedido inteiro
+                            (o Finalizar exige 100% bipado) e a única saída
+                            era devolver o card TODO pra matriz. */}
+                        {!done && (
+                          <button
+                            onClick={() => {
+                              setReportCtx(it);
+                              setReportReason('out_of_stock');
+                              setReportNote('');
+                              setReportErr(null);
+                            }}
+                            className="mt-1 text-xs text-red-600 hover:text-red-800 underline underline-offset-2"
+                          >
+                            Não achei essa peça — reportar
+                          </button>
+                        )}
                       </div>
                       <div className="ml-3 text-right flex-shrink-0">
                         <div className={`text-2xl font-bold ${done ? 'text-emerald-600' : 'text-slate-700'}`}>
@@ -727,6 +837,38 @@ export default function BipModal({
                   );
                 })}
               </div>
+
+              {/* Peças reportadas: ficam visíveis e apagadas em vez de sumir —
+                  peça que some sem explicação vira "o sistema comeu". */}
+              {(data.reports ?? []).length > 0 && (
+                <div className="mt-4">
+                  <div className="text-xs font-medium uppercase text-slate-400 mb-1">
+                    Peças reportadas — fora deste pedido, com a matriz
+                  </div>
+                  <div className="space-y-2">
+                    {(data.reports ?? []).map((r) => (
+                      <div
+                        key={r.id}
+                        className="border border-dashed border-slate-300 rounded p-3 flex items-center justify-between bg-slate-50"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-xs text-slate-400">{r.sku}</div>
+                          {r.ref && (
+                            <div className="font-medium text-slate-500 line-through">{refCorTam(r)}</div>
+                          )}
+                          <div className="text-xs text-slate-500">
+                            {r.reasonLabel} — matriz avisada
+                            {r.stockDecreased ? ' · já saiu do estoque' : ''}
+                          </div>
+                        </div>
+                        <div className="ml-3 text-right flex-shrink-0 text-sm font-semibold text-red-500">
+                          {r.qtyMissing} un
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -768,6 +910,98 @@ export default function BipModal({
           </div>
         </footer>
       </div>
+
+      {/* Mini-modal do reporte por peça */}
+      {reportCtx && (
+        <div
+          className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-3"
+          {...overlayClose(() => { if (!reportSending) setReportCtx(null); })}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="p-4 border-b bg-red-50 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-red-700">
+                <AlertTriangle className="w-5 h-5" />
+                <h3 className="font-bold">Reportar peça</h3>
+              </div>
+              <button
+                onClick={() => { if (!reportSending) setReportCtx(null); }}
+                className="p-2 hover:bg-red-100 rounded"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="mb-3">
+                <div className="font-mono text-xs text-slate-500">{reportCtx.sku}</div>
+                <div className="font-semibold text-slate-900">
+                  {reportCtx.ref ? refCorTam(reportCtx) : nomeSemVariacao(reportCtx.productName, reportCtx.cor, reportCtx.tamanho) || reportCtx.sku}
+                </div>
+              </div>
+              <div className="space-y-2 mb-3">
+                {REPORT_REASONS.map((r) => (
+                  <label
+                    key={r.value}
+                    className={`block border rounded p-2 cursor-pointer ${
+                      reportReason === r.value ? 'border-red-400 bg-red-50' : 'border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="report-reason"
+                      className="sr-only"
+                      checked={reportReason === r.value}
+                      onChange={() => setReportReason(r.value)}
+                    />
+                    <div className="font-medium text-sm text-slate-800">{r.label}</div>
+                    <div className="text-xs text-slate-500">{r.hint}</div>
+                  </label>
+                ))}
+              </div>
+              <textarea
+                value={reportNote}
+                onChange={(e) => setReportNote(e.target.value)}
+                rows={2}
+                maxLength={500}
+                placeholder={reportReason === 'other' ? 'Explique o que aconteceu (obrigatório)' : 'Observação (opcional)'}
+                className="w-full border rounded p-2 text-sm mb-3"
+              />
+              <div className="text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded p-2">
+                A peça <strong>sai deste pedido</strong> e a matriz decide: mandar de outra
+                loja ou devolver o dinheiro da cliente. Em <strong>“Não achei a peça”</strong>,
+                ela também sai do estoque da loja — o site para de vender uma peça que não
+                existe. O resto do pedido continua normal e o Finalizar destrava.
+              </div>
+              {reportErr && (
+                <div role="alert" className="mt-3 bg-red-50 border border-red-300 text-red-800 px-3 py-2 rounded text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <div>{reportErr}</div>
+                </div>
+              )}
+            </div>
+            <footer className="p-3 border-t bg-slate-50 flex gap-2">
+              <button
+                onClick={() => setReportCtx(null)}
+                disabled={reportSending}
+                className="flex-1 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium rounded disabled:opacity-50"
+              >
+                Voltar
+              </button>
+              {/* Sempre clicável (menos durante o envio): botão morto sem
+                  explicação é pior que o clique mostrar "explique o motivo". */}
+              <button
+                onClick={submitReport}
+                disabled={reportSending}
+                className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded disabled:opacity-50"
+              >
+                {reportSending ? 'Reportando…' : 'Reportar peça'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
 
       {/* Modal de debug — só aparece quando o EAN bipado não bateu em nada */}
       {debug && !debug.found && (

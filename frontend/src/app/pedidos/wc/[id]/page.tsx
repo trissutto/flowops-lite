@@ -291,6 +291,44 @@ export default function PedidoDetailPage() {
   }>>([]);
   const [liveStatusFlash, setLiveStatusFlash] = useState<Record<string, number>>({});
 
+  // ── Peças reportadas na bipagem ("não achei a peça") ──
+  // O card da loja SEGUIU com o resto; a peça reportada ficou SEM loja,
+  // esperando a matriz mandar de outra loja (Recalcular) ou reembolsar.
+  // O reporte se auto-resolve quando o item ganha loja de novo.
+  const [itemReports, setItemReports] = useState<Array<{
+    id: string;
+    storeCode: string;
+    sku: string;
+    productName: string | null;
+    ref?: string | null;
+    cor?: string | null;
+    tamanho?: string | null;
+    qtyMissing: number;
+    reason: string;
+    reasonLabel: string;
+    note?: string | null;
+    reportedAt: string;
+    stockDecreased: boolean;
+  }>>([]);
+  const [resolvendoReport, setResolvendoReport] = useState<string | null>(null);
+  const loadItemReports = () => {
+    if (!wcId) return;
+    api<any[]>(`/pick-orders/item-reports/by-wc/${wcId}`)
+      .then((d) => setItemReports(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  };
+  const resolverItemReport = async (id: string) => {
+    setResolvendoReport(id);
+    try {
+      await api(`/pick-orders/item-reports/${id}/resolve`, { method: 'POST' });
+      setItemReports((prev) => prev.filter((r) => r.id !== id));
+    } catch {
+      loadItemReports();
+    } finally {
+      setResolvendoReport(null);
+    }
+  };
+
   useEffect(() => { load(); /* eslint-disable-line */ }, [wcId]);
 
   // Carrega pick-orders atuais desse pedido WC quando a página abre
@@ -299,6 +337,8 @@ export default function PedidoDetailPage() {
     api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
       .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
       .catch((e) => console.warn('Falha ao carregar pick-orders:', e?.message));
+    loadItemReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wcId]);
 
   // Escuta socket 'pick-order:status' pra atualizar em tempo real
@@ -338,21 +378,28 @@ export default function PedidoDetailPage() {
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
+      loadItemReports(); // re-rotear pode ter dado destino à peça reportada
     };
     const onNew = () => {
       // Idem — pick-order novo apareceu (recalcular ou primeira confirmação)
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
+      loadItemReports();
     };
+    // Reporte novo (do card inteiro OU por peça) — atualiza o banner na hora.
+    const onIssue = () => loadItemReports();
     socket.on('pick-order:status', onStatus);
     socket.on('pick-order:removed', onRemoved);
     socket.on('pick-order:new', onNew);
+    socket.on('pick-order:issue', onIssue);
     return () => {
       socket.off('pick-order:status', onStatus);
       socket.off('pick-order:removed', onRemoved);
       socket.off('pick-order:new', onNew);
+      socket.off('pick-order:issue', onIssue);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wcId]);
 
   async function load() {
@@ -1862,6 +1909,47 @@ export default function PedidoDetailPage() {
                   >
                     🎯 Escolher outra loja manualmente
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Peça reportada na bipagem — o card seguiu, mas UMA peça ficou sem
+            destino. Não confundir com o banner acima (card INTEIRO parado). */}
+        {itemReports.length > 0 && (
+          <div className="bg-red-50 border-2 border-red-400 rounded-lg p-3 mb-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm">
+                <div className="font-bold text-red-900">
+                  Peça reportada na bipagem — sem loja pra enviar
+                </div>
+                {itemReports.map((r) => (
+                  <div key={r.id} className="mt-1 text-red-800 flex flex-wrap items-center gap-x-2">
+                    <span>
+                      <b>Loja {r.storeCode}</b>:{' '}
+                      {[r.ref, r.cor, r.tamanho].filter(Boolean).join(' · ') || r.sku} ({r.qtyMissing} un)
+                      {' — '}{r.reasonLabel}
+                      {r.note && <span className="text-red-700 italic"> — "{r.note}"</span>}
+                      {r.stockDecreased && (
+                        <span className="text-red-600 text-xs"> · já saiu do estoque da loja</span>
+                      )}
+                    </span>
+                    <button
+                      onClick={() => resolverItemReport(r.id)}
+                      disabled={resolvendoReport === r.id}
+                      className="px-2 py-0.5 rounded text-xs font-semibold bg-white border border-red-400 text-red-800 hover:bg-red-100 disabled:opacity-60"
+                      title="Marque quando resolver por fora (ex.: reembolsou a cliente)"
+                    >
+                      {resolvendoReport === r.id ? 'salvando…' : '✓ Resolvi (reembolso/outro)'}
+                    </button>
+                  </div>
+                ))}
+                <div className="mt-2 text-xs text-red-700">
+                  A cliente pagou por essa peça. Use <b>Recalcular separação</b> pra mandar de
+                  outra loja que tenha a peça — o aviso some sozinho quando ela ganhar destino —
+                  ou resolva com reembolso e marque "Resolvi".
                 </div>
               </div>
             </div>

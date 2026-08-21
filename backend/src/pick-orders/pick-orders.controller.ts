@@ -432,6 +432,55 @@ export class PickOrdersController {
   }
 
   /**
+   * LOJA reporta UMA PEÇA na bipagem ("não achei a peça") sem travar o resto.
+   * Body: { orderItemId, reason: 'out_of_stock' | 'defective' | 'divergence' | 'other', note? }
+   *
+   * O item sai do card (fica sem loja, esperando a matriz) e — no motivo
+   * "sem estoque físico" — a quantidade fantasma sai do estoque da loja na
+   * mesma transação, pro site parar de vender peça que não existe. O
+   * "Finalizar separação" destrava com o resto bipado.
+   */
+  @Post(':id/report-item')
+  reportItem(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { orderItemId: string; reason: string; note?: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja reportam peça');
+    }
+    return this.svc.reportItem(id, user.storeId, user.userId, body ?? ({} as any));
+  }
+
+  /**
+   * Matriz: reportes de peça ainda sem destino de um pedido WC — banner do
+   * /pedidos/wc/[id]. Reporte se auto-resolve quando o item ganha loja de novo.
+   */
+  @Get('item-reports/by-wc/:wcOrderId')
+  itemReportsByWc(@Req() req: any, @Param('wcOrderId') wcOrderId: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) acessa essa rota');
+    }
+    const id = Number(wcOrderId);
+    if (!Number.isFinite(id)) {
+      throw new ForbiddenException('wcOrderId inválido');
+    }
+    return this.svc.listItemReportsByWc(id);
+  }
+
+  /** Matriz marca um reporte de peça como resolvido na mão (ex.: reembolsou a cliente). */
+  @Post('item-reports/:reportId/resolve')
+  resolveItemReport(@Req() req: any, @Param('reportId') reportId: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) resolve reporte');
+    }
+    return this.svc.resolveItemReport(reportId, user.userId);
+  }
+
+  /**
    * LOJA troca uma peça manualmente na separação (produto não encontrado / trocar
    * por outro). Só antes da baixa de estoque. Se o preço da peça nova difere,
    * exige senha GERENTE+ (a service devolve needsPassword quando falta senha).
