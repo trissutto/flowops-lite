@@ -2171,7 +2171,11 @@ export default function PedidoDetailPage() {
               const cardsAtivos = liveStatus.filter((p) =>
                 ['new', 'separating', 'separated', 'ready'].includes(p.status),
               );
-              if (cardsAtivos.length < 2 || juntada?.juntando === true || order.pickup?.isPickup) return null;
+              // Blindagem: se o GET /juntada falhou (juntada=null) mas os
+              // cards já mostram feeder (isTransfer sem retirada), a juntada
+              // EXISTE — oferecer o botão de novo só geraria erro no modal.
+              const jaTemFeeder = cardsAtivos.some((p) => p.isTransfer && !order.pickup?.isPickup);
+              if (cardsAtivos.length < 2 || juntada?.juntando === true || jaTemFeeder || order.pickup?.isPickup) return null;
               return (
                 <div className="mb-2 text-xs bg-violet-50 border border-violet-200 text-violet-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
                   <span>🧲</span>
@@ -2196,13 +2200,17 @@ export default function PedidoDetailPage() {
                 const badgeColor = hasIssue
                   ? 'bg-red-600 text-white'
                   : r.status === 'shipped' ? 'bg-emerald-600 text-white'
-                  : r.status === 'ready' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : r.status === 'ready' || r.status === 'separated' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                   : r.status === 'separating' ? 'bg-blue-100 text-blue-800 border border-blue-300'
                   : 'bg-amber-100 text-amber-900 border border-amber-300';
+                // 'separated' = bipagem 100% — no feeder da juntada é o momento
+                // em que a caixa nasce; deixar cair no fallback "Aguardando
+                // iniciar" contradizia o "caixa em trânsito" da linha de baixo.
                 const label = hasIssue
                   ? `⚠ ${r.issueReasonLabel ?? 'Problema reportado'}`
                   : r.status === 'shipped' ? 'Enviado'
                   : r.status === 'ready' ? 'Pronto pra envio'
+                  : r.status === 'separated' ? 'Separado (bipe completo)'
                   : r.status === 'separating' ? 'Separando'
                   : 'Aguardando iniciar';
                 const st = printState[r.id] ?? 'idle';

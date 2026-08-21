@@ -2373,7 +2373,12 @@ function PickOrderCard({
   // etiqueta de cliente aqui seria envio errado (o backend bloqueia, mas o
   // botão nem deve aparecer). O caminho é "Documentos da caixa".
   const ehFeederJuntada = !!row.juntadaFeeder;
-  const podeGerarEnvio = !order.isPickup && !ehMotoboy && !ehFeederJuntada;
+  // ÂNCORA aguardando caixas das outras lojas: o envio final só libera com o
+  // pedido completo (o backend trava) — botão ativo aqui viraria toast de
+  // erro em loop enquanto a faixa acima diz "aguarde as caixas".
+  const aguardandoCaixas =
+    !!row.juntadaChegando && row.juntadaChegando.recebidas < row.juntadaChegando.total;
+  const podeGerarEnvio = !order.isPickup && !ehMotoboy && !ehFeederJuntada && !aguardandoCaixas;
   const [corrBusy, setCorrBusy] = useState(false);
   const [docsBusy, setDocsBusy] = useState(false);
 
@@ -2803,8 +2808,14 @@ function PickOrderCard({
             {ehMotoboy ? '🛵 Entregue por motoboy' : '🏬 Cliente retirou'}
           </button>
         )}
+        {/* Âncora com o próprio bipe pronto, aguardando as caixas das feeders */}
+        {(status === 'separated' || status === 'ready') && aguardandoCaixas && (
+          <div className="flex-1 rounded-lg border-2 border-violet-300 bg-violet-50 px-3 py-3 text-center text-sm font-bold text-violet-800">
+            🧲 Suas peças estão prontas — o envio libera quando as caixas das outras lojas chegarem
+          </div>
+        )}
         {/* Fallback manual → envio com rastreio digitado (só quem posta) */}
-        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !ehFeederJuntada && !row.trackingCode && (
+        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !ehFeederJuntada && !aguardandoCaixas && !row.trackingCode && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
             title="Digitar o rastreio manualmente (fallback se o Gerar envio falhar)"
