@@ -2022,12 +2022,16 @@ export class LojaCatalogService {
      * ABREM a vitrine na ordem gravada e o resto segue atrás na ordenação
      * normal (sort estável — não embaralha o que o dono não posicionou).
      *
-     * Só vale na listagem de UMA categoria, sem busca e na ordenação padrão:
-     * se a cliente pediu "menor preço", a escolha DELA manda — curadoria não
-     * atropela filtro.
+     * Só vale na listagem de UMA categoria, sem busca e nas ordenações
+     * EDITORIAIS — 'relevancia' E 'novidades', porque a página de categoria
+     * ABRE em 'novidades' (a primeira versão, só com 'relevancia', fez a
+     * curadoria "não mudar nada" na tela do dono). Se a cliente pediu
+     * "menor preço" ou "nome", a escolha DELA manda — curadoria não
+     * atropela filtro funcional.
      */
+    const ordensEditoriais: Array<ListarParams['ordenar']> = ['relevancia', 'novidades'];
     const catsDaOrdem =
-      params.categoria && !params.busca && (!params.ordenar || params.ordenar === 'relevancia')
+      params.categoria && !params.busca && (!params.ordenar || ordensEditoriais.includes(params.ordenar))
         ? String(params.categoria).split(',').map((c) => c.trim().toLowerCase()).filter(Boolean)
         : [];
     if (catsDaOrdem.length === 1) {
