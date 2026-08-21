@@ -230,9 +230,30 @@ export class TrocaPecaService {
         return { erro: String(e?.message || e).slice(0, 300) };
       });
     } else if (tipo === 'vale') {
-      vale = await this.gerarVale(order, swap.id, Math.abs(diff)).catch((e: any) => {
-        this.logger.error(`[troca-peca] vale falhou (swap ${swap.id}): ${e?.message || e}`);
-        return { erro: String(e?.message || e).slice(0, 300) };
+      vale = await this.gerarVale(order, swap.id, Math.abs(diff)).catch(async (e: any) => {
+        const erro = String(e?.message || e).slice(0, 300);
+        this.logger.error(`[troca-peca] vale falhou (swap ${swap.id}): ${erro}`);
+        /**
+         * Vale que não saiu é DÍVIDA COM A CLIENTE, não acerto fechado. O
+         * swap nasce `settled` (vale não trava separação — o dinheiro é
+         * nosso), mas sem `cupomCode` ele mentiria "pago" na tela. Registra
+         * a falha no motivo pra virar pendência visível na retaguarda.
+         */
+        await (this.prisma as any).orderItemSwap
+          .update({
+            where: { id: swap.id },
+            data: { motivo: [swap.motivo, `VALE NÃO EMITIDO: ${erro}`].filter(Boolean).join(' · ').slice(0, 300) },
+          })
+          .catch(() => null);
+        await this.prisma.orderHistory
+          .create({
+            data: {
+              orderId: order.id,
+              note: `⚠️ Vale de R$ ${Math.abs(diff).toFixed(2)} NÃO emitido: ${erro} — cliente ainda tem esse valor a receber.`,
+            },
+          })
+          .catch(() => null);
+        return { erro };
       });
     }
 
