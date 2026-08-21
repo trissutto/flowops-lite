@@ -875,6 +875,51 @@ function PdvPageInner() {
   const [stores, setStores] = useState<Store[]>([]);
   const [storeCode, setStoreCode] = useState<string>('');
   const [sale, setSale] = useState<Sale | null>(null);
+
+  /**
+   * A VENDA DE VITRINE — a tela nasce INTEIRA, antes do primeiro bipe.
+   *
+   * A venda de verdade só nasce quando a peça é bipada (decisão de jun/26:
+   * venda criada junto com a tela enchia o banco de registro vazio, e em loja
+   * com 2 PCs o segundo adotava a venda órfã do primeiro). Isso está certo e
+   * continua igual — o que estava errado era a TELA ter sido amarrada ao
+   * objeto: sem venda, sumia o painel direito inteiro (cliente, peças,
+   * subtotal, formas de pagamento, Finalizar), sumia o "Carrinho vazio" e
+   * sobrava uma faixa branca com a barra de bipe no meio. A vendedora via
+   * isso ao abrir o PDV e DE NOVO entre cada duas vendas, o dia inteiro.
+   *
+   * Agora o que falta é o CONTEÚDO (zeros), nunca a ESTRUTURA. Nada aqui
+   * chama a API: é um objeto de leitura, com `id` vazio de propósito — quem
+   * precisa de venda de verdade passa por `ensureSaleId()`, que cria na hora.
+   */
+  const saleView: Sale = useMemo(
+    () =>
+      sale ?? {
+        id: '',
+        storeCode,
+        storeName: stores.find((s) => s.code === storeCode)?.name || '',
+        vendedorName: null,
+        sellerId: null,
+        sellerName: null,
+        customerCpf: null,
+        customerName: null,
+        customerEmail: null,
+        customerPhone: null,
+        status: 'open',
+        subtotal: 0,
+        desconto: 0,
+        total: 0,
+        activePromotion: null,
+        paymentMethod: null,
+        payments: [],
+        nfceNumber: null,
+        nfceChave: null,
+        nfceXml: null,
+        finalizedAt: null,
+        items: [],
+      },
+    [sale, storeCode, stores],
+  );
   const [loadingSale, setLoadingSale] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1223,6 +1268,22 @@ function PdvPageInner() {
     }
   };
 
+  /**
+   * Identificar a cliente ANTES de bipar é fluxo normal de balcão — mas o
+   * modal só monta com venda no banco (`showCustomer && sale`), então o
+   * clique morria em silêncio sempre que a tela estava sem venda: F6 não
+   * fazia nada, o card do cliente não fazia nada, e o "Marcar" mandava
+   * identificar a cliente e não abria onde identificar. Aqui a venda nasce
+   * na hora, igual ao primeiro bipe.
+   */
+  const abrirIdentificacaoCliente = useCallback(async () => {
+    if (!sale) {
+      const id = await ensureSaleId();
+      if (!id) return;
+    }
+    setShowCustomer(true);
+  }, [sale, ensureSaleId]);
+
   // ── Fotos do carrinho: UM pedido em lote, não um por peça ──
   useEffect(() => {
     const skus = (sale?.items || []).map((i) => i.sku).filter(Boolean);
@@ -1342,7 +1403,7 @@ function PdvPageInner() {
       // não cancela em todos os browsers.
       if (e.key === 'F6') {
         e.preventDefault();
-        setShowCustomer(true);
+        void abrirIdentificacaoCliente();
         return;
       }
       // F9 (escolher vendedora) REMOVIDO — a vendedora agora é escolhida no
@@ -2886,7 +2947,7 @@ function PdvPageInner() {
               })}
             </div>
           </div>
-        ) : sale?.status === 'open' ? (
+        ) : (
           <div className="text-center py-16 px-6 bg-white rounded-2xl border-2 border-dashed border-slate-200">
             <div className="w-20 h-20 mx-auto rounded-full bg-[#FAF6E8] border-2 border-[#E5E5E0] flex items-center justify-center mb-4">
               <ShoppingCart className="w-10 h-10 text-[#D4AF37]" />
@@ -2896,11 +2957,11 @@ function PdvPageInner() {
               Bipe o primeiro produto pra começar a venda
             </div>
           </div>
-        ) : null}
+        )}
 
-        {checkoutLayout === 'highlighted' && sale?.status === 'open' && (
+        {checkoutLayout === 'highlighted' && (!sale || sale.status === 'open') && (
           <QuickCardBrandDock
-            disabled={(sale.items?.length ?? 0) === 0 || (sale.total || 0) <= 0}
+            disabled={(saleView.items?.length ?? 0) === 0 || (saleView.total || 0) <= 0}
             onCredit={(brand) => venderCredito(brand)}
             onDebit={(brand) => venderDebito(brand)}
           />
@@ -2908,7 +2969,15 @@ function PdvPageInner() {
       </main>
 
       {/* PAINEL DIREITO: cliente + totais + controles operacionais. */}
-      {sale?.status === 'open' && (() => {
+      {(!sale || sale.status === 'open') && (() => {
+        /**
+         * Sombra proposital: destas 375 linhas para baixo, `sale` é a venda
+         * REAL quando existe e a de vitrine quando ainda não bipou nada — as
+         * duas do mesmo tipo, sem `?.` espalhado pelo JSX. O que precisa da
+         * venda no banco (marcar, vale residual) já é barrado antes por
+         * carrinho vazio; o resto é leitura de zero.
+         */
+        const sale = saleView;
         const podePagar = (sale.items?.length ?? 0) > 0 && (sale.total || 0) > 0;
         const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
         const liquido = Math.round((sale.total - paid) * 100) / 100;
@@ -2927,7 +2996,7 @@ function PdvPageInner() {
 
         {/* Card do CLIENTE — clique abre o modal de identificação (F6) */}
         <button
-          onClick={() => setShowCustomer(true)}
+          onClick={() => void abrirIdentificacaoCliente()}
           className="w-full bg-white rounded-2xl border border-[#E5E2D9] shadow-sm px-4 py-3 flex items-center gap-3 text-left hover:border-[#CDA434] hover:bg-[#FBF6E6]/40 transition group"
           title="Identificar / trocar cliente (atalho F6)"
         >
@@ -3065,7 +3134,7 @@ function PdvPageInner() {
               onClick={async () => {
                 if (!sale.customerCpf) {
                   toast('warning', 'Identifique a cliente primeiro', 'CPF é obrigatorio pra marcar (provar em casa)');
-                  setShowCustomer(true);
+                  void abrirIdentificacaoCliente();
                   return;
                 }
                 if (!sale.items?.length) {
