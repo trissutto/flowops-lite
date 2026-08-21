@@ -98,6 +98,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/reprocessar-estoque',  label: 'Reprocessar',       subtitle: 'Remessas',      description: 'Ajustar baixa Giga de remessas com bug', tone: 'rose', icon: Truck         },
   { href: '/retaguarda/baixa-origem',         label: 'Baixa Origem',      subtitle: 'Por rota',      description: 'Ver TUDO que saiu de uma loja e baixar Giga', tone: 'rose', icon: Truck         },
   { href: '/logs',                            label: 'Logs',              subtitle: 'Sistema',       description: 'Eventos do servidor',           tone: 'slate',  icon: Activity        },
+  { href: '/retaguarda/telemetria',           label: 'Uso das telas',     subtitle: 'Sistema',       description: 'Quais telas são usadas de verdade', tone: 'slate', icon: Activity      },
 ];
 
 export default function GestaoHub() {
