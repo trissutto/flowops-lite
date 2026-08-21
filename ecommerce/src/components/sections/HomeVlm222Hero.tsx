@@ -25,7 +25,7 @@ export function HomeVlm222Hero({ href }: { href: string }) {
               Compre agora
             </span>
           </div>
-          <div className="relative min-w-0 overflow-hidden bg-[#d9c9b9]">
+          <div className="relative min-w-0 overflow-hidden bg-[#2b211c]">
             <Image
               src={VLM_222_IMAGE}
               alt="Modelo usando vestido longo preto VLM-222"
@@ -34,7 +34,7 @@ export function HomeVlm222Hero({ href }: { href: string }) {
               priority
               fetchPriority="high"
               sizes="54vw"
-              className="object-cover object-top transition-transform duration-700 group-hover:scale-[1.006]"
+              className="object-contain object-center transition-transform duration-700 group-hover:scale-[1.006]"
             />
           </div>
         </AppLink>
