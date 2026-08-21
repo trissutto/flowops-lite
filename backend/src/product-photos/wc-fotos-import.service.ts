@@ -289,6 +289,39 @@ export class WcFotosImportService {
         return cor;
       }
     }
+
+    /**
+     * SEGUNDO PASSE: por PALAVRA DISTINTIVA da cor (21/08).
+     *
+     * A cor no Flow costuma ser mais descritiva que o nome no site antigo:
+     * "LISTRA CHUMBO" no catálogo contra "... Ref 700906 Chumbo" no WC. O
+     * passe de cima exige a cor INTEIRA e falhava — o importador empilhava
+     * a peça em `produtosWcSemCor` e não trazia foto nenhuma. Em silêncio:
+     * 49 REFs publicadas seguiam servindo foto do WordPress porque nunca
+     * receberam a nossa.
+     *
+     * Só vale palavra que aparece em UMA cor da REF. "LISTRA" está nas duas
+     * cores da 900859 (LISTRA AZUL / LISTRA BEGE) e não decide nada; quem
+     * decide é "AZUL" e "BEGE". Se a palavra levar a mais de uma cor, não
+     * casa — errar a cor é pior que não trazer a foto.
+     */
+    const palavrasDe = (c: string) =>
+      this.semAcento(c).split(/[^A-Z0-9]+/).filter((w) => w.length >= 3);
+    const emQuantasCores = new Map<string, number>();
+    for (const c of cores) {
+      for (const w of new Set(palavrasDe(c))) {
+        emQuantasCores.set(w, (emQuantasCores.get(w) ?? 0) + 1);
+      }
+    }
+    const porPalavra = cores.filter((c) =>
+      palavrasDe(c).some(
+        (w) =>
+          emQuantasCores.get(w) === 1 &&
+          new RegExp(`(^|[^A-Z0-9])${w}([^A-Z0-9]|$)`).test(nome),
+      ),
+    );
+    if (porPalavra.length === 1) return porPalavra[0];
+
     return null;
   }
 
@@ -689,7 +722,16 @@ export class WcFotosImportService {
     }
 
     for (const p of produtos) {
-      const cor = this.casarCor(String(p.name || ''), cores);
+      /**
+       * ÚLTIMO RECURSO: uma cor só no Flow e um produto só no WC.
+       *
+       * Não há o que confundir — se a peça tem uma cor e o site antigo tem
+       * um anúncio dela, a foto é daquela cor. Sem isto, peça de cor única
+       * cujo nome no WC não repete a cor ficava sem foto pra sempre.
+       */
+      const cor =
+        this.casarCor(String(p.name || ''), cores) ??
+        (cores.length === 1 && produtos.length === 1 ? cores[0] : null);
       if (!cor) {
         resultado.produtosWcSemCor.push(`#${p.id} ${String(p.name || '').slice(0, 60)}`);
         continue;
