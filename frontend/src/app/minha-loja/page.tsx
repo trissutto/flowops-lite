@@ -85,6 +85,15 @@ interface PickOrderRow {
    * cliente). Diferente da transferência de retirada: a cliente NÃO busca.
    */
   juntadaFeeder?: boolean;
+  /**
+   * A MODALIDADE DE VERDADE (21/08) — o que a loja tem que POSTAR, resolvido
+   * no backend pela mesma régua da etiqueta. Antes a faixa classificava pelo
+   * título e "Frete Grátis" virava "TRANSPORTADORA": a vendedora não sabia se
+   * era SEDEX ou PAC.
+   */
+  servicoEnvio?: 'SEDEX' | 'PAC' | 'RETIRADA' | 'MOTOBOY' | null;
+  /** Frete que a cliente pagou foi zero — vira o "(grátis)" ao lado. */
+  freteGratis?: boolean;
   /** Caixa deste feeder (nasce quando a bipagem finaliza). */
   caixaJuntada?: {
     code: string;
@@ -2508,43 +2517,66 @@ function PickOrderCard({
       {/* Destaque MÁXIMO pra filial bater o olho e saber se é SEDEX/PAC/RETIRADA. */}
       {(() => {
         const raw = order.shippingMethod ?? null;
-        if (!raw) return null;
-        // UF do destinatário pra resolver PROMOCIONAL → SEDEX (SP) ou PAC
+        /**
+         * O QUE POSTAR vem do BACKEND (dono, 21/08), não do título.
+         *
+         * "Frete Grátis" não diz serviço nenhum: a faixa classificava pelo
+         * texto e escrevia TRANSPORTADORA — a vendedora abria o card sem
+         * saber se ia de SEDEX ou de PAC. Agora `servicoEnvio` chega pronto,
+         * resolvido pela MESMA régua que gera a pré-postagem, e o "(grátis)"
+         * fica pequeno ao lado: é informação da cliente, não instrução de
+         * despacho.
+         *
+         * Card antigo (payload sem o campo) cai no classificador de sempre.
+         */
+        const servico = row.servicoEnvio ?? null;
+        if (!servico && !raw) return null;
+
         const addrPar = parseShippingAddress(order.shippingAddress);
         const m = classifyShipping(raw, addrPar?.state ?? null);
+        const kind: string = servico
+          ? servico === 'RETIRADA'
+            ? 'pickup'
+            : servico.toLowerCase()
+          : m.kind;
+        const label = servico === 'RETIRADA' ? 'RETIRADA EM LOJA' : servico ?? m.label;
+
         const Icon =
-          m.kind === 'sedex'
-            ? Truck
-            : m.kind === 'pac'
-            ? Package
-            : m.kind === 'pickup'
-            ? Package2
-            : m.kind === 'transportadora'
-            ? Truck
-            : Package2;
+          kind === 'sedex' ? Truck : kind === 'pac' ? Package : kind === 'motoboy' ? Truck : kind === 'pickup' ? Package2 : kind === 'transportadora' ? Truck : Package2;
         // Cores fortes inline pra garantir contraste alto
         const bg =
-          m.kind === 'sedex'
+          kind === 'sedex'
             ? 'bg-red-600'
-            : m.kind === 'pac'
+            : kind === 'pac'
             ? 'bg-blue-600'
-            : m.kind === 'pickup'
+            : kind === 'pickup'
             ? 'bg-amber-500'
-            : m.kind === 'transportadora'
+            : kind === 'motoboy'
+            ? 'bg-orange-600'
+            : kind === 'transportadora'
             ? 'bg-purple-600'
             : 'bg-slate-700';
+        // Grátis só faz sentido em ENVIO — retirada não tem frete pra pagar.
+        const mostrarGratis = !!row.freteGratis && kind !== 'pickup';
         return (
           <div
             className={`${bg} text-white px-4 py-3 flex items-center gap-3 shadow-inner`}
-            title={m.raw}
+            title={m.raw || label}
           >
             <Icon className="w-8 h-8 shrink-0" strokeWidth={2.5} />
             <div className="flex-1 min-w-0">
               <div className="text-[10px] uppercase tracking-widest opacity-80 leading-none">
                 Modalidade de Envio
               </div>
-              <div className="text-2xl md:text-3xl font-black uppercase tracking-wide leading-tight truncate">
-                {m.label}
+              <div className="flex items-baseline gap-2 min-w-0">
+                <span className="text-2xl md:text-3xl font-black uppercase tracking-wide leading-tight truncate">
+                  {label}
+                </span>
+                {mostrarGratis && (
+                  <span className="text-xs md:text-sm font-semibold uppercase tracking-wide opacity-90 shrink-0">
+                    (grátis)
+                  </span>
+                )}
               </div>
             </div>
           </div>
