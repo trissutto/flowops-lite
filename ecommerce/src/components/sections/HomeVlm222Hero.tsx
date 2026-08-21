@@ -2,8 +2,20 @@ import Image from 'next/image';
 import { ArrowRight } from 'lucide-react';
 import { AppLink } from '@/components/ui/AppLink';
 
-const VLM_222_IMAGE =
-  'https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/produtos/VLM-222/PRETO/1786674440424-modelo-oficial-vestido-preto-pele-textura-natural-700x1000.png';
+const VLM_222_IMAGES = [
+  {
+    src: 'https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/produtos/VLM-222/MARROM/1787276925747-ChatGPT_Image_20_de_ago._de_2026__22_48_18.jpg',
+    alt: 'Vestido longo VLM-222 marrom',
+  },
+  {
+    src: 'https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/produtos/VLM-222/PRETO/1787276763271-ChatGPT_Image_20_de_ago._de_2026__22_45_31.jpg',
+    alt: 'Vestido longo VLM-222 preto',
+  },
+  {
+    src: 'https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/produtos/VLM-222/ROYAL/1787277640650-ChatGPT_Image_20_de_ago._de_2026__22_56_49.jpg',
+    alt: 'Vestido longo VLM-222 royal',
+  },
+] as const;
 
 /** Oferta principal responsiva da home, com uma única foto nos dois layouts. */
 export function HomeVlm222Hero({ href }: { href: string }) {
@@ -13,17 +25,34 @@ export function HomeVlm222Hero({ href }: { href: string }) {
         <h1 id="vlm222-desktop-hero-title" className="sr-only">
           Elegância em movimento — Vestido Longo VLM-222
         </h1>
-        <AppLink href={href} className="group absolute inset-0 block focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-primary">
-          <Image
-            src="/banners/vlm-222-home-1920x800.jpg"
-            alt="Vestido longo VLM-222 nas cores marrom, preto, rosa queimado e royal"
-            fill
-            quality={95}
-            priority
-            fetchPriority="high"
-            sizes="100vw"
-            className="object-cover transition-transform duration-700 group-hover:scale-[1.005]"
-          />
+        <AppLink href={href} className="group absolute inset-0 grid grid-cols-[34%_1fr] focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-primary">
+          <div className="relative z-10 flex flex-col justify-center bg-[#f5eee6] px-[4.2vw] text-ink">
+            <p className="text-[clamp(0.65rem,0.72vw,0.9rem)] font-semibold tracking-[0.08em] uppercase">Nova coleção</p>
+            <p className="mt-[1.5vw] font-display text-[clamp(3rem,4.15vw,5.4rem)] leading-[0.96] tracking-[-0.035em]">
+              Elegância em<br />movimento
+            </p>
+            <p className="mt-[1vw] text-[clamp(0.9rem,1.3vw,1.6rem)] tracking-[0.01em]">VESTIDO LONGO VLM-222</p>
+            <p className="mt-[0.55vw] text-[clamp(0.8rem,1.05vw,1.3rem)] text-ink-soft">Três cores, o mesmo caimento fluido.</p>
+            <span className="mt-[2.2vw] w-fit bg-ink px-[1.5vw] py-[0.85vw] text-[clamp(0.65rem,0.8vw,1rem)] font-semibold tracking-[0.04em] text-light uppercase transition-colors group-hover:bg-primary-strong">
+              Compre agora
+            </span>
+          </div>
+          <div className="grid min-w-0 grid-cols-3 gap-[0.45vw] bg-[#d8c5b2] p-[0.45vw]">
+            {VLM_222_IMAGES.map((image, index) => (
+              <div key={image.src} className="relative min-w-0 overflow-hidden bg-[#d9c9b9]">
+                <Image
+                  src={image.src}
+                  alt={image.alt}
+                  fill
+                  quality={82}
+                  priority={index === 0}
+                  fetchPriority={index === 0 ? 'high' : 'auto'}
+                  sizes="22vw"
+                  className="object-cover object-top transition-transform duration-700 group-hover:scale-[1.008]"
+                />
+              </div>
+            ))}
+          </div>
         </AppLink>
       </section>
 
@@ -37,7 +66,7 @@ export function HomeVlm222Hero({ href }: { href: string }) {
         {/* A mesma imagem atende os dois breakpoints; só posição e tamanho
             mudam. Isso evita baixar uma arte mobile adicional no LCP. */}
         <Image
-          src={VLM_222_IMAGE}
+          src={VLM_222_IMAGES[1].src}
           alt="Modelo usando vestido longo preto VLM-222"
           width={700}
           height={1000}
