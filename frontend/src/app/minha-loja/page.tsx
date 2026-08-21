@@ -93,15 +93,25 @@ interface PickOrderRow {
     carrier: string | null;
     transportMode: string | null; // 'correios' | 'proprio' | null
   } | null;
-  /** Preenchido no card da ÂNCORA: caixas das outras lojas vindo pra cá. */
+  /**
+   * Preenchido no card da ÂNCORA: as peças das outras lojas que vêm pra cá.
+   * Nasce com a JUNTADA (não com a caixa) — a âncora precisa saber desde o
+   * primeiro minuto que o pedido é COMPOSTO e não sai só com o pedaço dela.
+   */
   juntadaChegando?: {
     total: number;
+    /** Caixas que JÁ chegaram — é o que libera o envio. */
     recebidas: number;
+    /** Peças vindo de fora (soma dos feeders). */
+    pecasChegando?: number;
     caixas: Array<{
-      code: string;
+      code: string | null;
       status: string;
+      /** separando (sem caixa ainda) · problema (loja reportou) · a_caminho · chegou */
+      etapa?: 'separando' | 'problema' | 'a_caminho' | 'chegou';
       fromStoreName: string | null;
       trackingCode: string | null;
+      pecas?: number;
     }>;
   } | null;
   customerSnapshot?: {
@@ -2379,6 +2389,17 @@ function PickOrderCard({
   const aguardandoCaixas =
     !!row.juntadaChegando && row.juntadaChegando.recebidas < row.juntadaChegando.total;
   const podeGerarEnvio = !order.isPickup && !ehMotoboy && !ehFeederJuntada && !aguardandoCaixas;
+  /**
+   * ETIQUETA JÁ GERADA continua administrável mesmo esperando as caixas.
+   *
+   * A matriz pode juntar um pedido que a loja JÁ despachou pro trilho dos
+   * Correios (`separated` com rastreio). Amarrar o painel da etiqueta ao
+   * `podeGerarEnvio` deixava o card sem NENHUM botão nessa janela: a etiqueta
+   * viva nos Correios, sem "Reabrir" pra cancelar e sem "Etiqueta + NF" pra
+   * reimprimir. O que a juntada tem que impedir é POSTAR incompleto — só o
+   * "Já postei" some enquanto falta caixa.
+   */
+  const podeMexerNaEtiqueta = !order.isPickup && !ehMotoboy && !ehFeederJuntada;
   const [corrBusy, setCorrBusy] = useState(false);
   const [docsBusy, setDocsBusy] = useState(false);
 
@@ -2533,34 +2554,73 @@ function PickOrderCard({
       {/* Card da ÂNCORA da juntada — caixas das outras lojas vindo pra cá.
           O bipe das peças próprias segue igual; o envio final só libera
           quando o pedido estiver completo (todas as caixas recebidas). */}
-      {row.juntadaChegando && (
+      {row.juntadaChegando && (() => {
+        const j = row.juntadaChegando!;
+        const faltam = j.total - j.recebidas;
+        const minhasPecas = items.reduce((s, i) => s + (i.quantity ?? 0), 0);
+        const totalPedido = minhasPecas + (j.pecasChegando ?? 0);
+        return (
         <section className="mx-4 mt-3 rounded-lg border-2 border-violet-300 bg-violet-50 p-3">
+          {/* O TÍTULO diz o que a loja precisa entender ANTES de embalar: este
+              pedido não é só o que está na tela dela. */}
           <div className="text-sm font-bold text-violet-900">
-            🧲 JUNTANDO PEÇAS — {row.juntadaChegando.recebidas}/{row.juntadaChegando.total} caixa(s) chegaram
+            🧲 PEDIDO COMPOSTO — esta loja junta e envia
           </div>
+          {j.pecasChegando ? (
+            <div className="mt-1 text-xs text-violet-900">
+              São <span className="font-bold">{totalPedido} peça(s)</span> no total:{' '}
+              <span className="font-bold">{minhasPecas}</span> daqui e{' '}
+              <span className="font-bold">{j.pecasChegando}</span> de outra(s) loja(s).
+            </div>
+          ) : null}
           <ul className="mt-1.5 space-y-1 text-xs text-violet-900">
-            {row.juntadaChegando.caixas.map((c) => (
-              <li key={c.code} className="flex items-center gap-1.5 flex-wrap">
+            {j.caixas.map((c, i) => (
+              <li key={c.code ?? `${c.fromStoreName}-${i}`} className="flex items-center gap-1.5 flex-wrap">
                 <span className="font-semibold">{c.fromStoreName ?? 'Loja da rede'}</span>
+                {c.pecas ? <span className="text-violet-700">({c.pecas} peça{c.pecas > 1 ? 's' : ''})</span> : null}
                 <span className="text-violet-400">→</span>
-                <span>
-                  caixa <span className="font-mono font-semibold">{c.code}</span>
-                </span>
-                {c.status === 'received' ? (
-                  <span className="font-semibold text-emerald-700">✅ chegou</span>
+                {/* Sem caixa ainda: a outra loja nem terminou de separar. Dizer
+                    isso é o que faltava — antes o card ficava mudo até a caixa
+                    nascer e a âncora achava que era um pedido comum. */}
+                {c.etapa === 'problema' ? (
+                  // A loja reportou problema: o card sumiu da fila DELA e a
+                  // matriz vai remanejar. Dizer "ainda separando" aqui seria a
+                  // fila mentindo — ninguém está separando essa peça.
+                  <span className="font-semibold text-red-700">
+                    ⚠️ loja reportou problema — a matriz vai remanejar
+                  </span>
+                ) : c.etapa === 'separando' || !c.code ? (
+                  <span className="font-semibold text-amber-700">✋ ainda separando na loja</span>
                 ) : (
-                  <span>📦 em trânsito</span>
+                  <>
+                    <span>
+                      caixa <span className="font-mono font-semibold">{c.code}</span>
+                    </span>
+                    {c.etapa === 'chegou' || c.status === 'received' ? (
+                      <span className="font-semibold text-emerald-700">✅ chegou</span>
+                    ) : (
+                      <span>📦 em trânsito</span>
+                    )}
+                    {c.trackingCode && <span className="font-mono text-violet-700">{c.trackingCode}</span>}
+                  </>
                 )}
-                {c.trackingCode && <span className="font-mono text-violet-700">{c.trackingCode}</span>}
               </li>
             ))}
           </ul>
           <div className="mt-1.5 text-xs text-violet-800 font-medium">
-            Dê entrada nas caixas na tela de Transferências quando chegarem — o envio
-            libera com o pedido completo.
+            {faltam > 0 ? (
+              <>
+                <span className="font-bold">NÃO ENVIE AINDA.</span> Separe e deixe as peças
+                daqui prontas; falta(m) {faltam} caixa(s). Dê entrada na tela de
+                Transferências quando chegar — o envio libera com o pedido completo.
+              </>
+            ) : (
+              <>Todas as caixas chegaram — pode conferir o pedido inteiro e enviar.</>
+            )}
           </div>
         </section>
-      )}
+        );
+      })()}
 
       {/* Itens — qty em badge circular de destaque */}
       <section className="px-4 py-3 space-y-2 text-sm">
@@ -2783,7 +2843,7 @@ function PickOrderCard({
           </button>
         )}
         {/* Pré-postagem gerada, aguardando postagem física */}
-        {podeGerarEnvio && row.trackingCode && status !== 'shipped' && (
+        {podeMexerNaEtiqueta && row.trackingCode && status !== 'shipped' && (
           <div className="flex-1 flex flex-col gap-1">
             <div className="rounded-lg border-2 border-sky-300 bg-sky-50 px-3 py-1.5 text-center text-sm font-bold text-sky-800">
               📮 {row.trackingCode} · {row.carrier || 'Correios'}
@@ -2792,7 +2852,13 @@ function PickOrderCard({
             <div className="flex gap-1">
               <button onClick={(e) => { e.stopPropagation(); onReimprimir(); }} title="Baixa etiqueta + DANFE num PDF único" className="flex-1 bg-white border-2 border-slate-300 text-slate-800 font-semibold py-2 rounded-lg text-sm hover:bg-slate-100">🏷️ Etiqueta + NF</button>
               <button onClick={(e) => { e.stopPropagation(); onEditarEndereco(); }} title="Corrigir o endereco antes de postar (complemento, numero, bairro)" className="flex-1 bg-white border-2 border-violet-300 text-violet-700 font-semibold py-2 rounded-lg text-sm hover:bg-violet-50">✎ Endereco</button>
-              <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa Giga + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
+              {/* "Já postei" fecha o pedido e avisa a cliente — não pode existir
+                  enquanto faltam caixas (postaria o pedido pela metade). Os
+                  outros botões continuam: a etiqueta está viva e precisa poder
+                  ser reimpressa/cancelada. */}
+              {!aguardandoCaixas && (
+                <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa Giga + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
+              )}
               <button onClick={(e) => { e.stopPropagation(); if (confirm('Refazer o envio? A etiqueta atual é CANCELADA nos Correios e uma nova é gerada com o endereço que estiver no pedido agora.')) onReabrir(); }} className="flex-1 bg-white border-2 border-amber-300 text-amber-700 font-semibold py-2 rounded-lg text-sm hover:bg-amber-50">↩︎ Reabrir</button>
             </div>
           </div>
