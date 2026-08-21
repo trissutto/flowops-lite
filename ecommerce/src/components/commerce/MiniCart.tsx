@@ -158,6 +158,7 @@ export function MiniCart() {
    * da oferta na hora, pela própria reatividade das lines.
    */
   const irmasDoLook = useLookOfferStore((s) => s.irmas);
+  const corDoLook = useLookOfferStore((s) => s.corEscolhida);
   const abrirQuickAdd = useQuickAddStore((s) => s.abrir);
 
   // Antes da hidratação o localStorage ainda não falou — renderiza vazio dos
@@ -165,9 +166,27 @@ export function MiniCart() {
   const lines = mounted ? rawLines : [];
   // Irmã que a cliente já levou sai da oferta — oferecer o que já está na
   // sacola soaria como insistência de vendedor.
-  const ofertasDoLook = irmasDoLook.filter(
-    (irma) => !lines.some((l) => String(l.productId) === irma.ref || l.slug === irma.slug),
-  );
+  const ofertasDoLook = irmasDoLook
+    .filter((irma) => !lines.some((l) => String(l.productId) === irma.ref || l.slug === irma.slug))
+    /**
+     * A IRMÃ NA COR DO LOOK (21/08). O look é a MESMA foto: quem levou o
+     * kimono ESTAMPA AZUL quer a calça ESTAMPA AZUL. O backend manda a REF
+     * crua (a curadoria não cadastra cor), e a foto que vinha era sempre a
+     * da primeira cor — dava pra levar a BEGE junto da AZUL sem perceber.
+     *
+     * Aqui a cor escolhida na peça anterior manda: se a irmã tem essa cor
+     * vendável, a oferta usa a FOTO dela e a janelinha abre já nela. Irmã
+     * sem essa cor (look de peças que não compartilham cor) fica exatamente
+     * como estava.
+     */
+    .map((irma) => {
+      const casada = corDoLook
+        ? (irma.cores ?? []).find((c) => c.nome === corDoLook)
+        : undefined;
+      return casada
+        ? { ...irma, imagem: casada.imagem ?? irma.imagem, corDoLook: casada.nome }
+        : { ...irma, corDoLook: null as string | null };
+    });
   const count = lines.reduce((sum, l) => sum + l.quantity, 0);
   const subtotal = lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
   const [promotion, setPromotion] = useState<PublicPromotionConfig | null>(null);
@@ -372,6 +391,16 @@ export function MiniCart() {
                         pixPrice: irma.precoPix ?? undefined,
                         images: irma.imagem ? [{ src: irma.imagem, alt: irma.nome }] : [],
                         sizes: [],
+                        /**
+                         * A cor do look já marcada — o Quick Add só a adota se
+                         * a irmã tiver essa cor COM estoque (a guarda é dele).
+                         * Sem isto a janelinha abria pedindo "escolha a cor pra
+                         * ver os tamanhos": um passo a mais, no escuro, com
+                         * risco de levar a cor que não combina.
+                         */
+                        ...(irma.corDoLook
+                          ? { vitrineCor: { nome: irma.corDoLook, rotulo: irma.corDoLook } }
+                          : {}),
                       })
                     }
                   >

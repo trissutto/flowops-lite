@@ -21,20 +21,31 @@ interface LookOfferState {
   nomeLook: string | null;
   irmas: IrmaDoLook[];
   /**
+   * A COR que a cliente escolheu na peça que ela acabou de adicionar.
+   *
+   * O look é a MESMA FOTO: quem levou o kimono ESTAMPA AZUL quer a calça
+   * ESTAMPA AZUL. Só quem sabe essa cor é a BuyBox (a escolha é do
+   * navegador, não do payload), então ela viaja junto da oferta e o
+   * mini-cart usa pra abrir o "Levar junto" já na cor certa.
+   */
+  corEscolhida: string | null;
+  /**
    * Registra as irmãs da peça recém-adicionada. Peça sem look LIMPA a oferta:
    * a irmã de um vestido não pode aparecer depois que a cliente adicionou uma
    * blusa de outra família. Esgotada fica de fora — oferecer o que não tem é
    * pior que não oferecer.
    */
-  oferecer: (look: PecaApi['look'] | undefined) => void;
+  oferecer: (look: PecaApi['look'] | undefined, cor?: string | null) => void;
 }
 
 export const useLookOfferStore = create<LookOfferState>((set) => ({
   nomeLook: null,
   irmas: [],
-  oferecer: (look) =>
+  corEscolhida: null,
+  oferecer: (look, cor) =>
     set({
       nomeLook: look?.nome ?? null,
       irmas: (look?.pecas ?? []).filter((p) => !p.atual && p.disponivel),
+      corEscolhida: look ? (cor ?? null) : null,
     }),
 }));
