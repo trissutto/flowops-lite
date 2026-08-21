@@ -310,89 +310,14 @@ export class FaturamentoService {
     const dInicio = this.parseDate(from, false);
     const dFimExclusive = this.parseDate(to, true);
 
-    // SITE = pedidos do WC/flowops Order (não PdvSale)
-    //
-    // MESMA RÉGUA DO CARD (19/08): status que contam como venda, pela data da
-    // COMPRA e só as origens do SITE. Antes era `status='completed'` por
-    // `createdAt` — quem clicava pra conferir o card via uma lista que não
-    // explicava o número. O que continua fora daqui, por ter fonte própria:
-    // Giga SITE (WhatsApp, caixa do Wincred) e LIVE (LivePdvCart).
-    // Atenção: `total` é o que a cliente PAGOU (com frete); o card soma só
-    // produtos — a coluna não fecha com o card por isso, e é de propósito.
+    // Chamada direta por `/faturamento/loja/SITE/vendas`. A TELA não passa por
+    // aqui: ela manda o code real da loja ('13'), que cai no caminho do PDV
+    // mais abaixo — e é lá que as origens do SITE são juntadas.
     if (storeCode === 'SITE' || storeCode.toUpperCase() === 'SITE') {
-      // wc_date_created é TIMESTAMP → dia no fuso BR, senão a compra das
-      // 21h cai no dia seguinte e o detalhe discorda do card (ver brInstant).
-      const dIniBR = this.brInstant(dInicio);
-      const dFimBR = this.brInstant(dFimExclusive);
-      const orders = await (this.prisma as any).order.findMany({
-        where: {
-          status: { in: FaturamentoService.FATURAMENTO_STATUSES },
-          source: { in: FaturamentoService.SITE_SOURCES },
-          OR: [
-            { wcDateCreated: { gte: dIniBR, lt: dFimBR } },
-            { AND: [{ wcDateCreated: null }, { createdAt: { gte: dIniBR, lt: dFimBR } }] },
-          ],
-        },
-        // CAMPOS QUE EXISTEM (19/08): o select pedia `paymentMethod` no Order e
-        // `descricao/qty/total` no OrderItem — nenhum dos quatro existe no
-        // schema. Como a chamada é `(this.prisma as any)`, o TS não reclamava e
-        // o Prisma derrubava a rota em runtime: abrir o detalhe do SITE dava
-        // 500. Agora lê o que o model tem e monta o resto no map.
-        select: {
-          id: true,
-          wcOrderId: true,
-          status: true,
-          totalAmount: true,
-          createdAt: true,
-          wcDateCreated: true,
-          customerCpf: true,
-          customerName: true,
-          paymentInfo: true,
-          items: {
-            select: { sku: true, productName: true, quantity: true, unitPrice: true },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 500,
-      });
-      /** PIX ou CARTÃO do site novo (JSON do gateway). Pedido do WooCommerce
-       *  não guarda isso no Order — a coluna segue mostrando '—', como antes. */
-      const formaPagamento = (raw: any): string | null => {
-        try {
-          const pi = raw ? JSON.parse(String(raw)) : null;
-          if (pi?.method === 'pix') return 'PIX';
-          if (pi?.method === 'card') return `CARTÃO${pi?.installments ? ` ${pi.installments}x` : ''}`;
-          return pi?.method || null;
-        } catch {
-          return null;
-        }
-      };
       return {
         storeCode: 'SITE',
         source: 'flowops_order',
-        vendas: orders.map((o: any) => ({
-          id: o.id,
-          number: `#${o.wcOrderId || o.id.slice(0, 8)}`,
-          status: o.status,
-          // Data da COMPRA (a mesma que o card usa pra jogar o pedido no dia).
-          createdAt: o.wcDateCreated || o.createdAt,
-          total: o.totalAmount,
-          customerCpf: o.customerCpf,
-          customerName: o.customerName,
-          paymentMethod: formaPagamento(o.paymentInfo),
-          sellerName: null,
-          nfceStatus: null,
-          nfceNumber: null,
-          items: (o.items || []).map((it: any) => ({
-            sku: it.sku,
-            descricao: it.productName,
-            qty: it.quantity,
-            unitPrice: it.unitPrice,
-            total: (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0),
-          })),
-          payments: [],
-          canEstornar: false,  // pedidos site têm fluxo separado de cancelamento
-        })),
+        vendas: await this.linhasPedidosDoSite(dInicio, dFimExclusive),
       };
     }
 
@@ -502,6 +427,74 @@ export class FaturamentoService {
     );
     const salesVisiveis = (sales as any[]).filter((s) => !zumbis.includes(s));
 
+    const vendasPdv = salesVisiveis.map((s: any) => ({
+      id: s.id,
+      number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
+      status: s.status,
+      // Mostra a data mais relevante:
+      // estornadas → cancelledAt (data do estorno)
+      // outras → finalizedAt
+      createdAt: s.status === 'cancelled'
+        ? (s.cancelledAt || s.finalizedAt || s.createdAt)
+        : (s.finalizedAt || s.createdAt),
+      total: s.total,
+      subtotal: s.subtotal,
+      desconto: s.desconto,
+      cancelledAt: s.cancelledAt,
+      cancelReason: s.cancelReason,
+      sellerName: s.sellerName,
+      customerCpf: s.customerCpf,
+      customerName: s.customerName,
+      paymentMethod: s.paymentMethod,
+      nfceStatus: s.nfceStatus,
+      nfceNumber: s.nfceNumber,
+      nfceSerie: s.nfceSerie,
+      nfceChave: s.nfceChave,
+      nfceAutorizadaEm: s.nfceAutorizadaEm,
+      stockDecreased: !!s.stockDecreasedAt,
+      items: s.items,
+      payments: s.payments,
+      canEstornar: s.status === 'finalized',
+    }));
+
+    /**
+     * A LOJA SITE NÃO É SÓ PDV (19/08).
+     *
+     * O card SITE soma quatro origens; o detalhe mostrava só uma. Em 19/08 a
+     * linha dizia R$ 3.156,64 e o expandir listava 4 vendas do PDV somando
+     * R$ 988,94 — sem nada na tela dizendo de onde vinha o resto. Agora as
+     * outras três entram na mesma lista:
+     *   PDV da loja SITE  venda online que a vendedora fecha no caixa
+     *   pedidos do site   Order (WooCommerce + site novo)
+     *   caixa do Wincred  venda de WhatsApp lançada no ERP (espelho, não Giga vivo)
+     *   live              carrinho pago do Live Commerce
+     * Cada origem em try/catch: uma falhando não pode apagar a lista inteira.
+     */
+    const ehLojaSite = storeCodeUpper === 'SITE' || storeName === 'SITE';
+    if (ehLojaSite) {
+      const [pedidos, caixa, live] = await Promise.all([
+        this.linhasPedidosDoSite(dInicio, dFimExclusive).catch(() => [] as any[]),
+        this.linhasCaixaDaLoja(storeCodeUpper, dInicio, dFimExclusive).catch(() => [] as any[]),
+        this.linhasDaLive(dInicio, dFimExclusive).catch(() => [] as any[]),
+      ]);
+      const todas = [...vendasPdv, ...pedidos, ...caixa, ...live].sort(
+        (a: any, b: any) =>
+          new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+      );
+      return {
+        storeCode: storeCodeUpper,
+        source: 'pdv_sale',
+        appliedPeriod: { from, to },
+        zumbisOcultas: zumbis.length,
+        sourceWarning:
+          `SITE = ${vendasPdv.length} venda(s) no PDV da loja · ${pedidos.length} pedido(s) do site · ` +
+          `${caixa.length} venda(s) do caixa Wincred (WhatsApp) · ${live.length} da live. ` +
+          `O valor de cada linha é o que a cliente PAGOU (com frete); o card soma só produtos, ` +
+          `então a soma daqui fica um pouco acima dele.`,
+        vendas: todas,
+      };
+    }
+
     // Se PDV flowops tem vendas → retorna elas (com flag canEstornar)
     if (sales.length > 0) {
       return {
@@ -509,35 +502,7 @@ export class FaturamentoService {
         source: 'pdv_sale',
         appliedPeriod: { from, to },
         zumbisOcultas: zumbis.length,
-        vendas: salesVisiveis.map((s: any) => ({
-          id: s.id,
-          number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
-          status: s.status,
-          // Mostra a data mais relevante:
-          // estornadas → cancelledAt (data do estorno)
-          // outras → finalizedAt
-          createdAt: s.status === 'cancelled'
-            ? (s.cancelledAt || s.finalizedAt || s.createdAt)
-            : (s.finalizedAt || s.createdAt),
-          total: s.total,
-          subtotal: s.subtotal,
-          desconto: s.desconto,
-          cancelledAt: s.cancelledAt,
-          cancelReason: s.cancelReason,
-          sellerName: s.sellerName,
-          customerCpf: s.customerCpf,
-          customerName: s.customerName,
-          paymentMethod: s.paymentMethod,
-          nfceStatus: s.nfceStatus,
-          nfceNumber: s.nfceNumber,
-          nfceSerie: s.nfceSerie,
-          nfceChave: s.nfceChave,
-          nfceAutorizadaEm: s.nfceAutorizadaEm,
-          stockDecreased: !!s.stockDecreasedAt,
-          items: s.items,
-          payments: s.payments,
-          canEstornar: s.status === 'finalized',
-        })),
+        vendas: vendasPdv,
       };
     }
 
@@ -579,6 +544,197 @@ export class FaturamentoService {
         canEstornar: false, // estorno Wincred deve ser feito no PDV legado
       })),
     };
+  }
+
+  /**
+   * Linhas do drill-down vindas dos PEDIDOS do site (Order) — WooCommerce e
+   * site novo. MESMA RÉGUA DO CARD: status que contam como venda, data da
+   * COMPRA e dia no fuso BR. Antes isto era `status='completed'` por
+   * `createdAt`, e a lista não explicava o número de cima.
+   */
+  private async linhasPedidosDoSite(dInicio: Date, dFimExclusive: Date) {
+    // wc_date_created é TIMESTAMP → dia BR, senão a compra das 21h cai no dia
+    // seguinte e o detalhe discorda do card (ver brInstant).
+    const dIniBR = this.brInstant(dInicio);
+    const dFimBR = this.brInstant(dFimExclusive);
+    // CAMPOS QUE EXISTEM: o select pedia `paymentMethod` no Order e
+    // `descricao/qty/total` no OrderItem — nenhum dos quatro existe no schema.
+    // Como a chamada é `(prisma as any)`, o TS não reclamava e o Prisma
+    // derrubava a rota em runtime.
+    const orders = await (this.prisma as any).order.findMany({
+      where: {
+        status: { in: FaturamentoService.FATURAMENTO_STATUSES },
+        source: { in: FaturamentoService.SITE_SOURCES },
+        OR: [
+          { wcDateCreated: { gte: dIniBR, lt: dFimBR } },
+          { AND: [{ wcDateCreated: null }, { createdAt: { gte: dIniBR, lt: dFimBR } }] },
+        ],
+      },
+      select: {
+        id: true,
+        wcOrderId: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+        wcDateCreated: true,
+        customerCpf: true,
+        customerName: true,
+        paymentInfo: true,
+        items: { select: { sku: true, productName: true, quantity: true, unitPrice: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    /** PIX ou CARTÃO do site novo (JSON do gateway). Pedido do WooCommerce não
+     *  guarda isso no Order — a coluna mostra 'SITE'. */
+    const formaPagamento = (raw: any): string => {
+      try {
+        const pi = raw ? JSON.parse(String(raw)) : null;
+        if (pi?.method === 'pix') return 'PIX';
+        if (pi?.method === 'card') return `CARTÃO${pi?.installments ? ` ${pi.installments}x` : ''}`;
+        return pi?.method || 'SITE';
+      } catch {
+        return 'SITE';
+      }
+    };
+    return (orders as any[]).map((o: any) => ({
+      id: o.id,
+      number: `#${o.wcOrderId || o.id.slice(0, 8)}`,
+      status: o.status,
+      // Data da COMPRA — a mesma que o card usa pra jogar o pedido no dia.
+      createdAt: o.wcDateCreated || o.createdAt,
+      total: o.totalAmount,
+      subtotal: o.totalAmount,
+      desconto: 0,
+      sellerName: null,
+      customerCpf: o.customerCpf,
+      customerName: o.customerName,
+      paymentMethod: formaPagamento(o.paymentInfo),
+      nfceStatus: null,
+      nfceNumber: null,
+      nfceSerie: null,
+      nfceChave: null,
+      nfceAutorizadaEm: null,
+      stockDecreased: true,
+      items: (o.items || []).map((it: any) => ({
+        sku: it.sku,
+        descricao: it.productName,
+        qty: it.quantity,
+        precoUnit: it.unitPrice,
+        total: (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0),
+      })),
+      payments: [],
+      canEstornar: false, // pedido do site tem fluxo próprio de cancelamento
+    }));
+  }
+
+  /**
+   * Linhas do drill-down vindas do CAIXA do Wincred (espelho `giga_caixa_mov`,
+   * nunca o Giga ao vivo). Na loja SITE isso é a venda de WhatsApp, que a
+   * matriz continua lançando no ERP. Mesmos filtros do card: sem marcado, sem
+   * a réplica do Flow ('flowops-%'), cupom = obs_pedido ou o número.
+   */
+  private async linhasCaixaDaLoja(lojaCode: string, dInicio: Date, dFimExclusive: Date) {
+    // data_fec é DATE (sem hora) → limites crus, NÃO brInstant: com meia-noite
+    // BR o Postgres converte a date pra 00:00Z e derruba o primeiro dia.
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero) AS cupom,
+              MAX(numero)                             AS numero,
+              MAX(data_fec)                           AS data,
+              MAX(COALESCE(nome_cliente, cliente))    AS cliente,
+              MAX(cpf)                                AS cpf,
+              MAX(vendedora)                          AS vendedora,
+              MAX(fpag)                               AS fpag,
+              COALESCE(SUM(valor_total), 0)::float8   AS total,
+              COALESCE(SUM(quantidade), 0)::float8    AS pecas
+         FROM giga_caixa_mov
+        WHERE loja = $1
+          AND data_fec >= $2
+          AND data_fec < $3
+          AND (marcado IS NULL OR marcado <> 'SIM')
+          AND COALESCE(obs_pedido, '') NOT LIKE 'flowops-%'
+        GROUP BY 1
+        ORDER BY 3 DESC
+        LIMIT 500`,
+      lojaCode, dInicio, dFimExclusive,
+    );
+    return rows.map((r: any) => ({
+      id: `caixa:${lojaCode}:${r.cupom}`,
+      number: `#${r.numero || r.cupom}`,
+      status: 'finalized',
+      createdAt: r.data,
+      total: Number(r.total) || 0,
+      subtotal: Number(r.total) || 0,
+      desconto: 0,
+      sellerName: r.vendedora || null,
+      customerCpf: r.cpf || null,
+      customerName: r.cliente || null,
+      paymentMethod: r.fpag || 'WINCRED',
+      nfceStatus: null,
+      nfceNumber: r.numero ? String(r.numero) : null,
+      nfceSerie: null,
+      nfceChave: null,
+      nfceAutorizadaEm: null,
+      stockDecreased: true,
+      items: [
+        {
+          sku: '—',
+          descricao: `${Math.round(Number(r.pecas) || 0)} peça(s) — lançamento no Wincred`,
+          qty: Math.round(Number(r.pecas) || 0),
+          precoUnit: 0,
+          total: Number(r.total) || 0,
+        },
+      ],
+      payments: [{ method: r.fpag || '—', valor: Number(r.total) || 0 }],
+      canEstornar: false, // lançamento do ERP: estorno é no Wincred
+    }));
+  }
+
+  /** Linhas do drill-down vindas da LIVE — carrinho PAGO (componente do SITE). */
+  private async linhasDaLive(dInicio: Date, dFimExclusive: Date) {
+    const carts: any[] = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        status: { in: FaturamentoService.LIVE_VENDIDO_STATUSES },
+        paidAt: { gte: dInicio, lt: dFimExclusive },
+      },
+      select: {
+        id: true,
+        cartNumber: true,
+        paidAt: true,
+        subtotalCents: true,
+        totalCents: true,
+        customerName: true,
+        customerInstagram: true,
+        customerCpf: true,
+        paymentMethod: true,
+      },
+      orderBy: { paidAt: 'desc' },
+      take: 500,
+    });
+    return carts.map((c: any) => ({
+      id: c.id,
+      number: `LIVE ${c.cartNumber ? `#${c.cartNumber}` : `#${String(c.id).slice(0, 8)}`}`,
+      status: 'finalized',
+      createdAt: c.paidAt,
+      total: (Number(c.totalCents) || 0) / 100,
+      subtotal: (Number(c.subtotalCents) || 0) / 100,
+      desconto: 0,
+      sellerName: null,
+      customerCpf: c.customerCpf || null,
+      customerName: c.customerInstagram
+        ? `${c.customerName} (@${String(c.customerInstagram).replace(/^@/, '')})`
+        : c.customerName,
+      paymentMethod: (c.paymentMethod || 'PIX').toUpperCase(),
+      nfceStatus: null,
+      nfceNumber: null,
+      nfceSerie: null,
+      nfceChave: null,
+      nfceAutorizadaEm: null,
+      stockDecreased: true,
+      items: [],
+      payments: [],
+      canEstornar: false, // carrinho da live se resolve na tela da live
+    }));
   }
 
   /**
