@@ -198,7 +198,13 @@ export function mapPeca(p: PecaApi): Product {
  */
 export function explodirPorCor(p: PecaApi): Product[] {
   const base = mapPeca(p);
-  const vendaveis = (p.cores ?? []).filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0);
+  const vendaveis = (p.cores ?? [])
+    .filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0)
+    /* A ORDEM DENTRO DA REF (dono, 20/08: "iniciar com a BMM-100 PRETO e na
+       sequência todas as cores da REF com estoque"): a cor com MAIS peça
+       abre a família — é a que aguenta a demanda que a vitrine cria — e as
+       demais vêm atrás, sempre juntas, antes da próxima REF. */
+    .sort((a, b) => b.estoque - a.estoque);
   if (vendaveis.length < 2) return [base];
   return vendaveis.map((c) => {
     const badges: Product['badges'] = (base.badges ?? []).filter((b) => b !== 'ultimas-pecas');
