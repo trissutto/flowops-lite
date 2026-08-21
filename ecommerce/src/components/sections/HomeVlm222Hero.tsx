@@ -50,14 +50,14 @@ export function HomeVlm222Hero({ href }: { href: string }) {
         {/* A mesma imagem atende os dois breakpoints; só posição e tamanho
             mudam. Isso evita baixar uma arte mobile adicional no LCP. */}
         <Image
-          src={VLM_222_IMAGE}
+          src="/banners/vlm222-mobile-700.webp"
           alt="Modelo usando vestido longo preto VLM-222"
           width={700}
           height={1000}
-          quality={95}
+          unoptimized
           priority
           fetchPriority="high"
-          sizes="(max-width: 1023px) 72vw, 42vw"
+          sizes="72vw"
           className="absolute right-[-12%] bottom-0 h-[25rem] w-auto max-w-[75%] object-contain object-bottom drop-shadow-[0_24px_26px_rgba(57,42,28,0.15)] transition-transform duration-700 group-hover:scale-[1.012] sm:right-[-5%] sm:h-[28rem] lg:right-[5%] lg:h-[33rem] lg:max-w-[44%]"
         />
 
