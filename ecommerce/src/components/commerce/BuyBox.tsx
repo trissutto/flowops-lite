@@ -372,17 +372,17 @@ export function BuyBox({
           </button>
         </div>
 
-        {/* As opções ficam coladas ao rótulo do passo para a instrução e a
-            escolha formarem um único bloco visual.
-
-            CENTRALIZADA (dono, 17/08): à esquerda, uma grade de 3 ou 4
-            números deixava um vazio grande à direita e o passo parecia
-            inacabado — logo o passo que decide a compra. */}
-        <div className="mt-4 flex flex-wrap justify-center gap-2.5 lg:justify-start">
+        {/* TODOS OS NÚMEROS NUMA LINHA SÓ, SEM QUEBRA (dono, 20/08): o 60
+            sobrando sozinho na segunda linha parecia de outra grade.
+            `grid-flow-col auto-cols-fr` divide a largura por igual entre
+            quantos números a peça tiver — as pílulas encolhem (`min-w-0`)
+            em vez de quebrar. */}
+        <div className="mt-4 grid grid-flow-col auto-cols-fr gap-1.5 sm:gap-2">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
               size="lg"
+              className="w-full min-w-0 px-0"
               label={option.label}
               selected={size === option.label}
               disabled={!option.available}
@@ -621,13 +621,14 @@ export function BuyBox({
           </p>
           <p className="mt-4 text-body text-ink">Toque no seu número — a peça já vai pra sacola.</p>
 
-          {/* Mesma centralização da grade da página: as duas mostram os
-              mesmos números e divergir no desenho confunde. */}
-          <div className="mt-4 flex flex-wrap justify-center gap-2.5 lg:justify-start">
+          {/* Mesmo desenho da grade da página (uma linha, sem quebra): as
+              duas mostram os mesmos números e divergir confunde. */}
+          <div className="mt-4 grid grid-flow-col auto-cols-fr gap-1.5 sm:gap-2">
             {product.sizes.map((option) => (
               <SizePill
                 key={option.label}
                 size="lg"
+                className="w-full min-w-0 px-0"
                 label={option.label}
                 disabled={!option.available}
                 onSelect={() => escolherNaFolha(option.label)}
