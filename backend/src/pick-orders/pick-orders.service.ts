@@ -24,6 +24,56 @@ import { JuntadaService } from './juntada.service';
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
 // franquias (Vinhedo/Jundiaí/Suzano/Anália Franco) entram via env sem deploy:
 // MAISENVIOS_STORES_JSON = {"10": 1234, "17": 5678, ...} (código → sender id).
+/**
+ * O SERVIÇO QUE A FAIXA DO CARD MOSTRA — 'SEDEX' | 'PAC' | 'RETIRADA' |
+ * 'MOTOBOY' (21/08).
+ *
+ * A loja precisa saber o que POSTAR. Retirada e motoboy não têm serviço de
+ * correio (e nem geram etiqueta), então saem identificados; o resto passa
+ * pelo `servicoPagoDoPedido`, a mesma régua da pré-postagem.
+ *
+ * A UF vem do endereço do pedido: é ela que resolve o "PROMOCIONAL" antigo
+ * (SP = SEDEX, resto = PAC) quando o título não diz o serviço.
+ */
+function servicoDoCard(order: {
+  isPickup?: boolean | null;
+  shippingMethod?: string | null;
+  checkoutInfo?: string | null;
+  shippingAddress?: string | null;
+}): 'SEDEX' | 'PAC' | 'RETIRADA' | 'MOTOBOY' {
+  if (order?.isPickup) return 'RETIRADA';
+  const titulo = String(order?.shippingMethod || '').toLowerCase();
+  if (titulo.includes('motoboy') || titulo.includes('moto boy')) return 'MOTOBOY';
+  try {
+    const ck = JSON.parse(String(order?.checkoutInfo || '{}'));
+    const kind = String(ck?.shipping?.kind || '').toLowerCase();
+    if (kind === 'retirada') return 'RETIRADA';
+    if (kind === 'motoboy') return 'MOTOBOY';
+  } catch { /* snapshot cru → segue pelo título */ }
+
+  let uf: string | null = null;
+  try {
+    const addr = JSON.parse(String(order?.shippingAddress || '{}'));
+    uf = String(addr?.state || addr?.uf || '').trim().toUpperCase() || null;
+  } catch { /* endereço cru → o fallback de UF decide */ }
+
+  return servicoPagoDoPedido(order as any, uf).servico;
+}
+
+/** A cliente pagou R$ 0 de frete? Só pra escrever "(grátis)" ao lado. */
+function freteFoiGratis(order: { shippingMethod?: string | null; checkoutInfo?: string | null }): boolean {
+  try {
+    const ck = JSON.parse(String(order?.checkoutInfo || '{}'));
+    const preco = Number(ck?.shipping?.price ?? ck?.shippingPrice);
+    if (Number.isFinite(preco)) return preco <= 0;
+  } catch { /* sem snapshot → cai no título */ }
+  const t = String(order?.shippingMethod || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+  return t.includes('gratis') || t.includes('free');
+}
+
 const MAISENVIOS_STORES: Record<string, number> = { '05': 3605, '06': 209, '11': 213, '15': 22908 };
 function maisEnviosStores(): Record<string, number> {
   const base: Record<string, number> = { ...MAISENVIOS_STORES };
@@ -1751,6 +1801,10 @@ export class PickOrdersService {
             isPickup: true,
             pickupStoreCode: true,
             shippingMethod: true,
+            // A MODALIDADE REAL do card sai daqui (21/08) — ver `servicoEnvio`
+            // abaixo. Sem o checkoutInfo, "Frete grátis" não diz se é SEDEX
+            // ou PAC e a loja lia "TRANSPORTADORA".
+            checkoutInfo: true,
           },
         },
       },
@@ -1949,6 +2003,20 @@ export class PickOrdersService {
         transferToStoreName: transferToStore?.name ?? null,
         transferToStoreCity: transferToStore?.city ?? null,
         customerSnapshot: customerSnapshotObj,
+        /**
+         * A MODALIDADE QUE A LOJA LÊ NA FAIXA DO CARD (dono, 21/08).
+         *
+         * O card classificava pelo TÍTULO do método, e "Frete Grátis" não diz
+         * serviço nenhum: caía em "TRANSPORTADORA" e a vendedora não sabia se
+         * postava SEDEX ou PAC. Aqui vai o serviço DE VERDADE — o mesmo
+         * `servicoPagoDoPedido` que gera a pré-postagem, então a faixa e a
+         * etiqueta nunca podem discordar ([[etiqueta-servico-por-uf]]).
+         *
+         * `freteGratis` é só a etiqueta "(grátis)" ao lado: o que a cliente
+         * pagou de frete não muda o serviço que a loja posta.
+         */
+        servicoEnvio: servicoDoCard(r.order as any),
+        freteGratis: freteFoiGratis(r.order as any),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,
         caixaJuntada: caixa
