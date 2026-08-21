@@ -34,7 +34,7 @@ export function HomeVlm222Hero({ href }: { href: string }) {
               priority
               fetchPriority="high"
               sizes="54vw"
-              className="object-cover object-[center_28%] transition-transform duration-700 group-hover:scale-[1.006]"
+              className="object-cover object-top transition-transform duration-700 group-hover:scale-[1.006]"
             />
           </div>
         </AppLink>
