@@ -324,6 +324,15 @@ model RealignmentShipment {
   stockDecreasedAt  DateTime? @map("stock_decreased_at")
   // Marcador de aumento Giga no destino: setado quando confirmReceived rodou.
   stockIncreasedAt  DateTime? @map("stock_increased_at")
+  // ── JUNTADA DE PEDIDO DIVIDIDO (21/08) ──────────────────────────────────
+  // Caixa que leva peças de um pedido do site/live/online até a LOJA ÂNCORA
+  // que envia tudo junto pra cliente. Quando `orderId` está preenchido:
+  //   - estoque NÃO se mexe por aqui (a baixa foi no BIPE do card de
+  //     separação, e a peça está VENDIDA — não entra no estoque do destino);
+  //   - não gera obrigação entre lojas (o acerto é o do canal, pelos picks);
+  //   - reabrir é bloqueado (desfaz-se pela tela do pedido).
+  orderId           String?  @map("order_id")
+  pickOrderId       String?  @map("pick_order_id")
   notes             String?
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
@@ -331,6 +340,8 @@ model RealignmentShipment {
   @@index([fromStoreCode, status])
   @@index([toStoreCode, status])
   @@index([status, createdAt(sort: Desc)])
+  @@index([orderId])
+  @@index([pickOrderId])
   @@map("realignment_shipments")
 }
 

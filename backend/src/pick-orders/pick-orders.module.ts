@@ -19,6 +19,8 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { PickScanModule } from './pick-scan.module';
 import { TrackingModule } from '../tracking/tracking.module';
+import { RealignmentModule } from '../realignment/realignment.module';
+import { JuntadaService } from './juntada.service';
 
 @Module({
   // LivePdvModule → ManychatService (WhatsApp de rastreio pra cliente da LIVE)
@@ -32,9 +34,11 @@ import { TrackingModule } from '../tracking/tracking.module';
   // TrackingModule → onde o objeto está (cache de rastreio) pra tela "Vendi online"
   // PickScanModule → bipe que baixa estoque + estorno (compartilhado com
   // routing e orders, por isso mora em módulo próprio).
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule, PickScanModule, TrackingModule],
+  // RealignmentModule → JuntadaService cria a CAIXA do feeder (remessa +
+  // etiqueta pra loja âncora + NF de transferência + romaneio carimbado).
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule, PickScanModule, TrackingModule, RealignmentModule],
   controllers: [PickOrdersController],
-  providers: [PickOrdersService, CorreiosPostagemReconcileCron, EntregaAvisoCron, PedidoEmailService],
-  exports: [PickOrdersService],
+  providers: [PickOrdersService, JuntadaService, CorreiosPostagemReconcileCron, EntregaAvisoCron, PedidoEmailService],
+  exports: [PickOrdersService, JuntadaService],
 })
 export class PickOrdersModule {}

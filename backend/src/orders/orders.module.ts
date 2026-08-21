@@ -6,10 +6,12 @@ import { RoutingModule } from '../routing/routing.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { ErpModule } from '../erp/erp.module';
 import { PickScanModule } from '../pick-orders/pick-scan.module';
+import { PickOrdersModule } from '../pick-orders/pick-orders.module';
 
 @Module({
   // PickScanModule → estorno dos bipes no cancelamento/reembolso do pedido.
-  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, forwardRef(() => WooCommerceModule)],
+  // PickOrdersModule (forwardRef) → JuntadaService dos endpoints /juntar.
+  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
   providers: [OrdersService],
   controllers: [OrdersController],
   exports: [OrdersService],

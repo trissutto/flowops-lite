@@ -3,6 +3,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PickOrdersService, PickStatus } from './pick-orders.service';
+import { JuntadaService } from './juntada.service';
 import { ErpService } from '../erp/erp.service';
 
 interface AuthUser {
@@ -18,6 +19,7 @@ export class PickOrdersController {
   constructor(
     private readonly svc: PickOrdersService,
     private readonly erp: ErpService,
+    private readonly juntada: JuntadaService,
   ) {}
 
   /**
@@ -306,6 +308,19 @@ export class PickOrdersController {
       throw new ForbiddenException('Apenas usuários de loja');
     }
     return this.svc.docsEnvioMerged(id, user.storeId);
+  }
+
+  /**
+   * JUNTADA (21/08) — documentos da CAIXA do card feeder num PDF só:
+   * etiqueta pra loja âncora + DANFE da NF de transferência (trecho
+   * Correios) + romaneio carimbado "PEÇAS DO PEDIDO #X". Rota própria
+   * (carro da rede) sai só o romaneio. Retaguarda também pode baixar.
+   */
+  @Get(':id/juntada-docs')
+  juntadaDocs(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    const storeId = user.role === 'store' ? user.storeId ?? null : null;
+    return this.juntada.docsDaCaixa(id, storeId, user.userId);
   }
 
   /** Reabre (desfaz) a pré-postagem gerada pra refazer — ex.: modalidade errada. */

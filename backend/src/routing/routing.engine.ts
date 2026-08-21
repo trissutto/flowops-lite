@@ -134,6 +134,13 @@ export class RoutingEngine {
       };
     }
 
+    // REGRA 1.5 — JUNTADA AUTOMÁTICA DA ROTA PRÓPRIA (21/08, decisão do dono):
+    // nenhuma loja cobre sozinha, mas Itanhaém/Praia Grande/Santos cobrem
+    // ENTRE SI → separa nelas e JUNTA tudo na âncora (a de mais peças), que
+    // envia um pacote só. O transporte interno é o carro da rede — frete zero.
+    const juntada = this.tryJuntadaRotaPropria(activeStores, ctx, stockMap, allScores);
+    if (juntada) return juntada;
+
     // REGRA 2 — mínimo de lojas (greedy set cover)
     const plan = this.greedySetCover(activeStores, ctx, stockMap);
     const coveredSkus = new Set(plan.flatMap((p) => p.items.map((i) => i.sku)));
@@ -174,6 +181,79 @@ export class RoutingEngine {
   }
 
   // ─── helpers ─────────────────────────────────────────────────────────────
+
+  /**
+   * JUNTADA DA ROTA PRÓPRIA — tenta cobrir o pedido SÓ com as lojas do grupo
+   * do carro (ctx.juntadaGroup). Cobrindo, a loja com MAIS peças vira ÂNCORA
+   * (envia pra cliente) e as outras saem `isTransfer` → âncora. Empate de
+   * peças → ordem do grupo (Itanhaém primeiro no padrão).
+   *
+   * Não roda quando o operador fixou loja manualmente (pin) — a ação mais
+   * recente dele manda. Se o grupo NÃO cobre, devolve null e o fluxo segue
+   * pro greedy geral, sem efeito colateral (o split debita o stockMap, por
+   * isso a tentativa usa um CLONE).
+   */
+  private tryJuntadaRotaPropria(
+    activeStores: StoreInput[],
+    ctx: RoutingContext,
+    stockMap: Map<string, number>,
+    allScores: RoutingResult['scoreBreakdown'],
+  ): RoutingResult | null {
+    if (!ctx.juntadaGroup?.length) return null;
+    if (ctx.pinStoreCodes?.length) return null;
+    const codes = ctx.juntadaGroup.map((c) => String(c).toUpperCase());
+    const groupStores = activeStores.filter((s) => codes.includes(String(s.code).toUpperCase()));
+    if (groupStores.length < 2) return null;
+
+    const mapClone = new Map(stockMap);
+    const plan = this.greedySetCover(groupStores, ctx, mapClone);
+    const coveredSkus = new Set(plan.flatMap((p) => p.items.map((i) => i.sku)));
+    let missing = ctx.items.filter((i) => !coveredSkus.has(i.sku));
+    const splitEnabled =
+      ctx.disableSkuSplit != null ? !ctx.disableSkuSplit : process.env.ROUTING_SPLIT_SKU !== '0';
+    if (missing.length > 0 && splitEnabled) {
+      missing = this.splitFillAcrossStores(plan, missing, groupStores, ctx, mapClone);
+    }
+    if (missing.length > 0 || plan.length === 0) return null;
+
+    if (plan.length === 1) {
+      // Uma loja só do grupo cobre tudo — a REGRA 1 normalmente já teria
+      // resolvido; devolve single-store nela por segurança, sem juntada.
+      return {
+        success: true,
+        strategy: 'single-store',
+        assignments: plan,
+        missing: [],
+        scoreBreakdown: allScores,
+      };
+    }
+
+    const pecasDe = (p: PickAssignment) => p.items.reduce((s, i) => s + i.quantity, 0);
+    const posDe = (p: PickAssignment) => {
+      const i = codes.indexOf(String(p.storeCode).toUpperCase());
+      return i < 0 ? 99 : i;
+    };
+    const ancora = [...plan].sort((a, b) => pecasDe(b) - pecasDe(a) || posDe(a) - posDe(b))[0];
+
+    const assignments = plan.map((p) =>
+      p.storeId === ancora.storeId
+        ? { ...p, isTransfer: false, transferToStoreCode: null, transferToStoreName: null }
+        : { ...p, isTransfer: true, transferToStoreCode: ancora.storeCode, transferToStoreName: ancora.storeName },
+    );
+    this.logger.log(
+      `[juntada] rota própria cobre o pedido: âncora ${ancora.storeCode} (${pecasDe(ancora)} peça(s)) + ` +
+        `${assignments.length - 1} loja(s) completando de carro`,
+    );
+    return {
+      success: true,
+      strategy: 'multi-store',
+      assignments,
+      missing: [],
+      consolidateStoreCode: ancora.storeCode,
+      consolidateStoreName: ancora.storeName,
+      scoreBreakdown: allScores,
+    };
+  }
 
   private buildStockMap(stock: StockEntry[]): Map<string, number> {
     // key: storeCode + '::' + sku

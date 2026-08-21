@@ -116,6 +116,128 @@ export class RealignmentShipmentService {
     throw lastErr || new Error('Falha ao gerar código de remessa após 5 tentativas');
   }
 
+  /**
+   * CAIXA DE JUNTADA (21/08) — a remessa que leva as peças de um pedido
+   * dividido da loja que separou (feeder) até a LOJA ÂNCORA, que junta tudo
+   * e envia um pacote só pra cliente.
+   *
+   * Diferenças de uma remessa normal, TODAS derivadas de `orderId` preenchido:
+   *   - nasce direto EM TRÂNSITO (o conteúdo é o card já 100% bipado);
+   *   - `stockDecreasedAt` já vem carimbado: a baixa aconteceu no BIPE do
+   *     card de separação (PickOrderScan) — fechar de novo baixaria 2×;
+   *   - NÃO cria obrigação entre lojas (o acerto do pedido é o do canal,
+   *     disparado pelos picks no afterShipped);
+   *   - a entrada no destino NÃO soma estoque (confirmReceived pula);
+   *   - reabrir é bloqueado (desfaz-se pela tela do pedido).
+   *
+   * Idempotente por pickOrderId: chamar de novo devolve a caixa existente.
+   */
+  async criarCaixaJuntada(input: {
+    fromStoreCode: string;
+    fromStoreName: string;
+    toStoreCode: string;
+    toStoreName: string;
+    orderId: string;
+    pickOrderId: string;
+    wcOrderNumber: string;
+    userId?: string | null;
+    itens: Array<{
+      sku: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      descricao?: string | null;
+      qty: number;
+      precoUnitCents?: number | null;
+    }>;
+  }) {
+    const existente = await (this.prisma as any).realignmentShipment.findFirst({
+      where: { pickOrderId: input.pickOrderId, status: { not: 'cancelled' } },
+    });
+    if (existente) return { shipment: existente, jaExistia: true };
+
+    const now = new Date();
+    const shipment = await this.createShipmentWithRetry({
+      fromStoreCode: input.fromStoreCode,
+      fromStoreName: input.fromStoreName,
+      toStoreCode: input.toStoreCode,
+      toStoreName: input.toStoreName,
+      openedByUserId: input.userId ?? null,
+      tipo: 'TRANSFERENCIA',
+    });
+
+    const totalQty = input.itens.reduce((s, it) => s + (Number(it.qty) || 1), 0);
+    await this.prisma.$transaction(async (tx) => {
+      for (const it of input.itens) {
+        await (tx as any).transferOrder.create({
+          data: {
+            tipo: 'TRANSFERENCIA',
+            refCode: String(it.ref || it.sku || 'ITEM'),
+            codigoBipado: String(it.sku || '') || null,
+            descricao: it.descricao ?? null,
+            cor: it.cor ?? null,
+            tamanho: it.tamanho ?? null,
+            qtyOrigem: Math.max(1, Number(it.qty) || 1),
+            precoUnitCents: it.precoUnitCents ?? null,
+            lojaOrigemCode: input.fromStoreCode,
+            lojaOrigemName: input.fromStoreName,
+            lojaDestinoCode: input.toStoreCode,
+            lojaDestinoName: input.toStoreName,
+            solicitanteNome: 'JUNTADA DE PEDIDO',
+            mensagem: `Peças do pedido #${input.wcOrderNumber} — juntando na loja ${input.toStoreName} pra envio à cliente`,
+            createdByUserId: input.userId ?? null,
+            realignmentStatus: 'sent',
+            realignmentSentAt: now,
+            realignmentSentByUserId: input.userId ?? null,
+            shipmentId: shipment.id,
+          },
+        });
+      }
+      await (tx as any).realignmentShipment.update({
+        where: { id: shipment.id },
+        data: {
+          status: 'in_transit',
+          sentAt: now,
+          sentByUserId: input.userId ?? null,
+          totalItems: input.itens.length,
+          totalQty,
+          // O estoque saiu no bipe do card — este carimbo impede reprocessos
+          // de baixarem de novo.
+          stockDecreasedAt: now,
+          orderId: input.orderId,
+          pickOrderId: input.pickOrderId,
+          notes: `JUNTADA do pedido #${input.wcOrderNumber}`,
+        },
+      });
+    });
+
+    // Avisa a loja âncora que tem caixa chegando (mesmo evento do closeAndSend).
+    try {
+      const destStore: any = await this.prisma.store.findUnique({
+        where: { code: input.toStoreCode },
+        select: { id: true } as any,
+      });
+      if (destStore?.id) {
+        this.gateway.emitToStore(destStore.id, 'shipment:incoming', {
+          shipmentId: shipment.id,
+          code: shipment.code,
+          fromStoreCode: input.fromStoreCode,
+          fromStoreName: input.fromStoreName,
+          totalItems: input.itens.length,
+          totalQty,
+          juntadaPedido: input.wcOrderNumber,
+        });
+      }
+    } catch { /* aviso é best-effort */ }
+
+    this.logger.log(
+      `[juntada] caixa ${shipment.code} criada: ${input.fromStoreCode} → ${input.toStoreCode} ` +
+        `(${totalQty} peça(s) do pedido #${input.wcOrderNumber})`,
+    );
+    const fresh = await (this.prisma as any).realignmentShipment.findUnique({ where: { id: shipment.id } });
+    return { shipment: fresh ?? shipment, jaExistia: false };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // LOJA ORIGEM — montar e enviar remessa
   // ═══════════════════════════════════════════════════════════════════════
@@ -403,6 +525,15 @@ export class RealignmentShipmentService {
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
     if (shipment.fromStoreCode !== (store as any).code) {
       throw new ForbiddenException('Essa remessa não é da sua loja');
+    }
+    // CAIXA DE JUNTADA (21/08): o estoque dela saiu no BIPE do card de
+    // separação, não no fechamento — reabrir aqui devolveria estoque que este
+    // trilho nunca baixou (peça fantasma). Desfaz-se pela tela do pedido.
+    if ((shipment as any).orderId) {
+      throw new BadRequestException(
+        `A ${shipment.code} é caixa de JUNTADA do pedido — não se reabre pela remessa. ` +
+          'Se a caixa não vai mais, desfaça a juntada na tela do pedido (retaguarda).',
+      );
     }
     if (shipment.status === 'open') {
       return { ok: true, jaEstavaAberta: true, code: shipment.code };
@@ -2821,7 +2952,16 @@ export class RealignmentShipmentService {
     }
 
     let increaseResult: any = { success: true, applied: [] };
-    if (stockItems.length > 0) {
+    const ehJuntada = !!(shipment as any).orderId;
+    if (ehJuntada) {
+      // CAIXA DE JUNTADA (21/08): as peças estão VENDIDAS (pedido de cliente)
+      // e só passam pela loja âncora a caminho do pacote final. Entrada de
+      // estoque aqui criaria saldo fantasma que o envio nunca baixaria — a
+      // baixa real já aconteceu no bipe do card da loja origem.
+      this.logger.log(
+        `[shipment] ${shipment.code}: caixa de JUNTADA recebida — SEM entrada de estoque (peças do pedido, não da arara)`,
+      );
+    } else if (stockItems.length > 0) {
       increaseResult = await this.erp.increaseStock(stockItems);
       if (!increaseResult.success) {
         throw new BadRequestException(
@@ -2830,7 +2970,7 @@ export class RealignmentShipmentService {
       }
     }
     const appliedIncreaseCount = increaseResult.applied?.length || 0;
-    if (stockItems.length > 0 && appliedIncreaseCount === 0) {
+    if (!ehJuntada && stockItems.length > 0 && appliedIncreaseCount === 0) {
       this.logger.error(
         `[confirmReceived] ${shipment.code}: increaseStock retornou success mas 0 SKUs aplicados! ` +
         `Possivel mismatch de storeCode. toStoreCode=${shipment.toStoreCode}. ` +
@@ -2851,8 +2991,9 @@ export class RealignmentShipmentService {
         receivedByUserId: input.userId ?? null,
         receivedQty,
         missingQty,
-        // So marca se realmente aplicou — pra reprocess saber quem precisa
-        stockIncreasedAt: appliedIncreaseCount > 0 ? now : null,
+        // So marca se realmente aplicou — pra reprocess saber quem precisa.
+        // JUNTADA marca também: não há (nem deve haver) entrada a reprocessar.
+        stockIncreasedAt: ehJuntada || appliedIncreaseCount > 0 ? now : null,
       } as any,
     });
 

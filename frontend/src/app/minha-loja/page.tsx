@@ -79,6 +79,31 @@ interface PickOrderRow {
   transferToStoreCode?: string | null;
   transferToStoreName?: string | null;
   transferToStoreCity?: string | null;
+  /**
+   * JUNTADA (21/08): pedido dividido com loja ÂNCORA — este card é FEEDER
+   * (as peças completam o pedido na âncora, que envia o pacote único pra
+   * cliente). Diferente da transferência de retirada: a cliente NÃO busca.
+   */
+  juntadaFeeder?: boolean;
+  /** Caixa deste feeder (nasce quando a bipagem finaliza). */
+  caixaJuntada?: {
+    code: string;
+    status: string; // in_transit | received
+    trackingCode: string | null;
+    carrier: string | null;
+    transportMode: string | null; // 'correios' | 'proprio' | null
+  } | null;
+  /** Preenchido no card da ÂNCORA: caixas das outras lojas vindo pra cá. */
+  juntadaChegando?: {
+    total: number;
+    recebidas: number;
+    caixas: Array<{
+      code: string;
+      status: string;
+      fromStoreName: string | null;
+      trackingCode: string | null;
+    }>;
+  } | null;
   customerSnapshot?: {
     name?: string | null;
     cpf?: string | null;
@@ -939,6 +964,40 @@ export default function MinhaLojaPage() {
     } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
   }
 
+  // DOCUMENTOS DA CAIXA DA JUNTADA num PDF único: etiqueta pra loja âncora +
+  // DANFE da transferência + romaneio carimbado "PEÇAS DO PEDIDO #X".
+  // Transporte próprio (carro da rede) sai só o romaneio.
+  async function docsCaixaJuntada(row: PickOrderRow) {
+    cancelAutoMaximize(row.id);
+    try {
+      const m = await api<any>(`/pick-orders/${row.id}/juntada-docs`);
+      if (m?.ok && m.pdfBase64) {
+        downloadPdf(m.pdfBase64, `caixa-${m.shipmentCode ?? row.order.wcOrderNumber ?? 'juntada'}.pdf`);
+        if (m.transporte === 'proprio') pushToast('🚚 Romaneio baixado — a caixa vai no carro da rede');
+        else if (m.temEtiqueta && m.temNota) pushToast('📦 Etiqueta pra loja + NF + romaneio num arquivo só');
+        else if (m.aviso) pushToast(`⚠️ ${m.aviso}`);
+        else pushToast('📄 Documentos da caixa baixados');
+        // Reflete a caixa no card na hora (o retorno é a fonte mais fresca)
+        setRows((prev) => prev.map((r) => r.id === row.id
+          ? {
+              ...r,
+              caixaJuntada: {
+                code: m.shipmentCode ?? r.caixaJuntada?.code ?? '',
+                status: r.caixaJuntada?.status ?? 'in_transit',
+                trackingCode: m.trackingCode ?? r.caixaJuntada?.trackingCode ?? null,
+                carrier: m.carrier ?? r.caixaJuntada?.carrier ?? null,
+                transportMode: m.transporte ?? r.caixaJuntada?.transportMode ?? null,
+              },
+            }
+          : r));
+      } else {
+        pushToast(m?.aviso ? `⚠️ ${m.aviso}` : 'Documentos ainda não disponíveis — tente de novo em instantes.');
+      }
+    } catch (err: any) {
+      pushToast(`Erro nos documentos da caixa: ${err?.body?.message ?? err?.message ?? 'falha'}`);
+    }
+  }
+
   // MODEL B: gera a pré-postagem (modalidade correta), mostra o rastreio e baixa
   // etiqueta + declaração. NÃO marca enviado — o pedido FICA na lista
   // "aguardando postagem"; o cron marca enviado quando os Correios postarem.
@@ -1465,6 +1524,7 @@ export default function MinhaLojaPage() {
               onEditarEndereco={() => setEditandoEndereco(row)}
               onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaCorreios(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta', row.id) : pushToast('Sem pré-postagem pra reimprimir.')}
               onMarcarEnviado={() => marcarEnviadoManual(row)}
+              onDocsJuntada={() => docsCaixaJuntada(row)}
               onPrint={() => openPrintWindow(row.id)}
               onReportIssue={() => setShowIssueModal(row)}
               onSeen={() => cancelAutoMaximize(row.id)}
@@ -2278,7 +2338,7 @@ function LiveBipModal({
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onEntregaSemRastreio, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onPrint, onReportIssue, onSeen, onSwapItem, onEditarEndereco,
+  row, onStart, onBip, onShip, onEntregaSemRastreio, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onDocsJuntada, onPrint, onReportIssue, onSeen, onSwapItem, onEditarEndereco,
 }: {
   row: PickOrderRow;
   onStart: () => void;
@@ -2290,6 +2350,7 @@ function PickOrderCard({
   onEditarEndereco: () => void;
   onReimprimir: () => void;
   onMarcarEnviado: () => void;
+  onDocsJuntada: () => Promise<void> | void;
   onPrint: () => void;
   onReportIssue: () => void;
   onSeen: () => void;
@@ -2308,8 +2369,18 @@ function PickOrderCard({
    */
   const tipoEntrega = classifyShipping(order.shippingMethod ?? null, null).kind;
   const ehMotoboy = tipoEntrega === 'motoboy';
-  const podeGerarEnvio = !order.isPickup && !ehMotoboy;
+  // FEEDER DE JUNTADA: as peças vão pra loja ÂNCORA, nunca pra cliente —
+  // etiqueta de cliente aqui seria envio errado (o backend bloqueia, mas o
+  // botão nem deve aparecer). O caminho é "Documentos da caixa".
+  const ehFeederJuntada = !!row.juntadaFeeder;
+  // ÂNCORA aguardando caixas das outras lojas: o envio final só libera com o
+  // pedido completo (o backend trava) — botão ativo aqui viraria toast de
+  // erro em loop enquanto a faixa acima diz "aguarde as caixas".
+  const aguardandoCaixas =
+    !!row.juntadaChegando && row.juntadaChegando.recebidas < row.juntadaChegando.total;
+  const podeGerarEnvio = !order.isPickup && !ehMotoboy && !ehFeederJuntada && !aguardandoCaixas;
   const [corrBusy, setCorrBusy] = useState(false);
+  const [docsBusy, setDocsBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
   // CARD VERDE ONLINE (14/08): pedido criado pela Venda Online do PDV de outra
@@ -2338,16 +2409,31 @@ function PickOrderCard({
       <div className={`w-1.5 flex-shrink-0 ${statusAccent(status)}`} />
 
       <div className="flex-1 min-w-0">
-      {/* Banner TRANSFERÊNCIA — alerta visual forte quando não é venda direta */}
+      {/* Banner TRANSFERÊNCIA — alerta visual forte quando não é venda direta.
+          JUNTADA tem banner próprio: aqui a cliente NÃO retira — as peças
+          completam o pedido na loja âncora, que envia o pacote único. */}
       {isTransfer && (
-        <div className="bg-orange-500 text-white px-4 py-2.5">
-          <div className="font-bold text-sm flex items-center gap-2">
-            🚚 TRANSFERÊNCIA PRA LOJA {row.transferToStoreName ?? row.transferToStoreCode}
+        ehFeederJuntada ? (
+          <div className="bg-violet-600 text-white px-4 py-2.5">
+            <div className="font-bold text-sm flex items-center gap-2">
+              🧲 JUNTANDO PEDIDO #{order.wcOrderNumber ?? order.wcOrderId ?? '—'} — envie as
+              peças pra LOJA {row.transferToStoreName ?? row.transferToStoreCode}
+            </div>
+            <div className="text-xs opacity-95 mt-0.5">
+              As peças NÃO vão pra cliente: elas completam o pedido na loja{' '}
+              {row.transferToStoreName ?? row.transferToStoreCode}, que envia tudo junto.
+            </div>
           </div>
-          <div className="text-xs opacity-95 mt-0.5">
-            Separar e enviar pra essa loja — cliente vai retirar lá. Não é venda direta.
+        ) : (
+          <div className="bg-orange-500 text-white px-4 py-2.5">
+            <div className="font-bold text-sm flex items-center gap-2">
+              🚚 TRANSFERÊNCIA PRA LOJA {row.transferToStoreName ?? row.transferToStoreCode}
+            </div>
+            <div className="text-xs opacity-95 mt-0.5">
+              Separar e enviar pra essa loja — cliente vai retirar lá. Não é venda direta.
+            </div>
           </div>
-        </div>
+        )
       )}
 
       {/* Pipeline steps — mostra o progresso visualmente */}
@@ -2366,8 +2452,12 @@ function PickOrderCard({
               {STATUS_LABEL[status]}
             </span>
             {isTransfer && (
-              <span className="text-xs px-2 py-1 rounded bg-orange-100 text-orange-800 border border-orange-300 font-bold uppercase">
-                Transferência
+              <span className={`text-xs px-2 py-1 rounded font-bold uppercase border ${
+                ehFeederJuntada
+                  ? 'bg-violet-100 text-violet-800 border-violet-300'
+                  : 'bg-orange-100 text-orange-800 border-orange-300'
+              }`}>
+                {ehFeederJuntada ? '🧲 Juntada' : 'Transferência'}
               </span>
             )}
             {isOnline && (
@@ -2440,6 +2530,38 @@ function PickOrderCard({
         );
       })()}
 
+      {/* Card da ÂNCORA da juntada — caixas das outras lojas vindo pra cá.
+          O bipe das peças próprias segue igual; o envio final só libera
+          quando o pedido estiver completo (todas as caixas recebidas). */}
+      {row.juntadaChegando && (
+        <section className="mx-4 mt-3 rounded-lg border-2 border-violet-300 bg-violet-50 p-3">
+          <div className="text-sm font-bold text-violet-900">
+            🧲 JUNTANDO PEÇAS — {row.juntadaChegando.recebidas}/{row.juntadaChegando.total} caixa(s) chegaram
+          </div>
+          <ul className="mt-1.5 space-y-1 text-xs text-violet-900">
+            {row.juntadaChegando.caixas.map((c) => (
+              <li key={c.code} className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-semibold">{c.fromStoreName ?? 'Loja da rede'}</span>
+                <span className="text-violet-400">→</span>
+                <span>
+                  caixa <span className="font-mono font-semibold">{c.code}</span>
+                </span>
+                {c.status === 'received' ? (
+                  <span className="font-semibold text-emerald-700">✅ chegou</span>
+                ) : (
+                  <span>📦 em trânsito</span>
+                )}
+                {c.trackingCode && <span className="font-mono text-violet-700">{c.trackingCode}</span>}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-1.5 text-xs text-violet-800 font-medium">
+            Dê entrada nas caixas na tela de Transferências quando chegarem — o envio
+            libera com o pedido completo.
+          </div>
+        </section>
+      )}
+
       {/* Itens — qty em badge circular de destaque */}
       <section className="px-4 py-3 space-y-2 text-sm">
         <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 mb-1">
@@ -2497,9 +2619,13 @@ function PickOrderCard({
 
       {/* Dados do cliente (quando transferência — bloco em destaque com tudo que a loja precisa) */}
       {isTransfer && (
-        <section className="px-3 pb-2 text-xs text-slate-700 leading-relaxed border-t border-orange-100 bg-orange-50/40 pt-2">
-          <div className="font-semibold text-orange-900 mb-1">
-            🧾 Dados do cliente final (quem vai retirar na LOJA {row.transferToStoreName ?? row.transferToStoreCode})
+        <section className={`px-3 pb-2 text-xs text-slate-700 leading-relaxed border-t pt-2 ${
+          ehFeederJuntada ? 'border-violet-100 bg-violet-50/40' : 'border-orange-100 bg-orange-50/40'
+        }`}>
+          <div className={`font-semibold mb-1 ${ehFeederJuntada ? 'text-violet-900' : 'text-orange-900'}`}>
+            {ehFeederJuntada
+              ? <>🧾 Cliente final (recebe o pacote único da LOJA {row.transferToStoreName ?? row.transferToStoreCode})</>
+              : <>🧾 Dados do cliente final (quem vai retirar na LOJA {row.transferToStoreName ?? row.transferToStoreCode})</>}
           </div>
           {customerName && <div className="text-slate-900 font-medium">{customerName}</div>}
           {customerCpf && (
@@ -2507,10 +2633,18 @@ function PickOrderCard({
           )}
           {customerEmail && <div>✉️ {customerEmail}</div>}
           {customerPhone && <div>📱 {formatPhone(customerPhone)}</div>}
-          <div className="mt-1 text-orange-900 font-medium">
-            ⚠ Cliente vai retirar na loja {row.transferToStoreName ?? row.transferToStoreCode}
-            {row.transferToStoreCity ? ` (${row.transferToStoreCity})` : ''}.
-          </div>
+          {ehFeederJuntada ? (
+            <div className="mt-1 text-violet-900 font-medium">
+              As peças deste card NÃO vão pra cliente: elas completam o pedido na loja{' '}
+              {row.transferToStoreName ?? row.transferToStoreCode}, que envia tudo junto.
+              Bipe normal e finalize — a caixa e os documentos saem sozinhos.
+            </div>
+          ) : (
+            <div className="mt-1 text-orange-900 font-medium">
+              ⚠ Cliente vai retirar na loja {row.transferToStoreName ?? row.transferToStoreCode}
+              {row.transferToStoreCity ? ` (${row.transferToStoreCity})` : ''}.
+            </div>
+          )}
         </section>
       )}
 
@@ -2600,6 +2734,43 @@ function PickOrderCard({
             <Barcode className="w-6 h-6" /> Bipar peças
           </button>
         )}
+        {/* FEEDER DE JUNTADA finalizado → o caminho é a CAIXA pra loja âncora:
+            PDF único com etiqueta pra loja + DANFE da transferência + romaneio
+            (rota do carro sai só o romaneio). Nada de etiqueta de cliente. */}
+        {ehFeederJuntada && (status === 'separated' || status === 'ready') && (
+          <div className="flex-1 flex flex-col gap-1.5">
+            <button
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (docsBusy) return;
+                setDocsBusy(true);
+                try { await onDocsJuntada(); } finally { setDocsBusy(false); }
+              }}
+              disabled={docsBusy}
+              title="Baixa etiqueta pra loja + NF de transferência + romaneio num PDF único"
+              className="w-full bg-violet-600 hover:bg-violet-700 active:scale-[0.98] disabled:opacity-50 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
+            >
+              <Printer className="w-6 h-6" /> {docsBusy ? 'Gerando…' : '📄 Documentos da caixa'}
+            </button>
+            {row.caixaJuntada && (
+              <div className="rounded-lg border-2 border-violet-200 bg-violet-50 px-3 py-1.5 text-center text-sm font-bold text-violet-900">
+                Caixa <span className="font-mono">{row.caixaJuntada.code}</span>
+                {row.caixaJuntada.status === 'received' && ' · ✅ chegou na âncora'}
+                {row.caixaJuntada.trackingCode && (
+                  <div className="text-[11px] font-normal text-violet-700">
+                    <span className="font-mono font-semibold">{row.caixaJuntada.trackingCode}</span>
+                    {row.caixaJuntada.carrier && <> · {row.caixaJuntada.carrier}</>}
+                  </div>
+                )}
+              </div>
+            )}
+            {row.caixaJuntada?.transportMode === 'proprio' && (
+              <div className="rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-1.5 text-center text-xs font-bold text-amber-900">
+                🚚 Vai no carro da rede — imprima o romaneio e despache a caixa
+              </div>
+            )}
+          </div>
+        )}
         {/* Pronto, SEM pré-postagem (live OU site) → gera (não marca enviado; fica na lista) */}
         {(status === 'separated' || status === 'ready') && podeGerarEnvio && !row.trackingCode && (
           <button
@@ -2628,7 +2799,7 @@ function PickOrderCard({
         )}
         {/* Motoboy → saiu com o motoboy. Retirada → a cliente levou. Nenhum dos
             dois tem rastreio, e o backend aceita shipped sem código nesses casos. */}
-        {(status === 'separated' || status === 'ready') && (ehMotoboy || order.isPickup) && (
+        {(status === 'separated' || status === 'ready') && (ehMotoboy || order.isPickup) && !ehFeederJuntada && (
           <button
             onClick={(e) => { e.stopPropagation(); onEntregaSemRastreio(ehMotoboy ? 'Motoboy' : 'Retirada'); }}
             title={ehMotoboy ? 'A peça saiu com o motoboy — fecha o pedido sem rastreio' : 'A cliente levou a peça — fecha o pedido sem rastreio'}
@@ -2637,8 +2808,14 @@ function PickOrderCard({
             {ehMotoboy ? '🛵 Entregue por motoboy' : '🏬 Cliente retirou'}
           </button>
         )}
+        {/* Âncora com o próprio bipe pronto, aguardando as caixas das feeders */}
+        {(status === 'separated' || status === 'ready') && aguardandoCaixas && (
+          <div className="flex-1 rounded-lg border-2 border-violet-300 bg-violet-50 px-3 py-3 text-center text-sm font-bold text-violet-800">
+            🧲 Suas peças estão prontas — o envio libera quando as caixas das outras lojas chegarem
+          </div>
+        )}
         {/* Fallback manual → envio com rastreio digitado (só quem posta) */}
-        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !row.trackingCode && (
+        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !ehFeederJuntada && !aguardandoCaixas && !row.trackingCode && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
             title="Digitar o rastreio manualmente (fallback se o Gerar envio falhar)"
