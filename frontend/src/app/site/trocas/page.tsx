@@ -44,7 +44,26 @@ type SearchResult = {
   itemCount: number;
   previousReturnsCount: number;
   previousReturnsValor: number;
+  /** 'site' (site velho) · 'ecommerce' (site novo) · 'pdv_online' · 'live' */
+  source?: string | null;
 };
+
+/** O nº do pedido da LIVE se repete entre clientes (LIVE-74 são 3 pessoas).
+ *  Sem a origem à vista a vendedora não sabe qual sacolinha está abrindo. */
+const ORIGEM: Record<string, { label: string; cls: string }> = {
+  ecommerce: { label: 'SITE', cls: 'bg-fuchsia-100 text-fuchsia-800' },
+  site: { label: 'SITE ANTIGO', cls: 'bg-gray-200 text-gray-700' },
+  pdv_online: { label: 'ONLINE DA LOJA', cls: 'bg-sky-100 text-sky-800' },
+  live: { label: 'LIVE', cls: 'bg-purple-100 text-purple-800' },
+};
+
+function OrigemBadge({ source }: { source?: string | null }) {
+  const o = source ? ORIGEM[source] : null;
+  if (!o) return null;
+  return (
+    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${o.cls}`}>{o.label}</span>
+  );
+}
 
 type StoreOpt = { code: string; name: string; active?: boolean };
 
@@ -212,6 +231,7 @@ function OrderCard({ order, onClick }: { order: SearchResult; onClick: () => voi
             <span className="font-mono font-black text-rose-900 text-base">
               #{order.wcOrderNumber}
             </span>
+            <OrigemBadge source={order.source} />
             <PrazoBadge order={order} />
             {order.previousReturnsCount > 0 && (
               <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">
@@ -422,6 +442,16 @@ function OrderDetail({
                 ? new Date(success.creditoValidade).toLocaleDateString('pt-BR')
                 : '—'}
             </div>
+            {success.valeNoCaixaOk ? (
+              <div className="text-xs mt-2 font-bold text-emerald-700">
+                ✓ Já vale no caixa da loja e no site
+              </div>
+            ) : (
+              <div className="text-xs mt-2 font-bold text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                ⚠️ Esse código NÃO foi registrado no caixa — não passe a cliente pro caixa com ele.
+                Chame a matriz.
+              </div>
+            )}
           </div>
         )}
 
@@ -454,6 +484,7 @@ function OrderDetail({
       {/* Cabeçalho do pedido — uma linha só */}
       <div className="bg-white rounded-xl shadow-sm px-4 py-3 flex items-center flex-wrap gap-x-5 gap-y-1">
         <div className="font-mono font-black text-rose-900">#{detail.wcOrderNumber}</div>
+        <OrigemBadge source={detail.source} />
         <div className="font-bold text-gray-800">{detail.customerName}</div>
         <div className="text-xs text-gray-500">
           {detail.customerCpf && <>CPF {detail.customerCpf} · </>}
