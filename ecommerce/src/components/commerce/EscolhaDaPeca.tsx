@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
+import { useSearchParams } from 'next/navigation';
 import { AlertCircle, Check } from 'lucide-react';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
-import { BuyBox } from '@/components/commerce/BuyBox';
+import { BuyBox, PrecoDaPeca, TituloDaPeca } from '@/components/commerce/BuyBox';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
 import { youtubeId } from '@/lib/youtube';
@@ -90,15 +91,35 @@ export function EscolhaDaPeca({
   /**
    * O `?cor=` MUDOU COM A PÁGINA JÁ ABERTA (20/08): a sugestão de cores da
    * SACOLA navega pra esta mesma PDP com outra cor — sem key no componente,
-   * o estado não renasce. Então a cor do link é adotada quando chega.
+   * o estado não renasce sozinho.
+   *
+   * A escuta é do `useSearchParams` DO NAVEGADOR, não do prop do servidor:
+   * a primeira versão dependia do server component re-renderizar pra
+   * `corInicial` chegar, e o clique na sugestão trocava a URL sem a página
+   * trocar a cor (dono, 20/08: "ao clicar na sugestão, tem que mostrar no
+   * produto a cor da sugestão escolhida"). O hook reage à navegação do
+   * client na hora.
+   *
+   * Adotou a cor por um clique desses, a página rola até a foto — a prova
+   * de que o toque valeu é a foto virar NA FRENTE dela.
    */
+  const searchParams = useSearchParams();
+  const corDaUrl = searchParams.get('cor');
+  const primeiraLeituraDaUrl = useRef(true);
   useEffect(() => {
-    if (corInicial && corInicial !== cor && cores.some((c) => c.nome === corInicial)) {
-      trocarCor(corInicial, { silencioso: true });
+    const primeira = primeiraLeituraDaUrl.current;
+    primeiraLeituraDaUrl.current = false;
+    if (!corDaUrl || corDaUrl === cor) return;
+    if (!cores.some((c) => c.nome === corDaUrl)) return;
+    trocarCor(corDaUrl, { silencioso: true });
+    if (!primeira) {
+      document
+        .getElementById('galeria-da-peca')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-    // Só o link é gatilho — reagir a `cor` desfaria a troca manual seguinte.
+    // Só a URL é gatilho — reagir a `cor` desfaria a troca manual seguinte.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [corInicial]);
+  }, [corDaUrl]);
 
   /**
    * TODA troca de cor passa por aqui (20/08): muda o estado (instantâneo,
@@ -130,9 +151,12 @@ export function EscolhaDaPeca({
    */
   function pedirCor() {
     setCorError(true);
-    document
-      .getElementById('grade-de-cores')
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // A grade tem DUAS instâncias (celular embaixo da foto, PC na coluna da
+    // direita) — rola até a que está de fato na tela.
+    const alvo = window.matchMedia('(min-width: 1024px)').matches
+      ? 'grade-de-cores-desktop'
+      : 'grade-de-cores';
+    document.getElementById(alvo)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   /**
    * O TAMANHO MORA AQUI (17/08), e nao dentro do BuyBox.
@@ -276,24 +300,11 @@ export function EscolhaDaPeca({
           pra 620px e a PDP INTEIRA cortava à direita — grade de tamanhos,
           "Adicionar à sacola", tudo. Quanto mais cores a peça ganhava, pior. */}
       <div id="galeria-da-peca" className="min-w-0 scroll-mt-24">
-        {/* A LINHA DA COR NO TOPO, ACIMA DA FOTO (dono, 20/08: "descrição bem
-            menor e no topo"). A primeira versão punha o rótulo grande entre a
-            foto e a grade — e um nomeAmigavel poluído do cadastro estourou em
-            três linhas. Aqui é uma linha discreta; quem grita é a grade. */}
-        {temVariasCores && (
-          <p className="mb-2 text-center text-small text-ink-soft lg:text-left" aria-live="polite">
-            {corAtual ? (
-              <>
-                Cor escolhida:{' '}
-                <span className="font-semibold uppercase tracking-wide text-ink">
-                  {rotuloDaCor(corAtual)}
-                </span>
-              </>
-            ) : (
-              'Escolha a cor abaixo da foto'
-            )}
-          </p>
-        )}
+        {/* ORDEM DO CELULAR (dono, 20/08, preview aprovado): NOME no topo →
+            foto → PREÇO → cor escolhida + grade → tamanhos. Nome e preço
+            são os MESMOS componentes da coluna de compra, que no desktop os
+            mostra à direita — aqui só aparecem no empilhado do celular. */}
+        <TituloDaPeca product={pecaDaCor} className="mb-3 lg:hidden" />
         <ProductGallery
           key={cor ?? 'unica'}
           images={galeria}
@@ -308,12 +319,14 @@ export function EscolhaDaPeca({
             outras cores desta mesma peça.
           </p>
         )}
-        {/* A GRADE DE CORES mora AQUI, colada na foto que ela muda (dono,
-            20/08): miniaturas embaixo da foto principal, todas de uma vez,
-            sem rolagem. É o passo 1 da compra — o tamanho (passo 2) fica na
-            coluna ao lado. */}
+        <PrecoDaPeca product={pecaDaCor} className="mt-4 lg:hidden" />
+        {/* A GRADE DE CORES do CELULAR, colada na foto que ela muda. No PC a
+            grade fica na coluna da direita (dono, 20/08: "as fotos das cores
+            estão descendo") — é a instância `seletorCores` do BuyBox. */}
         {temVariasCores && (
           <GradeDeCores
+            id="grade-de-cores"
+            className="lg:hidden"
             slug={product.slug}
             cores={cores}
             corAtualNome={corAtual?.nome ?? null}
@@ -352,6 +365,19 @@ export function EscolhaDaPeca({
              tamanho sem escolher a cor, o site pede para escolher a cor"). */
           corPendente={temVariasCores && !cor}
           onPedirCor={pedirCor}
+          seletorCores={
+            temVariasCores ? (
+              <GradeDeCores
+                id="grade-de-cores-desktop"
+                slug={product.slug}
+                cores={cores}
+                corAtualNome={corAtual?.nome ?? null}
+                tamanho={tamanho}
+                erro={corError}
+                onEscolher={trocarCor}
+              />
+            ) : null
+          }
         />
       </div>
     </div>
@@ -379,6 +405,8 @@ export function EscolhaDaPeca({
  * miniatura com foto errada é a armadilha da "foto ilustrativa" sem aviso.
  */
 function GradeDeCores({
+  id,
+  className,
   slug,
   cores,
   corAtualNome,
@@ -386,6 +414,9 @@ function GradeDeCores({
   erro,
   onEscolher,
 }: {
+  /** Duas instâncias na página (celular/PC) — cada uma com seu id. */
+  id: string;
+  className?: string;
   slug: string;
   cores: CorApi[];
   corAtualNome: string | null;
@@ -399,15 +430,17 @@ function GradeDeCores({
 
   return (
     <div
-      id="grade-de-cores"
+      id={id}
       className={cn(
         'mt-4 scroll-mt-28 rounded-lg transition-all duration-300',
         erro && 'bg-danger/5 p-3 ring-2 ring-danger ring-offset-2 ring-offset-background',
+        className,
       )}
     >
-      {/* Rótulo do passo, ENXUTO (dono, 20/08: "descrição bem menor") — a
-          confirmação em voz alta mora ACIMA da foto; aqui só o convite. */}
-      <div className="flex items-center justify-center gap-2 lg:justify-start">
+      {/* "Cor escolhida: MARINHO" — a confirmação da vendedora, com o nome um
+          degrau acima do corpo (preview aprovado 20/08). O `rotuloDaCor` tem
+          a guarda contra cadastro poluído. */}
+      <div className="flex items-center justify-center gap-2 lg:justify-start" aria-live="polite">
         <span
           aria-hidden
           className={cn(
@@ -418,7 +451,16 @@ function GradeDeCores({
           {atual ? <Check className="size-3" strokeWidth={3} /> : 1}
         </span>
         <p className="text-small font-medium text-ink">
-          {atual ? 'Cor escolhida' : 'Escolha a cor'}
+          {atual ? (
+            <>
+              Cor escolhida:{' '}
+              <span className="text-[1rem] font-semibold uppercase tracking-wide">
+                {rotuloDaCor(atual)}
+              </span>
+            </>
+          ) : (
+            'Escolha a cor'
+          )}
         </p>
       </div>
 

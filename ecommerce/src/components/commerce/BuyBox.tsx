@@ -60,7 +60,7 @@ export interface CorEscolhivel {
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, corPendente, onPedirCor,
+  product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, corPendente, onPedirCor, seletorCores,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
@@ -78,6 +78,14 @@ export function BuyBox({
    */
   corPendente?: boolean;
   onPedirCor?: () => void;
+  /**
+   * A GRADE DE CORES DO DESKTOP (dono, 20/08: "no PC colocar as fotos das
+   * cores na lateral direita, pois elas estão descendo"). No celular a grade
+   * mora embaixo da foto; no PC ela entra AQUI, entre o preço e o tamanho —
+   * cor é o passo 1, tamanho o 2. O nó vem montado do pai, que é quem tem o
+   * estado da cor.
+   */
+  seletorCores?: React.ReactNode;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
   /**
@@ -181,10 +189,6 @@ export function BuyBox({
     // de existir, e reagir à própria limpeza reabriria o aviso.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [escolhidoEsgotou]);
-  const discount = product.compareAtPrice
-    ? discountPercent(product.compareAtPrice, product.price)
-    : 0;
-
   /**
    * O CLIQUE SEM TAMANHO PRECISA VIRAR ESCOLHA, NÃO ERRO (16/08).
    *
@@ -317,123 +321,20 @@ export function BuyBox({
 
   return (
     <div className="flex flex-col">
-      {/* AS ETIQUETAS SAÍRAM DAQUI (dono, 15/08). "Novo" abria a coluna de
-          compra e custava 43px de rolagem — a pílula mais o respiro — pra
-          dizer uma palavra. Agora elas vivem SOBRE a foto, no canto superior
-          direito (ver `badges` do ProductGallery), que é onde a cliente já
-          está olhando e onde não empurram nada pra baixo. */}
-      {product.fabric && <p className="eyebrow text-primary-strong">{product.fabric}</p>}
-
-      {/* TÍTULO MENOR NO CELULAR (dono, 15/08: "reduza esta quebra").
-          `text-h2` dá 28px no mobile e nessa largura (327px) quase nenhum
-          nome de peça cabe em uma linha — a mediana do catálogo é 39
-          caracteres. Medido: a 28px só 4% dos nomes cabem; a 22px o nome
-          típico de blusa ("Blusa Manga Curta — BMM-100", 314px) entra
-          inteiro, e o nome longo de vestido, que não caberia nem a 16px,
-          quebra em duas linhas de 50px em vez de 65px.
-
-          22px é o piso: abaixo disso o título fica menor que o preço e a
-          peça perde o nome como manchete. Quem quiser mais nomes em uma
-          linha só tem um caminho, e ele é de CONTEÚDO — tirar o código da
-          REF do fim do nome. */}
-      {/* BLOCO DE DECISÃO CENTRALIZADO NO CELULAR (dono, 17/08).
-
-          Nome, preço, os dois passos e a grade — tudo no eixo. Centralizar
-          só a grade, como ficou na primeira tentativa, deixou o conjunto
-          desalinhado: o número no meio e o preço encostado na margem.
-
-          `lg:text-left` porque no desktop a coluna de compra fica ao lado
-          da foto, estreita e alta — ali o texto centralizado vira serrilha. */}
-      <h1 className="mt-3 text-center font-display text-[1.375rem] leading-[1.2] text-ink sm:text-h2 sm:leading-[1.16] lg:text-left">
-        {product.name}
-      </h1>
-
-      {product.rating && (
-        <div className="mt-4 flex items-center gap-2">
-          <span className="flex items-center gap-0.5" role="img" aria-label={`${product.rating.average} de 5`}>
-            {Array.from({ length: 5 }, (_, i) => (
-              <Star
-                key={i}
-                className={cn(
-                  'size-3.5',
-                  i < Math.round(product.rating!.average)
-                    ? 'fill-primary text-primary'
-                    : 'text-border-strong',
-                )}
-                strokeWidth={1.5}
-              />
-            ))}
-          </span>
-          <span className="text-small text-ink-soft">
-            {product.rating.average.toFixed(1)} · {product.rating.count} avaliações
-          </span>
-        </div>
-      )}
-
-      {/* Preço */}
-      <div className="mt-7">
-        <div className="flex flex-wrap items-baseline justify-center gap-x-3 gap-y-1 lg:justify-start">
-          {product.compareAtPrice && (
-            <span className="tabular text-body text-ink-muted line-through">
-              {formatPrice(product.compareAtPrice)}
-            </span>
-          )}
-          {/* Um degrau menor (dono, 17/08): o preço competia em peso com o
-              passo do tamanho logo abaixo, que é o que decide a compra. */}
-          <span className="tabular font-display text-[1.625rem] leading-none font-medium text-ink">
-            {formatPrice(product.price)}
-          </span>
-          {discount > 0 && (
-            <span className="tabular rounded-pill bg-secondary-wash px-2.5 py-1 text-small font-medium text-secondary">
-              -{discount}%
-            </span>
-          )}
-        </div>
-
-        {/* PIX + PARCELA EM UMA LINHA SÓ NO CELULAR (dono, 15/08).
-            A 15px a frase inteira mede 355px numa coluna de 327 e quebrava
-            "sem juros" sozinho na linha de baixo — o argumento mais forte do
-            preço saía órfão. A 13px ela mede 308px e cabe, com folga até em
-            peça de R$ 379 (318px). Encurtar o texto seria o outro caminho,
-            mas custaria "5% off" ou "sem juros", que é o que faz ela decidir.
-            Desktop segue nos 15px de sempre. */}
-        <p className="mt-3 text-small font-light text-ink-soft sm:text-body">
-          {product.pixPrice && (
-            <>
-              <span className="tabular font-medium text-success">
-                {formatPrice(product.pixPrice)}
-              </span>{' '}
-              no Pix (5% off) ·{' '}
-            </>
-          )}
-          {product.installments && (
-            <span className="tabular">
-              {product.installments.times}x de {formatPrice(product.installments.value)} sem juros
-            </span>
-          )}
-        </p>
-
-        {/* QUEBRA DE PREÇO POR TAMANHO (dono 07/08). Peça que custa um valor
-            do 44 ao 54 e outro do 56 ao 60 mostra OS DOIS aqui. Escondendo a
-            faixa maior, a cliente de 58 só descobre no carrinho — e é ali que
-            ela desiste. */}
-        {product.priceRanges && product.priceRanges.length > 1 && (
-          <div className="mt-4 rounded-md border border-border bg-surface-alt/60 px-4 py-3">
-            <p className="eyebrow text-ink-soft">Preço por tamanho</p>
-            <ul className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
-              {product.priceRanges.map((f) => (
-                <li key={`${f.from}-${f.to}`} className="text-small text-ink">
-                  <span className="tabular font-medium">
-                    {f.from === f.to ? f.from : `${f.from} ao ${f.to}`}
-                  </span>
-                  {' · '}
-                  <span className="tabular">{formatPrice(f.price)}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+      {/* NOME e PREÇO só no DESKTOP (dono, 20/08, preview aprovado): no
+          celular eles moram na coluna da galeria — nome ACIMA da foto, preço
+          logo abaixo dela — renderizados pelo EscolhaDaPeca com estes mesmos
+          componentes. Duplicar markup foi descartado de propósito: preço tem
+          Pix, parcela e faixa por tamanho, e divergir isso entre telas é bug
+          na certa. */}
+      <div className="hidden lg:block">
+        <TituloDaPeca product={product} />
+        <PrecoDaPeca product={product} className="mt-7" />
       </div>
+
+      {/* A GRADE DE CORES DO DESKTOP — passo 1, antes do tamanho. No celular
+          esta instância não existe (a de lá fica embaixo da foto). */}
+      {seletorCores && <div className="hidden lg:block">{seletorCores}</div>}
 
       {/* Tamanho */}
       {/* IMPOSSÍVEL DE IGNORAR (dono, 15/08): "minha cliente é lenta com
@@ -534,72 +435,12 @@ export function BuyBox({
         )}
       </div>
 
-      {/* AS BOLINHAS DE COR SAÍRAM DAQUI (dono, 17/08).
-
-          Eram a TERCEIRA aparição da mesma escolha: a foto grande, a fita de
-          miniaturas ao lado dela, e mais estas. E a fita já faz o trabalho
-          inteiro — marca a cor ativa (`aria-selected` + borda destacada) e
-          escreve o nome embaixo.
-
-          Duplicar não ensinava nada e custava 158px na coluna de decisão,
-          empurrando o seletor de TAMANHO para baixo da dobra num iPhone
-          (medido: 866px, com a dobra em 812). E 81% das visitantes não rolam
-          a página de produto — ou seja, quatro em cada cinco nunca viam a
-          única escolha que decide a compra.
-
-          Quem escolhe a cor é a fita (`grupos`, no ProductGallery). O aviso
-          de "esta cor não tem o seu número" mora lá, que é onde ela olha.
-
-          FICA UMA LINHA, porque a escolha tem que ser NÍTIDA (dono, 17/08):
-          a fita está na outra coluna e no celular ela rola pra fora da
-          vista. Esta linha confirma, ao lado do botão, qual cor vai no
-          pedido — sem devolver os 158px de bolinha. */}
-      {/* MESMO PESO DO TAMANHO (dono, 17/08: "mais destaque pra variante
-          escolhida"). Com as bolinhas removidas, a cor tinha virado uma nota
-          de rodapé cinza ao lado de um passo com selo dourado — a tela dizia,
-          sem querer, que a cor importa menos. Agora usa o MESMO PassoLabel:
-          um selo, um número, um ✓ quando escolhida. */}
-      {/* A COR VIROU UM FATO, NÃO UM PASSO (dono, 20/08).
-
-          Histórico curto de por que este bloco já foi bolinhas (até 17/08),
-          linha de texto (17/08) e botão que abria folha de cores (19/08): em
-          peça multicor 16% de quem tentava comprar travava, contra 5% na de
-          cor única — CADA versão do seletor continuou consumindo a decisão.
-
-          Agora a página abre ancorada numa cor e esta linha só CONFIRMA qual
-          é, como a vendedora no balcão ("o vinho, certo?"). Quem quiser outra
-          cor troca de PÁGINA pelos cards logo abaixo do botão — o link rola
-          até eles. Nenhuma escolha de cor acontece mais entre o tamanho e o
-          "Adicionar": sobrou UMA decisão na coluna. */}
-      {temCor && corLabel && (
-        <div className="mt-6 flex items-center gap-3 rounded-md border border-border bg-surface-alt/50 px-3 py-2.5">
-          {corAtual?.capa && (
-            <Image
-              src={corAtual.capa}
-              alt=""
-              aria-hidden
-              width={32}
-              height={42}
-              className="h-[42px] w-8 shrink-0 rounded-sm object-cover"
-            />
-          )}
-          <p className="min-w-0 flex-1 truncate text-body text-ink">
-            <span className="font-medium">Cor:</span>{' '}
-            <span className="font-medium">{corLabel}</span>
-          </p>
-          <button
-            type="button"
-            onClick={() =>
-              document
-                .getElementById('grade-de-cores')
-                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-            }
-            className="shrink-0 whitespace-nowrap text-small font-medium text-ink underline decoration-border underline-offset-4 transition-colors hover:text-ink-soft"
-          >
-            Ver as {cores!.length} cores
-          </button>
-        </div>
-      )}
+      {/* A LINHA "Cor: X · Ver as N cores" SAIU (20/08, terceira era deste
+          bloco): com a grade de cores na própria coluna (desktop) e embaixo
+          da foto (celular), a linha virava a segunda aparição da mesma
+          escolha — e duplicar seletor de cor é o erro que já custou 158px
+          uma vez. Quem confirma a cor agora é o cabeçalho da grade e o
+          botão, que carimba "Adicionar · MARINHO 48". */}
 
       {/* SAI NA MESMA FOTO — a irmã do look colada na decisão (dono, 13/08:
           "era bom aparecer aqui a indicação da peça irmã"). A cliente está
@@ -901,6 +742,111 @@ function PassoLabel({
           </span>
         )}
       </p>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * NOME DA PEÇA — usado em DOIS lugares desde 20/08 (preview aprovado): no
+ * desktop abre a coluna de compra; no celular o EscolhaDaPeca põe ACIMA da
+ * foto principal ("coloque a descrição no topo"). Um componente só pros dois
+ * porque título tem regra (22px de piso no celular, ver histórico de 15/08) e
+ * divergir a regra entre telas é bug.
+ */
+export function TituloDaPeca({ product, className }: { product: Product; className?: string }) {
+  return (
+    <div className={className}>
+      {product.fabric && <p className="eyebrow text-primary-strong">{product.fabric}</p>}
+      {/* 22px é o piso no celular (15/08): abaixo disso o título perde pro
+          preço. Centralizado no empilhado, à esquerda na coluna do desktop. */}
+      <h1 className="mt-1 text-center font-display text-[1.375rem] leading-[1.2] text-ink sm:text-h2 sm:leading-[1.16] lg:text-left">
+        {product.name}
+      </h1>
+      {product.rating && (
+        <div className="mt-2 flex items-center justify-center gap-2 lg:justify-start">
+          <span className="flex items-center gap-0.5" role="img" aria-label={`${product.rating.average} de 5`}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <Star
+                key={i}
+                className={cn(
+                  'size-3.5',
+                  i < Math.round(product.rating!.average)
+                    ? 'fill-primary text-primary'
+                    : 'text-border-strong',
+                )}
+                strokeWidth={1.5}
+              />
+            ))}
+          </span>
+          <span className="text-small text-ink-soft">
+            {product.rating.average.toFixed(1)} · {product.rating.count} avaliações
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * PREÇO DA PEÇA — no desktop segue na coluna de compra; no celular vem LOGO
+ * ABAIXO da foto principal (dono, 20/08: "o preço logo abaixo da foto").
+ * Pix + parcela numa linha de 13px no celular (15/08) e a quebra de preço
+ * por tamanho (07/08) vêm juntos — são um bloco só.
+ */
+export function PrecoDaPeca({ product, className }: { product: Product; className?: string }) {
+  const discount = product.compareAtPrice
+    ? discountPercent(product.compareAtPrice, product.price)
+    : 0;
+  return (
+    <div className={className}>
+      <div className="flex flex-wrap items-baseline justify-center gap-x-3 gap-y-1 lg:justify-start">
+        {product.compareAtPrice && (
+          <span className="tabular text-body text-ink-muted line-through">
+            {formatPrice(product.compareAtPrice)}
+          </span>
+        )}
+        <span className="tabular font-display text-[1.625rem] leading-none font-medium text-ink">
+          {formatPrice(product.price)}
+        </span>
+        {discount > 0 && (
+          <span className="tabular rounded-pill bg-secondary-wash px-2.5 py-1 text-small font-medium text-secondary">
+            -{discount}%
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-center text-small font-light text-ink-soft sm:text-body lg:text-left">
+        {product.pixPrice && (
+          <>
+            <span className="tabular font-medium text-success">
+              {formatPrice(product.pixPrice)}
+            </span>{' '}
+            no Pix (5% off) ·{' '}
+          </>
+        )}
+        {product.installments && (
+          <span className="tabular">
+            {product.installments.times}x de {formatPrice(product.installments.value)} sem juros
+          </span>
+        )}
+      </p>
+      {product.priceRanges && product.priceRanges.length > 1 && (
+        <div className="mt-4 rounded-md border border-border bg-surface-alt/60 px-4 py-3">
+          <p className="eyebrow text-ink-soft">Preço por tamanho</p>
+          <ul className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
+            {product.priceRanges.map((f) => (
+              <li key={`${f.from}-${f.to}`} className="text-small text-ink">
+                <span className="tabular font-medium">
+                  {f.from === f.to ? f.from : `${f.from} ao ${f.to}`}
+                </span>
+                {' · '}
+                <span className="tabular">{formatPrice(f.price)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
