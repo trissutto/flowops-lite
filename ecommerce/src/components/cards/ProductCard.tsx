@@ -453,27 +453,20 @@ export function ProductCard({
           <p className="mt-1.5 hidden text-small text-ink-muted lg:block">{faixaDeTamanhos}</p>
         )}
 
-        {/* Cores disponíveis */}
-        {product.colors && product.colors.length > 1 && (
-          <div
+        {/* AS BOLINHAS DE COR SAÍRAM DO CARD (dono, 21/08: "cada cor é um
+            produto"). O card que sobra com várias cores é o da peça cujas
+            cores não têm foto própria — a bolinha prometia uma escolha que
+            agora acontece em outro card. Fica uma LINHA discreta contando as
+            cores; a escolha em si é a grade da PDP. */}
+        {!product.vitrineCor && product.colors && product.colors.length > 1 && (
+          <p
             className={cn(
-              'flex items-center gap-1.5',
-              compact ? 'mt-3' : 'mt-2 justify-center lg:mt-3 lg:justify-start',
+              'text-[0.6875rem] text-ink-muted',
+              compact ? 'mt-2' : 'mt-1.5 text-center lg:text-left',
             )}
-            aria-label="Cores disponíveis"
           >
-            {product.colors.slice(0, 5).map((color) => (
-              <span
-                key={color.name}
-                title={color.name}
-                className="size-3.5 rounded-pill border border-border"
-                style={{ backgroundColor: color.hex }}
-              />
-            ))}
-            {product.colors.length > 5 && (
-              <span className="text-[0.625rem] text-ink-muted">+{product.colors.length - 5}</span>
-            )}
-          </div>
+            +{product.colors.length - 1} {product.colors.length - 1 === 1 ? 'cor' : 'cores'}
+          </p>
         )}
 
         {temEstoque && !compact && (

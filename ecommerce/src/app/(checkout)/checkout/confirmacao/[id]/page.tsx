@@ -20,7 +20,7 @@ import { ProductCardSkeleton, Skeleton } from '@/components/ui/Skeleton';
 import { ProductCard } from '@/components/cards/ProductCard';
 import { WhatsAppIcon } from '@/components/ui/icons';
 import { stores } from '@/data/stores';
-import { mapPeca } from '@/services/products';
+import { mapPecasDaVitrine } from '@/services/products';
 import { maskCpf } from '@/components/checkout/masks';
 import { PixPanel } from '@/components/checkout/PixPanel';
 import type { Product } from '@/types';
@@ -395,7 +395,7 @@ function Recomendados() {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (!ativo) return;
-        if (data?.itens?.length) setProducts(data.itens.map(mapPeca));
+        if (data?.itens?.length) setProducts(mapPecasDaVitrine(data.itens));
         else setErro(true);
       })
       .catch(() => {

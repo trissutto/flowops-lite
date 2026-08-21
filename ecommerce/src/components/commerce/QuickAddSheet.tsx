@@ -56,7 +56,14 @@ export function QuickAddSheet() {
         if (!vivo) return;
         const lista = peca?.cores ?? [];
         setCores(lista);
-        // Cor única: já escolhe. A cliente não deve clicar no óbvio.
+        // A COR DO CARD vem pré-marcada (dono, 21/08): a sacolinha de um card
+        // "· Marinho" abre já no Marinho — o card É a cor. Sem cor no card,
+        // vale a regra de sempre: cor única se escolhe sozinha.
+        const doCard = produto?.vitrineCor?.nome;
+        if (doCard && lista.some((c) => c.nome === doCard && c.estoque > 0)) {
+          setCor(doCard);
+          return;
+        }
         const comEstoque = lista.filter((c) => c.estoque > 0);
         if (comEstoque.length === 1) setCor(comEstoque[0].nome);
       })

@@ -20,7 +20,7 @@
  *   - falha de rede/parse → [] (o rail some; a página NUNCA quebra).
  */
 
-import { mapPeca } from '@/services/products';
+import { mapPeca, mapPecasDaVitrine } from '@/services/products';
 import { normalize } from '@/lib/utils';
 import { useWishlistStore } from '@/store/wishlist';
 import { getRecentlyViewed, type RecentlyViewedItem } from './recently-viewed';
@@ -80,7 +80,7 @@ function pecasDe(dados: unknown): Product[] {
     ? dados
     : ((dados as { itens?: unknown[] }).itens ?? []);
   try {
-    return (itens as PecaApi[]).map(mapPeca);
+    return mapPecasDaVitrine(itens as PecaApi[]);
   } catch {
     // Shape inesperado do backend não pode quebrar o rail.
     return [];
