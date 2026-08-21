@@ -486,6 +486,7 @@ model Order {
   items      OrderItem[]
   pickOrders PickOrder[]
   history    OrderHistory[]
+  itemSwaps  OrderItemSwap[]
   // Convite de avaliacao pos-venda (D+5 da entrega). A LINHA e a marca: pedido
   // entregue SEM convite ainda nao foi chamado pra avaliar.
   avaliacaoConvite AvaliacaoConvite?
@@ -505,6 +506,61 @@ model Order {
   @@index([customerCpf])
   @@index([personId])
   @@map("orders")
+}
+
+/// TROCA DE PEÇA NO PEDIDO, pela retaguarda (21/08).
+///
+/// A cliente pede outra cor/tamanho depois de comprar, ou a peça vem com
+/// defeito e a matriz resolve ANTES de mandar pra loja separar. Trocar a peça
+/// é fácil; o que faltava era o DINHEIRO fechar:
+///   - peça nova mais CARA  → link de pagamento da diferença, e a separação
+///     fica travada até a cliente pagar (peça só viaja com dinheiro provado,
+///     a mesma régua da conferência de vendas);
+///   - peça nova mais BARATA → vale nominal no CPF dela (`SiteCupom` com
+///     `origem='troca'`), que vale no site E na loja;
+///   - mesmo preço → troca seca.
+///
+/// Uma linha por troca, imutável: é o extrato de "por que este pedido custa
+/// diferente do que a cliente pagou no checkout".
+model OrderItemSwap {
+  id             String  @id @default(uuid())
+  orderId        String  @map("order_id")
+  /// Item trocado. Sem FK: o OrderItem é reescrito in-place (mesma linha
+  /// muda de SKU), e apagar o pedido não pode apagar o rastro do acerto.
+  orderItemId    String  @map("order_item_id")
+  wcOrderNumber  String? @map("wc_order_number")
+  /// Snapshot dos dois lados — em CENTAVOS, que é o que fecha conta.
+  oldSku         String  @map("old_sku")
+  oldName        String? @map("old_name")
+  oldPriceCents  Int     @map("old_price_cents")
+  newSku         String  @map("new_sku")
+  newName        String? @map("new_name")
+  newPriceCents  Int     @map("new_price_cents")
+  qty            Int     @default(1)
+  /// (novo - velho) × qty. Positivo = cliente deve · negativo = casa deve.
+  diffCents      Int     @map("diff_cents")
+  /// 'cobranca' (diferença a maior) | 'vale' (a menor) | 'neutro' (sem diferença)
+  tipo           String
+  /// 'pending' (esperando a cliente pagar) | 'settled' (pago/vale emitido/sem
+  /// diferença) | 'cancelled' (troca desfeita ou cobrança abandonada)
+  status         String  @default("pending")
+  // ── diferença A MAIOR: link de pagamento ──
+  pagarmeOrderId String?   @map("pagarme_order_id")
+  linkToken      String?   @map("link_token")
+  linkUrl        String?   @map("link_url")
+  linkExpiresAt  DateTime? @map("link_expires_at")
+  // ── diferença A MENOR: vale nominal ──
+  cupomCode      String?   @map("cupom_code")
+  motivo         String?   @db.VarChar(300)
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  settledAt      DateTime? @map("settled_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("order_item_swaps")
 }
 
 // Vendedoras — cadastro de atendentes que iniciam vendas online (exemplos: Karine, Manu).

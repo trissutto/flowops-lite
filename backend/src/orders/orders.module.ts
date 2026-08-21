@@ -8,15 +8,21 @@ import { ErpModule } from '../erp/erp.module';
 import { PickScanModule } from '../pick-orders/pick-scan.module';
 import { PickOrdersModule } from '../pick-orders/pick-orders.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
+import { PagarmeModule } from '../pagarme/pagarme.module';
+import { PromoSiteModule } from '../promo-site/promo-site.module';
+import { TrocaPecaService } from './troca-peca.service';
 
 @Module({
   // PickScanModule → estorno dos bipes no cancelamento/reembolso do pedido.
   // PickOrdersModule (forwardRef) → JuntadaService dos endpoints /juntar.
   // WincredMirrorModule → WincredCatalogService (troca manual de item lê a
   // peça nova pelo espelho, mesmo caminho do bipe do PDV).
-  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
-  providers: [OrdersService],
+  // PagarmeModule → link de pagamento da diferença da troca de peça.
+  // PromoSiteModule → o preço que o SITE cobra hoje pela peça nova (precoPromo
+  // digitado / promoção de 50%), pra sugerir a diferença certa.
+  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoSiteModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
+  providers: [OrdersService, TrocaPecaService],
   controllers: [OrdersController],
-  exports: [OrdersService],
+  exports: [OrdersService, TrocaPecaService],
 })
 export class OrdersModule {}

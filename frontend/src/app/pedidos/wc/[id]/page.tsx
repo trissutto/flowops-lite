@@ -11,7 +11,7 @@ import { ruaComNumero } from '@/lib/format-address';
 import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
-import SwapModal, { type SwapPayload, type SwapResponse } from '@/app/minha-loja/SwapModal';
+import TrocaPecaModal from './TrocaPecaModal';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -242,9 +242,72 @@ export default function PedidoDetailPage() {
   const [diagnoseSku, setDiagnoseSku] = useState<string | null>(null);
 
   // TROCA MANUAL DE ITEM (21/08) — botão "Trocar" na tabela de ITENS. Depois
-  // de confirmar, o pedido é re-roteado inteiro (decisão do dono). O valor
-  // cobrado da cliente NÃO muda — diferença se acerta por fora.
+  // de confirmar, o backend acerta o dinheiro (link de cobrança OU vale) e
+  // re-roteia o pedido inteiro; a tela só recarrega o que mudou.
   const [trocaItem, setTrocaItem] = useState<{ id: string; label: string } | null>(null);
+
+  // ── ACERTOS DA TROCA (21/08) ──────────────────────────────────────────
+  // Peça mais cara vira link de pagamento e TRAVA a separação até a cliente
+  // pagar; mais barata vira vale nominal no CPF. Sem esse painel a trava
+  // seria invisível — o pedido ficaria parado sem ninguém saber por quê.
+  const [trocas, setTrocas] = useState<Array<{
+    id: string;
+    tipo: 'cobranca' | 'vale' | 'neutro';
+    status: 'pending' | 'settled' | 'cancelled';
+    oldSku: string | null;
+    oldName: string | null;
+    newSku: string | null;
+    newName: string | null;
+    diferenca: number;
+    linkUrl: string | null;
+    linkExpiresAt: string | null;
+    cupomCode: string | null;
+    motivo: string | null;
+    createdAt: string;
+    settledAt: string | null;
+  }>>([]);
+  const [trocasTravando, setTrocasTravando] = useState(false);
+  /** Mini-form inline de cortesia: id da troca sendo liberada + motivo. */
+  const [liberandoTroca, setLiberandoTroca] = useState<string | null>(null);
+  const [liberarMotivo, setLiberarMotivo] = useState('');
+  const [liberarBusy, setLiberarBusy] = useState(false);
+  const [liberarErro, setLiberarErro] = useState<string | null>(null);
+  const [linkCopiado, setLinkCopiado] = useState<string | null>(null);
+  const loadTrocas = () => {
+    if (!wcId) return;
+    api<{ trocas: typeof trocas; travando: boolean }>(`/orders/wc/${wcId}/trocas`)
+      .then((d) => {
+        setTrocas(Array.isArray(d?.trocas) ? d.trocas : []);
+        setTrocasTravando(!!d?.travando);
+      })
+      .catch(() => {});
+  };
+
+  /** Cortesia: a casa absorve a diferença e a separação destrava. */
+  async function liberarTrocaSemCobrar(swapId: string) {
+    const motivo = liberarMotivo.trim();
+    if (motivo.length < 3) {
+      setLiberarErro('Escreva o motivo — é ele que explica o dinheiro que a casa abriu mão.');
+      return;
+    }
+    setLiberarBusy(true);
+    setLiberarErro(null);
+    try {
+      await api(`/orders/trocas/${swapId}/liberar-sem-cobrar`, {
+        method: 'POST',
+        body: JSON.stringify({ motivo }),
+      });
+      setLiberandoTroca(null);
+      setLiberarMotivo('');
+      loadTrocas();
+      setFlash('✓ Diferença liberada sem cobrar. Já dá pra gerar a separação.');
+      setTimeout(() => setFlash(null), 5000);
+    } catch (e: any) {
+      setLiberarErro(e?.message || 'Não deu pra liberar. Tente de novo.');
+    } finally {
+      setLiberarBusy(false);
+    }
+  }
 
   // Gate de quebra — pedido dividido em N lojas exige o operador marcar
   // "ciente da divisão" antes do botão Confirmar habilitar. Zera sempre que
@@ -413,6 +476,7 @@ export default function PedidoDetailPage() {
       .catch((e) => console.warn('Falha ao carregar pick-orders:', e?.message));
     loadItemReports();
     loadJuntada();
+    loadTrocas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wcId]);
 
@@ -500,59 +564,27 @@ export default function PedidoDetailPage() {
   }
 
   /**
-   * TROCA MANUAL DE ITEM — o SwapModal manda a peça nova, o backend troca o
-   * OrderItem mantendo o valor pago (POST /orders/wc/:id/swap-item).
+   * Depois da troca aplicada: só RECARREGA a tela.
+   *
+   * O re-roteio NÃO é mais chamado daqui (era, até 21/08 de manhã): quem
+   * troca a peça agora é o `swap-item`, e ele já cancela os cards antigos e
+   * roteia de novo por dentro. Chamar `recalculate-separation` outra vez
+   * cancelaria o card recém-criado e estornaria bipe à toa.
+   *
+   * Quando a troca gera diferença A COBRAR, o backend deixa o pedido SEM
+   * card de propósito — a separação fica travada até o dinheiro entrar, e é
+   * o painel "Acertos da troca" que explica isso pra quem está olhando.
    */
-  async function trocarItemDoPedido(payload: SwapPayload): Promise<SwapResponse> {
-    if (!trocaItem) return { ok: false };
-    return api<SwapResponse>(`/orders/wc/${wcId}/swap-item`, {
-      method: 'POST',
-      body: JSON.stringify({ orderItemId: trocaItem.id, ...payload }),
-    });
-  }
-
-  /**
-   * Depois da troca confirmada: recarrega o pedido e RE-ROTEIA a separação
-   * INTEIRA (decisão do dono, 21/08) — mesma chamada do botão "Recalcular
-   * separação", que estorna bipes e cancela os cards antigos. Sem card ativo
-   * (separação ainda não gerada), não tem o que re-rotear.
-   */
-  async function reRotearAposTroca() {
+  function aposTrocaDePeca() {
     void load();
-    const temCardAtivo = liveStatus.some((p) => ['new', 'separating'].includes(p.status));
-    if (!temCardAtivo) {
-      setFlash('✓ Peça trocada. Gere a separação quando quiser.');
-      setTimeout(() => setFlash(null), 5000);
-      return;
-    }
-    setSepLoading(true);
-    setSepError(null);
-    try {
-      const res = await api<{
-        ok: boolean;
-        message?: string;
-        cancelledCount?: number;
-        pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
-      }>(`/orders/wc/${wcId}/recalculate-separation`, { method: 'POST' });
-      if (!res.ok) {
-        setSepError(
-          `Peça trocada, mas o re-roteio não passou: ${res.message ?? 'use "Recalcular separação".'}`,
-        );
-        return;
-      }
-      setFlash(
-        `✓ Peça trocada e pedido re-roteado: ${res.cancelledCount ?? 0} card(s) antigo(s) cancelado(s), ` +
-        `novo(s) em ${res.pickOrders?.map((p) => p.storeCode).join(', ') || '—'}.`,
-      );
-      setTimeout(() => setFlash(null), 6000);
-      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
-        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
-        .catch(() => {});
-    } catch (e: any) {
-      setSepError(e?.message || 'Peça trocada, mas o re-roteio falhou — use "Recalcular separação".');
-    } finally {
-      setSepLoading(false);
-    }
+    loadTrocas();
+    loadItemReports();
+    loadJuntada();
+    api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+      .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+      .catch(() => {});
+    setFlash('✓ Peça trocada. Confira o acerto no painel abaixo dos itens.');
+    setTimeout(() => setFlash(null), 6000);
   }
 
   // Se o usuário escolhe uma transportadora conhecida + tem código, gera URL automática
@@ -1979,7 +2011,7 @@ export default function PedidoDetailPage() {
                     <button
                       onClick={() => setTrocaItem({ id: String(li.id), label: tituloPeca(li) })}
                       className="rounded-lg border border-[#E6DFC8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#8C7325] hover:bg-[#FBF6E6]"
-                      title="Trocar esta peça por outra — o valor cobrado da cliente não muda e o pedido é re-roteado."
+                      title="Trocar esta peça por outra — a diferença vira cobrança ou vale, e o pedido é re-roteado."
                     >
                       Trocar
                     </button>
@@ -2001,6 +2033,154 @@ export default function PedidoDetailPage() {
         </table>
         </div>
       </div>
+
+      {/* ── ACERTOS DA TROCA ────────────────────────────────────────────
+          O dinheiro que sobrou (ou faltou) de cada troca de peça. Fica
+          COLADO na tabela de itens porque é a explicação do preço que
+          mudou ali em cima — e, quando é cobrança, é a explicação da
+          separação que não anda. */}
+      {trocas.length > 0 && (
+        <div className="bg-white rounded shadow mb-4 overflow-hidden">
+          <h3 className="font-semibold p-4 text-sm text-slate-600 uppercase tracking-wide border-b flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" /> Acertos da troca ({trocas.length})
+          </h3>
+          <div className="divide-y">
+            {trocas.map((t) => {
+              const cobrando = t.tipo === 'cobranca';
+              const pendente = t.status === 'pending';
+              return (
+                <div key={t.id} className="p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0 text-sm">
+                      <div className="text-slate-800">
+                        <span className="line-through text-slate-400">{t.oldName || t.oldSku || '—'}</span>
+                        <span className="mx-2 text-slate-300">→</span>
+                        <span className="font-semibold">{t.newName || t.newSku || '—'}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        {fmtDate(t.createdAt)}
+                        {t.motivo ? ` · ${t.motivo}` : ''}
+                      </div>
+                    </div>
+                    <div
+                      className={`shrink-0 text-base font-bold tabular-nums ${
+                        t.diferenca > 0 ? 'text-red-600' : t.diferenca < 0 ? 'text-emerald-600' : 'text-slate-500'
+                      }`}
+                    >
+                      {t.diferenca > 0 ? '+' : t.diferenca < 0 ? '−' : ''}
+                      {fmtMoney(Math.abs(t.diferenca))}
+                    </div>
+                  </div>
+
+                  {/* Cobrança em aberto = separação parada. É a linha mais
+                      importante da tela quando existe. */}
+                  {cobrando && pendente && (
+                    <div className="rounded border-2 border-amber-300 bg-amber-50 p-3 space-y-2">
+                      <div className="text-sm font-semibold text-amber-900">
+                        ⏳ Aguardando a cliente pagar {fmtMoney(Math.abs(t.diferenca))} — a separação está travada
+                      </div>
+                      {t.linkUrl && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <input
+                            readOnly
+                            value={t.linkUrl}
+                            onFocus={(e) => e.currentTarget.select()}
+                            className="flex-1 min-w-[200px] rounded border border-amber-300 bg-white px-2 py-1.5 text-xs font-mono text-slate-700"
+                          />
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(t.linkUrl || '');
+                                setLinkCopiado(t.id);
+                                setTimeout(() => setLinkCopiado(null), 2000);
+                              } catch { /* sem permissão: copia na mão pelo campo */ }
+                            }}
+                            className="px-2.5 py-1.5 rounded border-2 border-amber-300 bg-white text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                          >
+                            {linkCopiado === t.id ? 'Copiado ✓' : 'Copiar link'}
+                          </button>
+                        </div>
+                      )}
+                      {t.linkExpiresAt && (
+                        <div className="text-xs text-amber-700">Link válido até {fmtDate(t.linkExpiresAt)}.</div>
+                      )}
+
+                      {/* Cortesia — trava sem porta de saída vira pedido
+                          esquecido. Mini-form inline (nada de prompt()). */}
+                      {liberandoTroca === t.id ? (
+                        <div className="space-y-2">
+                          <input
+                            value={liberarMotivo}
+                            autoFocus
+                            onChange={(e) => setLiberarMotivo(e.target.value)}
+                            placeholder="Motivo da cortesia (ex: erro nosso na peça)"
+                            className="w-full rounded border border-amber-300 bg-white px-2 py-1.5 text-sm"
+                          />
+                          {liberarErro && <div className="text-xs text-red-700">{liberarErro}</div>}
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => { setLiberandoTroca(null); setLiberarErro(null); setLiberarMotivo(''); }}
+                              disabled={liberarBusy}
+                              className="px-3 py-1.5 rounded border-2 border-slate-300 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void liberarTrocaSemCobrar(t.id)}
+                              disabled={liberarBusy || liberarMotivo.trim().length < 3}
+                              className="px-3 py-1.5 rounded bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 disabled:opacity-50"
+                            >
+                              {liberarBusy ? 'Liberando…' : 'Confirmar cortesia'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => { setLiberandoTroca(t.id); setLiberarMotivo(''); setLiberarErro(null); }}
+                          className="text-xs font-semibold text-amber-800 underline hover:text-amber-900"
+                          title="A casa absorve a diferença e a separação destrava"
+                        >
+                          Liberar sem cobrar
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* VALE QUE NÃO SAIU não pode se passar por acerto fechado:
+                      a emissão falha quando o pedido está sem CPF, e dizer
+                      "✅ Pago" aqui deixaria a cliente sem o troco com a tela
+                      afirmando que está tudo certo. */}
+                  {t.status === 'settled' && t.tipo === 'vale' && !t.cupomCode && (
+                    <div className="rounded-lg border-2 border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">
+                      ⚠️ Vale de {fmtMoney(Math.abs(t.diferenca))} NÃO foi emitido — a cliente ainda tem
+                      esse valor a receber. Confira o CPF no pedido e emita o vale.
+                    </div>
+                  )}
+
+                  {t.status === 'settled' && !(t.tipo === 'vale' && !t.cupomCode) && (
+                    <div className="text-sm text-emerald-700 font-semibold">
+                      {t.cupomCode
+                        ? `✅ Vale ${t.cupomCode} emitido`
+                        : t.tipo === 'neutro'
+                          ? '✅ Sem diferença'
+                          : '✅ Pago'}
+                      {t.settledAt ? <span className="font-normal text-slate-400"> · {fmtDate(t.settledAt)}</span> : null}
+                    </div>
+                  )}
+
+                  {t.status === 'cancelled' && (
+                    <div className="text-sm text-slate-500">Acerto cancelado.</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* SEPARAÇÃO — bloqueada se pagamento nao confirmado (on-hold/pending/failed/cancelled) */}
       {['on-hold', 'pending', 'failed', 'cancelled'].includes(status) ? (
@@ -2033,6 +2213,15 @@ export default function PedidoDetailPage() {
             {separation ? 'Recalcular separação' : liveStatus.length > 0 ? 'Recalcular separação' : 'Gerar separação'}
           </button>
         </div>
+
+        {/* Trava da troca — o backend recusa mesmo; o aviso existe pra pessoa
+            entender ANTES de clicar e ir cobrar a cliente (ou liberar sem
+            cobrar no painel "Acertos da troca"). */}
+        {trocasTravando && (
+          <div className="mb-3 rounded border-2 border-amber-400 bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-900">
+            🔒 Separação travada: diferença da troca ainda não paga.
+          </div>
+        )}
 
         {/* ── FAIXA "JUNTANDO PEÇAS" ─────────────────────────────────────
             Pedido dividido com loja ÂNCORA: as caixas das feeders viajam pra
@@ -3406,13 +3595,14 @@ export default function PedidoDetailPage() {
         />
       )}
 
-      {/* Troca manual de item — confirma antes de trocar; depois re-roteia tudo */}
+      {/* Troca manual de item — mostra o acerto do dinheiro antes de confirmar;
+          o backend aplica, cobra/da vale e re-roteia o pedido inteiro. */}
       {trocaItem && (
-        <SwapModal
+        <TrocaPecaModal
+          wcId={wcId}
+          orderItemId={trocaItem.id}
           currentLabel={trocaItem.label}
-          requireConfirm
-          onSwap={trocarItemDoPedido}
-          onDone={() => void reRotearAposTroca()}
+          onDone={aposTrocaDePeca}
           onClose={() => setTrocaItem(null)}
         />
       )}

@@ -6,6 +6,7 @@ import { SalesStatsService } from './sales-stats.service';
 import { OrderStatus, PickStatus } from '../common/enums';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pedidoOnlineLiberado } from '../common/prova-pagamento';
+import { diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import { lojasDaRotaPropria } from '../common/rota-propria';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
@@ -167,6 +168,17 @@ export class RoutingService {
           `a venda fechou sem prova no gateway (PIX recebido/Link externo). ` +
           `Confira o dinheiro no extrato e carimbe em SITE → Conferência de Vendas; aí a separação libera.`,
       );
+    }
+
+    /**
+     * TROCA DE PEÇA COM DIFERENÇA A COBRAR (21/08): a matriz trocou por uma
+     * peça mais cara e o link foi pra cliente. Mesma régua da conferência —
+     * peça só viaja com dinheiro provado. Libera sozinho quando o gateway
+     * registra o pagamento; cortesia destrava na tela do pedido.
+     */
+    const trocaPendente = await diferencaDeTrocaPendente(this.prisma as any, orderId);
+    if (trocaPendente.travado) {
+      throw new BadRequestException(trocaPendente.motivo);
     }
 
     if (!result.success) {
