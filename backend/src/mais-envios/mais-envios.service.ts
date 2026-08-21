@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { MaisEnviosAuthService } from './mais-envios-auth.service';
-import { encurtarCampoEndereco, encurtarNomeDestinatario, LIMITES_TRANSPORTE } from '../lib/nome-destinatario';
+import { encurtarCampoEndereco, encurtarNomeDestinatario, limparTextoTransporte, LIMITES_TRANSPORTE } from '../lib/nome-destinatario';
 
 /**
  * Serviços do Mais Envios (portalmaisenvios.com.br) — cotação de frete,
@@ -244,7 +244,9 @@ export class MaisEnviosService {
         nfeNumber: input.nfe?.numero ? String(input.nfe.numero) : '',
         nfeSerie: input.nfe?.serie ? String(input.nfe.serie) : '',
       },
-      dc: (input.itens || []).map((it) => ({ conteudo: String(it.conteudo || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
+      // Mesma limpeza da pré-postagem Correios: "—"/"·" no conteúdo derruba a
+      // etiqueta no sistema de captação ("Etiqueta cancelada", caso 21/08).
+      dc: (input.itens || []).map((it) => ({ conteudo: (limparTextoTransporte(it.conteudo) || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
     };
 
     // DEBUG da homologação (28/07): payload e resposta CRUS nos logs do Railway

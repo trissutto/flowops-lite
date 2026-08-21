@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { CorreiosAuthService } from './correios-auth.service';
-import { encurtarCampoEndereco, encurtarNomeDestinatario, LIMITES_TRANSPORTE } from '../lib/nome-destinatario';
+import { encurtarCampoEndereco, encurtarNomeDestinatario, limparTextoTransporte, LIMITES_TRANSPORTE } from '../lib/nome-destinatario';
 
 /**
  * Serviços dos Correios (API CWS) — cálculo de frete (preço + prazo) e
@@ -293,9 +293,13 @@ export class CorreiosService {
       // ── Ciência de que o objeto não é proibido (PPN-330). ──
       cienteObjetoNaoProibido: 1,
       // ── Declaração de Conteúdo obrigatória (PPN-347). ──
+      // `limparTextoTransporte` no conteúdo é OBRIGATÓRIO: nome de peça com
+      // "—"/"·" fez o sistema de captação CANCELAR a etiqueta no ato ("Etiqueta
+      // cancelada pelo sistema de captação") e a cliente ouviu "código
+      // inválido" no balcão — caso das trocas de 17–21/08.
       itensDeclaracaoConteudo: (input.itensDeclaracao && input.itensDeclaracao.length)
         ? input.itensDeclaracao.map((it) => ({
-            conteudo: String(it.conteudo || 'Vestuário').slice(0, 60),
+            conteudo: (limparTextoTransporte(it.conteudo) || 'Vestuário').slice(0, 60),
             quantidade: String(it.quantidade ?? 1),
             valor: (it.valor ?? (input.valorDeclarado ? input.valorDeclarado / input.itensDeclaracao!.length : 50)).toFixed(2),
           }))
