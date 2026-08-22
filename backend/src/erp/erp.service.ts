@@ -192,16 +192,34 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * WRITE-THROUGH de estoque nos espelhos (giga_estoque + wincred_estoque).
-   * Entrada/baixa no Giga refletem NA HORA no Flow — sem esperar o full de
-   * hora em hora. Incidente VOGUE VINHO 14/07: entrada de 1un pela tela de
-   * pedidos gravou no Giga, a grade da live (que esconde estoque 0) só veria
-   * o saldo na virada da hora. Best effort: falha aqui NUNCA quebra a
-   * operação principal (o cron continua sendo a fonte de reconciliação).
+   * WRITE-THROUGH do saldo do GIGA por cima dos espelhos — DESLIGADO (22/08).
+   *
+   * Nasceu pro mundo de antes de 14/07, em que o Giga era quem sabia o saldo e
+   * o Flow ia atrás (incidente VOGUE VINHO: entrada de 1un pela tela de pedidos
+   * gravava no Giga e a grade da live só veria na virada da hora). A
+   * constituição de 14/07 inverteu o sentido — o Flow aplica o delta e o Giga
+   * é réplica —, mas este método continuou carimbando o número ABSOLUTO que o
+   * Giga calculou em cima de `giga_estoque`/`wincred_estoque`, que são as
+   * tabelas do FLOW, não cópias. Resultado: em toda baixa e toda entrada o
+   * Giga dava a última palavra, alguns segundos DEPOIS do movimento.
+   *
+   * ⚠️ O ESTRAGO (BMM-100 VINHO 52, São José, 19/08 — pedido ON-000006): a
+   * loja bipou a peça no pedido da Bruna às 17:35:50 (Flow: 1 → 0) e às
+   * 17:36:01 o cron do outbox replicou a baixa no Giga e trouxe o saldo DELE
+   * de volta. Às 19:48 a entrada da REM-2026-001250 repetiu a dose. A peça
+   * saiu na sacola da cliente e o estoque de São José continua dizendo que ela
+   * está na arara. A digital está no par `erp_outbox.done_at` ==
+   * `giga_estoque.synced_at` — mesmo milissegundo, linha por linha. Cada uma
+   * das 855 divergências medidas em 31/07 era uma correção silenciosa
+   * esperando um movimento pra ser aplicada a favor do banco errado.
+   *
+   * `ERP_STOCK_WRITEBACK_GIGA=1` religa. Só faria sentido se o Giga voltasse a
+   * ser fonte de estoque, o que a diretriz do dono (02/08) descarta.
    */
   private async mirrorStockWriteThrough(
     applied: Array<{ sku: string; storeCode: string; newStock: number }>,
   ): Promise<void> {
+    if (String(process.env.ERP_STOCK_WRITEBACK_GIGA ?? '0').trim() !== '1') return;
     for (const a of applied) {
       try {
         const lojaRaw = String(a.storeCode || '').trim();
@@ -1718,6 +1736,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      // No-op desde 22/08 (só volta com ERP_STOCK_WRITEBACK_GIGA=1): o saldo
+      // do Giga não carimba mais por cima do estoque do Flow.
       void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
@@ -2039,6 +2059,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      // No-op desde 22/08 (só volta com ERP_STOCK_WRITEBACK_GIGA=1): o saldo
+      // do Giga não carimba mais por cima do estoque do Flow.
       void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {

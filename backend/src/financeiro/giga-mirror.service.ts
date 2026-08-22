@@ -477,8 +477,9 @@ export class GigaMirrorService implements OnModuleInit {
 
   private async syncEstoque(): Promise<number> {
     // CONSTITUIÇÃO 14/07: Flow é a fonte do estoque — o full Giga→Flow fica
-    // desligado por padrão (ESTOQUE_SYNC_GIGA=1 reativa). O write-through das
-    // operações do Flow mantém giga_estoque em dia.
+    // desligado por padrão (ESTOQUE_SYNC_GIGA=1 reativa). Quem mantém
+    // giga_estoque em dia são os deltas do próprio Flow (bipe, venda, remessa):
+    // desde 22/08 o Giga não carimba mais saldo nenhum de volta.
     if (String(process.env.ESTOQUE_SYNC_GIGA ?? '').trim() !== '1') {
       this.logger.log('[estoque] sync Giga→Flow desligado — Flow é a fonte');
       return 0;

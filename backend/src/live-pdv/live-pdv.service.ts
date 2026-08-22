@@ -266,8 +266,15 @@ export class LivePdvService {
    * giga_produto), casando pelo valor numérico — padding de zeros é
    * inconsistente entre produtos e estoque no Giga (convenção do projeto:
    * JOIN sempre via CAST AS UNSIGNED).
+   *
+   * ⚠️ DESLIGADO EM 22/08, mesma flag do write-through: `giga_estoque` deixou
+   * de ser espelho em 14/07 — é a tabela de estoque do Flow. Apagar e regravar
+   * essas linhas com o saldo do Giga tira a verdade da grade em vez de deixá-la
+   * fresca (a venda da live já aplica o delta no Flow na hora) e reimporia o
+   * fantasma do BMM-100 VINHO 52 em cima da correção, dentro dos 45s do TTL.
    */
   private async refreshMirrorStock(codigos: string[], opts?: { force?: boolean }): Promise<boolean> {
+    if (String(process.env.ERP_STOCK_WRITEBACK_GIGA ?? '0').trim() !== '1') return false;
     const uniq = Array.from(
       new Set(codigos.map((c) => String(c).trim()).filter((c) => /^\d+$/.test(c))),
     ).slice(0, 80);
