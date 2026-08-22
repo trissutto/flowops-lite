@@ -62,7 +62,7 @@ export interface CorEscolhivel {
 
 export function BuyBox({
   product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, corPendente, onPedirCor, seletorCores,
-  irmas, irmasHref, irmasLabel,
+  seletorCoresMobile, irmas, irmasHref, irmasLabel,
 }: {
   product: Product;
   /**
@@ -96,6 +96,22 @@ export function BuyBox({
    * estado da cor.
    */
   seletorCores?: React.ReactNode;
+  /**
+   * A GRADE DE CORES DO CELULAR — agora DEPOIS do tamanho (22/08).
+   *
+   * Medido em produção: com a grade 2×4 embaixo da foto, o seletor de tamanho
+   * caía em 1065px num viewport de 812px — 253px ABAIXO da dobra (em 17/08
+   * eram 94px; a grade piorou 159px). Dos 341 bloqueados em 7 dias, 228 (67%)
+   * NUNCA rolaram a página antes de tentar comprar, e só 32 (9%) tinham
+   * tocado no tamanho — não é escolha perdida, é escolha nunca vista.
+   *
+   * A grade não sumiu e não encolheu: ela desceu. O que subiu foi o número,
+   * que é a única escolha que trava a compra. Isso só é honesto porque a cor
+   * JÁ VEM PRÉ-SELECIONADA desde 21/08 (#1063) — a decisão de cor está feita
+   * quando a página abre, e a grade abaixo serve pra TROCAR, não pra escolher
+   * do zero. No PC nada muda: lá é a coluna direita, sem dobra pra brigar.
+   */
+  seletorCoresMobile?: React.ReactNode;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
   /**
@@ -166,6 +182,16 @@ export function BuyBox({
   // `rotuloDaCor` (services/products) tem a guarda contra cadastro poluído:
   // nomeAmigavel com o nome da PEÇA colado estourava o botão e a barra fixa.
   const corLabel = corAtual ? rotuloDaCor(corAtual) : (corSelecionada ?? null);
+
+  /**
+   * A barra fixa mostra OS NÚMEROS em vez de um botão (22/08).
+   *
+   * Só quando falta exatamente uma coisa e essa coisa é o tamanho: com a cor
+   * pendente a ordem é outra (cor primeiro — escolher número de uma cor que
+   * não existe é comprar no escuro), e sem tamanho disponível a fileira seria
+   * uma porta pra parede. Nesses dois casos a barra segue botão.
+   */
+  const barraEhSeletor = !size && !corPendente && available.length > 0;
 
   /**
    * O TAMANHO ESCOLHIDO ACABOU ENQUANTO ELA OLHAVA (dono, 13/08).
@@ -242,7 +268,7 @@ export function BuyBox({
   }
 
   /** O caminho único de entrada na sacola — página e folha passam por aqui. */
-  function adicionar(tamanho: string) {
+  function adicionar(tamanho: string, origem: 'barra' | 'botao' | 'folha' = 'botao') {
     /**
      * A cor escolhida vai junto no carrinho, NO CAMPO `color`.
      *
@@ -271,7 +297,7 @@ export function BuyBox({
     });
     // add_to_cart SÓ depois da peça entrar de fato no carrinho (contrato do
     // tracking).
-    trackAddToCart(product, { tamanho, cor });
+    trackAddToCart(product, { tamanho, cor, origem });
     toast({
       message: 'Adicionado à sacola',
       description: `${product.name} · ${cor ? `${cor} · ` : ''}tamanho ${tamanho}`,
@@ -297,7 +323,26 @@ export function BuyBox({
     setSizeError(false);
     setFolhaTamanho(false);
     trackSizeSwitch(product, tamanho);
-    adicionar(tamanho);
+    adicionar(tamanho, 'folha');
+  }
+
+  /**
+   * A BARRA FIXA VIROU O SELETOR (22/08).
+   *
+   * Ela é a única coisa da PDP que está na tela desde o primeiro segundo, e
+   * era um BOTÃO: o toque virava recusa ("Escolha o tamanho") e gastava a
+   * intenção da cliente. Medido: 305 das 341 bloqueadas (89%) clicavam UMA
+   * vez só e não voltavam — tiro único. Agora os números estão dentro da
+   * barra, então o primeiro toque já é a escolha e a peça entra na sacola.
+   *
+   * Mesmo contrato da folha: um toque escolhe, registra o `size_switch` (é
+   * ele que prova que a barra resolveu) e adiciona.
+   */
+  function escolherNaBarra(tamanho: string) {
+    setSize(tamanho);
+    setSizeError(false);
+    trackSizeSwitch(product, tamanho);
+    adicionar(tamanho, 'barra');
   }
 
   /**
@@ -365,11 +410,13 @@ export function BuyBox({
         )}
       >
         <div className="flex items-end justify-between gap-4">
-          {/* Passo 2 quando a peça tem cores (20/08): a COR é o passo 1, na
-              grade embaixo da foto. Peça de cor única segue com o tamanho
-              como único passo. */}
+          {/* O NÚMERO DO PASSO CONTA O QUE FALTA, não a ordem na tela
+              (22/08). Com a cor pré-selecionada desde 21/08, a grade de cores
+              já abre com ✓ — chamar o tamanho de "passo 2" anunciava uma fila
+              de duas decisões quando só falta UMA. Só volta a ser 2 quando a
+              cor está mesmo pendente (peça multicor aberta sem cor). */}
           <PassoLabel
-            numero={temCor ? 2 : 1}
+            numero={temCor && corPendente ? 2 : 1}
             titulo="Escolha o tamanho"
             escolhido={size}
             sufixoEscolhido="tamanho"
@@ -446,6 +493,11 @@ export function BuyBox({
           </p>
         )}
       </div>
+
+      {/* A GRADE DE CORES DO CELULAR, agora ABAIXO do tamanho (22/08) — ver o
+          porquê medido em `seletorCoresMobile`. No PC esta instância não
+          existe: lá a grade fica acima, na coluna da direita. */}
+      {seletorCoresMobile && <div className="mt-9 lg:hidden">{seletorCoresMobile}</div>}
 
       {/* A LINHA "Cor: X · Ver as N cores" SAIU (20/08, terceira era deste
           bloco): com a grade de cores na própria coluna (desktop) e embaixo
@@ -695,30 +747,63 @@ export function BuyBox({
 
       {!soldOut && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">
-          <div className="mx-auto flex max-w-lg items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-small font-medium text-ink">{product.name}</p>
-              {/* Mesma conferência do botão grande: enquanto falta número a
-                  barra PEDE a escolha; completa, ela CONFIRMA cor e tamanho.
-                  É a única coisa da PDP que está na tela desde o primeiro
-                  segundo — 36 das 41 clientes travadas tentaram comprar por
-                  aqui sem nunca ter subido até os seletores. */}
-              <p className="tabular truncate text-xs text-ink-soft">
-                {corPendente
-                  ? 'Escolha a cor'
-                  : size
-                    ? temCor && corLabel
-                      ? `${corLabel} · ${size}`
-                      : `Tamanho ${size}`
-                    : 'Escolha o tamanho'}{' '}
-                · {formatPrice(product.price)}
+          {/* A BARRA É O SELETOR ENQUANTO FALTA O NÚMERO (22/08).
+              Ela está na tela desde o primeiro segundo e 67% das clientes
+              travadas nunca rolaram a página — então é aqui que a escolha
+              tem que existir, não um botão que devolve "escolha o tamanho".
+              Com número escolhido ela volta a ser a barra de sempre:
+              confirma cor · tamanho e leva pra sacola. */}
+          {barraEhSeletor ? (
+            <div className="mx-auto max-w-lg">
+              <p className="mb-2 flex items-baseline justify-between gap-3 text-xs">
+                <span className="truncate font-medium text-ink">Toque no seu número</span>
+                <button
+                  type="button"
+                  onClick={() => setSizeChartOpen(true)}
+                  className="shrink-0 text-ink-soft underline decoration-border underline-offset-4"
+                >
+                  Não sei meu número
+                </button>
               </p>
+              <div className="grid grid-flow-col auto-cols-fr gap-1.5">
+                {product.sizes.map((option) => (
+                  <SizePill
+                    key={option.label}
+                    /* `py-3` = 44px de altura, o mínimo de alvo de toque. Com 8
+                       números a largura cai pra 39px (a grade divide 375px por
+                       igual) e não dá pra crescer sem quebrar linha — então o
+                       que dá pra garantir é a altura. */
+                    className="w-full min-w-0 px-0 py-3"
+                    label={option.label}
+                    disabled={!option.available}
+                    onSelect={() => escolherNaBarra(option.label)}
+                  />
+                ))}
+              </div>
             </div>
-            <Button onClick={handleAdd} className="shrink-0">
-              <ShoppingBag />{' '}
-              {corPendente ? 'Escolher cor' : size ? 'Adicionar' : 'Escolher tamanho'}
-            </Button>
-          </div>
+          ) : (
+            <div className="mx-auto flex max-w-lg items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-small font-medium text-ink">{product.name}</p>
+                {/* Mesma conferência do botão grande: enquanto falta número a
+                    barra PEDE a escolha; completa, ela CONFIRMA cor e tamanho. */}
+                <p className="tabular truncate text-xs text-ink-soft">
+                  {corPendente
+                    ? 'Escolha a cor'
+                    : size
+                      ? temCor && corLabel
+                        ? `${corLabel} · ${size}`
+                        : `Tamanho ${size}`
+                      : 'Escolha o tamanho'}{' '}
+                  · {formatPrice(product.price)}
+                </p>
+              </div>
+              <Button onClick={handleAdd} className="shrink-0">
+                <ShoppingBag />{' '}
+                {corPendente ? 'Escolher cor' : size ? 'Adicionar' : 'Escolher tamanho'}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -114,9 +114,21 @@ export const trackSortChanged = (ordem: string) => track('sort_changed', { sort_
  * recusar (sem estoque, tamanho esgotado), NÃO chamar — a spec é explícita, e
  * medir intenção como se fosse ação estraga toda a análise de funil.
  */
-export const trackAddToCart = (product: TrackableProduct, extra: { cor?: string; tamanho?: string; quantidade?: number } = {}) => {
-  const item = toTrackedItem(product, extra);
-  track('add_to_cart', {}, { items: [item], value: item.valor * item.quantidade });
+/**
+ * `origem` diz POR ONDE a peça entrou na sacola — e existe pra não repetir o
+ * erro de 16/08, quando a folha de tamanhos derrubou o `add_to_cart_blocked` e
+ * isso foi lido como conserto: o erro sumiu porque o clique mudou de nome, e a
+ * conversão peça→sacola caiu junto. Com a barra fixa virando seletor (22/08) o
+ * mesmo risco volta, então a barra CARIMBA a origem: dá pra medir se ela está
+ * puxando venda ou só apagando o evento.
+ */
+export const trackAddToCart = (
+  product: TrackableProduct,
+  extra: { cor?: string; tamanho?: string; quantidade?: number; origem?: 'barra' | 'botao' | 'folha' } = {},
+) => {
+  const { origem, ...doItem } = extra;
+  const item = toTrackedItem(product, doItem);
+  track('add_to_cart', origem ? { origem } : {}, { items: [item], value: item.valor * item.quantidade });
 };
 
 /** Idem: só após a remoção acontecer. */
