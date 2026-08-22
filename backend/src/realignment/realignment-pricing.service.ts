@@ -40,7 +40,22 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
         database: this.config.get<string>('ERP_DATABASE'),
         waitForConnections: true,
         connectionLimit: 2,
-        queueLimit: 0,
+        /**
+         * ⚠️ FILA FINITA. Era `0` — que no mysql2 quer dizer ILIMITADA.
+         *
+         * Com 2 conexões, `connectTimeout` de 12s e o `ERP_HOST` fora do ar
+         * (162.215.213.154 responde EHOSTUNREACH desde a saída do Giga), cada
+         * chamada entrava numa fila sem teto esperando uma conexão que não vem.
+         * É o mesmo desenho que o CLAUDE.md registra como causa da queda da
+         * live de 01/07 — corrigido lá no pool principal do ERP
+         * (`queueLimit: 30`) e esquecido aqui, que é um pool separado.
+         *
+         * Teto baixo de propósito: com 2 conexões, fila de 10 já é mais espera
+         * do que qualquer chamador desta classe tolera. O excedente falha na
+         * hora, e quem chama já trata preço ausente — os dois métodos devolvem
+         * Map, e a chave simplesmente não vem.
+         */
+        queueLimit: 10,
         connectTimeout: 12000,
       });
       this.logger.log(`pool pricing inicializado (host=${host})`);

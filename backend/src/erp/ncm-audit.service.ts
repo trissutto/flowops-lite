@@ -61,7 +61,20 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
         database: this.config.get<string>('ERP_DATABASE'),
         waitForConnections: true,
         connectionLimit: 3,
-        queueLimit: 0,
+        /**
+         * ⚠️ FILA FINITA — `0` no mysql2 é ILIMITADA, não "sem fila".
+         *
+         * Terceiro pool com o mesmo defeito (os outros: `wp-db.service` e
+         * `realignment-pricing.service`), todos apontando pro `ERP_HOST` que
+         * está fora do ar desde a saída do Giga. O do ERP principal já tinha
+         * sido corrigido pra 30; estes três nasceram como pools separados e
+         * ficaram pra trás.
+         *
+         * Aqui o risco é o menor dos três — é auditoria de NCM, disparada à
+         * mão por admin — mas fila sem teto num host morto não tem defesa
+         * possível a jusante, então o teto entra junto com os outros.
+         */
+        queueLimit: 10,
         connectTimeout: 12000,
       });
       this.logger.log(`NcmAuditService pool inicializado (host=${host})`);
