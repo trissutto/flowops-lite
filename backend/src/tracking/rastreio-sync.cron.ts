@@ -56,6 +56,12 @@ export class RastreioSyncCron {
     if (this.running) return; // ciclo anterior ainda rodando (API é lenta)
     this.running = true;
     try {
+      // Vem ANTES da varredura: é o passo que fecha o pedido cuja entrega já
+      // está confirmada no cache e que a fila abaixo nunca mais visita (a
+      // fila descarta `entregue` de propósito). Sem isto, o `return` do
+      // "nenhum candidato" logo abaixo pularia a reconciliação inteira.
+      await this.reconciliarEntregues();
+
       const candidatos = await this.candidatos();
       if (!candidatos.length) return;
 
@@ -130,6 +136,69 @@ export class RastreioSyncCron {
           .filter((c: string) => TrackingService.ehCodigoValido(c)),
       ),
     ];
+  }
+
+  /**
+   * 🔴 O PEDIDO ENTREGUE QUE NUNCA FECHAVA (22/08) — a regra da estreia estava
+   * derrubando a BAIXA junto com o aviso.
+   *
+   * Medido: 255 pedidos com `status='shipped'` e o cache dizendo `entregue`.
+   * Desses, **205 de 206** dentro da janela de 30 dias tinham
+   * `entrega_na_estreia = true`. 122 estavam entregues havia mais de 15 dias.
+   *
+   * O caminho que prendia: `sincronizarLote` só põe o código em
+   * `entreguesAgora` se `antes.has(codigo)` — ou seja, se o objeto JÁ existia
+   * no cache antes daquela sincronização. Isso é a regra da estreia, e ela é
+   * CERTA pro aviso ("seu pedido chegou" pra quem recebeu semana passada é
+   * constrangedor). Só que `entreguesAgora` também era o ÚNICO gancho da
+   * PROMOÇÃO pra `delivered` — então o objeto que estreou entregue nunca
+   * fechava o pedido. E como a fila do cron descarta `entregue` pra sempre
+   * (`if (r.entregue) return false`), ele nunca mais era revisitado: estado
+   * terminal, sem ninguém pra reconciliar.
+   *
+   * O estrago: a aba "Em trânsito" mostrava 358 quando o real era ~152;
+   * pedido entregue não ganhava `deliveredAt`, então não entrava no pós-venda
+   * nem no prazo de troca; e a loja não sabia que tinha chegado.
+   *
+   * Este passo é a rede: varre pedido `shipped` cujo cache diz entregue e
+   * promove pelo MESMO `promoverEntregues` (que respeita pedido dividido).
+   * Não toca no caminho do aviso — quem avisa continua sendo o
+   * `entreguesAgora`, com a estreia intacta.
+   *
+   * Kill-switch: `RASTREIO_RECONCILIA=0`. Teto: `RASTREIO_RECONCILIA_LOTE`
+   * (default 40) — trickle em vez de fechar 255 pedidos de uma vez.
+   */
+  private async reconciliarEntregues(): Promise<void> {
+    if (String(process.env.RASTREIO_RECONCILIA ?? '1') === '0') return;
+    const n = parseInt(String(process.env.RASTREIO_RECONCILIA_LOTE ?? '40'), 10);
+    const lote = Number.isFinite(n) && n > 0 ? n : 40;
+
+    /**
+     * O código vem do PEDIDO (e do pick-order do pedido dividido), não do
+     * cache: é o pedido preso que interessa, e `promoverEntregues` reconfere
+     * volume a volume antes de fechar.
+     */
+    const presos: Array<{ codigo: string }> = await this.prisma.$queryRawUnsafe(
+      `SELECT DISTINCT c.codigo
+         FROM (
+           SELECT o.id, o.tracking_code AS codigo FROM orders o WHERE o.status='shipped' AND o.tracking_code IS NOT NULL
+           UNION ALL
+           SELECT o.id, po.tracking_code FROM orders o
+             JOIN pick_orders po ON po.order_id = o.id
+            WHERE o.status='shipped' AND po.tracking_code IS NOT NULL
+         ) c
+         JOIN rastreio_objetos r ON r.codigo = c.codigo
+        WHERE r.entregue
+        ORDER BY c.codigo
+        LIMIT $1`,
+      lote,
+    );
+    if (!presos.length) return;
+
+    await this.promoverEntregues(presos.map((p) => p.codigo));
+    this.logger.log(
+      `[rastreio-sync] reconciliação: ${presos.length} objeto(s) com entrega confirmada revisitados`,
+    );
   }
 
   /**
