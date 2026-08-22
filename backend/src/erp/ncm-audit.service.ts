@@ -61,7 +61,22 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
         database: this.config.get<string>('ERP_DATABASE'),
         waitForConnections: true,
         connectionLimit: 3,
-        queueLimit: 0,
+        /**
+         * ⚠️ FILA FINITA — `0` no mysql2 é ILIMITADA, não "sem fila".
+         *
+         * Terceiro pool com o mesmo defeito. O pool principal do ERP já tinha
+         * sido corrigido (`queueLimit: 30`, ver `erp.service.ts`), mas
+         * `ncm-audit` e `realignment-pricing` nasceram como pools SEPARADOS e
+         * a correção nunca chegou neles.
+         *
+         * Aqui o risco é o menor dos três — auditoria de NCM é disparada à mão
+         * por admin, não tem concorrência —, mas a razão de fundo é a mesma: o
+         * Giga PENDURA em vez de dar erro quando o firewall da KingHost
+         * derruba o IP do Railway, e fila sem teto transforma um pendurado
+         * numa fila infinita de promises vivas. Não há defesa a jusante contra
+         * isso; o teto é a defesa.
+         */
+        queueLimit: 10,
         connectTimeout: 12000,
       });
       this.logger.log(`NcmAuditService pool inicializado (host=${host})`);
