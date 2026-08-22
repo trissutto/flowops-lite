@@ -74,7 +74,35 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   const port = process.env.PORT ?? 3001;
-  await app.listen(port, '0.0.0.0');
+  /**
+   * ESCUTA EM IPv6 TAMBÉM (`::`), não só IPv4 — 22/08/2026.
+   *
+   * ── O SINTOMA ──
+   *
+   * ~6% das requisições morriam com 502 depois de exatos 15s. O log do proxy
+   * do Railway dizia `"connection dial timeout", duration: 5000`, três vezes
+   * (5s × 3 = os 15s): ele não conseguia ABRIR a conexão. Não era lentidão —
+   * enquanto uma requisição estourava, as concorrentes respondiam em 202ms, e
+   * o processo seguia servindo normalmente.
+   *
+   * ── A PISTA ──
+   *
+   * O `upstreamAddress` do proxy é IPv6:
+   *   `http://[fd12:50ed:a59e:1:5000:37:5f90:83a2]:3001`
+   *
+   * A rede privada do Railway é IPv6. E `0.0.0.0` faz o Node abrir socket
+   * **só em IPv4** — o binding não cobre o endereço em que o proxy bate.
+   *
+   * `::` com `ipv6Only` desligado (o padrão do Node) escuta nos dois: IPv6
+   * nativo e IPv4 mapeado. É o binding que a própria Railway recomenda pra
+   * serviço atrás da rede privada dela, e é estritamente mais permissivo que o
+   * anterior — nada que funcionava para de funcionar.
+   *
+   * ⚠️ Se algum dia isto voltar pra `0.0.0.0`, o sintoma volta com ele: 502
+   * intermitente que não deixa rastro nenhum no log da aplicação, porque a
+   * requisição nunca chega até ela.
+   */
+  await app.listen(port, '::');
 
   Logger.log(`🚀 FlowOps backend rodando na porta ${port}`, 'Bootstrap');
   if (isProd && frontendUrl?.length) {

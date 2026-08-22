@@ -198,6 +198,21 @@ export class LojaCatalogAdminController {
     return this.svc.validacao();
   }
 
+  /**
+   * AS REFs RECICLADAS — mais de um produto cadastrado na mesma REF no ERP.
+   *
+   * O catálogo escolhe UM produto por REF e ignora os outros; esta é a lista
+   * do que o cadastro precisa separar. Existia só como aviso no log — e como
+   * o log repetia a lista inteira a cada montagem (114 linhas por minuto, 83%
+   * de todo o volume de log de produção em 22/08/2026), ninguém conseguia
+   * usar. Agora o log resume e quem vai CONSERTAR lê a lista completa aqui.
+   */
+  @Get('recicladas')
+  recicladas(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.recicladas();
+  }
+
   @Post('importar')
   importar(@Req() req: any) {
     this.requireAdmin(req);

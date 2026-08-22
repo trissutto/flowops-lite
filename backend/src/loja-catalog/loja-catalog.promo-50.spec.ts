@@ -1,4 +1,5 @@
 import { LojaCatalogService } from './loja-catalog.service';
+import { eventLoopStub } from './event-loop.stub';
 
 /**
  * O PREÇO QUE A CLIENTE LÊ na peça em promoção (15/08/2026).
@@ -13,7 +14,7 @@ import { LojaCatalogService } from './loja-catalog.service';
 
 // Métodos privados por desenho — o teste exercita a REGRA de preço, que é o
 // que não pode mudar sem alguém perceber.
-const svc = new LojaCatalogService({} as any, {} as any) as any;
+const svc = new LojaCatalogService({} as any, {} as any, eventLoopStub) as any;
 
 const linha = (over: Partial<any> = {}) => ({
   ref: '700979', codigo: '1001', cor: 'PRETO', tamanho: '46', marca: 'KASUAL',

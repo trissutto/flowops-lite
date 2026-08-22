@@ -42,6 +42,7 @@ import { WpDbModule } from './wp-db/wp-db.module';
 import { AbandonedCartsModule } from './abandoned-carts/abandoned-carts.module';
 import { CarrinhosAbandonadosModule } from './carrinhos-abandonados/carrinhos-abandonados.module';
 import { EtiquetaConfigModule } from './etiqueta-config/etiqueta-config.module';
+import { EventLoopModule } from './health/event-loop.module';
 import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
@@ -108,6 +109,10 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
+    // Primeiro da fila de propósito: é o vigia que mede o congelamento do
+    // backend, e ele precisa estar contando desde antes de qualquer módulo
+    // pesado subir. Ver EventLoopService.
+    EventLoopModule,
     CommonModule,
     PrismaModule,
     AuthModule,

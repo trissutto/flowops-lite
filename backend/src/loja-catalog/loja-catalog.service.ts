@@ -6,6 +6,7 @@ import { limparNomeVitrine, nomeDaDescricaoErp } from './nome-vitrine';
 import { classificarPorNome } from './classificacao-por-nome';
 import { aplicarDescontoPromo } from '../common/promo-julho';
 import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.service';
+import { EventLoopService } from '../health/event-loop.service';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -108,6 +109,7 @@ export class LojaCatalogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly promoSite: PromoSiteService,
+    private readonly eventLoop: EventLoopService,
   ) {}
 
   private normRef(v?: string | null) {
@@ -124,6 +126,14 @@ export class LojaCatalogService {
     this.cacheCatalogo = null;
     this.cacheFiltros = null;
     this.cacheTaxonomia = null;
+    /**
+     * A impressão digital cai JUNTO — senão quem chamou "invalide" veria a
+     * digital bater com a de antes, a montagem seria pulada e o cache voltaria
+     * idêntico. Zerar aqui é o que mantém a promessa desta função: depois dela,
+     * a próxima leitura remonta de verdade.
+     */
+    this.digitalDoCatalogo = '';
+    this.montadoEm = 0;
   }
 
   /** Slug de categoria/subcategoria normalizado — a comparação é sempre por aqui. */
@@ -429,13 +439,78 @@ export class LojaCatalogService {
     }
 
     const descartadas = linhas.length - (escolhida?.length ?? 0);
-    this.logger.warn(
-      `[catalogo] REF ${ref} tem ${porFamilia.size} PRODUTOS diferentes no ERP ` +
-        `(${Array.from(porFamilia.keys()).join(', ')}) — REF reciclada. ` +
-        `Fiquei com "${criterio}" e ignorei ${descartadas} variação(ões). ` +
-        `Cadastro precisa separar essas REFs.`,
-    );
+    /**
+     * ACUMULA em vez de logar aqui.
+     *
+     * O aviso é verdadeiro e útil — cadastro precisa separar essas REFs — mas
+     * saía UMA VEZ POR REF RECICLADA, A CADA MONTAGEM DO CATÁLOGO. Medido em
+     * 22/08/2026: 114 linhas por montagem, uma montagem por minuto, **4.139
+     * linhas em 30 min = 83% de todo o log de produção**. Nesse volume o log
+     * deixa de servir pra diagnóstico — o incidente de verdade fica soterrado,
+     * e foi exatamente o que atrapalhou achar o congelamento do backend.
+     *
+     * A informação não se perde: vira um resumo só, emitido no fim da montagem
+     * e apenas quando a LISTA MUDA (ver `reportarRecicladas`).
+     */
+    this.recicladasDaRodada.push({ ref, produtos: porFamilia.size, criterio, descartadas });
     return escolhida ?? linhas;
+  }
+
+  /** Preenchido durante a montagem; esvaziado e resumido no fim dela. */
+  private recicladasDaRodada: Array<{
+    ref: string;
+    produtos: number;
+    criterio: string;
+    descartadas: number;
+  }> = [];
+  /** Assinatura da última lista reportada — só fala de novo se mudar. */
+  private assinaturaRecicladas = '';
+
+  /**
+   * UM resumo por montagem, e só quando a lista de REFs recicladas muda.
+   *
+   * Trocar 114 linhas/minuto por 1 linha quando alguém mexe no cadastro
+   * mantém o sinal (dá pra ver que existem REFs pra separar, e quais) e mata o
+   * ruído. O total continua visível a qualquer momento em
+   * `GET /api/loja-catalog/recicladas` — quem vai CONSERTAR precisa da lista
+   * inteira, não de um pedaço no log.
+   */
+  private reportarRecicladas() {
+    const achadas = this.recicladasDaRodada;
+    this.recicladasDaRodada = [];
+    this.ultimasRecicladas = achadas;
+
+    const assinatura = achadas.map((r) => r.ref).sort().join(',');
+    if (assinatura === this.assinaturaRecicladas) return; // nada mudou: silêncio
+    this.assinaturaRecicladas = assinatura;
+
+    if (!achadas.length) {
+      this.logger.log('[catalogo] nenhuma REF reciclada — todas as REFs publicadas têm um produto só');
+      return;
+    }
+    const amostra = achadas.slice(0, 10).map((r) => r.ref).join(', ');
+    const resto = achadas.length > 10 ? ` (+${achadas.length - 10})` : '';
+    this.logger.warn(
+      `[catalogo] ${achadas.length} REF(s) recicladas — mais de um produto na mesma REF no ERP. ` +
+        `Escolhi um por REF e ignorei ${achadas.reduce((s, r) => s + r.descartadas, 0)} variação(ões). ` +
+        `REFs: ${amostra}${resto}. Lista completa em GET /api/loja-catalog/recicladas.`,
+    );
+  }
+
+  /** Última lista completa, pra quem for consertar o cadastro. */
+  private ultimasRecicladas: Array<{
+    ref: string;
+    produtos: number;
+    criterio: string;
+    descartadas: number;
+  }> = [];
+
+  recicladas() {
+    return {
+      total: this.ultimasRecicladas.length,
+      variacoesIgnoradas: this.ultimasRecicladas.reduce((s, r) => s + r.descartadas, 0),
+      refs: this.ultimasRecicladas,
+    };
   }
 
   /**
@@ -1444,6 +1519,24 @@ export class LojaCatalogService {
    *
    * `catalogoEmVoo` é o guarda contra estouro: N requisições chegando com o
    * cache frio esperam a MESMA montagem em vez de dispararem N montagens.
+   *
+   * ── O QUE MUDOU EM 22/08/2026 ──
+   *
+   * O cache é preguiçoso, mas o site tem visita o tempo todo — então na
+   * prática ele virava um job de minuto em minuto, **1.440 montagens por dia**,
+   * mudando o catálogo ou não. Duas correções:
+   *
+   * 1. O `carimbarPublicadoEm()` saiu daqui. Ele fazia DOIS `UPDATE` no
+   *    Postgres antes de cada montagem — um deles com subconsulta correlata em
+   *    `product_photos` por linha. Quase sempre atualizava ZERO linhas (o
+   *    `WHERE publicado_em IS NULL` raramente casa), mas o banco varria pra
+   *    descobrir isso, de minuto em minuto, pra sempre. Agora só roda quando
+   *    existe peça pra carimbar — e a conferência é um `count` barato.
+   *
+   * 2. Montagem só acontece se o catálogo MUDOU. Antes de refazer o trabalho
+   *    inteiro, compara uma impressão digital barata (quantas peças publicadas
+   *    e qual a alteração mais recente). Igual à da montagem anterior = o
+   *    resultado seria idêntico, então revalida o cache e pronto.
    */
   private async catalogoPublicado(): Promise<any[]> {
     if (this.cacheCatalogo && Date.now() - this.cacheCatalogo.at < this.TTL_CATALOGO) {
@@ -1451,8 +1544,7 @@ export class LojaCatalogService {
     }
     if (this.catalogoEmVoo) return this.catalogoEmVoo;
 
-    this.catalogoEmVoo = this.carimbarPublicadoEm()
-      .then(() => this.montarCatalogo())
+    this.catalogoEmVoo = this.montarSeMudou()
       .then((pecas) => {
         this.cacheCatalogo = { at: Date.now(), pecas };
         return pecas;
@@ -1461,6 +1553,85 @@ export class LojaCatalogService {
         this.catalogoEmVoo = null;
       });
     return this.catalogoEmVoo;
+  }
+
+  /** Impressão digital do catálogo na última montagem de verdade. */
+  private digitalDoCatalogo = '';
+
+  /**
+   * Refaz a montagem só se algo mudou. Se nada mudou, devolve o que já estava
+   * em memória e só reestampa a validade.
+   *
+   * A impressão digital é deliberadamente BARATA — um `count` e um `max` sobre
+   * `site_produto`, ambos servidos por índice — porque ela roda no lugar de um
+   * trabalho caro. Se ela custasse caro não haveria economia.
+   *
+   * Cobre: publicar/despublicar peça, e qualquer edição da ficha (o
+   * `updated_at` sobe). Não cobre mudança que nasce FORA de `site_produto` —
+   * foto nova, estoque, preço. Por isso o `TTL_FUNDO` continua existindo:
+   * a cada 10 minutos remonta de qualquer jeito, mudando ou não. Ou seja, o
+   * pior atraso de um preço novo na vitrine é o mesmo TTL de sempre pra quem
+   * publica, e 10 min pro resto — contra as 1.440 montagens/dia de antes.
+   */
+  private async montarSeMudou(): Promise<any[]> {
+    const cacheado = this.cacheCatalogo?.pecas;
+    if (cacheado?.length) {
+      try {
+        const digital = await this.digitalAtual();
+        const dentroDoTeto =
+          Date.now() - (this.montadoEm || 0) < LojaCatalogService.TTL_FUNDO;
+        if (digital && digital === this.digitalDoCatalogo && dentroDoTeto) {
+          return cacheado; // nada mudou — o resultado seria idêntico
+        }
+      } catch (err) {
+        // Impressão digital é otimização, não regra: se falhar, monta.
+        this.logger.warn(`[catalogo] impressão digital falhou, remontando: ${String(err)}`);
+      }
+    }
+
+    await this.carimbarSeNecessario();
+    const pecas = await this.eventLoop.medir('catalogo:montar', () => this.montarCatalogo());
+    this.montadoEm = Date.now();
+    try {
+      this.digitalDoCatalogo = (await this.digitalAtual()) || '';
+    } catch {
+      this.digitalDoCatalogo = ''; // sem digital, a próxima remonta — é o comportamento antigo
+    }
+    return pecas;
+  }
+
+  /** Teto: remonta de tempos em tempos mesmo sem mudança em `site_produto`. */
+  private static readonly TTL_FUNDO = 10 * 60_000;
+  private montadoEm = 0;
+
+  private async digitalAtual(): Promise<string | null> {
+    const linhas: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT COUNT(*)::text AS n, COALESCE(MAX(updated_at), MAX(synced_at))::text AS ult
+         FROM site_produto WHERE publicado = true`,
+    );
+    const r = linhas?.[0];
+    if (!r) return null;
+    return `${r.n}|${r.ult ?? ''}`;
+  }
+
+  /**
+   * O carimbo de `publicado_em` só quando há o que carimbar.
+   *
+   * Antes rodava em TODA montagem. O `count` abaixo é servido por índice e
+   * responde em microssegundos; os dois `UPDATE` que ele evita varrem
+   * `site_produto` e, num deles, `product_photos` por linha.
+   */
+  private async carimbarSeNecessario(): Promise<void> {
+    try {
+      const linhas: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT COUNT(*)::int AS n FROM site_produto
+          WHERE publicado = true AND publicado_em IS NULL`,
+      );
+      if (!Number(linhas?.[0]?.n)) return;
+      await this.carimbarPublicadoEm();
+    } catch (err) {
+      this.logger.warn(`[catalogo] conferência do carimbo falhou: ${String(err)}`);
+    }
   }
 
   /**
@@ -1898,14 +2069,24 @@ export class LojaCatalogService {
      * permite conferir a peça antes de publicar).
      */
     const semFoto = pecas.filter((p) => !p.imagens.length);
-    if (semFoto.length) {
-      this.logger.warn(
-        `[catalogo] ${semFoto.length} REF(s) publicada(s) sem foto — fora da vitrine: ` +
-          semFoto.slice(0, 15).map((p) => p.ref).join(', '),
-      );
+    // Mesma regra do aviso de REF reciclada: só fala quando a lista MUDA. Era
+    // uma linha por montagem — 1.440 por dia dizendo exatamente a mesma coisa.
+    const assinaturaSemFoto = semFoto.map((p) => p.ref).sort().join(',');
+    if (assinaturaSemFoto !== this.assinaturaSemFoto) {
+      this.assinaturaSemFoto = assinaturaSemFoto;
+      if (semFoto.length) {
+        this.logger.warn(
+          `[catalogo] ${semFoto.length} REF(s) publicada(s) sem foto — fora da vitrine: ` +
+            semFoto.slice(0, 15).map((p) => p.ref).join(', '),
+        );
+      }
     }
+    this.reportarRecicladas();
     return pecas.filter((p) => p.imagens.length > 0);
   }
+
+  /** Assinatura da última lista de "publicada sem foto" reportada. */
+  private assinaturaSemFoto = '';
 
   /** Listagem paginada — o que a página de categoria e a busca consomem. */
   async listar(params: ListarParams) {

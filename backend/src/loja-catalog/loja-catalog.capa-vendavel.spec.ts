@@ -1,4 +1,5 @@
 import { LojaCatalogService } from './loja-catalog.service';
+import { eventLoopStub } from './event-loop.stub';
 
 /**
  * A CAPA DO CARD É DA COR QUE DÁ PRA COMPRAR (15/08/2026).
@@ -10,7 +11,7 @@ import { LojaCatalogService } from './loja-catalog.service';
  * estavam assim no dia da medição.
  */
 
-const svc = new LojaCatalogService({} as any, {} as any) as any;
+const svc = new LojaCatalogService({} as any, {} as any, eventLoopStub) as any;
 
 const linha = (over: Partial<any> = {}) => ({
   ref: 'VLM-222', codigo: '1001', cor: 'PRETO', tamanho: '46', marca: 'MARRIE',
