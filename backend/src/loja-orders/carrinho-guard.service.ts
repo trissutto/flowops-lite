@@ -96,10 +96,34 @@ export interface ItemConferido {
   ref: string;
 }
 
+/**
+ * POR QUE o carrinho foi recusado — em código, não em frase (22/08).
+ *
+ * A frase é pra cliente e muda quando a gente quiser; isto é pro funil. Até
+ * agora o `checkout_error` gravava só `reason: catalog_unavailable`, então a
+ * tela de Alertas mostrava "Produto, estoque ou preço alterado" sem dizer
+ * qual das SETE recusas disparou nem em qual peça. Descobrir que era reserva
+ * velha de pedido parado exigiu refazer a conta do guard na mão, no banco.
+ */
+export type MotivoRecusa =
+  | 'sacola_vazia'
+  | 'catalogo_fora'
+  | 'sku_inexistente'
+  | 'despublicada'
+  | 'sem_cor'
+  | 'sem_tamanho'
+  | 'preco_zerado'
+  | 'esgotou'
+  | 'estoque_insuficiente'
+  | 'preco_subiu'
+  /** Não vem do guard: o TETO do `reprecificar` (nossa conta passou do que a cliente leu). */
+  | 'total_acima';
+
 export type ResultadoGuard =
   /** `item` só vem na recusa por PREÇO — as outras recusas (esgotou, saiu do
-   *  site, cor/tamanho sumiu) já dizem o que fazer e não têm valor a corrigir. */
-  | { ok: false; erro: string; item?: ItemRecusado }
+   *  site, cor/tamanho sumiu) já dizem o que fazer e não têm valor a corrigir.
+   *  `motivo`/`ref` vêm SEMPRE: são o que a tela de Alertas lê. */
+  | { ok: false; erro: string; motivo: MotivoRecusa; ref?: string; item?: ItemRecusado }
   | { ok: true; itens: ItemConferido[]; subtotal: number };
 
 /** Linha crua do espelho. */
@@ -280,12 +304,48 @@ export class CarrinhoGuardService {
    */
   private static readonly HORAS_PENDENTE = 0;
 
+  /**
+   * 🔴 TETO DE IDADE DA RESERVA (22/08) — reserva eterna é reserva errada.
+   *
+   * O que aconteceu: 103 pedidos parados em `separating`, o mais antigo de
+   * 27/04 (quase 4 meses), segurando 225 peças. Como `separating` reserva pra
+   * sempre, o disponível de 61 variações ficava <= 0 — e 25 delas tinham peça
+   * DE VERDADE na arara. O checkout recusava com `catalog_unavailable`, a
+   * frase mandava "atualize a página", e atualizar não mudava nada porque a
+   * recusa é server-side e determinística. Caso medido: cliente de anúncio
+   * pago, sacola de 4 peças, 11 tentativas de PIX em 7 minutos, zero compra.
+   *
+   * O conserto NÃO mexe em pedido nenhum (ordem do dono, 22/08: "não mexa em
+   * pedidos em separação"). O pedido continua exatamente como está — o que
+   * muda é que a CONFERÊNCIA DO CARRINHO para de contar reserva velha.
+   * Reversível por env, sem migração e sem UPDATE.
+   *
+   * Por que 15 dias: a separação real leva 4,1 dias em média (medição das 639
+   * caixas em 30 dias) e o lote recente mais antigo tem 7. Quinze dias é o
+   * dobro da pior separação legítima. Medido no banco: destrava 15 das 16
+   * variações que dá pra destravar (10 dias destravaria 16, e 30 só 10) sem
+   * deixar de honrar nenhum pedido dentro do prazo normal.
+   *
+   * O risco assumido é o MESMO que o dono já escolheu pro `HORAS_PENDENTE`:
+   * peça de pedido esquecido pode ser vendida duas vezes e isso tem conserto
+   * (estorno); recusar venda todo dia não tem.
+   *
+   * `CARRINHO_RESERVA_DIAS=0` desliga o teto (volta a reservar pra sempre).
+   */
+  private get diasDeReserva(): number {
+    const v = Number(process.env.CARRINHO_RESERVA_DIAS);
+    return Number.isFinite(v) && v >= 0 ? v : 15;
+  }
+
   private async reservado(codigos: string[]): Promise<Map<string, number>> {
     const vazio = new Map<string, number>();
     if (String(process.env.CARRINHO_RESERVA ?? '1') === '0') return vazio;
     if (!codigos.length) return vazio;
 
     const desde = new Date(Date.now() - CarrinhoGuardService.HORAS_PENDENTE * 3600_000);
+    // Zero = sem teto: uma data no passado remoto faz todo pedido passar.
+    const dias = this.diasDeReserva;
+    const reservaDesde = dias > 0 ? new Date(Date.now() - dias * 86_400_000) : new Date(0);
     try {
       const rows = await this.prisma.$queryRawUnsafe<Array<{ sku: string; qtd: number }>>(
         `
@@ -294,7 +354,7 @@ export class CarrinhoGuardService {
           JOIN orders o ON o.id = oi.order_id
          WHERE oi.sku = ANY($1)
            AND (
-                 o.status = ANY($2)
+                 (o.status = ANY($2) AND o.created_at >= $4)
               OR (o.status = 'pending' AND o.created_at >= $3)
            )
          GROUP BY oi.sku
@@ -302,6 +362,7 @@ export class CarrinhoGuardService {
         codigos,
         CarrinhoGuardService.STATUS_QUE_RESERVAM,
         desde,
+        reservaDesde,
       );
       const m = new Map<string, number>();
       for (const r of rows) m.set(String(r.sku), Number(r.qtd) || 0);
@@ -344,7 +405,7 @@ export class CarrinhoGuardService {
    */
   async conferir(itens: ItemCarrinho[]): Promise<ResultadoGuard> {
     if (!Array.isArray(itens) || !itens.length) {
-      return { ok: false, erro: 'Sua sacola está vazia.' };
+      return { ok: false, motivo: 'sacola_vazia', erro: 'Sua sacola está vazia.' };
     }
 
     const chaves = itens.map((it) => this.normRef(it.sku));
@@ -357,7 +418,7 @@ export class CarrinhoGuardService {
       // Catálogo fora do ar. NÃO cobra no escuro: sem preço de referência, a
       // única coisa que dá pra garantir é que ninguém pagou errado.
       return {
-        ok: false,
+        ok: false, motivo: 'catalogo_fora',
         erro: 'Não conseguimos confirmar os preços da sua sacola agora. Tente de novo em instantes — nada foi cobrado. 💜',
       };
     }
@@ -404,7 +465,7 @@ export class CarrinhoGuardService {
       if (!candidatas.length) {
         this.logger.warn(`[guard] SKU "${it.sku}" não existe no catálogo — pedido recusado`);
         return {
-          ok: false,
+          ok: false, motivo: 'sku_inexistente', ref: chave,
           erro: `Não encontramos mais "${nomePeca}" no nosso catálogo. Atualize a página e monte a sacola de novo. 💜`,
         };
       }
@@ -415,7 +476,7 @@ export class CarrinhoGuardService {
       if (bloqueadas.has(ref)) {
         this.logger.warn(`[guard] REF ${ref} despublicada — pedido recusado`);
         return {
-          ok: false,
+          ok: false, motivo: 'despublicada', ref,
           erro: `"${nomePeca}" saiu do site enquanto você comprava. Remova da sacola pra continuar — e desculpa por isso. 💜`,
         };
       }
@@ -429,7 +490,7 @@ export class CarrinhoGuardService {
         if (!daCor.length) {
           this.logger.warn(`[guard] REF ${ref} sem a cor "${it.color}" no catálogo`);
           return {
-            ok: false,
+            ok: false, motivo: 'sem_cor', ref,
             erro: `A cor escolhida de "${nomePeca}" não está mais disponível. Escolha outra cor pra continuar. 💜`,
           };
         }
@@ -442,7 +503,7 @@ export class CarrinhoGuardService {
         if (!doTam.length) {
           this.logger.warn(`[guard] REF ${ref} sem o tamanho "${it.size}"`);
           return {
-            ok: false,
+            ok: false, motivo: 'sem_tamanho', ref,
             erro: `O tamanho ${it.size} de "${nomePeca}" não está mais disponível. Escolha outro tamanho pra continuar. 💜`,
           };
         }
@@ -461,7 +522,7 @@ export class CarrinhoGuardService {
       if (!precos.length) {
         this.logger.error(`[guard] REF ${ref} com preço zerado no catálogo — pedido recusado`);
         return {
-          ok: false,
+          ok: false, motivo: 'preco_zerado', ref,
           erro: `"${nomePeca}" está com o preço em atualização. Tente de novo em instantes ou fale com a gente pelo WhatsApp. 💜`,
         };
       }
@@ -504,13 +565,13 @@ export class CarrinhoGuardService {
       }
       if (estoque <= 0) {
         return {
-          ok: false,
+          ok: false, motivo: 'esgotou', ref,
           erro: `"${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''} acabou de esgotar. Remova da sacola pra fechar o resto do pedido. 💜`,
         };
       }
       if (estoque < qtd) {
         return {
-          ok: false,
+          ok: false, motivo: 'estoque_insuficiente', ref,
           erro:
             estoque === 1
               ? `Sobrou só 1 unidade de "${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''}. Ajuste a quantidade pra continuar. 💜`
@@ -540,7 +601,7 @@ export class CarrinhoGuardService {
           );
           const brl = (v: number) => v.toFixed(2).replace('.', ',');
           return {
-            ok: false,
+            ok: false, motivo: 'preco_subiu', ref,
             erro:
               `O preço de "${nomePeca}" passou de R$ ${brl(precoInformado)} para R$ ${brl(precoCatalogo)} enquanto você comprava. ` +
               `Confira o novo total antes de pagar — se a sacola não atualizar, remova a peça e adicione de novo. 💜`,

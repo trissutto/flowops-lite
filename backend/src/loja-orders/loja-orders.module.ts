@@ -20,6 +20,7 @@ import { EmailModule } from '../email/email.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from './pedido-email.service';
 import { PixResgateCron } from './pix-resgate.cron';
+import { PedidoExpiraCron } from './pedido-expira.cron';
 import { ProgressiveDiscountModule } from '../progressive-discount/progressive-discount.module';
 
 /**
@@ -57,6 +58,7 @@ import { ProgressiveDiscountModule } from '../progressive-discount/progressive-d
     PedidoEmailService,
     // Resgate do PIX não pago: toque único aos 30min, dentro da validade.
     PixResgateCron,
+    PedidoExpiraCron,
   ],
   exports: [LojaOrdersService, CupomService],
 })

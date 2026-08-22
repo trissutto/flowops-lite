@@ -183,6 +183,16 @@ export class OrderStoreError extends Error {
      * emite antes de criar o pedido.
      */
     readonly quote?: QuoteAtualizada,
+    /**
+     * A CAUSA EXATA da recusa e a REF, vindas do guard do backend (22/08).
+     *
+     * Nunca chegam na tela — a frase da cliente é o `publico`. Isto sobe pro
+     * `checkout_error` do funil: o `code` junta SETE recusas diferentes sob
+     * `catalog_unavailable`, e sem o motivo a tela de Alertas mostra só
+     * "Produto, estoque ou preço alterado", sem dizer o que de fato houve.
+     */
+    readonly motivo?: string,
+    readonly ref?: string,
   ) {
     super(tecnico);
     this.name = 'OrderStoreError';
@@ -245,6 +255,9 @@ type BackendEnvelope = {
   item?: unknown;
   /** `shipping_changed` do backend (só o frete subiu): a cotação que vale agora. */
   quote?: unknown;
+  /** Causa exata da recusa (guard) e a REF — só pro funil, nunca pra tela. */
+  motivo?: unknown;
+  ref?: unknown;
 };
 
 /** `body.quote` de `shipping_changed` → cotação nova, ou `undefined` sem o shape. */
@@ -441,6 +454,9 @@ class BackendOrderStore implements OrderStore {
         code === 'catalog_unavailable' ? itemRecusado(body.item) : undefined,
         // Idem: cotação nova só acompanha `shipping_changed`.
         code === 'shipping_changed' ? quoteAtualizada(body.quote) : undefined,
+        // Causa/REF são diagnóstico: vêm em qualquer recusa que o guard emita.
+        typeof body.motivo === 'string' ? body.motivo : undefined,
+        typeof body.ref === 'string' ? body.ref : undefined,
       );
     }
 

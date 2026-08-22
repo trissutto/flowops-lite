@@ -779,7 +779,23 @@ export class SiteMetricsService {
               falhas AS (
                 SELECT e.*,
                        COALESCE(e.dados->>'reason', e.dados->>'method', e.dados->>'section', 'sem_codigo') AS codigo,
-                       CASE WHEN e.dados ? 'field' THEN e.dados->>'field' ELSE NULL END AS campo,
+                       /* A CAUSA EXATA quando não há campo (22/08): o código
+                          catalog_unavailable cobre SETE recusas do guard e a
+                          tela mostrava as sete numa linha só. O motivo entra
+                          na MESMA coluna do field — os dois respondem "o que
+                          exatamente reprovou", um nível abaixo do código, e
+                          nunca vêm juntos no mesmo evento. A REF vai colada,
+                          que é o que deixa ir direto na peça.
+                          Sem crase aqui dentro: este SQL mora num template
+                          literal e a crase fecharia a string (quebrou o build
+                          em 22/08). */
+                       CASE
+                         WHEN e.dados ? 'field' THEN e.dados->>'field'
+                         WHEN e.dados ? 'motivo' THEN
+                           e.dados->>'motivo' ||
+                           COALESCE(' · ' || NULLIF(e.dados->>'ref', ''), '')
+                         ELSE NULL
+                       END AS campo,
                        CASE e.evento
                          WHEN 'add_to_cart_blocked' THEN 1
                          WHEN 'checkout_validation_error' THEN 3

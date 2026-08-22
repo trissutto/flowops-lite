@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
-import { CarrinhoGuardService, ItemRecusado } from './carrinho-guard.service';
+import { CarrinhoGuardService, ItemRecusado, MotivoRecusa } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
 import { PersonIdentityService } from '../person-identity/person-identity.service';
@@ -183,6 +183,21 @@ export interface CriarPedidoResult {
    * vez do beco "atualize a página". Opcional pelo mesmo motivo do `item`.
    */
   quote?: { id: string; label: string; price: number; etaDays: { min: number; max: number } | null };
+  /**
+   * POR QUE recusou, em código — e em qual REF (22/08).
+   *
+   * O `code` diz a FAMÍLIA do erro: `catalog_unavailable` sozinho cobre SETE
+   * causas (preço zerado, preço que subiu, cor sumiu, tamanho sumiu, peça
+   * despublicada, esgotou, estoque insuficiente). O `motivo` diz qual delas.
+   *
+   * Vai pro `checkout_error` do funil, NÃO pra tela da cliente — a frase dela
+   * já vem pronta em `error`. Sem isto, a tela de Alertas mostra "Produto,
+   * estoque ou preço alterado" e ninguém consegue dizer o que aconteceu:
+   * descobrir que a causa era reserva velha de pedido parado exigiu refazer a
+   * conta do guard na mão, direto no banco (22/08).
+   */
+  motivo?: MotivoRecusa;
+  ref?: string;
 }
 
 /* ─────────────────────────────── SERVICE ──────────────────────────────── */
@@ -403,7 +418,7 @@ export class LojaOrdersService {
    * na tela é o erro que não se desfaz com pedido de desculpas.
    */
   private async reprecificar(input: CriarPedidoInput): Promise<
-    | { ok: false; erro: string; code: CheckoutErrorCode; item?: ItemRecusado; quote?: CriarPedidoResult['quote'] }
+    | { ok: false; erro: string; code: CheckoutErrorCode; item?: ItemRecusado; motivo?: MotivoRecusa; ref?: string; quote?: CriarPedidoResult['quote'] }
     | {
         ok: true;
         subtotal: number;
@@ -425,6 +440,10 @@ export class LojaOrdersService {
         ok: false,
         erro: conferencia.erro,
         code: 'catalog_unavailable',
+        // A causa exata e a peça, pro funil (22/08) — `code` sozinho junta
+        // sete recusas diferentes num rótulo só.
+        motivo: conferencia.motivo,
+        ...(conferencia.ref ? { ref: conferencia.ref } : {}),
         ...(conferencia.item ? { item: conferencia.item } : {}),
       };
     }
@@ -609,6 +628,7 @@ export class LojaOrdersService {
         ok: false,
         erro: 'Os valores da sacola mudaram desde que você abriu o checkout. Atualize a página e confira antes de pagar. 💜',
         code: 'catalog_unavailable',
+        motivo: 'total_acima',
       };
     }
     if (informado > 0 && Math.abs(total - informado) > LojaOrdersService.TOLERANCIA) {
@@ -1547,6 +1567,10 @@ export class LojaOrdersService {
         ok: false,
         error: conta.erro,
         code: conta.code,
+        // Causa exata + peça: é o que o `checkout_error` grava pra tela de
+        // Alertas parar de ser cega (22/08).
+        ...(conta.motivo ? { motivo: conta.motivo } : {}),
+        ...(conta.ref ? { ref: conta.ref } : {}),
         ...(conta.item ? { item: conta.item } : {}),
         ...(conta.quote ? { quote: conta.quote } : {}),
       };

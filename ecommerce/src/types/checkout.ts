@@ -202,6 +202,15 @@ export interface CreateOrderResult {
   item?: { productId: string; size: string; color?: string; precoAtual: number };
   /** Só em `shipping_changed`: a cotação que vale agora (17/08). */
   quote?: { id: string; label: string; price: number; etaDays: { min: number; max: number } | null };
+  /**
+   * A CAUSA EXATA da recusa e a REF (22/08) — diagnóstico do funil, não texto
+   * de tela. `code: 'catalog_unavailable'` cobre sete recusas do guard, e a
+   * tela de Alertas mostrava as sete como "Produto, estoque ou preço
+   * alterado": ninguém conseguia dizer se era preço, cor, tamanho,
+   * despublicação ou estoque preso em reserva velha.
+   */
+  motivo?: string;
+  ref?: string;
 }
 
 /** GET /api/checkout/:id/status — resposta (poll do PIX). */
