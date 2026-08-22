@@ -427,7 +427,15 @@ export default function CheckoutPage() {
         setFailureCount(attempt);
         setLastErrorCode(code);
         const field = result?.field;
-        trackCheckoutError(pagamento.method, code, { stage: 'submission', attempt, field });
+        // `motivo`/`ref` (22/08): qual das sete recusas do guard e em que peça.
+        // Só medição — a frase que a cliente lê continua vindo de `error`.
+        trackCheckoutError(pagamento.method, code, {
+          stage: 'submission',
+          attempt,
+          field,
+          motivo: result?.motivo,
+          ref: result?.ref,
+        });
         if (code === 'card_declined') trackCardDeclined(attempt);
 
         // O FRETE SUBIU ENTRE A TELA E O PEDIDO: o BFF recusou ANTES de criar

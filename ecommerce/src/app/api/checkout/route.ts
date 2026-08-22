@@ -505,6 +505,13 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
           // já trata (atualiza a entrega, pede confirmação). Mesma resposta
           // que este BFF dá no pré-check acima — a cliente não distingue.
           ...(err.quote ? { quote: err.quote } : {}),
+          // A CAUSA EXATA (22/08): `catalog_unavailable` cobre sete recusas
+          // do guard (preço zerado, preço que subiu, cor/tamanho que sumiu,
+          // despublicada, esgotou, estoque insuficiente) e a tela de Alertas
+          // mostrava as sete na mesma linha. Vai pro `checkout_error`, não
+          // pra tela — a frase da cliente continua sendo `error`.
+          ...(err.motivo ? { motivo: err.motivo } : {}),
+          ...(err.ref ? { ref: err.ref } : {}),
         },
         { status: err.status },
       );

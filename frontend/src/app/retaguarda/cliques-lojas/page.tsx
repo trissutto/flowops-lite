@@ -1808,8 +1808,27 @@ const ROTULOS_CAMPO: Record<string, string> = {
   item_size: 'tamanho da peça', item_image_src: 'foto da peça', item_unitPrice: 'preço da peça',
   item_name: 'nome da peça', item_quantity: 'quantidade', item_color: 'cor da peça',
   backend_validacao: 'recusado na validação do backend',
+  // A CAUSA EXATA da recusa do carrinho (22/08). "Produto, estoque ou preço
+  // alterado" é uma FAMÍLIA de sete recusas do guard, e mostrar as sete na
+  // mesma linha escondeu por meses uma cliente de anúncio pago tentando o PIX
+  // 11 vezes contra estoque preso em reserva de pedido parado.
+  sacola_vazia: 'sacola chegou vazia',
+  catalogo_fora: 'catálogo fora do ar',
+  sku_inexistente: 'peça não existe mais no catálogo',
+  despublicada: 'peça saiu do site durante a compra',
+  sem_cor: 'a cor sumiu do catálogo',
+  sem_tamanho: 'o tamanho sumiu do catálogo',
+  preco_zerado: 'preço zerado no cadastro',
+  esgotou: 'esgotou (ou preso em reserva de pedido parado)',
+  estoque_insuficiente: 'estoque menor que a quantidade pedida',
+  preco_subiu: 'preço subiu entre a sacola e o pagamento',
+  total_acima: 'nossa conta passou do total que a cliente viu',
 };
 
 function rotuloCampo(campo: string): string {
-  return ROTULOS_CAMPO[campo] ?? campo;
+  // A causa do carrinho vem com a REF colada ("esgotou · BMM-100", 22/08):
+  // traduz a causa e mantém a peça, que é o que faz alguém ir olhar a peça.
+  const [causa, ...resto] = campo.split(' · ');
+  const traduzida = ROTULOS_CAMPO[causa] ?? causa;
+  return resto.length ? `${traduzida} · ${resto.join(' · ')}` : traduzida;
 }

@@ -243,7 +243,7 @@ export const trackCheckoutSubmission = (method: 'pix' | 'card') =>
 export const trackCheckoutError = (
   method: 'pix' | 'card',
   reason: CheckoutErrorCode,
-  context?: { stage?: string; order_id?: string; attempt?: number; field?: string },
+  context?: { stage?: string; order_id?: string; attempt?: number; field?: string; motivo?: string; ref?: string },
 ) => track('checkout_error', {
   method,
   reason,
@@ -254,6 +254,17 @@ export const trackCheckoutError = (
   // painel dizer "Dados do pedido incompletos · número" em vez de só a
   // primeira metade.
   ...(context?.field ? { field: context.field } : {}),
+  /**
+   * A CAUSA EXATA e a PEÇA (22/08) — mesma ideia do `field`, um nível acima.
+   *
+   * `reason: catalog_unavailable` junta SETE recusas do guard num rótulo só,
+   * e a tela de Alertas mostrava as sete como "Produto, estoque ou preço
+   * alterado". Uma cliente de anúncio pago tentou o PIX 11 vezes em 7 minutos
+   * contra essa mesma parede e descobrir a causa (reserva velha de pedido
+   * parado) exigiu refazer a conta do guard direto no banco.
+   */
+  ...(context?.motivo ? { motivo: context.motivo } : {}),
+  ...(context?.ref ? { ref: context.ref } : {}),
 });
 export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
   track('checkout_validation_error', { section, field: field.slice(0, 40) });
