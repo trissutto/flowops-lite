@@ -1,5 +1,8 @@
 {
   "functions": {
-    "src/app/api/**/route.ts": { "maxDuration": 60 }
-  }
+    "src/app/api/**/route.ts": {
+      "maxDuration": 60
+    }
+  },
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ':/imoveis-publico'"
 }
