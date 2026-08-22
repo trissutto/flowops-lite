@@ -40,7 +40,31 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
         database: this.config.get<string>('ERP_DATABASE'),
         waitForConnections: true,
         connectionLimit: 2,
-        queueLimit: 0,
+        /**
+         * ⚠️ FILA FINITA. Era `0` — que no mysql2 quer dizer ILIMITADA, não
+         * "sem fila".
+         *
+         * O host aqui (`ERP_HOST`) está VIVO — não confundir com o
+         * `WP_DB_HOST`, que é outro servidor e esse sim está fora do ar. O
+         * problema não é o host estar morto: é o modo como ele MORRE.
+         *
+         * O CLAUDE.md registra que o Giga **PENDURA** em vez de dar erro
+         * quando o firewall por IP da KingHost derruba o IP dinâmico do
+         * Railway — `.catch` não pega, porque não há erro; a conexão só não
+         * volta. Foi assim que a live de 01/07 caiu. Com fila ILIMITADA, um
+         * pendurado desses não fica contido: cada chamada nova entra na fila
+         * pra esperar uma das 2 conexões que nunca vão vagar, e a fila cresce
+         * sem teto até levar o processo junto.
+         *
+         * Fila finita transforma "app congela" em "esta chamada falhou" — que
+         * é um resultado que o chamador já sabe tratar: os dois métodos
+         * públicos daqui fazem catch por chunk e devolvem Map, então a peça
+         * sai sem preço em vez de derrubar a tela.
+         *
+         * Teto baixo de propósito: com 2 conexões, fila de 10 já é mais espera
+         * do que qualquer chamador destas telas tolera.
+         */
+        queueLimit: 10,
         connectTimeout: 12000,
       });
       this.logger.log(`pool pricing inicializado (host=${host})`);
