@@ -80,4 +80,114 @@ export class DiagnosticoBancoController {
     );
     return { tabela: alvo, constraints, indices, triggers };
   }
+
+  /**
+   * QUEM ESTÁ SENDO VARRIDO — responde "por que a consulta demora".
+   *
+   * ── A PERGUNTA (22/08/2026) ──
+   *
+   * `/api/products/store-search` — a busca de produto que a vendedora usa com
+   * a cliente na frente — leva **2,1s de mediana**. A tabela `wincred_produtos`
+   * tem 353 mil linhas e um índice em `ref`, então "parece" resolvido.
+   *
+   * Só que o Prisma traduz `startsWith` pra `LIKE 'termo%'`, e no Postgres
+   * `LIKE` com prefixo **só usa índice btree se a collation do banco for C/POSIX
+   * ou se o índice tiver sido criado com `varchar_pattern_ops`**. Com collation
+   * normal (pt_BR/en_US.UTF-8), o índice é ignorado e vira varredura completa —
+   * o índice existe, aparece na lista, e não serve pra essa consulta.
+   *
+   * ── COMO ISTO RESPONDE ──
+   *
+   * `seq_scan` vs `idx_scan` do `pg_stat_user_tables` não deixa dúvida: é a
+   * contagem real de varreduras desde o último reset. Tabela grande com
+   * `seq_scan` alto e `linhasPorVarredura` na casa das centenas de milhares
+   * está sendo lida inteira, toda vez.
+   *
+   * `collation` no retorno é o que decide se `LIKE` pode ou não usar índice.
+   *
+   * Tudo metadado do próprio Postgres — nenhuma linha de cliente sai daqui.
+   */
+  @Get('varreduras')
+  async varreduras(@Req() req: any) {
+    this.admin(req);
+
+    const [banco] = await this.prisma.$queryRawUnsafe<
+      Array<{ collation: string; ctype: string; versao: string }>
+    >(
+      `SELECT datcollate AS collation, datctype AS ctype, version() AS versao
+         FROM pg_database WHERE datname = current_database()`,
+    );
+
+    /**
+     * `LIKE 'x%'` só usa btree se a collation for C/POSIX. Fora disso, o índice
+     * precisa de `varchar_pattern_ops` — e é isso que a lista `indicesDeUmPrefixo`
+     * abaixo mostra que existe (ou não).
+     */
+    const likeUsaIndice = /^(C|POSIX)(\.|$)/i.test(String(banco?.collation || ''));
+
+    const tabelas = await this.prisma.$queryRawUnsafe<
+      Array<{
+        tabela: string;
+        varreduraCompleta: number;
+        porIndice: number;
+        linhas: number;
+        linhasLidasVarrendo: number;
+      }>
+    >(
+      `SELECT relname                              AS tabela,
+              COALESCE(seq_scan, 0)::int           AS "varreduraCompleta",
+              COALESCE(idx_scan, 0)::int           AS "porIndice",
+              COALESCE(n_live_tup, 0)::int         AS linhas,
+              COALESCE(seq_tup_read, 0)::bigint    AS "linhasLidasVarrendo"
+         FROM pg_stat_user_tables
+        WHERE COALESCE(n_live_tup, 0) > 1000
+        ORDER BY COALESCE(seq_tup_read, 0) DESC
+        LIMIT 20`,
+    );
+
+    /** Índices que NUNCA foram usados — custam escrita e não pagam leitura. */
+    const indicesInuteis = await this.prisma.$queryRawUnsafe(
+      `SELECT relname AS tabela, indexrelname AS indice,
+              pg_size_pretty(pg_relation_size(indexrelid)) AS tamanho
+         FROM pg_stat_user_indexes
+        WHERE idx_scan = 0
+          AND pg_relation_size(indexrelid) > 1048576
+        ORDER BY pg_relation_size(indexrelid) DESC
+        LIMIT 20`,
+    );
+
+    /** Os índices que servem pra `LIKE 'prefixo%'` em collation normal. */
+    const indicesDeUmPrefixo = await this.prisma.$queryRawUnsafe(
+      `SELECT c.relname AS tabela, i.relname AS indice, am.amname AS tipo
+         FROM pg_index x
+         JOIN pg_class c  ON c.oid = x.indrelid
+         JOIN pg_class i  ON i.oid = x.indexrelid
+         JOIN pg_am   am  ON am.oid = i.relam
+         JOIN pg_opclass op ON op.oid = ANY(x.indclass::oid[])
+        WHERE op.opcname IN ('varchar_pattern_ops', 'text_pattern_ops', 'bpchar_pattern_ops')
+        ORDER BY c.relname`,
+    );
+
+    return {
+      banco: {
+        collation: banco?.collation,
+        ctype: banco?.ctype,
+        /**
+         * false = todo `startsWith`/`LIKE 'x%'` do Prisma ignora os índices
+         * normais e varre a tabela inteira, por mais índice que ela tenha.
+         */
+        likeDePrefixoUsaIndiceComum: likeUsaIndice,
+      },
+      /** As linhas mais lidas por varredura completa — o topo é o gargalo. */
+      tabelas: tabelas.map((t) => ({
+        ...t,
+        linhasPorVarredura:
+          t.varreduraCompleta > 0
+            ? Math.round(Number(t.linhasLidasVarrendo) / t.varreduraCompleta)
+            : 0,
+      })),
+      indicesDeUmPrefixo,
+      indicesInuteis,
+    };
+  }
 }
