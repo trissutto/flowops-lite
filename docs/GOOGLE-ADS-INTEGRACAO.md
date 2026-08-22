@@ -190,22 +190,63 @@ as vendas pagas via `uploadClickConversions`, casando pelo **`gclid`**:
   próxima rodada em vez de sumir.
 - Hora da conversão = `paidAt` (não `createdAt`), com fuso explícito.
 
-Envs: `GOOGLE_ADS_CONVERSAO_ACTION_ID` (na conta 892-523-1246, a `Compra [OK]`
-é **6807548872** — o "Código do tipo de conversão" na ficha dela),
+### 🚨 A ação de conversão tem que ser do tipo `UPLOAD_CLICKS`
+
+A doc é categórica: *"The conversion action must have a `type` of
+`UPLOAD_CLICKS`."* A `Compra [OK]` (6807548872) nasceu como conversão de **site**
+(gtag/GTM), então é `type=WEBPAGE` e recusa **100%** do lote com
+`INVALID_CONVERSION_ACTION_TYPE` — sempre, para sempre. E a recusa é
+**silenciosa**: HTTP 200 com `results` cheio de objetos vazios.
+
+**Criar a ação certa:** Ferramentas → Conversões → **Nova ação de conversão** →
+**Importar** → Outras fontes de dados ou CRM → **Acompanhar conversões de
+cliques**. Nasce `UPLOAD_CLICKS`. É ação NOVA — não dá para converter a antiga.
+
+⚠️ Ação recém-criada só aceita upload **6 horas depois** de existir
+(`TOO_RECENT_CONVERSION_ACTION`). Criar hoje, ligar amanhã.
+
+O serviço confere o tipo antes do primeiro envio (1 operação) e **se recusa a
+arrancar** se estiver errado — o log diz exatamente o quê.
+
+Envs: `GOOGLE_ADS_CONVERSAO_ACTION_ID` (a ação UPLOAD_CLICKS nova),
 `GOOGLE_ADS_CONVERSAO_CONTA` e o kill-switch `GOOGLE_ADS_CONVERSAO_UPLOAD`.
 
-Teste manual, sem esperar o cron:
+### A ordem de ligar
+
+**1. Validar sem gravar nada** (`validateOnly` da API — o Google confere e não
+registra):
+
+```bash
+curl -X POST "https://SEU-BACKEND/site-metrics/google-ads/conversoes?validar=1" -H "Authorization: Bearer SEU_JWT"
+```
+
+**2. Só depois, valendo:**
 
 ```bash
 curl -X POST "https://SEU-BACKEND/site-metrics/google-ads/conversoes" -H "Authorization: Bearer SEU_JWT"
 ```
 
+### O que o nível do token permite
+
+`Acesso às Análises` no painel é o **Explorer** da documentação (a versão pt-BR
+chama de "acesso de exploração"). Ele **alcança contas de produção** e **não é
+somente-leitura** — `ConversionUploadService` não está entre os serviços
+restritos. O gargalo é outro: **2.880 operações/dia**, em janela deslizante de
+24h, **compartilhadas entre leitura e escrita**. Por isso o cron de conversão é
+de hora em hora, e não de 10 em 10 minutos: cada ciclo a mais é cota a menos
+para o espelho de gasto, e `RESOURCE_EXHAUSTED` derrubaria os dois. Basic Access
+sobe para 15.000/dia e leva ~5 dias úteis.
+
+⚠️ **Corte de 15/06/2026:** o Google passou a recusar `UploadClickConversions`
+de developer token que **nunca** subiu conversão offline antes dessa data,
+mandando usar a **Data Manager API**. Como este token nasceu depois, é possível
+que caia nesse corte — o passo 1 (validar) responde isso sem sujar a conta.
+
 ⚠️ **Só vale daqui pra frente.** Pedido fechado antes deste deploy não tem
 `gclid` gravado e não há como recuperá-lo.
 
-⚠️ **Depois que isto estiver enviando, a ação que recebe o upload precisa virar
-principal** — e a do GA4, secundária. Duas principais medindo a mesma compra
-contam a venda em dobro.
+⚠️ **Depois que estiver enviando, a ação que recebe o upload vira principal** —
+e a do GA4, secundária. Duas principais medindo a mesma compra contam em dobro.
 
 ## O que NÃO vai bater — e está certo assim
 

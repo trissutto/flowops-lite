@@ -83,7 +83,7 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `GOOGLE_ADS_CONTAS` | — | `customer_id` sem hífen, separados por vírgula. Contas da conexão: `8681042744` (Ecomm 2024), `8925231246` (Plus Size Ecomm), `9564998046` (Lojas físicas) |
 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | — | Id do MCC (provavelmente `1458258153`). Só quando a conta lida está dentro de um centro de clientes |
 | `GOOGLE_ADS_API_VERSION` | `v25` | Versão da API. Vive ~1 ano e o endpoint some com 404 seco — subir aqui evita deploy de código |
-| `GOOGLE_ADS_CONVERSAO_ACTION_ID` | — | Id da AÇÃO de conversão que recebe a venda pelo servidor (`Compra [OK]` da conta 892-523-1246 = `6807548872`). SEM ela o upload não roda — subir pra ação errada não tem desfazer |
+| `GOOGLE_ADS_CONVERSAO_ACTION_ID` | — | Id de uma ação de conversão do tipo **UPLOAD_CLICKS** (Ferramentas → Conversões → Nova → **Importar** → Outras fontes de dados/CRM → Acompanhar conversões de cliques). 🚨 **A ação do gtag/GTM NÃO serve** — `Compra [OK]` (6807548872) é `WEBPAGE` e recusa 100% do lote com `INVALID_CONVERSION_ACTION_TYPE`, respondendo HTTP 200. O serviço confere o tipo e se recusa a arrancar |
 | `GOOGLE_ADS_CONVERSAO_CONTA` | 1ª de `GOOGLE_ADS_CONTAS` | Conta dona da ação de conversão, quando não for a primeira da lista |
 | `GOOGLE_ADS_CONVERSAO_UPLOAD` | on | `0` desliga o envio de conversão pro Google (o espelho de gasto continua) |
 

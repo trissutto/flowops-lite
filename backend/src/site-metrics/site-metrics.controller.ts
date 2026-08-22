@@ -148,7 +148,11 @@ export class SiteMetricsController {
    * fora da janela da ação de conversão, e ela vem escrita na resposta.
    */
   @Post('google-ads/conversoes')
-  async enviarConversoesGoogleAds(@Req() req: any, @Query('limite') limite?: string) {
+  async enviarConversoesGoogleAds(
+    @Req() req: any,
+    @Query('limite') limite?: string,
+    @Query('validar') validar?: string,
+  ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
     if (!this.googleAdsConversao.configurado()) {
       return {
@@ -158,10 +162,15 @@ export class SiteMetricsController {
       };
     }
     try {
-      const enviadas = await this.googleAdsConversao.enviarPendentes(
+      // `?validar=1` roda com `validateOnly` da API: o Google confere tudo e
+      // NÃO grava nada. É o primeiro comando a rodar depois de configurar —
+      // descobre se o token e a ação prestam sem sujar a conta com conversão
+      // errada, que não tem desfazer.
+      const r = await this.googleAdsConversao.enviarPendentes(
         Math.min(Math.max(Number(limite) || 200, 1), 2000),
+        validar === '1' || validar === 'true',
       );
-      return { ok: true, configurado: true, enviadas };
+      return { ok: !r.erro, configurado: true, ...r };
     } catch (err) {
       return { ok: false, configurado: true, erro: String(err).slice(0, 500) };
     }

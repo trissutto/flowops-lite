@@ -444,6 +444,18 @@ model Order {
   /// do cron. O Google também deduplica por `orderId`, mas depender da garantia
   /// do outro é o mesmo erro do outbox do PDV confiar no Giga.
   adsConversaoEnviadaEm DateTime? @map("ads_conversao_enviada_em")
+  /// Quantas vezes o Google já recusou este pedido.
+  ///
+  /// Sem contador, recusa DEFINITIVA vira retry eterno: o cron busca sempre os
+  /// mais antigos não enviados, então um punhado de pedidos recusados para
+  /// sempre entope o lote e a venda nova nunca sobe — o feature morre calado
+  /// fazendo exatamente o oposto do que existe pra fazer. Pior: o teto diário
+  /// de operações do token é COMPARTILHADO com o espelho de gasto, então a
+  /// fila entupida também derruba a tela de ROAS.
+  adsConversaoTentativas Int @default(0) @map("ads_conversao_tentativas")
+  /// A última recusa, como veio do Google. É o que distingue "tenta de novo"
+  /// (rede) de "nunca mais" (clique expirado, ação de tipo errado).
+  adsConversaoErro String? @map("ads_conversao_erro")
   // ── Atribuição de venda (atendente que iniciou o contato — cliente fecha no site) ──
   // Marcação manual via UI (operadora matriz). Relatório mensal soma por vendedora.
   sellerId        String?   @map("seller_id")
