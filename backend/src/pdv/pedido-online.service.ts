@@ -191,12 +191,34 @@ export class PedidoOnlineService {
     return !qualquer;
   }
 
-  /** SKUs (com quantidade) que a loja NÃO cobre. Vazio = tem tudo. */
-  private async faltamNaLoja(pecas: any[], storeCode: string): Promise<string[]> {
+  /**
+   * O que a loja TEM DE VERDADE pras peças desta venda: espelho
+   * `wincred_estoque` MENOS as peças já prometidas a cards de separação
+   * abertos nela.
+   *
+   * PEÇA PROMETIDA NÃO É PEÇA DISPONÍVEL (22/08, ordem do dono). O estoque só
+   * desce quando a vendedora BIPA — até lá o espelho conta a peça que já tem
+   * dono, e sem descontar aqui o auto-atende abre um SEGUNDO card pra mesma
+   * peça (e o motoboy sai prometendo peça de outro pedido). Mesma conta do
+   * roteamento (`RoutingService.getCommittedStock`), pra que a decisão de
+   * quem separa não dependa de qual porta o pedido entrou.
+   *
+   * @returns `porSku` = o que a venda pede · `disponivel` = o que sobra (líquido).
+   */
+  private async disponivelNaLoja(
+    pecas: any[],
+    storeCode: string,
+  ): Promise<{ porSku: Map<string, number>; disponivel: Map<string, number> }> {
     const porSku = new Map<string, number>();
+    // O `sku` do OrderItem é o do PDV, cru; o espelho normaliza sem zeros à
+    // esquerda. Manda as duas formas pro comprometido e casa na volta.
+    const skusCrus = new Set<string>();
     for (const it of pecas) {
       const sku = this.semZeros(it.sku);
       porSku.set(sku, (porSku.get(sku) || 0) + Number(it.qty || 1));
+      const cru = String(it.sku ?? '').trim();
+      if (cru) skusCrus.add(cru);
+      if (sku) skusCrus.add(sku);
     }
     const lojaAlvo = this.semZeros(storeCode);
     const est: any[] = await (this.prisma as any).wincredEstoque.findMany({
@@ -209,6 +231,29 @@ export class PedidoOnlineService {
       const c = this.semZeros(r.codigo);
       disponivel.set(c, (disponivel.get(c) || 0) + (Number(r.estoque) || 0));
     }
+
+    // Falha aqui NÃO trava a venda: sem o comprometido a conta volta a ser a
+    // de antes (estoque cheio), que é o comportamento conhecido.
+    const comprometido = await this.routing
+      .getCommittedStock([...skusCrus], [String(storeCode ?? '').trim()])
+      .catch((e: any) => {
+        this.logger.warn(
+          `[pedido-online] comprometido da loja ${storeCode} falhou (${e?.message || e}) — segue com estoque cheio`,
+        );
+        return new Map<string, number>();
+      });
+    for (const [chave, qtd] of comprometido) {
+      const sku = this.semZeros(chave.split('::')[1] ?? '');
+      if (!sku || !disponivel.has(sku)) continue;
+      disponivel.set(sku, Math.max(0, (disponivel.get(sku) || 0) - qtd));
+    }
+
+    return { porSku, disponivel };
+  }
+
+  /** SKUs (com quantidade) que a loja NÃO cobre. Vazio = tem tudo. */
+  private async faltamNaLoja(pecas: any[], storeCode: string): Promise<string[]> {
+    const { porSku, disponivel } = await this.disponivelNaLoja(pecas, storeCode);
     const faltam: string[] = [];
     for (const [sku, qtd] of porSku) {
       const tem = disponivel.get(sku) || 0;
@@ -217,24 +262,9 @@ export class PedidoOnlineService {
     return faltam;
   }
 
-  /** A loja vendedora tem TODAS as peças da venda? (espelho wincred_estoque) */
+  /** A loja vendedora tem TODAS as peças da venda? (espelho − prometido) */
   private async lojaTemTudo(pecas: any[], storeCode: string): Promise<boolean> {
-    const porSku = new Map<string, number>();
-    for (const it of pecas) {
-      const sku = this.semZeros(it.sku);
-      porSku.set(sku, (porSku.get(sku) || 0) + Number(it.qty || 1));
-    }
-    const lojaAlvo = this.semZeros(storeCode);
-    const est: any[] = await (this.prisma as any).wincredEstoque.findMany({
-      where: { codigo: { in: [...porSku.keys()] } },
-      select: { codigo: true, loja: true, estoque: true },
-    });
-    const disponivel = new Map<string, number>();
-    for (const r of est) {
-      if (this.semZeros(r.loja) !== lojaAlvo) continue;
-      const c = this.semZeros(r.codigo);
-      disponivel.set(c, (disponivel.get(c) || 0) + (Number(r.estoque) || 0));
-    }
+    const { porSku, disponivel } = await this.disponivelNaLoja(pecas, storeCode);
     for (const [sku, qtd] of porSku) {
       if ((disponivel.get(sku) || 0) < qtd) return false;
     }
