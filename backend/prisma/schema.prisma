@@ -7701,3 +7701,30 @@ model AvaliacaoConvite {
   @@index([respondidoEm])
   @@map("avaliacao_convites")
 }
+
+/// A SESSÃO DO WHATSAPP, FORA DO DISCO.
+///
+/// O Baileys guarda sessão em arquivos, e por isso o serviço precisava de um
+/// VOLUME montado. No Railway volume é de instância única, e essa única
+/// decisão custava três coisas: deploy sem rolling (toda publicação derrubava
+/// requisição em voo — medido em 22/08/2026: 16 deploys, 922 erros 5xx em 6h),
+/// impossibilidade de rodar mais de uma réplica, e a sessão morando no único
+/// lugar sem backup.
+///
+/// Aqui a sessão passa a viver no Postgres, que já tem PITR. O volume deixa de
+/// ser necessário e as três consequências caem juntas.
+///
+/// `sessao` separa as DUAS conexões que o mesmo processo mantém (site e
+/// cobrança). `chave` é `creds` para as credenciais e `<tipo>-<id>` para as
+/// chaves do Signal — exatamente o nome que o Baileys usa internamente.
+model WaAuth {
+  sessao    String   @db.VarChar(20)
+  chave     String   @db.VarChar(200)
+  /// Serializado com o BufferJSON do Baileys: Buffer vira { type, data } e
+  /// volta byte a byte na leitura.
+  valor     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@id([sessao, chave])
+  @@map("wa_auth")
+}

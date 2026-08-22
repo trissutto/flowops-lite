@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
+import { usarAuthPostgres } from './auth-postgres';
 
 /**
  * WhatsappCobrancaService — instância DEDICADA pra cobrança.
@@ -34,6 +35,34 @@ export class WhatsappCobrancaService implements OnModuleInit {
     return dir;
   }
 
+
+  /**
+   * TEM SESSÃO SALVA? Pergunta ao POSTGRES primeiro, disco depois.
+   *
+   * A ordem importa: assim que a sessão migra pro banco, o volume pode sumir —
+   * e se esta checagem continuasse olhando só o disco, o serviço acharia que
+   * nunca houve sessão e ficaria esperando alguém escanear um QR que não é
+   * necessário.
+   *
+   * O disco segue como segunda opção só enquanto o volume existir, pra cobrir
+   * a primeira subida (antes da importação acontecer).
+   */
+  private async temSessaoSalva(): Promise<boolean> {
+    try {
+      const n = await (this.prisma as any).waAuth.count({
+        where: { sessao: 'cobranca', chave: 'creds' },
+      });
+      if (n > 0) return true;
+    } catch {
+      // Banco fora do ar no boot não pode impedir a reconexão pelo disco.
+    }
+    try {
+      return fs.existsSync(path.join(this.sessionDir(), 'creds.json'));
+    } catch {
+      return false;
+    }
+  }
+
   async onModuleInit() {
     const dir = this.sessionDir();
     const hasSession = fs.existsSync(path.join(dir, 'creds.json'));
@@ -51,9 +80,11 @@ export class WhatsappCobrancaService implements OnModuleInit {
     try {
       const baileys = await import('@whiskeysockets/baileys');
       const makeWASocket = baileys.default;
-      const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = baileys;
+      const { DisconnectReason, fetchLatestBaileysVersion } = baileys;
 
-      const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir());
+      const { state, saveCreds } = await usarAuthPostgres(
+        this.prisma, 'cobranca', this.logger, this.sessionDir(),
+      );
       const { version } = await fetchLatestBaileysVersion();
       const pino = (await import('pino')).default;
       const silent = pino({ level: 'silent' });
