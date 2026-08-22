@@ -329,21 +329,11 @@ export function EscolhaDaPeca({
           </p>
         )}
         <PrecoDaPeca product={pecaDaCor} className="mt-4 lg:hidden" />
-        {/* A GRADE DE CORES do CELULAR, colada na foto que ela muda. No PC a
-            grade fica na coluna da direita (dono, 20/08: "as fotos das cores
-            estão descendo") — é a instância `seletorCores` do BuyBox. */}
-        {temVariasCores && (
-          <GradeDeCores
-            id="grade-de-cores"
-            className="lg:hidden"
-            slug={product.slug}
-            cores={cores}
-            corAtualNome={corAtual?.nome ?? null}
-            tamanho={tamanho}
-            erro={corError}
-            onEscolher={trocarCor}
-          />
-        )}
+        {/* A GRADE DE CORES DO CELULAR SAIU DAQUI (22/08) e desceu pra depois
+            do tamanho, dentro do BuyBox (`seletorCoresMobile`). Ela ficava
+            colada na foto que muda — bonito, mas empurrava o seletor de
+            tamanho pra 1065px num viewport de 812px. Medição e motivo estão
+            no prop `seletorCoresMobile` do BuyBox. */}
       </div>
       <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
         <BuyBox
@@ -378,6 +368,22 @@ export function EscolhaDaPeca({
             temVariasCores ? (
               <GradeDeCores
                 id="grade-de-cores-desktop"
+                slug={product.slug}
+                cores={cores}
+                corAtualNome={corAtual?.nome ?? null}
+                tamanho={tamanho}
+                erro={corError}
+                onEscolher={trocarCor}
+              />
+            ) : null
+          }
+          /* A MESMA grade, instância do celular — o BuyBox a renderiza
+             ABAIXO do tamanho (22/08). O id continua `grade-de-cores`, que é
+             o alvo do `pedirCor()`. */
+          seletorCoresMobile={
+            temVariasCores ? (
+              <GradeDeCores
+                id="grade-de-cores"
                 slug={product.slug}
                 cores={cores}
                 corAtualNome={corAtual?.nome ?? null}
