@@ -877,6 +877,19 @@ function PdvPageInner() {
   const [sale, setSale] = useState<Sale | null>(null);
 
   /**
+   * A LOJA DA SESSÃO — vale com ou sem venda aberta.
+   *
+   * Quem abriu o PDV escolheu a loja; isso não depende de existir venda. Ler
+   * o nome só de `sale` deixava o cabeçalho em "Carregando…" eterno no estado
+   * mais comum da tela — o PDV parado, esperando a próxima cliente.
+   *
+   * Cai pro código da loja quando a lista de lojas ainda não chegou: "02" é
+   * informação de verdade, "Carregando…" não é.
+   */
+  const nomeDaLoja =
+    sale?.storeName || stores.find((s) => s.code === storeCode)?.name || storeCode || '';
+
+  /**
    * A VENDA DE VITRINE — a tela nasce INTEIRA, antes do primeiro bipe.
    *
    * A venda de verdade só nasce quando a peça é bipada (decisão de jun/26:
@@ -2292,16 +2305,34 @@ function PdvPageInner() {
             </div>
           </Link>
 
+          {/*
+            O NOME DA LOJA NÃO É DA VENDA.
+
+            Era `sale?.storeName || 'Carregando…'`: sem venda aberta — que é o
+            estado NORMAL do PDV entre uma cliente e outra — `sale` é null e o
+            cabeçalho ficava "Carregando…" pra sempre. Não estava carregando
+            nada; não havia o que carregar. A vendedora via a tela inteira
+            funcionando com um "Carregando…" eterno em cima.
+
+            Mesma raiz do painel da direita que sumia (#1089) e a mesma regra:
+            `sale` não é chave de tela. A loja é da SESSÃO — quem abriu o PDV
+            já sabe em qual loja está, com ou sem venda.
+
+            A cadeia de fallback é a que a linha ~3494 já usava: venda →
+            cadastro da loja pelo código da sessão → o código puro ("02" é
+            informação de verdade; "Carregando…" não é). O texto de carregando
+            só sobra pro instante inicial, antes de a sessão resolver a loja.
+          */}
           <span
             className="text-base font-bold text-slate-800 truncate leading-none"
-            title={sale?.storeName || ''}
+            title={nomeDaLoja}
           >
-            {sale?.storeName || 'Carregando…'}
+            {nomeDaLoja || 'Carregando…'}
           </span>
 
-          {sale?.storeCode && (
+          {(sale?.storeCode || storeCode) && (
             <span className="text-[11px] font-bold text-slate-500 bg-[#F3F1EA] border border-[#E5E2D9] px-2 py-1 rounded-md leading-none shrink-0">
-              PDV · {sale.storeCode}
+              PDV · {sale?.storeCode || storeCode}
             </span>
           )}
 
