@@ -1,6 +1,14 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
+import { EventLoopService } from '../health/event-loop.service';
+
+/** Falhas seguidas de conexão antes de parar de tentar. */
+const FALHAS_PRA_ABRIR = 3;
+/** Primeira espera com o circuito aberto. Dobra a cada rodada que falha. */
+const ESPERA_INICIAL_MS = 30_000;
+/** Teto da espera — mesmo morto há horas, tenta de novo a cada 10 min. */
+const ESPERA_MAXIMA_MS = 10 * 60_000;
 
 /**
  * Cliente direto pro MySQL do WordPress/WooCommerce.
@@ -14,7 +22,32 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WpDbService.name);
   private pool: mysql.Pool | null = null;
 
-  constructor(private readonly config: ConfigService) {}
+  /**
+   * DISJUNTOR — o servidor do WP pode sumir, e some.
+   *
+   * Medido em 22/08/2026: `162.215.213.154:3306` respondendo EHOSTUNREACH em
+   * 100% das tentativas, e a tela de realinhamento disparando `getImagesByRefs`
+   * a cada chamada. Sem disjuntor, cada uma dessas ia pro pool esperar até
+   * `connectTimeout` (12s) numa fila que era ILIMITADA (`queueLimit: 0`) — o
+   * mesmo desenho que o CLAUDE.md documenta como causa da queda da live de
+   * 01/07, só que no pool do WordPress em vez do Giga.
+   *
+   * O comentário que justificava não ter disjuntor dizia "servidor dedicado e
+   * aberto pra qualquer IP". Isso deixou de ser verdade. Agora: 3 falhas
+   * seguidas abrem o circuito, e enquanto ele estiver aberto a consulta falha
+   * NA HORA em vez de ocupar conexão e esperar 12s.
+   */
+  private falhasSeguidas = 0;
+  private circuitoAbertoAte = 0;
+  private esperaAtualMs = ESPERA_INICIAL_MS;
+  /** Pra logar a abertura uma vez só, e não a cada chamada recusada. */
+  private avisouCircuitoAberto = false;
+  private recusadasNoCircuito = 0;
+
+  constructor(
+    private readonly config: ConfigService,
+    private readonly eventLoop: EventLoopService,
+  ) {}
 
   async onModuleInit() {
     const host = this.config.get<string>('WP_DB_HOST');
@@ -31,17 +64,20 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
       database: this.config.get<string>('WP_DB_DATABASE'),
       waitForConnections: true,
       connectionLimit: 5,
-      queueLimit: 0,
+      /**
+       * ⚠️ FILA FINITA. Era `0` — ilimitada — e com o host fora do ar as
+       * chamadas empilhavam sem teto, cada uma segurando memória e uma promise
+       * viva por até 12s. Com teto, o excedente é recusado NA HORA
+       * (`ER_CON_COUNT_ERROR`), que é o que o chamador já sabe tratar: todos os
+       * usos daqui caem pra "sem foto" e seguem a vida.
+       */
+      queueLimit: 20,
       // 12s. Mesmo servidor dedicado do Giga. 4s/5s causava ETIMEDOUT em pico
-      // de latência — e como o breaker é COMPARTILHADO, um timeout aqui abria o
-      // circuito e bloqueava o Giga junto. O breaker já cobre o "falhar rápido"
-      // em queda real, então o timeout pode ser tolerante. (Regressão 23/06.)
+      // de latência. Hoje quem faz o "falhar rápido" é o disjuntor abaixo — o
+      // timeout só vale pra PRIMEIRA tentativa depois que o circuito reabre.
       connectTimeout: 12000,
       timezone: 'Z',
     });
-
-    // (Removido 24/06) Circuit-breaker do Giga/WP — desnecessário: servidor
-    // dedicado e aberto pra qualquer IP. O pool + connectTimeout já bastam.
 
     // IMPORTANTE: ping em background (fire-and-forget). NÃO bloquear o boot.
     // Se o IP do Railway não estiver liberado no WP, o TCP fica pendurado
@@ -79,14 +115,78 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Executa uma query simples. Se o pool não estiver pronto, retorna [].
+   *
+   * Passa pelo disjuntor: com o servidor do WP fora do ar, devolve [] na hora
+   * em vez de ocupar conexão e esperar o `connectTimeout`. Todo chamador daqui
+   * já trata lista vazia (a foto do realinhamento cai pro ícone), então falhar
+   * rápido é estritamente melhor do que falhar devagar.
    */
   async query<T = mysql.RowDataPacket>(
     sql: string,
     params: any[] = [],
   ): Promise<T[]> {
     if (!this.pool) return [];
-    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
-    return rows as unknown as T[];
+    if (this.circuitoAberto()) return [];
+
+    const fim = this.eventLoop.marcar('wp-mysql:query');
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      this.registrarSucesso();
+      return rows as unknown as T[];
+    } catch (err) {
+      this.registrarFalha(err as Error);
+      throw err;
+    } finally {
+      fim();
+    }
+  }
+
+  /** true = não vale a pena tentar agora. */
+  private circuitoAberto(): boolean {
+    if (Date.now() >= this.circuitoAbertoAte) return false;
+    this.recusadasNoCircuito++;
+    return true;
+  }
+
+  private registrarSucesso() {
+    if (this.avisouCircuitoAberto) {
+      this.logger.log(
+        `✅ WP MySQL voltou — circuito fechado (${this.recusadasNoCircuito} consulta(s) recusada(s) enquanto esteve aberto)`,
+      );
+    }
+    this.falhasSeguidas = 0;
+    this.circuitoAbertoAte = 0;
+    this.esperaAtualMs = ESPERA_INICIAL_MS;
+    this.avisouCircuitoAberto = false;
+    this.recusadasNoCircuito = 0;
+  }
+
+  private registrarFalha(err: Error) {
+    this.falhasSeguidas++;
+    if (this.falhasSeguidas < FALHAS_PRA_ABRIR) return;
+
+    this.circuitoAbertoAte = Date.now() + this.esperaAtualMs;
+    // Uma linha por ABERTURA, não por falha. Era este log — repetido a cada
+    // pre-fetch de imagem — que enchia o log de produção de EHOSTUNREACH.
+    if (!this.avisouCircuitoAberto) {
+      this.logger.warn(
+        `⚠️  WP MySQL fora do ar (${err.message}) — circuito ABERTO por ${Math.round(this.esperaAtualMs / 1000)}s. ` +
+          `As telas que dependem disto seguem sem a foto, sem esperar.`,
+      );
+      this.avisouCircuitoAberto = true;
+    }
+    this.esperaAtualMs = Math.min(this.esperaAtualMs * 2, ESPERA_MAXIMA_MS);
+  }
+
+  /** Estado do disjuntor — sai no GET /api/health/diagnostico. */
+  estadoConexao() {
+    return {
+      configurado: !!this.pool,
+      circuitoAberto: Date.now() < this.circuitoAbertoAte,
+      reabreEmS: Math.max(0, Math.round((this.circuitoAbertoAte - Date.now()) / 1000)),
+      falhasSeguidas: this.falhasSeguidas,
+      recusadasNoCircuito: this.recusadasNoCircuito,
+    };
   }
 
   /**
@@ -286,7 +386,17 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
         "SELECT option_value FROM wp_options WHERE option_name = 'siteurl' LIMIT 1",
       );
       siteUrl = (siteUrlRows[0]?.option_value || '').replace(/\/+$/, '');
-      this.siteUrlCache = { value: siteUrl, expiresAt: now + this.CACHE_TTL_MS };
+      /**
+       * SÓ CACHEIA SE VEIO. Com o WP fora do ar a consulta volta vazia, e
+       * gravar isso no cache carimbava `siteUrl = ''` por 10 minutos — tempo
+       * em que TODA foto sairia como caminho relativo (`/wp-content/...`),
+       * quebrando a imagem mesmo depois do servidor voltar.
+       */
+      if (siteUrl) {
+        this.siteUrlCache = { value: siteUrl, expiresAt: now + this.CACHE_TTL_MS };
+      } else {
+        return result; // sem base de URL não dá pra montar foto — devolve o que veio do cache
+      }
     }
 
     for (let i = 0; i < refsToFetch.length; i += BATCH) {

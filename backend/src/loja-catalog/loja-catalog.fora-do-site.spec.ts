@@ -1,4 +1,5 @@
 import { LojaCatalogService } from './loja-catalog.service';
+import { eventLoopStub } from './event-loop.stub';
 
 /**
  * "FORA DO SITE" TEM QUE SAIR DO SITE (19/08/2026).
@@ -15,7 +16,7 @@ import { LojaCatalogService } from './loja-catalog.service';
  *    vendável, e a listagem só corta peça sem imagem.
  */
 
-const svc = new LojaCatalogService({} as any, {} as any) as any;
+const svc = new LojaCatalogService({} as any, {} as any, eventLoopStub) as any;
 
 const linha = (over: Partial<any> = {}) => ({
   ref: '350842', codigo: '1001', cor: 'CHOCOLATE', tamanho: '46', marca: null,

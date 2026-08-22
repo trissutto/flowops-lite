@@ -1,4 +1,5 @@
 import { LojaCatalogService } from './loja-catalog.service';
+import { eventLoopStub } from './event-loop.stub';
 
 /**
  * REF RECICLADA NÃO PODE VIRAR "COR" (Limeira, 13/08/2026).
@@ -18,7 +19,7 @@ import { LojaCatalogService } from './loja-catalog.service';
 
 // Métodos privados por desenho — o teste exercita a REGRA, e a regra não
 // merece virar API pública só pra ser testada.
-const svc = new LojaCatalogService({} as any, {} as any) as any;
+const svc = new LojaCatalogService({} as any, {} as any, eventLoopStub) as any;
 const tipo = (d: string) => svc.tipoDePeca(d);
 const chave = (d: string) => svc.chaveDeProduto(d);
 
