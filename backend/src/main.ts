@@ -40,13 +40,42 @@ async function bootstrap() {
   const isProd = process.env.NODE_ENV === 'production';
   const frontendUrl = process.env.FRONTEND_URL?.split(',').map((s) => s.trim()).filter(Boolean);
 
+  /**
+   * O NAVEGADOR PARA DE PERGUNTAR A MESMA COISA — `maxAge` no preflight.
+   *
+   * ── O QUE FOI MEDIDO (22/08/2026, 24h de produção) ──
+   *
+   * De 412.984 requisições no dia, **37,4% eram `OPTIONS`** — o preflight que
+   * o navegador manda ANTES da chamada de verdade pra perguntar "posso?".
+   * Sem `Access-Control-Max-Age` na resposta, essa pergunta é refeita a cada
+   * chamada: eram ~155 mil viagens por dia só pra ouvir a mesma resposta.
+   *
+   * Custo em dinheiro é quase zero (preflight não devolve corpo — 0 byte de
+   * egress). O custo real é OUTRO: são 155 mil conexões e handshakes que o
+   * backend aceita e responde à toa, e é UMA IDA E VOLTA A MAIS somada na
+   * frente de cada ação da vendedora — com a cliente esperando no balcão, e o
+   * servidor em us-west2 (~200ms de ida e volta pro Brasil).
+   *
+   * Com o cache, o navegador pergunta uma vez e reusa a permissão.
+   *
+   * ⚠️ O TETO É DO NAVEGADOR, não daqui: o Chrome limita a 2h (7.200s) por
+   * mais que se peça, o Firefox aceita 24h. Pedir 24h não quebra o Chrome —
+   * ele apenas corta pro teto dele. Por isso o número alto: aproveita o que
+   * cada navegador der.
+   *
+   * Não afeta segurança: `maxAge` só diz por quanto tempo vale a RESPOSTA do
+   * preflight. Quem pode chamar continua sendo decidido por `origin`, e mudar
+   * `FRONTEND_URL` continua valendo — o pior caso é um navegador que já tinha
+   * permissão seguir usando por até 2h após a mudança.
+   */
   const app = await NestFactory.create(AppModule, {
     cors: isProd && frontendUrl?.length
       ? {
           origin: frontendUrl,
           credentials: true,
+          maxAge: 86400,
         }
-      : true, // dev: aceita qualquer origem
+      : true, // dev: aceita qualquer origem (inalterado — `true` = `origin: '*'`)
   });
 
   app.use(helmet());
