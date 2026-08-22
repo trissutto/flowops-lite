@@ -86,6 +86,33 @@ export class TrackingService {
   }
 
   /**
+   * 🔴 O CÓDIGO CERTO, DIGITADO ERRADO (22/08).
+   *
+   * A loja digita o rastreio na mão, e um em cada dez sai com espaço ou em
+   * minúscula: "AD 717 071 708 BR", "ad718148023br", "aN856224448BR". Nada
+   * disso passa no `ehCodigoValido`, então o objeto NUNCA é consultado, o
+   * pedido nunca fecha e ele fica preso em "Em trânsito" até envelhecer pros
+   * 30 dias e cair em "Concluídos" sem ninguém ter confirmado a entrega.
+   *
+   * Medido na base inteira: **1.026 códigos fora do padrão em `orders`
+   * (+1.061 em `pick_orders`), e 914 deles viram etiqueta válida só tirando
+   * espaço e subindo pra maiúscula** — 913 estavam em `shipped`.
+   *
+   * Tira espaço, ponto e hífen (as três formas que aparecem no copia-e-cola
+   * dos Correios e do Mais Envios) e sobe pra maiúscula. NÃO inventa: o que
+   * não vira etiqueta válida volta como veio, e quem decide é o
+   * `ehCodigoValido` de sempre. "MOTOBOY" e "retirada em loja" continuam
+   * sendo o que são — esses não é digitação torta, é ausência de rastreio, e
+   * o guard do `marcarEnviado` já trata.
+   */
+  static normalizarCodigo<T extends string | null | undefined>(code: T): T | string {
+    const cru = String(code ?? '');
+    if (!cru.trim()) return code;
+    const limpo = cru.toUpperCase().replace(/[\s.\-]/g, '');
+    return TrackingService.ehCodigoValido(limpo) ? limpo : code;
+  }
+
+  /**
    * "Entregue" de verdade.
    *
    * `/entreg/i` casa com "saiu para ENTREGA ao destinatário" (ainda no carro do

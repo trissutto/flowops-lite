@@ -56,6 +56,11 @@ export class RastreioSyncCron {
     if (this.running) return; // ciclo anterior ainda rodando (API é lenta)
     this.running = true;
     try {
+      // Endireita o código torto ANTES de tudo: enquanto ele estiver com
+      // espaço/minúscula não passa no `ehCodigoValido`, então nem a fila nem
+      // a reconciliação enxergam o objeto.
+      await this.normalizarCodigosTortos();
+
       // Vem ANTES da varredura: é o passo que fecha o pedido cuja entrega já
       // está confirmada no cache e que a fila abaixo nunca mais visita (a
       // fila descarta `entregue` de propósito). Sem isto, o `return` do
@@ -136,6 +141,71 @@ export class RastreioSyncCron {
           .filter((c: string) => TrackingService.ehCodigoValido(c)),
       ),
     ];
+  }
+
+  /**
+   * 🔴 ETIQUETA CERTA, DIGITADA ERRADA (22/08).
+   *
+   * A loja digita o rastreio na mão. Medido na base inteira: **1.026 códigos
+   * em `orders` fora do padrão dos Correios, e 914 viram etiqueta válida só
+   * tirando espaço e subindo pra maiúscula** ("AD 717 071 708 BR",
+   * "ad718148023br", "aN856224448BR") — 913 deles em `shipped`. Mais 1.061
+   * na `pick_orders`. Enquanto está torto, o `ehCodigoValido` reprova, o
+   * objeto NUNCA é consultado, o pedido nunca fecha e ele fica em "Em
+   * trânsito" até envelhecer pros 30 dias e cair em "Concluídos" sem
+   * ninguém nunca ter confirmado que chegou.
+   *
+   * A entrada já é arrumada no `marcarEnviado` — isto aqui é o passivo. Roda
+   * junto do ciclo e some sozinho: quando não houver mais torto, a consulta
+   * volta vazia e o passo custa uma query.
+   *
+   * ⚠️ NUNCA reescreve pra um código que outro pedido já usa: rastreio
+   * repetido faz dois pedidos compartilharem a mesma entrega e um deles
+   * fecha por engano. A conferência é por linha, e a que colide fica como
+   * está (aparece no log pra alguém olhar).
+   *
+   * `RASTREIO_NORMALIZA=0` desliga. Teto: `RASTREIO_NORMALIZA_LOTE` (200).
+   */
+  private async normalizarCodigosTortos(): Promise<void> {
+    if (String(process.env.RASTREIO_NORMALIZA ?? '1') === '0') return;
+    const n = parseInt(String(process.env.RASTREIO_NORMALIZA_LOTE ?? '200'), 10);
+    const lote = Number.isFinite(n) && n > 0 ? n : 200;
+
+    for (const tabela of ['orders', 'pick_orders'] as const) {
+      const tortos: Array<{ id: string; tracking_code: string }> = await this.prisma.$queryRawUnsafe(
+        `SELECT id, tracking_code FROM ${tabela}
+          WHERE tracking_code IS NOT NULL AND tracking_code <> ''
+            AND tracking_code !~ '^[A-Z]{2}[0-9]{9}[A-Z]{2}$'
+          LIMIT $1`,
+        lote,
+      );
+      let arrumados = 0;
+      for (const linha of tortos) {
+        const novo = TrackingService.normalizarCodigo(linha.tracking_code);
+        // Só mexe no que VIRA etiqueta. "MOTOBOY"/"retirada em loja" ficam.
+        if (novo === linha.tracking_code || !TrackingService.ehCodigoValido(novo as string)) continue;
+        const colide: Array<{ n: number }> = await this.prisma.$queryRawUnsafe(
+          `SELECT COUNT(*)::int AS n FROM ${tabela} WHERE tracking_code = $1 AND id <> $2`,
+          novo,
+          linha.id,
+        );
+        if (Number(colide[0]?.n ?? 0) > 0) {
+          this.logger.warn(
+            `[rastreio-sync] ${tabela} ${linha.id}: "${linha.tracking_code}" viraria ${novo}, que já é de outro registro — deixei como está`,
+          );
+          continue;
+        }
+        await this.prisma.$executeRawUnsafe(
+          `UPDATE ${tabela} SET tracking_code = $1 WHERE id = $2`,
+          novo,
+          linha.id,
+        );
+        arrumados++;
+      }
+      if (arrumados) {
+        this.logger.log(`[rastreio-sync] ${arrumados} código(s) de rastreio endireitados em ${tabela}`);
+      }
+    }
   }
 
   /**
