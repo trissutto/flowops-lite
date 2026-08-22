@@ -3414,6 +3414,19 @@ export class PickOrdersService {
     }
 
     if (input.status === 'shipped') {
+      /**
+       * ARRUMA O CÓDIGO NA ENTRADA (22/08) — a loja digita na mão e um em
+       * cada dez sai com espaço ou minúscula ("AD 717 071 708 BR",
+       * "ad718148023br"). Assim ele não passa no `ehCodigoValido`, o objeto
+       * nunca é consultado e o pedido fica preso em "Em trânsito" até
+       * envelhecer. Medido: 914 pedidos nesse estado. Mexer aqui é o que
+       * impede o problema de voltar; o que já está gravado é varrido pelo
+       * `normalizarCodigosTortos` do RastreioSyncCron.
+       *
+       * Só reescreve o que VIRA etiqueta válida — "MOTOBOY" e "retirada em
+       * loja" seguem intactos e caem no `semRastreio` logo abaixo.
+       */
+      input.trackingCode = TrackingService.normalizarCodigo(input.trackingCode) as any;
       const code = (input.trackingCode ?? '').trim();
       const carrier = (input.carrier ?? '').trim();
       if (!carrier) throw new BadRequestException('Transportadora é obrigatória');

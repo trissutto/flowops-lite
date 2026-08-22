@@ -99,3 +99,31 @@ describe('TrackingService — normalização', () => {
     expect(r.estimatedAt).toBe('2026-08-20T02:59:59.000Z');
   });
 });
+
+describe('TrackingService.normalizarCodigo', () => {
+  const n = (s: any) => TrackingService.normalizarCodigo(s);
+
+  it('endireita o que a loja digitou torto', () => {
+    expect(n('AD 717 071 708 BR')).toBe('AD717071708BR');
+    expect(n('ad718148023br')).toBe('AD718148023BR');
+    expect(n('aN856224448BR')).toBe('AN856224448BR');
+    expect(n(' AD-756-368-696-BR ')).toBe('AD756368696BR');
+  });
+
+  it('deixa em paz o que NÃO é etiqueta', () => {
+    // Não é digitação torta, é ausência de rastreio — o guard do envio trata.
+    for (const cru of ['MOTOBOY', 'retirada em loja', '000000', 'a caminho de santos', '121212121212121']) {
+      expect(n(cru)).toBe(cru);
+    }
+  });
+
+  it('não inventa nada com vazio/nulo', () => {
+    expect(n(null)).toBeNull();
+    expect(n(undefined)).toBeUndefined();
+    expect(n('   ')).toBe('   ');
+  });
+
+  it('é idempotente — código já certo não muda', () => {
+    expect(n('AD717071708BR')).toBe('AD717071708BR');
+  });
+});
