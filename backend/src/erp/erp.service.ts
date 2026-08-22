@@ -7496,10 +7496,38 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     items: Array<{ refCode: string; cor: string | null; tamanho: string | null; storeCode: string }>,
   ): Promise<Map<string, { totalQty: number; codigos: string[] }>> {
     const out = new Map<string, { totalQty: number; codigos: string[] }>();
-    if (!this.pool || !items?.length) return out;
+    if (!items?.length) return out;
 
     const makeKey = (refCode: string, cor: string | null, tamanho: string | null, storeCode: string) =>
       `${String(refCode).trim().toUpperCase()}::${String(cor || '').trim().toUpperCase()}::${String(tamanho || '').trim().toUpperCase()}::${String(storeCode).trim()}`;
+
+    // ── FLOW PRIMEIRO (22/08) ────────────────────────────────────────────
+    // A versão de UMA peça já respondia do Flow; esta, a em LOTE, era 100%
+    // Giga — e é ela que o pré-check de toda remessa usa. Ou seja: a decisão
+    // de "essa peça pode sair da loja?" era tomada com o saldo do banco
+    // errado (no fechamento da REM-2026-001432 o Giga disse 2 numa peça em
+    // que o Flow tem 1). Mesma regra do irmão de uma peça: só aceito a
+    // resposta do Flow quando ela AFIRMA — zero cai pro Giga, porque zero
+    // também é o que sai de um cadastro que o espelho ainda não viu.
+    let pendentes = items;
+    if (this.sombra?.respondeDoFlow) {
+      try {
+        const doFlow = await this.sombra.getStockByRefCorTamInStoreBatch(items);
+        for (const [k, v] of doFlow) {
+          if (v.totalQty > 0 && v.codigos.length) out.set(k, v);
+        }
+        pendentes = items.filter((it) => !out.has(makeKey(it.refCode, it.cor, it.tamanho, it.storeCode)));
+        if (!pendentes.length) return out;
+        this.logger.warn(
+          `[flow-leitura] estoque em lote: ${pendentes.length} de ${items.length} peça(s) sem saldo no espelho — recorrendo ao Giga`,
+        );
+      } catch (e) {
+        this.logger.warn(`[flow-leitura] estoque em lote falhou (${(e as Error).message}) — recorrendo ao Giga`);
+        pendentes = items;
+      }
+    }
+    if (!this.pool) return out;
+    items = pendentes;
 
     try {
       // 1) Coleta TODAS combinacoes unicas de REF+COR+TAM (independente de loja)

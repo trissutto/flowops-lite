@@ -13,12 +13,18 @@ import { ErpService } from '../erp/erp.service';
  * se afastam EM SILÊNCIO — e ninguém enxerga.
  *
  * Esta tela acaba com o silêncio: compara SKU a SKU, loja a loja, e lista só
- * o que diverge. O Flow continua sendo a fonte — o botão "puxar do Giga" é
- * uma correção MANUAL, item a item, pra quando o valor certo estiver lá.
+ * o que diverge. A COMPARAÇÃO continua valendo e é o motivo de a tela existir.
  *
- * Cuidado deliberado: "puxar do Giga" grava SÓ nos espelhos do Flow. Não
- * enfileira réplica de volta pro Giga — senão a correção reescreveria o valor
- * que a gente acabou de considerar correto.
+ * ⚠️ ADOTAR O NÚMERO DO GIGA — BLOQUEADO EM 22/08. "Puxar do Giga" e
+ * "importar negativos" partiam de uma premissa que o caso BMM-100 VINHO 52
+ * derrubou: a de que, quando os dois lados divergem, o Giga pode estar certo.
+ * Não pode. O Flow é a fonte desde 14/07, o Giga não recebe digitação humana
+ * desde 31/07 e o que ele tem de diferente é atraso ou erro — foi assim que
+ * uma peça vendida voltou pro estoque de São José. Divergência se resolve
+ * contando a arara e corrigindo no Flow, nunca copiando o outro banco.
+ *
+ * `ERP_STOCK_WRITEBACK_GIGA=1` (a mesma flag do write-through) destrava os
+ * dois botões, se algum dia houver motivo.
  */
 
 export type LinhaDivergencia = {
@@ -253,7 +259,23 @@ export class StockConferidorService {
    * Relê o Giga na hora em vez de confiar no número que veio da tela: entre a
    * conferência e o clique pode ter entrado venda.
    */
+  /**
+   * Trava única dos dois caminhos que copiam saldo do Giga pro Flow.
+   * Fica no serviço (e não no controller) pra valer pra qualquer chamador,
+   * inclusive script.
+   */
+  private assertAdocaoDoGigaPermitida(acao: string): void {
+    if (String(process.env.ERP_STOCK_WRITEBACK_GIGA ?? '0').trim() === '1') return;
+    throw new BadRequestException(
+      `${acao}: desativado. O Flow é a fonte do estoque desde 14/07 — copiar o número do Giga ` +
+      'foi o que devolveu ao estoque uma peça já vendida (BMM-100 VINHO 52, São José, 19/08). ' +
+      'Divergência se resolve contando a peça na arara e corrigindo no Flow. A comparação desta ' +
+      'tela continua funcionando normalmente.',
+    );
+  }
+
   async puxarDoGiga(input: { codigo: string; loja: string; userName?: string | null }) {
+    this.assertAdocaoDoGigaPermitida('Puxar do Giga');
     const codigo = this.norm(input.codigo);
     const loja = this.loja2(input.loja);
     if (!codigo || !loja) throw new BadRequestException('codigo e loja são obrigatórios');
@@ -325,6 +347,7 @@ export class StockConferidorService {
    * pontual e auditada (StockMovement motivo IMPORTA_NEGATIVO_GIGA).
    */
   async importarNegativos(input: { loja?: string; simular?: boolean; userName?: string | null }) {
+    this.assertAdocaoDoGigaPermitida('importar negativos do Giga');
     const lojaFiltro = input.loja ? this.loja2(input.loja) : null;
     const gigaRows = await this.erp.getEstoqueGigaCompleto();
     if (!gigaRows.length) throw new BadRequestException('Giga não respondeu — nada foi importado.');

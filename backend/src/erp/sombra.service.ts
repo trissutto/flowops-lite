@@ -524,6 +524,77 @@ export class SombraService {
     return { totalQty: total, codigos };
   }
 
+  /**
+   * MESMA CONTA DO MÉTODO ACIMA, PRA UMA LISTA — uma query só.
+   *
+   * Existe por causa do fechamento de remessa (22/08): o pré-check de estoque
+   * usa a versão em lote, e ela era 100% Giga. Toda caixa fechada perguntava
+   * o saldo ao banco errado — no fechamento da REM-2026-001432 o Giga disse
+   * "tem 2" numa peça em que o Flow tem 1. Quem decide se a peça pode sair da
+   * loja é o estoque do Flow.
+   *
+   * Chave de retorno idêntica à do ErpService: REF::COR::TAM::LOJA (tudo
+   * maiúsculo menos a loja, que vai como veio). Item sem linha no Flow
+   * simplesmente não aparece no Map — quem chamou decide o que fazer.
+   */
+  async getStockByRefCorTamInStoreBatch(
+    itens: Array<{ refCode: string; cor: string | null; tamanho: string | null; storeCode: string }>,
+  ): Promise<Map<string, { totalQty: number; codigos: string[] }>> {
+    const out = new Map<string, { totalQty: number; codigos: string[] }>();
+    if (!itens?.length) return out;
+
+    // Uma linha por combinação única — a mesma peça repetida na caixa não
+    // multiplica parâmetro nem resultado.
+    const unicos = new Map<string, { ref: string; cor: string; tam: string; loja: string }>();
+    for (const it of itens) {
+      const ref = String(it.refCode ?? '').trim().toUpperCase();
+      const cor = String(it.cor ?? '').trim().toUpperCase();
+      const tam = String(it.tamanho ?? '').trim().toUpperCase();
+      const loja = String(it.storeCode ?? '').trim();
+      if (!ref || !loja) continue;
+      unicos.set(`${ref}::${cor}::${tam}::${loja}`, { ref, cor, tam, loja });
+    }
+    if (!unicos.size) return out;
+
+    const chaves = Array.from(unicos.keys());
+    const LOTE = 400; // 5 parâmetros por linha — folga enorme no teto do Postgres
+    for (let ini = 0; ini < chaves.length; ini += LOTE) {
+      const fatia = chaves.slice(ini, ini + LOTE);
+      const linhas: string[] = [];
+      const params: string[] = [];
+      fatia.forEach((k, i) => {
+        const v = unicos.get(k)!;
+        const b = i * 5;
+        linhas.push(`($${b + 1}::text,$${b + 2}::text,$${b + 3}::text,$${b + 4}::text,$${b + 5}::text)`);
+        params.push(k, v.ref, v.cor, v.tam, v.loja);
+      });
+      // A loja é comparada SEM zero à esquerda dos dois lados: o Giga gravou
+      // '05' e '5' conforme a época, e o espelho herdou os dois formatos.
+      const sql = `
+        WITH alvo(k, ref, cor, tam, loja) AS (VALUES ${linhas.join(',')})
+        SELECT a.k, p.codigo, COALESCE(SUM(e.estoque),0)::text AS qtd
+          FROM alvo a
+          JOIN wincred_produtos p
+            ON UPPER(TRIM(COALESCE(p.ref,''))) = a.ref
+           AND UPPER(TRIM(COALESCE(p.cor,''))) = a.cor
+           AND UPPER(TRIM(COALESCE(p.tamanho,''))) = a.tam
+          JOIN wincred_estoque e
+            ON e.codigo = p.codigo
+           AND regexp_replace(e.loja,'^0+','') = regexp_replace(a.loja,'^0+','')
+         GROUP BY a.k, p.codigo`;
+      const rows: Array<{ k: string; codigo: string; qtd: string }> =
+        await (this.prisma as any).$queryRawUnsafe(sql, ...params);
+      for (const r of rows || []) {
+        const chave = String(r.k);
+        const atual = out.get(chave) || { totalQty: 0, codigos: [] as string[] };
+        atual.totalQty += Number(r.qtd) || 0;
+        atual.codigos.push(String(r.codigo).trim());
+        out.set(chave, atual);
+      }
+    }
+    return out;
+  }
+
   /* ────────────── customer-info do PDV (crediário) — Postgres ────────────── */
 
   /**
