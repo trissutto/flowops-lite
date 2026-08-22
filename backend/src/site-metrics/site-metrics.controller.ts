@@ -21,6 +21,8 @@ import {
   Trafego,
   TRAFEGOS,
 } from './site-metrics.service';
+import { MetaAdsService } from './meta-ads.service';
+import { GoogleAdsService } from './google-ads.service';
 
 /**
  * A PORTA DO SITE — server-to-server, do BFF do e-commerce pra cá.
@@ -104,7 +106,37 @@ export class SiteMetricsPublicController {
 @Controller('site-metrics')
 @UseGuards(JwtAuthGuard)
 export class SiteMetricsController {
-  constructor(private readonly service: SiteMetricsService) {}
+  constructor(
+    private readonly service: SiteMetricsService,
+    private readonly metaAds: MetaAdsService,
+    private readonly googleAds: GoogleAdsService,
+  ) {}
+
+  /**
+   * COLETA MANUAL DO GASTO DO GOOGLE — o botão de "será que a credencial
+   * presta?".
+   *
+   * O cron roda de hora em hora e engole o erro de propósito (métrica não pode
+   * derrubar o processo), o que é certo em produção e péssimo no dia em que
+   * alguém acabou de colar as envs: a única prova ficaria no log do Railway,
+   * uma hora depois. Aqui o erro do Google VOLTA na resposta — token de
+   * desenvolvedor não aprovado, refresh token revogado e conta fora do MCC
+   * dizem coisas diferentes, e cada uma tem um conserto diferente.
+   */
+  @Post('google-ads/sync')
+  async sincronizarGoogleAds(@Req() req: any, @Query('dias') dias?: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    if (!this.googleAds.configurado()) {
+      return { ok: false, configurado: false, erro: 'Faltam as envs do Google Ads' };
+    }
+    const janela = Math.min(Math.max(Number(dias) || 7, 1), 90);
+    try {
+      const linhas = await this.googleAds.coletar(janela);
+      return { ok: true, configurado: true, dias: janela, linhas };
+    } catch (err) {
+      return { ok: false, configurado: true, erro: String(err).slice(0, 500) };
+    }
+  }
 
   /**
    * QUEM ESTÁ NO SITE AGORA — o card ao vivo da tela de cliques.
@@ -211,6 +243,19 @@ export class SiteMetricsController {
       ate: fim.toISOString(),
       segmento: seg,
       segmentos,
+      /**
+       * QUAIS PLATAFORMAS TÊM ESPELHO DE GASTO LIGADO.
+       *
+       * Sem isto a tela não consegue distinguir "esta campanha não gastou
+       * nada" de "ninguém configurou a credencial desta plataforma", e as duas
+       * saem na tela como a mesma coisa: uma pílula sem ROAS. Foi exatamente
+       * assim que o Google passou meses parecendo campanha sem retorno quando
+       * na verdade era integração que não existia.
+       */
+      gastoConfigurado: {
+        meta: this.metaAds.configurado(),
+        google: this.googleAds.configurado(),
+      },
       campanhasDeLojas,
       etapas,
       diagnosticos,

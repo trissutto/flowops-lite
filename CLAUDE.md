@@ -77,6 +77,12 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `PONTO_IP_CHECK` | on | `0` desliga a regra "celular só bate ponto no WiFi da loja" (batida `pwa_selfie` vs IPs do heartbeat do PDV Electron; fail-open se não há IP <48h) |
 | `RASTREIO_SYNC` | on | `0` desliga o acompanhamento do objeto (cache `rastreio_objetos` para de atualizar; a tela mostra o último dado conhecido e nenhum pedido vira ENTREGUE sozinho) |
 | `RASTREIO_SYNC_LOTE` | 60 | Teto de objetos por ciclo (cron de 30min). A escada por idade já rarefaz o que é velho: até 3 dias de hora em hora, 4-10 dias de 4h, 11-30 dias 1x/dia, entregue nunca mais |
+| `META_ADS_TOKEN` / `META_ADS_CONTAS` | — | Espelho de gasto do Meta (`meta_ads_gasto_dia`, cron `7 * * * *`). Sem elas a linha do dinheiro do Meta **some** da cascata — nunca mostra zero |
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | — | Espelho de gasto/conversão do Google (`google_ads_gasto_dia`, cron `17 * * * *`). Token do **MCC**, aprovado pelo Google — é o passo que depende do dono |
+| `GOOGLE_ADS_CLIENT_ID` / `_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth de leitura (escopo `adwords`). O refresh token não vence sozinho, mas morre se a senha da conta Google mudar |
+| `GOOGLE_ADS_CONTAS` | — | `customer_id` sem hífen, separados por vírgula (e-commerce: `1458258153`) |
+| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | — | Id do MCC. Só quando a conta lida está dentro de um centro de clientes |
+| `GOOGLE_ADS_API_VERSION` | `v25` | Versão da API. Vive ~1 ano e o endpoint some com 404 seco — subir aqui evita deploy de código |
 
 ## Convenções de trabalho (Thiago)
 

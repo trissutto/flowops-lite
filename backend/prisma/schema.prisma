@@ -7305,6 +7305,64 @@ model MetaAdsGastoDia {
   @@map("meta_ads_gasto_dia")
 }
 
+/// GASTO E CONVERSÃO DO GOOGLE ADS — o gêmeo do `MetaAdsGastoDia`.
+///
+/// Nasceu em 22/08/2026. Até aqui o Google era a metade cega do relatório: a
+/// cascata mostrava as sessões (o `gclid` prova que o clique foi pago), mas o
+/// dinheiro do lado do Google vinha ZERADO — não existia integração nenhuma, e
+/// a pílula acabava exibindo só a receita, sem seta e sem ROAS.
+///
+/// ⚠️ A CHAVE É O `campanhaId`, MESMA REGRA DO META. O nome muda quando alguém
+/// renomeia a campanha, e no Google ainda chega torto de propósito: hoje há
+/// anúncio com o NOME da campanha dentro do `utm_source`. O id é imutável e é
+/// o que o `utm_id={campaignid}` (ValueTrack) grava em `Order.utmId`.
+///
+/// ── POR QUE GUARDAR AS CONVERSÕES DELE TAMBÉM ──
+///
+/// O Meta só precisa do gasto: a receita sai do nosso caixa. Aqui não — hoje o
+/// link do Google não carrega `utm_id`, então `Order.utmId` fica NULL e a
+/// nossa receita não casa com campanha nenhuma. Guardar `conversoes` e
+/// `valorConversoes` faz a tela mostrar O QUE O GOOGLE DIZ enquanto o UTM não
+/// é corrigido — e, depois de corrigido, vira a segunda opinião que denuncia
+/// divergência de atribuição em vez de escondê-la.
+///
+/// As duas contas NUNCA vão bater exatamente, e isso é esperado: o Google
+/// conta conversão no dia do CLIQUE (atribuição retroativa), nós contamos no
+/// dia do PEDIDO; ele credita view-through, nós só último clique.
+model GoogleAdsGastoDia {
+  id           String   @id @default(uuid())
+  /// `customer_id` sem hífen (ex.: `1458258153`).
+  contaId      String   @map("conta_id") @db.VarChar(32)
+  /// `campaign.id` do Google — casa com `Order.utmId` quando o ValueTrack
+  /// `utm_id={campaignid}` está no sufixo de URL final da conta.
+  campanhaId   String   @map("campanha_id") @db.VarChar(40)
+  /// Nome no dia da coleta. É ele que a tela mostra — rótulo torto no UTM
+  /// deixa de sujar o relatório, igual ao que o espelho do Meta já resolveu.
+  campanhaNome String?  @map("campanha_nome") @db.VarChar(200)
+  /// `segments.date` — o Google já recorta no fuso da CONTA, não em UTC.
+  dia          DateTime @db.Date
+  /// `metrics.cost_micros` / 1.000.000 — em REAIS. Micros é a unidade do
+  /// Google; gravar micros aqui seria repetir o bug do preço 100× do espelho
+  /// Wincred, só que 1.000.000×.
+  gasto        Decimal  @default(0) @db.Decimal(12, 2)
+  impressoes   Int      @default(0)
+  cliques      Int      @default(0)
+  /// Decimal, não Int: o Google devolve conversão FRACIONÁRIA (15,06) porque
+  /// divide o crédito entre pontos de contato. Arredondar aqui perderia o
+  /// dado — quem arredonda é a tela, se quiser.
+  conversoes   Decimal  @default(0) @map("conversoes") @db.Decimal(12, 2)
+  /// `metrics.conversions_value` — a receita SEGUNDO O GOOGLE, em reais.
+  valorConversoes Decimal @default(0) @map("valor_conversoes") @db.Decimal(12, 2)
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  /// Recoleta do mesmo dia sobrescreve em vez de duplicar — o Google credita
+  /// conversão no dia do clique por até 90 dias, então o número de ontem ainda
+  /// muda depois de amanhã.
+  @@unique([contaId, campanhaId, dia])
+  @@index([dia])
+  @@map("google_ads_gasto_dia")
+}
+
 /// LOOK — peças que formam um conjunto (dono, 13/08: Regata 403048 + Calça
 /// Aladdin 406027 saem na MESMA foto e têm que se vender juntas). Fase 1: a
 /// PDP de cada peça mostra as irmãs do look ("Complete o look"). Fase 2 (o

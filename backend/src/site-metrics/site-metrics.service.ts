@@ -163,6 +163,32 @@ const soGente = (alias: string) =>
  * referenciados, mesmo em "tudo": query que deixasse de citar um parâmetro
  * quebraria no bind do Postgres, e valor concatenado à mão seria injeção.
  */
+/**
+ * A PLATAFORMA, NORMALIZADA — Google continua sendo Google com o UTM torto.
+ *
+ * `plataforma` só é preenchida quando veio `gclid`/`fbclid`; sem id de clique
+ * ela cai pro `canal`, que é o `utm_source` cru. E `utm_source` cru chega
+ * errado com frequência: em 22/08/2026 a tela mostrava
+ * `Google_Pmax_Feeds_Petter` e `Google_Shopping_Novidades_Petter` como se
+ * fossem PLATAFORMAS — alguém pôs o nome da campanha no `utm_source`. Fatiar o
+ * Google em três linhas de uma peça só não é relatório, é ruído; e uma
+ * variação de maiúscula (`Meta` × `meta`) já bastava pra abrir linha nova.
+ *
+ * Dobra só o que é reconhecível e devolve o resto intacto: normalizar tudo
+ * apagaria origem legítima que ninguém previu.
+ *
+ * ⚠️ Tem que ser o MESMO texto nos dois lugares — na lista que MOSTRA as
+ * opções (`segmentosDisponiveis`) e no filtro que RECORTA por elas
+ * (`SQL_SESSOES_DO_SEGMENTO`). Divergir aqui é oferecer na tela um "google"
+ * que o filtro não encontra, e o relatório inteiro voltar vazio.
+ */
+const SQL_PLATAFORMA = `
+      CASE
+        WHEN lower(COALESCE(plataforma, canal)) LIKE '%google%'          THEN 'google'
+        WHEN lower(COALESCE(plataforma, canal)) ~ '(meta|facebook|instagram)' THEN 'meta'
+        ELSE COALESCE(plataforma, canal)
+      END`;
+
 const SQL_SESSOES_DO_SEGMENTO = `
     SELECT session_id FROM (
       SELECT DISTINCT ON (session_id) session_id,
@@ -178,7 +204,7 @@ const SQL_SESSOES_DO_SEGMENTO = `
             OR ($3 = 'pago'     AND pago)
             OR ($3 = 'organico' AND NOT pago AND canal IS NOT NULL)
             OR ($3 = 'direto'   AND canal IS NULL))
-       AND ($4::text IS NULL OR COALESCE(plataforma, canal) = $4)
+       AND ($4::text IS NULL OR (${SQL_PLATAFORMA}) = $4)
        AND ($5::text IS NULL OR campanha = $5)`;
 
 /** Recorte do segmento pra uma tabela `site_eventos` com o alias dado. Exige
@@ -1086,29 +1112,54 @@ export class SiteMetricsService {
     trafego: Trafego;
     plataforma: string | null;
     campanha: string | null;
-    /** `campaign.id` do Meta — a chave que casa gasto e receita. */
+    /** `campaign.id` (Meta ou Google) — a chave que casa gasto e receita. */
     utmId: string | null;
     pessoas: number;
     gasto: number;
     receita: number;
     pedidos: number;
+    /**
+     * O QUE A PLATAFORMA DIZ que converteu, quando ela diz. `null` = não
+     * coletamos essa métrica dela (hoje: Meta) — e null NÃO é zero. Só o
+     * espelho do Google traz isto, porque é lá que a nossa receita ainda não
+     * casa e o número dele é a única resposta que existe.
+     */
+    convPlataforma: number | null;
+    valorPlataforma: number | null;
+    /** De qual espelho veio o gasto: `meta` | `google` | null (não temos). */
+    fonteGasto: string | null;
   }>> {
     const linhas = await this.prisma.$queryRawUnsafe<Array<{
       trafego: Trafego; plataforma: string | null; campanha: string | null;
       utm_id: string | null; pessoas: number; gasto: number; receita: number; pedidos: number;
+      conv_plataforma: number | null; valor_plataforma: number | null; fonte_gasto: string | null;
     }>>(
       /**
        * O DINHEIRO ENTRA AQUI JUNTO COM AS PESSOAS.
        *
-       * `gasto` vem do espelho do Meta e `receita` vem de `orders` — pedido
-       * PAGO, não evento rastreado. As duas casam pelo **id** da campanha
-       * (`utm_id` = `campaign.id`), nunca pelo nome: nome é renomeado no
-       * Gerenciador, chega codificado duas vezes na URL e às vezes vem como
-       * número. E o rótulo passa a sair do `campanha_nome` da API, então UTM
-       * mal etiquetado deixa de sujar a tela.
+       * `gasto` vem dos espelhos de anúncio (Meta E Google, unidos abaixo) e
+       * `receita` vem de `orders` — pedido PAGO, não evento rastreado. As duas
+       * casam pelo **id** da campanha (`utm_id` = `campaign.id`), nunca pelo
+       * nome: nome é renomeado no Gerenciador, chega codificado duas vezes na
+       * URL e às vezes vem como número. E o rótulo passa a sair do
+       * `campanha_nome` da API, então UTM mal etiquetado deixa de sujar a tela.
        *
        * Receita por PEDIDO e não por evento `purchase` de propósito: ROAS é
        * sobre dinheiro que entrou no caixa. O evento serve pro funil.
+       *
+       * ── O DINHEIRO CONTA UMA VEZ SÓ (corrigido em 22/08/2026) ──
+       *
+       * `sessoes` agrupa por (tráfego, plataforma, campanha, utm_id), e o
+       * MESMO `utm_id` cai em mais de uma dessas linhas sempre que o UTM chega
+       * escrito de dois jeitos. Com o LEFT JOIN puro, cada uma dessas linhas
+       * recebia a receita INTEIRA da campanha — e a cascata somava tudo de
+       * novo por cima. Foi o que fez o mesmo R$ 210 aparecer em "Google" e em
+       * "Google_Shopping_Novidades_Petter" no mesmo dia, inflando o total.
+       *
+       * Agora o dinheiro entra só na linha de POSTO 1 daquele `utm_id` — a de
+       * mais gente. As irmãs continuam aparecendo com as pessoas delas e
+       * dinheiro zero, o total fecha, e o número não é inventado nem dividido
+       * por um critério que ninguém conseguiria explicar depois.
        */
       `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
             origem AS (
@@ -1128,19 +1179,44 @@ export class SiteMetricsService {
               SELECT CASE WHEN pago THEN 'pago'
                           WHEN canal IS NOT NULL THEN 'organico'
                           ELSE 'direto' END      AS trafego,
-                     COALESCE(plataforma, canal) AS plataforma,
+                     (${SQL_PLATAFORMA})         AS plataforma,
                      campanha,
                      utm_id,
                      COUNT(*)::int               AS pessoas
                 FROM origem
                GROUP BY 1, 2, 3, 4
             ),
-            gasto AS (
-              SELECT campanha_id,
-                     MAX(campanha_nome)  AS nome,
-                     SUM(gasto)::float   AS gasto
+            ranqueadas AS (
+              SELECT s.*,
+                     ROW_NUMBER() OVER (PARTITION BY s.utm_id
+                                        ORDER BY s.pessoas DESC, s.plataforma, s.campanha) AS posto
+                FROM sessoes s
+            ),
+            anuncio AS (
+              SELECT campanha_id, campanha_nome, gasto, 'meta'::text AS fonte,
+                     NULL::numeric AS conversoes, NULL::numeric AS valor_conv
                 FROM meta_ads_gasto_dia
                WHERE dia >= $1::date AND dia <= $2::date
+               UNION ALL
+              SELECT campanha_id, campanha_nome, gasto, 'google'::text AS fonte,
+                     conversoes, valor_conversoes
+                FROM google_ads_gasto_dia
+               WHERE dia >= $1::date AND dia <= $2::date
+            ),
+            gasto AS (
+              SELECT campanha_id,
+                     MAX(campanha_nome)      AS nome,
+                     -- De QUEM é este número. A tela precisa escrever "o
+                     -- Google conta X conversões" com o nome certo; "a
+                     -- plataforma diz" não dá pra conferir em lugar nenhum.
+                     MAX(fonte)              AS fonte,
+                     SUM(gasto)::float       AS gasto,
+                     -- SUM de coluna toda NULL devolve NULL, e é isso que
+                     -- separa "o Meta não reporta conversão pra gente" de "o
+                     -- Google reportou zero conversão". Ausência ≠ zero.
+                     SUM(conversoes)::float  AS conversoes,
+                     SUM(valor_conv)::float  AS valor_conv
+                FROM anuncio
                GROUP BY campanha_id
             ),
             receita AS (
@@ -1156,13 +1232,18 @@ export class SiteMetricsService {
             )
        SELECT s.trafego,
               s.plataforma,
+              -- O NOME vem sempre do espelho quando existe, inclusive nas
+              -- linhas de posto 2+: rótulo certo não é dinheiro, pode repetir.
               COALESCE(g.nome, s.campanha)  AS campanha,
               s.utm_id,
               s.pessoas,
-              COALESCE(g.gasto, 0)::float   AS gasto,
-              COALESCE(r.receita, 0)::float AS receita,
-              COALESCE(r.pedidos, 0)::int   AS pedidos
-         FROM sessoes s
+              CASE WHEN s.posto = 1 THEN COALESCE(g.gasto, 0)   ELSE 0 END::float AS gasto,
+              CASE WHEN s.posto = 1 THEN COALESCE(r.receita, 0) ELSE 0 END::float AS receita,
+              CASE WHEN s.posto = 1 THEN COALESCE(r.pedidos, 0) ELSE 0 END::int   AS pedidos,
+              (CASE WHEN s.posto = 1 THEN g.conversoes END)::float AS conv_plataforma,
+              (CASE WHEN s.posto = 1 THEN g.valor_conv END)::float AS valor_plataforma,
+              g.fonte                       AS fonte_gasto
+         FROM ranqueadas s
          LEFT JOIN gasto   g ON g.campanha_id = s.utm_id
          LEFT JOIN receita r ON r.utm_id      = s.utm_id
         ORDER BY s.pessoas DESC, 1, 2, 3
@@ -1179,6 +1260,12 @@ export class SiteMetricsService {
       gasto: Number(l.gasto) || 0,
       receita: Number(l.receita) || 0,
       pedidos: Number(l.pedidos) || 0,
+      // `?? null` e não `|| 0`: zero conversão é uma afirmação do Google,
+      // ausência é a plataforma que não reporta. A tela trata as duas
+      // diferente e só consegue porque o null chega inteiro até ela.
+      convPlataforma: l.conv_plataforma == null ? null : Number(l.conv_plataforma),
+      valorPlataforma: l.valor_plataforma == null ? null : Number(l.valor_plataforma),
+      fonteGasto: l.fonte_gasto ?? null,
     }));
   }
 

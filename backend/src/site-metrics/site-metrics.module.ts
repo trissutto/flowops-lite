@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { SiteMetricsController, SiteMetricsPublicController } from './site-metrics.controller';
 import { SiteMetricsService } from './site-metrics.service';
 import { MetaAdsService } from './meta-ads.service';
+import { GoogleAdsService } from './google-ads.service';
 
 /**
  * MÉTRICA DOS BOTÕES DA LOJA — dado nosso, não do Google.
@@ -24,6 +25,6 @@ import { MetaAdsService } from './meta-ads.service';
 @Module({
   imports: [PrismaModule, AuthModule],
   controllers: [SiteMetricsPublicController, SiteMetricsController],
-  providers: [SiteMetricsService, MetaAdsService],
+  providers: [SiteMetricsService, MetaAdsService, GoogleAdsService],
 })
 export class SiteMetricsModule {}

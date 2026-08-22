@@ -399,3 +399,71 @@ describe('jornadaCompra', () => {
     expect(resultado.jornada.every((linha) => linha.chegaram === 0)).toBe(true);
   });
 });
+
+/**
+ * O DINHEIRO DO GOOGLE NA CASCATA (22/08/2026).
+ *
+ * O Google era a metade cega do relatório: sessão aparecia, dinheiro não. E o
+ * pouco que aparecia estava errado — a receita de um `utm_id` era espalhada
+ * por CADA grafia de UTM daquela campanha e somada de novo pela tela.
+ */
+describe('gasto e receita por campanha', () => {
+  const sqlDaCascata = async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+    await service.segmentosDisponiveis(new Date(), new Date());
+    return String(query.mock.calls[0][0]);
+  };
+
+  it('soma os DOIS espelhos de anúncio, não só o do Meta', async () => {
+    const sql = await sqlDaCascata();
+    expect(sql).toContain('FROM meta_ads_gasto_dia');
+    expect(sql).toContain('FROM google_ads_gasto_dia');
+    expect(sql).toContain('UNION ALL');
+  });
+
+  /**
+   * A receita entra só na linha de POSTO 1 do `utm_id`. Sem isso, campanha que
+   * chega com o UTM escrito de dois jeitos aparece com a receita inteira em
+   * cada linha — foi o mesmo R$ 210 em "Google" e em
+   * "Google_Shopping_Novidades_Petter" no mesmo dia, inflando o total da tela.
+   */
+  it('não deixa a mesma receita cair em duas linhas do mesmo utm_id', async () => {
+    const sql = await sqlDaCascata();
+    expect(sql).toContain('ROW_NUMBER() OVER (PARTITION BY s.utm_id');
+    expect(sql).toMatch(/CASE WHEN s\.posto = 1 THEN COALESCE\(r\.receita, 0\)/);
+    expect(sql).toMatch(/CASE WHEN s\.posto = 1 THEN COALESCE\(g\.gasto, 0\)/);
+  });
+
+  /**
+   * Conversão do Meta é NULL de propósito (não coletamos), e do Google é
+   * número. Trocar o `SUM` por `COALESCE(SUM(...), 0)` aqui faria a tela
+   * afirmar "o Meta converteu zero" — que é mentira, não ausência.
+   */
+  it('deixa a conversão da plataforma chegar nula quando ela não reporta', async () => {
+    const sql = await sqlDaCascata();
+    expect(sql).toContain('NULL::numeric AS conversoes');
+    expect(sql).not.toContain('COALESCE(SUM(conversoes)');
+  });
+
+  /**
+   * A LISTA E O FILTRO TÊM QUE FALAR A MESMA LÍNGUA.
+   *
+   * A tela oferece "google" como opção porque a lista normalizou o UTM torto
+   * (`Google_Shopping_Novidades_Petter` no `utm_source`). Se o filtro não
+   * normalizar igual, clicar na opção devolve relatório vazio — a pior falha
+   * possível aqui, porque parece "não teve movimento" e não "filtro quebrado".
+   */
+  it('normaliza a plataforma do mesmo jeito na lista e no filtro', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new SiteMetricsService({ $queryRawUnsafe: query } as any);
+    const seg = { trafego: 'pago' as const, plataforma: 'google', campanha: null };
+
+    await service.segmentosDisponiveis(new Date(), new Date());
+    await service.funil(new Date(), new Date(), seg);
+
+    for (const [sql] of query.mock.calls) {
+      expect(String(sql)).toContain("lower(COALESCE(plataforma, canal)) LIKE '%google%'");
+    }
+  });
+});

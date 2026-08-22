@@ -1,0 +1,141 @@
+# Google Ads no relatório — o que falta e como ligar
+
+**Por que isto existe.** Em 22/08/2026 a tela `/retaguarda/cliques-lojas` mostrava
+o Meta com `R$ 1,7 mil → R$ 6,6 mil · 3,97x` e o Google com um número solto de
+`R$ 210`. Aquele número solto **não era gasto: era receita**. O Google estava
+cego por **duas** faltas independentes — e cada uma tem um conserto diferente.
+
+| Falta | Sintoma na tela | Conserto | Quem faz |
+|---|---|---|---|
+| Não existia integração com o Google Ads | pílula sem `→` e sem ROAS | espelho `google_ads_gasto_dia` (este PR) | ✅ código pronto, falta credencial |
+| O link do Google não carrega `utm_id` | receita do Google ≈ zero | `utm_id={campaignid}` no sufixo de URL final | 🔧 painel do Google Ads |
+
+O código dos dois lados já subiu. O que resta são **as credenciais** (parte 1) e
+**um campo no painel do Google Ads** (parte 2).
+
+---
+
+## Parte 1 — as credenciais (Railway)
+
+São três coisas diferentes e é fácil confundir uma com a outra.
+
+### 1.1 Token de desenvolvedor (o passo mais demorado)
+
+No **centro de clientes (MCC)**, não na conta do e-commerce:
+`Ferramentas e configurações → Configuração → Central de API`.
+
+- Se aparecer um token com nível **"Acesso de teste"**, ele **não lê conta de
+  produção** — só contas de teste. É preciso pedir **acesso básico**, que passa
+  por análise do Google (formulário sobre o uso da API). É o passo que pode
+  levar dias.
+- O token é do MCC e vale para todas as contas abaixo dele.
+
+→ `GOOGLE_ADS_DEVELOPER_TOKEN`
+
+### 1.2 OAuth — quem autoriza a leitura
+
+Em [console.cloud.google.com](https://console.cloud.google.com):
+
+1. Criar (ou escolher) um projeto.
+2. `APIs e serviços → Biblioteca` → habilitar **Google Ads API**.
+3. `Tela de permissão OAuth` → tipo **Externo** → preencher o mínimo.
+   ⚠️ **PUBLICAR o app (status "Em produção").** Enquanto ficar em **"Teste"**,
+   o refresh token **expira em 7 dias** e a coleta morre em silêncio uma semana
+   depois de tudo parecer funcionando.
+4. `Credenciais → Criar credenciais → ID do cliente OAuth` → tipo **Aplicativo da
+   Web** → em URIs de redirecionamento autorizados, incluir
+   `https://developers.google.com/oauthplayground`.
+
+→ `GOOGLE_ADS_CLIENT_ID` e `GOOGLE_ADS_CLIENT_SECRET`
+
+Para o refresh token, em
+[developers.google.com/oauthplayground](https://developers.google.com/oauthplayground):
+
+1. Engrenagem (canto superior direito) → marcar **Use your own OAuth
+   credentials** → colar o client id e o secret.
+2. Passo 1: digitar o escopo `https://www.googleapis.com/auth/adwords` →
+   **Authorize APIs** → entrar com a conta Google **que tem acesso ao Google Ads**.
+3. Passo 2: **Exchange authorization code for tokens** → copiar o
+   **`refresh_token`** (o `access_token` não serve, vale 1 hora).
+
+→ `GOOGLE_ADS_REFRESH_TOKEN`
+
+### 1.3 As contas
+
+- `GOOGLE_ADS_CONTAS` — `customer_id` **sem hífen**, separados por vírgula.
+  E-commerce: `1458258153`.
+- `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — o id do MCC, sem hífen. Só é necessário se a
+  conta acima estiver **dentro** de um centro de clientes; mandar um MCC que não
+  é o pai dela dá erro de permissão, não é ignorado.
+- `GOOGLE_ADS_API_VERSION` — opcional. Padrão `v25`. Cada versão vive ~1 ano e
+  depois o endpoint devolve **404 seco**; quando isso acontecer, subir a versão
+  aqui resolve sem deploy de código.
+
+### 1.4 Conferir na hora (sem esperar o cron)
+
+O cron roda de hora em hora e **engole o erro de propósito** — métrica não pode
+derrubar o backend. Para ver a resposta do Google na cara, logado como admin:
+
+```bash
+curl -X POST "https://SEU-BACKEND/site-metrics/google-ads/sync?dias=7" -H "Authorization: Bearer SEU_JWT"
+```
+
+- `{"ok":true,"linhas":N}` → gravou N linhas (campanha × dia). A tela já mostra.
+- `{"ok":false,"erro":"..."}` → o erro do Google vem inteiro. Os três mais comuns:
+  - `DEVELOPER_TOKEN_NOT_APPROVED` → parou no 1.1 (ainda é token de teste).
+  - `invalid_grant` no OAuth → refresh token revogado, ou a tela de permissão
+    ficou em "Teste" e ele venceu (1.2, passo 3).
+  - `USER_PERMISSION_DENIED` → `GOOGLE_ADS_LOGIN_CUSTOMER_ID` errado ou ausente.
+
+---
+
+## Parte 2 — o `utm_id` (painel do Google Ads)
+
+Esta parte é independente da parte 1 e **não precisa de API nenhuma**. Sem ela,
+o gasto aparece mas a **nossa** receita continua sem casar com campanha.
+
+**Por quê.** A receita da tela sai de `orders.utm_id`, que casa com o **id da
+campanha**. O Meta preenche `utm_id={{campaign.id}}` sozinho no link. O Google,
+com auto-tagging, entrega só o **`gclid`** — e `gclid` identifica uma *pessoa*,
+então o site guarda o fato (`pago=true`) e a plataforma, nunca o id. Sem
+`utm_id`, `Order.utmId` fica `NULL`, e em Postgres `NULL = NULL` nunca casa.
+
+**O conserto.** Na conta `1458258153`:
+`Configurações → Configurações da conta → Sufixo do URL final`, acrescentar:
+
+```
+utm_id={campaignid}
+```
+
+Se já houver sufixo, juntar com `&` e não apagar o que está lá. Vale também
+conferir campanha a campanha — sufixo definido no nível da campanha **substitui**
+o da conta, não soma.
+
+⚠️ **Não retroage.** Só passa a valer nos cliques a partir do momento em que
+entrar. Pedido antigo continua sem `utm_id` para sempre.
+
+---
+
+## O que NÃO vai bater — e está certo assim
+
+Depois de tudo ligado, a tela mostra dois números de conversão para o Google, e
+eles **vão divergir**:
+
+| | O que o Google conta | O que a nossa tela conta |
+|---|---|---|
+| Quando | no dia do **clique** (retroativo, até 90 dias) | no dia do **pedido** |
+| O quê | inclui view-through e conversões modeladas | só pedido **pago** no caixa |
+| Atribuição | modelo do Google (data-driven) | último clique, janela de 30 dias |
+
+Por isso o espelho guarda `conversoes` e `valor_conversoes` **junto** com o
+gasto: a divergência é informação (quanto o Google está inflando ou quanto a
+gente está perdendo de atribuição), não defeito. Defeito seria uma das duas
+sumir — que é exatamente o que acontecia até aqui.
+
+## Onde mora no código
+
+- `backend/src/site-metrics/google-ads.service.ts` — coleta, OAuth, cron `17 * * * *`
+- `backend/prisma/schema.prisma` → `model GoogleAdsGastoDia`
+- `backend/src/site-metrics/site-metrics.service.ts` → `segmentosDisponiveis()`
+  (une os dois espelhos e casa com `orders`)
+- `frontend/src/app/retaguarda/cliques-lojas/page.tsx` → as pílulas da cascata

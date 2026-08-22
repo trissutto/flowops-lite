@@ -145,11 +145,24 @@ type OpcaoSegmento = {
   gasto: number;
   receita: number;
   pedidos: number;
+  /**
+   * O QUE A PLATAFORMA DIZ que converteu. `null` = ela não reporta isso pra
+   * gente (hoje o Meta), e null NÃO é zero. Só o Google preenche, porque é do
+   * lado dele que a NOSSA receita ainda não casa — o link do Google não
+   * carrega `utm_id`, então o número dele é a única resposta que existe.
+   */
+  convPlataforma: number | null;
+  valorPlataforma: number | null;
+  /** De qual espelho veio o gasto: 'meta' | 'google' | null. */
+  fonteGasto: string | null;
 };
+/** Espelho de gasto ligado por plataforma — `false` é "não sabemos", não "zero". */
+type GastoConfigurado = { meta: boolean; google: boolean };
 type RespostaFunil = {
   de: string;
   ate: string;
   segmentos?: OpcaoSegmento[];
+  gastoConfigurado?: GastoConfigurado;
   /** Anúncios marcados como "de lojas" — sessão deles é tráfego de lojas, entre por onde entrar. */
   campanhasDeLojas?: string[];
   etapas: EtapaFunil[];
@@ -223,7 +236,70 @@ function rotuloCampanha(valor: string): string {
 
 /** Um degrau da cascata. Vazio some — degrau com uma opção só não é escolha. */
 /** Uma opção de degrau, com o dinheiro que ela moveu. */
-type Opcao = { valor: string; pessoas: number; gasto: number; receita: number };
+type Opcao = {
+  valor: string;
+  pessoas: number;
+  gasto: number;
+  receita: number;
+  /** Plataformas que caem nesta opção — é o que diz se falta espelho de gasto. */
+  plataformas: string[];
+  /** Conversões que a plataforma reporta, e quem é ela. Null = não reporta. */
+  convPlataforma: number | null;
+  valorPlataforma: number | null;
+  fontes: string[];
+};
+
+const OPCAO_VAZIA = (valor: string): Opcao => ({
+  valor,
+  pessoas: 0,
+  gasto: 0,
+  receita: 0,
+  plataformas: [],
+  convPlataforma: null,
+  valorPlataforma: null,
+  fontes: [],
+});
+
+/** Soma que preserva o null: null + 3 = 3, null + null = null. */
+const somaOuNull = (a: number | null, b: number | null): number | null =>
+  a == null && b == null ? null : (a ?? 0) + (b ?? 0);
+
+const juntar = (a: string[], b: Array<string | null>): string[] =>
+  Array.from(new Set([...a, ...b.filter((x): x is string => Boolean(x))]));
+
+const acumular = (s: Opcao, o: Omit<Opcao, 'valor'>): Opcao => ({
+  valor: s.valor,
+  pessoas: s.pessoas + o.pessoas,
+  gasto: s.gasto + o.gasto,
+  receita: s.receita + o.receita,
+  plataformas: juntar(s.plataformas, o.plataformas),
+  convPlataforma: somaOuNull(s.convPlataforma, o.convPlataforma),
+  valorPlataforma: somaOuNull(s.valorPlataforma, o.valorPlataforma),
+  fontes: juntar(s.fontes, o.fontes),
+});
+
+/**
+ * AS PLATAFORMAS DESTA OPÇÃO QUE NÃO TÊM ESPELHO DE GASTO.
+ *
+ * Existe pra tela conseguir dizer "não sabemos" em vez de deixar o leitor
+ * concluir "não gastou". Enquanto só o Meta tinha integração, a pílula do
+ * Google saía com a receita nua e sem ROAS — visualmente idêntica a uma
+ * campanha que não custou nada. Meses parecendo campanha ruim, quando o que
+ * faltava era credencial.
+ *
+ * Só fala das duas que a gente SABE integrar. Origem orgânica (WhatsApp,
+ * indicação) não tem gasto pra configurar, e avisar ali seria alarme falso.
+ */
+const PLATAFORMAS_COM_ESPELHO = ['google', 'meta'] as const;
+function semEspelhoDeGasto(o: Opcao, cfg?: GastoConfigurado): string[] {
+  if (!cfg) return [];
+  return o.plataformas
+    .map((p) => p.toLowerCase())
+    .filter((p): p is 'google' | 'meta' =>
+      (PLATAFORMAS_COM_ESPELHO as readonly string[]).includes(p),
+    )
+    .filter((p) => !cfg[p]);
+}
 
 /**
  * ROAS só existe onde houve gasto.
@@ -247,23 +323,17 @@ function Degrau({
   valor,
   onEscolher,
   rotulo = (v: string) => v,
+  gastoConfigurado,
 }: {
   titulo: string;
   opcoes: Opcao[];
   valor: string | null;
   onEscolher: (v: string | null) => void;
   rotulo?: (v: string) => string;
+  gastoConfigurado?: GastoConfigurado;
 }) {
   if (!opcoes.length) return null;
-  const total = opcoes.reduce(
-    (s, o) => ({
-      valor: 'Tudo',
-      pessoas: s.pessoas + o.pessoas,
-      gasto: s.gasto + o.gasto,
-      receita: s.receita + o.receita,
-    }),
-    { valor: 'Tudo', pessoas: 0, gasto: 0, receita: 0 } as Opcao,
-  );
+  const total = opcoes.reduce(acumular, OPCAO_VAZIA('Tudo'));
   const pilula = (ativo: boolean) =>
     `px-3 py-1.5 rounded-xl border text-sm text-left transition ${
       ativo
@@ -271,20 +341,55 @@ function Degrau({
         : 'border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
     }`;
 
-  /** A segunda linha da pílula: o dinheiro. Some quando não houve nenhum. */
+  /**
+   * A SEGUNDA LINHA DA PÍLULA: o dinheiro — e, quando ele falta, POR QUÊ.
+   *
+   * Três coisas diferentes podem aparecer aqui, e a tela nunca deixa duas
+   * virarem a mesma:
+   *  · `gasto → receita · ROAS` — o caso completo, com espelho e com pedido
+   *    casado por `utm_id`.
+   *  · "gasto do Google não configurado" — não temos a credencial. É ausência
+   *    de dado, não campanha sem retorno.
+   *  · "o Google conta N conv · R$ X" — a plataforma reporta e a nossa receita
+   *    não casa (falta `utm_id={campaignid}` no link). Mostrar o número dele é
+   *    melhor que mostrar zero, contanto que fique claro de quem é o número.
+   */
   const dinheiro = (o: Opcao) => {
     const roas = roasDe(o);
-    if (!o.gasto && !o.receita) return null;
+    const cegas = semEspelhoDeGasto(o, gastoConfigurado);
+    // A receita da plataforma só entra quando a NOSSA não casou: com as duas
+    // presentes a pílula viraria um quebra-cabeça de qual é qual.
+    const mostraPlataforma = o.valorPlataforma != null && o.receita === 0;
+    if (!o.gasto && !o.receita && !cegas.length && !mostraPlataforma) return null;
+    const donos = (o.fontes.length ? o.fontes : ['a plataforma'])
+      .map((f) => ROTULO_PLATAFORMA[f] ?? f)
+      .join(' e ');
     return (
-      <span className="block text-[11px] leading-tight tabular-nums text-slate-400">
-        {o.gasto > 0 && <>R$ {brlCurto(o.gasto)} → </>}
-        <span className="text-[#2E7D46] font-semibold">R$ {brlCurto(o.receita)}</span>
-        {roas !== null && (
-          <span className={`ml-1 font-bold ${roas >= 1 ? 'text-[#8C7325]' : 'text-rose-600'}`}>
-            · {roas.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}x
+      <>
+        {(o.gasto > 0 || o.receita > 0) && (
+          <span className="block text-[11px] leading-tight tabular-nums text-slate-400">
+            {o.gasto > 0 && <>R$ {brlCurto(o.gasto)} → </>}
+            <span className="text-[#2E7D46] font-semibold">R$ {brlCurto(o.receita)}</span>
+            {roas !== null && (
+              <span className={`ml-1 font-bold ${roas >= 1 ? 'text-[#8C7325]' : 'text-rose-600'}`}>
+                · {roas.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}x
+              </span>
+            )}
           </span>
         )}
-      </span>
+        {cegas.length > 0 && (
+          <span className="block text-[11px] leading-tight text-amber-700">
+            gasto do {cegas.map((p) => ROTULO_PLATAFORMA[p] ?? p).join(' e ')} não configurado
+          </span>
+        )}
+        {mostraPlataforma && (
+          <span className="block text-[11px] leading-tight tabular-nums text-slate-400">
+            {donos} conta{' '}
+            {(o.convPlataforma ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} conv ·
+            R$ {brlCurto(o.valorPlataforma ?? 0)}
+          </span>
+        )}
+      </>
     );
   };
 
@@ -327,12 +432,14 @@ function Cascata({
   plataforma,
   campanha,
   onMudar,
+  gastoConfigurado,
 }: {
   opcoes: OpcaoSegmento[];
   trafego: Trafego | null;
   plataforma: string | null;
   campanha: string | null;
   onMudar: (s: { trafego: Trafego | null; plataforma: string | null; campanha: string | null }) => void;
+  gastoConfigurado?: GastoConfigurado;
 }) {
   const somar = (
     linhas: OpcaoSegmento[],
@@ -342,11 +449,18 @@ function Cascata({
     for (const o of linhas) {
       const k = chave(o);
       if (!k) continue;
-      const atual = mapa.get(k) ?? { valor: k, pessoas: 0, gasto: 0, receita: 0 };
-      atual.pessoas += o.pessoas;
-      atual.gasto += o.gasto;
-      atual.receita += o.receita;
-      mapa.set(k, atual);
+      mapa.set(
+        k,
+        acumular(mapa.get(k) ?? OPCAO_VAZIA(k), {
+          pessoas: o.pessoas,
+          gasto: o.gasto,
+          receita: o.receita,
+          plataformas: o.plataforma ? [o.plataforma] : [],
+          convPlataforma: o.convPlataforma,
+          valorPlataforma: o.valorPlataforma,
+          fontes: o.fonteGasto ? [o.fonteGasto] : [],
+        }),
+      );
     }
     return Array.from(mapa.values()).sort(
       (a, b) => b.pessoas - a.pessoas || a.valor.localeCompare(b.valor),
@@ -383,6 +497,7 @@ function Cascata({
         titulo="Tráfego"
         opcoes={nivel1}
         valor={trafego}
+        gastoConfigurado={gastoConfigurado}
         rotulo={(v) => ROTULO_TRAFEGO[v as Trafego] ?? v}
         onEscolher={(v) =>
           onMudar({ trafego: (v as Trafego) ?? null, plataforma: null, campanha: null })
@@ -393,6 +508,7 @@ function Cascata({
           titulo="Origem"
           opcoes={nivel2}
           valor={plataforma}
+          gastoConfigurado={gastoConfigurado}
           rotulo={(v) => ROTULO_PLATAFORMA[v.toLowerCase()] ?? v}
           onEscolher={(v) => onMudar({ trafego, plataforma: v, campanha: null })}
         />
@@ -402,6 +518,7 @@ function Cascata({
           titulo="Campanha"
           opcoes={nivel3}
           valor={campanha}
+          gastoConfigurado={gastoConfigurado}
           rotulo={rotuloCampanha}
           onEscolher={(v) => onMudar({ trafego, plataforma, campanha: v })}
         />
@@ -698,6 +815,7 @@ export default function CliquesLojasPage() {
         plataforma={seg.plataforma}
         campanha={seg.campanha}
         onMudar={setSeg}
+        gastoConfigurado={funil?.gastoConfigurado}
       />
 
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
