@@ -192,6 +192,38 @@ export class GoogleAdsService {
   }
 
   /**
+   * UMA CHAMADA AUTENTICADA À API — o lugar único que monta os três headers.
+   *
+   * Público porque o `GoogleAdsConversaoService` (que devolve a venda pro
+   * Google) usa a mesma credencial. Duplicar a montagem de header em dois
+   * serviços significaria consertar `login-customer-id` em dois lugares no dia
+   * em que o MCC mudar, e esquecer um.
+   */
+  async requisitar(caminho: string, corpo: unknown): Promise<any> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${await this.token()}`,
+      'developer-token': this.env('GOOGLE_ADS_DEVELOPER_TOKEN') ?? '',
+      'Content-Type': 'application/json',
+    };
+    // Só vai quando existe: mandar `login-customer-id` de um MCC que não é pai
+    // da conta é erro de permissão, não header ignorado.
+    const mcc = this.env('GOOGLE_ADS_LOGIN_CUSTOMER_ID')?.replace(/\D/g, '');
+    if (mcc) headers['login-customer-id'] = mcc;
+
+    const res = await fetch(`https://googleads.googleapis.com/${this.versao}/${caminho}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(corpo),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) {
+      const texto = await res.text().catch(() => '');
+      throw new Error(`Google ${res.status} em ${caminho}: ${texto.slice(0, 400)}`);
+    }
+    return res.json();
+  }
+
+  /**
    * Uma linha por campanha POR DIA. O `segments.date` no SELECT é o que quebra
    * o período em dias — sem ele o Google devolve o intervalo somado e não dá
    * pra cruzar com o filtro De/Até da tela.
@@ -220,32 +252,13 @@ export class GoogleAdsService {
       ` WHERE segments.date BETWEEN '${desde}' AND '${ate}'`,
     ].join('\n');
 
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${await this.token()}`,
-      'developer-token': this.env('GOOGLE_ADS_DEVELOPER_TOKEN') ?? '',
-      'Content-Type': 'application/json',
-    };
-    // Só vai quando existe: mandar `login-customer-id` de um MCC que não é pai
-    // da conta é erro de permissão, não header ignorado.
-    const mcc = this.env('GOOGLE_ADS_LOGIN_CUSTOMER_ID')?.replace(/\D/g, '');
-    if (mcc) headers['login-customer-id'] = mcc;
-
-    const url = `https://googleads.googleapis.com/${this.versao}/customers/${conta}/googleAds:searchStream`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ query }),
-      signal: AbortSignal.timeout(60_000),
-    });
-    if (!res.ok) {
-      const texto = await res.text().catch(() => '');
-      throw new Error(`Google ${res.status} na conta ${conta}: ${texto.slice(0, 400)}`);
-    }
-
     // `searchStream` devolve um ARRAY de lotes, cada um com `results` — não um
     // objeto com `results` na raiz. Ler `json.results` direto volta vazio sem
     // erro nenhum, que é o jeito mais fácil de achar que a conta não gastou.
-    const corpo = (await res.json()) as unknown;
+    const corpo = (await this.requisitar(
+      `customers/${conta}/googleAds:searchStream`,
+      { query },
+    )) as unknown;
     const lotes: Array<{ results?: any[] }> = Array.isArray(corpo)
       ? (corpo as Array<{ results?: any[] }>)
       : [corpo as { results?: any[] }];

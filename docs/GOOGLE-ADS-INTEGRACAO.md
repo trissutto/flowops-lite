@@ -162,6 +162,51 @@ anúncio.
 
 ---
 
+---
+
+## Parte 3 — a conversão volta pelo servidor (o conserto de 19/08)
+
+**O que quebrou.** Em 19/08/2026 às 09:00 a conta parou de registrar conversão.
+As DUAS ações morreram no mesmo minuto: a `Compra [OK]`, disparada pelo Tag
+Manager do WordPress (que morreu quando o site novo assumiu `lurds.com.br`), e o
+import `[GA4] (web) purchase`, que é a ação **principal**. Três dias de campanha
+em ROAS desejado otimizando às cegas — e o robô não corta o gasto quando perde o
+sinal, corta a entrega: o Shopping caiu de 487 para 127 cliques/dia.
+
+**Por que tag no navegador não resolve.** `purchase` é `SERVER_ONLY_EVENTS` no
+site, de propósito: evento de compra disparado pelo navegador é forjável, e o
+PIX é pago horas depois, sem navegador aberto. A conversão tem que sair do
+servidor.
+
+**O que passou a existir.** `GoogleAdsConversaoService` — cron de 10 min que sobe
+as vendas pagas via `uploadClickConversions`, casando pelo **`gclid`**:
+
+- `Order.gclid` — o id do clique, que **já chegava** no checkout dentro de
+  `attribution` e era descartado (o backend lia só o `attr.id`).
+- `Order.adsConversaoEnviadaEm` — idempotência nossa. O Google também deduplica
+  por `orderId`, mas depender da garantia do outro é o erro que o outbox do PDV
+  não comete com o Giga.
+- `partialFailure: true` + carimbo **por índice**: a linha recusada volta na
+  próxima rodada em vez de sumir.
+- Hora da conversão = `paidAt` (não `createdAt`), com fuso explícito.
+
+Envs: `GOOGLE_ADS_CONVERSAO_ACTION_ID` (na conta 892-523-1246, a `Compra [OK]`
+é **6807548872** — o "Código do tipo de conversão" na ficha dela),
+`GOOGLE_ADS_CONVERSAO_CONTA` e o kill-switch `GOOGLE_ADS_CONVERSAO_UPLOAD`.
+
+Teste manual, sem esperar o cron:
+
+```bash
+curl -X POST "https://SEU-BACKEND/site-metrics/google-ads/conversoes" -H "Authorization: Bearer SEU_JWT"
+```
+
+⚠️ **Só vale daqui pra frente.** Pedido fechado antes deste deploy não tem
+`gclid` gravado e não há como recuperá-lo.
+
+⚠️ **Depois que isto estiver enviando, a ação que recebe o upload precisa virar
+principal** — e a do GA4, secundária. Duas principais medindo a mesma compra
+contam a venda em dobro.
+
 ## O que NÃO vai bater — e está certo assim
 
 Depois de tudo ligado, a tela mostra dois números de conversão para o Google, e

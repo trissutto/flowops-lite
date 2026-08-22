@@ -23,6 +23,7 @@ import {
 } from './site-metrics.service';
 import { MetaAdsService } from './meta-ads.service';
 import { GoogleAdsService } from './google-ads.service';
+import { GoogleAdsConversaoService } from './google-ads-conversao.service';
 
 /**
  * A PORTA DO SITE — server-to-server, do BFF do e-commerce pra cá.
@@ -110,6 +111,7 @@ export class SiteMetricsController {
     private readonly service: SiteMetricsService,
     private readonly metaAds: MetaAdsService,
     private readonly googleAds: GoogleAdsService,
+    private readonly googleAdsConversao: GoogleAdsConversaoService,
   ) {}
 
   /**
@@ -133,6 +135,33 @@ export class SiteMetricsController {
     try {
       const linhas = await this.googleAds.coletar(janela);
       return { ok: true, configurado: true, dias: janela, linhas };
+    } catch (err) {
+      return { ok: false, configurado: true, erro: String(err).slice(0, 500) };
+    }
+  }
+
+  /**
+   * ENVIO MANUAL DAS CONVERSÕES PENDENTES — o mesmo motivo do sync acima.
+   *
+   * Quem acabou de configurar precisa ver o Google aceitar (ou recusar, e por
+   * quê) agora, não daqui a 10 minutos num log. A recusa mais comum é clique
+   * fora da janela da ação de conversão, e ela vem escrita na resposta.
+   */
+  @Post('google-ads/conversoes')
+  async enviarConversoesGoogleAds(@Req() req: any, @Query('limite') limite?: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    if (!this.googleAdsConversao.configurado()) {
+      return {
+        ok: false,
+        configurado: false,
+        erro: 'Faltam as envs do Google Ads ou GOOGLE_ADS_CONVERSAO_ACTION_ID',
+      };
+    }
+    try {
+      const enviadas = await this.googleAdsConversao.enviarPendentes(
+        Math.min(Math.max(Number(limite) || 200, 1), 2000),
+      );
+      return { ok: true, configurado: true, enviadas };
     } catch (err) {
       return { ok: false, configurado: true, erro: String(err).slice(0, 500) };
     }

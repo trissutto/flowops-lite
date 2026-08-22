@@ -117,6 +117,14 @@ export interface LojaTrackingInput {
     campaign?: string;
     content?: string;
     id?: string;
+    /**
+     * `gclid` — o id do clique do Google Ads. Chegava desde sempre dentro deste
+     * mesmo objeto (o `captureAttribution()` do site já o inclui) e sumia aqui,
+     * porque a interface não o declarava. Mesmo tipo de buraco do
+     * `recovery_consent` logo abaixo: o dado viaja, o tipo não o conhece, e a
+     * feature que depende dele nunca liga — sem erro nenhum.
+     */
+    gclid?: string;
   };
   /**
    * Opt-in de WhatsApp, vindo da etapa 1 do checkout.
@@ -1040,6 +1048,12 @@ export class LojaOrdersService {
             utmCampaign: attr.campaign || null,
             utmId: attr.id || null,
             utmContent: attr.content || null,
+            // O `gclid` viajava no MESMO objeto de atribuição desde sempre e
+            // morria aqui, porque só o `attr.id` era lido. É ele que permite
+            // devolver a venda ao Google pelo servidor
+            // (`GoogleAdsConversaoService`), sem depender do import do GA4 —
+            // o caminho que secou sozinho em 19/08/2026.
+            gclid: attr.gclid || null,
             checkoutInfo: JSON.stringify(checkoutInfo),
             trackingInfo: trackingInfo ? JSON.stringify(trackingInfo) : null,
             items: {

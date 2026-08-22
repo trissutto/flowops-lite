@@ -425,6 +425,25 @@ model Order {
   utmCampaign     String? @map("utm_campaign")    // NOME da campanha ({{campaign.name}})
   utmId           String? @map("utm_id")          // ID da campanha ({{campaign.id}})
   utmContent      String? @map("utm_content")     // anúncio/criativo ({{ad.name}})
+  /// ID DO CLIQUE DO GOOGLE ADS — a prova de que ESTA venda veio DAQUELE clique.
+  ///
+  /// O navegador já capturava (`identity.ts`) e o checkout já mandava dentro de
+  /// `attribution`; o backend lia só o `attr.id` e jogava o resto fora. Sem ele
+  /// não existe caminho de volta pro Google: o `purchase` deste site é
+  /// SERVER-ONLY (PIX paga horas depois, sem navegador aberto), então a
+  /// conversão precisa ser ENVIADA pelo servidor — e o `uploadClickConversions`
+  /// casa por `gclid`. Foi essa a peça que faltou quando o import do GA4 secou
+  /// em 19/08/2026 e a conta passou dias otimizando às cegas.
+  ///
+  /// ⚠️ Aqui é diferente de `site_eventos`: naquela tabela id de clique é
+  /// PROIBIDO (identifica uma pessoa numa tabela de métrica anônima). No pedido
+  /// já moram nome, CPF, telefone e endereço da MESMA pessoa — guardar o clique
+  /// dela ao lado não muda a natureza do dado, e é o que fecha o dinheiro.
+  gclid           String? @map("gclid")
+  /// Carimbo do upload pro Google Ads. NULL = ainda não subiu; é a idempotência
+  /// do cron. O Google também deduplica por `orderId`, mas depender da garantia
+  /// do outro é o mesmo erro do outbox do PDV confiar no Giga.
+  adsConversaoEnviadaEm DateTime? @map("ads_conversao_enviada_em")
   // ── Atribuição de venda (atendente que iniciou o contato — cliente fecha no site) ──
   // Marcação manual via UI (operadora matriz). Relatório mensal soma por vendedora.
   sellerId        String?   @map("seller_id")
