@@ -41,6 +41,18 @@ export class StockMirrorService {
    * pra cada SKU que mudou.
    */
   async fullSyncFromGiga(input?: { storeCodes?: string[] }) {
+    // ⚠️ BLOQUEADO EM 22/08. Este sync é de 2026-06, de quando o Giga ainda
+    // sabia o saldo; hoje ele copiaria o número do Giga por cima da tabela
+    // `stock` — a mesma família do que devolveu ao estoque de São José uma
+    // peça já vendida (BMM-100 VINHO 52, 19/08). Some o agravante: nenhuma
+    // tela lê a tabela `stock` desde então, então isso só cria dado errado
+    // sem servir a ninguém. `ERP_STOCK_WRITEBACK_GIGA=1` destrava.
+    if (String(process.env.ERP_STOCK_WRITEBACK_GIGA ?? '0').trim() !== '1') {
+      throw new BadRequestException(
+        'Sync de estoque Giga→Flow desativado: o Flow é a fonte do estoque desde 14/07 e nenhuma ' +
+        'tela lê mais esta tabela. Se precisa conferir divergência, use o Conferidor de Estoque.',
+      );
+    }
     const lojas = (input?.storeCodes || this.MANAGED_STORES)
       .map((s) => String(s).trim().toUpperCase())
       .filter(Boolean);

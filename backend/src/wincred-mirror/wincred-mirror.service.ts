@@ -410,12 +410,24 @@ export class WincredMirrorService {
   async syncEstoque(force = false): Promise<SyncResult> {
     // CONSTITUIÇÃO 14/07 (dono): FLOW é a FONTE do estoque e ninguém mais mexe
     // em estoque no Wincred desktop. O full Giga→Flow fica DESLIGADO por
-    // padrão — só sobrescreveria a verdade do Flow na janela da fila do
-    // outbox. O Giga segue recebendo réplica de tudo (backup). Recuperação:
-    // botão manual da tela (force=true) ou env ESTOQUE_SYNC_GIGA=1.
+    // padrão — só sobrescreveria a verdade do Flow na janela da fila do outbox.
+    //
+    // ⚠️ 22/08: o `force` do botão da tela NÃO fura mais a trava. Ele existia
+    // como "recuperação", mas puxar 283 mil linhas do Giga por cima do estoque
+    // do Flow não recupera nada — é a versão em massa do que devolveu uma peça
+    // vendida ao estoque de São José (BMM-100 VINHO 52, 19/08). Quem quiser
+    // mesmo precisa ligar a env, conscientemente, e desligar depois.
     const gigaSyncOn = String(process.env.ESTOQUE_SYNC_GIGA ?? '').trim() === '1';
-    if (!gigaSyncOn && !force) {
-      return { table: 'estoque', success: true, processed: 0, durationMs: 0, error: 'desligado — Flow é a fonte (ESTOQUE_SYNC_GIGA=1 reativa)' };
+    if (!gigaSyncOn) {
+      return {
+        table: 'estoque',
+        success: true,
+        processed: 0,
+        durationMs: 0,
+        error: force
+          ? 'desligado — o Flow é a fonte do estoque; o botão não fura mais a trava (só ESTOQUE_SYNC_GIGA=1 reativa)'
+          : 'desligado — Flow é a fonte (ESTOQUE_SYNC_GIGA=1 reativa)',
+      };
     }
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
