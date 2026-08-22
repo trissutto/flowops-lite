@@ -62,11 +62,24 @@ Para o refresh token, em
 
 ### 1.3 As contas
 
-- `GOOGLE_ADS_CONTAS` — `customer_id` **sem hífen**, separados por vírgula.
-  E-commerce: `1458258153`.
-- `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — o id do MCC, sem hífen. Só é necessário se a
-  conta acima estiver **dentro** de um centro de clientes; mandar um MCC que não
-  é o pai dela dá erro de permissão, não é ignorado.
+⚠️ **Conferir o id antes de colar.** A conexão do Google (`trissutto@gmail.com`)
+lista **três** contas, e nenhuma delas é o `1458258153` que aparece em anotações
+anteriores — esse número é, muito provavelmente, o **MCC**, não a conta:
+
+| `customer_id` | Nome |
+|---|---|
+| `8681042744` | Lurds Ecomm - 2024 |
+| `8925231246` | Lurds Plus Size - Ecomm |
+| `9564998046` | Lurds Plus Size - Lojas físicas |
+
+- `GOOGLE_ADS_CONTAS` — `customer_id` **sem hífen**, separados por vírgula. Pôr a
+  conta do e-commerce que está gastando hoje (conferir no painel qual das duas
+  primeiras é a viva); dá pra listar as três, e aí o relatório passa a enxergar
+  também a conta das lojas físicas.
+- `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — o id do MCC, sem hífen (provavelmente
+  `1458258153`). Só é necessário se a conta acima estiver **dentro** de um centro
+  de clientes; mandar um MCC que não é o pai dela dá erro de permissão, não é
+  ignorado.
 - `GOOGLE_ADS_API_VERSION` — opcional. Padrão `v25`. Cada versão vive ~1 ano e
   depois o endpoint devolve **404 seco**; quando isso acontecer, subir a versão
   aqui resolve sem deploy de código.
@@ -100,7 +113,7 @@ com auto-tagging, entrega só o **`gclid`** — e `gclid` identifica uma *pessoa
 então o site guarda o fato (`pago=true`) e a plataforma, nunca o id. Sem
 `utm_id`, `Order.utmId` fica `NULL`, e em Postgres `NULL = NULL` nunca casa.
 
-**O conserto.** Na conta `1458258153`:
+**O conserto.** Na conta do e-commerce (ver 1.3):
 `Configurações → Configurações da conta → Sufixo do URL final`, acrescentar:
 
 ```
@@ -113,6 +126,39 @@ o da conta, não soma.
 
 ⚠️ **Não retroage.** Só passa a valer nos cliques a partir do momento em que
 entrar. Pedido antigo continua sem `utm_id` para sempre.
+
+### 2.2 O `utm_source` com o nome da campanha dentro
+
+Na tela de 22/08 apareciam, no degrau **ORIGEM** (que é plataforma),
+`Google_Pmax_Feeds_Petter` e `Google_Shopping_Novidades_Petter`. Isso é o **nome
+da campanha escrito no `utm_source`** de algum anúncio — `utm_source` responde
+"de que plataforma veio", `utm_campaign` responde "de que campanha".
+
+O relatório **já não quebra mais por causa disso** (a normalização dobra qualquer
+`utm_source` que contenha "google" para `google`, e o mesmo texto vale no filtro),
+mas a etiqueta segue errada na origem e vale consertar:
+
+| Parâmetro | Certo | O que está no ar em alguns anúncios |
+|---|---|---|
+| `utm_source` | `google` | `Google_Shopping_Novidades_Petter` ❌ |
+| `utm_medium` | `cpc` | — |
+| `utm_campaign` | o nome da campanha | ok |
+| `utm_id` | `{campaignid}` | ausente ❌ (2.1) |
+
+Sufixo completo recomendado para a conta:
+
+```
+utm_source=google&utm_medium=cpc&utm_campaign={campaignid}&utm_id={campaignid}
+```
+
+⚠️ Sufixo definido na **campanha** substitui o da **conta** — conferir campanha a
+campanha se alguma tem sufixo próprio, senão o da conta nunca chega naquele
+anúncio.
+
+> **Isto não dá para fazer daqui.** A conexão do Google Ads disponível nesta
+> sessão (Supermetrics) está com o trial expirado desde 18/07/2026 — só lê e
+> escreve com assinatura ativa. Enquanto isso, os dois consertos da parte 2 são
+> no painel, na mão.
 
 ---
 

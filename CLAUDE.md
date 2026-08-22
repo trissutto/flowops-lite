@@ -80,8 +80,8 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `META_ADS_TOKEN` / `META_ADS_CONTAS` | — | Espelho de gasto do Meta (`meta_ads_gasto_dia`, cron `7 * * * *`). Sem elas a linha do dinheiro do Meta **some** da cascata — nunca mostra zero |
 | `GOOGLE_ADS_DEVELOPER_TOKEN` | — | Espelho de gasto/conversão do Google (`google_ads_gasto_dia`, cron `17 * * * *`). Token do **MCC**, aprovado pelo Google — é o passo que depende do dono |
 | `GOOGLE_ADS_CLIENT_ID` / `_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth de leitura (escopo `adwords`). O refresh token não vence sozinho, mas morre se a senha da conta Google mudar |
-| `GOOGLE_ADS_CONTAS` | — | `customer_id` sem hífen, separados por vírgula (e-commerce: `1458258153`) |
-| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | — | Id do MCC. Só quando a conta lida está dentro de um centro de clientes |
+| `GOOGLE_ADS_CONTAS` | — | `customer_id` sem hífen, separados por vírgula. Contas da conexão: `8681042744` (Ecomm 2024), `8925231246` (Plus Size Ecomm), `9564998046` (Lojas físicas) |
+| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | — | Id do MCC (provavelmente `1458258153`). Só quando a conta lida está dentro de um centro de clientes |
 | `GOOGLE_ADS_API_VERSION` | `v25` | Versão da API. Vive ~1 ano e o endpoint some com 404 seco — subir aqui evita deploy de código |
 
 ## Convenções de trabalho (Thiago)
