@@ -178,17 +178,40 @@ export class RastreioSyncCron {
      * cache: é o pedido preso que interessa, e `promoverEntregues` reconfere
      * volume a volume antes de fechar.
      */
+    /**
+     * ⚠️ SÓ ENTRA QUEM CONSEGUE FECHAR (corrigido na estreia, 22/08).
+     *
+     * A primeira versão pedia "código entregue" e deixava o
+     * `promoverEntregues` decidir. Só que pedido DIVIDIDO com uma caixa
+     * entregue e outra na rua não fecha — e, como o pedido continua
+     * `shipped`, o código voltava na consulta do ciclo seguinte, e do
+     * seguinte, pra sempre. Medido em produção logo depois do deploy: 187
+     * pedidos na fila, 171 fechavam e **16 ocupavam vaga sem nunca fechar**
+     * (todos divididos). Com teto de 40, isso queimava 40% do lote por
+     * ciclo; se um dia os travados passassem de 40, a fila PARAVA e o buraco
+     * voltava calado.
+     *
+     * Agora o `BOOL_AND` resolve no banco: o pedido só aparece quando TODOS
+     * os volumes dele estão entregues. O `promoverEntregues` reconfere assim
+     * mesmo — proteção em duas camadas, porque fechar pedido cuja caixa
+     * ainda está na rua faz a loja dizer pra cliente que chegou tudo.
+     */
     const presos: Array<{ codigo: string }> = await this.prisma.$queryRawUnsafe(
-      `SELECT DISTINCT c.codigo
-         FROM (
+      `WITH cod AS (
            SELECT o.id, o.tracking_code AS codigo FROM orders o WHERE o.status='shipped' AND o.tracking_code IS NOT NULL
            UNION ALL
            SELECT o.id, po.tracking_code FROM orders o
              JOIN pick_orders po ON po.order_id = o.id
             WHERE o.status='shipped' AND po.tracking_code IS NOT NULL
-         ) c
-         JOIN rastreio_objetos r ON r.codigo = c.codigo
-        WHERE r.entregue
+         ),
+         pedido AS (
+           SELECT c.id, BOOL_AND(COALESCE(r.entregue, false)) AS todos_entregues
+             FROM cod c LEFT JOIN rastreio_objetos r ON r.codigo = c.codigo
+            GROUP BY c.id
+         )
+       SELECT DISTINCT c.codigo
+         FROM cod c JOIN pedido p ON p.id = c.id
+        WHERE p.todos_entregues
         ORDER BY c.codigo
         LIMIT $1`,
       lote,
