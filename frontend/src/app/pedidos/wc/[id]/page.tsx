@@ -81,7 +81,10 @@ interface SeparationPreview {
   shippingMethod: string;
   groups: SeparationGroup[];
   missing: Array<{ sku: string; quantity: number; productName: string }>;
-  alternativesBySku: Record<string, Array<{ storeId: string; storeCode: string; storeName: string; availableQty: number; whatsapp: string | null }>>;
+  // `availableQty` é LÍQUIDO: já vem sem as peças prometidas a cards abertos
+  // em outros pedidos (`reservedQty`). Trocar a loja na mão não pode oferecer
+  // peça que já tem dono.
+  alternativesBySku: Record<string, Array<{ storeId: string; storeCode: string; storeName: string; availableQty: number; reservedQty?: number; whatsapp: string | null }>>;
   /**
    * Outras lojas que TAMBÉM cobrem o pedido inteiro (top 5, exceto a escolhida).
    * Aparece como radio buttons abaixo do "1 loja atende o pedido inteiro"
@@ -358,6 +361,8 @@ export default function PedidoDetailPage() {
     skusTotal: number;
     /** Quantidade total que a loja tem somando todos os SKUs. */
     totalQty: number;
+    /** Peças que a loja tem mas já estão PROMETIDAS a cards de outros pedidos. */
+    reservedQty: number;
     /** Lista dos SKUs que faltam nessa loja. */
     missingSkus: string[];
     /** Já reportou problema nesse pedido? */
@@ -1196,11 +1201,15 @@ export default function PedidoDetailPage() {
       // conjunto de SKUs cobertos por loja (group assignee + alternativa com
       // estoque suficiente) e deriva skusCovered/missing/totalQty dele.
       const skusArr = Array.from(relevantSkus);
-      const byStore = new Map<string, { skusCovered: number; totalQty: number; missing: string[] }>();
+      const byStore = new Map<string, { skusCovered: number; totalQty: number; reservedQty: number; missing: string[] }>();
       for (const s of activeStores) {
         const code = s.code;
         const covered = new Set<string>();
         let totalQty = 0;
+        // Peças que a loja TEM mas já estão prometidas a card de outro pedido —
+        // o backend já tirou elas do availableQty; aqui é só pra tela poder
+        // dizer POR QUE a loja aparece com menos do que a Consulta mostra.
+        let reservedQty = 0;
         preview.groups.filter((g) => g.storeCode === code).forEach((g) =>
           g.items.forEach((it) => {
             if (relevantSkus.has(it.sku) && !covered.has(it.sku)) {
@@ -1210,10 +1219,13 @@ export default function PedidoDetailPage() {
           }),
         );
         Object.entries(preview.alternativesBySku ?? {}).forEach(([sku, alts]) => {
-          if (!relevantSkus.has(sku) || covered.has(sku)) return;
-          const need = qtyBySku.get(sku) ?? 1;
+          if (!relevantSkus.has(sku)) return;
           const alt = alts.find((a) => a.storeCode === code);
-          if (alt && alt.availableQty >= need) {
+          if (!alt) return;
+          reservedQty += alt.reservedQty ?? 0;
+          if (covered.has(sku)) return;
+          const need = qtyBySku.get(sku) ?? 1;
+          if (alt.availableQty >= need) {
             covered.add(sku);
             totalQty += alt.availableQty;
           }
@@ -1221,13 +1233,14 @@ export default function PedidoDetailPage() {
         byStore.set(code, {
           skusCovered: covered.size,
           totalQty,
+          reservedQty,
           missing: skusArr.filter((sku) => !covered.has(sku)),
         });
       }
 
       const candidates = activeStores
         .map((s) => {
-          const rec = byStore.get(s.code) ?? { skusCovered: 0, totalQty: 0, missing: [] };
+          const rec = byStore.get(s.code) ?? { skusCovered: 0, totalQty: 0, reservedQty: 0, missing: [] };
           return {
             id: s.id,
             code: s.code,
@@ -1238,6 +1251,7 @@ export default function PedidoDetailPage() {
             skusCovered: rec.skusCovered,
             skusTotal: relevantSkus.size,
             totalQty: rec.totalQty,
+            reservedQty: rec.reservedQty,
             missingSkus: rec.missing,
             hasReportedIssue: issueCodes.has(s.code),
           };
@@ -3434,6 +3448,14 @@ export default function PedidoDetailPage() {
                           <div className="text-xs text-slate-500 mt-0.5">
                             {[c.city, c.state].filter(Boolean).join(' / ') || '—'}
                             {c.totalQty > 0 && <> · {c.totalQty} un. disponíveis</>}
+                            {/* A peça está na arara, mas já tem dono: outro card
+                                aberto nesta loja vai levar ela. Sem esta linha a
+                                loja "some" e ninguém entende por quê. */}
+                            {c.reservedQty > 0 && (
+                              <span className="text-amber-700 font-medium">
+                                {' '}· {c.reservedQty} já prometida{c.reservedQty > 1 ? 's' : ''} a outro pedido
+                              </span>
+                            )}
                           </div>
                           {c.missingSkus.length > 0 && c.missingSkus.length <= 5 && (
                             <div className="text-xs text-slate-600 mt-1">

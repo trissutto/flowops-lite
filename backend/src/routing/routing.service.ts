@@ -9,6 +9,7 @@ import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 import { diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import { lojasDaRotaPropria } from '../common/rota-propria';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
+import { computeCommittedStock } from './committed-stock.util';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { ErpService } from '../erp/erp.service';
@@ -1100,15 +1101,40 @@ export class RoutingService {
   }
 
   /**
+   * ANTI-OVERBOOKING — LIGADO por padrão desde 22/08 (ordem do dono).
+   *
+   * "No roteamento deve se levar em conta as peças pedidas na loja, pois
+   *  enquanto a peça não é baixada ela pode ser pedida várias vezes."
+   *
+   * Ficou desligado por muito tempo com a justificativa de "prometer a venda":
+   * na prática quem pagava a promessa era a loja, que recebia dois cards pra
+   * mesma peça e descobria no balcão. `ROUTING_ANTI_OVERBOOKING=0` (ou
+   * `false`/`off`) volta o comportamento antigo — qualquer outro valor mantém
+   * ligado, inclusive o `true` que já esteja setado em produção.
+   */
+  private get antiOverbookingEnabled(): boolean {
+    const v = String(process.env.ROUTING_ANTI_OVERBOOKING ?? '').trim().toLowerCase();
+    return v !== '0' && v !== 'false' && v !== 'off';
+  }
+
+  /**
    * ESTOQUE COMPROMETIDO em pick-orders ATIVOS (status new/separating/separated).
    *
-   * Pra cada (storeCode, sku), retorna a soma de quantidades já alocadas em
-   * pick-orders que ainda NÃO foram baixados (separated ainda aguarda matriz aprovar).
-   * Quando pick-order vai pra `ready` (após approve-debit) ou `shipped`, o estoque já
-   * caiu no Giga (ou cai logo, se ERP_WRITE_ENABLED), então não conta mais.
+   * Pra cada (storeCode, sku), quanto a loja JÁ DEVE entregar e ainda não tirou
+   * do estoque. É esse número que o roteamento desconta antes de escolher a
+   * loja — peça prometida não pode ser prometida de novo.
    *
-   * `excludePickOrderIds` permite ignorar pick-orders do próprio pedido sendo recalculado
-   * (pra não descontar a si mesmo do estoque disponível).
+   * A conta é PENDENTE = esperado − já baixado no bipe (`computeCommittedStock`).
+   * Reservar a quantidade cheia depois de 18/08 seria contar a mesma peça duas
+   * vezes (o bipe JÁ baixou o que passou no leitor) e criaria ruptura falsa —
+   * pedido parado na matriz com a peça na arara.
+   *
+   * Card em `ready`/`shipped` não entra: o estoque já caiu. Card com
+   * `debitApprovedAt` também não, mesmo em `separated` — é o caso da live que
+   * nasce bipada e da aprovação manual da matriz.
+   *
+   * `excludePickOrderIds` permite ignorar pick-orders do próprio pedido sendo
+   * recalculado (pra não descontar a si mesmo do estoque disponível).
    *
    * RETORNO: Map com chave `${storeCode}::${sku}` → qty comprometida
    */
@@ -1119,13 +1145,7 @@ export class RoutingService {
   ): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!skus.length || !storeCodes.length) return out;
-
-    // FLAG GLOBAL: anti-overbooking desligado por padrão.
-    // Justificativa: lojista prefere PROMETER a venda (peça pode estar fisicamente
-    // disponível mesmo "comprometida" — pedido conflitante pode ser cancelado,
-    // pode haver divergência ERP×físico, etc). Routing usa estoque REAL do Giga.
-    // Pra ativar proteção contra overbooking, setar `ROUTING_ANTI_OVERBOOKING=true`.
-    if (process.env.ROUTING_ANTI_OVERBOOKING !== 'true') {
+    if (!this.antiOverbookingEnabled) {
       return out; // map vazio → subtractCommitted não tira nada → liquid = real
     }
 
@@ -1145,47 +1165,78 @@ export class RoutingService {
         status: { in: ['new', 'separating', 'separated'] },
         ...(excludePickOrderIds.length > 0 ? { id: { notIn: excludePickOrderIds } } : {}),
       },
-      select: { id: true, orderId: true, storeId: true },
+      select: { id: true, orderId: true, storeId: true, debitApprovedAt: true },
     });
     if (activePickOrders.length === 0) return out;
 
     const orderIds = [...new Set(activePickOrders.map((p) => p.orderId))];
 
-    // Items desses pedidos com SKU dentro do conjunto pedido
+    // Items desses pedidos, SÓ os atribuídos a uma das lojas em jogo.
+    //
+    // A atribuição é ESTRITA no `assignedStoreId` — o fallback "sem loja? usa a
+    // do card" que existia aqui reservava justamente a peça que a loja tinha
+    // acabado de reportar como "não achei": o report zera o `assignedStoreId` e
+    // baixa a quantidade fantasma, então o chute segurava peça que já saiu do
+    // estoque e que ninguém vai separar. É o mesmo critério do
+    // `pendingDebitItems` do bipe e do `finishSeparation`.
     const items = await this.prisma.orderItem.findMany({
       where: {
         orderId: { in: orderIds },
         sku: { in: skus },
+        assignedStoreId: { in: storeIds },
       },
       select: { orderId: true, sku: true, quantity: true, assignedStoreId: true },
     });
-
-    // Agrupa por (storeCode, sku):
-    //   - se item tem assignedStoreId → usa esse (split pode ter ido pra outra loja)
-    //   - senão, usa storeId do pick-order daquele orderId (fallback)
-    const pickStoreByOrderId = new Map<string, string>();
-    for (const po of activePickOrders) {
-      // Quando o pedido está em múltiplas lojas, mantemos o último (ou primeiro), o
-      // ramo abaixo só é usado quando assignedStoreId está null — e nesse caso o pedido
-      // não foi splitado (1 loja só), então qualquer pick-order serve.
-      pickStoreByOrderId.set(po.orderId, po.storeId);
-    }
-
+    const itemsByCard = new Map<string, Array<{ sku: string; quantity: number }>>();
     for (const it of items) {
-      const targetStoreId = it.assignedStoreId ?? pickStoreByOrderId.get(it.orderId) ?? null;
-      if (!targetStoreId) continue;
-      const code = codeByStoreId.get(targetStoreId);
-      if (!code) continue;
-      const key = `${code}::${it.sku}`;
-      out.set(key, (out.get(key) ?? 0) + it.quantity);
+      const key = `${it.orderId}::${it.assignedStoreId}`;
+      const arr = itemsByCard.get(key);
+      if (arr) arr.push({ sku: it.sku, quantity: it.quantity });
+      else itemsByCard.set(key, [{ sku: it.sku, quantity: it.quantity }]);
     }
 
-    return out;
+    // O que JÁ saiu do estoque no bipe destes cards (1 linha = 1 peça). Mesmo
+    // filtro do `debitedBySku`: bipe estornado ou em shadow não baixou nada,
+    // então continua contando como prometido.
+    const scans = await this.prisma.pickOrderScan.findMany({
+      where: {
+        pickOrderId: { in: activePickOrders.map((p) => p.id) },
+        sku: { in: skus },
+        revertedAt: null,
+        stockDecreasedAt: { not: null },
+        stockIncreasedAt: null,
+      },
+      select: { pickOrderId: true, sku: true },
+    });
+    const debitedByCard = new Map<string, Map<string, number>>();
+    for (const s of scans) {
+      let m = debitedByCard.get(s.pickOrderId);
+      if (!m) {
+        m = new Map<string, number>();
+        debitedByCard.set(s.pickOrderId, m);
+      }
+      m.set(s.sku, (m.get(s.sku) ?? 0) + 1);
+    }
+
+    return computeCommittedStock(
+      activePickOrders.map((po) => ({
+        pickOrderId: po.id,
+        storeCode: codeByStoreId.get(po.storeId) ?? '',
+        debitApproved: !!po.debitApprovedAt,
+        items: itemsByCard.get(`${po.orderId}::${po.storeId}`) ?? [],
+        debited: debitedByCard.get(po.id),
+      })),
+    );
   }
 
   /**
    * Aplica `committed` num array de StockEntry, retornando estoque LÍQUIDO (real - reservado).
    * Linhas que ficariam com qty <= 0 são removidas pra não confundir o engine.
+   *
+   * O log das linhas ZERADAS não é enfeite: é a única pista de por que uma loja
+   * que a Consulta mostra com peça não apareceu no roteamento. Card esquecido
+   * aberto há dias segura a peça pra sempre — e sem esta linha o diagnóstico
+   * vira "sumiu estoque".
    */
   private subtractCommitted(
     stockEntries: StockEntry[],
@@ -1193,10 +1244,18 @@ export class RoutingService {
   ): StockEntry[] {
     if (committed.size === 0) return stockEntries;
     const out: StockEntry[] = [];
+    const zeradas: string[] = [];
     for (const e of stockEntries) {
       const reserved = committed.get(`${e.storeCode}::${e.sku}`) ?? 0;
       const liquid = e.availableQty - reserved;
       if (liquid > 0) out.push({ ...e, availableQty: liquid });
+      else if (reserved > 0) zeradas.push(`${e.storeCode}/${e.sku} (${e.availableQty}−${reserved})`);
+    }
+    if (zeradas.length) {
+      this.logger.log(
+        `[routing] ${zeradas.length} opção(ões) fora por peça JÁ PROMETIDA a card aberto: ${zeradas.slice(0, 10).join(', ')}` +
+          (zeradas.length > 10 ? ` … +${zeradas.length - 10}` : ''),
+      );
     }
     return out;
   }
@@ -1373,21 +1432,31 @@ export class RoutingService {
       };
     });
 
-    // Lojas alternativas (que também têm estoque) pra override manual
-    const alternativesBySku: Record<string, Array<{ storeId: string; storeCode: string; storeName: string; availableQty: number; whatsapp: string | null }>> = {};
+    // Lojas alternativas (que também têm estoque) pra override manual.
+    //
+    // `availableQty` aqui é LÍQUIDO (real − prometido a outros cards): era por
+    // esta lista que o "↔ Trocar loja" recriava na mão o overbooking que o
+    // roteamento automático evita — a loja aparecia com 1 peça que já estava
+    // reservada pra outro pedido. `reservedQty` vai junto pra tela explicar.
+    const alternativesBySku: Record<string, Array<{ storeId: string; storeCode: string; storeName: string; availableQty: number; reservedQty: number; whatsapp: string | null }>> = {};
     for (const sku of skus) {
       alternativesBySku[sku] = stores
         .map((s) => {
           const stk = stockEntries.find((e) => e.storeCode === s.code && e.sku === sku);
+          const reservado = committed.get(`${s.code}::${sku}`) ?? 0;
           return {
             storeId: s.id,
             storeCode: s.code,
             storeName: s.name,
-            availableQty: stk?.availableQty ?? 0,
+            availableQty: Math.max(0, (stk?.availableQty ?? 0) - reservado),
+            reservedQty: reservado,
             whatsapp: s.whatsapp ?? null,
           };
         })
-        .filter((x) => x.availableQty > 0)
+        // Loja que só tem peça PROMETIDA fica na lista com 0 disponível: sumir
+        // dela em silêncio é o que fazia a matriz perguntar "cadê a peça que a
+        // Consulta mostra?". Aparecer com 0 + o motivo responde sozinho.
+        .filter((x) => x.availableQty > 0 || x.reservedQty > 0)
         .sort((a, b) => b.availableQty - a.availableQty);
     }
 
