@@ -145,6 +145,23 @@ export class LojaCatalogPublicController {
     return { ...p, look: await this.svc.lookDaPeca(p) };
   }
 
+  /**
+   * GET /api/public/loja/slug-antigo/:slug — o endereço velho da peça.
+   *
+   * Existe pros 404 do WooCommerce: devolve `{ slug }` com o endereço de hoje
+   * quando a peça mudou de porta, ou 404 quando ela realmente não existe mais.
+   * Quem faz o 308 é o site — ver `slugAtualDoLegado`.
+   *
+   * Fica ANTES de `produto/:slug/...` só por clareza de leitura; o prefixo é
+   * outro, então não há disputa de rota.
+   */
+  @Get('slug-antigo/:slug')
+  async slugAntigo(@Param('slug') slug: string) {
+    const atual = await this.svc.slugAtualDoLegado(slug);
+    if (!atual) throw new NotFoundException('Sem correspondência');
+    return { slug: atual };
+  }
+
   @Get('produto/:slug/relacionados')
   relacionados(@Param('slug') slug: string, @Query('limite') limite?: string) {
     return this.svc.relacionados(slug, limite ? Number(limite) : 8);

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, permanentRedirect } from 'next/navigation';
 import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -18,6 +18,7 @@ import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
 import { fetchIrmasDaPeca } from '@/services/vitrine';
 import { resumoDeAvaliacoes } from '@/services/avaliacoes';
+import { apiSafe } from '@/lib/api';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { MAX_PARCELAS } from '@/lib/commerce/cartao';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
@@ -146,6 +147,37 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
   // de conteúdo não termina.
   const peca = await fetchPeca(slug);
   const result = peca ?? (await getProduct(slug));
+
+  /**
+   * ANTES DE DESISTIR, PROCURA O ENDEREÇO ANTIGO (23/08/2026).
+   *
+   * A Search Console tem **4.156 URLs em 404** neste domínio, e boa parte é
+   * peça que existe com outro endereço: o WooCommerce servia
+   * `/produto/blusa-feminina-plus-size-manga-curta-ref-700651-bege`, e hoje a
+   * mesma peça mora em `/produto/ref-700651`. Cada uma dessas era uma cliente
+   * com link salvo, um post do Instagram e um resultado do Google caindo numa
+   * página de erro.
+   *
+   * O casamento é por DADO (`SiteProduto.wcSlug`, o endereço que o WooCommerce
+   * de fato usava), nunca por regex em cima do texto — ver `slugAtualDoLegado`.
+   *
+   * `permanentRedirect` = 308: é o que faz o Google transferir o histórico do
+   * endereço velho pro novo em vez de tratar as duas como páginas diferentes.
+   * Um 307 aqui manteria o 404 valendo aos olhos dele.
+   *
+   * Falhou a consulta? Segue pro 404 de sempre — recuperação é cortesia e não
+   * pode virar erro 500 na página mais visitada do site.
+   */
+  if (!result) {
+    const novo = await apiSafe<{ slug?: string } | null>(
+      `/public/loja/slug-antigo/${encodeURIComponent(slug)}`,
+      null,
+      { revalidate: 3600 },
+    );
+    if (novo?.slug && novo.slug !== slug) {
+      permanentRedirect(`/produto/${encodeURIComponent(novo.slug)}`);
+    }
+  }
 
   // Produto inexistente OU catálogo fora do ar: 404 é melhor que página quebrada.
   if (!result) notFound();

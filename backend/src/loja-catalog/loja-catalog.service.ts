@@ -2612,6 +2612,55 @@ export class LojaCatalogService {
   }
 
   /** Detalhe da peça — por slug (site) ou pela própria REF. */
+  /**
+   * O ENDEREÇO ANTIGO DA PEÇA → O ENDEREÇO DE HOJE (23/08/2026).
+   *
+   * A Search Console mostra **4.156 URLs em 404** no domínio, e boa parte é
+   * peça que EXISTE com outro endereço: o site velho servia
+   * `/produto/blusa-feminina-plus-size-manga-curta-ref-700651-bege` e este
+   * serve `/produto/ref-700651`. Medido em 23/08: a primeira dá 404, a segunda
+   * dá 200 — a peça está no ar, só mudou de porta.
+   *
+   * ⚠️ O comentário do `redirects-legado.ts` ("624 de 641 já respondiam 200",
+   * medido em 19/08) ENVELHECEU: os slugs foram regerados pro formato
+   * `ref-<CÓDIGO>` depois daquela medição.
+   *
+   * Aqui a resolução é por DADO, não por regex em cima do texto do slug. O
+   * `wcSlug` guarda exatamente o endereço que o WooCommerce usava (gravado
+   * pelo `site-sync.service.ts`), então o casamento é exato — nada de tentar
+   * adivinhar onde termina o código e começa a cor, que é onde toda heurística
+   * quebra (`ref-con-200` contra `ref-700651-bege`).
+   *
+   * Devolve só o slug: quem redireciona é o site, com 308, pra o Google
+   * transferir o histórico em vez de ver duas páginas iguais.
+   */
+  async slugAtualDoLegado(slugAntigo: string): Promise<string | null> {
+    const chave = String(slugAntigo || '').trim().toLowerCase();
+    if (!chave || chave.length > 160) return null;
+
+    const achado = await (this.prisma as any).siteProduto
+      .findFirst({ where: { wcSlug: chave }, select: { slug: true } })
+      .catch(() => null);
+    if (achado?.slug && achado.slug !== chave) return achado.slug;
+
+    /**
+     * Rede de segurança pro slug antigo que carrega a REF no meio do texto e
+     * não está no `wcSlug` (peça importada antes de a coluna existir). Só
+     * confirma quando a REF resolve numa peça de verdade — sem invenção.
+     */
+    const comRef = chave.match(/(?:^|-)ref-([a-z0-9]+(?:-[a-z0-9]+)?)(?:-|$)/i);
+    if (!comRef) return null;
+    for (const candidata of [comRef[1], comRef[1].split('-')[0]]) {
+      const ref = this.normRef(candidata);
+      if (!ref) continue;
+      const p = await (this.prisma as any).siteProduto
+        .findUnique({ where: { ref }, select: { slug: true } })
+        .catch(() => null);
+      if (p?.slug && p.slug !== chave) return p.slug;
+    }
+    return null;
+  }
+
   async porSlug(slug: string) {
     const chave = String(slug || '').trim();
     if (!chave) return null;
