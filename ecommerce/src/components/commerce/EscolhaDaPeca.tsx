@@ -329,11 +329,33 @@ export function EscolhaDaPeca({
           </p>
         )}
         <PrecoDaPeca product={pecaDaCor} className="mt-3 lg:hidden" />
-        {/* A GRADE DE CORES DO CELULAR SAIU DAQUI (22/08) e desceu pra depois
-            do tamanho, dentro do BuyBox (`seletorCoresMobile`). Ela ficava
-            colada na foto que muda — bonito, mas empurrava o seletor de
-            tamanho pra 1065px num viewport de 812px. Medição e motivo estão
-            no prop `seletorCoresMobile` do BuyBox. */}
+        {/* A GRADE DE CORES DO CELULAR, COLADA NA FOTO QUE ELA MUDA.
+
+            Ela desceu pra depois do tamanho em 22/08 (#1112, pela dobra) e o
+            dono mandou subir de volta no MESMO dia: "nada a ver descer as
+            miniaturas — suba e deixe próximo à foto principal, logo em
+            seguida os tamanhos, como estava". O toque na miniatura troca a
+            foto grande: separar as duas tira a prova de que o toque valeu.
+
+            O custo continua sendo o de sempre (a grade 2×4 empurra o número
+            pra baixo da dobra) e continua coberto pela BARRA FIXA, que desde
+            o #1112 mostra os tamanhos enquanto falta escolher — a escolha
+            está na tela mesmo pra quem nunca rola.
+
+            No PC a grade fica na coluna da direita (dono, 20/08: "as fotos
+            das cores estão descendo") — é a instância `seletorCores`. */}
+        {temVariasCores && (
+          <GradeDeCores
+            id="grade-de-cores"
+            className="lg:hidden"
+            slug={product.slug}
+            cores={cores}
+            corAtualNome={corAtual?.nome ?? null}
+            tamanho={tamanho}
+            erro={corError}
+            onEscolher={trocarCor}
+          />
+        )}
       </div>
       <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
         <BuyBox
@@ -368,22 +390,6 @@ export function EscolhaDaPeca({
             temVariasCores ? (
               <GradeDeCores
                 id="grade-de-cores-desktop"
-                slug={product.slug}
-                cores={cores}
-                corAtualNome={corAtual?.nome ?? null}
-                tamanho={tamanho}
-                erro={corError}
-                onEscolher={trocarCor}
-              />
-            ) : null
-          }
-          /* A MESMA grade, instância do celular — o BuyBox a renderiza
-             ABAIXO do tamanho (22/08). O id continua `grade-de-cores`, que é
-             o alvo do `pedirCor()`. */
-          seletorCoresMobile={
-            temVariasCores ? (
-              <GradeDeCores
-                id="grade-de-cores"
                 slug={product.slug}
                 cores={cores}
                 corAtualNome={corAtual?.nome ?? null}
@@ -450,7 +456,7 @@ function GradeDeCores({
     <div
       id={id}
       className={cn(
-        'mt-0 scroll-mt-28 rounded-lg transition-all duration-300 lg:mt-4',
+        'mt-3 scroll-mt-28 rounded-lg transition-all duration-300 lg:mt-4',
         erro && 'bg-danger/5 p-3 ring-2 ring-danger ring-offset-2 ring-offset-background',
         className,
       )}
