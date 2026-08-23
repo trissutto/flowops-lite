@@ -355,8 +355,18 @@ function Degrau({
    *    melhor que mostrar zero, contanto que fique claro de quem é o número.
    */
   const dinheiro = (o: Opcao) => {
-    const roas = roasDe(o);
     const cegas = semEspelhoDeGasto(o, gastoConfigurado);
+    /**
+     * ROAS SÓ QUANDO O GASTO INTEIRO É CONHECIDO.
+     *
+     * Visto na tela em 22/08: a pílula "Tudo" mostrava `R$ 1,7 mil → R$ 6,8 mil
+     * · 4,01x` com o Google sem espelho — ou seja, dividia a receita dos DOIS
+     * pelo gasto de UM. O aviso "gasto do Google não configurado" estava logo
+     * abaixo, e ainda assim o número saía inflado; e número com nota de rodapé
+     * é citado sem a nota. Some o múltiplo, ficam o gasto e a receita, que são
+     * verdade. Mesma regra do resto desta tela: melhor faltar que mentir.
+     */
+    const roas = cegas.length ? null : roasDe(o);
     // A receita da plataforma só entra quando a NOSSA não casou: com as duas
     // presentes a pílula viraria um quebra-cabeça de qual é qual.
     const mostraPlataforma = o.valorPlataforma != null && o.receita === 0;
