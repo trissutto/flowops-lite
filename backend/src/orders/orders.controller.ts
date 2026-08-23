@@ -1612,20 +1612,19 @@ export class OrdersController {
       },
     });
 
-    // …com o `_wc_order_attribution_*` cru como rede: pedido que o sync ainda
-    // não copiou pra cá não tem linha local, e sem esse fallback a tela diria
-    // "sem campanha" pra um pedido que TEM campanha no WooCommerce.
-    const attrWc = extractAttributionRaw(o.meta_data ?? []);
+    // ⚠️ O WOOCOMMERCE ACABOU (última venda por lá em 19/08/2026, virada pro
+    // site novo). Este caminho só existe pros ~22 mil pedidos históricos, e a
+    // atribuição deles vive NO NOSSO Postgres — o sync já tinha copiado o
+    // `_wc_order_attribution_*` pras colunas `utm_*` do Order. Ler o
+    // `meta_data` de volta seria depender de um site que não responde mais.
     const atribuicao = await this.cascataAtribuicao({
-      utmSource: localOrder?.utmSource ?? attrWc.utmSource,
-      utmMedium: localOrder?.utmMedium ?? attrWc.utmMedium,
-      utmCampaign: localOrder?.utmCampaign ?? attrWc.utmCampaign,
-      utmId: localOrder?.utmId ?? attrWc.utmId,
-      utmContent: localOrder?.utmContent ?? attrWc.utmContent,
-      // Pedido velho do WC não tem `trackingInfo` (isso nasceu no site novo);
-      // o tipo/referrer do Order Attribution é o que dá pra dizer dele.
-      sourceType: attrWc.sourceType,
-      referrer: getMeta('_wc_order_attribution_referrer'),
+      utmSource: localOrder?.utmSource,
+      utmMedium: localOrder?.utmMedium,
+      utmCampaign: localOrder?.utmCampaign,
+      utmId: localOrder?.utmId,
+      utmContent: localOrder?.utmContent,
+      // Pedido velho não tem `trackingInfo` — isso nasceu com o site novo.
+      // Sem UTM gravado, a cascata diz "sem campanha" em vez de inventar.
     });
 
     return {

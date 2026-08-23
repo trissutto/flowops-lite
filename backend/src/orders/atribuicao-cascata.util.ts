@@ -1,14 +1,13 @@
 /**
  * DE QUAL CAMPANHA VEIO ESTE PEDIDO — a cascata que a tela do pedido abre.
  *
- * A atribuição já existia em três pedaços espalhados: as colunas `utm_*` do
- * `Order` (gravadas no fechamento), o `trackingInfo.attribution` (que guarda o
- * que as colunas não têm — posicionamento, página de entrada, fbclid) e o
- * `_wc_order_attribution_*` do pedido velho do WooCommerce. A tela mostrava
- * uma linha cinza no rodapé com os três colados por barra, e nenhuma delas
- * respondia "de qual ANÚNCIO veio".
+ * A atribuição já existia em dois pedaços espalhados: as colunas `utm_*` do
+ * `Order` (gravadas no fechamento) e o `trackingInfo.attribution`, que guarda
+ * o que as colunas não têm — posicionamento do anúncio, página de entrada,
+ * fbclid. A tela mostrava uma linha cinza no rodapé com utm_source/medium/
+ * campaign colados por barra, e não respondia "de qual ANÚNCIO veio".
  *
- * Aqui os três viram UMA cascata, na mesma ordem da tela de cliques
+ * Aqui os dois viram UMA cascata, na mesma ordem da tela de cliques
  * (plataforma → campanha → anúncio → posicionamento → página de entrada):
  * cada degrau só nasce se o dado existir, então pedido direto não inventa
  * campanha e pedido velho não finge ter posicionamento.
@@ -57,9 +56,15 @@ export type EntradaAtribuicao = {
   utmContent?: string | null;
   /** `Order.trackingInfo` já parseado (objeto) — só o pedido nativo tem. */
   trackingInfo?: any;
-  /** `_wc_order_attribution_source_type` do WooCommerce. */
+  /**
+   * "organic" / "referral" / "direct" — de onde a visita veio quando não há
+   * campanha. ⚠️ HOJE NINGUÉM PREENCHE: quem mandava era o Order Attribution
+   * do WooCommerce, que acabou em 19/08/2026. Fica porque a pergunta continua
+   * de pé (o site novo pode passar a responder) e porque é o único jeito de
+   * distinguir busca de encaminhamento sem UTM.
+   */
   sourceType?: string | null;
-  /** `_wc_order_attribution_referrer` do WooCommerce. */
+  /** Site que encaminhou, no mesmo caso do `sourceType`. */
   referrer?: string | null;
   /**
    * Pedido que NÃO nasce de clique no site (live, venda online da loja).
@@ -205,7 +210,7 @@ export function montarCascataAtribuicao(e: EntradaAtribuicao): CascataAtribuicao
 
   if (paginaEntrada) degraus.push({ rotulo: 'Entrou por', valor: paginaEntrada, mono: true });
 
-  // ── Pedido velho do WooCommerce: orgânico / encaminhamento ──
+  // ── Sem campanha, mas com origem conhecida: orgânico / encaminhamento ──
   const host = hostDe(e.referrer);
   if (!campanha && (tipo === 'organic' || tipo === 'referral') && host) {
     degraus.push({
