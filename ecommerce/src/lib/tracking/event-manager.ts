@@ -184,11 +184,19 @@ export function track(name: EventName, params: Record<string, unknown> = {}, opt
      * ⚠️ Não trocar por `requestIdleCallback` sem `timeout`: evento que
      * precede navegação (add_to_cart indo pro checkout) pode nunca rodar se
      * a thread não ficar ociosa antes de a página trocar.
+     *
+     * ⚠️ A FILA DO SERVIDOR CONTINUA SÍNCRONA, e isso é de propósito.
+     *
+     * `enqueueForServer` é um `push` num array (o envio em si já é assíncrono,
+     * com lote, `keepalive` e `sendBeacon` no `pagehide`). Adiar o push seria
+     * o único jeito de PERDER evento: se a página descarregasse antes do
+     * timer, ele nunca teria entrado na fila e nem o beacon o pegaria. O dono
+     * pediu todos os cliques registrados — a cópia de primeira parte não pode
+     * depender de timer. O caro é o `dispatchToBrowser` (Pixel/GA), e é só ele
+     * que sai do caminho.
      */
-    setTimeout(() => {
-      dispatchToBrowser(event);
-      enqueueForServer(event);
-    }, 0);
+    enqueueForServer(event);
+    setTimeout(() => dispatchToBrowser(event), 0);
   } catch (err) {
     console.warn('[tracking] falha ao registrar evento:', msg(err));
   }
