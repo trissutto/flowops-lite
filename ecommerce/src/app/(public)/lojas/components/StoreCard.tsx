@@ -70,9 +70,25 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
           <span>{store.address.neighborhood} · {store.address.street}</span>
         </p>
 
-        <p className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[var(--lj-gold-strong)]">
-          Ver fotos, horários e detalhes <ArrowRight className="h-3.5 w-3.5" />
-        </p>
+        {/**
+         * LINK DE VERDADE, não texto — e isso é metade do motivo de a página
+         * por cidade existir.
+         *
+         * O clique no card abre o drawer, que é ótimo pra quem já está aqui e
+         * péssimo pro Google: o drawer só entra no DOM depois da primeira
+         * abertura, então sem este `<a>` as 14 landings de cidade nasceriam
+         * alcançáveis só pelo sitemap, sem um link interno no site inteiro.
+         *
+         * `stopPropagation` porque o card inteiro é um botão: sem ele o clique
+         * navegaria E abriria o drawer no mesmo gesto.
+         */}
+        <a
+          href={`/lojas/${store.slug}`}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[var(--lj-gold-strong)] hover:underline"
+        >
+          Ver a página da loja <ArrowRight className="h-3.5 w-3.5" />
+        </a>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
           <a
