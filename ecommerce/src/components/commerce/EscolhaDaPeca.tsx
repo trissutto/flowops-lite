@@ -297,7 +297,7 @@ export function EscolhaDaPeca({
        galeria e a coluna de compra ficam LADO A LADO. Empilhadas no celular
        o mesmo número vira um buraco entre a foto e o nome da peça. O desktop
        segue nos 64px do `lg:gap-16`. */
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
       {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
@@ -313,7 +313,7 @@ export function EscolhaDaPeca({
             foto → PREÇO → cor escolhida + grade → tamanhos. Nome e preço
             são os MESMOS componentes da coluna de compra, que no desktop os
             mostra à direita — aqui só aparecem no empilhado do celular. */}
-        <TituloDaPeca product={pecaDaCor} className="mb-3 lg:hidden" />
+        <TituloDaPeca product={pecaDaCor} className="mb-2 lg:hidden" />
         <ProductGallery
           key={cor ?? 'unica'}
           images={galeria}
@@ -328,7 +328,7 @@ export function EscolhaDaPeca({
             outras cores desta mesma peça.
           </p>
         )}
-        <PrecoDaPeca product={pecaDaCor} className="mt-4 lg:hidden" />
+        <PrecoDaPeca product={pecaDaCor} className="mt-3 lg:hidden" />
         {/* A GRADE DE CORES DO CELULAR SAIU DAQUI (22/08) e desceu pra depois
             do tamanho, dentro do BuyBox (`seletorCoresMobile`). Ela ficava
             colada na foto que muda — bonito, mas empurrava o seletor de
@@ -450,7 +450,7 @@ function GradeDeCores({
     <div
       id={id}
       className={cn(
-        'mt-4 scroll-mt-28 rounded-lg transition-all duration-300',
+        'mt-0 scroll-mt-28 rounded-lg transition-all duration-300 lg:mt-4',
         erro && 'bg-danger/5 p-3 ring-2 ring-danger ring-offset-2 ring-offset-background',
         className,
       )}

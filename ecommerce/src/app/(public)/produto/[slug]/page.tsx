@@ -168,8 +168,10 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
 
       {/* Caminho de migalhas encostado na foto no celular (dono, 15/08):
           `pt-8 pb-4` são 48px de ar entre o menu e a peça numa tela de 812px.
-          O desktop mantém o respiro original. */}
-      <Container width="wide" className="pt-4 pb-2 sm:pt-8 sm:pb-4">
+          O desktop mantém o respiro original. Em 22/08 apertou de novo
+          (`pt-2 pb-1`): 44px de bloco viraram 32 e a trilha continua legível
+          — no celular ela já mostra só "Início › Categoria". */}
+      <Container width="wide" className="pt-2 pb-1 sm:pt-8 sm:pb-4">
         <Breadcrumb
           colapsarNoMobile
           items={trail.map((item, i) => ({
@@ -192,7 +194,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
             irmasLabel={`Ver tudo em ${categoryLabel}`}
           />
         ) : (
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
             <div className="min-w-0">
               <ProductGallery images={product.images} name={product.name} badges={product.badges} />
             </div>

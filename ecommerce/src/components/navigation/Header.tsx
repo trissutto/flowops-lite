@@ -60,7 +60,11 @@ export function Header({
           <div
             className={cn(
               'flex items-center justify-between gap-6 transition-all duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
-              scrolled ? 'h-[68px] lg:h-[76px]' : 'h-20 lg:h-24',
+              /* CELULAR MAIS BAIXO (22/08): 80px parados e 68 rolando era
+                 cromo demais numa tela de 734 — a PDP precisa da dobra pro
+                 tamanho e pra cor. 64/56 mantém o logo (36px) e os ícones
+                 (40px) com folga. O desktop não muda. */
+              scrolled ? 'h-14 lg:h-[76px]' : 'h-16 lg:h-24',
             )}
           >
             {/* Esquerda: menu mobile + logo */}
