@@ -743,10 +743,13 @@ export function BuyBox({
       </Overlay>
 
       {!soldOut && (
-        /* A BARRA ENCOLHEU 12px (22/08): ela é FIXA, então cada pixel dela
-           é pixel que a página inteira não tem — eram 95px de dobra comida
-           em 734. Os 44px de alvo de toque das pílulas ficam intocados; o
-           que saiu foi respiro (p-3 → pt-2/pb-2, e o mb-2 do rótulo). */
+        /* A BARRA ENCOLHEU (22/08): ela é FIXA, então cada pixel dela é
+           pixel que a página inteira não tem — eram 95px de dobra comida em
+           734. Saiu só respiro (p-3 → pt-2/pb-2 e o mb-2 do rótulo): 12px
+           em Android/iPhone sem home indicator, 6px onde o
+           `env(safe-area-inset-bottom)` de 34px ganha do `max()` — lá o
+           padrão de baixo nunca foi nosso. Os 44px de alvo de toque das
+           pílulas ficam intocados. */
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">
           {/* A BARRA É O SELETOR ENQUANTO FALTA O NÚMERO (22/08).
               Ela está na tela desde o primeiro segundo e 67% das clientes
