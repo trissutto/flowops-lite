@@ -246,7 +246,17 @@ type Opcao = {
   /** Conversões que a plataforma reporta, e quem é ela. Null = não reporta. */
   convPlataforma: number | null;
   valorPlataforma: number | null;
+  /** Quem forneceu o GASTO deste grupo. */
   fontes: string[];
+  /**
+   * Quem forneceu a CONVERSÃO — e é diferente de `fontes` de propósito.
+   *
+   * Só o Google reporta conversão pra gente; o Meta manda NULL. Numa pílula
+   * agregada com gasto das duas, usar `fontes` fazia a tela escrever "Meta e
+   * Google conta 15 conv" — creditando ao Meta um número que é 100% do Google.
+   * Autoria errada num número é pior que número ausente: vira decisão.
+   */
+  fontesConv: string[];
 };
 
 const OPCAO_VAZIA = (valor: string): Opcao => ({
@@ -258,6 +268,7 @@ const OPCAO_VAZIA = (valor: string): Opcao => ({
   convPlataforma: null,
   valorPlataforma: null,
   fontes: [],
+  fontesConv: [],
 });
 
 /** Soma que preserva o null: null + 3 = 3, null + null = null. */
@@ -276,6 +287,7 @@ const acumular = (s: Opcao, o: Omit<Opcao, 'valor'>): Opcao => ({
   convPlataforma: somaOuNull(s.convPlataforma, o.convPlataforma),
   valorPlataforma: somaOuNull(s.valorPlataforma, o.valorPlataforma),
   fontes: juntar(s.fontes, o.fontes),
+  fontesConv: juntar(s.fontesConv, o.fontesConv),
 });
 
 /**
@@ -371,7 +383,10 @@ function Degrau({
     // presentes a pílula viraria um quebra-cabeça de qual é qual.
     const mostraPlataforma = o.valorPlataforma != null && o.receita === 0;
     if (!o.gasto && !o.receita && !cegas.length && !mostraPlataforma) return null;
-    const donos = (o.fontes.length ? o.fontes : ['a plataforma'])
+    // `fontesConv`, NUNCA `fontes`: quem pagou não é necessariamente quem
+    // reportou. Com as duas plataformas gastando e só o Google reportando,
+    // `fontes` faria a tela escrever "Meta e Google conta 15 conv".
+    const donos = (o.fontesConv.length ? o.fontesConv : ['a plataforma'])
       .map((f) => ROTULO_PLATAFORMA[f] ?? f)
       .join(' e ');
     return (
@@ -465,10 +480,20 @@ function Cascata({
           pessoas: o.pessoas,
           gasto: o.gasto,
           receita: o.receita,
-          plataformas: o.plataforma ? [o.plataforma] : [],
+          // Só tráfego PAGO entra na conta de "falta espelho de gasto".
+          // Orgânico e direto não têm gasto pra configurar, e o aviso ali
+          // seria alarme falso — a regra da fila de tarefas da loja vale aqui
+          // também: alarme falso mata a confiança na tela inteira.
+          plataformas: o.trafego === 'pago' && o.plataforma ? [o.plataforma] : [],
           convPlataforma: o.convPlataforma,
           valorPlataforma: o.valorPlataforma,
           fontes: o.fonteGasto ? [o.fonteGasto] : [],
+          // A autoria do NÚMERO DE CONVERSÃO, não a do gasto: só entra quem de
+          // fato reportou conversão nesta linha.
+          fontesConv:
+            o.fonteGasto && (o.convPlataforma != null || o.valorPlataforma != null)
+              ? [o.fonteGasto]
+              : [],
         }),
       );
     }

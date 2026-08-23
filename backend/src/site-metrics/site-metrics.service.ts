@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { diaBrasiliaSql } from '../common/tz';
 
 /** Só estes entram. Evento fora da lista é descartado em silêncio — a rota é
  *  pública (token compartilhado) e não vira depósito de qualquer coisa. */
@@ -189,12 +190,33 @@ const SQL_PLATAFORMA = `
         ELSE COALESCE(plataforma, canal)
       END`;
 
+/**
+ * O NOME DA CAMPANHA SEGUNDO OS ESPELHOS — id → nome, Meta E Google.
+ *
+ * Existe porque a tela mostra o rótulo do ESPELHO (`COALESCE(g.nome, campanha)`)
+ * e usa esse MESMO texto como valor de filtro. Quando o nome do espelho difere
+ * do `utm_campaign` cru — que é justamente o caso que o espelho existe pra
+ * consertar (`utm_campaign={{campaign.id}}`, campanha renomeada no Gerenciador,
+ * nome com codificação dupla) — filtrar pelo rótulo não acha nada, e a tela
+ * responde "essa campanha não gerou nada" em vez de "não achei a campanha".
+ *
+ * ⚠️ Tem que cobrir os DOIS espelhos. Enquanto isto lia só o `meta_ads_gasto_dia`,
+ * marcar um anúncio de lojas do GOOGLE salvava e não fazia efeito nenhum: o nome
+ * salvo não era o utm cru nem o nome do Meta, então não casava de lado nenhum —
+ * o botão dizia "salvo" e o número não se mexia.
+ */
+const SQL_NOMES_DE_CAMPANHA = `
+      SELECT campanha_id, MAX(campanha_nome) AS nome FROM meta_ads_gasto_dia GROUP BY campanha_id
+      UNION ALL
+      SELECT campanha_id, MAX(campanha_nome) AS nome FROM google_ads_gasto_dia GROUP BY campanha_id`;
+
 const SQL_SESSOES_DO_SEGMENTO = `
     SELECT session_id FROM (
       SELECT DISTINCT ON (session_id) session_id,
              dados->>'campanha'   AS campanha,
              dados->>'canal'      AS canal,
              dados->>'plataforma' AS plataforma,
+             dados->>'utm_id'     AS utm_id,
              COALESCE(dados->>'pago', 'false') = 'true' AS pago
         FROM site_eventos
        WHERE criado_em >= $1 AND criado_em <= $2 AND session_id IS NOT NULL
@@ -205,7 +227,13 @@ const SQL_SESSOES_DO_SEGMENTO = `
             OR ($3 = 'organico' AND NOT pago AND canal IS NOT NULL)
             OR ($3 = 'direto'   AND canal IS NULL))
        AND ($4::text IS NULL OR (${SQL_PLATAFORMA}) = $4)
-       AND ($5::text IS NULL OR campanha = $5)`;
+       -- Casa pelo utm_campaign CRU **ou** pelo nome que o espelho dá àquele
+       -- utm_id — porque é o rótulo do espelho que a tela mostra e devolve como
+       -- filtro. Sem o segundo braço, clicar numa campanha renomeada no
+       -- Gerenciador zera funil, jornada e problemas de uma vez.
+       AND ($5::text IS NULL
+            OR campanha = $5
+            OR utm_id IN (SELECT campanha_id FROM (${SQL_NOMES_DE_CAMPANHA}) nc WHERE nc.nome = $5))`;
 
 /** Recorte do segmento pra uma tabela `site_eventos` com o alias dado. Exige
  *  que a query declare a CTE `segmento`. */
@@ -691,8 +719,8 @@ export class SiteMetricsService {
            AND session_id IS NOT NULL AND NOT bot
          ORDER BY session_id, (dados->>'canal') IS NULL, criado_em
       ) o
-       LEFT JOIN (SELECT campanha_id, MAX(campanha_nome) AS nome
-                    FROM meta_ads_gasto_dia GROUP BY campanha_id) g
+       LEFT JOIN (SELECT campanha_id, MAX(nome) AS nome
+                    FROM (${SQL_NOMES_DE_CAMPANHA}) n GROUP BY campanha_id) g
               ON g.campanha_id = o.utm_id
        WHERE (o.campanha = ANY($6::text[]) OR g.nome = ANY($6::text[]))
     ) de_loja
@@ -1187,21 +1215,35 @@ export class SiteMetricsService {
                GROUP BY 1, 2, 3, 4
             ),
             ranqueadas AS (
+              -- O desempate aqui tem que ser o MESMO da ordenação final lá
+              -- embaixo, senão o LIMIT 200 pode cortar justamente a linha de
+              -- posto 1 e deixar na tela só as irmãs — que carregam zero. O
+              -- dinheiro da campanha sumiria sem nada indicar que sumiu.
               SELECT s.*,
                      ROW_NUMBER() OVER (PARTITION BY s.utm_id
-                                        ORDER BY s.pessoas DESC, s.plataforma, s.campanha) AS posto
+                                        ORDER BY s.pessoas DESC, s.trafego,
+                                                 s.plataforma, s.campanha) AS posto
                 FROM sessoes s
             ),
             anuncio AS (
+              -- ⚠️ A JANELA É EM BRASÍLIA, NÃO EM UTC.
+              --
+              -- $2 chega como 23:59:59.999 de São Paulo, que é 02:59:59.999Z
+              -- do dia SEGUINTE. $2::date truncava isso e devolvia amanhã —
+              -- então "Ontem" somava o gasto de HOJE (os crons já gravaram a
+              -- linha do dia quando o relatório roda). Gasto inflado + receita
+              -- certa = ROAS menor do que é, justamente na tela que decide
+              -- onde pôr dinheiro. A coluna dia do espelho já está no fuso
+              -- da conta; quem precisava converter era o parâmetro.
               SELECT campanha_id, campanha_nome, gasto, 'meta'::text AS fonte,
                      NULL::numeric AS conversoes, NULL::numeric AS valor_conv
                 FROM meta_ads_gasto_dia
-               WHERE dia >= $1::date AND dia <= $2::date
+               WHERE dia >= ${diaBrasiliaSql('$1')} AND dia <= ${diaBrasiliaSql('$2')}
                UNION ALL
               SELECT campanha_id, campanha_nome, gasto, 'google'::text AS fonte,
                      conversoes, valor_conversoes
                 FROM google_ads_gasto_dia
-               WHERE dia >= $1::date AND dia <= $2::date
+               WHERE dia >= ${diaBrasiliaSql('$1')} AND dia <= ${diaBrasiliaSql('$2')}
             ),
             gasto AS (
               SELECT campanha_id,
@@ -1246,7 +1288,10 @@ export class SiteMetricsService {
          FROM ranqueadas s
          LEFT JOIN gasto   g ON g.campanha_id = s.utm_id
          LEFT JOIN receita r ON r.utm_id      = s.utm_id
-        ORDER BY s.pessoas DESC, 1, 2, 3
+        -- s.posto no fim garante que a linha que carrega o dinheiro nunca
+        -- fique atrás de uma irmã do mesmo utm_id: o corte do LIMIT só leva o
+        -- posto 1 junto com o grupo inteiro, nunca sozinho.
+        ORDER BY s.pessoas DESC, 1, 2, 3, s.utm_id, s.posto
         LIMIT 200`,
       de,
       ate,

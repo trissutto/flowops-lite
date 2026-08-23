@@ -89,7 +89,7 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 
 ## Convenções de trabalho (Thiago)
 
-- **SEMPRE entregar em branch + push + PR pra main** — não perguntar "commit ou testar local?". Deploy é passo manual dele. `gh` CLI NÃO está instalado — dar o link `https://github.com/trissutto/flowops-lite/pull/new/<branch>`.
+- 🚨 **COMMIT, MERGE NA MAIN E DEPLOY SÃO AUTOMÁTICOS** (ordem do dono, 22/08/2026). Terminou e verificou? Commita, `git push origin <branch>:main` e deixa subir. **NÃO perguntar** "posso mergear/deployar?", não parar no link do PR, não montar preview só pra pedir aprovação. A autorização é pra não PERGUNTAR — verificar antes (build + teste + SQL em Postgres) continua obrigatório. Backend reinicia ~30s no Railway: escolher hora fora de loja aberta é bom senso, não é motivo pra pedir permissão. Se o classificador bloquear o push na main, avisar e entregar na branch — `gh` CLI NÃO está instalado, link manual `https://github.com/trissutto/flowops-lite/pull/new/<branch>`.
 - Telas com recorte de tempo: filtro **De/Até** (`type=date`) + atalhos Hoje/Ontem/7 dias/Mês — NUNCA dropdown de períodos fixos.
 - Preview local: `.claude/launch.json` sobe o frontend na 3000; backend real não roda local — usar mock na 3001 (endpoints com prefixo `/api`; ver scratchpad de sessões anteriores como referência).
 - PDV tema CLARO: fundo #FAFAF7, dourado como acento (#D4AF37/#B8912B/#8C7325, hover #FBF6E6), **verde #2E7D46 só pra dinheiro** (total, Finalizar). Vendedora escolhida no popup de confirmação da venda (F9/seletor de canto removidos).
