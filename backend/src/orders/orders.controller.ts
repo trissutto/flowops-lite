@@ -14,6 +14,7 @@ import { JuntadaService } from '../pick-orders/juntada.service';
 import { TrocaPecaService } from './troca-peca.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
+import { montarCascataAtribuicao, EntradaAtribuicao } from './atribuicao-cascata.util';
 import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
 /**
@@ -1313,6 +1314,23 @@ export class OrdersController {
         }
       : null;
 
+    /**
+     * DE ONDE VEIO A CLIENTE — o pedido nativo é o único que tem a história
+     * inteira: as colunas `utm_*` (gravadas no fechamento) mais o
+     * `trackingInfo.attribution`, que guarda o que elas não têm (posicionamento
+     * do anúncio, página de entrada, fbclid).
+     */
+    const atribuicao = await this.cascataAtribuicao({
+      utmSource: pedido.utmSource,
+      utmMedium: pedido.utmMedium,
+      utmCampaign: pedido.utmCampaign,
+      utmId: pedido.utmId,
+      utmContent: pedido.utmContent,
+      trackingInfo: ler(pedido.trackingInfo),
+      // Venda online do PDV não veio de anúncio nenhum — veio da vendedora.
+      origemFixa: lojaPedinte ? `Venda online da loja ${lojaPedinte.name}` : null,
+    });
+
     return {
       id: pedido.wcOrderId,
       number: pedido.wcOrderNumber,
@@ -1376,6 +1394,7 @@ export class OrdersController {
               .filter(Boolean)
               .join(' / ') || '(Site) (direto)',
       },
+      atribuicao,
       /**
        * DE ONDE VEIO O PEDIDO (14/08). Pedido do site não tem loja pedinte —
        * o do PDV tem, e sem mostrar isso a matriz abria o pedido sem saber
@@ -1399,6 +1418,30 @@ export class OrdersController {
   /** R$ com vírgula — só pra texto de nota, não pra conta. */
   private reaisBr(v: any): string {
     return `R$ ${(Number(v) || 0).toFixed(2).replace('.', ',')}`;
+  }
+
+  /**
+   * DE QUAL CAMPANHA VEIO ESTE PEDIDO — a cascata que a tela abre no clique.
+   *
+   * Só faz uma coisa a mais que a função pura: buscar o nome ATUAL da campanha
+   * no espelho de gasto (`meta_ads_gasto_dia`), pelo `utm_id`. É o que conserta
+   * o rótulo do pedido cuja campanha foi renomeada no Gerenciador depois de já
+   * ter vendido — o id é imutável, o nome não (mesma regra do MetaAdsGastoDia).
+   */
+  private async cascataAtribuicao(entrada: EntradaAtribuicao) {
+    let nomeOficial: string | null = null;
+    const id = String(entrada.utmId ?? '').trim();
+    if (id) {
+      const gasto = await (this.prisma as any).metaAdsGastoDia
+        .findFirst({
+          where: { campanhaId: id, campanhaNome: { not: null } },
+          orderBy: { dia: 'desc' },
+          select: { campanhaNome: true },
+        })
+        .catch(() => null);
+      nomeOficial = gasto?.campanhaNome ?? null;
+    }
+    return montarCascataAtribuicao({ ...entrada, nomeOficial });
   }
 
   /**
@@ -1527,6 +1570,7 @@ export class OrdersController {
           unresolvedCityName: null,
         },
         attribution: { origem: 'Live Commerce', source: '(Live) ()' },
+        atribuicao: montarCascataAtribuicao({ origemFixa: 'Live Commerce' }),
         sellerId: liveLocal.sellerId ?? null,
         sellerName: liveLocal.sellerName ?? null,
         // Item vive no Postgres → a tela pode oferecer "Trocar" por item.
@@ -1551,10 +1595,36 @@ export class OrdersController {
     });
     const pickup = detectPickup(o, activeStores);
 
-    // Vendedora atribuída (cache denormalizado)
+    // Vendedora atribuída (cache denormalizado) + a atribuição de marketing.
+    // O UTM sai daqui, não do WooCommerce: o sync já copiou o
+    // `_wc_order_attribution_*` pras colunas do Order, e é ele que o relatório
+    // de campanhas usa — ler os dois lugares só criaria chance de divergir.
     const localOrder = await this.prisma.order.findFirst({
       where: { wcOrderId: Number(wcId) },
-      select: { sellerId: true, sellerName: true },
+      select: {
+        sellerId: true,
+        sellerName: true,
+        utmSource: true,
+        utmMedium: true,
+        utmCampaign: true,
+        utmId: true,
+        utmContent: true,
+      },
+    });
+
+    // ⚠️ O WOOCOMMERCE ACABOU (última venda por lá em 19/08/2026, virada pro
+    // site novo). Este caminho só existe pros ~22 mil pedidos históricos, e a
+    // atribuição deles vive NO NOSSO Postgres — o sync já tinha copiado o
+    // `_wc_order_attribution_*` pras colunas `utm_*` do Order. Ler o
+    // `meta_data` de volta seria depender de um site que não responde mais.
+    const atribuicao = await this.cascataAtribuicao({
+      utmSource: localOrder?.utmSource,
+      utmMedium: localOrder?.utmMedium,
+      utmCampaign: localOrder?.utmCampaign,
+      utmId: localOrder?.utmId,
+      utmContent: localOrder?.utmContent,
+      // Pedido velho não tem `trackingInfo` — isso nasceu com o site novo.
+      // Sem UTM gravado, a cascata diz "sem campanha" em vez de inventar.
     });
 
     return {
@@ -1598,6 +1668,7 @@ export class OrdersController {
         unresolvedCityName: pickup.unresolvedCityName ?? null,
       },
       attribution,
+      atribuicao,
       sellerId: localOrder?.sellerId ?? null,
       sellerName: localOrder?.sellerName ?? null,
     };
