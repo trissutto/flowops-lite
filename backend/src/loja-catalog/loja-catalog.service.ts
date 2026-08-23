@@ -2647,12 +2647,28 @@ export class LojaCatalogService {
      * Rede de segurança pro slug antigo que carrega a REF no meio do texto e
      * não está no `wcSlug` (peça importada antes de a coluna existir). Só
      * confirma quando a REF resolve numa peça de verdade — sem invenção.
+     *
+     * ⚠️ PROCURA NO CATÁLOGO MONTADO, NÃO SÓ NA TABELA (corrigido 23/08 depois
+     * de o endpoint responder "sem correspondência" pra `...-ref-700651-bege`
+     * enquanto `/produto/ref-700651` respondia 200). Nem toda peça vendável
+     * tem linha em `SiteProduto`: a `porSlug` acha várias pelo catálogo
+     * publicado — inclusive pela REF-BASE da família — e é esse mesmo conjunto
+     * que precisa valer aqui, senão o redirect fica cego justamente pras peças
+     * que a vitrine mostra.
      */
     const comRef = chave.match(/(?:^|-)ref-([a-z0-9]+(?:-[a-z0-9]+)?)(?:-|$)/i);
     if (!comRef) return null;
+
+    const catalogo = await this.catalogoPublicado().catch(() => [] as any[]);
     for (const candidata of [comRef[1], comRef[1].split('-')[0]]) {
       const ref = this.normRef(candidata);
       if (!ref) continue;
+
+      const daVitrine = catalogo.find(
+        (p: any) => this.normRef(p.ref) === ref || this.normRef(p.ref) === refBaseOf(ref),
+      );
+      if (daVitrine?.slug && daVitrine.slug !== chave) return daVitrine.slug;
+
       const p = await (this.prisma as any).siteProduto
         .findUnique({ where: { ref }, select: { slug: true } })
         .catch(() => null);
