@@ -23,7 +23,25 @@ import { MAX_PARCELAS } from '@/lib/commerce/cartao';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
 import { STORE_POLICIES } from '@/data/store-policies';
-import { ProductVisualEditor } from '@/components/editor/ProductVisualEditor';
+// Alias obrigatório: esta rota já exporta `const dynamic = 'force-dynamic'`
+// (opção de rota do Next), e importar `dynamic` aqui colidiria com ela — o
+// Turbopack falha com "the name `dynamic` is defined multiple times".
+import carregarSobDemanda from 'next/dynamic';
+
+/**
+ * O EDITOR VISUAL SÓ EXISTE PARA QUEM ABRE COM ?editar=1 — E AGORA O JS DELE
+ * TAMBÉM (23/08/2026).
+ *
+ * O import era estático: 159 linhas de componente de retaguarda (formulário,
+ * login, upload de foto) entravam no chunk da rota e eram baixadas, parseadas
+ * e avaliadas por TODA cliente, mesmo sem nunca renderizar. Com `dynamic` o
+ * arquivo vira um chunk à parte, buscado só quando a condição abaixo é
+ * verdadeira. O Lighthouse mobile marcava 579 ms de Script Evaluation nesta
+ * página.
+ */
+const ProductVisualEditor = carregarSobDemanda(() =>
+  import('@/components/editor/ProductVisualEditor').then((m) => m.ProductVisualEditor),
+);
 
 /**
  * PÁGINA DE PRODUTO — dados REAIS do catálogo (backend → WooCommerce).

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Clock, MapPin, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { cn, formatPrice } from '@/lib/utils';
@@ -19,8 +19,17 @@ import { useCepGuardado, useCepStore } from '@/store/cep';
  * Cota UMA peça de propósito. O carrinho fechado sai mais barato por peça (a
  * caixa cresce menos que a quantidade), então o número aqui é o PIOR caso —
  * a cliente nunca é surpreendida pra cima no checkout.
+ *
+ * ── POR QUE ELE É `memo` (23/08/2026) ──
+ *
+ * Vive dentro do BuyBox, que re-renderiza a cada toque na grade de tamanhos.
+ * Medido na PDP em produção: o MutationObserver flagrava o INPUT DE CEP daqui
+ * entre os nós tocados a cada número escolhido — o campo e a cotação já na
+ * tela sendo reconciliados por um evento que não tem relação nenhuma com eles.
+ * A única prop é `preco` (number), então o memo é seguro e corta o trabalho
+ * inteiro.
  */
-export function SimuladorFrete({ preco }: { preco: number }) {
+function SimuladorFreteBase({ preco }: { preco: number }) {
   const [cep, setCep] = useState('');
   const [carregando, setCarregando] = useState(false);
   const [cotacao, setCotacao] = useState<CotacaoDoSite | null>(null);
@@ -175,3 +184,5 @@ export function SimuladorFrete({ preco }: { preco: number }) {
     </div>
   );
 }
+
+export const SimuladorFrete = memo(SimuladorFreteBase);

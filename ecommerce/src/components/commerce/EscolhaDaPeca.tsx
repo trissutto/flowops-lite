@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
 import { AlertCircle, Check } from 'lucide-react';
@@ -137,18 +137,21 @@ export function EscolhaDaPeca({
    * saindo da peça, não desfazendo cores). É o que faz o link compartilhado
    * abrir na cor que ela estava vendo e o funil saber qual cor foi vista.
    */
-  function trocarCor(nome: string, opts?: { silencioso?: boolean }) {
-    setCor(nome);
-    setCorError(false);
-    if (!opts?.silencioso) trackColorSwitch(product, nome);
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.set('cor', nome);
-      window.history.replaceState(null, '', url);
-    } catch {
-      /* URL é conveniência — a troca de cor nunca pode falhar por causa dela. */
-    }
-  }
+  const trocarCor = useCallback(
+    (nome: string, opts?: { silencioso?: boolean }) => {
+      setCor(nome);
+      setCorError(false);
+      if (!opts?.silencioso) trackColorSwitch(product, nome);
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('cor', nome);
+        window.history.replaceState(null, '', url);
+      } catch {
+        /* URL é conveniência — a troca de cor nunca pode falhar por causa dela. */
+      }
+    },
+    [product],
+  );
 
   /**
    * ELA PULOU DIRETO PRO TAMANHO (ou pro botão) SEM ESCOLHER A COR.
@@ -158,7 +161,7 @@ export function EscolhaDaPeca({
    * tamanho usa quando falta. O toque dela não é perdido: assim que tocar
    * numa cor, o erro apaga e a grade de tamanhos passa a valer.
    */
-  function pedirCor() {
+  const pedirCor = useCallback(() => {
     setCorError(true);
     // A grade tem DUAS instâncias (celular embaixo da foto, PC na coluna da
     // direita) — rola até a que está de fato na tela.
@@ -166,7 +169,7 @@ export function EscolhaDaPeca({
       ? 'grade-de-cores-desktop'
       : 'grade-de-cores';
     document.getElementById(alvo)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
+  }, []);
   /**
    * O TAMANHO MORA AQUI (17/08), e nao dentro do BuyBox.
    *
@@ -175,6 +178,37 @@ export function EscolhaDaPeca({
    * que enxerga as duas.
    */
   const [tamanho, setTamanho] = useState<string | null>(null);
+
+  /**
+   * ── POR QUE ESTE useMemo EXISTE (23/08/2026) ──
+   *
+   * Esta lista ia montada INLINE no JSX do BuyBox, com dois `.map` aninhados.
+   * Como `tamanho` mora aqui, cada toque num número re-renderizava este
+   * componente, o array inteiro nascia de novo (N cores × M tamanhos, objetos
+   * novos) e o BuyBox — 977 linhas — reconciliava inteiro atrás dele.
+   *
+   * Não é teoria. Medido na PDP em produção, com clique real:
+   * escolher tamanho custava **55 ms** contra 16 ms de "Favoritar" e 23 ms de
+   * abrir o modal de medidas, e o MutationObserver mostrava o INPUT DE CEP do
+   * simulador de frete entre os nós tocados — um campo que não tem relação
+   * nenhuma com o número escolhido. No celular médio (4–6× mais lento) esses
+   * 55 ms são os 408 ms de INP que a Search Console reporta em 498 PDPs.
+   *
+   * A lista depende só de `cores`. Fora do render, ela para de nascer a cada
+   * toque.
+   */
+  const coresParaBuyBox = useMemo(
+    () =>
+      cores.map((c) => ({
+        nome: c.nome,
+        nomeAmigavel: c.nomeAmigavel,
+        capa: c.fotos[0]?.src ?? null,
+        swatch: c.swatch,
+        estoque: c.estoque,
+        tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel })),
+      })),
+    [cores],
+  );
 
   const corAtual = cores.find((c) => c.nome === cor);
 
@@ -369,14 +403,7 @@ export function EscolhaDaPeca({
              BuyBox: ela mostra a mesma foto que a fita de miniaturas mostra
              (a primeira da cor) e o nome que a cliente lê — o cru do ERP
              ("VD MUSGO ESC") segue sendo só a chave da seleção. */
-          cores={cores.map((c) => ({
-            nome: c.nome,
-            nomeAmigavel: c.nomeAmigavel,
-            capa: c.fotos[0]?.src ?? null,
-            swatch: c.swatch,
-            estoque: c.estoque,
-            tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel })),
-          }))}
+          cores={coresParaBuyBox}
           corSelecionada={cor}
           tamanho={tamanho}
           onTamanho={setTamanho}
