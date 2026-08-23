@@ -149,6 +149,32 @@ export class OrdersController {
     private readonly trocaPeca: TrocaPecaService,
   ) {}
 
+  /**
+   * A TELA DE SEPARAÇÃO AINDA PERGUNTA PRO WOOCOMMERCE?
+   *
+   * Não desde 22/08/2026 — o dono cortou: "WOOCOMMERCE NÃO EXISTE MAIS". A
+   * última venda por lá foi 19/08 (virada de `lurds.com.br` pro site novo),
+   * mas a API do WordPress continua no ar respondendo o ARQUIVO — e era ele
+   * que enchia as abas com trabalho que ninguém vai fazer:
+   *
+   *   Concluídos 22.780 = 22.538 do WooCommerce + 242 da operação de verdade
+   *   Cancelados    212 = 212 do WooCommerce + 0
+   *   Aguardando      4 = 4 pedidos parados lá desde antes da virada
+   *   Em separação   34 = 3 do WooCommerce (presos) + 31 de verdade
+   *
+   * Badge que mistura arquivo morto com pendência real é badge que ninguém
+   * olha — a mesma regra da fila da loja ("alarme falso mata a confiança na
+   * fila inteira"). A tela agora conta e lista SÓ a operação viva.
+   *
+   * O pedido antigo não sumiu: ele mora no nosso Postgres e continua achável
+   * pela BUSCA desta mesma tela (ver `wcList`) e pela URL direta.
+   *
+   * Kill-switch: `SEPARACAO_WOOCOMMERCE=1` traz o arquivo de volta.
+   */
+  private get separacaoComWoo(): boolean {
+    return String(process.env.SEPARACAO_WOOCOMMERCE ?? '0').trim() === '1';
+  }
+
   // ---------- Rotas estáticas PRIMEIRO (senão o `:id` come) ----------
 
   /**
@@ -464,7 +490,9 @@ export class OrdersController {
      * — pra TODAS as origens, WooCommerce incluído.
      */
     const ehEmTransito = status === 'em-transito';
-    const res = ehEmTransito
+    // Sem WooCommerce, a lista sai inteira do Postgres — o mesmo caminho que
+    // "Em trânsito" já usava desde 19/08.
+    const res = ehEmTransito || !this.separacaoComWoo
       ? { data: [] as any[], total: 0, totalPages: 0 }
       : await this.wc.listOrders({
           status,
@@ -574,7 +602,13 @@ export class OrdersController {
       // quem sabe onde o objeto está é o Postgres (`rastreio_objetos`), não o
       // WooCommerce — e a loja despacha os dois pelo mesmo card, com o mesmo
       // código de rastreio.
-      if (!ehEmTransito) filtros.push({ source: { in: ORIGENS_NATIVAS } });
+      //
+      // ⚠️ A BUSCA ENXERGA O ARQUIVO. Sem o WooCommerce na lista, o pedido
+      // antigo só é achável por aqui — e a matriz procura pedido de julho o
+      // tempo todo (troca, reclamação, segunda via). Ele mora no nosso
+      // Postgres desde o sync, então quem digitou algo na busca recebe os dois
+      // mundos; quem está só olhando a aba recebe o trabalho de hoje.
+      if (!ehEmTransito && !search) filtros.push({ source: { in: ORIGENS_NATIVAS } });
       if (search) {
         filtros.push({
           OR: [
@@ -1143,7 +1177,7 @@ export class OrdersController {
   /** Contadores por status (pra renderizar os filtros com número exato do WC). */
   @Get('wc/counts')
   async wcCounts() {
-    const totals = await this.wc.countByStatus();
+    const totals = this.separacaoComWoo ? await this.wc.countByStatus() : [];
     const byStatus: Record<string, { name: string; total: number }> = {};
     let grand = 0;
     for (const t of totals) {

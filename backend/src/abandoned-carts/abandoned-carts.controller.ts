@@ -110,6 +110,12 @@ export class AbandonedCartsController {
     return this.service.listEcommercePending({ status, since, until, search });
   }
 
+  /** KPIs do e-commerce novo — o badge da aba soma isto ao plugin. */
+  @Get('ecommerce/stats')
+  ecommerceStats(@Query('since') since?: string, @Query('until') until?: string) {
+    return this.service.statsEcommercePending(since, until);
+  }
+
   /** Stats agregadas via fallback WC. */
   @Get('wc-pending/stats')
   wcPendingStats(

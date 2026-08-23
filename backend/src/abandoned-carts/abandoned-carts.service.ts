@@ -522,6 +522,42 @@ export class AbandonedCartsService {
     };
   }
 
+  /**
+   * KPIs do E-COMMERCE NOVO — o número que o BADGE da aba precisa.
+   *
+   * Existe porque o badge dizia **23** enquanto o painel logo abaixo dizia
+   * **118**: o badge lia só o `stats` do plugin do WooCommerce (a loja que não
+   * existe mais desde 19/08) e ignorava os carrinhos do site novo, que hoje
+   * são 80% do total. Badge que discorda do painel da MESMA tela é o defeito
+   * que já apareceu na fila de separação — a operação para de confiar no
+   * número e passa a abrir a aba "pra conferir".
+   *
+   * ⚠️ Conta pela MESMA função que monta a lista (`status: 'all'` + filtro por
+   * `order_status`), que é exatamente o que a tela faz. Reimplementar a regra
+   * aqui com `count()` daria um número parecido e diferente — e aí seriam
+   * TRÊS contas.
+   */
+  async statsEcommercePending(since?: string, until?: string) {
+    const r: any = await this.listEcommercePending({ status: 'all', since, until });
+    const items: any[] = Array.isArray(r?.items) ? r.items : [];
+    const conta = (st: string) => items.filter((i) => i.order_status === st).length;
+    const soma = (st: string) =>
+      items.filter((i) => i.order_status === st).reduce((acc, i) => acc + (Number(i.cart_total) || 0), 0);
+    const abandoned = conta('abandoned');
+    const recovered = conta('recovered');
+    const lost = conta('lost');
+    const base = abandoned + recovered + lost;
+    return {
+      ok: true,
+      abandoned,
+      recovered,
+      lost,
+      total_abandoned_value: soma('abandoned'),
+      total_recovered_value: soma('recovered'),
+      recovery_rate: base > 0 ? (recovered / base) * 100 : 0,
+    };
+  }
+
   /** Stats agregadas via fallback WC — conta tudo dentro do período. */
   async statsWcPending(since?: string, until?: string) {
     if (!this.wcBase || !this.wcAuth.username || !this.wcAuth.password) {
