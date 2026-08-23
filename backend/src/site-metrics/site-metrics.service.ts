@@ -296,7 +296,13 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   // `code`, `field`, `stage` e `attempt` entram (17/08): a Kênia falhou 14
   // vezes com `validation_error` e ninguém sabia QUAL campo — o front mandava,
   // o sanitizador podava. Diagnóstico às cegas custa a venda seguinte.
-  checkout_error: ['method', 'reason', 'code', 'field', 'stage', 'attempt'],
+  // `motivo` e `ref` entram (23/08) pelo MESMO motivo do `field`, um nível
+  // acima: o site já mandava os dois desde 22/08 e este mapa podava os dois em
+  // silêncio. Sem eles, `catalog_unavailable` — que é UM código cobrindo SETE
+  // recusas (peça sumiu, despublicada, esgotou, estoque insuficiente, preço
+  // subiu…) — chega ao painel como uma frase só. Medido em 22/08: 7 clientes
+  // recusadas no envio do pedido e nenhuma resposta sobre qual das sete foi.
+  checkout_error: ['method', 'reason', 'code', 'field', 'stage', 'attempt', 'motivo', 'ref'],
   checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
   payment_method_selected: ['method'],

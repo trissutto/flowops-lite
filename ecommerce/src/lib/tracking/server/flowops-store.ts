@@ -68,7 +68,10 @@ const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
   add_shipping_info: ['shipping_tier'],
   add_payment_info: ['payment_type'],
   checkout_submission: ['method'],
-  checkout_error: ['method', 'reason', 'code', 'field', 'stage', 'attempt'],
+  // `motivo` e `ref`: o `trackCheckoutError` manda os dois desde 22/08 e esta
+  // lista podava em silêncio (mesma família da poda do UTM). São eles que
+  // separam as SETE recusas escondidas sob `catalog_unavailable`.
+  checkout_error: ['method', 'reason', 'code', 'field', 'stage', 'attempt', 'motivo', 'ref'],
   checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
   payment_method_selected: ['method'],
