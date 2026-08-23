@@ -13,6 +13,8 @@ import { stores } from '@/data/stores';
 import { trackAddShippingInfo, trackCheckoutValidationError, trackShippingQuoteFallback, type TrackedItem } from '@/lib/tracking';
 import type { Address, ShippingQuote } from '@/types/checkout';
 import { maskCep, onlyDigits } from './masks';
+import { useCepGuardado, useCepStore } from '@/store/cep';
+import type { EnderecoSalvo } from '@/hooks/useClienteLogada';
 
 /**
  * § 2 — ENTREGA. A ordem da seção é a ordem da decisão da cliente:
@@ -65,11 +67,29 @@ interface ShippingStepProps {
   /** Itens no formato de tracking — pro add_shipping_info. */
   itemsTracked: TrackedItem[];
   defaults?: ShippingSelection | null;
+  /**
+   * Endereços que a cliente logada já tem no CRM (o mesmo cadastro da loja
+   * física). Vazio pra visitante — e aí a etapa é exatamente a de sempre.
+   */
+  salvos?: EnderecoSalvo[];
   onDone: (selection: ShippingSelection) => void;
 }
 
-export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDone }: ShippingStepProps) {
-  const [cep, setCep] = useState(defaults ? maskCep(defaults.cep) : '');
+export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, salvos = [], onDone }: ShippingStepProps) {
+  /**
+   * O CEP JÁ VEM PREENCHIDO quando ela calculou o frete na peça ou na sacola
+   * (`store/cep`). Era a QUARTA vez que o site pedia os mesmos 8 dígitos na
+   * mesma visita — e aqui, no celular, com o teclado numérico e a compra quase
+   * fechada, é onde digitar de novo mais custa.
+   *
+   * `defaults` (a volta da edição, dentro do próprio checkout) continua tendo
+   * precedência: ali ela já escolheu um endereço nesta compra.
+   */
+  const cepGuardado = useCepGuardado();
+  const guardarCep = useCepStore((s) => s.guardar);
+  const [cep, setCep] = useState(
+    defaults ? maskCep(defaults.cep) : cepGuardado ? maskCep(cepGuardado) : '',
+  );
   const [cepBuscando, setCepBuscando] = useState(false);
   const [quoteId, setQuoteId] = useState<string | undefined>(defaults?.quote.id);
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -177,12 +197,15 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
         // Evento PRÓPRIO, não `checkout_validation_error`: é falha nossa de
         // infra, não erro da cliente — no painel do funil misturava os dois.
         if (r.origem === 'local') trackShippingQuoteFallback(r.motivo ?? 'sem_motivo');
+        // CEP que cotou é CEP bom: guarda pra próxima peça e pra próxima
+        // visita já abrirem com o prazo em vez de um campo vazio.
+        if (r.quotes.length) guardarCep(cep);
       })
       .finally(() => {
         if (!controller.signal.aborted) setCotando(false);
       });
     return () => controller.abort();
-  }, [cep, cepValido, subtotal, pecas, recotacao]);
+  }, [cep, cepValido, subtotal, pecas, recotacao, guardarCep]);
 
   // Ficam de pé DURANTE a recotação (a lista antiga continua na tela com o
   // "calculando…"): é o que deixa o botão girar em vez do aviso sumir e voltar.
@@ -405,8 +428,59 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
     )();
   }
 
+  /**
+   * Despeja um endereço salvo nos campos.
+   *
+   * `cepAplicado` é carimbado junto pra o efeito do ViaCEP não sobrescrever
+   * depois o que veio do cadastro — o ViaCEP sabe a rua do CEP, mas não sabe
+   * o NÚMERO nem o complemento dela, e perder esses dois é perder o atalho.
+   */
+  function usarEnderecoSalvo(e: EnderecoSalvo) {
+    setCep(maskCep(e.cep));
+    cepAplicado.current = e.cep;
+    ultimoCepBuscado.current = e.cep;
+    setValue('street', e.street, { shouldValidate: true });
+    setValue('number', e.number, { shouldValidate: true });
+    setValue('complement', e.complement ?? '');
+    setValue('neighborhood', e.neighborhood, { shouldValidate: true });
+    setValue('city', e.city, { shouldValidate: true });
+    setValue('uf', e.uf, { shouldValidate: true });
+    setAvisoEndereco(null);
+  }
+
   return (
     <form onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
+      {/* OS ENDEREÇOS QUE ELA JÁ TEM (22/08).
+          Um toque preenche CEP, rua, número, bairro, cidade e UF de uma vez —
+          seis campos que a cliente logada estava redigitando por não haver
+          ponte entre o checkout e o cadastro dela no CRM. Visitante não vê
+          nada disto (`salvos` chega vazio). */}
+      {salvos.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <p className="eyebrow text-ink-muted">Seus endereços</p>
+          <div className="flex flex-wrap gap-2">
+            {salvos.map((e) => (
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => usarEnderecoSalvo(e)}
+                className={cn(
+                  'max-w-full rounded-md border px-3.5 py-2.5 text-left text-small transition-colors',
+                  onlyDigits(cep) === e.cep
+                    ? 'border-primary bg-primary-wash text-ink'
+                    : 'border-border bg-surface text-ink-soft hover:border-primary hover:text-ink',
+                )}
+              >
+                {e.apelido && <span className="mr-1.5 font-medium text-ink">{e.apelido}</span>}
+                <span className="truncate">
+                  {e.street}, {e.number} — {e.city}/{e.uf}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* CEP primeiro: é ele que define preço, prazo e lojas de retirada. */}
       <div className="max-w-[220px]">
         <Input

@@ -109,6 +109,24 @@ export default async function HomePage() {
           <div className="mt-3 sm:mt-10">
             <VitrineGrid products={vitrine.produtos} listName={vitrine.titulo} />
           </div>
+
+          {/* "VER TODAS" NO PÉ DA PRATELEIRA — só no celular.
+              No desktop o CTA do `SectionTitle` fica à direita do título e é
+              visto de relance. No celular ele some lá em cima assim que a
+              cliente rola a grade, e é justamente no FIM da prateleira que ela
+              decide se quer mais daquilo. Com a vitrine cortada em 8 (ver
+              `VITRINE_GRID_MAX_MOBILE`), este link deixa de ser conveniência e
+              vira o caminho pro resto do estoque. */}
+          {vitrine.ctaHref && (
+            <div className="mt-5 sm:hidden">
+              <a
+                href={vitrine.ctaHref}
+                className="flex h-12 w-full items-center justify-center rounded-pill border border-border-strong bg-surface text-[0.6875rem] font-medium tracking-[0.16em] text-ink uppercase transition-colors hover:border-primary hover:text-primary-strong"
+              >
+                {vitrine.ctaLabel ?? `Ver tudo em ${vitrine.titulo}`}
+              </a>
+            </div>
+          )}
         </Section>
       ))}
 

@@ -51,7 +51,10 @@ export default function CheckoutLayout({ children }: { children: React.ReactNode
             <Link href="/privacidade" className="link-underline">
               Privacidade
             </Link>
-            <Link href="/institucional/trocas" className="link-underline">
+            {/* Apontava pra /institucional/trocas, que NUNCA existiu: 404 no
+                rodapé do checkout, na única página onde a cliente está com o
+                cartão na mão e procurando garantia. A página publicada é esta. */}
+            <Link href="/politica-de-trocas" className="link-underline">
               Trocas
             </Link>
           </p>

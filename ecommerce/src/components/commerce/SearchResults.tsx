@@ -1,7 +1,7 @@
 'use client';
 
 import { chaveDoCard } from '@/services/products';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { Search, Sparkles } from 'lucide-react';
 import { Section } from '@/components/layout/Section';
@@ -18,6 +18,13 @@ import {
 import type { SearchOutcome } from '@/lib/search';
 import type { Product, SearchResult } from '@/types';
 import { LINK_WHATSAPP_SITE } from '@/data/contato';
+import {
+  FILTRO_BUSCA_VAZIO,
+  FiltroDaBusca,
+  aplicarFiltroBusca,
+  filtroBuscaAtivo,
+  type FiltroBusca,
+} from '@/components/commerce/FiltroDaBusca';
 
 /**
  * RESULTADOS DE BUSCA — /busca?q=…
@@ -43,12 +50,16 @@ export function SearchResults({ term }: { term: string }) {
   const [outcome, setOutcome] = useState<SearchOutcome | null>(null);
   const [relacionados, setRelacionados] = useState<SearchResult[]>([]);
   const [populares, setPopulares] = useState<Product[]>([]);
+  const [filtro, setFiltro] = useState<FiltroBusca>(FILTRO_BUSCA_VAZIO);
   const trackedFor = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setOutcome(null);
     setRelacionados([]);
+    // Termo novo, recorte zerado: manter o 58 marcado numa busca por "calça"
+    // depois de outra por "vestido" esconderia resultado sem a cliente pedir.
+    setFiltro(FILTRO_BUSCA_VAZIO);
 
     if (term.length < 2) {
       // Sem termo: a página vira convite, não erro — populares + termos-guia.
@@ -83,10 +94,14 @@ export function SearchResults({ term }: { term: string }) {
   }, [outcome, term]);
 
   const carregando = outcome === null;
-  const produtos = outcome?.results.map((r) => r.doc.product) ?? [];
+  /** Tudo que o motor devolveu — é daqui que saem as opções do filtro. */
+  const todos = useMemo(() => outcome?.results.map((r) => r.doc.product) ?? [], [outcome]);
+  /** O que vai pra grade, já com o recorte da cliente. */
+  const produtos = useMemo(() => aplicarFiltroBusca(todos, filtro), [todos, filtro]);
   const total = produtos.length;
   const relaxed = outcome?.relaxed ?? false;
   const intentLabel = outcome?.intent?.label;
+  const recortou = filtroBuscaAtivo(filtro);
 
   /** Só o clique que navega conta (padrão do RecommendationRail). */
   const aoClicar = (product: Product, index: number) => (event: React.MouseEvent) => {
@@ -126,7 +141,9 @@ export function SearchResults({ term }: { term: string }) {
         )}
         {!carregando && term.length >= 2 && !relaxed && (
           <p className="tabular mt-2 text-small text-ink-muted" aria-live="polite">
-            {total} {total === 1 ? 'peça encontrada' : 'peças encontradas'}
+            {/* A contagem do TERMO, não a do recorte: quem diz quantas sobraram
+                depois do filtro é a própria barra de filtro, embaixo. */}
+            {todos.length} {todos.length === 1 ? 'peça encontrada' : 'peças encontradas'}
           </p>
         )}
       </Section>
@@ -177,6 +194,19 @@ export function SearchResults({ term }: { term: string }) {
 
       {/* Grade de resultados */}
       <Section space="sm" width="wide">
+        {/* FILTRO — em cima da grade, sempre visível. Só aparece quando há
+            mais de uma resposta possível (ver `FiltroDaBusca`). */}
+        {!carregando && todos.length > 1 && (
+          <div className="mb-8">
+            <FiltroDaBusca
+              produtos={todos}
+              valor={filtro}
+              onChange={setFiltro}
+              totalFiltrado={total}
+            />
+          </div>
+        )}
+
         {carregando ? (
           <ProductGridSkeleton count={8} />
         ) : total > 0 ? (
@@ -195,6 +225,19 @@ export function SearchResults({ term }: { term: string }) {
               ))}
             </div>
           </>
+        ) : recortou ? (
+          /**
+           * Zerou POR CAUSA DO RECORTE, não da busca. Mandar a cliente falar
+           * no WhatsApp aqui seria mentir sobre o que aconteceu: o termo achou
+           * peça, o número dela é que não tem. A saída é desfazer o recorte —
+           * e o botão de limpar está logo acima, na barra de filtro.
+           */
+          <EmptyState
+            icon={<Search strokeWidth={1.5} />}
+            title="Nenhuma peça com esse recorte."
+            description="Tente soltar um dos filtros acima — ou fale com uma consultora: a gente procura no estoque das 14 lojas."
+            action={{ label: 'Falar no WhatsApp', href: LINK_WHATSAPP_SITE }}
+          />
         ) : term.length >= 2 ? (
           // Último recurso (BFF fora do ar E navegação sem pista): ainda assim
           // com saída dupla — consultora e vitrine. Nunca uma frase seca.

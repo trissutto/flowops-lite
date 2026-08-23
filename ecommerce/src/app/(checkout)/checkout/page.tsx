@@ -18,6 +18,7 @@ import { maskPhone } from '@/components/checkout/masks';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { PIX_DESCONTO_PCT, pixDiscount, pixTotal } from '@/lib/commerce/pix';
 import { clearCheckoutDraft, readCheckoutDraft, writeCheckoutDraft } from '@/lib/commerce/checkout-draft';
+import { useClienteLogada } from '@/hooks/useClienteLogada';
 import { formatPrice } from '@/lib/utils';
 import {
   trackBeginCheckout,
@@ -272,6 +273,52 @@ export default function CheckoutPage() {
     if (!draftReady) return;
     writeCheckoutDraft(window.sessionStorage, { contact, customer, shipping, payment });
   }, [draftReady, contact, customer, shipping, payment]);
+
+  /**
+   * A CLIENTE LOGADA NÃO DIGITA DE NOVO (22/08).
+   *
+   * O checkout nunca consultava a conta: nome, WhatsApp, CPF, e-mail e o
+   * endereço salvo em /conta/enderecos ficavam de fora, e quem já comprava na
+   * loja física redigitava tudo no celular com a compra já decidida.
+   *
+   * Só preenche o que está VAZIO, e só depois que o rascunho da sessão foi
+   * lido: o que ela digitou nesta compra sempre vence o cadastro. Sem sessão
+   * ou com backend fora, `cliente` é null e nada muda.
+   */
+  const { cliente: clienteLogada, enderecos: enderecosSalvos } = useClienteLogada();
+  const jaPreencheuDaConta = useRef(false);
+  useEffect(() => {
+    if (!draftReady || !clienteLogada || jaPreencheuDaConta.current) return;
+    jaPreencheuDaConta.current = true;
+
+    setContact((atual) =>
+      atual ??
+      (clienteLogada.nome && clienteLogada.telefone.length >= 10
+        ? { name: clienteLogada.nome, phone: clienteLogada.telefone, recoveryConsent: false }
+        : null),
+    );
+    setCustomer((atual) =>
+      atual ?? {
+        name: clienteLogada.nome,
+        email: clienteLogada.email,
+        cpf: clienteLogada.cpf,
+        phone: clienteLogada.telefone,
+      },
+    );
+  }, [draftReady, clienteLogada]);
+
+  /**
+   * Com nome e WhatsApp já conhecidos, a etapa 1 não é mais uma parada: ela
+   * abre CONFIRMADA e o checkout começa na entrega. A cliente ainda pode
+   * abrir e corrigir — a seção continua editável, só não bloqueia mais.
+   */
+  useEffect(() => {
+    if (!draftReady || !contact || step !== 1) return;
+    if (!jaPreencheuDaConta.current) return;
+    setStep(2);
+    // Só na primeira vez que o preenchimento vem da conta.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftReady, contact]);
 
   /** Captura mínima para recuperação. Nunca bloqueia nem atrasa o checkout. */
   function saveRecovery(nextContact: CheckoutContact) {
@@ -628,6 +675,7 @@ export default function CheckoutPage() {
               pecas={lines.reduce((s, l) => s + l.quantity, 0)}
               itemsTracked={itemsTracked}
               defaults={shipping}
+              salvos={enderecosSalvos}
               onDone={(s) => {
                 setSubmitError(null);
                 setShipping(s);

@@ -2,7 +2,7 @@
 
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { Heart, MapPin, Search, ShoppingBag, User } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, contarPecas } from '@/lib/utils';
 import { useMounted } from '@/hooks';
 import { useWishlistCount } from '@/store/wishlist';
 import { useCartCount } from '@/store/cart';
@@ -78,7 +78,7 @@ export function CartButton({ tone = 'dark' }: { tone?: Tone }) {
     <button
       type="button"
       onClick={() => openOverlay('cart')}
-      aria-label={`Sacola${mounted && count ? ` (${count} itens)` : ''}`}
+      aria-label={`Sacola${mounted && count ? ` (${contarPecas(count)})` : ''}`}
       className={actionClass(tone)}
     >
       <ShoppingBag className="size-[18px]" strokeWidth={1.5} />

@@ -9,12 +9,15 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { CartLineRow } from '@/components/commerce/CartLineRow';
 import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
+import { CompletarFreteGratis } from '@/components/commerce/CompletarFreteGratis';
 import { RecommendationRail } from '@/components/commerce/RecommendationRail';
 import { useCartStore } from '@/store/cart';
+import { useCepGuardado, useCepStore } from '@/store/cep';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { fetchQuotes, isValidCep, onlyDigits } from '@/lib/commerce/frete';
 import {
+  avisoDaLinha as calcularAvisoDaLinha,
   cartStockBlocksCheckout,
   currentCartStockNotice,
   type CartStockNotice,
@@ -67,6 +70,8 @@ export default function CarrinhoPage() {
   const couponCode = useCartStore((s) => s.couponCode);
   const setCoupon = useCartStore((s) => s.setCoupon);
   const cepSalvo = useCartStore((s) => s.cep);
+  const cepGuardado = useCepGuardado();
+  const guardarCep = useCepStore((s) => s.guardar);
   const setCep = useCartStore((s) => s.setCep);
   const shippingQuoteId = useCartStore((s) => s.shippingQuoteId);
   const setShippingQuote = useCartStore((s) => s.setShippingQuote);
@@ -107,10 +112,20 @@ export default function CarrinhoPage() {
   /* ----------------------------------------------------------------- frete */
   const [cepInput, setCepInput] = useState('');
 
-  // Pré-preenche com o CEP persistido — só depois da hidratação.
+  /**
+   * Pré-preenche — só depois da hidratação.
+   *
+   * Duas fontes, nesta ordem: o CEP DESTA SACOLA (escolha desta compra) e,
+   * na falta dele, o CEP que a cliente digitou em qualquer outra tela
+   * (`store/cep`, gravado pelo simulador da peça e pelo checkout). Antes só a
+   * primeira existia, então quem calculou o frete na peça e foi pra sacola
+   * digitava tudo de novo — a mesma pergunta, três telas seguidas.
+   */
   useEffect(() => {
-    if (mounted && cepSalvo) setCepInput(maskCep(cepSalvo));
-  }, [mounted, cepSalvo]);
+    if (!mounted) return;
+    const inicial = cepSalvo || cepGuardado;
+    if (inicial) setCepInput(maskCep(inicial));
+  }, [mounted, cepSalvo, cepGuardado]);
 
   /**
    * A SACOLA MOSTRAVA UM FRETE QUE NÃO É O QUE SE COBRA (corrigido 17/08).
@@ -148,6 +163,9 @@ export default function CarrinhoPage() {
     setCepInput(mascarado);
     if (isValidCep(mascarado)) {
       setCep(onlyDigits(mascarado));
+      // Vale pro site inteiro, não só pra esta sacola: a próxima peça que ela
+      // abrir já mostra o prazo em vez de pedir o CEP de novo.
+      guardarCep(onlyDigits(mascarado));
     } else if (shippingQuoteId) {
       // CEP incompleto invalida a opção escolhida — sem cotação fantasma.
       setShippingQuote(null);
@@ -215,39 +233,10 @@ export default function CarrinhoPage() {
         if (!peca) return nada;
         const produto = mapPeca(peca);
 
-        const tamanho = (peca.tamanhos ?? []).find((t) => t.label === line.size);
-        if (!tamanho) return { aviso: null, peca: produto };
-        if (!tamanho.disponivel) {
-          return {
-            peca: produto,
-            aviso: [line.id, {
-              tone: 'danger',
-              bloqueia: true,
-              maxQuantity: 0,
-              text: `Esgotou no tamanho ${line.size} — remova ou troque o tamanho.`,
-            }],
-          };
-        }
-        if (tamanho.estoque === 1) {
-          return {
-            peca: produto,
-            aviso: [line.id, {
-              tone: 'gold', maxQuantity: 1, text: 'Última peça neste tamanho — garanta a sua.',
-            }],
-          };
-        }
-        if (line.quantity > tamanho.estoque) {
-          return {
-            peca: produto,
-            aviso: [line.id, {
-              tone: 'danger',
-              bloqueia: true,
-              maxQuantity: tamanho.estoque,
-              text: `Restam só ${tamanho.estoque} neste tamanho — diminua a quantidade para continuar.`,
-            }],
-          };
-        }
-        return { aviso: null, peca: produto };
+        // A REGRA mora em `lib/commerce/cart-stock` desde 22/08: o mini-cart
+        // precisa da mesma, e duas cópias divergiriam no primeiro ajuste.
+        const aviso = calcularAvisoDaLinha(line, peca);
+        return { aviso: aviso ? ([line.id, aviso] as [string, AvisoEstoque]) : null, peca: produto };
       } catch {
         return nada;
       }
@@ -565,6 +554,11 @@ export default function CarrinhoPage() {
       vazia não fica com seção fantasma, e "Vistos por você" continua valendo
       (é o convite pra retomar de onde ela parou).
     */}
+    {/* A barra de progresso lá em cima dizia o quanto FALTAVA pro frete grátis
+        e parava aí — uma conta pra cliente resolver sozinha num catálogo de
+        milhares de peças. Esta prateleira mostra as que fecham a conta. */}
+    <CompletarFreteGratis subtotal={subtotal} />
+
     {pecasDaSacola.length > 0 && (
       <RecommendationRail
         kind="complete-seu-look"

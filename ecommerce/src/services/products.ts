@@ -221,8 +221,35 @@ export function explodirPorCor(p: PecaApi): Product[] {
        abre a família — é a que aguenta a demanda que a vitrine cria — e as
        demais vêm atrás, sempre juntas, antes da próxima REF. */
     .sort((a, b) => b.estoque - a.estoque);
-  if (vendaveis.length < 2) return [base];
-  return vendaveis.map((c) => {
+
+  /**
+   * DUAS CORES, UM RÓTULO SÓ — o card duplicado da vitrine (22/08/2026).
+   *
+   * Visto em produção na seção Blusas da home: a peça 138818 saía DUAS VEZES
+   * seguidas, com nome e preço idênticos — "Blusa Manga Curta Estampa Mostarda
+   * · Blusa Manga Curta". Pra cliente é a mesma blusa listada duas vezes; pra
+   * loja é uma prateleira que parece desorganizada logo na primeira dobra.
+   *
+   * A causa é cadastro poluído: duas cores CRUAS diferentes ("...MOSTARDA" e
+   * "...ESTAMPA", ambas com o nome da PEÇA colado no campo cor) que a guarda
+   * do `rotuloDaCor` reduz ao MESMO texto. As chaves de lista continuavam
+   * únicas (o React nem avisa, porque `chaveDoCard` usa o nome cru), então o
+   * bug era invisível pro código e óbvio pra quem olha a tela.
+   *
+   * A regra é a da cliente: se dois cards mostram o mesmo rótulo, são o mesmo
+   * card. Fica o de MAIOR estoque — a lista já vem ordenada por estoque, então
+   * é o primeiro. Isto NÃO conserta o cadastro (esse é trabalho da retaguarda);
+   * impede que ele chegue à vitrine.
+   */
+  const porRotulo = new Map<string, (typeof vendaveis)[number]>();
+  for (const c of vendaveis) {
+    const chave = rotuloDaCor(c).trim().toUpperCase();
+    if (!porRotulo.has(chave)) porRotulo.set(chave, c);
+  }
+  const distintas = [...porRotulo.values()];
+
+  if (distintas.length < 2) return [base];
+  return distintas.map((c) => {
     const badges: Product['badges'] = (base.badges ?? []).filter((b) => b !== 'ultimas-pecas');
     // "Últimas peças" honesto por COR — é o estoque dela que conta aqui.
     if (c.estoque > 0 && c.estoque <= 3) badges.push('ultimas-pecas');

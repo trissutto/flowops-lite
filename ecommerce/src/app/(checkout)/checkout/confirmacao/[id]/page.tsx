@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { ProductCardSkeleton, Skeleton } from '@/components/ui/Skeleton';
 import { ProductCard } from '@/components/cards/ProductCard';
+import { CriarContaDepoisDaCompra } from '@/components/conta/CriarContaDepoisDaCompra';
+import { RastreioDoPedido } from '@/components/commerce/RastreioDoPedido';
 import { WhatsAppIcon } from '@/components/ui/icons';
 import { stores } from '@/data/stores';
 import { mapPecasDaVitrine } from '@/services/products';
@@ -284,20 +286,31 @@ export default function ConfirmacaoPage() {
         </div>
       </section>
 
+      {/* O RASTREIO, DENTRO DE CASA (22/08). O card genérico abaixo continua
+          valendo enquanto a peça não foi postada; assim que existe código, é
+          esta seção que responde "onde está" — sem mandar a cliente pro site
+          dos Correios. Pedido dividido vira uma caixa por linha. */}
+      {!encerrado && <RastreioDoPedido volumes={order.volumes ?? []} />}
+
       {/* Acompanhamento + NF — placeholders HONESTOS (nada de link morto, e
           nada de e-mail: o canal que existe e dispara de verdade é o WhatsApp). */}
       {!encerrado && (
         <section className="mx-auto mt-6 grid max-w-text gap-6 sm:grid-cols-2">
-          <div className="rounded-md bg-surface-alt p-6">
-            <h2 className="mb-2 flex items-center gap-2 font-display text-h4 text-ink">
-              <PackageSearch className="size-4 text-primary-strong" /> Acompanhe seu pedido
-            </h2>
-            <p className="text-small text-ink-soft">
-              {retirada
-                ? 'Avisamos pelo WhatsApp assim que estiver tudo pronto pra retirada.'
-                : 'Você recebe o código de rastreamento pelo WhatsApp assim que o pacote for despachado.'}
-            </p>
-          </div>
+          {/* Some quando o rastreio real já está na tela: "você recebe o
+              código quando despachar" ao lado do código e do status seria
+              contar a mesma história duas vezes, uma delas desatualizada. */}
+          {!order.volumes?.length && (
+            <div className="rounded-md bg-surface-alt p-6">
+              <h2 className="mb-2 flex items-center gap-2 font-display text-h4 text-ink">
+                <PackageSearch className="size-4 text-primary-strong" /> Acompanhe seu pedido
+              </h2>
+              <p className="text-small text-ink-soft">
+                {retirada
+                  ? 'Avisamos pelo WhatsApp assim que estiver tudo pronto pra retirada.'
+                  : 'Você recebe o código de rastreamento pelo WhatsApp assim que o pacote for despachado.'}
+              </p>
+            </div>
+          )}
           <div className="rounded-md bg-surface-alt p-6">
             <h2 className="mb-2 flex items-center gap-2 font-display text-h4 text-ink">
               <FileText className="size-4 text-primary-strong" /> Nota fiscal
@@ -309,6 +322,14 @@ export default function ConfirmacaoPage() {
           </div>
         </section>
       )}
+
+      {/* A CONTA, NA ÚNICA HORA EM QUE ELA CUSTA UM CAMPO (22/08).
+          O checkout é sem cadastro — e depois de pagar ninguém oferecia nada,
+          então quem comprava como visitante nunca virava conta: não acompanha
+          entrega, não vê o cashback que já está sendo creditado e não abre
+          troca sozinha. Aqui CPF, nome, telefone e e-mail já foram digitados;
+          falta a senha. Some pra quem já está logada e pra quem disser não. */}
+      <CriarContaDepoisDaCompra />
 
       {/* WhatsApp — o canal onde a Lurd's realmente atende. */}
       <div className="mt-10 text-center">

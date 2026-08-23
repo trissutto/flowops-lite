@@ -31,4 +31,23 @@ export const HOME_NEWS_PATH = '/novidades';
  * pro TypeScript o tipo continua sendo `number`. Só apareceu olhando a URL que
  * saiu na rede.
  */
-export const VITRINE_GRID_MAX = 18;
+export const VITRINE_GRID_MAX = 12;
+
+/**
+ * QUANTAS A VITRINE MOSTRA NO CELULAR — 8, contra as 12 do desktop.
+ *
+ * Medido em 22/08/2026, em 375×812: a home tinha **32.140px de altura (39,6
+ * telas)** e **278 links de produto**. Ninguém chega ao fim — e as seções do
+ * meio (as lojas, o Instagram, a newsletter) nunca eram vistas. Com 18 peças
+ * por vitrine, UMA vitrine já ocupava 9 telas de rolagem no celular.
+ *
+ * 8 = 4 linhas de 2. É o suficiente pra a cliente entender o que a prateleira
+ * tem e decidir se quer "ver todas" — que é o trabalho da home. Quem quer a
+ * lista inteira tem a página da categoria, que é onde os filtros moram.
+ *
+ * O teto do DESKTOP caiu de 18 pra 12 pelo mesmo motivo, respeitando o pedido
+ * do dono (20/08: "pelo menos 12 produtos em 4 colunas"). 12 ainda tem o bônus
+ * de fechar a grade certinho: 4+4+4, sem a última linha pela metade que o 18
+ * deixava (4+4+4+4+2).
+ */
+export const VITRINE_GRID_MAX_MOBILE = 8;

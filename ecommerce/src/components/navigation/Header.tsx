@@ -1,6 +1,7 @@
 'use client';
 
-import { Menu } from 'lucide-react';
+import { Menu, Search } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import type { NavItem } from '@/types';
 import { useScrolled } from '@/hooks';
@@ -40,9 +41,36 @@ export function Header({
   navegacao?: NavItem[];
 }) {
   const scrolled = useScrolled(24);
+  const pathname = usePathname();
   const overlay = useUiStore((s) => s.overlay);
   const toggleOverlay = useUiStore((s) => s.toggleOverlay);
   const closeOverlay = useUiStore((s) => s.closeOverlay);
+
+  /**
+   * A BARRA DE BUSCA DO CELULAR — visível, não escondida atrás do ícone.
+   *
+   * No desktop a busca sempre foi alcançável; no celular era só a lupa, e quem
+   * chega de anúncio procurando uma peça específica precisava descobrir o
+   * ícone primeiro. Numa loja com 152 vestidos no catálogo, campo aberto é
+   * atalho, não enfeite.
+   *
+   * Ela NÃO aparece em todo lugar, e isso é deliberado: 44px a mais no topo
+   * empurram a dobra pra baixo, e nas telas de DECISÃO (a peça, a sacola, o
+   * pagamento) a dobra vale mais que a descoberta — a PDP luta por cada pixel
+   * pra levar o seletor de tamanho pra cima. Some também quando a cliente
+   * começa a rolar: aí ela já está lendo, e a lupa do header dá conta.
+   *
+   * É um BOTÃO com cara de campo, não um input: quem faz a busca de verdade é
+   * o `SearchOverlay`, que tem histórico, intenções e sugestões. Dois campos
+   * de busca com dois comportamentos seria pior que um só escondido.
+   */
+  const telaDeDecisao =
+    !!pathname &&
+    (pathname.startsWith('/produto/') ||
+      pathname.startsWith('/carrinho') ||
+      pathname.startsWith('/checkout') ||
+      pathname.startsWith('/busca'));
+  const mostrarBuscaMobile = !telaDeDecisao && !scrolled;
 
   return (
     <>
@@ -101,6 +129,20 @@ export function Header({
               <CartButton />
             </div>
           </div>
+
+          {/* Busca aberta — só celular, só nas telas de descoberta. */}
+          {mostrarBuscaMobile && (
+            <div className="pb-3 lg:hidden">
+              <button
+                type="button"
+                onClick={() => toggleOverlay('search')}
+                className="flex h-11 w-full items-center gap-2.5 rounded-pill border border-border bg-surface px-4 text-left text-small font-light text-ink-muted transition-colors hover:border-border-strong"
+              >
+                <Search className="size-4 shrink-0 text-primary-strong" strokeWidth={1.5} />
+                <span className="truncate">Buscar peça, cor ou tamanho</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 

@@ -1,8 +1,9 @@
 import Image from 'next/image';
-import { Star } from 'lucide-react';
+import { FlaskConical, Star } from 'lucide-react';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { apiSafe } from '@/lib/api';
+import { AVALIACOES_DEMO } from '@/services/avaliacoes';
 
 /**
  * O QUE DIZ QUEM LEVOU — a prova social que voltou, agora de verdade.
@@ -54,6 +55,110 @@ const VAZIO: Resposta = {
   avaliacoes: [],
 };
 
+/**
+ * CONJUNTO DE EXEMPLO — ligado só por `NEXT_PUBLIC_AVALIACOES_DEMO=1`.
+ *
+ * ⚠️ NÃO É AVALIAÇÃO DE CLIENTE, e a tela diz isso em cima, em letra grande.
+ * Existe por um motivo só: a seção nunca pôde ser vista, porque a loja ainda
+ * não tem avaliação nenhuma, e desenho que ninguém viu não se aprova. Com a
+ * flag ligada dá pra olhar a página pronta e decidir.
+ *
+ * O que ele NÃO faz, de propósito:
+ *  - não vira `aggregateRating` no JSON-LD (nota falsa no Google derruba o
+ *    rich snippet do domínio inteiro, não só da peça);
+ *  - não acende as estrelas do topo da PDP (a nota do `BuyBox` vem de
+ *    `resumoDeAvaliacoes`, que só lê o banco);
+ *  - não aparece sem o aviso.
+ *
+ * COMO ISTO SE ENCHE DE AVALIAÇÃO REAL: sozinho. O `PosVendaConviteCron` já
+ * roda de hora em hora e manda "como ficou?" no WhatsApp alguns dias depois
+ * de cada entrega confirmada pelo rastreio. Não existe script de disparo em
+ * massa aqui de propósito — convidar em lote quem recebeu semanas atrás foi
+ * exatamente o que o dono vetou em 22/08, quando a reconciliação do rastreio
+ * fechou 255 pedidos de uma vez.
+ */
+const EXEMPLO: Resposta = {
+  total: 4,
+  media: 5,
+  distribuicao: [
+    { estrelas: 5, quantas: 4 },
+    { estrelas: 4, quantas: 0 },
+    { estrelas: 3, quantas: 0 },
+    { estrelas: 2, quantas: 0 },
+    { estrelas: 1, quantas: 0 },
+  ],
+  caimento: { total: 4, pequeno: 0, fiel: 4, grande: 0 },
+  avaliacoes: [
+    {
+      id: 'exemplo-1',
+      nome: 'Exemplo A.',
+      nota: 5,
+      texto:
+        'Texto de exemplo para conferir o desenho da seção. Aqui apareceria o que a cliente escreveu sobre o caimento da peça.',
+      fotos: [],
+      cor: 'Preto',
+      tamanho: '52',
+      caimento: 'fiel',
+      alturaCm: 165,
+      pesoKg: 92,
+      data: '2026-08-20',
+    },
+    {
+      id: 'exemplo-2',
+      nome: 'Exemplo B.',
+      nota: 5,
+      texto: 'Texto de exemplo, curto, para ver como fica uma avaliação de uma linha só.',
+      fotos: [],
+      cor: 'Marrom',
+      tamanho: '56',
+      caimento: 'fiel',
+      alturaCm: null,
+      pesoKg: null,
+      data: '2026-08-18',
+    },
+    {
+      id: 'exemplo-3',
+      nome: 'Exemplo C.',
+      nota: 5,
+      texto: null,
+      fotos: [],
+      cor: 'Royal',
+      tamanho: '48',
+      caimento: 'fiel',
+      alturaCm: 172,
+      pesoKg: 88,
+      data: '2026-08-15',
+    },
+    {
+      id: 'exemplo-4',
+      nome: 'Exemplo D.',
+      nota: 5,
+      texto:
+        'Texto de exemplo mais longo, para conferir a quebra de linha e o espaçamento quando a cliente escreve um parágrafo inteiro contando como a peça vestiu, com que ela combinou e se recomendaria para outra pessoa do mesmo manequim.',
+      fotos: [],
+      cor: 'Preto',
+      tamanho: '54',
+      caimento: 'fiel',
+      alturaCm: 160,
+      pesoKg: 95,
+      data: '2026-08-11',
+    },
+  ],
+};
+
+function AvisoDeExemplo() {
+  return (
+    <p className="mt-6 flex items-start gap-2.5 rounded-sm border border-warning/40 bg-warning/10 px-4 py-3 text-small text-ink">
+      <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" strokeWidth={1.75} />
+      <span>
+        <strong className="font-medium">Avaliações de exemplo.</strong> Nenhuma destas foi
+        escrita por uma cliente — servem só para conferir o desenho da seção. Desligue com{' '}
+        <code>NEXT_PUBLIC_AVALIACOES_DEMO=0</code>.
+      </span>
+    </p>
+  );
+}
+
 function Estrelas({ nota, className = '' }: { nota: number; className?: string }) {
   return (
     <span className={`inline-flex items-center gap-0.5 ${className}`} aria-label={`${nota} de 5`}>
@@ -71,9 +176,16 @@ function Estrelas({ nota, className = '' }: { nota: number; className?: string }
 export async function AvaliacoesDaPeca({ slug }: { slug: string }) {
   // Catálogo fora do ar não pode derrubar a página do produto — a lição da
   // live de 01/07 vale pra toda dependência: falha vira seção ausente.
-  const dados = await apiSafe<Resposta>(`/public/loja/avaliacoes/${encodeURIComponent(slug)}`, VAZIO, {
+  const reais = await apiSafe<Resposta>(`/public/loja/avaliacoes/${encodeURIComponent(slug)}`, VAZIO, {
     revalidate: 300,
   });
+
+  /**
+   * O exemplo só entra quando NÃO há avaliação real — avaliação de verdade
+   * sempre vence, e nunca se misturam na mesma lista.
+   */
+  const usandoExemplo = AVALIACOES_DEMO && !reais.total;
+  const dados = usandoExemplo ? EXEMPLO : reais;
 
   if (!dados.total) return null;
 
@@ -89,6 +201,8 @@ export async function AvaliacoesDaPeca({ slug }: { slug: string }) {
         title="Quem levou, conta"
         align="left"
       />
+
+      {usandoExemplo && <AvisoDeExemplo />}
 
       <div className="mt-8 flex flex-wrap items-end gap-x-8 gap-y-4">
         <div>

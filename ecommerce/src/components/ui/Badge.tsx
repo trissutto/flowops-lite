@@ -83,6 +83,44 @@ export function ProductBadgeTag({ badge, compact = false }: { badge: ProductBadg
   return <Badge tone={conf.tone} compact={compact}>{conf.label}</Badge>;
 }
 
+/**
+ * ORDEM DE IMPORTÂNCIA DAS ETIQUETAS — usada por `seloDoCard`.
+ *
+ * A vitrine tinha até TRÊS etiquetas no mesmo card: em 22/08 quase toda a home
+ * saía com "Novo", e as peças CHIC e SMILE traziam "Promoção" E "Novo"
+ * empilhadas. Etiqueta que está em tudo não marca nada — e a de promoção, que
+ * é a que move preço, perdia a vez pra companhia.
+ *
+ * O critério é o que a etiqueta faz pela DECISÃO da cliente, não o que é mais
+ * novo pra loja: preço cortado primeiro, escassez verdadeira depois, e "novo"
+ * por último, porque é a única que não muda nada no que ela leva pra casa.
+ */
+const ORDEM_DOS_SELOS: readonly ProductBadge[] = [
+  'promocao',
+  'ultimas-pecas',
+  'preco-especial',
+  'exclusivo',
+  'best-seller',
+  'novo',
+  'loja-fisica',
+];
+
+/**
+ * A ÚNICA etiqueta que o card mostra.
+ *
+ * `temDesconto` vem do preço comparado (o card calcula), e vale mais que
+ * qualquer `badge` cadastrada: se o preço está cortado na tela, a etiqueta
+ * tem que dizer isso.
+ */
+export function seloDoCard(
+  badges: readonly ProductBadge[] | undefined,
+  temDesconto: boolean,
+): ProductBadge | null {
+  if (temDesconto) return 'promocao';
+  if (!badges?.length) return null;
+  return ORDEM_DOS_SELOS.find((b) => badges.includes(b)) ?? null;
+}
+
 /** Chip de filtro ativo — clicar remove. */
 export function Chip({
   children,

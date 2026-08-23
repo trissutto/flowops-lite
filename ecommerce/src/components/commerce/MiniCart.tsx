@@ -10,6 +10,7 @@ import { AppLink } from '@/components/ui/AppLink';
 import { hexDaCor, rotuloDaCor, type CorApi } from '@/services/products';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { CartLineRow } from '@/components/commerce/CartLineRow';
+import { avisoDaLinha, type CartStockNotice } from '@/lib/commerce/cart-stock';
 import { useCartStore } from '@/store/cart';
 import { useLookOfferStore } from '@/store/look-offer';
 import { useQuickAddStore } from '@/store/quick-add';
@@ -189,6 +190,48 @@ export function MiniCart() {
     });
   const count = lines.reduce((sum, l) => sum + l.quantity, 0);
   const subtotal = lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
+
+  /**
+   * RECONFERÊNCIA DE ESTOQUE DO DRAWER — a mesma da página da sacola.
+   *
+   * Roda quando o drawer ABRE (não a cada render): é o momento em que a
+   * cliente olha a sacola, e é aí que "última peça" e "esgotou no seu número"
+   * precisam estar certos. Best-effort igual ao da página: miss ou falha de
+   * rede não vira alarme, porque quem trava a venda de verdade é o checkout.
+   */
+  const [avisos, setAvisos] = useState<Record<string, CartStockNotice>>({});
+  useEffect(() => {
+    if (!open || lines.length === 0) return;
+    const controller = new AbortController();
+
+    void Promise.all(
+      lines.slice(0, 8).map(async (line) => {
+        try {
+          const r = await fetch(
+            `/api/loja/produtos?busca=${encodeURIComponent(line.productId)}&perPage=5`,
+            { signal: controller.signal },
+          );
+          if (!r.ok) return null;
+          const dados = await r.json();
+          const peca = ((dados.itens ?? []) as Array<{ ref?: string; tamanhos?: Array<{ label: string; disponivel: boolean; estoque?: number | null }> }>)
+            .find((p) => p.ref === line.productId);
+          const aviso = avisoDaLinha(line, peca ?? null);
+          return aviso ? ([line.id, aviso] as const) : null;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((pares) => {
+      if (controller.signal.aborted) return;
+      const mapa = Object.fromEntries(pares.filter((p): p is readonly [string, CartStockNotice] => p !== null));
+      if (Object.keys(mapa).length) setAvisos(mapa);
+    });
+
+    return () => controller.abort();
+    // `lines.length` e não `lines`: mexer na quantidade não precisa refazer a
+    // rodada inteira — o aviso já sabe se ajustar sozinho pela quantidade.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, lines.length]);
   const [promotion, setPromotion] = useState<PublicPromotionConfig | null>(null);
   useEffect(() => {
     let active = true;
@@ -345,7 +388,14 @@ export function MiniCart() {
           <ul className="flex flex-col divide-y divide-border">
             {lines.map((line) => (
               <li key={line.id} className="py-5 first:pt-0 last:pb-0">
-                <CartLineRow line={line} />
+                {/* O AVISO DE ESTOQUE CHEGOU AQUI (22/08).
+                    A página /carrinho reconferia a grade desde sempre; o
+                    DRAWER, que é a sacola que a maioria das clientes abre (o
+                    botão do topo abre ele, não a página), não reconferia nada:
+                    a peça podia ter esgotado enquanto ela navegava e o drawer
+                    seguia normal até o checkout recusar. Mesma regra dos dois
+                    lados — `avisoDaLinha` em lib/commerce/cart-stock. */}
+                <CartLineRow line={line} notice={avisos[line.id]} maxQuantity={avisos[line.id]?.maxQuantity} />
               </li>
             ))}
           </ul>

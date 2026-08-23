@@ -56,6 +56,17 @@ export function formatInstallments(total: number, times = 12): string {
   return `${times}x de ${formatPrice(total / times)}`;
 }
 
+/**
+ * "1 peça" / "3 peças" — a contagem que a cliente lê.
+ *
+ * Existia solta em cada tela, e o botão da sacola (o elemento mais visto do
+ * site, em TODAS as páginas) ficou anunciando "Sacola (1 itens)" enquanto a
+ * página da sacola dizia "1 peça" logo abaixo. Uma função só, um resultado só.
+ */
+export function contarPecas(n: number): string {
+  return `${n} ${n === 1 ? 'peça' : 'peças'}`;
+}
+
 /** Desconto percentual arredondado (para etiqueta). */
 export function discountPercent(from: number, to: number): number {
   if (from <= 0 || to >= from) return 0;

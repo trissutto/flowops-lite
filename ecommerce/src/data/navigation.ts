@@ -314,7 +314,9 @@ export const navigation: NavItem[] = podarNavegacao(NAVEGACAO_COMPLETA);
  */
 export const announcements = [
   { label: 'Frete grátis acima de {FRETE_GRATIS}', href: '/carrinho' },
-  { label: 'Até 12x sem juros', href: '/carrinho' },
+  // Apontava pra /carrinho: o anúncio mais persuasivo do site levava a cliente
+  // pra uma sacola vazia, antes de ela ter escolhido peça nenhuma.
+  { label: 'Até 12x sem juros', href: '/institucional/pagamento' },
   { label: `Troca fácil em ${STORE_POLICIES.exchangeWindowDays} dias`, href: '/politica-de-trocas' },
   { label: '14 lojas em São Paulo e região', href: '/lojas' },
   { label: 'Fale com uma consultora no WhatsApp', href: '/lojas#whatsapp' },

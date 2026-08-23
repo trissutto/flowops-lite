@@ -98,6 +98,41 @@ describe('nome-vitrine', () => {
     });
   });
 
+  /**
+   * Os dois casos que a varredura da vitrine achou em 22/08/2026 — o card
+   * anunciava uma cor no TÍTULO e outra no rótulo, logo abaixo.
+   */
+  describe('nome que contradiz a cor do card (22/08/2026)', () => {
+    it('116920: corta cor com ACENTO NA PONTA ("Café")', () => {
+      // `\b` não casa depois de letra acentuada em JS sem a flag `u`: o "é"
+      // não é caractere de palavra, então a cor estava na lista e mesmo assim
+      // nunca era removida. Saía "Vestido Mid Manga Curta Café · Preto".
+      expect(
+        limparNomeVitrine('Vestido Mid Manga Curta Café', '116920', ['PRETO', 'VINHO', 'CAFE']),
+      ).toBe('Vestido Mid Manga Curta');
+    });
+
+    it('116920: acento na PONTA vale nos dois sentidos', () => {
+      expect(limparNomeVitrine('Vestido Cafe', '1', ['CAFÉ'])).toBe('Vestido');
+      expect(limparNomeVitrine('Blusa Índigo', '1', ['INDIGO'])).toBe('Blusa');
+    });
+
+    it('900890: corta "Cor <X>" mesmo com X fora da lista de cores da peça', () => {
+      // A cor que batizou o cadastro saiu de linha: a peça é Marrom e Vinho, e
+      // o nome continuava dizendo "Cor Preta".
+      expect(
+        limparNomeVitrine('Vestido Sem Manga Cor Preta', '900890', ['MARROM', 'VINHO']),
+      ).toBe('Vestido Sem Manga');
+    });
+
+    it('"Cor" só cai no FIM do nome', () => {
+      // "Cor Block" no meio é nome de verdade — não pode sumir.
+      expect(limparNomeVitrine('Blusa Cor Block Manga Curta', '1', ['PRETO'])).toBe(
+        'Blusa Cor Block Manga Curta',
+      );
+    });
+  });
+
   describe('nomeDaDescricaoErp', () => {
     it('tira a cor da variação e o tamanho, sem cortar o resto', () => {
       expect(

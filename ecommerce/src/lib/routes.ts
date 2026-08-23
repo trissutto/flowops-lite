@@ -44,6 +44,9 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/politica-de-trocas',
   '/privacidade',
   '/termos',
+  // 22/08: a faixa do topo anunciava "Até 12x sem juros" e mandava pra
+  // /carrinho. Agora existe a página que responde.
+  '/institucional/pagamento',
   // Tela nativa desde 10/08/2026 (antes era redirect pro FlowOps).
   '/trocas',
   '/conta',

@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Clock, MapPin, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { cn, formatPrice } from '@/lib/utils';
 import { fetchQuotes, isValidCep, onlyDigits, type CotacaoDoSite } from '@/lib/commerce/frete';
+import { useCepGuardado, useCepStore } from '@/store/cep';
 
 /**
  * SIMULADOR DE FRETE NA PDP (item 28 da lista de lançamento).
@@ -24,29 +25,62 @@ export function SimuladorFrete({ preco }: { preco: number }) {
   const [carregando, setCarregando] = useState(false);
   const [cotacao, setCotacao] = useState<CotacaoDoSite | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const cepGuardado = useCepGuardado();
+  const guardarCep = useCepStore((s) => s.guardar);
+  /** O CEP que já foi cotado sozinho — pra não recotar a cada render. */
+  const jaCotouSozinho = useRef<string | null>(null);
 
   const mascarar = (v: string) => {
     const d = onlyDigits(v).slice(0, 8);
     return d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
   };
 
-  async function calcular() {
-    if (!isValidCep(cep)) {
-      setErro('Digite os 8 números do CEP.');
-      return;
-    }
-    setErro(null);
-    setCarregando(true);
-    try {
-      const r = await fetchQuotes(cep, preco, 1);
-      setCotacao(r);
-      if (!r.quotes.length) setErro('Não conseguimos calcular pra esse CEP agora. Tente de novo em instantes.');
-    } catch {
-      setErro('Não conseguimos calcular agora. Tente de novo em instantes.');
-    } finally {
-      setCarregando(false);
-    }
-  }
+  const calcular = useCallback(
+    async (alvo: string, guardar = true) => {
+      if (!isValidCep(alvo)) {
+        setErro('Digite os 8 números do CEP.');
+        return;
+      }
+      setErro(null);
+      setCarregando(true);
+      try {
+        const r = await fetchQuotes(alvo, preco, 1);
+        setCotacao(r);
+        if (!r.quotes.length) {
+          setErro('Não conseguimos calcular pra esse CEP agora. Tente de novo em instantes.');
+          return;
+        }
+        // Só guarda CEP que o cotador ACEITOU: número errado que ela corrigiu
+        // em seguida não pode virar o padrão das próximas peças.
+        if (guardar) guardarCep(alvo);
+      } catch {
+        setErro('Não conseguimos calcular agora. Tente de novo em instantes.');
+      } finally {
+        setCarregando(false);
+      }
+    },
+    [guardarCep, preco],
+  );
+
+  /**
+   * ABRE JÁ RESPONDIDO — o CEP que ela digitou uma vez vale pra peça toda.
+   *
+   * A caixa nascia vazia em toda peça e em toda visita: "quanto custa e quando
+   * chega?" é a dúvida que mais adia a compra de roupa, e o site pedia uma
+   * TAREFA em vez de dar a resposta que já tinha. Com o CEP guardado
+   * (`store/cep`), a peça abre dizendo o prazo.
+   *
+   * O campo continua editável e o botão continua lá — quem quer conferir outro
+   * endereço digita por cima, e aí o novo CEP passa a ser o guardado.
+   */
+  useEffect(() => {
+    if (!cepGuardado || jaCotouSozinho.current === cepGuardado) return;
+    jaCotouSozinho.current = cepGuardado;
+    setCep(mascarar(cepGuardado));
+    // `guardar: false` — reusar o que já está guardado não é uma escolha nova
+    // dela, e renovaria a validade de 90 dias sem ela ter confirmado nada.
+    void calcular(cepGuardado, false);
+  }, [calcular, cepGuardado]);
 
   const entregas = cotacao?.quotes.filter((q) => q.kind !== 'retirada') ?? [];
   const retiradas = cotacao?.quotes.filter((q) => q.kind === 'retirada') ?? [];
@@ -61,7 +95,7 @@ export function SimuladorFrete({ preco }: { preco: number }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void calcular();
+          void calcular(cep);
         }}
         className="flex gap-2"
       >

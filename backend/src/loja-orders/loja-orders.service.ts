@@ -1854,11 +1854,90 @@ export class LojaOrdersService {
   }
 
   /** GET /public/loja/pedido/:id — sem PII inteira, sem tracking, sem gateway. */
+  /**
+   * OS VOLUMES DO PEDIDO, COM O RASTREIO QUE O FLOW JÁ TEM (22/08/2026).
+   *
+   * A página de acompanhamento mandava a cliente pro site dos Correios — "a
+   * consulta abre em outra aba" — enquanto o `RastreioSyncCron` mantém a
+   * tabela `rastreio_objetos` atualizada de 30 em 30 minutos, com cascata
+   * Correios → Mais Envios → LinkeTrack. O dado estava em casa e a cliente
+   * ansiosa ia procurar fora.
+   *
+   * PEDIDO DIVIDIDO ENTRA AQUI TAMBÉM. Quando as peças saem de lojas
+   * diferentes, cada `PickOrder` vira uma caixa com código próprio, e a
+   * cliente recebia duas mensagens sem nenhuma tela que juntasse as duas —
+   * parecia pedido errado. Agora é "caixa 1 de 2" e "caixa 2 de 2", cada uma
+   * com o status dela.
+   *
+   * ⚠️ SÓ O CACHE, NUNCA A API AO VIVO: esta rota é pública e a cliente
+   * atualiza a página várias vezes por dia. Consultar o SRO por visita
+   * queimaria a cota do contrato — o cron é quem consulta.
+   */
+  private async volumesDoPedido(order: any): Promise<any[]> {
+    const caixas: Array<{ codigo: string; carrier: string | null; loja: string | null }> = [];
+
+    // Pedido inteiro numa caixa só: o código está no próprio Order.
+    if (order.trackingCode) {
+      caixas.push({ codigo: String(order.trackingCode).trim(), carrier: order.carrier ?? null, loja: null });
+    }
+
+    // Pedido dividido: uma caixa por ordem de separação com código.
+    try {
+      const picks: any[] = await (this.prisma as any).pickOrder.findMany({
+        where: { orderId: order.id, trackingCode: { not: null } },
+        select: { trackingCode: true, carrier: true, store: { select: { name: true } } },
+        orderBy: { createdAt: 'asc' },
+      });
+      for (const p of picks) {
+        const codigo = String(p.trackingCode || '').trim();
+        if (codigo && !caixas.some((c) => c.codigo.toUpperCase() === codigo.toUpperCase())) {
+          caixas.push({ codigo, carrier: p.carrier ?? null, loja: p.store?.name ?? null });
+        }
+      }
+    } catch {
+      // Sem as caixas o pedido continua exibível com o código principal.
+    }
+
+    if (!caixas.length) return [];
+
+    let cache = new Map<string, any>();
+    try {
+      const linhas: any[] = await (this.prisma as any).rastreioObjeto.findMany({
+        where: { codigo: { in: caixas.map((c) => c.codigo.toUpperCase()) } },
+      });
+      cache = new Map(linhas.map((l) => [String(l.codigo).toUpperCase(), l]));
+    } catch {
+      // Cache fora do ar: devolve os códigos sem status em vez de sumir com
+      // a seção — o código é o mínimo que a cliente precisa ter na mão.
+    }
+
+    return caixas.map((c, i) => {
+      const r = cache.get(c.codigo.toUpperCase());
+      return {
+        codigo: c.codigo,
+        carrier: c.carrier,
+        loja: c.loja,
+        posicao: i + 1,
+        total: caixas.length,
+        status: r?.status ?? null,
+        local: r?.local ?? null,
+        eventoEm: r?.eventoEm?.toISOString?.() ?? null,
+        previsaoEm: r?.previsaoEm?.toISOString?.() ?? null,
+        entregue: !!r?.entregue,
+        entregueEm: r?.entregueEm?.toISOString?.() ?? null,
+        atualizadoEm: r?.consultadoEm?.toISOString?.() ?? null,
+        url: `https://rastreamento.correios.com.br/app/index.php?objeto=${encodeURIComponent(c.codigo)}`,
+      };
+    });
+  }
+
   async buscarPedido(id: string): Promise<{ ok: boolean; order?: any; error?: string }> {
     const order = await (this.prisma as any).order
       .findFirst({ where: { id, source: 'ecommerce' }, include: { items: true } })
       .catch(() => null);
     if (!order) return { ok: false, error: 'Pedido não encontrado.' };
+
+    const volumes = await this.volumesDoPedido(order).catch(() => []);
 
     const ck = this.parseJson<any>(order.checkoutInfo, {});
     const pi = this.parseJson<any>(order.paymentInfo, {});
@@ -1923,6 +2002,12 @@ export class LojaOrdersService {
               url: `https://rastreamento.correios.com.br/app/index.php?objeto=${encodeURIComponent(order.trackingCode)}`,
             }
           : null,
+        /**
+         * AS CAIXAS, COM O STATUS QUE JÁ ESTÁ NO FLOW (ver `volumesDoPedido`).
+         * Vazio = ainda não postado. `tracking` acima fica pra não quebrar
+         * quem já lia de lá.
+         */
+        volumes,
         subtotal: ck.subtotal ?? null,
         discount: ck.discount ?? 0,
         // Discriminado quando o pedido nasceu depois do bloco A; pedido antigo

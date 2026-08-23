@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { Eye, Heart, ShoppingBag } from 'lucide-react';
 import { BLUR_DATA_URL, cn, discountPercent, formatInstallments, formatPrice } from '@/lib/utils';
-import { ProductBadgeTag } from '@/components/ui/Badge';
+import { ProductBadgeTag, seloDoCard } from '@/components/ui/Badge';
 import { useWishlistStore } from '@/store/wishlist';
 import { useQuickAddStore } from '@/store/quick-add';
 import { useMounted } from '@/hooks';
@@ -120,6 +120,8 @@ export function ProductCard({
   const discount = product.compareAtPrice
     ? discountPercent(product.compareAtPrice, product.price)
     : 0;
+  /** A única etiqueta do card — prioridade em `seloDoCard`. */
+  const selo = seloDoCard(product.badges, discount > 0);
   const availableSizes = product.sizes.filter((s) => s.available);
   const temEstoque = availableSizes.length > 0;
   /**
@@ -226,10 +228,10 @@ export function ProductCard({
             compact ? 'bottom-2 right-2 left-2' : 'bottom-3 left-3',
           )}
         >
-          {discount > 0 && <ProductBadgeTag badge="promocao" compact={compact} />}
-          {product.badges?.filter((badge) => badge !== 'promocao').slice(0, 2).map((badge) => (
-            <ProductBadgeTag key={badge} badge={badge} compact={compact} />
-          ))}
+          {/* UMA etiqueta, nunca duas (ver `seloDoCard`). Antes saíam até três
+              empilhadas e a de promoção competia com "Novo", que estava em
+              quase toda a home. */}
+          {selo && <ProductBadgeTag badge={selo} compact={compact} />}
         </div>
 
         {/* Favoritar */}

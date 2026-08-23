@@ -1,7 +1,8 @@
 'use client';
 
 import { HOME_GRID_SIZES, ProductCard } from '@/components/cards/ProductCard';
-import { VITRINE_GRID_MAX } from '@/data/home';
+import { VITRINE_GRID_MAX, VITRINE_GRID_MAX_MOBILE } from '@/data/home';
+import { cn } from '@/lib/utils';
 import type { Product } from '@/types';
 import { trackSelectItem } from '@/lib/tracking';
 
@@ -74,7 +75,16 @@ export function VitrineGrid({
            * viewport de layout do celular, cortando a página INTEIRA — foi o
            * incidente de 13/08 na página da peça.
            */
-          className="min-w-0"
+          /**
+           * O QUE PASSA DE 8 SÓ EXISTE DO `sm:` PRA CIMA.
+           *
+           * A home media 39,6 telas no celular em 22/08 — uma vitrine de 18
+           * peças sozinha ocupava 9. Aqui a peça extra some da ROLAGEM (e a
+           * foto dela nem entra na fila de download, porque `progressiveImage`
+           * só carrega o que aparece), enquanto o desktop segue com as 12 em
+           * 4 colunas que o dono pediu.
+           */
+          className={cn('min-w-0', index >= VITRINE_GRID_MAX_MOBILE && 'hidden sm:block')}
           sizes={HOME_GRID_SIZES}
           /**
            * Obrigatório aqui: é o que faz vitrine fora da tela custar ZERO

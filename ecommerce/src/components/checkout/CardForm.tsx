@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { Input, Select } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { formatPrice } from '@/lib/utils';
+import { MAX_PARCELAS } from '@/lib/commerce/cartao';
 import { trackCheckoutValidationError } from '@/lib/tracking';
 import {
   CARD_BRAND_LABEL,
@@ -44,7 +45,8 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
-export const MAX_PARCELAS = 12;
+// Reexportado pra não quebrar quem já importava daqui.
+export { MAX_PARCELAS };
 
 /** Endpoint público de tokenização da Pagar.me (v5) — autentica pela chave `pk_`. */
 const PAGARME_TOKENS_URL = 'https://api.pagar.me/core/v5/tokens';

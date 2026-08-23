@@ -142,6 +142,36 @@ export interface Order {
     attribution?: Record<string, string | undefined>;
     recovery_consent?: boolean;
   };
+  /**
+   * AS CAIXAS DO PEDIDO, com o rastreio que o Flow já mantém em cache
+   * (`rastreio_objetos`, atualizado de 30 em 30 min pelo `RastreioSyncCron`).
+   *
+   * Vazio/ausente = ainda não postado. Mais de um item = pedido dividido: as
+   * peças saíram de lojas diferentes e chegam em caixas diferentes — o caso
+   * que fazia a cliente receber dois avisos e achar que o pedido estava errado.
+   */
+  volumes?: VolumeDoPedido[];
+}
+
+export interface VolumeDoPedido {
+  codigo: string;
+  carrier: string | null;
+  /** Loja que despachou esta caixa — só no pedido dividido. */
+  loja: string | null;
+  /** "Caixa 1 de 2". */
+  posicao: number;
+  total: number;
+  /** Descrição do último evento ("Objeto saiu para entrega ao destinatário"). */
+  status: string | null;
+  /** "CAMPINAS/SP". */
+  local: string | null;
+  eventoEm: string | null;
+  previsaoEm: string | null;
+  entregue: boolean;
+  entregueEm: string | null;
+  /** Quando o cron conferiu pela última vez. */
+  atualizadoEm: string | null;
+  url: string;
 }
 
 /* --------------------------------------------------------------------- DTOs */

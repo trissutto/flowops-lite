@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
@@ -16,6 +17,9 @@ import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
 import { fetchIrmasDaPeca } from '@/services/vitrine';
+import { resumoDeAvaliacoes } from '@/services/avaliacoes';
+import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
+import { MAX_PARCELAS } from '@/lib/commerce/cartao';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
 import { STORE_POLICIES } from '@/data/store-policies';
@@ -151,6 +155,22 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
     limite: 6,
   });
 
+  /**
+   * A NOTA NO TOPO DA PEÇA.
+   *
+   * O `BuyBox` tem o bloco de estrelas escrito desde sempre, atrás de
+   * `product.rating` — e o catálogo nunca devolveu nota, então ele nunca
+   * renderizou. Preenchendo aqui acendem os três de uma vez: as estrelas ao
+   * lado do nome, o `aggregateRating` do JSON-LD (estrelas no resultado do
+   * Google) e a ordenação "Mais avaliados" da categoria.
+   *
+   * Só entra com pelo menos 3 avaliações (ver `MINIMO_PRA_NOTA`).
+   */
+  const nota = await resumoDeAvaliacoes(product.slug);
+  const produtoComNota = nota
+    ? { ...product, rating: { average: nota.media, count: nota.total } }
+    : product;
+
   const trail = [
     { name: 'Início', path: '/' },
     { name: categoryLabel, path: `/categoria/${product.category}` },
@@ -162,7 +182,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: jsonLdGraph(productSchema(product), breadcrumbSchema(trail)),
+          __html: jsonLdGraph(productSchema(produtoComNota), breadcrumbSchema(trail)),
         }}
       />
 
@@ -185,7 +205,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
       <Container width="wide" className="pb-16">
         {cores.length > 0 ? (
           <EscolhaDaPeca
-            product={product}
+            product={produtoComNota}
             cores={cores}
             look={peca?.look ?? null}
             corInicial={achaCorDaUrl(cores, cor)?.nome ?? null}
@@ -202,7 +222,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
               {/* Peça de COR ÚNICA — é aqui que a faixa mais faz falta: sem
                   grade de cores, a coluna terminava no botão. */}
               <BuyBox
-                product={product}
+                product={produtoComNota}
                 irmas={irmas}
                 irmasHref={`/categoria/${product.category}`}
                 irmasLabel={`Ver tudo em ${categoryLabel}`}
@@ -266,9 +286,16 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
               </p>
             </AccordionItem>
             <AccordionItem title="Formas de pagamento">
+              {/* SEM CREDIÁRIO (dono, 22/08): ele existe na loja física e NÃO é
+                  oferecido no site. Prometer aqui o que o checkout não faz é o
+                  mesmo erro dos "30 dias de troca" que o portal recusava. */}
               <p className="text-body font-light text-ink-soft">
-                Pix com 5% de desconto, cartão em até 12x sem juros, ou crediário próprio nas
-                lojas físicas.
+                Pix com {PIX_DESCONTO_PCT}% de desconto ou cartão em até {MAX_PARCELAS}x sem
+                juros. Detalhes em{' '}
+                <Link href="/institucional/pagamento" className="link-underline text-ink">
+                  formas de pagamento
+                </Link>
+                .
               </p>
             </AccordionItem>
           </Accordion>

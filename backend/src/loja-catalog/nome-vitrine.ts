@@ -43,6 +43,29 @@ function padraoAcentoTolerante(semAcentoTxt: string): string {
 }
 
 /**
+ * BORDA DE PALAVRA QUE ENTENDE ACENTO — `\b` NÃO entende, e isso era um bug.
+ *
+ * 🔴 Medido em produção, 22/08/2026: a peça 116920 saía na vitrine como
+ * **"Vestido Mid Manga Curta Café"** com as cores Preto, Vinho e Cafe — ou
+ * seja, o nome anunciava uma cor e o card mostrava outra ao lado. A cor
+ * ESTAVA na lista e mesmo assim não era cortada.
+ *
+ * A causa é do JavaScript, não do cadastro: sem a flag `u`, `\w` é
+ * `[A-Za-z0-9_]` e letra acentuada NÃO é caractere de palavra. Depois do "é"
+ * de "Café" vem o fim da string — dois não-palavra em sequência, então `\b`
+ * ali NUNCA casa e o `.replace` não faz nada. O mesmo vale pra cor que começa
+ * com acento ("Índigo", "Ébano").
+ *
+ * O fix de 13/08 ("POÁ MARROM") parecia ter resolvido porque aquela cor
+ * terminava em "M": a borda final caía numa letra comum e o `\b` funcionava.
+ * Só a cor com acento na PONTA é atingida — por isso passou tanto tempo.
+ *
+ * Lookbehind/lookahead sobre `[\wÀ-ÿ]` cobre a faixa latina acentuada inteira.
+ */
+const NAO_LETRA_ANTES = '(?<![\\wÀ-ÿ])';
+const NAO_LETRA_DEPOIS = '(?![\\wÀ-ÿ])';
+
+/**
  * NÚMERO DA GRADE NO FIM DO NOME = tamanho da variação, nunca nome da peça.
  * Só a grade da casa (44–60, pares) e as duplas ("46/48", "46-48", "46 48");
  * "Jeans 501" não é atingido. Roda em loop: "... 46 48" cai inteiro.
@@ -132,8 +155,31 @@ export function limparNomeVitrine(
   for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
     const alvo = semAcento(cor).trim();
     if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
-    txt = txt.replace(new RegExp(`\\b${padraoAcentoTolerante(alvo)}\\b.*$`, 'i'), ' ');
+    txt = txt.replace(
+      new RegExp(`${NAO_LETRA_ANTES}${padraoAcentoTolerante(alvo)}${NAO_LETRA_DEPOIS}.*$`, 'i'),
+      ' ',
+    );
   }
+
+  /**
+   * "COR PRETA" NUM VESTIDO MARROM (produção, 22/08/2026).
+   *
+   * A peça 900890 saía como **"Vestido Sem Manga Cor Preta — 900890 · Marrom"**
+   * e a 116920 como "... Café · Preto": o nome carrega uma cor que NÃO está
+   * mais na lista da peça (a variação que batizou o cadastro saiu de linha, ou
+   * alguém digitou). O laço acima só sabe remover as cores que a peça TEM, e
+   * por isso não alcançava estas — o card acabava contradizendo a si mesmo,
+   * anunciando uma cor no título e outra no rótulo, logo abaixo.
+   *
+   * Aqui a âncora não é a cor, é a PALAVRA "cor": nenhum nome de roupa de
+   * verdade termina em "Cor <alguma coisa>". Isso deixa a regra segura sem
+   * precisar de um dicionário de cores — que é justamente o que este módulo
+   * evita desde 06/08 ("não sai adivinhando palavra por palavra", senão
+   * "Vinho" some do nome de um modelo chamado Vinho).
+   *
+   * Só no FIM: "Blusa Cor Block" não é atingida (ali "Cor" não fecha o nome).
+   */
+  txt = txt.replace(/[\s·,–-]*\bcor(?:es)?\s*:?\s+\S+(?:\s+\S+)?\s*$/i, ' ');
 
   /**
    * Qualificador de cor que ficou órfão. "Blusa Manga Curta Estampa
@@ -224,7 +270,11 @@ export function nomeDaDescricaoErp(
   for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
     const alvo = semAcento(cor).trim();
     if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
-    txt = txt.replace(new RegExp(`\\b${padraoAcentoTolerante(alvo)}\\b`, 'gi'), ' ');
+    // Mesma borda acento-ciente do `limparNomeVitrine` — ver NAO_LETRA_ANTES.
+    txt = txt.replace(
+      new RegExp(`${NAO_LETRA_ANTES}${padraoAcentoTolerante(alvo)}${NAO_LETRA_DEPOIS}`, 'gi'),
+      ' ',
+    );
   }
 
   let limpo = txt.replace(/\s{2,}/g, ' ').replace(/[\s·,-]+$/, '').trim();
