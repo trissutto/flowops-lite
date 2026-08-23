@@ -304,16 +304,27 @@ function SeparacaoPageInner() {
       // que vem de outro endpoint e pode chegar depois
       setTabCounts((prev) => ({ ...prev, ...next }));
     } catch { /* silencioso */ }
-    // Carrinhos abandonados vêm do plugin WP (endpoint próprio), não do
-    // /orders/wc/counts. Badge = abandonados nos últimos 7 dias.
+    /**
+     * Carrinhos abandonados nos últimos 7 dias — as DUAS lojas.
+     *
+     * ⚠️ O badge lia só o plugin do WooCommerce e mostrava **23** enquanto o
+     * painel da própria aba mostrava **118**: os outros 95 são do site novo,
+     * que hoje é a loja. Badge que discorda do painel da mesma tela faz a
+     * operação abrir a aba "pra conferir" — e aí o badge não serve pra nada.
+     * As duas contas somam aqui, do mesmo jeito que o painel soma lá dentro.
+     */
     try {
       const since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-      const s = await api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`);
+      const [s, ecom] = await Promise.all([
+        api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
+        api<any>(`/abandoned-carts/ecommerce/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
+      ]);
       // stats pode vir PLANO (abandoned) ou ANINHADO (by_status.abandoned.qty)
       const raw = (s as any)?.stats || s || {};
       const by = raw.by_status || {};
       const abandoned = Number(raw.abandoned ?? by.abandoned?.qty ?? by.abandoned?.count ?? 0) || 0;
-      setTabCounts((prev) => ({ ...prev, carrinhos: abandoned }));
+      const abandonedEcom = Number((ecom as any)?.abandoned ?? 0) || 0;
+      setTabCounts((prev) => ({ ...prev, carrinhos: abandoned + abandonedEcom }));
     } catch { /* silencioso */ }
     // Pós-venda: o badge conta só o que EXIGE alguém — avaliação esperando
     // aprovação + entrega que já passou do prazo e ninguém convidou. Contar
