@@ -27,6 +27,14 @@
 import { useEffect, useState } from 'react';
 import { acceptAll, getConsent, hydrateConsent, needsDecision, rejectAll, setConsent } from '@/lib/tracking/consent';
 
+/**
+ * Quanto o banner espera antes de aparecer. Ver o comentário no efeito.
+ * Constante nomeada porque é um número de PRODUTO (o dono escolheu 8s), não
+ * um detalhe de implementação — e porque é o que vai mudar se a medição de
+ * aceite pedir mais ou menos.
+ */
+const ATRASO_MS = 8_000;
+
 export function ConsentBanner() {
   const [visivel, setVisivel] = useState(false);
   const [detalhes, setDetalhes] = useState(false);
@@ -38,11 +46,56 @@ export function ConsentBanner() {
   // servidor não tem como saber o que está no localStorage da visitante).
   useEffect(() => {
     hydrateConsent();
-    setVisivel(needsDecision());
     const atual = getConsent();
     setAnalytics(atual.analytics);
     setMarketing(atual.marketing);
     setPersonalization(atual.personalization);
+
+    if (!needsDecision()) return;
+
+    /**
+     * O BANNER ESPERA 8 SEGUNDOS (dono, 23/08/2026).
+     *
+     * ── O QUE A MEDIÇÃO ACHOU ──
+     *
+     * Em 375×812, na página de uma peça, o cartão ocupa y 496–732: **237px,
+     * 29% da primeira tela**. Nessa faixa ele cobre 132px da foto (31% dela)
+     * e o BLOCO DE PREÇO INTEIRO — R$ 139,90, o "R$ 132,91 no Pix" e o
+     * parcelamento ficam atrás dele. A cliente nova no celular via nome, dois
+     * terços da foto, um cartão de cookie e a barra de comprar. Sem preço.
+     *
+     * O ajuste de 14/08 cuidou de não tapar a BARRA DE COMPRA (o cartão
+     * termina em 732, a barra começa em 751 — certinho, ver o `bottom-20`
+     * abaixo). Ninguém tinha medido que ele pousa em cima do preço.
+     *
+     * ── POR QUE ATRASAR, E NÃO ENCOLHER ──
+     *
+     * Encolher desfaria o ganho de 14/08: a faixa fina anterior era ignorada
+     * por 794 de 938 sessões, e ignorar tem o mesmo efeito de recusar. O
+     * problema não é o tamanho do cartão, é a HORA: em t=0 ele interrompe
+     * antes de a cliente ter qualquer motivo pra dizer sim. Depois de ver a
+     * peça e o preço, o "Pode sim!" tem contexto — a expectativa é o aceite
+     * SUBIR, e a PDP já é a melhor porta (13,3% contra 0,8% da campanha).
+     *
+     * ── O QUE NÃO MUDA ──
+     *
+     * Nenhuma regra de consentimento. Continua não-bloqueante, os dois botões
+     * com o mesmo peso, nada pré-marcado, "Só o necessário" a um clique. Muda
+     * QUANDO a pergunta aparece, não a pergunta. E não muda o que é coletado:
+     * todo evento já grava em `site_eventos` com a flag `sem_aceite`, e o
+     * pixel de terceiro segue sem carregar enquanto não houver decisão.
+     *
+     * Uma vez POR VISITA, não por página: o `TrackingProvider` mora no layout
+     * raiz, então este efeito roda no primeiro carregamento e sobrevive à
+     * navegação — quem passa 8s na home não é interrompida de novo na peça.
+     */
+    const t = setTimeout(() => {
+      // Reconfere na hora de mostrar: em 8s ela pode ter decidido em outra
+      // aba (o consentimento vive em localStorage, compartilhado).
+      if (needsDecision()) setVisivel(true);
+    }, ATRASO_MS);
+
+    return () => clearTimeout(t);
   }, []);
 
   if (!visivel) return null;
