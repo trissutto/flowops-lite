@@ -2,6 +2,7 @@ import type { MetadataRoute } from 'next';
 import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
 import { navigation } from '@/data/navigation';
+import lojasData from '@/data/lojas.json';
 
 /**
  * SITEMAP — o mapa que o Google usa pra achar o que existe aqui.
@@ -55,17 +56,38 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${SITE.url}/termos`, changeFrequency: 'yearly' as const, priority: 0.3 },
   ].map((entry) => ({ ...entry, lastModified: now }));
 
+  /**
+   * O menu tem link de navegação, não só de página: `/lojas#whatsapp` leva a
+   * uma seção. Pro Google o fragmento não existe — ele descarta o `#` e vê uma
+   * duplicata de `/lojas` no próprio sitemap. Mesma coisa pra query string.
+   * Por isso o href é podado antes de virar URL do mapa.
+   */
+  const semAncora = (href: string) => href.split('#')[0].split('?')[0];
+
   const menu: MetadataRoute.Sitemap = navigation.flatMap((item) => {
-    const propria = { url: `${SITE.url}${item.href}`, lastModified: now, priority: 0.8 };
+    const propria = { url: `${SITE.url}${semAncora(item.href)}`, lastModified: now, priority: 0.8 };
     const filhas = (item.menu?.columns ?? []).flatMap((coluna) =>
       coluna.links.map((link) => ({
-        url: `${SITE.url}${link.href}`,
+        url: `${SITE.url}${semAncora(link.href)}`,
         lastModified: now,
         priority: 0.7,
       })),
     );
     return [propria, ...filhas];
   });
+
+  /**
+   * As 14 páginas de loja (23/08/2026). Prioridade alta e de propósito: é por
+   * elas que entra a busca local ("loja plus size em Santos"), que na Search
+   * Console aparece em quase toda unidade da rede. Enquanto não existiam, essa
+   * intenção caía na `/lojas` genérica.
+   */
+  const lojas: MetadataRoute.Sitemap = lojasData.stores.map((s) => ({
+    url: `${SITE.url}/lojas/${s.slug}`,
+    lastModified: now,
+    changeFrequency: 'monthly' as const,
+    priority: 0.8,
+  }));
 
   /**
    * O catálogo. Mesma fonte do feed do Meta — uma consulta, um cache, dois
@@ -98,7 +120,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // Dedup por URL — o mesmo destino aparece em mais de uma coluna do menu, e
   // uma peça pode repetir slug se o catálogo vier com linha duplicada.
   const vistas = new Set<string>();
-  return [...estaticas, ...menu, ...produtos].filter((entry) => {
+  return [...estaticas, ...menu, ...lojas, ...produtos].filter((entry) => {
     if (vistas.has(entry.url)) return false;
     vistas.add(entry.url);
     return true;

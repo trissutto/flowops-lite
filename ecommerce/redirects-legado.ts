@@ -79,6 +79,38 @@ const PRODUTOS_MORTOS: Record<string, string> = {
   __trashed: '/categoria',
 };
 
+/**
+ * O SLUG DE LOJA DO WORDPRESS → O SLUG DAQUI.
+ *
+ * O WordPress escrevia tudo emendado (`analiafranco`, `praiagrande`,
+ * `saojosedoscampos`); o `lojas.json` usa hífen (`analia-franco`). Sem este
+ * mapa, repassar `:cidade` adiante mandaria a cliente de Anália Franco pra um
+ * 404 novo em folha — o oposto do que a mudança quer.
+ *
+ * As chaves saíram da Search Console (90 dias, filtro `nossaslojas`), não de
+ * palpite: são exatamente as URLs que o Google ainda serve.
+ *
+ * ⚠️ `itu` aparece lá mas NÃO está no `lojas.json` — a unidade saiu da rede.
+ * Fica de fora de propósito: o curinga manda pro índice, que é o certo pra
+ * quem procura uma loja que fechou.
+ */
+const LOJA_POR_SLUG_ANTIGO: Record<string, string> = {
+  analiafranco: 'analia-franco',
+  campinas: 'campinas',
+  indaiatuba: 'indaiatuba',
+  itanhaem: 'itanhaem',
+  jundiai: 'jundiai',
+  limeira: 'limeira',
+  moema: 'moema',
+  piracicaba: 'piracicaba',
+  praiagrande: 'praia-grande',
+  santos: 'santos',
+  saojosedoscampos: 'sao-jose-dos-campos',
+  sorocaba: 'sorocaba',
+  suzano: 'suzano',
+  vinhedo: 'vinhedo',
+};
+
 export const redirectsLegado: RedirectLegado[] = [
   // ═══════════════════════════════════════════════════════════════════════════
   // 1. O PREFIXO `/index.php/` — o WordPress fazia, a Vercel não faz
@@ -208,16 +240,33 @@ export const redirectsLegado: RedirectLegado[] = [
   // e por isso o WordPress passou a redirecioná-lo pra `/nossaslojas`. Some o
   // WordPress, some o desvio: as duas famílias precisam apontar pra cá.
   //
-  // Hoje as duas caem em `/lojas`, a página única. A página por cidade
-  // (`/lojas/<cidade>`) entra esta semana — quando entrar, é só trocar o
-  // destino destas duas linhas pra `/lojas/:cidade` e a busca local volta
-  // inteira.
+  // ── CADA CIDADE PRA SUA PÁGINA (23/08/2026) ──
+  //
+  // Até aqui as duas famílias caíam na `/lojas` genérica, porque a página por
+  // cidade não existia. Ela existe desde hoje (`app/(public)/lojas/[cidade]`),
+  // e o desperdício era medido: na Search Console, 90 dias,
+  // `/nossaslojas/<cidade>` traz clique com nome de cidade em quase toda
+  // unidade (jundiai 36, moema 33, analiafranco 27, piracicaba 24,
+  // indaiatuba 23, itanhaem 22, campinas 20, saojosedoscampos 17…) e o `/tree`
+  // sozinho ~50 por semana. Tudo isso aterrissava num índice de 14 lojas.
+  //
+  // ⚠️ O SLUG ANTIGO NÃO É O NOVO — ver `LOJA_POR_SLUG_ANTIGO` no topo.
+  //
+  // As específicas vêm primeiro; os curingas logo abaixo continuam existindo
+  // pra cidade que não casar (a `itu`, que fechou, e qualquer lixo inventado).
+  ...Object.entries(LOJA_POR_SLUG_ANTIGO).flatMap(([antigo, novo]) => [
+    { source: `/tree/${antigo}`, destination: `/lojas/${novo}`, permanent: true },
+    { source: `/nossaslojas/${antigo}`, destination: `/lojas/${novo}`, permanent: true },
+  ]),
+
+  // A raiz das duas famílias e o que não casou acima: índice das 14.
   { source: '/tree', destination: '/lojas', permanent: true },
   { source: '/tree/:cidade*', destination: '/lojas', permanent: true },
   { source: '/nossaslojas', destination: '/lojas', permanent: true },
   { source: '/nossaslojas/:cidade*', destination: '/lojas', permanent: true },
   // Loja que ganhou URL na raiz do domínio, fora do padrão (8.401 impressões).
-  { source: '/praia-grande', destination: '/lojas', permanent: true },
+  // Agora tem página própria pra onde ir.
+  { source: '/praia-grande', destination: '/lojas/praia-grande', permanent: true },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 6. RASTREIO — a 2ª página mais clicada do domínio
