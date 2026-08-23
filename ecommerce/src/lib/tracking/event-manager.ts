@@ -171,11 +171,23 @@ export function track(name: EventName, params: Record<string, unknown> = {}, opt
      * toque até o próximo quadro pintado — então tudo o que o Pixel faz
      * continuava dentro da janela medida.
      *
-     * E o que ele faz não é pouco. Medido na PDP em produção (23/08/2026),
-     * um único toque na grade de tamanhos: **93 mutações de DOM, 78 delas
-     * (84%) dentro de um `<form action="facebook.com/tr/">` com 79 inputs**
-     * que o Pixel monta e pendura no `<body>` pra postar o evento. A
-     * aplicação mexia em ~15 nós — os botões, o texto, o link. O certo.
+     * ⚠️ MAS O GRANDE PESO DA PDP NÃO PASSA POR AQUI — não se iluda com este
+     * `setTimeout`.
+     *
+     * Medido na PDP em produção (23/08/2026), um toque na grade de tamanhos:
+     * 93 mutações de DOM, **78 delas (84%) dentro de um
+     * `<form action="facebook.com/tr/">` com 79 inputs** que o Pixel monta e
+     * pendura no `<body>`. A tentação é dizer que era o `trackSizeSwitch`
+     * daqui. Não era: o mesmo teste num botão SEM tracking nenhum ("Tabela de
+     * medidas") deu as MESMAS 78 mutações, e um clique fora de botão deu
+     * ZERO. É o auto-tracking de clique em botão do próprio Pixel
+     * (`autoConfig`), que só se desliga com
+     * `fbq('set', 'autoConfig', false, <id>)` ANTES do init — ou no
+     * Gerenciador de Eventos do Meta. Fazer isso mexe em atribuição de
+     * campanha, então é decisão do dono, não de refactor.
+     *
+     * O que ESTE `setTimeout` resolve é o nosso pedaço: os eventos que o site
+     * dispara deixam de somar ao trabalho do quadro em que a cliente tocou.
      *
      * `setTimeout(…, 0)` é macrotask: o navegador pinta primeiro e o
      * despacho acontece no quadro seguinte. Nenhum evento se perde — só
