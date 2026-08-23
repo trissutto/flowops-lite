@@ -7,7 +7,8 @@ import { useLojaConfig } from '@/hooks/useLojaConfig';
 import { formatPrice } from '@/lib/utils';
 
 /**
- * AnnouncementBar — 36px, discreta, mensagens rotativas.
+ * AnnouncementBar — 28px no celular / 36px do `sm` pra cima, discreta,
+ * mensagens rotativas.
  *
  * As frases vêm do cadastro de banners da retaguarda (slot 'tarja-topo'),
  * entregues pelo layout. Lista vazia = cai nas frases padrão de

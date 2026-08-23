@@ -183,20 +183,28 @@ export function ProductGallery({
       onMouseEnter={() => setParado(true)}
     >
       {/* Foto principal */}
-      {/* A FOTO NÃO PASSA DE 52% DA ALTURA DA TELA NO CELULAR (22/08).
+      {/* A FOTO NÃO PASSA DE 52% DA ALTURA DA TELA — E O TETO É DE LARGURA.
 
-          Medido em 390×734 na BMM-100: o quadro 3/4 dava 342×456 — 62% da
-          dobra numa foto só, e o seletor de tamanho nascia em 786px, com a
-          barra fixa comendo os últimos 95. O teto é em `svh` de propósito:
-          em iPhone 15 (844) a foto quase não muda (439 contra 456), em tela
-          curta ela cede o que precisa. O PC não tem dobra pra brigar e fica
-          no 3/4 inteiro (`lg:max-h-none`).
+          O quadro segue 3/4 SEMPRE; quem cede é a largura (`max-w` =
+          52svh × 3/4). Isso dá a mesma altura que um `max-h` daria, sem
+          mudar a proporção da caixa — e é a proporção, não o tamanho, que
+          decide quanto o `object-cover` corta da foto.
 
-          O catálogo tem foto 3/4 (ensaio novo) E foto quadrada (era
-          WooCommerce). O corte de altura só existe pra 3/4; na quadrada o
-          quadro mais baixo até MELHORA — no 3/4 ela perdia 57px de cada
-          lado pra caber. */}
-      <div className="relative aspect-3/4 max-h-[52svh] flex-1 overflow-hidden rounded-lg bg-surface-alt lg:max-h-none">
+          ⚠️ A PRIMEIRA VERSÃO DISTO (#1126) USAVA `max-h-[52svh]` E CORTAVA
+          PEÇA. Eu tinha assumido que o catálogo era 3/4; medi 110 fotos reais
+          da API e não existe UMA 3/4: **61% são quadradas** (calça, saia,
+          conjunto — era WooCommerce), **24% são MAIS ALTAS que 3/4** (vestido:
+          17 de 19) e 15% são 4:5 (blusa do ensaio novo). Com `max-h` a caixa
+          virava 0,896 em 390×734 e o corte vertical do vestido pulava de 11%
+          pra 26% — a bainha e o sapato saíam da foto. Em iPad retrato era pior:
+          o teto é de ALTURA mas só era solto no `lg:`, que é largura, então a
+          caixa deitava (720×532) e o corte chegava a 51%.
+
+          Com teto de largura o corte volta a ser exatamente o de sempre em
+          qualquer proporção, e o tablet se resolve sozinho. O preço é a foto
+          mais estreita no celular (286px em vez de 342, em 390×734) — foi a
+          troca escolhida: peça inteira vale mais que peça grande cortada. */}
+      <div className="relative aspect-3/4 mx-auto w-full max-w-[calc(52svh*0.75)] flex-1 overflow-hidden rounded-lg bg-surface-alt lg:max-w-none">
         {video && noVideo ? (
           <VideoSlide id={video.id} corDoVideo={video.corDoVideo} name={name} />
         ) : current.src ? (
@@ -244,14 +252,12 @@ export function ProductGallery({
               sizes="(max-width: 1024px) 100vw, 45vw"
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}
-              /* O CORTE PUXA PRO ALTO (25%), não pro meio: com o teto de
-                 altura, a foto 3/4 perde 74px em 390×734 — centralizado,
-                 metade sairia do topo e raspava o cabelo da modelo (o ensaio
-                 deixa ~5% de ar acima da cabeça). Em 25% saem 18px de cima e
-                 55 de baixo, onde há shorts/piso e não peça: a barra da
-                 blusa termina em 79% da foto. */
+              /* Corte centralizado, como sempre foi. O viés pro alto que
+                 entrou no #1126 existia pra compensar o teto de ALTURA; com o
+                 teto de largura a caixa voltou a ser 3/4 e não há corte novo
+                 pra compensar. */
               className={cn(
-                'object-cover object-[center_25%] transition-transform duration-500 lg:object-center',
+                'object-cover transition-transform duration-500',
                 zoomed && 'scale-[1.7] cursor-zoom-out',
               )}
             />
