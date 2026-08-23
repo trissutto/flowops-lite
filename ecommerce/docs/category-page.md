@@ -30,7 +30,8 @@ segundo). Slug desconhecido cai no fallback dinâmico com metadados genéricos.
 
 ## Barra inteligente
 
-`SmartBar.tsx`, sticky abaixo do header (`top-[68px]` / `top-[76px]` no lg).
+`SmartBar.tsx`, sticky abaixo do header (`top-14` / `top-[76px]` no lg — os
+dois números são a altura do header rolado, ver `docs/header.md`).
 
 Contagem de peças · busca dentro da categoria · chips de filtro ativo
 (removíveis) · "Limpar filtros" · ordenação (7 opções) · alternância

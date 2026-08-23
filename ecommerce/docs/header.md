@@ -20,7 +20,7 @@ Ao passar de **24px** de scroll:
 
 | Propriedade | Topo | Rolado |
 |---|---|---|
-| Altura | 80px / 96px (lg) | 68px / 76px (lg) — ~15% menor |
+| Altura | 64px / 96px (lg) | 56px / 76px (lg) — ~15% menor |
 | Fundo | `background` sólido | `background/92` + `backdrop-blur-md` |
 | Borda | transparente | `border` |
 | Sombra | nenhuma | `shadow-xs` |
