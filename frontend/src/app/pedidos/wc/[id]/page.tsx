@@ -12,6 +12,7 @@ import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
 import TrocaPecaModal from './TrocaPecaModal';
+import CampanhaCascata, { Atribuicao } from './CampanhaCascata';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -166,6 +167,8 @@ interface WcOrderDetail {
   shippingLines: Array<{ method: string; total: string }>;
   tracking: { number: string; carrier: string; url: string };
   attribution: { origem: string; source: string };
+  /** Cascata "de qual campanha veio" — montada no backend. */
+  atribuicao?: Atribuicao | null;
   /** Loja que PEDIU (venda online do PDV). NULL no pedido do site. */
   origemLoja?: { code: string; name: string; vendedora: string | null } | null;
   customerCpf?: string | null;
@@ -1635,6 +1638,11 @@ export default function PedidoDetailPage() {
           </div>
         );
       })()}
+
+      {/* DE QUAL CAMPANHA VEIO — o nome do anúncio que trouxe a cliente, com a
+          cascata inteira a um clique. Antes isso era uma linha cinza de 12px no
+          rodapé da tela, com utm_source/medium/campaign colados por barra. */}
+      <CampanhaCascata atribuicao={order.atribuicao} />
 
       {/* DE ONDE VEIO O PEDIDO — a loja que vendeu. A loja que SEPARA pode ser
           outra (roteamento), e é ela quem cobra desta no acerto; sem este
@@ -3304,7 +3312,8 @@ export default function PedidoDetailPage() {
         </div>
       </div>
 
-      {/* Attribution */}
+      {/* Attribution — a origem crua do WooCommerce continua aqui embaixo como
+          rodapé técnico; o que a operação lê é o bloco de campanha lá em cima. */}
       <div className="text-xs text-slate-500 text-right">
         {order.attribution.origem} · {order.attribution.source}
       </div>
