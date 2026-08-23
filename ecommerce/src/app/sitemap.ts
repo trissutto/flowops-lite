@@ -52,6 +52,17 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${SITE.url}/rastreio`, changeFrequency: 'monthly' as const, priority: 0.8 },
     { url: `${SITE.url}/trocas`, changeFrequency: 'monthly' as const, priority: 0.5 },
     { url: `${SITE.url}/politica-de-trocas`, changeFrequency: 'yearly' as const, priority: 0.3 },
+    /**
+     * Nasceu em 22/08 e ficou de fora do mapa — achado na varredura do Google
+     * de 23/08. Registrar em `lib/routes.ts` faz o link aparecer na navegação;
+     * NÃO põe a página no sitemap. São duas listas, e quem cria página nova
+     * tem que lembrar das duas.
+     *
+     * Não é página decorativa: "12x sem juros" e "é seguro comprar aí?" são
+     * busca de gente decidindo a compra, e hoje o domínio não responde nenhuma.
+     */
+    { url: `${SITE.url}/institucional/pagamento`, changeFrequency: 'monthly' as const, priority: 0.5 },
+    { url: `${SITE.url}/tamanhos/guia`, changeFrequency: 'monthly' as const, priority: 0.6 },
     { url: `${SITE.url}/privacidade`, changeFrequency: 'yearly' as const, priority: 0.3 },
     { url: `${SITE.url}/termos`, changeFrequency: 'yearly' as const, priority: 0.3 },
   ].map((entry) => ({ ...entry, lastModified: now }));
