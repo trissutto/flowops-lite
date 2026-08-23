@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { AlertCircle, ArrowLeft, Check, Loader2, PackageOpen } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { cn, formatPrice } from '@/lib/utils';
@@ -175,9 +176,9 @@ export function PortalTrocas({ logada, pedidosIniciais }: Props) {
           </Button>
           <p className="text-small text-ink-soft">
             Tem conta na Lurd&apos;s?{' '}
-            <a href="/conta" className="link-underline text-ink">
+            <Link href="/conta" className="link-underline text-ink">
               Entre
-            </a>{' '}
+            </Link>{' '}
             e seus pedidos aparecem aqui sem digitar nada.
           </p>
         </form>
@@ -362,9 +363,9 @@ export function PortalTrocas({ logada, pedidosIniciais }: Props) {
                 />
                 <span className="text-small text-ink-soft">
                   Declaro que a peça está sem uso, com etiqueta, e nas condições da{' '}
-                  <a href="/politica-de-trocas" className="link-underline text-ink" target="_blank">
+                  <Link href="/politica-de-trocas" className="link-underline text-ink" target="_blank">
                     política de trocas
-                  </a>
+                  </Link>
                   .
                 </span>
               </label>
@@ -401,9 +402,9 @@ export function PortalTrocas({ logada, pedidosIniciais }: Props) {
           </div>
           <p className="text-small text-ink-soft">
             Qualquer dúvida, fale com a gente pelo{' '}
-            <a href="/lojas#whatsapp" className="link-underline text-ink">
+            <Link href="/lojas#whatsapp" className="link-underline text-ink">
               WhatsApp
-            </a>
+            </Link>
             .
           </p>
         </div>

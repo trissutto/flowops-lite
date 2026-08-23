@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { MapPin, MessageCircle, ArrowRight } from 'lucide-react';
 import { trackStoreLocator, trackWhatsAppClick } from '@/lib/tracking';
@@ -81,14 +82,17 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
          *
          * `stopPropagation` porque o card inteiro é um botão: sem ele o clique
          * navegaria E abriria o drawer no mesmo gesto.
+         *
+         * `<Link>` e não `<a>`: `@next/next/no-html-link-for-pages` é ERRO no
+         * build da Vercel (não warning), e derruba o deploy inteiro.
          */}
-        <a
+        <Link
           href={`/lojas/${store.slug}`}
           onClick={(e) => e.stopPropagation()}
           className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[var(--lj-gold-strong)] hover:underline"
         >
           Ver a página da loja <ArrowRight className="h-3.5 w-3.5" />
-        </a>
+        </Link>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
           <a
