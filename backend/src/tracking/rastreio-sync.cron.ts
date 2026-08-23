@@ -266,23 +266,44 @@ export class RastreioSyncCron {
      * mesmo — proteção em duas camadas, porque fechar pedido cuja caixa
      * ainda está na rua faz a loja dizer pra cliente que chegou tudo.
      */
+    /**
+     * ⚠️ O CÓDIGO CASA NORMALIZADO — a MESMA regra do
+     * `TrackingService.normalizarCodigo` (maiúscula, sem espaço/ponto/hífen),
+     * escrita em SQL porque o casamento acontece no banco.
+     *
+     * Sem isso, `AD 717 071 708 BR` no pedido não encontrava `AD717071708BR`
+     * no cache: o `LEFT JOIN` trazia NULL, o `COALESCE(...,false)` dizia "não
+     * entregue" e o pedido ficava fora da fila PARA SEMPRE — porque a fila do
+     * rastreio também nunca revisita objeto já marcado entregue. Medido em
+     * 22/08: 95 pedidos entravam na fila com o código cru, 107 com o código
+     * normalizado. Os 12 da diferença eram entrega confirmada há semanas
+     * parada em "Em trânsito", a maioria por ter o MESMO objeto escrito de
+     * dois jeitos no pedido e no pick-order.
+     */
     const presos: Array<{ codigo: string }> = await this.prisma.$queryRawUnsafe(
       `WITH cod AS (
-           SELECT o.id, o.tracking_code AS codigo FROM orders o WHERE o.status='shipped' AND o.tracking_code IS NOT NULL
+           SELECT o.id, o.tracking_code AS bruto,
+                  UPPER(REGEXP_REPLACE(o.tracking_code, '[[:space:].-]', '', 'g')) AS codigo
+             FROM orders o WHERE o.status='shipped' AND o.tracking_code IS NOT NULL
            UNION ALL
-           SELECT o.id, po.tracking_code FROM orders o
+           SELECT o.id, po.tracking_code,
+                  UPPER(REGEXP_REPLACE(po.tracking_code, '[[:space:].-]', '', 'g'))
+             FROM orders o
              JOIN pick_orders po ON po.order_id = o.id
             WHERE o.status='shipped' AND po.tracking_code IS NOT NULL
          ),
          pedido AS (
            SELECT c.id, BOOL_AND(COALESCE(r.entregue, false)) AS todos_entregues
-             FROM cod c LEFT JOIN rastreio_objetos r ON r.codigo = c.codigo
+             FROM cod c LEFT JOIN rastreio_objetos r ON UPPER(r.codigo) = c.codigo
             GROUP BY c.id
          )
-       SELECT DISTINCT c.codigo
+       -- devolve o código BRUTO: é por ele que o \`promoverEntregues\` acha o
+       -- pedido (a coluna guarda o que a loja digitou). A normalização vale
+       -- pro casamento com o cache, não pra busca do pedido.
+       SELECT DISTINCT c.bruto AS codigo
          FROM cod c JOIN pedido p ON p.id = c.id
         WHERE p.todos_entregues
-        ORDER BY c.codigo
+        ORDER BY c.bruto
         LIMIT $1`,
       lote,
     );
@@ -320,8 +341,20 @@ export class RastreioSyncCron {
 
       for (const p of pedidos) {
         const doPedido = [p.trackingCode, ...p.pickOrders.map((x: any) => x.trackingCode)]
-          .map((c: any) => String(c || '').trim().toUpperCase())
-          .filter((c: string) => TrackingService.ehCodigoValido(c));
+          .map((c: any) => TrackingService.normalizarCodigo(String(c || '').trim()))
+          .filter((c: any) => TrackingService.ehCodigoValido(c));
+
+        /**
+         * ⚠️ SEM CÓDIGO VÁLIDO, NÃO FECHA.
+         *
+         * `doPedido` vazio fazia `faltando` vazio (nada pra faltar), o guard
+         * passava, e o `?? new Date()` lá embaixo carimbava a entrega com a
+         * data de HOJE. Ou seja: pedido cujo "código" é `retirada em loja`
+         * fecharia com uma data inventada — e é dela que corre o prazo de
+         * troca da cliente. Melhor ficar preso e visível.
+         */
+        if (!doPedido.length) continue;
+
         const resumo = await this.tracking.resumoDoCache(doPedido);
         const faltando = doPedido.filter((c) => !resumo.get(c)?.entregue);
         if (faltando.length) {
