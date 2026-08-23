@@ -111,6 +111,16 @@ const LOJA_POR_SLUG_ANTIGO: Record<string, string> = {
   vinhedo: 'vinhedo',
 };
 
+/**
+ * As cidades que aparecem SOLTAS na raiz do domínio (`/CAMPINAS`).
+ *
+ * Sai do mesmo mapa acima pra não existirem duas listas de loja divergindo —
+ * é o slug NOVO que vale aqui, porque a página é `/lojas/<slug novo>`.
+ * `praia-grande` já tem regra própria mais abaixo (8.401 impressões) e entra
+ * de novo sem prejuízo: a primeira que casar vence.
+ */
+const LOJAS_NA_RAIZ = [...new Set(Object.values(LOJA_POR_SLUG_ANTIGO))];
+
 export const redirectsLegado: RedirectLegado[] = [
   // ═══════════════════════════════════════════════════════════════════════════
   // 1. O PREFIXO `/index.php/` — o WordPress fazia, a Vercel não faz
@@ -268,6 +278,23 @@ export const redirectsLegado: RedirectLegado[] = [
   // Agora tem página própria pra onde ir.
   { source: '/praia-grande', destination: '/lojas/praia-grande', permanent: true },
 
+  /**
+   * CIDADE SOLTA NA RAIZ, EM CAIXA ALTA (23/08/2026).
+   *
+   * Achado na amostra de 404 da Search Console: `/CAMPINAS`, rastreado em
+   * 22/08. Não é `/tree/campinas` nem `/nossaslojas/campinas` — é o nome da
+   * cidade direto na raiz, do jeito que alguém escreveu num link de bio.
+   * Cada uma dessas hoje cai em erro, e o destino existe.
+   *
+   * O `source` do Next casa sem diferenciar caixa, então uma regra por loja
+   * cobre `/CAMPINAS`, `/campinas` e `/Campinas`.
+   */
+  ...LOJAS_NA_RAIZ.map((slug) => ({
+    source: `/${slug}`,
+    destination: `/lojas/${slug}`,
+    permanent: true,
+  })),
+
   // ═══════════════════════════════════════════════════════════════════════════
   // 6. RASTREIO — a 2ª página mais clicada do domínio
   // ═══════════════════════════════════════════════════════════════════════════
@@ -283,11 +310,37 @@ export const redirectsLegado: RedirectLegado[] = [
   // ═══════════════════════════════════════════════════════════════════════════
   // `/tamanho-46/` → `/tamanhos/46`. Casa direto, um pra um.
   { source: '/tamanho-:numero(\\d{2})', destination: '/tamanhos/:numero', permanent: true },
+  /**
+   * A FORMA COM BARRA — `/tamanho/54/` (23/08/2026).
+   *
+   * A regra acima cobria só o hífen. A Search Console mostrou `/tamanho/54/` e
+   * `/tamanho/54/page/4/` em 404, rastreados em 21/08. É a mesma landing por
+   * número do WooCommerce, escrita do outro jeito — e "tamanho 54" é a busca
+   * mais valiosa que existe nesta loja.
+   *
+   * A paginada vai pro mesmo lugar: `/tamanhos/54` já é a lista inteira.
+   */
+  { source: '/tamanho/:numero(\\d{2})', destination: '/tamanhos/:numero', permanent: true },
+  { source: '/tamanho/:numero(\\d{2})/page/:p*', destination: '/tamanhos/:numero', permanent: true },
+  { source: '/tamanho/:resto*', destination: '/tamanhos', permanent: true },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 8. PÁGINAS DO WORDPRESS
   // ═══════════════════════════════════════════════════════════════════════════
   { source: '/shop', destination: '/categoria', permanent: true },
+  /**
+   * A vitrine do Woo era paginada e filtrada por query — `/shop/page/10/?...`
+   * apareceu em 404 na amostra de 23/08. A raiz já ia pra `/categoria`; as
+   * páginas 2 em diante não iam a lugar nenhum.
+   */
+  { source: '/shop/:resto*', destination: '/categoria', permanent: true },
+  /**
+   * `/colecoes/alfaiataria` e irmãs: a coleção editorial do WordPress não tem
+   * equivalente um-a-um aqui. Vai pro índice de categorias, que é o lugar mais
+   * próximo da intenção — melhor que erro, honesto sobre não ser a mesma página.
+   */
+  { source: '/colecoes/:resto*', destination: '/categoria', permanent: true },
+  { source: '/colecoes', destination: '/categoria', permanent: true },
   { source: '/destaques', destination: '/mais-top-da-semana', permanent: true },
   { source: '/cupom', destination: '/novidades', permanent: true },
 
