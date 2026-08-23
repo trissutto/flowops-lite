@@ -62,7 +62,7 @@ export interface CorEscolhivel {
 
 export function BuyBox({
   product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, corPendente, onPedirCor, seletorCores,
-  seletorCoresMobile, irmas, irmasHref, irmasLabel,
+  irmas, irmasHref, irmasLabel,
 }: {
   product: Product;
   /**
@@ -97,21 +97,20 @@ export function BuyBox({
    */
   seletorCores?: React.ReactNode;
   /**
-   * A GRADE DE CORES DO CELULAR — agora DEPOIS do tamanho (22/08).
+   * ⚠️ NÃO EXISTE MAIS UMA INSTÂNCIA DE CELULAR AQUI DENTRO.
    *
-   * Medido em produção: com a grade 2×4 embaixo da foto, o seletor de tamanho
-   * caía em 1065px num viewport de 812px — 253px ABAIXO da dobra (em 17/08
-   * eram 94px; a grade piorou 159px). Dos 341 bloqueados em 7 dias, 228 (67%)
-   * NUNCA rolaram a página antes de tentar comprar, e só 32 (9%) tinham
-   * tocado no tamanho — não é escolha perdida, é escolha nunca vista.
+   * O #1112 desceu a grade de cores do celular pra depois do tamanho (prop
+   * `seletorCoresMobile`), pela dobra: com a grade 2×4 embaixo da foto o
+   * seletor de tamanho caía em 1065px num viewport de 812px. O dono desfez no
+   * mesmo dia — "nada a ver descer as miniaturas" — e a grade voltou pra
+   * baixo da foto, no `EscolhaDaPeca`, colada na foto que ela troca.
    *
-   * A grade não sumiu e não encolheu: ela desceu. O que subiu foi o número,
-   * que é a única escolha que trava a compra. Isso só é honesto porque a cor
-   * JÁ VEM PRÉ-SELECIONADA desde 21/08 (#1063) — a decisão de cor está feita
-   * quando a página abre, e a grade abaixo serve pra TROCAR, não pra escolher
-   * do zero. No PC nada muda: lá é a coluna direita, sem dobra pra brigar.
+   * A rede que segurou a decisão é a BARRA FIXA logo abaixo: desde o #1112
+   * ela mostra os tamanhos enquanto falta escolher, então o número está na
+   * tela desde o primeiro segundo mesmo pra quem nunca rola (67% das
+   * bloqueadas). Antes de tentar descer a grade de novo, é essa medição que
+   * tem que dizer alguma coisa nova.
    */
-  seletorCoresMobile?: React.ReactNode;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
   /**
@@ -401,8 +400,9 @@ export function BuyBox({
           e no bmm-100) e parte ia embora. Quando falta o tamanho, o passo
           INTEIRO acende: moldura vermelha + fundo + a instrução em caixa
           dizendo pra tocar num número acima. */}
-      {/* `mt-6` no celular (22/08, "compacte mais"): 36px de respiro entre
-          o preço e o passo do tamanho é ar de coluna larga. No PC segue 36. */}
+      {/* `mt-6` no celular (22/08, "compacte mais"): 36px entre a grade de
+          cores e o passo do tamanho é respiro de coluna larga — empilhado no
+          celular vira buraco. No PC segue 36. */}
       <div
         id="seletor-tamanho"
         className={cn(
@@ -495,11 +495,6 @@ export function BuyBox({
           </p>
         )}
       </div>
-
-      {/* A GRADE DE CORES DO CELULAR, agora ABAIXO do tamanho (22/08) — ver o
-          porquê medido em `seletorCoresMobile`. No PC esta instância não
-          existe: lá a grade fica acima, na coluna da direita. */}
-      {seletorCoresMobile && <div className="mt-6 lg:hidden">{seletorCoresMobile}</div>}
 
       {/* A LINHA "Cor: X · Ver as N cores" SAIU (20/08, terceira era deste
           bloco): com a grade de cores na própria coluna (desktop) e embaixo
