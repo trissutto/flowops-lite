@@ -31,7 +31,7 @@ export function SmartBar({
   categoryName: string;
 }) {
   return (
-    <div className="sticky top-[68px] z-[var(--z-sticky)] border-y border-border bg-background/92 backdrop-blur-md lg:top-[76px]">
+    <div className="sticky top-14 z-[var(--z-sticky)] border-y border-border bg-background/92 backdrop-blur-md lg:top-[76px]">
       <div className="flex flex-col gap-3 py-4">
         <div className="flex flex-wrap items-center gap-3">
           {/* Contagem */}

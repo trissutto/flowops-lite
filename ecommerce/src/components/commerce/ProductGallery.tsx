@@ -183,7 +183,20 @@ export function ProductGallery({
       onMouseEnter={() => setParado(true)}
     >
       {/* Foto principal */}
-      <div className="relative aspect-3/4 flex-1 overflow-hidden rounded-lg bg-surface-alt">
+      {/* A FOTO NÃO PASSA DE 52% DA ALTURA DA TELA NO CELULAR (22/08).
+
+          Medido em 390×734 na BMM-100: o quadro 3/4 dava 342×456 — 62% da
+          dobra numa foto só, e o seletor de tamanho nascia em 786px, com a
+          barra fixa comendo os últimos 95. O teto é em `svh` de propósito:
+          em iPhone 15 (844) a foto quase não muda (439 contra 456), em tela
+          curta ela cede o que precisa. O PC não tem dobra pra brigar e fica
+          no 3/4 inteiro (`lg:max-h-none`).
+
+          O catálogo tem foto 3/4 (ensaio novo) E foto quadrada (era
+          WooCommerce). O corte de altura só existe pra 3/4; na quadrada o
+          quadro mais baixo até MELHORA — no 3/4 ela perdia 57px de cada
+          lado pra caber. */}
+      <div className="relative aspect-3/4 max-h-[52svh] flex-1 overflow-hidden rounded-lg bg-surface-alt lg:max-h-none">
         {video && noVideo ? (
           <VideoSlide id={video.id} corDoVideo={video.corDoVideo} name={name} />
         ) : current.src ? (
@@ -231,8 +244,14 @@ export function ProductGallery({
               sizes="(max-width: 1024px) 100vw, 45vw"
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}
+              /* O CORTE PUXA PRO ALTO (25%), não pro meio: com o teto de
+                 altura, a foto 3/4 perde 74px em 390×734 — centralizado,
+                 metade sairia do topo e raspava o cabelo da modelo (o ensaio
+                 deixa ~5% de ar acima da cabeça). Em 25% saem 18px de cima e
+                 55 de baixo, onde há shorts/piso e não peça: a barra da
+                 blusa termina em 79% da foto. */
               className={cn(
-                'object-cover transition-transform duration-500',
+                'object-cover object-[center_25%] transition-transform duration-500 lg:object-center',
                 zoomed && 'scale-[1.7] cursor-zoom-out',
               )}
             />

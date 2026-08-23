@@ -401,10 +401,12 @@ export function BuyBox({
           e no bmm-100) e parte ia embora. Quando falta o tamanho, o passo
           INTEIRO acende: moldura vermelha + fundo + a instrução em caixa
           dizendo pra tocar num número acima. */}
+      {/* `mt-6` no celular (22/08, "compacte mais"): 36px de respiro entre
+          o preço e o passo do tamanho é ar de coluna larga. No PC segue 36. */}
       <div
         id="seletor-tamanho"
         className={cn(
-          'mt-9 scroll-mt-28 rounded-lg transition-all duration-300',
+          'mt-6 scroll-mt-28 rounded-lg transition-all duration-300 lg:mt-9',
           sizeError &&
             'bg-danger/5 p-4 ring-2 ring-danger ring-offset-2 ring-offset-background',
         )}
@@ -436,7 +438,7 @@ export function BuyBox({
             `grid-flow-col auto-cols-fr` divide a largura por igual entre
             quantos números a peça tiver — as pílulas encolhem (`min-w-0`)
             em vez de quebrar. */}
-        <div className="mt-4 grid grid-flow-col auto-cols-fr gap-1.5 sm:gap-2">
+        <div className="mt-3 grid grid-flow-col auto-cols-fr gap-1.5 sm:gap-2 lg:mt-4">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
@@ -497,7 +499,7 @@ export function BuyBox({
       {/* A GRADE DE CORES DO CELULAR, agora ABAIXO do tamanho (22/08) — ver o
           porquê medido em `seletorCoresMobile`. No PC esta instância não
           existe: lá a grade fica acima, na coluna da direita. */}
-      {seletorCoresMobile && <div className="mt-9 lg:hidden">{seletorCoresMobile}</div>}
+      {seletorCoresMobile && <div className="mt-6 lg:hidden">{seletorCoresMobile}</div>}
 
       {/* A LINHA "Cor: X · Ver as N cores" SAIU (20/08, terceira era deste
           bloco): com a grade de cores na própria coluna (desktop) e embaixo
@@ -548,7 +550,7 @@ export function BuyBox({
           o último argumento antes do clique e o único da página que vem de
           venda de verdade — mas em caixa ela empurrava o botão pra longe do
           seletor. Uma linha argumenta igual sem afastar o clique. */}
-      <SeloVendas vendas={product.sold} variant="linha" className="mt-7" />
+      <SeloVendas vendas={product.sold} variant="linha" className="mt-6 lg:mt-7" />
 
       {/* Ações — UM botão grande (dono, 14/08): "Adicionar à sacola" tinha o
           mesmo peso visual de Favoritar e do WhatsApp, e o VERDE do WhatsApp
@@ -710,7 +712,7 @@ export function BuyBox({
 
           {/* Mesmo desenho da grade da página (uma linha, sem quebra): as
               duas mostram os mesmos números e divergir confunde. */}
-          <div className="mt-4 grid grid-flow-col auto-cols-fr gap-1.5 sm:gap-2">
+          <div className="mt-3 grid grid-flow-col auto-cols-fr gap-1.5 sm:gap-2 lg:mt-4">
             {product.sizes.map((option) => (
               <SizePill
                 key={option.label}
@@ -746,7 +748,11 @@ export function BuyBox({
       </Overlay>
 
       {!soldOut && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">
+        /* A BARRA ENCOLHEU 12px (22/08): ela é FIXA, então cada pixel dela
+           é pixel que a página inteira não tem — eram 95px de dobra comida
+           em 734. Os 44px de alvo de toque das pílulas ficam intocados; o
+           que saiu foi respiro (p-3 → pt-2/pb-2, e o mb-2 do rótulo). */
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">
           {/* A BARRA É O SELETOR ENQUANTO FALTA O NÚMERO (22/08).
               Ela está na tela desde o primeiro segundo e 67% das clientes
               travadas nunca rolaram a página — então é aqui que a escolha
@@ -755,7 +761,7 @@ export function BuyBox({
               confirma cor · tamanho e leva pra sacola. */}
           {barraEhSeletor ? (
             <div className="mx-auto max-w-lg">
-              <p className="mb-2 flex items-baseline justify-between gap-3 text-xs">
+              <p className="mb-1.5 flex items-baseline justify-between gap-3 text-xs">
                 <span className="truncate font-medium text-ink">Toque no seu número</span>
                 <button
                   type="button"

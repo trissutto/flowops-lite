@@ -48,7 +48,10 @@ export function AnnouncementBar({ itens }: { itens?: { label: string; href: stri
   if (!current) return null;
 
   return (
-    <div className="relative h-9 overflow-hidden bg-ink text-light">
+    /* 28px no celular, 36 a partir do `sm` (22/08): a tarja é a primeira
+       coisa da tela e some no primeiro scroll — no celular ela cede 8px pra
+       peça. O texto já era 10px, nada encolheu de tamanho de letra. */
+    <div className="relative h-7 overflow-hidden bg-ink text-light sm:h-9">
       {/* aria-live off: mensagem promocional não deve interromper leitor de tela */}
       <div className="mx-auto flex h-full max-w-wide items-center justify-center px-gutter">
         <div
