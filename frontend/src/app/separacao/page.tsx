@@ -284,17 +284,24 @@ function SeparacaoPageInner() {
   // As três origens entram na MESMA fila: quem sabe rotear Order roteia todas.
   const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce' | 'pdv_online'>('');
 
-  // Carrega lojas com contagem de pedidos em aberto
+  // Carrega as lojas com o que CADA UMA tem na mão na aba atual: em "Em
+  // separação" é o card ainda na arara; em "Pronto pra postar", a caixa
+  // esperando etiqueta. O número não seguia aba nenhuma e contava tudo que não
+  // tinha acabado — 56 contra os 11 da tela em 24/08 (ver `wcStoresLoad`).
+  async function loadStores(aba: string) {
+    try {
+      const r = await api<{ stores: Array<{ code: string; name: string; openOrders: number }> }>(
+        `/orders/wc/stores-load?aba=${encodeURIComponent(aba)}`,
+      );
+      setStores(r.stores || []);
+    } catch {}
+  }
+  // Depende da aba: sem isso o número congelava no que foi carregado na
+  // abertura da tela e o botão Atualizar não o alcançava.
   useEffect(() => {
-    (async () => {
-      try {
-        const r = await api<{ stores: Array<{ code: string; name: string; openOrders: number }> }>(
-          '/orders/wc/stores-load',
-        );
-        setStores(r.stores || []);
-      } catch {}
-    })();
-  }, []);
+    loadStores(status);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   async function loadCounts() {
     try {
@@ -1095,7 +1102,7 @@ function SeparacaoPageInner() {
             Home
           </Link>
           <button
-            onClick={() => { load(); loadCounts(); }}
+            onClick={() => { load(); loadCounts(); loadStores(status); }}
             className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
@@ -1228,6 +1235,11 @@ function SeparacaoPageInner() {
             value={storeCode}
             onChange={(e) => setStoreCode(e.target.value)}
             className="px-3 py-2 border rounded text-sm bg-white min-w-[200px]"
+            title={
+              status === 'pronto-postar'
+                ? 'O número é quantas caixas desta loja esperam postagem'
+                : 'O número é quantos pedidos esta loja tem PRA SEPARAR agora'
+            }
           >
             <option value="">Todas as lojas</option>
             {stores.map((s) => (

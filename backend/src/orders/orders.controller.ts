@@ -833,22 +833,55 @@ export class OrdersController {
   }
 
   /**
-   * Lista lojas com contagem de pedidos em separação por loja.
-   * Usado pelo dropdown de filtro na tela /pedidos.
+   * Lista lojas com a contagem do TRABALHO NA MÃO de cada loja.
+   * Usado pelo dropdown de filtro na tela /separacao.
+   *
+   * ⚠️ O número era `status notIn ['shipped','cancelled']` — "card que ainda
+   * não acabou", que na prática virou saco de tudo. Medição de 24/08/2026: 56
+   * cards, contra 11 pedidos na aba "Em separação". A diferença NÃO era pedido
+   * dividido:
+   *   · 34 cards já `separated` — peça na sacola, trabalho da aba de POSTAGEM;
+   *   ·  4 com problema reportado — o card JÁ saiu da fila da loja
+   *     (`reportarProblema` grava `issueReportedAt` e não mexe no status);
+   *   ·  9 de pedido `pdv_online` que o cron fechou como `shipped` sem ninguém
+   *     encostar no card — o mais velho com 5 dias.
+   * Sobravam 9 reais. Número que infla 6× é número que a matriz para de olhar,
+   * e aí o filtro inteiro perde a serventia.
+   *
+   * Responde à ABA porque em "Pronto pra postar" a pergunta é outra (quantas
+   * caixas desta loja esperam etiqueta): mostrar 0 pra loja com 7 caixas
+   * paradas seria o mesmo defeito ao contrário — silêncio no lugar do alarme.
    */
   @Get('wc/stores-load')
-  async wcStoresLoad() {
-    // Pega lojas ativas + conta pedidos cuja pick-order ainda não foi enviada
+  async wcStoresLoad(@Query('aba') aba?: string) {
     const stores = await (this.prisma as any).store.findMany({
       where: { active: true },
       select: { id: true, code: true, name: true, city: true, state: true },
       orderBy: { name: 'asc' },
     });
 
-    // Conta pick-orders em aberto por loja (status != shipped/cancelled)
+    // A MESMA régua de `whereNativoDaAba`: o card na arara (ou o card pronto, na
+    // aba de postagem) enquanto o pedido está de fato em separação. O
+    // `order: { status: 'separating' }` é o que mata o card órfão de pedido já
+    // despachado.
+    const prontoPostar = aba === 'pronto-postar';
     const countsRaw = await (this.prisma as any).pickOrder.groupBy({
       by: ['storeId'],
-      where: { status: { notIn: ['shipped', 'cancelled'] } },
+      where: {
+        status: { in: prontoPostar ? CARD_PRONTO : CARD_SEPARANDO },
+        issueReportedAt: null,
+        order: {
+          status: 'separating',
+          // O ¬A de `whereNativoDaAba('pronto-postar')`: pedido que ainda tem
+          // peça na arara mora na aba "Em separação", e a caixa já pronta dele
+          // NÃO pode contar aqui. Sem esta linha eram 32 contra 28 na lista —
+          // 4 a mais, e número que não bate com a tela é o defeito que esta
+          // mudança veio consertar.
+          ...(prontoPostar
+            ? { pickOrders: { none: { status: { in: CARD_SEPARANDO } } } }
+            : {}),
+        },
+      },
       _count: { _all: true },
     });
     const countMap = new Map<string, number>();
