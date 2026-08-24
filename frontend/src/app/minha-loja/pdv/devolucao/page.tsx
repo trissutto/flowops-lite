@@ -56,6 +56,15 @@ type LookupResult = {
 const fmt = (n: number) =>
   n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/**
+ * Os motivos de devolução em DINHEIRO/PIX, em botão.
+ *
+ * Antes era um `prompt()` de texto livre: cada loja escrevia de um jeito e o
+ * relatório de sangria não agrupava nada. Botão fixo agrupa; "Outro motivo"
+ * continua aceitando o que não couber aqui.
+ */
+const MOTIVOS_DINHEIRO = ['Peça com defeito', 'Não serviu', 'Cobrança errada'];
+
 export default function DevolucaoPage() {
   const [query, setQuery] = useState('');
   const [data, setData] = useState<LookupResult | null>(null);
@@ -91,6 +100,21 @@ export default function DevolucaoPage() {
   const [modo, setModo] = useState<'dinheiro' | 'pix' | 'troca' | 'credito'>('troca');
   const [motivo, setMotivo] = useState('');
   const [validade, setValidade] = useState(90);
+  /**
+   * FLUXO GUIADO (24/08) — uma decisão por tela, igual à venda online.
+   *
+   * A tela pedia tudo de uma vez: modo, validade, motivo e confirmar, num
+   * grid só. E quando o modo era dinheiro/pix, a justificativa e a senha do
+   * gerente vinham em DOIS `prompt()` do navegador — a caixinha cinza do
+   * Windows, sem dizer quanto sai do caixa nem por quê.
+   *
+   * `null` = fora do fluxo (marcando as peças).
+   */
+  const [etapa, setEtapa] = useState<'modo' | 'validade' | 'gerente' | 'confere' | null>(null);
+  /** Senha do gerente digitada no passo próprio (não mais num prompt()). */
+  const [senhaGerente, setSenhaGerente] = useState('');
+  /** "Outro motivo" escolhido — o campo livre é um ESTADO, não o texto digitado. */
+  const [motivoLivre, setMotivoLivre] = useState(false);
   const [success, setSuccess] = useState<any>(null);
   // Indica que a vendedora veio do PDV com uma venda em andamento (F4 ou
   // botão Trocar). O crédito da troca será ANEXADO nessa venda, sem
@@ -444,10 +468,20 @@ export default function DevolucaoPage() {
     let gerentePassword: string | undefined;
     let motivoToSend = motivo;
     if (modo === 'dinheiro' || modo === 'pix') {
-      const auth = await exigirSenhaGerente();
-      if (!auth) return;
-      gerentePassword = auth.password;
-      motivoToSend = auth.motivoFinal;
+      /**
+       * O passo "gerente" do fluxo guiado já pediu motivo e senha, numa tela
+       * que diz QUANTO sai do caixa. Só cai nos `prompt()` do navegador se
+       * alguém chegou aqui por fora do fluxo — o caminho de compatibilidade.
+       */
+      if (senhaGerente && motivo.trim()) {
+        gerentePassword = senhaGerente;
+        motivoToSend = motivo.trim();
+      } else {
+        const auth = await exigirSenhaGerente();
+        if (!auth) return;
+        gerentePassword = auth.password;
+        motivoToSend = auth.motivoFinal;
+      }
     }
     setBusy(true);
     try {
@@ -1102,88 +1136,351 @@ export default function DevolucaoPage() {
             {Object.keys(selected).length > 0 && (
               <div className="bg-white rounded-xl shadow-sm p-3">
                 {/* GRID: modo (esq) + valor+confirmar (dir) lado a lado */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <div className="text-xs font-bold text-rose-900 uppercase tracking-wide mb-1.5">Modo</div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                      <ModoBtn
-                        active={modo === 'dinheiro'}
-                        onClick={() => setModo('dinheiro')}
-                        icon={<Banknote size={16} />}
-                        title="Dinheiro"
-                        sub="Sangria"
-                      />
-                      <ModoBtn
-                        active={modo === 'pix'}
-                        onClick={() => setModo('pix')}
-                        icon={<span className="text-base font-black">📲</span>}
-                        title="PIX"
-                        sub="Sangria"
-                      />
-                      <ModoBtn
-                        active={modo === 'troca'}
-                        onClick={() => setModo('troca')}
-                        icon={<ArrowRightLeft size={16} />}
-                        title="Troca"
-                        sub="Hoje"
-                      />
-                      <ModoBtn
-                        active={modo === 'credito'}
-                        onClick={() => setModo('credito')}
-                        icon={<CreditCard size={16} />}
-                        title="Vale"
-                        sub="Depois"
-                      />
+                {/* O QUE VOLTA + UM BOTÃO SÓ (24/08) — o grid de modo, validade
+                    e motivo saiu daqui e virou fluxo guiado, uma pergunta por
+                    tela. Aqui fica o valor e a porta de entrada. */}
+                <div className="flex flex-col sm:flex-row items-stretch gap-3">
+                  <div className="flex-1 bg-rose-50 rounded-lg p-3 text-center flex flex-col justify-center">
+                    <div className="text-xs text-rose-700 uppercase tracking-wide">Valor da devolução</div>
+                    <div className="text-3xl font-black text-rose-900 tabular-nums leading-tight">
+                      R$ {fmt(totalDevolucao)}
                     </div>
-
-                    {modo === 'credito' && (
-                      <div className="mt-2">
-                        <label className="text-[11px] font-semibold text-gray-700">
-                          Validade do vale (dias)
-                        </label>
-                        <input
-                          type="number"
-                          value={validade}
-                          onChange={(e) => setValidade(parseInt(e.target.value, 10) || 90)}
-                          min={1}
-                          max={365}
-                          className="w-full p-1.5 border rounded text-sm"
-                        />
-                      </div>
-                    )}
-
-                    <div className="mt-2">
-                      <label className="text-[11px] font-semibold text-gray-700">
-                        Motivo (opcional)
-                      </label>
-                      <input
-                        type="text"
-                        value={motivo}
-                        onChange={(e) => setMotivo(e.target.value)}
-                        placeholder="Defeito, tamanho, arrependimento…"
-                        className="w-full p-1.5 border rounded text-sm"
-                      />
+                    <div className="text-[11px] text-rose-700 font-semibold">
+                      {Object.values(selected).reduce((s, q) => s + q, 0)} peça(s)
                     </div>
                   </div>
+                  <button
+                    onClick={() => { setSenhaGerente(''); setEtapa('modo'); }}
+                    disabled={busy || !Object.keys(selected).length}
+                    className="flex-1 py-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-lg disabled:opacity-50 shadow-md"
+                  >
+                    CONTINUAR →
+                  </button>
+                </div>
+                {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
+              </div>
+            )}
+          </div>
+        )}
 
-                  <div className="flex flex-col">
-                    <div className="bg-rose-50 rounded-lg p-3 text-center flex-1 flex flex-col justify-center">
-                      <div className="text-xs text-rose-700 uppercase tracking-wide">Valor da devolução</div>
-                      <div className="text-3xl font-black text-rose-900 tabular-nums leading-tight">
-                        R$ {fmt(totalDevolucao)}
-                      </div>
+        {/* ══ FLUXO GUIADO DA DEVOLUÇÃO (24/08) ═══════════════════════════
+            Uma decisão por tela. Mesmo desenho do passo a passo da venda
+            online: o caminho comum grande e colorido, o caminho que mexe em
+            dinheiro discreto e com o motivo escrito. ── */}
+        {etapa && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/70 p-3">
+
+            {/* ── 1 · O QUE A CLIENTE VAI LEVAR ── */}
+            {etapa === 'modo' && (
+              <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-rose-200">
+                <div className="bg-gradient-to-b from-rose-600 to-rose-700 px-5 pb-5 pt-4 text-center">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-200">
+                    Devolução · passo 1 de 2
+                  </div>
+                  <h3 className="mt-1 text-2xl font-black leading-tight text-white">
+                    O que a cliente vai levar?
+                  </h3>
+                  <div className="mt-2 inline-flex items-baseline gap-1.5 rounded-full bg-white/15 px-4 py-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-rose-200">volta</span>
+                    <span className="text-lg font-black tabular-nums text-white">R$ {fmt(totalDevolucao)}</span>
+                  </div>
+                </div>
+                <div className="p-4">
+                  {/* TROCA AGORA é o botão grande e sozinho: a cliente está na
+                      frente do balcão e o crédito cai direto no PDV. O vale de
+                      90 dias é o caso raro — fica do lado, menor. */}
+                  <div className="rounded-2xl border-2 border-teal-300 bg-teal-50 p-4 text-center">
+                    <div className="text-lg font-black uppercase tracking-wide text-teal-900">
+                      Leva outra peça
                     </div>
-
-                    {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
-
+                    <div className="mt-0.5 text-[11px] font-semibold text-teal-600">
+                      O dinheiro não sai do caixa
+                    </div>
                     <button
-                      onClick={() => confirm()}
-                      disabled={busy || !Object.keys(selected).length}
-                      className="mt-2 w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-base disabled:opacity-50 shadow-md"
+                      type="button"
+                      onClick={() => { setModo('troca'); setEtapa('confere'); }}
+                      className="mt-3 w-full rounded-xl border-2 border-teal-500 bg-white py-5 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-teal-700 hover:shadow-md"
                     >
-                      {busy ? 'Processando…' : 'Confirmar Devolução'}
+                      <div className="text-3xl leading-none">🔄</div>
+                      <div className="mt-2 text-lg font-black text-slate-800">USAR AGORA</div>
+                      <div className="text-[11px] font-semibold text-slate-500">
+                        O crédito entra na venda e você volta a bipar
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setModo('credito'); setEtapa('validade'); }}
+                      className="mt-2 w-full rounded-lg border border-teal-300 bg-white py-2.5 text-center transition hover:bg-teal-100"
+                    >
+                      <div className="text-xs font-bold text-teal-800">🎟️ Só gerar o vale</div>
+                      <div className="text-[10px] text-teal-600">Ela leva o papel e volta depois</div>
                     </button>
                   </div>
+
+                  <div className="my-3 flex items-center gap-3">
+                    <span className="h-px flex-1 bg-slate-200" />
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      ou
+                    </span>
+                    <span className="h-px flex-1 bg-slate-200" />
+                  </div>
+
+                  {/* Discreto DE PROPÓSITO: é a escolha que esvazia a gaveta. */}
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+                    <div className="text-base font-black uppercase tracking-wide text-slate-600">
+                      Devolver o dinheiro
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setModo('dinheiro'); setEtapa('gerente'); }}
+                        className="rounded-lg border border-slate-300 bg-white py-2.5 transition hover:border-slate-500 hover:bg-slate-100"
+                      >
+                        <div className="text-xs font-bold text-slate-700">Dinheiro</div>
+                        <div className="text-[10px] text-slate-400">Sai da gaveta</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setModo('pix'); setEtapa('gerente'); }}
+                        className="rounded-lg border border-slate-300 bg-white py-2.5 transition hover:border-slate-500 hover:bg-slate-100"
+                      >
+                        <div className="text-xs font-bold text-slate-700">PIX</div>
+                        <div className="text-[10px] text-slate-400">Manda pra ela</div>
+                      </button>
+                    </div>
+                    <p className="mt-2 text-[10px] font-semibold leading-snug text-rose-600">
+                      🔒 Vira sangria no caixa e <b>precisa da senha do gerente</b>.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setEtapa(null)}
+                    className="mt-3 w-full rounded-xl border-2 border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                  >
+                    ← Voltar pras peças
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── 2a · ATÉ QUANDO ELA PODE USAR ── */}
+            {etapa === 'validade' && (
+              <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-teal-200">
+                <div className="bg-gradient-to-b from-teal-600 to-teal-700 px-5 pb-5 pt-4 text-center">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-teal-200">
+                    Vale-troca
+                  </div>
+                  <h3 className="mt-1 text-2xl font-black leading-tight text-white">
+                    Até quando ela pode usar?
+                  </h3>
+                </div>
+                <div className="p-4 text-center">
+                  <div className="grid grid-cols-3 gap-3">
+                    {[30, 60, 90].map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setValidade(d)}
+                        className={`rounded-xl border-2 py-5 transition ${
+                          validade === d
+                            ? 'border-teal-500 bg-teal-50 shadow-sm'
+                            : 'border-slate-200 bg-white hover:border-teal-400'
+                        }`}
+                      >
+                        <div className={`text-2xl font-black ${validade === d ? 'text-teal-800' : 'text-slate-800'}`}>{d}</div>
+                        <div className={`text-[10px] font-semibold ${validade === d ? 'text-teal-600' : 'text-slate-500'}`}>
+                          dias{d === 90 ? ' · padrão' : ''}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[11px] font-semibold text-slate-500">
+                    Ela pode usar até{' '}
+                    <b className="text-slate-800">
+                      {new Date(Date.now() + validade * 86400000).toLocaleDateString('pt-BR')}
+                    </b>.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setEtapa('confere')}
+                    className="mt-3 w-full rounded-xl bg-teal-600 py-3 text-base font-black text-white shadow hover:bg-teal-700"
+                  >
+                    Continuar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEtapa('modo')}
+                    className="mt-2 w-full rounded-xl border-2 border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                  >
+                    ← Voltar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── 2b · MOTIVO E SENHA, NUMA TELA SÓ ──
+                Eram dois `prompt()` do navegador em sequência, sem contexto.
+                Aqui o valor que SAI DO CAIXA está no título, e a saída fica à
+                vista: o botão de baixo troca por vale-troca. */}
+            {etapa === 'gerente' && (
+              <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-rose-300">
+                <div className="bg-gradient-to-b from-slate-700 to-slate-800 px-5 pb-5 pt-4 text-center">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-300">
+                    🔒 Precisa do gerente
+                  </div>
+                  <h3 className="mt-1 text-2xl font-black leading-tight text-white">
+                    Sai R$ {fmt(totalDevolucao)} do caixa
+                  </h3>
+                  <p className="mt-1 text-[11px] font-semibold text-slate-300">
+                    Isso vira sangria e some da gaveta hoje.
+                  </p>
+                </div>
+                <div className="p-4">
+                  <div className="text-center text-[11px] font-black uppercase tracking-wider text-slate-500">
+                    Por que em {modo === 'pix' ? 'PIX' : 'dinheiro'}?
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {MOTIVOS_DINHEIRO.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => { setMotivoLivre(false); setMotivo(m); }}
+                        className={`rounded-lg border py-2.5 text-xs font-bold transition ${
+                          !motivoLivre && motivo === m
+                            ? 'border-slate-700 bg-slate-700 text-white'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                    {/* OUTRO MOTIVO é um ESTADO, não um texto. Guardar só a
+                        string fazia o campo sumir na primeira tecla: digitar
+                        trocava `motivo`, a condição que abria o campo virava
+                        falsa e o input desmontava com uma letra dentro. */}
+                    <button
+                      type="button"
+                      onClick={() => { setMotivoLivre(true); setMotivo(''); }}
+                      className={`rounded-lg border py-2.5 text-xs font-bold transition ${
+                        motivoLivre
+                          ? 'border-slate-700 bg-slate-700 text-white'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Outro motivo
+                    </button>
+                  </div>
+                  {motivoLivre && (
+                    <input
+                      autoFocus
+                      value={motivo}
+                      onChange={(e) => setMotivo(e.target.value)}
+                      placeholder="Escreva o motivo"
+                      className="mt-2 w-full rounded-lg border-2 border-slate-200 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                    />
+                  )}
+
+                  <div className="mt-4 text-center text-[11px] font-black uppercase tracking-wider text-slate-500">
+                    Senha do gerente
+                  </div>
+                  <input
+                    type="password"
+                    value={senhaGerente}
+                    onChange={(e) => setSenhaGerente(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && senhaGerente && motivo.trim()) setEtapa('confere'); }}
+                    className="mt-2 w-full rounded-xl border-4 border-slate-200 bg-white px-3 py-3 text-center text-2xl font-black tracking-[0.3em] text-slate-800 focus:border-slate-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={!senhaGerente || !motivo.trim()}
+                    onClick={() => setEtapa('confere')}
+                    className="mt-3 w-full rounded-xl bg-rose-600 py-3 text-base font-black text-white shadow hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    Liberar devolução em {modo === 'pix' ? 'PIX' : 'dinheiro'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setSenhaGerente(''); setModo('troca'); setEtapa('confere'); }}
+                    className="mt-2 w-full rounded-xl border-2 border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                  >
+                    ← Prefiro dar crédito na loja
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── 3 · CONFERE PRA FECHAR ──
+                A tela que não existia: a vendedora confirmava sem nunca ver a
+                conta escrita — o que volta, quanto, e em que forma. */}
+            {etapa === 'confere' && (
+              <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-emerald-300">
+                <div className="bg-gradient-to-b from-emerald-600 to-emerald-700 px-5 pb-5 pt-4 text-center">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-200">
+                    Passo 2 de 2
+                  </div>
+                  <h3 className="mt-1 text-2xl font-black leading-tight text-white">Confere pra fechar</h3>
+                </div>
+                <div className="p-4">
+                  <div className="rounded-xl bg-slate-900 px-4 py-3 text-white">
+                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                      Volta pro estoque
+                    </div>
+                    {todasVendasCarregadas.flatMap((v) =>
+                      v.items
+                        .filter((it) => selected[it.id])
+                        .map((it) => (
+                          <div key={it.id} className="flex items-center justify-between gap-3 py-0.5 text-sm">
+                            <span className="truncate text-slate-200">
+                              {it.descricao}
+                              {it.cor ? ` · ${it.cor}` : ''}
+                              {it.tamanho ? ` · ${it.tamanho}` : ''}
+                              {selected[it.id] > 1 ? ` (${selected[it.id]}x)` : ''}
+                            </span>
+                            {/* MESMA régua do `totalDevolucao`: o valor PAGO
+                                (total/qty), não o preço de etiqueta. Com
+                                desconto na venda os dois divergem, e um
+                                extrato cujas linhas não somam o total é pior
+                                que extrato nenhum. */}
+                            <span className="shrink-0 tabular-nums text-slate-300">
+                              R$ {fmt((it.qty > 0 ? it.total / it.qty : it.precoUnit) * selected[it.id])}
+                            </span>
+                          </div>
+                        )),
+                    )}
+                    <div className="mt-2 flex items-baseline justify-between border-t border-slate-700 pt-2">
+                      <span className="text-base font-black">A cliente recebe</span>
+                      <span className="text-2xl font-black tabular-nums text-emerald-400">
+                        R$ {fmt(totalDevolucao)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-right text-[11px] font-bold text-teal-300">
+                      {modo === 'troca' && 'crédito na venda, agora'}
+                      {modo === 'credito' && `em VALE-TROCA · ${validade} dias`}
+                      {modo === 'dinheiro' && 'em DINHEIRO · sangria no caixa'}
+                      {modo === 'pix' && 'em PIX · sangria no caixa'}
+                    </div>
+                  </div>
+                  <p className="mt-3 text-center text-[11px] font-semibold text-slate-500">
+                    {Object.values(selected).reduce((s, q) => s + q, 0)} peça(s) voltam pro
+                    estoque <b>desta loja</b> agora.
+                  </p>
+                  {err && <div className="mt-2 text-center text-xs text-red-600">{err}</div>}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => { setEtapa(null); void confirm(); }}
+                    className="mt-3 w-full rounded-xl bg-emerald-600 py-4 text-lg font-black text-white shadow hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {busy ? 'Processando…' : '✓ CONFIRMAR DEVOLUÇÃO'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEtapa('modo')}
+                    className="mt-2 w-full rounded-xl border-2 border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                  >
+                    ← Voltar
+                  </button>
                 </div>
               </div>
             )}
@@ -1424,34 +1721,9 @@ export default function DevolucaoPage() {
   );
 }
 
-function ModoBtn({
-  active,
-  onClick,
-  icon,
-  title,
-  sub,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  title: string;
-  sub: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`p-3 rounded-xl text-center transition-all ${
-        active
-          ? 'bg-rose-600 text-white shadow-lg scale-105'
-          : 'bg-rose-50 hover:bg-rose-100 text-rose-900'
-      }`}
-    >
-      <div className="flex justify-center mb-1">{icon}</div>
-      <div className="font-bold">{title}</div>
-      <div className={`text-xs ${active ? 'text-rose-100' : 'text-gray-500'}`}>{sub}</div>
-    </button>
-  );
-}
+// O `ModoBtn` (grade de 4 modos lado a lado) saiu em 24/08: a escolha virou o
+// passo 1 do fluxo guiado, onde "usar agora" é grande e "devolver o dinheiro"
+// é o bloco discreto que pede o gerente. Nada mais chamava o componente.
 
 // Botao "Copiar codigo" — clipboard API + feedback visual 2s.
 // Em browsers antigos/sem permissao, usa fallback document.execCommand.
