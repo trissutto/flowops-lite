@@ -1,5 +1,6 @@
 import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
+import { variantes, type PecaFeed, type Variante } from '@/lib/feed/variantes';
 
 /**
  * FEED DO GOOGLE MERCHANT CENTER — o maior canal da loja, medido.
@@ -59,30 +60,6 @@ import { SITE } from '@/lib/seo';
 
 export const revalidate = 3600;
 
-interface PecaFeed {
-  ref: string;
-  slug: string;
-  nome: string;
-  descricao: string | null;
-  marca: string | null;
-  categoria: string | null;
-  subcategoria: string | null;
-  preco: number;
-  precoPromocional: number | null;
-  disponivel: boolean;
-  imagens: string[];
-  tamanhos: string[];
-  cores: string[];
-  /** Estoque, fotos, preço e grade POR COR — a matéria-prima da explosão. */
-  coresDetalhe?: Array<{
-    nome: string;
-    estoque: number;
-    preco: number;
-    fotos: string[];
-    tamanhos: string[];
-  }>;
-}
-
 /** `&` vira `&amp;` etc. Um nome com "&" invalidaria o XML inteiro. */
 function escapar(v: string): string {
   return String(v ?? '')
@@ -117,57 +94,8 @@ const CATEGORIA_GOOGLE: Record<string, string> = {
   'linha-conforto': 'Vestuário e acessórios > Roupas > Roupas de dormir e loungewear',
 };
 
-function slugCor(nome: string): string {
-  return String(nome ?? "")
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
-interface Variante {
-  id: string;
-  cor: string;
-  fotos: string[];
-  tamanhos: string[];
-  /** `item_group_id`. Nulo = peça de cor única, item solto como antes. */
-  grupo: string | null;
-}
 
-/**
- * UM ITEM POR COR — a mesma regra da vitrine e do feed do Meta.
- *
- * Para vestuário o Google ESPERA variação: peça multicor num item só é
- * estrutura incompleta pra ele, e a cliente via um anúncio "PRETO" cuja
- * segunda foto era bege.
- *
- * 🔑 A COR DE MAIOR ESTOQUE HERDA O `id` DA REF — ver o cabeçalho.
- *
- * Só entra cor COM foto própria e COM estoque. Peça que ainda serve foto do
- * acervo antigo não tem foto por cor e sai como item único, exatamente como
- * antes: a virada não multiplica item reprovado.
- */
-function variantes(p: PecaFeed): Variante[] {
-  const unica: Variante = {
-    id: p.ref,
-    cor: p.cores[0] ?? "",
-    fotos: p.imagens.filter(Boolean),
-    tamanhos: p.tamanhos,
-    grupo: null,
-  };
-  const vendaveis = (p.coresDetalhe ?? [])
-    .filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0)
-    .sort((a, b) => b.estoque - a.estoque);
-  if (vendaveis.length < 2) return [unica];
-  return vendaveis.map((c, n) => ({
-    id: n === 0 ? p.ref : `${p.ref}-${slugCor(c.nome)}`,
-    cor: c.nome,
-    fotos: c.fotos.filter(Boolean),
-    tamanhos: c.tamanhos?.length ? c.tamanhos : p.tamanhos,
-    grupo: p.ref,
-  }));
-}
 
 function item(p: PecaFeed, v: Variante): string {
   // A URL TEM que ser a canônica da PDP — a mesma do sitemap e a que tem

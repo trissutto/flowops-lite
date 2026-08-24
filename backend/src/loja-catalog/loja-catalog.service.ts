@@ -2613,6 +2613,56 @@ export class LojaCatalogService {
 
   /** Detalhe da peça — por slug (site) ou pela própria REF. */
   /**
+   * ESTOQUE POR LOJA, PRA VITRINE DA FICHA DO GOOGLE (23/08/2026).
+   *
+   * O que o dono pediu: a peça nova aparecer na vitrine da ficha de cada loja
+   * — e só na ficha da loja que REALMENTE tem a peça. É o "inventário local"
+   * do Merchant Center, que casa com a ficha pelo código de loja.
+   *
+   * ── A DIFERENÇA PRO FEED NACIONAL ──
+   *
+   * `catalogoParaFeed` soma o estoque da rede inteira e devolve UMA linha por
+   * peça. Aqui a granularidade é (peça × cor × LOJA): a mesma blusa aparece 6
+   * vezes se está em 6 lojas, e não aparece na 7ª. A única mudança na consulta
+   * é o `loja` no GROUP BY — o resto é o mesmo `wincred_estoque` que o site já
+   * usa pra dizer se a peça está disponível.
+   *
+   * ── A FOTO NÃO VEM DAQUI, E ISSO É DE PROPÓSITO ──
+   *
+   * Feed de inventário local não carrega imagem: o Google casa este dado com o
+   * feed nacional (`/feed/google.xml`) pelo `id` e usa a foto de lá — que já é
+   * a principal da cor. Mandar foto aqui seria duplicar a fonte e arriscar as
+   * duas divergirem.
+   *
+   * ⚠️ O `id` é montado no SITE, não aqui, exatamente como o feed nacional
+   * monta (`ref` na cor de maior estoque, `ref-<cor>` nas demais). Se as duas
+   * rotas divergirem, o Google não casa e a vitrine local simplesmente não
+   * aparece — sem erro nenhum na tela.
+   */
+  async estoquePorLoja(): Promise<Array<{ loja: string; ref: string; cor: string | null; estoque: number }>> {
+    const linhas: Array<{ loja: string; ref: string; cor: string | null; estoque: number }> =
+      await this.prisma.$queryRawUnsafe(`
+        SELECT
+          TRIM(e.loja)                                AS loja,
+          UPPER(TRIM(p.ref))                          AS ref,
+          NULLIF(TRIM(p.cor), '')                     AS cor,
+          SUM(COALESCE(e.estoque, 0))::int            AS estoque
+        FROM wincred_produtos p
+        JOIN wincred_estoque e ON e.codigo = p.codigo
+        WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
+          AND TRIM(e.loja) <> ''
+          AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
+          AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%INFANTIL%'
+          AND UPPER(COALESCE(p."nomeGrupo", '')) NOT LIKE '%MASCULIN%'
+          AND UPPER(COALESCE(p."nomeGrupo", '')) NOT LIKE '%INFANTIL%'
+        GROUP BY TRIM(e.loja), UPPER(TRIM(p.ref)), NULLIF(TRIM(p.cor), '')
+        HAVING SUM(COALESCE(e.estoque, 0)) > 0
+        ORDER BY 1, 2, 3
+      `);
+    return linhas ?? [];
+  }
+
+  /**
    * O ENDEREÇO ANTIGO DA PEÇA → O ENDEREÇO DE HOJE (23/08/2026).
    *
    * A Search Console mostra **4.156 URLs em 404** no domínio, e boa parte é

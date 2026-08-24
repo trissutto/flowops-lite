@@ -57,6 +57,19 @@ export class LojaCatalogPublicController {
   }
 
   /**
+   * GET /api/public/loja/feed-local — estoque POR LOJA, pro inventário local.
+   *
+   * Alimenta `/feed/google-local.xml` do site, que é o que faz a peça aparecer
+   * na vitrine da ficha de cada loja no Google. Uma linha por (peça × cor ×
+   * loja), só com estoque acima de zero. Sem imagem de propósito — ver
+   * `estoquePorLoja`.
+   */
+  @Get('feed-local')
+  feedLocal() {
+    return this.svc.estoquePorLoja();
+  }
+
+  /**
    * GET /api/public/loja/curadoria/:slug — os produtos de uma coleção curada
    * (ex.: "mais-top-da-semana"), NA ORDEM que o dono escolheu. Alimenta a página
    * do site. Coleção paralela: a peça continua na categoria real dela.
