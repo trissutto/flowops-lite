@@ -2640,6 +2640,23 @@ export class LojaCatalogService {
    * aparece — sem erro nenhum na tela.
    */
   async estoquePorLoja(): Promise<Array<{ loja: string; ref: string; cor: string | null; estoque: number }>> {
+    /**
+     * SÓ AS PEÇAS QUE ESTÃO NO SITE (corrigido 23/08, com o feed já no ar).
+     *
+     * A primeira versão devolvia o depósito inteiro: **71.887 linhas, 4 MB,
+     * 19.428 REFs** — contra as **735** que o feed nacional publica. Ou seja,
+     * 96% do payload era peça que o Google nem conhece, e o site engasgava
+     * antes de montar o XML (o cache de dados do Next não guarda resposta
+     * desse tamanho).
+     *
+     * Filtrar aqui é o certo por definição, não só por peso: inventário local
+     * de peça que não está no feed nacional o Google descarta — ele casa os
+     * dois pelo `id`, e id que não existe do outro lado não vira nada.
+     */
+    const publicadas = await this.catalogoPublicado().catch(() => [] as any[]);
+    const refs = [...new Set(publicadas.map((p: any) => this.normRef(p.ref)).filter(Boolean))];
+    if (!refs.length) return [];
+
     const linhas: Array<{ loja: string; ref: string; cor: string | null; estoque: number }> =
       await this.prisma.$queryRawUnsafe(`
         SELECT
@@ -2651,6 +2668,7 @@ export class LojaCatalogService {
         JOIN wincred_estoque e ON e.codigo = p.codigo
         WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
           AND TRIM(e.loja) <> ''
+          AND UPPER(TRIM(p.ref)) = ANY($1)
           AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
           AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%INFANTIL%'
           AND UPPER(COALESCE(p."nomeGrupo", '')) NOT LIKE '%MASCULIN%'
@@ -2658,7 +2676,7 @@ export class LojaCatalogService {
         GROUP BY TRIM(e.loja), UPPER(TRIM(p.ref)), NULLIF(TRIM(p.cor), '')
         HAVING SUM(COALESCE(e.estoque, 0)) > 0
         ORDER BY 1, 2, 3
-      `);
+      `, refs);
     return linhas ?? [];
   }
 

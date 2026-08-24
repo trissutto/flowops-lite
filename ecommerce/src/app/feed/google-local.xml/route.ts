@@ -83,22 +83,22 @@ export async function GET() {
    * importação e pode desagendar a busca; arquivo vazio ele registra e tenta
    * de novo amanhã. Mesma postura do feed nacional.
    */
-  try {
-    [pecas, estoques] = await Promise.all([
-      api<PecaFeed[]>('/public/loja/feed?rev=1', {
-        revalidate,
-        tags: ['catalogo'],
-        timeoutMs: 25000,
-      }).then((r) => r ?? []),
-      api<EstoqueLoja[]>('/public/loja/feed-local', {
-        revalidate,
-        tags: ['catalogo'],
-        timeoutMs: 25000,
-      }).then((r) => r ?? []),
-    ]);
-  } catch {
-    /* silêncio proposital — ver acima */
-  }
+  /**
+   * ⚠️ UM `try` POR FONTE, e não um `Promise.all` num `try` só.
+   *
+   * A primeira versão embrulhava as duas num bloco: falhou uma, as DUAS
+   * variáveis ficavam vazias e o feed saía sem nada — sem nenhuma pista de
+   * qual das duas caiu. Separado, a que responder responde, e o `console.error`
+   * diz o nome da que faltou.
+   */
+  await Promise.all([
+    api<PecaFeed[]>('/public/loja/feed?rev=1', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
+      .then((r) => { pecas = r ?? []; })
+      .catch((e) => console.error('[feed-local] catálogo nacional falhou:', e?.message ?? e)),
+    api<EstoqueLoja[]>('/public/loja/feed-local', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
+      .then((r) => { estoques = r ?? []; })
+      .catch((e) => console.error('[feed-local] estoque por loja falhou:', e?.message ?? e)),
+  ]);
 
   /**
    * Índice do estoque: `REF` → `COR normalizada` → mapa de loja → quantidade.
