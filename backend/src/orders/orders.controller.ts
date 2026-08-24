@@ -4,6 +4,7 @@ import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
+import { pedidoPago } from '../common/pedido-pago';
 import { StockService } from '../stock/stock.service';
 import { RoutingService } from '../routing/routing.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -1283,10 +1284,21 @@ export class OrdersController {
     const enderecoWc: any = ler(pedido.shippingAddress);
 
     /** Vocabulário da operação → slug que a tela de pedido entende. */
+    /**
+     * Status interno → slug que a TELA fala (vocabulário do WooCommerce).
+     *
+     * ⚠️ `pending` é ambíguo de nascença: no enum quer dizer "aguardando
+     * pagamento", mas o roteamento também usava a palavra pra dizer "voltou
+     * pra fila" — e aí um pedido PAGO aparecia como "Pagamento pendente" e a
+     * tela travava a separação (LP-000161, 24/08). O `recalculateForWc` passou
+     * a gravar `awaiting_stock`; aqui ele entra junto de `routing` como
+     * "Processando" — pago, sem card, esperando estoque.
+     */
     const STATUS_SLUG: Record<string, string> = {
       awaiting_payment: 'pending',
       processing: 'processing',
       routing: 'processing',
+      awaiting_stock: 'processing',
       separating: 'separacao',
       shipped: 'completed',
       delivered: 'completed',
@@ -1444,6 +1456,17 @@ export class OrdersController {
         : null,
       sellerId: pedido.sellerId ?? null,
       sellerName: pedido.sellerName ?? null,
+      /**
+       * O DINHEIRO ENTROU? — a MESMA régua dos relatórios (`pedidoPago`).
+       *
+       * Existe porque a palavra do status não decide isso sozinha: a tela
+       * bloqueava a separação por status, e um pedido pago que voltou pra fila
+       * de roteamento (`pending`/`awaiting_stock`) virava "PAGAMENTO NÃO
+       * CONFIRMADO" com o PIX já na conta (LP-000161, 24/08). Quem manda é o
+       * carimbo `paidAt` do gateway.
+       */
+      pago: pedidoPago(pedido),
+      paidAt: pedido.paidAt?.toISOString?.() ?? null,
       // Item vive no Postgres → a tela pode oferecer "Trocar" por item.
       canEditItems: true,
     };
@@ -1542,6 +1565,8 @@ export class OrdersController {
         : null;
       const STATUS_SLUG: Record<string, string> = {
         processing: 'processing',
+        routing: 'processing',
+        awaiting_stock: 'processing', // pago, sem card — ver o mapa do e-commerce
         separating: 'separacao',
         shipped: 'completed',
         delivered: 'completed',
@@ -1607,6 +1632,9 @@ export class OrdersController {
         atribuicao: montarCascataAtribuicao({ origemFixa: 'Live Commerce' }),
         sellerId: liveLocal.sellerId ?? null,
         sellerName: liveLocal.sellerName ?? null,
+        // O dinheiro entrou? — mesma régua do e-commerce (ver `detalheEcommerce`).
+        pago: pedidoPago(liveLocal),
+        paidAt: liveLocal.paidAt?.toISOString?.() ?? null,
         // Item vive no Postgres → a tela pode oferecer "Trocar" por item.
         canEditItems: true,
       };

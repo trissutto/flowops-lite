@@ -40,6 +40,21 @@ describe('pedidoPago — a régua da receita', () => {
     expect(pedidoNaoPago(o)).toBe(false); // não é "nunca pagou", é estorno
   });
 
+  it('pago que VOLTOU pra fila de roteamento continua sendo receita (LP-000161, 24/08)', () => {
+    // Trocar uma peça re-roteia o pedido; sem loja com estoque ele fica sem
+    // card. O status disso não pode apagar um PIX que já entrou.
+    for (const status of ['pending', 'awaiting_stock', 'routing']) {
+      const o = { status, source: 'ecommerce', paidAt: new Date() };
+      expect(pedidoPago(o)).toBe(true);
+      expect(pedidoNaoPago(o)).toBe(false);
+    }
+  });
+
+  it('recusado/estornado NÃO volta a ser receita nem com carimbo', () => {
+    expect(pedidoPago({ status: 'payment_failed', source: 'ecommerce', paidAt: new Date() })).toBe(false);
+    expect(pedidoPago({ status: 'cancelled', source: 'pdv_online', paidAt: new Date() })).toBe(false);
+  });
+
   it('status vazio/nulo não vira receita por omissão', () => {
     expect(pedidoPago({ status: '', source: 'site' })).toBe(false);
     expect(pedidoPago(null)).toBe(false);
