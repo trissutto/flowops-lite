@@ -1013,6 +1013,66 @@ export class LojaOrdersService {
       }
     };
 
+    const itensCreate = input.items.map((it) => ({
+      sku: String(it.sku),
+      productName: [it.name, it.color, it.size].filter(Boolean).join(' · '),
+      // REF/COR/TAMANHO em colunas próprias: o `productName` já trazia cor e
+      // tamanho grudados no nome, mas grudado não dá pra destacar na separação
+      // nem imprimir em coluna.
+      ref: it.ref || it.productId || null,
+      cor: it.color || null,
+      tamanho: it.size || null,
+      quantity: Number(it.quantity),
+      unitPrice: this.dinheiro(it.unitPrice),
+      // No site o preço praticado JÁ é o cheio — não há tabela promocional por
+      // peça como na live, então base = unitário.
+      baseUnitPrice: this.dinheiro(it.unitPrice),
+    }));
+
+    /**
+     * Tudo o que descreve a COMPRA — vale igual pro pedido que nasce agora e
+     * pro pedido recusado que a cliente está retentando. Fora daqui ficam só as
+     * três coisas que são da PRIMEIRA tentativa e não se repetem: `wcOrderId`,
+     * `wcOrderNumber` e `wcDateCreated`.
+     */
+    const dados: any = {
+      source: 'ecommerce',
+      // Enquanto não pagar, o pedido NÃO existe pra retaguarda: só vira
+      // 'processing' (= fila de roteamento) quando o dinheiro entra.
+      status: 'awaiting_payment',
+      customerName: String(input.customer.name || '').trim() || null,
+      customerEmail: String(input.customer.email || '').trim() || null,
+      customerPhone: this.digits(input.customer.phone) || null,
+      customerCpf: this.digits(input.customer.cpf) || null,
+      shippingCep: this.digits(input.shippingAddress?.cep) || null,
+      shippingAddress: JSON.stringify(shipping),
+      totalAmount: this.dinheiro(input.total),
+      isPickup: retirada,
+      pickupStoreCode: retirada ? pickup?.code || null : null,
+      shippingMethod: retirada
+        ? `Retirada em loja${pickup?.name ? ` (${pickup.name})` : ''}`
+        : input.shipping.label || 'Entrega',
+      utmSource: attr.source || null,
+      utmMedium: attr.medium || null,
+      utmCampaign: attr.campaign || null,
+      utmId: attr.id || null,
+      utmContent: attr.content || null,
+      // O `gclid` viajava no MESMO objeto de atribuição desde sempre e morria
+      // aqui, porque só o `attr.id` era lido. É ele que permite devolver a
+      // venda ao Google pelo servidor (`GoogleAdsConversaoService`), sem
+      // depender do import do GA4 — o caminho que secou sozinho em 19/08/2026.
+      gclid: attr.gclid || null,
+      checkoutInfo: JSON.stringify(checkoutInfo),
+      trackingInfo: trackingInfo ? JSON.stringify(trackingInfo) : null,
+    };
+
+    // RETENTATIVA RECOBRA O MESMO PEDIDO (dono, 24/08) — ver `reaproveitarRecusado`.
+    const reaproveitado = await this.reaproveitarRecusado(input, dados, itensCreate);
+    if (reaproveitado) {
+      void marcarCarrinhoRecuperado();
+      return reaproveitado;
+    }
+
     // Retry em colisão de wcOrderId — rede de segurança que ficou de pé mesmo
     // com o contador transacional: número gravado à mão em produção ou
     // importação antiga ainda podem ocupar a faixa.
@@ -1026,53 +1086,9 @@ export class LojaOrdersService {
           data: {
             wcOrderId: base + seq,
             wcOrderNumber: this.numeroPedido(seq),
-            source: 'ecommerce',
-            // Enquanto não pagar, o pedido NÃO existe pra retaguarda: só vira
-            // 'processing' (= fila de roteamento) quando o dinheiro entra.
-            status: 'awaiting_payment',
-            customerName: String(input.customer.name || '').trim() || null,
-            customerEmail: String(input.customer.email || '').trim() || null,
-            customerPhone: this.digits(input.customer.phone) || null,
-            customerCpf: this.digits(input.customer.cpf) || null,
-            shippingCep: this.digits(input.shippingAddress?.cep) || null,
-            shippingAddress: JSON.stringify(shipping),
-            totalAmount: this.dinheiro(input.total),
-            isPickup: retirada,
-            pickupStoreCode: retirada ? pickup?.code || null : null,
-            shippingMethod: retirada
-              ? `Retirada em loja${pickup?.name ? ` (${pickup.name})` : ''}`
-              : input.shipping.label || 'Entrega',
             wcDateCreated: new Date(),
-            utmSource: attr.source || null,
-            utmMedium: attr.medium || null,
-            utmCampaign: attr.campaign || null,
-            utmId: attr.id || null,
-            utmContent: attr.content || null,
-            // O `gclid` viajava no MESMO objeto de atribuição desde sempre e
-            // morria aqui, porque só o `attr.id` era lido. É ele que permite
-            // devolver a venda ao Google pelo servidor
-            // (`GoogleAdsConversaoService`), sem depender do import do GA4 —
-            // o caminho que secou sozinho em 19/08/2026.
-            gclid: attr.gclid || null,
-            checkoutInfo: JSON.stringify(checkoutInfo),
-            trackingInfo: trackingInfo ? JSON.stringify(trackingInfo) : null,
-            items: {
-              create: input.items.map((it) => ({
-                sku: String(it.sku),
-                productName: [it.name, it.color, it.size].filter(Boolean).join(' · '),
-                // REF/COR/TAMANHO em colunas próprias: o `productName` já
-                // trazia cor e tamanho grudados no nome, mas grudado não dá
-                // pra destacar na separação nem imprimir em coluna.
-                ref: it.ref || it.productId || null,
-                cor: it.color || null,
-                tamanho: it.size || null,
-                quantity: Number(it.quantity),
-                unitPrice: this.dinheiro(it.unitPrice),
-                // No site o preço praticado JÁ é o cheio — não há tabela
-                // promocional por peça como na live, então base = unitário.
-                baseUnitPrice: this.dinheiro(it.unitPrice),
-              })),
-            },
+            ...dados,
+            items: { create: itensCreate },
           },
         });
         // Fora do caminho crítico: a marcação do carrinho recuperado não pode
@@ -1084,6 +1100,149 @@ export class LojaOrdersService {
       }
     }
     throw new Error('não consegui gerar o número do pedido (colisão de wcOrderId)');
+  }
+
+  /**
+   * Janela em que a próxima tentativa ainda é A MESMA COMPRA.
+   *
+   * Curta de propósito. O `createdAt` do pedido reaproveitado NÃO é reescrito —
+   * ele continua marcando quando a cliente começou — então uma janela larga
+   * penduraria a venda de hoje num pedido de ontem e o relatório dataria a
+   * receita no dia errado. 30 min cobre com folga a retentativa real (as 4 da
+   * HELEMAR levaram 1min13s) e o caminho "recusou no cartão, paguei no Pix".
+   *
+   * É o MESMO número do piso da aba Carrinhos (`PIX_RESGATE_MIN`), e isso não é
+   * coincidência: enquanto o pedido é reaproveitável ele está escondido da
+   * lista; quando aparece lá como abandono, já não é mais retentativa. As duas
+   * telas param de discordar sobre o que é "ainda tentando".
+   */
+  private static readonly RETRY_JANELA_MIN = 30;
+
+  /**
+   * RETENTATIVA RECOBRA O MESMO PEDIDO (dono, 24/08/2026: "RECOBRE O MESMO").
+   *
+   * O checkout criava um pedido NOVO a cada tentativa de pagamento. Cartão
+   * recusado 3× e aprovado na 4ª deixava 3 LPs órfãos em `payment_failed` — que
+   * furavam a numeração, inflavam o "não pagos" do relatório e apareciam como
+   * carrinho abandonado de uma venda que TINHA fechado (HELEMAR VALIM,
+   * LP-000195/196/197 → paga em LP-000198, 24/08).
+   *
+   * Agora a tentativa seguinte da MESMA cliente reaproveita o pedido recusado:
+   * mesmo LP, dados sobrescritos pelo checkout novo (ela pode ter trocado o
+   * cartão, mudado pra Pix — que muda o total pelo `descontoPix` — ou tirado uma
+   * peça), e o histórico do que já falhou guardado em `paymentInfo`.
+   *
+   * ── AS TRÊS TRAVAS ──
+   *
+   * 1. SÓ `payment_failed`. Pedido `awaiting_payment` tem cobrança VIVA (Pix
+   *    aberto ou cartão em análise) — recobrar por cima é o caminho da cobrança
+   *    dupla, que é justamente o que a classificação em 3 estados evita.
+   * 2. CLAIM ATÔMICO (`updateMany` com o status na cláusula): entre achar e
+   *    reaproveitar, o webhook pode ter confirmado o pagamento daquele mesmo
+   *    pedido. Se o claim não pegar 1 linha, cria pedido novo como antes.
+   * 3. IDENTIDADE POR CPF. O checkout exige CPF completo (`validar`), e é a
+   *    única chave que não muda entre tentativas — e-mail e telefone a cliente
+   *    redigita (e erra).
+   *
+   * Kill-switch: `LOJA_RETRY_MESMO_PEDIDO=0` volta a criar pedido por tentativa.
+   */
+  private async reaproveitarRecusado(
+    input: CriarPedidoInput,
+    dados: any,
+    itensCreate: any[],
+  ): Promise<any | null> {
+    if (process.env.LOJA_RETRY_MESMO_PEDIDO === '0') return null;
+    const cpf = this.digits(input.customer.cpf);
+    if (cpf.length !== 11) return null;
+
+    const janelaMin = Number(process.env.LOJA_RETRY_MIN) || LojaOrdersService.RETRY_JANELA_MIN;
+    const desde = new Date(Date.now() - janelaMin * 60_000);
+
+    try {
+      const alvo = await (this.prisma as any).order.findFirst({
+        where: {
+          source: 'ecommerce',
+          status: 'payment_failed',
+          paidAt: null,
+          customerCpf: cpf,
+          createdAt: { gte: desde },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, wcOrderNumber: true, paymentInfo: true },
+      });
+      if (!alvo) return null;
+
+      let anterior: any = {};
+      try {
+        anterior = JSON.parse(alvo.paymentInfo || '{}');
+      } catch {
+        /* paymentInfo corrompido não impede a retentativa */
+      }
+      const tentativa = Number(anterior.tentativa || 1) + 1;
+      /**
+       * O histórico é o que os 3 LPs órfãos guardavam sem querer: quantas vezes
+       * ela tentou e por quê falhou. Sem isto, juntar as tentativas num pedido
+       * só APAGARIA a informação — o conserto viraria outro buraco.
+       */
+      const tentativasAnteriores = [
+        ...(Array.isArray(anterior.tentativasAnteriores) ? anterior.tentativasAnteriores : []),
+        {
+          em: anterior.falhaEm || new Date().toISOString(),
+          method: anterior.method ?? null,
+          installments: anterior.installments ?? null,
+          falha: anterior.falha ?? null,
+          falhaTipo: anterior.falhaTipo ?? null,
+          gatewayOrderId: anterior.gatewayOrderId ?? null,
+        },
+      ].slice(-10);
+
+      const claim = await (this.prisma as any).order.updateMany({
+        where: { id: alvo.id, status: 'payment_failed', paidAt: null },
+        data: { status: 'awaiting_payment' },
+      });
+      if (claim.count !== 1) return null;
+
+      // `wcDateCreated` fica com a PRIMEIRA tentativa: é quando a cliente fez o
+      // pedido. Idem `createdAt`, que nem entra em `dados`.
+      const { wcDateCreated: _ignora, ...dadosSemData } = dados;
+      let atualizado: any;
+      try {
+        atualizado = await (this.prisma as any).order.update({
+          where: { id: alvo.id },
+          data: {
+            ...dadosSemData,
+            paymentInfo: JSON.stringify({ tentativa, tentativasAnteriores }),
+            items: { deleteMany: {}, create: itensCreate },
+          },
+        });
+      } catch (e: any) {
+        // Devolve o pedido ao estado em que estava — senão ele fica
+        // `awaiting_payment` com dados velhos, some da aba Carrinhos e espera
+        // um pagamento que ninguém vai fazer.
+        await (this.prisma as any).order
+          .updateMany({
+            where: { id: alvo.id, status: 'awaiting_payment', paidAt: null },
+            data: { status: 'payment_failed' },
+          })
+          .catch(() => undefined);
+        throw e;
+      }
+
+      this.logger.log(
+        `[loja] retentativa ${tentativa} do pedido ${alvo.wcOrderNumber} (${input.payment.method}) — recobrando o MESMO pedido`,
+      );
+      // Viajam junto com o objeto (não são colunas): `criarPedido` os costura no
+      // `paymentInfo` final e `codigoCobranca` usa a tentativa pra não repetir o
+      // `code` na Pagar.me.
+      atualizado.tentativa = tentativa;
+      atualizado.tentativasAnteriores = tentativasAnteriores;
+      return atualizado;
+    } catch (e: any) {
+      // Reaproveitar é otimização, não requisito: qualquer tropeço aqui volta
+      // pro caminho de sempre (pedido novo) em vez de derrubar a venda.
+      this.logger.warn(`[loja] retentativa no mesmo pedido falhou (${e?.message || e}) — criando pedido novo`);
+      return null;
+    }
   }
 
   /* ───────────────────────────── PAGAMENTO ────────────────────────────── */
@@ -1209,11 +1368,16 @@ export class LojaOrdersService {
    * dupla, e como o `PagarmePayment` nunca foi gravado, o webhook que chegasse
    * depois cairia em "order desconhecida".
    *
-   * O corpo do POST já leva `code = LP-xxxxxx` (único por tentativa — o
-   * contador queima número), então dá pra perguntar de volta: `GET
-   * /orders?code=`. Achou → segue exatamente como se a resposta tivesse
-   * chegado. Não achou, ou o GET também falhou → aí sim é erro de integração,
-   * sem cobrança do nosso lado.
+   * O corpo do POST já leva um `code` ÚNICO POR TENTATIVA (`codigoCobranca`),
+   * então dá pra perguntar de volta: `GET /orders?code=`. Achou → segue
+   * exatamente como se a resposta tivesse chegado. Não achou, ou o GET também
+   * falhou → aí sim é erro de integração, sem cobrança do nosso lado.
+   *
+   * ⚠️ A unicidade do `code` é o que faz esta busca valer. Quando a retentativa
+   * passou a recobrar o MESMO pedido (24/08), o LP deixou de ser único por
+   * tentativa — daí o sufixo `-T2`, `-T3`. Sem ele, esta pergunta traria de
+   * volta a order RECUSADA da tentativa anterior e a gente marcaria como
+   * recusada uma cobrança que pode ter sido aprovada.
    *
    * Confere `code` de novo no resultado (e o `flowops_order_id` do metadata,
    * quando vier): se o filtro da API for ignorado um dia, isto não pode pegar
@@ -1243,6 +1407,20 @@ export class LojaOrdersService {
       this.logger.warn(`[loja] busca da order por code=${code} também falhou: ${e?.response?.status || ''} ${e?.message || e}`);
       return null;
     }
+  }
+
+  /**
+   * O `code` que vai pra Pagar.me — ÚNICO POR TENTATIVA, mesmo com o pedido
+   * sendo o mesmo.
+   *
+   * Tentativa 1 é o LP puro (é o que a cliente vê na fatura e o que a matriz
+   * procura no painel do gateway). Da segunda em diante ganha `-T<n>`, porque
+   * `procurarOrderPagarmePorCode` — a rede que salva o POST ambíguo — busca por
+   * `code` e pegaria a tentativa velha.
+   */
+  private codigoCobranca(order: any): string {
+    const t = Number(order?.tentativa || 1);
+    return t > 1 ? `${order.wcOrderNumber}-T${t}` : String(order.wcOrderNumber);
   }
 
   /**
@@ -1284,13 +1462,14 @@ export class LojaOrdersService {
   > {
     const storeCode = this.lojaDoDinheiro();
     const cfg = await this.configPagarme(storeCode);
+    const codigo = this.codigoCobranca(order);
     const valorCentavos = Math.round(this.dinheiro(input.total) * 100);
     const parcelas = Math.max(1, Math.min(12, Number(input.payment.installments || 1)));
     const cpf = this.digits(input.customer.cpf);
     const end = input.shippingAddress;
 
     const body: any = {
-      code: order.wcOrderNumber,
+      code: codigo,
       items: [
         {
           amount: valorCentavos,
@@ -1409,7 +1588,7 @@ export class LojaOrdersService {
        */
       const ambigua = !e?.response || (typeof httpStatus === 'number' && httpStatus >= 500);
       if (ambigua) {
-        gw = await this.procurarOrderPagarmePorCode(cfg.apiKey, order.wcOrderNumber, order.id);
+        gw = await this.procurarOrderPagarmePorCode(cfg.apiKey, codigo, order.id);
         if (gw) {
           this.logger.warn(
             `[loja] cartão pedido=${order.wcOrderNumber}: POST sem resposta (HTTP ${httpStatus ?? 'timeout/rede'}) ` +
@@ -1619,6 +1798,16 @@ export class LojaOrdersService {
       gatewayOrderId: null,
       gatewayChargeId: null,
       pix: null,
+      // Retentativa no MESMO pedido (`reaproveitarRecusado`): a contagem e as
+      // falhas anteriores viajam daqui pra frente em TODOS os caminhos — os três
+      // `update` abaixo espalham este objeto. É o histórico que os LPs órfãos
+      // guardavam sem querer, e que juntar as tentativas apagaria.
+      ...(Number(order.tentativa || 1) > 1
+        ? {
+            tentativa: Number(order.tentativa),
+            tentativasAnteriores: order.tentativasAnteriores ?? [],
+          }
+        : {}),
     };
     /** Cartão aprovado NA HORA — só ele chama `confirmarPagamento` abaixo. */
     let cartaoPago = false;
