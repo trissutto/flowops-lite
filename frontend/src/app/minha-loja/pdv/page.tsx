@@ -5300,6 +5300,25 @@ function PaymentModal({
 
   const gerarPixOnline = async () => {
     if (pixOnlineLoading || !saleId) return;
+    /**
+     * COMO A PEÇA SAI ANTES DA COBRANÇA (24/08) — caso ON-000105.
+     *
+     * A escolha da entrega só era cobrada no CONFIRMAR VENDA, e nesta tela
+     * esse clique quase nunca chega: o PIX cai depois e quem fecha a venda é o
+     * reconciliador do servidor. Sem a escolha gravada o pedido nasce "Entrega
+     * (não informada)" e a etiqueta vira PAC fora de SP — sem ninguém ter
+     * escolhido PAC. O servidor recusa também (`/pagbank/pix/create`); aqui é
+     * pra ela ver ANTES de mandar o QR pra cliente.
+     */
+    if (!entregaTipo) {
+      toast(
+        'warning',
+        'Escolha a forma de entrega antes do PIX',
+        'SEDEX, PAC, Motoboy ou Retirada. A venda fecha sozinha quando o pagamento cair — ' +
+          'sem isso o pedido sai como "Entrega (não informada)".',
+      );
+      return;
+    }
     // Cadastro completo ANTES da cobrança: PIX pago com cadastro pela metade
     // vira dinheiro na conta e venda que não fecha.
     if (dadosOnlineFaltando.length) {
@@ -6996,14 +7015,22 @@ function PaymentModal({
                     <button
                       type="button"
                       onClick={() => void gerarPixOnline()}
-                      disabled={pixOnlineLoading || !saleId}
+                      disabled={pixOnlineLoading || !saleId || !entregaTipo}
                       className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm py-3 disabled:opacity-50"
                     >
                       {pixOnlineLoading ? 'Gerando PIX...' : `Gerar PIX de ${brl(restante > 0 ? restante : total)}`}
                     </button>
-                    <p className="text-[10px] text-slate-500 text-center">
-                      PagBank · vale 1 hora · a venda confirma sozinha quando ela pagar
-                    </p>
+                    {/* Botão morto sem explicação faz a vendedora clicar de
+                        novo achando que travou. Diz o que falta. */}
+                    {!entregaTipo ? (
+                      <p className="text-[11px] font-bold text-amber-800 text-center leading-snug">
+                        ⚠️ Escolha a forma de entrega ali em cima antes de gerar o PIX
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-slate-500 text-center">
+                        PagBank · vale 1 hora · a venda confirma sozinha quando ela pagar
+                      </p>
+                    )}
                   </>
                 ) : (
                   <>
@@ -7166,8 +7193,25 @@ function PaymentModal({
                   <>
                     <button
                       type="button"
-                      disabled={pagarmeLinkLoading || !linkEmailOk || !linkPhoneOk || dadosOnlineFaltando.length > 0}
+                      disabled={pagarmeLinkLoading || !linkEmailOk || !linkPhoneOk || dadosOnlineFaltando.length > 0 || !entregaTipo}
                       onClick={async () => {
+                        /**
+                         * COMO A PEÇA SAI ANTES DO LINK (24/08) — caso
+                         * ON-000105. Quem fecha a venda do link é o cron do
+                         * servidor, então o CONFIRMAR VENDA (onde a entrega era
+                         * exigida) nunca acontece: o pedido nascia "Entrega
+                         * (não informada)" e a etiqueta virava PAC fora de SP.
+                         * O servidor também recusa (`/pagarme/checkout/create`).
+                         */
+                        if (!entregaTipo) {
+                          toast(
+                            'warning',
+                            'Escolha a forma de entrega antes do link',
+                            'SEDEX, PAC, Motoboy ou Retirada. A venda fecha sozinha quando o pagamento cair — ' +
+                              'sem isso o pedido sai como "Entrega (não informada)".',
+                          );
+                          return;
+                        }
                         // Mesma trava do PIX: link pago com cadastro pela
                         // metade = dinheiro na conta e venda travada.
                         if (dadosOnlineFaltando.length) {
@@ -7235,6 +7279,11 @@ function PaymentModal({
                         </>
                       )}
                     </button>
+                    {!entregaTipo && (
+                      <p className="text-[11px] font-bold text-amber-800 text-center leading-snug mt-1.5">
+                        ⚠️ Escolha a forma de entrega ali em cima antes de gerar o link
+                      </p>
+                    )}
                   </>
                 ) : (
                   <>

@@ -92,6 +92,13 @@ interface PickOrderRow {
    * era SEDEX ou PAC.
    */
   servicoEnvio?: 'SEDEX' | 'PAC' | 'RETIRADA' | 'MOTOBOY' | null;
+  /**
+   * NINGUÉM ESCOLHEU esse serviço — quem decidiu foi a regra de UF (24/08).
+   * A faixa avisa em vez de afirmar: no ON-000105 ela escreveu "PAC" num
+   * pedido sem forma de entrega e a vendedora, que tinha marcado SEDEX,
+   * levou a culpa por uma escolha que o sistema fez sozinho.
+   */
+  servicoEnvioIncerto?: boolean;
   /** Frete que a cliente pagou foi zero — vira o "(grátis)" ao lado. */
   freteGratis?: boolean;
   /** Caixa deste feeder (nasce quando a bipagem finaliza). */
@@ -2577,7 +2584,20 @@ function PickOrderCard({
                     (grátis)
                   </span>
                 )}
+                {/* NINGUÉM ESCOLHEU (24/08) — a faixa não pode afirmar um
+                    serviço que o sistema chutou pela UF. Ver ON-000105. */}
+                {row.servicoEnvioIncerto && (
+                  <span className="text-[10px] md:text-xs font-black uppercase tracking-wide bg-amber-300 text-amber-950 px-2 py-0.5 rounded shrink-0">
+                    não informada
+                  </span>
+                )}
               </div>
+              {row.servicoEnvioIncerto && (
+                <div className="text-[11px] font-semibold leading-snug mt-0.5 opacity-95">
+                  Ninguém escolheu como enviar — o sistema supôs pelo estado da cliente.
+                  Confirme com quem vendeu <b>antes</b> de gerar a etiqueta.
+                </div>
+              )}
             </div>
           </div>
         );

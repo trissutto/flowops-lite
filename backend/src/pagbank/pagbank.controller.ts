@@ -203,6 +203,30 @@ export class PagbankController {
         `Esta venda já está ${venda.status === 'finalized' ? 'finalizada' : venda.status}. Abra uma venda nova antes de gerar o PIX.`,
       );
     }
+    /**
+     * COMO A PEÇA SAI ANTES DA COBRANÇA (24/08/2026) — caso ON-000105.
+     *
+     * A forma de entrega só era exigida no clique de CONFIRMAR VENDA. Só que
+     * na venda online quem fecha quase sempre é o SERVIDOR (o PIX/link cai
+     * depois, com a vendedora já atendendo outra cliente) — esse clique nunca
+     * acontece, e o pedido nasce "Entrega (não informada)". Aí a etiqueta cai
+     * na regra histórica de UF (SP = SEDEX, resto = PAC): a cliente de
+     * Contagem/MG pagou R$ 28,85 e ia receber PAC, com a vendedora jurando ter
+     * marcado SEDEX — e ela tinha razão, a escolha nunca chegou ao banco.
+     *
+     * Medição do dia: 5 dos 105 pedidos ON- nasceram sem forma de entrega, e
+     * os 5 eram cobrança gerada aqui (link/PIX da venda online).
+     *
+     * A trava é na COBRANÇA porque é o último momento em que a vendedora ainda
+     * está na tela. Depois que o QR sai pro WhatsApp, ninguém mais volta.
+     */
+    if (String(body?.origem || '') === 'venda_online' && !venda.entregaTipo) {
+      throw new BadRequestException(
+        'Escolha a forma de entrega (SEDEX, PAC, motoboy ou retirada) antes de mandar o PIX. ' +
+          'Quando o pagamento cai, o sistema fecha a venda sozinho — sem essa escolha o pedido ' +
+          'sai como "Entrega (não informada)" e a etiqueta vira PAC fora de São Paulo.',
+      );
+    }
     return this.svc.createPixCharge({
       ...body,
       origem: body.origem === 'venda_online' ? 'venda_online' : null,

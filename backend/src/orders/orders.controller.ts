@@ -1071,14 +1071,33 @@ export class OrdersController {
 
     const order: any = await (this.prisma as any).order.findFirst({
       where: { wcOrderId },
-      include: { pickOrders: { select: { id: true, status: true } } },
+      include: { pickOrders: { select: { id: true, status: true, trackingCode: true, carrier: true } } },
     });
     if (!order) throw new BadRequestException(`Pedido ${wcId} não encontrado`);
     if (['shipped', 'delivered', 'cancelled'].includes(String(order.status))) {
       throw new BadRequestException(`Pedido já está ${order.status} — não dá pra trocar a entrega`);
     }
-    const avancados = (order.pickOrders || []).filter((p: any) => !['new', 'separating'].includes(p.status));
-    if (avancados.length > 0) {
+    const picks: any[] = order.pickOrders || [];
+    const avancados = picks.filter((p: any) => !['new', 'separating'].includes(p.status));
+    /**
+     * SEDEX ↔ PAC CONTINUA PERMITIDO ATÉ A CAIXA SAIR (24/08/2026).
+     *
+     * A trava era "passou de separando, não mexe" — o que é certo pra RETIRADA
+     * e MOTOBOY (mudam quem atende e refazem o roteamento) e exagerado pra
+     * SEDEX↔PAC: trocar o serviço não move peça nenhuma, só muda o que vai
+     * escrito na etiqueta. No ON-000105 a matriz precisou trocar o serviço com
+     * a peça já separada e a tela respondeu 400 — a correção teve que ser
+     * feita à mão no banco, que é o tipo de conserto que não escala pra loja.
+     *
+     * Régua nova: enquanto NADA foi postado (`shipped`), trocar entre serviços
+     * dos Correios passa — e sem re-rotear, porque a separação já está pronta
+     * onde está. Postou, acabou: aí é decisão de gente, não de tela.
+     */
+    const jaPostado = picks.some((p: any) => String(p.status) === 'shipped');
+    const eraCorreios =
+      !order.isPickup && !/motoboy|moto boy/i.test(String(order.shippingMethod || ''));
+    const soTrocaDeServico = (tipo === 'sedex' || tipo === 'pac') && eraCorreios && !jaPostado;
+    if (avancados.length > 0 && !soTrocaDeServico) {
       throw new BadRequestException(
         `${avancados.length} separação(ões) já passaram de "separando" (${[...new Set(avancados.map((a: any) => a.status))].join(', ')}). ` +
           'A peça já saiu — trocar a entrega agora não é conserto de sistema.',
@@ -1129,11 +1148,16 @@ export class OrdersController {
       })
       .catch(() => null);
 
-    // Roteamento coerente com a entrega nova.
-    const ativos = (order.pickOrders || []).filter((p: any) => ['new', 'separating'].includes(p.status));
-    let roteamento: any = { acao: 'nenhuma' };
+    // Roteamento coerente com a entrega nova. Quando é só troca de serviço
+    // com peça JÁ SEPARADA, ninguém re-roteia: recalcular apagaria um card
+    // pronto pra refazer a mesma separação.
+    const ativos = picks.filter((p: any) => ['new', 'separating'].includes(p.status));
+    const congelado = soTrocaDeServico && avancados.length > 0;
+    let roteamento: any = { acao: congelado ? 'nenhuma (peça já separada)' : 'nenhuma' };
     try {
-      if (ativos.length > 0) {
+      if (congelado) {
+        /* separação pronta: só o rótulo do envio mudou */
+      } else if (ativos.length > 0) {
         const r: any = await this.routing.recalculateForWc(order.id);
         roteamento = { acao: 'recalculado', ok: !!r?.ok, detalhe: r?.message ?? null };
       } else if (loja) {
@@ -1145,6 +1169,19 @@ export class OrdersController {
       roteamento = { acao: ativos.length > 0 ? 'recalculado' : 'roteado', ok: false, detalhe: e?.message || String(e) };
     }
 
+    /**
+     * ETIQUETA VELHA NA MÃO: a pré-postagem já gerada carrega o serviço
+     * ANTIGO. Trocar o pedido não troca o papel — quem gerou tem que Reabrir
+     * pra cancelar e emitir de novo, senão a caixa sai com o serviço errado
+     * mesmo com a tela dizendo o certo.
+     */
+    const comEtiqueta = picks.filter((p: any) => p.trackingCode);
+    const aviso = comEtiqueta.length
+      ? `Já existe etiqueta gerada (${comEtiqueta
+          .map((p: any) => `${p.carrier || 'etiqueta'} ${p.trackingCode}`)
+          .join(', ')}). Ela ainda está com a entrega antiga — use "Reabrir" no card pra cancelar e gerar de novo.`
+      : null;
+
     return {
       ok: true,
       shippingMethod: label,
@@ -1152,6 +1189,7 @@ export class OrdersController {
       pickupStoreCode: loja?.code ?? null,
       pickupStoreName: loja?.name ?? null,
       roteamento,
+      aviso,
     };
   }
 

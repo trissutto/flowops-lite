@@ -167,6 +167,28 @@ export class PagarmeController {
     if (!body?.saleId) throw new BadRequestException('saleId obrigatório');
     if (!body?.valor) throw new BadRequestException('valor obrigatório');
     if (!body?.storeCode) throw new BadRequestException('storeCode obrigatório');
+    /**
+     * COMO A PEÇA SAI ANTES DO LINK (24/08/2026) — caso ON-000105.
+     *
+     * O link Pagar.me do PDV só existe dentro de VENDA ONLINE, e quem fecha
+     * essa venda quase sempre é o `PagarmeLinkReconcileService` (o pagamento
+     * cai depois, com a vendedora já em outro atendimento). Como a forma de
+     * entrega só era exigida no clique de CONFIRMAR VENDA — que nesse fluxo
+     * nunca acontece —, o pedido nascia "Entrega (não informada)" e a etiqueta
+     * caía na regra de UF: SP = SEDEX, resto = PAC. A vendedora jurava ter
+     * marcado SEDEX e tinha razão; a escolha só não chegou ao banco.
+     *
+     * Mesma trava do PIX (`POST /pagbank/pix/create`): é o último momento em
+     * que ela ainda está na tela. Venda que não é do PDV passa direto.
+     */
+    const venda = await this.svc.buscarVendaPdv(body.saleId);
+    if (venda && !venda.entregaTipo) {
+      throw new BadRequestException(
+        'Escolha a forma de entrega (SEDEX, PAC, motoboy ou retirada) antes de gerar o link. ' +
+          'Quando o pagamento cai, o sistema fecha a venda sozinho — sem essa escolha o pedido ' +
+          'sai como "Entrega (não informada)" e a etiqueta vira PAC fora de São Paulo.',
+      );
+    }
     return this.svc.createCheckoutLink(body);
   }
 

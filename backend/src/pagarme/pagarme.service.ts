@@ -75,6 +75,24 @@ export class PagarmeService {
   ) {}
 
   /**
+   * A venda de PDV por trás de um saleId — ou null.
+   *
+   * Existe pro guard do `POST /pagarme/checkout/create` (a forma de entrega
+   * tem que estar escolhida ANTES do link ir pra cliente — ver a rota). Espelha
+   * o `buscarVendaPdv` do PagBank de propósito: mesma pergunta, mesma resposta,
+   * e a validação fica na ROTA do PDV, não dentro do create (a live e o site
+   * chamam o mesmo caminho com id que não é `pdv_sale`).
+   */
+  async buscarVendaPdv(
+    saleId: string,
+  ): Promise<{ id: string; status: string; entregaTipo: string | null } | null> {
+    return (this.prisma as any).pdvSale.findUnique({
+      where: { id: String(saleId || '') },
+      select: { id: true, status: true, entregaTipo: true },
+    });
+  }
+
+  /**
    * Resolve nome da loja por storeCode com cache 24h.
    * Fallback: storeCode se loja nao for encontrada.
    * Garante que nome da cobranca sempre tem nome legivel da loja.

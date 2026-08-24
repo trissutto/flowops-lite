@@ -901,10 +901,12 @@ export class PagbankService {
    * controller, e SEM validar aqui dentro do `createPixCharge`: a live chama o
    * mesmo create com id de CARRINHO, que nunca é pdv_sale.
    */
-  async buscarVendaPdv(saleId: string): Promise<{ id: string; status: string } | null> {
+  async buscarVendaPdv(
+    saleId: string,
+  ): Promise<{ id: string; status: string; entregaTipo: string | null } | null> {
     return (this.prisma as any).pdvSale.findUnique({
       where: { id: String(saleId || '') },
-      select: { id: true, status: true },
+      select: { id: true, status: true, entregaTipo: true },
     });
   }
 

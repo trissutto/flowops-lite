@@ -41,6 +41,17 @@ function servicoDoCard(order: {
   checkoutInfo?: string | null;
   shippingAddress?: string | null;
 }): 'SEDEX' | 'PAC' | 'RETIRADA' | 'MOTOBOY' {
+  const semCorreio = retiradaOuMotoboy(order);
+  if (semCorreio) return semCorreio;
+  return servicoPagoDoPedido(order as any, ufDoPedido(order)).servico;
+}
+
+/** RETIRADA/MOTOBOY não têm serviço de correio — ou null, se a peça viaja. */
+function retiradaOuMotoboy(order: {
+  isPickup?: boolean | null;
+  shippingMethod?: string | null;
+  checkoutInfo?: string | null;
+}): 'RETIRADA' | 'MOTOBOY' | null {
   if (order?.isPickup) return 'RETIRADA';
   const titulo = String(order?.shippingMethod || '').toLowerCase();
   if (titulo.includes('motoboy') || titulo.includes('moto boy')) return 'MOTOBOY';
@@ -50,14 +61,41 @@ function servicoDoCard(order: {
     if (kind === 'retirada') return 'RETIRADA';
     if (kind === 'motoboy') return 'MOTOBOY';
   } catch { /* snapshot cru → segue pelo título */ }
+  return null;
+}
 
-  let uf: string | null = null;
+/** UF do destino — é ela que resolve o "PROMOCIONAL" e o fallback histórico. */
+function ufDoPedido(order: { shippingAddress?: string | null }): string | null {
   try {
     const addr = JSON.parse(String(order?.shippingAddress || '{}'));
-    uf = String(addr?.state || addr?.uf || '').trim().toUpperCase() || null;
-  } catch { /* endereço cru → o fallback de UF decide */ }
+    return String(addr?.state || addr?.uf || '').trim().toUpperCase() || null;
+  } catch {
+    return null; /* endereço cru → o fallback de UF decide */
+  }
+}
 
-  return servicoPagoDoPedido(order as any, uf).servico;
+/**
+ * NINGUÉM ESCOLHEU ESSE SERVIÇO — foi a regra de UF que chutou (24/08/2026).
+ *
+ * Caso ON-000105: venda online paga por link, fechada pelo cron sem a forma de
+ * entrega gravada. O pedido nasceu "Entrega (não informada)", a régua caiu no
+ * `servicoPorUf` (MG → PAC) e a faixa do card escreveu **PAC** com todas as
+ * letras. A vendedora leu aquilo como decisão do sistema e reclamou que tinha
+ * marcado SEDEX — ela tinha marcado mesmo; a faixa é que afirmou uma escolha
+ * que não existia.
+ *
+ * Aqui a faixa passa a dizer que é um palpite. Medição de 24/08: dos 51
+ * pedidos ativos que geram etiqueta, **1** cai neste caso — o aviso é raro por
+ * construção, então quando aparecer merece atenção de verdade.
+ */
+function envioIncerto(order: {
+  isPickup?: boolean | null;
+  shippingMethod?: string | null;
+  checkoutInfo?: string | null;
+  shippingAddress?: string | null;
+}): boolean {
+  if (retiradaOuMotoboy(order)) return false;
+  return servicoPagoDoPedido(order as any, ufDoPedido(order)).origem === 'fallback-uf';
 }
 
 /** A cliente pagou R$ 0 de frete? Só pra escrever "(grátis)" ao lado. */
@@ -2016,6 +2054,9 @@ export class PickOrdersService {
          * pagou de frete não muda o serviço que a loja posta.
          */
         servicoEnvio: servicoDoCard(r.order as any),
+        // "Ninguém informou — isto aqui é chute da regra de UF." A faixa
+        // avisa em vez de afirmar um serviço que não foi escolhido.
+        servicoEnvioIncerto: envioIncerto(r.order as any),
         freteGratis: freteFoiGratis(r.order as any),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,

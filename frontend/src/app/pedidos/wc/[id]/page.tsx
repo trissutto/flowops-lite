@@ -763,6 +763,8 @@ export default function PedidoDetailPage() {
         ok: boolean;
         shippingMethod: string;
         roteamento?: { acao: string; ok?: boolean; detalhe?: string | null };
+        /** Etiqueta já gerada com a entrega ANTIGA — precisa Reabrir. */
+        aviso?: string | null;
       }>(`/orders/wc/${wcId}/entrega`, {
         method: 'PATCH',
         body: JSON.stringify({ tipo: entregaNova, storeCode: entregaLoja || null }),
@@ -774,6 +776,9 @@ export default function PedidoDetailPage() {
       const r = res.roteamento;
       if (r && r.acao !== 'nenhuma' && r.ok === false) {
         setSepError(`Entrega trocada pra ${res.shippingMethod}, mas o roteamento não foi: ${r.detalhe || 'sem detalhe'}. Use "Recalcular separação".`);
+      } else if (res.aviso) {
+        // Trocar o pedido não troca o papel que já saiu da impressora.
+        setSepError(`Entrega trocada pra ${res.shippingMethod}. ${res.aviso}`);
       }
     } catch (e: any) {
       setEntregaErro(e?.message || 'Falha ao trocar a entrega.');
