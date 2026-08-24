@@ -27,6 +27,7 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import { autoSendOrderToStore } from '@/lib/auto-send-order';
+import { abrirWhatsApp } from '@/lib/whatsapp';
 import SellerTag from '@/components/SellerTag';
 import EnviadosByStore from '@/components/EnviadosByStore';
 import PosVenda from '@/components/PosVenda';
@@ -2318,15 +2319,17 @@ function CarrinhosTab() {
     const brl = valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
     const msg = `Ola, ${nome}! Aqui e da Lurd\'s Plus Size. Vi que voce separou pecas no valor de ${brl} no nosso site. Posso te ajudar a finalizar?`;
     /**
-     * A JANELA ABRE PRIMEIRO, E ISSO É REGRA — não estilo.
+     * A CONVERSA ABRE PRIMEIRO, E ISSO É REGRA — não estilo.
      *
-     * `window.open` fora do clique síncrono é popup bloqueado pelo navegador. A
-     * marcação vai DEPOIS, sem await: assumir o atendimento é aviso entre
-     * colegas, e nunca pode ficar entre a operadora e a conversa com a cliente.
+     * Tudo o que depende de clique (protocolo do app, popup) tem que sair no
+     * gesto síncrono, senão o navegador bloqueia. A marcação vai DEPOIS, sem
+     * await: assumir o atendimento é aviso entre colegas, e nunca pode ficar
+     * entre a operadora e a conversa com a cliente.
      */
-    window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+    abrirWhatsApp(phone, msg);
     assumirAtendimento(tel);
   }
+
 
   /**
    * Marca "EM ATENDIMENTO" com quem está logado (decisão do dono, 24/08: quem
