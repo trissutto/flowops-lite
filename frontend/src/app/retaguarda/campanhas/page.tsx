@@ -74,20 +74,20 @@ interface CampanhasReport {
   totalReceita: number;
   totalNaoPagos: number;
   totalNaoPagosReceita: number;
-  totalRecuperados: number;
-  totalRecuperadosValor: number;
-  totalVoltouSozinha: number;
-  totalVoltouSozinhaValor: number;
+  totalRecuperados?: number;
+  totalRecuperadosValor?: number;
+  totalVoltouSozinha?: number;
+  totalVoltouSozinhaValor?: number;
   totalCancelados: number;
   ticketMedioGeral: number;
-  totalGasto: number;
-  totalReceitaOffline: number;
-  totalPedidosOffline: number;
+  totalGasto?: number;
+  totalReceitaOffline?: number;
+  totalPedidosOffline?: number;
   roas: number | null;
   roasComAssistida: number | null;
-  totalSessoes: number;
+  totalSessoes?: number;
   conversaoGeral: number | null;
-  reconciliacao: {
+  reconciliacao?: {
     receitaSemGasto: number;
     linhasSemGasto: number;
     gastoSemReceita: number;
@@ -98,16 +98,24 @@ interface CampanhasReport {
   campanhas: CampanhaRow[];
 }
 
-function fmtMoney(v: number) {
-  return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+/**
+ * ⚠️ Todo formatador aceita `undefined`.
+ *
+ * O Vercel publica em segundos e o Railway leva minutos — em TODO deploy existe
+ * uma janela em que esta tela (nova) conversa com a API (velha), que não manda
+ * `gasto`/`roas`/`sessoes`. Com `v.toLocaleString` cru isso vira TypeError no
+ * meio do render e a tela inteira some, em vez de mostrar o que já tem.
+ */
+function fmtMoney(v: number | null | undefined) {
+  return v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
-function fmtInt(v: number) {
-  return v.toLocaleString('pt-BR');
+function fmtInt(v: number | null | undefined) {
+  return v == null ? '—' : v.toLocaleString('pt-BR');
 }
-function fmtRoas(v: number | null) {
+function fmtRoas(v: number | null | undefined) {
   return v == null ? '—' : `${v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`;
 }
-function fmtPct(v: number | null) {
+function fmtPct(v: number | null | undefined) {
   return v == null ? '—' : `${v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 function todayIso() {
@@ -216,7 +224,8 @@ export default function CampanhasPage() {
       'Receita assistida', 'ROAS c/ assistida', 'Pedidos pagos', 'Ticket medio',
       'Sessoes', 'Conversao %', 'Recuperados (atendimento)', 'Valor recuperado', 'Voltou sozinha', 'Valor voltou sozinha', 'Nao pagos', 'Valor nao pago', 'Cancelados', 'Motivo sem gasto',
     ].join(';'));
-    const v = (x: number | null) => (x == null ? '' : x.toFixed(2).replace('.', ','));
+    // Aceita undefined: a API velha não manda gasto/ROAS/sessões.
+    const v = (x: number | null | undefined) => (x == null ? '' : x.toFixed(2).replace('.', ','));
     for (const c of data.campanhas) {
       lines.push([
         c.campanha, c.rede ?? '', c.source ?? '',
@@ -312,6 +321,16 @@ export default function CampanhasPage() {
         <div className="mb-4 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>
       )}
 
+      {/* A API velha não tem `totalGasto`. Dizer isso é melhor que mostrar a
+          tela pela metade e deixar o dono achar que o ROAS não foi feito. */}
+      {data && data.totalGasto == null && (
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+          <b>O servidor ainda está subindo a versão nova.</b> Gasto, ROAS, conversão e
+          recuperação vão aparecer assim que ele terminar (leva alguns minutos depois
+          do deploy). A receita abaixo já está certa — recarregue a página em seguida.
+        </div>
+      )}
+
       {data && (
         <>
           {/* ── A LINHA DO DINHEIRO ── */}
@@ -330,7 +349,7 @@ export default function CampanhasPage() {
               <div className="flex items-center gap-2 text-slate-500 text-xs"><TrendingUp className="w-4 h-4" /> ROAS</div>
               <div className={`text-2xl font-bold mt-1 ${corRoas(data.roas)}`}>{fmtRoas(data.roas)}</div>
               <div className="text-[11px] text-slate-400 mt-1">
-                {data.totalReceitaOffline > 0
+                {(data.totalReceitaOffline ?? 0) > 0
                   ? `${fmtRoas(data.roasComAssistida)} contando a venda assistida`
                   : 'receita paga ÷ gasto'}
               </div>
@@ -355,7 +374,7 @@ export default function CampanhasPage() {
                 <span className="text-slate-500"> — cartão recusado, PIX vencido ou link não aberto.</span>
                 {/* Sem esta linha, tentativa que o atendimento salvou continuava
                     contando como perda e a campanha levava a culpa. */}
-                {data.totalRecuperados > 0 && (
+                {(data.totalRecuperados ?? 0) > 0 && (
                   <span className="text-slate-500">
                     {' '}<b className="text-emerald-700">{fmtInt(data.totalRecuperados)} ({fmtMoney(data.totalRecuperadosValor)})</b>{' '}
                     o time RECUPEROU: alguém assumiu na aba Carrinhos e a venda saiu.
@@ -363,7 +382,7 @@ export default function CampanhasPage() {
                 )}
                 {/* Voltou sozinha ≠ recuperada. Contar junto daria ao time
                     crédito por venda que aconteceu sem ninguém chamar. */}
-                {data.totalVoltouSozinha > 0 && (
+                {(data.totalVoltouSozinha ?? 0) > 0 && (
                   <span className="text-slate-500">
                     {' '}Outras <b>{fmtInt(data.totalVoltouSozinha)} ({fmtMoney(data.totalVoltouSozinhaValor)})</b>{' '}
                     a cliente voltou e pagou <b>sozinha</b>, sem ninguém chamar.
@@ -374,12 +393,12 @@ export default function CampanhasPage() {
                 )}
               </div>
             </div>
-            <div className={`rounded-lg shadow border p-4 ${data.totalReceitaOffline > 0 ? 'bg-violet-50 border-violet-300' : 'bg-white'}`}>
+            <div className={`rounded-lg shadow border p-4 ${(data.totalReceitaOffline ?? 0) > 0 ? 'bg-violet-50 border-violet-300' : 'bg-white'}`}>
               <div className="flex items-center gap-2 text-slate-600 text-xs font-semibold">
-                <MessageCircle className={`w-4 h-4 ${data.totalReceitaOffline > 0 ? 'text-violet-600' : ''}`} /> Venda assistida (offline)
+                <MessageCircle className={`w-4 h-4 ${(data.totalReceitaOffline ?? 0) > 0 ? 'text-violet-600' : ''}`} /> Venda assistida (offline)
               </div>
               <div className="mt-1 text-sm">
-                <b className={data.totalReceitaOffline > 0 ? 'text-violet-800' : 'text-slate-400'}>
+                <b className={(data.totalReceitaOffline ?? 0) > 0 ? 'text-violet-800' : 'text-slate-400'}>
                   {fmtInt(data.totalPedidosOffline)} pedidos · {fmtMoney(data.totalReceitaOffline)}
                 </b>
                 <span className="text-slate-500">
@@ -549,8 +568,8 @@ export default function CampanhasPage() {
                       <td className="px-4 py-2 text-right">{fmtInt(data.totalPedidos)}</td>
                       <td className="px-4 py-2 text-right">{fmtInt(data.totalSessoes)}</td>
                       <td className="px-4 py-2 text-right">{fmtPct(data.conversaoGeral)}</td>
-                      <td className="px-4 py-2 text-right text-emerald-700">{data.totalRecuperados > 0 ? fmtInt(data.totalRecuperados) : '—'}</td>
-                      <td className="px-4 py-2 text-right text-slate-600">{data.totalVoltouSozinha > 0 ? fmtInt(data.totalVoltouSozinha) : '—'}</td>
+                      <td className="px-4 py-2 text-right text-emerald-700">{(data.totalRecuperados ?? 0) > 0 ? fmtInt(data.totalRecuperados) : '—'}</td>
+                      <td className="px-4 py-2 text-right text-slate-600">{(data.totalVoltouSozinha ?? 0) > 0 ? fmtInt(data.totalVoltouSozinha) : '—'}</td>
                       <td className="px-4 py-2 text-right text-amber-700">{data.totalNaoPagos > 0 ? fmtInt(data.totalNaoPagos) : '—'}</td>
                     </tr>
                   </tfoot>
@@ -562,7 +581,7 @@ export default function CampanhasPage() {
           {/* ── RECONCILIAÇÃO: o que NÃO casou ──
               Fica embaixo da tabela de propósito. Enquanto isso não aparecia, o
               ROAS parecia pior do que é e ninguém descobria por quê. */}
-          {(data.reconciliacao.linhasSemGasto > 0 || data.reconciliacao.linhasGastoSemReceita > 0) && (
+          {data.reconciliacao && (data.reconciliacao.linhasSemGasto > 0 || data.reconciliacao.linhasGastoSemReceita > 0) && (
             <div className="mt-4 rounded-lg border border-slate-300 bg-slate-50 p-4 text-xs text-slate-600">
               <div className="font-semibold text-slate-700 mb-2 flex items-center gap-2">
                 <ShoppingBag className="w-4 h-4" /> O que não casou neste período
