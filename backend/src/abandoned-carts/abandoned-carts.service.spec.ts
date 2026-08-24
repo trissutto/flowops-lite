@@ -110,6 +110,62 @@ describe('AbandonedCartsService carrinhos do site novo', () => {
     expect(r.items[0].order_status).toBe('abandoned');
   });
 
+  it('marca quem já chamou a cliente com o usuário logado, por telefone', async () => {
+    const upsert = jest.fn().mockResolvedValue({});
+    const service = new AbandonedCartsService({} as any, {} as any, {
+      carrinhoAtendimento: { upsert },
+    } as any);
+
+    const r: any = await service.assumirAtendimento('(35) 99172-0547', {
+      sub: 'user-1',
+      name: 'Karine',
+      email: 'karine@lurds.com.br',
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.por).toBe('Karine');
+    // Telefone normalizado: é a chave que faz a tag valer em TODAS as linhas
+    // daquela cliente, não só na que ela clicou.
+    expect(upsert.mock.calls[0][0].where).toEqual({ telefone: '35991720547' });
+    expect(upsert.mock.calls[0][0].create).toMatchObject({ usuarioNome: 'Karine', usuarioId: 'user-1' });
+  });
+
+  it('telefone incompleto não vira atendimento', async () => {
+    const upsert = jest.fn();
+    const service = new AbandonedCartsService({} as any, {} as any, {
+      carrinhoAtendimento: { upsert },
+    } as any);
+
+    const r: any = await service.assumirAtendimento('9917', { name: 'Karine' });
+    expect(r.ok).toBe(false);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('só devolve atendimento das últimas 2h — depois disso a linha volta pra fila', async () => {
+    const findMany = jest.fn().mockResolvedValue([
+      { telefone: '35991720547', usuarioNome: 'Karine', assumidoEm: new Date('2026-08-24T11:40:00Z') },
+    ]);
+    const service = new AbandonedCartsService({} as any, {} as any, {
+      carrinhoAtendimento: { findMany },
+    } as any);
+
+    const r: any = await service.atendimentosAtivos();
+    expect(r.ativos).toEqual([
+      { telefone: '35991720547', por: 'Karine', desde: '2026-08-24T11:40:00.000Z' },
+    ]);
+    const corte = findMany.mock.calls[0][0].where.assumidoEm.gte as Date;
+    expect(Math.round((Date.now() - corte.getTime()) / 60000)).toBe(120);
+  });
+
+  it('falha ao ler atendimento não derruba a lista — só perde a tag', async () => {
+    const service = new AbandonedCartsService({} as any, {} as any, {
+      carrinhoAtendimento: { findMany: jest.fn().mockRejectedValue(new Error('sem tabela')) },
+    } as any);
+
+    const r: any = await service.atendimentosAtivos();
+    expect(r).toMatchObject({ ok: true, ativos: [] });
+  });
+
   it('não esconde nada quando a venda da mesma cliente está fora da janela', async () => {
     const service = makeService([pedido({})], [
       {

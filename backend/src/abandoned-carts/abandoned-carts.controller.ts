@@ -116,6 +116,28 @@ export class AbandonedCartsController {
     return this.service.statsEcommercePending(since, until);
   }
 
+  /**
+   * QUEM JÁ CHAMOU A CLIENTE — a tag "EM ATENDIMENTO" da aba Carrinhos.
+   *
+   * ⚠️ Tem que ficar ANTES do `@Get(':id')` lá embaixo: o Nest casa por ordem de
+   * declaração e `atendimento` cairia no ParseIntPipe do id.
+   *
+   * Lista separada (e não um campo dentro de cada carrinho) porque a tela junta
+   * QUATRO fontes — plugin, WooCommerce, pedido do site novo e captura de
+   * checkout. A marca é por telefone, então um mapa só pinta as quatro sem
+   * repetir a regra em quatro lugares.
+   */
+  @Get('atendimento')
+  atendimentos() {
+    return this.service.atendimentosAtivos();
+  }
+
+  /** Assume o atendimento da cliente (disparado pelo clique no WhatsApp). */
+  @Post('atendimento')
+  assumirAtendimento(@Body() body: any, @Req() request: any) {
+    return this.service.assumirAtendimento(String(body?.telefone ?? ''), request?.user);
+  }
+
   /** Stats agregadas via fallback WC. */
   @Get('wc-pending/stats')
   wcPendingStats(

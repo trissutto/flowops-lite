@@ -747,6 +747,77 @@ export class AbandonedCartsService {
     return limpos;
   }
 
+  /**
+   * Por quanto tempo "alguém já chamou essa cliente" continua verdade.
+   *
+   * 2 horas (dono, 24/08). Sem prazo, a fila inteira vira "em atendimento" e a
+   * tag deixa de significar alguma coisa — o mesmo jeito que alarme falso mata
+   * a fila de tarefas da loja.
+   */
+  private static readonly ATENDIMENTO_VALE_MIN = 120;
+
+  /**
+   * QUEM JÁ CHAMOU A CLIENTE — marca no clique do WhatsApp.
+   *
+   * O gatilho é o clique porque passo manual é passo esquecido: quem abre a
+   * conversa É quem está atendendo, e a tela não pode depender de ela lembrar de
+   * avisar as colegas. Chave por telefone (ver o model `CarrinhoAtendimento`):
+   * a marca vale pra PESSOA, em todas as linhas dela.
+   */
+  async assumirAtendimento(telefoneRaw: string, user: any) {
+    const telefone = AbandonedCartsService.soDigitosFone(telefoneRaw);
+    if (telefone.length < 10) {
+      return { ok: false, error: 'Telefone inválido pra marcar atendimento.' };
+    }
+    const nome = String(user?.name || user?.email || 'Matriz').trim().slice(0, 120);
+    const dados = {
+      usuarioId: user?.sub || user?.id || null,
+      usuarioNome: nome,
+      usuarioEmail: user?.email ? String(user.email).slice(0, 160) : null,
+      assumidoEm: new Date(),
+    };
+    try {
+      // Reassumir é upsert de propósito: se a colega de 3h atrás não fechou, quem
+      // está falando com a cliente AGORA é quem aparece na tag.
+      await (this.prisma as any).carrinhoAtendimento.upsert({
+        where: { telefone },
+        create: { telefone, ...dados },
+        update: dados,
+      });
+      return { ok: true, telefone, por: nome, desde: dados.assumidoEm.toISOString() };
+    } catch (e: any) {
+      // Marcar é aviso entre colegas, não trava: falhar aqui não pode impedir o
+      // WhatsApp de abrir (o front já abriu a janela antes de chamar).
+      this.logger.warn(`[carrinhos] não consegui marcar atendimento: ${e?.message ?? e}`);
+      return { ok: false, error: 'Não consegui marcar o atendimento.' };
+    }
+  }
+
+  /** Atendimentos ainda válidos (últimas 2h), pra tela pintar a tag em qualquer
+   *  linha daquele telefone — venha ela do pedido, da captura ou do WooCommerce. */
+  async atendimentosAtivos() {
+    const desde = new Date(Date.now() - AbandonedCartsService.ATENDIMENTO_VALE_MIN * 60_000);
+    try {
+      const linhas = await (this.prisma as any).carrinhoAtendimento.findMany({
+        where: { assumidoEm: { gte: desde } },
+        orderBy: { assumidoEm: 'desc' },
+        take: 500,
+      });
+      return {
+        ok: true,
+        valeMin: AbandonedCartsService.ATENDIMENTO_VALE_MIN,
+        ativos: linhas.map((l: any) => ({
+          telefone: l.telefone,
+          por: l.usuarioNome,
+          desde: l.assumidoEm?.toISOString?.() ?? null,
+        })),
+      };
+    } catch (e: any) {
+      this.logger.warn(`[carrinhos] não consegui ler os atendimentos: ${e?.message ?? e}`);
+      return { ok: true, valeMin: AbandonedCartsService.ATENDIMENTO_VALE_MIN, ativos: [] };
+    }
+  }
+
   async listEcommercePending(params: {
     status?: string; // abandoned | recovered/completed | lost | all
     since?: string;  // YYYY-MM-DD

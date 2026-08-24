@@ -1965,6 +1965,22 @@ type CarrinhoAB = {
   utmCampaign?: string | null;
 };
 
+/**
+ * QUEM JÁ CHAMOU A CLIENTE (dono, 24/08).
+ *
+ * A fila é aberta por várias pessoas da matriz ao mesmo tempo e nada dizia que
+ * alguém já tinha puxado conversa — duas operadoras mandavam o mesmo "posso te
+ * ajudar a finalizar?" pra mesma cliente. Chave por TELEFONE, não por linha: a
+ * mesma cliente aparece em mais de uma linha (captura + pedido não pago, duas
+ * tentativas), e quem foi chamada foi a pessoa.
+ */
+type Atendimento = { telefone: string; por: string; desde: string | null };
+type AtendResp = { ok?: boolean; valeMin?: number; ativos?: Atendimento[] };
+
+/** Mesma normalização do backend (`soDigitosFone`): só dígitos, sem o 55. */
+const soDigitosFone = (v: unknown) =>
+  String(v ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+
 type StatsAB = {
   abandoned?: number;
   recovered?: number;
@@ -1988,6 +2004,8 @@ type ListResp = {
 function CarrinhosTab() {
   const [items, setItems] = useState<CarrinhoAB[]>([]);
   const [stats, setStats] = useState<StatsAB | null>(null);
+  /** telefone (só dígitos) → quem assumiu. Ver o type `Atendimento`. */
+  const [atendimentos, setAtendimentos] = useState<Record<string, Atendimento>>({});
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [dias, setDias] = useState(7);
@@ -2154,12 +2172,22 @@ function CarrinhosTab() {
       const qsEcom = new URLSearchParams({ since, status: 'all', _t: String(Date.now()) });
       if (search) qsEcom.set('search', search);
 
-      const [listResp, statsResp, ecomResp] = await Promise.all([
+      const [listResp, statsResp, ecomResp, atendResp] = await Promise.all([
         fetchAllCarts().catch((e) => ({ ok: false, error: e?.message } as ListResp)),
         api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
         api<ListResp>(`/abandoned-carts/ecommerce/list?${qsEcom}`).catch(() => null),
+        // Quem já chamou a cliente (últimas 2h). Vem separado das listas de
+        // propósito: a marca é por TELEFONE e vale nas quatro fontes que a tela
+        // junta — a mesma cliente costuma aparecer em mais de uma linha.
+        api<AtendResp>(`/abandoned-carts/atendimento?_t=${Date.now()}`).catch(() => null),
       ]);
       setLastFetch(new Date());
+
+      const mapaAtend: Record<string, Atendimento> = {};
+      for (const a of atendResp?.ativos ?? []) {
+        if (a?.telefone) mapaAtend[soDigitosFone(a.telefone)] = a;
+      }
+      setAtendimentos(mapaAtend);
 
       const ecomAll: CarrinhoAB[] = Array.isArray((ecomResp as any)?.items)
         ? ((ecomResp as any).items as CarrinhoAB[])
@@ -2289,7 +2317,47 @@ function CarrinhosTab() {
     const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
     const brl = valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
     const msg = `Ola, ${nome}! Aqui e da Lurd\'s Plus Size. Vi que voce separou pecas no valor de ${brl} no nosso site. Posso te ajudar a finalizar?`;
+    /**
+     * A JANELA ABRE PRIMEIRO, E ISSO É REGRA — não estilo.
+     *
+     * `window.open` fora do clique síncrono é popup bloqueado pelo navegador. A
+     * marcação vai DEPOIS, sem await: assumir o atendimento é aviso entre
+     * colegas, e nunca pode ficar entre a operadora e a conversa com a cliente.
+     */
     window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+    assumirAtendimento(tel);
+  }
+
+  /**
+   * Marca "EM ATENDIMENTO" com quem está logado (decisão do dono, 24/08: quem
+   * clicou é quem atende — passo manual é passo esquecido).
+   *
+   * Pinta na hora e só então confirma no servidor: a lista recarrega a cada 60s
+   * e a colega ao lado precisa ver a tag AGORA, não no próximo ciclo. Se o POST
+   * falhar, a tag some sozinha no recarregamento — o erro se corrige, e não vale
+   * um alerta no meio do atendimento.
+   */
+  async function assumirAtendimento(telefone: string) {
+    const chave = soDigitosFone(telefone);
+    if (chave.length < 10) return;
+    setAtendimentos((prev) => ({
+      ...prev,
+      [chave]: { telefone: chave, por: 'você', desde: new Date().toISOString() },
+    }));
+    try {
+      const r = await api<{ ok?: boolean; por?: string; desde?: string }>('/abandoned-carts/atendimento', {
+        method: 'POST',
+        body: JSON.stringify({ telefone: chave }),
+      });
+      if (r?.ok && r.por) {
+        setAtendimentos((prev) => ({
+          ...prev,
+          [chave]: { telefone: chave, por: r.por!, desde: r.desde ?? new Date().toISOString() },
+        }));
+      }
+    } catch {
+      /* ver o comentário acima: a tag se corrige no próximo carregamento */
+    }
   }
 
   const fmt = (s: string | null | undefined) => s ? new Date(s + (typeof s === 'string' && s.endsWith('Z') ? '' : ' UTC')).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '-';
@@ -2406,6 +2474,8 @@ function CarrinhosTab() {
             // certa aqui é outra: "seu cartão foi recusado, quer tentar de novo
             // ou pagar no PIX?".
             const recusado = isEcom && c.pedido_status === 'payment_failed';
+            // Alguém da matriz já puxou conversa com ESTA cliente nas últimas 2h.
+            const atendida = atendimentos[soDigitosFone(c.phone)] || null;
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
@@ -2421,6 +2491,17 @@ function CarrinhosTab() {
                     {isEcomContact && <span className="ml-2 text-[10px] bg-violet-100 text-violet-800 px-1.5 py-0.5 rounded font-bold uppercase" title="Nome e WhatsApp capturados antes de existir pedido">Contato capturado</span>}
                     {c.optin === false && <span className="ml-2 text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase" title="Nao marcou o aviso de WhatsApp no checkout — aparece aqui para voce ver o volume real de abandono, mas nao pode receber disparo">Sem opt-in</span>}
                     {Boolean(c.unsubscribed) && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
+                    {/* SÓLIDA de propósito: as outras tags dizem em que pé está o
+                        pagamento; esta diz "não ligue pra esta, já tem gente" — e
+                        precisa parar o olho de quem varre a lista. */}
+                    {atendida && (
+                      <span
+                        className="ml-2 text-[10px] bg-indigo-600 text-white px-1.5 py-0.5 rounded font-bold uppercase"
+                        title={`${atendida.por} abriu a conversa com esta cliente${atendida.desde ? ` em ${fmt(atendida.desde)}` : ''}. A marca vale 2h — depois disso a linha volta pra fila.`}
+                      >
+                        Em atendimento · {atendida.por}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
                     <span>{c.email || '-'}</span>
@@ -2439,7 +2520,20 @@ function CarrinhosTab() {
                 </div>
                 <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(valor)}</div>
                 {!isCompleted && !c.unsubscribed && c.optin !== false && c.phone && (
-                  <button onClick={(e) => { e.stopPropagation(); whatsapp(c); }} className="px-3 py-2 rounded-lg font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">WhatsApp</button>
+                  // Já atendida: o botão sai do verde "pode ir" e vira contorno.
+                  // Continua clicável de propósito — quem assumiu volta pra
+                  // conversa por aqui, e a tag ao lado é que avisa a colega.
+                  <button
+                    onClick={(e) => { e.stopPropagation(); whatsapp(c); }}
+                    title={atendida ? `${atendida.por} já está falando com esta cliente — confira antes de mandar outra mensagem.` : undefined}
+                    className={`px-3 py-2 rounded-lg font-bold text-xs whitespace-nowrap ${
+                      atendida
+                        ? 'border-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    }`}
+                  >
+                    WhatsApp
+                  </button>
                 )}
               </div>
             );

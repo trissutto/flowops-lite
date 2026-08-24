@@ -6048,6 +6048,40 @@ model CheckoutRecovery {
   @@map("checkout_recoveries")
 }
 
+/// QUEM JÁ CHAMOU A CLIENTE (dono, 24/08/2026).
+///
+/// A aba Carrinhos é uma fila que várias pessoas da matriz abrem ao mesmo tempo.
+/// Nada na tela dizia que alguém já tinha puxado conversa, então duas operadoras
+/// mandavam mensagem pra mesma cliente — que recebe dois "posso te ajudar a
+/// finalizar?" da mesma loja e entende exatamente o que aquilo é.
+///
+/// A chave é o TELEFONE, não a linha da lista, e isso é de propósito:
+///  - a linha de contato capturado tem id SINTÉTICO (970.000.000 + posição), que
+///    muda a cada carregamento — marcar por linha marcaria outra pessoa amanhã;
+///  - a mesma cliente aparece em mais de uma linha (carrinho + pedido não pago,
+///    duas tentativas). Quem foi chamada foi a PESSOA: a marca tem que valer em
+///    todas as linhas dela, senão a segunda linha convida pro mesmo erro.
+///
+/// Vence sozinha em 2h (decisão do dono): sem prazo, a fila inteira vira "em
+/// atendimento" e ninguém liga pra ninguém.
+model CarrinhoAtendimento {
+  /// Só dígitos, sem o 55 — mesma normalização de `CheckoutRecovery.telefone`.
+  telefone     String   @id @db.VarChar(11)
+  usuarioId    String?  @map("usuario_id")
+  /// Nome de quem assumiu, cacheado: a tag precisa dizer QUEM, e não vale um
+  /// JOIN por linha numa lista que recarrega a cada 60s.
+  usuarioNome  String   @map("usuario_nome") @db.VarChar(120)
+  usuarioEmail String?  @map("usuario_email") @db.VarChar(160)
+  assumidoEm   DateTime @default(now()) @map("assumido_em")
+  createdAt    DateTime @default(now()) @map("created_at")
+  /// `@default(now())` junto do `@updatedAt` porque coluna NOT NULL sem default
+  /// derruba o `prisma db push` do start:prod — e o deploy falha calado.
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([assumidoEm])
+  @@map("carrinho_atendimento")
+}
+
 /// BASE DE MARKETING PRÓPRIA (dono, 14/08/2026).
 ///
 /// Os 171 mil contatos de e-mail viviam SÓ no Mautic (mkt.lurds.com.br). O
