@@ -14,6 +14,8 @@ import { RealignmentReportController } from './realignment-report.controller';
 import { RealignmentReportService } from './realignment-report.service';
 import { RealignmentPricingService } from './realignment-pricing.service';
 import { RemessaEnvioService } from './remessa-envio.service';
+import { PromessaEstoqueService } from './promessa-estoque.service';
+import { PendenciaExpiryCron } from './pendencia-expiry.cron';
 import { CorreiosModule } from '../correios/correios.module';
 import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { NfeModule } from '../nfe/nfe.module';
@@ -39,6 +41,9 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
     RealignmentReportService,
     RealignmentPricingService,
     RemessaEnvioService,
+    // Trava "peça já prometida" + expiração de pendência velha (24/08)
+    PromessaEstoqueService,
+    PendenciaExpiryCron,
   ],
   exports: [
     RealignmentService,
@@ -50,6 +55,7 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
     RealignmentPricingService,
     // JuntadaService (pick-orders) gera etiqueta/NF da caixa de juntada por aqui
     RemessaEnvioService,
+    PromessaEstoqueService,
   ],
 })
 export class RealignmentModule {}

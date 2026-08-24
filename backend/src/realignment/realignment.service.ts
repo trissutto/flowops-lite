@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WpDbService } from '../wp-db/wp-db.service';
+import { PromessaEstoqueService } from './promessa-estoque.service';
 
 /**
  * RealignmentService — Realinhamento de estoques entre lojas.
@@ -41,6 +42,7 @@ export class RealignmentService {
     private readonly erp: ErpService,
     private readonly gateway: RealtimeGateway,
     private readonly wpDb: WpDbService,
+    private readonly promessa: PromessaEstoqueService,
   ) {}
 
   /**
@@ -793,6 +795,22 @@ export class RealignmentService {
   }) {
     const lines = (input.plan || []).filter((p) => p.qty > 0);
     if (lines.length === 0) throw new BadRequestException('Plano vazio.');
+
+    /**
+     * TRAVA "PEÇA JÁ PROMETIDA" (24/08). A grade já barra o arrasto sem saldo,
+     * mas o plano pode chegar de outra tela, ou minutos depois de outra pessoa
+     * ter pedido a mesma peça — e ordem que nasce sem peça vira negativo eterno
+     * na Grade por Loja. Valida o plano INTEIRO antes de gravar qualquer linha:
+     * criar metade e recusar a outra deixaria a remessa pela metade.
+     */
+    await this.promessa.garantirDisponivel(
+      lines.map((p) => ({
+        codigo: p.sku,
+        origemCode: p.fromCode,
+        qty: p.qty,
+        rotulo: [p.ref || p.sku, p.cor, p.tamanho].filter(Boolean).join(' '),
+      })),
+    );
 
     // Nomes + IDs das lojas envolvidas (precisamos do storeId pra emitir socket room)
     const codes = Array.from(

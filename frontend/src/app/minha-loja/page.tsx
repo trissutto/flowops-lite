@@ -782,12 +782,22 @@ export default function MinhaLojaPage() {
     }
     if (pendingPieces.length > 0) {
       const oldest = Math.max(...pendingPieces.map((p: any) => horas(p.createdAt)));
+      // AVISO DE ESQUECIMENTO (24/08): peça pedida e nunca enviada é cancelada
+      // sozinha com 7 dias (cron da retaguarda) — enquanto ela existe, segura o
+      // estoque e deixa a Grade por Loja negativa. Some sem avisar é pior do
+      // que parada, então do 5º dia em diante a fila conta os dias que restam.
+      const EXPIRA_DIAS = 7;
+      const restam = EXPIRA_DIAS - Math.floor(oldest / 24);
+      const quase = oldest >= 5 * 24;
+      const prazo = restam <= 0 ? 'hoje' : `em ${restam} dia${restam > 1 ? 's' : ''}`;
       tasks.push({
         key: 'realinhamento-pendente',
         urgency: oldest >= 24 ? 'red' : 'yellow',
         icon: Shuffle,
         title: `Separar ${pendingPieces.length} peça(s) pra outras lojas`,
-        subtitle: `realinhamento aguardando bipe${oldest >= 24 ? ` · parado há ${idadeTxt(oldest)}` : ''}`,
+        subtitle:
+          `realinhamento aguardando bipe${oldest >= 24 ? ` · parado há ${idadeTxt(oldest)}` : ''}` +
+          `${quase ? ` · a mais antiga sai da fila ${prazo} se não for enviada` : ''}`,
         go: () => router.push('/minha-loja/realinhamento'),
       });
     }

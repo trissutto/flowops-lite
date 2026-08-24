@@ -13,6 +13,7 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { CorreiosService } from '../correios/correios.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { RemessaEnvioService } from './remessa-envio.service';
+import { PromessaEstoqueService } from './promessa-estoque.service';
 
 /**
  * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
@@ -43,6 +44,7 @@ export class RealignmentShipmentService {
     private readonly correios: CorreiosService,
     private readonly nfe: NfeTransferService,
     private readonly envio: RemessaEnvioService,
+    private readonly promessa: PromessaEstoqueService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -897,6 +899,20 @@ export class RealignmentShipmentService {
     const cor = info.cor ? String(info.cor).trim() : null;
     const tamanho = info.tamanho ? String(info.tamanho).trim() : null;
     const descricao = (info.descricao || '').trim() || null;
+
+    /**
+     * ECO DO LEITOR (24/08). O primeiro bipe passa SEMPRE — a peça pode estar
+     * na mão sem constar no espelho. Do segundo em diante, se já existe
+     * promessa aberta deste código pra este destino e a loja não tem peça pra
+     * sustentar mais uma, recusa: foi assim que VOGUE-PD PRETO DOURADO 46 e 48
+     * nasceram em dobro (3 segundos de diferença) e deixaram Itanhaém com -2.
+     */
+    await this.promessa.garantirNaoDuplicaBipe({
+      codigo: codigoReal,
+      origemCode: (origem as any).code,
+      destinoCode: (destino as any).code,
+      rotulo: [ref, cor, tamanho].filter(Boolean).join(' '),
+    });
 
     // Preço já vem da rotina do PDV. Fallback no espelho local (Postgres) se vier 0.
     // Transferência NÃO bloqueia por preço (é só snapshot pra conferência/impresso).
