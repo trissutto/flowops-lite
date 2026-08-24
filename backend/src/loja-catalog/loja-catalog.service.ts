@@ -2681,6 +2681,53 @@ export class LojaCatalogService {
   }
 
   /**
+   * ONDE ESTÁ ESTA PEÇA — loja por loja, cor por cor, TAMANHO por tamanho.
+   *
+   * Nasceu em 23/08/2026 pra página `/lojas/<cidade>/<peça>`: a cliente que
+   * busca "vestido plus size perto de mim" cai numa página da PEÇA NAQUELA
+   * LOJA, não na página de comprar online.
+   *
+   * ⚠️ DEVOLVE A REDE INTEIRA, NÃO SÓ UMA LOJA — e isso é decisão do dono
+   * (23/08): tamanho que falta na unidade **a loja pede pra outra**. Então a
+   * página mostra a grade toda e separa "tem aqui hoje" de "a gente traz",
+   * em vez de dizer "indisponível" e perder a venda. Quem recorta por loja é
+   * o frontend; o backend entrega tudo numa consulta só.
+   *
+   * Diferente de `estoquePorLoja()` (que alimenta o feed do Google e agrupa
+   * só por cor), aqui o TAMANHO é o dado principal: é ele que decide se a
+   * cliente sai de casa.
+   */
+  async estoqueDaPecaPorLoja(
+    ref: string,
+  ): Promise<Array<{ loja: string; cor: string | null; tamanho: string | null; estoque: number }>> {
+    const alvo = this.normRef(ref);
+    if (!alvo) return [];
+
+    const linhas: Array<{ loja: string; cor: string | null; tamanho: string | null; estoque: number }> =
+      await this.prisma.$queryRawUnsafe(
+        `
+        SELECT TRIM(e.loja)                       AS loja,
+               NULLIF(TRIM(p.cor), '')            AS cor,
+               NULLIF(TRIM(p.tamanho), '')        AS tamanho,
+               SUM(COALESCE(e.estoque, 0))::int   AS estoque
+          FROM wincred_produtos p
+          JOIN wincred_estoque e ON e.codigo = p.codigo
+         WHERE UPPER(TRIM(p.ref)) = $1
+           AND TRIM(e.loja) <> ''
+           AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
+           AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%INFANTIL%'
+           AND UPPER(COALESCE(p."nomeGrupo", ''))        NOT LIKE '%MASCULIN%'
+           AND UPPER(COALESCE(p."nomeGrupo", ''))        NOT LIKE '%INFANTIL%'
+         GROUP BY TRIM(e.loja), NULLIF(TRIM(p.cor), ''), NULLIF(TRIM(p.tamanho), '')
+        HAVING SUM(COALESCE(e.estoque, 0)) > 0
+         ORDER BY 1, 2, 3
+      `,
+        alvo,
+      );
+    return linhas ?? [];
+  }
+
+  /**
    * O ENDEREÇO ANTIGO DA PEÇA → O ENDEREÇO DE HOJE (23/08/2026).
    *
    * A Search Console mostra **4.156 URLs em 404** no domínio, e boa parte é

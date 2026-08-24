@@ -90,3 +90,6 @@ backup/
 backend/scripts/backup-antes.json
 backend/scripts/mudancas.json
 backend/scripts/sem-manga.txt
+
+# Fotos JPEG das peças pro Meu Negócio (geradas por .gbp-fotos/baixar-fotos.js)
+.gbp-fotos/

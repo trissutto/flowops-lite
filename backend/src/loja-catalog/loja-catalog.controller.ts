@@ -70,6 +70,22 @@ export class LojaCatalogPublicController {
   }
 
   /**
+   * GET /api/public/loja/estoque-peca/:ref — onde esta peça está, na REDE toda.
+   *
+   * Alimenta a página `/lojas/<cidade>/<peça>` do site. Devolve loja × cor ×
+   * tamanho com estoque acima de zero.
+   *
+   * ⚠️ Devolve TODAS as lojas de propósito. A unidade que não tem o tamanho
+   * pede pra outra (decisão do dono, 23/08) — então a página mostra a grade
+   * inteira e separa "tem aqui hoje" de "a gente traz", em vez de dizer
+   * "indisponível" e perder a cliente que já estava a caminho.
+   */
+  @Get('estoque-peca/:ref')
+  estoquePeca(@Param('ref') ref: string) {
+    return this.svc.estoqueDaPecaPorLoja(ref);
+  }
+
+  /**
    * GET /api/public/loja/curadoria/:slug — os produtos de uma coleção curada
    * (ex.: "mais-top-da-semana"), NA ORDEM que o dono escolheu. Alimenta a página
    * do site. Coleção paralela: a peça continua na categoria real dela.

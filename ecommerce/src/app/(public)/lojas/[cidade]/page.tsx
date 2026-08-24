@@ -46,7 +46,8 @@ import StoreCtas from './StoreCtas';
  */
 
 interface Params {
-  params: { cidade: string };
+  /** Next 15: em rota dinamica, params chega como Promise. */
+  params: Promise<{ cidade: string }>;
 }
 
 function storeBySlug(slug: string): Store | undefined {
@@ -58,8 +59,9 @@ export function generateStaticParams() {
   return stores.map((s) => ({ cidade: s.slug }));
 }
 
-export function generateMetadata({ params }: Params): Metadata {
-  const s = storeBySlug(params.cidade);
+export async function generateMetadata({ params }: Params): Promise<Metadata> {
+  const { cidade } = await params;
+  const s = storeBySlug(cidade);
   if (!s) return { title: 'Loja não encontrada' };
 
   const url = `${SITE_URL}/lojas/${s.slug}`;
@@ -160,8 +162,9 @@ function breadcrumbJsonLd(s: Store) {
   };
 }
 
-export default function LojaCidadePage({ params }: Params) {
-  const s = storeBySlug(params.cidade);
+export default async function LojaCidadePage({ params }: Params) {
+  const { cidade } = await params;
+  const s = storeBySlug(cidade);
   if (!s) notFound();
 
   const outras = stores.filter((o) => o.slug !== s.slug);

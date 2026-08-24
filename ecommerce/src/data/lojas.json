@@ -24,6 +24,7 @@
   "stores": [
     {
       "slug": "analia-franco",
+      "codigoFlow": "18",
       "unit": "Anália Franco",
       "city": "São Paulo",
       "uf": "SP",
@@ -51,6 +52,7 @@
     },
     {
       "slug": "campinas",
+      "codigoFlow": "07",
       "unit": "Campinas",
       "city": "Campinas",
       "uf": "SP",
@@ -78,6 +80,7 @@
     },
     {
       "slug": "indaiatuba",
+      "codigoFlow": "04",
       "unit": "Indaiatuba",
       "city": "Indaiatuba",
       "uf": "SP",
@@ -105,6 +108,7 @@
     },
     {
       "slug": "itanhaem",
+      "codigoFlow": "01",
       "unit": "Itanhaém",
       "city": "Itanhaém",
       "uf": "SP",
@@ -131,6 +135,7 @@
     },
     {
       "slug": "jundiai",
+      "codigoFlow": "10",
       "unit": "Jundiaí",
       "city": "Jundiaí",
       "uf": "SP",
@@ -158,6 +163,7 @@
     },
     {
       "slug": "limeira",
+      "codigoFlow": "11",
       "unit": "Limeira",
       "city": "Limeira",
       "uf": "SP",
@@ -185,6 +191,7 @@
     },
     {
       "slug": "moema",
+      "codigoFlow": "15",
       "unit": "Moema",
       "city": "São Paulo",
       "uf": "SP",
@@ -212,6 +219,7 @@
     },
     {
       "slug": "piracicaba",
+      "codigoFlow": "05",
       "unit": "Piracicaba",
       "city": "Piracicaba",
       "uf": "SP",
@@ -239,6 +247,7 @@
     },
     {
       "slug": "praia-grande",
+      "codigoFlow": "14",
       "unit": "Praia Grande",
       "city": "Praia Grande",
       "uf": "SP",
@@ -265,6 +274,7 @@
     },
     {
       "slug": "santos",
+      "codigoFlow": "02",
       "unit": "Santos",
       "city": "Santos",
       "uf": "SP",
@@ -292,6 +302,7 @@
     },
     {
       "slug": "sao-jose-dos-campos",
+      "codigoFlow": "08",
       "unit": "São José dos Campos",
       "city": "São José dos Campos",
       "uf": "SP",
@@ -319,6 +330,7 @@
     },
     {
       "slug": "sorocaba",
+      "codigoFlow": "06",
       "unit": "Sorocaba",
       "city": "Sorocaba",
       "uf": "SP",
@@ -346,6 +358,7 @@
     },
     {
       "slug": "suzano",
+      "codigoFlow": "17",
       "unit": "Suzano",
       "city": "Suzano",
       "uf": "SP",
@@ -373,6 +386,7 @@
     },
     {
       "slug": "vinhedo",
+      "codigoFlow": "03",
       "unit": "Vinhedo",
       "city": "Vinhedo",
       "uf": "SP",

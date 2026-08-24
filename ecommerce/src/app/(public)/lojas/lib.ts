@@ -35,6 +35,13 @@ export interface Store {
   hours: StoreHours;
   mapsQuery: string;
   geo: { lat: number; lng: number };
+  /**
+   * Código da loja no Flow (`Store.code`) — '01', '07', '18'.
+   * É a chave que casa esta loja com o estoque do ERP e com o `store_code`
+   * (`LURDS-<código>`) da ficha no Google Meu Negócio. Conferido 14/14 em
+   * 23/08/2026 contra /retaguarda/lojas.
+   */
+  codigoFlow: string;
   image: string | null;
   /** Opcionais por loja — sem eles a página usa site.badgesDefault/galleryDefaults. */
   badges?: string[];
@@ -198,6 +205,31 @@ export function whatsappUrl(s: Store): string {
    * texto quebra o reconhecimento sem dar erro em lugar nenhum.
    */
   const text = encodeURIComponent(`Olá! Quero conhecer a loja ${s.unit} (vim pelo site).`);
+  return `https://api.whatsapp.com/send?phone=${s.whatsapp}&text=${text}`;
+}
+
+/**
+ * WHATSAPP DA UNIDADE JÁ FALANDO DA PEÇA — o CTA da página /lojas/<cidade>/<peça>.
+ *
+ * ⚠️ MANTÉM, PALAVRA POR PALAVRA, o trecho `loja <unidade> (vim pelo site)` do
+ * `whatsappUrl` acima. Esse texto é CONTRATO DE PARSE da automação (n8n /
+ * Evolution): é por ele que o fluxo reconhece de qual loja veio o lead e grava
+ * a origem certa no CRM. Reescrever a frase quebra o reconhecimento sem dar
+ * erro em lugar nenhum — o lead simplesmente cai sem loja.
+ *
+ * O que muda é só o que vem DEPOIS: a peça, e o tamanho quando a cliente
+ * chegou por um tamanho específico.
+ */
+export function whatsappUrlPeca(
+  s: Store,
+  peca: { nome: string; ref: string },
+  tamanho?: string | null,
+): string {
+  const oTamanho = tamanho ? ` no tamanho ${tamanho}` : '';
+  const text = encodeURIComponent(
+    `Olá! Quero conhecer a loja ${s.unit} (vim pelo site). ` +
+      `Vi a peça ${peca.nome} (ref ${peca.ref})${oTamanho} e queria saber se tem aí.`,
+  );
   return `https://api.whatsapp.com/send?phone=${s.whatsapp}&text=${text}`;
 }
 
