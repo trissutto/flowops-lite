@@ -5239,7 +5239,14 @@ function PaymentModal({
    * `null` = fora do fluxo (venda já com entrega escolhida, ou já passou).
    */
   const [etapaOnline, setEtapaOnline] = useState<
-    'frete_tipo' | 'frete_valor' | 'confirma_total' | 'pagamento' | 'vendedora' | null
+    | 'frete_tipo'
+    | 'frete_loja'
+    | 'frete_valor'
+    | 'confirma_total'
+    | 'pagamento'
+    | 'vendedora'
+    | 'fechando'
+    | null
   >(null);
   /** Vendedoras da loja pro popup do último passo (mesma fonte do fechamento). */
   const [vendedorasFluxo, setVendedorasFluxo] = useState<Array<{ codigo: string; nome: string; apelido?: string | null }>>([]);
@@ -5275,7 +5282,11 @@ function PaymentModal({
       freteAutoRef.current = txt;
       setFreteStr(txt);
     }
-    setEtapaOnline('frete_valor');
+    // QUEM ATENDE (17/08, caso ON-000006): retirada e motoboy precisam de uma
+    // loja com balcão/moto. A loja-canal 13/SITE vende pra cliente de qualquer
+    // cidade e não tem nenhum dos dois — sem esta pergunta o pedido nascia
+    // "retira NA LOJA 13" e a matriz roteava na mão, 2 dias parado.
+    setEtapaOnline(tipo === 'retirada' || tipo === 'motoboy' ? 'frete_loja' : 'frete_valor');
     if (!saleId) return;
     try {
       await api(`/pdv/sales/${saleId}/entrega`, {
@@ -5293,6 +5304,29 @@ function PaymentModal({
       }
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
+    }
+  };
+
+  /**
+   * QUEM ATENDE a retirada/motoboy. Grava e segue pro valor do frete; se o
+   * servidor recusar (Regra A: motoboy só sai de loja que tem a peça), desfaz
+   * a escolha em vez de deixar a venda com uma entrega que o fechamento nega.
+   */
+  const escolherLojaGuiada = async (code: string) => {
+    const anterior = entregaStoreCode;
+    setEntregaStoreCode(code);
+    setEtapaOnline('frete_valor');
+    if (!saleId) return;
+    try {
+      await api(`/pdv/sales/${saleId}/entrega`, {
+        method: 'POST',
+        body: JSON.stringify({ tipo: entregaTipo, entregaStoreCode: code || null }),
+      });
+    } catch (err: any) {
+      setEntregaStoreCode(anterior);
+      setEtapaOnline('frete_loja');
+      const h = humanizeError(err);
+      toast('error', h.title, err?.message || h.hint);
     }
   };
 
@@ -5323,7 +5357,29 @@ function PaymentModal({
       });
       // Refetch do parent: é o que faz `hasSeller` virar true na tela.
       onPaymentsChange?.();
-      setEtapaOnline(null);
+      /**
+       * ESCOLHEU A VENDEDORA, ACABOU (dono, 24/08).
+       *
+       * A tela voltava pro painel inteiro com um botão FINALIZAR no fim — mais
+       * uma conferência depois de três telas de conferência. Quando o dinheiro
+       * JÁ ESTÁ na conta (PIX recebido / link externo) não há o que conferir:
+       * registra e fecha, com a animação de baixa por cima.
+       *
+       * Os dois de COBRAR (gerar PIX / link Pagar.me) NÃO passam por aqui: a
+       * venda fica legitimamente aberta esperando o dinheiro cair, e a tela do
+       * QR/link precisa aparecer pra ela mandar pra cliente.
+       *
+       * Fecha via `retomarAposVendedoraRef` (não chamando direto) porque
+       * `hasSeller` só vira true quando o refetch do parent chega — chamar
+       * agora cairia na trava "escolha a vendedora" que acabou de ser cumprida.
+       */
+      const jaEstaPago = vendaOnlineTipo === 'pix' || vendaOnlineTipo === 'link';
+      if (jaEstaPago) {
+        retomarAposVendedoraRef.current = true;
+        setEtapaOnline('fechando');
+      } else {
+        setEtapaOnline(null);
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
@@ -5770,7 +5826,13 @@ function PaymentModal({
   useEffect(() => {
     if (!hasSeller || !retomarAposVendedoraRef.current) return;
     retomarAposVendedoraRef.current = false;
-    void adicionarPagamento();
+    void adicionarPagamento().finally(() => {
+      // Segura a animação mais um instante: o auto-finalize sai num timeout de
+      // 80ms e é ELE que acende o overlay de tela cheia. Limpar na hora
+      // piscaria o painel no meio do fechamento. Se o registro tiver falhado
+      // (cadastro incompleto, rede), o painel volta — com o motivo no toast.
+      setTimeout(() => setEtapaOnline((e) => (e === 'fechando' ? null : e)), 600);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasSeller]);
 
@@ -6915,7 +6977,49 @@ function PaymentModal({
             </div>
           )}
 
-          {/* ── 2/3 · QUANTO É O FRETE ──
+          {/* ── 1b · QUEM ATENDE (só retirada e motoboy) ── */}
+          {etapaOnline === 'frete_loja' && (
+            <div className="w-full max-w-md rounded-2xl border-4 border-amber-400 bg-amber-50 p-5 shadow-2xl">
+              <div className="text-center">
+                <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">
+                  {ENTREGA_LABEL[entregaTipo || ''] || 'Entrega'}
+                </div>
+                <h3 className="mt-1 text-2xl font-black text-slate-900">
+                  {entregaTipo === 'retirada' ? 'Ela busca em qual loja?' : 'Qual loja manda o motoboy?'}
+                </h3>
+              </div>
+              <div className="mt-4 max-h-64 space-y-1.5 overflow-y-auto">
+                <button
+                  type="button"
+                  onClick={() => void escolherLojaGuiada('')}
+                  className="w-full rounded-xl border-2 border-amber-400 bg-white py-3 text-sm font-black text-slate-800 hover:bg-amber-100"
+                >
+                  🏬 Esta loja ({storeCode})
+                </button>
+                {stores
+                  .filter((s) => s.code !== storeCode)
+                  .map((s) => (
+                    <button
+                      key={s.code}
+                      type="button"
+                      onClick={() => void escolherLojaGuiada(s.code)}
+                      className="w-full rounded-xl border-2 border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 hover:border-amber-400 hover:bg-amber-50"
+                    >
+                      {s.name} ({s.code})
+                    </button>
+                  ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEtapaOnline('frete_tipo')}
+                className="mt-3 w-full rounded-xl border-2 border-slate-300 bg-white py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Voltar
+              </button>
+            </div>
+          )}
+
+          {/* ── 2/5 · QUANTO É O FRETE ──
               Vem preenchido com o valor de tabela da modalidade e é EDITÁVEL:
               a tabela acerta a maioria, não todas (SEDEX fora de SP não tem
               valor de tabela — ver `freteSugerido`). */}
@@ -6947,7 +7051,7 @@ function PaymentModal({
               <div className="mt-4 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setEtapaOnline('frete_tipo')}
+                  onClick={() => setEtapaOnline(entregaTipo === 'retirada' || entregaTipo === 'motoboy' ? 'frete_loja' : 'frete_tipo')}
                   className="rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-600 hover:bg-slate-50"
                 >
                   Voltar
@@ -7090,6 +7194,25 @@ function PaymentModal({
               >
                 Voltar
               </button>
+            </div>
+          )}
+
+          {/* ── FECHANDO ──
+              Cobre a ida ao servidor entre "escolheu a vendedora" e o overlay
+              de tela cheia do parent. Sem isto o painel inteiro pisca no meio
+              do fechamento — que é justamente a tela que o dono não quer mais
+              ver depois da vendedora. */}
+          {etapaOnline === 'fechando' && (
+            <div className="flex flex-col items-center justify-center">
+              <div className="relative flex h-20 w-20 items-center justify-center">
+                <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500/40" />
+                <span className="absolute inset-2 rounded-full bg-emerald-500/20" />
+                <Loader2 className="relative h-10 w-10 animate-spin text-emerald-400" />
+              </div>
+              <p className="mt-5 text-xl font-black text-white">Aguarde, estamos finalizando...</p>
+              <p className="mt-1 text-xs font-semibold text-emerald-300">
+                Baixando as peças do estoque e fechando a venda
+              </p>
             </div>
           )}
         </div>
@@ -7457,222 +7580,11 @@ function PaymentModal({
               </div>
             )}
 
-            {/* ── COMO A PEÇA SAI (14/08) — a matriz despacha por isto:
-                SEDEX/PAC geram etiqueta dos Correios, MOTOBOY é entrega na
-                mão e RETIRADA segura a peça na própria loja (o pedido nasce
-                como retirada, sem etiqueta). Obrigatório na venda online.
-
-                DESTAQUE (24/08, ordem do dono): o bloco era uma caixinha
-                igual às outras, com o frete numa caixa SEPARADA logo abaixo.
-                São a MESMA decisão — o serviço escolhido é o que define
-                quanto custa o envio — e separá-los é o que deixava a
-                vendedora cobrar sem olhar como a peça ia sair. Agora é UM
-                bloco só, com faixa de cor e o serviço escrito por extenso. ── */}
-            <div className={`rounded-xl border-2 p-3 ${entregaTipo ? 'border-teal-400 bg-teal-50/50' : 'border-amber-400 bg-amber-50'}`}>
-              <div className="flex items-center justify-between gap-2">
-                <label className="text-[11px] text-slate-700 uppercase font-black tracking-wider">
-                  🚚 Como vai enviar <span className="text-rose-600">*</span>
-                </label>
-                <span
-                  className={`rounded-md px-2 py-0.5 text-[11px] font-black uppercase tracking-wide ${
-                    entregaTipo ? 'bg-teal-600 text-white' : 'bg-amber-500 text-white'
-                  }`}
-                >
-                  {entregaTipo
-                    ? ENTREGA_LABEL[entregaTipo] || entregaTipo
-                    : 'Não escolhido'}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5 mt-2">
-                {([
-                  { id: 'sedex', label: '⚡ SEDEX' },
-                  { id: 'pac', label: '📦 PAC' },
-                  { id: 'motoboy', label: '🛵 MOTOBOY' },
-                  { id: 'retirada', label: '🏬 RETIRA NA LOJA' },
-                ] as const).map((op) => (
-                  <button
-                    key={op.id}
-                    type="button"
-                    onClick={async () => {
-                      // Trocar de forma zera a loja escolhida — SEDEX/PAC não
-                      // têm loja que atende, e retirada→motoboy é outra escolha.
-                      const lojaAtende = op.id === entregaTipo ? entregaStoreCode : '';
-                      setEntregaTipo(op.id);
-                      setEntregaStoreCode(lojaAtende);
-                      if (!saleId) return;
-                      /**
-                       * O SISTEMA SOMA SOZINHO (dono, 24/08).
-                       *
-                       * Escolher a modalidade já traz o valor da rede e GRAVA
-                       * na venda — sem isso a vendedora escolhia SEDEX, ia
-                       * digitar o frete, e o passo do meio era onde a cobrança
-                       * saía curta. Só mexe no valor enquanto ele foi posto
-                       * pela tela: o que ela digitou fica.
-                       */
-                      const sugerido = freteSugerido(op.id, clienteOnline?.uf);
-                      const podeSugerir = !freteStr || freteStr === freteAutoRef.current;
-                      if (sugerido != null && podeSugerir) {
-                        const txt = sugerido.toFixed(2).replace('.', ',');
-                        freteAutoRef.current = txt;
-                        setFreteStr(txt);
-                        void aplicarFrete(sugerido);
-                      }
-                      try {
-                        await api(`/pdv/sales/${saleId}/entrega`, {
-                          method: 'POST',
-                          body: JSON.stringify({ tipo: op.id, entregaStoreCode: lojaAtende || null }),
-                        });
-                      } catch (e: any) {
-                        const h = humanizeError(e);
-                        if (op.id === 'motoboy' && (e?.status === 400 || /motoboy/i.test(String(e?.message || '')))) {
-                          // REGRA A (dono, 17/08): motoboy só sai desta loja. O
-                          // servidor disse que falta peça aqui — a escolha NÃO
-                          // fica. Deixar marcado seria fechar a venda com uma
-                          // entrega que o fechamento vai recusar de novo.
-                          setEntregaTipo(null);
-                          toast('error', 'Motoboy não disponível', e?.message || h.hint);
-                          return;
-                        }
-                        // Outros erros: a escolha fica na tela; o finalize
-                        // regrava. Nunca travar a venda por registro da entrega.
-                        toast('error', h.title, h.hint);
-                      }
-                    }}
-                    className={`rounded-lg border-2 py-2 text-xs font-bold transition ${
-                      entregaTipo === op.id
-                        ? 'border-teal-500 bg-teal-600 text-white'
-                        : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300'
-                    }`}
-                  >
-                    {op.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* LOJA QUE ATENDE (17/08) — retirada: onde a cliente busca;
-                  motoboy: quem sai de moto. Padrão = esta loja. A loja-canal
-                  SITE vende pra cliente de qualquer cidade e não tem balcão
-                  nem moto — sem isto o pedido nascia "retira NA LOJA 13" e a
-                  matriz roteava na mão (ON-000006, 2 dias parado). */}
-              {(entregaTipo === 'retirada' || entregaTipo === 'motoboy') && (
-                <div className="mt-2">
-                  <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
-                    {entregaTipo === 'retirada' ? 'Cliente retira em qual loja?' : 'Qual loja manda o motoboy?'}
-                  </label>
-                  <select
-                    value={entregaStoreCode}
-                    onChange={async (e) => {
-                      const code = e.target.value;
-                      const anterior = entregaStoreCode;
-                      setEntregaStoreCode(code);
-                      if (!saleId) return;
-                      try {
-                        await api(`/pdv/sales/${saleId}/entrega`, {
-                          method: 'POST',
-                          body: JSON.stringify({ tipo: entregaTipo, entregaStoreCode: code || null }),
-                        });
-                      } catch (err: any) {
-                        // Voltou pra "esta loja" e o servidor recusou (Regra A
-                        // do motoboy sem estoque aqui): desfaz a escolha.
-                        setEntregaStoreCode(anterior);
-                        const h = humanizeError(err);
-                        toast('error', h.title, err?.message || h.hint);
-                      }
-                    }}
-                    className="mt-1 w-full rounded-lg border-2 border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-teal-400 focus:outline-none"
-                  >
-                    <option value="">🏬 Esta loja ({storeCode})</option>
-                    {stores
-                      .filter((s) => s.code !== storeCode)
-                      .map((s) => (
-                        <option key={s.code} value={s.code}>
-                          {s.name} ({s.code})
-                        </option>
-                      ))}
-                  </select>
-                  <p className="text-[10px] text-teal-700 mt-1 font-semibold">
-                    {entregaTipo === 'retirada'
-                      ? entregaStoreCode
-                        ? 'O card nasce na loja escolhida. O que ela não tiver chega por transferência antes da cliente buscar.'
-                        : 'A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.'
-                      : entregaStoreCode
-                        ? 'O card nasce na loja escolhida: ela separa (recebe por transferência o que faltar) e manda o motoboy.'
-                        : 'Motoboy sai desta loja: a peça já baixa aqui e ninguém mais separa. Só vale se você tem tudo na arara.'}
-                  </p>
-                </div>
-              )}
-
-              {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
-                  soma no total, entra no caixa como receita e fica FORA da
-                  base de comissão da vendedora.
-
-                  MORA AQUI DENTRO desde 24/08: era uma caixa separada logo
-                  abaixo, e "escolher o serviço" e "cobrar por ele" viraram
-                  dois passos que a vendedora fazia em momentos diferentes. ── */}
-              <div className="mt-3 border-t-2 border-dashed border-teal-200 pt-2.5">
-                <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
-                  {entregaTipo === 'retirada'
-                    ? 'Frete (retirada normalmente é 0)'
-                    : entregaTipo === 'motoboy'
-                      ? 'Quanto a cliente paga pelo motoboy (R$)'
-                      : 'Quanto a cliente paga de frete (R$)'}
-                </label>
-                <div className="flex gap-2 mt-1">
-                  <input
-                    value={freteStr}
-                    onChange={(e) => setFreteStr(e.target.value.replace(/[^\d.,]/g, ''))}
-                    // APLICA AO SAIR DO CAMPO — digitar e não clicar no botão
-                    // deixava o número na tela e o frete FORA da venda. O
-                    // blur cobre o caminho natural: digita, sai, cobra.
-                    onBlur={() => { if (fretePendente) void aplicarFrete(); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void aplicarFrete(); } }}
-                    placeholder="0,00"
-                    inputMode="decimal"
-                    className={`flex-1 rounded-lg border-2 px-3 py-2 text-sm text-right tabular-nums focus:outline-none ${
-                      fretePendente ? 'border-amber-400 bg-amber-50' : 'border-slate-200 focus:border-teal-400'
-                    }`}
-                  />
-                  <button
-                    type="button"
-                    disabled={aplicandoFrete}
-                    onClick={() => void aplicarFrete()}
-                    className={`rounded-lg text-white text-xs font-bold px-4 disabled:opacity-50 ${
-                      fretePendente ? 'bg-amber-500 hover:bg-amber-600' : 'bg-teal-600 hover:bg-teal-700'
-                    }`}
-                  >
-                    {aplicandoFrete ? '...' : fretePendente ? 'Aplicar frete' : '✓ Aplicado'}
-                  </button>
-                </div>
-                {fretePendente ? (
-                  <p className="text-[11px] font-bold text-amber-800 mt-1 leading-snug">
-                    ⚠️ {brl(freteDigitado)} ainda NÃO entrou na venda — clique em Aplicar frete.
-                  </p>
-                ) : (
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Soma no total a cobrar · não baixa estoque · fora da comissão da vendedora.
-                  </p>
-                )}
-
-                {/* ── O QUE VAI SER COBRADO, POR EXTENSO ──
-                    A vendedora só via o total. Com peças e frete somados num
-                    número só, cobrar sem o frete não tinha como aparecer na
-                    tela — e não aparecia mesmo (5 vendas, loja 13, 24/08). */}
-                <div className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-white">
-                  <div className="flex items-center justify-between text-[11px] text-slate-300">
-                    <span>Peças</span>
-                    <span className="tabular-nums">{brl(Math.max(0, Math.round((totalVivo - freteAplicado) * 100) / 100))}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-300">
-                    <span>Frete {entregaTipo ? `(${ENTREGA_LABEL[entregaTipo] || entregaTipo})` : ''}</span>
-                    <span className="tabular-nums">{brl(freteAplicado)}</span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between border-t border-slate-700 pt-1 text-sm font-black">
-                    <span>Cobrar da cliente</span>
-                    <span className="tabular-nums text-emerald-400">{brl(restante > 0 ? restante : total)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+            {/* O bloco COMO VAI ENVIAR + campo de frete morava aqui e virou
+                DUPLICATA quando o fluxo guiado nasceu (24/08): o mesmo servico,
+                o mesmo frete e a mesma conta apareciam nos popups e de novo no
+                painel, um abaixo do outro. Ficou so a linha de recibo la em
+                cima, com "alterar" reabrindo o passo 1. */}
 
             {/* ── PAINEL: Gerar PIX (PagBank) — código pra mandar pra cliente ── */}
             {vendaOnlineTipo === 'pix_gerar' && (
