@@ -224,6 +224,37 @@ export class GoogleAdsService {
   }
 
   /**
+   * CHAMADA À **DATA MANAGER API** — outro host, outras regras.
+   *
+   * Desde 15/06/2026 o Google recusa `ConversionUploadService.UploadClickConversions`
+   * de integração nova (`CUSTOMER_NOT_ALLOWLISTED_FOR_THIS_FEATURE`) e manda usar
+   * esta API. Medido na conta 892-523-1246 em 23/08/2026.
+   *
+   * ⚠️ Aqui NÃO vão `developer-token` nem `login-customer-id`: a Data Manager
+   * autentica só pelo OAuth e identifica a conta pelo `destinations[]` do corpo.
+   * Mandar os headers do Ads não é ignorado — é 400.
+   *
+   * ⚠️ O escopo é OUTRO: `.../auth/datamanager`. O refresh token precisa ter
+   * sido gerado com ele E com `.../auth/adwords`, senão uma das duas pontas cai.
+   */
+  async requisitarDataManager(caminho: string, corpo: unknown): Promise<any> {
+    const res = await fetch(`https://datamanager.googleapis.com/v1/${caminho}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await this.token()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(corpo),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) {
+      const texto = await res.text().catch(() => '');
+      throw new Error(`DataManager ${res.status} em ${caminho}: ${texto.slice(0, 400)}`);
+    }
+    return res.json();
+  }
+
+  /**
    * Uma linha por campanha POR DIA. O `segments.date` no SELECT é o que quebra
    * o período em dias — sem ele o Google devolve o intervalo somado e não dá
    * pra cruzar com o filtro De/Até da tela.

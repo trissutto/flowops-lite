@@ -71,23 +71,6 @@ export class GoogleAdsConversaoService {
   /** O Google recusa clique com menos de 6h. Piso de idade da nossa fila. */
   private readonly CARENCIA_MS = 6 * 60 * 60 * 1000;
 
-  /**
-   * Recusas que NUNCA vão passar numa segunda tentativa. Reapresentar isto é
-   * queimar cota para receber o mesmo "não".
-   */
-  private readonly DEFINITIVOS = [
-    'INVALID_CONVERSION_ACTION_TYPE',
-    'EXPIRED_EVENT',
-    'EVENT_NOT_FOUND',
-    'EXPIRED_CLICK',
-    'CLICK_NOT_FOUND',
-    'INVALID_CUSTOMER_FOR_CLICK',
-    'CONVERSION_PRECEDES_EVENT',
-    'DUPLICATE_ORDER_ID',
-    'INVALID_CONVERSION_ACTION',
-    'CONVERSION_NOT_COMPLIANT_WITH_ATT_POLICY',
-  ];
-
   /** Cache do check de tipo: null = ainda não conferido nesta instância. */
   private acaoValida: boolean | null = null;
 
@@ -258,24 +241,37 @@ export class GoogleAdsConversaoService {
     });
     if (!pedidos.length) return { enviadas: 0, recusadas: 0 };
 
-    const acao = `customers/${conta}/conversionActions/${acaoId}`;
-    const conversoes = pedidos.map((p: any) => ({
-      gclid: p.gclid,
-      conversionAction: acao,
+    // O DESTINO carrega a conta e a ação; na Data Manager não existe
+    // `conversionAction` por evento como no caminho antigo.
+    const mcc = this.env('GOOGLE_ADS_LOGIN_CUSTOMER_ID')?.replace(/\D/g, '');
+    const destino: Record<string, unknown> = {
+      operatingAccount: { accountType: 'GOOGLE_ADS', accountId: conta },
+      productDestinationId: acaoId,
+    };
+    // Só vai quando existe: `loginAccount` de um MCC que não é pai da conta é
+    // erro de permissão, não campo ignorado.
+    if (mcc) destino.loginAccount = { accountType: 'GOOGLE_ADS', accountId: mcc };
+
+    const eventos = pedidos.map((p: any) => ({
+      adIdentifiers: { gclid: p.gclid },
       // A hora da CONVERSÃO é a do pagamento — o PIX pago no dia seguinte
-      // pertence ao dia seguinte.
-      conversionDateTime: this.momento(p.paidAt),
+      // pertence ao dia seguinte. Aqui o formato é RFC 3339, com 'T'; o
+      // caminho antigo exigia espaço. Trocar um pelo outro é 400.
+      eventTimestamp: this.momentoRfc3339(p.paidAt),
       conversionValue: Number(p.totalAmount) || 0,
-      currencyCode: 'BRL',
+      currency: 'BRL',
+      eventSource: 'WEB',
       // A chave de deduplicação do lado do Google.
-      orderId: p.wcOrderNumber ?? p.id,
+      transactionId: String(p.wcOrderNumber ?? p.id),
     }));
 
-    const resposta = await this.ads.requisitar(`customers/${conta}:uploadClickConversions`, {
-      conversions: conversoes,
-      partialFailure: true,
+    const resposta = await this.ads.requisitarDataManager('events:ingest', {
+      destinations: [destino],
+      events: eventos,
       ...(validar ? { validateOnly: true } : {}),
     });
+
+    const avisos: any[] = Array.isArray(resposta?.fieldWarnings) ? resposta.fieldWarnings : [];
 
     if (validar) {
       // Nada é carimbado: o Google não gravou nada.
@@ -283,87 +279,36 @@ export class GoogleAdsConversaoService {
         enviadas: 0,
         recusadas: 0,
         validado: pedidos.length,
-        erro: resposta?.partialFailureError
-          ? JSON.stringify(resposta.partialFailureError).slice(0, 800)
-          : undefined,
+        erro: avisos.length ? JSON.stringify(avisos).slice(0, 800) : undefined,
       };
     }
 
-    // `results` vem com UMA entrada por conversão, na MESMA ordem. A que falhou
-    // volta como objeto VAZIO — por isso a leitura é posicional. Carimbar o
-    // lote inteiro perderia em silêncio as recusadas.
-    const resultados: any[] = Array.isArray(resposta?.results) ? resposta.results : [];
-    const errosPorIndice = this.errosPorIndice(resposta?.partialFailureError);
-
-    const aceitos: string[] = [];
-    const recusados: Array<{ id: string; erro: string; definitivo: boolean }> = [];
-
-    pedidos.forEach((p: any, i: number) => {
-      const r = resultados[i];
-      if (r && (r.orderId || r.gclidDateTimePair || r.conversionAction)) {
-        aceitos.push(p.id);
-        return;
-      }
-      const erro = errosPorIndice.get(i) ?? 'recusada sem detalhe';
-      recusados.push({
-        id: p.id,
-        erro: erro.slice(0, 300),
-        definitivo: this.DEFINITIVOS.some((d) => erro.includes(d)),
-      });
-    });
-
-    if (aceitos.length) {
-      await (this.prisma as any).order.updateMany({
-        where: { id: { in: aceitos } },
-        data: { adsConversaoEnviadaEm: new Date(), adsConversaoErro: null },
-      });
-    }
-
-    for (const r of recusados) {
-      await (this.prisma as any).order.update({
-        where: { id: r.id },
-        data: {
-          adsConversaoErro: r.erro,
-          // Recusa definitiva sai da fila NA HORA, sem gastar as 5 tentativas.
-          adsConversaoTentativas: r.definitivo ? this.MAX_TENTATIVAS : { increment: 1 },
-        },
-      });
-    }
-
-    if (recusados.length) {
-      const definitivas = recusados.filter((r) => r.definitivo).length;
+    // ⚠️ A Data Manager NÃO devolve resultado por evento: `IngestEventsResponse`
+    // traz só `requestId` e `fieldWarnings`. É TUDO OU NADA — HTTP 200 quer
+    // dizer lote aceito. A leitura posicional do caminho antigo não tem
+    // equivalente aqui, e forjar uma seria carimbar como enviado o que o Google
+    // não confirmou item a item.
+    //
+    // Consequência: falha da requisição inteira (rede, escopo, permissão) não
+    // carimba nada e o lote volta na hora seguinte — `requisitarDataManager`
+    // lança, e quem chama registra o erro.
+    if (avisos.length) {
       this.logger.warn(
-        `${recusados.length} conversão(ões) recusada(s) (${definitivas} definitiva(s)). ` +
-          `Primeiro motivo: ${recusados[0].erro}`,
+        `Data Manager aceitou o lote com ${avisos.length} aviso(s) de campo. ` +
+          `Primeiro: ${JSON.stringify(avisos[0]).slice(0, 300)}`,
       );
     }
-    return { enviadas: aceitos.length, recusadas: recusados.length };
-  }
 
-  /**
-   * Mapeia índice do lote → mensagem de erro, lendo o `partialFailureError`.
-   *
-   * O Google diz QUAL item falhou em
-   * `details[].errors[].location.fieldPathElements[].index` (0-based, casa
-   * posicionalmente com o array enviado). Esse índice já chegava na resposta e
-   * era jogado fora — sem ele não dá pra distinguir "tenta de novo" de "nunca
-   * mais", e todo erro vira retry eterno.
-   */
-  private errosPorIndice(partialFailureError: any): Map<number, string> {
-    const mapa = new Map<number, string>();
-    const detalhes: any[] = partialFailureError?.details ?? [];
-    for (const d of detalhes) {
-      for (const e of d?.errors ?? []) {
-        const idx = (e?.location?.fieldPathElements ?? []).find(
-          (f: any) => typeof f?.index === 'number',
-        )?.index;
-        // O nome do erro é a chave do objeto `errorCode` (ex.: conversionUploadError).
-        const codigo = Object.values(e?.errorCode ?? {})[0];
-        const texto = `${codigo ?? ''} ${e?.message ?? ''}`.trim();
-        if (typeof idx === 'number') mapa.set(idx, texto);
-      }
-    }
-    return mapa;
+    await (this.prisma as any).order.updateMany({
+      where: { id: { in: pedidos.map((p: any) => p.id) } },
+      data: { adsConversaoEnviadaEm: new Date(), adsConversaoErro: null },
+    });
+
+    this.logger.log(
+      `${pedidos.length} conversão(ões) enviada(s) ao Google ` +
+        `(requestId ${resposta?.requestId ?? '-'})`,
+    );
+    return { enviadas: pedidos.length, recusadas: 0 };
   }
 
   /**
@@ -371,6 +316,17 @@ export class GoogleAdsConversaoService {
    * serve. O fuso é obrigatório: sem ele o Google assume o da conta e a venda
    * das 23h vira do dia seguinte.
    */
+  /**
+   * RFC 3339 — o que a Data Manager exige: 'yyyy-MM-ddTHH:mm:ss+/-HH:mm'.
+   *
+   * É o `momento()` com 'T' no lugar do espaço. Mantidos os dois de propósito:
+   * o espaço era exigência do `uploadClickConversions` e a diferença entre um e
+   * outro é um 400 seco, não um aviso.
+   */
+  private momentoRfc3339(d: Date): string {
+    return this.momento(d).replace(' ', 'T');
+  }
+
   private momento(d: Date): string {
     const opcoes: Intl.DateTimeFormatOptions = {
       timeZone: 'America/Sao_Paulo',

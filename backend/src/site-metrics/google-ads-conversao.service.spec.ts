@@ -18,15 +18,28 @@ const CREDENCIAIS = {
   GOOGLE_ADS_CONVERSAO_ACTION_ID: '9999888877',
 };
 
-/** Fake do GoogleAdsService: 1ª chamada = check de tipo, 2ª = upload. */
-const adsFake = (upload: any, tipo = 'UPLOAD_CLICKS') => {
+/**
+ * Fake do GoogleAdsService.
+ *
+ * São DOIS transportes de propósito: o check do tipo da ação ainda é Google Ads
+ * API (`requisitar`), e o envio da conversão é Data Manager
+ * (`requisitarDataManager`) — desde 15/06/2026 o `uploadClickConversions` recusa
+ * integração nova. Se um teste chamar o transporte errado, o outro mock nem é
+ * tocado e a falha aparece.
+ */
+const adsFake = (envio: any, tipo = 'UPLOAD_CLICKS') => {
   const requisitar = jest.fn().mockImplementation((caminho: string) => {
     if (caminho.includes('searchStream')) {
       return Promise.resolve([{ results: [{ conversionAction: { id: '9999888877', type: tipo } }] }]);
     }
-    return Promise.resolve(upload);
+    return Promise.reject(new Error(`caminho inesperado no Ads API: ${caminho}`));
   });
-  return { configurado: () => true, requisitar };
+  const requisitarDataManager = jest
+    .fn()
+    .mockImplementation(() =>
+      envio instanceof Error ? Promise.reject(envio) : Promise.resolve(envio),
+    );
+  return { configurado: () => true, requisitar, requisitarDataManager };
 };
 
 const pedido = (id: string, numero: string) => ({
@@ -143,41 +156,63 @@ describe('GoogleAdsConversaoService', () => {
   });
 
   describe('envio', () => {
-    it('manda no formato da API, com orderId pra deduplicar', async () => {
+    it('manda no formato da Data Manager, com transactionId pra deduplicar', async () => {
       const { prisma } = prismaFake([pedido('a', 'LP-1')]);
-      const ads = adsFake({ results: [{ orderId: 'LP-1' }] });
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
+      const ads = adsFake({ requestId: 'req-1' });
+      const svc = new GoogleAdsConversaoService(
+        prisma,
+        env({ ...CREDENCIAIS, GOOGLE_ADS_LOGIN_CUSTOMER_ID: '178-496-3045' }),
+        ads as any,
+      );
 
       const r = await svc.enviarPendentes();
 
       expect(r.enviadas).toBe(1);
-      const upload = ads.requisitar.mock.calls.find((c: any[]) =>
-        c[0].includes('uploadClickConversions'),
+      // O envio NÃO passa mais pelo Ads API — só o check do tipo da ação passa.
+      expect(ads.requisitar.mock.calls.every((c: any[]) => c[0].includes('searchStream'))).toBe(
+        true,
       );
-      expect(upload[0]).toBe('customers/8925231246:uploadClickConversions');
-      expect(upload[1].partialFailure).toBe(true);
-      expect(upload[1].validateOnly).toBeUndefined();
-      expect(upload[1].conversions[0]).toEqual({
-        gclid: 'gclid-a',
-        conversionAction: 'customers/8925231246/conversionActions/9999888877',
-        // ESPAÇO, não 'T'. E fuso explícito.
-        conversionDateTime: '2026-08-22 19:30:00-03:00',
-        conversionValue: 210.5,
-        currencyCode: 'BRL',
-        orderId: 'LP-1',
+
+      const [caminho, corpo] = ads.requisitarDataManager.mock.calls[0];
+      expect(caminho).toBe('events:ingest');
+      expect(corpo.validateOnly).toBeUndefined();
+      // O destino carrega conta + ação; o MCC vai só como loginAccount, sem hífen.
+      expect(corpo.destinations[0]).toEqual({
+        operatingAccount: { accountType: 'GOOGLE_ADS', accountId: '8925231246' },
+        productDestinationId: '9999888877',
+        loginAccount: { accountType: 'GOOGLE_ADS', accountId: '1784963045' },
       });
+      expect(corpo.events[0]).toEqual({
+        adIdentifiers: { gclid: 'gclid-a' },
+        // 'T', não espaço — o contrário do caminho antigo. E fuso explícito.
+        eventTimestamp: '2026-08-22T19:30:00-03:00',
+        conversionValue: 210.5,
+        currency: 'BRL',
+        eventSource: 'WEB',
+        transactionId: 'LP-1',
+      });
+    });
+
+    /** Sem MCC configurado o campo não vai — mandar vazio é erro de permissão. */
+    it('omite loginAccount quando não há MCC', async () => {
+      const { prisma } = prismaFake([pedido('a', 'LP-1')]);
+      const ads = adsFake({ requestId: 'req-1' });
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
+
+      await svc.enviarPendentes();
+
+      expect(ads.requisitarDataManager.mock.calls[0][1].destinations[0].loginAccount).toBeUndefined();
     });
 
     it('vira o dia pelo fuso da loja, não por UTC', () => {
       const svc = new GoogleAdsConversaoService({} as any, env(CREDENCIAIS), adsFake({}) as any);
-      const texto = (svc as any).momento(new Date('2026-08-23T02:30:00.000Z'));
-      expect(texto.startsWith('2026-08-22 23:30:00')).toBe(true);
+      const texto = (svc as any).momentoRfc3339(new Date('2026-08-23T02:30:00.000Z'));
+      expect(texto.startsWith('2026-08-22T23:30:00')).toBe(true);
     });
 
-    /** Com validateOnly o Google devolve `results` vazio DE PROPÓSITO. */
-    it('no modo validar não carimba nada e não confunde results vazio com falha', async () => {
+    it('no modo validar não carimba nada', async () => {
       const { prisma, updateMany, update } = prismaFake([pedido('a', 'LP-1')]);
-      const ads = adsFake({ results: [] });
+      const ads = adsFake({ requestId: 'req-1' });
       const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
 
       const r = await svc.enviarPendentes(200, true);
@@ -186,93 +221,62 @@ describe('GoogleAdsConversaoService', () => {
       expect(r.recusadas).toBe(0);
       expect(updateMany).not.toHaveBeenCalled();
       expect(update).not.toHaveBeenCalled();
-      const upload = ads.requisitar.mock.calls.find((c: any[]) =>
-        c[0].includes('uploadClickConversions'),
-      );
-      expect(upload[1].validateOnly).toBe(true);
+      expect(ads.requisitarDataManager.mock.calls[0][1].validateOnly).toBe(true);
     });
   });
 
+  /**
+   * A Data Manager é TUDO OU NADA: `IngestEventsResponse` traz só `requestId` e
+   * `fieldWarnings`, sem resultado por evento. Não existe mais "carimba a
+   * aceita e devolve a recusada pra fila" — ou o lote entra, ou nada entra.
+   */
   describe('recusa', () => {
-    const comErro = (indice: number, codigo: string) => ({
-      results: [{ orderId: 'LP-1' }, {}],
-      partialFailureError: {
-        details: [
-          {
-            errors: [
-              {
-                errorCode: { conversionUploadError: codigo },
-                message: 'motivo do google',
-                location: { fieldPathElements: [{ fieldName: 'conversions', index: indice }] },
-              },
-            ],
-          },
-        ],
-      },
-    });
-
-    it('carimba só as aceitas e guarda o motivo da recusada', async () => {
+    it('requisição que falha não carimba NENHUM pedido como enviado', async () => {
       const { prisma, updateMany, update } = prismaFake([pedido('a', 'LP-1'), pedido('b', 'LP-2')]);
       const svc = new GoogleAdsConversaoService(
         prisma,
         env(CREDENCIAIS),
-        adsFake(comErro(1, 'TOO_RECENT_EVENT')) as any,
+        adsFake(new Error('DataManager 403: CUSTOMER_NOT_ALLOWLISTED_FOR_THIS_FEATURE')) as any,
       );
 
-      const r = await svc.enviarPendentes();
-
-      expect(r).toMatchObject({ enviadas: 1, recusadas: 1 });
-      expect(updateMany.mock.calls[0][0].where.id.in).toEqual(['a']);
-      expect(update.mock.calls[0][0].where.id).toBe('b');
-      expect(update.mock.calls[0][0].data.adsConversaoErro).toContain('TOO_RECENT_EVENT');
-    });
-
-    /** Erro que se resolve sozinho conta +1 e volta na próxima. */
-    it('recusa temporária incrementa a tentativa', async () => {
-      const { prisma, update } = prismaFake([pedido('a', 'LP-1'), pedido('b', 'LP-2')]);
-      const svc = new GoogleAdsConversaoService(
-        prisma,
-        env(CREDENCIAIS),
-        adsFake(comErro(1, 'TOO_RECENT_EVENT')) as any,
-      );
-
-      await svc.enviarPendentes();
-
-      expect(update.mock.calls[0][0].data.adsConversaoTentativas).toEqual({ increment: 1 });
+      await expect(svc.enviarPendentes()).rejects.toThrow('CUSTOMER_NOT_ALLOWLISTED');
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
     });
 
     /**
-     * Recusa DEFINITIVA sai da fila na hora. Sem isso ela volta de hora em
-     * hora pra sempre, entope o lote (a venda nova nunca sobe) e queima a cota
-     * diária do token — que é compartilhada com o espelho de gasto, então
-     * derrubaria a tela de ROAS junto.
+     * Aviso de campo NÃO é recusa: o lote entrou. Tratar aviso como falha
+     * devolveria pra fila uma conversão que o Google já contou, e o
+     * `transactionId` faria o Google deduplicar em silêncio — a venda pareceria
+     * eternamente pendente.
      */
-    it('recusa definitiva sai da fila na hora, sem gastar as 5 tentativas', async () => {
-      const { prisma, update } = prismaFake([pedido('a', 'LP-1'), pedido('b', 'LP-2')]);
-      const svc = new GoogleAdsConversaoService(
-        prisma,
-        env(CREDENCIAIS),
-        adsFake(comErro(1, 'EXPIRED_EVENT')) as any,
-      );
+    it('aviso de campo não impede o carimbo — o lote entrou', async () => {
+      const { prisma, updateMany } = prismaFake([pedido('a', 'LP-1')]);
+      const ads = adsFake({
+        requestId: 'req-1',
+        fieldWarnings: [{ fieldPath: 'events[0].userData', warning: 'sem dado de usuário' }],
+      });
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
 
-      await svc.enviarPendentes();
+      const r = await svc.enviarPendentes();
 
-      expect(update.mock.calls[0][0].data.adsConversaoTentativas).toBe(5);
+      expect(r).toMatchObject({ enviadas: 1, recusadas: 0 });
+      expect(updateMany.mock.calls[0][0].where.id.in).toEqual(['a']);
     });
 
-    it('sem detalhe de índice, ainda registra a recusa em vez de carimbar como enviada', async () => {
-      const { prisma, updateMany, update } = prismaFake([pedido('a', 'LP-1')]);
+    it('carimba o lote inteiro de uma vez, sem update pedido a pedido', async () => {
+      const { prisma, updateMany, update } = prismaFake([pedido('a', 'LP-1'), pedido('b', 'LP-2')]);
       const svc = new GoogleAdsConversaoService(
         prisma,
         env(CREDENCIAIS),
-        adsFake({ results: [{}], partialFailureError: {} }) as any,
+        adsFake({ requestId: 'req-1' }) as any,
       );
 
       const r = await svc.enviarPendentes();
 
-      expect(r).toMatchObject({ enviadas: 0, recusadas: 1 });
-      expect(updateMany).not.toHaveBeenCalled();
-      expect(update).toHaveBeenCalledTimes(1);
+      expect(r).toMatchObject({ enviadas: 2, recusadas: 0 });
+      expect(updateMany.mock.calls[0][0].where.id.in).toEqual(['a', 'b']);
+      expect(update).not.toHaveBeenCalled();
     });
   });
 });
