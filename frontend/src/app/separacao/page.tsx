@@ -1951,6 +1951,10 @@ type CarrinhoAB = {
   // Só no source='ecommerce': número LP-xxxxxx e itens já embutidos na lista
   // (vêm do nosso banco — não precisa de /full).
   order_number?: string | null;
+  // Status CRU do pedido no site novo. `payment_failed` = cartão RECUSADO (a
+  // cliente não vai "terminar de pagar"); `awaiting_payment` = PIX/link em
+  // aberto. A tela dizia "aguardando pagamento" pros dois.
+  pedido_status?: string | null;
   cart_items?: any[];
   // Pedido WC vinculado (quando o CartFlows registrou que o carrinho virou
   // pedido). Usado pra deduplicar contra os itens do fallback WooCommerce.
@@ -2395,6 +2399,13 @@ function CarrinhosTab() {
             const isWc = c.source === 'woocommerce';
             const isEcom = c.source === 'ecommerce';
             const isEcomContact = c.source === 'ecommerce-contact';
+            // CARTÃO RECUSADO ≠ AGUARDANDO PAGAMENTO. O primeiro está morto (ela
+            // não vai "terminar de pagar" — o banco negou); o segundo é PIX/link
+            // em aberto. O mesmo rótulo pros dois mandava a operadora cobrar a
+            // conclusão de um pagamento que nunca vai acontecer, e a mensagem
+            // certa aqui é outra: "seu cartão foi recusado, quer tentar de novo
+            // ou pagar no PIX?".
+            const recusado = isEcom && c.pedido_status === 'payment_failed';
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
@@ -2404,7 +2415,8 @@ function CarrinhosTab() {
                     {nome}
                     {isCompleted && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Recuperado</span>}
                     {isWc && <span className="ml-2 text-[10px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded font-bold uppercase" title="Pedido iniciado no site sem pagamento (via WooCommerce) — o plugin de carrinhos não registrou este">Site</span>}
-                    {isEcom && !isCompleted && <span className="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Pedido criado no site novo, aguardando confirmação do pagamento${c.order_number ? ` — ${c.order_number}` : ''}`}>Aguardando pagamento</span>}
+                    {isEcom && !isCompleted && recusado && <span className="ml-2 text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Cartão RECUSADO pelo banco — este pagamento não vai se concluir sozinho${c.order_number ? ` (${c.order_number})` : ''}. Se ela tivesse tentado de novo e passado, este pedido nem apareceria aqui.`}>Cartão recusado</span>}
+                    {isEcom && !isCompleted && !recusado && <span className="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Pedido criado no site novo, aguardando confirmação do pagamento${c.order_number ? ` — ${c.order_number}` : ''}`}>Aguardando pagamento</span>}
                     {isEcom && isCompleted && <span className="ml-2 text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Pagamento confirmado</span>}
                     {isEcomContact && <span className="ml-2 text-[10px] bg-violet-100 text-violet-800 px-1.5 py-0.5 rounded font-bold uppercase" title="Nome e WhatsApp capturados antes de existir pedido">Contato capturado</span>}
                     {c.optin === false && <span className="ml-2 text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase" title="Nao marcou o aviso de WhatsApp no checkout — aparece aqui para voce ver o volume real de abandono, mas nao pode receber disparo">Sem opt-in</span>}

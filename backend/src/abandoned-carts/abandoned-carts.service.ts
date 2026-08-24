@@ -658,6 +658,95 @@ export class AbandonedCartsService {
   // recuperação possível.
   // ==========================================================================
 
+  /**
+   * Janela em que uma VENDA FECHADA explica o pedido não pago que ficou pra trás.
+   *
+   * A retentativa de cartão acontece em segundos (4 tentativas em 1min13s no
+   * caso que originou isto). As 2h pra trás cobrem o caminho inverso — pagou e
+   * depois tentou de novo — e as 24h pra frente cobrem o PIX que é pago horas
+   * depois e a cliente que volta no mesmo dia.
+   */
+  private static readonly VENDA_ANTES_MS = 2 * 60 * 60_000;
+  private static readonly VENDA_DEPOIS_MS = 24 * 60 * 60_000;
+
+  private static soDigitosFone(v: unknown) {
+    return String(v ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+  }
+
+  /**
+   * JÁ FOI VENDIDO — RETENTATIVA NÃO É CARRINHO (dono, 24/08/2026).
+   *
+   * O checkout cria um pedido NOVO a cada tentativa de pagamento em vez de
+   * recobrar o mesmo. Cartão recusado 3x e aprovado na 4ª deixa 3 pedidos
+   * `payment_failed` pra trás — e todos caíam aqui como "carrinho abandonado",
+   * com botão de WhatsApp do lado, oferecendo pra loja cobrar uma cliente que
+   * ACABOU de comprar. Foi assim com a HELEMAR VALIM (LP-000195/196/197
+   * recusados, LP-000198 pago 23 segundos depois, R$ 229,69).
+   *
+   * Medido na base em 24/08: 9 dos 41 não pagos dos últimos 30 dias
+   * (R$ 2.038,11 de R$ 10.389,04) eram retentativa de venda que FECHOU.
+   *
+   * A regra é de ESTADO, não de status: pedido sem pagamento cuja MESMA cliente
+   * (e-mail ou telefone) fechou uma venda na janela acima não é carrinho — some
+   * da lista e para de contar nos KPIs, que derivam da mesma lista. O que sobra
+   * é abandono de verdade, e é nele que a loja gasta a ligação.
+   *
+   * Vale pros DOIS ramos (`abandoned` e `all`): a contagem sai de `items`, então
+   * filtrar num lugar só faria a lista e o KPI divergirem de novo.
+   */
+  private async semRetentativaDeVendaFeita(orders: any[]): Promise<any[]> {
+    const naoPagos = (orders ?? []).filter((o: any) => !o.paidAt && o.createdAt);
+    if (naoPagos.length === 0) return orders ?? [];
+
+    const tempos = naoPagos.map((o: any) => new Date(o.createdAt).getTime());
+    const de = new Date(Math.min(...tempos) - AbandonedCartsService.VENDA_ANTES_MS);
+    const ate = new Date(Math.max(...tempos) + AbandonedCartsService.VENDA_DEPOIS_MS);
+
+    // A venda que explica o abandono pode estar FORA do filtro de data da tela
+    // (ela filtra a tentativa, não a compra), por isso esta busca é própria.
+    //
+    // `paidAt` cru, e NÃO o `pedidoPago()` do relatório: a pergunta aqui é "ela
+    // pagou?", não "isso virou receita?". Pedido pago e cancelado depois conta
+    // como pago — ligar cobrando o pagamento de um carrinho que ela já quitou
+    // continua errado (LP-000049 → LP-000070, mesmo valor, 22h depois).
+    const pagos = await (this.prisma as any).order.findMany({
+      where: {
+        source: 'ecommerce',
+        paidAt: { not: null },
+        createdAt: { gte: de, lte: ate },
+      },
+      select: { customerEmail: true, customerPhone: true, createdAt: true },
+      take: 500,
+    });
+    if (pagos.length === 0) return orders;
+
+    const jaComprou = (o: any) => {
+      const email = String(o.customerEmail ?? '').trim().toLowerCase();
+      const fone = AbandonedCartsService.soDigitosFone(o.customerPhone);
+      const t = new Date(o.createdAt).getTime();
+      return pagos.some((p: any) => {
+        const mesmaPessoa =
+          (email !== '' && String(p.customerEmail ?? '').trim().toLowerCase() === email) ||
+          (fone.length >= 10 && AbandonedCartsService.soDigitosFone(p.customerPhone) === fone);
+        if (!mesmaPessoa) return false;
+        const tp = new Date(p.createdAt).getTime();
+        return (
+          tp >= t - AbandonedCartsService.VENDA_ANTES_MS &&
+          tp <= t + AbandonedCartsService.VENDA_DEPOIS_MS
+        );
+      });
+    };
+
+    const limpos = orders.filter((o: any) => Boolean(o.paidAt) || !jaComprou(o));
+    const sumiram = orders.length - limpos.length;
+    if (sumiram > 0) {
+      this.logger.log(
+        `[carrinhos] ${sumiram} pedido(s) não pago(s) escondido(s): a mesma cliente fechou a venda na sequência`,
+      );
+    }
+    return limpos;
+  }
+
   async listEcommercePending(params: {
     status?: string; // abandoned | recovered/completed | lost | all
     since?: string;  // YYYY-MM-DD
@@ -728,12 +817,13 @@ export class AbandonedCartsService {
     }
 
     try {
-      const orders = await (this.prisma as any).order.findMany({
+      const encontrados = await (this.prisma as any).order.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         take: 200,
         include: { items: true },
       });
+      const orders = await this.semRetentativaDeVendaFeita(encontrados);
 
       const items = orders.map((o: any) => {
         const nome = String(o.customerName ?? '').trim();
@@ -763,6 +853,13 @@ export class AbandonedCartsService {
           order_id: Number(o.wcOrderId),
           order_number: o.wcOrderNumber ?? null,
           source: 'ecommerce',
+          // Status CRU do pedido, só pra tela saber o que dizer: `payment_failed`
+          // é cartão RECUSADO (morto — a cliente não vai "terminar de pagar"),
+          // `awaiting_payment` é PIX/link em aberto (vivo). Chamar os dois de
+          // "aguardando pagamento" fazia a operadora cobrar quem já era caso
+          // perdido — e, quando a cliente insistia e passava, cobrar quem já
+          // tinha pago (HELEMAR VALIM, 24/08: 3 recusas e a 4ª aprovada).
+          pedido_status: o.status ?? null,
           utmCampaign: o.utmCampaign ?? null,
           cart_items: cartItems,
         };
