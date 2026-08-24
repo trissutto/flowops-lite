@@ -2579,10 +2579,11 @@ function PdvPageInner() {
               <span className={rowLabel}>Trocas</span>
               <span className={rowKey}>F4</span>
             </Link>
-            <Link href="/site/trocas" className={rowBase} title="Troca de pedido do site (lurds.com.br)">
-              <Globe className={rowIcon} />
-              <span className={rowLabel}>Troca site</span>
-            </Link>
+            {/* "Troca site" saiu do menu em 24/08: TROCAS agora começa
+                perguntando onde a cliente comprou e abre a tela certa — dois
+                itens de menu pra mesma operação era justamente o que fazia a
+                vendedora escolher a porta errada. A tela /site/trocas continua
+                existindo e é alcançada por lá. */}
             <Link href="/minha-loja/pdv/marcados" className={rowBase} title="Marcados (provar em casa)">
               <Tag className={rowIcon} />
               <span className={rowLabel}>Marcados</span>

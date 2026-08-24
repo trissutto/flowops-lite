@@ -1249,6 +1249,16 @@ export default function DevolucaoPage() {
                   Na dúvida? Se ela tem número de pedido <b>LP-</b>, <b>ON-</b> ou{' '}
                   <b>LIVE-</b>, é do site.
                 </p>
+                {/* SAÍDA — o popup cobre a tela inteira, inclusive o "Voltar"
+                    do cabeçalho. Sem esta porta a vendedora que abriu Trocas
+                    sem querer fica presa e só sai pelo F5. */}
+                <button
+                  type="button"
+                  onClick={() => { window.location.href = '/minha-loja/pdv'; }}
+                  className="mt-3 w-full rounded-xl border-2 border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                >
+                  ← Voltar pro PDV
+                </button>
               </div>
             </div>
           </div>
