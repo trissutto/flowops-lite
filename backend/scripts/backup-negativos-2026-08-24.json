@@ -1,0 +1,10586 @@
+{
+  "wincred": [
+    {
+      "codigo": "10001516",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11008118",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11015000",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11022015",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11022947",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11023067",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11024309",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11027096",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11027997",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11028024",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11028543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11029212",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11030379",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11031055",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11035718",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11037798",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11040156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11044932",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "11052487",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11058038",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11058151",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11058809",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059226",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059271",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059325",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059943",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11070740",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11071037",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11071112",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11072126",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11074526",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11089674",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11091561",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11095187",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11098447",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11099567",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11099727",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11099758",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11099833",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11099840",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11109471",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11109891",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11112037",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11114727",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11115779",
+      "loja": "01",
+      "estoque": -4
+    },
+    {
+      "codigo": "11118015",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11118817",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11118961",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11123767",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11124221",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11128304",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11128779",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11129974",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11133902",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11135319",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11136378",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11140122",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11140610",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11141105",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11141112",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11142669",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11143956",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11162469",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11164500",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11171287",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11175681",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11176527",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11180753",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11181156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11186137",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11186519",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11189350",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11189633",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11191469",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11192862",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11193432",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11198215",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11199274",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11202493",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11204077",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11204626",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11214014",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11215165",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11218838",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11223412",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11226864",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11231271",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11239000",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "11245384",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11247104",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11248217",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11248538",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11248675",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11257745",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11270218",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11284543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11285007",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11285403",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11285410",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11287186",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11287803",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11288718",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11288725",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11295563",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11296713",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11297758",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11297871",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11297901",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11298670",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11299110",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11300861",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11302674",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11304036",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11304296",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11304319",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11304371",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11305361",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11310600",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11310907",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11311010",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11312925",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11314523",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11320241",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11320289",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11322870",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11322900",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11323082",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11324591",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11325604",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11330714",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11330844",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11331452",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11331469",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11334378",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11334729",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11335085",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11336082",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11336631",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11337065",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11342403",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11349822",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11350903",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11353812",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11358107",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11358671",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11359012",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11360179",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11360292",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11363552",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "11369905",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11372554",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11372653",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11373094",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11373681",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11373988",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11378006",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11378020",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11380757",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11396116",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11396550",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11400424",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11400523",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11402312",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11418207",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11419204",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11419310",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11420156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11420262",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11420323",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11421993",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422044",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422211",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422358",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422402",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11424468",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11429494",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11432548",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11434351",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11434573",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11434627",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11434634",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11434665",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11436119",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11436577",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11440130",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11443841",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11451570",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11451631",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11453444",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11453642",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11453802",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11456681",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11456971",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11472841",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11473008",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11473794",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11473916",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477686",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11479772",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11480860",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11485162",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11485858",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11486183",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11486626",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11488064",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11488163",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11488392",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11491408",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11493044",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11493754",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11494409",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11496175",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11503804",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11506522",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11510024",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11515623",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11520429",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11520740",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11521402",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11523017",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11528395",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11532958",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11534037",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11542377",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11544104",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11545521",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11547969",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "11548058",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11555971",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11562320",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11563679",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11566199",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11568957",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "11571582",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11572558",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11573739",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11575177",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11576631",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11577355",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11578109",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11589259",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11589266",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11589273",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11589556",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592532",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592570",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592709",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592815",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592853",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11598510",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11598541",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "11599029",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11599166",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11599449",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11608219",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11609407",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11609612",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611462",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611486",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611547",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611561",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611721",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611745",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611776",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11613350",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11630081",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11630104",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "123321",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "1359200040002",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "163859",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "16544",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "17",
+      "loja": "01",
+      "estoque": -70
+    },
+    {
+      "codigo": "195348",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2018218",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2127224",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2132259",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2141640",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2202900050149",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "24",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "244114",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "26109",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "270618",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2800967",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "281737",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2934815",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2944708",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2945491",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2945507",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2945569",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "2945576",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2945637",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2945644",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2959528",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2959597",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3019603",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "31",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "3186787",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "3218181",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3269169",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3321027",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3445778",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3448953",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3466438",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3472194",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3476543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3482315",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3496862",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3515709",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "352963",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "3562185",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3570982",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3594353",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3618455",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3618820",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3639375",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3639436",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3640067",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3649664",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3651131",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3656365",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3660133",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3668955",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3672167",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "3684337",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3704592",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3746462",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3777183",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3780817",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3783139",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3788677",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3840719",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3841853",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3850480",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3852071",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3864661",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3864692",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3871614",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3875148",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3878156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3900956",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3912997",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3913222",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3919989",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3927076",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3929025",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3933770",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3939352",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3956564",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3971147",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3981719",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3982242",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3982303",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3982716",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3987261",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3989531",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3993712",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3998519",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3998526",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "3998533",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "4002031",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4002116",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4004011",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4004042",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4006862",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4008934",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4021742",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4022800",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4030676",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4051428",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "406017",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4065043",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4065302",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4068297",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "4074243",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4079187",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4085881",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4089704",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4095835",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "42857",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4400572610519",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4402228266057",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5001774",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5003556",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5022977",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5026906",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5027866",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5030330",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5036592",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5037766",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5038268",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5038787",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5038893",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5039999",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5043316",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5043514",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5044382",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5045877",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5055760",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5074563",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5078844",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5079872",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5083480",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5083886",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5090419",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5095742",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5112852",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5113255",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5113262",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5122455",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5123452",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5123780",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5124053",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5130177",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5131549",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5131570",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5134311",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5134656",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5135776",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5135790",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5135806",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5136230",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5139569",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5157877",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5157891",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5160358",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5160709",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5169252",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5169351",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5169689",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5170289",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177219",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177240",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177509",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177530",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5178483",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5178513",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5179763",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5180448",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5180479",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5180639",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5180714",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5181513",
+      "loja": "01",
+      "estoque": -4
+    },
+    {
+      "codigo": "5181773",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182008",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182442",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182497",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5183395",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5190171",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5190188",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5190539",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191628",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5191710",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5192106",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5192137",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5192144",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5192694",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5193110",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5193165",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5194858",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5197040",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5197552",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5197712",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5198450",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5198955",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5198993",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200924",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200931",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5201143",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5201280",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5203734",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5205103",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5207664",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5207886",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5209965",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5210183",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5210190",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212040",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212057",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5212088",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212170",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5212231",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212248",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5212255",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212460",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212484",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212811",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212842",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213436",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213443",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213481",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213702",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213719",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213726",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213870",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213900",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5214341",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5214402",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5215171",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5215515",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5222148",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5222162",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5227068",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5228164",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5236374",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5238682",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5238897",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5238903",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5238910",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5239511",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5239917",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5241132",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242429",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242474",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242696",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242719",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242900",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242917",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242924",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242948",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242955",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243112",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243174",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243198",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243204",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243211",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243242",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243266",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243877",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243983",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5244003",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5244010",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5244027",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5244034",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5244072",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5244089",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5244096",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5247585",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5248094",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5248650",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5249947",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5250264",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5250325",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5253470",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5253562",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5255061",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5257270",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5257508",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5257522",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5258451",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5258888",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "526487",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5268221",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5269365",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5270569",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5270965",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5271061",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5271115",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5273034",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5273041",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274185",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "5274192",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274208",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274307",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5278589",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5279197",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5279579",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5286690",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5296224",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5296231",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5296248",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5299171",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5300372",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300402",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5301867",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5302130",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5303939",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305216",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305964",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305971",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "5308040",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5308156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5308170",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5308194",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5330744",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5330911",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5334377",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5334414",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5335039",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5337279",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5337316",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5339860",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5341788",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5342402",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5344345",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5344475",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5344482",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5344727",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5344901",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345038",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345144",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345151",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345502",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5345526",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345533",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5346387",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5346394",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5346844",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5349975",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5351596",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5355068",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5355273",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5355327",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5356287",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5356515",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5357833",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358427",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358458",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358588",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5361281",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5361458",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5361755",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "5362240",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363223",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363650",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363674",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365425",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365982",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366132",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5367368",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5368587",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5370382",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5370580",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5370597",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5371105",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "5372409",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372423",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373161",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373178",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373277",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373468",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373482",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373499",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5374793",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5378098",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5378401",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5378968",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379125",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379163",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379361",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379385",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379620",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5379651",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379989",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5380152",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383030",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383207",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383221",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383535",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383801",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383818",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5384730",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5384945",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385027",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385034",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385065",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385140",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385713",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385874",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5386277",
+      "loja": "01",
+      "estoque": -197
+    },
+    {
+      "codigo": "5386666",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387496",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387533",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387854",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5388196",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5388790",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389643",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389650",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389735",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389759",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389766",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5390069",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5390106",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5390328",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5390366",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5390830",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5391394",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5392742",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5396412",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5396429",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "5396443",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5396481",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5396542",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5398492",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5402342",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5402618",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5403462",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5404452",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5404674",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5404711",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5404766",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5405046",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5405831",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5407118",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5407163",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5407910",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "68246",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "72922",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7890016917552",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890212555978",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890485877876",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890989634692",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890989781273",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891186175407",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7891186229919",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891186229957",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "7891186230250",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891186432296",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891186547143",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891186814139",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7891669445003",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891669445065",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891669813178",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7892487559811",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7892758530440",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7892758589301",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7892888091064",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7895857720132",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7895857784967",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7898521120955",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7899423831543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7900373051469",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7909112887680",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909123108828",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909123232530",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909129113888",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909129708718",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909173207373",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909173228842",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909173736538",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909173901738",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909188046851",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206131798",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7909206210516",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206595156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206595491",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206708983",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206930018",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206994560",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206995420",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206995451",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206995505",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206995659",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909263082255",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909319327262",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909319777555",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909356264308",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909356398508",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7909356448234",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909356723171",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909358186905",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909358297649",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909358327735",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392119945",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392363959",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392498484",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392761458",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392804292",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392808283",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392808399",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392993279",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392993361",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "7909392995068",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392995112",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909400013456",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7909400855919",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909442814714",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909843035626",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909879337213",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909989587027",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909989785447",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000002440",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003652",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003874",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000004543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000005892",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "+8000000009388",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000011060",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "85182",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11010494",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11032458",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11032502",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11044611",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11063018",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11069973",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11076582",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11081562",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11118312",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11126706",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11132721",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11132905",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11147701",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11149811",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11159322",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11169727",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11181149",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11181163",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11181170",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11186687",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11197515",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11198246",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11239642",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11278870",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11280224",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11286868",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11292890",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11295662",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11295921",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11307945",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11328674",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11349822",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11378013",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11394792",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11395393",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11397175",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11418214",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11459262",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11461272",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11463733",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11474050",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477525",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11498131",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11498223",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11499282",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11511908",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11519683",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11519980",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11534150",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548256",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548713",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11572329",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11572848",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11575306",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11578086",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11578093",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11578536",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11578543",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592860",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11613329",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11614685",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11618492",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11630005",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "166751",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "17",
+      "loja": "02",
+      "estoque": -5
+    },
+    {
+      "codigo": "2000000921761",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3526149",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3553305",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3635117",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3659618",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3682005",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3722909",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3749821",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3775837",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3850053",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3946374",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4003397",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4003427",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4012160",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4017233",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4026266",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4053996",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4054092",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4066439",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4096450",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4096498",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5017843",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5035984",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5106585",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5118304",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5148110",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5157808",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177530",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5197583",
+      "loja": "02",
+      "estoque": -2
+    },
+    {
+      "codigo": "5198450",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212163",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213740",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5247127",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5267842",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274710",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5304899",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333530",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5344826",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358441",
+      "loja": "02",
+      "estoque": -2
+    },
+    {
+      "codigo": "5363988",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363995",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364305",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365982",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366026",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366071",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373130",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373345",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373871",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379736",
+      "loja": "02",
+      "estoque": -2
+    },
+    {
+      "codigo": "5381418",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382644",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383276",
+      "loja": "02",
+      "estoque": -2
+    },
+    {
+      "codigo": "5395620",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11332534",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "11521594",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5158225",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5197859",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5254774",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300853",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300877",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5361359",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379910",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891426031791",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000001863",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000006738",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "0 05333530",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11133865",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11214267",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11214311",
+      "loja": "04",
+      "estoque": -2
+    },
+    {
+      "codigo": "11344797",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11351009",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11573630",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177219",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191567",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213818",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "5230235",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "5254699",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "5395514",
+      "loja": "04",
+      "estoque": -2
+    },
+    {
+      "codigo": "5396849",
+      "loja": "04",
+      "estoque": -2
+    },
+    {
+      "codigo": "8000000004352",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11088776",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11230106",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11300236",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11317746",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11344766",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11469957",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11512240",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11573739",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3139714",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3140017",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3390283",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3390337",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3390733",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3492864",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3494202",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3519578",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3650929",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3859025",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3989531",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "4002116",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "4005407",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "4032724",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "4037538",
+      "loja": "05",
+      "estoque": -2
+    },
+    {
+      "codigo": "4066538",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5002863",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177868",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200252",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5253296",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5253883",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5271412",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5355761",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364640",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379774",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383818",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5395538",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5399000",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5399031",
+      "loja": "05",
+      "estoque": -2
+    },
+    {
+      "codigo": "5399086",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000001672",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000004109",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11057642",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11057802",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11057871",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059578",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11153764",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11153849",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11192862",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11197713",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11240204",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11240242",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11271710",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11272625",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11272908",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11280620",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11310600",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11342946",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11343127",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11343523",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11343530",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11343608",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "11343684",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11343714",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11343721",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11343745",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "11344018",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11366423",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11390107",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11391586",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11404019",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11404323",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11412342",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11448556",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11469766",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11473701",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11562269",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11574279",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11622666",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3087879",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3162712",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3328019",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3328071",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3434727",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3434734",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3450680",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3482315",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "3516072",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3542538",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3588192",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3594469",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3611197",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3645697",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3648414",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3659793",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "3816486",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3821428",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3855997",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3858561",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3858578",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "3858608",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3859247",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3862773",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3877999",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3994320",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "4058724",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5035991",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5085613",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5129218",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5129331",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5178681",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "5178735",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5190515",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5192892",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5192915",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "5193196",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "5193240",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "5197972",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200375",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213252",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213337",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5239788",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242160",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5346400",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5348978",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "5363407",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372867",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379620",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382484",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890007369278",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890212763427",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890212804298",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891426029729",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909356044061",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392119945",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000006691",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "10001011",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11052579",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11174646",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11300236",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11310587",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11369646",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11459378",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477600",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477709",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11561811",
+      "loja": "07",
+      "estoque": -2
+    },
+    {
+      "codigo": "5099047",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5114344",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5178827",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191536",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191932",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5239818",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5355174",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382491",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5393411",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000006745",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11104827",
+      "loja": "08",
+      "estoque": -1
+    },
+    {
+      "codigo": "11604198",
+      "loja": "08",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363674",
+      "loja": "08",
+      "estoque": -1
+    },
+    {
+      "codigo": "11176923",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183471",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "11367666",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "11484134",
+      "loja": "10",
+      "estoque": -2
+    },
+    {
+      "codigo": "4002031",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "4002086",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5169672",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177004",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182473",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212040",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5230365",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5301324",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333509",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345304",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363469",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379941",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389667",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389674",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5394890",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5395620",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5395705",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5397761",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003171",
+      "loja": "10",
+      "estoque": -2
+    },
+    {
+      "codigo": "11181194",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11271819",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11385974",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11509578",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11510383",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11547945",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548621",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "3244982",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "3514979",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "3542934",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "3558119",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "3718162",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "4072089",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5043941",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5091331",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5176779",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177110",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177660",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5183531",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191857",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5192946",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200641",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274703",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305933",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5334377",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358014",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363889",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5374205",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5377824",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5380022",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387816",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5395545",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11530206",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5148592",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5267347",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5332502",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362738",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372065",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372959",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379651",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383221",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003966",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000004093",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "+05334995",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11001799",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11088691",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11128465",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11128496",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11132899",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11192626",
+      "loja": "14",
+      "estoque": -2
+    },
+    {
+      "codigo": "11291466",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11499237",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11510857",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548294",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11563051",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11563402",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11571803",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11573890",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11575351",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11608349",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611554",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "123321",
+      "loja": "14",
+      "estoque": -2
+    },
+    {
+      "codigo": "3565148",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3672198",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3712665",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3854662",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3854679",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3864647",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3933770",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "4002031",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "4009351",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "4062950",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5051328",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5086665",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5112807",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5118434",
+      "loja": "14",
+      "estoque": -3
+    },
+    {
+      "codigo": "5118618",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5129270",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5179015",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5181438",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182527",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182862",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182992",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5190553",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191734",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300501",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5301102",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305803",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305940",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5341986",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345526",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5356249",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5360826",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365326",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372928",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379361",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379378",
+      "loja": "14",
+      "estoque": -2
+    },
+    {
+      "codigo": "5387687",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5388837",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890212849046",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11046820",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "11175001",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "11344759",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "11589211",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "17",
+      "loja": "15",
+      "estoque": -3
+    },
+    {
+      "codigo": "5214716",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362486",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392119280",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "11037750",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059387",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11167907",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11296379",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11350989",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11370239",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11469636",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11523970",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548621",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11577386",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11623557",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "2968032",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "3458792",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "3542309",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "3555927",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "3616673",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "3940563",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "4061311",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "4070214",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5088928",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5251438",
+      "loja": "17",
+      "estoque": -2
+    },
+    {
+      "codigo": "5251476",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358670",
+      "loja": "17",
+      "estoque": -71
+    },
+    {
+      "codigo": "5362875",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5371761",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372102",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372867",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5388288",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "5394982",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11214250",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11291985",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11427568",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477235",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11533306",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11598565",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611714",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11619963",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "4002130",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5131143",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300853",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5332700",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389797",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389803",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000001504",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11002178",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11010159",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11010180",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11010197",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11030423",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11030430",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11033592",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11033875",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11047858",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11055433",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11057970",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11061731",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11063155",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11066071",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11066149",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11073567",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11078401",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11090748",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11093220",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11104568",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11105756",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11105763",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11106623",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11106661",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11106807",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11106906",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11107866",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11108238",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11108245",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11115557",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11120773",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11120964",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11121244",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11121251",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11122616",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11131458",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11149095",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11149101",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11149187",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11167921",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11174455",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11177647",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11177753",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11180470",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11180487",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11182320",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11185512",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11185529",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11186670",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11190233",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11193449",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11195153",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11197539",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11197546",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11198307",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11201885",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11213505",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11213550",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11234067",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11239871",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11252139",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11258070",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11258087",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11270966",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11270973",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11270980",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11270997",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11279389",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11279679",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11280705",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11286868",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11294221",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11295914",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11308058",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329046",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329367",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11329374",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11329381",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329411",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329428",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329473",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329480",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329503",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11329510",
+      "loja": "19",
+      "estoque": -3
+    },
+    {
+      "codigo": "11329688",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11344728",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11348986",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11356356",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11363088",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11368519",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11374688",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11382515",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11385820",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11385837",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11385844",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11385851",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11385882",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11385899",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11385905",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11390107",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11391890",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11394822",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11404316",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11404330",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11404347",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11406631",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11406662",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11406693",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11406730",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11406747",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11406761",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11412175",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11419815",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11427537",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11427766",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11454496",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11461258",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11461272",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11472339",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477266",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477303",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11481522",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11483502",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11497486",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11497752",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11498421",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11504863",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11505709",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11507796",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11510475",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11510499",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11511533",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11519874",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11524793",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11525585",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11534150",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11534501",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11534556",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11546870",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11547310",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548096",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548256",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11548287",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11548300",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548324",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11562092",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11563099",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11572053",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11572329",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11572411",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11577089",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11577973",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11578116",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11578154",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11588382",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592563",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11592679",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "11592723",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11600855",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11603238",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11607076",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11607892",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11607939",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11609711",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611363",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11612032",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11616382",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11621003",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11621010",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11621034",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11623717",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11629542",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11629573",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "11630012",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "123321",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "17",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "205917",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "2844428",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "2876290",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "2968049",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3045152",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3087961",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3154731",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3154748",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3275153",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3276525",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3305256",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3427545",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3448427",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3463284",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3466445",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3521069",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3521076",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3521168",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3521656",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "3521663",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3534366",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3534434",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3600931",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3606674",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3609927",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3609958",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3625477",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3630716",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3635278",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3645703",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3648780",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "3649688",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3676998",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "3678831",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3693094",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3693124",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3693636",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3693643",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3693711",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3699447",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3773826",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3773833",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "3774472",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "3774489",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3774724",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3798522",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3839980",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3862834",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "3862841",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4001935",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4001942",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4012153",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4012160",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "4013501",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4060789",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4072058",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4072089",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "4072096",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5000920",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5027170",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5027200",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5066926",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5066933",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5072903",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5073788",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5073801",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5113682",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5115310",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5115389",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "5115396",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5115464",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5130801",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5130870",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5130887",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5133413",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5136940",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5137244",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5137961",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5138852",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5138869",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5138906",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5144549",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5148127",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "5148134",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5148158",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5148165",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5158393",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5169443",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5169603",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177455",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5178476",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5183579",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191581",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5193110",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "5193127",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5193134",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5193141",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5193165",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5197767",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5198368",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5199013",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5199075",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5199082",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5199112",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5199143",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5199747",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200023",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200184",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200207",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212040",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212095",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212149",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212156",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212187",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212200",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212217",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212224",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "5212231",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213863",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213900",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5214778",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5214976",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5229024",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5230228",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5230303",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5230389",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5230464",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242801",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242849",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5245574",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5246939",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5247011",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5247479",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5250103",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5250202",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5250400",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5251780",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5252275",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5252329",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5256181",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5256228",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5257300",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5257348",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5258581",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5267231",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5267910",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274024",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274079",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274185",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274581",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5274864",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5275588",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5275748",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5275908",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5277490",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5277704",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5277759",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5278558",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5304295",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5304349",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305353",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5306534",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5308644",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5310579",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5310623",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5311422",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5332762",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5332816",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5332977",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333172",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333226",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333424",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333431",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333448",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333455",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333479",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333523",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333530",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333554",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5334926",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5337217",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5337279",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5339365",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5344550",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5346325",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358427",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5359981",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5360536",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5360659",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5361236",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362363",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362462",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362486",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362561",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362714",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362769",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362868",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362912",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363254",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363261",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363308",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363452",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363551",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363735",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363810",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363896",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363971",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363988",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5363995",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364015",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364053",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364091",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364336",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364411",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364459",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5364893",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365371",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365418",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365852",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365890",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365937",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365975",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "5365982",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366019",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366033",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366057",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "5366071",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366170",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366217",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5366354",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5370528",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5371808",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5371853",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5371907",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372898",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372935",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372942",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373017",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373062",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373468",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373581",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373819",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373864",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5374045",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379576",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382170",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382187",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382491",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382507",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5382514",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387465",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387915",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387939",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890007338182",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891186229957",
+      "loja": "19",
+      "estoque": -4
+    },
+    {
+      "codigo": "7893756343131",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "3486627",
+      "loja": "20",
+      "estoque": -1
+    },
+    {
+      "codigo": "5029433",
+      "loja": "20",
+      "estoque": -1
+    },
+    {
+      "codigo": "5107704",
+      "loja": "20",
+      "estoque": -1
+    }
+  ],
+  "giga": [
+    {
+      "codigo": "10001516",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11015000",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11022015",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11022947",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11023067",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11024309",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11027096",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11027997",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11028543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11029212",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11031055",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11035695",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11035855",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11050711",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11057543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059325",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11072126",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11088851",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11110491",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11115779",
+      "loja": "01",
+      "estoque": -4
+    },
+    {
+      "codigo": "11123767",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11140122",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11140610",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11143734",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11151265",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11162469",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11175087",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11175094",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11175681",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183211",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183228",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183266",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183358",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183365",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183426",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11185055",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11189350",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11192015",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11213369",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11214014",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11215165",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11218838",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11248538",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11257745",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11258254",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11258421",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11258438",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11270218",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11288718",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11292661",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11292753",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11292807",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11297871",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11304296",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11307532",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11310822",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11320241",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11322610",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11322900",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11323082",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11325604",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11331452",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11332329",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11334729",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11335085",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11337065",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11347422",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11349921",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11353812",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11372554",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11372653",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11373094",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11373681",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11396550",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11400424",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11407980",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11415558",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11419204",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11420156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11420323",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11421993",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422044",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422211",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422358",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11422402",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11424468",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11429494",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11432548",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11434573",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11434634",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11436119",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11440130",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11447481",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11451570",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11451631",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11452591",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11453444",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11453802",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11460268",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11472841",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11473008",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11473916",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11480860",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11485162",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11485858",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11486183",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11486626",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11488064",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11488392",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11493044",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11493754",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11496175",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11504535",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11515623",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11521167",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11523017",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11547969",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "11555971",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11563679",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11566199",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11571582",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11573739",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11598510",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11598541",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "11599029",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11599166",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11608998",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11614647",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "17",
+      "loja": "01",
+      "estoque": -70
+    },
+    {
+      "codigo": "2721",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "281737",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2959528",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "2959597",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3019603",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3186787",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "3218181",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3484746",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "352963",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "3570982",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3639689",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3646427",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3646519",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3649985",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3651001",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3684337",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3825785",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3852071",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3912997",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3913222",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "393898",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "393904",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3956564",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "3971147",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4002116",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4008934",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "406017",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4063858",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4074243",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4075325",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4076872",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4079187",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4095835",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "418614",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "4402228266057",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5002016",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5002207",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5036592",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5037766",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5038268",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5038787",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5038893",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5065721",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5078844",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5083480",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5085453",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5112852",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5134656",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5136384",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5136407",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5139569",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5148851",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5160709",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182497",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5201280",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5203734",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5205103",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5212156",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212576",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5213702",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5228164",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5236374",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5239511",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243242",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5243266",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5257522",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5258888",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "526487",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5269365",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5270569",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5270965",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5273041",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5296224",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5296231",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5299171",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5305216",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5330744",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5330911",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345144",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5356287",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5357833",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5361281",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5370382",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "5371105",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "5372409",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372423",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373277",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373468",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373482",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5373499",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5374793",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5378968",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379651",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385065",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5385140",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5387496",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389650",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389735",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5390069",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5396429",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "5396481",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5398492",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5404711",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5404766",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5405831",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "5407163",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890016917552",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890989634692",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891186175407",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7891186229957",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "7891186230250",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891426119833",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891612317210",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891669390297",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891669813178",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7892487559811",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7895857784967",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7899874480789",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909112887680",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909123210385",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909123232530",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909123281743",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909129113888",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909173207373",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909173901738",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909206210516",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909263082255",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909319633585",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909319777555",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392498484",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392761458",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909392993361",
+      "loja": "01",
+      "estoque": -3
+    },
+    {
+      "codigo": "7909392995068",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909400013456",
+      "loja": "01",
+      "estoque": -2
+    },
+    {
+      "codigo": "7909400855919",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909879337213",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "7909989785447",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000002440",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003652",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003874",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000004543",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "+8000000009388",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000011060",
+      "loja": "01",
+      "estoque": -1
+    },
+    {
+      "codigo": "11063018",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11307945",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11499282",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3722909",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "3775837",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "4053996",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5157808",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177530",
+      "loja": "02",
+      "estoque": -1
+    },
+    {
+      "codigo": "11286738",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "11286783",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "11521594",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "4018230",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5197859",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5254774",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300853",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300877",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "7891426031791",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000006738",
+      "loja": "03",
+      "estoque": -1
+    },
+    {
+      "codigo": "0 05333530",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11059899",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11133865",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11344797",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11573630",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "5191567",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000004352",
+      "loja": "04",
+      "estoque": -1
+    },
+    {
+      "codigo": "11230175",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "11344766",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "3627419",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "4066538",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5253883",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "5271412",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000004109",
+      "loja": "05",
+      "estoque": -1
+    },
+    {
+      "codigo": "0000",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11192862",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11197713",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11240204",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11240242",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11272625",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11280620",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11310600",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11363293",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11404323",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11427964",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11448556",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11469766",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11470908",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11473701",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11524991",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "3862773",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5178681",
+      "loja": "06",
+      "estoque": -2
+    },
+    {
+      "codigo": "5178735",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5242160",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "5346400",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000006691",
+      "loja": "06",
+      "estoque": -1
+    },
+    {
+      "codigo": "11052579",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11309093",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11369646",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11418054",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11459378",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11472407",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477600",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11561811",
+      "loja": "07",
+      "estoque": -2
+    },
+    {
+      "codigo": "5112852",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5114344",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5181742",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "5239818",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000006745",
+      "loja": "07",
+      "estoque": -1
+    },
+    {
+      "codigo": "11104827",
+      "loja": "08",
+      "estoque": -1
+    },
+    {
+      "codigo": "11363590",
+      "loja": "08",
+      "estoque": -1
+    },
+    {
+      "codigo": "11604198",
+      "loja": "08",
+      "estoque": -1
+    },
+    {
+      "codigo": "11176923",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "11183471",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "11367666",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "11484134",
+      "loja": "10",
+      "estoque": -2
+    },
+    {
+      "codigo": "5169672",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5177004",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5182473",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5212040",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5230365",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5301324",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5333509",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345304",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379941",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389667",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389674",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5394890",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5395620",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "5395705",
+      "loja": "10",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003171",
+      "loja": "10",
+      "estoque": -2
+    },
+    {
+      "codigo": "11271819",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11547945",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11548621",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5176779",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5200641",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5305933",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5334377",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "5358014",
+      "loja": "11",
+      "estoque": -1
+    },
+    {
+      "codigo": "11395379",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5148592",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5332502",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5362738",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372065",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5372959",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5379651",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "5383221",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000003966",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000004093",
+      "loja": "13",
+      "estoque": -1
+    },
+    {
+      "codigo": "+05334995",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11128496",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11174448",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "123321",
+      "loja": "14",
+      "estoque": -2
+    },
+    {
+      "codigo": "3407653",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3458570",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3482377",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "3672198",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5085675",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5086665",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5345526",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "5365326",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890212762888",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "7890212849046",
+      "loja": "14",
+      "estoque": -1
+    },
+    {
+      "codigo": "11589211",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "17",
+      "loja": "15",
+      "estoque": -3
+    },
+    {
+      "codigo": "7909392119280",
+      "loja": "15",
+      "estoque": -1
+    },
+    {
+      "codigo": "11177791",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11328292",
+      "loja": "17",
+      "estoque": -1
+    },
+    {
+      "codigo": "11291985",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11427568",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11477235",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11533306",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11598565",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11611714",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11619963",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5131143",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5300853",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5332700",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389797",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "5389803",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "8000000001504",
+      "loja": "18",
+      "estoque": -1
+    },
+    {
+      "codigo": "11214236",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "123321",
+      "loja": "19",
+      "estoque": -1
+    },
+    {
+      "codigo": "17",
+      "loja": "19",
+      "estoque": -2
+    },
+    {
+      "codigo": "5113682",
+      "loja": "19",
+      "estoque": -1
+    }
+  ]
+}
