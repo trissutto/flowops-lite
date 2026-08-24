@@ -2114,7 +2114,16 @@ function CarrinhosTab() {
       }
       // O PDV retoma venda aberta pela chave do localStorage (não aceita id na
       // URL). Escrever aqui e navegar reusa o mecanismo que já existe.
-      try { localStorage.setItem(`lurds_pdv_sale_${r.storeCode}`, r.saleId); } catch {}
+      //
+      // ⚠️ A LOJA VAI JUNTO. Pra admin da matriz o PDV abre na loja que ficou
+      // no `lurds_pdv_store` da última vez — se ela for outra, a venda que
+      // acabou de nascer na loja-canal SITE não é retomada e a operadora cai
+      // num PDV vazio, sem entender por quê. Vendedora (role=store) ignora
+      // isto: a loja dela vem travada do token.
+      try {
+        localStorage.setItem('lurds_pdv_store', r.storeCode);
+        localStorage.setItem(`lurds_pdv_sale_${r.storeCode}`, r.saleId);
+      } catch {}
       window.location.href = '/minha-loja/pdv';
     } catch (e: any) {
       setImportErro(e?.message || 'Não deu pra abrir a venda no PDV.');

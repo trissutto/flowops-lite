@@ -380,8 +380,26 @@ export class PdvController {
     // Mesma trava do createSale: role=store não escolhe loja pelo body.
     const userRole = req?.user?.role;
     const userStoreCode = req?.user?.storeCode;
+    /**
+     * ADMIN DA MATRIZ CAI NA LOJA-CANAL SITE.
+     *
+     * O botão "Fechar esta venda no PDV" existe nos DOIS lados: no PDV da loja
+     * 13 (role=store, a loja vem do token) e na retaguarda, em
+     * `/separacao?tab=carrinhos` (role=admin, que **não tem loja no token**).
+     * Do lado da retaguarda ninguém mandava `storeCode` e o botão morria em
+     * `400 storeCode obrigatório` — a operadora fechava no WhatsApp e a venda
+     * não entrava no sistema, que é exatamente o buraco que este botão foi
+     * feito pra tapar (7 carrinhos recuperados, 2 viraram venda, 17/08).
+     *
+     * A loja certa não é uma escolha: carrinho do site é da **loja-canal SITE**
+     * — a mesma regra que o guard de `carrinhos-abandonados` logo acima já usa
+     * pra decidir quem pode ver a lista. Admin que quiser outra loja continua
+     * mandando `storeCode` no corpo.
+     */
     const effectiveStoreCode =
-      userRole === 'store' && userStoreCode ? userStoreCode : body?.storeCode;
+      userRole === 'store' && userStoreCode
+        ? userStoreCode
+        : body?.storeCode || PdvController.CARRINHOS_STORE_CODE;
     if (!effectiveStoreCode) throw new BadRequestException('storeCode obrigatório');
     // `recoveryId` = contato capturado no checkout (carrinho que nunca virou
     // pedido). Vem no lugar do wcOrderId — ver `PdvService.importarCarrinho`.
