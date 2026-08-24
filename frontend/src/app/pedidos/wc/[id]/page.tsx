@@ -181,6 +181,13 @@ interface WcOrderDetail {
   };
   sellerId?: string | null;
   sellerName?: string | null;
+  /**
+   * O DINHEIRO ENTROU? Vem da régua `pedidoPago` do backend (carimbo do
+   * gateway). Só o pedido NATIVO manda — no do WooCommerce vem undefined e a
+   * tela segue decidindo pelo status, como sempre decidiu.
+   */
+  pago?: boolean;
+  paidAt?: string | null;
   /** true = pedido nativo (item no Postgres) → a tabela de itens mostra "Trocar". */
   canEditItems?: boolean;
 }
@@ -2204,20 +2211,52 @@ export default function PedidoDetailPage() {
         </div>
       )}
 
-      {/* SEPARAÇÃO — bloqueada se pagamento nao confirmado (on-hold/pending/failed/cancelled) */}
-      {['on-hold', 'pending', 'failed', 'cancelled'].includes(status) ? (
+      {/* ── SEPARAÇÃO: quando fica bloqueada ──────────────────────────────
+          A régua é o DINHEIRO, não a palavra do status (24/08).
+
+          Até aqui bastava o status estar em on-hold/pending/failed/cancelled
+          pra tela trocar o bloco de Separação INTEIRO por "pagamento não
+          confirmado" — inclusive o "escolher loja manualmente", que é a
+          saída de emergência. Só que `pending` também é o estado que o
+          re-roteamento deixava num pedido PAGO sem loja com estoque: a
+          matriz trocava uma peça do LP-000161 (PIX de R$ 95,90 confirmado
+          dois dias antes) e caía num beco sem saída, com a tela dizendo que
+          a cliente não pagou.
+
+          Agora: pedido com pagamento comprovado (`pago`, carimbo do gateway)
+          NUNCA cai no aviso de pagamento — o bloco de Separação continua ali
+          e a matriz roteia de novo (ou escolhe a loja na mão, se der
+          ruptura). Pedido cancelado/estornado segue bloqueado, com o texto
+          certo em vez de "a cliente não pagou". */}
+      {(() => {
+        const morto = ['cancelled', 'refunded'].includes(status);
+        const semPagamento = ['on-hold', 'pending', 'failed'].includes(status) && !order.pago;
+        return morto || semPagamento;
+      })() ? (
         <div className="bg-amber-50 border-2 border-amber-300 rounded shadow p-5 mb-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
-            <div>
-              <div className="font-bold text-amber-900 text-sm uppercase tracking-wide">Separacao bloqueada — pagamento nao confirmado</div>
-              <div className="text-amber-800 text-sm mt-1">
-                O pedido esta com status <b>{STATUS_OPTIONS.find((s) => s.slug === status)?.label || status}</b>. Aguarde o cliente confirmar o pagamento antes de gerar a separacao.
+            {['cancelled', 'refunded'].includes(status) ? (
+              <div>
+                <div className="font-bold text-amber-900 text-sm uppercase tracking-wide">
+                  Separação bloqueada — pedido {status === 'refunded' ? 'reembolsado' : 'cancelado'}
+                </div>
+                <div className="text-amber-800 text-sm mt-1">
+                  Não dá pra separar um pedido {status === 'refunded' ? 'reembolsado' : 'cancelado'}. Se foi engano,
+                  mude o status em <b>Atualizar pedido</b> antes de gerar a separação.
+                </div>
               </div>
-              <div className="text-amber-700 text-xs mt-2">
-                Depois que o status mudar para <b>Processando</b> ou <b>Em separacao</b>, o botao de gerar separacao aparece automaticamente.
+            ) : (
+              <div>
+                <div className="font-bold text-amber-900 text-sm uppercase tracking-wide">Separacao bloqueada — pagamento nao confirmado</div>
+                <div className="text-amber-800 text-sm mt-1">
+                  O pedido esta com status <b>{STATUS_OPTIONS.find((s) => s.slug === status)?.label || status}</b>. Aguarde o cliente confirmar o pagamento antes de gerar a separacao.
+                </div>
+                <div className="text-amber-700 text-xs mt-2">
+                  Depois que o status mudar para <b>Processando</b> ou <b>Em separacao</b>, o botao de gerar separacao aparece automaticamente.
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       ) : (

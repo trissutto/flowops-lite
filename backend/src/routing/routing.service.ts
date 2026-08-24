@@ -646,7 +646,26 @@ export class RoutingService {
 
     // 1) Cancela pick-orders cancelaveis + limpa assignedStoreId APENAS dos
     //    items que estavam neles. Items dos pick-orders avançados (já enviados)
-    //    ficam intocados. Order volta pra pending pra reatribuir.
+    //    ficam intocados. Order volta pra fila de roteamento pra reatribuir.
+    //
+    //    ⚠️ O status aqui é `awaiting_stock`, NÃO `pending` (24/08).
+    //
+    //    `pending` no enum significa AGUARDANDO PAGAMENTO, e quem lê o pedido
+    //    lê assim: a tela do pedido traduz pra "Pagamento pendente" e troca o
+    //    bloco de Separação inteiro por "SEPARAÇÃO BLOQUEADA — PAGAMENTO NÃO
+    //    CONFIRMADO" — escondendo justamente o "escolher loja manualmente",
+    //    que era a saída. Beco sem saída num pedido PAGO (LP-000161: PIX de
+    //    R$ 95,89 confirmado em 23/08, peça trocada em 24/08, recálculo sem
+    //    loja com estoque → pending → matriz sem botão nenhum).
+    //
+    //    Pior: `pending` não está em `STATUS_QUE_RESERVAM` (carrinho-guard),
+    //    então o pedido pago PARAVA DE SEGURAR a peça — o site podia vender a
+    //    mesma peça pra outra cliente enquanto essa esperava.
+    //
+    //    `awaiting_stock` é o que o próprio `confirmRoute` já grava quando dá
+    //    ruptura (linha ~188) — mesmo caso, mesmo estado: pago, sem card,
+    //    esperando estoque. Ele reserva, aparece na aba Processando e não
+    //    mente sobre dinheiro.
     await this.prisma.$transaction(async (tx) => {
       if (cancellableIds.length > 0) {
         await tx.pickOrder.deleteMany({ where: { id: { in: cancellableIds } } });
@@ -672,13 +691,13 @@ export class RoutingService {
       }
       await tx.order.update({
         where: { id: orderId },
-        data: { status: OrderStatus.pending, routingResult: null },
+        data: { status: OrderStatus.awaiting_stock, routingResult: null },
       });
       await tx.orderHistory.create({
         data: {
           orderId,
-          fromStatus: OrderStatus.separating,
-          toStatus: OrderStatus.pending,
+          fromStatus: order.status,
+          toStatus: OrderStatus.awaiting_stock,
           note: `Recalcular separação: ${cancellableIds.length} pick-order(s) cancelado(s) pra reatribuir` +
                 (advanced.length > 0 ? ` (${advanced.length} já avançado(s) preservado(s))` : '') +
                 (estornoBipes.pecas ? ` · ${estornoBipes.pecas} peça(s) já bipada(s) devolvida(s) ao estoque` : '') + '.',
@@ -769,10 +788,10 @@ export class RoutingService {
         reason: excludeStoreCodes.length ? 'sem-estoque-excluindo-loja' : 'sem-estoque',
         message: excludeStoreCodes.length
           ? `Recalculei excluindo ${excludeStoreCodes.join(', ')} (que reportaram problema) ` +
-            `e nenhuma OUTRA loja tem estoque suficiente. Pedido ficou pending — ` +
+            `e nenhuma OUTRA loja tem estoque suficiente. Pedido ficou aguardando estoque — ` +
             `verifique estoque ou divida manualmente.`
           : 'Recalculei e nenhuma loja tem estoque suficiente agora. ' +
-            'O pedido voltou pra pending — verifique estoque ou divida manualmente.',
+            'O pedido ficou aguardando estoque — verifique estoque ou divida manualmente.',
         missing: preview.missing,
         cancelledCount: cancellableIds.length,
         excludedStoreCodes: excludeStoreCodes,
