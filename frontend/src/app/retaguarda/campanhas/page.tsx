@@ -12,11 +12,16 @@
  * IMPORTANTE: só reflete o que foi capturado a partir de quando as campanhas do
  * Meta passaram a mandar UTM na URL (Parâmetros de URL com {{campaign.name}}).
  * NÃO é retroativo. Pedidos sem UTM caem em "Sem campanha / Direto".
+ *
+ * PEDIDO = PAGO (24/08). Antes a tela dizia "não cancelados" e contava cartão
+ * RECUSADO e PIX/link nunca pago como receita — 24,7% do total do site novo em
+ * 30 dias. Agora só entra o que tem prova de pagamento, e o descartado aparece
+ * na coluna "Não pagos" pra o buraco ser visível em vez de sumir.
  */
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { Megaphone, Calendar, Download, Loader2, TrendingUp, ShoppingBag, DollarSign } from 'lucide-react';
+import { Megaphone, Calendar, Download, Loader2, TrendingUp, ShoppingBag, DollarSign, AlertTriangle } from 'lucide-react';
 
 interface CampanhaRow {
   campanha: string;
@@ -25,6 +30,12 @@ interface CampanhaRow {
   pedidos: number;
   receita: number;
   cancelados: number;
+  /** Cartão recusado / PIX vencido / link não aberto — nunca virou dinheiro. */
+  naoPagos: number;
+  naoPagosReceita: number;
+  /** % do grupo que veio da origem exibida (o resto é mistura). */
+  origemPct: number;
+  origensDistintas: number;
   comUtm: boolean;
   ticketMedio: number;
 }
@@ -33,6 +44,9 @@ interface CampanhasReport {
   to: string;
   totalPedidos: number;
   totalReceita: number;
+  totalNaoPagos: number;
+  totalNaoPagosReceita: number;
+  totalCancelados: number;
   ticketMedioGeral: number;
   campanhas: CampanhaRow[];
 }
@@ -113,7 +127,7 @@ export default function CampanhasPage() {
     const lines: string[] = [];
     lines.push(`Vendas por campanha — ${data.from} até ${data.to}`);
     lines.push('');
-    lines.push('Campanha;Origem;Meio;Pedidos;Receita;Ticket medio;Cancelados');
+    lines.push('Campanha;Origem;Meio;Pedidos pagos;Receita paga;Ticket medio;Nao pagos;Valor nao pago;Cancelados');
     for (const c of data.campanhas) {
       lines.push([
         c.campanha,
@@ -122,11 +136,13 @@ export default function CampanhasPage() {
         c.pedidos,
         c.receita.toFixed(2).replace('.', ','),
         c.ticketMedio.toFixed(2).replace('.', ','),
+        c.naoPagos,
+        c.naoPagosReceita.toFixed(2).replace('.', ','),
         c.cancelados,
       ].join(';'));
     }
     lines.push('');
-    lines.push(`TOTAL;;;${data.totalPedidos};${data.totalReceita.toFixed(2).replace('.', ',')};${data.ticketMedioGeral.toFixed(2).replace('.', ',')};`);
+    lines.push(`TOTAL;;;${data.totalPedidos};${data.totalReceita.toFixed(2).replace('.', ',')};${data.ticketMedioGeral.toFixed(2).replace('.', ',')};${data.totalNaoPagos};${data.totalNaoPagosReceita.toFixed(2).replace('.', ',')};${data.totalCancelados}`);
     const csv = lines.join('\n');
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -218,18 +234,36 @@ export default function CampanhasPage() {
       {data && (
         <>
           {/* KPIs */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <div className="bg-white rounded-lg shadow border p-4">
-              <div className="flex items-center gap-2 text-slate-500 text-xs"><ShoppingBag className="w-4 h-4" /> Pedidos (não cancelados)</div>
+              <div className="flex items-center gap-2 text-slate-500 text-xs"><ShoppingBag className="w-4 h-4" /> Pedidos PAGOS</div>
               <div className="text-2xl font-bold mt-1">{fmtInt(data.totalPedidos)}</div>
             </div>
             <div className="bg-white rounded-lg shadow border p-4">
-              <div className="flex items-center gap-2 text-slate-500 text-xs"><DollarSign className="w-4 h-4" /> Receita do site</div>
+              <div className="flex items-center gap-2 text-slate-500 text-xs"><DollarSign className="w-4 h-4" /> Receita recebida</div>
               <div className="text-2xl font-bold mt-1 text-emerald-700">{fmtMoney(data.totalReceita)}</div>
+              <div className="text-[11px] text-slate-400 mt-1">com frete, como a cliente pagou</div>
             </div>
             <div className="bg-white rounded-lg shadow border p-4">
               <div className="flex items-center gap-2 text-slate-500 text-xs"><TrendingUp className="w-4 h-4" /> Ticket médio</div>
               <div className="text-2xl font-bold mt-1">{fmtMoney(data.ticketMedioGeral)}</div>
+            </div>
+            {/* O que a tela DESCARTOU. Fica visível de propósito: era isso que
+                antes entrava como receita e fazia o número não bater com a
+                percepção de quem acompanha os pedidos todo dia. */}
+            <div className={`rounded-lg shadow border p-4 ${data.totalNaoPagos > 0 ? 'bg-amber-50 border-amber-300' : 'bg-white'}`}>
+              <div className="flex items-center gap-2 text-slate-500 text-xs">
+                <AlertTriangle className={`w-4 h-4 ${data.totalNaoPagos > 0 ? 'text-amber-600' : ''}`} /> Não pagos (fora do total)
+              </div>
+              <div className={`text-2xl font-bold mt-1 ${data.totalNaoPagos > 0 ? 'text-amber-700' : 'text-slate-400'}`}>
+                {fmtInt(data.totalNaoPagos)}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                {data.totalNaoPagos > 0
+                  ? `${fmtMoney(data.totalNaoPagosReceita)} — cartão recusado, PIX vencido ou link não aberto`
+                  : 'nenhuma tentativa de pagamento perdida'}
+                {data.totalCancelados > 0 ? ` · ${fmtInt(data.totalCancelados)} cancelado(s)` : ''}
+              </div>
             </div>
           </div>
 
@@ -241,15 +275,16 @@ export default function CampanhasPage() {
                   <tr className="bg-slate-50 text-slate-600 text-xs uppercase">
                     <th className="text-left px-4 py-2">Campanha</th>
                     <th className="text-left px-4 py-2">Origem</th>
-                    <th className="text-right px-4 py-2">Pedidos</th>
+                    <th className="text-right px-4 py-2">Pedidos pagos</th>
                     <th className="text-right px-4 py-2">Receita</th>
                     <th className="text-right px-4 py-2">Ticket médio</th>
+                    <th className="text-right px-4 py-2">Não pagos</th>
                     <th className="text-right px-4 py-2">Cancelados</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.campanhas.length === 0 && (
-                    <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-400">Nenhum pedido no período.</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-6 text-center text-slate-400">Nenhum pedido no período.</td></tr>
                   )}
                   {data.campanhas.map((c) => (
                     <tr key={c.campanha} className="border-t hover:bg-slate-50">
@@ -273,10 +308,25 @@ export default function CampanhasPage() {
                       </td>
                       <td className="px-4 py-2 text-slate-500 text-xs">
                         {c.source ? `${c.source}${c.medium ? ` / ${c.medium}` : ''}` : '—'}
+                        {/* O balde "Direto" junta origens diferentes. Sem este
+                            aviso a linha parece dizer que TODOS vieram dali. */}
+                        {c.origensDistintas > 1 && (
+                          <div className="text-[11px] text-slate-400">
+                            {c.origemPct}% · +{c.origensDistintas - 1} outra{c.origensDistintas > 2 ? 's' : ''}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-right font-medium">{fmtInt(c.pedidos)}</td>
                       <td className="px-4 py-2 text-right font-semibold text-emerald-700">{fmtMoney(c.receita)}</td>
                       <td className="px-4 py-2 text-right">{fmtMoney(c.ticketMedio)}</td>
+                      <td className="px-4 py-2 text-right">
+                        {c.naoPagos > 0 ? (
+                          <span className="text-amber-700" title={`${fmtMoney(c.naoPagosReceita)} tentados e não pagos`}>
+                            {fmtInt(c.naoPagos)}
+                            <span className="block text-[11px] text-amber-600/80">{fmtMoney(c.naoPagosReceita)}</span>
+                          </span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
                       <td className="px-4 py-2 text-right text-slate-400">{c.cancelados > 0 ? fmtInt(c.cancelados) : '—'}</td>
                     </tr>
                   ))}
@@ -289,7 +339,12 @@ export default function CampanhasPage() {
                       <td className="px-4 py-2 text-right">{fmtInt(data.totalPedidos)}</td>
                       <td className="px-4 py-2 text-right text-emerald-700">{fmtMoney(data.totalReceita)}</td>
                       <td className="px-4 py-2 text-right">{fmtMoney(data.ticketMedioGeral)}</td>
-                      <td className="px-4 py-2"></td>
+                      <td className="px-4 py-2 text-right text-amber-700">
+                        {data.totalNaoPagos > 0 ? fmtInt(data.totalNaoPagos) : '—'}
+                      </td>
+                      <td className="px-4 py-2 text-right text-slate-400">
+                        {data.totalCancelados > 0 ? fmtInt(data.totalCancelados) : '—'}
+                      </td>
                     </tr>
                   </tfoot>
                 )}

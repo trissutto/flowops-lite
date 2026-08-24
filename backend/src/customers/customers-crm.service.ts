@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { comPedidoPago } from '../common/pedido-pago';
 import { ErpService } from '../erp/erp.service';
 
 /**
@@ -1239,21 +1240,24 @@ export class CustomersCrmService {
     // 1b. Compras ONLINE (Order: site WooCommerce, site novo e live).
     // Cancelado/malsucedido fica de fora: não é compra, e contar como compra
     // inflaria o LTV que a vendedora usa pra decidir como atender.
+    // ⚠️ A lista de status vive em common/pedido-pago.ts. A versão antiga aqui
+    // barrava só 'cancelled'/'failed' e deixava entrar 'payment_failed' (cartão
+    // RECUSADO) e 'awaiting_payment' (PIX nunca pago) — a vendedora via como
+    // cliente boa quem tinha tentado e não conseguido pagar.
     const cpfMascarado = `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`;
     let comprasOnline: any[] = [];
     try {
       comprasOnline = await (this.prisma as any).order.findMany({
-        where: {
+        where: comPedidoPago({
           OR: [
             ...(customer.personId ? [{ personId: customer.personId }] : []),
             { customerCpf: { in: [cpf, cpfMascarado] } },
           ],
-          status: { notIn: ['cancelled', 'failed'] },
           // Pedido ONLINE do PDV fica FORA: a venda dele já aparece na ficha
           // como PdvSale (caixa da loja vendedora) — listar o Order junto
           // mostraria a MESMA compra duas vezes.
           source: { not: 'pdv_online' },
-        },
+        }),
         orderBy: { createdAt: 'desc' },
         take: 100,
         select: {

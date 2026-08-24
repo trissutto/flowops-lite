@@ -31,6 +31,9 @@ interface Analytics {
     avgTicket: number;
     cancelledCount: number;
     cancelledRevenue: number;
+    /** Cartão recusado / PIX vencido: nunca virou dinheiro. Fora do faturamento. */
+    unpaidCount: number;
+    unpaidRevenue: number;
     shippedCount: number;
     shippedRevenue: number;
     inProgressCount: number;
@@ -143,6 +146,7 @@ export default function FinanceiroPage() {
     lines.push(`Enviados;${data.kpis.shippedCount};${data.kpis.shippedRevenue.toFixed(2).replace('.', ',')}`);
     lines.push(`Em andamento;${data.kpis.inProgressCount}`);
     lines.push(`Cancelados;${data.kpis.cancelledCount};${data.kpis.cancelledRevenue.toFixed(2).replace('.', ',')}`);
+    lines.push(`Nao pagos (fora do faturamento);${data.kpis.unpaidCount};${data.kpis.unpaidRevenue.toFixed(2).replace('.', ',')}`);
     lines.push(`Pickup (retirada);${data.kpis.pickupCount};${data.kpis.pickupRevenue.toFixed(2).replace('.', ',')}`);
     lines.push(`Frete (envio);${data.kpis.shippingCount};${data.kpis.shippingRevenue.toFixed(2).replace('.', ',')}`);
     lines.push(`Transferências entre lojas;${data.kpis.transferCount}`);
@@ -292,14 +296,22 @@ export default function FinanceiroPage() {
               icon={<ShoppingBag className="w-5 h-5" />}
               label="Pedidos"
               value={fmtInt(data.kpis.totalOrders)}
-              sub={`${fmtInt(data.kpis.cancelledCount)} cancelado(s)`}
+              sub={
+                data.kpis.unpaidCount > 0
+                  ? `${fmtInt(data.kpis.cancelledCount)} cancelado(s) · ${fmtInt(data.kpis.unpaidCount)} não pago(s)`
+                  : `${fmtInt(data.kpis.cancelledCount)} cancelado(s)`
+              }
               tone="slate"
             />
             <Kpi
               icon={<DollarSign className="w-5 h-5" />}
               label="Faturamento"
               value={fmtMoney(data.kpis.totalRevenue)}
-              sub={`Ticket médio ${fmtMoney(data.kpis.avgTicket)}`}
+              sub={
+                data.kpis.unpaidCount > 0
+                  ? `Ticket ${fmtMoney(data.kpis.avgTicket)} · ${fmtMoney(data.kpis.unpaidRevenue)} tentados e não pagos`
+                  : `Ticket médio ${fmtMoney(data.kpis.avgTicket)}`
+              }
               tone="emerald"
             />
             <Kpi

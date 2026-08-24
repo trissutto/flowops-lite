@@ -4,6 +4,7 @@ import { OrderStatus } from '../common/enums';
 import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
 import { extractAttributionRaw } from '../woocommerce/attribution.util';
 import { lerComplementoBairroWc, montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
+import { pedidoPago, pedidoCancelado } from '../common/pedido-pago';
 
 @Injectable()
 export class OrdersService {
@@ -252,10 +253,13 @@ export class OrdersService {
         utmCampaign: true,
         utmSource: true,
         utmMedium: true,
+        // A régua da receita precisa dos dois: `paidAt` é o carimbo do dinheiro
+        // e `source` diz se este trilho carimba (ver common/pedido-pago.ts).
+        paidAt: true,
+        source: true,
       },
     });
 
-    const isFinancial = (s: string) => !['cancelled', 'failed'].includes(s);
     const SEM = 'Sem campanha / Direto';
 
     const map = new Map<string, {
@@ -265,10 +269,17 @@ export class OrdersService {
       pedidos: number;
       receita: number;
       cancelados: number;
+      naoPagos: number;
+      naoPagosReceita: number;
       comUtm: boolean;
+      /** Contagem por origem — pra escolher a que REPRESENTA o grupo. */
+      origens: Map<string, number>;
     }>();
     let totalPedidos = 0;
     let totalReceita = 0;
+    let totalNaoPagos = 0;
+    let totalNaoPagosReceita = 0;
+    let totalCancelados = 0;
 
     for (const o of orders) {
       const camp = o.utmCampaign?.trim();
@@ -277,20 +288,44 @@ export class OrdersService {
       if (!g) {
         g = {
           campanha: key,
-          source: o.utmSource || null,
-          medium: o.utmMedium || null,
+          source: null,
+          medium: null,
           pedidos: 0,
           receita: 0,
           cancelados: 0,
+          naoPagos: 0,
+          naoPagosReceita: 0,
           comUtm: !!camp,
+          origens: new Map<string, number>(),
         };
         map.set(key, g);
       }
-      if (!isFinancial(o.status)) {
+
+      // ORIGEM: conta TODAS e decide no fim pela maioria.
+      // Antes gravava a do PRIMEIRO pedido que criava o grupo e nunca mais
+      // atualizava — no balde "Sem campanha / Direto", que junta todo mundo sem
+      // UTM, isso rotulava 44 pedidos de `br.search.yahoo.com` porque UM deles
+      // veio do Yahoo (medido 15→24/08). Rótulo de sorteio, não de dado.
+      const org = `${o.utmSource || '(direto)'}|${o.utmMedium || ''}`;
+      g.origens.set(org, (g.origens.get(org) ?? 0) + 1);
+
+      const amt = Number(o.totalAmount ?? 0);
+
+      if (pedidoCancelado(o)) {
         g.cancelados++;
+        totalCancelados++;
         continue;
       }
-      const amt = Number(o.totalAmount ?? 0);
+      // Cartão recusado / PIX vencido / link não aberto: NÃO é receita, mas
+      // também não é cancelamento. Sai do total e aparece em coluna própria —
+      // era exatamente esse balde que inflava a tela em 24,7%.
+      if (!pedidoPago(o)) {
+        g.naoPagos++;
+        g.naoPagosReceita += amt;
+        totalNaoPagos++;
+        totalNaoPagosReceita += amt;
+        continue;
+      }
       g.pedidos++;
       g.receita += amt;
       totalPedidos++;
@@ -298,7 +333,22 @@ export class OrdersService {
     }
 
     const campanhas = Array.from(map.values())
-      .map((g) => ({ ...g, ticketMedio: g.pedidos > 0 ? g.receita / g.pedidos : 0 }))
+      .map(({ origens, ...g }) => {
+        // A origem que mais aparece no grupo representa o grupo.
+        let melhor = '', maior = 0;
+        for (const [k, n] of origens) if (n > maior) { maior = n; melhor = k; }
+        const [src, med] = melhor.split('|');
+        const total = Array.from(origens.values()).reduce((a, b) => a + b, 0);
+        return {
+          ...g,
+          source: src && src !== '(direto)' ? src : null,
+          medium: med || null,
+          /** % do grupo que veio dessa origem — a tela avisa quando é mistura. */
+          origemPct: total > 0 ? Math.round((maior / total) * 100) : 0,
+          origensDistintas: origens.size,
+          ticketMedio: g.pedidos > 0 ? g.receita / g.pedidos : 0,
+        };
+      })
       .sort((a, b) => b.receita - a.receita);
 
     return {
@@ -306,6 +356,9 @@ export class OrdersService {
       to: toStr,
       totalPedidos,
       totalReceita,
+      totalNaoPagos,
+      totalNaoPagosReceita,
+      totalCancelados,
       ticketMedioGeral: totalPedidos > 0 ? totalReceita / totalPedidos : 0,
       campanhas,
     };
@@ -342,9 +395,11 @@ export class OrdersService {
       orderBy: { createdAt: 'asc' },
     });
 
-    // Cancelados/malsucedidos não contam no faturamento. Quem conta:
-    // everything que não for cancelled/failed/refunded (status locais após mapStatus).
-    const isFinancial = (s: string) => !['cancelled', 'failed'].includes(s);
+    // Só entra no faturamento o pedido que virou DINHEIRO — régua única em
+    // common/pedido-pago.ts. Antes esta linha excluía 'cancelled' e 'failed',
+    // e deixava passar 'payment_failed' (cartão recusado) e 'awaiting_payment'
+    // (PIX/link nunca pago), que juntos inflavam a receita do site novo em
+    // 24,7% (medição de 24/08). Agora eles saem do total e viram `unpaid*`.
     // "Enviado" = tem pelo menos 1 pick-order com status shipped OU order.status shipped/delivered
     const isShipped = (o: typeof orders[number]) =>
       ['shipped', 'delivered'].includes(o.status) ||
@@ -363,13 +418,22 @@ export class OrdersService {
     let shippingRevenue = 0;
     let transferCount = 0;       // pedidos com pelo menos 1 pick-order de transferência
     let inProgressCount = 0;     // ainda não enviado, não cancelado
+    let unpaidCount = 0;         // cartão recusado / PIX vencido: nunca virou dinheiro
+    let unpaidRevenue = 0;
 
     for (const o of orders) {
       const amt = Number(o.totalAmount ?? 0);
       totalOrders++;
-      if (!isFinancial(o.status)) {
+      if (pedidoCancelado(o)) {
         cancelledCount++;
         cancelledRevenue += amt;
+        continue;
+      }
+      // Nunca pagou ≠ cancelou. Fica em balde próprio pra o buraco aparecer
+      // na tela em vez de sumir dentro de "cancelados".
+      if (!pedidoPago(o)) {
+        unpaidCount++;
+        unpaidRevenue += amt;
         continue;
       }
       totalRevenue += amt;
@@ -415,7 +479,7 @@ export class OrdersService {
       approved: number;            // pick-orders com baixa aprovada
     }>();
     for (const o of orders) {
-      if (!isFinancial(o.status)) continue;
+      if (!pedidoPago(o)) continue;
       const amt = Number(o.totalAmount ?? 0);
       // Dedup: se um pedido tem 2 pick-orders na mesma loja, ainda conta só 1 na revenue da loja.
       const storesHit = new Set<string>();
@@ -443,7 +507,7 @@ export class OrdersService {
     // 5) Breakdown por dia (série temporal pra gráfico de linha)
     const byDayMap = new Map<string, { count: number; revenue: number }>();
     for (const o of orders) {
-      if (!isFinancial(o.status)) continue;
+      if (!pedidoPago(o)) continue;
       const date = o.wcDateCreated ?? o.createdAt;
       // Converte pra YYYY-MM-DD em horário de SP (-03:00)
       const key = new Date(date.getTime() - 3 * 3600 * 1000).toISOString().slice(0, 10);
@@ -459,7 +523,7 @@ export class OrdersService {
     // 6) Top produtos (soma quantidade + valor estimado por unitPrice)
     const byProductMap = new Map<string, { sku: string; productName: string; quantity: number; revenue: number }>();
     for (const o of orders) {
-      if (!isFinancial(o.status)) continue;
+      if (!pedidoPago(o)) continue;
       for (const it of o.items) {
         const cur = byProductMap.get(it.sku) ?? {
           sku: it.sku,
@@ -476,12 +540,16 @@ export class OrdersService {
       .sort((a, b) => b.quantity - a.quantity)
       .slice(0, 20);
 
-    const avgTicket = totalRevenue > 0 && (totalOrders - cancelledCount) > 0
-      ? totalRevenue / (totalOrders - cancelledCount)
+    // Denominador = só pedido pago. Tirar apenas os cancelados deixaria o
+    // recusado/não-pago no divisor e achataria o ticket médio de graça.
+    const paidOrders = totalOrders - cancelledCount - unpaidCount;
+
+    const avgTicket = totalRevenue > 0 && paidOrders > 0
+      ? totalRevenue / paidOrders
       : 0;
 
-    const shipmentRate = (totalOrders - cancelledCount) > 0
-      ? shippedCount / (totalOrders - cancelledCount)
+    const shipmentRate = paidOrders > 0
+      ? shippedCount / paidOrders
       : 0;
 
     return {
@@ -496,6 +564,8 @@ export class OrdersService {
         avgTicket,
         cancelledCount,
         cancelledRevenue,
+        unpaidCount,
+        unpaidRevenue,
         shippedCount,
         shippedRevenue,
         inProgressCount,
