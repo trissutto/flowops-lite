@@ -115,6 +115,18 @@ export default function DevolucaoPage() {
   const [senhaGerente, setSenhaGerente] = useState('');
   /** "Outro motivo" escolhido — o campo livre é um ESTADO, não o texto digitado. */
   const [motivoLivre, setMotivoLivre] = useState(false);
+  /**
+   * ONDE ELA COMPROU — a porta (dono, 24/08).
+   *
+   * Devolução da loja e troca do site são DUAS telas que procuram a peça em
+   * lugares diferentes: aqui a busca é por peça bipada nas vendas do balcão;
+   * em `/site/trocas` é por pedido/nome nos pedidos do site. Abrir a errada
+   * devolve "nenhum pedido encontrado" e a vendedora acha que quebrou — quando
+   * só errou a porta.
+   *
+   * `null` = ainda não perguntou. Só nasce null uma vez por visita à tela.
+   */
+  const [origem, setOrigem] = useState<'loja' | null>(null);
   const [success, setSuccess] = useState<any>(null);
   // Indica que a vendedora veio do PDV com uma venda em andamento (F4 ou
   // botão Trocar). O crédito da troca será ANEXADO nessa venda, sem
@@ -701,6 +713,22 @@ export default function DevolucaoPage() {
               </label>
             )}
             {err && <div className="mt-1.5 text-xs text-red-600">{err}</div>}
+            {/* REDE DE SEGURANÇA DA PORTA (24/08) — "não está em nenhuma venda"
+                é o sintoma exato de peça do SITE procurada no balcão. Errar a
+                porta passa a custar um clique. */}
+            {err && /nenhuma venda|não está em nenhuma/i.test(err) && !data && (
+              <button
+                onClick={() => { window.location.href = '/site/trocas'; }}
+                className="mt-2 w-full rounded-lg border-2 border-violet-300 bg-violet-50 px-3 py-2 text-left hover:bg-violet-100"
+              >
+                <span className="block text-xs font-bold text-violet-900">
+                  📱 Ela comprou pelo site? Procurar lá →
+                </span>
+                <span className="block text-[11px] text-violet-700">
+                  Pedido LP-, ON- ou LIVE- não aparece nas vendas do balcão.
+                </span>
+              </button>
+            )}
           </div>
         )}
 
@@ -806,6 +834,24 @@ export default function DevolucaoPage() {
               🚫 Devolução bloqueada
             </div>
             <p className="text-sm text-rose-800 mt-1.5 leading-snug">{manualBlocked}</p>
+            {/* REDE DE SEGURANÇA DA PORTA (24/08) — errar a porta de entrada
+                não pode custar nada. "Não achei" é exatamente o sintoma de
+                peça do SITE procurada nas vendas do balcão. */}
+            <div className="mt-3 rounded-lg border-2 border-violet-300 bg-violet-50 p-3">
+              <div className="text-xs font-bold text-violet-900">
+                Será que ela comprou pelo site?
+              </div>
+              <p className="mt-0.5 text-[11px] leading-snug text-violet-700">
+                Peça de pedido <b>LP-</b>, <b>ON-</b> ou <b>LIVE-</b> não sai nas vendas
+                do balcão — é em outra tela.
+              </p>
+              <button
+                onClick={() => { window.location.href = '/site/trocas'; }}
+                className="mt-2 w-full rounded-lg bg-violet-600 py-2.5 text-sm font-black text-white hover:bg-violet-700"
+              >
+                📱 Procurar nos pedidos do site
+              </button>
+            </div>
             <button
               onClick={() => {
                 setManualBlocked(null);
@@ -1160,6 +1206,51 @@ export default function DevolucaoPage() {
                 {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── PORTA · ONDE ELA COMPROU? ────────────────────────────────
+            Primeira coisa da tela. Um clique, e é ele que decide se a busca
+            vai acontecer aqui (vendas do balcão) ou em /site/trocas (pedidos
+            do site). Ver o comentário do estado `origem`. */}
+        {!origem && !success && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/70 p-3">
+            <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-rose-200">
+              <div className="bg-gradient-to-b from-rose-600 to-rose-700 px-5 pb-5 pt-4 text-center">
+                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-200">
+                  Devolução · começo
+                </div>
+                <h3 className="mt-1 text-2xl font-black leading-tight text-white">
+                  Onde ela comprou a peça?
+                </h3>
+              </div>
+              <div className="p-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setOrigem('loja'); setTimeout(() => inputRef.current?.focus(), 50); }}
+                    className="rounded-xl border-2 border-rose-400 bg-white py-5 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-rose-600 hover:shadow-md"
+                  >
+                    <div className="text-3xl leading-none">🏬</div>
+                    <div className="mt-2 text-sm font-black text-slate-800">NA LOJA</div>
+                    <div className="text-[10px] font-semibold text-slate-500">Comprou no balcão</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { window.location.href = '/site/trocas'; }}
+                    className="rounded-xl border-2 border-violet-400 bg-white py-5 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-violet-600 hover:shadow-md"
+                  >
+                    <div className="text-3xl leading-none">📱</div>
+                    <div className="mt-2 text-sm font-black text-slate-800">NO SITE</div>
+                    <div className="text-[10px] font-semibold text-slate-500">Chegou pelo correio</div>
+                  </button>
+                </div>
+                <p className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-center text-[11px] font-semibold leading-snug text-slate-600">
+                  Na dúvida? Se ela tem número de pedido <b>LP-</b>, <b>ON-</b> ou{' '}
+                  <b>LIVE-</b>, é do site.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
