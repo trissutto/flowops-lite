@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PromoSiteService } from '../promo-site/promo-site.service';
+import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 
 /**
  * GUARD DO CARRINHO — reconfere no CATÁLOGO tudo que o checkout mandou.
@@ -188,8 +189,11 @@ export class CarrinhoGuardService {
         COALESCE(e.total, 0)::int     AS estoque
       FROM wincred_produtos p
       LEFT JOIN (
+        -- SEM A LOJA-CANAL (dono, 24/08). É esta soma que a trava do carrinho
+        -- usa pra deixar (ou não) a cliente comprar: contar o saldo de quem não
+        -- tem arara é aceitar pedido que ninguém consegue separar.
         SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
-          FROM wincred_estoque GROUP BY codigo
+          FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
       ) e ON e.codigo = p.codigo
       WHERE UPPER(TRIM(p.ref)) = ANY($1) OR p.codigo = ANY($2)
     `;

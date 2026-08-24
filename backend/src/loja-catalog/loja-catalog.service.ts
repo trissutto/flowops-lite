@@ -7,6 +7,7 @@ import { classificarPorNome } from './classificacao-por-nome';
 import { aplicarDescontoPromo } from '../common/promo-julho';
 import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.service';
 import { EventLoopService } from '../health/event-loop.service';
+import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -545,8 +546,11 @@ export class LojaCatalogService {
       p."dataAlt"                                 AS "dataAlt"
     FROM wincred_produtos p
     LEFT JOIN (
+      -- SEM A LOJA-CANAL (dono, 24/08): o saldo dela não é peça na arara, e o
+      -- site não pode prometer o que ninguém tem. Ver common/loja-canal.ts —
+      -- eram 5 SKUs cujo único estoque positivo da rede estava lá.
       SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
-        FROM wincred_estoque GROUP BY codigo
+        FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
     ) e ON e.codigo = p.codigo
     WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
       AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
@@ -3423,7 +3427,7 @@ export class LojaCatalogService {
         SELECT COUNT(*)::int AS n FROM (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque GROUP BY codigo) e
+            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
               ON e.codigo = p.codigo
            WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
            GROUP BY 1 HAVING SUM(COALESCE(e.total,0)) <= 0
@@ -3449,7 +3453,7 @@ export class LojaCatalogService {
         LEFT JOIN (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque GROUP BY codigo) e
+            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
               ON e.codigo = p.codigo
            GROUP BY 1
         ) k ON k.ref = s.ref

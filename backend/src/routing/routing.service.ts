@@ -15,6 +15,7 @@ import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { ErpService } from '../erp/erp.service';
 import { PushService } from '../push/push.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
+import { LOJA_CANAL_CODES } from '../common/loja-canal';
 
 @Injectable()
 export class RoutingService {
@@ -1351,7 +1352,13 @@ export class RoutingService {
       );
     }
 
-    const stores = await this.prisma.store.findMany({ where: { active: true } });
+    // A LOJA-CANAL NÃO SEPARA (dono, 24/08): ela RECEBE a peça no acerto entre
+    // lojas, não tem arara pra ceder. Ver `common/loja-canal.ts` — 3 cards
+    // caíram nela em 90 dias e ficaram parados em `new`, porque não há quem
+    // separe do outro lado.
+    const stores = await this.prisma.store.findMany({
+      where: { active: true, code: { notIn: LOJA_CANAL_CODES } },
+    });
     if (stores.length === 0) {
       throw new BadRequestException(
         'Nenhuma loja ativa cadastrada. Cadastra pelo menos uma em /lojas.',
@@ -1553,7 +1560,13 @@ export class RoutingService {
   ) {
     if (!orders?.length) return { previews: [], cedeSummary: null };
 
-    const stores = await this.prisma.store.findMany({ where: { active: true } });
+    // A LOJA-CANAL NÃO SEPARA (dono, 24/08): ela RECEBE a peça no acerto entre
+    // lojas, não tem arara pra ceder. Ver `common/loja-canal.ts` — 3 cards
+    // caíram nela em 90 dias e ficaram parados em `new`, porque não há quem
+    // separe do outro lado.
+    const stores = await this.prisma.store.findMany({
+      where: { active: true, code: { notIn: LOJA_CANAL_CODES } },
+    });
     if (stores.length === 0) {
       throw new BadRequestException(
         'Nenhuma loja ativa cadastrada. Cadastra pelo menos uma em /lojas.',

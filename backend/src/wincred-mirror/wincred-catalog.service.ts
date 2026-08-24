@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { discriminadorProduto } from '../common/produto-discriminador';
+import { ehLojaCanal } from '../common/loja-canal';
 
 /**
  * WincredCatalogService — leitura do CATÁLOGO pro caminho quente do PDV
@@ -308,6 +309,10 @@ export class WincredCatalogService {
         select: { codigo: true, loja: true, estoque: true },
       });
       for (const r of estRows) {
+        // A LOJA-CANAL NÃO ENTRA NA CONTA (dono, 24/08): ela não cede peça, e
+        // somá-la no total faz a vendedora prometer o que ninguém tem. Ver
+        // `common/loja-canal.ts`.
+        if (ehLojaCanal(r.loja)) continue;
         const c = String(r.codigo).trim();
         const loja = this.normalizeLoja(r.loja);
         const qty = Number(r.estoque) || 0;
@@ -396,10 +401,15 @@ export class WincredCatalogService {
     const codigos = filtered.map((p) => String(p.codigo));
     const estRows: any[] = await prisma.wincredEstoque.findMany({
       where: { codigo: { in: codigos } },
-      select: { codigo: true, estoque: true },
+      // `loja` entra no select só pra poder DESCARTAR a loja-canal logo abaixo.
+      select: { codigo: true, loja: true, estoque: true },
     });
     const totalByCodigo = new Map<string, number>();
     for (const r of estRows) {
+      // Loja-canal fora do TOTAL_EST: ela não cede peça (`common/loja-canal.ts`),
+      // e é este total que decide qual CÓDIGO ganha a dedup — deixá-la dentro
+      // elegia o código cujo estoque só existe no canal.
+      if (ehLojaCanal(r.loja)) continue;
       const c = String(r.codigo);
       totalByCodigo.set(c, (totalByCodigo.get(c) || 0) + (Number(r.estoque) || 0));
     }
@@ -608,6 +618,9 @@ export class WincredCatalogService {
     });
     const agg = new Map<string, Map<string, number>>();
     for (const r of rows) {
+      // A loja-canal não aparece pra quem está atendendo cliente (dono, 24/08):
+      // ela não tem arara. Ver `common/loja-canal.ts`.
+      if (ehLojaCanal(r.loja)) continue;
       const original = bySkuNorm.get(String(r.codigo).trim());
       if (!original) continue;
       const storeCode = String(r.loja || '').trim();

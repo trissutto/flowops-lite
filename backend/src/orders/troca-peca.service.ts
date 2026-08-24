@@ -7,6 +7,7 @@ import { PromoSiteService } from '../promo-site/promo-site.service';
 import { RoutingService } from '../routing/routing.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { conferirDiferencaNoGateway, diferencaDeTrocaPendente } from '../common/diferenca-troca';
+import { LOJA_CANAL_CODES } from '../common/loja-canal';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -73,7 +74,12 @@ export class TrocaPecaService {
     let estoqueRede = 0;
     let lojasComEstoque: Array<{ storeCode: string; qty: number }> = [];
     try {
-      const lojas = await this.prisma.store.findMany({ where: { active: true }, select: { code: true } });
+      // Sem a loja-canal: ela não cede peça (dono, 24/08 — `common/loja-canal.ts`),
+      // e trocar por peça que "só existe" nela é ruptura marcada pra depois.
+      const lojas = await this.prisma.store.findMany({
+        where: { active: true, code: { notIn: LOJA_CANAL_CODES } },
+        select: { code: true },
+      });
       const entradas = await this.stock.getStockFor([novo.sku], lojas.map((l) => l.code));
       lojasComEstoque = entradas
         .filter((e) => e.availableQty > 0)

@@ -20,6 +20,7 @@ import { CashbackService } from '../cashback/cashback.service';
 import { PedidoOnlineService } from './pedido-online.service';
 import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -805,8 +806,11 @@ export class PdvService {
              COALESCE(e.total, 0)::int    AS estoque
         FROM wincred_produtos p
         LEFT JOIN (
+          -- Sem a loja-canal, igual ao CarrinhoGuardService: é este total que
+          -- desempata qual CÓDIGO a peça bipa, e o saldo de quem não cede peça
+          -- não pode eleger o código errado.
           SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
-            FROM wincred_estoque GROUP BY codigo
+            FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
         ) e ON e.codigo = p.codigo
        WHERE UPPER(TRIM(p.ref)) = $1
       `,
