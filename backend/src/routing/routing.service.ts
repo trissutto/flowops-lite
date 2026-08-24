@@ -59,11 +59,27 @@ export class RoutingService {
         pickOrders: { select: { id: true } }, // pra excluir do `committed` ao recalcular
       },
     });
-    const excludeCodes = (opts?.excludeStoreCodes ?? []).filter(Boolean);
+    // 🚨 A LOJA-CANAL NUNCA ENTRA NO RATEIO.
+    //
+    // A regra já existia em `common/loja-canal.ts` (ordem do dono, 24/08) e já
+    // valia em outras DUAS queries deste mesmo arquivo — faltava justamente
+    // aqui, que é a lista de candidatos que o roteador usa pra decidir. Por
+    // isso a loja 13 (SITE) continuava sendo escolhida: ela não tem arara nem
+    // quem separe, e o card cai num lugar onde ninguém vai buscar.
+    //
+    // Medido em 24/08 antes do conserto: 5 pedidos com SITE atribuído em 30
+    // dias — 3 saíram na mão (ON-000046/49/50, 19/08) e 2 ficaram TRAVADOS em
+    // `separating`: ON-000107 (hoje) e 198090, parado desde 10/08.
+    //
+    // Seguro de excluir: a loja 13 tem 53 SKUs / 58 peças (a menor da rede;
+    // Itanhaém tem 89.483) e só 5 SKUs existem exclusivamente lá.
+    const excludeCodes = Array.from(
+      new Set([...(opts?.excludeStoreCodes ?? []).filter(Boolean), ...LOJA_CANAL_CODES]),
+    );
     const stores = await this.prisma.store.findMany({
       where: {
         active: true,
-        ...(excludeCodes.length ? { code: { notIn: excludeCodes } } : {}),
+        code: { notIn: excludeCodes },
       },
     });
     // Escopo dos itens a rotear: subconjunto (swap) ou pedido inteiro (padrão).
