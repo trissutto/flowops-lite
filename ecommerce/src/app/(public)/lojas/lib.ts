@@ -226,9 +226,20 @@ export function whatsappUrlPeca(
   tamanho?: string | null,
 ): string {
   const oTamanho = tamanho ? ` no tamanho ${tamanho}` : '';
+
+  /**
+   * A REF SÓ ENTRA SE O NOME NÃO A TROUXER — o catálogo já batiza a peça como
+   * "Regata Alça Larga — 138824". Concatenar sem checar produzia
+   * "Regata Alça Larga — 138824 (ref 138824)", que chegava assim no WhatsApp
+   * da vendedora (visto em produção em 24/08).
+   */
+  const jaTemRef =
+    !peca.ref || peca.nome.toUpperCase().includes(peca.ref.toUpperCase());
+  const aRef = jaTemRef ? '' : ` (ref ${peca.ref})`;
+
   const text = encodeURIComponent(
     `Olá! Quero conhecer a loja ${s.unit} (vim pelo site). ` +
-      `Vi a peça ${peca.nome} (ref ${peca.ref})${oTamanho} e queria saber se tem aí.`,
+      `Vi a peça ${peca.nome}${aRef}${oTamanho} e queria saber se tem aí.`,
   );
   return `https://api.whatsapp.com/send?phone=${s.whatsapp}&text=${text}`;
 }
