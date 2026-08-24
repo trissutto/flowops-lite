@@ -5,6 +5,39 @@ import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
 import { extractAttributionRaw } from '../woocommerce/attribution.util';
 import { lerComplementoBairroWc, montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { pedidoPago, pedidoCancelado } from '../common/pedido-pago';
+import { SQL_CAMPANHAS_ROAS } from './campanhas-roas.sql';
+
+/**
+ * Uma linha como o Postgres devolve. Tudo que é dinheiro sai da query já em
+ * `float8` e o que é contagem em `int` — `numeric` e `bigint` do Prisma viram
+ * objeto/BigInt e o `JSON.stringify` do Nest morre com 500 mudo.
+ */
+interface LinhaCampanhaCrua {
+  campanhaId: string | null;
+  campanha: string;
+  rede: string | null;
+  pedidos: number;
+  receita: number;
+  naoPagos: number;
+  naoPagosReceita: number;
+  recuperados: number;
+  recuperadosValor: number;
+  voltouSozinha: number;
+  voltouSozinhaValor: number;
+  cancelados: number;
+  gasto: number | null;
+  cliques: number | null;
+  impressoes: number | null;
+  sessoes: number;
+  pedidosOffline: number;
+  receitaOffline: number;
+  /** O pedido trazia utm_id? Distingue "anúncio não manda" de "id não casa". */
+  comUtmId: boolean;
+  source: string | null;
+  medium: string | null;
+  origensDistintas: number;
+  origemPct: number;
+}
 
 @Injectable()
 export class OrdersService {
@@ -219,12 +252,20 @@ export class OrdersService {
    * Pickups, transferências e fretes separados pra o CEO ter visibilidade de origem e destino.
    */
   /**
-   * Relatório VENDAS POR CAMPANHA no intervalo [from, to] (America/Sao_Paulo).
-   * Agrupa pedidos do SITE pela campanha de origem (utmCampaign capturada do
-   * Order Attribution do WC no sync). Receita real = soma do total dos pedidos
-   * NÃO cancelados. Pedidos sem UTM caem no bucket "Sem campanha / Direto".
-   * ATENÇÃO: só reflete o que foi capturado a partir do momento em que as
-   * campanhas do Meta passaram a mandar UTM na URL — NÃO é retroativo.
+   * GASTO → RECEITA → ROAS por campanha, no intervalo [from, to] (SP).
+   *
+   * Junta quatro fontes num lugar só, todas casadas por `campaign.id`:
+   *   - gasto: `meta_ads_gasto_dia` + `google_ads_gasto_dia` (contas de ECOMM);
+   *   - receita: `orders` PAGOS (régua de `common/pedido-pago.ts`);
+   *   - sessões: `site_eventos` (denominador da conversão);
+   *   - receita ASSISTIDA: carrinho largado que virou venda pelo WhatsApp/PDV.
+   *
+   * ⚠️ ROAS de linha sem gasto casado é `null`, NUNCA zero — ausência de dado
+   * não é desempenho ruim, e a diferença decide se a campanha é desligada.
+   * O motivo de cada falta vai em `motivoSemGasto` e o total em
+   * `reconciliacao`: buraco que a tela não mostra vira decisão errada.
+   *
+   * NÃO é retroativo: só vale a partir de quando o anúncio passou a mandar UTM.
    */
   async campanhasReport(fromStr: string, toStr: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr) || !/^\d{4}-\d{2}-\d{2}$/.test(toStr)) {
@@ -234,135 +275,144 @@ export class OrdersService {
     const to = new Date(`${toStr}T23:59:59.999-03:00`);
     if (to < from) throw new Error('to deve ser >= from');
 
-    const whereDate = {
-      // Os DOIS sites: 'site' = WooCommerce (antigo), 'ecommerce' = site novo
-      // (950M+). Sem o segundo, campanha que vendeu no site novo aparecia
-      // zerada — mesmo furo que o card SITE do Faturamento tinha.
-      source: { in: ['site', 'ecommerce'] },
-      OR: [
-        { wcDateCreated: { gte: from, lte: to } },
-        { AND: [{ wcDateCreated: null }, { createdAt: { gte: from, lte: to } }] },
-      ],
-    };
-
-    const orders = await this.prisma.order.findMany({
-      where: whereDate,
-      select: {
-        status: true,
-        totalAmount: true,
-        utmCampaign: true,
-        utmSource: true,
-        utmMedium: true,
-        // A régua da receita precisa dos dois: `paidAt` é o carimbo do dinheiro
-        // e `source` diz se este trilho carimba (ver common/pedido-pago.ts).
-        paidAt: true,
-        source: true,
-      },
-    });
+    const linhas = await this.prisma.$queryRawUnsafe<LinhaCampanhaCrua[]>(
+      SQL_CAMPANHAS_ROAS,
+      from,
+      to,
+    );
 
     const SEM = 'Sem campanha / Direto';
+    const n = (v: unknown) => Number(v ?? 0);
 
-    const map = new Map<string, {
-      campanha: string;
-      source: string | null;
-      medium: string | null;
-      pedidos: number;
-      receita: number;
-      cancelados: number;
-      naoPagos: number;
-      naoPagosReceita: number;
-      comUtm: boolean;
-      /** Contagem por origem — pra escolher a que REPRESENTA o grupo. */
-      origens: Map<string, number>;
-    }>();
-    let totalPedidos = 0;
-    let totalReceita = 0;
-    let totalNaoPagos = 0;
-    let totalNaoPagosReceita = 0;
-    let totalCancelados = 0;
+    const campanhas = linhas.map((l) => {
+      const gasto = l.gasto == null ? null : n(l.gasto);
+      const receita = n(l.receita);
+      const receitaOffline = n(l.receitaOffline);
+      const pedidos = n(l.pedidos);
+      const sessoes = n(l.sessoes);
+      const temGasto = gasto != null && gasto > 0;
 
-    for (const o of orders) {
-      const camp = o.utmCampaign?.trim();
-      const key = camp || SEM;
-      let g = map.get(key);
-      if (!g) {
-        g = {
-          campanha: key,
-          source: null,
-          medium: null,
-          pedidos: 0,
-          receita: 0,
-          cancelados: 0,
-          naoPagos: 0,
-          naoPagosReceita: 0,
-          comUtm: !!camp,
-          origens: new Map<string, number>(),
-        };
-        map.set(key, g);
-      }
+      return {
+        campanhaId: l.campanhaId ?? null,
+        campanha: l.campanha === '(sem campanha)' ? SEM : l.campanha,
+        rede: l.rede ?? null,
+        comUtm: l.campanha !== '(sem campanha)',
+        source: l.source ?? null,
+        medium: l.medium ?? null,
+        origemPct: n(l.origemPct),
+        origensDistintas: n(l.origensDistintas),
 
-      // ORIGEM: conta TODAS e decide no fim pela maioria.
-      // Antes gravava a do PRIMEIRO pedido que criava o grupo e nunca mais
-      // atualizava — no balde "Sem campanha / Direto", que junta todo mundo sem
-      // UTM, isso rotulava 44 pedidos de `br.search.yahoo.com` porque UM deles
-      // veio do Yahoo (medido 15→24/08). Rótulo de sorteio, não de dado.
-      const org = `${o.utmSource || '(direto)'}|${o.utmMedium || ''}`;
-      g.origens.set(org, (g.origens.get(org) ?? 0) + 1);
+        pedidos,
+        receita,
+        ticketMedio: pedidos > 0 ? receita / pedidos : 0,
+        naoPagos: n(l.naoPagos),
+        naoPagosReceita: n(l.naoPagosReceita),
+        /**
+         * RECUPERADO: a tentativa não pagou, mas a MESMA pessoa fechou uma
+         * venda paga em até 14 dias — o atendimento foi atrás e salvou.
+         *
+         * ⚠️ NÃO somar isto à receita: o dinheiro da venda recuperada já está
+         * em `receita` (se veio com UTM) ou em `receitaOffline` (se não veio).
+         * Aqui é a CONTAGEM da tentativa que acabou bem, pra a tela parar de
+         * cobrar da campanha uma perda que não existiu.
+         */
+        recuperados: n(l.recuperados),
+        recuperadosValor: n(l.recuperadosValor),
+        /**
+         * Pagou depois SEM ninguém chamar. Fica separado de `recuperados` de
+         * propósito: recuperação é mérito do time, retentativa espontânea não.
+         * Juntar os dois faria a tela dar crédito por trabalho que não houve.
+         */
+        voltouSozinha: n(l.voltouSozinha),
+        voltouSozinhaValor: n(l.voltouSozinhaValor),
+        cancelados: n(l.cancelados),
 
-      const amt = Number(o.totalAmount ?? 0);
+        gasto,
+        cliques: l.cliques == null ? null : n(l.cliques),
+        impressoes: l.impressoes == null ? null : n(l.impressoes),
+        /** ROAS só existe quando há gasto casado. Sem gasto NÃO é ROAS zero. */
+        roas: temGasto ? receita / gasto : null,
+        roasComAssistida: temGasto ? (receita + receitaOffline) / gasto : null,
+        custoPorPedido: temGasto && pedidos > 0 ? gasto / pedidos : null,
 
-      if (pedidoCancelado(o)) {
-        g.cancelados++;
-        totalCancelados++;
-        continue;
-      }
-      // Cartão recusado / PIX vencido / link não aberto: NÃO é receita, mas
-      // também não é cancelamento. Sai do total e aparece em coluna própria —
-      // era exatamente esse balde que inflava a tela em 24,7%.
-      if (!pedidoPago(o)) {
-        g.naoPagos++;
-        g.naoPagosReceita += amt;
-        totalNaoPagos++;
-        totalNaoPagosReceita += amt;
-        continue;
-      }
-      g.pedidos++;
-      g.receita += amt;
-      totalPedidos++;
-      totalReceita += amt;
-    }
+        sessoes,
+        /**
+         * Conversão pode passar de 100% e isso NÃO é bug: a origem do pedido
+         * vale 30 dias de último clique, mas a sessão só conta dentro do
+         * período escolhido. A tela marca em vez de esconder.
+         */
+        conversao: sessoes > 0 ? (pedidos / sessoes) * 100 : null,
+        conversaoSuspeita: sessoes > 0 && pedidos > sessoes,
 
-    const campanhas = Array.from(map.values())
-      .map(({ origens, ...g }) => {
-        // A origem que mais aparece no grupo representa o grupo.
-        let melhor = '', maior = 0;
-        for (const [k, n] of origens) if (n > maior) { maior = n; melhor = k; }
-        const [src, med] = melhor.split('|');
-        const total = Array.from(origens.values()).reduce((a, b) => a + b, 0);
-        return {
-          ...g,
-          source: src && src !== '(direto)' ? src : null,
-          medium: med || null,
-          /** % do grupo que veio dessa origem — a tela avisa quando é mistura. */
-          origemPct: total > 0 ? Math.round((maior / total) * 100) : 0,
-          origensDistintas: origens.size,
-          ticketMedio: g.pedidos > 0 ? g.receita / g.pedidos : 0,
-        };
-      })
-      .sort((a, b) => b.receita - a.receita);
+        pedidosOffline: n(l.pedidosOffline),
+        receitaOffline,
+
+        /**
+         * Por que esta linha não tem gasto casado. É o que transforma um buraco
+         * mudo em tarefa: `sem_id` = o anúncio não manda utm_id (caso do Google
+         * até 24/08); `id_nao_casa` = manda id de CONJUNTO em vez de campanha.
+         */
+        motivoSemGasto:
+          // Gasto casado (mesmo que R$ 0,00 no período) não tem motivo nenhum:
+          // a campanha existe no espelho, só não rodou. Dizer "não manda o id"
+          // aqui manda o dono consertar UTM que já está certa.
+          gasto != null
+            ? null
+            : !l.comUtmId
+              ? (l.campanha === '(sem campanha)' ? 'direto' : 'sem_id')
+              : 'id_nao_casa',
+      };
+    });
+
+    const soma = (f: (c: (typeof campanhas)[number]) => number) =>
+      campanhas.reduce((acc, c) => acc + f(c), 0);
+
+    const totalPedidos = soma((c) => c.pedidos);
+    const totalReceita = soma((c) => c.receita);
+    const totalGasto = soma((c) => c.gasto ?? 0);
+    const totalReceitaOffline = soma((c) => c.receitaOffline);
+    const totalSessoes = soma((c) => c.sessoes);
+
+    // RECONCILIAÇÃO: o que não casou dos dois lados. Sem isto o ROAS parece
+    // pior do que é e ninguém descobre por quê.
+    const semGasto = campanhas.filter((c) => c.gasto == null && c.receita > 0 && c.comUtm);
+    const semReceita = campanhas.filter((c) => (c.gasto ?? 0) > 0 && c.pedidos === 0);
 
     return {
       from: fromStr,
       to: toStr,
       totalPedidos,
       totalReceita,
-      totalNaoPagos,
-      totalNaoPagosReceita,
-      totalCancelados,
+      totalNaoPagos: soma((c) => c.naoPagos),
+      totalNaoPagosReceita: soma((c) => c.naoPagosReceita),
+      totalRecuperados: soma((c) => c.recuperados),
+      totalRecuperadosValor: soma((c) => c.recuperadosValor),
+      totalVoltouSozinha: soma((c) => c.voltouSozinha),
+      totalVoltouSozinhaValor: soma((c) => c.voltouSozinhaValor),
+      totalCancelados: soma((c) => c.cancelados),
       ticketMedioGeral: totalPedidos > 0 ? totalReceita / totalPedidos : 0,
+
+      totalGasto,
+      totalReceitaOffline,
+      totalPedidosOffline: soma((c) => c.pedidosOffline),
+      roas: totalGasto > 0 ? totalReceita / totalGasto : null,
+      roasComAssistida: totalGasto > 0 ? (totalReceita + totalReceitaOffline) / totalGasto : null,
+      totalSessoes,
+      conversaoGeral: totalSessoes > 0 ? (totalPedidos / totalSessoes) * 100 : null,
+
+      reconciliacao: {
+        receitaSemGasto: semGasto.reduce((a, c) => a + c.receita, 0),
+        linhasSemGasto: semGasto.length,
+        gastoSemReceita: semReceita.reduce((a, c) => a + (c.gasto ?? 0), 0),
+        linhasGastoSemReceita: semReceita.length,
+        semId: campanhas.filter((c) => c.motivoSemGasto === 'sem_id').length,
+        idNaoCasa: campanhas.filter((c) => c.motivoSemGasto === 'id_nao_casa').length,
+      },
+
       campanhas,
     };
   }
+
 
   async analytics(fromStr: string, toStr: string) {
     // Parse das datas do query string (formato YYYY-MM-DD).
