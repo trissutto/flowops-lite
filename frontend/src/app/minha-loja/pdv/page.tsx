@@ -29,7 +29,7 @@ import {
   AlertTriangle,
   FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
-  Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
+  Receipt, Globe, Shuffle, Tag, Wallet, Printer,
   RefreshCw, Handshake, Moon, Sun, Package,
   type LucideIcon,
 } from 'lucide-react';
@@ -101,6 +101,9 @@ type Sale = {
   customerBairro?: string | null;
   customerCidade?: string | null;
   customerUf?: string | null;
+  /** Forma de entrega da venda online (sedex/pac/motoboy/retirada). Vazio no balcão. */
+  entregaTipo?: string | null;
+  entregaStoreCode?: string | null;
   status: 'open' | 'finalized' | 'cancelled' | string;
   subtotal: number;
   desconto: number;
@@ -2032,7 +2035,12 @@ function PdvPageInner() {
      * gravada E venda online, o finalize passa direto.
      */
     const ehVendaOnline =
-      !!opts?.vendaOnline || (sale.payments || []).some((p: any) => p.method === 'venda_online');
+      !!opts?.vendaOnline ||
+      (sale.payments || []).some((p: any) => p.method === 'venda_online') ||
+      // `entregaTipo` só existe em venda online — é o sinal que NÃO depende do
+      // refetch do pagamento ter chegado. Sem ele, fechar pelo botão do rodapé
+      // (que não manda `opts`) reabria o popup pedindo a vendedora de novo.
+      !!sale.entregaTipo;
     const jaTemVendedora = !!sale.sellerName;
     if (!opts?.skipSellerGate && !(ehVendaOnline && jaTemVendedora)) {
       pendingFinalizeRef.current = { paymentMethod, paymentDetails };
@@ -3599,6 +3607,7 @@ function PdvPageInner() {
           onPaymentsChange={onPaymentsChanged}
           onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
           hasSeller={!!sale.sellerName}
+          sellerNome={sale.sellerName}
           onNeedSeller={() => setShowConfirmSale(true)}
           clienteOnline={clienteOnline}
           onNeedCustomer={abrirCadastroOnline}
@@ -5026,6 +5035,7 @@ function PaymentModal({
   onPaymentsChange,
   onAutoFlowTriggered,
   hasSeller,
+  sellerNome,
   onNeedSeller,
   clienteOnline,
   onNeedCustomer,
@@ -5064,6 +5074,8 @@ function PaymentModal({
   onAutoFlowTriggered?: () => void;
   /** Venda já tem vendedora gravada? (venda online exige escolher ANTES) */
   hasSeller?: boolean;
+  /** Nome da vendedora já gravada — o recibo do fluxo guiado mostra quem é. */
+  sellerNome?: string | null;
   /** Abre o popup de escolher vendedora no parent (sem finalizar) */
   onNeedSeller?: () => void;
   /**
@@ -5226,7 +5238,12 @@ function PaymentModal({
    *
    * `null` = fora do fluxo (venda já com entrega escolhida, ou já passou).
    */
-  const [etapaOnline, setEtapaOnline] = useState<'frete_tipo' | 'frete_valor' | 'confirma_total' | null>(null);
+  const [etapaOnline, setEtapaOnline] = useState<
+    'frete_tipo' | 'frete_valor' | 'confirma_total' | 'pagamento' | 'vendedora' | null
+  >(null);
+  /** Vendedoras da loja pro popup do último passo (mesma fonte do fechamento). */
+  const [vendedorasFluxo, setVendedorasFluxo] = useState<Array<{ codigo: string; nome: string; apelido?: string | null }>>([]);
+  const [salvandoVendedora, setSalvandoVendedora] = useState(false);
   /** A venda já veio do servidor? Sem isso o fluxo abriria em cima de dado incompleto. */
   const [saleCarregada, setSaleCarregada] = useState(false);
   /** O fluxo guiado só arranca UMA vez por seleção de "Venda Online". */
@@ -5285,6 +5302,61 @@ function PaymentModal({
     await aplicarFrete(freteDigitado, { silencioso: true });
     setEtapaOnline('confirma_total');
   };
+
+  /**
+   * PASSO 5 — A VENDEDORA DENTRO DO FLUXO (dono, 24/08, segunda volta).
+   *
+   * Ela era pedida pelo popup CONFIRMAR VENDA, que é a tela de ENCERRAMENTO do
+   * balcão — e na venda online esse popup ainda aparecia depois, pedindo de
+   * novo. Perguntar aqui, como passo do roteiro, tira o popup de encerramento
+   * do caminho da venda online de vez: quando o pagamento é registrado a venda
+   * JÁ TEM DONA, então nem a trava do `adicionarPagamento` nem o `finalizeSale`
+   * têm motivo pra abrir coisa nenhuma.
+   */
+  const salvarVendedoraGuiada = async (v: { codigo: string; nome: string }) => {
+    if (!saleId || salvandoVendedora) return;
+    setSalvandoVendedora(true);
+    try {
+      await api(`/pdv/sales/${saleId}/vendedora`, {
+        method: 'PATCH',
+        body: JSON.stringify({ codigo: v.codigo, nome: v.nome }),
+      });
+      // Refetch do parent: é o que faz `hasSeller` virar true na tela.
+      onPaymentsChange?.();
+      setEtapaOnline(null);
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    } finally {
+      setSalvandoVendedora(false);
+    }
+  };
+
+  /**
+   * Carrega as vendedoras quando o passo abre. Mesma fonte do popup de
+   * encerramento: a whitelist de /retaguarda/vendedoras-ativas primeiro, e o
+   * cadastro do Wincred como reserva pra loja que não configurou a lista.
+   */
+  useEffect(() => {
+    if (etapaOnline !== 'vendedora' || !storeCode || vendedorasFluxo.length) return;
+    let cancelado = false;
+    (async () => {
+      try {
+        const ativas = await api<Array<{ codigo: string; nome: string; apelido?: string | null }>>(
+          `/pdv/vendedoras-ativas?storeCode=${encodeURIComponent(storeCode)}`,
+        );
+        if (!cancelado && ativas?.length) { setVendedorasFluxo(ativas); return; }
+      } catch { /* cai na reserva */ }
+      try {
+        const r = await api<{ results: Array<{ codigo: string; nome: string; apelido?: string | null }> }>(
+          `/pdv/funcionarios-search?q=&limit=20&loja=${encodeURIComponent(storeCode)}`,
+        );
+        if (!cancelado) setVendedorasFluxo(r.results || []);
+      } catch { /* sem lista: o passo mostra o aviso e deixa seguir */ }
+    })();
+    return () => { cancelado = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [etapaOnline, storeCode]);
   const aplicarFrete = async (valorForcado?: number, opts?: { silencioso?: boolean }) => {
     if (!saleId || aplicandoFrete) return;
     const v = valorForcado != null ? valorForcado : freteDigitado;
@@ -6815,7 +6887,7 @@ function PaymentModal({
           {etapaOnline === 'frete_tipo' && (
             <div className="w-full max-w-md rounded-2xl border-4 border-amber-400 bg-amber-50 p-5 shadow-2xl">
               <div className="text-center">
-                <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">Passo 1 de 3</div>
+                <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">Passo 1 de 5</div>
                 <h3 className="mt-1 text-2xl font-black text-slate-900">Como vai enviar?</h3>
                 <p className="mt-1 text-xs text-amber-800">
                   É isto que a matriz lê pra despachar a peça.
@@ -6850,7 +6922,7 @@ function PaymentModal({
           {etapaOnline === 'frete_valor' && (
             <div className="w-full max-w-md rounded-2xl border-4 border-amber-400 bg-amber-50 p-5 shadow-2xl">
               <div className="text-center">
-                <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">Passo 2 de 3</div>
+                <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">Passo 2 de 5</div>
                 <h3 className="mt-1 text-2xl font-black text-slate-900">Quanto é o frete?</h3>
                 <p className="mt-1 text-xs font-bold text-amber-800">
                   {ENTREGA_LABEL[entregaTipo || ''] || 'Envio'}
@@ -6898,7 +6970,7 @@ function PaymentModal({
           {etapaOnline === 'confirma_total' && (
             <div className="w-full max-w-md rounded-2xl border-4 border-emerald-500 bg-white p-5 shadow-2xl">
               <div className="text-center">
-                <div className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Passo 3 de 3</div>
+                <div className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Passo 3 de 5</div>
                 <h3 className="mt-1 text-2xl font-black text-slate-900">Confere o total?</h3>
               </div>
               <div className="mt-4 rounded-xl bg-slate-900 px-4 py-3 text-white">
@@ -6925,7 +6997,7 @@ function PaymentModal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setEtapaOnline(null)}
+                  onClick={() => setEtapaOnline('pagamento')}
                   className="flex-1 rounded-xl bg-emerald-600 py-3 text-base font-black text-white shadow hover:bg-emerald-700"
                 >
                   SIM, CONFIRMA
@@ -6934,6 +7006,90 @@ function PaymentModal({
               <p className="mt-2 text-center text-[10px] text-slate-400">
                 Depois de confirmar você escolhe como a cliente vai pagar.
               </p>
+            </div>
+          )}
+
+          {/* ── 4/5 · COMO A CLIENTE VAI PAGAR ──
+              Era uma grade dentro do painel, no meio de tudo. Vira pergunta
+              própria: o total já está fechado, falta só o caminho do dinheiro. */}
+          {etapaOnline === 'pagamento' && (
+            <div className="w-full max-w-md rounded-2xl border-4 border-violet-400 bg-violet-50 p-5 shadow-2xl">
+              <div className="text-center">
+                <div className="text-[11px] font-black uppercase tracking-widest text-violet-700">Passo 4 de 5</div>
+                <h3 className="mt-1 text-2xl font-black text-slate-900">Como a cliente vai pagar?</h3>
+                <p className="mt-1 text-sm font-black text-violet-800">{brl(totalVivo)}</p>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
+                {([
+                  { id: 'pix_gerar', icone: '📲', label: 'GERAR PIX', hint: 'Mandar QR pra cliente' },
+                  { id: 'pagarme_link', icone: '🔗', label: 'LINK PAGAR.ME', hint: 'Cartão · gerar agora' },
+                  { id: 'pix', icone: '✅', label: 'PIX RECEBIDO', hint: 'Já caiu na conta' },
+                  { id: 'link', icone: '↗️', label: 'LINK EXTERNO', hint: 'Já pago por fora' },
+                ] as const).map((op) => (
+                  <button
+                    key={op.id}
+                    type="button"
+                    onClick={() => {
+                      setVendaOnlineTipo(op.id);
+                      setPagarmeLink(null);
+                      // Vendedora já gravada (venda retomada): não pergunta de novo.
+                      setEtapaOnline(hasSeller ? null : 'vendedora');
+                    }}
+                    className="rounded-xl border-2 border-violet-300 bg-white py-4 text-center transition hover:border-violet-500 hover:bg-violet-100 active:scale-95"
+                  >
+                    <div className="text-2xl leading-none">{op.icone}</div>
+                    <div className="mt-1.5 text-[13px] font-black text-slate-800">{op.label}</div>
+                    <div className="text-[10px] font-semibold text-slate-500">{op.hint}</div>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEtapaOnline('confirma_total')}
+                className="mt-3 w-full rounded-xl border-2 border-slate-300 bg-white py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Voltar pro total
+              </button>
+            </div>
+          )}
+
+          {/* ── 5/5 · QUEM VENDEU ──
+              O último passo. Perguntar AQUI é o que tira o popup CONFIRMAR
+              VENDA do caminho da venda online: quando o pagamento é registrado
+              a venda já tem dona, e ninguém tem motivo pra perguntar de novo. */}
+          {etapaOnline === 'vendedora' && (
+            <div className="w-full max-w-md rounded-2xl border-4 border-emerald-500 bg-white p-5 shadow-2xl">
+              <div className="text-center">
+                <div className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Passo 5 de 5</div>
+                <h3 className="mt-1 text-2xl font-black text-slate-900">Quem fez esta venda?</h3>
+                <p className="mt-1 text-xs text-slate-500">É por aqui que entra na comissão.</p>
+              </div>
+              {vendedorasFluxo.length === 0 ? (
+                <p className="mt-5 rounded-lg bg-amber-50 p-3 text-center text-xs font-bold text-amber-800">
+                  Carregando as vendedoras da loja...
+                </p>
+              ) : (
+                <div className="mt-4 grid max-h-64 grid-cols-2 gap-2.5 overflow-y-auto">
+                  {vendedorasFluxo.map((v) => (
+                    <button
+                      key={`${v.codigo}-${v.nome}`}
+                      type="button"
+                      disabled={salvandoVendedora}
+                      onClick={() => void salvarVendedoraGuiada({ codigo: v.codigo, nome: v.apelido || v.nome })}
+                      className="rounded-xl border-2 border-slate-200 bg-white py-4 text-center text-sm font-black text-slate-800 transition hover:border-emerald-500 hover:bg-emerald-50 active:scale-95 disabled:opacity-50"
+                    >
+                      {v.apelido || v.nome}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setEtapaOnline('pagamento')}
+                className="mt-3 w-full rounded-xl border-2 border-slate-300 bg-white py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Voltar
+              </button>
             </div>
           )}
         </div>
@@ -7242,73 +7398,25 @@ function PaymentModal({
                 <span className="shrink-0 text-[11px] font-bold text-teal-700 underline">alterar</span>
               </button>
             )}
-            <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
-              Como a cliente vai pagar?
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {/* GERAR PIX — o caso do WhatsApp: a cliente fechou e precisa
-                  receber o código pra pagar. Vem primeiro por ser o mais usado. */}
+            {/* A ESCOLHA DO PAGAMENTO VIROU POPUP (dono, 24/08) — a grade de 4
+                botões ficava no meio do painel e competia com tudo o mais.
+                Aqui sobrou o RECIBO, com "alterar" pra reabrir o popup. */}
+            {vendaOnlineTipo && (
               <button
                 type="button"
-                onClick={() => { setVendaOnlineTipo('pix_gerar'); setPagarmeLink(null); }}
-                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
-                  vendaOnlineTipo === 'pix_gerar'
-                    ? 'border-emerald-600 bg-emerald-100 text-emerald-900 shadow-md ring-2 ring-emerald-300'
-                    : 'border-emerald-400 hover:border-emerald-500 bg-emerald-50 text-emerald-800'
-                }`}
+                onClick={() => setEtapaOnline('pagamento')}
+                className="flex w-full items-center gap-2 rounded-lg border-2 border-violet-300 bg-violet-50 px-3 py-2 text-left hover:bg-violet-100"
+                title="Trocar a forma de pagamento"
               >
-                <QrCode className="w-5 h-5" />
-                Gerar PIX
-                <span className="text-[9px] font-normal text-emerald-700 leading-tight font-bold">
-                  Mandar p/ cliente
+                <span className="shrink-0 rounded bg-violet-600 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-white">
+                  {VENDA_ONLINE_LABEL[vendaOnlineTipo] || vendaOnlineTipo}
                 </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setVendaOnlineTipo('pix'); setPagarmeLink(null); }}
-                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
-                  vendaOnlineTipo === 'pix'
-                    ? 'border-teal-600 bg-teal-100 text-teal-900 shadow-md'
-                    : 'border-slate-200 hover:border-teal-300 bg-white text-slate-700'
-                }`}
-              >
-                <QrCode className="w-5 h-5" />
-                PIX recebido
-                <span className="text-[9px] font-normal text-slate-500 leading-tight">
-                  Já caiu na conta
+                <span className="flex-1 truncate text-xs font-semibold text-violet-900">
+                  {hasSeller ? `Vendedora: ${sellerNome || 'escolhida'}` : 'Falta a vendedora'}
                 </span>
+                <span className="shrink-0 text-[11px] font-bold text-violet-700 underline">alterar</span>
               </button>
-              <button
-                type="button"
-                onClick={() => { setVendaOnlineTipo('link'); setPagarmeLink(null); }}
-                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
-                  vendaOnlineTipo === 'link'
-                    ? 'border-teal-600 bg-teal-100 text-teal-900 shadow-md'
-                    : 'border-slate-200 hover:border-teal-300 bg-white text-slate-700'
-                }`}
-              >
-                <ArrowUpRight className="w-5 h-5" />
-                Link externo
-                <span className="text-[9px] font-normal text-slate-500 leading-tight">
-                  Já pago (outro)
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setVendaOnlineTipo('pagarme_link')}
-                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
-                  vendaOnlineTipo === 'pagarme_link'
-                    ? 'border-violet-600 bg-violet-100 text-violet-900 shadow-md ring-2 ring-violet-300'
-                    : 'border-violet-400 hover:border-violet-500 bg-violet-50 text-violet-800'
-                }`}
-              >
-                <span className="text-base">🔗</span>
-                Link Pagar.me
-                <span className="text-[9px] font-normal text-violet-600 leading-tight font-bold">
-                  Gerar agora
-                </span>
-              </button>
-            </div>
+            )}
             {/* CADASTRO DA CLIENTE (dono 18/08) — sem nome e sobrenome, CPF,
                 WhatsApp e e-mail a etiqueta sai "Cliente" e ninguém consegue
                 avisar a cliente. O ENDEREÇO entra na conta só quando a peça
