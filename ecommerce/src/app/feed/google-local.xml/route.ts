@@ -93,6 +93,28 @@ const LOJAS_COM_FICHA = new Set([
 /** `1`, `07`, ` 7 ` → `07`. A mesma chave que o `codigoDaFicha` usa. */
 const numeroDaLoja = (loja: string) => String(loja).trim().padStart(2, '0');
 
+/**
+ * 🧪 SONDA TEMPORÁRIA — REMOVER quando o inventário local casar (24/08/2026).
+ *
+ * O Merchant recusa o feed inteiro com "[Perfil da Empresa] Código da loja
+ * inválido — 10.295 produtos, 14 lojas", e o checklist dele diz conhecer só
+ * **3 lojas**. A hipótese é atraso de sincronismo: os 14 `LURDS-nn` entraram
+ * nas fichas em 23/08 à noite e a cópia do Merchant ainda seria a antiga.
+ *
+ * Estas DUAS lojas são as únicas que tinham código ANTES dessa virada. Mandar
+ * o código velho junto com o novo transforma a hipótese em medição:
+ *
+ *   · casou pelo velho  → é atraso mesmo. Esperar é a resposta certa.
+ *   · não casou nem assim → o problema é outro, e esperar seria perder dias.
+ *
+ * Código inválido o Google descarta em silêncio — é o que já acontece com os
+ * 14 hoje. O feed cresce ~15% por um dia; nada quebra.
+ */
+const CODIGO_LEGADO: Record<string, string> = {
+  '06': 'LURDSSOROCABA', // Sorocaba — virou LURDS-06 em 23/08
+  '18': '07281599556208318742', // Anália Franco — id numérico do Google, virou LURDS-18
+};
+
 /** Uma linha de estoque por (peça × cor × loja), vinda do backend. */
 interface EstoqueLoja {
   loja: string;
@@ -187,19 +209,24 @@ export async function GET() {
         if (!(quantidade > 0)) continue;
         // Depósito, matriz, estoque do site e loja fechada não têm ficha.
         if (!LOJAS_COM_FICHA.has(numeroDaLoja(loja))) continue;
-        linhas.push(
+
+        const item = (codigo: string) =>
           '<item>' +
-            `<g:store_code>${escapar(codigoDaFicha(loja))}</g:store_code>` +
-            `<g:id>${escapar(v.id)}</g:id>` +
-            `<g:quantity>${quantidade}</g:quantity>` +
-            `<g:availability>in_stock</g:availability>` +
-            `<g:price>${dinheiro(preco)}</g:price>` +
-            // A cliente vê a peça na ficha e vai buscar na loja — é o
-            // comportamento que a rede já tem no balcão.
-            `<g:pickup_method>buy</g:pickup_method>` +
-            `<g:pickup_sla>same_day</g:pickup_sla>` +
-            '</item>',
-        );
+          `<g:store_code>${escapar(codigo)}</g:store_code>` +
+          `<g:id>${escapar(v.id)}</g:id>` +
+          `<g:quantity>${quantidade}</g:quantity>` +
+          `<g:availability>in_stock</g:availability>` +
+          `<g:price>${dinheiro(preco)}</g:price>` +
+          // A cliente vê a peça na ficha e vai buscar na loja — é o
+          // comportamento que a rede já tem no balcão.
+          `<g:pickup_method>buy</g:pickup_method>` +
+          `<g:pickup_sla>same_day</g:pickup_sla>` +
+          '</item>';
+
+        linhas.push(item(codigoDaFicha(loja)));
+
+        const legado = CODIGO_LEGADO[numeroDaLoja(loja)];
+        if (legado) linhas.push(item(legado));
       }
     }
   }
