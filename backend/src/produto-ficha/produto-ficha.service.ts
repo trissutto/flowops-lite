@@ -664,4 +664,114 @@ export class ProdutoFichaService {
 
     return (this.prisma as any).gradeMedidas.update({ where: { id }, data: patch });
   }
+
+  /* ────────────────────────── Reposição por tamanho ──────────────────────── */
+
+  /**
+   * MÍNIMO e IDEAL já configurados desta cor — as linhas 3 e 4 da matriz.
+   *
+   * Devolve SÓ o que está guardado. O que TENHO e o que VENDEU continuam
+   * saindo de onde já saíam (espelho de estoque e relatório de vendas):
+   * repetir os dois aqui criaria um SEGUNDO número de estoque na casa, e a
+   * grade por loja logo acima, na MESMA tela, mostraria o outro.
+   *
+   * A chave passa pelo mesmo `chave()` da ficha (REF-base + MARCA), então a
+   * matriz cai exatamente no grupo que a cascata da tela desenha.
+   */
+  async reposicao(refRaw: string, marcaRaw: string, corRaw: string) {
+    const { ref, marca } = this.chave(refRaw, marcaRaw);
+    const cor = String(corRaw || '').trim().toUpperCase();
+    if (!cor) throw new BadRequestException('COR obrigatória');
+
+    const linhas = await (this.prisma as any).produtoReposicao.findMany({
+      where: { ref, marca, cor },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    return {
+      ref,
+      marca,
+      cor,
+      tamanhos: linhas.map((l: any) => ({
+        tamanho: l.tamanho,
+        minimoLoja: l.minimoLoja,
+        idealLoja: l.idealLoja,
+      })),
+      // A linha mais recente responde "quem mexeu por último nesta grade".
+      atualizadoPor: linhas[0]?.atualizadoPor ?? null,
+      atualizadoEm: linhas[0]?.updatedAt ?? null,
+    };
+  }
+
+  /**
+   * Grava a grade INTEIRA de uma cor, e não célula a célula: quem configura
+   * mexe em vários tamanhos de uma vez, e um POST por tecla encheria a fila
+   * de estados intermediários que ninguém pediu.
+   *
+   * ⚠️ NULO ≠ ZERO, e a diferença decide o pedido de compra. Nulo é "ninguém
+   * configurou ainda" — a linha some da tabela e o tamanho fica fora da conta.
+   * Zero é "esta loja não carrega este tamanho" e fica GRAVADO; sem essa
+   * distinção, o tamanho que a compradora decidiu não repor voltaria pro
+   * pedido toda vez que alguém abrisse a tela.
+   */
+  async salvarReposicao(
+    refRaw: string,
+    marcaRaw: string,
+    corRaw: string,
+    tamanhos: Array<{ tamanho?: string; minimoLoja?: number | null; idealLoja?: number | null }>,
+    quem: string,
+  ) {
+    const { ref, marca } = this.chave(refRaw, marcaRaw);
+    const cor = String(corRaw || '').trim().toUpperCase();
+    if (!cor) throw new BadRequestException('COR obrigatória');
+    if (!Array.isArray(tamanhos)) throw new BadRequestException('tamanhos precisa ser uma lista');
+
+    /** Teto de 999: acima disso é dedo escorregado, não decisão de compra. */
+    const quantia = (v: unknown): number | null => {
+      if (v === null || v === undefined || v === '') return null;
+      const n = Math.floor(Number(v));
+      if (!Number.isFinite(n)) return null;
+      return Math.min(999, Math.max(0, n));
+    };
+
+    /**
+     * Valida TUDO antes de gravar QUALQUER coisa. Estourar no meio do laço
+     * deixaria metade da grade salva e metade não, sem a pessoa ter como
+     * saber onde parou — e o pedido sairia de uma grade pela metade.
+     */
+    const planos: Array<{ tamanho: string; minimoLoja: number | null; idealLoja: number | null }> = [];
+    for (const t of tamanhos) {
+      const tamanho = String(t?.tamanho || '').trim().toUpperCase();
+      if (!tamanho) continue;
+      const minimoLoja = quantia(t?.minimoLoja);
+      const idealLoja = quantia(t?.idealLoja);
+      // Ideal abaixo do mínimo inverte a banda: o "comprar" miraria num
+      // patamar mais baixo do que o que não pode faltar na arara.
+      if (minimoLoja !== null && idealLoja !== null && idealLoja < minimoLoja) {
+        throw new BadRequestException(
+          `Tamanho ${tamanho}: o ideal (${idealLoja}) não pode ser menor que o mínimo (${minimoLoja}).`,
+        );
+      }
+      planos.push({ tamanho, minimoLoja, idealLoja });
+    }
+
+    for (const p of planos) {
+      if (p.minimoLoja === null && p.idealLoja === null) {
+        await (this.prisma as any).produtoReposicao.deleteMany({
+          where: { ref, marca, cor, tamanho: p.tamanho },
+        });
+        continue;
+      }
+      await (this.prisma as any).produtoReposicao.upsert({
+        where: { ref_marca_cor_tamanho: { ref, marca, cor, tamanho: p.tamanho } },
+        create: {
+          ref, marca, cor, tamanho: p.tamanho,
+          minimoLoja: p.minimoLoja, idealLoja: p.idealLoja, atualizadoPor: quem,
+        },
+        update: { minimoLoja: p.minimoLoja, idealLoja: p.idealLoja, atualizadoPor: quem },
+      });
+    }
+
+    return this.reposicao(ref, marca, cor);
+  }
 }

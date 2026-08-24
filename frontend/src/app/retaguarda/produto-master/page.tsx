@@ -54,6 +54,14 @@ import {
   GradeEstoque,
   VitrinesDoSite,
 } from '@/features/produtos/components/FichaProduto';
+import MatrizReposicao from '@/features/produtos/components/MatrizReposicao';
+
+/** Os três modos do nível 3. Rótulo aqui pra não virar `if` dentro do JSX. */
+const MODO_LABEL = {
+  mover: 'Mover entre lojas',
+  ajustar: 'Ajustar estoque',
+  comprar: 'Comprar de novo',
+} as const;
 
 
 /**
@@ -332,7 +340,14 @@ export default function ProdutoMasterPage() {
    * campo de digitação ao mesmo tempo, e as duas ações têm consequências bem
    * diferentes — mover gera ordem de separação, ajustar mexe no estoque agora.
    */
-  const [modo, setModo] = useState<'mover' | 'ajustar'>('mover');
+  /**
+   * 'comprar' (24/08) é a terceira pergunta da mesma cor: as duas de cima
+   * mexem no que JÁ existe (onde a peça está, quanto tem), essa olha o que
+   * FALTA. Entrou como modo, e não como painel embaixo da grade, porque a
+   * matriz tem a sua própria linha de estoque — as duas visíveis ao mesmo
+   * tempo dariam dois totais na mesma tela.
+   */
+  const [modo, setModo] = useState<'mover' | 'ajustar' | 'comprar'>('mover');
   /** `${codigo}|${loja}` → quantidade nova digitada. */
   const [ajustes, setAjustes] = useState<Record<string, number>>({});
   const [salvandoAjuste, setSalvandoAjuste] = useState(false);
@@ -581,9 +596,10 @@ export default function ProdutoMasterPage() {
                               gera ordem de separação, ajustar mexe no estoque
                               agora. Modo explícito evita fazer uma pensando na
                               outra, e a célula não pode ser arrastável e campo
-                              de digitação ao mesmo tempo. */}
+                              de digitação ao mesmo tempo. "Comprar de novo"
+                              nem mexe no estoque: olha o que falta. */}
                           <div className="flex gap-1">
-                            {(['mover', 'ajustar'] as const).map((m) => (
+                            {(['mover', 'ajustar', 'comprar'] as const).map((m) => (
                               <button
                                 key={m}
                                 type="button"
@@ -594,22 +610,32 @@ export default function ProdutoMasterPage() {
                                     : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
                                 }`}
                               >
-                                {m === 'mover' ? 'Mover entre lojas' : 'Ajustar estoque'}
+                                {MODO_LABEL[m]}
                               </button>
                             ))}
                           </div>
-                          <GradeEstoque
-                            skus={prod.skus}
-                            movimentos={movimentos}
-                            origemSel={origemSel}
-                            onMover={moverUma}
-                            onClicarCelula={aoClicarCelula}
-                            modo={modo}
-                            ajustes={ajustes}
-                            onAjustar={definirAjuste}
-                            lojaNomes={lojaNomes}
-                            pendencias={pendencias}
-                          />
+                          {modo === 'comprar' ? (
+                            <MatrizReposicao
+                              ref_={prod.ref}
+                              marca={prod.marca}
+                              cor={prod.cor}
+                              skus={prod.skus}
+                              lojaNomes={lojaNomes}
+                            />
+                          ) : (
+                            <GradeEstoque
+                              skus={prod.skus}
+                              movimentos={movimentos}
+                              origemSel={origemSel}
+                              onMover={moverUma}
+                              onClicarCelula={aoClicarCelula}
+                              modo={modo}
+                              ajustes={ajustes}
+                              onAjustar={definirAjuste}
+                              lojaNomes={lojaNomes}
+                              pendencias={pendencias}
+                            />
+                          )}
                           <FichaDaCor
                             ref_={prod.ref}
                             marca={prod.marca}

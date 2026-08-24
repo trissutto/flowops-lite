@@ -5536,6 +5536,47 @@ model ProdutoFichaCor {
   @@map("produto_ficha_cor")
 }
 
+/// REPOSIÇÃO — quanto se QUER ter de cada tamanho de uma peça.
+///
+/// A grade de estoque responde "onde a peça está"; esta tabela é a outra
+/// metade, "quanto falta comprar". Guarda só o que ninguém consegue calcular:
+/// o mínimo e o ideal. O que TENHO sai do espelho de estoque e o que VENDEU
+/// sai do relatório — repetir esses dois aqui criaria um segundo número de
+/// estoque na casa, que é pior do que não ter a linha.
+///
+/// Chaveada em REF + MARCA + COR + TAMANHO. A MARCA entra porque REF numérica
+/// é reciclada entre fornecedores (mesma regra do resto da ficha), e nada é
+/// herdado por REF-base: cada referência é única por decisão do dono (21/08).
+model ProdutoReposicao {
+  id        String @id @default(uuid())
+  ref       String
+  marca     String
+  cor       String
+  tamanho   String
+
+  /// Quanto NÃO pode faltar em cada arara. Por LOJA, não da rede: é assim que
+  /// a pessoa pensa ("dois do 48 em cada loja"), e o total da rede é conta.
+  ///
+  /// NULO ≠ ZERO, e a diferença decide o pedido: nulo é "ninguém configurou
+  /// ainda" e some da conta; zero é "esta loja não carrega este tamanho" e
+  /// vale como decisão — sem isso o tamanho que não gira volta pro pedido
+  /// toda vez que alguém abrir a tela.
+  minimoLoja Int? @map("minimo_loja")
+  /// Grade cheia por loja. É este número que manda no pedido de compra.
+  idealLoja  Int? @map("ideal_loja")
+
+  atualizadoPor String?  @map("atualizado_por")
+  createdAt     DateTime @default(now()) @map("created_at")
+  /// `@default(now())` junto do `@updatedAt` de propósito: `@updatedAt`
+  /// sozinho gera coluna NOT NULL sem default e derruba o `prisma db push`
+  /// do `start:prod` em silêncio, mantendo a versão antiga no ar.
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([ref, marca, cor, tamanho])
+  @@index([ref, marca])
+  @@map("produto_reposicao")
+}
+
 /// ATENDIMENTO DO SITE — a conversa da cliente com a assistente.
 ///
 /// Guarda a conversa INTEIRA, e não só o lead: quando a cliente pede uma

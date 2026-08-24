@@ -29,6 +29,7 @@ import {
   type SkuRow,
   type VitrinesPeca,
 } from '../types';
+import { lojasDaGrade } from '../lojas-grade';
 
 /**
  * EM QUE VITRINES ESTA PEÇA APARECE — árvore de checkbox (dono, 18/08/2026).
@@ -394,57 +395,10 @@ export function GradeEstoque({
   lojaNomes: Map<string, string>;
   pendencias: Pendencia[];
 }) {
-  const lojas = useMemo(() => {
-    // TODAS as lojas cadastradas, mesmo zeradas (pedido do dono 03/08) —
-    // mesma regra do editor de produtos. Coluna vazia é DESTINO válido: sem
-    // ela não dá pra arrastar peça pra loja que ainda não tem essa cor.
-    const s = new Set<string>(lojaNomes.keys());
-    if (!s.size) for (const c of ['01', '02', '03', '05', '06', '08', '10', '15', '17', '18']) s.add(c);
-    for (const r of skus) for (const l of Object.keys(r.estoqueLojas ?? {})) s.add(l);
-    /**
-     * MATRIZ, ITU e DEPÓSITO fora da grade (dono, 04/08).
-     *
-     * A grade existe pra mover peça ENTRE LOJAS QUE VENDEM. Essas três não
-     * vendem — e coluna a mais aqui não é só ruído visual: cada uma é um
-     * destino de arraste, e arrastar peça pra matriz por engano tira ela da
-     * arara sem ninguém precisar dela.
-     *
-     * Filtra pela SIGLA (o mesmo texto do cabeçalho) e não por código: código
-     * de loja eu não tenho como conferir daqui, e chutar código é esconder a
-     * coluna errada.
-     */
-    // SITE entrou aqui em 04/08: é loja-canal, não arara. A peça vai pro site
-    // pelo pedido (TransferOrder do canal), nunca arrastada nesta grade.
-    const FORA_DA_GRADE = ['MATRI', 'ITU', 'DEPOS', 'SITE'];
-
-    /**
-     * ORDEM DO ITINERÁRIO DA ENTREGA (dono, 04/08) — não alfabética.
-     *
-     * A grade é usada pra decidir o que vai em cada caixa, e quem monta segue
-     * a ordem do carro. Coluna em ordem alfabética obriga a pular de um lado
-     * pro outro da tela a cada loja da rota.
-     *
-     * Casa pela SIGLA (o mesmo texto do cabeçalho), não por código: código de
-     * loja eu não tenho como conferir daqui. Loja fora da rota (SITE, e
-     * qualquer uma nova) vai pro fim, em ordem alfabética — melhor no fim do
-     * que sumida.
-     */
-    const ITINERARIO = [
-      'ITANH', 'PRAIA', 'SANTO', 'JUNDI', 'VINHE', 'CAMPI', 'LIMEI',
-      'PIRAC', 'INDAI', 'SOROC', 'MOEMA', 'ANALI', 'SUZAN', 'SAO J',
-    ];
-    const posicao = (c: string) => {
-      const i = ITINERARIO.indexOf((lojaNomes.get(c) || c).toUpperCase());
-      return i < 0 ? ITINERARIO.length : i;
-    };
-
-    return [...s]
-      .filter((c) => !FORA_DA_GRADE.includes((lojaNomes.get(c) || c).toUpperCase()))
-      .sort((a, b) => {
-        const d = posicao(a) - posicao(b);
-        return d !== 0 ? d : a.localeCompare(b);
-      });
-  }, [skus, lojaNomes]);
+  // A lista saiu daqui pra `lojas-grade.ts` em 24/08: a matriz de reposição
+  // soma o TENHO com ela, e dois conjuntos diferentes dariam dois estoques da
+  // mesma peça na mesma tela.
+  const lojas = useMemo(() => lojasDaGrade(skus, lojaNomes), [skus, lojaNomes]);
 
   /**
    * As três camadas da célula:
