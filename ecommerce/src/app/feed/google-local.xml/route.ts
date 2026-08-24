@@ -53,8 +53,45 @@ export const revalidate = 3600;
  * descarta a linha em silêncio.
  */
 function codigoDaFicha(loja: string): string {
-  return `LURDS-${String(loja).trim().padStart(2, '0')}`;
+  return `LURDS-${numeroDaLoja(loja)}`;
 }
+
+/**
+ * SÓ LOJA QUE A CLIENTE PODE VISITAR — as 14 que têm ficha no Meu Negócio.
+ *
+ * O Flow tem 18 códigos de loja, e nem todos são porta de rua. Sem esta trava
+ * o feed anunciava também (medido em 23/08, 132 linhas):
+ *
+ *   09 MATRIZ (inativa) · 13 SITE (o estoque do e-commerce)
+ *   19 ITU (**fechada** — as duas fichas viraram "Encerrado permanentemente"
+ *      em 23/08) · 20 DEPÓSITO
+ *
+ * As três primeiras o Google descartaria em silêncio, por não existir ficha
+ * com esse código. ITU é o caso que dói: no dia em que alguém criasse a ficha
+ * de novo, o feed começaria a mandar cliente pra uma loja que não abre mais.
+ *
+ * A lista é explícita de propósito. Loja nova entra AQUI depois que a ficha
+ * dela existe no Meu Negócio com o código — nunca antes.
+ */
+const LOJAS_COM_FICHA = new Set([
+  '01', // Itanhaém
+  '02', // Santos (Parque Balneário)
+  '03', // Vinhedo
+  '04', // Indaiatuba
+  '05', // Piracicaba
+  '06', // Sorocaba
+  '07', // Campinas
+  '08', // São José dos Campos
+  '10', // Jundiaí
+  '11', // Limeira
+  '14', // Praia Grande
+  '15', // Moema
+  '17', // Suzano
+  '18', // Anália Franco
+]);
+
+/** `1`, `07`, ` 7 ` → `07`. A mesma chave que o `codigoDaFicha` usa. */
+const numeroDaLoja = (loja: string) => String(loja).trim().padStart(2, '0');
 
 /** Uma linha de estoque por (peça × cor × loja), vinda do backend. */
 interface EstoqueLoja {
@@ -148,6 +185,8 @@ export async function GET() {
 
       for (const [loja, quantidade] of porLoja) {
         if (!(quantidade > 0)) continue;
+        // Depósito, matriz, estoque do site e loja fechada não têm ficha.
+        if (!LOJAS_COM_FICHA.has(numeroDaLoja(loja))) continue;
         linhas.push(
           '<item>' +
             `<g:store_code>${escapar(codigoDaFicha(loja))}</g:store_code>` +
