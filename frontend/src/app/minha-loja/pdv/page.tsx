@@ -5255,8 +5255,8 @@ function PaymentModal({
   const [saleCarregada, setSaleCarregada] = useState(false);
   /** O fluxo guiado só arranca UMA vez por seleção de "Venda Online". */
   const fluxoOnlineIniciadoRef = useRef(false);
-  /** Ficou faltando só a vendedora — retoma o registro assim que ela escolher. */
-  const retomarAposVendedoraRef = useRef(false);
+  /** Fecha a venda assim que der: vendedora escolhida + caminho do dinheiro definido. */
+  const fecharQuandoPuderRef = useRef(false);
   const freteDigitado = Math.round((Number((freteStr || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
   const fretePendente = Math.abs(freteDigitado - freteAplicado) > 0.005;
   /**
@@ -5330,6 +5330,29 @@ function PaymentModal({
     }
   };
 
+  /** O dinheiro JÁ ESTÁ na conta? Só esses dois fecham a venda na hora. */
+  const ehJaPago = (tipo: string | null) => tipo === 'pix' || tipo === 'link';
+
+  /** PASSO 4: guarda o caminho do dinheiro e segue pra vendedora. */
+  const escolherPagamentoGuiado = (tipo: 'pix_gerar' | 'pagarme_link' | 'pix' | 'link') => {
+    setVendaOnlineTipo(tipo);
+    setPagarmeLink(null);
+    if (!hasSeller) {
+      setEtapaOnline('vendedora');
+      return;
+    }
+    // Vendedora já gravada (venda retomada): não pergunta de novo. Se o
+    // dinheiro já está na conta, fecha daqui mesmo — o efeito abaixo dispara
+    // quando `vendaOnlineTipo` chegar no estado (ler o tipo agora daria o
+    // valor ANTERIOR, e a venda fecharia pelo caminho errado).
+    if (ehJaPago(tipo)) {
+      fecharQuandoPuderRef.current = true;
+      setEtapaOnline('fechando');
+    } else {
+      setEtapaOnline(null);
+    }
+  };
+
   /** PASSO 2 do fluxo guiado: grava o frete e leva pra conferência do total. */
   const confirmarFreteGuiado = async () => {
     if (aplicandoFrete) return;
@@ -5369,13 +5392,13 @@ function PaymentModal({
        * venda fica legitimamente aberta esperando o dinheiro cair, e a tela do
        * QR/link precisa aparecer pra ela mandar pra cliente.
        *
-       * Fecha via `retomarAposVendedoraRef` (não chamando direto) porque
+       * Fecha via `fecharQuandoPuderRef` (não chamando direto) porque
        * `hasSeller` só vira true quando o refetch do parent chega — chamar
        * agora cairia na trava "escolha a vendedora" que acabou de ser cumprida.
        */
-      const jaEstaPago = vendaOnlineTipo === 'pix' || vendaOnlineTipo === 'link';
+      const jaEstaPago = ehJaPago(vendaOnlineTipo);
       if (jaEstaPago) {
-        retomarAposVendedoraRef.current = true;
+        fecharQuandoPuderRef.current = true;
         setEtapaOnline('fechando');
       } else {
         setEtapaOnline(null);
@@ -5817,15 +5840,16 @@ function PaymentModal({
   }, [selected, saleCarregada]);
 
   /**
-   * RETOMA SOZINHO DEPOIS DA VENDEDORA — o fim do fluxo guiado.
+   * FECHA SOZINHO — o fim do fluxo guiado.
    *
-   * Ela escolheu quem vendeu no popup; a tela continua de onde parou e
-   * finaliza. Sem isto o popup fecha e a vendedora fica olhando pro mesmo
-   * botão que já tinha clicado.
+   * Dois gatilhos, uma porta só: a vendedora acabou de ser escolhida, ou o
+   * caminho do dinheiro acabou de ser escolhido numa venda que já tinha dona.
+   * Os dois dependem de estado que só existe no PRÓXIMO render — por isso a
+   * espera vive aqui, e não numa chamada direta do clique.
    */
   useEffect(() => {
-    if (!hasSeller || !retomarAposVendedoraRef.current) return;
-    retomarAposVendedoraRef.current = false;
+    if (!hasSeller || !fecharQuandoPuderRef.current) return;
+    fecharQuandoPuderRef.current = false;
     void adicionarPagamento().finally(() => {
       // Segura a animação mais um instante: o auto-finalize sai num timeout de
       // 80ms e é ELE que acende o overlay de tela cheia. Limpar na hora
@@ -5834,7 +5858,7 @@ function PaymentModal({
       setTimeout(() => setEtapaOnline((e) => (e === 'fechando' ? null : e)), 600);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasSeller]);
+  }, [hasSeller, vendaOnlineTipo]);
 
   // Botão "Gerar Link Pagar.me" ficava fora da área visível (embaixo, atrás
   // do footer FINALIZAR) — rola a seção pra vista quando o tipo é escolhido
@@ -5970,7 +5994,7 @@ function PaymentModal({
         // ÚLTIMO PASSO do fluxo guiado. Marca pra RETOMAR sozinho quando ela
         // escolher — sem isso a vendedora escolhe a dona da venda e a tela
         // volta pro mesmo botão, esperando o mesmo clique de novo.
-        retomarAposVendedoraRef.current = true;
+        fecharQuandoPuderRef.current = true;
         toast('warning', 'Escolha a vendedora', 'Última coisa — quem fez esta venda?');
         onNeedSeller?.();
         return;
@@ -7114,39 +7138,85 @@ function PaymentModal({
           )}
 
           {/* ── 4/5 · COMO A CLIENTE VAI PAGAR ──
-              Era uma grade dentro do painel, no meio de tudo. Vira pergunta
-              própria: o total já está fechado, falta só o caminho do dinheiro. */}
+              DOIS BLOCOS, NÃO QUATRO BOTÕES (dono, 24/08).
+
+              Os quatro descreviam o INSTRUMENTO — e os dois lados têm PIX, os
+              dois lados têm link. Era isso que borrava. O que separa é o TEMPO
+              VERBAL: vou cobrar × já recebi. Com o título dizendo a
+              consequência, a vendedora acerta sem saber o que é cada gateway.
+
+              E o peso visual é INVERTIDO de propósito. "Já recebi" é a escolha
+              que custa dinheiro se estiver errada — peça sai sem pagamento na
+              conta —, então ela é a mais discreta, nunca a mais bonita. Errar
+              pro outro lado só dá retrabalho. ── */}
           {etapaOnline === 'pagamento' && (
-            <div className="w-full max-w-md rounded-2xl border-4 border-violet-400 bg-violet-50 p-5 shadow-2xl">
+            <div className="w-full max-w-md rounded-2xl border-4 border-violet-400 bg-white p-5 shadow-2xl">
               <div className="text-center">
                 <div className="text-[11px] font-black uppercase tracking-widest text-violet-700">Passo 4 de 5</div>
                 <h3 className="mt-1 text-2xl font-black text-slate-900">Como a cliente vai pagar?</h3>
                 <p className="mt-1 text-sm font-black text-violet-800">{brl(totalVivo)}</p>
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-2.5">
-                {([
-                  { id: 'pix_gerar', icone: '📲', label: 'GERAR PIX', hint: 'Mandar QR pra cliente' },
-                  { id: 'pagarme_link', icone: '🔗', label: 'LINK PAGAR.ME', hint: 'Cartão · gerar agora' },
-                  { id: 'pix', icone: '✅', label: 'PIX RECEBIDO', hint: 'Já caiu na conta' },
-                  { id: 'link', icone: '↗️', label: 'LINK EXTERNO', hint: 'Já pago por fora' },
-                ] as const).map((op) => (
-                  <button
-                    key={op.id}
-                    type="button"
-                    onClick={() => {
-                      setVendaOnlineTipo(op.id);
-                      setPagarmeLink(null);
-                      // Vendedora já gravada (venda retomada): não pergunta de novo.
-                      setEtapaOnline(hasSeller ? null : 'vendedora');
-                    }}
-                    className="rounded-xl border-2 border-violet-300 bg-white py-4 text-center transition hover:border-violet-500 hover:bg-violet-100 active:scale-95"
-                  >
-                    <div className="text-2xl leading-none">{op.icone}</div>
-                    <div className="mt-1.5 text-[13px] font-black text-slate-800">{op.label}</div>
-                    <div className="text-[10px] font-semibold text-slate-500">{op.hint}</div>
-                  </button>
-                ))}
+
+              {/* ── COBRAR AGORA — colorido, é o caminho seguro ── */}
+              <div className="mt-4 rounded-xl border-2 border-violet-300 bg-violet-50 p-3">
+                <div className="text-[11px] font-black uppercase tracking-wider text-violet-800">
+                  Vou cobrar agora
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2.5">
+                  {([
+                    { id: 'pix_gerar', icone: '📲', label: 'GERAR PIX', hint: 'Manda o QR pra ela' },
+                    { id: 'pagarme_link', icone: '🔗', label: 'LINK PAGAR.ME', hint: 'Cartão · gera agora' },
+                  ] as const).map((op) => (
+                    <button
+                      key={op.id}
+                      type="button"
+                      onClick={() => escolherPagamentoGuiado(op.id)}
+                      className="rounded-xl border-2 border-violet-400 bg-white py-4 text-center shadow-sm transition hover:border-violet-600 hover:bg-violet-100 active:scale-95"
+                    >
+                      <div className="text-2xl leading-none">{op.icone}</div>
+                      <div className="mt-1.5 text-[13px] font-black text-slate-800">{op.label}</div>
+                      <div className="text-[10px] font-semibold text-slate-500">{op.hint}</div>
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] font-semibold leading-snug text-violet-700">
+                  A venda fica aberta e fecha sozinha quando o dinheiro cair.
+                </p>
               </div>
+
+              <div className="my-2 flex items-center gap-2">
+                <span className="h-px flex-1 bg-slate-200" />
+                <span className="text-[10px] font-bold uppercase text-slate-400">ou</span>
+                <span className="h-px flex-1 bg-slate-200" />
+              </div>
+
+              {/* ── JÁ RECEBI — discreto DE PROPÓSITO (ver comentário acima) ── */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-black uppercase tracking-wider text-slate-500">
+                  Já recebi o dinheiro
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2.5">
+                  {([
+                    { id: 'pix', label: 'PIX na conta', hint: 'Conferi o extrato' },
+                    { id: 'link', label: 'Pago por fora', hint: 'Outro link/máquina' },
+                  ] as const).map((op) => (
+                    <button
+                      key={op.id}
+                      type="button"
+                      onClick={() => escolherPagamentoGuiado(op.id)}
+                      className="rounded-lg border border-slate-300 bg-white py-2.5 text-center transition hover:border-slate-500 hover:bg-slate-100 active:scale-95"
+                    >
+                      <div className="text-xs font-bold text-slate-700">{op.label}</div>
+                      <div className="text-[10px] text-slate-400">{op.hint}</div>
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] font-semibold leading-snug text-slate-500">
+                  Fecha a venda agora. Só marque com o dinheiro <b>já na conta</b> —
+                  daqui a peça sai.
+                </p>
+              </div>
+
               <button
                 type="button"
                 onClick={() => setEtapaOnline('confirma_total')}
