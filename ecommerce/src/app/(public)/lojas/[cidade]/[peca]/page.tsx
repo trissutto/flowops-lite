@@ -45,7 +45,23 @@ import PecaNaLojaCtas from './PecaNaLojaCtas';
  * INP acima de 200ms em 498 das 597 URLs no mobile.
  */
 
-export const revalidate = 300;
+/**
+ * DINÂMICA, NÃO ISR — e isso não é escolha de performance.
+ *
+ * `fetchPeca` busca com `revalidate: 0` de propósito: a grade com estoque não
+ * pode vir do cache (foi assim que o 48 esgotado da VOGUE VINHO ficou
+ * comprável a tarde inteira em 06/08). Declarar `revalidate = 300` aqui, em
+ * cima de um fetch sem cache, faz o Next tentar gerar a página estaticamente
+ * e estourar.
+ *
+ * ⚠️ E o estrago é traiçoeiro: **`next build` passa limpo e o `next dev`
+ * responde 200** — o erro só aparece em produção, como 500, quando a primeira
+ * requisição real chega. Foi exatamente o que aconteceu no deploy de 23/08.
+ * Não confie no build local pra validar esta rota.
+ *
+ * A PDP (`/produto/[slug]`) usa `force-dynamic` pelo mesmo motivo.
+ */
+export const dynamic = 'force-dynamic';
 
 interface Params {
   /** Next 15: params chega como Promise em rota dinamica async. */
@@ -78,16 +94,18 @@ const dinheiro = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /**
- * As páginas nascem sob demanda, não no build.
+ * As páginas nascem sob demanda, e SEM `generateStaticParams`.
  *
- * 14 lojas × ~950 peças = ~13 mil rotas. Pré-renderizar tudo faria o build da
+ * 14 lojas × ~950 peças = ~13 mil rotas — pré-renderizar tudo faria o build da
  * Vercel estourar por um ganho que não existe: o Google entra numa peça por
- * vez, vindo da ficha. `revalidate` de 5 min mantém o estoque honesto.
+ * vez, vindo da ficha.
+ *
+ * ⚠️ Um `generateStaticParams` devolvendo `[]` NÃO é equivalente a não ter:
+ * ele mantém a rota marcada como estática (o `next build` imprime `●` em vez
+ * de `ƒ`) e ANULA o `force-dynamic` acima. Foi o que segurou o 500 de pé
+ * mesmo depois da primeira correção.
  */
 export const dynamicParams = true;
-export function generateStaticParams() {
-  return [];
-}
 
 async function carregar(cidade: string, pecaSlug: string) {
   const loja = lojaPorSlug(cidade);
@@ -99,7 +117,7 @@ async function carregar(cidade: string, pecaSlug: string) {
   const ref = peca.product.sku || peca.editorIdentity?.ref || '';
   const estoque = ref
     ? await apiSafe<LinhaEstoque[]>(`/public/loja/estoque-peca/${encodeURIComponent(ref)}`, [], {
-        revalidate: 300,
+        revalidate: 0,
         tags: ['catalogo', `produto:${pecaSlug}`],
         timeoutMs: 8000,
       })
