@@ -14,6 +14,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagarmeService } from './pagarme.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
+import { conferirCobrancaCobreVendaOnline } from '../common/cobranca-venda-online';
 import { LojaOrdersService } from '../loja-orders/loja-orders.service';
 import { Inject, forwardRef, Logger } from '@nestjs/common';
 
@@ -189,6 +190,10 @@ export class PagarmeController {
           'sai como "Entrega (não informada)" e a etiqueta vira PAC fora de São Paulo.',
       );
     }
+    // O LINK NÃO PODE SAIR MAIS BARATO QUE A VENDA (24/08) — o defeito das
+    // "duas voltas": frete aplicado depois que a tela calculou o valor. Ver
+    // `common/cobranca-venda-online.ts`. Venda que não é do PDV passa direto.
+    conferirCobrancaCobreVendaOnline(venda, Number(body.valor));
     return this.svc.createCheckoutLink(body);
   }
 

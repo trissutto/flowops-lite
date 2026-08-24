@@ -50,6 +50,7 @@ import {
   AlertCircle,
   Zap,
   Truck,
+  PackageCheck,
   Plane,
   Star,
   ArrowLeft,
@@ -88,6 +89,8 @@ interface WcOrderListItem {
   // Enriquecimento vindo do backend: loja(s) responsável(is) + rastreio
   pickOrders?: PickOrderLite[];
   shipped?: boolean;
+  /** Desde quando a caixa está separada esperando postagem (aba "Pronto pra postar"). */
+  prontoDesde?: string | null;
   trackingCode?: string | null;
   trackingCarrier?: string | null;
   // Vendedora atribuída (tag pra relatório de vendas online por atendente)
@@ -166,6 +169,12 @@ const FILTROS = [
   { slug: 'on-hold',     label: 'Aguardando',          color: 'bg-yellow-100 text-yellow-800' },
   { slug: 'carrinhos',   label: 'Carrinhos',           color: 'bg-rose-100 text-rose-800' },
   { slug: 'separacao',   label: 'Em separação',        color: 'bg-blue-100 text-blue-800' },
+  // PRONTO PRA POSTAR (24/08, ordem do dono): "entre separação e em trânsito
+  // ele fica parado, sem movimentar status". A peça já foi bipada e a caixa
+  // espera etiqueta/postagem — 31 cards nesse limbo na medição do dia, 36h de
+  // média e o pior com 6,3 dias, todos escondidos dentro de "Em separação".
+  // Reparte aquela aba (não duplica): ver `whereNativoDaAba` no backend.
+  { slug: 'pronto-postar', label: 'Pronto pra postar', color: 'bg-orange-100 text-orange-800' },
   // "Enviados por Loja" não é um status de pedido WC — é um painel diferente
   // (tracking do dia por filial). Reaproveitamos a aba pra evitar que a matriz
   // precise ir pra /retaguarda/enviados-hoje só pra ver quem despachou.
@@ -295,6 +304,10 @@ function SeparacaoPageInner() {
       next['pending']     = r.byStatus['pending']?.total ?? 0;
       next['on-hold']     = r.byStatus['on-hold']?.total ?? 0;
       next['separacao']   = r.byStatus['separacao']?.total ?? 0;
+      // O backend reparte o `separating` entre as duas abas pela MESMA regra
+      // da lista — badge que discorda da tela faz a matriz abrir a aba "pra
+      // conferir", e aí o badge não serve pra nada.
+      next['pronto-postar'] = r.byStatus['pronto-postar']?.total ?? 0;
       // O backend passou a devolver a aba pronta (regra: shipped + rastreio +
       // dentro da janela). Ler 'shipped' do WC dava 0 pra sempre — lá o pedido
       // despachado vira 'completed'.
@@ -1106,6 +1119,7 @@ function SeparacaoPageInner() {
               }`}
             >
               {f.slug === 'enviados' && <Truck className="w-3.5 h-3.5" />}
+              {f.slug === 'pronto-postar' && <PackageCheck className="w-3.5 h-3.5" />}
               {f.slug === 'em-transito' && <Plane className="w-3.5 h-3.5" />}
               {f.slug === 'completed' && <CheckCircle2 className="w-3.5 h-3.5" />}
               {f.slug === 'pos-venda' && <Star className="w-3.5 h-3.5" />}
@@ -1427,6 +1441,23 @@ function SeparacaoPageInner() {
                         </span>
                       )}
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
+                      {/* PARADO HÁ QUANTO TEMPO — só na aba "Pronto pra postar".
+                          A caixa já está fechada esperando etiqueta; sem a
+                          idade na linha, 1h e 6 dias se parecem. Vermelho a
+                          partir de 24h, o mesmo semáforo da fila da loja. */}
+                      {status === 'pronto-postar' && o.prontoDesde && (() => {
+                        const horas = (Date.now() - new Date(o.prontoDesde).getTime()) / 3600000;
+                        return (
+                          <div
+                            className={`mt-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                              horas >= 24 ? 'bg-rose-600 text-white' : 'bg-amber-100 text-amber-800'
+                            }`}
+                            title="Tempo desde que a loja terminou de separar"
+                          >
+                            ⏱ parado há {fmtDate(o.prontoDesde)}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div className="sm:col-span-4 sm:truncate min-w-0">
                       {(() => {
@@ -1603,15 +1634,22 @@ function SeparacaoPageInner() {
                             {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <StoreIcon className="w-3.5 h-3.5" />}
                             Prévia
                           </button>
-                          <button
-                            onClick={() => umClique(o.id)}
-                            disabled={isBusy}
-                            className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-50 flex items-center gap-1.5 font-semibold shadow-sm ring-1 ring-green-500"
-                            title="1 clique faz TUDO: calcula loja → envia WhatsApp → muda status pra Separação"
-                          >
-                            {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                            1-CLIQUE
-                          </button>
+                          {/* 1-CLIQUE calcula a loja e MANDA SEPARAR. Na aba
+                              "Pronto pra postar" a peça já está separada e a
+                              caixa fechada: clicar aqui rerotearia o pedido e
+                              dispararia o WhatsApp de novo pra uma loja que já
+                              fez o trabalho. Fora da aba. */}
+                          {status !== 'pronto-postar' && (
+                            <button
+                              onClick={() => umClique(o.id)}
+                              disabled={isBusy}
+                              className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-50 flex items-center gap-1.5 font-semibold shadow-sm ring-1 ring-green-500"
+                              title="1 clique faz TUDO: calcula loja → envia WhatsApp → muda status pra Separação"
+                            >
+                              {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                              1-CLIQUE
+                            </button>
+                          )}
                         </>
                       )}
                       {!hasIssue && p && p.success && p.groups.length === 1 && (

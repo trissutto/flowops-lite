@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import * as crypto from 'crypto';
+import { SELECT_VENDA_COBRANCA } from '../common/cobranca-venda-online';
 
 /**
  * PagBank — integração via Order API moderna (REST/JSON com Bearer Token).
@@ -901,12 +902,13 @@ export class PagbankService {
    * controller, e SEM validar aqui dentro do `createPixCharge`: a live chama o
    * mesmo create com id de CARRINHO, que nunca é pdv_sale.
    */
-  async buscarVendaPdv(
-    saleId: string,
-  ): Promise<{ id: string; status: string; entregaTipo: string | null } | null> {
+  async buscarVendaPdv(saleId: string): Promise<any | null> {
     return (this.prisma as any).pdvSale.findUnique({
       where: { id: String(saleId || '') },
-      select: { id: true, status: true, entregaTipo: true },
+      // `total` + `payments` entraram em 24/08 pro guard da cobrança curta
+      // (`conferirCobrancaCobreVendaOnline`) — a mesma leitura serve às duas
+      // travas, e assim a rota não faz dois SELECT na mesma venda.
+      select: SELECT_VENDA_COBRANCA,
     });
   }
 

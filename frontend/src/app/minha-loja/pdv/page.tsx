@@ -175,6 +175,52 @@ const PAYMENT_METHODS = [
 ] as const;
 
 /**
+ * COMO A PEÇA SAI, escrito por extenso.
+ *
+ * O botão da grade é curto ("⚡ SEDEX") porque cabe em meia linha; a faixa de
+ * destaque precisa dizer a coisa inteira — é o que a vendedora confere antes
+ * de cobrar e o que a matriz lê pra despachar.
+ */
+const ENTREGA_LABEL: Record<string, string> = {
+  sedex: 'SEDEX (expresso)',
+  pac: 'PAC (econômico)',
+  motoboy: 'Motoboy',
+  retirada: 'Retira na loja',
+};
+
+/**
+ * O FRETE QUE A REDE COBRA — sugestão, nunca imposição.
+ *
+ * Medição de 120 dias (24/08/2026), vendas com linha FRETE por modalidade:
+ *   sedex em SP ...... 39 vendas, 32 delas entre 9,90 e 10,00 → 9,99
+ *   sedex fora de SP .. 8 vendas e NENHUM valor dominante (28,85 · 10,63 ·
+ *                       11,00) — a distância manda, e chutar aqui seria pior
+ *                       que campo vazio. Devolve null: a loja calcula.
+ *   pac .............. 19,99 em 7 de 12
+ *   motoboy .......... 20,00 em 8 de 14 (SP)
+ *   retirada ......... 0 (a peça não viaja)
+ *
+ * Preenche e APLICA sozinho enquanto a vendedora não digitar outro valor —
+ * digitado dela sempre ganha.
+ */
+/** Rótulo curto de cada caminho da venda online — usado no roteiro de passos. */
+const VENDA_ONLINE_LABEL: Record<string, string> = {
+  pix_gerar: 'Gerar PIX',
+  pix: 'PIX recebido',
+  link: 'Link externo',
+  pagarme_link: 'Link Pagar.me',
+};
+
+function freteSugerido(tipo: string | null, uf?: string | null): number | null {
+  const emSp = String(uf || '').trim().toUpperCase() === 'SP';
+  if (tipo === 'retirada') return 0;
+  if (tipo === 'motoboy') return 20;
+  if (tipo === 'pac') return 19.99;
+  if (tipo === 'sedex') return emSp ? 9.99 : null;
+  return null;
+}
+
+/**
  * A venda fresca SEM uma segunda viagem ao servidor.
  *
  * As mutações do PDV (bipar, +/−, remover, desconto, campanha, remover
@@ -1966,13 +2012,29 @@ function PdvPageInner() {
 
   // ── Finalizar ──
   // Se paymentMethod vier vazio, usa modo SPLIT (pagamentos parciais já adicionados via addPayment)
-  const finalizeSale = async (paymentMethod: string, paymentDetails?: any, opts?: { skipSellerGate?: boolean }) => {
+  const finalizeSale = async (
+    paymentMethod: string,
+    paymentDetails?: any,
+    opts?: { skipSellerGate?: boolean; vendaOnline?: boolean },
+  ) => {
     if (!sale) return;
-    // PDV2: a confirmação da venda (resumo + escolha OBRIGATÓRIA da vendedora)
-    // acontece num popup central no ENCERRAMENTO. Salva o finalize pendente,
-    // abre o popup e retoma automaticamente após confirmar (skipSellerGate
-    // evita reabrir o popup na retomada). Sempre abre — é a etapa final do fluxo.
-    if (!opts?.skipSellerGate) {
+    /**
+     * VENDA ONLINE NÃO PERGUNTA A VENDEDORA DUAS VEZES (dono, 24/08).
+     *
+     * No balcão o popup de confirmação É a etapa final do fluxo: resumo da
+     * venda + escolha da vendedora num lugar só. Na VENDA ONLINE ela já
+     * escolheu — o passo 4 do roteiro exige a vendedora ANTES da cobrança sair,
+     * porque quem fecha a venda depois é o servidor (o link/PIX cai com a
+     * vendedora já em outro atendimento) e venda sem dona some da comissão.
+     *
+     * O popup abria de novo mesmo assim, com a vendedora já pré-selecionada, e
+     * pra quem está no balcão isso é escolher duas vezes. Com vendedora
+     * gravada E venda online, o finalize passa direto.
+     */
+    const ehVendaOnline =
+      !!opts?.vendaOnline || (sale.payments || []).some((p: any) => p.method === 'venda_online');
+    const jaTemVendedora = !!sale.sellerName;
+    if (!opts?.skipSellerGate && !(ehVendaOnline && jaTemVendedora)) {
       pendingFinalizeRef.current = { paymentMethod, paymentDetails };
       setShowConfirmSale(true);
       return;
@@ -4963,7 +5025,14 @@ function PaymentModal({
   /** Pré-seleção da bandeira (em conjunto com presetMethod) */
   presetBandeira?: string | null;
   onClose: () => void;
-  onConfirm: (method: string, details?: any) => void;
+  /**
+   * `opts.vendaOnline` (24/08): o modal AVISA que este fechamento veio do
+   * painel Venda Online, onde a vendedora já foi escolhida como passo do
+   * roteiro. O parent não pode descobrir isso sozinho na hora — o pagamento
+   * acabou de nascer e o `sale` dele ainda está recarregando —, e sem o aviso
+   * o popup de confirmação abria pedindo a vendedora DE NOVO.
+   */
+  onConfirm: (method: string, details?: any, opts?: { vendaOnline?: boolean }) => void;
   onLater: () => void;
   onPaymentsChange?: () => void;
   /** Sinaliza pro parent que entrou em fluxo automático (PIX confirmado) */
@@ -5006,6 +5075,23 @@ function PaymentModal({
           setEntregaTipo(s.entregaTipo);
           setEntregaStoreCode(s.entregaStoreCode || '');
         }
+        // FRETE JÁ GRAVADO — o campo nascia VAZIO mesmo com a linha FRETE na
+        // venda. Reabrir o modal (link pendente, F5, "fechar depois") mostrava
+        // "0,00" e convidava a digitar de novo: ou aplica o mesmo valor em
+        // cima, ou some com o frete achando que nunca entrou.
+        const linhaFrete = Array.isArray(s?.items)
+          ? s.items.find((i: any) => i?.ref === 'FRETE')
+          : null;
+        const jaAplicado = Math.round((Number(linhaFrete?.total) || 0) * 100) / 100;
+        setFreteAplicado(jaAplicado);
+        if (jaAplicado > 0) setFreteStr(jaAplicado.toFixed(2).replace('.', ','));
+        // Peças bipadas (sem contar a linha FRETE) — é o passo 1 do roteiro
+        // da venda online, e é o único que não dá pra ler do estado do modal.
+        setQtdPecas(
+          Array.isArray(s?.items)
+            ? s.items.filter((i: any) => i?.ref !== 'FRETE').reduce((n: number, i: any) => n + (i?.qty || 0), 0)
+            : 0,
+        );
       } catch { /* sem rede: mantém o estado local */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5078,6 +5164,49 @@ function PaymentModal({
   // FRETE à parte (venda online) — vira linha própria na venda
   const [freteStr, setFreteStr] = useState('');
   const [aplicandoFrete, setAplicandoFrete] = useState(false);
+  /**
+   * O frete que está GRAVADO na venda (linha FRETE), não o que está digitado.
+   *
+   * São coisas diferentes e a diferença é dinheiro: digitar 9,99 e não clicar
+   * em "Aplicar frete" deixava o campo mostrando 9,99 com a venda cobrando só
+   * as peças. Guardar o valor aplicado é o que permite a tela dizer "você
+   * digitou e não aplicou" antes de a cobrança sair.
+   */
+  const [freteAplicado, setFreteAplicado] = useState(0);
+  /** Peças no carrinho SEM contar a linha FRETE — passo 1 do roteiro. */
+  const [qtdPecas, setQtdPecas] = useState(0);
+  const freteDigitado = Math.round((Number((freteStr || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+  const fretePendente = Math.abs(freteDigitado - freteAplicado) > 0.005;
+  /**
+   * Grava o frete na venda. Chamada pelo botão, pelo Enter e pelo blur do
+   * campo — o mesmo caminho nos três, pra não existir "jeito que aplica" e
+   * "jeito que só parece que aplicou".
+   */
+  /** O último valor que a TELA sugeriu — o que ela digitou nunca é sobrescrito. */
+  const freteAutoRef = useRef<string | null>(null);
+  const aplicarFrete = async (valorForcado?: number) => {
+    if (!saleId || aplicandoFrete) return;
+    const v = valorForcado != null ? valorForcado : freteDigitado;
+    setAplicandoFrete(true);
+    try {
+      const r = await api<{ ok: boolean; freteReais: number; total: number }>(
+        `/pdv/sales/${saleId}/frete`,
+        { method: 'POST', body: JSON.stringify({ valor: v }) },
+      );
+      setFreteAplicado(v);
+      onPaymentsChange?.();
+      toast(
+        'success',
+        v > 0 ? `Frete de ${brl(v)} aplicado` : 'Frete removido',
+        `Total da venda: ${brl(r.total)} — a linha FRETE aparece no carrinho`,
+      );
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    } finally {
+      setAplicandoFrete(false);
+    }
+  };
   // COMO A PEÇA SAI (14/08) — SEDEX / PAC / MOTOBOY / RETIRADA EM LOJA.
   // Sem isso o pedido online nascia "Correios R$ 0,00" e a matriz não sabia
   // se emitia etiqueta, chamava motoboy ou segurava a peça pra retirada.
@@ -5163,13 +5292,34 @@ function PaymentModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, customerCpf, credRefresh]);
 
-  // Quando muda o restante, sugere preencher o valor parcial
+  /**
+   * QUANTO COBRAR — ESPELHO DO QUE FALTA, NÃO FOTOGRAFIA (24/08).
+   *
+   * O campo era preenchido UMA vez, no clique da forma de pagamento, e nunca
+   * mais: o `!valorParcial` barrava toda reescrita. Aplicar o FRETE depois
+   * disso subia o total da venda no banco e o campo continuava no valor velho
+   * — a cobrança saía SEM o frete, a venda não fechava (`willComplete` falso)
+   * e sobrava uma SEGUNDA VOLTA só do frete pra cliente pagar.
+   *
+   * Medido em 24/08: 5 vendas da loja 13 em 40 minutos, todas iguais — um
+   * pagamento `venda_online 289,60` e 13s depois outro de `9,99`, com a linha
+   * FRETE criada ANTES dos dois. Era este `!valorParcial`.
+   *
+   * Agora o campo SEGUE o restante enquanto ninguém digitou outra coisa. O ref
+   * guarda o último valor que a tela escreveu sozinha: se o que está no campo
+   * for diferente dele, a vendedora mexeu (split de formas) e a tela não toca.
+   * DINHEIRO fica de fora — lá quem manda no campo é o efeito do troco.
+   */
+  const valorParcialAutoRef = useRef<string | null>(null);
   useEffect(() => {
-    if (restante > 0 && selected && !valorParcial) {
-      setValorParcial(restante.toFixed(2).replace('.', ','));
-    }
+    if (!selected || selected === 'dinheiro' || restante <= 0) return;
+    if (valorParcial && valorParcial !== valorParcialAutoRef.current) return;
+    const auto = restante.toFixed(2).replace('.', ',');
+    if (auto === valorParcial) return;
+    valorParcialAutoRef.current = auto;
+    setValorParcial(auto);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
+  }, [selected, restante]);
 
   // DINHEIRO: sincroniza valorParcial = min(recebido, restante) automaticamente.
   // Vendedora só precisa digitar quanto a cliente entregou — sistema calcula
@@ -5319,6 +5469,13 @@ function PaymentModal({
       );
       return;
     }
+    // PASSO 5 — vendedora ANTES do QR. Quem fecha esta venda é o servidor,
+    // com ela já em outro atendimento: sem dona agora, sem dona nunca.
+    if (!hasSeller) {
+      toast('warning', 'Escolha a vendedora antes do PIX', 'Venda online também tem dona — é o passo 5 do roteiro.');
+      onNeedSeller?.();
+      return;
+    }
     // Cadastro completo ANTES da cobrança: PIX pago com cadastro pela metade
     // vira dinheiro na conta e venda que não fecha.
     if (dadosOnlineFaltando.length) {
@@ -5328,6 +5485,18 @@ function PaymentModal({
         `Falta: ${dadosOnlineFaltando.join(', ')}.`,
       );
       onNeedCustomer?.(entregaEfetiva);
+      return;
+    }
+    // FRETE DIGITADO E NÃO APLICADO — o QR sairia com o valor sem frete e a
+    // cliente pagaria a menos. Aplica sozinho e segue (ela já digitou: a
+    // intenção está clara, o que faltou foi o clique).
+    if (fretePendente) {
+      await aplicarFrete();
+      toast(
+        'warning',
+        `Frete de ${brl(freteDigitado)} aplicado antes do PIX`,
+        'Confira o valor do QR — ele agora inclui o frete.',
+      );
       return;
     }
     setPixOnlineLoading(true);
@@ -5380,13 +5549,19 @@ function PaymentModal({
     }
   };
 
-  // VENDA ONLINE exige VENDEDORA ANTES (dono 29/07): o fechamento pode
-  // acontecer bem depois (link pago via webhook / "Liberar") — se não
-  // escolher agora, a venda fica sem dona e some da comissão.
-  useEffect(() => {
-    if (selected === 'venda_online' && !hasSeller) onNeedSeller?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, hasSeller]);
+  /**
+   * VENDA ONLINE exige VENDEDORA ANTES DA COBRANÇA (dono 29/07): o fechamento
+   * pode acontecer bem depois (link pago via webhook / "Liberar") — sem ela a
+   * venda fica sem dona e some da comissão.
+   *
+   * O popup ABRIA SOZINHO no instante em que "Venda Online" era clicado, antes
+   * de bipar, de escolher envio, de qualquer coisa — e depois abria DE NOVO no
+   * fechamento, que é onde ele mora no fluxo do balcão. Escolher a vendedora
+   * duas vezes na mesma venda (dono, 24/08). Agora ela é o PASSO 5 do roteiro:
+   * a vendedora clica quando chega nele, e as travas ficam nos pontos que
+   * geram cobrança (PIX, link, registrar pagamento) — o mesmo lugar onde a
+   * forma de entrega já é exigida.
+   */
 
   // Botão "Gerar Link Pagar.me" ficava fora da área visível (embaixo, atrás
   // do footer FINALIZAR) — rola a seção pra vista quando o tipo é escolhido
@@ -5485,6 +5660,39 @@ function PaymentModal({
     }
     // VENDA ONLINE — exige VENDEDORA + CPF do cliente + escolher PIX ou LINK
     if (selected === 'venda_online') {
+      /**
+       * O FRETE DIGITADO E NÃO APLICADO (24/08).
+       *
+       * Última porta antes de registrar o pagamento: se o campo mostra um
+       * valor que não está na venda, quem cobra é o número velho e o frete
+       * volta como segunda cobrança pra cliente.
+       */
+      if (fretePendente) {
+        toast(
+          'warning',
+          'O frete digitado ainda não entrou na venda',
+          `Você digitou ${brl(freteDigitado)} e a venda está cobrando ${brl(freteAplicado)} de frete. Clique em "Aplicar frete" antes de registrar.`,
+        );
+        return;
+      }
+      /**
+       * COBRANÇA CURTA — o defeito das "duas voltas" (24/08).
+       *
+       * Venda online cobra o total de uma vez: os dois caminhos que geram
+       * cobrança (PIX e link) sempre mandam o restante inteiro. Um valor
+       * MENOR que o restante aqui nunca é escolha da vendedora — é campo
+       * defasado, e o resultado é o pedido pago e o frete pendente.
+       */
+      if (valor < restante - 0.01) {
+        setValorParcial(restante.toFixed(2).replace('.', ','));
+        valorParcialAutoRef.current = restante.toFixed(2).replace('.', ',');
+        toast(
+          'warning',
+          `Faltam ${brl(Math.round((restante - valor) * 100) / 100)} nessa cobrança`,
+          `Venda online cobra tudo de uma vez. Corrigi o valor pra ${brl(restante)} — confira e registre.`,
+        );
+        return;
+      }
       if (!hasSeller) {
         toast('warning', 'Escolha a vendedora', 'Venda online também tem dona — selecione quem vendeu.');
         onNeedSeller?.();
@@ -5792,8 +6000,11 @@ function PaymentModal({
       // finaliza a venda automaticamente sem exigir 2º clique. Pequeno delay deixa
       // o estado de payments propagar antes do finalize.
       if (willComplete) {
+        // `selected` já foi zerado acima, mas a closure carrega o valor deste
+        // render — é ele que diz se o fechamento veio da Venda Online.
+        const eraVendaOnline = selected === 'venda_online';
         setTimeout(() => {
-          onConfirm('', undefined);
+          onConfirm('', undefined, { vendaOnline: eraVendaOnline });
         }, 80);
       }
     } catch (e: any) {
@@ -6729,19 +6940,81 @@ function PaymentModal({
             sem geração de cobrança real). Aviso explícito + 2 botões grandes. */}
         {selected === 'venda_online' && (
           <div className="space-y-3 pt-2 border-t">
-            <div className="bg-teal-50 border border-teal-300 rounded-lg p-3 text-xs text-teal-900">
-              <div className="font-bold flex items-center gap-1.5 mb-1">
-                <Globe className="w-3.5 h-3.5" />
-                Venda Online — sem gerar cobrança
-              </div>
-              <div className="text-teal-800 leading-snug">
-                Pagamento já chegou na conta da loja (WhatsApp/Instagram).
-                PDV só registra venda, vendedora e cliente. <b>Não emite NFC-e</b>.
-                Estoque é baixado normalmente.
-              </div>
-            </div>
+            {/* ── O ROTEIRO DA VENDA ONLINE (dono, 24/08) ──
+                "Podemos ter um passo a passo?" — a venda online tem 5 escolhas
+                obrigatórias que viviam espalhadas pelo painel, sem ordem e sem
+                dizer o que já foi feito. A vendedora descobria o que faltava
+                pelo botão que não clicava. Aqui a fila está escrita, com o que
+                está pronto marcado e o passo da vez em destaque.
+
+                Vale SÓ na venda online: no balcão a cliente está na frente e o
+                fluxo é bipar → cobrar → pronto. ── */}
+            {(() => {
+              const passos = [
+                // `total > 0` é a rede de segurança: se a leitura da venda
+                // falhou (sem rede), o passo 1 não pode acusar carrinho vazio
+                // com a peça na tela atrás do modal.
+                { n: 1, label: 'Bipe as peças', ok: qtdPecas > 0 || total > 0, valor: qtdPecas > 0 ? `${qtdPecas} peça${qtdPecas > 1 ? 's' : ''}` : null },
+                { n: 2, label: 'Forma de pagamento', ok: !!vendaOnlineTipo, valor: vendaOnlineTipo ? VENDA_ONLINE_LABEL[vendaOnlineTipo] || vendaOnlineTipo : null },
+                { n: 3, label: 'Como vai enviar', ok: !!entregaTipo, valor: entregaTipo ? ENTREGA_LABEL[entregaTipo] || entregaTipo : null },
+                // O frete só conta como resolvido quando o valor DIGITADO é o
+                // que está gravado na venda — foi exatamente aqui que a
+                // cobrança saía curta e voltava como segunda cobrança.
+                { n: 4, label: 'Valor do frete', ok: !!entregaTipo && !!freteStr && !fretePendente, valor: freteStr ? brl(freteAplicado) : null },
+                { n: 5, label: 'Escolha a vendedora', ok: !!hasSeller, valor: null, acao: () => onNeedSeller?.() },
+              ];
+              const atual = passos.find((p) => !p.ok)?.n ?? 0;
+              return (
+                <div className="rounded-lg border-2 border-teal-300 bg-teal-50/60 p-2.5">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-teal-900">
+                    <Globe className="h-3.5 w-3.5" />
+                    Venda online · passo a passo
+                  </div>
+                  <div className="space-y-1">
+                    {passos.map((p) => {
+                      const acao = (p as any).acao as (() => void) | undefined;
+                      return (
+                        <button
+                          key={p.n}
+                          type="button"
+                          disabled={!acao}
+                          onClick={acao}
+                          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs disabled:cursor-default ${
+                            p.ok
+                              ? 'text-teal-800'
+                              : p.n === atual
+                                ? 'bg-amber-100 font-bold text-amber-900 ring-1 ring-amber-400'
+                                : 'text-slate-400'
+                          }`}
+                        >
+                          <span
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
+                              p.ok ? 'bg-teal-600 text-white' : p.n === atual ? 'bg-amber-500 text-white' : 'bg-slate-200 text-slate-500'
+                            }`}
+                          >
+                            {p.ok ? '✓' : p.n}
+                          </span>
+                          <span className="flex-1 truncate">{p.label}</span>
+                          {p.valor && <span className="shrink-0 font-semibold tabular-nums">{p.valor}</span>}
+                          {/* A vendedora é o único passo que não tem campo na
+                              tela — o popup dela abre daqui. */}
+                          {acao && !p.ok && (
+                            <span className="shrink-0 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-black text-white">
+                              escolher
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 border-t border-teal-200 pt-1 text-[10px] leading-snug text-teal-700">
+                    Só depois dos 5 a cobrança sai. <b>Não emite NFC-e</b> · estoque baixa normal.
+                  </p>
+                </div>
+              );
+            })()}
             <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
-              Como foi feita a venda online?
+              Passo 2 — Como foi feita a venda online?
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {/* GERAR PIX — o caso do WhatsApp: a cliente fechou e precisa
@@ -6850,12 +7123,30 @@ function PaymentModal({
             {/* ── COMO A PEÇA SAI (14/08) — a matriz despacha por isto:
                 SEDEX/PAC geram etiqueta dos Correios, MOTOBOY é entrega na
                 mão e RETIRADA segura a peça na própria loja (o pedido nasce
-                como retirada, sem etiqueta). Obrigatório na venda online. ── */}
-            <div className="bg-white border-2 border-teal-200 rounded-lg p-2.5">
-              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
-                Forma de entrega <span className="text-rose-600">*</span>
-              </label>
-              <div className="grid grid-cols-2 gap-1.5 mt-1">
+                como retirada, sem etiqueta). Obrigatório na venda online.
+
+                DESTAQUE (24/08, ordem do dono): o bloco era uma caixinha
+                igual às outras, com o frete numa caixa SEPARADA logo abaixo.
+                São a MESMA decisão — o serviço escolhido é o que define
+                quanto custa o envio — e separá-los é o que deixava a
+                vendedora cobrar sem olhar como a peça ia sair. Agora é UM
+                bloco só, com faixa de cor e o serviço escrito por extenso. ── */}
+            <div className={`rounded-xl border-2 p-3 ${entregaTipo ? 'border-teal-400 bg-teal-50/50' : 'border-amber-400 bg-amber-50'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[11px] text-slate-700 uppercase font-black tracking-wider">
+                  🚚 Como vai enviar <span className="text-rose-600">*</span>
+                </label>
+                <span
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-black uppercase tracking-wide ${
+                    entregaTipo ? 'bg-teal-600 text-white' : 'bg-amber-500 text-white'
+                  }`}
+                >
+                  {entregaTipo
+                    ? ENTREGA_LABEL[entregaTipo] || entregaTipo
+                    : 'Não escolhido'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 mt-2">
                 {([
                   { id: 'sedex', label: '⚡ SEDEX' },
                   { id: 'pac', label: '📦 PAC' },
@@ -6872,6 +7163,23 @@ function PaymentModal({
                       setEntregaTipo(op.id);
                       setEntregaStoreCode(lojaAtende);
                       if (!saleId) return;
+                      /**
+                       * O SISTEMA SOMA SOZINHO (dono, 24/08).
+                       *
+                       * Escolher a modalidade já traz o valor da rede e GRAVA
+                       * na venda — sem isso a vendedora escolhia SEDEX, ia
+                       * digitar o frete, e o passo do meio era onde a cobrança
+                       * saía curta. Só mexe no valor enquanto ele foi posto
+                       * pela tela: o que ela digitou fica.
+                       */
+                      const sugerido = freteSugerido(op.id, clienteOnline?.uf);
+                      const podeSugerir = !freteStr || freteStr === freteAutoRef.current;
+                      if (sugerido != null && podeSugerir) {
+                        const txt = sugerido.toFixed(2).replace('.', ',');
+                        freteAutoRef.current = txt;
+                        setFreteStr(txt);
+                        void aplicarFrete(sugerido);
+                      }
                       try {
                         await api(`/pdv/sales/${saleId}/entrega`, {
                           method: 'POST',
@@ -6956,55 +7264,77 @@ function PaymentModal({
                   </p>
                 </div>
               )}
-            </div>
 
-            {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
-                soma no total, entra no caixa como receita e fica FORA da
-                base de comissão da vendedora ── */}
-            <div className="bg-white border-2 border-teal-200 rounded-lg p-2.5">
-              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
-                Frete cobrado da cliente (R$) — opcional
-              </label>
-              <div className="flex gap-2 mt-1">
-                <input
-                  value={freteStr}
-                  onChange={(e) => setFreteStr(e.target.value.replace(/[^\d.,]/g, ''))}
-                  placeholder="0,00"
-                  inputMode="decimal"
-                  className="flex-1 rounded-lg border-2 border-slate-200 px-3 py-2 text-sm text-right tabular-nums focus:border-teal-400 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  disabled={aplicandoFrete}
-                  onClick={async () => {
-                    const v = Math.round((Number((freteStr || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
-                    setAplicandoFrete(true);
-                    try {
-                      const r = await api<{ ok: boolean; freteReais: number; total: number }>(
-                        `/pdv/sales/${saleId}/frete`,
-                        { method: 'POST', body: JSON.stringify({ valor: v }) },
-                      );
-                      onPaymentsChange?.();
-                      toast(
-                        'success',
-                        v > 0 ? `Frete de ${brl(v)} aplicado` : 'Frete removido',
-                        `Total da venda: ${brl(r.total)} — a linha FRETE aparece no carrinho`,
-                      );
-                    } catch (e: any) {
-                      const h = humanizeError(e);
-                      toast('error', h.title, h.hint);
-                    } finally {
-                      setAplicandoFrete(false);
-                    }
-                  }}
-                  className="rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-4 disabled:opacity-50"
-                >
-                  {aplicandoFrete ? '...' : 'Aplicar frete'}
-                </button>
+              {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
+                  soma no total, entra no caixa como receita e fica FORA da
+                  base de comissão da vendedora.
+
+                  MORA AQUI DENTRO desde 24/08: era uma caixa separada logo
+                  abaixo, e "escolher o serviço" e "cobrar por ele" viraram
+                  dois passos que a vendedora fazia em momentos diferentes. ── */}
+              <div className="mt-3 border-t-2 border-dashed border-teal-200 pt-2.5">
+                <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                  {entregaTipo === 'retirada'
+                    ? 'Frete (retirada normalmente é 0)'
+                    : entregaTipo === 'motoboy'
+                      ? 'Quanto a cliente paga pelo motoboy (R$)'
+                      : 'Quanto a cliente paga de frete (R$)'}
+                </label>
+                <div className="flex gap-2 mt-1">
+                  <input
+                    value={freteStr}
+                    onChange={(e) => setFreteStr(e.target.value.replace(/[^\d.,]/g, ''))}
+                    // APLICA AO SAIR DO CAMPO — digitar e não clicar no botão
+                    // deixava o número na tela e o frete FORA da venda. O
+                    // blur cobre o caminho natural: digita, sai, cobra.
+                    onBlur={() => { if (fretePendente) void aplicarFrete(); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void aplicarFrete(); } }}
+                    placeholder="0,00"
+                    inputMode="decimal"
+                    className={`flex-1 rounded-lg border-2 px-3 py-2 text-sm text-right tabular-nums focus:outline-none ${
+                      fretePendente ? 'border-amber-400 bg-amber-50' : 'border-slate-200 focus:border-teal-400'
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    disabled={aplicandoFrete}
+                    onClick={() => void aplicarFrete()}
+                    className={`rounded-lg text-white text-xs font-bold px-4 disabled:opacity-50 ${
+                      fretePendente ? 'bg-amber-500 hover:bg-amber-600' : 'bg-teal-600 hover:bg-teal-700'
+                    }`}
+                  >
+                    {aplicandoFrete ? '...' : fretePendente ? 'Aplicar frete' : '✓ Aplicado'}
+                  </button>
+                </div>
+                {fretePendente ? (
+                  <p className="text-[11px] font-bold text-amber-800 mt-1 leading-snug">
+                    ⚠️ {brl(freteDigitado)} ainda NÃO entrou na venda — clique em Aplicar frete.
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Soma no total a cobrar · não baixa estoque · fora da comissão da vendedora.
+                  </p>
+                )}
+
+                {/* ── O QUE VAI SER COBRADO, POR EXTENSO ──
+                    A vendedora só via o total. Com peças e frete somados num
+                    número só, cobrar sem o frete não tinha como aparecer na
+                    tela — e não aparecia mesmo (5 vendas, loja 13, 24/08). */}
+                <div className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-white">
+                  <div className="flex items-center justify-between text-[11px] text-slate-300">
+                    <span>Peças</span>
+                    <span className="tabular-nums">{brl(Math.max(0, Math.round((total - freteAplicado) * 100) / 100))}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-300">
+                    <span>Frete {entregaTipo ? `(${ENTREGA_LABEL[entregaTipo] || entregaTipo})` : ''}</span>
+                    <span className="tabular-nums">{brl(freteAplicado)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between border-t border-slate-700 pt-1 text-sm font-black">
+                    <span>Cobrar da cliente</span>
+                    <span className="tabular-nums text-emerald-400">{brl(restante > 0 ? restante : total)}</span>
+                  </div>
+                </div>
               </div>
-              <p className="text-[10px] text-slate-400 mt-1">
-                Soma no total a cobrar · não baixa estoque · fora da comissão da vendedora.
-              </p>
             </div>
 
             {/* ── PAINEL: Gerar PIX (PagBank) — código pra mandar pra cliente ── */}
@@ -7212,6 +7542,13 @@ function PaymentModal({
                           );
                           return;
                         }
+                        // PASSO 5 — vendedora ANTES do link, pelo mesmo motivo
+                        // do PIX: quem fecha esta venda depois é o servidor.
+                        if (!hasSeller) {
+                          toast('warning', 'Escolha a vendedora antes do link', 'Venda online também tem dona — é o passo 5 do roteiro.');
+                          onNeedSeller?.();
+                          return;
+                        }
                         // Mesma trava do PIX: link pago com cadastro pela
                         // metade = dinheiro na conta e venda travada.
                         if (dadosOnlineFaltando.length) {
@@ -7221,6 +7558,18 @@ function PaymentModal({
                             `Falta: ${dadosOnlineFaltando.join(', ')}.`,
                           );
                           onNeedCustomer?.(entregaEfetiva);
+                          return;
+                        }
+                        // FRETE DIGITADO E NÃO APLICADO — o link sairia com o
+                        // valor sem frete. Aplica e devolve o clique: o botão
+                        // já mostra o novo valor.
+                        if (fretePendente) {
+                          await aplicarFrete();
+                          toast(
+                            'warning',
+                            `Frete de ${brl(freteDigitado)} aplicado antes do link`,
+                            'Confira o valor do botão — ele agora inclui o frete.',
+                          );
                           return;
                         }
                         setPagarmeLinkLoading(true);

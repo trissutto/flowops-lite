@@ -16,6 +16,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagbankService } from './pagbank.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
+import { conferirCobrancaCobreVendaOnline } from '../common/cobranca-venda-online';
 import type { Request } from 'express';
 
 @Controller('pagbank')
@@ -226,6 +227,11 @@ export class PagbankController {
           'Quando o pagamento cai, o sistema fecha a venda sozinho — sem essa escolha o pedido ' +
           'sai como "Entrega (não informada)" e a etiqueta vira PAC fora de São Paulo.',
       );
+    }
+    // O QR NÃO PODE SAIR MAIS BARATO QUE A VENDA (24/08) — ver o arquivo da
+    // regra. Vale só pra venda online: no balcão o split parcial é legítimo.
+    if (String(body?.origem || '') === 'venda_online') {
+      conferirCobrancaCobreVendaOnline(venda, Number(body.valor));
     }
     return this.svc.createPixCharge({
       ...body,

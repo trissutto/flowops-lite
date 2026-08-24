@@ -88,8 +88,68 @@ const TEM_RASTREIO = {
  * `delivered` cai em uma delas e em uma só. Pedido que não cai em aba nenhuma
  * é pedido invisível.
  */
+/**
+ * O CARD JÁ SEPARADO — peça na mão, esperando etiqueta/postagem.
+ *
+ * `separated` é o status que a loja grava quando termina de bipar (`ready` é o
+ * antigo, ainda existe em card velho). Card nesse estado não pede mais nada da
+ * arara: pede POSTAGEM.
+ */
+const CARD_PRONTO = ['separated', 'ready'];
+/** O card ainda na arara — ninguém terminou de separar. */
+const CARD_SEPARANDO = ['new', 'separating'];
+
 export function whereNativoDaAba(slug: string): Record<string, any> | null {
   const desde = new Date(Date.now() - RASTREIO_JANELA_DIAS * 86_400_000);
+
+  /**
+   * PRONTO PRA POSTAR (24/08/2026, ordem do dono) — o buraco entre separar e
+   * despachar.
+   *
+   * "Entre separação e em trânsito ele fica parado, sem movimentar status."
+   * Estava certo: o pedido entra em `separating` quando a loja recebe o card e
+   * só sai quando alguém posta E cola o rastreio. Entre bipar a última peça e
+   * postar a caixa não existia status nenhum — e a aba "Em separação" não
+   * distinguia "ainda procurando na arara" de "sacola pronta no balcão".
+   *
+   * Medição de 24/08: 31 cards `separated` parados, 36h de média e o pior com
+   * 6,3 dias. Nenhum deles aparecia como pendência de postagem em lugar
+   * nenhum — só como mais uma linha de "Em separação".
+   *
+   * ⚠️ COMPLEMENTAR a `separacao` de propósito, pela mesma regra que já vale
+   * pra "Em trânsito"/"Concluídos": todo pedido `separating` cai em uma das
+   * duas e em uma só. Se A = "tem card ainda separando" e B = "tem card
+   * pronto", aqui é ¬A ∧ B e lá é A ∨ ¬B. Pedido sem card nenhum e pedido com
+   * todos os cards já despachados continuam em "Em separação" — invisível é
+   * pior que na aba errada.
+   */
+  if (slug === 'pronto-postar') {
+    return {
+      AND: [
+        { status: 'separating' },
+        { pickOrders: { none: { status: { in: CARD_SEPARANDO } } } },
+        { pickOrders: { some: { status: { in: CARD_PRONTO } } } },
+      ],
+    };
+  }
+
+  // EM SEPARAÇÃO = o resto do `separating`: card ainda na arara, pedido sem
+  // card e pedido cujos cards já saíram. Escrito por extenso (não como NOT do
+  // bloco acima) — negação sobre relação é onde o Postgres some com linha sem
+  // avisar, e some sem erro.
+  if (slug === 'separacao' || slug === 'em-separacao') {
+    return {
+      AND: [
+        { status: 'separating' },
+        {
+          OR: [
+            { pickOrders: { some: { status: { in: CARD_SEPARANDO } } } },
+            { pickOrders: { none: { status: { in: CARD_PRONTO } } } },
+          ],
+        },
+      ],
+    };
+  }
 
   // EM TRÂNSITO = a loja despachou E colocou o rastreio, e o objeto ainda está
   // dentro da janela em que dá pra saber onde ele está.
@@ -631,11 +691,19 @@ export class OrdersController {
               status: true,
               trackingCode: true,
               carrier: true,
+              // `updatedAt` (24/08): é o carimbo de QUANDO a loja terminou de
+              // separar. A aba "Pronto pra postar" existe pra mostrar o que
+              // está PARADO — sem a hora, a linha não diz se esperou 1h ou 6
+              // dias, e uma fila sem idade não é fila, é lista.
+              updatedAt: true,
               store: { select: { code: true, name: true } },
             },
           },
         },
-        orderBy: { wcDateCreated: 'desc' },
+        // "Pronto pra postar" ordena pelo MAIS PARADO primeiro — é uma fila de
+        // pendência, não um extrato: quem espera há 6 dias tem que estar na
+        // primeira linha, não na página 2 do mais-recente-primeiro.
+        orderBy: status === 'pronto-postar' ? { updatedAt: 'asc' } : { wcDateCreated: 'desc' },
         take: ehEmTransito ? 200 : 100,
       });
 
@@ -675,6 +743,14 @@ export class OrdersController {
         }));
         const allShipped =
           pickOrders.length > 0 && pickOrders.every((p: any) => p.status === 'shipped');
+        // DESDE QUANDO A CAIXA ESTÁ PRONTA — o card separado mais ANTIGO, que
+        // é o que manda: pedido dividido só posta quando a última loja separa,
+        // mas quem está esperando há mais tempo é quem define a urgência.
+        const prontoDesde =
+          (o.pickOrders || [])
+            .filter((p: any) => CARD_PRONTO.includes(p.status))
+            .map((p: any) => p.updatedAt)
+            .sort((a: any, b: any) => +new Date(a) - +new Date(b))[0] ?? o.updatedAt ?? null;
         const firstTracking = pickOrders.find((p: any) => !!p.trackingCode);
         let addrState: string | null = null;
         try { addrState = JSON.parse(o.shippingAddress || '{}')?.state ?? null; } catch {}
@@ -692,6 +768,7 @@ export class OrdersController {
           shippingState: addrState,
           pickOrders,
           shipped: allShipped,
+          prontoDesde: prontoDesde?.toISOString?.() ?? prontoDesde ?? null,
           trackingCode: o.trackingCode ?? firstTracking?.trackingCode ?? null,
           trackingCarrier: o.carrier ?? firstTracking?.carrier ?? null,
           // Volumes: pedido dividido despacha uma caixa por loja, e ele só vira
@@ -1257,14 +1334,36 @@ export class OrdersController {
        * pedidos na fila). Duas contagens a mais por ciclo de 30s é barato
        * perto de a operação achar que perdeu pedido.
        */
-      const [emTransito, concluidosNativos] = await Promise.all([
+      const [emTransito, concluidosNativos, prontoPostar, emSeparacao] = await Promise.all([
         (this.prisma as any).order.count({ where: whereNativoDaAba('em-transito')! }),
         (this.prisma as any).order.count({
           where: { AND: [{ source: { in: ORIGENS_NATIVAS } }, whereNativoDaAba('completed')!] },
         }),
+        (this.prisma as any).order.count({
+          where: { AND: [{ source: { in: ORIGENS_NATIVAS } }, whereNativoDaAba('pronto-postar')!] },
+        }),
+        (this.prisma as any).order.count({
+          where: { AND: [{ source: { in: ORIGENS_NATIVAS } }, whereNativoDaAba('separacao')!] },
+        }),
       ]);
       byStatus['em-transito'] = { name: 'Em trânsito', total: emTransito };
       grand += emTransito;
+      /**
+       * "Pronto pra postar" REPARTE o número de "Em separação", não soma.
+       *
+       * O laço acima já contou todo `separating` uma vez, dentro de
+       * `separacao` — e as duas abas são complementares. Recalcular as duas
+       * pelo MESMO `where` da lista mantém badge e tela dizendo a mesma coisa
+       * (o defeito de 13/08), e o `grand` fica intacto porque a soma das duas
+       * é exatamente o que ele já tem.
+       */
+      const wcSeparacao = totals.find((t: any) => t.slug === 'separacao')?.total ?? 0;
+      byStatus['pronto-postar'] = { name: 'Pronto pra postar', total: prontoPostar };
+      byStatus['separacao'] = {
+        name: byStatus['separacao']?.name ?? 'Em separação',
+        total: wcSeparacao + emSeparacao,
+      };
+      byStatus['em-separacao'] = byStatus['separacao'];
       // `completed` já pode ter vindo do laço acima (delivered) — aqui ele é
       // recalculado pela regra completa e substitui aquele número.
       byStatus['completed'] = {
