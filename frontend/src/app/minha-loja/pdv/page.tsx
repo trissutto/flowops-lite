@@ -3495,6 +3495,31 @@ function PdvPageInner() {
           4 botões grandes em vez de texto livre. O motivo entra no
           cancel_reason e vira relatório: dá pra separar desistência da
           cliente (normal no provador) de erro nosso (que a gente conserta). */}
+      {/* ── AGUARDE, ESTAMOS FINALIZANDO (dono, 24/08) ──
+          Fechar a venda baixa estoque, grava caixa, enfileira o ERP e monta o
+          pedido — segundos em que a tela ficava parada com um spinner
+          minúsculo dentro do botão. Vendedora achava que travou e clicava de
+          novo. Agora a tela inteira diz o que está acontecendo.
+          z acima de TUDO (inclusive o modal de pagamento, z-50). ── */}
+      {finalizing && (
+        <div className="fixed inset-0 z-[90] flex flex-col items-center justify-center bg-slate-900/80 backdrop-blur-sm">
+          <div className="relative flex h-24 w-24 items-center justify-center">
+            <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500/40" />
+            <span className="absolute inset-2 rounded-full bg-emerald-500/20" />
+            <Loader2 className="relative h-12 w-12 animate-spin text-emerald-400" />
+          </div>
+          <p className="mt-6 text-2xl font-black tracking-tight text-white">
+            Aguarde, estamos finalizando...
+          </p>
+          <p className="mt-1.5 text-sm font-semibold text-emerald-300">
+            Baixando as peças do estoque e fechando a venda
+          </p>
+          <p className="mt-4 rounded-full bg-white/10 px-4 py-1.5 text-xs font-bold text-slate-300">
+            Não feche a tela nem clique de novo
+          </p>
+        </div>
+      )}
+
       {showCancelReason && sale && (
         <div
           className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4"
@@ -5093,11 +5118,26 @@ function PaymentModal({
             : 0,
         );
       } catch { /* sem rede: mantém o estado local */ }
+      finally { setSaleCarregada(true); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saleId]);
+  /**
+   * O TOTAL QUE O SERVIDOR ACABOU DE DEVOLVER.
+   *
+   * Aplicar o frete devolve o total novo na hora, mas o prop `total` só muda
+   * quando o refetch do parent chega — e a tela de conferência do fluxo
+   * guiado abre ANTES disso. Sem esta ponte, o passo 3 mostraria o total sem
+   * o frete que a vendedora acabou de confirmar: exatamente o número errado
+   * que este fluxo existe pra impedir.
+   *
+   * Some sozinho assim que o prop se atualiza — quem manda é o parent.
+   */
+  const [totalServidor, setTotalServidor] = useState<number | null>(null);
+  useEffect(() => { setTotalServidor(null); }, [total]);
+  const totalVivo = totalServidor ?? total;
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
-  const restante = Math.max(0, Math.round((total - jaPago) * 100) / 100);
+  const restante = Math.max(0, Math.round((totalVivo - jaPago) * 100) / 100);
   const pago100 = restante < 0.01;
   // Auto-seleciona quando filtro tem só 1 método (PIX, crediario) OU quando
   // veio um presetMethod dos atalhos rápidos (MASTERCARD/VISANET/REDESHOP/...).
@@ -5175,6 +5215,24 @@ function PaymentModal({
   const [freteAplicado, setFreteAplicado] = useState(0);
   /** Peças no carrinho SEM contar a linha FRETE — passo 1 do roteiro. */
   const [qtdPecas, setQtdPecas] = useState(0);
+  /**
+   * O FLUXO GUIADO DA VENDA ONLINE (dono, 24/08) — uma decisão por tela.
+   *
+   * "Não quero um manual de como fazer, quero que facilite a operação." O
+   * painel mostrava TUDO junto (tipo da venda, entrega, frete, cobrança) e a
+   * vendedora tinha que saber a ordem de cabeça. Agora, ao escolher VENDA
+   * ONLINE, a tela conduz: escolhe o frete → confirma o valor → confirma o
+   * total → e só então aparecem as formas de pagamento.
+   *
+   * `null` = fora do fluxo (venda já com entrega escolhida, ou já passou).
+   */
+  const [etapaOnline, setEtapaOnline] = useState<'frete_tipo' | 'frete_valor' | 'confirma_total' | null>(null);
+  /** A venda já veio do servidor? Sem isso o fluxo abriria em cima de dado incompleto. */
+  const [saleCarregada, setSaleCarregada] = useState(false);
+  /** O fluxo guiado só arranca UMA vez por seleção de "Venda Online". */
+  const fluxoOnlineIniciadoRef = useRef(false);
+  /** Ficou faltando só a vendedora — retoma o registro assim que ela escolher. */
+  const retomarAposVendedoraRef = useRef(false);
   const freteDigitado = Math.round((Number((freteStr || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
   const fretePendente = Math.abs(freteDigitado - freteAplicado) > 0.005;
   /**
@@ -5184,7 +5242,50 @@ function PaymentModal({
    */
   /** O último valor que a TELA sugeriu — o que ela digitou nunca é sobrescrito. */
   const freteAutoRef = useRef<string | null>(null);
-  const aplicarFrete = async (valorForcado?: number) => {
+
+  /**
+   * PASSO 1 do fluxo guiado: grava a entrega e já traz o valor de tabela pro
+   * campo do passo 2. NÃO aplica o frete aqui — quem aplica é a confirmação
+   * do passo 2, pra nunca existir frete gravado que a vendedora não viu.
+   */
+  const escolherEntregaGuiada = async (tipo: 'sedex' | 'pac' | 'motoboy' | 'retirada') => {
+    setEntregaTipo(tipo);
+    setEntregaStoreCode('');
+    const sugerido = freteSugerido(tipo, clienteOnline?.uf);
+    // Só preenche o campo se ela ainda não digitou um valor próprio.
+    if (!freteStr || freteStr === freteAutoRef.current) {
+      const txt = sugerido != null ? sugerido.toFixed(2).replace('.', ',') : '';
+      freteAutoRef.current = txt;
+      setFreteStr(txt);
+    }
+    setEtapaOnline('frete_valor');
+    if (!saleId) return;
+    try {
+      await api(`/pdv/sales/${saleId}/entrega`, {
+        method: 'POST',
+        body: JSON.stringify({ tipo, entregaStoreCode: null }),
+      });
+    } catch (e: any) {
+      // REGRA A (17/08): motoboy só sai desta loja. Servidor recusou por falta
+      // de peça aqui — a escolha NÃO fica, senão o fechamento recusa de novo.
+      if (tipo === 'motoboy') {
+        setEntregaTipo(null);
+        setEtapaOnline('frete_tipo');
+        toast('error', 'Motoboy não disponível', e?.message || humanizeError(e).hint);
+        return;
+      }
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    }
+  };
+
+  /** PASSO 2 do fluxo guiado: grava o frete e leva pra conferência do total. */
+  const confirmarFreteGuiado = async () => {
+    if (aplicandoFrete) return;
+    await aplicarFrete(freteDigitado, { silencioso: true });
+    setEtapaOnline('confirma_total');
+  };
+  const aplicarFrete = async (valorForcado?: number, opts?: { silencioso?: boolean }) => {
     if (!saleId || aplicandoFrete) return;
     const v = valorForcado != null ? valorForcado : freteDigitado;
     setAplicandoFrete(true);
@@ -5194,12 +5295,17 @@ function PaymentModal({
         { method: 'POST', body: JSON.stringify({ valor: v }) },
       );
       setFreteAplicado(v);
+      setTotalServidor(Number(r.total) || 0);
       onPaymentsChange?.();
-      toast(
-        'success',
-        v > 0 ? `Frete de ${brl(v)} aplicado` : 'Frete removido',
-        `Total da venda: ${brl(r.total)} — a linha FRETE aparece no carrinho`,
-      );
+      // No fluxo guiado o toast é ruído: a tela SEGUINTE já mostra a conta
+      // inteira com o frete somado, que é uma confirmação melhor.
+      if (!opts?.silencioso) {
+        toast(
+          'success',
+          v > 0 ? `Frete de ${brl(v)} aplicado` : 'Frete removido',
+          `Total da venda: ${brl(r.total)} — a linha FRETE aparece no carrinho`,
+        );
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
@@ -5557,11 +5663,44 @@ function PaymentModal({
    * O popup ABRIA SOZINHO no instante em que "Venda Online" era clicado, antes
    * de bipar, de escolher envio, de qualquer coisa — e depois abria DE NOVO no
    * fechamento, que é onde ele mora no fluxo do balcão. Escolher a vendedora
-   * duas vezes na mesma venda (dono, 24/08). Agora ela é o PASSO 5 do roteiro:
-   * a vendedora clica quando chega nele, e as travas ficam nos pontos que
-   * geram cobrança (PIX, link, registrar pagamento) — o mesmo lugar onde a
-   * forma de entrega já é exigida.
+   * duas vezes na mesma venda (dono, 24/08). Agora ela vem NO FIM do fluxo
+   * guiado, e as travas ficam nos pontos que geram cobrança (PIX, link,
+   * registrar pagamento) — o mesmo lugar onde a forma de entrega já é exigida.
    */
+
+  /**
+   * ARRANQUE DO FLUXO GUIADO — escolheu VENDA ONLINE, a tela assume a direção.
+   *
+   * Só arranca depois que a venda chegou do servidor (senão abriria em cima de
+   * `entregaTipo` ainda vazio numa venda que JÁ tem entrega escolhida) e só
+   * uma vez por seleção — reabrir o modal de uma venda em andamento não pode
+   * jogar a vendedora no começo do roteiro de novo.
+   */
+  useEffect(() => {
+    if (selected !== 'venda_online') {
+      fluxoOnlineIniciadoRef.current = false;
+      setEtapaOnline(null);
+      return;
+    }
+    if (!saleCarregada || fluxoOnlineIniciadoRef.current) return;
+    fluxoOnlineIniciadoRef.current = true;
+    if (!entregaTipo) setEtapaOnline('frete_tipo');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, saleCarregada]);
+
+  /**
+   * RETOMA SOZINHO DEPOIS DA VENDEDORA — o fim do fluxo guiado.
+   *
+   * Ela escolheu quem vendeu no popup; a tela continua de onde parou e
+   * finaliza. Sem isto o popup fecha e a vendedora fica olhando pro mesmo
+   * botão que já tinha clicado.
+   */
+  useEffect(() => {
+    if (!hasSeller || !retomarAposVendedoraRef.current) return;
+    retomarAposVendedoraRef.current = false;
+    void adicionarPagamento();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSeller]);
 
   // Botão "Gerar Link Pagar.me" ficava fora da área visível (embaixo, atrás
   // do footer FINALIZAR) — rola a seção pra vista quando o tipo é escolhido
@@ -5694,7 +5833,11 @@ function PaymentModal({
         return;
       }
       if (!hasSeller) {
-        toast('warning', 'Escolha a vendedora', 'Venda online também tem dona — selecione quem vendeu.');
+        // ÚLTIMO PASSO do fluxo guiado. Marca pra RETOMAR sozinho quando ela
+        // escolher — sem isso a vendedora escolhe a dona da venda e a tela
+        // volta pro mesmo botão, esperando o mesmo clique de novo.
+        retomarAposVendedoraRef.current = true;
+        toast('warning', 'Escolha a vendedora', 'Última coisa — quem fez esta venda?');
         onNeedSeller?.();
         return;
       }
@@ -6658,6 +6801,144 @@ function PaymentModal({
       onMouseDown={backdropClose.onMouseDown}
       onClick={backdropClose.onClick}
     >
+      {/* ══ FLUXO GUIADO DA VENDA ONLINE (dono, 24/08) ══════════════════════
+          Uma decisão por tela, por cima do modal. O painel de pagamento fica
+          atrás e só reaparece quando o total é confirmado — a vendedora não
+          escolhe onde clicar, a tela pergunta. ── */}
+      {etapaOnline && (
+        <div
+          className="absolute inset-0 z-[60] flex items-center justify-center bg-slate-900/70 p-3"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {/* ── 1/3 · COMO VAI ENVIAR ── */}
+          {etapaOnline === 'frete_tipo' && (
+            <div className="w-full max-w-md rounded-2xl border-4 border-amber-400 bg-amber-50 p-5 shadow-2xl">
+              <div className="text-center">
+                <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">Passo 1 de 3</div>
+                <h3 className="mt-1 text-2xl font-black text-slate-900">Como vai enviar?</h3>
+                <p className="mt-1 text-xs text-amber-800">
+                  É isto que a matriz lê pra despachar a peça.
+                </p>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
+                {([
+                  { id: 'sedex', label: 'SEDEX', icone: '⚡', hint: 'Expresso' },
+                  { id: 'pac', label: 'PAC', icone: '📦', hint: 'Econômico' },
+                  { id: 'motoboy', label: 'MOTOBOY', icone: '🛵', hint: 'Entrega na mão' },
+                  { id: 'retirada', label: 'RETIRA NA LOJA', icone: '🏬', hint: 'Sem etiqueta' },
+                ] as const).map((op) => (
+                  <button
+                    key={op.id}
+                    type="button"
+                    onClick={() => void escolherEntregaGuiada(op.id)}
+                    className="rounded-xl border-2 border-amber-300 bg-white py-4 text-center transition hover:border-amber-500 hover:bg-amber-100 active:scale-95"
+                  >
+                    <div className="text-2xl leading-none">{op.icone}</div>
+                    <div className="mt-1.5 text-sm font-black text-slate-800">{op.label}</div>
+                    <div className="text-[10px] font-semibold text-slate-500">{op.hint}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── 2/3 · QUANTO É O FRETE ──
+              Vem preenchido com o valor de tabela da modalidade e é EDITÁVEL:
+              a tabela acerta a maioria, não todas (SEDEX fora de SP não tem
+              valor de tabela — ver `freteSugerido`). */}
+          {etapaOnline === 'frete_valor' && (
+            <div className="w-full max-w-md rounded-2xl border-4 border-amber-400 bg-amber-50 p-5 shadow-2xl">
+              <div className="text-center">
+                <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">Passo 2 de 3</div>
+                <h3 className="mt-1 text-2xl font-black text-slate-900">Quanto é o frete?</h3>
+                <p className="mt-1 text-xs font-bold text-amber-800">
+                  {ENTREGA_LABEL[entregaTipo || ''] || 'Envio'}
+                  {freteSugerido(entregaTipo, clienteOnline?.uf) != null
+                    ? ' · valor da tabela — pode mudar'
+                    : ' · sem valor de tabela, digite'}
+                </p>
+              </div>
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <span className="text-2xl font-black text-slate-400">R$</span>
+                <input
+                  autoFocus
+                  value={freteStr}
+                  onChange={(e) => setFreteStr(e.target.value.replace(/[^\d.,]/g, ''))}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void confirmarFreteGuiado(); } }}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                  className="w-40 rounded-xl border-4 border-amber-300 bg-white px-3 py-3 text-center text-3xl font-black tabular-nums text-slate-900 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEtapaOnline('frete_tipo')}
+                  className="rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  disabled={aplicandoFrete}
+                  onClick={() => void confirmarFreteGuiado()}
+                  className="flex-1 rounded-xl bg-amber-500 py-3 text-base font-black text-white shadow hover:bg-amber-600 disabled:opacity-60"
+                >
+                  {aplicandoFrete ? 'Aplicando...' : 'Confirmar frete'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── 3/3 · O TOTAL, POR EXTENSO ──
+              A conta escrita é a trava contra a cobrança curta: peças e frete
+              somados num número só não deixavam ninguém ver o frete faltando. */}
+          {etapaOnline === 'confirma_total' && (
+            <div className="w-full max-w-md rounded-2xl border-4 border-emerald-500 bg-white p-5 shadow-2xl">
+              <div className="text-center">
+                <div className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Passo 3 de 3</div>
+                <h3 className="mt-1 text-2xl font-black text-slate-900">Confere o total?</h3>
+              </div>
+              <div className="mt-4 rounded-xl bg-slate-900 px-4 py-3 text-white">
+                <div className="flex items-center justify-between py-1 text-sm text-slate-300">
+                  <span>Produtos{qtdPecas > 0 ? ` (${qtdPecas})` : ''}</span>
+                  <span className="tabular-nums">{brl(Math.max(0, Math.round((totalVivo - freteAplicado) * 100) / 100))}</span>
+                </div>
+                <div className="flex items-center justify-between py-1 text-sm text-slate-300">
+                  <span>Frete · {ENTREGA_LABEL[entregaTipo || ''] || '—'}</span>
+                  <span className="tabular-nums">{brl(freteAplicado)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between border-t border-slate-700 pt-2">
+                  <span className="text-base font-black">TOTAL</span>
+                  <span className="text-2xl font-black tabular-nums text-emerald-400">{brl(totalVivo)}</span>
+                </div>
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEtapaOnline('frete_valor')}
+                  className="rounded-xl border-2 border-rose-300 bg-white px-5 py-3 text-sm font-black text-rose-600 hover:bg-rose-50"
+                >
+                  NÃO
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEtapaOnline(null)}
+                  className="flex-1 rounded-xl bg-emerald-600 py-3 text-base font-black text-white shadow hover:bg-emerald-700"
+                >
+                  SIM, CONFIRMA
+                </button>
+              </div>
+              <p className="mt-2 text-center text-[10px] text-slate-400">
+                Depois de confirmar você escolhe como a cliente vai pagar.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Modal: layout flex-col com header/body/footer separados.
          Footer sticky no FUNDO pra botão "Adicionar/Finalizar" SEMPRE aparecer
          (antes ficava cortado em telas baixas com 12 parcelas + card grande). */}
@@ -6940,81 +7221,29 @@ function PaymentModal({
             sem geração de cobrança real). Aviso explícito + 2 botões grandes. */}
         {selected === 'venda_online' && (
           <div className="space-y-3 pt-2 border-t">
-            {/* ── O ROTEIRO DA VENDA ONLINE (dono, 24/08) ──
-                "Podemos ter um passo a passo?" — a venda online tem 5 escolhas
-                obrigatórias que viviam espalhadas pelo painel, sem ordem e sem
-                dizer o que já foi feito. A vendedora descobria o que faltava
-                pelo botão que não clicava. Aqui a fila está escrita, com o que
-                está pronto marcado e o passo da vez em destaque.
-
-                Vale SÓ na venda online: no balcão a cliente está na frente e o
-                fluxo é bipar → cobrar → pronto. ── */}
-            {(() => {
-              const passos = [
-                // `total > 0` é a rede de segurança: se a leitura da venda
-                // falhou (sem rede), o passo 1 não pode acusar carrinho vazio
-                // com a peça na tela atrás do modal.
-                { n: 1, label: 'Bipe as peças', ok: qtdPecas > 0 || total > 0, valor: qtdPecas > 0 ? `${qtdPecas} peça${qtdPecas > 1 ? 's' : ''}` : null },
-                { n: 2, label: 'Forma de pagamento', ok: !!vendaOnlineTipo, valor: vendaOnlineTipo ? VENDA_ONLINE_LABEL[vendaOnlineTipo] || vendaOnlineTipo : null },
-                { n: 3, label: 'Como vai enviar', ok: !!entregaTipo, valor: entregaTipo ? ENTREGA_LABEL[entregaTipo] || entregaTipo : null },
-                // O frete só conta como resolvido quando o valor DIGITADO é o
-                // que está gravado na venda — foi exatamente aqui que a
-                // cobrança saía curta e voltava como segunda cobrança.
-                { n: 4, label: 'Valor do frete', ok: !!entregaTipo && !!freteStr && !fretePendente, valor: freteStr ? brl(freteAplicado) : null },
-                { n: 5, label: 'Escolha a vendedora', ok: !!hasSeller, valor: null, acao: () => onNeedSeller?.() },
-              ];
-              const atual = passos.find((p) => !p.ok)?.n ?? 0;
-              return (
-                <div className="rounded-lg border-2 border-teal-300 bg-teal-50/60 p-2.5">
-                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-teal-900">
-                    <Globe className="h-3.5 w-3.5" />
-                    Venda online · passo a passo
-                  </div>
-                  <div className="space-y-1">
-                    {passos.map((p) => {
-                      const acao = (p as any).acao as (() => void) | undefined;
-                      return (
-                        <button
-                          key={p.n}
-                          type="button"
-                          disabled={!acao}
-                          onClick={acao}
-                          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs disabled:cursor-default ${
-                            p.ok
-                              ? 'text-teal-800'
-                              : p.n === atual
-                                ? 'bg-amber-100 font-bold text-amber-900 ring-1 ring-amber-400'
-                                : 'text-slate-400'
-                          }`}
-                        >
-                          <span
-                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
-                              p.ok ? 'bg-teal-600 text-white' : p.n === atual ? 'bg-amber-500 text-white' : 'bg-slate-200 text-slate-500'
-                            }`}
-                          >
-                            {p.ok ? '✓' : p.n}
-                          </span>
-                          <span className="flex-1 truncate">{p.label}</span>
-                          {p.valor && <span className="shrink-0 font-semibold tabular-nums">{p.valor}</span>}
-                          {/* A vendedora é o único passo que não tem campo na
-                              tela — o popup dela abre daqui. */}
-                          {acao && !p.ok && (
-                            <span className="shrink-0 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-black text-white">
-                              escolher
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-1.5 border-t border-teal-200 pt-1 text-[10px] leading-snug text-teal-700">
-                    Só depois dos 5 a cobrança sai. <b>Não emite NFC-e</b> · estoque baixa normal.
-                  </p>
-                </div>
-              );
-            })()}
+            {/* ── O QUE JÁ FOI DECIDIDO (dono, 24/08) ──
+                O fluxo guiado já perguntou envio, frete e total, uma tela de
+                cada vez. Aqui embaixo fica só o RECIBO daquilo, com "alterar"
+                pra voltar — não um manual de passos: a vendedora já passou por
+                eles, o que ela precisa agora é conferir e cobrar. ── */}
+            {entregaTipo && (
+              <button
+                type="button"
+                onClick={() => setEtapaOnline('frete_tipo')}
+                className="flex w-full items-center gap-2 rounded-lg border-2 border-teal-300 bg-teal-50 px-3 py-2 text-left hover:bg-teal-100"
+                title="Voltar e mudar o envio ou o valor do frete"
+              >
+                <span className="shrink-0 rounded bg-teal-600 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-white">
+                  {ENTREGA_LABEL[entregaTipo] || entregaTipo}
+                </span>
+                <span className="flex-1 truncate text-xs font-semibold text-teal-900">
+                  Frete {brl(freteAplicado)} · total {brl(totalVivo)}
+                </span>
+                <span className="shrink-0 text-[11px] font-bold text-teal-700 underline">alterar</span>
+              </button>
+            )}
             <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
-              Passo 2 — Como foi feita a venda online?
+              Como a cliente vai pagar?
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {/* GERAR PIX — o caso do WhatsApp: a cliente fechou e precisa
@@ -7323,7 +7552,7 @@ function PaymentModal({
                 <div className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-white">
                   <div className="flex items-center justify-between text-[11px] text-slate-300">
                     <span>Peças</span>
-                    <span className="tabular-nums">{brl(Math.max(0, Math.round((total - freteAplicado) * 100) / 100))}</span>
+                    <span className="tabular-nums">{brl(Math.max(0, Math.round((totalVivo - freteAplicado) * 100) / 100))}</span>
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-300">
                     <span>Frete {entregaTipo ? `(${ENTREGA_LABEL[entregaTipo] || entregaTipo})` : ''}</span>

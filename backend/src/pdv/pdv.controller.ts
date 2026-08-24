@@ -2082,7 +2082,22 @@ export class PdvController {
       throw new BadRequestException('Venda cancelada — não dá pra atribuir vendedora');
     }
     if (sale.status === 'finalized' && sale.sellerName) {
-      // Já tem dona: trocar a vendedora de uma venda fechada é ajuste de
+      /**
+       * REENVIAR A MESMA VENDEDORA NÃO É TROCA (24/08/2026).
+       *
+       * Caso do print de 16:40: a vendedora escolheu KARINE, o pagamento caiu,
+       * o reconciliador fechou a venda — e o popup de confirmação abriu de
+       * novo, já pré-selecionado em KARINE. Clicar em FINALIZAR VENDA mandava
+       * a MESMA pessoa e voltava "Algo deu errado: troca de vendedora é pela
+       * retaguarda", com a venda perfeita por trás do erro vermelho.
+       *
+       * Mandar quem já está gravada é operação NENHUMA. Devolve a venda como
+       * está e deixa a tela seguir pro cupom.
+       */
+      const mesmaPessoa =
+        sale.sellerName.trim().toLowerCase() === String(body.nome || '').trim().toLowerCase();
+      if (mesmaPessoa) return sale;
+      // Outra pessoa: trocar a vendedora de uma venda fechada é ajuste de
       // comissão e passa pela retaguarda, não pelo popup do PDV.
       throw new BadRequestException(
         `Venda já finalizada com a vendedora ${sale.sellerName} — troca de vendedora é pela retaguarda.`,
