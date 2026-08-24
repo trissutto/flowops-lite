@@ -7150,80 +7150,99 @@ function PaymentModal({
               conta —, então ela é a mais discreta, nunca a mais bonita. Errar
               pro outro lado só dá retrabalho. ── */}
           {etapaOnline === 'pagamento' && (
-            <div className="w-full max-w-md rounded-2xl border-4 border-violet-400 bg-white p-5 shadow-2xl">
-              <div className="text-center">
-                <div className="text-[11px] font-black uppercase tracking-widest text-violet-700">Passo 4 de 5</div>
-                <h3 className="mt-1 text-2xl font-black text-slate-900">Como a cliente vai pagar?</h3>
-                <p className="mt-1 text-sm font-black text-violet-800">{brl(totalVivo)}</p>
+            <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-violet-200">
+              {/* Cabeçalho com o VALOR em destaque: é a pergunta e a resposta
+                  na mesma faixa — ela confere quanto vai cobrar sem sair daqui. */}
+              <div className="bg-gradient-to-b from-violet-600 to-violet-700 px-5 pb-5 pt-4 text-center">
+                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-200">Passo 4 de 5</div>
+                <h3 className="mt-1 text-2xl font-black leading-tight text-white">Como a cliente vai pagar?</h3>
+                <div className="mt-2 inline-flex items-baseline gap-1.5 rounded-full bg-white/15 px-4 py-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-violet-200">a cobrar</span>
+                  <span className="text-lg font-black tabular-nums text-white">{brl(totalVivo)}</span>
+                </div>
               </div>
 
-              {/* ── COBRAR AGORA — colorido, é o caminho seguro ── */}
-              <div className="mt-4 rounded-xl border-2 border-violet-300 bg-violet-50 p-3">
-                <div className="text-[11px] font-black uppercase tracking-wider text-violet-800">
-                  Vou cobrar agora
+              <div className="p-4">
+                {/* ── COBRAR AGORA — o bloco grande, é o caminho seguro ── */}
+                <div className="rounded-2xl border-2 border-violet-300 bg-violet-50 p-4 text-center">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-600 text-sm text-white">💳</span>
+                    <div className="text-lg font-black uppercase leading-none tracking-wide text-violet-900">
+                      Vou cobrar agora
+                    </div>
+                  </div>
+                  <div className="mt-1.5 text-[11px] font-semibold text-violet-600">
+                    Manda pra cliente e espera cair
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    {([
+                      { id: 'pix_gerar', icone: '📲', label: 'GERAR PIX', hint: 'Manda o QR pra ela' },
+                      { id: 'pagarme_link', icone: '🔗', label: 'LINK PAGAR.ME', hint: 'Cartão · gera agora' },
+                    ] as const).map((op) => (
+                      <button
+                        key={op.id}
+                        type="button"
+                        onClick={() => escolherPagamentoGuiado(op.id)}
+                        className="rounded-xl border-2 border-violet-400 bg-white py-5 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-violet-600 hover:shadow-md active:translate-y-0"
+                      >
+                        <div className="text-3xl leading-none">{op.icone}</div>
+                        <div className="mt-2 text-sm font-black text-slate-800">{op.label}</div>
+                        <div className="text-[10px] font-semibold text-slate-500">{op.hint}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-3 rounded-lg bg-violet-100 px-2.5 py-1.5 text-center text-[11px] font-semibold leading-snug text-violet-800">
+                    ⏳ A venda fica aberta e fecha sozinha quando o dinheiro cair.
+                  </p>
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2.5">
-                  {([
-                    { id: 'pix_gerar', icone: '📲', label: 'GERAR PIX', hint: 'Manda o QR pra ela' },
-                    { id: 'pagarme_link', icone: '🔗', label: 'LINK PAGAR.ME', hint: 'Cartão · gera agora' },
-                  ] as const).map((op) => (
-                    <button
-                      key={op.id}
-                      type="button"
-                      onClick={() => escolherPagamentoGuiado(op.id)}
-                      className="rounded-xl border-2 border-violet-400 bg-white py-4 text-center shadow-sm transition hover:border-violet-600 hover:bg-violet-100 active:scale-95"
-                    >
-                      <div className="text-2xl leading-none">{op.icone}</div>
-                      <div className="mt-1.5 text-[13px] font-black text-slate-800">{op.label}</div>
-                      <div className="text-[10px] font-semibold text-slate-500">{op.hint}</div>
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-2 text-[10px] font-semibold leading-snug text-violet-700">
-                  A venda fica aberta e fecha sozinha quando o dinheiro cair.
-                </p>
-              </div>
 
-              <div className="my-2 flex items-center gap-2">
-                <span className="h-px flex-1 bg-slate-200" />
-                <span className="text-[10px] font-bold uppercase text-slate-400">ou</span>
-                <span className="h-px flex-1 bg-slate-200" />
-              </div>
-
-              {/* ── JÁ RECEBI — discreto DE PROPÓSITO (ver comentário acima) ── */}
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-[11px] font-black uppercase tracking-wider text-slate-500">
-                  Já recebi o dinheiro
+                <div className="my-3 flex items-center gap-3">
+                  <span className="h-px flex-1 bg-slate-200" />
+                  <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    ou
+                  </span>
+                  <span className="h-px flex-1 bg-slate-200" />
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2.5">
-                  {([
-                    { id: 'pix', label: 'PIX na conta', hint: 'Conferi o extrato' },
-                    { id: 'link', label: 'Pago por fora', hint: 'Outro link/máquina' },
-                  ] as const).map((op) => (
-                    <button
-                      key={op.id}
-                      type="button"
-                      onClick={() => escolherPagamentoGuiado(op.id)}
-                      className="rounded-lg border border-slate-300 bg-white py-2.5 text-center transition hover:border-slate-500 hover:bg-slate-100 active:scale-95"
-                    >
-                      <div className="text-xs font-bold text-slate-700">{op.label}</div>
-                      <div className="text-[10px] text-slate-400">{op.hint}</div>
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-2 text-[10px] font-semibold leading-snug text-slate-500">
-                  Fecha a venda agora. Só marque com o dinheiro <b>já na conta</b> —
-                  daqui a peça sai.
-                </p>
-              </div>
 
-              <button
-                type="button"
-                onClick={() => setEtapaOnline('confirma_total')}
-                className="mt-3 w-full rounded-xl border-2 border-slate-300 bg-white py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
-              >
-                Voltar pro total
-              </button>
+                {/* ── JÁ RECEBEMOS — discreto DE PROPÓSITO (ver comentário acima) ── */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+                  {/* Um degrau ABAIXO do "Vou cobrar agora" (text-lg) de
+                      propósito: cresceu porque estava pequeno demais pra ler,
+                      não pra empatar. A hierarquia é a trava contra marcar
+                      "já recebemos" sem o dinheiro na conta. */}
+                  <div className="text-base font-black uppercase tracking-wide text-slate-600">
+                    Já recebemos o pagamento
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {([
+                      { id: 'pix', label: 'PIX na conta', hint: 'Conferi o extrato' },
+                      { id: 'link', label: 'Pago por fora', hint: 'Outro link/máquina' },
+                    ] as const).map((op) => (
+                      <button
+                        key={op.id}
+                        type="button"
+                        onClick={() => escolherPagamentoGuiado(op.id)}
+                        className="rounded-lg border border-slate-300 bg-white py-2.5 text-center transition hover:border-slate-500 hover:bg-slate-100 active:scale-95"
+                      >
+                        <div className="text-xs font-bold text-slate-700">{op.label}</div>
+                        <div className="text-[10px] text-slate-400">{op.hint}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-center text-[10px] font-semibold leading-snug text-slate-500">
+                    Fecha a venda agora. Só marque com o dinheiro <b>já na conta</b> —
+                    daqui a peça sai.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setEtapaOnline('confirma_total')}
+                  className="mt-3 w-full rounded-xl border-2 border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                >
+                  ← Voltar pro total
+                </button>
+              </div>
             </div>
           )}
 
