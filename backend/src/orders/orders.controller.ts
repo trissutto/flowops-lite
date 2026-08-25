@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { pedidoPago } from '../common/pedido-pago';
+import { voltariaProFluxo, motivoDaRecusa } from '../common/volta-pro-fluxo';
 import {
   RASTREIO_JANELA_DIAS as JANELA_DIAS,
   inicioDaJanela,
@@ -2145,6 +2146,44 @@ export class OrdersController {
     });
     const isLive = this.origemSintetica(localForSource?.source);
 
+    /**
+     * 🔴 PEDIDO QUE JÁ SAIU NÃO VOLTA PRO FLUXO (25/08/2026, dono).
+     *
+     * Este PATCH aceitava qualquer status em qualquer ordem. Mandar
+     * `separacao` num pedido **já despachado** fazia DUAS coisas, nesta
+     * sequência, e nenhuma com trava:
+     *   1. `ensurePickOrdersForWc` CRIAVA card novo nas lojas — peça já postada
+     *      voltando pra arara de alguém procurar;
+     *   2. `aplicarStatusLocal` puxava o pedido de `shipped` de volta pra
+     *      `separating`, ressuscitando ele na fila da matriz.
+     *
+     * Aconteceu com o LP-000210 em 24/08 18:46 (`shipped` → `separating`, nota
+     * default = veio de um PATCH sem nota) — o pedido tinha sido concluído às
+     * 18:34 e 12 minutos depois estava separando de novo. É a mesma família dos
+     * 22 relançamentos de 24/08 que viraram separação fantasma; o `confirmRoute`
+     * já recusava por lá, e esta porta continuava aberta.
+     *
+     * A volta legítima existe e tem porta própria: "Recalcular separação"
+     * (`POST /orders/wc/:id/recalculate-separation`), que cancela os cards
+     * antigos antes de reabrir. Aqui é status na mão, e status na mão não
+     * desfaz postagem.
+     */
+    if (voltariaProFluxo(localForSource?.status, body.status)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[orders] PATCH recusado: pedido ${wcOrderId} está ${localForSource.status} e ` +
+          `pediram status "${body.status}" — não devolve pedido postado pro fluxo.`,
+      );
+      return {
+        ok: false,
+        id: wcOrderId,
+        status: localForSource.status,
+        requestedStatus: body.status,
+        statusApplied: false,
+        warning: motivoDaRecusa(localForSource.status),
+      };
+    }
+
     // 1) Se está indo pra 'separacao', garante pick-orders criados ANTES.
     //    Se não conseguir (sem estoque etc), aborta sem mexer no WC — não faz
     //    sentido marcar "separação" se ninguém vai separar.
@@ -2339,6 +2378,20 @@ export class OrdersController {
         select: { id: true, status: true },
       });
       if (!local || local.status === destino) return;
+      // Rede de segurança da trava lá de cima (25/08): quem escreve o status
+      // também recusa a marcha à ré. Se um caminho novo chamar isto sem passar
+      // pela porta da frente, o pedido postado continua postado. Aqui o
+      // parâmetro já é o status LOCAL (`separating`), não o slug da tela.
+      if (
+        ['shipped', 'delivered'].includes(local.status) &&
+        ['separating', 'processing'].includes(destino)
+      ) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[orders] aplicarStatusLocal recusou ${local.status} → ${destino} no pedido ${wcOrderId}.`,
+        );
+        return;
+      }
       await (this.prisma as any).order.update({
         where: { id: local.id },
         // Carimbo do despacho junto com o status — ver `common/janela-rastreio.ts`.
