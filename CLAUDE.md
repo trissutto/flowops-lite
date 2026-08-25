@@ -99,7 +99,7 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 
 ## Fila de tarefas da loja + ciclo da remessa (11/08)
 
-**Diretriz de UX (dono):** a loja não escolhe tela — a home `/minha-loja` abre com a fila **"O QUE FAZER AGORA"** (pedidos a separar, caixas abertas, remessas chegando, peças de realinhamento). Vermelho = parado, amarelo = a fazer, teto de 10 linhas + "ver as outras N". Toda tela nova pra loja segue esse padrão: **tarefa clicável > menu**, e nenhum passo manual entra sem alerta de esquecimento.
+**Diretriz de UX (dono):** a loja não escolhe tela — a home `/minha-loja` abre com a fila **"O QUE FAZER AGORA"** (pedidos a separar, caixas abertas, remessas chegando, peças de realinhamento). Vermelho = parado, amarelo = a fazer, teto de 10 linhas + "ver as outras N". Toda tela nova pra loja segue esse padrão: **tarefa clicável > menu**, e nenhum passo manual entra sem alerta de esquecimento. **Desde 25/08 (ordem do dono) a fila vive FECHADA** atrás de uma barra vermelha baixa (40px) logo acima do painel de botões: a barra diz quantas tarefas existem e quantas estão PARADAS, e um clique abre a lista inteira ali mesmo — o alarme continua na tela, o que saiu foi a parede de linhas empurrando os botões pra fora da primeira dobra.
 
 **Regra de ouro contra alarme falso:** tarefa só entra se for pendência real PRA AQUELA loja — alarme falso mata a confiança na fila inteira. Foi o que aconteceu com "Gerar etiqueta" (removida em 11/08): a medição mostrou que só **5 de 203** remessas em trânsito têm etiqueta do sistema e mesmo assim **639 caixas chegaram em 30 dias** (média 4,1 dias). Etiqueta é EXCEÇÃO na operação — quem precisa gera pelo painel "Caixas fechadas" da tela Realinhar.
 
