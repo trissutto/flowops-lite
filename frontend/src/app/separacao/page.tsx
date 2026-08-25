@@ -20,7 +20,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * Atualiza sozinho a cada 30s.
  */
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -80,7 +80,14 @@ interface PickOrderLite {
 interface WcOrderListItem {
   id: number;
   number: string;
+  /** Slug da ABA pedida — NÃO é o status do pedido (ver `statusLocal`). */
   status: string;
+  /** Status REAL do pedido no Postgres (separating, shipped, cancelled…). */
+  statusLocal?: string | null;
+  /** Rótulo humano do status real ("Em separação", "Despachado"…). */
+  statusLabel?: string | null;
+  /** Aba onde este pedido mora — null = status que nenhuma aba mostra. */
+  abaSlug?: string | null;
   dateCreatedGmt: string;
   total: string;
   customerName: string;
@@ -256,6 +263,19 @@ function SeparacaoPageInner() {
   }, [status]);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  /**
+   * BUSCA ENQUANTO DIGITA (25/08). O campo só valia depois de apertar Enter ou
+   * caçar o botão "Buscar" — e campo de busca que não reage a digitação é
+   * lido como campo quebrado. 400ms é o intervalo em que a matriz termina de
+   * digitar o número do pedido sem disparar uma requisição por tecla.
+   * O botão continua ali (Enter também) pra quem já tem o dedo viciado.
+   */
+  useEffect(() => {
+    const alvo = searchInput.trim();
+    if (alvo === search) return;
+    const t = setTimeout(() => setSearch(alvo), 400);
+    return () => clearTimeout(t);
+  }, [searchInput, search]);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [preview, setPreview] = useState<Record<number, SeparationPreview>>({});
   const [busy, setBusy] = useState<Record<number, boolean>>({});
@@ -283,6 +303,19 @@ function SeparacaoPageInner() {
   // Commerce) · 'ecommerce' (site NOVO, sprint 011 — nº "LP-xxxxxx").
   // As três origens entram na MESMA fila: quem sabe rotear Order roteia todas.
   const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce' | 'pdv_online'>('');
+
+  /**
+   * O QUE A MATRIZ REALMENTE VÊ — a lista já passada pelo filtro de origem.
+   *
+   * O filtro de origem era aplicado só na hora de desenhar as linhas: a barra
+   * de cima contava `orders` inteiro e dizia "1 pedido(s) na fila" com a lista
+   * vazia embaixo, e "Marcar todos" marcava pedido ESCONDIDO — que a mudança
+   * de status em bloco levava junto. Uma lista só, usada por todo mundo.
+   */
+  const visiveis = useMemo(
+    () => orders.filter((o) => !sourceFilter || ((o as any).orderSource || 'site') === sourceFilter),
+    [orders, sourceFilter],
+  );
 
   // Carrega as lojas com o que CADA UMA tem na mão na aba atual: em "Em
   // separação" é o card ainda na arara; em "Pronto pra postar", a caixa
@@ -467,11 +500,13 @@ function SeparacaoPageInner() {
   }
 
   function toggleAll() {
+    // Marca só o que está na tela: seleção em bloco que pega linha invisível
+    // vira mudança de status em pedido que ninguém viu.
     setSelected((prev) => {
-      if (prev.size === orders.length && orders.length > 0) {
+      if (prev.size === visiveis.length && visiveis.length > 0) {
         return new Set();
       }
-      return new Set(orders.map((o) => o.id));
+      return new Set(visiveis.map((o) => o.id));
     });
   }
 
@@ -1267,7 +1302,7 @@ function SeparacaoPageInner() {
           <span>📦 Mostrando apenas pedidos da loja</span>
           <strong>{stores.find((s) => s.code === storeCode)?.name || storeCode}</strong>
           <span className="text-blue-700/70 ml-auto text-xs">
-            {orders.length} pedido{orders.length === 1 ? '' : 's'}
+            {visiveis.length} pedido{visiveis.length === 1 ? '' : 's'}
           </span>
         </div>
       )}
@@ -1316,30 +1351,30 @@ function SeparacaoPageInner() {
       )}
 
       {/* Barra de seleção em bloco — SEMPRE VISÍVEL quando há pedidos */}
-      {orders.length > 0 && (
+      {visiveis.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3 bg-white border rounded-lg p-3 shadow-sm">
           <div className="flex items-center gap-3">
             <button
               onClick={toggleAll}
               className={`flex items-center gap-2 px-4 py-2 rounded font-semibold text-sm transition ${
-                selected.size === orders.length
+                selected.size === visiveis.length
                   ? 'bg-brand text-white hover:bg-brand-dark'
                   : 'bg-brand text-white hover:bg-brand-dark'
               }`}
               title="Selecionar/desmarcar todos os pedidos da lista"
             >
-              {selected.size === orders.length ? (
+              {selected.size === visiveis.length ? (
                 <>
                   <CheckSquare className="w-5 h-5" /> Desmarcar todos
                 </>
               ) : (
                 <>
-                  <Square className="w-5 h-5" /> Marcar todos ({orders.length})
+                  <Square className="w-5 h-5" /> Marcar todos ({visiveis.length})
                 </>
               )}
             </button>
 
-            {selected.size > 0 && selected.size < orders.length && (
+            {selected.size > 0 && selected.size < visiveis.length && (
               <button
                 onClick={clearSelection}
                 className="text-sm text-slate-500 hover:text-slate-800 underline"
@@ -1354,7 +1389,7 @@ function SeparacaoPageInner() {
               'Carregando...'
             ) : (
               <>
-                <span className="font-semibold">{orders.length}</span> pedido(s) na fila
+                <span className="font-semibold">{visiveis.length}</span> pedido(s) na fila
                 {selected.size > 0 && (
                   <span className="ml-2 text-brand font-bold">
                     · {selected.size} selecionado(s)
@@ -1366,30 +1401,74 @@ function SeparacaoPageInner() {
         </div>
       )}
 
-      {!orders.length && !loading && (
+      {!visiveis.length && !loading && !search && (
         <div className="text-sm text-slate-500 mb-3">0 pedido(s) na fila</div>
       )}
 
-      {/* Lista */}
-      {status === 'carrinhos' ? (
-        <CarrinhosTab />
-      ) : !loading && orders.filter((o: any) => !sourceFilter || (o.orderSource || 'site') === sourceFilter).length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
-          Nenhum pedido{' '}
-          {sourceFilter === 'live'
-            ? 'da LIVE '
-            : sourceFilter === 'site'
-              ? 'do site antigo '
-              : sourceFilter === 'ecommerce'
-                ? 'do site novo '
-                : sourceFilter === 'pdv_online'
-                  ? 'de venda online das lojas '
-                  : ''}
-          com esse status no momento. 🎉
+      {/* BUSCA ATIVA — a lista deixou de ser a aba (25/08).
+          Com termo digitado o backend varre TODOS os status; sem dizer isso na
+          cara, a matriz olha a aba "Processando" selecionada, vê um pedido
+          `separating` na lista e acha que a tela mentiu. */}
+      {search && !loading && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-brand/30 bg-brand/5 px-3 py-2 text-sm">
+          <Search className="w-4 h-4 text-brand shrink-0" />
+          <span>
+            Buscando <b className="font-mono">{search}</b> em{' '}
+            <b>todos os status</b> —{' '}
+            <b>{visiveis.length}</b> pedido(s)
+          </span>
+          <button
+            type="button"
+            onClick={() => { setSearchInput(''); setSearch(''); }}
+            className="text-brand underline hover:text-brand-dark"
+          >
+            voltar pra aba {FILTROS.find((f) => f.slug === status)?.label ?? status}
+          </button>
         </div>
+      )}
+
+      {/* Lista */}
+      {status === 'carrinhos' && !search ? (
+        <CarrinhosTab />
+      ) : !loading && visiveis.length === 0 ? (
+        search ? (
+          /* Busca vazia NÃO é motivo de festa: nada achado é problema de quem
+             procura, não conquista da operação. Diz o que foi procurado e
+             onde — e avisa se algum filtro ainda está cortando o resultado. */
+          <div className="bg-white rounded-lg shadow p-8 text-center text-slate-500">
+            <div className="text-slate-700 font-semibold">
+              Nenhum pedido encontrado para <span className="font-mono">{search}</span>
+            </div>
+            <div className="mt-1 text-sm">
+              Procuramos por nº do pedido, nome, e-mail, telefone e rastreio — em todos os status.
+            </div>
+            {(sourceFilter || storeCode) && (
+              <div className="mt-2 text-sm text-amber-700">
+                ⚠ Ainda há filtro ligado
+                {sourceFilter ? ` de origem (${sourceFilter})` : ''}
+                {sourceFilter && storeCode ? ' e' : ''}
+                {storeCode ? ` de loja (${storeCode})` : ''} — pode estar escondendo o pedido.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
+            Nenhum pedido{' '}
+            {sourceFilter === 'live'
+              ? 'da LIVE '
+              : sourceFilter === 'site'
+                ? 'do site antigo '
+                : sourceFilter === 'ecommerce'
+                  ? 'do site novo '
+                  : sourceFilter === 'pdv_online'
+                    ? 'de venda online das lojas '
+                    : ''}
+            com esse status no momento. 🎉
+          </div>
+        )
       ) : (
         <div className="space-y-2">
-          {orders.filter((o: any) => !sourceFilter || (o.orderSource || 'site') === sourceFilter).map((o) => {
+          {visiveis.map((o) => {
             const p = preview[o.id];
             const err = errorByOrder[o.id];
             const isBusy = busy[o.id];
@@ -1451,6 +1530,31 @@ function SeparacaoPageInner() {
                         <span className="ml-1 inline-block rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
                           ECOMMERCE
                         </span>
+                      )}
+                      {/* ONDE ESTE PEDIDO ESTÁ — só na busca, que é a única
+                          hora em que a lista mistura status. Clicável quando
+                          existe aba pra ir; texto seco quando o status não
+                          mora em aba nenhuma (aguardando pagamento, recusado,
+                          cancelado) — link que não leva a lugar nenhum é pior
+                          que badge sem link. */}
+                      {search && (o.statusLabel || o.statusLocal) && (
+                        o.abaSlug && o.abaSlug !== status ? (
+                          <button
+                            type="button"
+                            onClick={() => { setSearchInput(''); setSearch(''); setStatus(o.abaSlug!); }}
+                            className="ml-1 inline-block rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 align-middle hover:bg-slate-300"
+                            title={`Este pedido está na aba "${FILTROS.find((f) => f.slug === o.abaSlug)?.label ?? o.abaSlug}" — clique pra ir`}
+                          >
+                            {o.statusLabel || o.statusLocal} ↗
+                          </button>
+                        ) : (
+                          <span
+                            className="ml-1 inline-block rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 align-middle"
+                            title={o.abaSlug ? 'Status do pedido' : 'Status que nenhuma aba lista'}
+                          >
+                            {o.statusLabel || o.statusLocal}
+                          </span>
+                        )
                       )}
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
                       {/* PARADO HÁ QUANTO TEMPO — só na aba "Pronto pra postar".

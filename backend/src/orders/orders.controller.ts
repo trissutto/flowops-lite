@@ -190,6 +190,102 @@ export function whereNativoDaAba(slug: string): Record<string, any> | null {
   return statuses?.length ? { status: { in: statuses } } : null;
 }
 
+/**
+ * EM QUE ABA ESTE PEDIDO MORA — o caminho de volta do `whereNativoDaAba`.
+ *
+ * A busca agora atravessa as abas (ver `wcList`), então a linha tem que dizer
+ * onde o pedido está: achar o pedido e não saber pra onde ir é meio conserto.
+ * Escrito com as MESMAS constantes da ida (`CARD_PRONTO`, `CARD_SEPARANDO`,
+ * `RASTREIO_JANELA_DIAS`) — se a ida e a volta divergirem, a tela manda a
+ * matriz pra uma aba onde o pedido não está.
+ *
+ * `null` = status que não cai em aba nenhuma (`awaiting_payment`,
+ * `payment_failed`, `cancelled` do nativo). Nesse caso a tela mostra o rótulo
+ * cru e NÃO oferece atalho — melhor sem link do que com link que mente.
+ */
+export function abaDoNativo(
+  status: string,
+  pickStatuses: string[],
+  updatedAt: Date | null | undefined,
+  temRastreio: boolean,
+): string | null {
+  if (status === 'separating') {
+    const temSeparando = pickStatuses.some((s) => CARD_SEPARANDO.includes(s));
+    const temPronto = pickStatuses.some((s) => CARD_PRONTO.includes(s));
+    return !temSeparando && temPronto ? 'pronto-postar' : 'separacao';
+  }
+  if (status === 'shipped') {
+    const desde = new Date(Date.now() - RASTREIO_JANELA_DIAS * 86_400_000);
+    const dentroDaJanela = !!updatedAt && new Date(updatedAt) >= desde;
+    return dentroDaJanela && temRastreio ? 'em-transito' : 'completed';
+  }
+  if (status === 'delivered') return 'completed';
+  for (const [slug, statuses] of Object.entries(STATUS_LOCAL_POR_ABA)) {
+    // 'separacao'/'em-separacao'/'completed' já foram tratados por extenso
+    // acima; sobra o mapa simples (Processando e seus vizinhos).
+    if (slug === 'processing' && statuses.includes(status)) return slug;
+  }
+  return null;
+}
+
+/**
+ * O `where` DA BUSCA LIVRE — o que a matriz digita naquele campo.
+ *
+ *   nº do pedido  → `ON-000126`, `LP-000162`, `126` (contains)
+ *   nome          → `Erica`
+ *   e-mail        → o placeholder oferecia desde sempre e NINGUÉM consultava a
+ *                   coluna: buscar por e-mail dava zero
+ *   telefone      → digitado com máscara `(11) 99894-1591`; a coluna guarda só
+ *                   dígitos, então compara dígito com dígito
+ *   rastreio      → `AA123456789BR` colado do aviso da cliente
+ *   nº interno    → `960000126`, o da URL /pedidos/wc/…
+ *
+ * Fora daqui, quem chama já tirou o `#` do termo (a tela mostra `#ON-000126` e
+ * é assim que a matriz digita).
+ */
+export function filtroBuscaPedido(search: string): Record<string, any> {
+  const alvos: any[] = [
+    { wcOrderNumber: { contains: search, mode: 'insensitive' } },
+    { customerName: { contains: search, mode: 'insensitive' } },
+    { customerEmail: { contains: search, mode: 'insensitive' } },
+    { trackingCode: { contains: search, mode: 'insensitive' } },
+  ];
+  // Só entra no terreno numérico quem digitou SÓ número/pontuação. Se o termo
+  // tem letra (`ON-000126`), os dígitos soltos dele ("000126") não podem sair
+  // casando com pedaço de telefone alheio — linha a mais numa busca é o mesmo
+  // alarme falso que faz a operação parar de confiar na tela.
+  const soDigitos = /[a-z]/i.test(search) ? '' : search.replace(/\D/g, '');
+  if (soDigitos.length >= 4) {
+    alvos.push({ customerPhone: { contains: soDigitos } });
+    const comoId = Number(soDigitos);
+    // ⚠️ TETO DE INT32 obrigatório: `wc_order_id` é `Int` no Postgres e um
+    // telefone (11998941591) NÃO cabe — o Prisma estoura a query inteira e a
+    // busca por telefone viraria 500. Medido em 25/08: "value is out of range
+    // for type integer".
+    const CABE_EM_INT32 = 2_147_483_647;
+    if (comoId > 0 && comoId <= CABE_EM_INT32 && soDigitos.length >= 8) {
+      alvos.push({ wcOrderId: comoId });
+    }
+  }
+  return { OR: alvos };
+}
+
+/** Rótulo humano do status local — o que a matriz lê na linha da busca. */
+export const ROTULO_STATUS_LOCAL: Record<string, string> = {
+  pending: 'Processando',
+  processing: 'Processando',
+  routing: 'Processando',
+  awaiting_stock: 'Sem estoque',
+  separating: 'Em separação',
+  ready: 'Pronto pra postar',
+  shipped: 'Despachado',
+  delivered: 'Entregue',
+  cancelled: 'Cancelado',
+  refunded: 'Reembolsado',
+  awaiting_payment: 'Aguardando pagamento',
+  payment_failed: 'Pagamento recusado',
+};
+
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
@@ -623,6 +719,11 @@ export class OrdersController {
         id: o.id,
         number: o.number,
         status: o.status,
+        // Mesmo par de campos das linhas nativas, pra tela não ter que saber
+        // de onde veio a linha na hora de mostrar "onde este pedido está".
+        statusLocal: o.status,
+        statusLabel: ROTULO_STATUS_LOCAL[o.status] ?? o.status,
+        abaSlug: null,
         dateCreatedGmt: o.date_created_gmt ?? o.date_created,
         total: o.total,
         currency: o.currency,
@@ -659,12 +760,34 @@ export class OrdersController {
     // 'awaiting_payment' e vira 'processing' na confirmação — separar o que
     // não foi pago seria pedir prejuízo.
     const whereAba = status ? whereNativoDaAba(status) : null;
+
+    /**
+     * BUSCA ATRAVESSA AS ABAS (25/08/2026 — "ARRUME A BUSCA DOS PEDIDOS, NÃO
+     * FILTRA").
+     *
+     * Quem digita `ON-000126` está perguntando "onde está ESTE pedido", não
+     * "este pedido está nesta aba?". E a aba era exatamente o que sumia com
+     * ele: a busca entrava como mais um `AND` junto do `whereAba`, então
+     * procurar da aba Processando por um pedido que já está `separating`
+     * devolvia ZERO — sem erro, sem aviso, com o pedido vivo do outro lado da
+     * tela (era o caso do dia: ON-000126 = `separating`, procurado de
+     * Processando).
+     *
+     * Pior: aba sem regra nativa (`Pagto pendente`, `Aguardando`,
+     * `Cancelados`, `Carrinhos`) devolve `whereNativoDaAba` = null e o bloco
+     * inteiro nem rodava — buscar dali era um campo de texto decorativo.
+     *
+     * Com termo digitado, o funil é UM só: varre TODO o Postgres (todo status,
+     * toda origem, o arquivo do site antigo incluído) e a tela avisa em que
+     * status cada linha está. Sem termo, nada muda — a aba continua mandando.
+     */
+    const buscando = !!search;
     let liveRows: any[] = [];
-    if (whereAba) {
+    if (whereAba || buscando) {
       // Composto com AND explícito: a regra da aba e a busca livre usam `OR`
       // no mesmo nível, e duas chaves `OR` no mesmo objeto — uma sobrescreve a
       // outra em silêncio. Filtro que some sem erro é o pior tipo de filtro.
-      const filtros: any[] = [whereAba];
+      const filtros: any[] = whereAba && !buscando ? [whereAba] : [];
       // "Em trânsito" é a ÚNICA aba que também traz o pedido do site ANTIGO:
       // quem sabe onde o objeto está é o Postgres (`rastreio_objetos`), não o
       // WooCommerce — e a loja despacha os dois pelo mesmo card, com o mesmo
@@ -676,16 +799,7 @@ export class OrdersController {
       // Postgres desde o sync, então quem digitou algo na busca recebe os dois
       // mundos; quem está só olhando a aba recebe o trabalho de hoje.
       if (!ehEmTransito && !search) filtros.push({ source: { in: ORIGENS_NATIVAS } });
-      if (search) {
-        filtros.push({
-          OR: [
-            { wcOrderNumber: { contains: search, mode: 'insensitive' } },
-            { customerName: { contains: search, mode: 'insensitive' } },
-            { customerPhone: { contains: search } },
-            { trackingCode: { contains: search, mode: 'insensitive' } },
-          ],
-        });
-      }
+      if (search) filtros.push(filtroBuscaPedido(search));
       if (after) filtros.push({ wcDateCreated: { gte: new Date(after) } });
       if (before) filtros.push({ wcDateCreated: { lte: new Date(before) } });
 
@@ -709,8 +823,13 @@ export class OrdersController {
         // "Pronto pra postar" ordena pelo MAIS PARADO primeiro — é uma fila de
         // pendência, não um extrato: quem espera há 6 dias tem que estar na
         // primeira linha, não na página 2 do mais-recente-primeiro.
-        orderBy: status === 'pronto-postar' ? { updatedAt: 'asc' } : { wcDateCreated: 'desc' },
-        take: ehEmTransito ? 200 : 100,
+        // Buscando, o mais RECENTE primeiro sempre: quem procura um pedido
+        // procura o de agora, não o mais parado da fila.
+        orderBy:
+          !buscando && status === 'pronto-postar'
+            ? { updatedAt: 'asc' }
+            : { wcDateCreated: 'desc' },
+        take: buscando || ehEmTransito ? 200 : 100,
       });
 
       // ── Onde o objeto está AGORA ──
@@ -766,6 +885,19 @@ export class OrdersController {
           id: o.wcOrderId,
           number: o.wcOrderNumber,
           status,
+          // ONDE O PEDIDO ESTÁ DE VERDADE. O `status` acima é o slug da ABA
+          // pedida — servia enquanto a lista só trazia pedido daquela aba. Com
+          // a busca atravessando tudo, a linha precisa dizer o status real e
+          // pra qual aba ir; sem isso o resultado vira "achei, mas não sei
+          // onde está".
+          statusLocal: o.status,
+          statusLabel: ROTULO_STATUS_LOCAL[o.status] ?? o.status,
+          abaSlug: abaDoNativo(
+            o.status,
+            (o.pickOrders || []).map((p: any) => p.status),
+            o.updatedAt,
+            !!(o.trackingCode || firstTracking?.trackingCode),
+          ),
           dateCreatedGmt: (o.wcDateCreated ?? o.createdAt)?.toISOString?.() ?? null,
           total: String(o.totalAmount ?? 0),
           currency: 'BRL',
