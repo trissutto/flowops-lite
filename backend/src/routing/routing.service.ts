@@ -178,8 +178,26 @@ export class RoutingService {
      */
     const orderGate = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { source: true, vendaConferidaEm: true, checkoutInfo: true, wcOrderNumber: true } as any,
+      select: { source: true, status: true, vendaConferidaEm: true, checkoutInfo: true, wcOrderNumber: true } as any,
     });
+
+    /**
+     * TRAVA DE PEDIDO CONCLUÍDO (25/08, caso dos 22 relançados de 24/08):
+     * pedido `shipped`/`delivered`/`cancelled` NÃO gera separação. As meninas
+     * relançaram como venda online 22 pedidos já enviados — registro legítimo
+     * — e o 1-CLIQUE/Gerar separação na aba Concluídos transformou registro
+     * velho em trabalho novo: Itanhaém e São José separaram e biparam pedido
+     * fantasma (66 peças baixadas em dobro, peça bipada saindo do estoque de
+     * novo). Vale pra TODOS os gatilhos pelo mesmo motivo da trava acima:
+     * todos passam por aqui.
+     */
+    const statusFinal = String((orderGate as any)?.status || '');
+    if (['shipped', 'delivered', 'cancelled'].includes(statusFinal)) {
+      throw new BadRequestException(
+        `Pedido ${(orderGate as any)?.wcOrderNumber || orderId} já está ${statusFinal === 'cancelled' ? 'CANCELADO' : 'CONCLUÍDO/DESPACHADO'} — ` +
+          `não gera separação. Se a peça ainda precisa sair de uma loja, reabra o pedido primeiro (mudando o status) pra ficar registrado de propósito.`,
+      );
+    }
     if (orderGate && !(await pedidoOnlineLiberado(this.prisma, orderGate as any))) {
       throw new BadRequestException(
         `Pedido ${(orderGate as any).wcOrderNumber || orderId} está AGUARDANDO CONFERÊNCIA DE PAGAMENTO — ` +

@@ -1650,8 +1650,13 @@ function SeparacaoPageInner() {
                               "Pronto pra postar" a peça já está separada e a
                               caixa fechada: clicar aqui rerotearia o pedido e
                               dispararia o WhatsApp de novo pra uma loja que já
-                              fez o trabalho. Fora da aba. */}
-                          {status !== 'pronto-postar' && (
+                              fez o trabalho. Fora da aba.
+                              Em "Concluídos"/"Em trânsito" (25/08) o pedido JÁ
+                              ACABOU: o botão aqui foi o que transformou os 22
+                              relançamentos de 24/08 em separação fantasma pras
+                              lojas. O backend agora recusa (confirmRoute), mas
+                              botão que só devolve erro é pegadinha — some. */}
+                          {!['pronto-postar', 'completed', 'em-transito'].includes(status) && (
                             <button
                               onClick={() => umClique(o.id)}
                               disabled={isBusy}
