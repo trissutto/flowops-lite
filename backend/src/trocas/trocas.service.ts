@@ -178,10 +178,15 @@ export class TrocasService {
   }
 
   /** Texto do código de postagem — usado na geração e no reenvio. */
-  private textoCodigoReversa(troca: any, codigo: string, prazo: Date): string {
+  private textoCodigoReversa(troca: any, codigo: string, prazo: Date, substitui = false): string {
     return (
       `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
-      `Sua devolução da troca ${formatTrocaNumero(troca.numero)} está liberada.\n\n` +
+      // Quem já recebeu o código velho vai ficar com DOIS na mão. Sem dizer
+      // qual vale, ela leva o errado pro balcão de novo.
+      (substitui
+        ? `Desculpa: o código que te mandamos antes não funcionava na agência. ` +
+          `*Este aqui substitui aquele* — pode apagar o anterior.\n\n`
+        : `Sua devolução da troca ${formatTrocaNumero(troca.numero)} está liberada.\n\n`) +
       `📮 Código de postagem: *${codigo}*\n` +
       `É só levar a peça em QUALQUER agência dos Correios e informar esse código — ` +
       `você não paga nada, o frete é por nossa conta.\n\n` +
@@ -197,12 +202,16 @@ export class TrocasService {
   }
 
   /** O MESMO código, em HTML, pro e-mail. */
-  private emailCodigoReversa(troca: any, codigo: string, prazo: Date): string {
+  private emailCodigoReversa(troca: any, codigo: string, prazo: Date, substitui = false): string {
     const primeiro = (troca.customerName || '').split(' ')[0] || '';
     return `
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
       <h2 style="color:#8C7325">Oi${primeiro ? `, ${primeiro}` : ''}! 💛</h2>
-      <p>Sua devolução da troca <b>${formatTrocaNumero(troca.numero)}</b> está liberada.</p>
+      ${substitui
+        ? `<p style="background:#FDECEC;border-left:4px solid #C0392B;border-radius:6px;padding:12px">
+             Desculpa: o código que te mandamos antes <b>não funcionava na agência</b>.
+             <b>Este aqui substitui aquele</b> — pode apagar o anterior.</p>`
+        : `<p>Sua devolução da troca <b>${formatTrocaNumero(troca.numero)}</b> está liberada.</p>`}
       <p style="margin-bottom:4px">📮 Código de postagem:</p>
       <p style="font-size:24px;font-weight:bold;background:#FBF6E6;border:2px dashed #B8912B;border-radius:12px;padding:16px;text-align:center;letter-spacing:2px">${codigo}</p>
       <p>É só levar a peça em <b>qualquer agência dos Correios</b> e informar esse código —
@@ -237,11 +246,13 @@ export class TrocasService {
     troca: any,
     codigo: string,
     prazo: Date,
+    /** A cliente já recebeu um código antes deste — precisa saber qual vale. */
+    substitui = false,
   ): Promise<{ ok: boolean; canais: string[]; motivo?: string }> {
     const canais: string[] = [];
     const whats = await this.avisarWhatsDetalhado(
       troca.customerPhone,
-      this.textoCodigoReversa(troca, codigo, prazo),
+      this.textoCodigoReversa(troca, codigo, prazo, substitui),
     );
     if (whats.ok) canais.push('WhatsApp');
 
@@ -251,7 +262,7 @@ export class TrocasService {
         emailOk = await this.email.send(
           troca.customerEmail,
           `Lurd's Plus Size — seu código de postagem da troca ${formatTrocaNumero(troca.numero)} 📮`,
-          this.emailCodigoReversa(troca, codigo, prazo),
+          this.emailCodigoReversa(troca, codigo, prazo, substitui),
         );
       } catch { emailOk = false; }
     }
@@ -1421,7 +1432,12 @@ export class TrocasService {
       ? resp.validadePostagem
       : new Date(Date.now() + 15 * 86_400_000);
 
-    const aviso = await this.avisarCodigoReversa(troca, codigo, prazo);
+    // Esta troca já teve um código descartado? Então a cliente está com dois na
+    // mão e o aviso tem que dizer qual vale (as 18 do conserto de 25/08).
+    const jaTeveCodigo = await (this.prisma as any).trocaEvento.count({
+      where: { trocaId: troca.id, tipo: 'reversa', descricao: { contains: 'descartado' } },
+    });
+    const aviso = await this.avisarCodigoReversa(troca, codigo, prazo, jaTeveCodigo > 0);
     const whatsOk = aviso.ok;
 
     const updated = await (this.prisma as any).trocaSolicitacao.update({
