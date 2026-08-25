@@ -141,20 +141,23 @@ describe('AbandonedCartsService carrinhos do site novo', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
-  it('só devolve atendimento das últimas 2h — depois disso a linha volta pra fila', async () => {
+  // O dono cancelou o prazo de 2h em 25/08: atendimento de carrinho não acaba
+  // no relógio. Quem tira a tag agora é a baixa (`marcarNaoConvertido`).
+  it('a tag de atendimento não vence mais por tempo — sem corte de data na query', async () => {
     const findMany = jest.fn().mockResolvedValue([
-      { telefone: '35991720547', usuarioNome: 'Karine', assumidoEm: new Date('2026-08-24T11:40:00Z') },
+      { telefone: '35991720547', usuarioNome: 'Karine', assumidoEm: new Date('2026-08-20T11:40:00Z') },
     ]);
     const service = new AbandonedCartsService({} as any, {} as any, {
       carrinhoAtendimento: { findMany },
     } as any);
 
     const r: any = await service.atendimentosAtivos();
+    // 5 dias atrás e a tag continua de pé.
     expect(r.ativos).toEqual([
-      { telefone: '35991720547', por: 'Karine', desde: '2026-08-24T11:40:00.000Z' },
+      { telefone: '35991720547', por: 'Karine', desde: '2026-08-20T11:40:00.000Z' },
     ]);
-    const corte = findMany.mock.calls[0][0].where.assumidoEm.gte as Date;
-    expect(Math.round((Date.now() - corte.getTime()) / 60000)).toBe(120);
+    expect(findMany.mock.calls[0][0].where).toBeUndefined();
+    expect(r.valeMin).toBeNull();
   });
 
   it('falha ao ler atendimento não derruba a lista — só perde a tag', async () => {
@@ -177,5 +180,148 @@ describe('AbandonedCartsService carrinhos do site novo', () => {
 
     const r: any = await service.listEcommercePending({ status: 'abandoned' });
     expect(r.items).toHaveLength(1);
+  });
+});
+
+/**
+ * A ESPERA DE 1 HORA (dono, 25/08/2026).
+ *
+ * Ele abriu a tela às 11:55 e viu o carrinho das 11:41 já na fila, com botão de
+ * WhatsApp do lado — a cliente ainda estava NA TELA DE PAGAMENTO.
+ */
+describe('AbandonedCartsService espera de 1h antes de virar abandono', () => {
+  const minutosAtras = (min: number) => new Date(Date.now() - min * 60_000);
+  const pedido = (over: any) => ({
+    wcOrderId: 950000123,
+    customerName: 'Mariana Correa',
+    customerEmail: 'mariana@exemplo.com',
+    customerPhone: '19981411939',
+    totalAmount: 139.9,
+    status: 'awaiting_payment',
+    paidAt: null,
+    createdAt: minutosAtras(600),
+    wcOrderNumber: 'LP-000900',
+    items: [],
+    ...over,
+  });
+  const makeService = (pedidos: any[], capturas: any[] = [], desfechos: any[] = []) =>
+    new AbandonedCartsService({} as any, {} as any, {
+      order: {
+        findMany: jest.fn().mockImplementation((args: any) =>
+          Promise.resolve(args?.where?.paidAt?.not === null ? [] : pedidos),
+        ),
+      },
+      checkoutRecovery: { findMany: jest.fn().mockResolvedValue(capturas) },
+      carrinhoDesfecho: { findMany: jest.fn().mockResolvedValue(desfechos) },
+    } as any);
+
+  it('esconde o pedido que nasceu há 14 minutos — ela ainda está pagando', async () => {
+    const service = makeService([pedido({ createdAt: minutosAtras(14) })]);
+    const r: any = await service.listEcommercePending({ status: 'all' });
+    expect(r.items).toHaveLength(0);
+    expect(r.stats.abandoned).toBe(0);
+    expect(r.stats.no_forno).toBe(1);
+  });
+
+  it('solta o mesmo pedido depois de 1 hora', async () => {
+    const service = makeService([pedido({ createdAt: minutosAtras(61) })]);
+    const r: any = await service.listEcommercePending({ status: 'all' });
+    expect(r.items).toHaveLength(1);
+    expect(r.stats.abandoned).toBe(1);
+  });
+
+  it('conta a espera do NASCIMENTO da captura, não do último toque', async () => {
+    // Ela digitou o telefone há 10 minutos e continua mexendo na sacola: o
+    // `updatedAt` é de agora, mas o carrinho ainda não é abandono.
+    const service = makeService([], [{
+      id: 'rec-1', sessionId: 'sess-1', nome: 'Tatiany Mendes', telefone: '85999197103',
+      subtotal: 209.7, items: [], status: 'active', recoveryConsent: true,
+      createdAt: minutosAtras(10), updatedAt: new Date(),
+    }]);
+    const r: any = await service.listEcommercePending({ status: 'all' });
+    expect(r.items).toHaveLength(0);
+  });
+
+  it('pagamento confirmado aparece na hora — a espera só vale pro abandono', async () => {
+    const service = makeService([
+      pedido({ createdAt: minutosAtras(3), paidAt: minutosAtras(1) }),
+    ]);
+    const r: any = await service.listEcommercePending({ status: 'all' });
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0].order_status).toBe('recovered');
+  });
+});
+
+describe('AbandonedCartsService baixa do carrinho', () => {
+  const minutosAtras = (min: number) => new Date(Date.now() - min * 60_000);
+
+  it('carrinho com baixa sai da fila e vira nao_convertido', async () => {
+    const service = new AbandonedCartsService({} as any, {} as any, {
+      order: {
+        findMany: jest.fn().mockImplementation((args: any) =>
+          Promise.resolve(
+            args?.where?.paidAt?.not === null
+              ? []
+              : [{
+                  wcOrderId: 950000123, customerName: 'Andrea Ferreira',
+                  customerEmail: '', customerPhone: '11993928942', totalAmount: 409.7,
+                  status: 'awaiting_payment', paidAt: null, createdAt: minutosAtras(300),
+                  wcOrderNumber: 'LP-000901', items: [],
+                }],
+          ),
+        ),
+      },
+      checkoutRecovery: { findMany: jest.fn().mockResolvedValue([]) },
+      carrinhoDesfecho: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            chave: 'pedido:950000123', telefone: '11993928942', motivo: 'preco',
+            observacao: null, usuarioNome: 'Karine', criadoEm: minutosAtras(10), valor: 409.7,
+          },
+        ]),
+      },
+    } as any);
+
+    const r: any = await service.listEcommercePending({ status: 'all' });
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0].order_status).toBe('nao_convertido');
+    expect(r.items[0].desfecho).toMatchObject({ motivo: 'preco', motivoLabel: 'Achou caro', por: 'Karine' });
+    // O que importa pra fila: ele não conta mais como abandono em aberto.
+    expect(r.stats.abandoned).toBe(0);
+    expect(r.stats.nao_convertido).toBe(1);
+  });
+
+  it('a baixa registra o motivo e LIBERA o atendimento da cliente', async () => {
+    const upsert = jest.fn().mockImplementation(({ create }: any) => Promise.resolve({
+      ...create, criadoEm: new Date('2026-08-25T14:00:00Z'),
+    }));
+    const del = jest.fn().mockResolvedValue({});
+    const service = new AbandonedCartsService({} as any, {} as any, {
+      carrinhoDesfecho: { upsert },
+      carrinhoAtendimento: { delete: del },
+    } as any);
+
+    const r: any = await service.marcarNaoConvertido(
+      { chave: 'contato:rec-9', telefone: '(11) 99392-8942', motivo: 'frete', observacao: 'frete pra BA', valor: 409.7 },
+      { sub: 'user-1', name: 'Karine' },
+    );
+
+    expect(r.ok).toBe(true);
+    expect(upsert.mock.calls[0][0].where).toEqual({ chave: 'contato:rec-9' });
+    expect(upsert.mock.calls[0][0].create).toMatchObject({ motivo: 'frete', telefone: '11993928942', usuarioNome: 'Karine' });
+    // Caso encerrado, telefone liberado: sem isso a tag ficaria pra sempre.
+    expect(del).toHaveBeenCalledWith({ where: { telefone: '11993928942' } });
+  });
+
+  it('recusa motivo fora da lista e "outro" sem explicação', async () => {
+    const upsert = jest.fn();
+    const service = new AbandonedCartsService({} as any, {} as any, {
+      carrinhoDesfecho: { upsert },
+    } as any);
+
+    expect(await service.marcarNaoConvertido({ chave: 'pedido:1', motivo: 'sei_la' }, {})).toMatchObject({ ok: false });
+    expect(await service.marcarNaoConvertido({ chave: 'pedido:1', motivo: 'outro' }, {})).toMatchObject({ ok: false });
+    expect(await service.marcarNaoConvertido({ chave: 'sem-prefixo', motivo: 'preco' }, {})).toMatchObject({ ok: false });
+    expect(upsert).not.toHaveBeenCalled();
   });
 });

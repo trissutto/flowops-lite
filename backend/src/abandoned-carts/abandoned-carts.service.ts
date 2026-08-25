@@ -4,6 +4,15 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { extractAttributionRaw } from '../woocommerce/attribution.util';
+import {
+  baixasPorChave,
+  carrinhoEsperaMin,
+  chaveCarrinhoContato,
+  chaveCarrinhoPedido,
+  listarBaixas,
+  reabrirCarrinhoBaixado,
+  registrarBaixaCarrinho,
+} from '../common/carrinho-abandonado';
 
 /**
  * Service pra ler dados do plugin "Cart Abandonment Recovery for WooCommerce"
@@ -546,14 +555,19 @@ export class AbandonedCartsService {
     const abandoned = conta('abandoned');
     const recovered = conta('recovered');
     const lost = conta('lost');
-    const base = abandoned + recovered + lost;
+    // Baixa não é abandono em aberto: some do badge da aba, senão o número
+    // continua chamando a operadora pra uma fila que já foi resolvida.
+    const naoConvertido = conta('nao_convertido');
+    const base = abandoned + recovered + lost + naoConvertido;
     return {
       ok: true,
       abandoned,
       recovered,
       lost,
+      nao_convertido: naoConvertido,
       total_abandoned_value: soma('abandoned'),
       total_recovered_value: soma('recovered'),
+      total_nao_convertido_value: soma('nao_convertido'),
       recovery_rate: base > 0 ? (recovered / base) * 100 : 0,
     };
   }
@@ -748,13 +762,32 @@ export class AbandonedCartsService {
   }
 
   /**
-   * Por quanto tempo "alguém já chamou essa cliente" continua verdade.
+   * ⛔ O PRAZO DE 2 HORAS FOI CANCELADO (dono, 25/08/2026).
    *
-   * 2 horas (dono, 24/08). Sem prazo, a fila inteira vira "em atendimento" e a
-   * tag deixa de significar alguma coisa — o mesmo jeito que alarme falso mata
-   * a fila de tarefas da loja.
+   * A tag "em atendimento" vencia sozinha em 120 min e a linha voltava pra fila.
+   * Só que atendimento de carrinho não acaba no relógio: a cliente responde de
+   * noite, no dia seguinte, quando o marido vê o preço. A marca sumindo no meio
+   * disso convidava a colega a mandar a SEGUNDA mensagem justamente no caso que
+   * ainda estava vivo — o problema que a tag existe pra evitar.
+   *
+   * Agora quem tira a marca é o DESFECHO, não o cronômetro: a operadora dá baixa
+   * como "não convertido" (`marcarNaoConvertido`, que apaga o atendimento junto)
+   * ou a venda fecha. Existe saída — e ela é humana, não temporal.
    */
-  private static readonly ATENDIMENTO_VALE_MIN = 120;
+  private static readonly ATENDIMENTO_TETO_LINHAS = 2_000;
+
+  /**
+   * IDADE MÍNIMA PRA UM CARRINHO SER CHAMADO DE ABANDONADO — 1 hora (dono, 25/08).
+   *
+   * O que ele viu na tela às 11:55: carrinho das 11:41 já na lista, com botão de
+   * WhatsApp do lado, enquanto a cliente ainda estava NA TELA DE PAGAMENTO.
+   *
+   * A regra mora em `common/carrinho-abandonado` porque o PDV tem a própria
+   * lista, com o próprio código — e as duas já discordaram: o piso de 30min
+   * (`PIX_RESGATE_MIN`) existia só no ramo `abandoned` daqui, e a tela SEMPRE
+   * pede `status=all`. Ou seja: nunca rodou nesta lista, e nunca valeu pras
+   * capturas de contato.
+   */
 
   /**
    * QUEM JÁ CHAMOU A CLIENTE — marca no clique do WhatsApp.
@@ -793,19 +826,23 @@ export class AbandonedCartsService {
     }
   }
 
-  /** Atendimentos ainda válidos (últimas 2h), pra tela pintar a tag em qualquer
-   *  linha daquele telefone — venha ela do pedido, da captura ou do WooCommerce. */
+  /**
+   * Atendimentos em aberto, pra tela pintar a tag em qualquer linha daquele
+   * telefone — venha ela do pedido, da captura ou do WooCommerce.
+   *
+   * SEM FILTRO DE TEMPO desde 25/08: quem sai da lista é quem teve desfecho.
+   * O teto de linhas é só guarda de memória, e vem ordenado do mais recente —
+   * se um dia estourar, o que cai fora é o mais velho, que é o menos útil.
+   */
   async atendimentosAtivos() {
-    const desde = new Date(Date.now() - AbandonedCartsService.ATENDIMENTO_VALE_MIN * 60_000);
     try {
       const linhas = await (this.prisma as any).carrinhoAtendimento.findMany({
-        where: { assumidoEm: { gte: desde } },
         orderBy: { assumidoEm: 'desc' },
-        take: 500,
+        take: AbandonedCartsService.ATENDIMENTO_TETO_LINHAS,
       });
       return {
         ok: true,
-        valeMin: AbandonedCartsService.ATENDIMENTO_VALE_MIN,
+        valeMin: null,
         ativos: linhas.map((l: any) => ({
           telefone: l.telefone,
           por: l.usuarioNome,
@@ -814,8 +851,33 @@ export class AbandonedCartsService {
       };
     } catch (e: any) {
       this.logger.warn(`[carrinhos] não consegui ler os atendimentos: ${e?.message ?? e}`);
-      return { ok: true, valeMin: AbandonedCartsService.ATENDIMENTO_VALE_MIN, ativos: [] };
+      return { ok: true, valeMin: null, ativos: [] };
     }
+  }
+
+  // ==========================================================================
+  // BAIXA DO CARRINHO — "ela não vai fechar, e este é o motivo" (dono, 25/08).
+  // ==========================================================================
+
+  /**
+   * Lista as baixas, pra tela tirar essas linhas da fila e pintar o motivo.
+   *
+   * Mapa por CHAVE DA LINHA (`pedido:`/`contato:`/`wc:`/`plugin:`) e não por
+   * telefone: baixa é sobre AQUELE carrinho. A mesma cliente que abandonar de
+   * novo semana que vem volta pra fila — quem foi descartado foi o carrinho.
+   */
+  async desfechos(since?: string) {
+    return listarBaixas(this.prisma as any, since, (m) => this.logger.warn(m));
+  }
+
+  /** Dá baixa: registra o motivo, tira a linha da fila e libera o atendimento. */
+  async marcarNaoConvertido(body: any, user: any) {
+    return registrarBaixaCarrinho(this.prisma as any, body, user, (m) => this.logger.warn(m));
+  }
+
+  /** Desfaz a baixa — a linha volta pra fila. Baixa errada tem que ter volta. */
+  async reabrirCarrinho(chave: string) {
+    return reabrirCarrinhoBaixado(this.prisma as any, chave);
   }
 
   async listEcommercePending(params: {
@@ -857,27 +919,12 @@ export class AbandonedCartsService {
         // só esperando aprovação. `paymentInfo` é JSON em texto; a chave é
         // gravada pelo `cobrarCartao` só nesse caso.
         where.NOT = [{ paymentInfo: { contains: '"cartaoEmAnalise":true' } }];
-        /**
-         * IDADE MÍNIMA — sem isto o relatório cutuca quem está pagando.
-         *
-         * Desde 17/08 o clique no PIX JÁ CRIA o pedido em `awaiting_payment`.
-         * Sem piso de idade, ele entrava na lista de "abandonados" segundos
-         * depois do toque, enquanto a cliente ainda estava com o QR Code na
-         * tela — e a tela (que recarrega a cada 60s) oferecia o botão de
-         * WhatsApp pra cobrar alguém no meio do pagamento. Alarme falso mata
-         * a confiança na lista inteira, do mesmo jeito que matou na fila de
-         * tarefas da loja.
-         *
-         * O piso é o MESMO do `PixResgateCron` (env `PIX_RESGATE_MIN`, 30min):
-         * o sistema já sabia qual era a espera certa e as duas telas
-         * discordavam. Vale só no ramo "abandoned" — em `all`/`recovered` o
-         * pedido recém-pago tem que continuar aparecendo.
-         */
-        {
-          const esperaMin = Number(process.env.PIX_RESGATE_MIN) || 30;
-          const teto = new Date(Date.now() - esperaMin * 60_000);
-          where.createdAt = { ...(where.createdAt ?? {}), lte: teto };
-        }
+        // A IDADE MÍNIMA saiu daqui (25/08). Ficava só neste ramo, e a tela
+        // sempre pede `status=all` — então o piso nunca rodava nesta lista, e
+        // nunca valeu pras capturas de contato, que nem passam por aqui. Hoje
+        // ele é aplicado no item montado, lá embaixo, valendo pras duas origens.
+        // De quebra some um efeito colateral: este bloco sobrescrevia o `lte`
+        // do filtro "Até" da tela.
     }
     if (params.search) {
       where.OR = [
@@ -924,6 +971,14 @@ export class AbandonedCartsService {
           order_id: Number(o.wcOrderId),
           order_number: o.wcOrderNumber ?? null,
           source: 'ecommerce',
+          // Chave estável da linha (ver `CarrinhoDesfecho`): quem dá baixa manda
+          // ela de volta. É o backend que monta, pra tela não repetir a regra.
+          chave: chaveCarrinhoPedido(o.wcOrderId),
+          // NASCIMENTO da linha — é sobre ele que corre a espera de 1h. O `time`
+          // acima é a mesma coisa aqui, mas na captura de contato não é: lá ele
+          // é o último toque, e usar o último toque adiaria o carrinho pra
+          // sempre enquanto a cliente mexesse na sacola.
+          criado_em: o.createdAt ? o.createdAt.toISOString() : null,
           // Status CRU do pedido, só pra tela saber o que dizer: `payment_failed`
           // é cartão RECUSADO (morto — a cliente não vai "terminar de pagar"),
           // `awaiting_payment` é PIX/link em aberto (vivo). Chamar os dois de
@@ -1019,6 +1074,12 @@ export class AbandonedCartsService {
             items_count: cartItems.reduce((sum: number, it: any) => sum + it.quantity, 0),
             order_status: r.status === 'converted' ? 'recovered' : 'abandoned',
             time: r.updatedAt?.toISOString?.() ?? null, order_id: null, order_number: null,
+            chave: chaveCarrinhoContato(r.id),
+            // "Início da inserção dos dados" (dono): a hora em que ela digitou o
+            // primeiro campo. `updatedAt` sobe a cada tecla — contar a espera
+            // por ele deixaria o carrinho invisível enquanto ela estivesse
+            // mexendo, que é justo quando ele vira abandono de verdade.
+            criado_em: r.createdAt?.toISOString?.() ?? null,
             source: 'ecommerce-contact',
             // Aceita as duas formas: registros gravados ANTES do conserto do
             // sanitizeAttribution têm a coluna NULL, os novos têm `utm_*`.
@@ -1029,22 +1090,73 @@ export class AbandonedCartsService {
         });
       items.unshift(...recoveryItems);
 
+      /**
+       * QUEM JÁ TEVE BAIXA SAI DA FILA (dono, 25/08).
+       *
+       * A operadora ligou, ouviu "achei caro" e registrou. Manter a linha
+       * vermelha depois disso faz a próxima colega ligar pra ouvir a mesma
+       * coisa — alarme falso repetido, que é o que mata a confiança na fila.
+       * Ela não some do mundo: vira `nao_convertido`, com motivo e autor, e a
+       * tela tem um filtro só pra ela.
+       */
+      const baixas = await baixasPorChave(
+        this.prisma as any,
+        items.map((i: any) => i.chave),
+        (m) => this.logger.warn(m),
+      );
+      for (const it of items as any[]) {
+        const baixa = it.chave ? baixas.get(it.chave) : null;
+        if (!baixa) continue;
+        it.desfecho = baixa;
+        if (it.order_status === 'abandoned') it.order_status = 'nao_convertido';
+      }
+
+      /**
+       * A ESPERA DE 1 HORA (ver `esperaMin`): antes disso a cliente ainda está
+       * no checkout, e não existe "carrinho abandonado" pra cobrar. Some da
+       * lista e dos KPIs — os dois saem daqui, então não há como divergirem.
+       *
+       * Só corta quem seria ABANDONO: pagamento confirmado e cancelamento
+       * continuam aparecendo na hora.
+       */
+      const esperaMs = carrinhoEsperaMin() * 60_000;
+      const agora = Date.now();
+      const visiveis = (items as any[]).filter((it) => {
+        if (it.order_status !== 'abandoned') return true;
+        const nasceu = Date.parse(it.criado_em || it.time || '');
+        if (!Number.isFinite(nasceu)) return true; // sem data: melhor mostrar
+        return agora - nasceu >= esperaMs;
+      });
+      const noForno = items.length - visiveis.length;
+      if (noForno > 0) {
+        this.logger.log(
+          `[carrinhos] ${noForno} carrinho(s) ainda no forno: menos de ${carrinhoEsperaMin()}min desde o início do checkout`,
+        );
+      }
+
+      const conta = (st: string) => visiveis.filter((i: any) => i.order_status === st).length;
+      const soma = (st: string) =>
+        visiveis
+          .filter((i: any) => i.order_status === st)
+          .reduce((acc: number, i: any) => acc + (i.cart_total || 0), 0);
       const stats = {
-        abandoned: items.filter((i: any) => i.order_status === 'abandoned').length,
-        recovered: items.filter((i: any) => i.order_status === 'recovered').length,
-        lost: items.filter((i: any) => i.order_status === 'lost').length,
+        abandoned: conta('abandoned'),
+        recovered: conta('recovered'),
+        lost: conta('lost'),
+        nao_convertido: conta('nao_convertido'),
         recovery_rate: 0,
-        total_abandoned_value: items
-          .filter((i: any) => i.order_status === 'abandoned')
-          .reduce((acc: number, i: any) => acc + (i.cart_total || 0), 0),
-        total_recovered_value: items
-          .filter((i: any) => i.order_status === 'recovered')
-          .reduce((acc: number, i: any) => acc + (i.cart_total || 0), 0),
+        total_abandoned_value: soma('abandoned'),
+        total_recovered_value: soma('recovered'),
+        total_nao_convertido_value: soma('nao_convertido'),
+        // Quantos estão dentro da janela de espera — a tela mostra isso pra
+        // ninguém achar que a lista quebrou quando o movimento está fraco.
+        no_forno: noForno,
+        espera_min: carrinhoEsperaMin(),
       };
-      const base = stats.abandoned + stats.recovered + stats.lost;
+      const base = stats.abandoned + stats.recovered + stats.lost + stats.nao_convertido;
       stats.recovery_rate = base > 0 ? (stats.recovered / base) * 100 : 0;
 
-      return { ok: true, source: 'ecommerce', items, total: items.length, stats };
+      return { ok: true, source: 'ecommerce', items: visiveis, total: visiveis.length, stats };
     } catch (e: any) {
       this.logger.warn(`[carrinhos] lista ecommerce falhou: ${e?.message ?? e}`);
       return { ok: false, error: `Falha ao buscar carrinhos do e-commerce novo: ${e?.message ?? e}` };

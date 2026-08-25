@@ -2123,7 +2123,64 @@ type CarrinhoAB = {
   // Campanha de origem (via order_id → Order local com atribuição do WC).
   // null/undefined = carrinho sem pedido ainda ou sem UTM (não atribuível).
   utmCampaign?: string | null;
+  /**
+   * Chave ESTÁVEL da linha, montada pelo backend (`pedido:`/`contato:`). É por
+   * ela que se dá baixa — o `id` da linha de contato é sintético e muda a cada
+   * carregamento, então dar baixa por ele daria baixa em outra pessoa amanhã.
+   * As origens mortas (plugin WP / WooCommerce) não mandam: ver `chaveCarrinho`.
+   */
+  chave?: string;
+  /** Nascimento da linha (início da inserção dos dados no checkout). */
+  criado_em?: string | null;
+  /** Preenchido quando a linha já teve baixa — ver o type `Desfecho`. */
+  desfecho?: Desfecho | null;
 };
+
+/**
+ * A BAIXA: "ela não vai fechar, e este é o motivo" (dono, 25/08).
+ *
+ * A fila só tinha uma saída boa (a cliente paga) e nenhuma saída ruim. Quem
+ * ligava, ouvia "achei caro" e desligava não tinha onde registrar — a linha
+ * continuava lá e a próxima colega ligava pra ouvir a mesma coisa.
+ */
+type Desfecho = {
+  chave: string;
+  telefone?: string | null;
+  motivo: string;
+  motivoLabel: string;
+  observacao?: string | null;
+  por: string;
+  em?: string | null;
+  valor?: number | null;
+};
+type MotivoBaixa = { slug: string; label: string };
+type DesfechoResp = { ok?: boolean; motivos?: MotivoBaixa[]; itens?: Desfecho[] };
+
+/**
+ * Chave da linha pras origens que o backend não carimba (plugin do CartFlows e
+ * fallback WooCommerce, os dois do site velho). Mesmo formato do backend.
+ */
+const chaveCarrinho = (c: CarrinhoAB) =>
+  c.chave || (c.source === 'woocommerce' ? `wc:${c.id}` : `plugin:${c.id}`);
+
+/**
+ * Rede de segurança pros botões do modal: se o GET das baixas falhar, a tela
+ * ainda deixa registrar. Quem MANDA na validação é o backend
+ * (`common/carrinho-abandonado`) — esta lista é só o rótulo.
+ */
+const MOTIVOS_FALLBACK: MotivoBaixa[] = [
+  { slug: 'preco', label: 'Achou caro' },
+  { slug: 'frete', label: 'Frete caro ou demorado' },
+  { slug: 'sem_tamanho', label: 'Não tinha o tamanho/cor' },
+  { slug: 'so_pesquisando', label: 'Só estava pesquisando' },
+  { slug: 'comprou_loja', label: 'Vai comprar na loja física' },
+  { slug: 'comprou_fora', label: 'Comprou em outro lugar' },
+  { slug: 'pagamento', label: 'Problema no pagamento' },
+  { slug: 'sem_resposta', label: 'Não respondeu' },
+  { slug: 'desistiu', label: 'Desistiu / adiou a compra' },
+  { slug: 'contato_errado', label: 'Telefone errado / não é ela' },
+  { slug: 'outro', label: 'Outro (explique)' },
+];
 
 /**
  * QUEM JÁ CHAMOU A CLIENTE (dono, 24/08).
@@ -2169,7 +2226,18 @@ function CarrinhosTab() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [dias, setDias] = useState(7);
-  const [statusF, setStatusF] = useState<'abandoned' | 'completed' | 'all'>('abandoned');
+  const [statusF, setStatusF] = useState<'abandoned' | 'completed' | 'naoconvertido' | 'all'>('abandoned');
+  /** chave da linha → baixa. Ver o type `Desfecho`. */
+  const [desfechos, setDesfechos] = useState<Record<string, Desfecho>>({});
+  const [motivos, setMotivos] = useState<MotivoBaixa[]>(MOTIVOS_FALLBACK);
+  // Carrinho aberto no modal de baixa (null = modal fechado).
+  const [baixando, setBaixando] = useState<CarrinhoAB | null>(null);
+  const [motivoSel, setMotivoSel] = useState('');
+  const [obsBaixa, setObsBaixa] = useState('');
+  const [salvandoBaixa, setSalvandoBaixa] = useState(false);
+  const [baixaErro, setBaixaErro] = useState<string | null>(null);
+  /** Quantos ainda estão dentro da espera de 1h — a tela DIZ, não esconde calada. */
+  const [noForno, setNoForno] = useState(0);
   const [search, setSearch] = useState('');
   const [showDiag, setShowDiag] = useState(false);
   const [diag, setDiag] = useState<any>(null);
@@ -2296,7 +2364,10 @@ function CarrinhosTab() {
     setErro(null);
     try {
       const since = new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
-      const sParam = statusF === 'all' ? '' : statusF;
+      // O plugin do WP não conhece "não convertido" — pra ele essas linhas
+      // continuam sendo abandono; quem separa é o mapa de baixas, no cliente.
+      const sParam =
+        statusF === 'all' ? '' : statusF === 'naoconvertido' ? 'abandoned' : statusF;
       const qsList = new URLSearchParams({ since, per_page: '200' });
       if (sParam) qsList.set('status', sParam);
       if (search) qsList.set('search', search);
@@ -2341,7 +2412,7 @@ function CarrinhosTab() {
       const qsEcom = new URLSearchParams({ since, status: 'all', _t: String(Date.now()) });
       if (search) qsEcom.set('search', search);
 
-      const [listResp, statsResp, ecomResp, atendResp] = await Promise.all([
+      const [listResp, statsResp, ecomResp, atendResp, baixaResp] = await Promise.all([
         fetchAllCarts().catch((e) => ({ ok: false, error: e?.message } as ListResp)),
         api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
         api<ListResp>(`/abandoned-carts/ecommerce/list?${qsEcom}`).catch(() => null),
@@ -2349,6 +2420,9 @@ function CarrinhosTab() {
         // propósito: a marca é por TELEFONE e vale nas quatro fontes que a tela
         // junta — a mesma cliente costuma aparecer em mais de uma linha.
         api<AtendResp>(`/abandoned-carts/atendimento?_t=${Date.now()}`).catch(() => null),
+        // As baixas do período. Lista separada pelo mesmo motivo da de
+        // atendimento: a marca vale nas QUATRO fontes que a tela junta.
+        api<DesfechoResp>(`/abandoned-carts/desfecho?since=${since}&_t=${Date.now()}`).catch(() => null),
       ]);
       setLastFetch(new Date());
 
@@ -2358,6 +2432,14 @@ function CarrinhosTab() {
       }
       setAtendimentos(mapaAtend);
 
+      const mapaBaixa: Record<string, Desfecho> = {};
+      for (const d of baixaResp?.itens ?? []) {
+        if (d?.chave) mapaBaixa[d.chave] = d;
+      }
+      setDesfechos(mapaBaixa);
+      if (baixaResp?.motivos?.length) setMotivos(baixaResp.motivos);
+      setNoForno(Number((ecomResp as any)?.stats?.no_forno ?? 0));
+
       const ecomAll: CarrinhoAB[] = Array.isArray((ecomResp as any)?.items)
         ? ((ecomResp as any).items as CarrinhoAB[])
         : [];
@@ -2365,6 +2447,7 @@ function CarrinhosTab() {
         const st = String(c.order_status || '');
         if (statusF === 'abandoned') return st === 'abandoned';
         if (statusF === 'completed') return st === 'recovered';
+        if (statusF === 'naoconvertido') return st === 'nao_convertido';
         return true;
       });
 
@@ -2445,6 +2528,9 @@ function CarrinhosTab() {
       // antigo). Com ecommerce presente, recalcula a taxa em cima do total.
       const somaVal = (list: CarrinhoAB[]) =>
         list.reduce((s, c) => s + Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0), 0);
+      // `nao_convertido` NÃO entra no card de abandonados: ele é a fila que
+      // ainda dá pra trabalhar. Contar baixa ali faria o número chamar a
+      // operadora pra um caso que já foi resolvido.
       const ecomAb = ecomAll.filter((c) => c.order_status === 'abandoned');
       const ecomRec = ecomAll.filter((c) => c.order_status === 'recovered');
       const abTot = pick(raw.abandoned, by.abandoned?.qty, by.abandoned?.count) + ecomAb.length;
@@ -2531,10 +2617,100 @@ function CarrinhosTab() {
     }
   }
 
+  /**
+   * DÁ BAIXA — "ela não vai fechar, e este é o motivo" (dono, 25/08).
+   *
+   * Abre o modal com a lista fechada de motivos. Lista fechada porque é o que
+   * vira relatório: "achou caro", "tava caro" e "preço" digitados à mão viram
+   * três coisas diferentes no fim do mês e não somam.
+   */
+  function abrirBaixa(c: CarrinhoAB) {
+    setBaixando(c);
+    setMotivoSel('');
+    setObsBaixa('');
+    setBaixaErro(null);
+  }
+
+  async function confirmarBaixa() {
+    if (!baixando || !motivoSel) return;
+    const chave = chaveCarrinho(baixando);
+    setSalvandoBaixa(true);
+    setBaixaErro(null);
+    try {
+      const r = await api<{ ok?: boolean; error?: string; desfecho?: Desfecho }>(
+        '/abandoned-carts/desfecho',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            chave,
+            telefone: baixando.phone || '',
+            nome: `${baixando.first_name || ''} ${baixando.last_name || ''}`.trim(),
+            // Congela o valor: o carrinho de origem some (sessão morre, pedido
+            // expira) e sem isto não dá pra somar quanto o motivo PREÇO custou.
+            valor: Number(baixando.total ?? baixando.cart_total ?? baixando.cart_total_brl ?? 0),
+            motivo: motivoSel,
+            observacao: obsBaixa,
+          }),
+        },
+      );
+      if (!r?.ok) { setBaixaErro(r?.error || 'Não consegui registrar a baixa.'); return; }
+      const salvo: Desfecho = r.desfecho || {
+        chave, motivo: motivoSel, motivoLabel: motivoSel, por: 'você', observacao: obsBaixa || null,
+        em: new Date().toISOString(),
+      };
+      setDesfechos((prev) => ({ ...prev, [chave]: salvo }));
+      // ⚠️ O item do site novo carrega o próprio `desfecho` (o backend carimba
+      // na lista). Sem mexer nele, `baixaDe` continuaria lendo o valor velho no
+      // próximo render e a linha ficaria desencontrada com o mapa.
+      setItems((prev) => prev.map((i) => (chaveCarrinho(i) === chave
+        ? { ...i, desfecho: salvo, order_status: i.order_status === 'abandoned' ? 'nao_convertido' : i.order_status }
+        : i)));
+      // O backend apaga o atendimento junto: caso encerrado, telefone liberado.
+      // A tela reflete na hora — a colega ao lado não pode ver tag de um caso
+      // que já foi fechado.
+      const tel = soDigitosFone(baixando.phone);
+      if (tel) setAtendimentos((prev) => { const n = { ...prev }; delete n[tel]; return n; });
+      setBaixando(null);
+    } catch (e: any) {
+      setBaixaErro(e?.message || 'Não consegui registrar a baixa.');
+    } finally {
+      setSalvandoBaixa(false);
+    }
+  }
+
+  /** Desfaz a baixa: baixa errada tem que ter volta, senão ninguém dá a certa. */
+  async function voltarPraFila(c: CarrinhoAB) {
+    const chave = chaveCarrinho(c);
+    setDesfechos((prev) => { const n = { ...prev }; delete n[chave]; return n; });
+    // Mesma razão do `confirmarBaixa`: sem limpar o `desfecho` do item, a linha
+    // continuava "não convertida" na tela até o refresh de 60s — o clique
+    // parecia não ter feito nada, e a operadora clicava de novo.
+    setItems((prev) => prev.map((i) => (chaveCarrinho(i) === chave
+      ? { ...i, desfecho: null, order_status: i.order_status === 'nao_convertido' ? 'abandoned' : i.order_status }
+      : i)));
+    try {
+      await api('/abandoned-carts/desfecho/reabrir', {
+        method: 'POST',
+        body: JSON.stringify({ chave }),
+      });
+    } catch {
+      // Falhou: o próximo carregamento (60s) traz a baixa de volta sozinho.
+    }
+  }
+
   const fmt = (s: string | null | undefined) => s ? new Date(s + (typeof s === 'string' && s.endsWith('Z') ? '' : ' UTC')).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '-';
   const BRL = (v: number) => (v || 0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
 
+  /** A baixa desta linha — do próprio item (site novo) ou do mapa (outras origens). */
+  const baixaDe = (c: CarrinhoAB): Desfecho | null =>
+    c.desfecho || desfechos[chaveCarrinho(c)] || null;
+
   const filtered = items.filter((it) => {
+    // A baixa vale pras QUATRO fontes, e o backend só sabe carimbar as do site
+    // novo — por isso o corte é aqui, onde a lista já está junta.
+    const baixa = baixaDe(it);
+    if (statusF === 'abandoned' && baixa) return false;
+    if (statusF === 'naoconvertido' && !baixa) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     const nome = `${it.first_name || ''} ${it.last_name || ''}`.toLowerCase();
@@ -2544,6 +2720,7 @@ function CarrinhosTab() {
   // Safety-net: se o endpoint de stats vier sem os abandonados (formato divergente),
   // deriva dos próprios itens carregados — assim o card NUNCA fica 0 com lista cheia.
   const itensAbandonados = items.filter((c) => {
+    if (baixaDe(c)) return false; // baixa não é fila em aberto
     const st = String(c.order_status || c.status || 'abandoned').toLowerCase();
     return st === 'abandoned' || st === '';
   });
@@ -2608,12 +2785,13 @@ function CarrinhosTab() {
         <select value={statusF} onChange={(e) => setStatusF(e.target.value as any)} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white">
           <option value="abandoned">Abandonados</option>
           <option value="completed">Recuperados</option>
+          <option value="naoconvertido">Não convertidos</option>
           <option value="all">Todos</option>
         </select>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
         <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
-        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{ecomFill > 0 ? ` · ${ecomFill} do ecommerce` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
+        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{ecomFill > 0 ? ` · ${ecomFill} do ecommerce` : ''}{noForno > 0 ? ` · ${noForno} ainda no checkout (aparecem depois de 1h)` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
       </div>
 
       {warning && !erro && (
@@ -2645,12 +2823,15 @@ function CarrinhosTab() {
             // certa aqui é outra: "seu cartão foi recusado, quer tentar de novo
             // ou pagar no PIX?".
             const recusado = isEcom && c.pedido_status === 'payment_failed';
-            // Alguém da matriz já puxou conversa com ESTA cliente nas últimas 2h.
+            // Alguém da matriz já puxou conversa com ESTA cliente. Sem prazo
+            // desde 25/08 — quem tira a tag é a baixa, não o relógio.
             const atendida = atendimentos[soDigitosFone(c.phone)] || null;
+            // Já resolvida: "ela não vai fechar, e este é o motivo".
+            const baixa = baixaDe(c);
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
-              <div key={`${c.source || 'wp'}-${c.id}`} onClick={() => openCart(c)} className={`bg-white border-2 rounded-lg p-3 flex items-center gap-3 cursor-pointer hover:shadow-md hover:border-blue-400 transition ${isCompleted ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'}`}>
+              <div key={`${c.source || 'wp'}-${c.id}`} onClick={() => openCart(c)} className={`border-2 rounded-lg p-3 flex items-center gap-3 cursor-pointer hover:shadow-md hover:border-blue-400 transition ${isCompleted ? 'border-emerald-200 bg-emerald-50' : baixa ? 'border-slate-200 bg-slate-50 opacity-70' : 'bg-white border-slate-200'}`}>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-sm text-slate-800 truncate">
                     {nome}
@@ -2665,12 +2846,22 @@ function CarrinhosTab() {
                     {/* SÓLIDA de propósito: as outras tags dizem em que pé está o
                         pagamento; esta diz "não ligue pra esta, já tem gente" — e
                         precisa parar o olho de quem varre a lista. */}
-                    {atendida && (
+                    {atendida && !baixa && (
                       <span
                         className="ml-2 text-[10px] bg-indigo-600 text-white px-1.5 py-0.5 rounded font-bold uppercase"
-                        title={`${atendida.por} abriu a conversa com esta cliente${atendida.desde ? ` em ${fmt(atendida.desde)}` : ''}. A marca vale 2h — depois disso a linha volta pra fila.`}
+                        title={`${atendida.por} abriu a conversa com esta cliente${atendida.desde ? ` em ${fmt(atendida.desde)}` : ''}. A marca fica até alguém dar baixa no carrinho (ou a venda fechar) — não vence mais sozinha.`}
                       >
                         Em atendimento · {atendida.por}
+                      </span>
+                    )}
+                    {/* BAIXA: a linha continua visível (em "Não convertidos" e em
+                        "Todos") mas sai da fila de quem trabalha o abandono. */}
+                    {baixa && (
+                      <span
+                        className="ml-2 text-[10px] bg-slate-700 text-white px-1.5 py-0.5 rounded font-bold uppercase"
+                        title={`${baixa.por} deu baixa${baixa.em ? ` em ${fmt(baixa.em)}` : ''}${baixa.observacao ? ` — ${baixa.observacao}` : ''}`}
+                      >
+                        Não convertido · {baixa.motivoLabel}
                       </span>
                     )}
                   </div>
@@ -2689,8 +2880,28 @@ function CarrinhosTab() {
                     )}
                   </div>
                 </div>
-                <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(valor)}</div>
-                {!isCompleted && !c.unsubscribed && c.optin !== false && c.phone && (
+                <div className={`font-black tabular-nums text-lg whitespace-nowrap ${baixa ? 'text-slate-400 line-through' : 'text-rose-700'}`}>{BRL(valor)}</div>
+                {/* NÃO FECHOU — a saída ruim, que antes não existia. Discreto de
+                    propósito: o botão grande continua sendo o que dá dinheiro. */}
+                {!isCompleted && !baixa && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); abrirBaixa(c); }}
+                    title="Ela não vai fechar? Registre o motivo e tire da fila"
+                    className="px-3 py-2 rounded-lg border-2 border-slate-300 text-slate-600 hover:bg-slate-100 hover:border-slate-400 font-bold text-xs whitespace-nowrap"
+                  >
+                    Não fechou
+                  </button>
+                )}
+                {baixa && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); voltarPraFila(c); }}
+                    title={`Baixa por "${baixa.motivoLabel}"${baixa.por ? ` (${baixa.por})` : ''} — clique pra devolver esta cliente pra fila`}
+                    className="px-3 py-2 rounded-lg border-2 border-amber-400 text-amber-700 hover:bg-amber-50 font-bold text-xs whitespace-nowrap"
+                  >
+                    Voltar pra fila
+                  </button>
+                )}
+                {!isCompleted && !baixa && !c.unsubscribed && c.optin !== false && c.phone && (
                   // Já atendida: o botão sai do verde "pode ir" e vira contorno.
                   // Continua clicável de propósito — quem assumiu volta pra
                   // conversa por aqui, e a tag ao lado é que avisa a colega.
@@ -2709,6 +2920,81 @@ function CarrinhosTab() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── POR QUE ELA NÃO FECHOU ─────────────────────────────────────────
+          A saída ruim da fila, que até 25/08 não existia: só dava pra sair
+          vendendo. Quem ligava e ouvia "achei caro" não tinha onde registrar, a
+          linha continuava vermelha e a próxima colega ligava pra ouvir a mesma
+          coisa — alarme falso repetido, que mata a confiança na fila inteira.
+
+          Motivo é LISTA FECHADA porque é o que vira relatório: digitado à mão,
+          "achou caro"/"tava caro"/"preço" viram três coisas e não somam. */}
+      {baixando && (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-start justify-center p-4 overflow-y-auto" {...overlayClose(() => setBaixando(null))}>
+          <div className="bg-white rounded-2xl w-full max-w-lg my-10 overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 bg-slate-800 text-white flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="font-black text-lg">Por que ela não fechou?</h2>
+                <p className="text-[11px] opacity-90 truncate">
+                  {`${baixando.first_name || ''} ${baixando.last_name || ''}`.trim() || 'Cliente'}
+                  {' · '}
+                  {BRL(Number(baixando.total ?? baixando.cart_total ?? baixando.cart_total_brl ?? 0))}
+                </p>
+              </div>
+              <button onClick={() => setBaixando(null)} className="text-white hover:bg-white/20 rounded-lg w-8 h-8 flex items-center justify-center text-xl font-bold shrink-0">x</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {motivos.map((m) => (
+                  <button
+                    key={m.slug}
+                    type="button"
+                    onClick={() => setMotivoSel(m.slug)}
+                    className={`text-left px-3 py-2 rounded-lg border-2 text-sm font-bold transition ${
+                      motivoSel === m.slug
+                        ? 'border-slate-800 bg-slate-800 text-white'
+                        : 'border-slate-200 text-slate-700 hover:border-slate-400'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <div>
+                <label className="text-[11px] font-bold uppercase text-slate-500">
+                  O que ela disse{' '}
+                  {motivoSel === 'outro'
+                    ? <span className="text-rose-600">(obrigatório neste motivo)</span>
+                    : <span className="text-slate-400">(opcional)</span>}
+                </label>
+                <textarea
+                  value={obsBaixa}
+                  onChange={(e) => setObsBaixa(e.target.value)}
+                  rows={2}
+                  maxLength={400}
+                  placeholder="O caso em uma linha — é o que a próxima pessoa vai ler."
+                  className="w-full mt-1 px-3 py-2 border-2 rounded text-sm"
+                />
+              </div>
+              {baixaErro && <div className="text-xs font-bold text-rose-700">{baixaErro}</div>}
+              <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-2">
+                A cliente sai da fila de abandonados e o <b>atendimento é liberado</b>.
+                Errou? O botão <b>Voltar pra fila</b> na linha desfaz.
+              </div>
+            </div>
+            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex items-center gap-2">
+              <button onClick={() => setBaixando(null)} className="px-4 py-2 bg-white border-2 border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg font-bold text-sm">Cancelar</button>
+              <button
+                onClick={confirmarBaixa}
+                disabled={!motivoSel || salvandoBaixa || (motivoSel === 'outro' && obsBaixa.trim().length < 3)}
+                className="ml-auto px-4 py-2 bg-slate-800 hover:bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-bold text-sm"
+              >
+                {salvandoBaixa ? 'Registrando…' : 'Dar baixa — não convertido'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2859,8 +3145,19 @@ function CarrinhosTab() {
                 )}
 
               <section className="flex flex-wrap gap-2 pt-2 border-t border-slate-200">
-                {selected.phone && !selected.unsubscribed && (
+                {selected.phone && !selected.unsubscribed && !baixaDe(selected) && (
                   <button onClick={() => whatsapp(selected)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-sm">WhatsApp pra finalizar</button>
+                )}
+                {/* Quem abriu a ficha pra ver os itens é quem acabou de falar com
+                    ela — a saída ruim tem que estar aqui também, senão ela fecha
+                    o modal e a linha volta a parecer pendente. */}
+                {selected.order_status !== 'recovered' && !baixaDe(selected) && (
+                  <button
+                    onClick={() => { const c = selected; closeCart(); abrirBaixa(c); }}
+                    className="px-4 py-2 bg-white border-2 border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg font-bold text-sm"
+                  >
+                    Não fechou — dar baixa
+                  </button>
                 )}
                 {selected.email && (
                   <a href={`mailto:${selected.email}`} className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-bold text-sm">Email</a>

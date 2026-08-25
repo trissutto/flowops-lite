@@ -10577,6 +10577,12 @@ function CarrinhosAbandonadosModal({
   const { toast } = usePdvToast();
   type Carrinho = {
     id: number;
+    /**
+     * Chave ESTÁVEL da linha (`pedido:`/`contato:`), montada pelo backend. É
+     * por ela que se dá baixa — o `id` da linha de contato é sintético
+     * (970.000.000 + posição) e muda a cada carregamento.
+     */
+    chave: string;
     order_id?: number | null;
     order_number?: string | null;
     /**
@@ -10601,6 +10607,19 @@ function CarrinhosAbandonadosModal({
   const [erro, setErro] = useState<string | null>(null);
   const [importando, setImportando] = useState<number | null>(null);
   const [busca, setBusca] = useState('');
+  /**
+   * A BAIXA — "ela não vai fechar, e este é o motivo" (dono, 25/08).
+   *
+   * Fica aqui, e não só na retaguarda, porque quem OUVE o motivo é quem está no
+   * WhatsApp com a cliente. Sem isso a linha resolvida continuaria na fila e a
+   * próxima menina ligaria pra ouvir a mesma coisa.
+   */
+  type MotivoBaixa = { slug: string; label: string };
+  const [motivos, setMotivos] = useState<MotivoBaixa[]>([]);
+  const [baixando, setBaixando] = useState<Carrinho | null>(null);
+  const [motivoSel, setMotivoSel] = useState('');
+  const [obsBaixa, setObsBaixa] = useState('');
+  const [salvandoBaixa, setSalvandoBaixa] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -10620,6 +10639,13 @@ function CarrinhosAbandonadosModal({
       } finally {
         setCarregando(false);
       }
+      // Os motivos vêm do backend (`common/carrinho-abandonado`) pra não haver
+      // duas listas. Falhou? O botão de baixa some — melhor do que gravar um
+      // motivo que o relatório não conhece.
+      try {
+        const b = await api<{ motivos?: MotivoBaixa[] }>('/pdv/carrinhos-abandonados/baixas');
+        if (Array.isArray(b?.motivos)) setMotivos(b.motivos);
+      } catch { /* sem motivos: a lista continua servindo pra fechar venda */ }
     })();
   }, []);
 
@@ -10680,8 +10706,101 @@ function CarrinhosAbandonadosModal({
     }
   }
 
+  async function darBaixa() {
+    if (!baixando || !motivoSel) return;
+    setSalvandoBaixa(true);
+    try {
+      const r = await api<{ ok?: boolean; error?: string }>(
+        '/pdv/carrinhos-abandonados/desfecho',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            chave: baixando.chave,
+            telefone: baixando.phone || '',
+            nome: [baixando.first_name, baixando.last_name].filter(Boolean).join(' '),
+            valor: Number(baixando.cart_total || 0),
+            motivo: motivoSel,
+            observacao: obsBaixa,
+          }),
+        },
+      );
+      if (!r?.ok) { toast('error', 'Não deu pra dar baixa', r?.error || ''); return; }
+      // Sai da fila NA HORA: a menina precisa ver a lista encurtar, senão
+      // registra duas vezes achando que não pegou.
+      setItens((prev) => prev.filter((c) => c.chave !== baixando.chave));
+      toast('success', 'Baixa registrada', 'A cliente saiu da fila de carrinhos.');
+      setBaixando(null);
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, e?.message || h.hint);
+    } finally {
+      setSalvandoBaixa(false);
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-2 sm:p-4 overflow-y-auto" {...overlayClose(onClose)}>
+      {/* POR QUE ELA NÃO FECHOU — a saída ruim da fila. Sobrepõe a lista de
+          propósito: é uma decisão só, e voltar pra lista é o cancelar. */}
+      {baixando && (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-start justify-center p-2 sm:p-4 overflow-y-auto" {...overlayClose(() => setBaixando(null))}>
+          <div className="bg-white rounded-xl w-full max-w-md my-6" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-[#EDEAE1]">
+              <div className="font-black text-[#2B2B2B]">Por que ela não fechou?</div>
+              <div className="text-[11px] text-slate-500 truncate">
+                {[baixando.first_name, baixando.last_name].filter(Boolean).join(' ') || 'Cliente'}
+                {' · '}{brl(Number(baixando.cart_total || 0))}
+              </div>
+            </div>
+            <div className="p-4 space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {motivos.map((m) => (
+                  <button
+                    key={m.slug}
+                    type="button"
+                    onClick={() => setMotivoSel(m.slug)}
+                    className={`text-left px-3 py-2 rounded-lg border-2 text-sm font-bold transition ${
+                      motivoSel === m.slug
+                        ? 'border-[#B8912B] bg-[#FBF6E6] text-[#8C7325]'
+                        : 'border-[#EDEAE1] text-[#2B2B2B] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={obsBaixa}
+                onChange={(e) => setObsBaixa(e.target.value)}
+                rows={2}
+                maxLength={400}
+                placeholder={motivoSel === 'outro' ? 'Obrigatório neste motivo: o que aconteceu?' : 'O que ela disse (opcional)'}
+                className="w-full px-3 py-2 border-2 border-[#EDEAE1] rounded-lg text-sm"
+              />
+              <div className="text-[11px] text-slate-500">
+                Ela sai da fila de carrinhos e o atendimento é liberado. Pra desfazer, fale com a matriz.
+              </div>
+            </div>
+            <div className="p-4 border-t border-[#EDEAE1] flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBaixando(null)}
+                className="px-4 py-2 rounded-lg border-2 border-[#EDEAE1] text-[#2B2B2B] font-bold text-sm hover:bg-[#FAFAF7]"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                onClick={darBaixa}
+                disabled={!motivoSel || salvandoBaixa || (motivoSel === 'outro' && obsBaixa.trim().length < 3)}
+                className="ml-auto px-4 py-2 rounded-lg bg-[#2B2B2B] hover:bg-black disabled:opacity-40 text-white font-bold text-sm"
+              >
+                {salvandoBaixa ? 'Registrando…' : 'Dar baixa'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div
         className="bg-white rounded-xl w-full max-w-2xl my-4 max-h-[92vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -10741,6 +10860,19 @@ function CarrinhosAbandonadosModal({
                 <div className="font-black tabular-nums text-[#2E7D46]">
                   {brl(Number(c.cart_total || 0))}
                 </div>
+                {/* Discreto ao lado do botão que dá dinheiro — mas presente:
+                    sem ele a linha resolvida fica na fila pra sempre. */}
+                {motivos.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={importando !== null}
+                    onClick={() => { setBaixando(c); setMotivoSel(''); setObsBaixa(''); }}
+                    title="Ela não vai fechar? Registre o motivo e tire da fila"
+                    className="rounded-lg border-2 border-[#EDEAE1] hover:bg-[#FAFAF7] disabled:opacity-50 px-3 py-2 text-sm font-bold text-slate-600"
+                  >
+                    Não fechou
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={importando !== null}

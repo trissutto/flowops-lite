@@ -348,18 +348,66 @@ export class PdvController {
     this.requireRole(req);
     const role = req?.user?.role;
     const storeCode = String(req?.user?.storeCode ?? '').trim();
-    // Admin da matriz passa (usa o PDV em modo master); loja só se for a canal.
-    if (role !== 'admin' && storeCode !== PdvController.CARRINHOS_STORE_CODE) {
-      throw new ForbiddenException(
-        'Carrinhos do site são da loja SITE — sua loja não trabalha esses contatos.',
-      );
-    }
+    // Admin da matriz passa (usa o PDV em modo master); loja só se trabalhar a fila.
+    PdvController.exigirLojaDeCarrinho(role, storeCode);
     return this.svc.listarCarrinhosAbandonados(status || 'abandoned');
   }
 
-  /** Loja-canal SITE — a única loja (fora da matriz) que trabalha carrinho
-   *  abandonado. Mesmo código do `CARRINHOS_STORE_CODE` do PDV no front. */
+  /**
+   * POST /pdv/carrinhos-abandonados/desfecho { chave, motivo, observacao?, ... }
+   *
+   * DÁ BAIXA: "ela não vai fechar, e este é o motivo" (dono, 25/08).
+   *
+   * Fica no PDV, e não só na retaguarda, porque quem ouve o motivo é quem está
+   * no WhatsApp com a cliente. Deixar a baixa só pra matriz faria a linha
+   * continuar na fila da loja depois de resolvida — e a próxima menina ligaria
+   * pra ouvir a mesma coisa.
+   */
+  @Post('carrinhos-abandonados/desfecho')
+  darBaixaCarrinho(@Req() req: any, @Body() body: any) {
+    this.requireRole(req);
+    PdvController.exigirLojaDeCarrinho(req?.user?.role, String(req?.user?.storeCode ?? '').trim());
+    return this.svc.marcarCarrinhoNaoConvertido(body || {}, req?.user);
+  }
+
+  /** Desfaz a baixa — baixa errada tem que ter volta. */
+  @Post('carrinhos-abandonados/desfecho/reabrir')
+  reabrirCarrinhoBaixa(@Req() req: any, @Body() body: any) {
+    this.requireRole(req);
+    PdvController.exigirLojaDeCarrinho(req?.user?.role, String(req?.user?.storeCode ?? '').trim());
+    return this.svc.reabrirCarrinhoBaixa(String(body?.chave ?? ''));
+  }
+
+  /** As baixas do período + a lista de motivos (o modal do PDV monta os botões). */
+  @Get('carrinhos-abandonados/baixas')
+  baixasCarrinho(@Req() req: any, @Query('since') since?: string) {
+    this.requireRole(req);
+    PdvController.exigirLojaDeCarrinho(req?.user?.role, String(req?.user?.storeCode ?? '').trim());
+    return this.svc.listarBaixasCarrinho(since);
+  }
+
+  /**
+   * Quem trabalha a fila de carrinho do site.
+   *
+   * Começou só na loja-canal SITE (13). Em 25/08 o dono abriu pra MOEMA (15) e
+   * ITANHAÉM (01): são as lojas que atendem o WhatsApp do site junto com a
+   * matriz. Continua sendo lista curta, e não "todas as lojas" — carrinho do
+   * site não é de ninguém em particular, e loja que não trabalha essa fila só
+   * veria uma tela de nomes que não conhece. Espelha o
+   * `CARRINHOS_STORE_CODES` do PDV no front.
+   */
+  private static readonly CARRINHOS_STORE_CODES = ['13', '15', '01'];
+
+  /** Loja-canal SITE — o default de quem importa carrinho SEM loja no token. */
   private static readonly CARRINHOS_STORE_CODE = '13';
+
+  private static exigirLojaDeCarrinho(role: string, storeCode: string) {
+    if (role === 'admin') return;
+    if (PdvController.CARRINHOS_STORE_CODES.includes(storeCode)) return;
+    throw new ForbiddenException(
+      'Carrinhos do site são das lojas SITE, Moema e Itanhaém — sua loja não trabalha esses contatos.',
+    );
+  }
 
   /**
    * POST /pdv/sales/importar-carrinho { wcOrderId, storeCode? }

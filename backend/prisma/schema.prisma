@@ -6108,8 +6108,13 @@ model CheckoutRecovery {
 ///    duas tentativas). Quem foi chamada foi a PESSOA: a marca tem que valer em
 ///    todas as linhas dela, senão a segunda linha convida pro mesmo erro.
 ///
-/// Vence sozinha em 2h (decisão do dono): sem prazo, a fila inteira vira "em
-/// atendimento" e ninguém liga pra ninguém.
+/// NÃO VENCE MAIS POR TEMPO (dono, 25/08/2026). Até então a marca sumia sozinha
+/// em 2h e a linha voltava pra fila — mas atendimento de carrinho não acaba no
+/// relógio: a cliente responde de noite, no dia seguinte, quando o marido vê o
+/// preço. A tag sumindo no meio disso convidava a colega a mandar a segunda
+/// mensagem justamente no caso que ainda estava vivo. Quem tira a marca agora é
+/// o DESFECHO: converteu (fechou no PDV) ou a operadora deu baixa como não
+/// convertido — ver `CarrinhoDesfecho`.
 model CarrinhoAtendimento {
   /// Só dígitos, sem o 55 — mesma normalização de `CheckoutRecovery.telefone`.
   telefone     String   @id @db.VarChar(11)
@@ -6126,6 +6131,48 @@ model CarrinhoAtendimento {
 
   @@index([assumidoEm])
   @@map("carrinho_atendimento")
+}
+
+/// BAIXA DO CARRINHO — "ela não vai fechar, e este é o motivo" (dono, 25/08/2026).
+///
+/// A fila de carrinhos só tinha uma saída boa (a cliente paga) e nenhuma saída
+/// ruim. Quem ligava, ouvia "achei caro" e desligava não tinha onde registrar:
+/// a linha continuava lá, vermelha, e a próxima operadora ligava de novo pra
+/// ouvir a mesma coisa. Alarme falso repetido mata a confiança na fila inteira —
+/// a mesma regra da fila de tarefas da loja.
+///
+/// A chave é a LINHA (`chave`), não o telefone como no `CarrinhoAtendimento`:
+/// baixa é sobre AQUELE carrinho. A mesma cliente que abandona de novo semana
+/// que vem tem que voltar pra fila — quem foi descartado foi o carrinho, não a
+/// pessoa. Formato: `pedido:<wcOrderId>` · `contato:<CheckoutRecovery.id>` ·
+/// `wc:<id>` · `plugin:<id>` (o backend emite a chave junto de cada linha, pra
+/// tela não precisar remontar a regra).
+model CarrinhoDesfecho {
+  id          String   @id @default(uuid())
+  chave       String   @unique @db.VarChar(80)
+  /// Só dígitos, sem o 55 — é por ele que a baixa também libera o atendimento.
+  telefone    String?  @db.VarChar(11)
+  nomeCliente String?  @map("nome_cliente") @db.VarChar(120)
+  /// Quanto se perdeu nesta linha, congelado no momento da baixa: o carrinho de
+  /// origem some (sessão morre, pedido expira) e sem isto não dá pra somar
+  /// "quanto o motivo PREÇO custou no mês".
+  valor       Decimal? @db.Decimal(12, 2)
+  /// Slug do motivo (ver MOTIVOS_BAIXA no service). Curto de propósito: é o que
+  /// vira relatório. O texto livre vive em `observacao`.
+  motivo      String   @db.VarChar(40)
+  observacao  String?  @db.VarChar(400)
+  usuarioId   String?  @map("usuario_id")
+  usuarioNome String   @map("usuario_nome") @db.VarChar(120)
+  criadoEm    DateTime @default(now()) @map("criado_em")
+  createdAt   DateTime @default(now()) @map("created_at")
+  /// `@default(now())` junto do `@updatedAt`: coluna NOT NULL sem default
+  /// derruba o `prisma db push` do start:prod — e o deploy falha calado.
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([criadoEm])
+  @@index([motivo])
+  @@index([telefone])
+  @@map("carrinho_desfecho")
 }
 
 /// BASE DE MARKETING PRÓPRIA (dono, 14/08/2026).

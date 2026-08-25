@@ -21,6 +21,15 @@ import { PedidoOnlineService } from './pedido-online.service';
 import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
+import {
+  baixasPorChave,
+  carrinhoTetoNascimento,
+  chaveCarrinhoContato,
+  chaveCarrinhoPedido,
+  listarBaixas,
+  reabrirCarrinhoBaixado,
+  registrarBaixaCarrinho,
+} from '../common/carrinho-abandonado';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -51,6 +60,10 @@ import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 type CarrinhoDoPdv = {
   /** ⚠️ Sintético (970.000.000 + posição) nas linhas de contato — só `key` de tela. */
   id: number;
+  /** Chave ESTÁVEL da linha (`pedido:`/`contato:`) — é por ela que se dá baixa. */
+  chave: string;
+  /** Nascimento da linha: é sobre ele que corre a espera de 1h. */
+  criado_em: string | null;
   order_id: number | null;
   order_number: string | null;
   recovery_id?: string;
@@ -301,8 +314,10 @@ export class PdvService {
     } else if (status !== 'all') {
       where.paidAt = null;
       where.status = { not: 'cancelled' };
-      const esperaMin = Number(process.env.PIX_RESGATE_MIN) || 30;
-      where.createdAt = { lte: new Date(Date.now() - esperaMin * 60_000) };
+      // A espera vem de `common/carrinho-abandonado` — a MESMA da retaguarda.
+      // Era 30min aqui (`PIX_RESGATE_MIN`) e efetivamente zero lá; o dono viu
+      // carrinho de 14 minutos na tela e mandou subir pra 1h (25/08).
+      where.createdAt = { lte: carrinhoTetoNascimento() };
       // Cartão em análise de antifraude NÃO é abandono: a cliente já pagou e
       // está esperando a aprovação. Mesma regra da lista da retaguarda.
       where.NOT = [{ paymentInfo: { contains: '"cartaoEmAnalise":true' } }];
@@ -331,6 +346,8 @@ export class PdvService {
       const sp = nome.indexOf(' ');
       return {
         id: Number(o.wcOrderId),
+        chave: chaveCarrinhoPedido(o.wcOrderId),
+        criado_em: o.createdAt ? o.createdAt.toISOString() : null,
         order_id: Number(o.wcOrderId),
         order_number: o.wcOrderNumber ?? null,
         first_name: sp > 0 ? nome.slice(0, sp) : nome,
@@ -351,7 +368,24 @@ export class PdvService {
     // o que a loja está trabalhando no WhatsApp agora.
     items.unshift(...contatos);
 
-    return { items, total: items.length };
+    /**
+     * QUEM JÁ TEVE BAIXA SAI DA FILA (dono, 25/08).
+     *
+     * A operadora ligou, ouviu "achei caro" e registrou o motivo. Manter a
+     * linha aqui faz a próxima menina ligar pra ouvir a mesma coisa — alarme
+     * falso repetido, que é o que mata a confiança na fila inteira.
+     *
+     * Mesma leitura da retaguarda (`common/carrinho-abandonado`): as duas
+     * telas trabalham a MESMA fila e não podem discordar sobre quem está nela.
+     */
+    const baixas = await baixasPorChave(
+      this.prisma as any,
+      items.map((i) => i.chave),
+      (m) => this.logger.warn(m),
+    );
+    const abertos = baixas.size ? items.filter((i) => !baixas.has(i.chave)) : items;
+
+    return { items: abertos, total: abertos.length };
   }
 
   /**
@@ -370,7 +404,22 @@ export class PdvService {
   ): Promise<CarrinhoDoPdv[]> {
     const where: any = {};
     if (status === 'recovered') where.status = 'converted';
-    else if (status !== 'all') where.status = 'active';
+    else if (status !== 'all') {
+      where.status = 'active';
+      /**
+       * A ESPERA DE 1H TAMBÉM VALE AQUI — e é justamente aqui que ela faltava.
+       *
+       * A captura grava no primeiro campo preenchido do checkout: a linha
+       * nascia junto com a digitação do telefone e já aparecia como "carrinho
+       * abandonado", com botão de WhatsApp, enquanto a cliente ainda estava na
+       * tela de pagamento (o que o dono viu em 25/08 às 11:55).
+       *
+       * Corta por `createdAt` (início da inserção dos dados), não por
+       * `updatedAt`: este último sobe a cada tecla e adiaria o carrinho pra
+       * sempre enquanto ela mexesse na sacola.
+       */
+      where.createdAt = { lte: carrinhoTetoNascimento() };
+    }
 
     const capturas: any[] = await (this.prisma as any).checkoutRecovery.findMany({
       where,
@@ -421,6 +470,8 @@ export class PdvService {
         const itens = Array.isArray(r.items) ? r.items : [];
         return {
           id: 970_000_000 + index,
+          chave: chaveCarrinhoContato(r.id),
+          criado_em: r.createdAt?.toISOString?.() ?? null,
           recovery_id: r.id,
           order_id: null,
           order_number: null,
@@ -438,6 +489,27 @@ export class PdvService {
           source: 'ecommerce-contact' as const,
         };
       });
+  }
+
+  /**
+   * BAIXA DO CARRINHO PELO PDV — a loja que atende é quem ouve o motivo.
+   *
+   * Mesma função da retaguarda (`common/carrinho-abandonado`), pra não haver
+   * duas réguas do que é "não convertido". Quem pode chamar está travado no
+   * controller, na mesma lista de lojas que enxerga a fila.
+   */
+  async marcarCarrinhoNaoConvertido(body: any, user: any) {
+    return registrarBaixaCarrinho(this.prisma as any, body, user, (m) => this.logger.warn(m));
+  }
+
+  /** Desfaz a baixa — a linha volta pra fila. Baixa errada tem que ter volta. */
+  async reabrirCarrinhoBaixa(chave: string) {
+    return reabrirCarrinhoBaixado(this.prisma as any, chave);
+  }
+
+  /** Os motivos + as baixas do período, pro modal do PDV mostrar e desfazer. */
+  async listarBaixasCarrinho(since?: string) {
+    return listarBaixas(this.prisma as any, since, (m) => this.logger.warn(m));
   }
 
   /**

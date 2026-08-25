@@ -138,6 +138,32 @@ export class AbandonedCartsController {
     return this.service.assumirAtendimento(String(body?.telefone ?? ''), request?.user);
   }
 
+  /**
+   * BAIXAS — carrinhos que a operadora já resolveu como NÃO CONVERTIDO.
+   *
+   * Mesma razão do `atendimento` acima pra estar aqui em cima: o Nest casa por
+   * ordem de declaração e `desfecho` cairia no ParseIntPipe do `:id`.
+   *
+   * Vem em lista separada porque a marca vale pra QUALQUER uma das quatro
+   * fontes que a tela junta, e a chave é a linha (`pedido:`/`contato:`/...).
+   */
+  @Get('desfecho')
+  desfechos(@Query('since') since?: string) {
+    return this.service.desfechos(since);
+  }
+
+  /** Dá baixa: registra o motivo e tira a linha da fila. */
+  @Post('desfecho')
+  marcarNaoConvertido(@Body() body: any, @Req() request: any) {
+    return this.service.marcarNaoConvertido(body || {}, request?.user);
+  }
+
+  /** Desfaz a baixa — baixa errada tem que ter volta. */
+  @Post('desfecho/reabrir')
+  reabrirCarrinho(@Body() body: any) {
+    return this.service.reabrirCarrinho(String(body?.chave ?? ''));
+  }
+
   /** Stats agregadas via fallback WC. */
   @Get('wc-pending/stats')
   wcPendingStats(
