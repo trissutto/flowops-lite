@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CorreiosService } from '../correios/correios.service';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
+import { caixaDoSite } from '../common/caixa-site';
 
 /**
  * tracking.service.ts — status de entrega do objeto, em cascata (18/08).
@@ -275,6 +276,128 @@ export class TrackingService {
       fetchedAt: new Date().toISOString(),
       provider,
     };
+  }
+
+  /**
+   * "QUANTO CUSTA ESSE ENVIO HOJE" — pra tela do pedido conferir o frete
+   * cobrado contra o que o transporte cobra.
+   *
+   * 🔴 COMPARAR COM O PROVEDOR ERRADO É PIOR QUE NÃO COMPARAR (25/08). A
+   * primeira versão cotava SEMPRE nos Correios, saindo do CEP do env
+   * (Itanhaém). Num pedido real — etiqueta do **Mais Envios**, postada em
+   * **Vinhedo** — a tela acusou "frete no prejuízo: R$ 9,01" comparando os
+   * R$ 9,99 cobrados com R$ 19,00 de uma cotação que não tinha nada a ver com
+   * o envio: contrato diferente (o Mais Envios revende MAIS BARATO que o
+   * balcão) e origem a 300 km de onde a caixa saiu. Alarme falso mata a
+   * confiança na tela inteira — vale aqui como vale na fila da loja.
+   *
+   * Então: cota em QUEM emitiu a etiqueta, saindo do CEP da LOJA que postou.
+   * Quando não dá pra saber a origem, a cotação continua aparecendo como
+   * referência, mas SEM o veredito de prejuízo (`comparavel: false`).
+   */
+  async cotarFrete(input: {
+    cepDestino: string;
+    pecas?: number;
+    /** Loja que postou (code) — o CEP de origem sai dela. */
+    lojaCode?: string | null;
+    /** Transportadora do pedido ("Mais Envios SEDEX", "Correios PAC"…). */
+    carrier?: string | null;
+    /** Código do objeto — desempata o provedor pelo cache do rastreio. */
+    code?: string | null;
+  }): Promise<{
+    provedor: 'correios' | 'maisenvios';
+    motivo: string;
+    cepOrigem: string | null;
+    lojaCode: string | null;
+    lojaNome: string | null;
+    origemPadrao: boolean;
+    comparavel: boolean;
+    cepDestino: string;
+    pecas: number;
+    pesoGramas: number | null;
+    opcoes: Array<{ servico: string; codigo: string; precoReais: number | null; prazoDias: number | null; erro?: string }>;
+    erro?: string;
+  }> {
+    const cepDestino = String(input.cepDestino || '').replace(/\D/g, '');
+    if (cepDestino.length !== 8) throw new BadRequestException('CEP de destino inválido (8 dígitos).');
+    const pecas = Math.min(50, Math.max(1, Math.round(Number(input.pecas) || 1)));
+    const caixa = caixaDoSite(pecas);
+
+    // 1) QUEM levou. O carrier do pedido é o que a loja escolheu na hora de
+    //    gerar a etiqueta; o cache do rastreio é a segunda opinião (quem
+    //    respondeu a consulta: objeto do Mais Envios volta SRO-009 no SRO).
+    const carrier = String(input.carrier || '').toLowerCase();
+    let provedor: 'correios' | 'maisenvios' = 'correios';
+    let motivo = 'contrato próprio';
+    if (/mais\s*envios|maisenvios/.test(carrier)) {
+      provedor = 'maisenvios';
+      motivo = 'transportadora do pedido';
+    } else if (input.code) {
+      const cache: any = await (this.prisma as any).rastreioObjeto
+        .findUnique({ where: { codigo: String(input.code).trim().toUpperCase() }, select: { provedor: true } })
+        .catch(() => null);
+      if (cache?.provedor === 'maisenvios') {
+        provedor = 'maisenvios';
+        motivo = 'foi quem respondeu o rastreio';
+      }
+    }
+
+    // 2) DE ONDE saiu. Cada loja posta do CEP dela.
+    let cepOrigem: string | null = null;
+    let lojaNome: string | null = null;
+    const lojaCode = String(input.lojaCode || '').trim() || null;
+    if (lojaCode) {
+      const loja = await this.prisma.store
+        .findUnique({ where: { code: lojaCode }, select: { name: true, cep: true } })
+        .catch(() => null);
+      if (loja) {
+        lojaNome = loja.name;
+        const cep = String(loja.cep || '').replace(/\D/g, '');
+        if (cep.length === 8) cepOrigem = cep;
+      }
+    }
+    const origemPadrao = !cepOrigem;
+
+    const vazio = {
+      provedor, motivo, cepOrigem, lojaCode, lojaNome, origemPadrao,
+      comparavel: false, cepDestino, pecas, pesoGramas: caixa.pesoGramas,
+      opcoes: [] as Array<{ servico: string; codigo: string; precoReais: number | null; prazoDias: number | null; erro?: string }>,
+    };
+
+    try {
+      const r: any =
+        provedor === 'maisenvios'
+          ? await this.maisEnvios.calcularFrete({
+              cepDestino, cepOrigem: cepOrigem ?? undefined,
+              pesoGramas: caixa.pesoGramas, comprimento: caixa.comprimento,
+              largura: caixa.largura, altura: caixa.altura,
+            })
+          : await this.correios.calcularFrete({
+              cepDestino, cepOrigem: cepOrigem ?? undefined,
+              pesoGramas: caixa.pesoGramas, comprimento: caixa.comprimento,
+              largura: caixa.largura, altura: caixa.altura,
+            });
+      const opcoes = (r?.opcoes ?? []).map((o: any) => ({
+        servico: o.servico, codigo: o.codigo,
+        precoReais: o.precoReais ?? null, prazoDias: o.prazoDias ?? null,
+        ...(o.erro ? { erro: o.erro } : {}),
+      }));
+      // O provedor devolve de qual CEP ele cotou (`cepOrigem` nos Correios,
+      // `source` no Mais Envios) — é o que a tela mostra quando a loja não
+      // veio e a cotação caiu no padrão.
+      const cepUsado =
+        cepOrigem || String(r?.cepOrigem ?? r?.source ?? '').replace(/\D/g, '') || null;
+      return {
+        ...vazio,
+        cepOrigem: cepUsado,
+        opcoes,
+        // Veredito de prejuízo só quando os dois lados falam do MESMO envio:
+        // provedor da etiqueta e CEP da loja que postou.
+        comparavel: !origemPadrao && opcoes.some((o: any) => o.precoReais != null),
+      };
+    } catch (e: any) {
+      return { ...vazio, erro: e?.message || 'falha na cotação' };
+    }
   }
 
   /**

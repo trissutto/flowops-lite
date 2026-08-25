@@ -111,13 +111,19 @@ export class CorreiosService {
    */
   async calcularFrete(input: {
     cepDestino: string;
+    /**
+     * CEP de ORIGEM. Cada loja posta do CEP dela e o preço muda com a
+     * distância: cotar Itanhaém pra um objeto que saiu de Vinhedo devolve um
+     * numero que nao tem nada a ver com o envio. Sem isto, cai no env.
+     */
+    cepOrigem?: string;
     pesoGramas?: number;
     comprimento?: number;
     largura?: number;
     altura?: number;
   }) {
     const cepDestino = String(input.cepDestino || '').replace(/\D/g, '');
-    const cepOrigem = this.auth.cepOrigem;
+    const cepOrigem = String(input.cepOrigem || '').replace(/\D/g, '') || this.auth.cepOrigem;
     if (cepDestino.length !== 8) throw new BadRequestException('CEP destino inválido (8 dígitos).');
     if (cepOrigem.length !== 8) throw new BadRequestException('CEP de origem não configurado (CORREIOS_CEP_ORIGEM).');
 

@@ -17,9 +17,11 @@
  *     ESTE objeto. Campo que o provedor não mandou não aparece — não existe
  *     estimativa maquiada de dado;
  *   - a linha do dinheiro compara o frete que a cliente PAGOU (dado do pedido)
- *     com o preço que os Correios cobram HOJE por esse trajeto (cotação ao
- *     vivo, `GET /correios/frete`). São coisas diferentes e a tela diz qual é
- *     qual: a cotação de hoje não é a fatura daquele envio.
+ *     com o preço que o TRANSPORTE DAQUELA ETIQUETA cobra HOJE pelo mesmo
+ *     trajeto (`GET /tracking/cotacao` — Correios ou Mais Envios, saindo do
+ *     CEP da loja que postou). São coisas diferentes e a tela diz qual é qual:
+ *     a cotação de hoje não é a fatura daquele envio, e o veredito de prejuízo
+ *     só aparece quando provedor e origem batem com o envio de verdade.
  *
  * Render states:
  *   - Sem código → nada (retorna null)
@@ -67,10 +69,21 @@ type FreteOpcao = {
 };
 
 type FreteResp = {
-  cepOrigem: string;
+  /** Quem emitiu a etiqueta — e portanto quem foi cotado. */
+  provedor: 'correios' | 'maisenvios';
+  motivo: string;
+  cepOrigem: string | null;
+  lojaCode: string | null;
+  lojaNome: string | null;
+  /** true = não deu pra saber de qual loja saiu; cotou do CEP padrão. */
+  origemPadrao: boolean;
+  /** true = provedor E origem batem com o envio — só aí cabe veredito. */
+  comparavel: boolean;
   cepDestino: string;
-  pesoGramas: number;
+  pecas: number;
+  pesoGramas: number | null;
   opcoes: FreteOpcao[];
+  erro?: string;
 };
 
 interface Props {
@@ -81,13 +94,19 @@ interface Props {
   /** Compact = esconde eventos antigos, só mostra último status + botão expandir. */
   compact?: boolean;
   /**
-   * CEP de destino do pedido. Com ele o card cota preço+prazo nos Correios —
-   * é o "quanto custa e quanto demora" desse trajeto. Sem CEP a linha da
-   * cotação some (não há o que cotar).
+   * CEP de destino do pedido. Com ele o card cota preço+prazo NO PROVEDOR QUE
+   * LEVOU — é o "quanto custa e quanto demora" desse trajeto. Sem CEP a linha
+   * da cotação some (não há o que cotar).
    */
   cepDestino?: string | null;
   /** Nº de peças da caixa — a MESMA regra do checkout (250 g/peça). */
   pecas?: number;
+  /**
+   * Loja que POSTOU (code). Define o CEP de origem da cotação: cada loja posta
+   * do CEP dela e o preço muda com a distância. Sem ela a cotação sai do CEP
+   * padrão e vira só referência (sem veredito de prejuízo).
+   */
+  lojaCode?: string | null;
   /** Frete que a cliente pagou, em reais (linha de frete do pedido). */
   fretePago?: number | null;
   /** Método pago ("PAC", "SEDEX (Correios)"…) — casa a cotação com o serviço certo. */
@@ -171,6 +190,7 @@ export default function TrackingTimeline({
   compact = false,
   cepDestino,
   pecas,
+  lojaCode,
   fretePago,
   metodoPago,
 }: Props) {
@@ -209,14 +229,21 @@ export default function TrackingTimeline({
     setFreteLoading(true);
     setFreteErr(null);
     try {
-      const qs = `?cep=${cep}${pecas ? `&pecas=${Math.max(1, Math.round(pecas))}` : ''}`;
-      setFrete(await api<FreteResp>(`/correios/frete${qs}`));
+      // Quem cota e de onde é decisão do BACKEND (ele conhece o CEP da loja e
+      // sabe qual provedor emitiu a etiqueta) — a tela só manda o contexto.
+      const qs =
+        `?cepDestino=${cep}` +
+        `&pecas=${Math.max(1, Math.round(Number(pecas) || 1))}` +
+        (lojaCode ? `&loja=${encodeURIComponent(lojaCode)}` : '') +
+        (carrier ? `&carrier=${encodeURIComponent(carrier)}` : '') +
+        (code ? `&code=${encodeURIComponent(code)}` : '');
+      setFrete(await api<FreteResp>(`/tracking/cotacao${qs}`));
     } catch (e: any) {
       setFreteErr(e?.message || 'indisponível');
     } finally {
       setFreteLoading(false);
     }
-  }, [cepDestino, pecas]);
+  }, [cepDestino, pecas, lojaCode, carrier, code]);
 
   useEffect(() => {
     if (autoFetch && code) void fetchIt();
@@ -239,12 +266,37 @@ export default function TrackingTimeline({
       ? -(diasAte(data.estimatedAt, data.deliveredAt) ?? 0)
       : null;
 
+  /**
+   * "+EXPRESSO", "+ECONÔMICO" — o Mais Envios batiza os serviços dele com nome
+   * próprio, e é ESSE nome que vem no rastreio. A tela mostra a família que a
+   * loja usa no dia a dia (SEDEX/PAC) e guarda o nome cru embaixo, senão o
+   * card fala uma língua que ninguém do balcão usa.
+   */
+  const familiaServico = (cru: string | null | undefined): string | null => {
+    const t = String(cru || '').toUpperCase();
+    if (!t) return null;
+    if (/SEDEX|EXPRESS/.test(t)) return 'SEDEX';
+    if (/PAC|ECON/.test(t)) return 'PAC';
+    return null;
+  };
+  const familia = familiaServico(data?.service);
+
   // A cotação que corresponde ao que a cliente pagou: casa pelo nome do método
-  // do pedido e, na falta dele, pelo serviço que o próprio objeto declara.
-  const alvoServico = String(metodoPago || data?.service || '').toUpperCase();
+  // do pedido e, na falta dele, pela família do serviço que o objeto declara.
+  const alvoServico = `${metodoPago || ''} ${familia || data?.service || ''}`.toUpperCase();
   const opcaoPaga = frete?.opcoes.find((o) => alvoServico.includes(o.servico.toUpperCase())) ?? null;
+  /**
+   * 🔴 VEREDITO SÓ QUANDO A COMPARAÇÃO É LEGÍTIMA (25/08). Enquanto a cotação
+   * não sai do MESMO provedor da etiqueta e do CEP da loja que postou, o
+   * número serve de referência e nada mais: a primeira versão gritou "frete no
+   * prejuízo: R$ 9,01" num envio do Mais Envios cotado no balcão dos Correios,
+   * saindo de uma cidade a 300 km de onde a caixa saiu.
+   */
   const margem =
-    fretePago != null && opcaoPaga?.precoReais != null ? fretePago - opcaoPaga.precoReais : null;
+    frete?.comparavel && fretePago != null && opcaoPaga?.precoReais != null
+      ? fretePago - opcaoPaga.precoReais
+      : null;
+  const nomeProvedor = frete?.provedor === 'maisenvios' ? 'Mais Envios' : 'Correios';
 
   const temFicha = !!data && (!!data.service || !!postado || !!previsao || data.weightGrams != null);
   const temDinheiro = fretePago != null || !!frete || freteLoading || !!freteErr;
@@ -289,8 +341,17 @@ export default function TrackingTimeline({
           {data?.service && (
             <Ficha
               rotulo="Serviço"
-              valor={data.service.toUpperCase()}
-              detalhe={data.serviceDesc || null}
+              valor={familia || data.service.toUpperCase()}
+              detalhe={
+                [
+                  // Nome cru do provedor, quando é diferente da família.
+                  familia && familia !== data.service.toUpperCase() ? data.service : null,
+                  data.serviceDesc || null,
+                  data.provider === 'maisenvios' ? 'via Mais Envios' : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || null
+              }
             />
           )}
           {postado && (
@@ -359,7 +420,7 @@ export default function TrackingTimeline({
         </div>
       )}
 
-      {/* O DINHEIRO — o que a cliente pagou × o que os Correios cobram hoje. */}
+      {/* O DINHEIRO — o que a cliente pagou × o que o TRANSPORTE DELE cobra hoje. */}
       {temDinheiro && (
         <div className="mt-2 rounded-lg border border-slate-200 px-3 py-2">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs">
@@ -368,7 +429,7 @@ export default function TrackingTimeline({
                 Frete pago pela cliente: <b className="text-sm text-slate-900">{brl(fretePago)}</b>
               </span>
             )}
-            {freteLoading && <span className="text-slate-400">cotando nos Correios…</span>}
+            {freteLoading && <span className="text-slate-400">cotando o frete…</span>}
             {frete?.opcoes
               .filter((o) => o.precoReais != null)
               .map((o) => (
@@ -380,7 +441,7 @@ export default function TrackingTimeline({
                       : 'text-slate-600'
                   }`}
                 >
-                  {o.servico} hoje: {brl(o.precoReais)}
+                  {o.servico} {nomeProvedor} hoje: {brl(o.precoReais)}
                   {o.prazoDias != null ? ` · ${o.prazoDias} dia(s) úteis` : ''}
                 </span>
               ))}
@@ -394,15 +455,20 @@ export default function TrackingTimeline({
               </span>
             )}
           </div>
-          {frete && (
+          {frete && !frete.erro && (
             <div className="mt-1 text-[10px] leading-tight text-slate-400">
-              Cotação de hoje, origem CEP {frete.cepOrigem} · caixa de{' '}
-              {pecas ? `${pecas} peça(s), ` : ''}
-              {frete.pesoGramas} g — serve pra conferir o preço cobrado, não é a fatura deste envio.
+              Cotação de hoje no {nomeProvedor} ({frete.motivo}), saindo de{' '}
+              {frete.lojaNome ? `${frete.lojaNome} — CEP ${frete.cepOrigem}` : `CEP ${frete.cepOrigem}`}
+              {' · '}caixa de {frete.pecas} peça(s), {frete.pesoGramas} g.
+              {frete.comparavel
+                ? ' Serve pra conferir o preço cobrado, não é a fatura deste envio.'
+                : ' ⚠️ Não dá pra saber de qual loja o objeto saiu, então isto é só referência — sem essa origem, comparar com o frete cobrado acusaria prejuízo que pode não existir.'}
             </div>
           )}
-          {freteErr && (
-            <div className="mt-1 text-[10px] text-slate-400">Cotação dos Correios {freteErr}.</div>
+          {(freteErr || frete?.erro) && (
+            <div className="mt-1 text-[10px] text-slate-400">
+              Cotação indisponível ({freteErr || frete?.erro}).
+            </div>
           )}
         </div>
       )}

@@ -1633,6 +1633,26 @@ export default function PedidoDetailPage() {
     metodo: order.shippingLines?.[0]?.method || order.pickup?.shippingMethodTitle || '',
   };
 
+  /**
+   * A LOJA QUE POSTOU — quem casa o rastreio do pedido com o card de
+   * separação. É dela que sai o CEP de ORIGEM da cotação de frete: cada loja
+   * posta do CEP dela e o preço muda com a distância. Casa pelo código do
+   * objeto (normalizado, porque a loja digita na mão) e, se não achar, aceita
+   * a única loja que despachou. Duas lojas despachando = pedido dividido, e
+   * aí nenhuma origem sozinha explica o frete — melhor não chutar.
+   */
+  const lojaQuePostou = (() => {
+    const limpar = (s: string | null | undefined) =>
+      String(s || '').toUpperCase().replace(/[\s.\-]/g, '');
+    const alvo = limpar(order.tracking?.number);
+    const porCodigo = alvo
+      ? liveStatus.find((p) => limpar(p.trackingCode) === alvo)
+      : undefined;
+    if (porCodigo?.storeCode) return porCodigo.storeCode;
+    const despacharam = liveStatus.filter((p) => p.status === 'shipped' && p.storeCode);
+    return despacharam.length === 1 ? despacharam[0].storeCode : null;
+  })();
+
   return (
     <div className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between mb-4">
@@ -3556,10 +3576,13 @@ export default function PedidoDetailPage() {
 
             {/* Rastreio ao vivo — eventos + FICHA do objeto (serviço, postagem,
                 previsão de entrega, peso) e a linha do dinheiro: o frete que a
-                cliente pagou contra o que os Correios cobram hoje pelo mesmo
-                trajeto. O CEP e a contagem de peças montam a MESMA caixa que o
-                checkout cota (250 g/peça) — cotar com outra caixa dá outro
-                preço e a conferência não serve pra nada. */}
+                cliente pagou contra o que o transporte DAQUELA etiqueta cobra
+                hoje pelo mesmo trajeto. O CEP e a contagem de peças montam a
+                MESMA caixa que o checkout cota (250 g/peça) — cotar com outra
+                caixa dá outro preço e a conferência não serve pra nada.
+                `lojaCode` é a loja que POSTOU: sem ela a cotação sai do CEP
+                padrão e o card não dá veredito de prejuízo (cotar de outra
+                cidade inventa diferença que não existe). */}
             {order.tracking?.number && (
               <div className="mt-4">
                 <TrackingTimeline
@@ -3568,6 +3591,7 @@ export default function PedidoDetailPage() {
                   autoFetch
                   cepDestino={order.shipping?.postcode || order.billing?.postcode || null}
                   pecas={pecasDoPedido.reduce((s, li) => s + (Number(li.quantity) || 1), 0)}
+                  lojaCode={lojaQuePostou}
                   fretePago={freteDoPedido.valor || null}
                   metodoPago={freteDoPedido.metodo || null}
                 />
