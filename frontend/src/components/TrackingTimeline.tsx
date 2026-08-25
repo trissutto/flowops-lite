@@ -299,7 +299,9 @@ export default function TrackingTimeline({
               valor={`${postado}${horaPostagem ? ` · ${horaPostagem}` : ''}`}
               detalhe={
                 [
-                  data?.origin || null,
+                  data?.origin && data?.destination
+                    ? `${data.origin} → ${data.destination}`
+                    : data?.origin || data?.destination || null,
                   diasEmTransito != null && diasEmTransito > 0
                     ? `${diasEmTransito} dia(s) em trânsito`
                     : null,
@@ -307,6 +309,18 @@ export default function TrackingTimeline({
                   .filter(Boolean)
                   .join(' · ') || null
               }
+            />
+          )}
+          {/* ETIQUETA EMITIDA NÃO É POSTAGEM. Enquanto os Correios não
+              registram a postagem, a caixa está no balcão da loja — foi assim
+              que a REM-732 ficou 8 dias parada. O card diz isso em vez de
+              simplesmente omitir a linha. */}
+          {!postado && !!data && data.events.length > 0 && !data.delivered && (
+            <Ficha
+              rotulo="Postagem"
+              valor="ainda não postado"
+              tom="atencao"
+              detalhe="etiqueta emitida — a caixa não saiu da loja"
             />
           )}
           {previsao && !data?.delivered && (
@@ -341,13 +355,7 @@ export default function TrackingTimeline({
               }
             />
           )}
-          {data?.weightGrams != null && (
-            <Ficha
-              rotulo="Peso"
-              valor={kg(data.weightGrams) || ''}
-              detalhe={data.destination ? `→ ${data.destination}` : null}
-            />
-          )}
+          {data?.weightGrams != null && <Ficha rotulo="Peso" valor={kg(data.weightGrams) || ''} />}
         </div>
       )}
 
@@ -382,7 +390,7 @@ export default function TrackingTimeline({
                   margem < 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
                 }`}
               >
-                {margem < 0 ? `frete no prejuízo: ${brl(margem)}` : `sobra ${brl(margem)}`}
+                {margem < 0 ? `frete no prejuízo: ${brl(-margem)}` : `sobra ${brl(margem)}`}
               </span>
             )}
           </div>
