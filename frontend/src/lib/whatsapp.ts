@@ -61,8 +61,28 @@ export function abrirWhatsApp(telefone?: string | null, mensagem = ''): boolean 
    */
   const cru = String(telefone ?? '').trim();
   const numero = cru ? telefoneWhatsApp(cru) : null;
-  if (cru && !numero) return false;
 
+  /**
+   * 🚨 TELEFONE TORTO NÃO PODE MATAR O BOTÃO (25/08/2026).
+   *
+   * Aqui existia `if (cru && !numero) return false;` — a função voltava ANTES
+   * de abrir qualquer coisa, e as telas que não olham o retorno ficavam com um
+   * botão que não faz NADA. Queixa do dono no mesmo dia: "o botão do WhatsApp
+   * não abre" no link de pagamento do crediário.
+   *
+   * Medição das baixas de crediário (90 dias): 225 telefones válidos, 297
+   * vazios (esses já caíam na lista de contatos) e **409 tortos — 44%**, quase
+   * todos com 9 dígitos, que é celular sem DDD do cadastro antigo do Giga.
+   *
+   * O certo é o MESMO desfecho do telefone vazio: abrir o WhatsApp na lista de
+   * contatos com a mensagem pronta, pra quem está no balcão escolher a
+   * conversa. Continua devolvendo `false` — quem chamou ainda pode explicar o
+   * que houve (`falarComCliente` explica) —, mas agora `false` significa "abri
+   * sem destino", não "não fiz nada".
+   *
+   * ⚠️ NÃO tentar adivinhar o DDD pelo da loja: mandar link de PAGAMENTO pro
+   * número errado é pior que dar trabalho.
+   */
   const destino = numero ? `phone=${numero}&` : '';
 
   // Âncora escondida em vez de `location.href`: trocar o href da página levaria
@@ -100,18 +120,25 @@ export function abrirWhatsApp(telefone?: string | null, mensagem = ''): boolean 
       alert('Não consegui abrir o WhatsApp deste PC. Abra o aplicativo e procure pelo telefone da cliente.');
     }
   }, 2000);
-  return true;
+  // `false` = abriu SEM destino (telefone torto no cadastro), não "não abriu".
+  return !cru || !!numero;
 }
 
 /**
- * O MESMO clique, com a reclamação já pronta pra quem não tem telefone.
+ * O MESMO clique, com a explicação já pronta pra quando o cadastro não ajuda.
  *
  * Quase toda tela repetia estas quatro linhas (valida, avisa, abre) e algumas
  * esqueciam o aviso — o botão sumia ou não fazia nada, que é o pior desfecho
  * numa tela de atendimento. Use nos botões que falam com CLIENTE.
+ *
+ * O WhatsApp abre nos dois casos; o aviso existe só pra ela entender por que
+ * caiu na lista de contatos em vez da conversa da cliente.
  */
 export function falarComCliente(telefone?: string | null, mensagem = ''): void {
   if (!abrirWhatsApp(telefone, mensagem)) {
-    alert('Essa cliente não tem um telefone válido no cadastro — não dá pra abrir o WhatsApp.');
+    alert(
+      'O telefone desta cliente está incompleto no cadastro (normalmente falta o DDD) — ' +
+        'abri o WhatsApp na lista de contatos com a mensagem pronta. É só escolher a conversa.',
+    );
   }
 }

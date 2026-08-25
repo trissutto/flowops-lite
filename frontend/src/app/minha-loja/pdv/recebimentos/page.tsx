@@ -19,7 +19,7 @@ import {
   User, RefreshCw, ChevronDown, ChevronRight, Link as LinkIcon, MessageCircle, Printer,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { abrirWhatsApp } from '@/lib/whatsapp';
+import { falarComCliente } from '@/lib/whatsapp';
 
 type Cliente = {
   codCliente: string;
@@ -423,10 +423,16 @@ export default function RecebimentosPage() {
     if (!pixLinkUrl) return;
     const nome = clienteAtual?.nome?.split(' ')[0] || 'cliente';
     const msg = `Olá, ${nome}! Aqui é da Lurd's Plus Size 🛍️\n\nSegue o link para pagar suas parcelas de crediário via PIX:\n\n${pixLinkUrl}\n\nValor total: ${brl(totalPago)}\n\nÉ só abrir, copiar o código PIX e pagar no app do seu banco. Assim que pagar, sua dívida é quitada automaticamente.\n\nValidade: 24 horas.\n\nQualquer dúvida estamos à disposição 😊`;
-    // Sem telefone no cadastro, o app abre na lista de contatos — quem está no
-    // balcão escolhe a cliente. É o comportamento que já existia aqui, agora
-    // no app do PC em vez de mais uma aba do Web.
-    abrirWhatsApp(clienteAtual?.telefone, msg);
+    /**
+     * Sem telefone (ou com telefone torto) o app abre na LISTA DE CONTATOS com
+     * a mensagem pronta — quem está no balcão escolhe a cliente.
+     *
+     * 🚨 44% das baixas de crediário têm telefone que não passa na régua do
+     * WhatsApp (celular sem DDD, herança do cadastro do Giga). Até 25/08 isso
+     * fazia o botão não fazer NADA. `falarComCliente` abre do mesmo jeito e
+     * ainda explica por que caiu na lista.
+     */
+    falarComCliente(clienteAtual?.telefone, msg);
   }
 
   // Polling status PIX
