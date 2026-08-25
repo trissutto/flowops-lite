@@ -38,7 +38,7 @@ import {
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
   Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone, AlertTriangle,
-  Globe, Copy,
+  Globe, Copy, ChevronDown,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -336,6 +336,9 @@ export default function MinhaLojaPage() {
   // é tão inútil quanto lista nenhuma. Mostra as 10 mais urgentes e abre o
   // resto sob demanda.
   const [showAllTasks, setShowAllTasks] = useState(false);
+  // 25/08: a fila nasce FECHADA atrás da barra vermelha — a home abre com o
+  // painel de botões à vista e o alarme resumido em uma linha só.
+  const [tasksOpen, setTasksOpen] = useState(false);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
@@ -833,6 +836,10 @@ export default function MinhaLojaPage() {
     return tasks;
   }, [openBoxes, incomingShipments, pendingPieces, rows, liveRows, router]);
 
+  // Quantas estão PARADAS (vermelhas) — é o único detalhe que a barra fechada
+  // precisa dizer além do total.
+  const tasksParadas = useMemo(() => storeTasks.filter((t) => t.urgency === 'red').length, [storeTasks]);
+
   // ---------- Notificação + auto-maximize em 5min ----------
   const triggerNewOrderAlert = useCallback((pickOrder: any) => {
     const orderNumber = pickOrder?.order?.wcOrderNumber ?? pickOrder?.order?.wcOrderId ?? '—';
@@ -1294,7 +1301,12 @@ export default function MinhaLojaPage() {
       {/* ══ O QUE FAZER AGORA — fila de tarefas (piloto 11/08) ══
           A operadora não precisa saber QUAL tela abrir: tudo que está pendente
           na loja vira uma linha aqui, com idade e cor de urgência. Vermelho =
-          parado (caixa aberta 4h+, pedido 3h+, remessa em trânsito 3 dias+). */}
+          parado (caixa aberta 4h+, pedido 3h+, remessa em trânsito 3 dias+).
+
+          25/08 (ordem do dono): a fila vive FECHADA numa única barra vermelha
+          baixa, logo acima do painel de botões. A barra continua dizendo QUANTAS
+          tarefas existem e quantas estão paradas — o que sai da tela é a parede
+          de linhas, não o alarme. Um clique abre a lista inteira ali mesmo. */}
       <div className="max-w-3xl mx-auto px-3 pt-3">
         {storeTasks.length === 0 ? (
           <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center gap-2.5">
@@ -1304,51 +1316,64 @@ export default function MinhaLojaPage() {
             </div>
           </div>
         ) : (
-          <div className="rounded-2xl border-2 border-slate-200 bg-white shadow-sm overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-800 text-white flex items-center justify-between">
-              <span className="text-xs font-black tracking-widest uppercase">O que fazer agora</span>
-              <span className="text-[11px] font-bold bg-white/15 rounded-full px-2 py-0.5">
-                {storeTasks.length} tarefa{storeTasks.length === 1 ? '' : 's'}
+          <>
+            <button
+              type="button"
+              onClick={() => setTasksOpen((v) => !v)}
+              aria-expanded={tasksOpen}
+              aria-controls="fila-tarefas"
+              className="w-full rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 shadow-md flex items-center gap-3 transition active:scale-[0.99]"
+            >
+              <span className="shrink-0 w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+              <span className="text-sm font-black uppercase tracking-wide">
+                {storeTasks.length} tarefa{storeTasks.length === 1 ? '' : 's'} esperando você
               </span>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {(showAllTasks ? storeTasks : storeTasks.slice(0, 10)).map((t) => {
-                const Icon = t.icon;
-                const red = t.urgency === 'red';
-                return (
+              <span className="hidden sm:inline text-[11px] font-bold text-white/85 truncate">
+                {tasksParadas > 0 ? `${tasksParadas} parada${tasksParadas === 1 ? '' : 's'} · ` : ''}
+                {tasksOpen ? 'toque pra fechar' : 'toque pra ver a lista'}
+              </span>
+              <ChevronDown className={`ml-auto shrink-0 w-5 h-5 transition-transform ${tasksOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {tasksOpen && (
+              <div id="fila-tarefas" className="mt-2 rounded-2xl border-2 border-slate-200 bg-white shadow-sm overflow-hidden divide-y divide-slate-100">
+                {(showAllTasks ? storeTasks : storeTasks.slice(0, 10)).map((t) => {
+                  const Icon = t.icon;
+                  const red = t.urgency === 'red';
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={t.go}
+                      className={`w-full text-left px-4 py-3 flex items-center gap-3 transition ${
+                        red ? 'bg-rose-50 hover:bg-rose-100' : 'hover:bg-amber-50'
+                      }`}
+                    >
+                      <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${red ? 'bg-rose-500 animate-pulse' : 'bg-amber-400'}`} />
+                      <Icon className={`w-5 h-5 shrink-0 ${red ? 'text-rose-600' : 'text-amber-600'}`} />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-sm font-bold truncate ${red ? 'text-rose-900' : 'text-slate-800'}`}>{t.title}</span>
+                        <span className={`block text-[11px] truncate ${red ? 'text-rose-700' : 'text-slate-500'}`}>{t.subtitle}</span>
+                      </span>
+                      <span className={`shrink-0 text-[11px] font-black uppercase ${red ? 'text-rose-600' : 'text-amber-600'}`}>
+                        {red ? 'parado' : 'fazer'} →
+                      </span>
+                    </button>
+                  );
+                })}
+                {storeTasks.length > 10 && (
                   <button
-                    key={t.key}
                     type="button"
-                    onClick={t.go}
-                    className={`w-full text-left px-4 py-3 flex items-center gap-3 transition ${
-                      red ? 'bg-rose-50 hover:bg-rose-100' : 'hover:bg-amber-50'
-                    }`}
+                    onClick={() => setShowAllTasks((v) => !v)}
+                    className="w-full px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
                   >
-                    <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${red ? 'bg-rose-500 animate-pulse' : 'bg-amber-400'}`} />
-                    <Icon className={`w-5 h-5 shrink-0 ${red ? 'text-rose-600' : 'text-amber-600'}`} />
-                    <span className="min-w-0 flex-1">
-                      <span className={`block text-sm font-bold truncate ${red ? 'text-rose-900' : 'text-slate-800'}`}>{t.title}</span>
-                      <span className={`block text-[11px] truncate ${red ? 'text-rose-700' : 'text-slate-500'}`}>{t.subtitle}</span>
-                    </span>
-                    <span className={`shrink-0 text-[11px] font-black uppercase ${red ? 'text-rose-600' : 'text-amber-600'}`}>
-                      {red ? 'parado' : 'fazer'} →
-                    </span>
+                    {showAllTasks
+                      ? '↑ mostrar só as 10 mais urgentes'
+                      : `↓ ver as outras ${storeTasks.length - 10} tarefas`}
                   </button>
-                );
-              })}
-              {storeTasks.length > 10 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAllTasks((v) => !v)}
-                  className="w-full px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
-                >
-                  {showAllTasks
-                    ? '↑ mostrar só as 10 mais urgentes'
-                    : `↓ ver as outras ${storeTasks.length - 10} tarefas`}
-                </button>
-              )}
-            </div>
-          </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
 
