@@ -1,8 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
+import { EvolutionClient } from '../whatsapp-campaign/evolution.client';
 import { usarAuthPostgres } from './auth-postgres';
 
 /**
@@ -21,12 +23,44 @@ import { usarAuthPostgres } from './auth-postgres';
  *     No nosso caso (comunicação interna matriz→lojas conhecidas) o risco é baixo.
  *   - Sessão fica só numa instância do backend. Se escalar horizontal, um
  *     singleton externo (Redis/DB) seria necessário. Por enquanto 1 pod basta.
+ *
+ * ── 🚨 O TRANSPORTE MUDOU (25/08/2026, ordem do dono) ──
+ *
+ * O sistema tinha DOIS WhatsApps: esta sessão Baileys (avisos automáticos:
+ * troca, pós-venda, crediário, leads, PDV) e a instância do **Evolution**, que
+ * é o WhatsApp que a equipe usa no inbox e no Lulu. Mesmo aparelho, dois
+ * pareamentos — e ninguém sabia disso ao olhar a tela.
+ *
+ * A Baileys caiu em ~14/08 e ficou 11 dias fora sem ninguém ver: o único sinal
+ * era um WARN no log. Em 25/08 o cron de trocas drenou 18 códigos de postagem
+ * **todos por e-mail**, porque o WhatsApp não respondia. Enquanto isso a
+ * instância do Evolution mandava 284 mensagens no mesmo dia, sem falhar.
+ *
+ * Agora `sendText` fala pelo **Evolution primeiro** e só usa a sessão local se
+ * o Evolution não estiver configurado ou recusar. Ninguém mais precisa
+ * reescanear QR pra o aviso sair, e o aviso aparece no MESMO inbox onde a
+ * operadora continua a conversa. Kill-switch: `AVISOS_VIA_EVOLUTION=0` volta a
+ * mandar pela sessão local.
  */
 @Injectable()
 export class WhatsappService implements OnModuleInit {
   private readonly logger = new Logger(WhatsappService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly evo: EvolutionClient,
+  ) {}
+
+  /**
+   * A instância do Evolution respondeu "conectada" da última vez que olhamos?
+   *
+   * `getStatus()` é síncrono (a tela do QR faz polling nele), então o estado
+   * do Evolution vive aqui em cache: um cron de 5min atualiza, e todo envio
+   * carimba o resultado real — envio que passa é a melhor prova de que o canal
+   * está de pé.
+   */
+  private evoConectado = false;
+  private evoConferidoEm: Date | null = null;
 
   /** Socket Baileys ativo, ou null se desconectado */
   private sock: any = null;
@@ -76,6 +110,11 @@ export class WhatsappService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    // Estado do Evolution ANTES de qualquer coisa: sem isto o cache fica
+    // `false` por até 5 minutos depois do deploy e a barra de alarme grita
+    // "WhatsApp desconectado" com o canal perfeitamente de pé.
+    this.conferirEvolution().catch(() => {});
+
     // Só tenta reconectar auto se já existe uma sessão salva. Senão espera
     // o usuário clicar "conectar" na tela frontend pra gerar QR novo.
     const dir = this.sessionDir();
@@ -202,12 +241,33 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
+  /**
+   * `connected` continua significando **a sessão local (QR)** — é o que a tela
+   * de pareamento precisa saber, e trocar esse sentido faria o QR sumir de
+   * quem quer reconectar.
+   *
+   * Quem pergunta "dá pra avisar a cliente agora?" olha `podeEnviar`/`canal`:
+   * era o `connected` que fazia a barra da /separacao gritar "WhatsApp
+   * desconectado" enquanto a instância do Evolution mandava 284 mensagens no
+   * mesmo dia.
+   */
   getStatus() {
+    const localOk = !!this.sock && !!this.connectedAt;
+    const evoOk = this.evolutionPreferido() && this.evoConectado;
     return {
-      connected: !!this.sock && !!this.connectedAt,
+      connected: localOk,
       phoneNumber: this.ownNumber,
       connectedAt: this.connectedAt?.toISOString() ?? null,
       qr: this.lastQr,
+      /** Por onde o próximo aviso sai. */
+      canal: evoOk ? 'evolution' : localOk ? 'baileys' : 'nenhum',
+      podeEnviar: evoOk || localOk,
+      evolution: {
+        ligado: this.evolutionPreferido(),
+        conectado: evoOk,
+        instancia: this.evo.instancia || null,
+        conferidoEm: this.evoConferidoEm?.toISOString() ?? null,
+      },
     };
   }
 
@@ -290,19 +350,75 @@ export class WhatsappService implements OnModuleInit {
     return out;
   }
 
-  /** Dispara 1 mensagem. Retorna `{ ok, error? }`. */
+  /**
+   * Dispara 1 mensagem. Retorna `{ ok, error? }`.
+   *
+   * Ordem: **Evolution primeiro** (é a instância que a equipe usa e que não
+   * cai), sessão Baileys como reserva. Quem chama não sabe — e não precisa
+   * saber — por qual dos dois saiu.
+   */
   async sendText(rawNumber: string, text: string): Promise<{ ok: boolean; error?: string }> {
-    if (!this.sock || !this.connectedAt) {
-      return { ok: false, error: 'WhatsApp desconectado. Conecte primeiro em /retaguarda/whatsapp.' };
-    }
     const jid = this.toJid(rawNumber);
     if (!jid) return { ok: false, error: `Número inválido: ${rawNumber}` };
+    const numero = jid.split('@')[0];
+
+    let erroEvolution: string | null = null;
+    if (this.evolutionPreferido()) {
+      try {
+        await this.evo.enviarTexto(numero, text);
+        this.evoConectado = true;
+        this.evoConferidoEm = new Date();
+        return { ok: true };
+      } catch (e: any) {
+        // Não desiste: a sessão local ainda pode estar de pé. Mas marca o
+        // Evolution como suspeito pro `getStatus` não mentir pra tela.
+        erroEvolution = e?.message || String(e);
+        this.evoConectado = false;
+        this.evoConferidoEm = new Date();
+        this.logger.warn(`[whatsapp] Evolution recusou (${erroEvolution}) — tentando a sessão local`);
+      }
+    }
+
+    if (!this.sock || !this.connectedAt) {
+      return {
+        ok: false,
+        error: erroEvolution
+          ? `WhatsApp fora nos dois canais. Evolution: ${erroEvolution}. Sessão local: desconectada (QR em /config/whatsapp).`
+          : 'WhatsApp desconectado. Conecte primeiro em /config/whatsapp.',
+      };
+    }
 
     try {
       await this.sock.sendMessage(jid, { text });
       return { ok: true };
     } catch (e: any) {
       return { ok: false, error: e?.message || String(e) };
+    }
+  }
+
+  /** O Evolution está ligado (env) e não desligado pela flag? */
+  private evolutionPreferido(): boolean {
+    if (String(process.env.AVISOS_VIA_EVOLUTION ?? '1') === '0') return false;
+    return this.evo.configurado();
+  }
+
+  /**
+   * Confere o estado da instância do Evolution de tempos em tempos.
+   *
+   * 5 minutos porque a única coisa que depende disso é a BARRA de alarme na
+   * tela (que já recarrega sozinha a cada minuto) — envio não espera este
+   * cron: ele tenta e o resultado carimba o cache na hora.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'whatsapp-evolution-estado' })
+  async conferirEvolution(): Promise<void> {
+    if (!this.evolutionPreferido()) return;
+    try {
+      const r = await this.evo.instanciaConectada();
+      this.evoConectado = !!r.ok;
+      this.evoConferidoEm = new Date();
+    } catch {
+      this.evoConectado = false;
+      this.evoConferidoEm = new Date();
     }
   }
 

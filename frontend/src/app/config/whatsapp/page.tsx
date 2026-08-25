@@ -24,6 +24,15 @@ type Status = {
   phoneNumber: string | null;
   connectedAt: string | null;
   qr: string | null;
+  /** Por onde o próximo aviso sai de verdade (25/08). */
+  canal?: 'evolution' | 'baileys' | 'nenhum';
+  podeEnviar?: boolean;
+  evolution?: {
+    ligado: boolean;
+    conectado: boolean;
+    instancia: string | null;
+    conferidoEm: string | null;
+  };
 };
 
 export default function WhatsappPage() {
@@ -141,6 +150,36 @@ export default function WhatsappPage() {
         <div className="text-center py-12 text-slate-500">
           <Loader2 className="w-6 h-6 animate-spin inline mr-2" />
           Consultando status…
+        </div>
+      )}
+
+      {/* POR ONDE O AVISO SAI DE VERDADE (25/08).
+          Sem esta faixa, quem abre a tela vê "desconectado" e sai escaneando
+          QR achando que a cliente está sem aviso — quando na verdade o canal
+          principal (a instância do inbox) está de pé e mandando. A sessão
+          abaixo virou RESERVA. */}
+      {status?.canal === 'evolution' && (
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg flex items-start gap-3">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-emerald-900">
+            <b>Os avisos automáticos estão saindo normalmente</b> — pela instância{' '}
+            <span className="font-mono">{status.evolution?.instancia || 'do inbox'}</span>, o mesmo
+            WhatsApp onde a equipe responde a cliente.
+            <div className="text-xs text-emerald-800 mt-1">
+              A sessão abaixo (QR) é só a <b>reserva</b>: ela entra se a instância principal cair.
+              Não precisa parear nada pra a cliente ser avisada.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {status && status.podeEnviar === false && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-red-900">
+            <b>Nenhum canal de WhatsApp está de pé</b> — nem a instância do inbox, nem a sessão
+            daqui. Nenhum aviso automático está chegando na cliente.
+          </div>
         </div>
       )}
 

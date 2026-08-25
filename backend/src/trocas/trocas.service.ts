@@ -311,7 +311,14 @@ export class TrocasService {
       (t: any) => t.reversaPrazo && new Date(t.reversaPrazo).getTime() < agora,
     ).length;
     return {
-      whatsappConectado: !!status?.connected,
+      /**
+       * `podeEnviar`, não `connected`: desde 25/08 o aviso sai pela instância
+       * do Evolution (a mesma do inbox) e a sessão local do QR é só reserva.
+       * Olhar o `connected` fazia a barra gritar "WhatsApp desconectado" com o
+       * canal de verdade mandando centenas de mensagens no mesmo dia.
+       */
+      whatsappConectado: status?.podeEnviar ?? !!status?.connected,
+      whatsappCanal: status?.canal ?? null,
       whatsappDesde: status?.connectedAt ?? null,
       presos: presas.length,
       vencidos,
