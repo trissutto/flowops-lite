@@ -531,6 +531,12 @@ export class OrdersController {
     @Query('before') before?: string,
     @Query('storeCode') storeCode?: string,
   ) {
+    // A TELA exibe os números com '#' (#ON-000115), então é assim que a matriz
+    // digita na busca — mas o banco guarda SEM o '#', e um contains com a
+    // cerquilha na frente não acha nada (25/08: "POR QUE NAO CONSIGO BUSCAR
+    // POR NUMERO????"). Normaliza aqui, no funil único: vale pro caminho
+    // nativo E pro WooCommerce.
+    search = search ? search.replace(/#/g, '').trim() : search;
     // Quando filtra por loja, pega per_page MAIOR pra compensar o filtro local.
     // LIMITE 100 — WooCommerce REST API REJEITA per_page > 100 com 500.
     const effectivePerPage = storeCode
