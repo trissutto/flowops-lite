@@ -129,6 +129,19 @@ interface PickOrderRow {
       fromStoreName: string | null;
       trackingCode: string | null;
       pecas?: number;
+      /**
+       * QUAIS peças vêm nessa caixa. A âncora embala pelo que está na tela, e a
+       * lista da tela é só a DELA — sem isto, conferir o pedido inteiro
+       * dependia do romaneio de papel que veio dentro da caixa.
+       */
+      itens?: Array<{
+        sku: string;
+        ref?: string | null;
+        cor?: string | null;
+        tamanho?: string | null;
+        descricao?: string | null;
+        qty: number;
+      }>;
     }>;
   } | null;
   customerSnapshot?: {
@@ -2691,6 +2704,25 @@ function PickOrderCard({
                     )}
                     {c.trackingCode && <span className="font-mono text-violet-700">{c.trackingCode}</span>}
                   </>
+                )}
+                {/* AS PEÇAS DE FORA, uma a uma (25/08). Elas NÃO entram no bipe
+                    deste card — foram conferidas no bipe da loja de origem e de
+                    novo na entrada da caixa. O que faltava era vê-las na hora de
+                    embalar: a lista de cima é só a desta loja, e a caixa saía
+                    com 6 de 8 se a vendedora não abrisse o romaneio de papel. */}
+                {!!c.itens?.length && (
+                  <ul className="mt-1 w-full space-y-0.5 border-l-2 border-violet-200 pl-2">
+                    {c.itens.map((it, k) => (
+                      <li key={`${c.code ?? i}-${it.sku}-${k}`} className="text-[11px] text-violet-900">
+                        <span className="font-semibold">{it.qty}x</span>{' '}
+                        {refCorTam({
+                          ref: it.ref ?? null,
+                          cor: it.cor ?? null,
+                          tamanho: it.tamanho ?? null,
+                        }) || it.descricao || it.sku}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </li>
             ))}

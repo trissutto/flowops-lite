@@ -2056,17 +2056,48 @@ export class PickOrdersService {
       // pedido é COMPOSTO (ela vê 4 na tela e o pedido tem 6). Também é a
       // conferência de quando a caixa chegar.
       const pecasPorLojaPedido = new Map<string, number>();
+      /**
+       * QUAIS peças vêm de fora — não só quantas (25/08).
+       *
+       * A âncora embala olhando a lista da tela, e a lista da tela é só a
+       * DELA: o card dizia "2 de outra(s) loja(s)" sem dizer quais. Pra
+       * conferir o pedido inteiro na hora de fechar a caixa, a vendedora
+       * dependia do romaneio impresso que veio dentro da caixa — papel que
+       * some. Com a lista aqui, a conferência das 8 peças cabe na tela.
+       */
+      const itensPorLojaPedido = new Map<string, Array<{ sku: string; ref: string | null; cor: string | null; tamanho: string | null; descricao: string | null; qty: number }>>();
       if (feeders.length) {
+        const ondeItens = {
+          orderId: { in: [...new Set(feeders.map((f) => f.orderId))] },
+          assignedStoreId: { in: [...new Set(feeders.map((f) => f.store?.id).filter(Boolean))] },
+        };
         const grupos = await this.prisma.orderItem.groupBy({
           by: ['orderId', 'assignedStoreId'],
-          where: {
-            orderId: { in: [...new Set(feeders.map((f) => f.orderId))] },
-            assignedStoreId: { in: [...new Set(feeders.map((f) => f.store?.id).filter(Boolean))] },
-          },
+          where: ondeItens,
           _sum: { quantity: true },
         });
         for (const g of grupos) {
           pecasPorLojaPedido.set(`${g.orderId}~${g.assignedStoreId}`, g._sum.quantity ?? 0);
+        }
+        const detalhes = await this.prisma.orderItem.findMany({
+          where: ondeItens,
+          select: {
+            orderId: true, assignedStoreId: true, sku: true, productName: true,
+            ref: true, cor: true, tamanho: true, quantity: true,
+          },
+        });
+        for (const it of detalhes as any[]) {
+          const chave = `${it.orderId}~${it.assignedStoreId}`;
+          const arr = itensPorLojaPedido.get(chave) ?? [];
+          arr.push({
+            sku: String(it.sku || '').trim(),
+            ref: it.ref ?? null,
+            cor: it.cor ?? null,
+            tamanho: it.tamanho ?? null,
+            descricao: it.productName ?? null,
+            qty: Number(it.quantity) || 1,
+          });
+          itensPorLojaPedido.set(chave, arr);
         }
       }
       for (const f of feeders) {
@@ -2074,6 +2105,7 @@ export class PickOrdersService {
         arr.push({
           ...f,
           pecas: pecasPorLojaPedido.get(`${f.orderId}~${f.store?.id}`) ?? 0,
+          itens: itensPorLojaPedido.get(`${f.orderId}~${f.store?.id}`) ?? [],
         });
         feedersDoPedido.set(f.orderId, arr);
       }
@@ -2133,6 +2165,8 @@ export class PickOrdersService {
               fromStoreName: caixa?.fromStoreName ?? f.store?.name ?? null,
               trackingCode: caixa?.trackingCode ?? null,
               pecas: f.pecas ?? 0,
+              // QUAIS peças vêm nessa caixa — a âncora embala pelo que está na tela.
+              itens: f.itens ?? [],
             };
           })
         : [];
@@ -2194,6 +2228,7 @@ export class PickOrdersService {
                 fromStoreName: c.fromStoreName,
                 trackingCode: c.trackingCode,
                 pecas: c.pecas,
+                itens: c.itens ?? [],
               })),
             }
           : null,
