@@ -484,23 +484,55 @@ export class RoutingService {
     // Só peça baixa estoque — FRETE/MANUAL não existem no estoque.
     const pecas = order.items.filter((it: any) => !ehItemSemEstoque(it));
 
+    /**
+     * A VENDA JÁ PODE TER BAIXADO (caso ON-000140, 25/08): o fechamento
+     * motoboy/auto-atende da própria vendedora baixa o estoque NA HORA e
+     * marca `stockDecreasedAt` na pdv_sale. Depois, um roteamento indevido
+     * arrastou o pedido de volta pra separação — e este botão, criado pro
+     * caso OPOSTO (venda fechada SEM baixa, ON-000004), baixava a MESMA peça
+     * de novo. Se a venda de origem já baixou na MESMA loja vendedora, o
+     * passo 1 vira no-op: só cancela os cards e fecha.
+     */
+    let vendaJaBaixou = false;
+    try {
+      const ci = JSON.parse(String(order.checkoutInfo || '{}'));
+      if (ci?.pdvSaleId) {
+        const saleOrig: any = await (this.prisma as any).pdvSale.findUnique({
+          where: { id: String(ci.pdvSaleId) },
+          select: { stockDecreasedAt: true, storeCode: true },
+        });
+        vendaJaBaixou =
+          !!saleOrig?.stockDecreasedAt &&
+          String(saleOrig?.storeCode || '').trim() === seller.code;
+      }
+    } catch {
+      /* checkoutInfo ilegível → segue o caminho antigo (baixa) */
+    }
+
     // 1) BAIXA PRIMEIRO. Se falhar, nada muda de status e o pedido continua do
     //    jeito que estava — o inverso (marcar shipped e a baixa falhar) recria
     //    exatamente o estoque fantasma que este conserto existe pra matar.
-    const baixa = await this.erp.decreaseStockAsync(
-      pecas.map((it: any) => ({
-        sku: String(it.sku),
-        qty: Number(it.quantity || 1),
-        storeCode: seller.code,
-      })),
-      { allowNegative: true, skipNotFound: true },
-    );
-    if (!baixa?.success) {
-      return {
-        ok: false as const,
-        reason: 'baixa-falhou',
-        message: `Baixa de estoque na ${seller.name} falhou: ${baixa?.error || 'sem detalhe'}. Nada foi alterado.`,
-      };
+    let baixa: any = null;
+    if (!vendaJaBaixou) {
+      baixa = await this.erp.decreaseStockAsync(
+        pecas.map((it: any) => ({
+          sku: String(it.sku),
+          qty: Number(it.quantity || 1),
+          storeCode: seller.code,
+        })),
+        { allowNegative: true, skipNotFound: true },
+      );
+      if (!baixa?.success) {
+        return {
+          ok: false as const,
+          reason: 'baixa-falhou',
+          message: `Baixa de estoque na ${seller.name} falhou: ${baixa?.error || 'sem detalhe'}. Nada foi alterado.`,
+        };
+      }
+    } else {
+      this.logger.log(
+        `[fechar-na-vendedora] order ${orderId}: venda de origem JÁ baixou o estoque na ${seller.code} — baixa pulada, só cancela cards e fecha.`,
+      );
     }
 
     // 1.5) Devolve o que as OUTRAS lojas já tinham bipado. A peça saiu do
@@ -533,7 +565,10 @@ export class RoutingService {
           toStatus: OrderStatus.shipped,
           note:
             `Conserto: a ${seller.name} vendeu E entregou esta venda online. ` +
-            `${pecas.length} peça(s) baixada(s) do estoque dela` +
+            (vendaJaBaixou
+              ? `estoque já tinha saído no fechamento da venda (baixa NÃO repetida)` +
+                ''
+              : `${pecas.length} peça(s) baixada(s) do estoque dela`) +
             (cancelaveis.length > 0
               ? `; ${cancelaveis.length} card(s) de separação indevido(s) cancelado(s)`
               : '') +
@@ -566,7 +601,8 @@ export class RoutingService {
       pecasBaixadas: pecas.length,
       cardsCancelados: cancelaveis.length,
       pecasEstornadas: estornoBipes.pecas,
-      gigaEnfileirado: !!baixa.gigaEnfileirado,
+      pecasBaixadasAgora: vendaJaBaixou ? 0 : pecas.length,
+      gigaEnfileirado: !!baixa?.gigaEnfileirado,
     };
   }
 
