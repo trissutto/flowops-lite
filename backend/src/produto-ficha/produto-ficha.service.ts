@@ -683,10 +683,27 @@ export class ProdutoFichaService {
     const cor = String(corRaw || '').trim().toUpperCase();
     if (!cor) throw new BadRequestException('COR obrigatória');
 
-    const linhas = await (this.prisma as any).produtoReposicao.findMany({
+    const brutas = await (this.prisma as any).produtoReposicao.findMany({
       where: { ref, marca, cor },
       orderBy: { updatedAt: 'desc' },
     });
+
+    /**
+     * Descarta linha com os DOIS campos nulos — ela não configura nada.
+     *
+     * O `salvarReposicao` já apaga esse caso, mas a renomeação de
+     * `minimo_loja`/`ideal_loja` pra `*_total` (24/08, quando o dono trocou a
+     * unidade pra total da rede) deixou órfãs: o `db push` derruba as colunas
+     * velhas e cria as novas vazias, então a LINHA sobrevive sem valor nenhum.
+     * Sem este filtro elas fariam `atualizadoEm` responder "alguém mexeu" por
+     * um tamanho que ninguém tocou.
+     *
+     * Filtrado em JS de propósito: são no máximo uns dez registros por cor, e
+     * `{ not: null }` no Prisma tem pegadinha com nulo que não vale o risco.
+     */
+    const linhas = brutas.filter(
+      (l: any) => l.minimoTotal !== null || l.idealTotal !== null,
+    );
 
     return {
       ref,
@@ -694,8 +711,8 @@ export class ProdutoFichaService {
       cor,
       tamanhos: linhas.map((l: any) => ({
         tamanho: l.tamanho,
-        minimoLoja: l.minimoLoja,
-        idealLoja: l.idealLoja,
+        minimoTotal: l.minimoTotal,
+        idealTotal: l.idealTotal,
       })),
       // A linha mais recente responde "quem mexeu por último nesta grade".
       atualizadoPor: linhas[0]?.atualizadoPor ?? null,
@@ -710,15 +727,18 @@ export class ProdutoFichaService {
    *
    * ⚠️ NULO ≠ ZERO, e a diferença decide o pedido de compra. Nulo é "ninguém
    * configurou ainda" — a linha some da tabela e o tamanho fica fora da conta.
-   * Zero é "esta loja não carrega este tamanho" e fica GRAVADO; sem essa
+   * Zero é "a rede não carrega este tamanho" e fica GRAVADO; sem essa
    * distinção, o tamanho que a compradora decidiu não repor voltaria pro
    * pedido toda vez que alguém abrisse a tela.
+   *
+   * Os números são o TOTAL DA REDE, em peça inteira (dono, 24/08) — não a
+   * cota de cada arara.
    */
   async salvarReposicao(
     refRaw: string,
     marcaRaw: string,
     corRaw: string,
-    tamanhos: Array<{ tamanho?: string; minimoLoja?: number | null; idealLoja?: number | null }>,
+    tamanhos: Array<{ tamanho?: string; minimoTotal?: number | null; idealTotal?: number | null }>,
     quem: string,
   ) {
     const { ref, marca } = this.chave(refRaw, marcaRaw);
@@ -734,29 +754,61 @@ export class ProdutoFichaService {
       return Math.min(999, Math.max(0, n));
     };
 
+    /** A chave veio DECLARADA? Ausente ≠ nula — ver as duas guardas abaixo. */
+    const declarou = (t: any, k: string) => t !== null && typeof t === 'object' && k in t;
+
+    /**
+     * 🚨 GUARDA 1 — ABA VELHA. Recusa o formato anterior em vez de obedecer.
+     *
+     * Até 24/08 o corpo vinha como `{minimoLoja, idealLoja}` (a cota por
+     * arara). A Vercel serve o bundle antigo pros PCs da loja até o
+     * hard-refresh, então uma aba aberta desde ontem continua mandando aquilo.
+     * Sem esta guarda o efeito é DESTRUTIVO e silencioso: nenhum dos dois
+     * campos novos chega, os dois viram nulo, o laço lê "não configurou nada"
+     * e APAGA a grade inteira daquela cor — respondendo 200, com a tela
+     * dizendo "salvo".
+     */
+    if (tamanhos.some((t: any) => declarou(t, 'minimoLoja') || declarou(t, 'idealLoja'))) {
+      throw new BadRequestException(
+        'Esta tela está desatualizada — o mínimo e o ideal agora são o total da rede, '
+        + 'não a cota por loja. Atualize a página (Ctrl+F5) e digite de novo.',
+      );
+    }
+
     /**
      * Valida TUDO antes de gravar QUALQUER coisa. Estourar no meio do laço
      * deixaria metade da grade salva e metade não, sem a pessoa ter como
      * saber onde parou — e o pedido sairia de uma grade pela metade.
      */
-    const planos: Array<{ tamanho: string; minimoLoja: number | null; idealLoja: number | null }> = [];
+    const planos: Array<{ tamanho: string; minimoTotal: number | null; idealTotal: number | null }> = [];
     for (const t of tamanhos) {
       const tamanho = String(t?.tamanho || '').trim().toUpperCase();
       if (!tamanho) continue;
-      const minimoLoja = quantia(t?.minimoLoja);
-      const idealLoja = quantia(t?.idealLoja);
+      /**
+       * 🚨 GUARDA 2 — item MUDO não apaga nada.
+       *
+       * Apagar é um caminho que só pode ser tomado por quem PEDIU: a tela
+       * manda `minimoTotal: null, idealTotal: null` pra limpar um tamanho.
+       * Item que não declara nenhum dos dois campos não está pedindo nada —
+       * é payload de outra versão, ou truncado. Ignorar é o único desfecho
+       * seguro; tratar como "limpa" foi o que a guarda 1 acabou de barrar em
+       * atacado, e esta fecha o varejo.
+       */
+      if (!declarou(t, 'minimoTotal') && !declarou(t, 'idealTotal')) continue;
+      const minimoTotal = quantia(t?.minimoTotal);
+      const idealTotal = quantia(t?.idealTotal);
       // Ideal abaixo do mínimo inverte a banda: o "comprar" miraria num
-      // patamar mais baixo do que o que não pode faltar na arara.
-      if (minimoLoja !== null && idealLoja !== null && idealLoja < minimoLoja) {
+      // patamar mais baixo do que o que não pode faltar na rede.
+      if (minimoTotal !== null && idealTotal !== null && idealTotal < minimoTotal) {
         throw new BadRequestException(
-          `Tamanho ${tamanho}: o ideal (${idealLoja}) não pode ser menor que o mínimo (${minimoLoja}).`,
+          `Tamanho ${tamanho}: o ideal (${idealTotal}) não pode ser menor que o mínimo (${minimoTotal}).`,
         );
       }
-      planos.push({ tamanho, minimoLoja, idealLoja });
+      planos.push({ tamanho, minimoTotal, idealTotal });
     }
 
     for (const p of planos) {
-      if (p.minimoLoja === null && p.idealLoja === null) {
+      if (p.minimoTotal === null && p.idealTotal === null) {
         await (this.prisma as any).produtoReposicao.deleteMany({
           where: { ref, marca, cor, tamanho: p.tamanho },
         });
@@ -766,9 +818,9 @@ export class ProdutoFichaService {
         where: { ref_marca_cor_tamanho: { ref, marca, cor, tamanho: p.tamanho } },
         create: {
           ref, marca, cor, tamanho: p.tamanho,
-          minimoLoja: p.minimoLoja, idealLoja: p.idealLoja, atualizadoPor: quem,
+          minimoTotal: p.minimoTotal, idealTotal: p.idealTotal, atualizadoPor: quem,
         },
-        update: { minimoLoja: p.minimoLoja, idealLoja: p.idealLoja, atualizadoPor: quem },
+        update: { minimoTotal: p.minimoTotal, idealTotal: p.idealTotal, atualizadoPor: quem },
       });
     }
 

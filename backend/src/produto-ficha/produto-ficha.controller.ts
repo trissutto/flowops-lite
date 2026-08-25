@@ -18,7 +18,7 @@ import { FichaIaService } from './ficha-ia.service';
  *   PATCH /produto-ficha/grades/:id          — edita template
  *   GET   /produto-ficha/ia/status           — quanto falta da extração por IA
  *   POST  /produto-ficha/ia/lote             — extrai a ficha da descrição
- *   GET   /produto-ficha/reposicao?ref&marca&cor — mínimo/ideal por tamanho
+ *   GET   /produto-ficha/reposicao?ref&marca&cor — mínimo/ideal por tamanho (total da rede)
  *   PUT   /produto-ficha/reposicao?ref&marca&cor — grava a grade inteira
  *   GET   /produto-ficha/:ref?marca=X        — ficha completa (REF + cores + fotos)
  *   PATCH /produto-ficha/:ref?marca=X        — nível REF
@@ -115,7 +115,7 @@ export class ProdutoFichaController {
     @Query('marca') marca: string,
     @Query('cor') cor: string,
     @Body() body: {
-      tamanhos?: Array<{ tamanho?: string; minimoLoja?: number | null; idealLoja?: number | null }>;
+      tamanhos?: Array<{ tamanho?: string; minimoTotal?: number | null; idealTotal?: number | null }>;
     },
     @Req() req: any,
   ) {

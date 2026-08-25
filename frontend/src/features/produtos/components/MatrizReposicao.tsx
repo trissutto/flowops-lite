@@ -7,13 +7,26 @@
  *
  *   1 TENHO HOJE  soma das lojas que vendem
  *   2 JÁ VENDEU   série histórica, líquido de devolução
- *   3 MÍNIMO      o que não pode faltar na arara       ← digitado
+ *   3 MÍNIMO      o que não pode faltar na rede        ← digitado
  *   4 IDEAL       grade cheia pra vender sem furo      ← digitado
  *   5 COMPRAR     ideal − tenho, nunca negativo
  *
  * É a OUTRA METADE da grade que fica logo acima na mesma tela: aquela responde
  * "onde a peça está", esta responde "quanto falta comprar". Por isso convivem
  * como modos e nenhuma substitui a outra.
+ *
+ * ── UMA UNIDADE SÓ: PEÇA NA REDE ──
+ *
+ * As cinco linhas falam a MESMA língua — peça inteira, somando a rede toda.
+ *
+ * A primeira versão pedia mínimo e ideal POR LOJA e multiplicava por 14; o
+ * dono corrigiu no mesmo dia ("é para trabalhar com total"). Junto com o
+ * número foi embora o botão REDE/POR LOJA: com o alvo digitado em total, as
+ * linhas 3, 4 e 5 não têm versão "por loja", e um botão que dividisse só as
+ * linhas 1 e 2 deixaria a tabela com duas unidades ao mesmo tempo — que é
+ * exatamente a confusão que a correção veio desfazer. A cota de cada arara
+ * sobrou como DICA embaixo do campo ("≈ 1,4/loja"), que informa sem virar
+ * outro número pra conferir.
  *
  * ── De onde vem cada linha (e por que não vem tudo do mesmo lugar) ──
  *
@@ -46,7 +59,7 @@ import type { SkuRow } from '../types';
 import { lojasDaGrade } from '../lojas-grade';
 
 type LinhaVendaGrade = { tamanho: string; pecas: number; devolvidas: number };
-type LinhaCfg = { tamanho: string; minimoLoja: number | null; idealLoja: number | null };
+type LinhaCfg = { tamanho: string; minimoTotal: number | null; idealTotal: number | null };
 
 /** Rascunho da célula. String, e não número: "" precisa ser "em branco". */
 type Rascunho = { minimo?: string; ideal?: string };
@@ -72,9 +85,18 @@ function daCasa(tamanho: string): boolean {
   return n >= 46 && n < 61;
 }
 
-/** Número por loja, exibido com uma casa. "8,8" lê melhor que "8.8". */
-const media = (total: number, lojas: number) =>
+/** Cota por arara, só como dica. "1,4" lê melhor que "1.4". */
+const porLoja = (total: number, lojas: number) =>
   (lojas > 0 ? total / lojas : 0).toFixed(1).replace('.', ',');
+
+/**
+ * Soma que PRESERVA o "não sei": nulo quando nenhuma célula tem número.
+ * Com um valor que seja, os nulos restantes contam como zero — aí eles são
+ * de fato "este tamanho não entra na conta", e não "a coluna inteira é uma
+ * incógnita".
+ */
+const somaOuNulo = (vs: Array<number | null>): number | null =>
+  vs.some((v) => v !== null) ? vs.reduce((s: number, v) => s + (v ?? 0), 0) : null;
 
 export default function MatrizReposicao({
   ref_,
@@ -97,7 +119,6 @@ export default function MatrizReposicao({
    */
   const [de, setDe] = useState(() => mesesAtras(12));
   const [ate, setAte] = useState(() => iso(new Date()));
-  const [escala, setEscala] = useState<'rede' | 'loja'>('rede');
 
   const [vendas, setVendas] = useState<Map<string, LinhaVendaGrade> | null>(null);
   const [cfg, setCfg] = useState<Map<string, LinhaCfg>>(new Map());
@@ -106,6 +127,7 @@ export default function MatrizReposicao({
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [vendasErro, setVendasErro] = useState(false);
+  const [cfgErro, setCfgErro] = useState(false);
 
   const lojas = useMemo(() => lojasDaGrade(skus, lojaNomes), [skus, lojaNomes]);
   const nLojas = lojas.length;
@@ -153,12 +175,23 @@ export default function MatrizReposicao({
   }, [refsCru, cor, de, ate]);
 
   const carregarCfg = useCallback(async () => {
+    setCfgErro(false);
     try {
       const qs = new URLSearchParams({ ref: ref_, marca, cor });
       const r = await api<{ tamanhos?: LinhaCfg[] }>(`/produto-ficha/reposicao?${qs}`);
       setCfg(new Map((r?.tamanhos ?? []).map((t) => [t.tamanho.toUpperCase(), t])));
     } catch {
+      /**
+       * ⚠️ FALHAR NÃO É "NADA CONFIGURADO".
+       *
+       * Engolir o erro e seguir com o mapa vazio desenha a matriz inteira em
+       * branco — indistinguível de uma cor que ninguém configurou. Pior: os
+       * campos ficariam editáveis e um Salvar por cima APAGARIA no banco a
+       * grade que a tela só não conseguiu ler. Marca o erro; a faixa avisa e
+       * os campos travam.
+       */
       setCfg(new Map());
+      setCfgErro(true);
     }
   }, [ref_, marca, cor]);
 
@@ -199,7 +232,7 @@ export default function MatrizReposicao({
       const rasc = rascunhos[tamanho]?.[campo];
       if (rasc !== undefined) return rasc === '' ? null : Number(rasc);
       const salvo = cfg.get(tamanho);
-      const v = campo === 'minimo' ? salvo?.minimoLoja : salvo?.idealLoja;
+      const v = campo === 'minimo' ? salvo?.minimoTotal : salvo?.idealTotal;
       return v ?? null;
     },
     [rascunhos, cfg],
@@ -209,9 +242,8 @@ export default function MatrizReposicao({
     () =>
       tamanhos.map((t) => {
         const v = vendas?.get(t);
-        const minimoLoja = valorCfg(t, 'minimo');
-        const idealLoja = valorCfg(t, 'ideal');
-        const idealRede = idealLoja === null ? null : idealLoja * nLojas;
+        const minimo = valorCfg(t, 'minimo');
+        const ideal = valorCfg(t, 'ideal');
         const tenho = tenhoDe(t);
         return {
           tamanho: t,
@@ -219,32 +251,35 @@ export default function MatrizReposicao({
           tenho,
           vendeu: Math.max(0, (v?.pecas ?? 0) - (v?.devolvidas ?? 0)),
           devolvidas: v?.devolvidas ?? 0,
-          minimoLoja,
-          idealLoja,
-          minimoRede: minimoLoja === null ? null : minimoLoja * nLojas,
-          idealRede,
+          minimo,
+          ideal,
           // Sem ideal não há alvo — e sem alvo não existe pedido. Nulo, não zero.
-          comprar: idealRede === null ? null : Math.max(0, idealRede - tenho),
+          comprar: ideal === null ? null : Math.max(0, ideal - tenho),
         };
       }),
-    [tamanhos, vendas, valorCfg, nLojas, tenhoDe],
+    [tamanhos, vendas, valorCfg, tenhoDe],
   );
 
-  /**
-   * Os totais nas DUAS unidades. A coluna TOT tem que falar a mesma língua
-   * das células da linha: total da rede embaixo de células por loja é a
-   * incoerência mais fácil de cometer e a mais difícil de perceber lendo.
-   * COMPRAR é sempre da rede — é peça que se compra, não média.
-   */
+  /** Uma unidade só (peça na rede), então um total só por linha. */
   const totais = useMemo(
     () => ({
       tenho: linhas.reduce((s, l) => s + l.tenho, 0),
       vendeu: linhas.reduce((s, l) => s + l.vendeu, 0),
-      minimoRede: linhas.reduce((s, l) => s + (l.minimoRede ?? 0), 0),
-      idealRede: linhas.reduce((s, l) => s + (l.idealRede ?? 0), 0),
-      minimoLoja: linhas.reduce((s, l) => s + (l.minimoLoja ?? 0), 0),
-      idealLoja: linhas.reduce((s, l) => s + (l.idealLoja ?? 0), 0),
-      comprar: linhas.reduce((s, l) => s + (l.comprar ?? 0), 0),
+      /**
+       * NULO, e não zero, quando NENHUM tamanho tem o número.
+       *
+       * A regra "sem valor a célula fica vazia" valia só pras células; os TOT
+       * somavam `?? 0` e imprimiam **0** — no caso do COMPRAR, em negrito
+       * sobre violeta, o número mais destacado da matriz — dizendo "não
+       * precisa comprar nada" sobre uma cor que ninguém configurou. E esse é
+       * o estado de TODAS as cores logo depois deste deploy, porque a
+       * renomeação da coluna esvazia o que havia; é também o que a tela mostra
+       * quando a leitura do mínimo/ideal FALHA. Zero é uma afirmação; nesses
+       * dois casos a verdade é "não sei".
+       */
+      minimo: somaOuNulo(linhas.map((l) => l.minimo)),
+      ideal: somaOuNulo(linhas.map((l) => l.ideal)),
+      comprar: somaOuNulo(linhas.map((l) => l.comprar)),
     }),
     [linhas],
   );
@@ -271,8 +306,8 @@ export default function MatrizReposicao({
       const corpo = {
         tamanhos: linhas.map((l) => ({
           tamanho: l.tamanho,
-          minimoLoja: l.minimoLoja,
-          idealLoja: l.idealLoja,
+          minimoTotal: l.minimo,
+          idealTotal: l.ideal,
         })),
       };
       const r = await api<{ tamanhos?: LinhaCfg[] }>(`/produto-ficha/reposicao?${qs}`, {
@@ -298,8 +333,9 @@ export default function MatrizReposicao({
 
   const CEL = 'px-2 py-1.5 text-center tabular-nums';
   const ROT = 'px-2.5 py-1.5 text-left';
+  /** `w-14`: o campo agora recebe o total da rede, que chega a três dígitos. */
   const CAIXA =
-    'w-12 px-1 py-1 text-center text-xs tabular-nums font-bold rounded border ' +
+    'w-14 px-1 py-1 text-center text-xs tabular-nums font-bold rounded border ' +
     'border-amber-300 bg-amber-50 text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-400';
 
   /**
@@ -313,29 +349,25 @@ export default function MatrizReposicao({
     if (l.tenho <= 0 && l.vendeu > 0) {
       return { classe: 'bg-rose-50 text-rose-700', dica: 'Vendeu e zerou' };
     }
-    if (l.idealRede === 0 && l.tenho > 0) {
+    if (l.ideal === 0 && l.tenho > 0) {
       return {
         classe: 'bg-slate-100 text-slate-500',
         dica: `Ideal zerado pra este tamanho, mas ainda tem ${l.tenho} na rede — é encalhe, não reposição`,
       };
     }
-    if (l.minimoRede !== null && l.tenho < l.minimoRede) {
-      return { classe: 'bg-amber-50 text-amber-800', dica: `Abaixo do mínimo (${l.minimoRede})` };
+    if (l.minimo !== null && l.tenho < l.minimo) {
+      return { classe: 'bg-amber-50 text-amber-800', dica: `Abaixo do mínimo (${l.minimo})` };
     }
-    if (l.idealRede) {
-      if (l.tenho >= l.idealRede) return { classe: 'bg-green-50 text-green-700', dica: 'No ideal ou acima' };
+    if (l.ideal && l.tenho >= l.ideal) {
+      return { classe: 'bg-green-50 text-green-700', dica: 'No ideal ou acima' };
     }
     return { classe: 'text-slate-700' };
   }
 
-  const btnEscala = (v: 'rede' | 'loja') =>
-    `text-[10px] font-bold px-2.5 py-1 ${
-      escala === v ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
-    }`;
-
   return (
     <div className="border border-slate-200 rounded-lg bg-white overflow-hidden">
-      {/* Cabeçalho: recorte de tempo do VENDEU + unidade da matriz. */}
+      {/* Cabeçalho: só o recorte de tempo do VENDEU. A unidade não é escolha —
+          a matriz inteira é peça na rede. */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-violet-50/60 border-b border-violet-100">
         <h4 className="text-[11px] font-bold uppercase tracking-wide text-violet-800">
           O que comprar desta cor
@@ -375,15 +407,20 @@ export default function MatrizReposicao({
           ),
         )}
 
-        <div className="ml-auto flex rounded border border-slate-300 overflow-hidden">
-          <button type="button" onClick={() => setEscala('rede')} className={btnEscala('rede')}>
-            REDE ({nLojas} lojas)
-          </button>
-          <button type="button" onClick={() => setEscala('loja')} className={btnEscala('loja')}>
-            POR LOJA
-          </button>
-        </div>
+        <span className="ml-auto text-[10px] font-bold uppercase tracking-wide text-slate-400">
+          peças na rede · {nLojas} lojas
+        </span>
       </div>
+
+      {/* Falha de leitura do mínimo/ideal: avisa em vez de deixar a tela
+          parecer "ninguém configurou". Os campos ficam travados enquanto
+          isso — Salvar por cima apagaria o que existe no banco. */}
+      {cfgErro && !carregando && (
+        <p className="px-3 py-2 text-[11px] font-bold text-rose-800 bg-rose-50 border-b border-rose-200">
+          Não deu pra carregar o mínimo e o ideal desta cor. Os campos estão travados pra não
+          gravar por cima do que já está lá — recarregue a página pra tentar de novo.
+        </p>
+      )}
 
       {carregando ? (
         <p className="px-3 py-6 text-xs text-slate-400 flex items-center gap-2">
@@ -418,20 +455,18 @@ export default function MatrizReposicao({
               <tr className="border-t border-slate-100">
                 <td className={ROT}>
                   <div className="text-[11px] font-bold text-slate-800">1 · TENHO HOJE</div>
-                  <div className="text-[9.5px] text-slate-400">
-                    {escala === 'rede' ? `soma das ${nLojas} lojas` : 'média por loja'}
-                  </div>
+                  <div className="text-[9.5px] text-slate-400">soma das {nLojas} lojas</div>
                 </td>
                 {linhas.map((l) => {
                   const { classe, dica } = semaforoTenho(l);
                   return (
                     <td key={l.tamanho} title={dica} className={`${CEL} font-bold ${classe}`}>
-                      {escala === 'rede' ? l.tenho : media(l.tenho, nLojas)}
+                      {l.tenho}
                     </td>
                   );
                 })}
                 <td className={`${CEL} font-bold border-l border-slate-200 bg-slate-50`}>
-                  {escala === 'rede' ? totais.tenho : media(totais.tenho, nLojas)}
+                  {totais.tenho}
                 </td>
               </tr>
 
@@ -450,11 +485,9 @@ export default function MatrizReposicao({
                     ) : (
                       <>
                         <span className={l.vendeu ? 'font-bold text-slate-700' : 'text-slate-300'}>
-                          {escala === 'rede' ? l.vendeu : media(l.vendeu, nLojas)}
+                          {l.vendeu}
                         </span>
-                        {/* A devolução só aparece em peça inteira. "−0,2
-                            devolvida por loja" não é informação, é ruído. */}
-                        {escala === 'rede' && l.devolvidas > 0 && (
+                        {l.devolvidas > 0 && (
                           <span className="text-[9px] text-rose-600" title={`${l.devolvidas} devolvida(s)`}>
                             {' '}−{l.devolvidas}
                           </span>
@@ -471,15 +504,13 @@ export default function MatrizReposicao({
                   </td>
                 ))}
                 <td className={`${CEL} font-bold border-l border-slate-200 bg-slate-50`}>
-                  {vendasErro ? '?' : escala === 'rede' ? totais.vendeu : media(totais.vendeu, nLojas)}
+                  {vendasErro ? '?' : totais.vendeu}
                 </td>
               </tr>
 
-              {/* 3 e 4 — o que se digita. Sempre POR LOJA, nos dois modos: é
-                  a unidade em que a decisão é tomada ("dois do 48 em cada
-                  arara"), e trocar a unidade do campo conforme o botão faria
-                  o mesmo "2" significar duas coisas. No modo REDE o total
-                  multiplicado aparece embaixo, pra comparar com a linha 1. */}
+              {/* 3 e 4 — o que se digita: PEÇA NA REDE, a mesma unidade da
+                  linha 1 logo acima. A cota da arara vira dica embaixo do
+                  campo, pra dar a noção sem virar um segundo número. */}
               {(['minimo', 'ideal'] as const).map((campo) => (
                 <tr key={campo} className="border-t border-slate-100 bg-amber-50/30">
                   <td className={ROT}>
@@ -488,13 +519,12 @@ export default function MatrizReposicao({
                     </div>
                     <div className="text-[9.5px] text-slate-400">
                       {campo === 'minimo'
-                        ? 'o que não pode faltar · por loja'
-                        : 'grade cheia · por loja'}
+                        ? 'o que não pode faltar na rede'
+                        : 'grade cheia na rede'}
                     </div>
                   </td>
                   {linhas.map((l) => {
-                    const valor = campo === 'minimo' ? l.minimoLoja : l.idealLoja;
-                    const rede = campo === 'minimo' ? l.minimoRede : l.idealRede;
+                    const valor = campo === 'minimo' ? l.minimo : l.ideal;
                     return (
                       <td key={l.tamanho} className="px-1 py-1 text-center">
                         <input
@@ -503,22 +533,30 @@ export default function MatrizReposicao({
                           max={999}
                           value={valor ?? ''}
                           placeholder="—"
-                          aria-label={`${campo === 'minimo' ? 'Mínimo' : 'Ideal'} por loja do tamanho ${l.tamanho}`}
+                          disabled={cfgErro}
+                          aria-label={`${campo === 'minimo' ? 'Mínimo' : 'Ideal'} na rede do tamanho ${l.tamanho}`}
                           onChange={(e) => digitar(l.tamanho, campo, e.target.value)}
-                          className={CAIXA}
+                          className={`${CAIXA} disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400`}
                         />
-                        {escala === 'rede' && (
-                          <span className="block text-[9px] text-amber-700/70 font-bold">
-                            {rede === null ? '' : `= ${rede}`}
-                          </span>
-                        )}
+                        {/* ZERO tem dizer próprio. `valor ? …` deixaria o
+                            0 (decisão gravada: "a rede não carrega este
+                            tamanho") com a faixa vazia, igualzinho ao nunca
+                            configurado — apagando NULO≠ZERO na única tela
+                            cuja regra central é essa. */}
+                        <span className="block text-[9px] font-bold text-amber-700/70">
+                          {valor === null
+                            ? ''
+                            : valor === 0
+                              ? <em className="not-italic text-slate-400">não carrega</em>
+                              : `≈ ${porLoja(valor, nLojas)}/loja`}
+                        </span>
                       </td>
                     );
                   })}
                   <td className={`${CEL} font-bold border-l border-slate-200 bg-slate-50`}>
-                    {escala === 'rede'
-                      ? (campo === 'minimo' ? totais.minimoRede : totais.idealRede)
-                      : (campo === 'minimo' ? totais.minimoLoja : totais.idealLoja)}
+                    {(campo === 'minimo' ? totais.minimo : totais.ideal) ?? (
+                      <span className="text-slate-300" title="Nenhum tamanho configurado">—</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -527,7 +565,7 @@ export default function MatrizReposicao({
               <tr className="bg-slate-900">
                 <td className={`${ROT} bg-slate-900`}>
                   <div className="text-[11px] font-bold text-white">5 · COMPRAR</div>
-                  <div className="text-[9.5px] text-slate-400">ideal − tenho · peças pra rede</div>
+                  <div className="text-[9.5px] text-slate-400">ideal − tenho</div>
                 </td>
                 {linhas.map((l) => (
                   <td key={l.tamanho} className={`${CEL} py-2.5`}>
@@ -546,7 +584,16 @@ export default function MatrizReposicao({
                   </td>
                 ))}
                 <td className={`${CEL} py-2.5 border-l border-violet-800 bg-violet-600`}>
-                  <span className="text-white font-bold text-sm">{totais.comprar}</span>
+                  {totais.comprar === null ? (
+                    <span
+                      className="text-violet-200"
+                      title="Nenhum tamanho tem ideal configurado — não dá pra dizer quanto comprar"
+                    >
+                      —
+                    </span>
+                  ) : (
+                    <span className="text-white font-bold text-sm">{totais.comprar}</span>
+                  )}
                 </td>
               </tr>
             </tbody>

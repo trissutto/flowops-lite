@@ -5554,16 +5554,21 @@ model ProdutoReposicao {
   cor       String
   tamanho   String
 
-  /// Quanto NÃO pode faltar em cada arara. Por LOJA, não da rede: é assim que
-  /// a pessoa pensa ("dois do 48 em cada loja"), e o total da rede é conta.
+  /// Quanto NÃO pode faltar deste tamanho — no TOTAL DA REDE, peça inteira.
+  ///
+  /// ⚠️ Nasceu (24/08) como número POR LOJA e o dono corrigiu no mesmo dia:
+  /// "é para trabalhar com total". As colunas foram RENOMEADAS de propósito em
+  /// vez de reaproveitadas — um `1` gravado no formato antigo valia 14 peças
+  /// na rede, e manter a coluna faria a tela ler esse `1` como uma peça só,
+  /// mudando o pedido em silêncio. Renomear apaga; reinterpretar mentiria.
   ///
   /// NULO ≠ ZERO, e a diferença decide o pedido: nulo é "ninguém configurou
-  /// ainda" e some da conta; zero é "esta loja não carrega este tamanho" e
-  /// vale como decisão — sem isso o tamanho que não gira volta pro pedido
-  /// toda vez que alguém abrir a tela.
-  minimoLoja Int? @map("minimo_loja")
-  /// Grade cheia por loja. É este número que manda no pedido de compra.
-  idealLoja  Int? @map("ideal_loja")
+  /// ainda" e some da conta; zero é "a rede não carrega este tamanho" e vale
+  /// como decisão — sem isso o tamanho que não gira volta pro pedido toda vez
+  /// que alguém abrir a tela.
+  minimoTotal Int? @map("minimo_total")
+  /// Grade cheia na rede. É este número que manda no pedido de compra.
+  idealTotal  Int? @map("ideal_total")
 
   atualizadoPor String?  @map("atualizado_por")
   createdAt     DateTime @default(now()) @map("created_at")
