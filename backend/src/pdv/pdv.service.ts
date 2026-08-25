@@ -479,16 +479,42 @@ export class PdvService {
       pedidos.map((o: any) => soDigitos(o.customerPhone)).filter((p: string) => p.length >= 10),
     );
 
-    // Já virou venda no PDV (importada antes) → sai da lista de pendências. A
-    // venda existe e está na tela dela; repetir aqui é alarme falso, e alarme
-    // falso mata a confiança na lista inteira.
+    /**
+     * Já virou venda no PDV (importada antes) → sai da lista de pendências. A
+     * venda existe e está na tela dela; repetir aqui é alarme falso, e alarme
+     * falso mata a confiança na lista inteira.
+     *
+     * 🚨 VENDA CANCELADA NÃO SEGURA O CARRINHO (25/08). O filtro não olhava o
+     * status: bastava EXISTIR uma venda vinculada pra linha sumir — inclusive
+     * quando ela tinha sido cancelada, e a peça portanto NÃO foi vendida. A
+     * cliente sumia da fila do PDV de todas as lojas e, na retaguarda (onde a
+     * linha continuava), o botão "Fechar esta venda no PDV" respondia 400
+     * "este carrinho JÁ virou venda". Carrinho invisível de um lado e
+     * intocável do outro: o único caminho que sobrava era fechar por fora, que
+     * é exatamente o buraco que este botão existe pra tapar.
+     *
+     * Medido em produção no dia: 2 capturas ativas nessa situação
+     * (R$ 199,70 e R$ 139,80), as duas com a venda cancelada e nenhuma baixa.
+     *
+     * 🚨 VENDA ABERTA VAZIA TAMBÉM NÃO SEGURA. Quando NENHUMA peça resolve
+     * (REF fora do catálogo, cor/tamanho que sumiu), a venda nasce aberta e
+     * SEM ITEM — não há nada na tela de ninguém pra fechar, e o carrinho
+     * sumia da fila do mesmo jeito. Medido: 1 captura de 21/08 (R$ 69,90)
+     * escondida atrás de uma venda aberta com zero item desde 24/08. Reabrir a
+     * linha não duplica venda: quem clicar recebe de volta a MESMA venda
+     * aberta (ver `importarContatoCapturado`).
+     */
+    const vendasLigadas: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        carrinhoRecoveryId: { in: capturas.map((r: any) => r.id) },
+        status: { not: 'cancelled' },
+      },
+      select: { carrinhoRecoveryId: true, status: true, _count: { select: { items: true } } },
+    });
     const jaImportados = new Set(
-      (
-        await (this.prisma as any).pdvSale.findMany({
-          where: { carrinhoRecoveryId: { in: capturas.map((r: any) => r.id) } },
-          select: { carrinhoRecoveryId: true },
-        })
-      ).map((s: any) => s.carrinhoRecoveryId),
+      vendasLigadas
+        .filter((s: any) => s.status !== 'open' || Number(s._count?.items ?? 0) > 0)
+        .map((s: any) => s.carrinhoRecoveryId),
     );
 
     return capturas
@@ -622,6 +648,27 @@ export class PdvService {
       throw new BadRequestException(
         `Este carrinho já foi PAGO (${carrinho.wcOrderNumber}) — não é abandonado. ` +
           'Importar criaria uma segunda venda da mesma peça.',
+      );
+    }
+    /**
+     * Já FECHOU no PDV: recusa. O guard normal deste caminho é o `paidAt` do
+     * carrinho logo acima (o fechamento marca o `Order` como recuperado), mas
+     * aquela marcação é best-effort — se ela falhar, o vínculo da venda é a
+     * única coisa que impede vender a mesma peça duas vezes. Mesma régua do
+     * caminho da captura, que não tem `paidAt` nenhum pra consultar.
+     *
+     * Venda CANCELADA fica de fora de propósito: cancelou, não vendeu — o
+     * carrinho volta a ser importável.
+     */
+    const jaVendidaNoPdv = await (this.prisma as any).pdvSale.findFirst({
+      where: { carrinhoOrderId: carrinho.id, status: { notIn: ['open', 'cancelled'] } },
+      select: { id: true, storeCode: true, storeName: true, createdAt: true },
+    });
+    if (jaVendidaNoPdv) {
+      throw new BadRequestException(
+        `Este carrinho JÁ virou venda no PDV ` +
+          `(${jaVendidaNoPdv.storeName || `loja ${jaVendidaNoPdv.storeCode}`}) — ` +
+          'importar de novo venderia a mesma peça duas vezes.',
       );
     }
     // Já importado antes: devolve a venda existente em vez de criar outra.
@@ -758,29 +805,67 @@ export class PdvService {
     });
     if (!captura) throw new NotFoundException('Carrinho não encontrado');
 
-    // Já importado antes: devolve a venda existente. Dois cliques no botão não
-    // podem virar duas vendas. Diferente do caminho do `Order`, aqui vale
-    // TAMBÉM pra venda já finalizada — a captura não tem `paidAt` pra avisar
-    // que a peça já foi vendida, então a única defesa contra vender duas vezes
-    // é o vínculo.
-    const jaImportado = await (this.prisma as any).pdvSale.findFirst({
+    /**
+     * JÁ IMPORTADO ANTES — e o que decide é o ESTADO da venda, não a
+     * existência do vínculo.
+     *
+     * Dois cliques no botão não podem virar duas vendas, e diferente do
+     * caminho do `Order` aqui a defesa TEM que valer pra venda finalizada: a
+     * captura não tem `paidAt` pra avisar que a peça já foi vendida.
+     *
+     * 🚨 MAS VENDA CANCELADA NÃO VENDEU NADA (25/08). O código olhava só a
+     * última venda vinculada e recusava tudo que não estivesse `open` —
+     * cancelada inclusive. Resultado: a operadora importava, cancelava (peça
+     * errada, cliente desistiu do tamanho, o que for) e o carrinho ficava
+     * MORTO: sumia da fila do PDV (ver `listarContatosCapturados`) e, na
+     * retaguarda, o botão respondia 400 "já virou venda" pra sempre. Sobrava
+     * fechar por fora — o buraco que este botão existe pra tapar.
+     *
+     * Por isso a busca traz TODAS as vendas do carrinho, na ordem:
+     *   • alguma que não é `open` nem `cancelled` (finalizada) → recusa, a
+     *     peça já foi vendida de verdade;
+     *   • alguma `open` → devolve ELA (é a venda montada esperando na tela);
+     *   • só canceladas → importa de novo, venda nova.
+     */
+    const vendasDoCarrinho: any[] = await (this.prisma as any).pdvSale.findMany({
       where: { carrinhoRecoveryId: captura.id },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, storeCode: true, status: true },
+      select: { id: true, storeCode: true, storeName: true, status: true, createdAt: true },
     });
-    if (jaImportado) {
-      if (jaImportado.status !== 'open') {
-        throw new BadRequestException(
-          'Este carrinho JÁ virou venda no PDV — importar de novo venderia a mesma peça duas vezes.',
-        );
-      }
+    const jaVendida = vendasDoCarrinho.find(
+      (v: any) => v.status !== 'open' && v.status !== 'cancelled',
+    );
+    if (jaVendida) {
+      const onde = jaVendida.storeName || `loja ${jaVendida.storeCode}`;
+      const quando = jaVendida.createdAt
+        ? jaVendida.createdAt.toLocaleString('pt-BR', {
+            timeZone: 'America/Sao_Paulo',
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : null;
+      throw new BadRequestException(
+        `Este carrinho JÁ virou venda no PDV (${onde}${quando ? `, ${quando}` : ''}) — ` +
+          'importar de novo venderia a mesma peça duas vezes.',
+      );
+    }
+    const jaAberta = vendasDoCarrinho.find((v: any) => v.status === 'open');
+    if (jaAberta) {
       return {
-        saleId: jaImportado.id,
-        storeCode: jaImportado.storeCode,
+        saleId: jaAberta.id,
+        storeCode: jaAberta.storeCode,
         jaExistia: true,
         importados: 0,
         faltaram: [] as string[],
       };
+    }
+    if (vendasDoCarrinho.length) {
+      this.logger.log(
+        `[importar-carrinho] captura ${captura.id}: ${vendasDoCarrinho.length} venda(s) ` +
+          'cancelada(s) antes — a peça não foi vendida, importando de novo.',
+      );
     }
 
     const pecas: any[] = Array.isArray(captura.items) ? captura.items : [];
