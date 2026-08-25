@@ -78,6 +78,85 @@ export const MOTIVOS_BAIXA: Array<{ slug: string; label: string }> = [
 const soDigitosFone = (v: unknown) =>
   String(v ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
 
+/**
+ * QUEM JÁ CHAMOU A CLIENTE — marcado no CLIQUE do botão de WhatsApp.
+ *
+ * O gatilho é o clique porque passo manual é passo esquecido: quem abre a
+ * conversa É quem está atendendo, e a tela não pode depender de a operadora
+ * lembrar de avisar as colegas. A chave é o TELEFONE (ver o model
+ * `CarrinhoAtendimento`): a marca vale pra PESSOA, em todas as linhas dela.
+ *
+ * Mora aqui — e não só no `AbandonedCartsService` — desde que o PDV ganhou o
+ * mesmo botão (25/08). São duas telas sobre a MESMA fila: se a loja abrisse a
+ * conversa sem marcar, a matriz veria a linha livre e mandaria a segunda
+ * mensagem pra cliente que já está conversando com alguém.
+ */
+export async function assumirAtendimentoCarrinho(
+  prisma: any,
+  telefoneRaw: unknown,
+  user: any,
+  opts?: { padrao?: string; aviso?: (msg: string) => void },
+) {
+  const telefone = soDigitosFone(telefoneRaw);
+  if (telefone.length < 10) {
+    return { ok: false, error: 'Telefone inválido pra marcar atendimento.' };
+  }
+  const nome = String(user?.name || user?.email || opts?.padrao || 'Matriz').trim().slice(0, 120);
+  const dados = {
+    usuarioId: user?.sub || user?.id || null,
+    usuarioNome: nome,
+    usuarioEmail: user?.email ? String(user.email).slice(0, 160) : null,
+    assumidoEm: new Date(),
+  };
+  try {
+    // Reassumir é upsert de propósito: se a colega de 3h atrás não fechou, quem
+    // está falando com a cliente AGORA é quem aparece na tag.
+    await prisma.carrinhoAtendimento.upsert({
+      where: { telefone },
+      create: { telefone, ...dados },
+      update: dados,
+    });
+    return { ok: true, telefone, por: nome, desde: dados.assumidoEm.toISOString() };
+  } catch (e: any) {
+    // Marcar é aviso entre colegas, não trava: falhar aqui não pode impedir o
+    // WhatsApp de abrir (o front já abriu a janela antes de chamar).
+    opts?.aviso?.(`[carrinhos] não consegui marcar atendimento: ${e?.message ?? e}`);
+    return { ok: false, error: 'Não consegui marcar o atendimento.' };
+  }
+}
+
+/** Teto de linhas lidas de uma vez — guarda de memória, não regra de negócio. */
+const ATENDIMENTO_TETO_LINHAS = 2_000;
+
+/**
+ * Atendimentos em aberto, pra tela pintar a tag em qualquer linha daquele
+ * telefone — venha ela do pedido, da captura ou do WooCommerce.
+ *
+ * SEM FILTRO DE TEMPO desde 25/08: quem sai da lista é quem teve desfecho. O
+ * teto vem ordenado do mais recente — se um dia estourar, o que cai fora é o
+ * mais velho, que é o menos útil.
+ */
+export async function atendimentosAtivosCarrinho(prisma: any, aviso?: (msg: string) => void) {
+  try {
+    const linhas = await prisma.carrinhoAtendimento.findMany({
+      orderBy: { assumidoEm: 'desc' },
+      take: ATENDIMENTO_TETO_LINHAS,
+    });
+    return {
+      ok: true,
+      valeMin: null,
+      ativos: linhas.map((l: any) => ({
+        telefone: l.telefone,
+        por: l.usuarioNome,
+        desde: l.assumidoEm?.toISOString?.() ?? null,
+      })),
+    };
+  } catch (e: any) {
+    aviso?.(`[carrinhos] não consegui ler os atendimentos: ${e?.message ?? e}`);
+    return { ok: true, valeMin: null, ativos: [] };
+  }
+}
+
 export function desfechoPublico(d: any) {
   return {
     chave: d.chave,

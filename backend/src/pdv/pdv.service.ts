@@ -22,6 +22,8 @@ import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import {
+  assumirAtendimentoCarrinho,
+  atendimentosAtivosCarrinho,
   baixasPorChave,
   carrinhoTetoNascimento,
   chaveCarrinhoContato,
@@ -57,6 +59,14 @@ import {
  *                         WhatsApp na etapa 1 e saiu antes de criar pedido.
  *                         Sem `order_id`; quem importa a venda é `recovery_id`.
  */
+/**
+ * Telefone virado em CHAVE — a mesma normalização de `CarrinhoAtendimento`
+ * (só dígitos, sem o 55 da frente). Idempotente: aceita `(13) 99621-8277`,
+ * `13996218277` e `5513996218277` e devolve sempre a mesma coisa.
+ */
+const soDigitosFonePdv = (v: unknown) =>
+  String(v ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+
 type CarrinhoDoPdv = {
   /** ⚠️ Sintético (970.000.000 + posição) nas linhas de contato — só `key` de tela. */
   id: number;
@@ -76,6 +86,11 @@ type CarrinhoDoPdv = {
   time: string | null;
   utmCampaign: string | null;
   source: 'ecommerce' | 'ecommerce-contact';
+  /**
+   * Alguém JÁ está falando com esta cliente (a matriz na aba Carrinhos ou
+   * outra loja no PDV). Vem por TELEFONE: vale pra pessoa, não pra linha.
+   */
+  atendimento?: { por: string; desde: string | null } | null;
 };
 
 @Injectable()
@@ -385,6 +400,25 @@ export class PdvService {
     );
     const abertos = baixas.size ? items.filter((i) => !baixas.has(i.chave)) : items;
 
+    /**
+     * QUEM JÁ ESTÁ FALANDO COM ELA — a mesma tag da aba Carrinhos da matriz.
+     *
+     * A fila é UMA só e agora tem dois botões de WhatsApp apontando pra ela (o
+     * da retaguarda e o do PDV). Sem trazer a marca pra cá, a loja abriria a
+     * conversa por cima de quem já está atendendo — e a cliente receberia a
+     * segunda mensagem da mesma casa, cobrando o mesmo carrinho.
+     */
+    const atendimentos = await atendimentosAtivosCarrinho(this.prisma as any, (m) =>
+      this.logger.warn(m),
+    );
+    if (atendimentos.ativos.length) {
+      const porFone = new Map(atendimentos.ativos.map((a: any) => [a.telefone, a]));
+      for (const it of abertos) {
+        const a: any = porFone.get(soDigitosFonePdv(it.phone));
+        if (a) it.atendimento = { por: a.por, desde: a.desde ?? null };
+      }
+    }
+
     return { items: abertos, total: abertos.length };
   }
 
@@ -505,6 +539,20 @@ export class PdvService {
   /** Desfaz a baixa — a linha volta pra fila. Baixa errada tem que ter volta. */
   async reabrirCarrinhoBaixa(chave: string) {
     return reabrirCarrinhoBaixado(this.prisma as any, chave);
+  }
+
+  /**
+   * A LOJA ABRIU O WHATSAPP DA CLIENTE — marca quem está atendendo.
+   *
+   * Mesma função da retaguarda (`common/carrinho-abandonado`): a fila é a
+   * mesma e a marca vale pra PESSOA. O nome que aparece é o de quem clicou;
+   * sem nome no token, cai no da loja, que já diz mais do que "alguém".
+   */
+  async assumirAtendimentoCarrinho(telefone: string, user: any) {
+    return assumirAtendimentoCarrinho(this.prisma as any, telefone, user, {
+      padrao: user?.storeName || (user?.storeCode ? `Loja ${user.storeCode}` : 'Loja'),
+      aviso: (m) => this.logger.warn(m),
+    });
   }
 
   /** Os motivos + as baixas do período, pro modal do PDV mostrar e desfazer. */

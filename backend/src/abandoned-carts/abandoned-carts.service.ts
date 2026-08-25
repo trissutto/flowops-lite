@@ -5,6 +5,8 @@ import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { extractAttributionRaw } from '../woocommerce/attribution.util';
 import {
+  assumirAtendimentoCarrinho,
+  atendimentosAtivosCarrinho,
   baixasPorChave,
   carrinhoEsperaMin,
   chaveCarrinhoContato,
@@ -774,7 +776,6 @@ export class AbandonedCartsService {
    * como "não convertido" (`marcarNaoConvertido`, que apaga o atendimento junto)
    * ou a venda fecha. Existe saída — e ela é humana, não temporal.
    */
-  private static readonly ATENDIMENTO_TETO_LINHAS = 2_000;
 
   /**
    * IDADE MÍNIMA PRA UM CARRINHO SER CHAMADO DE ABANDONADO — 1 hora (dono, 25/08).
@@ -798,32 +799,12 @@ export class AbandonedCartsService {
    * a marca vale pra PESSOA, em todas as linhas dela.
    */
   async assumirAtendimento(telefoneRaw: string, user: any) {
-    const telefone = AbandonedCartsService.soDigitosFone(telefoneRaw);
-    if (telefone.length < 10) {
-      return { ok: false, error: 'Telefone inválido pra marcar atendimento.' };
-    }
-    const nome = String(user?.name || user?.email || 'Matriz').trim().slice(0, 120);
-    const dados = {
-      usuarioId: user?.sub || user?.id || null,
-      usuarioNome: nome,
-      usuarioEmail: user?.email ? String(user.email).slice(0, 160) : null,
-      assumidoEm: new Date(),
-    };
-    try {
-      // Reassumir é upsert de propósito: se a colega de 3h atrás não fechou, quem
-      // está falando com a cliente AGORA é quem aparece na tag.
-      await (this.prisma as any).carrinhoAtendimento.upsert({
-        where: { telefone },
-        create: { telefone, ...dados },
-        update: dados,
-      });
-      return { ok: true, telefone, por: nome, desde: dados.assumidoEm.toISOString() };
-    } catch (e: any) {
-      // Marcar é aviso entre colegas, não trava: falhar aqui não pode impedir o
-      // WhatsApp de abrir (o front já abriu a janela antes de chamar).
-      this.logger.warn(`[carrinhos] não consegui marcar atendimento: ${e?.message ?? e}`);
-      return { ok: false, error: 'Não consegui marcar o atendimento.' };
-    }
+    // A regra mora em `common/carrinho-abandonado`: o PDV marca a MESMA fila
+    // pelo botão dele, e duas cópias desta função voltariam a discordar.
+    return assumirAtendimentoCarrinho(this.prisma as any, telefoneRaw, user, {
+      padrao: 'Matriz',
+      aviso: (m) => this.logger.warn(m),
+    });
   }
 
   /**
@@ -835,24 +816,7 @@ export class AbandonedCartsService {
    * se um dia estourar, o que cai fora é o mais velho, que é o menos útil.
    */
   async atendimentosAtivos() {
-    try {
-      const linhas = await (this.prisma as any).carrinhoAtendimento.findMany({
-        orderBy: { assumidoEm: 'desc' },
-        take: AbandonedCartsService.ATENDIMENTO_TETO_LINHAS,
-      });
-      return {
-        ok: true,
-        valeMin: null,
-        ativos: linhas.map((l: any) => ({
-          telefone: l.telefone,
-          por: l.usuarioNome,
-          desde: l.assumidoEm?.toISOString?.() ?? null,
-        })),
-      };
-    } catch (e: any) {
-      this.logger.warn(`[carrinhos] não consegui ler os atendimentos: ${e?.message ?? e}`);
-      return { ok: true, valeMin: null, ativos: [] };
-    }
+    return atendimentosAtivosCarrinho(this.prisma as any, (m) => this.logger.warn(m));
   }
 
   // ==========================================================================

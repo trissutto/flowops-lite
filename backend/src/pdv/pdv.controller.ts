@@ -396,6 +396,24 @@ export class PdvController {
     return this.svc.marcarCarrinhoNaoConvertido(body || {}, req?.user);
   }
 
+  /**
+   * POST /pdv/carrinhos-abandonados/atendimento { telefone }
+   *
+   * "EU JÁ ESTOU FALANDO COM ELA" — disparado pelo clique no botão de WhatsApp
+   * do modal, igual à aba Carrinhos da retaguarda.
+   *
+   * Sem isto o botão novo criaria o problema que a tag existe pra evitar: a
+   * loja abre a conversa, a matriz não vê nada e manda a SEGUNDA mensagem
+   * cobrando o mesmo carrinho. A rota é do PDV (aceita `role: store`) porque
+   * `/abandoned-carts/atendimento` tem AdminOnlyGuard.
+   */
+  @Post('carrinhos-abandonados/atendimento')
+  assumirAtendimentoCarrinho(@Req() req: any, @Body() body: any) {
+    this.requireRole(req);
+    PdvController.exigirLojaDeCarrinho(req?.user?.role, String(req?.user?.storeCode ?? '').trim());
+    return this.svc.assumirAtendimentoCarrinho(String(body?.telefone ?? ''), req?.user);
+  }
+
   /** Desfaz a baixa — baixa errada tem que ter volta. */
   @Post('carrinhos-abandonados/desfecho/reabrir')
   reabrirCarrinhoBaixa(@Req() req: any, @Body() body: any) {

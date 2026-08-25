@@ -30,7 +30,7 @@ import {
   FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, Printer,
-  RefreshCw, Handshake, Moon, Sun, Package,
+  RefreshCw, Handshake, Moon, Sun, Package, MessageCircle,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -10754,6 +10754,8 @@ function CarrinhosAbandonadosModal({
     items_count?: number;
     time?: string | null;
     utmCampaign?: string | null;
+    /** Alguém (matriz ou outra loja) já abriu a conversa com esta cliente. */
+    atendimento?: { por: string; desde: string | null } | null;
   };
   const [itens, setItens] = useState<Carrinho[]>([]);
   const [carregando, setCarregando] = useState(true);
@@ -10769,6 +10771,11 @@ function CarrinhosAbandonadosModal({
    */
   type MotivoBaixa = { slug: string; label: string };
   const [motivos, setMotivos] = useState<MotivoBaixa[]>([]);
+  /**
+   * QUEM JÁ CHAMOU A CLIENTE — por TELEFONE, não por linha: a mesma pessoa
+   * aparece em mais de um carrinho e a marca vale pra ela toda.
+   */
+  const [atendidos, setAtendidos] = useState<Record<string, { por: string; desde: string | null }>>({});
   const [baixando, setBaixando] = useState<Carrinho | null>(null);
   const [motivoSel, setMotivoSel] = useState('');
   const [obsBaixa, setObsBaixa] = useState('');
@@ -10811,6 +10818,68 @@ function CarrinhosAbandonadosModal({
         .some((v) => String(v).toLowerCase().includes(q)),
     );
   }, [itens, busca]);
+
+  /** Telefone virado em chave — a MESMA normalização do backend. */
+  const soFone = (v?: string | null) =>
+    String(v ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+
+  /**
+   * FALAR COM A CLIENTE — o botão que faltava (dono, 25/08).
+   *
+   * A tela listava nome, peças e valor e o único caminho pra frente era
+   * "Fechar venda" — mas ninguém fecha venda de carrinho abandonado sem antes
+   * conversar. A atendente saía do sistema, procurava a cliente no WhatsApp na
+   * mão e voltava; quando voltava, muitas vezes já tinha fechado por fora.
+   *
+   * É a MESMA rotina da aba Carrinhos da retaguarda: mensagem pronta, conversa
+   * no WhatsApp que já está logado NESTE PC (`lib/whatsapp`, nunca aba nova) e
+   * a marca de atendimento avisando as colegas.
+   */
+  function whatsapp(c: Carrinho) {
+    const nome = String(c.first_name || '').trim().split(' ')[0] || 'cliente';
+    const valor = brl(Number(c.cart_total || 0));
+    const msg =
+      `Olá, ${nome}! Aqui é da Lurd's Plus Size. Vi que você separou peças no valor de ` +
+      `${valor} no nosso site. Posso te ajudar a finalizar?`;
+    /**
+     * A CONVERSA ABRE PRIMEIRO, E ISSO É REGRA — não estilo. Protocolo e popup
+     * têm que sair no gesto SÍNCRONO do clique, senão o navegador bloqueia. A
+     * marcação vai depois, sem await: avisar a colega nunca pode ficar entre a
+     * atendente e a cliente.
+     */
+    if (!abrirWhatsApp(c.phone, msg)) {
+      toast('error', 'Telefone não dá pra abrir', 'O cadastro desta cliente não tem um WhatsApp válido.');
+      return;
+    }
+    void assumirAtendimento(c.phone);
+  }
+
+  /**
+   * "EU ESTOU FALANDO COM ELA" — pinta na hora e só então confirma no servidor.
+   *
+   * A lista da matriz recarrega a cada 60s e a colega ao lado precisa ver a tag
+   * AGORA. Se o POST falhar, a marca some sozinha no próximo carregamento: o
+   * erro se corrige, e não vale um alerta no meio do atendimento.
+   */
+  async function assumirAtendimento(telefone?: string | null) {
+    const fone = soFone(telefone);
+    if (fone.length < 10) return;
+    setAtendidos((prev) => ({
+      ...prev,
+      [fone]: { por: 'você', desde: new Date().toISOString() },
+    }));
+    try {
+      const r = await api<{ ok?: boolean; por?: string; desde?: string }>(
+        '/pdv/carrinhos-abandonados/atendimento',
+        { method: 'POST', body: JSON.stringify({ telefone: fone }) },
+      );
+      if (r?.ok && r.por) {
+        setAtendidos((prev) => ({ ...prev, [fone]: { por: r.por!, desde: r.desde ?? null } }));
+      }
+    } catch {
+      /* ver o comentário acima: a tag se corrige no próximo carregamento */
+    }
+  }
 
   async function importar(c: Carrinho) {
     setImportando(c.id);
@@ -10963,7 +11032,7 @@ function CarrinhosAbandonadosModal({
           <div className="flex-1">
             <div className="font-black text-[#2B2B2B]">Carrinhos abandonados</div>
             <div className="text-[11px] text-slate-500">
-              Cliente fechou com você? Clica nela que a venda abre pronta — você só escolhe como recebeu.
+              Chame no WhatsApp sem sair daqui. Fechou com você? A venda abre pronta — você só escolhe como recebeu.
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-2xl leading-none px-2">×</button>
@@ -10993,10 +11062,26 @@ function CarrinhosAbandonadosModal({
             // é melhor ela já pedir CPF/e-mail/endereço no telefone do que
             // descobrir na hora de gerar o PIX.
             const soContato = c.source === 'ecommerce-contact';
+            // Alguém da casa já puxou conversa com ESTA cliente — a marca vale
+            // pelo telefone e não vence no relógio: sai na baixa ou na venda.
+            const atendida = atendidos[soFone(c.phone)] || c.atendimento || null;
             return (
               <div key={c.id} className="rounded-lg border-2 border-slate-200 p-3 flex items-center gap-3 flex-wrap">
                 <div className="flex-1 min-w-[180px]">
-                  <div className="font-bold text-sm text-[#2B2B2B]">{nome}</div>
+                  <div className="font-bold text-sm text-[#2B2B2B]">
+                    {nome}
+                    {/* SÓLIDA de propósito: não é status do carrinho, é
+                        "não ligue pra esta, já tem gente" — precisa parar o
+                        olho de quem varre a lista. */}
+                    {atendida && (
+                      <span
+                        className="ml-2 align-middle text-[10px] bg-indigo-600 text-white px-1.5 py-0.5 rounded font-bold uppercase"
+                        title={`${atendida.por} abriu a conversa com esta cliente. A marca fica até alguém dar baixa no carrinho (ou a venda fechar).`}
+                      >
+                        Em atendimento · {atendida.por}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2">
                     {c.phone && <span>{c.phone}</span>}
                     {c.items_count ? <span>{c.items_count} peça(s)</span> : null}
@@ -11013,6 +11098,24 @@ function CarrinhosAbandonadosModal({
                 <div className="font-black tabular-nums text-[#2E7D46]">
                   {brl(Number(c.cart_total || 0))}
                 </div>
+                {/* FALAR COM ELA — o primeiro passo real do atendimento, e por
+                    isso vem ANTES dos outros dois. Contorno, não verde sólido:
+                    no PDV o verde cheio é do dinheiro (o "Fechar venda" ao
+                    lado), e dois botões verdes disputariam o mesmo olhar. */}
+                {c.phone && (
+                  <button
+                    type="button"
+                    onClick={() => whatsapp(c)}
+                    title={
+                      atendida
+                        ? `${atendida.por} já está falando com esta cliente — confira antes de mandar outra mensagem.`
+                        : 'Abre a conversa no WhatsApp deste PC, com a mensagem pronta'
+                    }
+                    className="rounded-lg border-2 border-[#2E7D46] text-[#2E7D46] hover:bg-[#EAF4EC] px-3 py-2 text-sm font-bold inline-flex items-center gap-1.5"
+                  >
+                    <MessageCircle className="w-4 h-4" /> WhatsApp
+                  </button>
+                )}
                 {/* Discreto ao lado do botão que dá dinheiro — mas presente:
                     sem ele a linha resolvida fica na fila pra sempre. */}
                 {motivos.length > 0 && (

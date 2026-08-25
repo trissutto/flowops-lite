@@ -159,31 +159,65 @@ sessoes AS (
    GROUP BY 1
 ),
 -- CONVERSÃO ASSISTIDA ("offline"): veio do anúncio, largou o carrinho, alguém
--- puxou no WhatsApp e a venda fechou — muitas vezes no PDV, sem UTM nenhuma.
+-- puxou no WhatsApp e a venda fechou FORA do site — quase sempre no PDV da loja.
+--
+-- São TRÊS jeitos de a mesma coisa acontecer, e por muito tempo só o primeiro
+-- era contado. Os outros dois são a venda de carrinho recuperado fechada no
+-- caixa: o \`ped\` lá em cima só olha \`source IN ('site','ecommerce')\`, então
+-- pedido \`pdv_online\` nunca entrou na receita — e o ramo (1) exige \`utm_id\`
+-- NULO, ou seja, CARREGAR a campanha do carrinho era justamente o que fazia a
+-- venda sumir das duas pontas. Medido em 24-25/08: 4 vendas / R$ 1.480,81 em 30
+-- dias invisíveis por esse motivo, e são elas que a loja fecha depois de puxar
+-- a cliente no WhatsApp pelo modal "Carrinhos abandonados" do PDV.
 assistida AS (
   SELECT campanha_id, COUNT(*)::int AS pedidos, SUM(valor) AS receita
     FROM (
+      -- (1) A VENDA SEM CAMPANHA PRÓPRIA, casada com o carrinho pelo TELEFONE.
       -- DISTINCT ON (v.id): uma venda conta UMA vez. Sem isto, cliente que
       -- largou o carrinho 3 vezes fazia a MESMA venda entrar 3 vezes — inflou
       -- o offline de R$ 1.510,97 pra R$ 10.524,69 (7×) na primeira medição.
-      SELECT DISTINCT ON (v.id)
-             v.id,
-             COALESCE(r.attribution::jsonb->>'utm_id', ori.utm_id) AS campanha_id,
-             COALESCE(v.total_amount, 0)::numeric                  AS valor
-        FROM checkout_recoveries r
-        LEFT JOIN LATERAL (
-          SELECT se.dados->>'utm_id' AS utm_id FROM site_eventos se
-           WHERE se.session_id = r.session_id AND se.dados->>'utm_id' IS NOT NULL
-           ORDER BY se.criado_em LIMIT 1
-        ) ori ON TRUE
-        JOIN orders v
-          ON RIGHT(regexp_replace(COALESCE(v.customer_phone,''), '\\D', '', 'g'), 11)
-           = RIGHT(regexp_replace(COALESCE(r.telefone,''),      '\\D', '', 'g'), 11)
-         AND COALESCE(v.paid_at, v.created_at) >  r.created_at
-         AND COALESCE(v.paid_at, v.created_at) <  r.created_at + INTERVAL '14 days'
-       WHERE length(regexp_replace(COALESCE(r.telefone,''), '\\D', '', 'g')) >= 10
-         -- Venda que trouxe a PRÓPRIA campanha já está na receita online.
-         AND v.utm_id IS NULL
+      SELECT * FROM (
+        SELECT DISTINCT ON (v.id)
+               v.id,
+               COALESCE(r.attribution::jsonb->>'utm_id', ori.utm_id) AS campanha_id,
+               COALESCE(v.total_amount, 0)::numeric                  AS valor
+          FROM checkout_recoveries r
+          LEFT JOIN LATERAL (
+            SELECT se.dados->>'utm_id' AS utm_id FROM site_eventos se
+             WHERE se.session_id = r.session_id AND se.dados->>'utm_id' IS NOT NULL
+             ORDER BY se.criado_em LIMIT 1
+          ) ori ON TRUE
+          JOIN orders v
+            ON RIGHT(regexp_replace(COALESCE(v.customer_phone,''), '\\D', '', 'g'), 11)
+             = RIGHT(regexp_replace(COALESCE(r.telefone,''),      '\\D', '', 'g'), 11)
+           AND COALESCE(v.paid_at, v.created_at) >  r.created_at
+           AND COALESCE(v.paid_at, v.created_at) <  r.created_at + INTERVAL '14 days'
+         WHERE length(regexp_replace(COALESCE(r.telefone,''), '\\D', '', 'g')) >= 10
+           -- Quem trouxe a PRÓPRIA campanha é o ramo (2) logo abaixo — aqui
+           -- entraria duas vezes.
+           AND v.utm_id IS NULL
+           AND v.status NOT IN ('cancelled','canceled','failed','payment_failed')
+           AND CASE WHEN v.source IN ('ecommerce','loja','pdv_online')
+                    THEN v.paid_at IS NOT NULL
+                    ELSE v.status NOT IN ('awaiting_payment','pending')
+               END
+           AND COALESCE(v.paid_at, v.created_at) >= $1
+           AND COALESCE(v.paid_at, v.created_at) <= $2
+         -- O contato MAIS RECENTE antes da venda leva o crédito.
+         ORDER BY v.id, r.created_at DESC
+      ) casada
+      UNION ALL
+      -- (2) A VENDA QUE TROUXE A CAMPANHA DO CARRINHO e não é pedido do site:
+      -- carrinho importado pro PDV e fechado como VENDA ONLINE (\`pdv_online\`).
+      -- O \`PedidoOnlineService\` copia utm/fbc do carrinho pro pedido novo — é o
+      -- único lugar onde a campanha existe — e é essa cópia que a tela precisa
+      -- enxergar. Sem \`utm_id\` a linha cai no ramo (1) pelo telefone.
+      SELECT v.id,
+             NULLIF(TRIM(v.utm_id), '')            AS campanha_id,
+             COALESCE(v.total_amount, 0)::numeric  AS valor
+        FROM orders v
+       WHERE v.source NOT IN ('site','ecommerce')
+         AND NULLIF(TRIM(v.utm_id), '') IS NOT NULL
          AND v.status NOT IN ('cancelled','canceled','failed','payment_failed')
          AND CASE WHEN v.source IN ('ecommerce','loja','pdv_online')
                   THEN v.paid_at IS NOT NULL
@@ -191,8 +225,36 @@ assistida AS (
              END
          AND COALESCE(v.paid_at, v.created_at) >= $1
          AND COALESCE(v.paid_at, v.created_at) <= $2
-       -- O contato MAIS RECENTE antes da venda leva o crédito.
-       ORDER BY v.id, r.created_at DESC
+      UNION ALL
+      -- (3) A VENDA DE BALCÃO: o mesmo carrinho, fechado no caixa em dinheiro,
+      -- PIX ou cartão — a cliente combinou no WhatsApp e passou na loja. Aí NÃO
+      -- nasce pedido nenhum (o \`Order\` só é criado quando TODO o pagamento é
+      -- \`venda_online\`), então a campanha morreria com a venda.
+      --
+      -- A campanha vem do carrinho de origem, que a venda já aponta desde a
+      -- importação (\`carrinho_order_id\`/\`carrinho_recovery_id\`) — sem cópia
+      -- nova, sem coluna nova, e vale retroativo pro que já foi vendido.
+      --
+      -- O \`EXISTS\` de pagamento que NÃO é \`venda_online\` é o que impede contar
+      -- duas vezes: venda 100% online já entrou pelo pedido dela no ramo (2).
+      SELECT s.id,
+             COALESCE(
+               NULLIF(TRIM(co.utm_id), ''),
+               NULLIF(TRIM(cr.attribution::jsonb->>'utm_id'), '')
+             )                              AS campanha_id,
+             COALESCE(s.total, 0)::numeric  AS valor
+        FROM pdv_sales s
+        LEFT JOIN orders              co ON co.id = s.carrinho_order_id
+        LEFT JOIN checkout_recoveries cr ON cr.id = s.carrinho_recovery_id
+       WHERE s.status = 'finalized'
+         AND COALESCE(s.is_training, false) = false
+         AND (s.carrinho_order_id IS NOT NULL OR s.carrinho_recovery_id IS NOT NULL)
+         AND COALESCE(s.finalized_at, s.created_at) >= $1
+         AND COALESCE(s.finalized_at, s.created_at) <= $2
+         AND EXISTS (
+           SELECT 1 FROM pdv_sale_payments p
+            WHERE p.sale_id = s.id AND lower(p.method) <> 'venda_online'
+         )
     ) u
    WHERE campanha_id IS NOT NULL
    GROUP BY campanha_id
