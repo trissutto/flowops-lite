@@ -511,6 +511,14 @@ model Order {
   // registrou a entrega, e é o marco zero do prazo de troca. Preenchida pelo
   // RastreioSyncCron junto com status='delivered'.
   deliveredAt         DateTime? @map("delivered_at")
+  // QUANDO A CAIXA SAIU (25/08). Carimbo próprio do despacho, gravado junto com
+  // status='shipped'. Existe porque a janela de 30 dias das abas "Em trânsito"
+  // e "Concluídos" lia `updatedAt` — e `updatedAt` é @updatedAt: QUALQUER
+  // escrita na linha o joga pra agora. Atribuir a vendedora a um pedido de
+  // junho ressuscitava ele em "Em trânsito" (caso do dono, 25/08); o mesmo
+  // valia pro carimbo de conversão do Google Ads, aviso de entrega, correção
+  // de endereço — dezenas de caminhos que não têm nada a ver com envio.
+  shippedAt           DateTime? @map("shipped_at")
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 

@@ -5,6 +5,13 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { pedidoPago } from '../common/pedido-pago';
+import {
+  RASTREIO_JANELA_DIAS as JANELA_DIAS,
+  inicioDaJanela,
+  despachadoEm,
+  despachadoDentroDaJanela,
+  despachadoForaDaJanela,
+} from '../common/janela-rastreio';
 import { StockService } from '../stock/stock.service';
 import { RoutingService } from '../routing/routing.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -58,14 +65,12 @@ export const ORIGENS_NATIVAS = ['live', 'ecommerce', 'pdv_online'];
 /**
  * A JANELA DO RASTREIO — a MESMA do `RastreioSyncCron.candidatos()` (30 dias).
  *
- * Passou disso, os Correios não têm mais o que dizer e o objeto nunca vai ser
- * confirmado como entregue. Sem esta janela, "Em trânsito" viraria o depósito
- * de todo pedido despachado antes de 18/08 — data em que o rastreio começou a
- * funcionar de verdade (faltava o header `Accept-Language`) e por isso NENHUM
- * pedido virou `delivered` em 90 dias. Aba cheia de pedido que nunca sai é
- * exatamente o alarme falso que faz a operação parar de olhar pra fila.
+ * A régua inteira (e o motivo de ela NÃO poder medir por `updatedAt`) mora em
+ * `common/janela-rastreio.ts`, porque a lista, o badge e o cron precisam ler
+ * exatamente a mesma coisa. Reexportado aqui só pra não quebrar quem já
+ * importava desta porta.
  */
-export const RASTREIO_JANELA_DIAS = 30;
+export const RASTREIO_JANELA_DIAS = JANELA_DIAS;
 
 /** Pedido com código de rastreio — no próprio pedido ou em algum card da loja. */
 const TEM_RASTREIO = {
@@ -100,7 +105,7 @@ const CARD_PRONTO = ['separated', 'ready'];
 const CARD_SEPARANDO = ['new', 'separating'];
 
 export function whereNativoDaAba(slug: string): Record<string, any> | null {
-  const desde = new Date(Date.now() - RASTREIO_JANELA_DIAS * 86_400_000);
+  const desde = inicioDaJanela();
 
   /**
    * PRONTO PRA POSTAR (24/08/2026, ordem do dono) — o buraco entre separar e
@@ -153,8 +158,12 @@ export function whereNativoDaAba(slug: string): Record<string, any> | null {
 
   // EM TRÂNSITO = a loja despachou E colocou o rastreio, e o objeto ainda está
   // dentro da janela em que dá pra saber onde ele está.
+  //
+  // ⚠️ A janela mede por `shippedAt`, NÃO por `updatedAt` (25/08): tocar a
+  // linha por qualquer outro motivo — atribuir vendedora, carimbar conversão
+  // do Google Ads, avisar a cliente — trazia pedido velho de volta pra cá.
   if (slug === 'em-transito') {
-    return { AND: [{ status: 'shipped' }, { updatedAt: { gte: desde } }, TEM_RASTREIO] };
+    return { AND: [{ status: 'shipped' }, despachadoDentroDaJanela(desde), TEM_RASTREIO] };
   }
 
   // CONCLUÍDOS = entregue (o rastreio confirmou e o cron fechou o pedido) OU
@@ -171,7 +180,7 @@ export function whereNativoDaAba(slug: string): Record<string, any> | null {
             { status: 'shipped' },
             {
               OR: [
-                { updatedAt: { lt: desde } },
+                despachadoForaDaJanela(desde),
                 {
                   AND: [
                     { trackingCode: null },
@@ -206,7 +215,9 @@ export function whereNativoDaAba(slug: string): Record<string, any> | null {
 export function abaDoNativo(
   status: string,
   pickStatuses: string[],
-  updatedAt: Date | null | undefined,
+  /** QUANDO A CAIXA SAIU — `shippedAt`, com `updatedAt` só como plano B da
+   *  linha antiga. Ver `common/janela-rastreio.ts`. */
+  despachoEm: Date | null | undefined,
   temRastreio: boolean,
 ): string | null {
   if (status === 'separating') {
@@ -215,8 +226,8 @@ export function abaDoNativo(
     return !temSeparando && temPronto ? 'pronto-postar' : 'separacao';
   }
   if (status === 'shipped') {
-    const desde = new Date(Date.now() - RASTREIO_JANELA_DIAS * 86_400_000);
-    const dentroDaJanela = !!updatedAt && new Date(updatedAt) >= desde;
+    const desde = inicioDaJanela();
+    const dentroDaJanela = !!despachoEm && new Date(despachoEm) >= desde;
     return dentroDaJanela && temRastreio ? 'em-transito' : 'completed';
   }
   if (status === 'delivered') return 'completed';
@@ -820,14 +831,26 @@ export class OrdersController {
             },
           },
         },
-        // "Pronto pra postar" ordena pelo MAIS PARADO primeiro — é uma fila de
-        // pendência, não um extrato: quem espera há 6 dias tem que estar na
-        // primeira linha, não na página 2 do mais-recente-primeiro.
-        // Buscando, o mais RECENTE primeiro sempre: quem procura um pedido
-        // procura o de agora, não o mais parado da fila.
+        /**
+         * "Pronto pra postar" ordena pelo MAIS PARADO primeiro — é uma fila de
+         * pendência, não um extrato: quem espera há 6 dias tem que estar na
+         * primeira linha, não na página 2 do mais-recente-primeiro.
+         *
+         * ⚠️ Ordenava por `order.updatedAt` (24/08) e isso MENTIA a partir do
+         * momento em que alguém encostava no pedido: atribuir a vendedora pela
+         * tag rosa carimba `updatedAt` com agora e joga a caixa parada há 3
+         * dias pro fim da fila, como se tivesse acabado de ser trabalhada.
+         * Quem manda é `prontoDesde` — o carimbo do CARD separado mais antigo,
+         * que é o mesmo número do chip "⏱ parado há X". O `wcDateCreated asc`
+         * aqui só garante que o `take` pegue os mais VELHOS quando a aba passar
+         * de 100; a ordem final é a do `prontoDesde`, logo abaixo.
+         *
+         * Buscando, o mais RECENTE primeiro sempre: quem procura um pedido
+         * procura o de agora, não o mais parado da fila.
+         */
         orderBy:
           !buscando && status === 'pronto-postar'
-            ? { updatedAt: 'asc' }
+            ? { wcDateCreated: 'asc' }
             : { wcDateCreated: 'desc' },
         take: buscando || ehEmTransito ? 200 : 100,
       });
@@ -895,7 +918,7 @@ export class OrdersController {
           abaSlug: abaDoNativo(
             o.status,
             (o.pickOrders || []).map((p: any) => p.status),
-            o.updatedAt,
+            despachadoEm(o),
             !!(o.trackingCode || firstTracking?.trackingCode),
           ),
           dateCreatedGmt: (o.wcDateCreated ?? o.createdAt)?.toISOString?.() ?? null,
@@ -940,6 +963,16 @@ export class OrdersController {
                   : 'Site',
         };
       });
+
+      // A fila de POSTAGEM ordena pelo tempo que a CAIXA está pronta, não pelo
+      // que aconteceu com a linha do pedido. Ver o comentário do `orderBy`.
+      if (!buscando && status === 'pronto-postar') {
+        liveRows.sort(
+          (a: any, b: any) =>
+            (a.prontoDesde ? +new Date(a.prontoDesde) : Infinity) -
+            (b.prontoDesde ? +new Date(b.prontoDesde) : Infinity),
+        );
+      }
     }
     const dataMerged = [...liveRows, ...data];
 
@@ -2306,7 +2339,11 @@ export class OrdersController {
         select: { id: true, status: true },
       });
       if (!local || local.status === destino) return;
-      await (this.prisma as any).order.update({ where: { id: local.id }, data: { status: destino } });
+      await (this.prisma as any).order.update({
+        where: { id: local.id },
+        // Carimbo do despacho junto com o status — ver `common/janela-rastreio.ts`.
+        data: { status: destino, ...(destino === 'shipped' ? { shippedAt: new Date() } : {}) },
+      });
       await (this.prisma as any).orderHistory
         .create({
           data: {

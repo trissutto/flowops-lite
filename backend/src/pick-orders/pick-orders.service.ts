@@ -3524,7 +3524,15 @@ export class PickOrdersService {
       if (allShipped) {
         await this.prisma.order.update({
           where: { id: current.orderId },
-          data: { status: 'shipped', trackingCode: input.trackingCode, carrier: input.carrier },
+          data: {
+            status: 'shipped',
+            // QUANDO A CAIXA SAIU. Carimbo próprio porque `updatedAt` é tocado
+            // por dezenas de caminhos que não são envio — ver
+            // `common/janela-rastreio.ts`.
+            shippedAt: new Date(),
+            trackingCode: input.trackingCode,
+            carrier: input.carrier,
+          },
         });
       }
     }

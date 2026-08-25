@@ -158,7 +158,16 @@ export class OrdersService {
 
       await this.prisma.order.update({
         where: { id: existing.id },
-        data: { ...payload, status: nextStatus },
+        data: {
+          ...payload,
+          status: nextStatus,
+          // Carimbo do despacho na entrada de status (ver
+          // `common/janela-rastreio.ts`). Só na TRANSIÇÃO: reimportar um
+          // pedido já despachado não pode rejuvenescer a caixa.
+          ...(nextStatus === OrderStatus.shipped && existing.status !== OrderStatus.shipped
+            ? { shippedAt: new Date() }
+            : {}),
+        },
       });
       this.logger.log(`Order #${wc.id} atualizado (${existing.status} → ${nextStatus}).`);
       const shouldRoute = canOverwriteStatus && nextStatus === OrderStatus.processing;

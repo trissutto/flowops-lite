@@ -317,6 +317,9 @@ export class PedidoOnlineService {
         where: { id: order.id },
         data: {
           status: 'shipped',
+          // QUANDO A CAIXA SAIU — aqui o "despacho" é a peça indo na mão da
+          // cliente. Ver `common/janela-rastreio.ts`.
+          shippedAt: new Date(),
           // A peça saiu da vendedora: os itens são DELA, não de quem separaria.
           // Sem isso o acerto ÷2,5 e a auditoria de roteamento ficam sem dono.
           items: { updateMany: { where: { orderId: order.id }, data: { assignedStoreId: store.id } } },

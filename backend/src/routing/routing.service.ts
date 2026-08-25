@@ -555,7 +555,9 @@ export class RoutingService {
       });
       await tx.order.update({
         where: { id: orderId },
-        data: { status: OrderStatus.shipped, routingResult: null },
+        // `shippedAt`: a peça saiu pela vendedora agora. Ver
+        // `common/janela-rastreio.ts` — `updatedAt` não serve de carimbo.
+        data: { status: OrderStatus.shipped, shippedAt: new Date(), routingResult: null },
       });
       await tx.orderHistory.create({
         data: {

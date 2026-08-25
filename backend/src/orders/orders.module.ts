@@ -11,6 +11,7 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
 import { PromoSiteModule } from '../promo-site/promo-site.module';
 import { TrocaPecaService } from './troca-peca.service';
+import { DespachoBackfillService } from './despacho-backfill.service';
 
 @Module({
   // PickScanModule → estorno dos bipes no cancelamento/reembolso do pedido.
@@ -21,7 +22,9 @@ import { TrocaPecaService } from './troca-peca.service';
   // PromoSiteModule → o preço que o SITE cobra hoje pela peça nova (precoPromo
   // digitado / promoção de 50%), pra sugerir a diferença certa.
   imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoSiteModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
-  providers: [OrdersService, TrocaPecaService],
+  // DespachoBackfillService → preenche `shipped_at` do que já estava
+  // despachado quando a coluna nasceu (25/08). Roda uma vez e some.
+  providers: [OrdersService, TrocaPecaService, DespachoBackfillService],
   controllers: [OrdersController],
   exports: [OrdersService, TrocaPecaService],
 })

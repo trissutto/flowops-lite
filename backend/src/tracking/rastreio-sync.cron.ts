@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackingService } from './tracking.service';
+import { inicioDaJanela, despachadoDentroDaJanela } from '../common/janela-rastreio';
 
 /**
  * ACOMPANHA O OBJETO ATÉ CHEGAR (18/08).
@@ -121,10 +122,18 @@ export class RastreioSyncCron {
    * de perguntar é do nosso lado.
    */
   private async candidatos(): Promise<string[]> {
-    const desde = new Date(Date.now() - 30 * 86_400_000);
+    const desde = inicioDaJanela();
     const [pedidos, cards] = await Promise.all([
       (this.prisma as any).order.findMany({
-        where: { status: 'shipped', trackingCode: { not: null }, updatedAt: { gte: desde } },
+        // Pelo carimbo do DESPACHO, não pelo `updatedAt`: tocar a linha por
+        // outro motivo (vendedora, aviso, conversão do Ads) devolvia pedido
+        // velho pra fila e gastava a cota de 60 objetos/ciclo com objeto que
+        // os Correios já esqueceram. Ver `common/janela-rastreio.ts`.
+        where: {
+          status: 'shipped',
+          trackingCode: { not: null },
+          ...despachadoDentroDaJanela(desde),
+        },
         select: { trackingCode: true },
         take: 2000,
       }),
