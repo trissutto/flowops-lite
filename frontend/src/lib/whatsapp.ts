@@ -10,9 +10,20 @@
  * O protocolo `whatsapp://` entrega a conversa pro APLICATIVO instalado (que já
  * está logado) e não abre aba nenhuma. Funciona igual no celular.
  *
- * Vive em `lib/` porque o mesmo `window.open` está espalhado por mais de dez
- * telas (CRM, PDV, minha-loja, recuperação): quando cada uma for migrando, é um
- * import — e a regra fica escrita num lugar só.
+ * ── ONDE VALE (25/08/2026, ordem do dono: "todos os botões whats do sistema
+ * seguem esta mesma rotina quando precisarmos interagir com clientes") ──
+ *
+ * TODO botão de WhatsApp de dentro do SISTEMA passa por aqui — quem clica é
+ * gente da casa, num PC da casa, com o app logado: carrinhos abandonados
+ * (matriz e loja), CRM (segmentos, lista personalizada, ficha), leads,
+ * recuperação, PDV (link de pagamento e PIX), recebimentos do crediário,
+ * live-pdv, consultar (transferência entre lojas), separação e a ficha do
+ * pedido. Nenhum deles monta `wa.me`/`web.whatsapp.com` na mão.
+ *
+ * ⚠️ NÃO vale nas páginas PÚBLICAS — vitrine, /nossaslojas, /qr/<token>,
+ * /pg/<token>, o modal do Fit e o site novo (`ecommerce/`). Ali quem clica é a
+ * CLIENTE, no aparelho dela: `wa.me` é o link universal e forçar o protocolo
+ * do app quebraria quem usa o WhatsApp pelo navegador.
  */
 
 /** Só dígitos, com DDI 55 na frente. É o formato que o WhatsApp espera. */
@@ -29,16 +40,35 @@ export function telefoneWhatsApp(raw: string): string | null {
  * ⚠️ Precisa ser chamada DENTRO do clique (gesto síncrono) — protocolo e popup
  * disparados fora do gesto são bloqueados pelo navegador.
  *
- * @param telefone telefone com DDI, só dígitos (use `telefoneWhatsApp`)
+ * @param telefone telefone da cliente, cru ou já normalizado. Vazio/omitido
+ *   abre o WhatsApp na LISTA DE CONTATOS (é o caso de "mandar o link de
+ *   pagamento pra alguém" — quem escolhe o destino é quem clicou).
  * @param mensagem texto já pronto, sem encode
+ * @returns `false` quando o telefone veio preenchido mas não é telefone —
+ *   quem chamou decide o que dizer; o botão não pode simplesmente morrer.
  */
-export function abrirWhatsApp(telefone: string, mensagem: string): void {
+export function abrirWhatsApp(telefone?: string | null, mensagem = ''): boolean {
   const texto = encodeURIComponent(mensagem);
+
+  /**
+   * A NORMALIZAÇÃO MORA AQUI, não em cada tela.
+   *
+   * Antes cada botão fazia seu próprio `replace(/\D/g,'')` + `55` na mão e
+   * cada um errava de um jeito: uns mandavam DDI dobrado (5555…), outros
+   * mandavam o número cru com parêntese, e o WhatsApp abria em conversa
+   * nenhuma. `telefoneWhatsApp` é idempotente — aceita `(13) 99621-8277`,
+   * `13996218277` e `5513996218277` e devolve sempre a mesma coisa.
+   */
+  const cru = String(telefone ?? '').trim();
+  const numero = cru ? telefoneWhatsApp(cru) : null;
+  if (cru && !numero) return false;
+
+  const destino = numero ? `phone=${numero}&` : '';
 
   // Âncora escondida em vez de `location.href`: trocar o href da página levaria
   // a tela embora se o protocolo não estivesse registrado no PC.
   const link = document.createElement('a');
-  link.href = `whatsapp://send?phone=${telefone}&text=${texto}`;
+  link.href = `whatsapp://send?${destino}text=${texto}`;
   link.style.display = 'none';
   document.body.appendChild(link);
 
@@ -62,9 +92,26 @@ export function abrirWhatsApp(telefone: string, mensagem: string): void {
     if (abriu || document.hidden) return;
     // Nome fixo na janela: caindo aqui duas vezes, reaproveita a MESMA aba em
     // vez de empilhar — que é a queixa que começou tudo isto.
-    const w = window.open(`https://web.whatsapp.com/send?phone=${telefone}&text=${texto}`, 'lurds_whatsapp_web');
+    const w = window.open(
+      `https://web.whatsapp.com/send?${destino}text=${texto}`,
+      'lurds_whatsapp_web',
+    );
     if (!w) {
       alert('Não consegui abrir o WhatsApp deste PC. Abra o aplicativo e procure pelo telefone da cliente.');
     }
   }, 2000);
+  return true;
+}
+
+/**
+ * O MESMO clique, com a reclamação já pronta pra quem não tem telefone.
+ *
+ * Quase toda tela repetia estas quatro linhas (valida, avisa, abre) e algumas
+ * esqueciam o aviso — o botão sumia ou não fazia nada, que é o pior desfecho
+ * numa tela de atendimento. Use nos botões que falam com CLIENTE.
+ */
+export function falarComCliente(telefone?: string | null, mensagem = ''): void {
+  if (!abrirWhatsApp(telefone, mensagem)) {
+    alert('Essa cliente não tem um telefone válido no cadastro — não dá pra abrir o WhatsApp.');
+  }
 }

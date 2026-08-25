@@ -22,6 +22,7 @@ import {
   Package, RefreshCw, Search, Send, ShieldOff, Sparkles, Users, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { falarComCliente } from '@/lib/whatsapp';
 
 interface StepConfig {
   index: number;
@@ -146,16 +147,12 @@ export default function RecuperacaoPage() {
       .replace(/\{link\}/g, link);
   }
 
-  function whatsappWebLink(phone: string, text: string): string {
-    const digits = phone.replace(/\D/g, '');
-    return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
-  }
-
   async function openAndRegister(cand: Candidate, stepIndex: number) {
     const body = renderMessage(cand, stepIndex);
-    const url = whatsappWebLink(cand.phone, body);
-    // Abre WhatsApp Web em nova aba fixa (reusa janela)
-    window.open(url, 'whatsapp-send', 'noopener');
+    // Abre no WhatsApp que já está logado NESTE PC. Tem que sair ANTES do
+    // `confirm` abaixo: o diálogo bloqueia a thread e o navegador para de
+    // tratar o clique como gesto, engolindo protocolo e popup.
+    falarComCliente(cand.phone, body);
     // Confirma registro
     const ok = confirm(
       `Após enviar pela janela do WhatsApp, confirmo o registro?\n\nSe você não enviou, clica Cancelar.`,
@@ -377,7 +374,6 @@ export default function RecuperacaoPage() {
           cand={preview.cand}
           stepIndex={preview.step}
           body={renderMessage(preview.cand, preview.step)}
-          waUrl={whatsappWebLink(preview.cand.phone, renderMessage(preview.cand, preview.step))}
           onClose={() => setPreview(null)}
           onSendAndRegister={() => {
             const c = preview.cand;
@@ -547,12 +543,11 @@ function CandidateCard({
 }
 
 function PreviewModal({
-  cand, stepIndex, body, waUrl, onClose, onSendAndRegister,
+  cand, stepIndex, body, onClose, onSendAndRegister,
 }: {
   cand: Candidate;
   stepIndex: number;
   body: string;
-  waUrl: string;
   onClose: () => void;
   onSendAndRegister: () => void;
 }) {
@@ -594,13 +589,14 @@ function PreviewModal({
             >
               <Copy size={14} /> Copiar texto
             </button>
-            <a
-              href={waUrl}
-              target="whatsapp-send"
+            <button
+              type="button"
+              onClick={() => falarComCliente(cand.phone, body)}
               className="flex-1 px-3 py-2 text-sm rounded border border-gray-300 hover:bg-gray-50 flex items-center justify-center gap-1"
+              title="Abre no WhatsApp que já está logado neste PC"
             >
               <ExternalLink size={14} /> Abrir WA
-            </a>
+            </button>
           </div>
         </div>
         <div className="sticky bottom-0 bg-white border-t p-4 flex justify-end gap-2">

@@ -19,6 +19,7 @@ import {
   User, RefreshCw, ChevronDown, ChevronRight, Link as LinkIcon, MessageCircle, Printer,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { abrirWhatsApp } from '@/lib/whatsapp';
 
 type Cliente = {
   codCliente: string;
@@ -418,16 +419,14 @@ export default function RecebimentosPage() {
     } catch {/* noop */}
   }
 
-  function abrirWhatsApp() {
+  function mandarPixNoWhats() {
     if (!pixLinkUrl) return;
-    const tel = (clienteAtual?.telefone || '').replace(/\D/g, '');
     const nome = clienteAtual?.nome?.split(' ')[0] || 'cliente';
     const msg = `Olá, ${nome}! Aqui é da Lurd's Plus Size 🛍️\n\nSegue o link para pagar suas parcelas de crediário via PIX:\n\n${pixLinkUrl}\n\nValor total: ${brl(totalPago)}\n\nÉ só abrir, copiar o código PIX e pagar no app do seu banco. Assim que pagar, sua dívida é quitada automaticamente.\n\nValidade: 24 horas.\n\nQualquer dúvida estamos à disposição 😊`;
-    const phone = tel.length >= 10 ? `55${tel}` : '';
-    const url = phone
-      ? `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`
-      : `https://web.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    // Sem telefone no cadastro, o app abre na lista de contatos — quem está no
+    // balcão escolhe a cliente. É o comportamento que já existia aqui, agora
+    // no app do PC em vez de mais uma aba do Web.
+    abrirWhatsApp(clienteAtual?.telefone, msg);
   }
 
   // Polling status PIX
@@ -1155,7 +1154,7 @@ export default function RecebimentosPage() {
                               {copyLinkMsg ? 'Copiado!' : 'Copiar link'}
                             </button>
                             <button
-                              onClick={abrirWhatsApp}
+                              onClick={mandarPixNoWhats}
                               className="p-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-lg flex items-center justify-center gap-2 text-sm shadow"
                             >
                               <MessageCircle size={18} />

@@ -28,6 +28,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api, apiRetry } from '@/lib/api';
+import { abrirWhatsApp, telefoneWhatsApp } from '@/lib/whatsapp';
 import { ConnectionProvider, ConnectionBadge, useConnection } from '@/lib/connection';
 import Logo from '@/components/Logo';
 import {
@@ -1804,12 +1805,11 @@ function TransferModal({
 
     const msg = buildMensagem(allPieces);
 
-    const onlyDigits = (store.whatsapp || '').replace(/\D/g, '');
-    if (onlyDigits.length < 10) {
+    const phone = telefoneWhatsApp(store.whatsapp || '');
+    if (!phone) {
       alert('Loja sem WhatsApp cadastrado.');
       return;
     }
-    const phone = onlyDigits.startsWith('55') ? onlyDigits : '55' + onlyDigits;
 
     // bundleId só existe pra envio direto (agrupa N transfer-orders no mesmo pacote)
     const bundleId =
@@ -1865,9 +1865,9 @@ function TransferModal({
       setSending(false);
     }
 
-    // 2) Abre WhatsApp DIRETO (web.whatsapp.com/send pula a splash do wa.me)
-    const url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`;
-    window.open(url, 'lurds_whatsapp'); // nome fixo — reusa mesma aba
+    // 2) Abre no WhatsApp que já está logado NESTE PC (app instalado), em
+    //    vez de mais uma aba do Web — a mesma regra dos botões de cliente.
+    abrirWhatsApp(phone, msg);
     onClose();
   };
 

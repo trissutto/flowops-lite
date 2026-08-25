@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { falarComCliente } from '@/lib/whatsapp';
 import {
   Crown, AlertTriangle, Sparkles, Moon, Target, Users,
   RefreshCw, Download, ArrowLeft, Search, Phone, MessageCircle,
@@ -370,12 +371,9 @@ function SegmentDetail({
     setPage(1);
   }
 
-  function whatsappLink(phone: string | null, name: string | null) {
-    if (!phone) return null;
-    const digits = phone.replace(/\D/g, '');
-    const full = digits.startsWith('55') ? digits : `55${digits}`;
-    const greeting = name ? `Oi ${name.split(' ')[0]}! 💕` : 'Oi! 💕';
-    return `https://wa.me/${full}?text=${encodeURIComponent(greeting)}`;
+  /** A saudação que abre a conversa — o mesmo texto dos dois lados do CRM. */
+  function saudacao(name: string | null) {
+    return name ? `Oi ${name.split(' ')[0]}! 💕` : 'Oi! 💕';
   }
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -498,7 +496,7 @@ function SegmentDetail({
               <tr><td colSpan={7} className="p-8 text-center text-slate-400">Nenhum cliente neste segmento.</td></tr>
             )}
             {!loading && list.map((c) => {
-              const wa = whatsappLink(c.phone, c.name);
+              const wa = !!c.phone;
               return (
                 <tr key={c.email} className="border-t hover:bg-slate-50">
                   <td className="p-3">
@@ -526,15 +524,15 @@ function SegmentDetail({
                   </td>
                   <td className="p-3 text-center">
                     {wa ? (
-                      <a
-                        href={wa}
-                        target="wa-out"
+                      <button
+                        type="button"
+                        onClick={() => falarComCliente(c.phone, saudacao(c.name))}
                         className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700"
-                        title="Abrir WhatsApp Web"
+                        title="Falar com a cliente no WhatsApp deste PC"
                       >
                         <MessageCircle className="w-3 h-3" />
                         WhatsApp
-                      </a>
+                      </button>
                     ) : (
                       <span className="text-xs text-slate-400">sem fone</span>
                     )}

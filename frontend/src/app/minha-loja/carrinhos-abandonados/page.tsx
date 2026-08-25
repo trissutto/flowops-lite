@@ -15,6 +15,7 @@ import {
   TrendingDown, TrendingUp, ShoppingCart, Percent,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { abrirWhatsApp } from '@/lib/whatsapp';
 
 type Carrinho = {
   id: number;
@@ -75,16 +76,12 @@ export default function CarrinhosAbandonadosPage() {
   }, [dias, status]);
 
   function whatsapp(c: Carrinho) {
-    const tel = (c.telefone || '').replace(/\D/g, '');
-    if (!tel || tel.length < 10) {
-      alert('Cliente sem telefone válido. Tente o email.');
-      return;
-    }
-    const phone = tel.length >= 11 ? `55${tel}` : `55${tel}`;
     const nome = c.nome?.split(' ')[0] || 'cliente';
     const msg = `Olá, ${nome}! Aqui é da Lurd\'s Plus Size 🛍️\n\nVi que você visitou nosso site e separou peças no valor de ${BRL(c.total)}. Posso te ajudar a finalizar a compra?\n\nSe quiser, posso te enviar um cupom de desconto especial!`;
-    const url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    // Abre no WhatsApp do PC (app já logado) em vez de empilhar aba do Web.
+    if (!abrirWhatsApp(c.telefone, msg)) {
+      alert('Cliente sem telefone válido. Tente o email.');
+    }
   }
 
   const filtered = items.filter((it) => {

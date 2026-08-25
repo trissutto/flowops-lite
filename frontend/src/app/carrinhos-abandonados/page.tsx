@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { falarComCliente, telefoneWhatsApp } from '@/lib/whatsapp';
 import {
   Search, RefreshCw, ShoppingCart, Package, ExternalLink,
   CheckCircle2, XCircle, Clock, AlertTriangle, MessageCircle,
@@ -249,7 +250,14 @@ export default function CarrinhosAbandonadosPage() {
     }
   }
 
-  /** Número BR -> formato wa.me (só dígitos, com DDI 55 se faltar). */
+  /**
+   * Link do WhatsApp pra COLUNA DO CSV — só isso.
+   *
+   * Os botões da tela não passam mais por aqui: eles chamam `falarComCliente`,
+   * que entrega a conversa pro app instalado neste PC em vez de abrir uma aba
+   * do Web por clique. Na planilha, porém, um `wa.me` é o certo — quem abrir o
+   * arquivo pode estar em qualquer máquina.
+   */
   function whatsappUrl(phone: string | null | undefined): string | null {
     if (!phone) return null;
     const digits = phone.replace(/\D/g, '');
@@ -510,7 +518,7 @@ export default function CarrinhosAbandonadosPage() {
             )}
             {!loading && list?.items.map((it) => {
               const nome = [it.first_name, it.last_name].filter(Boolean).join(' ').trim() || '—';
-              const wa = whatsappUrl(it.phone);
+              const temZap = !!telefoneWhatsApp(it.phone ?? "");
               return (
                 <tr key={it.id} className="border-t hover:bg-slate-50">
                   <td className="p-3">
@@ -539,16 +547,15 @@ export default function CarrinhosAbandonadosPage() {
                   <td className="p-3 text-xs text-slate-600">{fmtDate(it.time)}</td>
                   <td className="p-3">
                     <div className="flex items-center justify-center gap-1">
-                      {wa && (
-                        <a
-                          href={wa}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                      {temZap && (
+                        <button
+                          type="button"
+                          onClick={() => falarComCliente(it.phone)}
                           className="p-1.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700"
-                          title="Abrir WhatsApp"
+                          title="Falar com a cliente no WhatsApp deste PC"
                         >
                           <MessageCircle className="w-4 h-4" />
-                        </a>
+                        </button>
                       )}
                       <button
                         onClick={() => openDetail(it.id)}
@@ -622,15 +629,14 @@ export default function CarrinhosAbandonadosPage() {
                       <div className="text-[10px] font-semibold text-slate-500 uppercase">Telefone</div>
                       <div className="text-sm">
                         {detail.other_fields?.wcf_phone_number ?? '—'}
-                        {detail.other_fields?.wcf_phone_number && whatsappUrl(detail.other_fields.wcf_phone_number) && (
-                          <a
-                            href={whatsappUrl(detail.other_fields.wcf_phone_number) as string}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                        {telefoneWhatsApp(detail.other_fields?.wcf_phone_number ?? "") && (
+                          <button
+                            type="button"
+                            onClick={() => falarComCliente(detail.other_fields?.wcf_phone_number)}
                             className="ml-2 inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline"
                           >
                             <MessageCircle className="w-3 h-3" /> WhatsApp
-                          </a>
+                          </button>
                         )}
                       </div>
                     </div>

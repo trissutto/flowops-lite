@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { falarComCliente } from '@/lib/whatsapp';
 import {
   ArrowLeft, Check, ChevronRight, Clock3, ExternalLink, Loader2, MapPin,
   MessageCircle, Pencil, RefreshCw, ShieldCheck, ShoppingBag, Store, UserRound,
@@ -275,7 +276,7 @@ export default function FichaClienteBetaPage() {
               <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h1 className="truncate text-2xl font-semibold">{name}</h1><span className="rounded-full bg-[#FBF6E6] px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#8C7325]">Beta</span></div><p className="mt-1 text-sm text-[#817B70]">CPF {detail.cpf || 'não informado'} · cliente desde {date(detail.createdAt)}</p></div>
             </div>
             <div className="flex flex-wrap gap-2 lg:ml-auto">
-              {whatsappDigits && <a href={`https://wa.me/55${whatsappDigits}`} target="_blank" rel="noreferrer" className="rounded-lg border border-[#D8D3C8] bg-white px-4 py-2 text-sm font-semibold"><MessageCircle className="mr-2 inline h-4 w-4" />WhatsApp</a>}
+              {whatsappDigits && <button type="button" onClick={() => falarComCliente(whatsappDigits)} className="rounded-lg border border-[#D8D3C8] bg-white px-4 py-2 text-sm font-semibold" title="Abre no WhatsApp que já está logado neste PC"><MessageCircle className="mr-2 inline h-4 w-4" />WhatsApp</button>}
               <Link href={`/clientes-crm?openId=${id}`} className="rounded-lg border border-[#D8D3C8] bg-white px-4 py-2 text-sm font-semibold">Ficha antiga <ExternalLink className="ml-2 inline h-4 w-4" /></Link>
             </div>
           </div>

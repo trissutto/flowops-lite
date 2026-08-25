@@ -38,6 +38,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { abrirWhatsApp, falarComCliente } from '@/lib/whatsapp';
 import { getSocket } from '@/lib/socket';
 
 /* ─── Types ─── */
@@ -621,7 +622,7 @@ export default function LivePdvPage() {
 
   // Cobra UMA cliente da fila: Direct abre o perfil (colar Ctrl+V);
   // WhatsApp dispara DIRETO pela API do ManyChat (template aprovado — chega
-  // sozinho, sem abrir app). Se a API falhar, cai no wa.me como plano B.
+  // sozinho, sem abrir app). Se a API falhar, cai no WhatsApp do PC como plano B.
   async function chargeOne(c: Cart, canal: 'direct' | 'whats') {
     let whatsViaApi = false; // API do ManyChat já conta a tentativa no servidor
     const link = c.payCode
@@ -648,7 +649,7 @@ export default function LivePdvPage() {
         setWhatsState((s) => ({ ...s, [c.id]: 'sent' }));
       } catch (e: any) {
         setWhatsState((s) => ({ ...s, [c.id]: undefined }));
-        // API indisponível/recusou → plano B: wa.me manual (comportamento antigo)
+        // API indisponível/recusou → plano B: WhatsApp manual no app do PC
         const raw = String(e?.message || '');
         let m = 'ManyChat indisponível';
         try {
@@ -657,8 +658,8 @@ export default function LivePdvPage() {
         } catch { /* cru */ }
         alert(`Não consegui enviar pela API (${m}).\nAbrindo o WhatsApp manual como plano B — a mensagem já está copiada.`);
         navigator.clipboard?.writeText(msg);
-        const d = String(c.customerPhone).replace(/\D/g, '');
-        window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+        // Plano B no WhatsApp DESTE PC (app já logado), não em aba nova.
+        falarComCliente(c.customerPhone, msg);
       }
     }
     setChargeAllDone((s) => ({ ...s, [c.id]: true }));
@@ -3350,14 +3351,14 @@ function CartPanel({
                       >
                         {linkCopied ? 'Copiado! ✓' : 'Copiar link'}
                       </button>
-                      <a
-                        href={`https://wa.me/?text=${encodeURIComponent(payMsg)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
+                        onClick={() => abrirWhatsApp(cart?.customerPhone, payMsg)}
                         className="flex-1 rounded-lg bg-emerald-600 py-2 text-center text-xs font-bold text-white hover:bg-emerald-700"
+                        title="Abre no WhatsApp deste PC (sem telefone, escolhe o contato)"
                       >
                         WhatsApp
-                      </a>
+                      </button>
                       {cart?.customerInstagram && (
                         <button
                           onClick={() => {
@@ -3476,14 +3477,14 @@ function CartPanel({
                   >
                     Copiar link
                   </button>
-                  <a
-                    href={`https://wa.me/?text=${encodeURIComponent('Link de pagamento Lurd\'s: ' + qr.link)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => abrirWhatsApp(cart?.customerPhone, 'Link de pagamento Lurd\'s: ' + qr.link)}
                     className="flex-1 rounded-lg bg-emerald-600 py-2 text-center text-xs font-semibold text-white hover:bg-emerald-700"
+                    title="Abre no WhatsApp deste PC (sem telefone, escolhe o contato)"
                   >
                     Enviar no WhatsApp
-                  </a>
+                  </button>
                 </div>
                 <button
                   onClick={onConfirmPayment}

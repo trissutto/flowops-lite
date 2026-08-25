@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { falarComCliente } from '@/lib/whatsapp';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
@@ -1920,14 +1921,14 @@ function VendidoOnlineCard({ v }: { v: VendidoOnlineRow }) {
             </button>
           )}
           {zap && (
-            <a
-              href={`https://wa.me/55${zap}`}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={() => falarComCliente(zap)}
               className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-700"
+              title="Abre no WhatsApp que já está logado neste PC"
             >
               Falar com a cliente
-            </a>
+            </button>
           )}
         </div>
       )}

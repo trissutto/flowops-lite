@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Download, Loader2, RefreshCw, Search, Users } from 'lucide-react';
 import { api } from '@/lib/api';
+import { falarComCliente } from '@/lib/whatsapp';
 
 interface Lead {
   id: string;
@@ -200,14 +201,14 @@ export default function LeadsPage() {
                   <tr key={l.id} className="hover:bg-slate-50">
                     <td className="px-4 py-2 font-medium text-slate-800">{l.nome}</td>
                     <td className="px-4 py-2 text-slate-600 tabular-nums">
-                      <a
-                        href={`https://api.whatsapp.com/send?phone=55${l.telefone}`}
-                        target="_blank"
-                        rel="noreferrer"
+                      <button
+                        type="button"
+                        onClick={() => falarComCliente(l.telefone)}
                         className="text-emerald-700 hover:underline"
+                        title="Abre no WhatsApp que já está logado neste PC"
                       >
                         {formatarTelefone(l.telefone)}
-                      </a>
+                      </button>
                     </td>
                     <td className="px-4 py-2 text-slate-600">{l.email}</td>
                     <td className="px-4 py-2">

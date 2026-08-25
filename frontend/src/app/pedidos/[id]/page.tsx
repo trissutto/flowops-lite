@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { abrirWhatsApp } from '@/lib/whatsapp';
 import {
   Package, MapPin, User, Mail, Phone, Zap, Send, Check,
   Store as StoreIcon, X, ChevronDown, ChevronUp, MessageCircle,
@@ -146,15 +147,14 @@ Por favor confirmar separação no sistema assim que finalizar.
 — LURDS ORDER ONE`;
   }
 
-  function abrirWhatsApp(a: Assignment) {
+  function mandarSeparacaoNoWhats(a: Assignment) {
     if (!a.whatsapp) {
       alert(`A loja ${a.storeName} não tem WhatsApp cadastrado.\nVá em "Lojas" e cadastre o número.`);
       return;
     }
-    const numero = a.whatsapp.replace(/\D/g, '');
-    const mensagem = encodeURIComponent(montarMensagemWA(a));
-    // Nome fixo → reusa a mesma aba do WhatsApp (sem re-login a cada clique)
-    window.open(`https://wa.me/${numero}?text=${mensagem}`, 'flowops-whatsapp');
+    // App do PC (já logado), não aba do Web — mesma rotina de todo botão de
+    // WhatsApp do sistema.
+    abrirWhatsApp(a.whatsapp, montarMensagemWA(a));
   }
 
   if (!order) {
@@ -260,7 +260,7 @@ Por favor confirmar separação no sistema assim que finalizar.
                     </p>
                   </div>
                   <button
-                    onClick={() => abrirWhatsApp(a)}
+                    onClick={() => mandarSeparacaoNoWhats(a)}
                     disabled={!a.whatsapp}
                     className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     title={a.whatsapp ? 'Abre WhatsApp Web/App com mensagem pronta' : 'Sem WhatsApp — cadastre em Lojas'}

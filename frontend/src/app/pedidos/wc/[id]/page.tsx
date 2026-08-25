@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { abrirWhatsApp } from '@/lib/whatsapp';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
@@ -1430,18 +1431,18 @@ export default function PedidoDetailPage() {
     }
   }
 
-  /** Abre wa.me em nova aba e marca o pedido como "Separação" no WC. */
+  /** Abre a conversa no WhatsApp do PC e marca o pedido como "Separação". */
   async function sendWhatsapp(group: SeparationGroup) {
-    const url = group.whatsappUrl;
-    if (!url) {
+    if (!group.whatsapp) {
       alert(
         `A loja "${group.storeName}" não tem WhatsApp cadastrado. Vai em /lojas, edita a loja e salva o número.`,
       );
       return;
     }
-    // Nome fixo 'flowops-whatsapp' → cliques seguintes reusam a MESMA aba,
-    // não pedem login de novo no WhatsApp Web. Evita abrir 10 abas diferentes.
-    window.open(url, 'flowops-whatsapp', 'noopener,noreferrer');
+    // App do PC (já logado) em vez de mais uma aba do Web — mesma rotina de
+    // todo botão de WhatsApp do sistema. A conversa sai ANTES do PATCH: o que
+    // depende do clique tem que sair no gesto síncrono.
+    abrirWhatsApp(group.whatsapp, group.whatsappMessage);
 
     // Troca status pra "separacao" automaticamente (se ainda não estiver)
     if (order && order.status !== 'separacao') {

@@ -14,6 +14,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { falarComCliente } from '@/lib/whatsapp';
 import {
   AlertCircle, Loader2, MessageCircle, RefreshCw, Search, Store,
 } from 'lucide-react';
@@ -209,15 +210,14 @@ export default function LeadsWhatsappPage() {
                   <td className="px-4 py-3 whitespace-nowrap text-slate-500">{fmtQuando(l.criadoEm)}</td>
                   <td className="px-4 py-3">{l.nome || <span className="text-slate-400">—</span>}</td>
                   <td className="px-4 py-3 whitespace-nowrap">
-                    <a
-                      href={`https://wa.me/${l.telefone}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => falarComCliente(l.telefone)}
                       className="text-emerald-700 hover:underline font-medium"
-                      title="Abrir conversa no WhatsApp"
+                      title="Abre no WhatsApp que já está logado neste PC"
                     >
                       {fmtTelefone(l.telefone)}
-                    </a>
+                    </button>
                   </td>
                   <td className="px-4 py-3">{l.loja || <span className="text-slate-400">Atendimento site</span>}</td>
                   <td className="px-4 py-3 text-slate-600 max-w-md truncate" title={l.mensagem ?? ''}>

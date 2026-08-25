@@ -34,6 +34,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { abrirWhatsApp } from '@/lib/whatsapp';
 import {
   type DadosClienteOnline,
   checarDadosClienteOnline,
@@ -247,12 +248,19 @@ async function saleFromResponse(r: any, saleId: string): Promise<Sale> {
 type PdvDensityFixa = 'compacto' | 'normal' | 'grande';
 type PdvDensity = PdvDensityFixa | 'auto';
 /**
- * Loja-canal SITE — a única com "Carrinhos" no menu do PDV (dono, 17/08).
+ * Quem tem "Carrinhos" no menu do PDV.
  *
- * É o time que trabalha carrinho abandonado. Loja física não vê carrinho de
- * cliente que não é dela, e a lista lá só geraria confusão.
+ * Começou só na loja-canal SITE (13), o time que trabalha carrinho abandonado
+ * (dono, 17/08). Em 25/08 o dono abriu pra MOEMA (15) e ITANHAÉM (01): são as
+ * duas lojas que atendem o WhatsApp do site junto com a matriz, e mandar a
+ * menina trocar de tela pra chegar na lista era o atrito que fazia o carrinho
+ * fechar por fora — PIX no privado, sem baixa de estoque, sem NF, sem comissão.
+ *
+ * Continua sendo uma LISTA CURTA, e não "todas as lojas": carrinho do site não
+ * é de ninguém em particular, e loja que não trabalha essa fila só veria uma
+ * tela de nomes que não conhece.
  */
-const CARRINHOS_STORE_CODE = '13';
+const CARRINHOS_STORE_CODES = ['13', '15', '01'];
 
 const PDV_DENSITY_KEY = 'lurds_pdv_densidade';
 const DENSITY_ZOOM: Record<PdvDensityFixa, number> = {
@@ -1754,7 +1762,7 @@ function PdvPageInner() {
   const [showGiftVoucher, setShowGiftVoucher] = useState(false);
   // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
   const [showSimular, setShowSimular] = useState(false);
-  // Carrinhos abandonados — só no PDV da loja-canal SITE (ver CARRINHOS_STORE_CODE).
+  // Carrinhos abandonados — só nas lojas de CARRINHOS_STORE_CODES.
   const [showCarrinhos, setShowCarrinhos] = useState(false);
   // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
   const [promoExpanded, setPromoExpanded] = useState(false);
@@ -2639,10 +2647,9 @@ function PdvPageInner() {
                 dia, 2 registrados. Aqui a menina abre a lista sem sair da tela
                 em que trabalha, clica na cliente e a venda monta pronta.
 
-                SÓ NA LOJA 13 (SITE) — decisão do dono: é o time do carrinho
-                abandonado que trabalha esses contatos. Loja física não vê
-                carrinho de cliente que não é dela. */}
-            {storeCode === CARRINHOS_STORE_CODE && (
+                SITE (13), MOEMA (15) e ITANHAÉM (01) — ver
+                CARRINHOS_STORE_CODES. São as lojas que trabalham essa fila. */}
+            {CARRINHOS_STORE_CODES.includes(storeCode) && (
               <button
                 type="button"
                 onClick={() => setShowCarrinhos(true)}
@@ -3827,16 +3834,19 @@ function PdvPageInner() {
                                 >
                                   📋
                                 </button>
-                                <a
-                                  href={`https://wa.me/${(p.customerPhone || '').replace(/\D/g, '') ? `55${(p.customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
-                                    `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 12x sem juros.`,
-                                  )}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    abrirWhatsApp(
+                                      p.customerPhone,
+                                      `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 12x sem juros.`,
+                                    )
+                                  }
                                   className="py-1.5 px-3 bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold rounded"
+                                  title="Abre no WhatsApp deste PC (sem telefone, escolhe o contato)"
                                 >
                                   📱
-                                </a>
+                                </button>
                               </>
                             )}
                             <button
@@ -7755,25 +7765,26 @@ function PaymentModal({
                       >
                         {pixOnlineCopiado ? '✓ Copiado' : 'Copiar código'}
                       </button>
-                      <a
-                        href={`https://api.whatsapp.com/send?${
-                          customerPhone ? `phone=55${customerPhone.replace(/\D/g, '')}&` : ''
-                        }text=${encodeURIComponent(
-                          // COM shortUrl a mensagem leva SÓ o nosso link. O copia-e-cola
-                          // cru tem a URL da PagBank no meio e o WhatsApp pinta o trecho
-                          // de azul — a cliente tocava no azul em vez de copiar o código
-                          // inteiro e não pagava (caso Itanhaém 21/08). Na página /qr/
-                          // tocar É o caminho certo: valor + QR + botão "Copiar código".
-                          pixOnline.shortUrl
-                            ? `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só tocar no link abaixo e apertar COPIAR CÓDIGO PIX:\n\n${pixOnline.shortUrl}\n\nAssim que o pagamento cair a gente já separa tudo!`
-                            : `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só copiar o código abaixo e colar no seu banco (PIX copia e cola):\n\n${pixOnline.payload}\n\nAssim que o pagamento cair a gente já separa tudo!`,
-                        )}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
+                        onClick={() =>
+                          abrirWhatsApp(
+                            customerPhone,
+                            // COM shortUrl a mensagem leva SÓ o nosso link. O copia-e-cola
+                            // cru tem a URL da PagBank no meio e o WhatsApp pinta o trecho
+                            // de azul — a cliente tocava no azul em vez de copiar o código
+                            // inteiro e não pagava (caso Itanhaém 21/08). Na página /qr/
+                            // tocar É o caminho certo: valor + QR + botão "Copiar código".
+                            pixOnline.shortUrl
+                              ? `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só tocar no link abaixo e apertar COPIAR CÓDIGO PIX:\n\n${pixOnline.shortUrl}\n\nAssim que o pagamento cair a gente já separa tudo!`
+                              : `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só copiar o código abaixo e colar no seu banco (PIX copia e cola):\n\n${pixOnline.payload}\n\nAssim que o pagamento cair a gente já separa tudo!`,
+                          )
+                        }
                         className="rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2.5 flex items-center justify-center gap-1.5"
+                        title="Abre no WhatsApp deste PC (sem telefone, escolhe o contato)"
                       >
                         Mandar no WhatsApp
-                      </a>
+                      </button>
                     </div>
                     {pixOnlinePago ? (
                       <div className="rounded-lg bg-emerald-600 text-white text-center text-xs font-bold py-2.5">
@@ -8002,17 +8013,20 @@ function PaymentModal({
                         <span>📋</span>
                         <span>{pagarmeLinkCopied ? 'OK!' : 'Copiar'}</span>
                       </button>
-                      <a
-                        href={`https://wa.me/${(customerPhone || '').replace(/\D/g, '') ? `55${(customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
-                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.shortUrl || pagarmeLink.paymentUrl}\n\nPIX ou cartão até 12x sem juros. O link vale 3 dias.`,
-                        )}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
+                        onClick={() =>
+                          abrirWhatsApp(
+                            customerPhone,
+                            `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.shortUrl || pagarmeLink.paymentUrl}\n\nPIX ou cartão até 12x sem juros. O link vale 3 dias.`,
+                          )
+                        }
                         className="py-1.5 bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold rounded flex flex-col items-center"
+                        title="Abre no WhatsApp deste PC (sem telefone, escolhe o contato)"
                       >
                         <span>📱</span>
                         <span>WhatsApp</span>
-                      </a>
+                      </button>
                       <button
                         type="button"
                         disabled={pagarmeLinkPaid}
