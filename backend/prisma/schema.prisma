@@ -976,6 +976,16 @@ model PickOrder {
   // usa isso e não depende de re-baixar da API do provedor (Mais Envios
   // falha/atrasa no re-print; 28/07)
   etiquetaPdf           String?   @map("etiqueta_pdf")
+  // ── O QUE A CASA PAGOU pra postar (25/08) ──
+  // A cotação de hoje serve pra conferir preço; ela NÃO é a fatura daquele
+  // envio. Este campo é: nasce na emissão da etiqueta e não muda mais.
+  // Sem ele, "quanto custou esse frete?" só tinha resposta na fatura do
+  // provedor, um mês depois, sem o pedido do lado.
+  freteCustoCentavos    Int?      @map("frete_custo_centavos")
+  // 'provedor' = veio na resposta da etiqueta · 'cotacao' = cotado na emissão
+  // (mesmo provedor, mesma caixa, mesmo trajeto — o que a fatura vai cobrar,
+  // salvo repesagem).
+  freteCustoFonte       String?   @map("frete_custo_fonte")
   // ── Transferência entre lojas (quando pedido é retirada em loja e loja destino não tem estoque) ──
   isTransfer           Boolean @default(false) @map("is_transfer")             // true = separar e enviar pra outra loja, não pro cliente
   transferToStoreCode  String? @map("transfer_to_store_code")                   // loja que vai RECEBER a transferência (loja de retirada)

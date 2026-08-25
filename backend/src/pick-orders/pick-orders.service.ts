@@ -17,6 +17,7 @@ import { DanfePdfService } from '../nfe/danfe-pdf.service';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
+import { caixaDoSite } from '../common/caixa-site';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { JuntadaService } from './juntada.service';
@@ -524,6 +525,93 @@ export class PickOrdersService {
     return { nfe, nfeChave, nfeInfoME };
   }
 
+  /**
+   * Preço dentro da resposta CRUA do provedor.
+   *
+   * O nome do campo varia (e o Mais Envios já mudou o formato antes): tenta os
+   * candidatos plausíveis e aceita só o que vira número. Não achou → devolve
+   * null e quem chama cai pra cotação. Nunca chuta.
+   */
+  private precoDaResposta(raw: any): number | null {
+    const d: any = Array.isArray(raw) ? raw[0] : raw;
+    if (!d || typeof d !== 'object') return null;
+    const candidatos = [
+      d.price, d.pricetable, d.priceTable, d.value, d.valor, d.total,
+      d.amount, d.vlrTotal, d.valorTotal, d.freight, d.frete,
+      d.data?.price, d.data?.value, d.data?.total,
+    ];
+    for (const c of candidatos) {
+      if (c == null || c === '') continue;
+      const s = String(c).trim();
+      const n = s.includes(',') ? Number(s.replace(/\./g, '').replace(',', '.')) : Number(s);
+      // Etiqueta de vestuário no Brasil: entre R$ 1 e R$ 500. Fora disso é
+      // outro campo (id, peso, código) que casou por acidente.
+      if (isFinite(n) && n >= 1 && n <= 500) return n;
+    }
+    return null;
+  }
+
+  /**
+   * Grava o custo da etiqueta no pick-order. Ordem: o que o PROVEDOR informou
+   * na criação; se ele não informa, o que ele COTA pra essa mesma caixa e esse
+   * mesmo trajeto na hora da emissão.
+   */
+  private async registrarCustoEtiqueta(
+    pickId: string,
+    input: {
+      provedor: 'correios' | 'maisenvios';
+      cepOrigem?: string | null;
+      cepDestino?: string | null;
+      pecas: number;
+      raw?: any;
+    },
+  ): Promise<void> {
+    try {
+      let reais = this.precoDaResposta(input.raw);
+      let fonte: 'provedor' | 'cotacao' = 'provedor';
+
+      if (reais == null) {
+        const cepDestino = String(input.cepDestino || '').replace(/\D/g, '');
+        const cepOrigem = String(input.cepOrigem || '').replace(/\D/g, '');
+        if (cepDestino.length !== 8) return;
+        const caixa = caixaDoSite(input.pecas);
+        const args = {
+          cepDestino,
+          cepOrigem: cepOrigem.length === 8 ? cepOrigem : undefined,
+          pesoGramas: caixa.pesoGramas,
+          comprimento: caixa.comprimento,
+          largura: caixa.largura,
+          altura: caixa.altura,
+        };
+        const cot: any =
+          input.provedor === 'maisenvios'
+            ? await this.maisEnvios.calcularFrete(args)
+            : await this.correios.calcularFrete(args);
+        // A etiqueta já saiu no serviço que a cliente pagou; o carrier grava
+        // qual foi. Aqui pega a opção desse serviço, e na dúvida a mais barata
+        // — errar pra menos é melhor que inflar o custo do envio.
+        const pick: any = await this.prisma.pickOrder.findUnique({ where: { id: pickId }, select: { carrier: true } });
+        const alvo = String(pick?.carrier || '').toUpperCase();
+        const opcoes = (cot?.opcoes ?? []).filter((o: any) => o?.precoReais != null);
+        const escolhida =
+          opcoes.find((o: any) => alvo.includes(String(o.servico).toUpperCase())) ??
+          opcoes.sort((a: any, b: any) => a.precoReais - b.precoReais)[0];
+        if (!escolhida) return;
+        reais = Number(escolhida.precoReais);
+        fonte = 'cotacao';
+      }
+
+      if (!isFinite(reais as number) || (reais as number) <= 0) return;
+      await this.prisma.pickOrder.update({
+        where: { id: pickId },
+        data: { freteCustoCentavos: Math.round((reais as number) * 100), freteCustoFonte: fonte },
+      });
+      this.logger.log(`[frete-custo] pick ${pickId}: R$ ${reais} (${fonte}, ${input.provedor})`);
+    } catch (e: any) {
+      this.logger.warn(`[frete-custo] pick ${pickId}: ${e?.message || e}`);
+    }
+  }
+
   private async gerarEnvioCorreiosInner(id: string, pick: any) {
     const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido não encontrado');
@@ -579,6 +667,24 @@ export class PickOrdersService {
         ...(r.etiquetaPdf ? { etiquetaPdf: String(r.etiquetaPdf) } : {}),
       },
     });
+
+    /**
+     * O QUE A CASA PAGOU por esta etiqueta — gravado agora, pra sempre.
+     *
+     * Sem isto a única resposta pra "quanto custou esse frete?" era a fatura do
+     * provedor no mês seguinte, sem o pedido do lado. Roda SOLTO (sem await):
+     * a loja está esperando a etiqueta imprimir e uma cotação leva ~2,5 s —
+     * custo é informação de gestão, não pode entrar no caminho do botão. Falha
+     * aqui não derruba nada: o campo fica vazio e a tela volta a mostrar só a
+     * cotação de hoje, como antes.
+     */
+    void this.registrarCustoEtiqueta(id, {
+      provedor: provider === 'maisenvios' ? 'maisenvios' : 'correios',
+      cepOrigem: remetenteLoja?.cep ?? null,
+      cepDestino: order.shippingCep ?? null,
+      pecas: (order.items || []).reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1,
+      raw: r?.raw ?? null,
+    }).catch(() => undefined);
 
     // DC-e REMOVIDA do fluxo do envio (dono 29/07: "optamos pela NF-e") —
     // a SEFAZ bloqueia contribuinte de ICMS de emitir DC-e (cStat 812) e a
@@ -965,7 +1071,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf, raw: resp.raw ?? null };
   }
 
   /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
@@ -1032,7 +1138,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf, raw: resp.raw ?? null };
   }
 
   /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */
@@ -1112,6 +1218,8 @@ export class PickOrdersService {
     if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);
     return {
       codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Correios ${servico}`,
+      // Resposta crua — o custo da etiqueta pode vir aqui (ver `registrarCustoEtiqueta`).
+      raw: resp.raw ?? null,
       // Destinatário já normalizado (CEP-authoritative) pra DC-e usar o MESMO endereço da etiqueta
       destDce: {
         nome: order.customerName || 'Cliente',
@@ -3161,6 +3269,10 @@ export class PickOrdersService {
         // Status de baixa no ERP (Gigasistemas)
         debitApprovedAt,
         debitStatus,
+        // O QUE A CASA PAGOU nesta etiqueta (centavos) e de onde saiu o número.
+        // Vazio nas etiquetas anteriores a 25/08 — o custo não era guardado.
+        freteCustoCentavos: (r as any).freteCustoCentavos ?? null,
+        freteCustoFonte: (r as any).freteCustoFonte ?? null,
       };
     });
   }

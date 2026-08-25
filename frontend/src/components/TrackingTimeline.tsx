@@ -109,6 +109,14 @@ interface Props {
   lojaCode?: string | null;
   /** Frete que a cliente pagou, em reais (linha de frete do pedido). */
   fretePago?: number | null;
+  /**
+   * O que a CASA pagou nesta etiqueta, em reais — gravado na emissão. É a
+   * resposta de verdade pra "quanto custou esse frete?"; a cotação ao lado é
+   * só conferência. Vazio nas etiquetas anteriores a 25/08.
+   */
+  custoEtiqueta?: number | null;
+  /** 'provedor' (veio do transportador) ou 'cotacao' (cotado na emissão). */
+  custoEtiquetaFonte?: string | null;
   /** Método pago ("PAC", "SEDEX (Correios)"…) — casa a cotação com o serviço certo. */
   metodoPago?: string | null;
 }
@@ -192,6 +200,8 @@ export default function TrackingTimeline({
   pecas,
   lojaCode,
   fretePago,
+  custoEtiqueta,
+  custoEtiquetaFonte,
   metodoPago,
 }: Props) {
   const [data, setData] = useState<TrackingResult | null>(null);
@@ -249,9 +259,14 @@ export default function TrackingTimeline({
     if (autoFetch && code) void fetchIt();
   }, [autoFetch, code, fetchIt]);
 
+  /**
+   * Cota só quando NÃO se sabe o que a etiqueta custou. Com o custo gravado, a
+   * pergunta "quanto custou esse frete?" já está respondida — e cada cotação é
+   * uma chamada de ~2,5 s na API do transportador por pedido aberto.
+   */
   useEffect(() => {
-    if (autoFetch && code && cepDestino) void cotar();
-  }, [autoFetch, code, cepDestino, cotar]);
+    if (autoFetch && code && cepDestino && custoEtiqueta == null) void cotar();
+  }, [autoFetch, code, cepDestino, custoEtiqueta, cotar]);
 
   if (!code) return null;
 
@@ -286,16 +301,23 @@ export default function TrackingTimeline({
   const alvoServico = `${metodoPago || ''} ${familia || data?.service || ''}`.toUpperCase();
   const opcaoPaga = frete?.opcoes.find((o) => alvoServico.includes(o.servico.toUpperCase())) ?? null;
   /**
-   * 🔴 VEREDITO SÓ QUANDO A COMPARAÇÃO É LEGÍTIMA (25/08). Enquanto a cotação
-   * não sai do MESMO provedor da etiqueta e do CEP da loja que postou, o
-   * número serve de referência e nada mais: a primeira versão gritou "frete no
-   * prejuízo: R$ 9,01" num envio do Mais Envios cotado no balcão dos Correios,
-   * saindo de uma cidade a 300 km de onde a caixa saiu.
+   * 🔴 VEREDITO SÓ QUANDO A COMPARAÇÃO É LEGÍTIMA (25/08).
+   *
+   * Ordem de confiança: o CUSTO GRAVADO na emissão é a conta de verdade —
+   * quando ele existe, a margem sai dele e ponto. Sem ele, a cotação de hoje
+   * só vale como veredito se vier do MESMO provedor da etiqueta e do CEP da
+   * loja que postou: a primeira versão gritou "frete no prejuízo: R$ 9,01" num
+   * envio do Mais Envios cotado no balcão dos Correios, saindo de uma cidade
+   * a 300 km de onde a caixa saiu.
    */
   const margem =
-    frete?.comparavel && fretePago != null && opcaoPaga?.precoReais != null
-      ? fretePago - opcaoPaga.precoReais
-      : null;
+    fretePago == null
+      ? null
+      : custoEtiqueta != null
+        ? fretePago - custoEtiqueta
+        : frete?.comparavel && opcaoPaga?.precoReais != null
+          ? fretePago - opcaoPaga.precoReais
+          : null;
   const nomeProvedor = frete?.provedor === 'maisenvios' ? 'Mais Envios' : 'Correios';
 
   const temFicha = !!data && (!!data.service || !!postado || !!previsao || data.weightGrams != null);
@@ -427,6 +449,15 @@ export default function TrackingTimeline({
             {fretePago != null && (
               <span className="text-slate-700">
                 Frete pago pela cliente: <b className="text-sm text-slate-900">{brl(fretePago)}</b>
+              </span>
+            )}
+            {/* O QUE A CASA PAGOU — o número que a cotação nunca vai ser. */}
+            {custoEtiqueta != null && (
+              <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-800">
+                Pagamos: <b className="text-sm">{brl(custoEtiqueta)}</b>
+                {custoEtiquetaFonte === 'cotacao' ? (
+                  <span className="text-slate-500"> (cotado na emissão)</span>
+                ) : null}
               </span>
             )}
             {freteLoading && <span className="text-slate-400">cotando o frete…</span>}

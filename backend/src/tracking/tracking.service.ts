@@ -355,6 +355,25 @@ export class TrackingService {
         const cep = String(loja.cep || '').replace(/\D/g, '');
         if (cep.length === 8) cepOrigem = cep;
       }
+      /**
+       * `Store.cep` é campo de cadastro e vive vazio. O CEP de onde a caixa
+       * REALMENTE sai é o da CONFIG FISCAL — é ele que vai no remetente da
+       * etiqueta (mesma fonte do `remetenteDaLoja`). Sem esse fallback a
+       * cotação morria em "Informe o CEP de origem" justamente nas lojas que
+       * mais despacham.
+       */
+      if (!cepOrigem) {
+        const cfg: any = await (this.prisma as any).nfceConfig
+          .findUnique({ where: { storeCode: lojaCode }, select: { endereco: true, nfeEndereco: true } })
+          .catch(() => null);
+        for (const cru of [cfg?.nfeEndereco, cfg?.endereco]) {
+          if (!cru) continue;
+          try {
+            const cep = String(JSON.parse(String(cru))?.cep || '').replace(/\D/g, '');
+            if (cep.length === 8) { cepOrigem = cep; break; }
+          } catch { /* endereço fiscal não-JSON: ignora */ }
+        }
+      }
     }
     const origemPadrao = !cepOrigem;
 

@@ -427,6 +427,10 @@ export default function PedidoDetailPage() {
     // 'pending' = ainda não deveria ter baixa (status=new/separating/ready)
     debitApprovedAt?: string | null;
     debitStatus?: 'applied' | 'pending' | 'missing';
+    // O que a CASA pagou nesta etiqueta (centavos), gravado na emissão.
+    // Vazio nas etiquetas anteriores a 25/08 — antes o custo não era guardado.
+    freteCustoCentavos?: number | null;
+    freteCustoFonte?: string | null;
   }>>([]);
   const [liveStatusFlash, setLiveStatusFlash] = useState<Record<string, number>>({});
 
@@ -1641,17 +1645,21 @@ export default function PedidoDetailPage() {
    * a única loja que despachou. Duas lojas despachando = pedido dividido, e
    * aí nenhuma origem sozinha explica o frete — melhor não chutar.
    */
-  const lojaQuePostou = (() => {
+  const cardQuePostou = (() => {
     const limpar = (s: string | null | undefined) =>
       String(s || '').toUpperCase().replace(/[\s.\-]/g, '');
     const alvo = limpar(order.tracking?.number);
     const porCodigo = alvo
       ? liveStatus.find((p) => limpar(p.trackingCode) === alvo)
       : undefined;
-    if (porCodigo?.storeCode) return porCodigo.storeCode;
+    if (porCodigo) return porCodigo;
     const despacharam = liveStatus.filter((p) => p.status === 'shipped' && p.storeCode);
-    return despacharam.length === 1 ? despacharam[0].storeCode : null;
+    return despacharam.length === 1 ? despacharam[0] : null;
   })();
+  const lojaQuePostou = cardQuePostou?.storeCode ?? null;
+  // O que a casa pagou nesta etiqueta — centavos no banco, reais na tela.
+  const custoEtiqueta =
+    cardQuePostou?.freteCustoCentavos != null ? cardQuePostou.freteCustoCentavos / 100 : null;
 
   return (
     <div className="max-w-5xl mx-auto p-6">
@@ -3593,6 +3601,8 @@ export default function PedidoDetailPage() {
                   pecas={pecasDoPedido.reduce((s, li) => s + (Number(li.quantity) || 1), 0)}
                   lojaCode={lojaQuePostou}
                   fretePago={freteDoPedido.valor || null}
+                  custoEtiqueta={custoEtiqueta}
+                  custoEtiquetaFonte={cardQuePostou?.freteCustoFonte ?? null}
                   metodoPago={freteDoPedido.metodo || null}
                 />
               </div>
