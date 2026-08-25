@@ -3554,13 +3554,22 @@ export default function PedidoDetailPage() {
               Salvo como <code className="bg-slate-100 px-1 rounded">_tracking_number</code> / <code className="bg-slate-100 px-1 rounded">_tracking_carrier</code> nos meta_data do pedido (compatível com o plugin WooCommerce Shipment Tracking).
             </p>
 
-            {/* Timeline de rastreio — puxa status do Correios/LinkeTrack em tempo real */}
+            {/* Rastreio ao vivo — eventos + FICHA do objeto (serviço, postagem,
+                previsão de entrega, peso) e a linha do dinheiro: o frete que a
+                cliente pagou contra o que os Correios cobram hoje pelo mesmo
+                trajeto. O CEP e a contagem de peças montam a MESMA caixa que o
+                checkout cota (250 g/peça) — cotar com outra caixa dá outro
+                preço e a conferência não serve pra nada. */}
             {order.tracking?.number && (
               <div className="mt-4">
                 <TrackingTimeline
                   code={order.tracking.number}
                   carrier={order.tracking.carrier}
                   autoFetch
+                  cepDestino={order.shipping?.postcode || order.billing?.postcode || null}
+                  pecas={pecasDoPedido.reduce((s, li) => s + (Number(li.quantity) || 1), 0)}
+                  fretePago={freteDoPedido.valor || null}
+                  metodoPago={freteDoPedido.metodo || null}
                 />
               </div>
             )}

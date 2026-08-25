@@ -98,6 +98,59 @@ describe('TrackingService — normalização', () => {
     });
     expect(r.estimatedAt).toBe('2026-08-20T02:59:59.000Z');
   });
+
+  /**
+   * A FICHA DO OBJETO (25/08) — a tela do pedido passou a mostrar postagem,
+   * previsão, serviço e peso. Errar a POSTAGEM é o que dói: é dela que sai o
+   * "N dias em trânsito" e o começo do prazo.
+   */
+  test('postagem é a mais ANTIGA (objeto repostado não zera o relógio)', () => {
+    const r = svc.montar('HH123456789BR', 'correios', 'correios', {
+      eventos: [
+        { dtHrCriado: '2026-08-20T09:00:00', descricao: 'Objeto postado', unidade: { endereco: { cidade: 'SANTOS', uf: 'SP' } } },
+        { dtHrCriado: '2026-08-12T12:14:57', descricao: 'Objeto postado', unidade: { endereco: { cidade: 'INDAIATUBA', uf: 'SP' } } },
+        { dtHrCriado: '2026-08-18T10:00:00', descricao: 'Objeto devolvido ao remetente' },
+      ],
+    });
+    expect(r.postedAt).toBe('2026-08-12T15:14:57.000Z');
+    expect(r.origin).toBe('INDAIATUBA/SP');
+  });
+
+  test('"etiqueta emitida" NÃO é postagem — a caixa ainda está no balcão', () => {
+    const r = svc.montar('II123456789BR', 'correios', 'maisenvios', {
+      eventos: [doMaisEnvios[0]],
+    });
+    expect(r.postedAt).toBeNull();
+    expect(r.origin).toBeNull();
+  });
+
+  test('peso: SRO manda grama, Mais Envios manda quilo — e o absurdo vira null', () => {
+    const peso = (v: any) => svc.montar('JJ123456789BR', 'correios', 'correios', { eventos: [], peso: v }).weightGrams;
+    expect(peso('450')).toBe(450);       // SRO, em gramas
+    expect(peso(0.45)).toBe(450);        // Mais Envios, em quilos
+    expect(peso('1,25')).toBe(1250);     // quilo com vírgula
+    expect(peso('0')).toBeNull();
+    expect(peso(null)).toBeNull();
+    expect(peso('999999')).toBeNull();   // fora do teto dos Correios (60 kg)
+  });
+
+  test('serviço longo e destino saem junto quando o SRO manda', () => {
+    const r = svc.montar('KK123456789BR', 'correios', 'correios', {
+      eventos: [
+        {
+          dtHrCriado: '2026-08-13T08:00:00',
+          descricao: 'Objeto em transferência - por favor aguarde',
+          unidade: { endereco: { cidade: 'CAMPINAS', uf: 'SP' } },
+          unidadeDestino: { endereco: { cidade: 'SANTOS', uf: 'SP' } },
+        },
+      ],
+      servico: 'PAC',
+      servicoDesc: 'PAC - Encomenda Econômica',
+    });
+    expect(r.service).toBe('PAC');
+    expect(r.serviceDesc).toBe('PAC - Encomenda Econômica');
+    expect(r.destination).toBe('SANTOS/SP');
+  });
 });
 
 describe('TrackingService.normalizarCodigo', () => {

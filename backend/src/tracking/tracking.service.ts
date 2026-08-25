@@ -47,6 +47,25 @@ export interface TrackingResult {
   deliveredAt?: string | null;
   /** ISO da previsão de entrega (o SRO devolve `dtPrevista`). */
   estimatedAt?: string | null;
+  /** "PAC - Encomenda Econômica" — a descrição longa do serviço, quando vem. */
+  serviceDesc?: string | null;
+  /**
+   * Peso do objeto em GRAMAS, quando o provedor manda.
+   * ⚠️ O SRO manda gramas ("450") e o Mais Envios manda quilos (0.45): ver
+   * `pesoEmGramas`, que decide pela ordem de grandeza.
+   */
+  weightGrams?: number | null;
+  /**
+   * ISO da POSTAGEM (evento "Objeto postado").
+   * O relógio do prazo dos Correios começa AQUI, não na emissão da etiqueta —
+   * etiqueta emitida e caixa em cima do balcão é o caso do dia (a remessa
+   * REM-732 ficou 8 dias assim).
+   */
+  postedAt?: string | null;
+  /** Cidade/UF de onde o objeto foi postado. */
+  origin?: string | null;
+  /** Cidade/UF pra onde ele está indo (unidadeDestino do evento mais recente). */
+  destination?: string | null;
   error?: string;
 }
 
@@ -145,15 +164,44 @@ export class TrackingService {
     return { date: `${dd}/${mm}/${yyyy}`, time: `${hh}:${mi}` };
   }
 
-  /** "CAMPINAS/SP" a partir da unidade do evento (o formato varia por provedor). */
-  private local(ev: any): string {
-    const end = ev?.unidade?.endereco ?? {};
+  /** "CAMPINAS/SP" a partir de uma unidade (o formato varia por provedor). */
+  private localDe(unidade: any): string {
+    const end = unidade?.endereco ?? {};
     const cidade = String(end.cidade || '').trim();
     const uf = String(end.uf || '').trim();
     if (cidade && uf) return `${cidade}/${uf}`;
     if (cidade) return cidade;
-    const nome = String(ev?.unidade?.nome || ev?.unidade?.tipo || '').trim();
+    const nome = String(unidade?.nome || unidade?.tipo || '').trim();
     return uf && nome ? `${nome}/${uf}` : nome || uf;
+  }
+
+  /** "CAMPINAS/SP" a partir da unidade do evento. */
+  private local(ev: any): string {
+    return this.localDe(ev?.unidade);
+  }
+
+  /** Postagem de fato — é daqui que o prazo dos Correios conta. */
+  private ehPostagem(descricao: string): boolean {
+    return /objeto\s+postado/i.test(String(descricao || ''));
+  }
+
+  /**
+   * Peso do objeto em GRAMAS.
+   *
+   * O SRO manda gramas em texto ("450") e o Mais Envios manda quilos (0.45).
+   * Não dá pra confiar no nome do campo, então decide pela ordem de grandeza:
+   * peça de roupa não pesa 0,45 g nem a casa despacha caixa de 450 kg — abaixo
+   * de 100 é quilo, daí pra cima é grama. Fora da faixa plausível (até 60 kg,
+   * o teto dos Correios) devolve null: melhor não mostrar peso nenhum do que
+   * mostrar peso errado.
+   */
+  private pesoEmGramas(valor: any): number | null {
+    if (valor == null || valor === '') return null;
+    const cru = String(valor).trim().replace(',', '.');
+    const n = Number(cru.replace(/[^\d.]/g, ''));
+    if (!isFinite(n) || n <= 0) return null;
+    const gramas = n < 100 ? Math.round(n * 1000) : Math.round(n);
+    return gramas > 0 && gramas <= 60_000 ? gramas : null;
   }
 
   /**
@@ -185,24 +233,45 @@ export class TrackingService {
     code: string,
     carrier: string | undefined,
     provider: string,
-    dados: { eventos: any[]; servico?: string | null; previsao?: string | null },
+    dados: {
+      eventos: any[];
+      servico?: string | null;
+      previsao?: string | null;
+      servicoDesc?: string | null;
+      peso?: any;
+    },
   ): TrackingResult {
     const crus = Array.isArray(dados.eventos) ? dados.eventos : [];
     const events = this.normalizarEventos(crus);
+    const quando = (ev: any) => this.paraData(ev?.dtHrCriado)?.getTime() ?? 0;
     // A entrega é o evento mais recente que fala em "entregue": pega a data do
     // evento CRU correspondente pra não reconstruir a partir do texto.
     const entregaCrua = crus
       .filter((ev) => this.ehEntrega(String(ev?.descricao || ev?.status || '')))
-      .sort((a, b) => (this.paraData(b?.dtHrCriado)?.getTime() ?? 0) - (this.paraData(a?.dtHrCriado)?.getTime() ?? 0))[0];
+      .sort((a, b) => quando(b) - quando(a))[0];
+    // A POSTAGEM é a mais ANTIGA (o objeto pode ser repostado depois de uma
+    // devolução ao remetente) — é ela que marca o começo do prazo.
+    const postagemCrua = crus
+      .filter((ev) => this.ehPostagem(String(ev?.descricao || ev?.status || '')))
+      .sort((a, b) => quando(a) - quando(b))[0];
+    // Pra onde vai: o SRO carimba `unidadeDestino` nos eventos de trânsito.
+    const destinoCru = [...crus]
+      .sort((a, b) => quando(b) - quando(a))
+      .find((ev) => this.localDe(ev?.unidadeDestino));
     return {
       code,
       carrier: carrier || 'correios',
       service: dados.servico ?? null,
+      serviceDesc: dados.servicoDesc ?? null,
+      weightGrams: this.pesoEmGramas(dados.peso),
       events,
       lastStatus: events[0]?.description ?? null,
       delivered: !!entregaCrua,
       deliveredAt: entregaCrua ? this.paraData(entregaCrua.dtHrCriado)?.toISOString() ?? null : null,
       estimatedAt: dados.previsao ? this.paraData(dados.previsao)?.toISOString() ?? null : null,
+      postedAt: postagemCrua ? this.paraData(postagemCrua.dtHrCriado)?.toISOString() ?? null : null,
+      origin: postagemCrua ? this.local(postagemCrua) || null : null,
+      destination: destinoCru ? this.localDe(destinoCru.unidadeDestino) || null : null,
       fetchedAt: new Date().toISOString(),
       provider,
     };
@@ -227,6 +296,8 @@ export class TrackingService {
           const res = this.montar(c, carrier, 'correios', {
             eventos,
             servico: r?.objeto?.tipoPostal?.categoria ?? null,
+            servicoDesc: r?.objeto?.tipoPostal?.descricao ?? null,
+            peso: r?.objeto?.pesoObjeto ?? r?.objeto?.peso ?? null,
             previsao: r?.objeto?.dtPrevista ?? null,
           });
           await this.salvarCache(res);
@@ -245,10 +316,15 @@ export class TrackingService {
       const r: any = await this.maisEnvios.rastrear(c);
       const eventos = r?.data?.eventos ?? [];
       if (r?.ok && eventos.length) {
+        // O payload do Mais Envios varia por etiqueta: peso e previsão vêm em
+        // umas e faltam em outras. Campo ausente vira null e simplesmente não
+        // aparece na tela — nada aqui inventa número.
         const res = this.montar(c, carrier, 'maisenvios', {
           eventos,
           servico: r?.data?.servicoNome || r?.data?.categoria || null,
-          previsao: null,
+          servicoDesc: r?.data?.servicoDescricao || r?.data?.descricao || null,
+          peso: r?.data?.weight ?? r?.data?.peso ?? null,
+          previsao: r?.data?.deliveryForecast ?? r?.data?.previsaoEntrega ?? null,
         });
         await this.salvarCache(res);
         return res;
@@ -439,6 +515,8 @@ export class TrackingService {
         res = this.montar(codigo, 'correios', 'correios', {
           eventos: obj.eventos,
           servico: obj?.tipoPostal?.categoria ?? null,
+          servicoDesc: obj?.tipoPostal?.descricao ?? null,
+          peso: obj?.pesoObjeto ?? obj?.peso ?? null,
           previsao: obj?.dtPrevista ?? null,
         });
       } else {
@@ -450,7 +528,9 @@ export class TrackingService {
             res = this.montar(codigo, 'correios', 'maisenvios', {
               eventos,
               servico: r?.data?.servicoNome || r?.data?.categoria || null,
-              previsao: null,
+              servicoDesc: r?.data?.servicoDescricao || r?.data?.descricao || null,
+              peso: r?.data?.weight ?? r?.data?.peso ?? null,
+              previsao: r?.data?.deliveryForecast ?? r?.data?.previsaoEntrega ?? null,
             });
           }
         } catch (e: any) {
