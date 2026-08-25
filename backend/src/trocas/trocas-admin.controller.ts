@@ -42,6 +42,19 @@ export class TrocasAdminController {
     };
   }
 
+  /**
+   * GET /trocas/alerta-avisos — o alarme de "código preso".
+   *
+   * Vem ANTES do `@Get(':id')` de propósito (o Nest casa por ordem de
+   * declaração). Aberto pra loja também: quem atende a cliente que ligou
+   * perguntando do código precisa saber que o aviso não saiu.
+   */
+  @Get('alerta-avisos')
+  alertaAvisos(@Req() req: any) {
+    this.requireView(req);
+    return this.svc.alertaAvisosPresos();
+  }
+
   /** GET /trocas — lista com filtros (status, q, from/to) */
   @Get()
   async list(

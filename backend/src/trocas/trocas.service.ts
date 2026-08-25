@@ -191,6 +191,73 @@ export class TrocasService {
     );
   }
 
+  /** O MESMO código, em HTML, pro e-mail. */
+  private emailCodigoReversa(troca: any, codigo: string, prazo: Date): string {
+    const primeiro = (troca.customerName || '').split(' ')[0] || '';
+    return `
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+      <h2 style="color:#8C7325">Oi${primeiro ? `, ${primeiro}` : ''}! 💛</h2>
+      <p>Sua devolução da troca <b>${formatTrocaNumero(troca.numero)}</b> está liberada.</p>
+      <p style="margin-bottom:4px">📮 Código de postagem:</p>
+      <p style="font-size:24px;font-weight:bold;background:#FBF6E6;border:2px dashed #B8912B;border-radius:12px;padding:16px;text-align:center;letter-spacing:2px">${codigo}</p>
+      <p>É só levar a peça em <b>qualquer agência dos Correios</b> e informar esse código —
+         você não paga nada, o frete é por nossa conta.</p>
+      <p>Válido até <b>${prazo.toLocaleDateString('pt-BR')}</b>.</p>
+      <p>Assim que a peça chegar e passar na conferência, a gente te avisa pra escolher entre
+         trocar, vale-compras ou reembolso.</p>
+      <p>Equipe Lurd's Plus Size 💛</p>
+    </div>`;
+  }
+
+  /**
+   * 🚨 O CÓDIGO DE POSTAGEM SAI PELOS DOIS CANAIS (dono, 25/08/2026).
+   *
+   * Medido em produção nesse dia: 19 trocas com código VÁLIDO nos Correios e
+   * ZERO clientes avisadas — a mais antiga esperando desde 28/07. Todas as
+   * tentativas morreram na mesma linha: "WhatsApp desconectado". A sessão
+   * `wa-site` caiu em ~14/08 e só um humano com o celular na mão ressuscita.
+   *
+   * O erro de projeto não foi a sessão cair — foi o código de postagem depender
+   * de UM canal só. Agora ele tenta WhatsApp E e-mail, e `ok` é verdadeiro se
+   * QUALQUER um entregar: o objetivo é a cliente ter o código, não o canal.
+   *
+   * (O e-mail voltou a existir: `SMTP_*` está configurado em produção desde
+   * então — e o remetente sem endereço, que matava tudo em silêncio, foi
+   * corrigido em `EmailService.resolverFrom`.)
+   */
+  private async avisarCodigoReversa(
+    troca: any,
+    codigo: string,
+    prazo: Date,
+  ): Promise<{ ok: boolean; canais: string[]; motivo?: string }> {
+    const canais: string[] = [];
+    const whats = await this.avisarWhatsDetalhado(
+      troca.customerPhone,
+      this.textoCodigoReversa(troca, codigo, prazo),
+    );
+    if (whats.ok) canais.push('WhatsApp');
+
+    let emailOk = false;
+    if (troca.customerEmail) {
+      try {
+        emailOk = await this.email.send(
+          troca.customerEmail,
+          `Lurd's Plus Size — seu código de postagem da troca ${formatTrocaNumero(troca.numero)} 📮`,
+          this.emailCodigoReversa(troca, codigo, prazo),
+        );
+      } catch { emailOk = false; }
+    }
+    if (emailOk) canais.push('e-mail');
+
+    return {
+      ok: canais.length > 0,
+      canais,
+      motivo: canais.length
+        ? undefined
+        : `WhatsApp: ${whats.motivo || 'falhou'}${troca.customerEmail ? ' · e-mail: falhou' : ' · sem e-mail no cadastro'}`,
+    };
+  }
+
   /**
    * REENVIA O CÓDIGO QUE NÃO CHEGOU. Chamado pelo cron pra toda troca com
    * `reversaCodigo` e sem `reversaEnviadaAt`. Não gera etiqueta nova — a
@@ -201,20 +268,56 @@ export class TrocasService {
     if (!troca?.reversaCodigo) return { ok: false, motivo: 'troca sem código de reversa' };
     if (troca.reversaEnviadaAt) return { ok: true };
     const prazo = troca.reversaPrazo ? new Date(troca.reversaPrazo) : new Date(Date.now() + 15 * 86_400_000);
-    const r = await this.avisarWhatsDetalhado(
-      troca.customerPhone,
-      this.textoCodigoReversa(troca, troca.reversaCodigo, prazo),
-    );
+    const r = await this.avisarCodigoReversa(troca, troca.reversaCodigo, prazo);
     if (r.ok) {
       await (this.prisma as any).trocaSolicitacao.update({
         where: { id },
         data: {
           reversaEnviadaAt: new Date(),
-          eventos: { create: { tipo: 'reversa', descricao: `Código ${troca.reversaCodigo} enviado pra cliente por WhatsApp (reenvio automático).`, userName: 'automático (cron)' } },
+          eventos: { create: { tipo: 'reversa', descricao: `Código ${troca.reversaCodigo} enviado pra cliente por ${r.canais.join(' e ')} (reenvio automático).`, userName: 'automático (cron)' } },
         },
       });
     }
-    return r;
+    return { ok: r.ok, motivo: r.motivo };
+  }
+
+  /**
+   * ALARME: quantos códigos de postagem estão presos por falta de canal.
+   *
+   * A etapa que trava é sempre a única invisível — foi assim com a reversa que
+   * nunca era gerada (14/08) e de novo com o aviso que nunca saía (25/08). O
+   * cron grita num WARN de log que ninguém lê. Este resumo existe pra virar
+   * uma barra VERMELHA na tela de quem trabalha a fila.
+   */
+  async alertaAvisosPresos() {
+    const status = this.whats.getStatus();
+    const presas = await (this.prisma as any).trocaSolicitacao.findMany({
+      where: {
+        reversaCodigo: { not: null },
+        reversaEnviadaAt: null,
+        status: { in: ['aguardando_postagem', 'solicitada', 'aguardando_envio_cliente'] },
+      },
+      select: { numero: true, createdAt: true, reversaPrazo: true },
+      orderBy: { createdAt: 'asc' },
+      take: 200,
+    });
+    const agora = Date.now();
+    const maisAntigoDias = presas.length
+      ? Math.floor((agora - new Date(presas[0].createdAt).getTime()) / 86_400_000)
+      : 0;
+    // Código com prazo vencido não adianta mais reenviar: precisa de etiqueta
+    // nova, e isso é trabalho de gente. Conta separado pra não virar ruído.
+    const vencidos = presas.filter(
+      (t: any) => t.reversaPrazo && new Date(t.reversaPrazo).getTime() < agora,
+    ).length;
+    return {
+      whatsappConectado: !!status?.connected,
+      whatsappDesde: status?.connectedAt ?? null,
+      presos: presas.length,
+      vencidos,
+      maisAntigoDias,
+      trocas: presas.slice(0, 12).map((t: any) => formatTrocaNumero(t.numero)),
+    };
   }
 
   // ── Config (mesma chave da tela de trocas da equipe) ────────────────
@@ -1293,7 +1396,7 @@ export class TrocasService {
     const codigo = String(resp.codigoRastreio);
     const prazo = new Date(Date.now() + 15 * 86_400_000);
 
-    const aviso = await this.avisarWhatsDetalhado(troca.customerPhone, this.textoCodigoReversa(troca, codigo, prazo));
+    const aviso = await this.avisarCodigoReversa(troca, codigo, prazo);
     const whatsOk = aviso.ok;
 
     const updated = await (this.prisma as any).trocaSolicitacao.update({
@@ -1311,8 +1414,8 @@ export class TrocasService {
             descricao:
               `Etiqueta de devolução gerada nos Correios: ${codigo} (PAC, válido até ${prazo.toLocaleDateString('pt-BR')}).` +
               (whatsOk
-                ? ' Código enviado pra cliente por WhatsApp.'
-                : ` ATENÇÃO: WhatsApp NÃO enviado (${aviso.motivo || 'motivo desconhecido'}) — o cron reenvia sozinho enquanto a sessão não volta; se urgente, passar manualmente.`),
+                ? ` Código enviado pra cliente por ${aviso.canais.join(' e ')}.`
+                : ` ATENÇÃO: aviso NÃO entregue (${aviso.motivo || 'motivo desconhecido'}) — o cron reenvia sozinho pelos dois canais; se urgente, passar manualmente.`),
             userId: input.userId || null,
             userName: input.userName || null,
           },

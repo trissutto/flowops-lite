@@ -45,11 +45,32 @@ export class EmailService implements OnModuleInit {
         secure,
         auth: { user, pass },
       });
-      this.fromAddress = this.cfg.get<string>('SMTP_FROM') || this.fromAddress;
-      this.logger.log(`[email] SMTP configurado (${host}:${port})`);
+      this.fromAddress = EmailService.resolverFrom(this.cfg.get<string>('SMTP_FROM'), user);
+      this.logger.log(`[email] SMTP configurado (${host}:${port}) — de: ${this.fromAddress}`);
     } catch (e: any) {
       this.logger.error(`[email] falha ao configurar SMTP: ${e?.message || e}`);
     }
+  }
+
+  /**
+   * 🚨 REMETENTE SEM ENDEREÇO MATA TODO O E-MAIL, EM SILÊNCIO (25/08/2026).
+   *
+   * Em produção a `SMTP_FROM` estava valendo `Lurd's Plus Size` — só o NOME,
+   * sem `<endereco@dominio>`. O nodemailer aceita, monta `{address: '',
+   * name: "Lurd's Plus Size"}` e o envelope sai com `from: false`; o Gmail
+   * recusa e o `send()` devolve `false` — o mesmo `false` de "SMTP não
+   * configurado". Ou seja: ninguém consegue distinguir e nada é entregue.
+   *
+   * Erro de digitação numa variável de ambiente não pode derrubar um canal
+   * inteiro: sem `@` na `SMTP_FROM`, ela vira só o nome de exibição e o
+   * endereço vem do `SMTP_USER`, que é quem autenticou de qualquer forma.
+   */
+  static resolverFrom(smtpFrom: string | undefined, user: string): string {
+    const bruto = String(smtpFrom || '').trim();
+    if (bruto.includes('@')) return bruto;
+    if (!user) return bruto || `Lurd's Plus Size <noreply@lurds.com.br>`;
+    const nome = bruto.replace(/[<>"]/g, '').trim();
+    return nome ? `${nome} <${user}>` : user;
   }
 
   /** Envia um email. Retorna true se OK, false se falhou ou não configurado. */

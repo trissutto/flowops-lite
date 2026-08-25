@@ -21,6 +21,7 @@ import {
   Package, Settings,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import AlertaAvisosTroca from '@/components/AlertaAvisosTroca';
 
 type SearchResult = {
   wcOrderId: number;
@@ -121,6 +122,8 @@ export default function TrocasSitePage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-fuchsia-50 p-4 md:p-6">
       <div className="max-w-5xl mx-auto">
+        {/* Código de postagem que não chegou na cliente — ela liga AQUI. */}
+        <AlertaAvisosTroca />
         <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
           <Link
             href="/retaguarda"
@@ -394,7 +397,10 @@ function OrderDetail({
           motivo: motivo || undefined,
           obs: obs || undefined,
           forceOutOfPrazo,
-          creditoValidadeDias: modo === 'credito' ? validade : undefined,
+          // Vai nos DOIS modos: desde 25/08 "trocar agora" também nasce com
+          // validade de verdade (era 1 dia, e pedido do site não se resolve em
+          // 1 dia — 16 vales de R$ 4.382,03 venceram sem uso).
+          creditoValidadeDias: modo === 'devolucao' ? undefined : validade,
         }),
       });
       setSuccess(r);
@@ -619,7 +625,7 @@ function OrderDetail({
               <div className="text-left leading-tight">
                 <div className="font-black text-lg">TROCAR AGORA NA LOJA</div>
                 <div className={`text-xs ${modo === 'troca' ? 'text-emerald-50' : 'text-emerald-700'}`}>
-                  Gera o vale na hora pra cliente levar outra peça hoje
+                  Gera o vale na hora — vale {validade} dias, ela leva outra peça hoje ou depois
                 </div>
               </div>
               {modo === 'troca' && <Check size={22} className="ml-auto shrink-0" />}
@@ -650,7 +656,7 @@ function OrderDetail({
             </div>
           )}
 
-          {modo === 'credito' && (
+          {modo !== 'devolucao' && (
             <div className="flex items-center gap-2">
               <label className="text-xs font-bold text-gray-700 uppercase shrink-0">
                 Validade do vale (dias)

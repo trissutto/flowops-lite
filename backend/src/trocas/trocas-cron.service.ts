@@ -125,11 +125,11 @@ export class TrocasCronService {
       // WARN de propósito: isto tem que aparecer. É código de postagem que a
       // cliente está esperando — e reclamando no WhatsApp da loja.
       this.logger.warn(
-        `[trocas-cron] ${pendentes.length - ok} código(s) de postagem AINDA não entregue(s) por WhatsApp (${motivo || 'motivo desconhecido'}). Trocas: ` +
+        `[trocas-cron] ${pendentes.length - ok} código(s) de postagem AINDA não entregue(s) — nem WhatsApp nem e-mail (${motivo || 'motivo desconhecido'}). Trocas: ` +
           pendentes.map((t: any) => formatTrocaNumero(t.numero)).join(', '),
       );
     } else {
-      this.logger.log(`[trocas-cron] ${ok} código(s) de postagem reenviado(s) por WhatsApp`);
+      this.logger.log(`[trocas-cron] ${ok} código(s) de postagem reenviado(s) pra cliente`);
     }
   }
 

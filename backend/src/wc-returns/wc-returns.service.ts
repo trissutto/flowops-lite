@@ -507,7 +507,20 @@ export class WcReturnsService {
     let creditoValidade: Date | null = null;
     if (modo === 'troca' || modo === 'credito') {
       creditoCode = this.genCreditoCode();
-      const dias = modo === 'troca' ? 1 : Math.max(1, input.creditoValidadeDias || 90);
+      /**
+       * 🚨 VALE DE PEDIDO DO SITE NUNCA NASCE COM 1 DIA (dono, 25/08/2026).
+       *
+       * O modo `troca` ("TROCAR AGORA NA LOJA") dava validade de UM DIA. A
+       * lógica era do balcão — ela leva outra peça hoje, o vale morre hoje. Só
+       * que ESTA tela só atende venda ONLINE (site, ecommerce, pdv_online,
+       * live — ver o cabeçalho da classe): a cliente não está no balcão, e um
+       * vale de 24h é vale natimorto.
+       *
+       * Medido no dia: 16 vales emitidos nesse modo, R$ 4.382,03, ZERO usados.
+       * Devolução de peça comprada em loja física continua em `pdv_returns`,
+       * com a régua de lá — esta mudança não encosta nela.
+       */
+      const dias = Math.max(1, input.creditoValidadeDias || 90);
       creditoValidade = new Date(Date.now() + dias * 86400_000);
     }
 
