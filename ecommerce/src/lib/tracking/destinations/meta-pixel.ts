@@ -45,13 +45,35 @@ export const metaPixel: Destination = {
   init() {
     if (typeof window === 'undefined' || fbq()) return;
 
-    // Stub oficial da Meta: enfileira chamadas até o script real chegar, então
-    // podemos disparar eventos no mesmo tick sem perder nada.
+    // Stub no molde do snippet oficial da Meta: enfileira chamadas até o
+    // script real chegar, então podemos disparar eventos no mesmo tick sem
+    // perder nada.
+    //
+    // ⚠️ O RAMO `callMethod` NÃO É OPCIONAL — foi a linha que faltou de
+    // 30/07 a 24/08/2026. Quando o fbevents.js carrega, ele drena a fila UMA
+    // vez e pendura `callMethod` neste mesmo objeto; toda chamada seguinte
+    // precisa ir por ele. O stub antigo só fazia `queue.push(...)`: evento
+    // disparado DEPOIS do script carregado entrava numa fila que ninguém lia
+    // mais. Na prática só PageView/ViewContent (disparados na corrida antes
+    // do script) chegavam à Meta — AddToCart é clique, vinha sempre depois, e
+    // caiu de ~120/dia pra 1-4/dia quando a virada de domínio (19/08) tirou o
+    // WordPress (snippet oficial, são) da frente. Medição em
+    // [[publico-site-nao-constroi-24-08]].
     const w = window as unknown as Record<string, unknown>;
-    const n: ((...args: unknown[]) => void) & { queue?: unknown[]; loaded?: boolean; version?: string; push?: unknown } =
-      function (...args: unknown[]) {
+    const n: ((...args: unknown[]) => void) & {
+      queue?: unknown[];
+      loaded?: boolean;
+      version?: string;
+      push?: unknown;
+      callMethod?: (...args: unknown[]) => void;
+    } = function (...args: unknown[]) {
+      if (n.callMethod) {
+        // Chamada como método de `n` — o fbevents espera `this` = fbq.
+        n.callMethod(...args);
+      } else {
         (n.queue as unknown[]).push(args);
-      };
+      }
+    };
     n.queue = [];
     n.loaded = true;
     n.version = '2.0';

@@ -62,8 +62,15 @@ export const ga4: Destination = {
     const w = window as unknown as { dataLayer?: unknown[]; gtag?: (...a: unknown[]) => void };
     w.dataLayer = w.dataLayer || [];
     if (!w.gtag) {
-      w.gtag = function (...args: unknown[]) {
-        w.dataLayer!.push(args);
+      // ⚠️ Empurrar `arguments`, NUNCA um array de rest args: o gtag.js só
+      // processa comandos que chegam como objeto `Arguments` — array entra no
+      // dataLayer e é ignorado em silêncio. Este fallback é teoricamente morto
+      // (o bootstrap de consent no <head> já criou o gtag certo), mas se um
+      // dia rodar, precisa ser no formato que o Google lê. Primo do bug do
+      // stub do Meta Pixel (30/07→24/08) que engoliu todo evento pós-load.
+      w.gtag = function () {
+        // eslint-disable-next-line prefer-rest-params
+        w.dataLayer!.push(arguments);
       };
     }
 
