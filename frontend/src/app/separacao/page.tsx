@@ -28,6 +28,7 @@ import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import { autoSendOrderToStore } from '@/lib/auto-send-order';
 import { abrirWhatsApp } from '@/lib/whatsapp';
+import AlertaAvisosTroca from '@/components/AlertaAvisosTroca';
 import SellerTag from '@/components/SellerTag';
 import EnviadosByStore from '@/components/EnviadosByStore';
 import PosVenda from '@/components/PosVenda';
@@ -1145,6 +1146,10 @@ function SeparacaoPageInner() {
         </>
       }
     >
+      {/* A matriz vive nesta tela — é aqui que o alarme tem que aparecer.
+          Some sozinho quando não há código de postagem preso. */}
+      <AlertaAvisosTroca />
+
       {/* Filtros de status com contadores */}
       <div className="flex flex-wrap gap-2 mb-4">
         {FILTROS.map((f) => {
@@ -1426,6 +1431,12 @@ function SeparacaoPageInner() {
           </button>
         </div>
       )}
+
+      {/* COBRANÇA DE VENDA ONLINE ESPERANDO O DINHEIRO — mora aqui porque
+          "Pagto pendente" é exatamente o que ela é, e a lista de baixo só
+          conhece `Order` (a venda do PDV só vira pedido quando o pagamento
+          cai). Ver `CobrancasPdvBloco`. */}
+      {status === 'pending' && !search && <CobrancasPdvBloco />}
 
       {/* Lista */}
       {status === 'carrinhos' && !search ? (
@@ -3182,6 +3193,253 @@ function CarrinhosTab() {
               </section>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   COBRANÇAS DO PDV AGUARDANDO PAGAMENTO — aba "Pagto pendente" (25/08)
+
+   A aba lista `Order` com status `pending`. Só que a venda online da LOJA
+   (PIX/link mandado no WhatsApp) **não é pedido enquanto o dinheiro não cai**
+   — ela vive como `pdv_sales.status='open'`, e o pedido só nasce no
+   fechamento. Resultado: a cobrança na rua não aparecia em tela nenhuma da
+   matriz, e o dono não tinha como saber se a cliente pagou.
+
+   Mesma fonte do widget do PDV (`GET /pdv/cobrancas-online`), mesma régua de
+   situação — divergir aí é o defeito de badge×tela se repetindo. Sem
+   storeCode = rede inteira (a matriz é admin).
+   ══════════════════════════════════════════════════════════════════════ */
+type CobrancaOnline = {
+  saleId: string;
+  saleCode: string;
+  storeCode: string;
+  storeName: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  customerCpf: string | null;
+  sellerName: string | null;
+  entregaTipo: string | null;
+  total: number;
+  restante: number;
+  meio: 'pix' | 'link';
+  situacao: 'pago' | 'aguardando' | 'venceu';
+  statusGateway: string;
+  valor: number;
+  link: string | null;
+  orderId: string | null;
+  createdAt: string;
+  tentativas: number;
+  horas: number;
+};
+
+function CobrancasPdvBloco() {
+  const [itens, setItens] = useState<CobrancaOnline[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [aberto, setAberto] = useState(true);
+  const [ocupado, setOcupado] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const r = await api<CobrancaOnline[]>('/pdv/cobrancas-online');
+      setItens(Array.isArray(r) ? r : []);
+    } catch {
+      setItens([]);
+    } finally {
+      setCarregando(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (carregando || itens.length === 0) return null;
+
+  const BRL = (v: number) => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const naoPagou = itens.filter((c) => c.situacao === 'venceu').length;
+  const pagos = itens.filter((c) => c.situacao === 'pago').length;
+
+  const idade = (h: number) => (h < 1 ? 'agora há pouco' : h < 24 ? `há ${h}h` : `há ${Math.floor(h / 24)}d`);
+
+  const conferir = async (c: CobrancaOnline) => {
+    if (!c.orderId) return;
+    setOcupado(c.saleId);
+    try {
+      const rota = c.meio === 'pix' ? 'pagbank' : 'pagarme';
+      const r = await api<{ status: string; isPaid?: boolean }>(`/${rota}/pix/check/${c.orderId}`, { method: 'POST' });
+      alert(
+        r.isPaid || r.status === 'paid'
+          ? `PAGOU! A venda #${c.saleCode} fecha sozinha em segundos.`
+          : `Ainda não pagou (situação no gateway: ${r.status}).`,
+      );
+      load();
+    } catch (e: any) {
+      alert(`Não consegui conferir: ${e?.message || e}`);
+    } finally {
+      setOcupado(null);
+    }
+  };
+
+  /** Gera um PIX NOVO do que falta e abre o WhatsApp com o link. */
+  const cobrarDeNovo = async (c: CobrancaOnline) => {
+    const valor = c.restante > 0 ? c.restante : c.total;
+    if (!confirm(`Gerar um PIX NOVO de ${BRL(valor)} pra ${c.customerName || 'esta cliente'}?\n\nO código anterior para de valer.`)) return;
+    setOcupado(c.saleId);
+    try {
+      const pb = await api<{ shortUrl?: string; qrCodeText: string; valor: number }>('/pagbank/pix/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          saleId: c.saleId,
+          valor,
+          storeCode: c.storeCode,
+          customerName: c.customerName || undefined,
+          customerCpf: c.customerCpf || undefined,
+          expiresInMinutes: 60,
+          origem: 'venda_online',
+        }),
+      });
+      const url = pb.shortUrl || '';
+      if (url) navigator.clipboard.writeText(url).catch(() => {});
+      abrirWhatsApp(
+        c.customerPhone || '',
+        url
+          ? `Oi${c.customerName ? ` ${c.customerName.split(' ')[0]}` : ''}! Segue o PIX de ${BRL(pb.valor)} pra fechar seu pedido 💛\n\nÉ só tocar no link e apertar COPIAR CÓDIGO PIX:\n\n${url}\n\nAssim que o pagamento cair a gente já separa tudo!`
+          : `Oi${c.customerName ? ` ${c.customerName.split(' ')[0]}` : ''}! Segue o PIX de ${BRL(pb.valor)} pra fechar seu pedido 💛\n\n${pb.qrCodeText}`,
+      );
+      load();
+    } catch (e: any) {
+      alert(`Não consegui gerar o PIX: ${e?.message || e}`);
+    } finally {
+      setOcupado(null);
+    }
+  };
+
+  return (
+    <div className="mb-3 rounded-lg border-2 border-amber-300 bg-amber-50/60 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-amber-100/60"
+      >
+        <span className="text-base leading-none">💳</span>
+        <span className="font-bold text-sm text-amber-900">
+          {itens.length} cobrança{itens.length > 1 ? 's' : ''} de venda online esperando pagamento
+        </span>
+        <span className="text-[11px] text-amber-800">
+          {pagos > 0 && `· ${pagos} já pagou`}
+          {naoPagou > 0 && ` · ${naoPagou} não pagou`}
+        </span>
+        <span className="ml-auto text-[11px] text-amber-700">{aberto ? 'esconder' : 'ver'}</span>
+      </button>
+      {aberto && (
+        <div className="px-2 pb-2 space-y-1.5">
+          <p className="px-1 text-[11px] text-amber-800">
+            PIX/link que a loja mandou pra cliente. Enquanto o dinheiro não cai a venda não vira
+            pedido — por isso não aparece na lista abaixo.
+          </p>
+          {itens.map((c) => (
+            <div
+              key={c.saleId}
+              className={`rounded border bg-white px-2.5 py-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm ${
+                c.situacao === 'pago'
+                  ? 'border-emerald-300'
+                  : c.situacao === 'venceu'
+                    ? 'border-amber-300'
+                    : 'border-slate-200'
+              }`}
+            >
+              <span className="font-mono text-[10px] font-bold bg-slate-100 px-1.5 py-0.5 rounded">
+                #{c.saleCode}
+              </span>
+              <span
+                className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                  c.meio === 'pix' ? 'bg-emerald-100 text-emerald-800' : 'bg-violet-100 text-violet-800'
+                }`}
+              >
+                {c.meio === 'pix' ? 'PIX' : 'LINK'}
+              </span>
+              {c.situacao === 'pago' ? (
+                <span className="text-[10px] font-black px-2 py-0.5 rounded bg-emerald-600 text-white">✓ PAGOU</span>
+              ) : c.situacao === 'venceu' ? (
+                <span
+                  className="text-[10px] font-black px-2 py-0.5 rounded bg-amber-600 text-white"
+                  title={`Situação no gateway: ${c.statusGateway}`}
+                >
+                  ⚠ NÃO PAGOU
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
+                  ⏳ Aguardando
+                </span>
+              )}
+              <span className="font-semibold text-slate-800 truncate max-w-[220px]">
+                {c.customerName || 'Sem nome'}
+              </span>
+              <span className="text-[11px] text-slate-500">
+                {c.storeName || c.storeCode}
+                {c.sellerName ? ` · ${c.sellerName}` : ''} · {idade(c.horas)}
+                {c.tentativas > 1 ? ` · ${c.tentativas}ª cobrança` : ''}
+              </span>
+              <span className="ml-auto font-black tabular-nums text-slate-800">{BRL(c.total)}</span>
+              <div className="flex gap-1 flex-wrap">
+                <button
+                  type="button"
+                  disabled={ocupado === c.saleId || !c.orderId}
+                  onClick={() => conferir(c)}
+                  className="px-2 py-1 rounded bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white text-[11px] font-bold"
+                  title="Perguntar ao gateway se caiu"
+                >
+                  🔄
+                </button>
+                {c.link && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(c.link!);
+                        alert('Link copiado.');
+                      }}
+                      className="px-2 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-bold"
+                      title="Copiar o link que a cliente recebeu"
+                    >
+                      📋
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        abrirWhatsApp(
+                          c.customerPhone || '',
+                          c.meio === 'pix'
+                            ? `Oi${c.customerName ? ` ${c.customerName.split(' ')[0]}` : ''}! Segue o PIX de ${BRL(c.valor)} pra fechar seu pedido 💛\n\nÉ só tocar no link e apertar COPIAR CÓDIGO PIX:\n\n${c.link}`
+                            : `Olá! Link pra pagamento (${BRL(c.total)}):\n\n${c.link}\n\nPIX ou cartão até 12x sem juros.`,
+                        )
+                      }
+                      className="px-2 py-1 rounded bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold"
+                      title="Abre no WhatsApp deste PC"
+                    >
+                      📱
+                    </button>
+                  </>
+                )}
+                {c.situacao !== 'pago' && (
+                  <button
+                    type="button"
+                    disabled={ocupado === c.saleId}
+                    onClick={() => cobrarDeNovo(c)}
+                    className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-[11px] font-bold"
+                    title="Gera um PIX novo com o valor que falta e manda pra cliente"
+                  >
+                    💸 Cobrar de novo
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

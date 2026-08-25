@@ -1733,23 +1733,40 @@ function PdvPageInner() {
   const [showOpenList, setShowOpenList] = useState(false);
   const [showStoreSummary, setShowStoreSummary] = useState(false);
 
-  // ── Links Pagar.me aguardando pagamento (widget global) ──
-  // Polling a cada 15s lista vendas pausadas com Link Pagar.me. Quando
-  // alguma vira paid, alerta sonoro + visual + a vendedora finaliza.
+  // ── Cobranças online aguardando pagamento (widget global) ──
+  //
+  // 🚨 25/08: era "Links Pagar.me pendentes" e enxergava SÓ o link de cartão
+  // (`pagarme_payments`). O PIX da venda online mora em OUTRA tabela
+  // (`pagbank_payments`) e não aparecia em tela nenhuma — o dono: "os pedidos
+  // gerados pelo link PIX não aparecem como aguardando pagamento, não
+  // conseguimos saber se a cliente pagou ou não". Medição do dia: 12 vendas da
+  // loja 13 penduradas, R$ 3.840,21, a mais velha de 18/08.
+  //
+  // Agora a fonte é `/pdv/cobrancas-online`, que junta os DOIS meios numa
+  // linha por venda e devolve a situação em palavra de gente.
   const [onlinePending, setOnlinePending] = useState<Array<{
     saleId: string;
     saleCode: string;
-    saleStatus: string;
+    storeCode: string;
+    storeName: string | null;
     customerName: string | null;
     customerCpf: string | null;
     customerPhone: string | null;
     sellerName: string | null;
+    entregaTipo: string | null;
     total: number;
-    pagarmeOrderId: string;
-    paymentUrl: string | null;
-    status: string;
-    paidAt: string | null;
+    restante: number;
+    meio: 'pix' | 'link';
+    situacao: 'pago' | 'aguardando' | 'venceu';
+    statusGateway: string;
+    valor: number;
+    link: string | null;
+    orderId: string | null;
     createdAt: string;
+    paidAt: string | null;
+    expiresAt: string | null;
+    tentativas: number;
+    horas: number;
   }>>([]);
   const [showOnlinePending, setShowOnlinePending] = useState(false);
   // Set dos saleIds já notificados — evita tocar som 2x pro mesmo pagamento
@@ -1783,20 +1800,20 @@ function PdvPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeCode, sale?.id]);
 
-  // ── Polling Links Pagar.me pendentes (a cada 15s) ──
-  // Quando o cliente paga, o webhook do Pagar.me atualiza o status no banco.
+  // ── Polling das cobranças online (a cada 15s) ──
+  // Quando o cliente paga, o webhook do gateway atualiza o status no banco.
   // O polling pega esse status e dispara alerta sonoro + visual no header pra
   // vendedora finalizar a venda. Roda enquanto o PDV estiver aberto.
   const loadOnlinePending = async () => {
     if (!storeCode) return;
     try {
       const list = await api<typeof onlinePending>(
-        `/pagarme/online-pending?storeCode=${storeCode}`,
+        `/pdv/cobrancas-online?storeCode=${storeCode}`,
       );
       setOnlinePending(Array.isArray(list) ? list : []);
-      // Detecta novos paid e notifica (toca som + toast)
+      // Detecta novos pagos e notifica (toca som + toast)
       for (const item of list) {
-        if (item.status === 'paid' && !notifiedPaidRef.current.has(item.saleId)) {
+        if (item.situacao === 'pago' && !notifiedPaidRef.current.has(item.saleId)) {
           notifiedPaidRef.current.add(item.saleId);
           // Som de alerta — usa WebAudio pra garantir que toca
           try {
@@ -2447,11 +2464,14 @@ function PdvPageInner() {
             <span className="hidden xl:inline">Resumo da Loja</span>
           </button>
 
-          {/* Botão Links Online — Pagar.me aguardando/pago. Pisca em verde quando
-              tem algum PAGO pra vendedora finalizar. Sempre visível pra fácil acesso. */}
+          {/* Botão Cobranças Online — PIX + Link, aguardando/pago/não pagou.
+              Pisca em verde quando tem algum PAGO pra vendedora finalizar, e
+              fica âmbar quando tem cobrança que VENCEU sem pagar (é a que
+              exige decisão: cobrar de novo ou cancelar). */}
           {(() => {
             const totalLinks = onlinePending.length;
-            const paidCount = onlinePending.filter((p) => p.status === 'paid').length;
+            const paidCount = onlinePending.filter((p) => p.situacao === 'pago').length;
+            const venceuCount = onlinePending.filter((p) => p.situacao === 'venceu').length;
             if (totalLinks === 0) return null;
             const hasPaid = paidCount > 0;
             return (
@@ -2460,17 +2480,25 @@ function PdvPageInner() {
                 className={`relative text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 transition ${
                   hasPaid
                     ? 'bg-emerald-500 hover:bg-emerald-400 text-white ring-2 ring-emerald-300 animate-pulse'
+                    : venceuCount > 0
+                    ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
                     : 'bg-white hover:bg-[#FBF6E6] text-slate-600 border border-slate-200 hover:border-[#CDA434]'
                 }`}
                 title={
                   hasPaid
                     ? `${paidCount} pagamento(s) confirmado(s) — clique pra finalizar`
-                    : `${totalLinks} link(s) aguardando pagamento`
+                    : venceuCount > 0
+                    ? `${venceuCount} cobrança(s) venceram sem pagar — clique pra cobrar de novo`
+                    : `${totalLinks} cobrança(s) aguardando pagamento`
                 }
               >
-                <span className="text-sm leading-none">🔗</span>
+                <span className="text-sm leading-none">💳</span>
                 <span className="hidden xl:inline">
-                  {hasPaid ? `${paidCount} PAGO${paidCount > 1 ? 'S' : ''}!` : 'Online'}
+                  {hasPaid
+                    ? `${paidCount} PAGO${paidCount > 1 ? 'S' : ''}!`
+                    : venceuCount > 0
+                    ? `${venceuCount} não pagou`
+                    : 'Cobranças'}
                 </span>
                 <span className={`text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 ${
                   hasPaid ? 'bg-white text-emerald-700' : 'bg-[#D4AF37] text-black'
@@ -3642,8 +3670,13 @@ function PdvPageInner() {
         />
       )}
 
-      {/* Modal Links Online Pendentes — vendas com Link Pagar.me aguardando
-          ou já pagas pra finalizar. Atendente decide quando finalizar. */}
+      {/* Modal COBRANÇAS ONLINE — PIX (PagBank) e Link (Pagar.me) na MESMA
+          lista, uma linha por venda. Três situações e três ações:
+            · PAGOU      → finalizar a venda
+            · NÃO PAGOU  → cobrar de novo (PIX novo do restante) ou cancelar
+            · AGUARDANDO → reenviar o link pra cliente
+          Nada sai daqui sozinho (decisão do dono, 25/08): venda só some da
+          lista quando alguém finaliza ou cancela. */}
       {showOnlinePending && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
@@ -3655,10 +3688,15 @@ function PdvPageInner() {
           >
             <div className="p-4 border-b flex items-center justify-between">
               <h2 className="font-black text-lg flex items-center gap-2">
-                <span>🔗</span>
-                Pedidos Online Pendentes
+                <span>💳</span>
+                Cobranças online
                 <span className="text-xs font-normal text-slate-500">
-                  ({onlinePending.length} total · {onlinePending.filter((p) => p.status === 'paid').length} pago{onlinePending.filter((p) => p.status === 'paid').length !== 1 ? 's' : ''})
+                  ({onlinePending.length} total
+                  {onlinePending.filter((p) => p.situacao === 'pago').length > 0 &&
+                    ` · ${onlinePending.filter((p) => p.situacao === 'pago').length} pago`}
+                  {onlinePending.filter((p) => p.situacao === 'venceu').length > 0 &&
+                    ` · ${onlinePending.filter((p) => p.situacao === 'venceu').length} não pagou`}
+                  )
                 </span>
               </h2>
               <div className="flex items-center gap-2">
@@ -3678,12 +3716,12 @@ function PdvPageInner() {
             <div className="flex-1 overflow-auto p-3 space-y-2">
               {onlinePending.length === 0 ? (
                 <div className="p-8 text-center text-slate-400">
-                  Nenhum pedido online pendente nas últimas 48h.
+                  Nenhuma cobrança online aberta nos últimos 7 dias.
                 </div>
               ) : (
                 onlinePending.map((p) => {
-                  const isPaid = p.status === 'paid';
-                  const isFailed = p.status === 'failed' || p.status === 'canceled';
+                  const isPaid = p.situacao === 'pago';
+                  const isFailed = p.situacao === 'venceu';
                   const ageMin = Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 60000);
                   return (
                     <div
@@ -3692,7 +3730,7 @@ function PdvPageInner() {
                         isPaid
                           ? 'border-emerald-400 bg-emerald-50 shadow-lg'
                           : isFailed
-                          ? 'border-rose-300 bg-rose-50 opacity-60'
+                          ? 'border-amber-400 bg-amber-50'
                           : 'border-slate-200 bg-white'
                       }`}
                     >
@@ -3702,9 +3740,19 @@ function PdvPageInner() {
                             <span className="font-mono text-[10px] font-bold bg-slate-100 px-1.5 py-0.5 rounded">
                               #{p.saleCode}
                             </span>
+                            {/* QUAL COBRANÇA A CLIENTE RECEBEU — sem isto a
+                                vendedora não sabe se procura o PIX no banco
+                                ou a cobrança no painel da Pagar.me. */}
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                              p.meio === 'pix'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-violet-100 text-violet-800'
+                            }`}>
+                              {p.meio === 'pix' ? 'PIX' : 'LINK'}
+                            </span>
                             {isPaid && (
                               <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded">
-                                ✓ PAGO
+                                ✓ PAGOU
                               </span>
                             )}
                             {!isPaid && !isFailed && (
@@ -3713,8 +3761,19 @@ function PdvPageInner() {
                               </span>
                             )}
                             {isFailed && (
-                              <span className="bg-rose-200 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded">
-                                ✗ {p.status}
+                              <span
+                                className="bg-amber-600 text-white text-[10px] font-black px-2 py-0.5 rounded"
+                                title={`Situação no gateway: ${p.statusGateway}`}
+                              >
+                                ⚠ NÃO PAGOU
+                              </span>
+                            )}
+                            {p.tentativas > 1 && (
+                              <span
+                                className="text-[10px] text-slate-500"
+                                title="Quantas cobranças já foram geradas nesta venda"
+                              >
+                                {p.tentativas}ª cobrança
                               </span>
                             )}
                             <span className="text-[10px] text-slate-500">
@@ -3728,6 +3787,7 @@ function PdvPageInner() {
                             {p.customerCpf && <span>CPF {p.customerCpf}</span>}
                             {p.customerPhone && <span>· {p.customerPhone}</span>}
                             {p.sellerName && <span>· vend. {p.sellerName}</span>}
+                            {p.entregaTipo && <span>· {p.entregaTipo.toUpperCase()}</span>}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
@@ -3747,19 +3807,26 @@ function PdvPageInner() {
                               // Não abre PaymentModal (já tá pago — só registra e fecha).
                               if (!confirm(
                                 `Finalizar venda #${p.saleCode} de ${p.customerName || 'cliente'} ` +
-                                `(${brl(p.total)})?\n\nO pagamento já foi confirmado pela Pagar.me.`,
+                                `(${brl(p.total)})?\n\nO pagamento já foi confirmado ` +
+                                `${p.meio === 'pix' ? 'pelo PagBank' : 'pela Pagar.me'}.`,
                               )) return;
                               try {
-                                // 1) Cria PdvSalePayment como venda_online/pagarme_link
+                                // 1) Cria PdvSalePayment como venda_online
                                 await api(`/pdv/sales/${p.saleId}/payments`, {
                                   method: 'POST',
                                   body: JSON.stringify({
                                     method: 'venda_online',
                                     valor: p.total,
                                     details: {
-                                      tipo: 'pagarme_link',
+                                      // O TIPO SEGUE O MEIO REAL: gravar PIX
+                                      // como `pagarme_link` jogaria a venda no
+                                      // balde errado do relatório e da
+                                      // conferência de cobrança.
+                                      tipo: p.meio === 'pix' ? 'pix_gerar' : 'pagarme_link',
                                       origem: 'whatsapp_instagram',
-                                      pagarmeOrderId: p.pagarmeOrderId,
+                                      ...(p.meio === 'pix'
+                                        ? { pagbankOrderId: p.orderId }
+                                        : { pagarmeOrderId: p.orderId }),
                                       paidByWebhook: true,
                                     },
                                   }),
@@ -3802,18 +3869,26 @@ function PdvPageInner() {
                           </button>
                         ) : (
                           <>
+                            {/* CONFERIR AO VIVO — cada meio tem o seu gateway.
+                                Bater na rota errada devolve "não encontrado" e
+                                a vendedora entende como "não pagou". */}
                             <button
                               onClick={async () => {
+                                if (!p.orderId) {
+                                  toast('info', 'Cobrança antiga', 'Sem id do gateway pra conferir — gere uma cobrança nova.');
+                                  return;
+                                }
                                 try {
+                                  const rota = p.meio === 'pix' ? 'pagbank' : 'pagarme';
                                   const r = await api<{ status: string; isPaid?: boolean }>(
-                                    `/pagarme/pix/check/${p.pagarmeOrderId}`,
+                                    `/${rota}/pix/check/${p.orderId}`,
                                     { method: 'POST' },
                                   );
                                   if (r.isPaid || r.status === 'paid') {
-                                    toast('success', 'Pago!', `${p.customerName} pagou`);
+                                    toast('success', 'Pagou!', `${p.customerName || 'A cliente'} pagou — a venda fecha em segundos`);
                                     loadOnlinePending();
                                   } else {
-                                    toast('info', `Status: ${r.status}`, 'Ainda não pago');
+                                    toast('info', `Ainda não pagou`, `Situação no gateway: ${r.status}`);
                                   }
                                 } catch (e: any) {
                                   toast('error', 'Erro', e?.message);
@@ -3821,16 +3896,64 @@ function PdvPageInner() {
                               }}
                               className="flex-1 py-1.5 bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold rounded"
                             >
-                              🔄 Conferir
+                              🔄 Conferir agora
                             </button>
-                            {p.paymentUrl && (
+                            {/* COBRAR DE NOVO — a saída da cobrança vencida.
+                                Gera PIX do RESTANTE (o valor vem do servidor:
+                                cobrança curta é o defeito das "duas voltas") e
+                                já abre o WhatsApp com o link novo. */}
+                            <button
+                              onClick={async () => {
+                                const valor = p.restante > 0 ? p.restante : p.total;
+                                if (!confirm(
+                                  `Gerar um PIX NOVO de ${brl(valor)} pra ${p.customerName || 'esta cliente'}?\n\n` +
+                                  `O código anterior para de valer e o link novo abre no WhatsApp.`,
+                                )) return;
+                                try {
+                                  const pb = await api<{ shortUrl?: string; qrCodeText: string; valor: number }>(
+                                    '/pagbank/pix/create',
+                                    {
+                                      method: 'POST',
+                                      body: JSON.stringify({
+                                        saleId: p.saleId,
+                                        valor,
+                                        storeCode: p.storeCode,
+                                        customerName: p.customerName || undefined,
+                                        customerCpf: p.customerCpf || undefined,
+                                        expiresInMinutes: 60,
+                                        origem: 'venda_online',
+                                      }),
+                                    },
+                                  );
+                                  const url = pb.shortUrl || '';
+                                  if (url) navigator.clipboard.writeText(url).catch(() => {});
+                                  toast('success', 'PIX novo gerado', url ? 'Link copiado — abrindo o WhatsApp' : 'Abra a venda pra ver o QR');
+                                  abrirWhatsApp(
+                                    p.customerPhone,
+                                    url
+                                      ? `Oi${p.customerName ? ` ${p.customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pb.valor)} pra fechar seu pedido 💛\n\nÉ só tocar no link e apertar COPIAR CÓDIGO PIX:\n\n${url}\n\nAssim que o pagamento cair a gente já separa tudo!`
+                                      : `Oi${p.customerName ? ` ${p.customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pb.valor)} pra fechar seu pedido 💛\n\n${pb.qrCodeText}`,
+                                  );
+                                  loadOnlinePending();
+                                } catch (e: any) {
+                                  const h = humanizeError(e);
+                                  toast('error', h.title, h.hint);
+                                }
+                              }}
+                              className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded"
+                              title="Gera um PIX novo com o valor que falta e manda pra cliente"
+                            >
+                              💸 Cobrar de novo
+                            </button>
+                            {p.link && (
                               <>
                                 <button
                                   onClick={() => {
-                                    navigator.clipboard.writeText(p.paymentUrl!);
+                                    navigator.clipboard.writeText(p.link!);
                                     toast('success', 'Link copiado!');
                                   }}
                                   className="py-1.5 px-3 bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-bold rounded"
+                                  title="Copiar o link que a cliente recebeu"
                                 >
                                   📋
                                 </button>
@@ -3839,7 +3962,9 @@ function PdvPageInner() {
                                   onClick={() =>
                                     abrirWhatsApp(
                                       p.customerPhone,
-                                      `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 12x sem juros.`,
+                                      p.meio === 'pix'
+                                        ? `Oi${p.customerName ? ` ${p.customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(p.valor)} pra fechar seu pedido 💛\n\nÉ só tocar no link e apertar COPIAR CÓDIGO PIX:\n\n${p.link}`
+                                        : `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.link}\n\nPIX ou cartão até 12x sem juros.`,
                                     )
                                   }
                                   className="py-1.5 px-3 bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold rounded"
@@ -3859,6 +3984,33 @@ function PdvPageInner() {
                             >
                               Reabrir
                             </button>
+                            {/* DESISTIU — tira da fila com registro, em vez de
+                                deixar a venda aberta pra sempre (foi assim que
+                                a de 20/08 ficou 5 dias na tela de ninguém). */}
+                            <button
+                              onClick={async () => {
+                                if (!confirm(
+                                  `Cancelar a venda #${p.saleCode} de ${p.customerName || 'cliente'} (${brl(p.total)})?\n\n` +
+                                  `Use quando a cliente desistiu. A venda sai desta lista.`,
+                                )) return;
+                                try {
+                                  await api(`/pdv/sales/${p.saleId}/cancel`, {
+                                    method: 'POST',
+                                    body: JSON.stringify({ reason: 'Cliente não pagou a cobrança online' }),
+                                  });
+                                  toast('success', `Venda #${p.saleCode} cancelada`);
+                                  loadOnlinePending();
+                                  loadOpenCount();
+                                } catch (e: any) {
+                                  const h = humanizeError(e);
+                                  toast('error', h.title, h.hint);
+                                }
+                              }}
+                              className="py-1.5 px-2 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 text-[11px] font-bold rounded"
+                              title="A cliente desistiu — cancelar a venda"
+                            >
+                              ✕
+                            </button>
                           </>
                         )}
                       </div>
@@ -3868,7 +4020,8 @@ function PdvPageInner() {
               )}
             </div>
             <div className="p-3 border-t bg-slate-50 rounded-b-xl text-[11px] text-slate-600 text-center">
-              ℹ Lista atualiza automaticamente a cada 15s. Pagamentos confirmados emitem alerta sonoro.
+              ℹ PIX e Link juntos, dos últimos 7 dias. A lista atualiza sozinha a cada 15s e o
+              pagamento confirmado toca alerta — a venda fecha sozinha, sem ninguém clicar.
             </div>
           </div>
         </div>

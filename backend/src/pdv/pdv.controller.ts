@@ -35,6 +35,8 @@ import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { CrediarioPrintService } from './crediario-print.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ReturnsService } from './returns.service';
+import { CobrancasOnlineService } from './cobrancas-online.service';
+import type { CobrancaOnline } from './cobrancas-online.service';
 
 /**
  * /pdv — frente de caixa.
@@ -62,6 +64,7 @@ export class PdvController {
     private readonly prisma: PrismaService,
     private readonly sombra: SombraService,
     private readonly crediarioCriacao: CrediarioCriacaoService,
+    private readonly cobrancasOnlineSvc: CobrancasOnlineService,
   ) {}
 
   private requireRole(req: any) {
@@ -327,6 +330,29 @@ export class PdvController {
       sellerName: body?.sellerName,
       isTraining: isTrainingRequest(req),
     });
+  }
+
+  /**
+   * GET /pdv/cobrancas-online?storeCode=13
+   *
+   * "OS PEDIDOS DO LINK PIX NÃO APARECEM COMO AGUARDANDO PAGAMENTO" (dono,
+   * 25/08). PIX e Link Pagar.me na MESMA lista, uma linha por venda, com a
+   * situação em palavra de gente. Ver `CobrancasOnlineService` pro porquê.
+   *
+   * `store` só enxerga a própria loja (o storeCode do token manda, igual ao
+   * `createSale`); admin da matriz vê a loja que pedir — e a rede inteira
+   * quando não pede nenhuma, que é como a /separacao consome.
+   */
+  @Get('cobrancas-online')
+  async cobrancasOnline(
+    @Req() req: any,
+    @Query('storeCode') storeCode?: string,
+  ): Promise<CobrancaOnline[]> {
+    this.requireRole(req);
+    const role = req?.user?.role;
+    const doToken = String(req?.user?.storeCode ?? '').trim();
+    const loja = role === 'store' && doToken ? doToken : (storeCode || '').trim();
+    return this.cobrancasOnlineSvc.listar({ storeCode: loja || null });
   }
 
   /**

@@ -52,6 +52,7 @@ import { PagarmeLinkReconcileService } from './pagarme-link-reconcile.service';
 import { CashbackModule } from '../cashback/cashback.module';
 import { PdvStoreSummaryController } from './store-summary.controller';
 import { PdvStoreSummaryService } from './store-summary.service';
+import { CobrancasOnlineService } from './cobrancas-online.service';
 
 @Module({
   imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule],
@@ -65,7 +66,7 @@ import { PdvStoreSummaryService } from './store-summary.service';
   // motivo: fecha a venda quando o link Pagar.me é pago (antes ninguém
   // fechava — venda ficava aberta pra sempre com o dinheiro na conta) e lê
   // `pagarme_payment` pelo Prisma, sem importar o PagarmeModule.
-  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService],
+  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService, CobrancasOnlineService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}
