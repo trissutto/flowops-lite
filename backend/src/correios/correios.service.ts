@@ -23,6 +23,32 @@ export class CorreiosService {
     ];
   }
 
+  /**
+   * 🚨 SERVIÇO DE LOGÍSTICA REVERSA — NÃO É O MESMO DO ENVIO DE IDA.
+   *
+   * A devolução da cliente PRECISA sair no serviço reverso (03301 PAC REVERSO /
+   * 03247 SEDEX REVERSO) com `logisticaReversa: 'S'`. Só assim os Correios
+   * emitem uma AUTORIZAÇÃO DE POSTAGEM: a cliente chega no balcão, fala o
+   * código e posta — sem etiqueta impressa, sem pagar nada.
+   *
+   * Mandar a devolução no serviço de IDA (03298) gera uma pré-postagem comum
+   * com os papéis invertidos. Ela NASCE VÁLIDA na API (`Pré-postado`, aparece
+   * no rastreio como "Etiqueta emitida") mas o balcão RECUSA — a cliente ouve
+   * "esse código não existe". Foi o que aconteceu com 19 trocas entre 28/07 e
+   * 25/08: Luzia (troca 23) foi recusada às 21h53 do dia 24/08 e postou 27
+   * minutos depois com um código reverso DE VERDADE que a loja gerou na mão.
+   *
+   * Diferenças medidas na API (25/08):
+   *   03298 comum → statusAtual 2 "Pré-postado" · prazoPostagem 14 dias
+   *   03301 reversa → statusAtual 7 "Pendente"  · dataValidadeLogReversa 90 dias
+   */
+  private get servicosReversa(): Array<{ nome: 'PAC' | 'SEDEX'; codigo: string }> {
+    return [
+      { nome: 'PAC', codigo: String(process.env.CORREIOS_SERVICO_PAC_REVERSO || '03301').trim() },
+      { nome: 'SEDEX', codigo: String(process.env.CORREIOS_SERVICO_SEDEX_REVERSO || '03247').trim() },
+    ];
+  }
+
   status() {
     return {
       configurado: this.auth.configured,
@@ -217,16 +243,28 @@ export class CorreiosService {
    */
   async criarPrepostagem(input: {
     servico: 'PAC' | 'SEDEX';
-    remetente: { nome: string; cnpjCpf: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string; cep: string; telefone?: string };
+    remetente: { nome: string; cnpjCpf: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string; cep: string; telefone?: string; email?: string };
     destinatario: { nome: string; cpfCnpj?: string; endereco: string; numero: string; complemento?: string; bairro: string; cidade: string; uf: string; cep: string; telefone?: string };
     pesoGramas: number;
     comprimento?: number; largura?: number; altura?: number;
     nfeChave?: string; // chave da NF-e que acompanha (opcional mas recomendado)
     valorDeclarado?: number;
     itensDeclaracao?: Array<{ conteudo: string; quantidade?: string | number; valor?: number }>;
+    /** DEVOLUÇÃO DA CLIENTE: usa o serviço reverso e emite AUTORIZAÇÃO DE
+     *  POSTAGEM (o código vale sozinho no balcão). Ver `servicosReversa`. */
+    reversa?: boolean;
   }) {
-    const codigo = this.servicos.find((s) => s.nome === input.servico)?.codigo;
+    const tabela = input.reversa ? this.servicosReversa : this.servicos;
+    const codigo = tabela.find((s) => s.nome === input.servico)?.codigo;
     if (!codigo) throw new BadRequestException(`Serviço inválido: ${input.servico}`);
+    // PPN-252: os Correios EXIGEM e-mail do remetente na logística reversa —
+    // é por ele que eles também avisam a cliente. Sem isso o POST volta 400.
+    const emailRemetente = String(input.remetente.email || '').trim();
+    if (input.reversa && !emailRemetente.includes('@')) {
+      throw new BadRequestException(
+        'Logística reversa exige e-mail da cliente (PPN-252). Cadastro sem e-mail: gere o código manualmente.',
+      );
+    }
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
 
@@ -262,6 +300,7 @@ export class CorreiosService {
         nome: encurtarNomeDestinatario(input.remetente.nome, L.nome),
         cpfCnpj: input.remetente.cnpjCpf.replace(/\D/g, ''),
         ...(foneRem.numero ? { dddCelular: foneRem.ddd, celular: foneRem.numero } : {}),
+        ...(emailRemetente ? { email: emailRemetente } : {}),
         endereco: {
           cep: input.remetente.cep.replace(/\D/g, ''),
           logradouro: endLimite('logradouro remetente', input.remetente.endereco, L.logradouro),
@@ -288,6 +327,9 @@ export class CorreiosService {
         },
       },
       codigoServico: codigo,
+      // PPN-337: serviço reverso SEM esta flag é recusado; serviço de ida COM
+      // ela também. As duas coisas andam sempre juntas.
+      ...(input.reversa ? { logisticaReversa: 'S' } : {}),
       cartaoPostagem: this.auth.cartaoPostagem,
       // ── Peso e dimensões no formato do CWS (nomes "*Informado"). ──
       pesoInformado: String(Math.max(1, Math.round(input.pesoGramas))),        // PPN peso
@@ -327,10 +369,16 @@ export class CorreiosService {
         const msg = resp.data?.msgs?.join('; ') || resp.data?.message || `HTTP ${resp.status}`;
         throw new BadRequestException(`Correios recusou a pré-postagem: ${msg}`);
       }
+      // O PRAZO QUEM DÁ SÃO OS CORREIOS. Inventar "hoje + 15 dias" já fez o
+      // aviso prometer validade DEPOIS do vencimento real (medido em 25/08:
+      // trocas 18 e 21 diziam 2 dias a mais do que a API aceitava).
+      const validade =
+        resp.data?.dataValidadeLogReversa ?? resp.data?.prazoPostagem ?? null;
       return {
         ok: true,
         idPrepostagem: resp.data?.id ?? resp.data?.idPrePostagem ?? null,
         codigoRastreio: resp.data?.codigoObjeto ?? resp.data?.codigoRastreio ?? null,
+        validadePostagem: validade ? new Date(validade) : null,
         raw: resp.data,
       };
     } catch (e: any) {

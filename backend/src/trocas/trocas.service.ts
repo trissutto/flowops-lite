@@ -185,6 +185,11 @@ export class TrocasService {
       `📮 Código de postagem: *${codigo}*\n` +
       `É só levar a peça em QUALQUER agência dos Correios e informar esse código — ` +
       `você não paga nada, o frete é por nossa conta.\n\n` +
+      // A palavra certa no balcão evita a busca errada do atendente: é uma
+      // AUTORIZAÇÃO DE POSTAGEM (logística reversa), não uma encomenda comum,
+      // e ele localiza pelo código + CPF de quem está postando.
+      `_No balcão, diga que é uma *logística reversa (autorização de postagem)* ` +
+      `e leve seu CPF._\n\n` +
       `Válido até ${prazo.toLocaleDateString('pt-BR')}.\n\n` +
       `Assim que a peça chegar e passar na conferência, a gente te avisa pra escolher ` +
       `entre trocar, vale-compras ou reembolso.`
@@ -202,6 +207,9 @@ export class TrocasService {
       <p style="font-size:24px;font-weight:bold;background:#FBF6E6;border:2px dashed #B8912B;border-radius:12px;padding:16px;text-align:center;letter-spacing:2px">${codigo}</p>
       <p>É só levar a peça em <b>qualquer agência dos Correios</b> e informar esse código —
          você não paga nada, o frete é por nossa conta.</p>
+      <p style="background:#F5F3EE;border-radius:8px;padding:12px;font-size:14px">
+         No balcão, diga que é uma <b>logística reversa (autorização de postagem)</b>
+         e leve seu <b>CPF</b> — é assim que o atendente localiza o código.</p>
       <p>Válido até <b>${prazo.toLocaleDateString('pt-BR')}</b>.</p>
       <p>Assim que a peça chegar e passar na conferência, a gente te avisa pra escolher entre
          trocar, vale-compras ou reembolso.</p>
@@ -1367,9 +1375,13 @@ export class TrocasService {
       // PAC sempre: a devolução não tem pressa e quem paga é a loja. SEDEX na
       // volta seria custo a mais sem ganho nenhum pra cliente.
       servico: 'PAC',
+      // 🚨 O QUE FAZ O CÓDIGO VALER NO BALCÃO. Sem isto sai uma pré-postagem
+      // comum de papéis invertidos: válida na API, recusada na agência.
+      reversa: true,
       remetente: {
         nome: troca.customerName || pedido.customerName || 'Cliente',
         cnpjCpf: String(troca.customerCpf || pedido.customerCpf || '').replace(/\D/g, ''),
+        email: String(troca.customerEmail || pedido.customerEmail || '').trim(),
         endereco: endereco || '',
         numero: numero || 'S/N',
         bairro: bairro || '',
@@ -1401,7 +1413,13 @@ export class TrocasService {
     }
 
     const codigo = String(resp.codigoRastreio);
-    const prazo = new Date(Date.now() + 15 * 86_400_000);
+    // Prazo REAL dos Correios (`dataValidadeLogReversa`, hoje 90 dias). O
+    // "hoje + 15 dias" chutado ficava DEPOIS do vencimento verdadeiro da
+    // pré-postagem antiga — a cliente ia à agência confiando num prazo que
+    // não existia. Só cai no chute se a API não devolver a data.
+    const prazo: Date = resp.validadePostagem instanceof Date && !Number.isNaN(resp.validadePostagem.getTime())
+      ? resp.validadePostagem
+      : new Date(Date.now() + 15 * 86_400_000);
 
     const aviso = await this.avisarCodigoReversa(troca, codigo, prazo);
     const whatsOk = aviso.ok;
