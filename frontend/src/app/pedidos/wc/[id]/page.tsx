@@ -448,6 +448,9 @@ export default function PedidoDetailPage() {
     note?: string | null;
     reportedAt: string;
     stockDecreased: boolean;
+    // Quanto a cliente pagou por ESSA peça — é o default do crédito.
+    valorSugerido?: number;
+    cliente?: { nome: string | null; cpf: string | null; telefone: string | null; pedidoNumero: string };
   }>>([]);
   const [resolvendoReport, setResolvendoReport] = useState<string | null>(null);
   const loadItemReports = () => {
@@ -455,6 +458,77 @@ export default function PedidoDetailPage() {
     api<any[]>(`/pick-orders/item-reports/by-wc/${wcId}`)
       .then((d) => setItemReports(Array.isArray(d) ? d : []))
       .catch(() => {});
+  };
+
+  // ── CRÉDITO NO LUGAR DO REEMBOLSO (dono, 25/08) ──
+  // "A cliente prefere crédito": em vez de devolver o dinheiro da peça que
+  // faltou, emite um vale NOMINAL no CPF dela, SEM PRAZO, que vale no site e
+  // em qualquer caixa da rede. Quem emite é a matriz, aqui na ficha do pedido.
+  type ReportLinha = (typeof itemReports)[number];
+  const [creditoAlvo, setCreditoAlvo] = useState<ReportLinha | null>(null);
+  const [creditoValor, setCreditoValor] = useState('');
+  const [creditoBusy, setCreditoBusy] = useState(false);
+  const [creditoErro, setCreditoErro] = useState<string | null>(null);
+  const [creditosEmitidos, setCreditosEmitidos] = useState<Array<{
+    id: string; code: string; valor: number; peca: string; qtyMissing: number;
+    storeCode: string; emitidoEm: string | null; existe: boolean; usado: boolean;
+    usadoAt: string | null; ativo: boolean; semPrazo: boolean;
+  }>>([]);
+  const loadCreditos = () => {
+    if (!wcId) return;
+    api<any[]>(`/pick-orders/item-reports/creditos/by-wc/${wcId}`)
+      .then((d) => setCreditosEmitidos(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  };
+  const abrirCredito = (r: ReportLinha) => {
+    setCreditoAlvo(r);
+    setCreditoErro(null);
+    setCreditoValor(
+      r.valorSugerido ? Number(r.valorSugerido).toFixed(2).replace('.', ',') : '',
+    );
+  };
+  const confirmarCredito = async () => {
+    if (!creditoAlvo) return;
+    // pt-BR: vírgula é o decimal. Sem vírgula, ponto vale como decimal
+    // ("89.90" = 89,90) — senão 89.90 virava 8990.
+    const t = creditoValor.trim();
+    const valor = t
+      ? Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t)
+      : Number(creditoAlvo.valorSugerido || 0);
+    if (!Number.isFinite(valor) || valor <= 0) {
+      setCreditoErro('Digite o valor do crédito.');
+      return;
+    }
+    setCreditoBusy(true);
+    setCreditoErro(null);
+    try {
+      const resp = await api<any>(`/pick-orders/item-reports/${creditoAlvo.id}/resolve`, {
+        method: 'POST',
+        body: JSON.stringify({ modo: 'credito', valor }),
+      });
+      setItemReports((prev) => prev.filter((x) => x.id !== creditoAlvo.id));
+      setCreditoAlvo(null);
+      loadCreditos();
+      const code = resp?.credito?.code;
+      const tel = creditoAlvo.cliente?.telefone;
+      // O código só serve se chegar na cliente — o WhatsApp já sai escrito.
+      if (code && tel && confirm(`Crédito ${code} de ${fmtMoney(valor)} emitido.\n\nMandar no WhatsApp da cliente agora?`)) {
+        abrirWhatsApp(
+          tel,
+          `Oi${creditoAlvo.cliente?.nome ? ` ${String(creditoAlvo.cliente.nome).split(' ')[0]}` : ''}! ` +
+            `Sobre o seu pedido ${creditoAlvo.cliente?.pedidoNumero ?? ''}: uma peça não veio, e a gente já deixou ` +
+            `um crédito de ${fmtMoney(valor)} no seu nome 💜\n\n` +
+            `Código: ${code}\n\n` +
+            `Ele NÃO TEM PRAZO pra usar e vale no site (lurds.com.br) ou em qualquer uma das nossas lojas. ` +
+            `É só apresentar esse código na hora de pagar.`,
+        );
+      }
+    } catch (e: any) {
+      setCreditoErro(e?.message || 'Não consegui emitir o crédito.');
+      loadItemReports();
+    } finally {
+      setCreditoBusy(false);
+    }
   };
   // ── JUNTADA (21/08): pedido dividido com loja ÂNCORA ──
   // As lojas feeder mandam caixa pra âncora e SÓ ela envia o pacote único.
@@ -473,7 +547,10 @@ export default function PedidoDetailPage() {
   const resolverItemReport = async (id: string) => {
     setResolvendoReport(id);
     try {
-      await api(`/pick-orders/item-reports/${id}/resolve`, { method: 'POST' });
+      await api(`/pick-orders/item-reports/${id}/resolve`, {
+        method: 'POST',
+        body: JSON.stringify({ modo: 'reembolso' }),
+      });
       setItemReports((prev) => prev.filter((r) => r.id !== id));
     } catch {
       loadItemReports();
@@ -491,6 +568,7 @@ export default function PedidoDetailPage() {
       .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
       .catch((e) => console.warn('Falha ao carregar pick-orders:', e?.message));
     loadItemReports();
+    loadCreditos();
     loadJuntada();
     loadTrocas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2439,7 +2517,7 @@ export default function PedidoDetailPage() {
                   Peça reportada na bipagem — sem loja pra enviar
                 </div>
                 {itemReports.map((r) => (
-                  <div key={r.id} className="mt-1 text-red-800 flex flex-wrap items-center gap-x-2">
+                  <div key={r.id} className="mt-1 text-red-800 flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span>
                       <b>Loja {r.storeCode}</b>:{' '}
                       {[r.ref, r.cor, r.tamanho].filter(Boolean).join(' · ') || r.sku} ({r.qtyMissing} un)
@@ -2448,23 +2526,200 @@ export default function PedidoDetailPage() {
                       {r.stockDecreased && (
                         <span className="text-red-600 text-xs"> · já saiu do estoque da loja</span>
                       )}
+                      {r.valorSugerido ? (
+                        <span className="text-red-900 font-semibold"> · {fmtMoney(r.valorSugerido)}</span>
+                      ) : null}
                     </span>
+                    {/* O DESFECHO É UMA ESCOLHA DE DINHEIRO (dono, 25/08): devolver
+                        ou virar crédito. O crédito vem primeiro e colorido porque é
+                        o que a cliente costuma preferir — e é o que segura a venda
+                        dentro de casa. */}
+                    <button
+                      onClick={() => abrirCredito(r)}
+                      disabled={resolvendoReport === r.id}
+                      className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                      title="Emite um vale no CPF da cliente, sem prazo, que vale no site e em qualquer loja"
+                    >
+                      💳 Gerar crédito pra ela
+                    </button>
                     <button
                       onClick={() => resolverItemReport(r.id)}
                       disabled={resolvendoReport === r.id}
                       className="px-2 py-0.5 rounded text-xs font-semibold bg-white border border-red-400 text-red-800 hover:bg-red-100 disabled:opacity-60"
-                      title="Marque quando resolver por fora (ex.: reembolsou a cliente)"
+                      title="Marque quando o dinheiro já voltou pra cliente (estorno/PIX)"
                     >
-                      {resolvendoReport === r.id ? 'salvando…' : '✓ Resolvi (reembolso/outro)'}
+                      {resolvendoReport === r.id ? 'salvando…' : '✓ Reembolsei (ou resolvi por fora)'}
                     </button>
                   </div>
                 ))}
                 <div className="mt-2 text-xs text-red-700">
                   A cliente pagou por essa peça. Use <b>Recalcular separação</b> pra mandar de
-                  outra loja que tenha a peça — o aviso some sozinho quando ela ganhar destino —
-                  ou resolva com reembolso e marque "Resolvi".
+                  outra loja que tenha a peça — o aviso some sozinho quando ela ganhar destino.
+                  Se não tem de onde mandar, escolha o desfecho: <b>crédito</b> (fica com ela,
+                  sem prazo) ou <b>reembolso</b>.
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* CRÉDITO JÁ EMITIDO — o código tem que sobreviver ao F5. Assim que o
+            reporte é resolvido ele some do banner de cima; sem este painel, o
+            único lugar onde o código aparecia era a resposta do clique. */}
+        {creditosEmitidos.length > 0 && (
+          <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg p-3 mb-3">
+            <div className="flex items-start gap-2">
+              <Check className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm">
+                <div className="font-bold text-emerald-900">
+                  Crédito emitido pra cliente (no lugar do reembolso)
+                </div>
+                {creditosEmitidos.map((c) => (
+                  <div key={c.id} className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-emerald-900">
+                    <span className="font-mono font-bold text-base bg-white border border-emerald-400 rounded px-2 py-0.5">
+                      {c.code}
+                    </span>
+                    <span className="font-semibold">{fmtMoney(c.valor)}</span>
+                    <span className="text-emerald-700 text-xs">
+                      {c.peca} · loja {c.storeCode}
+                      {c.emitidoEm && ` · ${fmtDate(c.emitidoEm)}`}
+                    </span>
+                    {c.usado ? (
+                      <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-slate-200 text-slate-700">
+                        JÁ USADO{c.usadoAt ? ` em ${fmtDate(c.usadoAt)}` : ''}
+                      </span>
+                    ) : !c.existe || !c.ativo ? (
+                      <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800">
+                        {c.existe ? 'DESATIVADO' : 'NÃO ENCONTRADO'}
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-emerald-600 text-white">
+                        DISPONÍVEL {c.semPrazo ? '· SEM PRAZO' : ''}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(c.code)}
+                      className="px-2 py-0.5 rounded text-xs font-semibold bg-white border border-emerald-400 text-emerald-800 hover:bg-emerald-100"
+                    >
+                      copiar
+                    </button>
+                    {!c.usado && c.existe && (
+                      <button
+                        onClick={() =>
+                          abrirWhatsApp(
+                            order?.billing?.phone,
+                            `Oi! Sobre o seu pedido: uma peça não veio, e a gente deixou um crédito de ` +
+                              `${fmtMoney(c.valor)} no seu nome 💜\n\nCódigo: ${c.code}\n\n` +
+                              `Ele NÃO TEM PRAZO e vale no site (lurds.com.br) ou em qualquer uma das nossas lojas.`,
+                          )
+                        }
+                        className="px-2 py-0.5 rounded text-xs font-semibold bg-white border border-emerald-400 text-emerald-800 hover:bg-emerald-100"
+                      >
+                        WhatsApp
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <div className="mt-2 text-xs text-emerald-800">
+                  Vale no site e em qualquer caixa da rede, <b>sem prazo de validade</b>. É
+                  nominal: só a cliente do CPF deste pedido consegue usar.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DO CRÉDITO */}
+        {creditoAlvo && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            {...overlayClose(() => {
+              if (!creditoBusy) setCreditoAlvo(null);
+            })}
+          >
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-bold text-slate-900">Gerar crédito pra cliente</h3>
+                <button
+                  onClick={() => !creditoBusy && setCreditoAlvo(null)}
+                  className="text-slate-400 hover:text-slate-700"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded p-2 mb-3">
+                <div>
+                  <b>Peça que faltou:</b>{' '}
+                  {[creditoAlvo.ref, creditoAlvo.cor, creditoAlvo.tamanho].filter(Boolean).join(' · ') ||
+                    creditoAlvo.sku}{' '}
+                  ({creditoAlvo.qtyMissing} un) — loja {creditoAlvo.storeCode}
+                </div>
+                <div className="mt-1">
+                  <b>Cliente:</b> {creditoAlvo.cliente?.nome || '—'}
+                  {creditoAlvo.cliente?.cpf
+                    ? ` · CPF final ${creditoAlvo.cliente.cpf.slice(-4)}`
+                    : ''}
+                </div>
+              </div>
+
+              {/* SEM CPF NÃO EMITE. O vale é nominal de propósito: código sem
+                  dono circula em print de WhatsApp e vira compra de outra
+                  pessoa. Falar isso ANTES de ela digitar o valor. */}
+              {!creditoAlvo.cliente?.cpf ? (
+                <div className="text-sm bg-amber-50 border border-amber-300 text-amber-900 rounded p-3">
+                  Este pedido está <b>sem CPF</b>, e o crédito é nominal — não dá pra emitir.
+                  Preencha o CPF da cliente no pedido e volte aqui.
+                </div>
+              ) : (
+                <>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">
+                    Valor do crédito
+                  </label>
+                  <input
+                    value={creditoValor}
+                    onChange={(e) => setCreditoValor(e.target.value)}
+                    inputMode="decimal"
+                    autoFocus
+                    className="w-full border border-slate-300 rounded px-3 py-2 text-lg font-semibold"
+                    placeholder="0,00"
+                  />
+                  <div className="text-xs text-slate-500 mt-1">
+                    Sugerido: o que ela pagou pela peça
+                    {creditoAlvo.valorSugerido ? ` (${fmtMoney(creditoAlvo.valorSugerido)})` : ''}. Dá
+                    pra ajustar — por exemplo, incluir o frete.
+                  </div>
+
+                  <div className="mt-3 text-xs text-slate-600 bg-emerald-50 border border-emerald-200 rounded p-2">
+                    O crédito nasce <b>sem prazo de validade</b>, no CPF da cliente, e vale no
+                    site <b>e</b> em qualquer caixa da rede. Uso único.
+                  </div>
+
+                  {creditoErro && (
+                    <div className="mt-3 text-sm bg-red-50 border border-red-300 text-red-800 rounded p-2">
+                      {creditoErro}
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex gap-2 justify-end">
+                    <button
+                      onClick={() => setCreditoAlvo(null)}
+                      disabled={creditoBusy}
+                      className="px-3 py-2 rounded text-sm font-semibold border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={confirmarCredito}
+                      disabled={creditoBusy}
+                      className="px-4 py-2 rounded text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 inline-flex items-center gap-2"
+                    >
+                      {creditoBusy && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {creditoBusy ? 'emitindo…' : 'Gerar crédito sem prazo'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

@@ -485,14 +485,42 @@ export class PickOrdersController {
     return this.svc.listItemReportsByWc(id);
   }
 
-  /** Matriz marca um reporte de peça como resolvido na mão (ex.: reembolsou a cliente). */
+  /**
+   * Matriz resolve um reporte de peça. `modo` diz o DESFECHO:
+   *   'reembolso' (default) → o dinheiro volta por fora; aqui só apaga o alarme
+   *   'credito'             → emite vale nominal SEM PRAZO no CPF da cliente
+   * `valor` só vale no crédito (default: o preço da peça que faltou).
+   *
+   * Sem body, o comportamento é o de sempre — a aba velha que ainda mandar
+   * POST vazio continua funcionando como reembolso.
+   */
   @Post('item-reports/:reportId/resolve')
-  resolveItemReport(@Req() req: any, @Param('reportId') reportId: string) {
+  resolveItemReport(
+    @Req() req: any,
+    @Param('reportId') reportId: string,
+    @Body() body?: { modo?: string; valor?: number },
+  ) {
     const user = req.user as AuthUser;
     if (user.role !== 'admin' && user.role !== 'operator') {
       throw new ForbiddenException('Apenas matriz (admin/operator) resolve reporte');
     }
-    return this.svc.resolveItemReport(reportId, user.userId);
+    return this.svc.resolveItemReport(reportId, user.userId, {
+      modo: body?.modo,
+      valor: body?.valor == null ? undefined : Number(body.valor),
+      userName: (user as any).name || user.userId,
+    });
+  }
+
+  /** Créditos já emitidos por peça faltante neste pedido (painel que sobrevive ao F5). */
+  @Get('item-reports/creditos/by-wc/:wcOrderId')
+  creditosByWc(@Req() req: any, @Param('wcOrderId') wcOrderId: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) acessa essa rota');
+    }
+    const id = Number(wcOrderId);
+    if (!Number.isFinite(id)) throw new ForbiddenException('wcOrderId inválido');
+    return this.svc.listCreditosByWc(id);
   }
 
   /**

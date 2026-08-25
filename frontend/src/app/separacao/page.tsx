@@ -2363,7 +2363,23 @@ function CarrinhosTab() {
     setLoading(true);
     setErro(null);
     try {
-      const since = new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
+      /**
+       * PISO 19/08/2026 — A VIRADA DO SITE (ordem do dono, 25/08).
+       *
+       * "Excluir todos os carrinhos de 18/08 pra trás, independente de qualquer
+       * canal de aquisição." Antes desse dia a fila é lixo da migração: pedido
+       * do WooCommerce que morreu com o site velho, PIX vencido há semanas,
+       * contato capturado que nunca voltou. Fila com alarme falso velho é fila
+       * em que ninguém confia — a mesma regra da fila de tarefas da loja.
+       *
+       * O piso mora aqui, no `since` que vai pras QUATRO fontes de uma vez
+       * (plugin do WP, WooCommerce REST, site novo e contatos capturados) — é
+       * o que faz valer "independente do canal". Aumentar o filtro de dias na
+       * tela não traz os velhos de volta: o piso ganha do filtro.
+       */
+      const CORTE_CARRINHOS = '2026-08-19';
+      const janela = new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
+      const since = janela < CORTE_CARRINHOS ? CORTE_CARRINHOS : janela;
       // O plugin do WP não conhece "não convertido" — pra ele essas linhas
       // continuam sendo abandono; quem separa é o mapa de baixas, no cliente.
       const sParam =

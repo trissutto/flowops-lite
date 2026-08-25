@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
@@ -4656,26 +4657,260 @@ export class PickOrdersService {
     return vivos;
   }
 
-  /** Matriz: reportes de peça de um pedido WC (banner do /pedidos/wc/[id]). */
+  /**
+   * Matriz: reportes de peça de um pedido WC (banner do /pedidos/wc/[id]).
+   *
+   * Vem com o DINHEIRO junto (`valorSugerido`) e com quem é a dona dele
+   * (`cliente`): a peça sumiu depois de paga, e o desfecho — devolver ou virar
+   * crédito — é uma decisão de valor. Sem isso a matriz teria que abrir o
+   * pedido noutra aba pra descobrir quanto a cliente pagou por AQUELA peça.
+   */
   async listItemReportsByWc(wcOrderId: number) {
+    const order = await this.prisma.order.findFirst({
+      where: { wcOrderId },
+      select: {
+        id: true,
+        wcOrderNumber: true,
+        customerName: true,
+        customerCpf: true,
+        customerPhone: true,
+      },
+    });
+    if (!order) return [];
+    const abertos = await this.listItemReportsForOrder(order.id);
+    if (!abertos.length) return [];
+
+    const itens = await this.prisma.orderItem.findMany({
+      where: { orderId: order.id },
+      select: { id: true, sku: true, unitPrice: true },
+    });
+    const porId = new Map(itens.map((i) => [i.id, i]));
+    const porSku = new Map(itens.map((i) => [String(i.sku), i]));
+    const cpf = String(order.customerCpf || '').replace(/\D/g, '');
+
+    return abertos.map((r) => {
+      // O item pode ter sido apagado do pedido; o SKU do snapshot é o plano B.
+      const item = (r.orderItemId ? porId.get(r.orderItemId) : null) ?? porSku.get(String(r.sku));
+      const unit = Number(item?.unitPrice) || 0;
+      return {
+        ...r,
+        valorSugerido: Math.round(unit * (Number(r.qtyMissing) || 1) * 100) / 100,
+        cliente: {
+          nome: order.customerName || null,
+          cpf: cpf.length === 11 ? cpf : null,
+          telefone: order.customerPhone || null,
+          pedidoNumero: order.wcOrderNumber || String(wcOrderId),
+        },
+      };
+    });
+  }
+
+  /**
+   * Matriz resolve um reporte de peça. DOIS desfechos, e a diferença entre eles
+   * é dinheiro saindo ou dinheiro ficando (dono, 25/08/2026):
+   *
+   * · `reembolso` — o desfecho de sempre: o estorno acontece por fora (gateway,
+   *   PIX de volta) e aqui só se apaga o alarme.
+   * · `credito`   — a cliente PREFERE crédito. Emite um vale NOMINAL no CPF
+   *   dela, **sem prazo de validade**, que vale no site e em qualquer caixa da
+   *   rede.
+   *
+   * O vale nasce em `site_cupons` com `origem='troca'` porque é o ÚNICO formato
+   * que os dois lugares onde ela vai gastar já sabem aceitar: o checkout
+   * (`CupomService.aplicar`) e o PDV (`addPayment` → `resolverValeDoSite`).
+   * Inventar tabela nova aqui seria entregar um código que o caixa não
+   * reconhece — o erro que a tela de trocas do WC cometeu até 21/08.
+   */
+  async resolveItemReport(
+    reportId: string,
+    userId: string,
+    opts?: { modo?: string; valor?: number; userName?: string },
+  ) {
+    const r = await this.prisma.pickOrderItemReport.findUnique({ where: { id: reportId } });
+    if (!r) throw new NotFoundException('Reporte não encontrado');
+    if (r.resolvedAt) return { ok: true, alreadyResolved: true };
+
+    const modo = opts?.modo === 'credito' ? 'credito' : 'reembolso';
+    if (modo === 'reembolso') {
+      await this.prisma.pickOrderItemReport.update({
+        where: { id: reportId },
+        data: { resolvedAt: new Date(), resolvedBy: userId || 'admin' },
+      });
+      return { ok: true, alreadyResolved: false, modo };
+    }
+
+    // O vale nasce ANTES do carimbo: se a emissão falhar (pedido sem CPF), o
+    // alarme continua na tela. Apagar o aviso e não emitir o crédito seria a
+    // pior combinação possível — a cliente fica sem peça e sem dinheiro.
+    const credito = await this.emitirCreditoDoReporte(r, opts?.valor, opts?.userName || userId);
+    await this.prisma.pickOrderItemReport.update({
+      where: { id: reportId },
+      data: {
+        resolvedAt: new Date(),
+        // Mesma convenção do `auto:rerouted`: o prefixo diz COMO se resolveu, e
+        // é por ele que `listCreditosByWc` reencontra o vale desta peça.
+        resolvedBy: `credito:${credito.code}`,
+      },
+    });
+    return { ok: true, alreadyResolved: false, modo, credito };
+  }
+
+  /**
+   * Emite o vale do reporte. Regras que NÃO são negociáveis:
+   *
+   * · **Nominal.** Sem CPF de 11 dígitos no pedido, não emite — código sem dono
+   *   circula em print de WhatsApp e vira compra de outra pessoa
+   *   ([[vale-troca-so-apos-conferencia]]).
+   * · **Sem prazo** (ordem do dono): `fimEm: null`. O PDV e o checkout já
+   *   tratam validade nula como "não vence" — nenhum dos dois precisou mudar.
+   * · **Teto no que ela pagou.** O valor default é o preço da peça que faltou;
+   *   a matriz pode ajustar (frete, cortesia), mas não acima do total do
+   *   pedido — digitar 8990 no lugar de 89,90 não pode virar crédito real.
+   */
+  private async emitirCreditoDoReporte(r: any, valorPedido: number | undefined, autor: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: r.orderId },
+      select: {
+        wcOrderNumber: true,
+        wcOrderId: true,
+        customerName: true,
+        customerCpf: true,
+        totalAmount: true,
+      },
+    });
+    if (!order) throw new NotFoundException('Pedido do reporte não encontrado');
+
+    const cpf = String(order.customerCpf || '').replace(/\D/g, '');
+    if (cpf.length !== 11) {
+      throw new BadRequestException(
+        'Pedido sem CPF — o crédito é nominal e não pode ser emitido. Preencha o CPF da cliente no pedido e gere de novo.',
+      );
+    }
+
+    let valor = Number(valorPedido);
+    if (!Number.isFinite(valor) || valor <= 0) {
+      const item = r.orderItemId
+        ? await this.prisma.orderItem.findUnique({
+            where: { id: r.orderItemId },
+            select: { unitPrice: true },
+          })
+        : await this.prisma.orderItem.findFirst({
+            where: { orderId: r.orderId, sku: String(r.sku) },
+            select: { unitPrice: true },
+          });
+      valor = (Number(item?.unitPrice) || 0) * (Number(r.qtyMissing) || 1);
+    }
+    valor = Math.round(valor * 100) / 100;
+    if (!(valor > 0)) {
+      throw new BadRequestException(
+        'Não consegui descobrir quanto essa peça custou. Digite o valor do crédito na mão.',
+      );
+    }
+    const teto = Number(order.totalAmount) || 0;
+    if (teto > 0 && valor > teto + 0.01) {
+      throw new BadRequestException(
+        `Crédito de R$ ${valor.toFixed(2)} é maior que o total do pedido (R$ ${teto.toFixed(2)}). Confira o valor.`,
+      );
+    }
+
+    const pedido = order.wcOrderNumber || String(order.wcOrderId || '');
+    // Prefixo TROCA- de propósito: é o que a vendedora reconhece na tela de
+    // devolução do PDV (`/^TROCA-/i` roteia o código pro vale em vez de tentar
+    // achar uma peça com esse código de barras).
+    let code = '';
+    for (let i = 0; i < 5 && !code; i++) {
+      const tentativa = `TROCA-${randomBytes(5).toString('hex').toUpperCase()}`;
+      const existe = await (this.prisma as any).siteCupom.findUnique({
+        where: { code: tentativa },
+        select: { code: true },
+      });
+      if (!existe) code = tentativa;
+    }
+    if (!code) throw new BadRequestException('Não consegui gerar um código de vale. Tente de novo.');
+
+    await (this.prisma as any).siteCupom.create({
+      data: {
+        code,
+        label: `Crédito da peça que faltou no pedido ${pedido}`.slice(0, 80),
+        tipo: 'fixed',
+        valor,
+        usoMaximo: 1,
+        ativo: true,
+        fimEm: null, // SEM PRAZO — ordem do dono.
+        cpf,
+        origem: 'troca',
+        atualizadoPor: `peça faltante · ${autor}`.slice(0, 80),
+      },
+    });
+
+    this.logger.log(
+      `[item-report ${String(r.id).slice(0, 8)}] crédito ${code} R$${valor.toFixed(2)} ` +
+        `CPF final ${cpf.slice(-4)} pedido ${pedido} (sem prazo) — por ${autor}`,
+    );
+
+    return {
+      code,
+      valor,
+      cpf,
+      semPrazo: true,
+      clienteNome: order.customerName || null,
+      pedidoNumero: pedido,
+    };
+  }
+
+  /**
+   * Créditos JÁ emitidos por peça faltante neste pedido — o painel que
+   * sobrevive ao F5.
+   *
+   * O reporte some da lista assim que é resolvido, e o código do vale só
+   * aparecia uma vez, na resposta do clique: recarregar a página levava embora
+   * o único lugar onde ele estava escrito. Aqui ele é reencontrado pelo carimbo
+   * `resolvedBy = 'credito:<CODE>'`, com o estado ATUAL do vale (`usos`) — a
+   * matriz enxerga se a cliente já gastou.
+   */
+  async listCreditosByWc(wcOrderId: number) {
     const order = await this.prisma.order.findFirst({
       where: { wcOrderId },
       select: { id: true },
     });
     if (!order) return [];
-    return this.listItemReportsForOrder(order.id);
-  }
-
-  /** Matriz marca um reporte de peça como resolvido na mão (ex.: reembolsou). */
-  async resolveItemReport(reportId: string, userId: string) {
-    const r = await this.prisma.pickOrderItemReport.findUnique({ where: { id: reportId } });
-    if (!r) throw new NotFoundException('Reporte não encontrado');
-    if (r.resolvedAt) return { ok: true, alreadyResolved: true };
-    await this.prisma.pickOrderItemReport.update({
-      where: { id: reportId },
-      data: { resolvedAt: new Date(), resolvedBy: userId || 'admin' },
+    const resolvidos = await this.prisma.pickOrderItemReport.findMany({
+      where: { orderId: order.id, resolvedBy: { startsWith: 'credito:' } },
+      orderBy: { resolvedAt: 'desc' },
     });
-    return { ok: true, alreadyResolved: false };
+    if (!resolvidos.length) return [];
+
+    const codes = resolvidos.map((r) => String(r.resolvedBy).slice('credito:'.length));
+    let cupons: any[] = [];
+    try {
+      cupons = await (this.prisma as any).siteCupom.findMany({ where: { code: { in: codes } } });
+    } catch {
+      cupons = [];
+    }
+    const porCode = new Map(cupons.map((c: any) => [c.code, c]));
+
+    return resolvidos.map((r) => {
+      const code = String(r.resolvedBy).slice('credito:'.length);
+      const c = porCode.get(code);
+      const usos = Number(c?.usos) || 0;
+      const maximo = c?.usoMaximo == null ? null : Number(c.usoMaximo);
+      return {
+        id: r.id,
+        code,
+        valor: Number(c?.valor) || 0,
+        peca: [r.ref, r.cor, r.tamanho].filter(Boolean).join(' · ') || r.sku,
+        qtyMissing: r.qtyMissing,
+        storeCode: r.storeCode,
+        emitidoEm: r.resolvedAt,
+        // Vale sumido de `site_cupons` não pode virar "existe e está ativo".
+        existe: !!c,
+        usado: !!c && maximo != null && usos >= maximo,
+        usadoAt: c?.usadoAt ?? null,
+        ativo: c ? !!c.ativo : false,
+        semPrazo: c ? !c.fimEm : true,
+        validade: c?.fimEm ?? null,
+      };
+    });
   }
 
   /**
