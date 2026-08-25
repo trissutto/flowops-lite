@@ -37,6 +37,10 @@ interface SepGroup {
   storeCity?: string | null;
   storeState?: string | null;
   whatsapp?: string | null;
+  /** Feeder: a peça vai pra OUTRA LOJA, não pra cliente (retirada/juntada). */
+  isTransfer?: boolean;
+  transferToStoreCode?: string | null;
+  transferToStoreName?: string | null;
   items: SepItem[];
 }
 interface SepPreview {
@@ -45,6 +49,8 @@ interface SepPreview {
   shippingMethod: string;
   groups: SepGroup[];
   missing: Array<{ sku: string; quantity: number; productName: string }>;
+  /** true = veio da rota JÁ CONFIRMADA (pick-orders), não de uma simulação. */
+  confirmed?: boolean;
 }
 
 interface WcOrderFull {
@@ -94,7 +100,20 @@ function ImprimirSeparacaoPageInner() {
           ids.map(async (id) => {
             const [order, separation] = await Promise.all([
               api<WcOrderFull>(`/orders/wc/${id}`),
-              api<SepPreview>(`/orders/wc/${id}/prepare-separation`).catch(() => ({
+              /**
+               * 🚨 A ROTA QUE ESTÁ VALENDO, não uma simulação nova (25/08).
+               *
+               * Aqui se chamava `prepare-separation`, que RECALCULA a rota com
+               * o estoque do momento. Como a baixa é no BIPE, depois que as
+               * lojas designadas bipam elas somem do cálculo — e o papel saía
+               * com a loja errada. Caso LP-000254: roteado pra JUNDIAÍ +
+               * ITANHAÉM, impresso 50 minutos depois como "LOJA: SOROCABA
+               * (06)", com as duas peças numa folha só.
+               *
+               * `separation-confirmed` lê os pick-orders vivos do pedido e cai
+               * sozinho no preview quando ainda não há rota confirmada.
+               */
+              api<SepPreview>(`/orders/wc/${id}/separation-confirmed`).catch(() => ({
                 success: false,
                 strategy: 'insufficient-stock' as const,
                 shippingMethod: '',
@@ -415,6 +434,29 @@ function Folha({
       {separation.strategy === 'multi-store' && group && (
         <div className="muted" style={{ textAlign: 'center', marginTop: 2 }}>
           Pedido dividido em {separation.groups.length} lojas — esta folha é dessa loja
+        </div>
+      )}
+
+      {/* A PEÇA DESTA FOLHA NÃO É PRA CLIENTE (25/08).
+          Feeder de retirada/juntada manda pra outra loja, e o bloco "Forma de
+          envio" logo abaixo diz "RETIRADA EM LOJA · Retirar na loja X" — que é
+          verdade pra CLIENTE e mentira pra quem está com o papel na mão. Sem
+          esta faixa a peça fica esperando uma cliente que nunca vai lá. */}
+      {group?.isTransfer && (
+        <div
+          style={{
+            textAlign: 'center',
+            border: '2px solid #000',
+            padding: '4px',
+            fontWeight: 900,
+            fontSize: '11pt',
+            marginTop: 3,
+          }}
+        >
+          ENVIAR PARA A LOJA {group.transferToStoreName || group.transferToStoreCode || '—'}
+          <div style={{ fontWeight: 700, fontSize: '8pt' }}>
+            NÃO É ENTREGA PRA CLIENTE — a peça sai daqui pra outra loja
+          </div>
         </div>
       )}
 

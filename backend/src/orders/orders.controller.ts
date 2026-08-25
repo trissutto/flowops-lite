@@ -2644,11 +2644,129 @@ export class OrdersController {
   }
 
   /**
+   * A SEPARAÇÃO QUE ESTÁ VALENDO — não uma simulação nova (25/08).
+   *
+   * 🚨 O PAPEL DIZIA A LOJA ERRADA. A ordem de separação impressa em
+   * `/separacao/imprimir/[wcId]` chamava `prepare-separation`, que **roda a
+   * engine de novo com o estoque de AGORA** e ainda desconta os pick-orders do
+   * próprio pedido (ele existe pra recalcular rota). Como a baixa acontece no
+   * BIPE, assim que as lojas designadas bipam as peças elas deixam de ter
+   * estoque — e a simulação da impressão escolhe OUTRA loja.
+   *
+   * Caso LP-000254 (25/08): pedido de retirada em Jundiaí, roteado 17:49 pra
+   * JUNDIAÍ (1 peça) + ITANHAÉM (1 peça, transferência). Às 18:40 o papel saiu
+   * com "LOJA: SOROCABA (06)" e as DUAS peças numa folha só — Sorocaba nunca
+   * teve card nenhum desse pedido; era o resultado de uma rota nova, calculada
+   * na hora de imprimir.
+   *
+   * Aqui a fonte é o que foi CONFIRMADO: os `pick_orders` vivos do pedido e o
+   * `assignedStoreId` de cada item — os mesmos campos que a bipagem da loja
+   * usa pra saber o que esperar. Sem rota confirmada (pedido ainda não
+   * distribuído), cai no preview de sempre, que é o certo pra esse caso.
+   */
+  @Get('wc/:wcId/separation-confirmed')
+  async separationConfirmed(@Param('wcId') wcId: string) {
+    const confirmada = await this.separacaoConfirmadaDoPedido(Number(wcId));
+    if (confirmada) return confirmada;
+    return this.prepareSeparation(wcId);
+  }
+
+  /**
+   * Monta os grupos a partir da rota JÁ PERSISTIDA. Devolve `null` quando o
+   * pedido não tem rota (aí quem chama usa o preview).
+   *
+   * Item sem loja não é inventado: vai pra `missing`, que é o mesmo lugar da
+   * ruptura e da peça reportada como "não achei" — na folha ela não aparece
+   * como se alguém devesse separá-la.
+   */
+  private async separacaoConfirmadaDoPedido(wcOrderId: number) {
+    if (!Number.isFinite(wcOrderId)) return null;
+    const order: any = await (this.prisma as any).order.findUnique({
+      where: { wcOrderId },
+      include: { items: true },
+    });
+    if (!order) return null;
+
+    const picks: any[] = await (this.prisma as any).pickOrder.findMany({
+      where: { orderId: order.id, status: { not: 'cancelled' } },
+      include: { store: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!picks.length) return null;
+
+    const groups: any[] = [];
+    const missing: any[] = [];
+    const lojasComCard = new Set(picks.map((p) => p.storeId));
+
+    // Nome da loja que RECEBE a transferência — a folha do feeder tem que
+    // dizer pra onde a peça vai; código sozinho não diz nada no balcão.
+    const codigosDestino = [
+      ...new Set(picks.filter((p) => p.isTransfer && p.transferToStoreCode).map((p) => p.transferToStoreCode)),
+    ] as string[];
+    const destinos = codigosDestino.length
+      ? await (this.prisma as any).store.findMany({
+          where: { code: { in: codigosDestino } },
+          select: { code: true, name: true },
+        })
+      : [];
+    const nomeDestino = new Map<string, string>(destinos.map((s: any) => [s.code, s.name]));
+
+    for (const pick of picks) {
+      const itens = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
+      if (!itens.length) continue;
+      groups.push({
+        storeId: pick.storeId,
+        storeCode: pick.store?.code ?? '',
+        storeName: pick.store?.name ?? '',
+        storeCity: pick.store?.city ?? null,
+        storeState: pick.store?.state ?? null,
+        whatsapp: pick.store?.whatsapp ?? null,
+        // A folha do feeder precisa dizer que a peça vai pra OUTRA LOJA, não
+        // pra cliente — é o que a transferência da retirada e a juntada fazem.
+        isTransfer: !!pick.isTransfer,
+        transferToStoreCode: pick.transferToStoreCode ?? null,
+        transferToStoreName: pick.transferToStoreCode
+          ? nomeDestino.get(pick.transferToStoreCode) ?? null
+          : null,
+        items: itens.map((i: any) => ({
+          sku: String(i.sku ?? ''),
+          quantity: Number(i.quantity ?? 1),
+          productName: String(i.productName ?? ''),
+          variant: undefined,
+        })),
+      });
+    }
+
+    for (const i of (order.items || []) as any[]) {
+      if (i.assignedStoreId && lojasComCard.has(i.assignedStoreId)) continue;
+      missing.push({
+        sku: String(i.sku ?? ''),
+        quantity: Number(i.quantity ?? 1),
+        productName: String(i.productName ?? ''),
+      });
+    }
+
+    return {
+      success: groups.length > 0,
+      confirmed: true,
+      strategy: groups.length > 1 ? ('multi-store' as const) : ('single-store' as const),
+      shippingMethod: order.shippingMethod ?? '',
+      groups,
+      missing,
+    };
+  }
+
+  /**
    * Preview de separação pra um pedido WOOCOMMERCE (sem passar pelo banco local).
    *  1. Busca pedido no WC
    *  2. Extrai SKUs + cliente + método de envio
    *  3. Roda a engine de roteamento (1 loja preferido, múltiplas se necessário)
    *  4. Retorna grupos prontos pra enviar WhatsApp
+   *
+   * ⚠️ É SIMULAÇÃO, e refeita a cada chamada com o estoque do momento. Pra
+   * saber quem está separando de verdade, use `separation-confirmed` — foi
+   * chamar este aqui na hora de IMPRIMIR que mandou o papel do LP-000254 pra
+   * uma loja que não tinha card nenhum do pedido.
    */
   @Get('wc/:wcId/prepare-separation')
   async prepareSeparation(
