@@ -30,7 +30,8 @@ const montar = (
   linhas = [linha(), linha({ codigo: '1002', tamanho: '48' })],
   site: any = null,
   precoAnterior: Map<string, number> | null = null,
-) => svc.montarPeca('700979', linhas, site, null, [], undefined, 0, [], promo, precoAnterior);
+  precoDeRegistrado: Map<string, number> | null = null,
+) => svc.montarPeca('700979', linhas, site, null, [], undefined, 0, [], promo, precoAnterior, precoDeRegistrado);
 
 describe('montarPeca — promoção de 50%', () => {
   it('peça elegível sai pela metade, com o "de" riscado no preço cheio', () => {
@@ -130,5 +131,21 @@ describe('montarPeca — "de/por" automático pelo histórico da loja (26/08)', 
     const p = montar(null, undefined, { precoDe: 299.9 });
     expect(p.precoDe).toBeNull();
     expect(p.promocao).toBe(false);
+  });
+
+  /**
+   * DE/POR REGISTRADO (dono, 26/08 tarde): a retaguarda declara o "DE" no
+   * Preço em bloco (`product.precoDe`) — ele VENCE o histórico automático.
+   */
+  it('DE registrado pela retaguarda vence o histórico', () => {
+    const p = montar(null, undefined, null, new Map([['1001', 249.9]]), new Map([['1001', 299.9]]));
+    expect(p.preco).toBe(199.9);
+    expect(p.precoDe).toBe(299.9);
+    expect(p.promocao).toBe(true);
+  });
+
+  it('DE registrado menor que o preço atual é âncora velha — cai no histórico', () => {
+    const p = montar(null, undefined, null, new Map([['1001', 249.9]]), new Map([['1001', 149.9]]));
+    expect(p.precoDe).toBe(249.9);
   });
 });

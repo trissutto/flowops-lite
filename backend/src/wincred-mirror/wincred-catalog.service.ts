@@ -97,25 +97,53 @@ export class WincredCatalogService {
     tamanho: string | null;
     descricao: string;
     preco: number;
+    /** Preço "DE" registrado da promoção (> preco) — null = sem promoção. */
+    precoDe?: number | null;
     ncm: string | null;
     cfop: string | null;
     custo: number | null;
     dataCadastro: string | null;
   } | null> {
     const t0 = Date.now();
+    let info: any = null;
     if (this.enabled) {
       try {
         const hit = await this.getPdvProductInfoFromMirror(skuOrEan);
         if (hit) {
           this.logger.log(`[bipe] ${skuOrEan}: espelho HIT (${Date.now() - t0}ms)`);
-          return hit;
+          info = hit;
+        } else {
+          this.logger.log(`[bipe] ${skuOrEan}: espelho MISS → Giga ao vivo`);
         }
-        this.logger.log(`[bipe] ${skuOrEan}: espelho MISS → Giga ao vivo`);
       } catch (e: any) {
         this.logger.warn(`[bipe] ${skuOrEan}: espelho ERRO (${e?.message || e}) → Giga ao vivo`);
       }
     }
-    return this.erp.getPdvProductInfo(skuOrEan);
+    if (!info) info = await this.erp.getPdvProductInfo(skuOrEan);
+    return this.anexarPrecoDe(info);
+  }
+
+  /**
+   * PREÇO "DE" DA PROMOÇÃO no bipe (dono, 26/08): "você economizou R$ 30".
+   * A coluna vive só na tabela NATIVA (`product.precoDe` — o espelho é
+   * recriado pelo sync). Anexado aqui, depois de qualquer caminho (espelho ou
+   * Giga), pra valer nos dois. DE que não é maior que o preço atual é âncora
+   * velha — vai como null, nunca "economia negativa".
+   */
+  private async anexarPrecoDe<T extends { sku: string; preco: number } | null>(info: T): Promise<T> {
+    if (!info) return info;
+    try {
+      const codigo = this.normalizeCodigo(info.sku) || String(info.sku).trim();
+      const p: any = await (this.prisma as any).product.findUnique({
+        where: { codigo },
+        select: { precoDe: true },
+      });
+      const de = p?.precoDe != null ? Math.round(Number(p.precoDe) * 100) / 100 : null;
+      (info as any).precoDe = de != null && de > info.preco ? de : null;
+    } catch {
+      (info as any).precoDe = null;
+    }
+    return info;
   }
 
   private async getPdvProductInfoFromMirror(skuOrEan: string) {

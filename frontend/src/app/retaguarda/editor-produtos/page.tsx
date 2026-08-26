@@ -33,6 +33,8 @@ type Row = {
   cor: string;
   tamanho: string;
   preco: number | null;
+  /** Preço "DE" registrado da promoção (só nativa) — POR é o próprio preço. */
+  precoDe: number | null;
   estoque: number | null;
   estoqueLojas?: Record<string, number>;
 };
@@ -56,6 +58,8 @@ type Changes = {
   cor?: string;
   tamanho?: string;
   preco?: number;
+  /** Staged como string digitada; '' = LIMPAR o DE (encerrar promoção). */
+  precoDe?: string;
 };
 
 const LIMITS: Record<string, number> = { ref: 10, descricao: 100, marca: 30, cor: 15, tamanho: 20 };
@@ -140,6 +144,10 @@ export default function EditorProdutosPage() {
   const [refColisao, setRefColisao] = useState<{ existentes: number; exemploDescricao: string | null } | null>(null);
   const [precoModo, setPrecoModo] = useState<'fixar' | 'percentual'>('fixar');
   const [precoValor, setPrecoValor] = useState('');
+  // DE/POR em bloco (dono, 26/08): 'registrar' grava o DE junto do preço novo
+  // (vazio = o preço ATUAL de cada peça vira o DE); 'limpar' encerra a promoção.
+  const [promoAcao, setPromoAcao] = useState<'nao' | 'registrar' | 'limpar'>('nao');
+  const [deValor, setDeValor] = useState('');
   const [descDe, setDescDe] = useState('');
   const [descPara, setDescPara] = useState('');
 
@@ -170,11 +178,16 @@ export default function EditorProdutosPage() {
     }
   };
 
+  const ehNumerico = (field: keyof Changes) => field === 'preco' || field === 'precoDe';
+
   // Valor efetivo da célula (pendente > original)
   const val = (row: Row, field: keyof Changes): string => {
     const p = pending.get(row.codigo);
     if (p && p[field] !== undefined) return String(p[field]);
-    if (field === 'preco') return row.preco != null ? String(row.preco).replace('.', ',') : '';
+    if (ehNumerico(field)) {
+      const v = (row as any)[field];
+      return v != null ? String(v).replace('.', ',') : '';
+    }
     return String((row as any)[field] ?? '');
   };
 
@@ -182,14 +195,10 @@ export default function EditorProdutosPage() {
     setPending((prev) => {
       const next = new Map(prev);
       const cur = { ...(next.get(codigo) || {}) };
-      if (field === 'preco') {
-        (cur as any)[field] = value as any; // guarda como digitado; valida no preview
-      } else {
-        (cur as any)[field] = value;
-      }
+      (cur as any)[field] = value; // numérico fica como digitado; valida no preview
       // Se voltou pro valor original, limpa o campo pendente
-      const orig = field === 'preco'
-        ? (original.preco != null ? String(original.preco).replace('.', ',') : '')
+      const orig = ehNumerico(field)
+        ? ((original as any)[field] != null ? String((original as any)[field]).replace('.', ',') : '')
         : String((original as any)[field] ?? '');
       if (String(value) === orig) delete (cur as any)[field];
       if (Object.keys(cur).length) next.set(codigo, cur);
@@ -242,21 +251,38 @@ export default function EditorProdutosPage() {
 
   const aplicarPreco = () => {
     const v = parsePreco(precoValor);
-    if (!isFinite(v)) return;
+    const temPor = isFinite(v);
+    // 'limpar' pode rodar sem preço novo (só tira o DE); os outros exigem POR.
+    if (promoAcao !== 'limpar' && !temPor) return;
+    const deDigitado = deValor.trim() ? parsePreco(deValor) : null;
+    if (promoAcao === 'registrar' && deValor.trim() && (!isFinite(deDigitado as number) || (deDigitado as number) <= 0)) return;
     setPending((prev) => {
       const next = new Map(prev);
       for (const r of rows) {
         if (!sel.has(r.codigo)) continue;
         const cur = { ...(next.get(r.codigo) || {}) };
-        let novo: number;
-        if (precoModo === 'fixar') novo = v;
-        else novo = Math.round(((r.preco || 0) * (1 + v / 100)) * 100) / 100;
-        if (novo > 0 && novo !== r.preco) (cur as any).preco = String(novo).replace('.', ',');
+        let novo: number | null = null;
+        if (temPor) {
+          novo = precoModo === 'fixar' ? v : Math.round(((r.preco || 0) * (1 + v / 100)) * 100) / 100;
+          if (novo > 0 && novo !== r.preco) (cur as any).preco = String(novo).replace('.', ',');
+        }
+        if (promoAcao === 'registrar') {
+          // DE = digitado; vazio = "o original de hoje": o preço ATUAL da peça
+          // vira o DE, e o POR é o preço novo. DE que não fica MAIOR que o POR
+          // é pulado (não é promoção).
+          const de = deDigitado ?? r.preco ?? null;
+          const porFinal = novo ?? r.preco ?? 0;
+          if (de != null && porFinal > 0 && de > porFinal) {
+            (cur as any).precoDe = String(de).replace('.', ',');
+          }
+        } else if (promoAcao === 'limpar' && r.precoDe != null) {
+          (cur as any).precoDe = ''; // '' = limpar no apply
+        }
         if (Object.keys(cur).length) next.set(r.codigo, cur); else next.delete(r.codigo);
       }
       return next;
     });
-    setModalPreco(false); setPrecoValor('');
+    setModalPreco(false); setPrecoValor(''); setDeValor(''); setPromoAcao('nao');
   };
 
   // Marca em bloco: aplica a marca digitada SÓ no campo MARCA das selecionadas.
@@ -456,6 +482,21 @@ export default function EditorProdutosPage() {
           const n = parsePreco(String(value));
           if (!isFinite(n) || n <= 0) { setErr(`Preço inválido no código ${codigo}: "${value}"`); return; }
           linhas.push({ codigo, ref: row.ref, field: 'PREÇO', antes: brl(row.preco), depois: brl(n) });
+        } else if (field === 'precoDe') {
+          // '' = LIMPAR (encerra a promoção). Número precisa ser MAIOR que o
+          // POR (o staged, se houver; senão o atual) — "de 99 por 129" não é promoção.
+          if (String(value).trim() === '') {
+            linhas.push({ codigo, ref: row.ref, field: 'PREÇO DE', antes: brl(row.precoDe), depois: '— (limpar)' });
+          } else {
+            const n = parsePreco(String(value));
+            if (!isFinite(n) || n <= 0) { setErr(`Preço DE inválido no código ${codigo}: "${value}"`); return; }
+            const por = ch.preco !== undefined ? parsePreco(String(ch.preco)) : (row.preco ?? 0);
+            if (por > 0 && n <= por) {
+              setErr(`Preço DE (${brl(n)}) precisa ser MAIOR que o POR (${brl(por)}) no código ${codigo}`);
+              return;
+            }
+            linhas.push({ codigo, ref: row.ref, field: 'PREÇO DE', antes: brl(row.precoDe), depois: brl(n) });
+          }
         } else {
           const max = LIMITS[field] || 100;
           if (String(value).trim().length > max) {
@@ -478,6 +519,10 @@ export default function EditorProdutosPage() {
       const edits = Array.from(pending.entries()).map(([codigo, ch]) => {
         const changes: any = { ...ch };
         if (changes.preco !== undefined) changes.preco = parsePreco(String(changes.preco));
+        if (changes.precoDe !== undefined) {
+          // '' vira null = LIMPAR o DE (encerrar a promoção) no backend.
+          changes.precoDe = String(changes.precoDe).trim() === '' ? null : parsePreco(String(changes.precoDe));
+        }
         return { codigo, changes };
       });
       const r = await api<{ ok: boolean; shadow: boolean; atualizados: number; planejados: number }>(
@@ -652,7 +697,8 @@ export default function EditorProdutosPage() {
                     <th className="text-left px-2 py-1.5">Marca</th>
                     <th className="text-left px-2 py-1.5">Cor</th>
                     <th className="text-left px-2 py-1.5">Tam</th>
-                    <th className="text-right px-2 py-1.5">Preço (R$)</th>
+                    <th className="text-right px-2 py-1.5" title="POR — o preço cobrado (caixa e site)">Preço (R$)</th>
+                    <th className="text-right px-2 py-1.5" title="DE — preço original da promoção (riscado no site; 'você economizou' no PDV). Vazio = sem promoção.">DE (R$)</th>
                     {lojasDisponiveis.map((l) => (
                       <th key={l} title={`Loja ${l}`} className="text-center px-0.5 py-1.5 w-9 whitespace-nowrap">
                         {lojaNomes.get(l) || l}
@@ -701,6 +747,7 @@ export default function EditorProdutosPage() {
                         <td className="px-1 py-1">{cell('cor', 'w-28', false, LIMITS.cor)}</td>
                         <td className="px-1 py-1">{cell('tamanho', 'w-12', false, LIMITS.tamanho)}</td>
                         <td className="px-1 py-1">{cell('preco', 'w-20', true)}</td>
+                        <td className="px-1 py-1">{cell('precoDe', 'w-20', true)}</td>
                         {/* MATRIZ por loja (padrão Wincred): clicou → stepper −/+ grava na hora */}
                         {lojasDisponiveis.map((loja) => {
                           const qtd = r.estoqueLojas?.[loja] ?? 0;
@@ -855,9 +902,47 @@ export default function EditorProdutosPage() {
               ? `Todas as ${sel.size} variações selecionadas ficam com esse preço (em REAIS).`
               : `Aplica o percentual sobre o preço atual de cada uma das ${sel.size} selecionadas.`}
           </p>
+
+          {/* ── DE/POR (dono, 26/08): registrar a promoção junto do preço ── */}
+          <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+            <div className="flex gap-2">
+              {([
+                ['nao', 'Só mudar o preço'],
+                ['registrar', 'É promoção: registrar DE/POR'],
+                ['limpar', 'Encerrar promoção (limpar DE)'],
+              ] as const).map(([k, label]) => (
+                <button key={k} onClick={() => setPromoAcao(k)}
+                  className={`flex-1 px-2 py-2 rounded-lg text-[11px] font-bold border-2 leading-tight ${
+                    promoAcao === k ? 'border-amber-500 bg-amber-50 text-amber-800' : 'border-slate-200 text-slate-500'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {promoAcao === 'registrar' && (
+              <>
+                <input value={deValor}
+                  onChange={(e) => setDeValor(e.target.value)}
+                  placeholder="DE (R$) — vazio = o preço ATUAL de cada peça vira o DE"
+                  inputMode="decimal"
+                  className="w-full px-3 py-2.5 border-2 border-amber-200 rounded-xl font-bold tabular-nums focus:border-amber-400 focus:outline-none" />
+                <p className="text-[11px] text-slate-500">
+                  O DE sai riscado no site e no PDV (&quot;você economizou R$ X&quot;). O POR é o preço
+                  acima — o mesmo do caixa e do site, sempre. DE que não ficar MAIOR que o POR é pulado.
+                </p>
+              </>
+            )}
+            {promoAcao === 'limpar' && (
+              <p className="text-[11px] text-slate-500">
+                Remove o DE das selecionadas (o riscado some do site e do PDV). O campo de preço
+                acima é opcional — vazio mantém o preço como está.
+              </p>
+            )}
+          </div>
+
           <ModalActions
             okLabel="Calcular e revisar"
-            okDisabled={!isFinite(parsePreco(precoValor))}
+            okDisabled={promoAcao === 'limpar' ? false : !isFinite(parsePreco(precoValor))}
             onOk={aplicarPreco}
             onCancel={() => setModalPreco(false)}
           />

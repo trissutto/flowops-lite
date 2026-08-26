@@ -143,6 +143,8 @@ type Sale = {
     dataCadastro: string | null;
     qty: number;
     precoUnit: number;
+    /** Preço "DE" da promoção em centavos — a linha mostra cortado + economia. */
+    precoDeCents?: number | null;
     desconto: number;
     promoTag: string | null;
     // Item BÁSICO que a operadora forçou pra dentro da promoção (botão azul).
@@ -443,10 +445,12 @@ type ScanBarProps = {
   onError: (msg: string | null) => void;   // pai faz setError
   onRequestManualItem: () => void;         // pai abre o modal de item manual
   onAbrirPromoCheck: () => void;           // pai abre "essa peça entra na promo?"
+  /** Peça bipada com DE/POR registrado → pai mostra "cliente economizou R$ X". */
+  onPromoDePor?: (p: { de: number; por: number; economia: number } | null) => void;
 };
 
 const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
-  { saleId, ensureSaleId, onScanResult, onError, onRequestManualItem, onAbrirPromoCheck },
+  { saleId, ensureSaleId, onScanResult, onError, onRequestManualItem, onAbrirPromoCheck, onPromoDePor },
   ref,
 ) {
   type ErpSearchHit = {
@@ -485,10 +489,12 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
   const onScanResultRef = useRef(onScanResult);
   const onErrorRef = useRef(onError);
   const ensureSaleIdRef = useRef(ensureSaleId);
+  const onPromoDePorRef = useRef(onPromoDePor);
   useEffect(() => {
     onScanResultRef.current = onScanResult;
     onErrorRef.current = onError;
     ensureSaleIdRef.current = ensureSaleId;
+    onPromoDePorRef.current = onPromoDePor;
   });
   // Venda que a fila está usando. A prop manda enquanto existe venda; quando
   // ela volta a null (venda finalizada), só limpamos com a fila VAZIA — senão
@@ -585,6 +591,8 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         // segundo GET. Fallback pro GET enquanto backend antigo estiver no ar.
         const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sid}`));
         onScanResultRef.current(fresh);
+        // DE/POR registrado: avisa o pai pra mostrar o "cliente economizou".
+        onPromoDePorRef.current?.(r?.promoDePor ?? null);
       } catch (e: any) {
         const msg = String(e?.message || '');
         // FALLBACK REF: código numérico não existe no Giga? Pode ser uma REF
@@ -994,6 +1002,17 @@ function PdvPageInner() {
   );
   const [loadingSale, setLoadingSale] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // "CLIENTE ECONOMIZOU R$ X" (dono, 26/08): peça bipada com DE/POR
+  // registrado acende o aviso pra vendedora FALAR na hora. Some sozinho em
+  // 12s ou no próximo bipe sem promoção.
+  const [economiaBipe, setEconomiaBipe] = useState<{ de: number; por: number; economia: number } | null>(null);
+  const economiaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const avisarEconomia = useCallback((p: { de: number; por: number; economia: number } | null) => {
+    if (economiaTimerRef.current) clearTimeout(economiaTimerRef.current);
+    setEconomiaBipe(p);
+    if (p) economiaTimerRef.current = setTimeout(() => setEconomiaBipe(null), 12_000);
+  }, []);
 
   // Faixas de desconto (config /retaguarda/descontos-senhas). Default = regra
   // antiga 7/10 caso a leitura falhe. Só decide QUAL prompt de senha mostrar —
@@ -2762,7 +2781,29 @@ function PdvPageInner() {
             onError={setError}
             onRequestManualItem={() => setShowManualItem(true)}
             onAbrirPromoCheck={() => setPromoCheckOpen(true)}
+            onPromoDePor={avisarEconomia}
           />
+        )}
+
+        {/* PEÇA EM PROMOÇÃO — o aviso que a vendedora LÊ EM VOZ ALTA. Dourado
+            (acento do PDV; verde fica pro dinheiro do total). */}
+        {economiaBipe && (
+          <div
+            role="status"
+            className="mt-2 flex items-center gap-2.5 rounded-xl border-2 border-[#D4AF37] bg-[#FBF6E6] px-4 py-2.5"
+          >
+            <span className="text-xl" aria-hidden>🏷️</span>
+            <div className="min-w-0">
+              <div className="text-sm font-black text-[#8C7325]">
+                Peça em promoção: de{' '}
+                <span className="line-through">{brl(economiaBipe.de)}</span> por{' '}
+                <span>{brl(economiaBipe.por)}</span>
+              </div>
+              <div className="text-[13px] font-bold text-slate-700">
+                Fala pra cliente: <span className="text-[#8C7325]">“você economizou {brl(economiaBipe.economia)} nessa peça!”</span>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Carrinho */}
@@ -2958,6 +2999,22 @@ function PdvPageInner() {
                       {it.tamanho ? ` · ${it.tamanho}` : ''}
                       {it.qty > 1 ? ` · ${it.qty} × ${brl(it.precoUnit)}` : ''}
                     </div>
+                    {/* DE/POR REGISTRADO (dono, 26/08): peça em promoção mostra
+                        o preço original CORTADO + quanto a cliente economiza —
+                        é o argumento pra vendedora FALAR no balcão. Só
+                        exibição: o cobrado é o precoUnit de sempre. */}
+                    {(() => {
+                      const de = (it.precoDeCents ?? 0) / 100;
+                      if (!(de > it.precoUnit)) return null;
+                      return (
+                        <div className="mt-0.5 flex items-center gap-1.5 text-xs">
+                          <span className="text-slate-400 line-through tabular-nums">de {brl(de)}</span>
+                          <span className="text-[11px] font-bold text-[#8C7325] bg-[#FAF6E8] border border-[#E8DFC0] rounded px-1.5 py-0.5 tabular-nums">
+                            economiza {brl((de - it.precoUnit) * it.qty)}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* QTD — stepper − / valor / + (espec). Valor continua editável. */}

@@ -2640,6 +2640,11 @@ model PdvSaleItem {
   // Quantidades + valores
   qty         Int      @default(1)
   precoUnit   Float    @map("preco_unit")
+  // PREÇO "DE" congelado no bipe (26/08): a peça tinha promoção registrada
+  // (`product.precoDe`) → a linha mostra o DE cortado + "cliente economizou
+  // R$ X". Só exibição — o cobrado é `precoUnit` de sempre. Congela no ato
+  // pra linha não mudar se a promoção acabar no meio da venda.
+  precoDeCents Int?    @map("preco_de_cents")
   desconto    Float    @default(0)
   promoTag    String?  @map("promo_tag")         // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
   // FORÇAR PROMO (15/07): botão AZUL "colocar na promoção" — o item entra na
@@ -6365,6 +6370,15 @@ model Product {
   curadoManual Boolean   @default(false) @map("curado_manual")
   flowIsSource Boolean   @default(false) @map("flow_is_source")
   editedAt     DateTime? @map("edited_at")
+
+  /// PREÇO "DE" REGISTRADO (dono, 26/08): o preço original da promoção. O
+  /// "POR" é o próprio `vendaUn` — o que o caixa cobra e o site segue; este
+  /// campo é só a ÂNCORA exibida (riscado no site, "cliente economiza R$ X"
+  /// no PDV). Null = sem promoção registrada. Mora na NATIVA de propósito:
+  /// o espelho `wincred_produtos` é recriado pelo sync e apagaria a coluna
+  /// (mesma razão do `product_classification`). Preenchido pelo editor de
+  /// produtos ("Preço em bloco"); ignorado quando <= vendaUn (âncora velha).
+  precoDe      Decimal?  @map("preco_de") @db.Decimal(10, 2)
 
   syncedAt  DateTime @default(now()) @map("synced_at")
   updatedAt DateTime @updatedAt @map("updated_at")

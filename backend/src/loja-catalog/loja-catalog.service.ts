@@ -615,6 +615,11 @@ export class LojaCatalogService {
      * monta normal, só sem âncora.
      */
     precoAnterior: Map<string, number> | null = null,
+    /**
+     * Preço "DE" REGISTRADO (`product.precoDe`, dono 26/08) — âncora
+     * declarada pela retaguarda; vence o histórico quando existe.
+     */
+    precoDeRegistrado: Map<string, number> | null = null,
   ) {
     /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
      *
@@ -813,17 +818,23 @@ export class LojaCatalogService {
      * preço não vira "de" (anterior menor que o atual é descartado), e a peça
      * dos 50% mantém o preço cheio como âncora (é o que o caixa riscaria).
      */
-    const anchorHistorico = (() => {
-      if (!precoAnterior?.size || !(preco > 0) || daPromo50) return null;
+    const maiorNoMapa = (mapa: Map<string, number> | null): number | null => {
+      if (!mapa?.size || !(preco > 0)) return null;
       let maior = 0;
       for (const l of unicas) {
         const cod = String(l.codigo ?? '').trim().replace(/^0+/, '');
-        const ant = (cod && precoAnterior.get(cod)) || 0;
+        const ant = (cod && mapa.get(cod)) || 0;
         if (ant > maior) maior = ant;
       }
       return maior > preco ? Math.round(maior * 100) / 100 : null;
-    })();
-    const precoDe = daPromo50 ? precoCheio : anchorHistorico;
+    };
+    /**
+     * Precedência da âncora: 50% do caixa (preço cheio) → DE REGISTRADO pela
+     * retaguarda (`product.precoDe`, 26/08) → histórico automático de queda.
+     */
+    const anchorRegistrado = daPromo50 ? null : maiorNoMapa(precoDeRegistrado);
+    const anchorHistorico = daPromo50 || anchorRegistrado ? null : maiorNoMapa(precoAnterior);
+    const precoDe = daPromo50 ? precoCheio : (anchorRegistrado ?? anchorHistorico);
     const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
 
     /**
@@ -1750,6 +1761,36 @@ export class LojaCatalogService {
   private cachePrecoAnterior: { at: number; mapa: Map<string, number> } | null = null;
   private readonly TTL_PRECO_ANTERIOR = 10 * 60_000;
 
+  /**
+   * PREÇO "DE" REGISTRADO por código (dono, 26/08 — `product.precoDe`): a
+   * âncora que a retaguarda declarou ao fazer a promoção. Vence o histórico
+   * automático quando existe; quem valida "DE > POR" é o `montarPeca` (âncora
+   * velha, menor que o preço atual, é ignorada). Mesmo cache/TTL do histórico.
+   */
+  private cachePrecoDeReg: { at: number; mapa: Map<string, number> } | null = null;
+
+  private async precoDeRegistradoPorCodigo(): Promise<Map<string, number>> {
+    if (this.cachePrecoDeReg && Date.now() - this.cachePrecoDeReg.at < this.TTL_PRECO_ANTERIOR) {
+      return this.cachePrecoDeReg.mapa;
+    }
+    const mapa = new Map<string, number>();
+    try {
+      const rows: Array<{ codigo: string; precoDe: any }> = await (this.prisma as any).product.findMany({
+        where: { precoDe: { not: null } },
+        select: { codigo: true, precoDe: true },
+      });
+      for (const r of rows) {
+        const cod = String(r.codigo ?? '').trim().replace(/^0+/, '');
+        const v = Number(r.precoDe);
+        if (cod && isFinite(v) && v > 0) mapa.set(cod, Math.round(v * 100) / 100);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[catalogo] preço DE registrado indisponível: ${e?.message || e}`);
+    }
+    this.cachePrecoDeReg = { at: Date.now(), mapa };
+    return mapa;
+  }
+
   private async precoAnteriorPorCodigo(): Promise<Map<string, number>> {
     if (this.cachePrecoAnterior && Date.now() - this.cachePrecoAnterior.at < this.TTL_PRECO_ANTERIOR) {
       return this.cachePrecoAnterior.mapa;
@@ -2007,10 +2048,11 @@ export class LojaCatalogService {
       refsComplementos.add(ref);
       refsComplementos.add(refBaseOf(ref));
     }
-    const [{ site, fit, fotos, fichas }, vendas, precoAnterior] = await Promise.all([
+    const [{ site, fit, fotos, fichas }, vendas, precoAnterior, precoDeReg] = await Promise.all([
       this.complementos([...refsComplementos]),
       this.vendasPorFamilia(),
       this.precoAnteriorPorCodigo(),
+      this.precoDeRegistradoPorCodigo(),
     ]);
 
     /**
@@ -2115,6 +2157,7 @@ export class LojaCatalogService {
           fichasDaFamilia,
           promo50.get(this.normRef(ref)) ?? null,
           precoAnterior,
+          precoDeReg,
         ),
       );
     }
@@ -3118,6 +3161,7 @@ export class LojaCatalogService {
           // a mesma peça teria dois preços dependendo de como se chega nela.
           await this.promoSite.porChave(ref),
           await this.precoAnteriorPorCodigo(),
+          await this.precoDeRegistradoPorCodigo(),
         );
       }
     }
@@ -3133,6 +3177,7 @@ export class LojaCatalogService {
       0, c.fichas.get(registro.ref) ?? [],
       await this.promoSite.porChave(registro.ref),
       await this.precoAnteriorPorCodigo(),
+      await this.precoDeRegistradoPorCodigo(),
     );
   }
 

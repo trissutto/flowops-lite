@@ -2397,6 +2397,11 @@ export class PdvService {
           dataCadastro: info.dataCadastro,
           qty,
           precoUnit: info.preco,
+          // DE cortado + "você economizou" na linha (26/08) — ver schema.
+          precoDeCents:
+            (info as any).precoDe != null && (info as any).precoDe > info.preco
+              ? Math.round((info as any).precoDe * 100)
+              : null,
           desconto: 0,
           total: info.preco * qty,
           // Congela o CUSTO do produto no ato da venda — base do CMV da DRE.
@@ -2423,7 +2428,23 @@ export class PdvService {
     this.logger.log(
       `[bipe-timing] ${info.sku} total=${Date.now() - t0}ms · ${marks.join(' ')}${existing ? ' (incremento)' : ''}`,
     );
-    return { ok: true, item, sale: freshSale };
+
+    /**
+     * PROMOÇÃO DE/POR NO BIPE (dono, 26/08): a peça tem preço "DE" registrado
+     * → o front mostra "cliente economiza R$ X" pra vendedora FALAR. Só
+     * exibição: o item foi gravado pelo `vendaUn` de sempre.
+     */
+    const precoDe = (info as any).precoDe as number | null | undefined;
+    const promoDePor =
+      precoDe != null && precoDe > info.preco
+        ? {
+            de: precoDe,
+            por: info.preco,
+            economia: Math.round((precoDe - info.preco) * 100) / 100,
+          }
+        : null;
+
+    return { ok: true, item, sale: freshSale, promoDePor };
   }
 
   /**

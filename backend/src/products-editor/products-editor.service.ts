@@ -27,6 +27,14 @@ export type EditChanges = {
   cor?: string;
   tamanho?: string;
   preco?: number;
+  /**
+   * PREÇO "DE" da promoção (dono, 26/08): o preço original registrado. O POR
+   * é o próprio `preco`/`vendaUn`. `null` = LIMPAR (encerrar a promoção).
+   * Vive SÓ na tabela nativa `product` — o espelho é recriado pelo sync e o
+   * Giga nem tem a coluna (a réplica ignora, `updateProdutosCampos` pula
+   * set sem campo conhecido).
+   */
+  precoDe?: number | null;
 };
 
 // Limites reais das colunas do Giga (ver inserirProdutosBatch).
@@ -231,6 +239,19 @@ export class ProductsEditorService {
       }
     } catch { /* custo é informativo — nunca derruba a busca */ }
 
+    // ── Preço DE registrado (só a nativa tem — ver EditChanges.precoDe) ──
+    const precoDePorCodigo = new Map<string, number>();
+    try {
+      const prods: any[] = await (this.prisma as any).product.findMany({
+        where: { codigo: { in: codigos }, precoDe: { not: null } },
+        select: { codigo: true, precoDe: true },
+      });
+      for (const p of prods) {
+        const v = Number(p.precoDe);
+        if (isFinite(v) && v > 0) precoDePorCodigo.set(String(p.codigo).trim(), v);
+      }
+    } catch { /* DE é informativo — nunca derruba a busca */ }
+
     // ── Monta linhas: Giga fresco > espelho ──
     const rows = base
       .filter((r: any) => String(r.codigo || '').trim() && codigos.includes(String(r.codigo).trim()))
@@ -246,6 +267,7 @@ export class ProductsEditorService {
           cor: ex?.cor ?? (r.cor != null ? String(r.cor).trim() : ''),
           tamanho: ex?.tamanho ?? (r.tamanho != null ? String(r.tamanho).trim() : ''),
           preco: ex?.vendaUn ?? (r as any).vendaUn ?? null,
+          precoDe: precoDePorCodigo.get(codigo) ?? null,
           custo: cm?.custo ?? null,
           margem: cm?.margem ?? null,
           estoque: estoquePorCodigo.get(codigo) ?? null,
@@ -475,6 +497,21 @@ export class ProductsEditorService {
         // Guard-rail do bug ÷100: preço de roupa não é centavos nem milhões.
         if (n > 100000) throw new BadRequestException(`Preço R$ ${n} no código ${e.codigo} parece errado (limite 100.000)`);
       }
+      if (c.precoDe !== undefined && c.precoDe !== null) {
+        const n = Number(c.precoDe);
+        if (!isFinite(n) || n <= 0) {
+          throw new BadRequestException(`Preço DE inválido no código ${e.codigo} — informe em REAIS ou deixe vazio pra limpar`);
+        }
+        if (n > 100000) throw new BadRequestException(`Preço DE R$ ${n} no código ${e.codigo} parece errado (limite 100.000)`);
+        // DE tem que ser MAIOR que o POR do MESMO lote — "de 99 por 129" é
+        // anti-promoção. Quando o POR não veio no lote, quem confere é a
+        // exibição (DE <= vendaUn atual é simplesmente ignorado nas telas).
+        if (c.preco !== undefined && n <= Number(c.preco)) {
+          throw new BadRequestException(
+            `Preço DE (R$ ${n}) precisa ser MAIOR que o POR (R$ ${Number(c.preco)}) no código ${e.codigo}`,
+          );
+        }
+      }
     }
 
     // ── Valores atuais (espelho) pra auditoria ANTES→DEPOIS ──
@@ -483,6 +520,18 @@ export class ProductsEditorService {
       where: { codigo: { in: codigos } },
     });
     const atualPorCodigo = new Map(atuais.map((a) => [String(a.codigo).trim(), a]));
+
+    // DE atual (só a nativa tem a coluna) — pro ANTES→DEPOIS da auditoria.
+    const deAtualPorCodigo = new Map<string, number | null>();
+    try {
+      const prods: any[] = await (this.prisma as any).product.findMany({
+        where: { codigo: { in: codigos } },
+        select: { codigo: true, precoDe: true },
+      });
+      for (const p of prods) {
+        deAtualPorCodigo.set(String(p.codigo).trim(), p.precoDe != null ? Number(p.precoDe) : null);
+      }
+    } catch { /* auditoria fica sem o ANTES — nunca trava a edição */ }
 
     const batchId = randomUUID();
     const auditRows: any[] = [];
@@ -510,6 +559,11 @@ export class ProductsEditorService {
       if (c.cor !== undefined) { const v = String(c.cor).trim().toUpperCase(); set.cor = v; push('COR', atual?.cor, v); }
       if (c.tamanho !== undefined) { const v = String(c.tamanho).trim().toUpperCase(); set.tamanho = v; push('TAMANHO', atual?.tamanho, v); }
       if (c.preco !== undefined) { const v = Math.round(Number(c.preco) * 100) / 100; set.vendaUn = v; push('PRECO', atual?.vendaUn, v); }
+      if (c.precoDe !== undefined) {
+        const v = c.precoDe === null ? null : Math.round(Number(c.precoDe) * 100) / 100;
+        set.precoDe = v;
+        push('PRECO_DE', deAtualPorCodigo.get(e.codigo) ?? null, v);
+      }
       if (Object.keys(set).length) erpRows.push({ codigo: e.codigo, set });
     }
 
@@ -552,12 +606,19 @@ export class ProductsEditorService {
     // Modo NATIVO (P3): Flow primeiro (fonte da verdade) + réplica pro Giga.
     // Modo padrão: Giga primeiro (fonte da verdade) — comportamento original.
     let atualizados = 0;
+    // `precoDe` vive SÓ na nativa (espelho é recriado pelo sync; Giga nem tem
+    // a coluna) — entra à parte do `buildData` pros espelhos não o receberem.
+    const dataNativa = (set: any) => ({
+      ...buildData(set),
+      ...(set.precoDe !== undefined ? { precoDe: set.precoDe } : {}),
+    });
+
     if (this.nativeWrites) {
       const now = new Date();
       for (const g of grupos.values()) {
         const res = await (this.prisma as any).product.updateMany({
           where: { codigo: { in: comNormalizados(g.codigos) } },
-          data: { ...buildData(g.set), flowIsSource: true, editedAt: now },
+          data: { ...dataNativa(g.set), flowIsSource: true, editedAt: now },
         });
         atualizados += Number(res.count) || 0;
       }
@@ -587,7 +648,7 @@ export class ProductsEditorService {
         await (this.prisma as any).product
           .updateMany({
             where: { codigo: { in: comNormalizados(g.codigos) } },
-            data: buildData(g.set),
+            data: dataNativa(g.set),
           })
           .catch(() => null);
       }
