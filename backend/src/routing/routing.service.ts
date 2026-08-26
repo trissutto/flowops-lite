@@ -162,7 +162,12 @@ export class RoutingService {
    * Confirma o resultado de um routing já calculado e persiste no banco.
    * Recebe o result pra garantir que o que o usuário viu é o que foi gravado.
    */
-  async confirmRoute(orderId: string, result: RoutingResult) {
+  async confirmRoute(
+    orderId: string,
+    result: RoutingResult,
+    /** QUEM aprovou (26/08). Ausente = gatilho automático (webhook/cron). */
+    ator?: { userId: string | null; nome: string | null },
+  ) {
     /**
      * TRAVA DE CONFERÊNCIA (20/08, decisão do dono — caso ON-000049 e os 24
      * pedidos sem prova): venda online do PDV fechada por "PIX recebido"/
@@ -301,7 +306,10 @@ export class RoutingService {
           orderId,
           fromStatus: OrderStatus.pending,
           toStatus: OrderStatus.separating,
-          note: `Aprovado e enviado para ${result.assignments.length} loja(s) via ${result.strategy}.`,
+          userId: ator?.userId ?? null,
+          note:
+            `Aprovado e enviado para ${result.assignments.length} loja(s) via ${result.strategy}.` +
+            (ator?.nome ? ` · por ${ator.nome}` : ''),
         },
       });
     });
@@ -394,7 +402,7 @@ export class RoutingService {
    */
   async routeOrder(orderId: string) {
     const preview = await this.previewRoute(orderId);
-    await this.confirmRoute(orderId, preview as any);
+    await this.confirmRoute(orderId, preview as any); // gatilho automático — sem ator
     return preview;
   }
 
@@ -626,7 +634,13 @@ export class RoutingService {
    */
   async recalculateForWc(
     orderId: string,
-    opts?: { excludeStoreIds?: string[]; excludeStoreCodes?: string[]; forceStoreCode?: string },
+    opts?: {
+      excludeStoreIds?: string[];
+      excludeStoreCodes?: string[];
+      forceStoreCode?: string;
+      /** QUEM mandou recalcular/forçar (26/08) — userId já conferido na FK. */
+      ator?: { userId: string | null; nome: string | null };
+    },
   ) {
     // Se o caller passou codes (ex: ["MOEMA"]), converte pra IDs antes de seguir.
     // Mantemos o parâmetro original excludeStoreIds pra compat com chamadas internas.
@@ -771,9 +785,11 @@ export class RoutingService {
           orderId,
           fromStatus: order.status,
           toStatus: OrderStatus.awaiting_stock,
+          userId: opts?.ator?.userId ?? null,
           note: `Recalcular separação: ${cancellableIds.length} pick-order(s) cancelado(s) pra reatribuir` +
                 (advanced.length > 0 ? ` (${advanced.length} já avançado(s) preservado(s))` : '') +
-                (estornoBipes.pecas ? ` · ${estornoBipes.pecas} peça(s) já bipada(s) devolvida(s) ao estoque` : '') + '.',
+                (estornoBipes.pecas ? ` · ${estornoBipes.pecas} peça(s) já bipada(s) devolvida(s) ao estoque` : '') + '.' +
+                (opts?.ator?.nome ? ` · por ${opts.ator.nome}` : ''),
         },
       });
     });
@@ -830,7 +846,7 @@ export class RoutingService {
           },
         ],
       };
-      await this.confirmRoute(orderId, fakeResult);
+      await this.confirmRoute(orderId, fakeResult, opts?.ator);
       const newPickOrders = await this.prisma.pickOrder.findMany({
         where: { orderId },
         include: { store: { select: { code: true, name: true } } },
@@ -872,7 +888,7 @@ export class RoutingService {
     }
 
     // 4) Confirma → cria novos pick-orders + emite socket pras lojas novas
-    await this.confirmRoute(orderId, preview as any);
+    await this.confirmRoute(orderId, preview as any, opts?.ator);
 
     const newPickOrders = await this.prisma.pickOrder.findMany({
       where: { orderId },
@@ -919,7 +935,13 @@ export class RoutingService {
    */
   async swapSinglePickOrder(
     pickOrderId: string,
-    opts?: { excludeStoreCodes?: string[]; forceAdvanced?: boolean; forceStoreCode?: string },
+    opts?: {
+      excludeStoreCodes?: string[];
+      forceAdvanced?: boolean;
+      forceStoreCode?: string;
+      /** QUEM mandou (26/08) — userId já conferido contra a FK pelo caller. */
+      ator?: { userId: string | null; nome: string | null };
+    },
   ) {
     const pickOrder = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
@@ -1060,6 +1082,7 @@ export class RoutingService {
           orderId,
           fromStatus: pickOrder.status,
           toStatus: 'separating',
+          userId: opts?.ator?.userId ?? null,
           note:
             `Swap cirúrgico: pick-order da loja ${oldStoreCode} cancelado (status era "${pickOrder.status}") pra reatribuir ` +
             `${itemsAssigned.length} item(ns). ` +
@@ -1067,7 +1090,8 @@ export class RoutingService {
               ? `Estorno Giga: ${erpReverseResult?.success ? 'OK' : 'FALHOU (' + (erpReverseResult?.error || 'erro') + ')'}. `
               : '') +
             (estornoBipes.pecas ? `${estornoBipes.pecas} peça(s) bipada(s) devolvida(s) ao estoque da ${oldStoreCode}. ` : '') +
-            `Outros pick-orders intactos.`,
+            `Outros pick-orders intactos.` +
+            (opts?.ator?.nome ? ` · por ${opts.ator.nome}` : ''),
         },
       });
     });
@@ -1105,7 +1129,7 @@ export class RoutingService {
           },
         ],
       };
-      await this.confirmRoute(orderId, fakeResult);
+      await this.confirmRoute(orderId, fakeResult, opts?.ator);
       const newPickOrders = await this.prisma.pickOrder.findMany({
         where: { orderId, storeId: forcedStore.id },
         include: { store: { select: { code: true, name: true } } },
@@ -1151,7 +1175,7 @@ export class RoutingService {
 
     // 4) Confirma criando APENAS pick-orders pra items que ainda não estão atribuídos
     // (preserva os pick-orders das outras lojas que já estavam OK)
-    await this.confirmRoute(orderId, preview as any);
+    await this.confirmRoute(orderId, preview as any, opts?.ator);
 
     const newPickOrders = await this.prisma.pickOrder.findMany({
       where: {
@@ -1210,7 +1234,7 @@ export class RoutingService {
     orderId: string,
     orderItemIds: string[],
     toStoreCode: string,
-    opts?: { userId?: string | null },
+    opts?: { userId?: string | null; nome?: string | null },
   ) {
     const ids = Array.from(
       new Set((orderItemIds || []).map((s) => String(s || '').trim()).filter(Boolean)),
@@ -1377,11 +1401,16 @@ export class RoutingService {
       ),
     ) as string[];
 
+    // Assinado (26/08): FK conferida — id de token velho não derruba o create.
+    const moveuUser = opts?.userId
+      ? await this.prisma.user.findUnique({ where: { id: opts.userId }, select: { id: true } })
+      : null;
     await this.prisma.orderHistory.create({
       data: {
         orderId,
         fromStatus: order.status,
         toStatus: order.status,
+        userId: moveuUser?.id ?? null,
         note:
           `Peça movida na mão: ${mover.map(nomeDaPeca).join(', ')}` +
           (deLojas.length ? ` de ${deLojas.join('/')}` : '') +
@@ -1389,7 +1418,8 @@ export class RoutingService {
           `${mover.length} peça(s) — o resto do card ficou onde estava.` +
           (cardsRemovidos.length
             ? ` Card da ${cardsRemovidos.join('/')} ficou sem peça e foi removido.`
-            : ''),
+            : '') +
+          (opts?.nome ? ` · por ${opts.nome}` : ''),
       },
     });
 

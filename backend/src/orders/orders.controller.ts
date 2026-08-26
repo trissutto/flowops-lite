@@ -28,6 +28,7 @@ import { ErpService } from '../erp/erp.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
 import { JuntadaService } from '../pick-orders/juntada.service';
 import { TrocaPecaService } from './troca-peca.service';
+import { LinhaDoTempoService } from './linha-do-tempo.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { montarCascataAtribuicao, EntradaAtribuicao } from './atribuicao-cascata.util';
@@ -323,6 +324,8 @@ export class OrdersController {
     private readonly catalog: WincredCatalogService,
     // Troca de peça COM acerto do dinheiro (link da diferença / vale).
     private readonly trocaPeca: TrocaPecaService,
+    // Raio-X + linha do tempo assinada da tela do pedido (26/08).
+    private readonly linhaDoTempo: LinhaDoTempoService,
   ) {}
 
   /**
@@ -1870,6 +1873,16 @@ export class OrdersController {
   }
 
   /** Detalhe de 1 pedido direto do WC. */
+  /**
+   * RAIO-X + LINHA DO TEMPO (26/08 — contrato do dono, casos ON-000106 e
+   * LP-000244): onde está CADA peça agora + tudo que aconteceu, com QUEM.
+   * Leitura pura — costura history/bipes/reportes/caixas/rastreio.
+   */
+  @Get('wc/:wcId/linha-do-tempo')
+  async linhaDoTempoDoPedido(@Param('wcId') wcId: string) {
+    return this.linhaDoTempo.porWcOrderId(Number(wcId));
+  }
+
   @Get('wc/:wcId')
   async wcGetOne(@Param('wcId') wcId: string) {
     // Pedido da LIVE: monta o MESMO payload de detalhe a partir do Order local
@@ -2116,6 +2129,29 @@ export class OrdersController {
     @Req() req: any,
   ) {
     return this.orders.atualizarEnderecoEntrega(Number(wcId), body, {
+      userId: req?.user?.userId ?? req?.user?.sub ?? null,
+      name: req?.user?.name ?? req?.user?.nome ?? req?.user?.username ?? null,
+      storeCode: req?.user?.storeCode ?? null,
+    });
+  }
+
+  /**
+   * Corrige os DADOS DA CLIENTE do pedido — CPF, e-mail e WhatsApp.
+   * PATCH /orders/wc/:wcId/dados-cliente
+   *
+   * Irmã da rota de endereço logo acima, pela mesma razão: esses campos são
+   * snapshot do checkout e eram imutáveis — telefone com o +55 colado
+   * ("55119595822", com os últimos dígitos engolidos) ficava errado pra
+   * sempre e o aviso de WhatsApp ia pro nada. Campo ausente não muda; campo
+   * vazio limpa. Validação e normalização (tirar o DDI) ficam no service.
+   */
+  @Patch('wc/:wcId/dados-cliente')
+  async wcUpdateDadosCliente(
+    @Param('wcId') wcId: string,
+    @Body() body: { cpf?: string; email?: string; telefone?: string },
+    @Req() req: any,
+  ) {
+    return this.orders.atualizarDadosCliente(Number(wcId), body, {
       userId: req?.user?.userId ?? req?.user?.sub ?? null,
       name: req?.user?.name ?? req?.user?.nome ?? req?.user?.username ?? null,
       storeCode: req?.user?.storeCode ?? null,
@@ -3263,7 +3299,18 @@ export class OrdersController {
   async recalculateSeparation(
     @Param('wcId') wcId: string,
     @Body() body?: { excludeStoreCodes?: string[]; pickOrderId?: string; forceStoreCode?: string },
+    @Req() req?: any,
   ) {
+    // QUEM mandou trocar/forçar (26/08). Nos 7 dias antes disto, 79 de 79
+    // swaps/forces no order_history estavam SEM autor — a loja que reportava
+    // ficava assinada e quem forçava a peça pra loja zerada ficava anônimo
+    // (foi assim no carrossel do ON-000106 e do LP-000244).
+    const atorReq = this.atorDoRequest(req);
+    const ator = {
+      userId: await this.userIdGravavel(atorReq.userId),
+      nome: atorReq.nome,
+    };
+
     // SWAP CIRÚRGICO: se vier pickOrderId, troca SÓ aquele pick-order específico,
     // sem mexer nos outros (caso onde uma loja já enviou e outra precisa ser trocada).
     if (body?.pickOrderId) {
@@ -3272,6 +3319,7 @@ export class OrdersController {
           ? body.excludeStoreCodes
           : undefined,
         forceStoreCode: body?.forceStoreCode,
+        ator,
       });
     }
 
@@ -3289,6 +3337,7 @@ export class OrdersController {
         ? body!.excludeStoreCodes
         : undefined,
       forceStoreCode: body?.forceStoreCode,
+      ator,
     });
   }
 
@@ -3316,12 +3365,103 @@ export class OrdersController {
       select: { id: true },
     });
     if (!local) throw new BadRequestException('Pedido não existe no banco local.');
+    // Assinado do jeito certo (26/08): o JWT entrega `sub`, não `userId` —
+    // era por isso que o "Conserto manual" de hoje saiu SEM AUTOR.
+    const ator = this.atorDoRequest(req);
     return this.routing.moverItensParaLoja(
       local.id,
       body.orderItemIds.map(String),
       String(body.toStoreCode),
-      { userId: req?.user?.userId ?? null },
+      { userId: await this.userIdGravavel(ator.userId), nome: ator.nome },
     );
+  }
+
+  /**
+   * CANCELAR UMA PEÇA DO PEDIDO E DEVOLVER O VALOR (26/08 — pergunta do dono
+   * no ON-000106: "e a peça que faltou? como faço?").
+   *
+   * O caso: o resto do pedido JÁ FOI (Campinas postou 2 de 3) e a peça que
+   * sobrou não existe em loja nenhuma. As saídas são duas — outra loja envia
+   * com um 2º frete (botão Mover peça) OU cancela SÓ esta peça e devolve o
+   * dinheiro dela. Este endpoint é a segunda: marca a peça cancelada (o
+   * pedido segue vivo com as outras), grava motivo+autor no histórico e
+   * devolve o VALOR a estornar — o estorno em si é manual no gateway, e a
+   * nota do histórico fica cobrando isso.
+   *
+   * Só aceita peça que NÃO está em card ativo — peça com loja trabalhando
+   * usa Mover/reporte primeiro (cancelar por baixo do card criaria peça
+   * fantasma na bipagem).
+   */
+  @Post('wc/:wcId/cancelar-peca')
+  async cancelarPeca(
+    @Param('wcId') wcId: string,
+    @Body() body: { orderItemId?: string; motivo?: string },
+    @Req() req?: any,
+  ) {
+    const orderItemId = String(body?.orderItemId ?? '').trim();
+    const motivo = String(body?.motivo ?? '').trim();
+    if (!orderItemId) throw new BadRequestException('orderItemId é obrigatório');
+    if (motivo.length < 5) {
+      throw new BadRequestException(
+        'Cancelar peça exige o MOTIVO (mín. 5 letras) — é o que explica depois por que a cliente recebeu menos peças e o dinheiro de volta.',
+      );
+    }
+    const local: any = await this.prisma.order.findFirst({
+      where: { wcOrderId: Number(wcId) },
+      select: { id: true, status: true, wcOrderNumber: true },
+    });
+    if (!local) throw new BadRequestException('Pedido não existe no banco local.');
+    const item: any = await (this.prisma as any).orderItem.findUnique({ where: { id: orderItemId } });
+    if (!item || item.orderId !== local.id) {
+      throw new BadRequestException('Essa peça não é deste pedido — recarregue a tela.');
+    }
+    if (item.cancelledAt) {
+      return { ok: true as const, jaCancelada: true, valorEstornar: (item.unitPrice ?? 0) * (item.quantity ?? 1) };
+    }
+    // Peça em card ATIVO não cancela por baixo dos panos.
+    if (item.assignedStoreId) {
+      const cardVivo = await this.prisma.pickOrder.findFirst({
+        where: {
+          orderId: local.id,
+          storeId: item.assignedStoreId,
+          status: { in: ['new', 'separating', 'separated', 'ready'] },
+        },
+        include: { store: { select: { code: true } } },
+      });
+      if (cardVivo) {
+        throw new BadRequestException(
+          `A peça está no card da loja ${cardVivo.store?.code} — tire de lá primeiro (Mover peça) ou espere a loja reportar.`,
+        );
+      }
+    }
+    const atorReq = this.atorDoRequest(req);
+    const userId = await this.userIdGravavel(atorReq.userId);
+    const valor = (Number(item.unitPrice) || 0) * (Number(item.quantity) || 1);
+    const pecaTxt = [item.ref, item.cor, item.tamanho].filter(Boolean).join(' ') || item.sku;
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.orderItem.update({
+        where: { id: orderItemId },
+        data: {
+          cancelledAt: new Date(),
+          cancelReason: motivo,
+          cancelledBy: atorReq.nome ?? null,
+          assignedStoreId: null,
+        },
+      });
+      await tx.orderHistory.create({
+        data: {
+          orderId: local.id,
+          fromStatus: local.status,
+          toStatus: local.status,
+          userId,
+          note:
+            `Peça CANCELADA do pedido: ${pecaTxt} (${item.quantity}x). Motivo: ${motivo}. ` +
+            `🔴 DEVOLVER R$ ${valor.toFixed(2)} à cliente (estorno manual no gateway).` +
+            (atorReq.nome ? ` · por ${atorReq.nome}` : ''),
+        },
+      });
+    });
+    return { ok: true as const, valorEstornar: valor, peca: pecaTxt };
   }
 
   /**

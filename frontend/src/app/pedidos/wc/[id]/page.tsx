@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { abrirWhatsApp } from '@/lib/whatsapp';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
+import DadosClienteModal from '@/components/DadosClienteModal';
+import { fmtTelefoneBr, telefoneProblema } from '@/lib/telefone-br';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import { ruaComNumero } from '@/lib/format-address';
@@ -209,6 +211,7 @@ export default function PedidoDetailPage() {
 
   const [order, setOrder] = useState<WcOrderDetail | null>(null);
   const [editandoEndereco, setEditandoEndereco] = useState(false);
+  const [editandoCliente, setEditandoCliente] = useState(false);
   // TROCAR FORMA DE ENTREGA (17/08) — o pedido nasceu "não informada" ou com
   // a forma errada, e a matriz não tinha como consertar por tela (ON-000006:
   // cliente ia RETIRAR em SJC e o pedido não sabia).
@@ -558,6 +561,79 @@ export default function PedidoDetailPage() {
       .catch(() => {});
   };
 
+  // ── RAIO-X + LINHA DO TEMPO (26/08 — contrato do dono) ──────────────────
+  // ON-000106/LP-000244: o estado do pedido mora em 5 tabelas e ninguém via o
+  // todo — Campinas foi cobrada por não enviar o que já tinha postado. Aqui a
+  // tela mostra ONDE cada peça está AGORA e TUDO que aconteceu, com QUEM.
+  interface PecaRaioX {
+    orderItemId: string;
+    sku: string;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    quantity: number;
+    unitPrice: number | null;
+    estado: string;
+    onde: string;
+    cor_semaforo: 'vermelho' | 'amarelo' | 'verde';
+    storeCode: string | null;
+    storeName: string | null;
+    trackingCode: string | null;
+  }
+  interface EventoLT {
+    em: string;
+    quem: string | null;
+    tipoAtor: string;
+    origem: string;
+    titulo: string;
+    detalhe: string | null;
+  }
+  const [raiox, setRaiox] = useState<{
+    pecas: PecaRaioX[];
+    eventos: EventoLT[];
+    alertas: string[];
+  } | null>(null);
+  const loadRaiox = () => {
+    if (!wcId) return;
+    api<any>(`/orders/wc/${wcId}/linha-do-tempo`)
+      .then((r) => setRaiox(r?.found ? { pecas: r.pecas ?? [], eventos: r.eventos ?? [], alertas: r.alertas ?? [] } : null))
+      .catch(() => setRaiox(null));
+  };
+
+  // ── CANCELAR UMA PEÇA E DEVOLVER O VALOR (26/08 — "e a peça que faltou?").
+  // As duas saídas da peça vermelha: outra loja envia (2º frete, modal do
+  // Mover) OU cancela SÓ esta peça e devolve o dinheiro dela. Motivo
+  // obrigatório — mesma régua do cancelamento de pedido.
+  const [cancelarPeca, setCancelarPeca] = useState<PecaRaioX | null>(null);
+  const [cancelarMotivo, setCancelarMotivo] = useState('');
+  const [cancelarBusy, setCancelarBusy] = useState(false);
+  const [cancelarErro, setCancelarErro] = useState<string | null>(null);
+  async function confirmarCancelarPeca() {
+    if (!cancelarPeca) return;
+    setCancelarBusy(true);
+    setCancelarErro(null);
+    try {
+      const r = await api<{ ok: boolean; valorEstornar: number; peca?: string }>(
+        `/orders/wc/${wcId}/cancelar-peca`,
+        { method: 'POST', body: JSON.stringify({ orderItemId: cancelarPeca.orderItemId, motivo: cancelarMotivo.trim() }) },
+      );
+      setCancelarPeca(null);
+      setCancelarMotivo('');
+      setFlash(
+        `✂ Peça cancelada. 🔴 ESTORNE R$ ${Number(r.valorEstornar ?? 0).toFixed(2)} pra cliente no gateway — o pedido segue com as outras peças.`,
+      );
+      setTimeout(() => setFlash(null), 12000);
+      loadRaiox();
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setCancelarErro(e?.body?.message || e?.message || 'Não deu pra cancelar a peça.');
+    } finally {
+      setCancelarBusy(false);
+    }
+  }
+
   // ── MOVER UMA PEÇA DE LOJA (26/08) ──────────────────────────────────────
   // "↔ Trocar loja" move o CARD INTEIRO. No LP-000244 a loja tinha 2 das 3
   // peças e faltava só uma: trocar o card mandou as três juntas pra loja
@@ -649,7 +725,7 @@ export default function PedidoDetailPage() {
       setTimeout(() => setFlash(null), 8000);
       const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
       setLiveStatus(Array.isArray(fresh) ? fresh : []);
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       if (res.avisoJuntada) setSepError(`🧲 ${res.avisoJuntada}`);
     } catch (e: any) {
       setMoverErro(e?.body?.message || e?.message || 'Não deu pra mover a peça.');
@@ -683,7 +759,7 @@ export default function PedidoDetailPage() {
       .catch((e) => console.warn('Falha ao carregar pick-orders:', e?.message));
     loadItemReports();
     loadCreditos();
-    loadJuntada();
+    loadJuntada(); loadRaiox();
     loadTrocas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wcId]);
@@ -712,7 +788,7 @@ export default function PedidoDetailPage() {
       });
       // A feeder que finaliza a bipagem faz a CAIXA da juntada nascer — o
       // evento de status é a deixa pra faixa "JUNTANDO PEÇAS" atualizar.
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       // Flash visual (linha pisca verde por 3s)
       setLiveStatusFlash((prev) => ({ ...prev, [payload.id]: Date.now() }));
       setTimeout(() => {
@@ -729,7 +805,7 @@ export default function PedidoDetailPage() {
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
       loadItemReports(); // re-rotear pode ter dado destino à peça reportada
-      loadJuntada();
+      loadJuntada(); loadRaiox();
     };
     const onNew = () => {
       // Idem — pick-order novo apareceu (recalcular ou primeira confirmação)
@@ -737,7 +813,7 @@ export default function PedidoDetailPage() {
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
       loadItemReports();
-      loadJuntada();
+      loadJuntada(); loadRaiox();
     };
     // Reporte novo (do card inteiro OU por peça) — atualiza o banner na hora.
     const onIssue = () => loadItemReports();
@@ -787,7 +863,7 @@ export default function PedidoDetailPage() {
     void load();
     loadTrocas();
     loadItemReports();
-    loadJuntada();
+    loadJuntada(); loadRaiox();
     api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
       .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
       .catch(() => {});
@@ -1324,7 +1400,7 @@ export default function PedidoDetailPage() {
             .join(' · ')} — essa caixa NÃO muda de destino. Combine com a loja pra reencaminhar pra ${nome}.`,
         );
       }
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
@@ -1344,7 +1420,7 @@ export default function PedidoDetailPage() {
       await api(`/orders/wc/${wcId}/juntar/desfazer`, { method: 'POST' });
       setFlash('✓ Juntada desfeita — cada loja envia direto pra cliente.');
       setTimeout(() => setFlash(null), 5000);
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
@@ -2058,12 +2134,37 @@ export default function PedidoDetailPage() {
       <div className="grid md:grid-cols-2 gap-4 mb-4">
         {/* Dados do cliente */}
         <div className="bg-white rounded shadow p-4">
-          <h3 className="font-semibold mb-3 text-sm text-slate-600 uppercase tracking-wide">Cliente</h3>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-semibold text-sm text-slate-600 uppercase tracking-wide">Cliente</h3>
+            {/* Corrigir CPF/e-mail/WhatsApp: irmão do "Corrigir" da Entrega.
+                Esses campos são snapshot do checkout e eram imutáveis — o
+                telefone "55119595822" (+55 colado engolindo o fim do número)
+                ficava errado pra sempre e o aviso ia pro nada. */}
+            <button
+              type="button"
+              onClick={() => setEditandoCliente(true)}
+              className="rounded-lg border-2 border-violet-300 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50"
+            >
+              ✎ Corrigir
+            </button>
+          </div>
+          {editandoCliente && (
+            <DadosClienteModal
+              wcOrderId={Number(wcId)}
+              inicial={{
+                cpf: order.customerCpf || '',
+                email: order.billing.email || '',
+                telefone: order.billing.phone || '',
+              }}
+              onFechar={() => setEditandoCliente(false)}
+              onSalvo={() => { void load(); }}
+            />
+          )}
           <div className="text-sm space-y-1">
             <div className="font-medium">
               {order.billing.first_name} {order.billing.last_name}
             </div>
-            {order.customerCpf && (
+            {order.customerCpf ? (
               <div className="text-slate-700 flex items-center gap-2">
                 <span className="text-xs text-slate-500">🪪 CPF</span>
                 <span className="font-mono">{order.customerCpf}</span>
@@ -2079,8 +2180,12 @@ export default function PedidoDetailPage() {
                   copiar
                 </button>
               </div>
+            ) : (
+              // Sem CPF a NF-e não sai e o crédito de peça faltante recusa —
+              // melhor gritar aqui do que na hora de faturar.
+              <div className="text-xs text-amber-700">🪪 sem CPF — a NF-e e o crédito precisam dele</div>
             )}
-            {order.billing.email && (
+            {order.billing.email ? (
               <div className="text-slate-600 flex items-center gap-2">
                 <span className="text-xs text-slate-500">✉️</span>
                 <span>{order.billing.email}</span>
@@ -2096,23 +2201,37 @@ export default function PedidoDetailPage() {
                   copiar
                 </button>
               </div>
+            ) : (
+              <div className="text-xs text-slate-400">✉️ sem e-mail</div>
             )}
-            {order.billing.phone && (
-              <div className="text-slate-600 flex items-center gap-2">
-                <span className="text-xs text-slate-500">📱</span>
-                <span>{order.billing.phone}</span>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(order.billing.phone);
-                    setFlash('Telefone copiado.');
-                    setTimeout(() => setFlash(null), 1500);
-                  }}
-                  className="text-xs text-brand hover:underline"
-                  title="Copiar telefone"
-                >
-                  copiar
-                </button>
+            {order.billing.phone ? (
+              <div className="text-slate-600">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">📱</span>
+                  <span>{fmtTelefoneBr(order.billing.phone)}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(order.billing.phone);
+                      setFlash('Telefone copiado.');
+                      setTimeout(() => setFlash(null), 1500);
+                    }}
+                    className="text-xs text-brand hover:underline"
+                    title="Copiar telefone"
+                  >
+                    copiar
+                  </button>
+                </div>
+                {/* Número torto aparece CRU + o porquê — formatar bonito
+                    esconderia o defeito, e é aqui que a operadora percebe
+                    que o aviso de WhatsApp não vai chegar. */}
+                {telefoneProblema(order.billing.phone) && (
+                  <div className="mt-0.5 text-[11px] font-semibold text-rose-700">
+                    ⚠ {telefoneProblema(order.billing.phone)} — confirme com a cliente e use Corrigir
+                  </div>
+                )}
               </div>
+            ) : (
+              <div className="text-xs text-slate-400">📱 sem WhatsApp — os avisos do pedido não têm pra onde ir</div>
             )}
           </div>
         </div>
@@ -2585,24 +2704,44 @@ export default function PedidoDetailPage() {
         {/* Header de resumo — aparece SEMPRE que já houver pick-order criado, mesmo
              que o user não tenha clicado em "Gerar separação" nessa aba (ex: chegou
              via bulk WhatsApp). Mostra em qual loja o pedido ficou alocado. */}
-        {liveStatus.length > 0 && !separation && (
-          <div className="bg-emerald-50 border border-emerald-200 rounded p-3 mb-3 text-sm">
-            <div className="flex items-start gap-2">
-              <Check className="w-4 h-4 text-emerald-700 flex-shrink-0 mt-0.5" />
-              <div>
-                <div className="font-semibold text-emerald-900">
-                  Separação já criada — {liveStatus.length} loja{liveStatus.length === 1 ? '' : 's'} responsável{liveStatus.length === 1 ? '' : 'is'}
+        {liveStatus.length > 0 && !separation && (() => {
+          // O banner verde mentia (26/08 — flagra do ON-000106): dizia
+          // "Separação já criada, 1 loja responsável" com peça SEM DONO no
+          // pedido. Verde só quando TODAS as peças têm dono; com vermelha no
+          // raio-x, o banner vira âmbar e diz o que falta.
+          const paradas = raiox?.pecas.filter((p) => p.cor_semaforo === 'vermelho').length ?? 0;
+          if (paradas > 0) {
+            return (
+              <div className="bg-amber-50 border border-amber-300 rounded p-3 mb-3 text-sm">
+                <div className="font-semibold text-amber-900">
+                  ⚠ Separação INCOMPLETA — {paradas} peça{paradas === 1 ? '' : 's'} sem dono
                 </div>
-                <div className="text-emerald-800 text-xs mt-0.5">
-                  {liveStatus.map((r) => `${r.storeName} (${r.storeCode})`).join(' · ')}
+                <div className="text-amber-800 text-xs mt-0.5">
+                  {liveStatus.map((r) => `${r.storeName} (${r.storeCode})`).join(' · ')} cobre{liveStatus.length === 1 ? '' : 'm'} só uma parte do pedido — veja
+                  <b> Onde está cada peça</b> abaixo e decida a{paradas === 1 ? '' : 's'} vermelha{paradas === 1 ? '' : 's'}.
                 </div>
-                <div className="text-emerald-700 text-xs mt-1">
-                  Veja status em tempo real abaixo. Clica em <b>Recalcular separação</b> só se quiser reatribuir (ex: loja original sem estoque).
+              </div>
+            );
+          }
+          return (
+            <div className="bg-emerald-50 border border-emerald-200 rounded p-3 mb-3 text-sm">
+              <div className="flex items-start gap-2">
+                <Check className="w-4 h-4 text-emerald-700 flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold text-emerald-900">
+                    Separação já criada — {liveStatus.length} loja{liveStatus.length === 1 ? '' : 's'} responsável{liveStatus.length === 1 ? '' : 'is'}
+                  </div>
+                  <div className="text-emerald-800 text-xs mt-0.5">
+                    {liveStatus.map((r) => `${r.storeName} (${r.storeCode})`).join(' · ')}
+                  </div>
+                  <div className="text-emerald-700 text-xs mt-1">
+                    Veja status em tempo real abaixo. Clica em <b>Recalcular separação</b> só se quiser reatribuir (ex: loja original sem estoque).
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {sepError && (
           <div className="bg-red-50 text-red-700 p-3 rounded text-sm mb-3">{sepError}</div>
@@ -2883,6 +3022,155 @@ export default function PedidoDetailPage() {
                 </>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── RAIO-X: onde está CADA peça agora (26/08) ─────────────────────
+            A resposta que faltou no ON-000106: Campinas levou a culpa por não
+            enviar o que JÁ estava em rota porque nenhuma tela mostrava o
+            pedido peça por peça. Vermelho = parado/sem dono, nunca some. */}
+        {raiox && raiox.pecas.length > 0 && (
+          <div className="bg-white border border-slate-300 rounded p-3 mb-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
+              🧭 Onde está cada peça
+              {raiox.pecas.some((p) => p.cor_semaforo === 'vermelho') && (
+                <span className="text-[11px] font-bold text-white bg-red-600 rounded px-1.5 py-0.5">
+                  {raiox.pecas.filter((p) => p.cor_semaforo === 'vermelho').length} parada(s)
+                </span>
+              )}
+            </div>
+            {raiox.alertas.map((a, i) => (
+              <div key={i} className="mb-2 text-xs font-semibold text-red-800 bg-red-50 border border-red-300 rounded px-2 py-1.5">
+                ⚠ {a}
+              </div>
+            ))}
+            <div className="space-y-1">
+              {raiox.pecas.map((p) => {
+                const cores = {
+                  vermelho: 'bg-red-50 border-red-300 text-red-900',
+                  amarelo: 'bg-amber-50 border-amber-300 text-amber-900',
+                  verde: 'bg-emerald-50 border-emerald-300 text-emerald-900',
+                } as const;
+                const bolinha = { vermelho: '🔴', amarelo: '🟡', verde: '🟢' } as const;
+                // Peça vermelha SEM decisão ganha os dois botões da saída
+                // (26/08 — "e a peça que faltou? como faço?"): outra loja
+                // envia (2º frete) ou cancela e devolve o valor.
+                const decidivel = p.cor_semaforo === 'vermelho' && ['sem_dono', 'reportada'].includes(p.estado);
+                return (
+                  <div
+                    key={p.orderItemId}
+                    className={`flex items-start gap-2 text-xs border rounded px-2 py-1.5 ${cores[p.cor_semaforo]}`}
+                  >
+                    <span className="shrink-0">{bolinha[p.cor_semaforo]}</span>
+                    <span className="font-bold shrink-0">
+                      {[p.ref, p.cor, p.tamanho].filter(Boolean).join(' ') || p.sku}
+                      {p.quantity > 1 ? ` ×${p.quantity}` : ''}
+                    </span>
+                    <span className="flex-1">{p.onde}</span>
+                    {decidivel && (
+                      <span className="shrink-0 flex gap-1">
+                        <button
+                          onClick={() =>
+                            abrirMoverPeca(
+                              { id: p.orderItemId, sku: p.sku, ref: p.ref, cor: p.cor, tamanho: p.tamanho },
+                              { storeCode: p.storeCode, storeName: p.storeName, total: 1 },
+                            )
+                          }
+                          className="px-1.5 py-0.5 rounded border border-slate-400 bg-white hover:bg-slate-100 text-slate-800 font-bold"
+                          title="Outra loja envia esta peça pra cliente (2º frete)"
+                        >
+                          📦 Outra loja envia
+                        </button>
+                        <button
+                          onClick={() => { setCancelarPeca(p); setCancelarMotivo(''); setCancelarErro(null); }}
+                          className="px-1.5 py-0.5 rounded border border-red-400 bg-white hover:bg-red-100 text-red-700 font-bold"
+                          title="Cancela SÓ esta peça e devolve o valor dela — o pedido segue com as outras"
+                        >
+                          ✂ Cancelar e devolver
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* ── MODAL: cancelar a peça e devolver o valor ── */}
+            {cancelarPeca && (
+              <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+                <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-4">
+                  <div className="font-bold text-slate-900 mb-1">✂ Cancelar peça e devolver o valor</div>
+                  <div className="text-sm text-slate-700 mb-2">
+                    <b>{[cancelarPeca.ref, cancelarPeca.cor, cancelarPeca.tamanho].filter(Boolean).join(' ') || cancelarPeca.sku}</b>
+                    {cancelarPeca.quantity > 1 ? ` ×${cancelarPeca.quantity}` : ''} — devolver{' '}
+                    <b className="text-red-700">
+                      R$ {(((cancelarPeca.unitPrice ?? 0) * cancelarPeca.quantity) || 0).toFixed(2)}
+                    </b>{' '}
+                    à cliente. O pedido segue com as outras peças.
+                  </div>
+                  <label className="block text-xs font-semibold text-red-800 mb-1">Motivo (obrigatório) *</label>
+                  <textarea
+                    value={cancelarMotivo}
+                    onChange={(e) => setCancelarMotivo(e.target.value)}
+                    rows={2}
+                    placeholder="Ex: ruptura — nenhuma loja da rede tem a peça; cliente será avisada e o PIX da peça devolvido"
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm mb-2"
+                  />
+                  {cancelarErro && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-2">{cancelarErro}</div>}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setCancelarPeca(null)}
+                      disabled={cancelarBusy}
+                      className="px-3 py-1.5 rounded border border-slate-300 text-sm font-bold text-slate-700 hover:bg-slate-100"
+                    >
+                      Voltar
+                    </button>
+                    <button
+                      onClick={confirmarCancelarPeca}
+                      disabled={cancelarBusy || cancelarMotivo.trim().length < 5}
+                      className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-bold"
+                    >
+                      {cancelarBusy ? 'Cancelando…' : 'Cancelar peça e devolver'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {/* ── LINHA DO TEMPO: tudo que aconteceu, com QUEM ── */}
+            <details className="mt-3">
+              <summary className="text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                📜 Linha do tempo completa ({raiox.eventos.length} registro{raiox.eventos.length === 1 ? '' : 's'})
+              </summary>
+              <div className="mt-2 max-h-96 overflow-y-auto space-y-1 pr-1">
+                {raiox.eventos.map((ev, i) => {
+                  const badge: Record<string, string> = {
+                    pedido: 'bg-slate-200 text-slate-700',
+                    bipe: 'bg-blue-100 text-blue-800',
+                    reporte: 'bg-red-100 text-red-800',
+                    caixa: 'bg-violet-100 text-violet-800',
+                    rastreio: 'bg-emerald-100 text-emerald-800',
+                  };
+                  const quando = new Date(ev.em).toLocaleString('pt-BR', {
+                    timeZone: 'America/Sao_Paulo',
+                    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                  });
+                  return (
+                    <div key={i} className="flex items-start gap-2 text-[11px] leading-snug border-b border-slate-100 pb-1">
+                      <span className="text-slate-500 shrink-0 font-mono">{quando}</span>
+                      <span className={`shrink-0 rounded px-1 font-bold ${badge[ev.origem] ?? 'bg-slate-100 text-slate-600'}`}>
+                        {ev.origem}
+                      </span>
+                      <span className="flex-1 text-slate-800">
+                        <b>{ev.titulo}</b>
+                        {ev.detalhe ? <> — {ev.detalhe}</> : null}
+                        <span className={ev.quem ? 'text-slate-600' : 'text-slate-400 italic'}>
+                          {' '}· {ev.quem ?? (ev.tipoAtor === 'sistema' ? 'sistema' : 'sem autor (registro antigo)')}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
           </div>
         )}
 

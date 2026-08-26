@@ -12,6 +12,7 @@ import { PagarmeModule } from '../pagarme/pagarme.module';
 import { PromoSiteModule } from '../promo-site/promo-site.module';
 import { TrocaPecaService } from './troca-peca.service';
 import { DespachoBackfillService } from './despacho-backfill.service';
+import { LinhaDoTempoService } from './linha-do-tempo.service';
 
 @Module({
   // PickScanModule → estorno dos bipes no cancelamento/reembolso do pedido.
@@ -24,7 +25,9 @@ import { DespachoBackfillService } from './despacho-backfill.service';
   imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoSiteModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
   // DespachoBackfillService → preenche `shipped_at` do que já estava
   // despachado quando a coluna nasceu (25/08). Roda uma vez e some.
-  providers: [OrdersService, TrocaPecaService, DespachoBackfillService],
+  // LinhaDoTempoService → raio-x "onde está cada peça" + histórico assinado
+  // da tela do pedido (contrato 26/08, casos ON-000106/LP-000244).
+  providers: [OrdersService, TrocaPecaService, DespachoBackfillService, LinhaDoTempoService],
   controllers: [OrdersController],
   exports: [OrdersService, TrocaPecaService],
 })
