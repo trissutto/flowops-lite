@@ -5450,31 +5450,35 @@ function PaymentModal({
     // loja com balcão/moto. A loja-canal 13/SITE vende pra cliente de qualquer
     // cidade e não tem nenhum dos dois — sem esta pergunta o pedido nascia
     // "retira NA LOJA 13" e a matriz roteava na mão, 2 dias parado.
-    setEtapaOnline(tipo === 'retirada' || tipo === 'motoboy' ? 'frete_loja' : 'frete_valor');
+    const perguntaLoja = tipo === 'retirada' || tipo === 'motoboy';
+    setEtapaOnline(perguntaLoja ? 'frete_loja' : 'frete_valor');
     if (!saleId) return;
+    /**
+     * NÃO GRAVA ANTES DE PERGUNTAR (26/08). Este POST mandava
+     * `entregaStoreCode: null` = "sai DAQUI" no instante do clique — antes de
+     * a vendedora ver a lista de lojas. O servidor então media o estoque da
+     * loja errada e recusava: Itanhaém vendendo pra entregar em PIRACICABA
+     * levava "sua loja não tem: 5354658" e voltava pro passo 1, sem nunca
+     * chegar na tela onde Piracicaba estava listada. A escolha da loja é que
+     * grava agora (`escolherLojaGuiada`).
+     */
+    if (perguntaLoja) return;
     try {
       await api(`/pdv/sales/${saleId}/entrega`, {
         method: 'POST',
         body: JSON.stringify({ tipo, entregaStoreCode: null }),
       });
     } catch (e: any) {
-      // REGRA A (17/08): motoboy só sai desta loja. Servidor recusou por falta
-      // de peça aqui — a escolha NÃO fica, senão o fechamento recusa de novo.
-      if (tipo === 'motoboy') {
-        setEntregaTipo(null);
-        setEtapaOnline('frete_tipo');
-        toast('error', 'Motoboy não disponível', e?.message || humanizeError(e).hint);
-        return;
-      }
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
     }
   };
 
   /**
-   * QUEM ATENDE a retirada/motoboy. Grava e segue pro valor do frete; se o
-   * servidor recusar (Regra A: motoboy só sai de loja que tem a peça), desfaz
-   * a escolha em vez de deixar a venda com uma entrega que o fechamento nega.
+   * QUEM ATENDE a retirada/motoboy — e é AQUI que a entrega é gravada na
+   * venda (o passo anterior só pergunta a forma). Se o servidor recusar
+   * (loja inativa, venda já fechada), desfaz a escolha em vez de deixar a
+   * venda com uma entrega que o fechamento nega.
    */
   const escolherLojaGuiada = async (code: string) => {
     const anterior = entregaStoreCode;
@@ -5636,6 +5640,49 @@ function PaymentModal({
   // (quem sai de moto). '' = esta loja. A loja-canal SITE fecha venda pra
   // cliente de qualquer cidade: quem atende quase nunca é quem vendeu.
   const [entregaStoreCode, setEntregaStoreCode] = useState<string>('');
+  /**
+   * QUEM ENTREGA, COM O ESTOQUE NA FRENTE (26/08). A lista de lojas do passo
+   * 1b era só nome+código: pra saber quem tinha a peça a vendedora teria que
+   * adivinhar. Agora o servidor devolve, por loja, o que ela cobre desta
+   * sacola — cidade da cliente primeiro, porque motoboy é distância, e o que
+   * faltar chega por transferência.
+   */
+  const [lojasEntrega, setLojasEntrega] = useState<Array<{
+    code: string;
+    name: string;
+    city: string | null;
+    cobertas: number;
+    total: number;
+    temTudo: boolean;
+    faltam: string[];
+    cidadeDaCliente: boolean;
+    ehVendedora: boolean;
+  }> | null>(null);
+  const [lojasEntregaLoading, setLojasEntregaLoading] = useState(false);
+  useEffect(() => {
+    if (etapaOnline !== 'frete_loja' || !saleId) return;
+    let vivo = true;
+    // Zera antes de perguntar: a sacola pode ter mudado desde a última vez
+    // que esta tela abriu, e cobertura velha diz "tem tudo" de uma peça que
+    // acabou de entrar na venda. Enquanto não chega, vale a lista simples.
+    setLojasEntrega(null);
+    setLojasEntregaLoading(true);
+    api(`/pdv/sales/${saleId}/lojas-entrega`)
+      .then((r: any) => {
+        if (vivo) setLojasEntrega(Array.isArray(r?.lojas) ? r.lojas : []);
+      })
+      // Falhou? A lista simples (`stores`) continua aparecendo — escolher a
+      // loja é mais importante do que saber o estoque dela.
+      .catch(() => {
+        if (vivo) setLojasEntrega(null);
+      })
+      .finally(() => {
+        if (vivo) setLojasEntregaLoading(false);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [etapaOnline, saleId]);
   /**
    * A escolha VIVA da vendedora, ou a que já está gravada na venda enquanto o
    * `useEffect` de cima não trouxe o estado do servidor. Sem esse fallback o
@@ -7175,27 +7222,78 @@ function PaymentModal({
                 <h3 className="mt-1 text-2xl font-black text-slate-900">
                   {entregaTipo === 'retirada' ? 'Ela busca em qual loja?' : 'Qual loja manda o motoboy?'}
                 </h3>
+                <p className="mt-1 text-xs text-amber-800">
+                  {entregaTipo === 'retirada'
+                    ? 'A loja separa e guarda no balcão. O que ela não tiver, as outras mandam.'
+                    : 'A loja escolhida entrega. O que ela não tiver, as outras mandam pra ela.'}
+                </p>
               </div>
               <div className="mt-4 max-h-64 space-y-1.5 overflow-y-auto">
-                <button
-                  type="button"
-                  onClick={() => void escolherLojaGuiada('')}
-                  className="w-full rounded-xl border-2 border-amber-400 bg-white py-3 text-sm font-black text-slate-800 hover:bg-amber-100"
-                >
-                  🏬 Esta loja ({storeCode})
-                </button>
-                {stores
-                  .filter((s) => s.code !== storeCode)
-                  .map((s) => (
+                {/* Enquanto o estoque não chega, a lista simples já deixa
+                    escolher — a resposta demorar não pode travar a venda. */}
+                {lojasEntregaLoading && !lojasEntrega && (
+                  <div className="py-2 text-center text-xs font-bold text-amber-700">
+                    Vendo o que cada loja tem...
+                  </div>
+                )}
+                {(lojasEntrega ??
+                  stores.map((s) => ({
+                    code: s.code,
+                    name: s.name,
+                    city: null,
+                    cobertas: 0,
+                    total: 0,
+                    temTudo: false,
+                    faltam: [] as string[],
+                    cidadeDaCliente: false,
+                    ehVendedora: s.code === storeCode,
+                  }))
+                ).map((s) => {
+                  const semEstoque = !lojasEntrega;
+                  return (
                     <button
                       key={s.code}
                       type="button"
                       onClick={() => void escolherLojaGuiada(s.code)}
-                      className="w-full rounded-xl border-2 border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 hover:border-amber-400 hover:bg-amber-50"
+                      className={`w-full rounded-xl border-2 bg-white px-3 py-2.5 text-left hover:bg-amber-50 ${
+                        s.cidadeDaCliente || s.temTudo
+                          ? 'border-amber-400'
+                          : 'border-slate-200 hover:border-amber-400'
+                      }`}
                     >
-                      {s.name} ({s.code})
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-sm font-black text-slate-800">
+                          {s.ehVendedora ? '🏬 ' : ''}
+                          {s.name} ({s.code})
+                        </span>
+                        {s.cidadeDaCliente && (
+                          <span className="shrink-0 rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-900">
+                            📍 cidade da cliente
+                          </span>
+                        )}
+                      </div>
+                      {/* O ESTOQUE ANTES DA ESCOLHA: "não tem" NÃO é bloqueio —
+                          é o aviso de que a peça vem por transferência (e por
+                          isso demora). Quem decide se dá pra esperar é quem
+                          está com a cliente. */}
+                      {!semEstoque && (
+                        <div
+                          className={`mt-0.5 text-[11px] font-bold ${
+                            s.temTudo ? 'text-amber-800' : 'text-slate-500'
+                          }`}
+                        >
+                          {s.temTudo
+                            ? `Tem as ${s.total} ${s.total === 1 ? 'peça' : 'peças'} aqui`
+                            : `Tem ${s.cobertas} de ${s.total} · falta ${s.faltam
+                                .slice(0, 2)
+                                .join(', ')}${
+                                s.faltam.length > 2 ? ` +${s.faltam.length - 2}` : ''
+                              } (vem por transferência)`}
+                        </div>
+                      )}
                     </button>
-                  ))}
+                  );
+                })}
               </div>
               <button
                 type="button"
