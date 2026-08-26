@@ -42,8 +42,6 @@ interface PecaFeed {
 export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const now = new Date();
-
   const estaticas: MetadataRoute.Sitemap = [
     { url: SITE.url, changeFrequency: 'daily' as const, priority: 1 },
     { url: `${SITE.url}/lojas`, changeFrequency: 'monthly' as const, priority: 0.9 },
@@ -65,7 +63,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${SITE.url}/tamanhos/guia`, changeFrequency: 'monthly' as const, priority: 0.6 },
     { url: `${SITE.url}/privacidade`, changeFrequency: 'yearly' as const, priority: 0.3 },
     { url: `${SITE.url}/termos`, changeFrequency: 'yearly' as const, priority: 0.3 },
-  ].map((entry) => ({ ...entry, lastModified: now }));
+  ];
 
   /**
    * O menu tem link de navegação, não só de página: `/lojas#whatsapp` leva a
@@ -76,11 +74,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const semAncora = (href: string) => href.split('#')[0].split('?')[0];
 
   const menu: MetadataRoute.Sitemap = navigation.flatMap((item) => {
-    const propria = { url: `${SITE.url}${semAncora(item.href)}`, lastModified: now, priority: 0.8 };
+    const propria = { url: `${SITE.url}${semAncora(item.href)}`, priority: 0.8 };
     const filhas = (item.menu?.columns ?? []).flatMap((coluna) =>
       coluna.links.map((link) => ({
         url: `${SITE.url}${semAncora(link.href)}`,
-        lastModified: now,
         priority: 0.7,
       })),
     );
@@ -95,7 +92,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
    */
   const lojas: MetadataRoute.Sitemap = lojasData.stores.map((s) => ({
     url: `${SITE.url}/lojas/${s.slug}`,
-    lastModified: now,
     changeFrequency: 'monthly' as const,
     priority: 0.8,
   }));
@@ -121,7 +117,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     .filter((p) => p.slug)
     .map((p) => ({
       url: `${SITE.url}/produto/${p.slug}`,
-      lastModified: now,
       changeFrequency: 'weekly' as const,
       // Peça esgotada continua no mapa (a página existe e volta a vender
       // quando reabastece), mas com prioridade menor que a disponível.

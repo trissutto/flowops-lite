@@ -57,7 +57,7 @@ export default async function HomePage() {
   // As peças de TODAS as vitrines que saírem — o Google lê a lista da página
   // que existe, não a de uma seção fixa que pode nem estar mais na home.
   const jsonLd = jsonLdGraph(
-    itemListSchema(blocos.carrosseis.flatMap((v) => v.produtos), 'Destaques da home'),
+    itemListSchema(blocos.carrosseis.flatMap((v) => v.produtos), 'Destaques da home', 24),
     ...stores.map(storeSchema),
   );
 

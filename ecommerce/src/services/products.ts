@@ -165,6 +165,7 @@ export function mapPeca(p: PecaApi): Product {
     sku: p.ref,
     slug: p.slug,
     name: nomeComReferencia(p.nome, p.ref),
+    description: p.descricaoCurta || p.descricaoCompleta || undefined,
     category: p.categoria ?? '',
     subcategory: p.subcategoria ?? undefined,
     price: p.preco,

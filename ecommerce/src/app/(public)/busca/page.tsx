@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { SearchResults } from '@/components/commerce/SearchResults';
+import { buildMetadata } from '@/lib/seo';
 
 /**
  * PÁGINA DE BUSCA — /busca?q=termo
@@ -21,13 +22,15 @@ interface BuscaPageProps {
 export async function generateMetadata({ searchParams }: BuscaPageProps): Promise<Metadata> {
   const { q } = await searchParams;
   const termo = (q ?? '').trim();
-  return {
+  return buildMetadata({
     title: termo ? `Busca: ${termo}` : 'Busca',
     description: termo
       ? `Resultados para "${termo}" na Lurds Plus Size — moda plus size do 44 ao 60.`
       : 'Busque por peça, ocasião, tecido ou tamanho na Lurds Plus Size.',
-    robots: { index: false, follow: true },
-  };
+    path: '/busca',
+    noIndex: true,
+    follow: true,
+  });
 }
 
 export default async function BuscaPage({ searchParams }: BuscaPageProps) {

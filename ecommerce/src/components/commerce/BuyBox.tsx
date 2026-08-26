@@ -62,9 +62,11 @@ export interface CorEscolhivel {
 
 export function BuyBox({
   product, cores, corSelecionada, alertaEstoque, look, tamanho, onTamanho, corPendente, onPedirCor, seletorCores,
-  irmas, irmasHref, irmasLabel,
+  irmas, irmasHref, irmasLabel, showHeading = true,
 }: {
   product: Product;
+  /** A PDP multicor posiciona um único título fora da buy box responsiva. */
+  showHeading?: boolean;
   /**
    * AS IRMÃS DA PEÇA — outras peças da mesma família/categoria, buscadas no
    * SERVIDOR e passadas prontas (nenhuma chamada sai do navegador por causa
@@ -384,7 +386,7 @@ export function BuyBox({
           Pix, parcela e faixa por tamanho, e divergir isso entre telas é bug
           na certa. */}
       <div className="hidden lg:block">
-        <TituloDaPeca product={product} />
+        {showHeading && <TituloDaPeca product={product} />}
         <PrecoDaPeca product={product} className="mt-7" />
       </div>
 
