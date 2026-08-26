@@ -230,6 +230,13 @@ export default function PedidoDetailPage() {
   const [trackingUrl, setTrackingUrl] = useState('');
   const [note, setNote] = useState('');
   const [notifyCustomer, setNotifyCustomer] = useState(true);
+  /**
+   * POR QUE ESTÁ CANCELANDO (26/08). Campo próprio, separado da nota: o
+   * backend recusa cancelamento sem motivo (common/motivo-cancelamento.ts) e
+   * grava o texto + o nome de quem clicou no histórico do pedido. Até aqui
+   * todo cancelamento era anônimo e mudo — o ON-000017 morreu assim.
+   */
+  const [cancelReason, setCancelReason] = useState('');
 
   // Separação
   const [separation, setSeparation] = useState<SeparationPreview | null>(null);
@@ -717,6 +724,10 @@ export default function PedidoDetailPage() {
         body.addNote = { text: note.trim(), notifyCustomer };
       }
 
+      // Motivo do cancelamento vai em campo PRÓPRIO: o backend o exige e o
+      // grava no histórico junto com quem clicou.
+      if (cancelReason.trim()) body.cancelReason = cancelReason.trim();
+
       if (Object.keys(body).length === 0) {
         setFlash('Nada pra salvar — não tem alteração.');
         setTimeout(() => setFlash(null), 3000);
@@ -735,7 +746,12 @@ export default function PedidoDetailPage() {
         body: JSON.stringify(body),
       });
 
-      if (resp.warning || resp.statusApplied === false) {
+      if (resp.warning) {
+        // O backend já explica o que houve (motivo obrigatório, pedido já
+        // despachado...). Culpar o WooCommerce em toda recusa mandava a
+        // operação caçar plugin quando a trava era daqui mesmo.
+        setError(`⚠ ${resp.warning}`);
+      } else if (resp.statusApplied === false) {
         setError(
           `⚠ WooCommerce não aplicou o status pedido.\n` +
           `Pedido: "${resp.requestedStatus}" — Retornado pelo WC: "${resp.status}"\n\n` +
@@ -748,6 +764,7 @@ export default function PedidoDetailPage() {
         setFlash('✓ Alterações enviadas para o site.');
       }
       setNote('');
+      setCancelReason('');
       await load();
       setTimeout(() => setFlash(null), 3500);
     } catch (e: any) {
@@ -1615,6 +1632,9 @@ export default function PedidoDetailPage() {
     trackingCarrier !== (order.tracking.carrier || '') ||
     trackingUrl !== (order.tracking.url || '');
   const hasChanges = statusChanged || trackingChanged || note.trim().length > 0;
+  // Está matando o pedido? Aí o motivo é obrigatório — mesma regra do backend.
+  const cancelando = statusChanged && (status === 'cancelled' || status === 'refunded');
+  const faltaMotivoCancelamento = cancelando && cancelReason.trim().length < 3;
 
   /**
    * PEÇAS × FRETE (14/08). O frete que a loja cobrou da cliente é uma linha
@@ -3537,6 +3557,30 @@ export default function PedidoDetailPage() {
                 Vai trocar de <b>{STATUS_OPTIONS.find((s) => s.slug === order.status)?.label ?? order.status}</b> para <b>{STATUS_OPTIONS.find((s) => s.slug === status)?.label ?? status}</b>
               </p>
             )}
+
+            {/* MOTIVO DO CANCELAMENTO (26/08) — obrigatório, e vai pro
+                histórico com o nome de quem clicou. A loja já é obrigada a
+                dizer o porquê quando reporta ruptura numa peça; a retaguarda
+                cancelando o pedido inteiro não tinha exigência nenhuma. */}
+            {cancelando && (
+              <div className="mt-3 border border-red-200 bg-red-50 rounded p-3">
+                <label className="block text-sm font-medium text-red-800 mb-1">
+                  Motivo do {status === 'refunded' ? 'reembolso' : 'cancelamento'} *
+                </label>
+                <textarea
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  rows={2}
+                  placeholder="Ex: ruptura — nenhuma loja tem a SMILE 54; cliente avisada e PIX devolvido"
+                  className="w-full border border-red-300 rounded px-3 py-2 text-sm bg-white"
+                />
+                <p className="text-xs text-red-700 mt-1">
+                  {faltaMotivoCancelamento
+                    ? 'Escreva o motivo pra liberar o cancelamento — ele fica gravado no histórico com o seu nome.'
+                    : 'Fica gravado no histórico do pedido junto com o seu nome.'}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Rastreio */}
@@ -3638,6 +3682,7 @@ export default function PedidoDetailPage() {
               setTrackingCarrier(order.tracking.carrier || '');
               setTrackingUrl(order.tracking.url || '');
               setNote('');
+              setCancelReason('');
             }}
             disabled={!hasChanges || saving}
             className="px-4 py-2 border rounded hover:bg-slate-50 text-sm disabled:opacity-40"
@@ -3646,7 +3691,8 @@ export default function PedidoDetailPage() {
           </button>
           <button
             onClick={save}
-            disabled={!hasChanges || saving}
+            disabled={!hasChanges || saving || faltaMotivoCancelamento}
+            title={faltaMotivoCancelamento ? 'Escreva o motivo do cancelamento' : undefined}
             className="px-5 py-2 bg-brand text-white rounded hover:bg-brand-dark text-sm disabled:opacity-50 flex items-center gap-2"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
