@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackingService } from './tracking.service';
 import { inicioDaJanela, despachadoDentroDaJanela } from '../common/janela-rastreio';
+import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 
 /**
  * ACOMPANHA O OBJETO ATÉ CHEGAR (18/08).
@@ -369,6 +370,23 @@ export class RastreioSyncCron {
         if (faltando.length) {
           this.logger.log(
             `[rastreio-sync] ${p.wcOrderNumber}: ${faltando.length} volume(s) ainda em trânsito — não fecha`,
+          );
+          continue;
+        }
+
+        /**
+         * PEÇA ≠ CAIXA (ordem do dono, 26/08). A conta acima é por CÓDIGO de
+         * rastreio: peça reportada, sem dono ou de card apagado não tem código
+         * e portanto nunca "falta". Todas as caixas entregues com uma peça
+         * dessas pendurada NÃO é pedido entregue — é pedido parcialmente
+         * entregue, e ele fica aberto e visível até a peça ter desfecho
+         * (régua única em `common/pedido-completo`).
+         */
+        const pendentes = await carregarPecasPendentes(this.prisma, p.id);
+        if (pendentes.length) {
+          this.logger.warn(
+            `[rastreio-sync] ${p.wcOrderNumber}: todas as caixas entregues, mas ` +
+              `${pendentes.length} peça(s) sem desfecho (${descreverPendentes(pendentes)}) — não fecha`,
           );
           continue;
         }

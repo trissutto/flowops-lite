@@ -1843,9 +1843,16 @@ export default function PedidoDetailPage() {
   const ehLinhaFrete = (li: { sku?: string | null; ref?: string | null }) =>
     [li.sku, li.ref].some((v) => String(v ?? '').trim().toUpperCase() === 'FRETE');
   const pecasDoPedido = order.lineItems.filter((li) => !ehLinhaFrete(li));
-  // "Trocar" só em pedido nativo (item no Postgres) e antes de enviar/encerrar.
+  /**
+   * "Trocar" em pedido nativo (item no Postgres) enquanto o pedido não morreu.
+   * `completed` SAIU da lista (ordem do dono, 26/08: troca liberada a qualquer
+   * tempo pra peça não enviada): o slug junta `shipped` e `delivered`, e num
+   * pedido dividido a peça que ficou pra trás continua trocável mesmo com a
+   * caixa da irmã na rua. Quem decide POR PEÇA é o backend (`troca-bloqueio`)
+   * — o modal mostra o motivo exato quando a peça específica já saiu.
+   */
   const podeTrocarItem =
-    !!order.canEditItems && !['completed', 'cancelled', 'refunded'].includes(status);
+    !!order.canEditItems && !['cancelled', 'refunded'].includes(status);
   const freteDoPedido = {
     // Valor: o que o pedido guarda no método de envio; se o frete ainda estiver
     // como item (pedido de antes desta correção), soma a linha.

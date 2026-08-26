@@ -609,6 +609,12 @@ export class LojaCatalogService {
      * (`PromoSiteService`). null = peça fora da promoção.
      */
     promoAuto: PromoDaPeca | null = null,
+    /**
+     * Preço ANTERIOR por código (`precoAnteriorPorCodigo`) — o histórico de
+     * onde nasce o "de/por" automático. null = caminho sem o mapa: a peça
+     * monta normal, só sem âncora.
+     */
+    precoAnterior: Map<string, number> | null = null,
   ) {
     /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
      *
@@ -760,15 +766,19 @@ export class LojaCatalogService {
     })();
 
     /**
-     * PREÇO PROMOCIONAL DE SITE (dono, 14/08): quando a peça tem `precoPromo`,
-     * ele VENCE o preço do ERP na vitrine, na PDP e no checkout (a trava
-     * antifraude lê o mesmo campo). `precoDe` é o "de" riscado do criativo;
-     * sem ele, cai no próprio preço do ERP como âncora. Promo é preço único —
-     * a quebra por faixa (44–54 / 56–60) não faz sentido num "de/por".
+     * O SITE SEGUE O PREÇO DA LOJA — SEMPRE (ordem do dono, 26/08).
+     *
+     * O `precoPromo` digitado só no site MORREU neste dia: CHIC e SMILE
+     * estavam a R$ 59,90 no site com o caixa das 14 lojas cobrando R$ 79,90 —
+     * exatamente a divergência que a ordem proíbe. A loja tem UM preço
+     * (`vendaUn`), e é ele que o site vende, com a única promoção
+     * compartilhada (os 50% do caixa, logo abaixo). Promoção de site agora se
+     * faz baixando o preço DA LOJA (editor de produtos, "Preço em bloco") — o
+     * espelho reflete na hora e o "de/por" nasce sozinho do histórico. As
+     * colunas `precoPromo`/`precoDe` ficam no banco como registro do que já
+     * foi digitado; nenhum caminho as lê mais (nem a trava do carrinho, nem a
+     * troca de peça — divergir entre eles recusaria pedido no checkout).
      */
-    const promo = site?.precoPromo != null && Number(site.precoPromo) > 0
-      ? Math.round(Number(site.precoPromo) * 100) / 100
-      : null;
 
     /**
      * PROMOÇÃO DE 50% DO CAIXA, VALENDO NO SITE (dono, 15/08).
@@ -779,49 +789,41 @@ export class LojaCatalogService {
      * total deixaria a bolinha da cor e a grade da PDP mostrando preço cheio —
      * a cliente escolhe a cor e o número "sobe".
      *
-     * O preço DIGITADO à mão vence a regra automática: quem sentou e escreveu
-     * o preço daquela peça decidiu depois da regra, não antes dela. Por isso a
-     * peça com `precoPromo` não é descontada de novo aqui — 50% em cima do
-     * preço promocional seria promoção sobre promoção.
-     *
      * Quem decide é o `PromoSiteService`, o MESMO que a trava do carrinho
      * consulta na hora de cobrar. Divergir aqui não faz a cliente pagar mais:
      * faz o pedido ser RECUSADO no checkout ("o preço foi atualizado").
      */
-    const daPromo50 = !!promoAuto?.elegivel && precoCheio > 0 && promo == null;
+    const daPromo50 = !!promoAuto?.elegivel && precoCheio > 0;
     if (daPromo50) {
       unicas = unicas.map((l) =>
         l.preco > 0 ? { ...l, preco: aplicarDescontoPromo(l.preco) } : l,
       );
     }
 
-    /**
-     * O PRECO DIGITADO TAMBEM ENTRA LINHA A LINHA — pelo mesmo motivo do
-     * bloco acima, e por um que so apareceu quando o campo foi usado de
-     * verdade pela primeira vez (18/08).
-     *
-     * Ate aqui o precoPromo trocava so o preco do TOPO da peca. A bolinha
-     * da cor, a grade de tamanho e as VARIACOES (que sao o que o carrinho
-     * le) continuavam com o preco do ERP. Na PDP da REF CHIC isso saiu
-     * assim: "de R$ 119,90 por R$ 79,90" na tela, com o R$ 59,90 digitado
-     * aparecendo so no JSON-LD do Google. A trava do carrinho (que le o
-     * MESMO campo) cobrava os 59,90 certos — ou seja, a cliente pagava
-     * MENOS do que a pagina anunciava, e a promocao que alguem sentou e
-     * digitou nao chegava a existir na tela.
-     *
-     * precoCheio ja foi calculado acima, antes de qualquer desconto, entao
-     * o "de" riscado continua ancorado no preco original.
-     */
-    if (promo != null) {
-      unicas = unicas.map((l) => (l.preco > 0 ? { ...l, preco: promo } : l));
-    }
-
     const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
-    const precoErp = precos.length ? Math.min(...precos) : 0;
-    const preco = promo ?? precoErp;
-    const precoDe = promo
-      ? (site?.precoDe != null && Number(site.precoDe) > 0 ? Math.round(Number(site.precoDe) * 100) / 100 : precoCheio)
-      : (daPromo50 ? precoCheio : null);
+    const preco = precos.length ? Math.min(...precos) : 0;
+
+    /**
+     * "DE/POR" AUTOMÁTICO — o preço original é o que a PRÓPRIA LOJA cobrava.
+     *
+     * Toda mudança de preço passa pelo editor e fica auditada em
+     * `product_edit_audit` (ANTES→DEPOIS). O "de" riscado sai dali: o último
+     * preço MAIOR praticado dentro da janela (`SITE_PRECO_DE_DIAS`, 90 dias) —
+     * âncora real, do nosso próprio caixa, não número de criativo. Aumento de
+     * preço não vira "de" (anterior menor que o atual é descartado), e a peça
+     * dos 50% mantém o preço cheio como âncora (é o que o caixa riscaria).
+     */
+    const anchorHistorico = (() => {
+      if (!precoAnterior?.size || !(preco > 0) || daPromo50) return null;
+      let maior = 0;
+      for (const l of unicas) {
+        const cod = String(l.codigo ?? '').trim().replace(/^0+/, '');
+        const ant = (cod && precoAnterior.get(cod)) || 0;
+        if (ant > maior) maior = ant;
+      }
+      return maior > preco ? Math.round(maior * 100) / 100 : null;
+    })();
+    const precoDe = daPromo50 ? precoCheio : anchorHistorico;
     const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
 
     /**
@@ -833,7 +835,7 @@ export class LojaCatalogService {
      * de tamanho por preço; o site mostra "R$ 199,90 (44–54) · R$ 219,90
      * (56–60)" quando há mais de uma.
      */
-    const faixasPreco = promo ? [] : (() => {
+    const faixasPreco = (() => {
       const porNumero = new Map<number, number>();
       for (const l of unicas) {
         if (!(l.preco > 0)) continue;
@@ -1232,7 +1234,8 @@ export class LojaCatalogService {
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
-      /** "De" riscado quando há promoção de site; null = sem promo. */
+      /** "De" riscado: preço cheio nos 50%, ou o preço ANTERIOR da própria
+       *  loja (histórico de edição) quando o preço caiu. null = sem queda. */
       precoDe,
       /** Vazio = preço único. Com 2+, o site mostra os dois: "44–54" e "56–60". */
       faixasPreco,
@@ -1312,9 +1315,11 @@ export class LojaCatalogService {
        * cadastro (e a retaguarda continua podendo usá-la), mas quem decide o
        * que é "promoção" pra cliente é o desconto existir.
        *
-       * Peça que a loja quer no Outlet sem cair na regra dos 50% tem dois
-       * caminhos honestos: `precoPromo` na tela de publicação, ou o botão
-       * "liberar promoção" da tela de Classificação (que também vale no caixa).
+       * Peça que a loja quer no Outlet sem cair na regra dos 50% tem UM
+       * caminho honesto (26/08): baixar o preço DA LOJA no editor de produtos
+       * — o "de/por" nasce do histórico e a peça entra aqui sozinha. (O
+       * `precoPromo` de site morreu; o botão "liberar promoção" da tela de
+       * Classificação continua valendo, porque vale no caixa também.)
        */
       promocao: precoDe != null && precoDe > preco,
       /**
@@ -1729,6 +1734,53 @@ export class LojaCatalogService {
   private cacheVendas: { at: number; mapa: Map<string, number> } | null = null;
   private readonly TTL_VENDAS = 10 * 60_000;
 
+  /**
+   * PREÇO ANTERIOR POR CÓDIGO — a memória de onde nasce o "de/por" (26/08).
+   *
+   * Toda edição de preço fica em `product_edit_audit` (field='PRECO',
+   * ANTES→DEPOIS, gravada pelo editor de produtos). Aqui sai a última mudança
+   * de cada código dentro da janela `SITE_PRECO_DE_DIAS` (90 dias): o
+   * `old_value` é o preço que a loja praticava antes. Quem decide se vira
+   * âncora é o `montarPeca` (só quando anterior > atual — aumento não é
+   * promoção). Código normalizado SEM zeros à esquerda, igual ao espelho.
+   *
+   * Cache próprio de 10 min no molde do `vendasPorFamilia`: o histórico muda
+   * quando alguém edita preço, não a cada remontagem do catálogo.
+   */
+  private cachePrecoAnterior: { at: number; mapa: Map<string, number> } | null = null;
+  private readonly TTL_PRECO_ANTERIOR = 10 * 60_000;
+
+  private async precoAnteriorPorCodigo(): Promise<Map<string, number>> {
+    if (this.cachePrecoAnterior && Date.now() - this.cachePrecoAnterior.at < this.TTL_PRECO_ANTERIOR) {
+      return this.cachePrecoAnterior.mapa;
+    }
+    const mapa = new Map<string, number>();
+    try {
+      const dias = Math.max(1, Number(process.env.SITE_PRECO_DE_DIAS || 90));
+      // ⚠️ make_interval exige int explícito: o Prisma manda number como
+      // bigint e o Postgres recusa (validado na produção em 26/08).
+      const rows: Array<{ codigo: string; old_value: string | null }> = await this.prisma.$queryRawUnsafe(
+        `SELECT DISTINCT ON (codigo) codigo, old_value
+           FROM product_edit_audit
+          WHERE field = 'PRECO' AND applied = true
+            AND created_at >= NOW() - make_interval(days => $1::int)
+          ORDER BY codigo, created_at DESC`,
+        dias,
+      );
+      for (const r of rows) {
+        const cod = String(r.codigo ?? '').trim().replace(/^0+/, '');
+        const v = Number(r.old_value);
+        if (cod && isFinite(v) && v > 0) mapa.set(cod, Math.round(v * 100) / 100);
+      }
+    } catch (e: any) {
+      // Sem histórico o site continua vendendo pelo preço da loja — só perde
+      // o riscado. Nunca pode derrubar a montagem do catálogo.
+      this.logger.warn(`[catalogo] histórico de preço indisponível: ${e?.message || e}`);
+    }
+    this.cachePrecoAnterior = { at: Date.now(), mapa };
+    return mapa;
+  }
+
   private async vendasPorFamilia(): Promise<Map<string, number>> {
     if (this.cacheVendas && Date.now() - this.cacheVendas.at < this.TTL_VENDAS) {
       return this.cacheVendas.mapa;
@@ -1955,9 +2007,10 @@ export class LojaCatalogService {
       refsComplementos.add(ref);
       refsComplementos.add(refBaseOf(ref));
     }
-    const [{ site, fit, fotos, fichas }, vendas] = await Promise.all([
+    const [{ site, fit, fotos, fichas }, vendas, precoAnterior] = await Promise.all([
       this.complementos([...refsComplementos]),
       this.vendasPorFamilia(),
+      this.precoAnteriorPorCodigo(),
     ]);
 
     /**
@@ -2061,6 +2114,7 @@ export class LojaCatalogService {
           ),
           fichasDaFamilia,
           promo50.get(this.normRef(ref)) ?? null,
+          precoAnterior,
         ),
       );
     }
@@ -3063,6 +3117,7 @@ export class LojaCatalogService {
           // Link direto de peça fora da vitrine: a promoção vale igual, senão
           // a mesma peça teria dois preços dependendo de como se chega nela.
           await this.promoSite.porChave(ref),
+          await this.precoAnteriorPorCodigo(),
         );
       }
     }
@@ -3077,6 +3132,7 @@ export class LojaCatalogService {
       this.escolherFicha(c.fichas.get(registro.ref), linhas.find((l) => l.marca)?.marca),
       0, c.fichas.get(registro.ref) ?? [],
       await this.promoSite.porChave(registro.ref),
+      await this.precoAnteriorPorCodigo(),
     );
   }
 

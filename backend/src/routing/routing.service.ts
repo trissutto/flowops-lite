@@ -589,6 +589,28 @@ export class RoutingService {
       });
     });
 
+    /**
+     * 2.5) Reporte aberto vira resolvido AQUI (26/08): fechar na vendedora é a
+     * matriz afirmando "a venda inteira saiu pela loja X" — a peça que outra
+     * loja reportou como faltando deixou de ser pendência DESTE pedido. Sem
+     * isto o report ficava aberto pra sempre apontando pra um pedido fechado,
+     * e a régua de peça pendente (`common/pedido-completo`) travaria qualquer
+     * conclusão futura por uma pendência que já não existe.
+     */
+    try {
+      const resolvidos = await (this.prisma as any).pickOrderItemReport.updateMany({
+        where: { orderId, resolvedAt: null },
+        data: { resolvedAt: new Date(), resolvedBy: userId ?? 'fechar-na-vendedora' },
+      });
+      if (resolvidos.count > 0) {
+        this.logger.log(
+          `[conserto-venda-online] ${order.wcOrderNumber}: ${resolvidos.count} reporte(s) de peça resolvido(s) junto com o fechamento na vendedora.`,
+        );
+      }
+    } catch (err: any) {
+      this.logger.warn(`Falha ao resolver reportes no fechamento: ${err?.message ?? err}`);
+    }
+
     // 3) Tira o card do app das lojas que estavam com ele.
     for (const storeId of lojasNotificar) {
       try {
@@ -1250,11 +1272,24 @@ export class RoutingService {
       },
     });
     if (!order) throw new BadRequestException('Pedido não encontrado.');
-    if (['shipped', 'delivered', 'cancelled'].includes(String(order.status))) {
+    if (['delivered', 'cancelled'].includes(String(order.status))) {
       throw new BadRequestException(
-        `Pedido está "${order.status}" — não se remexe na separação de pedido que já saiu ou foi cancelado.`,
+        `Pedido está "${order.status}" — não se remexe na separação de pedido entregue ou cancelado.`,
       );
     }
+    /**
+     * Pedido `shipped` NÃO fecha mais a porta sozinho (ordem do dono, 26/08:
+     * peça que não foi enviada se resolve a qualquer tempo). Pedido dividido
+     * vira shipped com a caixa de UMA loja na rua e a peça órfã pra trás — é
+     * exatamente ela que a matriz precisa poder mover. O que continua proibido
+     * é mexer em peça cujo card do dono JÁ POSTOU (checado abaixo, por peça).
+     */
+    const cardsDoPedido: any[] = ['shipped'].includes(String(order.status))
+      ? await this.prisma.pickOrder.findMany({
+          where: { orderId },
+          select: { storeId: true, status: true },
+        })
+      : [];
 
     const alvo = await this.prisma.store.findFirst({
       where: { code: String(toStoreCode || '').trim(), active: true },
@@ -1271,6 +1306,24 @@ export class RoutingService {
     });
     if (itens.length !== ids.length) {
       throw new BadRequestException('Alguma das peças não é deste pedido — recarregue a tela.');
+    }
+    // Em pedido shipped, peça cujo card do dono já postou está no correio —
+    // essa não se move; a órfã e a de card ainda aberto, sim.
+    if (cardsDoPedido.length) {
+      const jaEnviadas = itens.filter((i) => {
+        const card = i.assignedStoreId
+          ? cardsDoPedido.find((c) => c.storeId === i.assignedStoreId)
+          : null;
+        return !!card && ['shipped', 'delivered'].includes(String(card.status));
+      });
+      if (jaEnviadas.length) {
+        const nomes = jaEnviadas
+          .map((i) => [i.ref || i.sku, i.cor, i.tamanho].filter(Boolean).join(' '))
+          .join(' · ');
+        throw new BadRequestException(
+          `Peça(s) já postada(s) pela loja dona: ${nomes} — o que já saiu se resolve por devolução/troca.`,
+        );
+      }
     }
     const mover = itens.filter((i) => i.assignedStoreId !== alvo.id);
     if (!mover.length) {
