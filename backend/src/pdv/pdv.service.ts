@@ -83,6 +83,13 @@ type CarrinhoDoPdv = {
   phone: string;
   cart_total: number;
   items_count: number;
+  /**
+   * As peças que ela escolheu, no formato da casa (REF · COR TAM) — o modal
+   * lista até 4 sob o nome da cliente. Mesma montagem da retaguarda
+   * (`abandoned-carts.service`): as duas telas trabalham a MESMA fila e não
+   * podem contar histórias diferentes sobre o mesmo carrinho.
+   */
+  cart_items: Array<{ name: string; sku: string | null; quantity: number }>;
   time: string | null;
   utmCampaign: string | null;
   source: 'ecommerce' | 'ecommerce-contact';
@@ -352,13 +359,22 @@ export class PdvService {
         createdAt: true,
         utmCampaign: true,
         trackingInfo: true,
-        items: { select: { quantity: true } },
+        items: { select: { productName: true, sku: true, quantity: true } },
       },
     });
 
     const items: CarrinhoDoPdv[] = pedidos.map((o) => {
       const nome = String(o.customerName ?? '').trim();
       const sp = nome.indexOf(' ');
+      // As peças na linha (dono, 26/08: "não aparece qual peça, cor e tamanho").
+      // O modal do PDV já desenhava `cart_items` — era ESTA rota que não mandava
+      // (selecionava só `quantity`). Mesma montagem da retaguarda: o nome do
+      // item do pedido já sai completo do checkout.
+      const cartItems = (o.items || []).map((it: any) => ({
+        name: String(it.productName || it.sku || 'peça'),
+        sku: it.sku != null ? String(it.sku) : null,
+        quantity: Number(it.quantity ?? 1),
+      }));
       return {
         id: Number(o.wcOrderId),
         chave: chaveCarrinhoPedido(o.wcOrderId),
@@ -370,7 +386,8 @@ export class PdvService {
         email: o.customerEmail ?? '',
         phone: o.customerPhone ?? '',
         cart_total: Number(o.totalAmount ?? 0),
-        items_count: (o.items || []).reduce((s: number, i: any) => s + Number(i.quantity ?? 1), 0),
+        items_count: cartItems.reduce((s, i) => s + i.quantity, 0),
+        cart_items: cartItems,
         time: o.createdAt ? o.createdAt.toISOString() : null,
         // A campanha só existe no carrinho — é o que liga a venda ao anúncio.
         utmCampaign: o.utmCampaign ?? null,
@@ -528,6 +545,20 @@ export class PdvService {
         const nome = String(r.nome ?? '').trim();
         const sp = nome.indexOf(' ');
         const itens = Array.isArray(r.items) ? r.items : [];
+        // COR E TAMANHO NA LINHA — a captura grava `color`/`size` soltos e o
+        // `name` vem sem eles. Formato da casa REF · COR TAM, a MESMA montagem
+        // da retaguarda (carimbo de 17/08): é o que deixa a vendedora conferir
+        // a arara antes de ligar.
+        const cartItems = itens.map((it: any) => {
+          const cor = String(it.color || '').trim();
+          const tam = String(it.size || '').trim();
+          const variacao = [cor, tam].filter(Boolean).join(' ');
+          return {
+            name: String(it.name || it.productId || 'peça') + (variacao ? ` · ${variacao}` : ''),
+            sku: it.productId != null ? String(it.productId) : null,
+            quantity: Number(it.quantity ?? 1),
+          };
+        });
         return {
           id: 970_000_000 + index,
           chave: chaveCarrinhoContato(r.id),
@@ -542,7 +573,8 @@ export class PdvService {
           email: '',
           phone: r.telefone ?? '',
           cart_total: Number(r.subtotal ?? 0),
-          items_count: itens.reduce((s: number, i: any) => s + Number(i.quantity ?? 1), 0),
+          items_count: cartItems.reduce((s, i) => s + i.quantity, 0),
+          cart_items: cartItems,
           time: r.updatedAt?.toISOString?.() ?? null,
           utmCampaign:
             (r.attribution as any)?.utm_campaign ?? (r.attribution as any)?.campaign ?? null,
