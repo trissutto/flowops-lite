@@ -29,9 +29,27 @@ import { Reflector } from '@nestjs/core';
 
 export const ADMIN_ONLY_KEY = 'adminOnly';
 export const ADMIN_ONLY_STRICT_KEY = 'adminOnlyStrict';
+export const PERMITE_LOJA_KEY = 'permiteLoja';
 
 export const AdminOnly = (opts: { strict?: boolean } = {}) =>
   SetMetadata(ADMIN_ONLY_KEY, { strict: !!opts.strict });
+
+/**
+ * ESCAPE HATCH POR LOJA — abre um endpoint `@AdminOnly()` pra usuário de LOJA
+ * cujo `storeCode` esteja na env informada (lista separada por vírgula).
+ *
+ * Nasceu em 26/08/2026 pra soltar a fila de carrinho abandonado pra Santos
+ * (`CARRINHO_LOJAS=02`) como piloto. A régua é env e não código porque a ideia
+ * é abrir loja a loja conforme o atendimento se prova — trocar a env não pede
+ * deploy, e esvaziar a env volta tudo a ser só da matriz.
+ *
+ * NÃO afeta endpoint nenhum sem o decorator: sem `@PermiteLoja` o guard segue
+ * exatamente como antes.
+ *
+ *   @PermiteLoja('CARRINHO_LOJAS')
+ *   @Controller('abandoned-carts')
+ */
+export const PermiteLoja = (envVar: string) => SetMetadata(PERMITE_LOJA_KEY, envVar);
 
 @Injectable()
 export class AdminOnlyGuard implements CanActivate {
@@ -67,6 +85,9 @@ export class AdminOnlyGuard implements CanActivate {
     } else {
       // padrão: matriz (admin + operator)
       if (role !== 'admin' && role !== 'operator') {
+        // ESCAPE HATCH POR LOJA — ver `PermiteLoja`. Só entra aqui quem já ia
+        // levar 403: loja fora da lista continua barrada exatamente como antes.
+        if (this.lojaLiberada(context, req)) return true;
         throw new ForbiddenException(
           'Apenas matriz — esta operação não está disponível pra loja',
         );
@@ -74,5 +95,27 @@ export class AdminOnlyGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  /** `@PermiteLoja('ENV')` + `storeCode` do JWT dentro da lista da env. */
+  private lojaLiberada(context: ExecutionContext, req: any): boolean {
+    const envVar =
+      this.reflector.get<string | undefined>(PERMITE_LOJA_KEY, context.getHandler()) ??
+      this.reflector.get<string | undefined>(PERMITE_LOJA_KEY, context.getClass());
+    if (!envVar) return false;
+
+    const permitidas = String(process.env[envVar] || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!permitidas.length) return false;
+
+    // `storeCode` é o código da loja no JWT ('02' = Santos). Comparo como texto
+    // e sem zero à esquerda também, porque o código vive como '02' no cadastro
+    // e alguém escrevendo `CARRINHO_LOJAS=2` na env não deve virar bug mudo.
+    const code = String(req?.user?.storeCode ?? '').trim();
+    if (!code) return false;
+    const semZero = code.replace(/^0+/, '');
+    return permitidas.some((p) => p === code || p.replace(/^0+/, '') === semZero);
   }
 }

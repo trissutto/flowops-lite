@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { AbandonedCartsService } from './abandoned-carts.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
-import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
+import { AdminOnly, AdminOnlyGuard, PermiteLoja } from '../auth/admin-only.guard';
 
 @Controller('public/loja/checkout-recovery')
 export class CheckoutRecoveryPublicController {
@@ -24,9 +24,24 @@ export class CheckoutRecoveryPublicController {
   }
 }
 
+/**
+ * ⚠️ LOJA TAMBÉM ENTRA AQUI desde 26/08/2026 — `CARRINHO_LOJAS` (env, códigos
+ * separados por vírgula) libera a fila de carrinho pra loja. Piloto: Santos
+ * (`02`), pra validar se a vendedora trabalha o lead antes de abrir pra rede.
+ *
+ * Liberado no controller INTEIRO de propósito: aqui não se move dinheiro nem se
+ * apaga pedido — é lista de carrinho, quem assumiu e baixa por motivo. Recortar
+ * endpoint a endpoint deixaria a tela quebrando com 403 em pedaço solto.
+ *
+ * A colisão entre duas pessoas já está resolvida no dado: `CarrinhoAtendimento`
+ * tem o TELEFONE como chave primária — quem assume primeiro é dono da cliente.
+ *
+ * Pra fechar de volta: esvaziar a env. Sem `CARRINHO_LOJAS`, volta a ser só matriz.
+ */
 @Controller('abandoned-carts')
 @UseGuards(JwtAuthGuard, AdminOnlyGuard)
 @AdminOnly()
+@PermiteLoja('CARRINHO_LOJAS')
 export class AbandonedCartsController {
   constructor(private readonly service: AbandonedCartsService) {}
 
