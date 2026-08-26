@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { abrirWhatsApp } from '@/lib/whatsapp';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
+import DadosClienteModal from '@/components/DadosClienteModal';
+import { fmtTelefoneBr, telefoneProblema } from '@/lib/telefone-br';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import { ruaComNumero } from '@/lib/format-address';
@@ -209,6 +211,7 @@ export default function PedidoDetailPage() {
 
   const [order, setOrder] = useState<WcOrderDetail | null>(null);
   const [editandoEndereco, setEditandoEndereco] = useState(false);
+  const [editandoCliente, setEditandoCliente] = useState(false);
   // TROCAR FORMA DE ENTREGA (17/08) — o pedido nasceu "não informada" ou com
   // a forma errada, e a matriz não tinha como consertar por tela (ON-000006:
   // cliente ia RETIRAR em SJC e o pedido não sabia).
@@ -2058,12 +2061,37 @@ export default function PedidoDetailPage() {
       <div className="grid md:grid-cols-2 gap-4 mb-4">
         {/* Dados do cliente */}
         <div className="bg-white rounded shadow p-4">
-          <h3 className="font-semibold mb-3 text-sm text-slate-600 uppercase tracking-wide">Cliente</h3>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-semibold text-sm text-slate-600 uppercase tracking-wide">Cliente</h3>
+            {/* Corrigir CPF/e-mail/WhatsApp: irmão do "Corrigir" da Entrega.
+                Esses campos são snapshot do checkout e eram imutáveis — o
+                telefone "55119595822" (+55 colado engolindo o fim do número)
+                ficava errado pra sempre e o aviso ia pro nada. */}
+            <button
+              type="button"
+              onClick={() => setEditandoCliente(true)}
+              className="rounded-lg border-2 border-violet-300 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50"
+            >
+              ✎ Corrigir
+            </button>
+          </div>
+          {editandoCliente && (
+            <DadosClienteModal
+              wcOrderId={Number(wcId)}
+              inicial={{
+                cpf: order.customerCpf || '',
+                email: order.billing.email || '',
+                telefone: order.billing.phone || '',
+              }}
+              onFechar={() => setEditandoCliente(false)}
+              onSalvo={() => { void load(); }}
+            />
+          )}
           <div className="text-sm space-y-1">
             <div className="font-medium">
               {order.billing.first_name} {order.billing.last_name}
             </div>
-            {order.customerCpf && (
+            {order.customerCpf ? (
               <div className="text-slate-700 flex items-center gap-2">
                 <span className="text-xs text-slate-500">🪪 CPF</span>
                 <span className="font-mono">{order.customerCpf}</span>
@@ -2079,8 +2107,12 @@ export default function PedidoDetailPage() {
                   copiar
                 </button>
               </div>
+            ) : (
+              // Sem CPF a NF-e não sai e o crédito de peça faltante recusa —
+              // melhor gritar aqui do que na hora de faturar.
+              <div className="text-xs text-amber-700">🪪 sem CPF — a NF-e e o crédito precisam dele</div>
             )}
-            {order.billing.email && (
+            {order.billing.email ? (
               <div className="text-slate-600 flex items-center gap-2">
                 <span className="text-xs text-slate-500">✉️</span>
                 <span>{order.billing.email}</span>
@@ -2096,23 +2128,37 @@ export default function PedidoDetailPage() {
                   copiar
                 </button>
               </div>
+            ) : (
+              <div className="text-xs text-slate-400">✉️ sem e-mail</div>
             )}
-            {order.billing.phone && (
-              <div className="text-slate-600 flex items-center gap-2">
-                <span className="text-xs text-slate-500">📱</span>
-                <span>{order.billing.phone}</span>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(order.billing.phone);
-                    setFlash('Telefone copiado.');
-                    setTimeout(() => setFlash(null), 1500);
-                  }}
-                  className="text-xs text-brand hover:underline"
-                  title="Copiar telefone"
-                >
-                  copiar
-                </button>
+            {order.billing.phone ? (
+              <div className="text-slate-600">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">📱</span>
+                  <span>{fmtTelefoneBr(order.billing.phone)}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(order.billing.phone);
+                      setFlash('Telefone copiado.');
+                      setTimeout(() => setFlash(null), 1500);
+                    }}
+                    className="text-xs text-brand hover:underline"
+                    title="Copiar telefone"
+                  >
+                    copiar
+                  </button>
+                </div>
+                {/* Número torto aparece CRU + o porquê — formatar bonito
+                    esconderia o defeito, e é aqui que a operadora percebe
+                    que o aviso de WhatsApp não vai chegar. */}
+                {telefoneProblema(order.billing.phone) && (
+                  <div className="mt-0.5 text-[11px] font-semibold text-rose-700">
+                    ⚠ {telefoneProblema(order.billing.phone)} — confirme com a cliente e use Corrigir
+                  </div>
+                )}
               </div>
+            ) : (
+              <div className="text-xs text-slate-400">📱 sem WhatsApp — os avisos do pedido não têm pra onde ir</div>
             )}
           </div>
         </div>
