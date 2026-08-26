@@ -97,6 +97,23 @@ export class JuntadaService {
       throw new BadRequestException('Só existe um card ativo — não há o que juntar.');
     }
 
+    /**
+     * CAIXA QUE JÁ SAIU NÃO MUDA DE DESTINO NO MEIO DO VOO.
+     *
+     * Trocar a âncora depois que um feeder despachou é legítimo (foi o que o
+     * LP-000244 pediu), mas a caixa física continua indo pro endereço da
+     * âncora ANTIGA. Antes isso acontecia em silêncio: a REM-2026-001480 saiu
+     * de Vinhedo pra Limeira, Limeira saiu do pedido, e ninguém soube que uma
+     * peça vendida estava a caminho de uma loja sem card. Agora a troca
+     * acontece — mas dizendo em voz alta qual caixa ficou apontada pro lugar
+     * errado, pra alguém combinar o reencaminhamento.
+     */
+    const caixasEmVoo: any[] = await (this.prisma as any).realignmentShipment.findMany({
+      where: { orderId: order.id, status: { in: ['open', 'in_transit'] } },
+      select: { code: true, toStoreCode: true, toStoreName: true, status: true, trackingCode: true },
+    });
+    const caixasDesalinhadas = caixasEmVoo.filter((c) => c.toStoreCode !== anchorStoreCode);
+
     const snapshot = JSON.stringify({
       name: order.customerName,
       cpf: order.customerCpf,
@@ -126,7 +143,14 @@ export class JuntadaService {
           toStatus: order.status,
           note:
             `JUNTANDO PEÇAS na loja ${ancora.store?.name ?? anchorStoreCode}: ` +
-            `${feeders.map((f: any) => f.store?.name ?? f.storeId).join(', ')} agora mandam pra ela em vez de pra cliente.`,
+            `${feeders.map((f: any) => f.store?.name ?? f.storeId).join(', ')} agora mandam pra ela em vez de pra cliente.` +
+            (caixasDesalinhadas.length
+              ? ` ⚠️ Caixa(s) JÁ DESPACHADA(S) pra outra loja: ` +
+                caixasDesalinhadas
+                  .map((c) => `${c.code} → ${c.toStoreName || c.toStoreCode}${c.trackingCode ? ` (${c.trackingCode})` : ''}`)
+                  .join(', ') +
+                ` — combinar o reencaminhamento pra ${anchorStoreCode}.`
+              : ''),
         },
       });
     });
@@ -152,11 +176,26 @@ export class JuntadaService {
     this.logger.log(
       `[juntada] pedido ${order.wcOrderNumber}: âncora ${anchorStoreCode}, ${feeders.length} feeder(s), ${caixas.length} caixa(s) criada(s) na hora`,
     );
+    if (caixasDesalinhadas.length) {
+      this.logger.warn(
+        `[juntada] ${order.wcOrderNumber}: ${caixasDesalinhadas.length} caixa(s) já despachada(s) pra outra âncora — ` +
+          caixasDesalinhadas.map((c) => `${c.code}→${c.toStoreCode}`).join(', '),
+      );
+    }
     return {
       ok: true,
       ancoraStoreCode: anchorStoreCode,
       feeders: feeders.map((f: any) => f.store?.code),
       caixasCriadas: caixas,
+      // Caixa que já saiu pra âncora ANTIGA: a tela avisa pra alguém combinar
+      // o reencaminhamento — a etiqueta não se refaz sozinha.
+      caixasDesalinhadas: caixasDesalinhadas.map((c) => ({
+        code: c.code,
+        toStoreCode: c.toStoreCode,
+        toStoreName: c.toStoreName,
+        status: c.status,
+        trackingCode: c.trackingCode ?? null,
+      })),
     };
   }
 

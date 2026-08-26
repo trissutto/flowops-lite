@@ -3264,6 +3264,7 @@ export class PickOrdersService {
     const itens = await this.prisma.orderItem.findMany({
       where: { orderId: order.id },
       select: {
+        id: true,
         sku: true,
         productName: true,
         ref: true,
@@ -3280,6 +3281,7 @@ export class PickOrdersService {
       Array.from(new Set(itensDaStore(storeId).map((i) => String(i.sku || '').trim()).filter(Boolean)));
     const itemsPorStore = (storeId: string) =>
       itensDaStore(storeId).map((i) => ({
+        id: String((i as any).id || ''),
         sku: String(i.sku || '').trim(),
         descricao: i.productName || null,
         ref: (i as any).ref || null,
