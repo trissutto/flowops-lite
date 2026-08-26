@@ -1,10 +1,12 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrderStatus } from '../common/enums';
 import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
 import { extractAttributionRaw } from '../woocommerce/attribution.util';
 import { lerComplementoBairroWc, montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { pedidoPago, pedidoCancelado } from '../common/pedido-pago';
+import { cpfValido, emailOk } from '../common/dados-cliente-online';
+import { localBrPhone, localBrPhoneValido } from '../lib/phone-br';
 import { SQL_CAMPANHAS_ROAS } from './campanhas-roas.sql';
 
 /**
@@ -126,7 +128,10 @@ export class OrdersService {
       customerName: `${shipping.first_name ?? ''} ${shipping.last_name ?? ''}`.trim() ||
                     `${wc.billing?.first_name ?? ''} ${wc.billing?.last_name ?? ''}`.trim(),
       customerEmail: wc.billing?.email,
-      customerPhone: wc.billing?.phone,
+      // Sem o DDI: "+5511…" colado no telefone virava número de ninguém no
+      // pedido (ver `localBrPhone`). Ausente continua ausente — update de
+      // webhook sem billing.phone NÃO pode apagar o que o pedido já tem.
+      customerPhone: wc.billing?.phone == null ? wc.billing?.phone : localBrPhone(wc.billing.phone) || null,
       customerCpf,
       shippingCep: (shipping.postcode ?? wc.billing?.postcode ?? '').replace(/\D/g, ''),
       shippingAddress: JSON.stringify(shipping),
@@ -809,5 +814,117 @@ export class OrdersService {
     );
 
     return { ok: true, shipping: novo, mudancas, orderId: atualizado.id };
+  }
+
+  /**
+   * CORRIGE OS DADOS DA CLIENTE no pedido — CPF, e-mail e WhatsApp.
+   *
+   * Irmão do `atualizarEnderecoEntrega` logo acima, pela mesma razão de
+   * existir: o pedido carrega um SNAPSHOT desses campos e é dele que tudo lê
+   * (aviso de WhatsApp, e-mail de status, NF-e, crédito de peça faltante —
+   * que recusa pedido sem CPF). Não havia como corrigir: telefone gravado
+   * "55119595822" (o +55 colado no checkout engolia os últimos dígitos)
+   * ficava errado pra sempre e o aviso ia pro nada.
+   *
+   * Contrato: campo NÃO enviado não muda; enviado vazio LIMPA (CPF de outra
+   * pessoa é pior que pedido sem CPF). Valor enviado é validado de verdade —
+   * CPF com dígito verificador, telefone com DDD. O DDI 55 é removido aqui
+   * (`localBrPhone`), então colar "+55 11 9…" inteiro conserta em vez de
+   * quebrar.
+   *
+   * NÃO espelha no cadastro do cliente de propósito: o CRM casa pessoa por
+   * CPF/telefone — se o que está sendo corrigido É a chave, o espelho
+   * atualizaria a ficha de outra pessoa.
+   */
+  async atualizarDadosCliente(
+    wcOrderId: number,
+    input: { cpf?: string; email?: string; telefone?: string },
+    actor?: { userId?: string | null; name?: string | null; storeCode?: string | null },
+  ) {
+    const order: any = await (this.prisma as any).order.findUnique({ where: { wcOrderId } });
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+
+    const data: Record<string, any> = {};
+    const mudancas: Array<{ campo: string; de: string | null; para: string | null }> = [];
+    const registrar = (campo: string, de: any, para: string | null) => {
+      if (String(de ?? '').trim() === String(para ?? '')) return;
+      mudancas.push({ campo, de: de ?? null, para });
+    };
+
+    if (input.cpf !== undefined) {
+      const cpf = String(input.cpf).replace(/\D/g, '');
+      if (cpf && !cpfValido(cpf)) {
+        throw new BadRequestException('CPF inválido — confira os dígitos (o verificador não bate).');
+      }
+      registrar('cpf', order.customerCpf, cpf || null);
+      data.customerCpf = cpf || null;
+    }
+
+    if (input.email !== undefined) {
+      const email = String(input.email).trim();
+      if (email && !emailOk(email)) {
+        throw new BadRequestException('E-mail inválido — é pra lá que vai o aviso do pedido.');
+      }
+      registrar('email', order.customerEmail, email || null);
+      data.customerEmail = email || null;
+    }
+
+    if (input.telefone !== undefined) {
+      const tel = localBrPhone(input.telefone);
+      if (tel && !localBrPhoneValido(tel)) {
+        throw new BadRequestException(
+          'Telefone inválido — precisa de DDD + número (celular tem 11 dígitos com o 9 na frente). ' +
+            'Se veio com +55, confira se não faltou dígito no FIM do número.',
+        );
+      }
+      registrar('telefone', order.customerPhone, tel || null);
+      data.customerPhone = tel || null;
+
+      // O telefone também vive no snapshot do endereço — é de lá que a
+      // etiqueta e a pré-postagem dos Correios leem o contato.
+      try {
+        const ship = JSON.parse(order.shippingAddress || '{}');
+        ship.phone = tel;
+        data.shippingAddress = JSON.stringify(ship);
+      } catch {
+        /* snapshot cru — o campo do pedido já foi corrigido */
+      }
+    }
+
+    if (!mudancas.length) {
+      return {
+        ok: true,
+        mudancas: [],
+        customerCpf: order.customerCpf || '',
+        billing: { email: order.customerEmail || '', phone: order.customerPhone || '' },
+      };
+    }
+
+    const atualizado = await (this.prisma as any).order.update({ where: { wcOrderId }, data });
+
+    await (this.prisma as any).integrationLog
+      .create({
+        data: {
+          source: 'orders', direction: 'internal', event: 'order.customer.edit',
+          payload: JSON.stringify({
+            wcOrderId,
+            por: { userId: actor?.userId ?? null, nome: actor?.name ?? null, loja: actor?.storeCode ?? null },
+            mudancas,
+          }),
+        },
+      })
+      .catch((e: any) => this.logger.warn(`[dados-cliente] auditoria falhou (${wcOrderId}): ${e?.message || e}`));
+
+    this.logger.log(
+      `[dados-cliente] pedido ${wcOrderId} corrigido por ${actor?.name ?? 'sistema'}: ` +
+        mudancas.map((m) => m.campo).join(', '),
+    );
+
+    return {
+      ok: true,
+      mudancas,
+      customerCpf: atualizado.customerCpf || '',
+      billing: { email: atualizado.customerEmail || '', phone: atualizado.customerPhone || '' },
+    };
   }
 }

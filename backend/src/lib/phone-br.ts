@@ -87,3 +87,32 @@ export function formatBrPhonePretty(raw: string | null | undefined): string {
 export function isValidBrPhone(raw: string | null | undefined): boolean {
   return normalizeBrPhone(raw) !== null;
 }
+
+/**
+ * Telefone LOCAL do pedido: DDD + número, SEM o DDI — o formato que
+ * `orders.customerPhone` guarda pro pedido do site e que a tela mostra.
+ *
+ * Existe por causa do "+55" colado no checkout: a máscara fazia
+ * `slice(0, 11)` e "+55 11 99595-8222" virava "55119959582" — o DDI entrava
+ * e ENGOLIA os últimos dígitos, gravando um número que não é de ninguém.
+ * O 55 só é tratado como DDI quando o total tem 12-13 dígitos: número real
+ * do DDD 55 (região de Santa Maria/RS) tem no máximo 11 e passa intacto.
+ */
+export function localBrPhone(raw: string | null | undefined): string {
+  let d = String(raw ?? '').replace(/\D/g, '');
+  if (!d) return '';
+  d = d.replace(/^0+/, ''); // prefixo de operadora ("011 9…")
+  if ((d.length === 12 || d.length === 13) && d.startsWith('55')) d = d.slice(2);
+  return d;
+}
+
+/**
+ * O número local é plausível? Fixo = DDD + 8 (10 dígitos); celular = DDD + 9
+ * dígitos começando com 9 (11). É o que denuncia o caso "55119595822": tem 11
+ * dígitos mas o terceiro não é 9 — sobrou DDI e faltou dígito no fim.
+ */
+export function localBrPhoneValido(raw: string | null | undefined): boolean {
+  const d = localBrPhone(raw);
+  if (d.length === 10) return true;
+  return d.length === 11 && d[2] === '9';
+}

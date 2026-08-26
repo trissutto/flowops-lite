@@ -2135,6 +2135,29 @@ export class OrdersController {
     });
   }
 
+  /**
+   * Corrige os DADOS DA CLIENTE do pedido — CPF, e-mail e WhatsApp.
+   * PATCH /orders/wc/:wcId/dados-cliente
+   *
+   * Irmã da rota de endereço logo acima, pela mesma razão: esses campos são
+   * snapshot do checkout e eram imutáveis — telefone com o +55 colado
+   * ("55119595822", com os últimos dígitos engolidos) ficava errado pra
+   * sempre e o aviso de WhatsApp ia pro nada. Campo ausente não muda; campo
+   * vazio limpa. Validação e normalização (tirar o DDI) ficam no service.
+   */
+  @Patch('wc/:wcId/dados-cliente')
+  async wcUpdateDadosCliente(
+    @Param('wcId') wcId: string,
+    @Body() body: { cpf?: string; email?: string; telefone?: string },
+    @Req() req: any,
+  ) {
+    return this.orders.atualizarDadosCliente(Number(wcId), body, {
+      userId: req?.user?.userId ?? req?.user?.sub ?? null,
+      name: req?.user?.name ?? req?.user?.nome ?? req?.user?.username ?? null,
+      storeCode: req?.user?.storeCode ?? null,
+    });
+  }
+
   @Patch('wc/:wcId')
   async wcUpdate(
     @Param('wcId') wcId: string,
