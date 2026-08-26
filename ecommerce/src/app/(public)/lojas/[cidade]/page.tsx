@@ -17,6 +17,7 @@ import {
 import { fetchStoreLaunches } from '@/services/store-launches.server';
 import StoreCtas, { StoreHeroActions } from './StoreCtas';
 import StoreLaunches from './StoreLaunches';
+import { storeLaunchHeroTitle } from './store-launches';
 
 /**
  * A PÁGINA DE UMA LOJA — a landing que faltava desde a virada de 19/08/2026.
@@ -171,8 +172,7 @@ export default async function LojaCidadePage({ params }: Params) {
   if (!s) notFound();
 
   const outras = stores.filter((o) => o.slug !== s.slug);
-  const isLimeira = s.slug === 'limeira';
-  const launches = isLimeira ? await fetchStoreLaunches(6) : [];
+  const launches = await fetchStoreLaunches(6);
   const heroImage = launches[0]?.images[0];
 
   return (
@@ -186,10 +186,9 @@ export default async function LojaCidadePage({ params }: Params) {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd(s)) }}
       />
 
-      {/* Capa editorial — Limeira ganha a foto do lançamento; as outras lojas
-          preservam a capa tipográfica atual. */}
+      {/* Capa editorial alimentada pelo catálogo geral. */}
       <header className="lojas-grain relative overflow-hidden bg-[var(--lj-ink)] px-5 pb-10 pt-8 sm:px-8 sm:pt-12">
-        {isLimeira && heroImage && (
+        {heroImage && (
           <>
             <Image
               src={heroImage.src}
@@ -220,15 +219,13 @@ export default async function LojaCidadePage({ params }: Params) {
             {s.address.city} · {s.address.uf}
           </p>
           <h1 className="lojas-serif mt-2 max-w-2xl text-[2rem] font-semibold uppercase leading-[1.08] tracking-[0.03em] text-white sm:text-[2.6rem]">
-            {isLimeira ? <>Novidades Lurd&apos;s em Limeira</> : <>Lurd&apos;s Plus Size {s.unit}</>}
+            {storeLaunchHeroTitle(s.unit)}
           </h1>
           <div className="lojas-rule mt-5 opacity-70" />
           <p className="lojas-serif mt-5 max-w-xl text-[15px] font-light italic leading-relaxed text-white/80">
-            {isLimeira
-              ? 'Looks plus size do 44 ao 60, com caimento que valoriza você e atendimento acolhedor para experimentar sem pressa.'
-              : s.description}
+            Looks plus size do 44 ao 60, com caimento que valoriza você e atendimento acolhedor para experimentar sem pressa.
           </p>
-          {isLimeira && <StoreHeroActions store={s} />}
+          <StoreHeroActions store={s} />
         </div>
       </header>
 
@@ -246,21 +243,19 @@ export default async function LojaCidadePage({ params }: Params) {
 
         <StoreCtas store={s} />
 
-        {isLimeira && <StoreLaunches products={launches} store={s} />}
+        <StoreLaunches products={launches} store={s} />
 
-        {isLimeira && (
-          <section className="mt-10 rounded-2xl border border-[var(--lj-line)] bg-[var(--lj-cream)] p-6 sm:p-8" aria-labelledby="acolhimento-titulo">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--lj-gold-strong)]">
-              Atendimento Lurd&apos;s
-            </p>
-            <h2 id="acolhimento-titulo" className="lojas-serif mt-2 text-[1.55rem] font-semibold text-[var(--lj-ink)]">
-              Uma loja feita para você se sentir à vontade
-            </h2>
-            <p className="mt-3 text-[15px] leading-relaxed text-[var(--lj-ink-soft)]">
-              Atendimento próximo, consultoras que entendem de caimento e numeração plus size do 46 ao 60.
-            </p>
-          </section>
-        )}
+        <section className="mt-10 rounded-2xl border border-[var(--lj-line)] bg-[var(--lj-cream)] p-6 sm:p-8" aria-labelledby="acolhimento-titulo">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--lj-gold-strong)]">
+            Atendimento Lurd&apos;s
+          </p>
+          <h2 id="acolhimento-titulo" className="lojas-serif mt-2 text-[1.55rem] font-semibold text-[var(--lj-ink)]">
+            Uma loja feita para você se sentir à vontade
+          </h2>
+          <p className="mt-3 text-[15px] leading-relaxed text-[var(--lj-ink-soft)]">
+            Atendimento próximo, consultoras que entendem de caimento e numeração plus size do 46 ao 60.
+          </p>
+        </section>
 
         <dl className="mt-8 space-y-4 border-t border-[var(--lj-line)] pt-7">
           <div className="flex gap-3">

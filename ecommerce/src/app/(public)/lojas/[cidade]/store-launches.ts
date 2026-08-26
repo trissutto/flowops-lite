@@ -1,5 +1,9 @@
 import type { Product } from '@/types';
 
+export function storeLaunchHeroTitle(unit: string): string {
+  return `Novidades Lurd's em ${unit}`;
+}
+
 /**
  * A vitrine da loja só promete o que consegue mostrar com honestidade:
  * produto online, com foto oficial e grade disponível.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Product } from '@/types';
-import { selectStoreLaunches, storeLaunchProductHref } from './store-launches';
+import { selectStoreLaunches, storeLaunchHeroTitle, storeLaunchProductHref } from './store-launches';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -19,6 +19,11 @@ function product(overrides: Partial<Product> = {}): Product {
 }
 
 describe('vitrine de lançamentos da loja', () => {
+  it('personaliza o título sem alterar o catálogo geral', () => {
+    expect(storeLaunchHeroTitle('Campinas')).toBe("Novidades Lurd's em Campinas");
+    expect(storeLaunchHeroTitle('Santos')).toBe("Novidades Lurd's em Santos");
+  });
+
   it('limita a seis produtos elegíveis', () => {
     const products = Array.from({ length: 8 }, (_, index) => product({ id: String(index) }));
     expect(selectStoreLaunches(products)).toHaveLength(6);
