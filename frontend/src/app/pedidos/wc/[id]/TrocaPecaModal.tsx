@@ -49,6 +49,8 @@ type TipoAcerto = 'cobranca' | 'vale' | 'neutro';
 type PreviewTroca = {
   ok: boolean;
   bloqueio: string | null;
+  /** Peça separada/bipada: pode trocar, mas a troca desfaz a separação. */
+  aviso?: string | null;
   item: {
     id: string; sku: string; nome: string; qty: number; precoPago: number;
     ref?: string | null; cor?: string | null; tamanho?: string | null;
@@ -528,11 +530,20 @@ export default function TrocaPecaModal({
                     </label>
                   </div>
 
-                  {/* Bloqueio: a peça já saiu do estoque (bipada/enviada/NF-e). */}
+                  {/* Bloqueio: a peça já SAIU (postada/caixa de juntada/NF-e). */}
                   {bloqueio && (
                     <div className="flex items-start gap-2 rounded-lg border-2 border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800">
                       <Lock className="w-4 h-4 shrink-0 mt-0.5" />
                       <div><b>Não dá pra trocar:</b> {bloqueio}</div>
+                    </div>
+                  )}
+
+                  {/* Aviso (26/08): separada/bipada TROCA — mas desfaz a
+                      separação da loja. A matriz confirma sabendo. */}
+                  {!bloqueio && preview?.aviso && (
+                    <div className="flex items-start gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                      <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div><b>Atenção:</b> {preview.aviso}</div>
                     </div>
                   )}
 

@@ -4,6 +4,7 @@ import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
+import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoPago } from '../common/pedido-pago';
 import { voltariaProFluxo, motivoDaRecusa } from '../common/volta-pro-fluxo';
 import {
@@ -2410,12 +2411,30 @@ export class OrdersController {
     statusPedido?: string,
   ): Promise<string | null> {
     if (String(statusPedido || '').toLowerCase() !== 'completed') return null;
-    if (!conferenciaTravaLigada()) return null;
     const gate = await (this.prisma as any).order.findUnique({
       where: { wcOrderId },
       select: { id: true, trackingCode: true, wcOrderNumber: true },
     });
     if (!gate) return null;
+
+    /**
+     * ORDEM DO DONO (26/08): pedido com peça pendente NÃO vira concluído em
+     * hipótese alguma — nem pelo botão, nem pela mudança em bloco. O guard
+     * antigo só pegava "nada separado E sem rastreio": um pedido com 1 card
+     * postado e 2 peças órfãs passava direto e sumia das filas. A régua de
+     * peça é a mesma de todas as portas (`common/pedido-completo`) e NÃO tem
+     * kill-switch de env — é regra da casa, não conferência.
+     */
+    const pendentes = await carregarPecasPendentes(this.prisma, gate.id);
+    if (pendentes.length) {
+      return (
+        `O pedido ${gate.wcOrderNumber || wcOrderId} ainda tem ${pendentes.length} peça(s) sem desfecho: ` +
+        `${descreverPendentes(pendentes)}. Concluir agora esconderia essas peças das filas com a cliente ` +
+        `esperando. Resolva cada uma (enviar, mover de loja, trocar ou cancelar com crédito) e o pedido fecha.`
+      );
+    }
+
+    if (!conferenciaTravaLigada()) return null;
     if (String(gate.trackingCode || '').trim()) return null; // rastreio = saiu de verdade
     const picks: any[] = await (this.prisma as any).pickOrder.findMany({
       where: { orderId: gate.id },

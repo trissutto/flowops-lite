@@ -1,13 +1,17 @@
-import { cardDaPeca, motivoDeBloqueioDaTroca } from './troca-bloqueio';
+import { avisoDaTroca, cardDaPeca, motivoDeBloqueioDaTroca } from './troca-bloqueio';
 
 /**
  * A TRAVA DA TROCA — testes da régua que decide se ESTA peça ainda pode ser
  * trocada.
  *
- * Os dois erros doem: soltar demais manda a loja procurar na arara uma peça
- * que mudou (ou deixa a NF-e mentindo); travar demais deixa a matriz sem
- * saída depois de já ter combinado a troca com a cliente no WhatsApp — foi o
- * que aconteceu no LP-000239 e é o caso 'pedido dividido' aqui embaixo.
+ * Os dois erros doem: soltar demais manda trocar peça que está no correio (ou
+ * deixa a NF-e mentindo); travar demais deixa a matriz sem saída depois de já
+ * ter combinado a troca com a cliente no WhatsApp — foi o que aconteceu no
+ * LP-000239 e é o caso 'pedido dividido' aqui embaixo.
+ *
+ * Desde 26/08 (ordem do dono) a régua trava SÓ o que já foi ENVIADO: card
+ * postado, caixa de juntada na estrada ou NF-e autorizada. Separada/bipada
+ * vira AVISO — o fluxo estorna o bipe e refaz o card sozinho.
  */
 describe('pode trocar esta peça?', () => {
   const loja = (code: string, name: string) => ({ code, name });
@@ -32,20 +36,29 @@ describe('pode trocar esta peça?', () => {
     expect(motivoDeBloqueioDaTroca({ orderStatus: 'awaiting_stock', card: null, bipesDaPeca: 0 })).toBeNull();
   });
 
-  test.each(['shipped', 'delivered', 'cancelled'])('pedido %s: não troca mais', (orderStatus) => {
+  test.each(['delivered', 'cancelled'])('pedido %s: não troca mais', (orderStatus) => {
     expect(motivoDeBloqueioDaTroca({ ...aberto, orderStatus })).toMatch(/portal de trocas|devolução/);
   });
 
-  test('card DELA já separado: manda pra devolução, dizendo a loja', () => {
-    const motivo = motivoDeBloqueioDaTroca({
-      ...aberto,
-      card: card('card-1', 'separated', 'store-1', '01', 'ITANHAÉM'),
-    });
-    expect(motivo).toContain('ITANHAÉM');
-    expect(motivo).toMatch(/separação/);
+  /**
+   * Pedido `shipped` NÃO fecha mais a régua sozinho (26/08): dividido, ele
+   * vira shipped com a caixa de UMA loja na rua — a peça que ficou pra trás
+   * continua trocável enquanto o card DELA não postar.
+   */
+  test('pedido shipped com card da peça ainda "new": pode trocar', () => {
+    expect(motivoDeBloqueioDaTroca({ ...aberto, orderStatus: 'shipped' })).toBeNull();
   });
 
-  test('card DELA já postado: fala em postagem, não em separação', () => {
+  test('card DELA separado: LIBERADO (vira aviso, não trava) — ordem 26/08', () => {
+    const ctx = {
+      ...aberto,
+      card: card('card-1', 'separated', 'store-1', '01', 'ITANHAÉM'),
+    };
+    expect(motivoDeBloqueioDaTroca(ctx)).toBeNull();
+    expect(avisoDaTroca(ctx)).toContain('ITANHAÉM');
+  });
+
+  test('card DELA já postado: trava falando em postagem', () => {
     const motivo = motivoDeBloqueioDaTroca({
       ...aberto,
       card: card('card-1', 'shipped', 'store-1', '01', 'ITANHAÉM'),
@@ -53,14 +66,44 @@ describe('pode trocar esta peça?', () => {
     expect(motivo).toMatch(/postou/);
   });
 
-  test('bipe DELA trava (a peça saiu do estoque no bipe)', () => {
-    expect(motivoDeBloqueioDaTroca({ ...aberto, bipesDaPeca: 1 })).toMatch(/bipou/);
+  test('bipe DELA não trava mais — vira aviso de estorno', () => {
+    expect(motivoDeBloqueioDaTroca({ ...aberto, bipesDaPeca: 1 })).toBeNull();
+    expect(avisoDaTroca({ ...aberto, bipesDaPeca: 1 })).toMatch(/estorna o bipe/);
+  });
+
+  test('caixa de juntada na estrada trava (peça lacrada indo pra âncora)', () => {
+    const motivo = motivoDeBloqueioDaTroca({
+      ...aberto,
+      card: card('card-1', 'separated', 'store-1', '01', 'ITANHAÉM'),
+      caixaDaJuntada: { status: 'in_transit' },
+    });
+    expect(motivo).toMatch(/caixa da juntada/);
+  });
+
+  test('caixa de juntada ainda ABERTA não trava', () => {
+    expect(
+      motivoDeBloqueioDaTroca({
+        ...aberto,
+        card: card('card-1', 'separated', 'store-1', '01', 'ITANHAÉM'),
+        caixaDaJuntada: { status: 'open' },
+      }),
+    ).toBeNull();
+  });
+
+  test('bipe de envio órfão trava (card postado/apagado sem estorno — ON-000106)', () => {
+    expect(
+      motivoDeBloqueioDaTroca({ orderStatus: 'shipped', card: null, bipesDaPeca: 0, bipesEnviados: 1 }),
+    ).toMatch(/já saiu/);
   });
 
   test('NF-e do card DELA trava, com o número na mensagem', () => {
     expect(
       motivoDeBloqueioDaTroca({ ...aberto, notaAutorizada: { numero: 689 } }),
     ).toContain('689');
+  });
+
+  test('sem nada separado/bipado: nenhum aviso', () => {
+    expect(avisoDaTroca(aberto)).toBeNull();
   });
 
   /**

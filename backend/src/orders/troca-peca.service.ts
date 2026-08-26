@@ -7,7 +7,14 @@ import { PromoSiteService } from '../promo-site/promo-site.service';
 import { RoutingService } from '../routing/routing.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { conferirDiferencaNoGateway, diferencaDeTrocaPendente } from '../common/diferenca-troca';
-import { CARD_ATIVO, cardDaPeca, motivoDeBloqueioDaTroca } from '../common/troca-bloqueio';
+import {
+  CARD_ATIVO,
+  CARD_SEPARADO,
+  avisoDaTroca,
+  cardDaPeca,
+  motivoDeBloqueioDaTroca,
+  type TrocaCtx,
+} from '../common/troca-bloqueio';
 import { LOJA_CANAL_CODES } from '../common/loja-canal';
 
 /**
@@ -66,7 +73,11 @@ export class TrocaPecaService {
 
   async preview(wcOrderId: number, orderItemId: string, codigo: string) {
     const { order, item } = await this.carregar(wcOrderId, orderItemId);
-    const bloqueio = await this.motivoDeBloqueio(order, item);
+    const ctx = await this.contextoDaTroca(order, item);
+    const bloqueio = motivoDeBloqueioDaTroca(ctx);
+    // Peça separada/bipada NÃO trava mais (ordem do dono 26/08) — mas a
+    // matriz confirma sabendo que a troca desfaz a separação da loja.
+    const aviso = bloqueio ? null : avisoDaTroca(ctx);
 
     const novo = await this.resolverPeca(codigo);
     const qty = Math.max(1, Number(item.quantity) || 1);
@@ -98,6 +109,7 @@ export class TrocaPecaService {
     return {
       ok: !bloqueio,
       bloqueio,
+      aviso,
       item: {
         id: item.id,
         sku: item.sku,
@@ -156,8 +168,18 @@ export class TrocaPecaService {
     const temIrmaoAvancado = ((order.pickOrders || []) as any[]).some(
       (c: any) => !CARD_ATIVO.includes(String(c.status)),
     );
+    /**
+     * Cirúrgico também quando o card DA PEÇA está `separated`/`ready` (26/08):
+     * a troca liberada de peça separada precisa desfazer SÓ o card dela —
+     * `swapSinglePickOrder` cancela o card, estorna o bipe e re-roteia os
+     * itens dele. O `recalculateForWc` não serve aqui: ou recusa (card
+     * avançado no pedido) ou nem roda (nenhum card `new`/`separating`), e a
+     * vendedora ficaria com a peça velha embalada e um card mentindo.
+     */
     const cirurgico =
-      !!cardDoItem && temIrmaoAvancado && CARD_ATIVO.includes(String(cardDoItem.status));
+      !!cardDoItem &&
+      (CARD_SEPARADO.includes(String(cardDoItem.status)) ||
+        (temIrmaoAvancado && CARD_ATIVO.includes(String(cardDoItem.status))));
 
     const novo = await this.resolverPeca(input.codigo);
     if (novo.sku === item.sku) throw new BadRequestException('É a mesma peça — nada pra trocar.');
@@ -532,23 +554,42 @@ export class TrocaPecaService {
    * da peça que ninguém tinha separado ainda (LP-000239).
    */
   private async motivoDeBloqueio(order: any, item: any): Promise<string | null> {
+    return motivoDeBloqueioDaTroca(await this.contextoDaTroca(order, item));
+  }
+
+  /**
+   * Tudo que a régua (`common/troca-bloqueio`) precisa saber DESTA peça.
+   * Montado uma vez e usado pro bloqueio E pro aviso do preview.
+   */
+  private async contextoDaTroca(order: any, item: any): Promise<TrocaCtx> {
     const card = cardDaPeca((order.pickOrders || []) as any[], item);
 
     /**
-     * Bipe DESTA peça. O scan congela o SKU (o swap reescreve o do item) e
-     * carrega a loja; filtrar pela loja do card evita que o bipe da peça da
-     * OUTRA loja, no mesmo pedido, trave esta aqui.
+     * Bipes DESTA peça, separados em dois destinos. O scan congela o SKU (o
+     * swap reescreve o do item) e o `pickOrderId` diz de qual card ele é:
+     * - bipe do card VIVO e aberto → só AVISO (a troca estorna sozinha);
+     * - bipe de card POSTADO ou APAGADO sem estorno → prova de que a peça
+     *   saiu (é a evidência que sobra quando o card morre — ON-000106), e aí
+     *   trava: o que já saiu se resolve por devolução.
      */
-    const bipesDaPeca = await (this.prisma as any).pickOrderScan
-      .count({
-        where: {
-          orderId: order.id,
-          sku: String(item.sku || ''),
-          revertedAt: null,
-          ...(card?.storeId ? { storeId: card.storeId } : {}),
-        },
-      })
-      .catch(() => 0);
+    let bipesDaPeca = 0;
+    let bipesEnviados = 0;
+    try {
+      const scans: Array<{ pickOrderId: string }> = await (this.prisma as any).pickOrderScan.findMany({
+        where: { orderId: order.id, sku: String(item.sku || ''), revertedAt: null },
+        select: { pickOrderId: true },
+      });
+      const statusPorCard = new Map(
+        ((order.pickOrders || []) as any[]).map((c: any) => [c.id, String(c.status)]),
+      );
+      for (const s of scans) {
+        const st = statusPorCard.get(s.pickOrderId);
+        if (!st || st === 'shipped' || st === 'delivered') bipesEnviados += 1;
+        else if (!card || s.pickOrderId === card.id) bipesDaPeca += 1;
+      }
+    } catch {
+      /* sem os bipes a régua decide pelo resto */
+    }
 
     // Nota do envio DESTE card — a nota da outra loja lista as peças dela.
     const notaAutorizada = card
@@ -560,12 +601,24 @@ export class TrocaPecaService {
           .catch(() => null)
       : null;
 
-    return motivoDeBloqueioDaTroca({
+    // Caixa de juntada nascida deste card (feeder) — lacrada, a peça viaja.
+    const caixaDaJuntada = card
+      ? await (this.prisma as any).realignmentShipment
+          .findFirst({
+            where: { pickOrderId: card.id, status: { not: 'cancelled' } },
+            select: { status: true },
+          })
+          .catch(() => null)
+      : null;
+
+    return {
       orderStatus: String(order.status),
       card,
       bipesDaPeca,
+      bipesEnviados,
       notaAutorizada,
-    });
+      caixaDaJuntada,
+    };
   }
 
   /**

@@ -19,6 +19,7 @@ import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { caixaDoSite } from '../common/caixa-site';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { JuntadaService } from './juntada.service';
 
@@ -3679,7 +3680,27 @@ export class PickOrdersService {
       );
     }
 
+    /**
+     * O pedido dono deste card — `isPickup` decide duas coisas abaixo:
+     * a trava da âncora não vale pra retirada (decisão do dono 26/08:
+     * retirada dividida AVISA, não trava) e o "Cliente retirou" fecha o
+     * pedido como ENTREGUE, não como enviado.
+     */
+    const pedidoDoCard = await this.prisma.order.findUnique({
+      where: { id: current.orderId },
+      select: { isPickup: true },
+    });
+
     if (input.status === 'shipped') {
+      /**
+       * A TRAVA DA ÂNCORA SAI DA UI E ENTRA NA PORTA (26/08). O
+       * `gerarEnvioCorreios` já travava; o "Já postei" manual só ESCONDIA o
+       * botão no front — qualquer chamada direta postava a âncora com caixa
+       * de feeder ainda na estrada e o pedido fechava incompleto.
+       */
+      if (!pedidoDoCard?.isPickup) {
+        await this.travarEnvioAncoraSeFaltamCaixas(current);
+      }
       /**
        * ARRUMA O CÓDIGO NA ENTRADA (22/08) — a loja digita na mão e um em
        * cada dez sai com espaço ou minúscula ("AD 717 071 708 BR",
@@ -3746,18 +3767,70 @@ export class PickOrdersService {
       });
       allShipped = allSiblings.every((p) => p.status === 'shipped');
       if (allShipped) {
-        await this.prisma.order.update({
-          where: { id: current.orderId },
-          data: {
-            status: 'shipped',
-            // QUANDO A CAIXA SAIU. Carimbo próprio porque `updatedAt` é tocado
-            // por dezenas de caminhos que não são envio — ver
-            // `common/janela-rastreio.ts`.
-            shippedAt: new Date(),
-            trackingCode: input.trackingCode,
-            carrier: input.carrier,
-          },
-        });
+        /**
+         * ORDEM DO DONO (26/08): "não deixar EM HIPÓTESE ALGUMA pedido
+         * concluído com peça ainda em aguardando". Contar só cards deixava a
+         * peça REPORTADA (sem dono, fora de card) e a de card apagado fora da
+         * conta — a loja postava a parte dela e o pedido inteiro fechava com
+         * peça pendurada. Agora a régua conta PEÇAS (`common/pedido-completo`):
+         * com pendência, os cards fecham normalmente mas o PEDIDO fica aberto
+         * e visível nas filas até cada peça ter desfecho (enviada, movida,
+         * trocada ou cancelada com crédito).
+         */
+        const pendentes = await carregarPecasPendentes(this.prisma, current.orderId);
+        if (pendentes.length) {
+          allShipped = false; // o site/WC também não pode ouvir "enviado"
+          await this.prisma.orderHistory
+            .create({
+              data: {
+                orderId: current.orderId,
+                userId,
+                note:
+                  `⚠️ Todas as caixas postadas, mas o pedido NÃO foi concluído: ` +
+                  `${descreverPendentes(pendentes)}. Resolva cada peça (mover, trocar ou ` +
+                  `cancelar com crédito) pra fechar.`,
+              },
+            })
+            .catch(() => null);
+          this.logger.warn(
+            `[pick-orders] pedido ${current.orderId} segue ABERTO com ${pendentes.length} peça(s) pendente(s) após envio do card ${id}`,
+          );
+        } else {
+          /**
+           * RETIRADA: "Cliente retirou" é a entrega acontecendo na frente da
+           * vendedora — o pedido fecha ENTREGUE com carimbo, em vez de ficar
+           * `shipped` pra sempre (o rastreio nunca confirma o que não tem
+           * código; eram 123 retiradas sem `deliveredAt` em 26/08).
+           */
+          const entregueNaHora =
+            !!pedidoDoCard?.isPickup && /retirada/i.test((input.carrier ?? '').trim());
+          await this.prisma.order.update({
+            where: { id: current.orderId },
+            data: {
+              status: entregueNaHora ? 'delivered' : 'shipped',
+              // QUANDO A CAIXA SAIU. Carimbo próprio porque `updatedAt` é tocado
+              // por dezenas de caminhos que não são envio — ver
+              // `common/janela-rastreio.ts`.
+              shippedAt: new Date(),
+              ...(entregueNaHora ? { deliveredAt: new Date() } : {}),
+              trackingCode: input.trackingCode,
+              carrier: input.carrier,
+            },
+          });
+          if (entregueNaHora) {
+            await this.prisma.orderHistory
+              .create({
+                data: {
+                  orderId: current.orderId,
+                  userId,
+                  fromStatus: 'shipped',
+                  toStatus: 'delivered',
+                  note: 'Cliente retirou na loja — pedido entregue com todas as peças.',
+                },
+              })
+              .catch(() => null);
+          }
+        }
       }
     }
 
