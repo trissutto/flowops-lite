@@ -4,5 +4,5 @@
       "maxDuration": 60
     }
   },
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ':/imoveis-publico'"
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ':/imoveis-publico' && { ! git rev-parse -q --verify HEAD^2 >/dev/null || git diff --quiet HEAD^2 HEAD -- ':/imoveis-publico'; }"
 }
