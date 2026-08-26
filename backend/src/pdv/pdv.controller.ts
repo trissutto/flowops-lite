@@ -906,10 +906,17 @@ export class PdvController {
   setEntrega(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { tipo: string; entregaStoreCode?: string | null },
+    @Body() body: { tipo: string; entregaStoreCode?: string | null; pecasNaMao?: boolean | null },
   ) {
     this.requireRole(req);
-    return this.svc.setEntrega(id, String(body?.tipo ?? ''), body?.entregaStoreCode ?? null);
+    return this.svc.setEntrega(
+      id,
+      String(body?.tipo ?? ''),
+      body?.entregaStoreCode ?? null,
+      // AS PEÇAS JÁ ESTÃO NA LOJA (26/08) — só motoboy da própria loja; o
+      // serviço zera nos outros casos.
+      typeof body?.pecasNaMao === 'boolean' ? body.pecasNaMao : null,
+    );
   }
 
   /**
@@ -1054,6 +1061,7 @@ export class PdvController {
       paymentDetails?: any;
       entregaTipo?: string | null;
       entregaStoreCode?: string | null;
+      entregaPecasNaMao?: boolean | null;
     },
   ) {
     this.requireRole(req);
@@ -1065,6 +1073,10 @@ export class PdvController {
       // é a verdade (o POST /entrega é otimista e pode nunca ter chegado).
       entregaTipo: body?.entregaTipo ?? null,
       entregaStoreCode: body?.entregaStoreCode ?? null,
+      // `undefined` (body sem o campo) preserva a resposta já gravada; só
+      // um booleano de verdade sobrescreve.
+      entregaPecasNaMao:
+        typeof body?.entregaPecasNaMao === 'boolean' ? body.entregaPecasNaMao : undefined,
       // Passa storeCode do JWT pra reconciliação automática quando a
       // venda foi criada com loja diferente do caixa atual.
       userStoreCode: req?.user?.storeCode,

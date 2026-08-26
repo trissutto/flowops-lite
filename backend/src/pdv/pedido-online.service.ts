@@ -5,6 +5,7 @@ import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { ehLojaCanal } from '../common/loja-canal';
+import { fechaMotoboySemSeparacao } from '../common/fechamento-motoboy';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { vendaOnlineTemProva } from '../common/prova-pagamento';
 import { ErpService } from '../erp/erp.service';
@@ -429,6 +430,13 @@ export class PedidoOnlineService {
     store: any,
     pecas: any[],
     sale: any,
+    /**
+     * POR QUE fechou sem card — vai pro histórico do pedido. Quando quem
+     * mandou fechar foi a VENDEDORA ("as peças estão aqui") e não o saldo, o
+     * estoque pode ficar negativo: sem esta linha, quem for conferir o saldo
+     * depois não tem como saber que a peça saiu de verdade.
+     */
+    motivo?: string | null,
   ): Promise<boolean> {
     try {
       const items = pecas.map((it) => ({
@@ -473,7 +481,8 @@ export class PedidoOnlineService {
               `Venda online entregue pela própria ${store.name}` +
               `${vendedora ? ` (vendedora: ${vendedora})` : ''} — ` +
               `${items.length} peça(s) baixada(s) do estoque dela no fechamento. ` +
-              `Sem separação: a peça já estava em mãos e saiu pra cliente.`,
+              `Sem separação: a peça já estava em mãos e saiu pra cliente.` +
+              `${motivo ? ` ${motivo}` : ''}`,
           },
         })
         .catch(() => null);
@@ -670,7 +679,33 @@ export class PedidoOnlineService {
        *                 tarefa real, e o `routePickup` já dá prioridade total à
        *                 loja da retirada.
        */
-      const fechaNaLoja = autoAtende && entrega.kind === 'motoboy';
+      /**
+       * QUEM SABE SE A MOTO JÁ SAIU É A PESSOA NO CAIXA, NÃO O SALDO (26/08).
+       *
+       * Até aqui a régua era só `autoAtende` — o espelho de estoque. O
+       * ON-000164 (Piracicaba, motoboy, 4 peças) foi entregue na hora e mesmo
+       * assim abriu roteamento: o espelho dizia que faltava peça, e o pedido
+       * foi parar na fila da matriz com a cliente já com a sacola na mão.
+       *
+       * Agora a tela pergunta ("as peças já estão aqui?") e a resposta MANDA:
+       *   - SIM  → fecha, mesmo com o espelho dizendo que falta. A baixa é
+       *            `allowNegative`: saldo negativo na tela é o retrato honesto
+       *            de uma peça que saiu e o sistema não sabia que existia.
+       *   - NÃO  → roteia, mesmo com o espelho dizendo que tem. Ela está
+       *            olhando pra arara; o espelho não.
+       *   - sem resposta (outra loja entrega, venda fechada pelo cron do PIX)
+       *            → continua valendo o estoque, como antes.
+       */
+      const pecasNaMao: boolean | null =
+        typeof (sale as any).entregaPecasNaMao === 'boolean'
+          ? (sale as any).entregaPecasNaMao
+          : null;
+      const fechaNaLoja = fechaMotoboySemSeparacao({
+        kind: entrega.kind,
+        outraLojaAtende,
+        pecasNaMao,
+        lojaTemTudo: autoAtende,
+      });
 
       const checkoutInfo = {
         origem: 'pdv_online',
@@ -791,7 +826,23 @@ export class PedidoOnlineService {
       // status só avança depois que o estoque mexeu de verdade, senão eu
       // recriaria o estoque fantasma que este fix existe pra matar.
       if (fechaNaLoja) {
-        fechadoNaLoja = await this.fecharNaLojaVendedora(order, store, pecas, sale);
+        // Quem mandou fechar foi a VENDEDORA e não o saldo? Registra o que o
+        // sistema achava que faltava. É a única pista de por que o estoque
+        // dela vai aparecer negativo depois — sem isso o conferidor "corrige"
+        // uma peça que de verdade saiu pra cliente.
+        let motivo: string | null = null;
+        if (pecasNaMao === true) {
+          motivo = 'A vendedora confirmou na tela que as peças estavam na loja.';
+          if (!autoAtende) {
+            const faltavam = await this.faltamNaLoja(pecas, store.code).catch(() => [] as string[]);
+            if (faltavam.length > 0) {
+              motivo +=
+                ` O estoque do sistema dizia que faltava ${faltavam.join(', ')}` +
+                ` — o saldo dela pode ficar negativo nessa(s) peça(s).`;
+            }
+          }
+        }
+        fechadoNaLoja = await this.fecharNaLojaVendedora(order, store, pecas, sale, motivo);
       }
 
       if (!fechadoNaLoja && autoAtende) {

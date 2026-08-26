@@ -20,7 +20,7 @@ import { CashbackService } from '../cashback/cashback.service';
 import { PedidoOnlineService } from './pedido-online.service';
 import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
-import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
+import { SQL_SEM_LOJA_CANAL, ehLojaCanal } from '../common/loja-canal';
 import {
   assumirAtendimentoCarrinho,
   atendimentosAtivosCarrinho,
@@ -2540,7 +2540,12 @@ export class PdvService {
    * entra na mesma regra pelo mesmo motivo: a 13 não tem moto — quem tem é
    * a loja na cidade da cliente, e é a vendedora quem sabe qual.
    */
-  async setEntrega(saleId: string, tipoRaw: string, entregaStoreCodeRaw?: string | null) {
+  async setEntrega(
+    saleId: string,
+    tipoRaw: string,
+    entregaStoreCodeRaw?: string | null,
+    pecasNaMaoRaw?: boolean | null,
+  ) {
     const tipo = String(tipoRaw || '').trim().toLowerCase();
     if (!(PdvService.ENTREGA_TIPOS as readonly string[]).includes(tipo)) {
       throw new BadRequestException(
@@ -2562,11 +2567,28 @@ export class PdvService {
     // escolhida junta por transferência o que não tiver — inclusive quando
     // ela é a própria vendedora. Ver `PedidoOnlineService.coberturaPorLoja`.
 
+    // A PEÇA JÁ ESTÁ NA MÃO? Só faz sentido no motoboy que sai da PRÓPRIA
+    // loja: em qualquer outro arranjo (SEDEX/PAC/retirada, ou outra loja
+    // mandando a moto) a resposta seria sobre uma arara que não é a de quem
+    // está no caixa. Fora desses casos grava null — quem decide volta a ser
+    // o estoque.
+    //
+    // LOJA-CANAL NUNCA (13/SITE): ela não tem arara, balcão nem moto — um
+    // "sim" ali fecharia o pedido numa loja sem peça nenhuma e baixaria
+    // estoque fantasma. Ver `common/loja-canal.ts`.
+    const pecasNaMao =
+      tipo === 'motoboy' &&
+      !entregaStoreCode &&
+      !ehLojaCanal(sale.storeCode) &&
+      typeof pecasNaMaoRaw === 'boolean'
+        ? pecasNaMaoRaw
+        : null;
+
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
-      data: { entregaTipo: tipo, entregaStoreCode },
+      data: { entregaTipo: tipo, entregaStoreCode, entregaPecasNaMao: pecasNaMao },
     });
-    return { ok: true, entregaTipo: tipo, entregaStoreCode };
+    return { ok: true, entregaTipo: tipo, entregaStoreCode, entregaPecasNaMao: pecasNaMao };
   }
 
   /**
@@ -3455,6 +3477,10 @@ export class PdvService {
      *  escolha que está na tela no momento do fechamento é a verdade. */
     entregaTipo?: string | null;
     entregaStoreCode?: string | null;
+    /** AS PEÇAS JÁ ESTÃO NA LOJA (26/08) — resposta da vendedora no motoboy
+     *  que sai da própria loja. `undefined` aqui NÃO apaga o que ela já
+     *  respondeu no POST /entrega: o valor da venda é o fallback. */
+    entregaPecasNaMao?: boolean | null;
   }) {
     let sale = await this.getSale(input.saleId);
 
@@ -3463,7 +3489,14 @@ export class PdvService {
     // passa por aqui com body, e não pode apagar o que a vendedora escolheu.
     if (sale.status === 'open' && input.entregaTipo) {
       try {
-        await this.setEntrega(sale.id, input.entregaTipo, input.entregaStoreCode ?? null);
+        await this.setEntrega(
+          sale.id,
+          input.entregaTipo,
+          input.entregaStoreCode ?? null,
+          typeof input.entregaPecasNaMao === 'boolean'
+            ? input.entregaPecasNaMao
+            : (sale as any).entregaPecasNaMao,
+        );
         sale = await this.getSale(input.saleId);
       } catch (e: any) {
         // Regra A do motoboy ou loja de retirada inválida: erro DE VERDADE —
