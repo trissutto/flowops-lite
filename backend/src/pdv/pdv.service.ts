@@ -19,6 +19,7 @@ import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
 import { PedidoOnlineService } from './pedido-online.service';
 import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
+import { vendaViraPedidoOnline } from '../common/venda-vira-pedido-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { SQL_SEM_LOJA_CANAL, ehLojaCanal } from '../common/loja-canal';
 import {
@@ -3821,9 +3822,13 @@ export class PdvService {
     }
 
     // ── PEDIDO ONLINE (flag PEDIDO_ONLINE_ROTEAMENTO, 14/08) ──
-    // Venda 100% 'venda_online' vira um Order no trilho do site: card verde
-    // ONLINE, roteamento (ou auto-atende na própria loja) e acerto
-    // fornecedora→vendedora. A venda segue normal no caixa desta loja.
+    // Venda que `vendaViraPedidoOnline` aprova vira um Order no trilho do
+    // site: card verde ONLINE, roteamento (ou auto-atende na própria loja) e
+    // acerto fornecedora→vendedora. A venda segue normal no caixa desta loja.
+    // A régua NÃO é mais "100% venda_online" (26/08): a TROCA ONLINE fecha
+    // com vale_troca + venda_online da diferença, e o every() derrubava ela
+    // pro balcão — caixa fechado, estoque baixado na vendedora e nenhum card
+    // (caso loja 08, R$ 739,40 pra São Sebastião, 25/08).
     //
     // ⚠️ TRAVA DE BAIXA DUPLA: com o Order criado, o finalize NÃO baixa aqui —
     // marca stockDecreasedAt ANTES de enfileirar o outbox, então o passo de
@@ -3844,7 +3849,7 @@ export class PdvService {
       lojaEscolhida: { code: string; name: string } | null;
       storeName: string | null;
     } | null = null;
-    if (isAllVendaOnline && this.pedidoOnline.enabled()) {
+    if (vendaViraPedidoOnline(payments as any[], (sale as any).entregaTipo) && this.pedidoOnline.enabled()) {
       /**
        * A Regra A do motoboy morava aqui também (26/08 — removida). Ela media
        * o estoque da LOJA VENDEDORA mesmo quando outra loja tinha sido
