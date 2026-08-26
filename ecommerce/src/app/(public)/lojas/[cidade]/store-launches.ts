@@ -1,5 +1,12 @@
 import type { Product } from '@/types';
 
+export function storeLaunchHeroTitle(unit: string): string {
+  return `Novidades Lurd's em ${unit}`;
+}
+
+export const STORE_LAUNCH_HERO_DESCRIPTION =
+  'Looks plus size do 44 ao 60, com caimento que valoriza você e atendimento acolhedor para experimentar sem pressa.';
+
 /**
  * A vitrine da loja só promete o que consegue mostrar com honestidade:
  * produto online, com foto oficial e grade disponível.
