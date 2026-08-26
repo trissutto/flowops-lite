@@ -502,7 +502,9 @@ export class PedidoOnlineService {
   }
 
   /**
-   * Chamado pelo finalize (venda 100% 'venda_online', flag ligada, não-treino).
+   * Chamado pelo finalize (venda aprovada por `vendaViraPedidoOnline`:
+   * qualquer pagamento 'venda_online', ou troca 100% vale_troca com envio
+   * escolhido; flag ligada, não-treino).
    * NUNCA lança: qualquer falha → null e o finalize segue no comportamento
    * legado (baixa na própria loja). Retorna info pro front exibir a mensagem.
    */
