@@ -7,6 +7,7 @@ import { PromoSiteService } from '../promo-site/promo-site.service';
 import { RoutingService } from '../routing/routing.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { conferirDiferencaNoGateway, diferencaDeTrocaPendente } from '../common/diferenca-troca';
+import { CARD_ATIVO, cardDaPeca, motivoDeBloqueioDaTroca } from '../common/troca-bloqueio';
 import { LOJA_CANAL_CODES } from '../common/loja-canal';
 
 /**
@@ -24,9 +25,13 @@ import { LOJA_CANAL_CODES } from '../common/loja-canal';
  *                           caixa das lojas);
  *    mesmo preço          → troca seca.
  *
- *  QUANDO PODE (decisão do dono): até a loja BIPAR. Depois do bipe a peça já
- *  saiu do estoque e está separada fisicamente na arara de alguém — trocar
- *  ali é confusão na loja. Daí em diante o caminho é devolução/troca.
+ *  QUANDO PODE (decisão do dono): até a loja BIPAR A PEÇA. Depois do bipe
+ *  ela já saiu do estoque e está separada fisicamente na arara de alguém —
+ *  trocar ali é confusão na loja. Daí em diante o caminho é devolução/troca.
+ *
+ *  ⚠️ A régua é POR PEÇA, não por pedido (`common/troca-bloqueio.ts`): pedido
+ *  dividido é o normal da casa, e a loja que já postou a peça DELA não fala
+ *  pela peça que continua parada no card de outra.
  *
  *  O VALOR É SUGERIDO, NÃO IMPOSTO: o preview calcula a diferença pela régua
  *  do site (precoPromo digitado > promoção de 50% > preço do ERP), mas quem
@@ -61,7 +66,7 @@ export class TrocaPecaService {
 
   async preview(wcOrderId: number, orderItemId: string, codigo: string) {
     const { order, item } = await this.carregar(wcOrderId, orderItemId);
-    const bloqueio = await this.motivoDeBloqueio(order);
+    const bloqueio = await this.motivoDeBloqueio(order, item);
 
     const novo = await this.resolverPeca(codigo);
     const qty = Math.max(1, Number(item.quantity) || 1);
@@ -138,8 +143,21 @@ export class TrocaPecaService {
     userId?: string | null,
   ) {
     const { order, item } = await this.carregar(wcOrderId, input.orderItemId);
-    const bloqueio = await this.motivoDeBloqueio(order);
+    const bloqueio = await this.motivoDeBloqueio(order, item);
     if (bloqueio) throw new BadRequestException(bloqueio);
+
+    /**
+     * Pedido dividido com irmão JÁ ENVIADO: o card desta peça é o único que
+     * ainda dá pra mexer. Decidido aqui, antes da transação, porque muda o
+     * que ela faz com o `assignedStoreId` — o re-roteamento cirúrgico acha a
+     * peça POR ELE.
+     */
+    const cardDoItem = cardDaPeca((order.pickOrders || []) as any[], item as any);
+    const temIrmaoAvancado = ((order.pickOrders || []) as any[]).some(
+      (c: any) => !CARD_ATIVO.includes(String(c.status)),
+    );
+    const cirurgico =
+      !!cardDoItem && temIrmaoAvancado && CARD_ATIVO.includes(String(cardDoItem.status));
 
     const novo = await this.resolverPeca(input.codigo);
     if (novo.sku === item.sku) throw new BadRequestException('É a mesma peça — nada pra trocar.');
@@ -168,8 +186,9 @@ export class TrocaPecaService {
           unitPrice: novoUnit,
           baseUnitPrice: novo.precoErp || novoUnit,
           // A peça nova pode estar em OUTRA loja — quem separa se decide no
-          // re-roteamento logo abaixo.
-          assignedStoreId: null,
+          // re-roteamento logo abaixo. No caminho cirúrgico o vínculo FICA:
+          // é por ele que o `swapSinglePickOrder` acha a peça pra re-rotear.
+          assignedStoreId: cirurgico ? undefined : null,
         },
       });
 
@@ -275,18 +294,32 @@ export class TrocaPecaService {
      * resultado esperado, não falha.
      */
     let reroteado: any = null;
-    const tinhaCards = await this.prisma.pickOrder.count({
-      where: { orderId: order.id, status: { in: ['new', 'separating'] } },
-    });
-    if (tinhaCards > 0) {
-      try {
-        reroteado = await this.routing.recalculateForWc(order.id);
-      } catch (e: any) {
-        reroteado = { ok: false, motivo: String(e?.message || e).slice(0, 300) };
-        this.logger.log(
-          `[troca-peca] ${order.wcOrderNumber}: cards cancelados e separação NÃO recriada — ${reroteado.motivo}`,
-        );
+    try {
+      if (cirurgico) {
+        /**
+         * PEDIDO DIVIDIDO: o `recalculateForWc` se recusa a mexer num pedido
+         * que tem card avançado — e faz bem, a peça da outra loja está no
+         * correio. Sem esta saída a peça nova ficava sem loja e o card antigo
+         * VAZIO na fila da loja (alarme falso na fila que a casa promete não
+         * dar).
+         *
+         * O `swapSinglePickOrder` cancela SÓ o card desta peça, estorna o que
+         * ele tivesse bipado e roteia só os itens dele. Ele sempre tira a loja
+         * de origem da disputa: dela a matriz acabou de trocar a peça (em
+         * geral porque ela não tinha), então quase sempre é o que se quer.
+         */
+        reroteado = await this.routing.swapSinglePickOrder(cardDoItem!.id);
+      } else {
+        const tinhaCards = await this.prisma.pickOrder.count({
+          where: { orderId: order.id, status: { in: ['new', 'separating'] } },
+        });
+        if (tinhaCards > 0) reroteado = await this.routing.recalculateForWc(order.id);
       }
+    } catch (e: any) {
+      reroteado = { ok: false, motivo: String(e?.message || e).slice(0, 300) };
+      this.logger.log(
+        `[troca-peca] ${order.wcOrderNumber}: cards cancelados e separação NÃO recriada — ${reroteado.motivo}`,
+      );
     }
 
     this.logger.log(
@@ -466,7 +499,18 @@ export class TrocaPecaService {
   private async carregar(wcOrderId: number, orderItemId: string) {
     const order: any = await this.prisma.order.findFirst({
       where: { wcOrderId },
-      include: { pickOrders: { select: { id: true, status: true } } },
+      include: {
+        pickOrders: {
+          // storeId/store: a trava é POR PEÇA e precisa saber QUAL card está
+          // com ela (`common/troca-bloqueio.ts`).
+          select: {
+            id: true,
+            status: true,
+            storeId: true,
+            store: { select: { code: true, name: true } },
+          },
+        },
+      },
     });
     if (!order) throw new NotFoundException('Pedido não encontrado no banco local.');
     const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId } });
@@ -480,39 +524,48 @@ export class TrocaPecaService {
   }
 
   /**
-   * Por que ESTE pedido não pode ter peça trocada agora. Null = pode.
-   * A ordem é a da operação: o que já saiu fisicamente pesa mais.
+   * Por que ESTA PEÇA não pode ser trocada agora. Null = pode.
+   *
+   * A régua está em `common/troca-bloqueio.ts` (com teste); aqui ficam só as
+   * consultas — e todas são POR PEÇA. Até 26/08 elas eram por PEDIDO, e num
+   * pedido dividido a loja que já tinha postado a peça DELA travava a troca
+   * da peça que ninguém tinha separado ainda (LP-000239).
    */
-  private async motivoDeBloqueio(order: any): Promise<string | null> {
-    if (['shipped', 'delivered', 'cancelled'].includes(String(order.status))) {
-      return 'Pedido já despachado ou cancelado — a troca agora é pelo portal de trocas/devolução.';
-    }
-    const avancado = (order.pickOrders || []).find((p: any) =>
-      ['separated', 'ready', 'shipped'].includes(String(p.status)),
-    );
-    if (avancado) {
-      return 'A loja já finalizou a separação — a peça está separada fisicamente. Use devolução/troca.';
-    }
-    // Bipe ativo = peça na mão da vendedora e estoque já baixado (18/08).
-    const bipes = await (this.prisma as any).pickOrderScan
-      .count({ where: { orderId: order.id, revertedAt: null } })
-      .catch(() => 0);
-    if (bipes > 0) {
-      return 'A loja já começou a bipar este pedido — a peça saiu do estoque. Peça pra ela reportar o item ou finalize e trate como devolução.';
-    }
-    const nota = await (this.prisma as any).nfeDoc
-      .findFirst({
+  private async motivoDeBloqueio(order: any, item: any): Promise<string | null> {
+    const card = cardDaPeca((order.pickOrders || []) as any[], item);
+
+    /**
+     * Bipe DESTA peça. O scan congela o SKU (o swap reescreve o do item) e
+     * carrega a loja; filtrar pela loja do card evita que o bipe da peça da
+     * OUTRA loja, no mesmo pedido, trave esta aqui.
+     */
+    const bipesDaPeca = await (this.prisma as any).pickOrderScan
+      .count({
         where: {
-          shipmentId: { in: (order.pickOrders || []).map((p: any) => `envio:${p.id}`) },
-          status: 'authorized',
+          orderId: order.id,
+          sku: String(item.sku || ''),
+          revertedAt: null,
+          ...(card?.storeId ? { storeId: card.storeId } : {}),
         },
-        select: { numero: true },
       })
-      .catch(() => null);
-    if (nota) {
-      return `Já existe NF-e autorizada (nº ${nota.numero}) para este pedido — trocar a peça agora deixaria a nota errada.`;
-    }
-    return null;
+      .catch(() => 0);
+
+    // Nota do envio DESTE card — a nota da outra loja lista as peças dela.
+    const notaAutorizada = card
+      ? await (this.prisma as any).nfeDoc
+          .findFirst({
+            where: { shipmentId: `envio:${card.id}`, status: 'authorized' },
+            select: { numero: true },
+          })
+          .catch(() => null)
+      : null;
+
+    return motivoDeBloqueioDaTroca({
+      orderStatus: String(order.status),
+      card,
+      bipesDaPeca,
+      notaAutorizada,
+    });
   }
 
   /**

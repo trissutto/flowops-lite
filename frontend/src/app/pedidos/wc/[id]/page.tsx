@@ -419,7 +419,10 @@ export default function PedidoDetailPage() {
     // contra os itens que realmente vão mudar de loja.
     skus?: string[];
     // Peças que esta loja separa (descrição + qtd) — mostradas no card.
+    // `id` é o OrderItem: é o que permite mover UMA peça de loja sem arrastar
+    // o card inteiro junto (LP-000244). Opcional porque backend antigo não manda.
     items?: Array<{
+      id?: string;
       sku: string; descricao: string | null; qty: number;
       ref?: string | null; cor?: string | null; tamanho?: string | null;
     }>;
@@ -554,6 +557,106 @@ export default function PedidoDetailPage() {
       .then((d) => setJuntada(d ?? { juntando: false }))
       .catch(() => {});
   };
+
+  // ── MOVER UMA PEÇA DE LOJA (26/08) ──────────────────────────────────────
+  // "↔ Trocar loja" move o CARD INTEIRO. No LP-000244 a loja tinha 2 das 3
+  // peças e faltava só uma: trocar o card mandou as três juntas pra loja
+  // seguinte, que recusou pela MESMA peça e devolveu as outras duas de novo —
+  // três rodadas em 21 horas. Aqui a unidade é a peça.
+  const [moverPeca, setMoverPeca] = useState<{
+    item: { id: string; sku: string; ref?: string | null; cor?: string | null; tamanho?: string | null; descricao?: string | null };
+    fromStoreCode: string | null;
+    fromStoreName: string | null;
+    totalNoCard: number;
+  } | null>(null);
+  const [moverOpcoes, setMoverOpcoes] = useState<Array<{
+    storeCode: string; storeName: string; qty: number; jaNoPedido: boolean; reportou: boolean;
+  }>>([]);
+  const [moverLoading, setMoverLoading] = useState(false);
+  const [moverBusy, setMoverBusy] = useState<string | null>(null);
+  const [moverErro, setMoverErro] = useState<string | null>(null);
+
+  /**
+   * Abre a escolha de loja PRA UMA PEÇA. A lista mostra TODAS as lojas ativas
+   * com o saldo DAQUELA peça — inclusive as zeradas, marcadas de vermelho.
+   * Esconder as zeradas seria pior: no LP-000244 a peça foi forçada na mão pra
+   * três lojas seguidas com saldo 0, e a tela não dizia isso em lugar nenhum.
+   */
+  async function abrirMoverPeca(
+    item: { id: string; sku: string; ref?: string | null; cor?: string | null; tamanho?: string | null; descricao?: string | null },
+    card: { storeCode: string | null; storeName: string | null; total: number },
+  ) {
+    setMoverPeca({ item, fromStoreCode: card.storeCode, fromStoreName: card.storeName, totalNoCard: card.total });
+    setMoverOpcoes([]);
+    setMoverErro(null);
+    setMoverLoading(true);
+    try {
+      const [stores, preview] = await Promise.all([
+        api<Array<{ code: string; name: string; active: boolean }>>('/stores'),
+        api<SeparationPreview>(`/orders/wc/${wcId}/prepare-separation`),
+      ]);
+      const saldo = new Map(
+        (preview.alternativesBySku?.[item.sku] ?? []).map((a) => [a.storeCode, a.availableQty ?? 0]),
+      );
+      const reportou = new Set(
+        liveStatus.filter((p) => p.issueReason && p.storeCode).map((p) => p.storeCode as string),
+      );
+      const noPedido = new Set(
+        liveStatus
+          .filter((p) => ['new', 'separating', 'separated', 'ready'].includes(p.status))
+          .map((p) => p.storeCode)
+          .filter(Boolean) as string[],
+      );
+      setMoverOpcoes(
+        stores
+          .filter((s) => s.active && s.code !== card.storeCode)
+          .map((s) => ({
+            storeCode: s.code,
+            storeName: s.name,
+            qty: saldo.get(s.code) ?? 0,
+            jaNoPedido: noPedido.has(s.code),
+            reportou: reportou.has(s.code),
+          }))
+          // Loja que JÁ está no pedido primeiro (não cria caixa nova), depois saldo.
+          .sort((a, b) =>
+            Number(b.jaNoPedido) - Number(a.jaNoPedido) || b.qty - a.qty || a.storeCode.localeCompare(b.storeCode),
+          ),
+      );
+    } catch (e: any) {
+      setMoverErro(e?.body?.message || e?.message || 'Não deu pra carregar o saldo das lojas.');
+    } finally {
+      setMoverLoading(false);
+    }
+  }
+
+  async function moverPecaPara(storeCode: string) {
+    if (!moverPeca) return;
+    setMoverBusy(storeCode);
+    setMoverErro(null);
+    try {
+      const res = await api<{ ok: boolean; avisoJuntada?: string | null; cardsRemovidos?: string[] }>(
+        `/orders/wc/${wcId}/mover-itens`,
+        { method: 'POST', body: JSON.stringify({ orderItemIds: [moverPeca.item.id], toStoreCode: storeCode }) },
+      );
+      const peca = [moverPeca.item.ref || moverPeca.item.sku, [moverPeca.item.cor, moverPeca.item.tamanho].filter(Boolean).join(' ')]
+        .filter(Boolean)
+        .join(' ');
+      setMoverPeca(null);
+      setFlash(
+        `✓ ${peca} → ${storeCode}` +
+          (res.cardsRemovidos?.length ? ` · card ${res.cardsRemovidos.join('/')} ficou vazio e saiu` : ''),
+      );
+      setTimeout(() => setFlash(null), 8000);
+      const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
+      setLiveStatus(Array.isArray(fresh) ? fresh : []);
+      loadJuntada();
+      if (res.avisoJuntada) setSepError(`🧲 ${res.avisoJuntada}`);
+    } catch (e: any) {
+      setMoverErro(e?.body?.message || e?.message || 'Não deu pra mover a peça.');
+    } finally {
+      setMoverBusy(null);
+    }
+  }
 
   const resolverItemReport = async (id: string) => {
     setResolvendoReport(id);
@@ -1203,13 +1306,24 @@ export default function PedidoDetailPage() {
     setJuntarBusy(anchorStoreCode);
     setJuntarErro(null);
     try {
-      await api(`/orders/wc/${wcId}/juntar`, {
+      const res = await api<{
+        caixasDesalinhadas?: Array<{ code: string; toStoreName: string | null; toStoreCode: string; trackingCode: string | null }>;
+      }>(`/orders/wc/${wcId}/juntar`, {
         method: 'POST',
         body: JSON.stringify({ anchorStoreCode }),
       });
       setJuntarOpen(false);
       setFlash(`🧲 Juntada criada — as peças se encontram em ${nome} e saem num pacote só.`);
       setTimeout(() => setFlash(null), 5000);
+      // Caixa que JÁ saiu pra âncora antiga não muda de rota sozinha — a
+      // etiqueta impressa continua com o endereço velho.
+      if (res?.caixasDesalinhadas?.length) {
+        setSepError(
+          `🚚 ${res.caixasDesalinhadas
+            .map((c) => `${c.code} já está a caminho da ${c.toStoreName || c.toStoreCode}${c.trackingCode ? ` (${c.trackingCode})` : ''}`)
+            .join(' · ')} — essa caixa NÃO muda de destino. Combine com a loja pra reencaminhar pra ${nome}.`,
+        );
+      }
       loadJuntada();
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
@@ -2805,6 +2919,41 @@ export default function PedidoDetailPage() {
                 (retirada tem o próprio trilho de transferência) e sem juntada
                 em andamento. As feeders mandam caixa pra âncora e só ela
                 posta o pacote único pra cliente. */}
+            {/* ÂNCORA ÓRFÃ — a juntada aponta pra uma loja que saiu do pedido.
+                Acontece quando a retaguarda troca/remove o card da âncora: o
+                `transferToStoreCode` dos feeders não acompanha, e a caixa segue
+                viajando pra quem não separa nada (LP-000244, caixa
+                REM-2026-001480 indo pra Limeira depois de Limeira sair). Antes
+                a tela ficava MUDA e o botão de juntar sumia — dava pra ver o
+                problema e não dava pra consertar. */}
+            {(() => {
+              if (order.pickup?.isPickup) return null;
+              const cardsAtivos = liveStatus.filter((p) =>
+                ['new', 'separating', 'separated', 'ready'].includes(p.status),
+              );
+              const feeders = cardsAtivos.filter((p) => p.isTransfer && p.transferToStoreCode);
+              if (!feeders.length) return null;
+              const anc = String(feeders[0].transferToStoreCode);
+              const ancoraViva = cardsAtivos.some((p) => !p.isTransfer && p.storeCode === anc);
+              if (ancoraViva) return null;
+              return (
+                <div className="mb-2 text-xs bg-red-50 border border-red-300 text-red-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
+                  <span>🚨</span>
+                  <span className="flex-1 min-w-[200px]">
+                    A juntada aponta pra loja <b>{anc}</b>, que <b>não tem card</b> neste pedido — a
+                    caixa dos feeders está indo pra quem não separa nada. Escolha a loja final de
+                    novo, ou mande uma peça pra {anc}.
+                  </span>
+                  <button
+                    onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
+                    disabled={sepLoading || cardsAtivos.length < 2}
+                    className="text-xs px-2 py-1 bg-white border border-red-400 text-red-900 rounded hover:bg-red-100 font-semibold disabled:opacity-60"
+                  >
+                    🧲 Escolher a loja final de novo
+                  </button>
+                </div>
+              );
+            })()}
             {(() => {
               const cardsAtivos = liveStatus.filter((p) =>
                 ['new', 'separating', 'separated', 'ready'].includes(p.status),
@@ -2957,7 +3106,7 @@ export default function PedidoDetailPage() {
                         </div>
                         <ul className="space-y-0.5">
                           {r.items!.map((it, i) => (
-                            <li key={`${it.sku}-${i}`} className="text-xs text-slate-600 flex gap-1.5">
+                            <li key={`${it.sku}-${i}`} className="text-xs text-slate-600 flex gap-1.5 items-center group">
                               <span className="font-bold tabular-nums text-slate-500 shrink-0">{it.qty}×</span>
                               <span className="truncate">
                                 {it.ref
@@ -2965,6 +3114,25 @@ export default function PedidoDetailPage() {
                                   : it.descricao || it.sku}
                               </span>
                               <span className="text-slate-300 shrink-0 font-mono">· {it.sku}</span>
+                              {/* SÓ ESTA PEÇA pra outra loja — sem arrastar o
+                                  resto do card junto (LP-000244). Some depois
+                                  que a loja bipou: aí o estoque já saiu de lá. */}
+                              {it.id && ['new', 'separating'].includes(r.status) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    abrirMoverPeca(
+                                      { id: it.id!, sku: it.sku, ref: it.ref, cor: it.cor, tamanho: it.tamanho, descricao: it.descricao },
+                                      { storeCode: r.storeCode, storeName: r.storeName, total: r.items?.length ?? 1 },
+                                    )
+                                  }
+                                  disabled={sepLoading}
+                                  className="ml-auto shrink-0 px-1.5 py-0.5 rounded border border-slate-200 text-slate-500 bg-white hover:bg-amber-50 hover:border-amber-300 hover:text-amber-800 opacity-60 group-hover:opacity-100 transition disabled:opacity-40"
+                                  title={`Mandar SÓ esta peça pra outra loja (o resto do card fica na ${r.storeCode})`}
+                                >
+                                  → outra loja
+                                </button>
+                              )}
                             </li>
                           ))}
                         </ul>
@@ -3706,6 +3874,100 @@ export default function PedidoDetailPage() {
       <div className="text-xs text-slate-500 text-right">
         {order.attribution.origem} · {order.attribution.source}
       </div>
+
+      {/* MODAL — Mandar SÓ ESTA PEÇA pra outra loja */}
+      {moverPeca && (
+        <div
+          className="fixed inset-0 z-[85] bg-black/60 flex items-center justify-center p-4"
+          {...overlayClose(() => !moverBusy && setMoverPeca(null))}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl max-w-xl w-full max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b">
+              <h3 className="font-bold text-lg text-slate-800">
+                Mandar SÓ esta peça pra outra loja
+              </h3>
+              <p className="text-sm text-slate-700 mt-1">
+                <b>
+                  {[moverPeca.item.ref || moverPeca.item.sku, [moverPeca.item.cor, moverPeca.item.tamanho].filter(Boolean).join(' ')]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </b>
+                {moverPeca.fromStoreCode && (
+                  <> — hoje na <b>{moverPeca.fromStoreName || moverPeca.fromStoreCode}</b></>
+                )}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {moverPeca.totalNoCard > 1
+                  ? `As outras ${moverPeca.totalNoCard - 1} peça(s) do card CONTINUAM na ${moverPeca.fromStoreCode}.`
+                  : 'É a única peça do card — a loja sai do pedido.'}
+              </p>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1">
+              {moverErro && (
+                <div className="mb-3 text-sm bg-red-50 border border-red-200 text-red-800 rounded p-2">
+                  {moverErro}
+                </div>
+              )}
+              {moverLoading ? (
+                <div className="text-sm text-slate-500">Carregando saldo das lojas…</div>
+              ) : (
+                <ul className="space-y-1">
+                  {moverOpcoes.map((o) => (
+                    <li key={o.storeCode}>
+                      <button
+                        type="button"
+                        onClick={() => moverPecaPara(o.storeCode)}
+                        disabled={!!moverBusy}
+                        className={`w-full text-left px-3 py-2 rounded border flex items-center gap-2 transition disabled:opacity-50 ${
+                          o.qty > 0
+                            ? 'border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50'
+                            : 'border-red-200 bg-red-50/40 hover:bg-red-50'
+                        }`}
+                      >
+                        <span className="font-semibold text-slate-800">{o.storeName}</span>
+                        <span className="text-xs text-slate-500">({o.storeCode})</span>
+                        {o.jaNoPedido && (
+                          <span className="text-[11px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 border border-violet-200">
+                            já está no pedido
+                          </span>
+                        )}
+                        {o.reportou && (
+                          <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            reportou problema aqui
+                          </span>
+                        )}
+                        <span
+                          className={`ml-auto text-xs font-bold ${o.qty > 0 ? 'text-emerald-700' : 'text-red-700'}`}
+                        >
+                          {o.qty > 0 ? `${o.qty} em estoque` : 'SEM SALDO'}
+                        </span>
+                        {moverBusy === o.storeCode && <span className="text-xs text-slate-500">…</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-[11px] text-slate-500 mt-3">
+                Loja com <b className="text-red-700">SEM SALDO</b> aparece de propósito: dá pra
+                forçar, mas foi assim que esta peça passou por três lojas zeradas antes de chegar
+                em alguém que a tivesse.
+              </p>
+            </div>
+            <div className="p-3 border-t flex justify-end">
+              <button
+                onClick={() => setMoverPeca(null)}
+                disabled={!!moverBusy}
+                className="px-3 py-1.5 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL — Escolher loja manualmente */}
       {pickStoreOpen && (

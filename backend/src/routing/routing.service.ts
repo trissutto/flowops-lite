@@ -1178,6 +1178,300 @@ export class RoutingService {
   }
 
   /**
+   * MOVER PEÇA(S) DE UMA LOJA PRA OUTRA — por PEÇA, não pelo card inteiro.
+   *
+   * 🔴 LP-000244 (25–26/08): pedido de 4 peças, VINHEDO + LIMEIRA. Limeira não
+   * tinha UMA das três dela (SMILE PRETA 48) e reportou problema — mas
+   * `reportIssue` é POR CARD, então as outras duas, que ela tinha, caíram
+   * junto. A retaguarda usou "↔ Trocar loja", que também é POR CARD
+   * (`swapSinglePickOrder` move TODOS os `itemsAssigned`) — e as três peças
+   * viajaram grudadas pra Jundiaí, depois Suzano, depois Moema. Cada loja
+   * recusava por causa da MESMA peça e devolvia as outras duas junto: três
+   * rodadas, 21 horas, nenhuma peça mais perto da cliente. E das lojas
+   * escolhidas na mão, três tinham saldo ZERO da peça em questão.
+   *
+   * Aqui a unidade é a PEÇA: a loja que tem 2 das 3 fica com as 2.
+   *
+   * Garantias:
+   *  - peça já BIPADA não se move (o estoque já saiu naquela loja) — pra essa
+   *    o caminho continua sendo o card inteiro, que estorna;
+   *  - NUNCA cria um 2º card pra mesma loja no mesmo pedido: o filtro de peça
+   *    do card é por `assignedStoreId`, então dois cards mostrariam as peças
+   *    um do outro (caso ON-000106, em que Campinas foi acusada de não ter
+   *    enviado o que já tinha postado);
+   *  - card de origem que fica sem peça nenhuma é apagado, com estorno de bipe
+   *    órfão — mesma regra do swap;
+   *  - a JUNTADA acompanha: o card novo nasce feeder da âncora vigente (ou
+   *    âncora, se for ela), e o método AVISA se a âncora ficou sem card — era
+   *    esse silêncio que deixou a caixa REM-2026-001480 viajando pra uma loja
+   *    que tinha saído do pedido.
+   */
+  async moverItensParaLoja(
+    orderId: string,
+    orderItemIds: string[],
+    toStoreCode: string,
+    opts?: { userId?: string | null },
+  ) {
+    const ids = Array.from(
+      new Set((orderItemIds || []).map((s) => String(s || '').trim()).filter(Boolean)),
+    );
+    if (!ids.length) throw new BadRequestException('Escolha ao menos uma peça pra mover.');
+
+    const order: any = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true, status: true, wcOrderId: true, wcOrderNumber: true, source: true,
+        customerName: true, customerCpf: true, customerEmail: true, customerPhone: true,
+        shippingMethod: true,
+      },
+    });
+    if (!order) throw new BadRequestException('Pedido não encontrado.');
+    if (['shipped', 'delivered', 'cancelled'].includes(String(order.status))) {
+      throw new BadRequestException(
+        `Pedido está "${order.status}" — não se remexe na separação de pedido que já saiu ou foi cancelado.`,
+      );
+    }
+
+    const alvo = await this.prisma.store.findFirst({
+      where: { code: String(toStoreCode || '').trim(), active: true },
+      select: { id: true, code: true, name: true },
+    });
+    if (!alvo) throw new BadRequestException(`Loja ${toStoreCode} não encontrada ou inativa.`);
+
+    const itens: any[] = await this.prisma.orderItem.findMany({
+      where: { id: { in: ids }, orderId },
+      select: {
+        id: true, sku: true, quantity: true, ref: true, cor: true, tamanho: true,
+        productName: true, assignedStoreId: true,
+      },
+    });
+    if (itens.length !== ids.length) {
+      throw new BadRequestException('Alguma das peças não é deste pedido — recarregue a tela.');
+    }
+    const mover = itens.filter((i) => i.assignedStoreId !== alvo.id);
+    if (!mover.length) {
+      return {
+        ok: true as const, movidos: 0, jaEstavam: true,
+        paraStoreCode: alvo.code, paraStoreName: alvo.name,
+      };
+    }
+
+    const cards: any[] = await this.prisma.pickOrder.findMany({
+      where: { orderId },
+      include: { store: { select: { id: true, code: true, name: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    const ATIVOS = ['new', 'separating', 'separated', 'ready'];
+    const cardAtivoDa = (storeId: string) =>
+      cards.find((c) => c.storeId === storeId && ATIVOS.includes(c.status));
+
+    // Peça já BIPADA não viaja: a baixa de estoque já aconteceu naquela loja.
+    const origemIds = Array.from(
+      new Set(mover.map((i) => i.assignedStoreId).filter(Boolean)),
+    ) as string[];
+    for (const storeId of origemIds) {
+      const card = cardAtivoDa(storeId);
+      if (!card) continue;
+      const skus = mover.filter((i) => i.assignedStoreId === storeId).map((i) => String(i.sku));
+      const bipadas: any[] = await (this.prisma as any).pickOrderScan.findMany({
+        where: { pickOrderId: card.id, sku: { in: skus }, revertedAt: null },
+        select: { sku: true },
+      });
+      if (bipadas.length) {
+        throw new BadRequestException(
+          `${card.store.code} já BIPOU ${[...new Set(bipadas.map((b) => b.sku))].join(', ')} — ` +
+            `a peça já saiu do estoque de lá. Peça pra loja desfazer o bipe, ou troque o card ` +
+            `inteiro em "↔ Trocar loja" (esse caminho estorna).`,
+        );
+      }
+    }
+
+    // Destino: NUNCA um segundo card pra mesma loja no mesmo pedido.
+    const cardAlvo = cardAtivoDa(alvo.id);
+    const cardAlvoFechado = cards.find(
+      (c) => c.storeId === alvo.id && ['shipped', 'delivered'].includes(c.status),
+    );
+    if (!cardAlvo && cardAlvoFechado) {
+      throw new BadRequestException(
+        `${alvo.code} já postou a parte dela deste pedido (card ${cardAlvoFechado.status}). ` +
+          `Peça nova pra lá criaria um segundo card, que mostraria também o que ela já enviou.`,
+      );
+    }
+
+    // JUNTADA vigente — quem é a âncora hoje.
+    const feeders = cards.filter(
+      (c) => ATIVOS.includes(c.status) && c.isTransfer && c.transferToStoreCode,
+    );
+    const ancoraCode: string | null = feeders.length ? String(feeders[0].transferToStoreCode) : null;
+    const snapshotJuntada = ancoraCode
+      ? JSON.stringify({
+          name: order.customerName,
+          cpf: order.customerCpf,
+          email: order.customerEmail,
+          phone: order.customerPhone,
+          shippingMethod: order.shippingMethod,
+          wcOrderId: order.wcOrderId,
+          wcOrderNumber: order.wcOrderNumber,
+          juntadaAncoraStoreCode: ancoraCode,
+        })
+      : null;
+
+    let cardCriado: any = null;
+    let statusAlvo: string = cardAlvo?.status ?? PickStatus.new;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.orderItem.updateMany({
+        where: { id: { in: mover.map((i) => i.id) } },
+        data: { assignedStoreId: alvo.id },
+      });
+
+      if (cardAlvo) {
+        // Card que já tinha terminado volta pra fila — chegou peça nova nele.
+        if (['separated', 'ready'].includes(cardAlvo.status)) {
+          await tx.pickOrder.update({
+            where: { id: cardAlvo.id },
+            data: { status: PickStatus.separating },
+          });
+          statusAlvo = PickStatus.separating;
+        }
+      } else {
+        const ehAncora = !!ancoraCode && alvo.code === ancoraCode;
+        cardCriado = await tx.pickOrder.create({
+          data: {
+            orderId,
+            storeId: alvo.id,
+            status: PickStatus.new,
+            isTransfer: !!ancoraCode && !ehAncora,
+            transferToStoreCode: ancoraCode && !ehAncora ? ancoraCode : null,
+            customerSnapshot: ancoraCode && !ehAncora ? snapshotJuntada : null,
+          },
+        });
+      }
+    });
+
+    // Card de origem que ficou sem peça nenhuma sai da fila da loja.
+    const cardsRemovidos: string[] = [];
+    for (const storeId of origemIds) {
+      const card = cardAtivoDa(storeId);
+      if (!card) continue;
+      const resto = await this.prisma.orderItem.count({
+        where: { orderId, assignedStoreId: storeId },
+      });
+      if (resto > 0) continue;
+      // Bipe órfão (peça bipada e depois desatribuída) volta pro estoque da loja.
+      await this.pickScans
+        .revertPickOrderStock(card.id, { reason: 'store_swap', userId: opts?.userId ?? null })
+        .catch(() => null);
+      await this.prisma.pickOrder.delete({ where: { id: card.id } });
+      cardsRemovidos.push(card.store.code);
+      try {
+        this.gateway.emitPickOrderRemoved?.(storeId, { orderId, pickOrderId: card.id });
+      } catch { /* best-effort */ }
+    }
+
+    const nomeDaPeca = (i: any) =>
+      [i.ref || i.sku, [i.cor, i.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' ');
+    const deLojas = Array.from(
+      new Set(
+        origemIds.map((sid) => cards.find((c) => c.storeId === sid)?.store?.code).filter(Boolean),
+      ),
+    ) as string[];
+
+    await this.prisma.orderHistory.create({
+      data: {
+        orderId,
+        fromStatus: order.status,
+        toStatus: order.status,
+        note:
+          `Peça movida na mão: ${mover.map(nomeDaPeca).join(', ')}` +
+          (deLojas.length ? ` de ${deLojas.join('/')}` : '') +
+          ` pra ${alvo.code} (${alvo.name}). ` +
+          `${mover.length} peça(s) — o resto do card ficou onde estava.` +
+          (cardsRemovidos.length
+            ? ` Card da ${cardsRemovidos.join('/')} ficou sem peça e foi removido.`
+            : ''),
+      },
+    });
+
+    // Loja de destino vê a peça na hora (o app da loja não recarrega sozinho).
+    try {
+      const itensDoAlvo = await this.prisma.orderItem.findMany({
+        where: { orderId, assignedStoreId: alvo.id },
+      });
+      if (cardCriado) {
+        const ordemSocket = await this.prisma.order.findUnique({
+          where: { id: orderId },
+          select: {
+            id: true, wcOrderId: true, wcOrderNumber: true, source: true, customerName: true,
+            customerPhone: true, shippingCep: true, shippingAddress: true, totalAmount: true,
+            wcDateCreated: true,
+          },
+        });
+        this.gateway.emitPickOrderToStore(alvo.id, {
+          id: cardCriado.id,
+          status: PickStatus.new,
+          storeId: alvo.id,
+          orderId,
+          order: { ...ordemSocket, items: itensDoAlvo },
+          strategy: 'item-move-manual',
+          storeCode: alvo.code,
+          storeName: alvo.name,
+          isTransfer: !!cardCriado.isTransfer,
+          transferToStoreCode: cardCriado.transferToStoreCode ?? null,
+        });
+      } else if (cardAlvo) {
+        this.gateway.emitPickOrderStatus(alvo.id, { id: cardAlvo.id, status: statusAlvo });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[mover-item] socket pra ${alvo.code} falhou: ${e?.message || e}`);
+    }
+
+    // A JUNTADA ficou coerente? Âncora sem card = caixa viajando pra ninguém.
+    const depois: any[] = await this.prisma.pickOrder.findMany({
+      where: { orderId, status: { in: ATIVOS } },
+      include: { store: { select: { code: true } } },
+    });
+    let avisoJuntada: string | null = null;
+    const feedersDepois = depois.filter((c) => c.isTransfer && c.transferToStoreCode);
+    if (feedersDepois.length) {
+      const anc = String(feedersDepois[0].transferToStoreCode);
+      const temAncora = depois.some((c) => !c.isTransfer && c.store?.code === anc);
+      if (!temAncora) {
+        avisoJuntada =
+          `A juntada aponta pra loja ${anc}, que NÃO tem card neste pedido — as caixas dos ` +
+          `feeders viajam pra quem não separa nada. Escolha a âncora de novo ou mande uma peça pra ${anc}.`;
+        this.logger.warn(`[mover-item] ${order.wcOrderNumber}: ${avisoJuntada}`);
+      }
+    }
+
+    this.logger.log(
+      `[mover-item] ${order.wcOrderNumber}: ${mover.length} peça(s) ` +
+        `${deLojas.join('/') || '(sem loja)'} → ${alvo.code}` +
+        (cardsRemovidos.length ? ` · card ${cardsRemovidos.join('/')} removido` : ''),
+    );
+
+    return {
+      ok: true as const,
+      movidos: mover.length,
+      pecas: mover.map((i) => ({
+        id: i.id, sku: i.sku, ref: i.ref, cor: i.cor, tamanho: i.tamanho,
+      })),
+      deStoreCodes: deLojas,
+      paraStoreCode: alvo.code,
+      paraStoreName: alvo.name,
+      cardCriado: cardCriado
+        ? {
+            id: cardCriado.id,
+            isTransfer: !!cardCriado.isTransfer,
+            transferToStoreCode: cardCriado.transferToStoreCode ?? null,
+          }
+        : null,
+      cardsRemovidos,
+      avisoJuntada,
+    };
+  }
+
+  /**
    * Grupo da JUNTADA automática = a rota própria do carro (Itanhaém/Praia
    * Grande/Santos, configurável em SystemSetting). Retirada não junta (a
    * REGRA 0 do pickup manda). Kill-switch: ROUTING_JUNTADA_TRIO=0.

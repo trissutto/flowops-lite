@@ -3293,6 +3293,38 @@ export class OrdersController {
   }
 
   /**
+   * MOVER PEÇA(S) PRA OUTRA LOJA — a versão POR PEÇA do "↔ Trocar loja".
+   *
+   * O swap de card inteiro continua existindo (é o certo quando a loja não
+   * tem NADA do pedido). Este aqui é pro caso que se repetiu três vezes no
+   * LP-000244: a loja tem 2 das 3 peças e só falta uma. Sem ele, a única
+   * saída era arrastar as três juntas pra loja seguinte — e a peça que
+   * ninguém tinha ia levando junto as que estavam resolvidas.
+   */
+  @Post('wc/:wcId/mover-itens')
+  async moverItens(
+    @Param('wcId') wcId: string,
+    @Body() body: { orderItemIds?: string[]; toStoreCode?: string },
+    @Req() req?: any,
+  ) {
+    if (!Array.isArray(body?.orderItemIds) || !body.orderItemIds.length) {
+      throw new BadRequestException('orderItemIds é obrigatório');
+    }
+    if (!body?.toStoreCode) throw new BadRequestException('toStoreCode é obrigatório');
+    const local = await this.prisma.order.findFirst({
+      where: { wcOrderId: Number(wcId) },
+      select: { id: true },
+    });
+    if (!local) throw new BadRequestException('Pedido não existe no banco local.');
+    return this.routing.moverItensParaLoja(
+      local.id,
+      body.orderItemIds.map(String),
+      String(body.toStoreCode),
+      { userId: req?.user?.userId ?? null },
+    );
+  }
+
+  /**
    * JUNTADA (21/08): escolhe a LOJA ÂNCORA de um pedido dividido já
    * confirmado — os outros cards passam a mandar as peças PRA ELA (caixa
    * com NF de transferência + etiqueta pra loja), e só ela envia pra

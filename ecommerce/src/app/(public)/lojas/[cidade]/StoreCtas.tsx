@@ -48,3 +48,39 @@ export default function StoreCtas({ store }: { store: Store }) {
     </div>
   );
 }
+
+export function StoreHeroActions({ store }: { store: Store }) {
+  return (
+    <div className="mt-7 flex flex-col gap-2.5 sm:flex-row">
+      <a
+        href="#lancamentos"
+        className="inline-flex items-center justify-center rounded-full bg-[var(--lj-gold-soft)] px-6 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--lj-ink)] transition hover:brightness-110"
+      >
+        Ver os lançamentos
+      </a>
+      <a
+        href={directionsUrl(store)}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={() => trackStoreLocator(store.city, store.unit, 'store_hero')}
+        className="inline-flex items-center justify-center gap-2 rounded-full border border-white/50 px-6 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition hover:border-white hover:bg-white hover:text-[var(--lj-ink)]"
+      >
+        <Navigation className="h-4 w-4" strokeWidth={1.75} aria-hidden /> Como chegar
+      </a>
+    </div>
+  );
+}
+
+export function StoreLaunchWhatsApp({ store }: { store: Store }) {
+  return (
+    <a
+      href={whatsappUrl(store)}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => trackWhatsAppClick('store_launches', store.unit)}
+      className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-[#2E7D46] px-6 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition hover:brightness-110"
+    >
+      <MessageCircle className="h-4 w-4" strokeWidth={1.75} aria-hidden /> Consultar pelo WhatsApp
+    </a>
+  );
+}
