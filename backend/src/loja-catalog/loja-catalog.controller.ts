@@ -96,6 +96,28 @@ export class LojaCatalogPublicController {
   }
 
   /**
+   * GET /api/public/loja/colecoes-menu — as coleções que ocupam a vaga de
+   * coleção do MENU do site ("Coleção Resort" no lugar da "Mais Top da
+   * Semana"). Só sai coleção com peça no ar. Nunca lança — menu é navegação.
+   */
+  @Get('colecoes-menu')
+  colecoesMenu() {
+    return this.svc.colecoesMenu();
+  }
+
+  /**
+   * GET /api/public/loja/colecao/:slug — a página /colecao/<slug>: nome,
+   * subtítulo e as peças NA ORDEM curada. 404 quando a coleção não existe
+   * (coleção interna `ordem-categoria-*` conta como inexistente).
+   */
+  @Get('colecao/:slug')
+  async colecao(@Param('slug') slug: string) {
+    const c = await this.svc.colecaoPublica(String(slug || '').toLowerCase());
+    if (!c) throw new NotFoundException('Coleção não encontrada');
+    return c;
+  }
+
+  /**
    * GET /api/public/loja/mais-vendidos-lojas — a coleção AUTOMÁTICA "Os Mais
    * Vendidos nas Lojas": top 30 do caixa físico com estoque ≥ 30 e a grade de
    * tamanhos cheia. Irmã da curadoria, mas sem tela — o ranking é o caixa.
@@ -287,7 +309,43 @@ export class LojaCatalogAdminController {
     return this.svc.criarLook(String(body?.nome || ''), body?.refs ?? [], quem);
   }
 
-  /* ── COLEÇÕES CURADAS — "Mais Top da Semana" (dono, 16/08) ──────────────── */
+  /* ── COLEÇÕES DO SITE — fixa + pontuais (dono, 26/08) ───────────────────── */
+
+  /** GET /loja-catalog/colecoes — todas as coleções do site pra tela listar. */
+  @Get('colecoes')
+  colecoes(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.listarColecoes();
+  }
+
+  /** POST /loja-catalog/colecoes — cria coleção pontual (slug nasce do nome). */
+  @Post('colecoes')
+  criarColecao(@Req() req: any, @Body() body: { nome?: string }) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.svc.criarColecao(String(body?.nome || ''), quem);
+  }
+
+  /** PATCH /loja-catalog/colecoes/:slug — nome, subtítulo e a vaga no menu. */
+  @Patch('colecoes/:slug')
+  salvarColecaoMeta(
+    @Req() req: any,
+    @Param('slug') slug: string,
+    @Body() body: { nome?: string; descricao?: string | null; noMenu?: boolean },
+  ) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.svc.salvarColecaoMeta(String(slug || '').toLowerCase(), body || {}, quem);
+  }
+
+  /** DELETE /loja-catalog/colecoes/:slug — apaga (a fixa não sai; vitrines da home somem junto). */
+  @Delete('colecoes/:slug')
+  excluirColecao(@Req() req: any, @Param('slug') slug: string) {
+    this.requireAdmin(req);
+    return this.svc.excluirColecao(String(slug || '').toLowerCase());
+  }
+
+  /* ── CURADORIA — a lista ordenada de REFs de uma coleção (dono, 16/08) ──── */
 
   /** GET /loja-catalog/curadoria/:slug — REFs gravadas + os produtos (na ordem)
    *  pra tela de curadoria montar a lista atual. */

@@ -63,6 +63,8 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/debug/tracking',
   /^\/ate\/[^/]+$/,
   /^\/categoria\/[^/]+$/,
+  // Coleção pontual (26/08) — a página genérica das coleções curadas.
+  /^\/colecao\/[^/]+$/,
   /^\/produto\/[^/]+$/,
   /^\/pedido\/[^/]+$/,
   /^\/tamanhos\/[^/]+$/,

@@ -1,5 +1,6 @@
 import { api } from '@/lib/api';
 import { navigation } from '@/data/navigation';
+import { fetchColecoesMenu } from '@/services/colecoes';
 import type { NavItem } from '@/types';
 
 /**
@@ -203,5 +204,31 @@ export async function getNavegacao(): Promise<NavItem[]> {
   } catch {
     /* menu estático segue de pé */
   }
+
+  /**
+   * A VAGA DE COLEÇÃO DO MENU (dono, 26/08) — o item "Mais Top da Semana"
+   * deixou de ser fixo: a retaguarda (/retaguarda/colecoes) decide qual
+   * coleção ocupa o lugar dele ("Coleção Resort" com as peças da JOIN da
+   * semana). A distinção `null` × lista vazia é de propósito:
+   *   · `null`  = backend não respondeu → o item estático fica (menu nunca
+   *     depende do backend pra existir — mesma regra do resto do arquivo);
+   *   · `[]`    = o dono tirou todas do menu → o item sai, porque foi escolha.
+   */
+  try {
+    const colecoes = await fetchColecoesMenu();
+    if (colecoes) {
+      const vaga = base.findIndex((i) => i.href === '/mais-top-da-semana');
+      if (vaga >= 0) {
+        base.splice(
+          vaga,
+          1,
+          ...colecoes.map((c) => ({ label: c.nome, href: c.href, icon: 'Flame' })),
+        );
+      }
+    }
+  } catch {
+    /* menu estático segue de pé */
+  }
+
   return base;
 }
