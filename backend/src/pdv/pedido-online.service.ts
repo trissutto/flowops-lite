@@ -1,9 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoutingService } from '../routing/routing.service';
 import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { ehLojaCanal } from '../common/loja-canal';
+import { fechaMotoboySemSeparacao } from '../common/fechamento-motoboy';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { vendaOnlineTemProva } from '../common/prova-pagamento';
 import { ErpService } from '../erp/erp.service';
@@ -118,77 +120,213 @@ export class PedidoOnlineService {
   }
 
   /**
-   * REGRA A DO MOTOBOY (dono, 17/08): motoboy SÓ SAI DA LOJA VENDEDORA.
+   * ═══════════════════════════════════════════════════════════════════════
+   *  QUEM ENTREGA — cobertura de CADA loja pras peças desta venda (26/08).
+   * ═══════════════════════════════════════════════════════════════════════
    *
-   * O roteamento não sabe distância, e um pedido motoboy podia cair numa
-   * loja a 100 km (ON-000004: Suzano vendeu pra Mogi, Sorocaba recebeu o
-   * card). Então a regra é na origem: se a loja que está vendendo não tem
-   * TODAS as peças, o PDV não deixa escolher motoboy — sobra Correios ou
-   * retirada. Simples, imediato, e a vendedora sabe na hora, com a lista do
-   * que falta.
+   * Substitui a REGRA A do motoboy (17/08), que dizia "motoboy só sai da loja
+   * vendedora" e RECUSAVA a escolha quando a arara da vendedora não tinha a
+   * peça. A regra nasceu certa pelo motivo certo — sem `pickupStoreCode` o
+   * pedido motoboy caía numa loja a 150 km (ON-000004) — mas hoje a trava é
+   * outra: a atendente ESCOLHE a loja que manda o motoboy, e a engine
+   * (`routePickup`) prende o pedido nela. Distância virou decisão de gente,
+   * não sorteio do roteamento.
    *
-   * Chamado em dois pontos, de propósito: na ESCOLHA (`setEntrega`, pra
-   * avisar cedo) e no FECHAMENTO (`finalize`, porque a sacola pode mudar
-   * depois da escolha e porque o front guarda a escolha mesmo se a API
-   * recusar). Devolve os SKUs que faltam pra mensagem ser útil.
+   * Caso que derrubou a regra (dono, 26/08): Itanhaém vende, a cliente é de
+   * PIRACICABA e quem entrega de moto é PIRACICABA. A vendedora clicava
+   * MOTOBOY e levava "sua loja não tem: 5354658" — um código que não está na
+   * etiqueta, sobre uma loja que nunca ia entregar nada.
+   *
+   * Então em vez de RECUSAR, a tela INFORMA antes: cada loja vem com o que
+   * ela cobre desta sacola. A loja escolhida recebe o card; o que faltar
+   * chega por transferência (`pickup-transfer`), **mesmo que ela não tenha
+   * nenhuma peça** — ordem do dono. Bloquear virou trabalho de nenhum
+   * ninguém: quem sabe se dá pra esperar a transferência é quem está com a
+   * cliente no telefone.
+   *
+   * ⚠️ LOJA-CANAL FORA DA LISTA: `routing.service` tira `LOJA_CANAL_CODES` das
+   * lojas roteáveis, então escolher a 13 como quem entrega gerava um pedido
+   * `pickup-blocked` (a engine não acha a loja de destino). Ela não tem arara
+   * nem moto — não é candidata. Isso fecha a ponta que estava aberta desde
+   * 17/08, quando a 13 ganhou exceção pra ESCOLHER motoboy sem ter onde
+   * ancorar a entrega.
    */
-  async faltaParaMotoboy(saleId: string): Promise<string[]> {
+  async coberturaPorLoja(saleId: string) {
     const sale: any = await (this.prisma as any).pdvSale.findUnique({
       where: { id: saleId },
-      select: { storeCode: true, items: { select: { sku: true, ref: true, qty: true } } },
+      select: {
+        storeCode: true,
+        customerCidade: true,
+        items: {
+          select: {
+            sku: true, ref: true, cor: true, tamanho: true, descricao: true, qty: true,
+          },
+        },
+      },
     });
-    if (!sale) return [];
-    const pecas = (sale.items || []).filter((it: any) => !ehItemSemEstoque(it));
-    if (!pecas.length) return [];
+    if (!sale) throw new NotFoundException('Venda não encontrada');
 
-    /**
-     * ⚠️ LOJA-CANAL NÃO ENTRA NA REGRA A (17/08).
-     *
-     * A Regra A nasceu pra loja FÍSICA (caso Suzano). Mas a venda online do
-     * SITE é fechada pela loja-canal 13 ("SITE" — o time que recupera carrinho
-     * abandonado), e essa loja NÃO TEM ESTOQUE PRÓPRIO. Aplicar a regra ali
-     * bloqueava motoboy em 100% das vendas do canal: `faltamNaLoja` devolvia
-     * a sacola inteira e o PDV recusava sempre. O time perdeu uma forma de
-     * entrega que o dono quer ofertar (SEDEX, PAC, RETIRADA e MOTOBOY).
-     *
-     * Loja sem NENHUMA linha no espelho de estoque é canal de faturamento, não
-     * loja com arara — a pergunta "você tem a peça?" não faz sentido pra ela.
-     *
-     * A trava de distância do motoboy nesse canal é do ROTEAMENTO (só loja
-     * perto da cliente pode atender um pedido motoboy), não da origem — está
-     * pendente e é o próximo passo. Sem esta exceção, porém, o canal fica
-     * parado, o que é pior.
-     */
-    if (await this.lojaSemEstoqueProprio(sale.storeCode)) {
-      this.logger.log(
-        `[motoboy] venda ${saleId}: loja ${sale.storeCode} é canal sem estoque próprio — ` +
-          `Regra A não se aplica (distância fica a cargo do roteamento)`,
-      );
-      return [];
+    const lojas = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, city: true },
+      orderBy: { name: 'asc' },
+    });
+    const candidatas = lojas.filter((s) => !ehLojaCanal(s.code));
+    const cidadeCliente = this.chaveCidade(sale.customerCidade);
+    const daCliente = (s: { city: string | null }) =>
+      !!cidadeCliente && this.chaveCidade(s.city) === cidadeCliente;
+    const ehVendedora = (code: string) =>
+      this.semZeros(code) === this.semZeros(sale.storeCode);
+
+    const pecas = (sale.items || []).filter((it: any) => !ehItemSemEstoque(it));
+
+    // Sacola só de FRETE/MANUAL: não há peça pra procurar, toda loja "cobre".
+    if (!pecas.length) {
+      return {
+        total: 0,
+        cidadeCliente: sale.customerCidade || null,
+        lojas: candidatas.map((s) => ({
+          code: s.code,
+          name: s.name,
+          city: s.city || null,
+          cobertas: 0,
+          total: 0,
+          temTudo: true,
+          faltam: [] as string[],
+          cidadeDaCliente: daCliente(s),
+          ehVendedora: ehVendedora(s.code),
+        })),
+      };
     }
 
-    return this.faltamNaLoja(pecas, sale.storeCode);
+    const { porSku, porLoja } = await this.disponivelPorLoja(
+      pecas,
+      candidatas.map((s) => s.code),
+    );
+
+    // REF · COR · TAM é o que está na etiqueta e na arara — o `sku` (código
+    // do Wincred) não está em lugar nenhum que a vendedora consiga olhar.
+    const rotulo = new Map<string, string>();
+    for (const it of pecas) {
+      const sku = this.semZeros(it.sku);
+      if (!rotulo.has(sku)) rotulo.set(sku, this.rotuloPeca(it));
+    }
+    const totalPecas = [...porSku.values()].reduce((a, b) => a + b, 0);
+
+    const linhas = candidatas.map((s) => {
+      const disp = porLoja.get(this.semZeros(s.code)) || new Map<string, number>();
+      let cobertas = 0;
+      const faltam: string[] = [];
+      for (const [sku, qtd] of porSku) {
+        const tem = Math.min(qtd, Math.max(0, disp.get(sku) || 0));
+        cobertas += tem;
+        if (tem < qtd) {
+          const nome = rotulo.get(sku) || sku;
+          faltam.push(qtd > 1 ? `${nome} (tem ${tem} de ${qtd})` : nome);
+        }
+      }
+      return {
+        code: s.code,
+        name: s.name,
+        city: s.city || null,
+        cobertas,
+        total: totalPecas,
+        temTudo: faltam.length === 0,
+        faltam,
+        cidadeDaCliente: daCliente(s),
+        ehVendedora: ehVendedora(s.code),
+      };
+    });
+
+    /**
+     * ORDEM DA LISTA: CIDADE DA CLIENTE PRIMEIRO, não "quem tem a peça".
+     *
+     * Motoboy é distância — a loja que tem a sacola inteira a 150 km não
+     * entrega nada, e a que não tem nenhuma peça mas fica na esquina entrega
+     * depois da transferência. Estoque desempata; endereço decide.
+     */
+    linhas.sort(
+      (a, b) =>
+        Number(b.cidadeDaCliente) - Number(a.cidadeDaCliente) ||
+        Number(b.temTudo) - Number(a.temTudo) ||
+        b.cobertas - a.cobertas ||
+        a.name.localeCompare(b.name, 'pt-BR'),
+    );
+
+    return { total: totalPecas, cidadeCliente: sale.customerCidade || null, lojas: linhas };
+  }
+
+  /** REF · COR · TAM (o que está na etiqueta); cai pro nome do cadastro. */
+  private rotuloPeca(it: any): string {
+    return (
+      [it?.ref, it?.cor, it?.tamanho].filter(Boolean).join(' · ') ||
+      String(it?.descricao || '').trim() ||
+      this.semZeros(it?.sku)
+    );
+  }
+
+  /** Cidade comparável: sem acento, sem caixa, sem espaço nas pontas. */
+  private chaveCidade(v: any): string {
+    return String(v ?? '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .trim()
+      .toUpperCase();
   }
 
   /**
-   * A loja tem alguma linha de estoque no espelho? `false` = loja-canal (só
-   * fatura, não guarda peça). Uma linha basta — não interessa a quantidade,
-   * interessa se ela existe como loja com arara no sistema de estoque.
+   * O `disponivelNaLoja` de VÁRIAS lojas de uma vez — mesma conta (espelho
+   * MENOS peça prometida), duas queries no total em vez de duas por loja.
+   * Com 14 lojas e a lista abrindo no meio da venda, 28 idas ao banco pra
+   * responder uma pergunta de tela não se justificam.
    */
-  private async lojaSemEstoqueProprio(storeCode: string): Promise<boolean> {
-    const alvo = this.semZeros(storeCode);
-    // `wincred_estoque.loja` é Char(2) — a forma canônica é com zero à
-    // esquerda ("07"). As outras variantes vão junto porque code de Store nem
-    // sempre normaliza, e um falso "sem estoque" liberaria motoboy pra loja
-    // física que não tem a peça (justamente o que a Regra A existe pra evitar).
-    const variantes = Array.from(
-      new Set([String(storeCode || '').trim(), alvo, alvo.padStart(2, '0')]),
-    );
-    const qualquer = await (this.prisma as any).wincredEstoque.findFirst({
-      where: { loja: { in: variantes } },
-      select: { codigo: true },
+  private async disponivelPorLoja(
+    pecas: any[],
+    storeCodes: string[],
+  ): Promise<{ porSku: Map<string, number>; porLoja: Map<string, Map<string, number>> }> {
+    const porSku = new Map<string, number>();
+    const skusCrus = new Set<string>();
+    for (const it of pecas) {
+      const sku = this.semZeros(it.sku);
+      porSku.set(sku, (porSku.get(sku) || 0) + Number(it.qty || 1));
+      const cru = String(it.sku ?? '').trim();
+      if (cru) skusCrus.add(cru);
+      if (sku) skusCrus.add(sku);
+    }
+
+    const porLoja = new Map<string, Map<string, number>>();
+    for (const c of storeCodes) porLoja.set(this.semZeros(c), new Map());
+
+    const est: any[] = await (this.prisma as any).wincredEstoque.findMany({
+      where: { codigo: { in: [...porSku.keys()] } },
+      select: { codigo: true, loja: true, estoque: true },
     });
-    return !qualquer;
+    for (const r of est) {
+      const alvo = porLoja.get(this.semZeros(r.loja));
+      if (!alvo) continue;
+      const c = this.semZeros(r.codigo);
+      alvo.set(c, (alvo.get(c) || 0) + (Number(r.estoque) || 0));
+    }
+
+    // Falha aqui NÃO trava a tela: sem o comprometido a conta volta a ser a
+    // do espelho cheio, que é o comportamento conhecido.
+    const comprometido = await this.routing
+      .getCommittedStock([...skusCrus], storeCodes)
+      .catch((e: any) => {
+        this.logger.warn(
+          `[pedido-online] comprometido das lojas falhou (${e?.message || e}) — segue com estoque cheio`,
+        );
+        return new Map<string, number>();
+      });
+    for (const [chave, qtd] of comprometido) {
+      const [lojaCru, skuCru] = chave.split('::');
+      const alvo = porLoja.get(this.semZeros(lojaCru));
+      const sku = this.semZeros(skuCru ?? '');
+      if (!alvo || !sku || !alvo.has(sku)) continue;
+      alvo.set(sku, Math.max(0, (alvo.get(sku) || 0) - qtd));
+    }
+
+    return { porSku, porLoja };
   }
 
   /**
@@ -292,6 +430,13 @@ export class PedidoOnlineService {
     store: any,
     pecas: any[],
     sale: any,
+    /**
+     * POR QUE fechou sem card — vai pro histórico do pedido. Quando quem
+     * mandou fechar foi a VENDEDORA ("as peças estão aqui") e não o saldo, o
+     * estoque pode ficar negativo: sem esta linha, quem for conferir o saldo
+     * depois não tem como saber que a peça saiu de verdade.
+     */
+    motivo?: string | null,
   ): Promise<boolean> {
     try {
       const items = pecas.map((it) => ({
@@ -336,7 +481,8 @@ export class PedidoOnlineService {
               `Venda online entregue pela própria ${store.name}` +
               `${vendedora ? ` (vendedora: ${vendedora})` : ''} — ` +
               `${items.length} peça(s) baixada(s) do estoque dela no fechamento. ` +
-              `Sem separação: a peça já estava em mãos e saiu pra cliente.`,
+              `Sem separação: a peça já estava em mãos e saiu pra cliente.` +
+              `${motivo ? ` ${motivo}` : ''}`,
           },
         })
         .catch(() => null);
@@ -356,7 +502,9 @@ export class PedidoOnlineService {
   }
 
   /**
-   * Chamado pelo finalize (venda 100% 'venda_online', flag ligada, não-treino).
+   * Chamado pelo finalize (venda aprovada por `vendaViraPedidoOnline`:
+   * qualquer pagamento 'venda_online', ou troca 100% vale_troca com envio
+   * escolhido; flag ligada, não-treino).
    * NUNCA lança: qualquer falha → null e o finalize segue no comportamento
    * legado (baixa na própria loja). Retorna info pro front exibir a mensagem.
    */
@@ -533,7 +681,33 @@ export class PedidoOnlineService {
        *                 tarefa real, e o `routePickup` já dá prioridade total à
        *                 loja da retirada.
        */
-      const fechaNaLoja = autoAtende && entrega.kind === 'motoboy';
+      /**
+       * QUEM SABE SE A MOTO JÁ SAIU É A PESSOA NO CAIXA, NÃO O SALDO (26/08).
+       *
+       * Até aqui a régua era só `autoAtende` — o espelho de estoque. O
+       * ON-000164 (Piracicaba, motoboy, 4 peças) foi entregue na hora e mesmo
+       * assim abriu roteamento: o espelho dizia que faltava peça, e o pedido
+       * foi parar na fila da matriz com a cliente já com a sacola na mão.
+       *
+       * Agora a tela pergunta ("as peças já estão aqui?") e a resposta MANDA:
+       *   - SIM  → fecha, mesmo com o espelho dizendo que falta. A baixa é
+       *            `allowNegative`: saldo negativo na tela é o retrato honesto
+       *            de uma peça que saiu e o sistema não sabia que existia.
+       *   - NÃO  → roteia, mesmo com o espelho dizendo que tem. Ela está
+       *            olhando pra arara; o espelho não.
+       *   - sem resposta (outra loja entrega, venda fechada pelo cron do PIX)
+       *            → continua valendo o estoque, como antes.
+       */
+      const pecasNaMao: boolean | null =
+        typeof (sale as any).entregaPecasNaMao === 'boolean'
+          ? (sale as any).entregaPecasNaMao
+          : null;
+      const fechaNaLoja = fechaMotoboySemSeparacao({
+        kind: entrega.kind,
+        outraLojaAtende,
+        pecasNaMao,
+        lojaTemTudo: autoAtende,
+      });
 
       const checkoutInfo = {
         origem: 'pdv_online',
@@ -654,7 +828,23 @@ export class PedidoOnlineService {
       // status só avança depois que o estoque mexeu de verdade, senão eu
       // recriaria o estoque fantasma que este fix existe pra matar.
       if (fechaNaLoja) {
-        fechadoNaLoja = await this.fecharNaLojaVendedora(order, store, pecas, sale);
+        // Quem mandou fechar foi a VENDEDORA e não o saldo? Registra o que o
+        // sistema achava que faltava. É a única pista de por que o estoque
+        // dela vai aparecer negativo depois — sem isso o conferidor "corrige"
+        // uma peça que de verdade saiu pra cliente.
+        let motivo: string | null = null;
+        if (pecasNaMao === true) {
+          motivo = 'A vendedora confirmou na tela que as peças estavam na loja.';
+          if (!autoAtende) {
+            const faltavam = await this.faltamNaLoja(pecas, store.code).catch(() => [] as string[]);
+            if (faltavam.length > 0) {
+              motivo +=
+                ` O estoque do sistema dizia que faltava ${faltavam.join(', ')}` +
+                ` — o saldo dela pode ficar negativo nessa(s) peça(s).`;
+            }
+          }
+        }
+        fechadoNaLoja = await this.fecharNaLojaVendedora(order, store, pecas, sale, motivo);
       }
 
       if (!fechadoNaLoja && autoAtende) {
@@ -685,17 +875,23 @@ export class PedidoOnlineService {
       }
 
       /**
-       * OUTRA LOJA ATENDE (retirada/motoboy em loja escolhida) → card NELA
-       * agora, sem esperar a matriz. A engine com `pickupStoreCode` é
-       * determinística (REGRA 0): trava na loja escolhida, e o que ela não
-       * tem vira card de transferência nas lojas que têm, apontando pra ela.
-       * Não há decisão humana a tomar aqui — passar pela matriz seria só um
-       * atraso (o ON-000006 ficou 2 dias esperando alguém rotear na mão).
-       * Se nem a rede cobre (`pickup-blocked`), o confirmRoute deixa em
-       * `awaiting_stock` e aí sim a matriz olha.
+       * ENTREGA TRAVADA NUMA LOJA (retirada/motoboy) → card NELA agora, sem
+       * esperar a matriz. A engine com `pickupStoreCode` é determinística
+       * (REGRA 0): trava na loja escolhida, e o que ela não tem vira card de
+       * transferência nas lojas que têm, apontando pra ela. Não há decisão
+       * humana a tomar aqui — passar pela matriz seria só um atraso (o
+       * ON-000006 ficou 2 dias esperando alguém rotear na mão). Se nem a rede
+       * cobre (`pickup-blocked`), o confirmRoute deixa em `awaiting_stock` e
+       * aí sim a matriz olha.
+       *
+       * `travaNaLoja` e não `outraLojaAtende` (26/08): com a Regra A fora, a
+       * PRÓPRIA vendedora pode escolher motoboy sem ter a peça — e esse caso
+       * caía em `processing`, parado na matriz, esperando um roteamento que
+       * a engine já sabe fazer sozinha. Quando é a vendedora E ela tem tudo,
+       * `fechaNaLoja`/`autoAtende` já resolveram antes e este bloco nem roda.
        */
       let lojaEscolhidaOk = false;
-      if (!fechadoNaLoja && !autoOk && outraLojaAtende) {
+      if (!fechadoNaLoja && !autoOk && travaNaLoja) {
         try {
           const preview: any = await this.routing.previewRoute(order.id);
           const r = await this.routing.confirmRoute(order.id, preview as RoutingResult);

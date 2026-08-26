@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import type { Product, Store } from '@/types';
+import { STORE_POLICIES } from '@/data/store-policies';
 
 /**
  * CAMADA DE SEO — helpers de metadata e JSON-LD.
@@ -24,8 +25,8 @@ import type { Product, Store } from '@/types';
  * sistema interno, e o ecommerce se anunciaria com a URL da retaguarda.
  */
 function resolveSiteUrl(): string {
-  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL;
-  if (process.env.NEXT_PUBLIC_VERCEL_URL) return `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`;
+  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL.replace(/\/$/, '');
+  if (process.env.NEXT_PUBLIC_VERCEL_URL) return `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`.replace(/\/$/, '');
   return 'http://localhost:3100';
 }
 
@@ -48,6 +49,8 @@ interface BuildMetadataInput {
   image?: string;
   keywords?: string[];
   noIndex?: boolean;
+  /** Sobrescreve o follow padrão; busca interna usa noindex, follow. */
+  follow?: boolean;
   type?: 'website' | 'article';
 }
 
@@ -58,6 +61,7 @@ export function buildMetadata({
   image = SITE.ogImage,
   keywords,
   noIndex = false,
+  follow,
   type = 'website',
 }: BuildMetadataInput): Metadata {
   const url = `${SITE.url}${path}`;
@@ -86,8 +90,8 @@ export function buildMetadata({
       site: SITE.twitter,
     },
     robots: noIndex
-      ? { index: false, follow: false }
-      : { index: true, follow: true, 'max-image-preview': 'large' },
+      ? { index: false, follow: follow ?? false }
+      : { index: true, follow: follow ?? true, 'max-image-preview': 'large' },
   };
 }
 
@@ -103,6 +107,21 @@ export function organizationSchema(): JsonLd {
     url: SITE.url,
     description: SITE.description,
     logo: `${SITE.url}/logo.svg`,
+    taxID: '20.104.813/0001-39',
+    email: 'atendimento@lurdsplussize.com.br',
+    sameAs: ['https://www.instagram.com/lurdsplussize'],
+    hasMerchantReturnPolicy: {
+      '@type': 'MerchantReturnPolicy',
+      '@id': `${SITE.url}#return-policy`,
+      applicableCountry: 'BR',
+      returnPolicyCategory: 'https://schema.org/MerchantReturnFiniteReturnWindow',
+      merchantReturnDays: STORE_POLICIES.returnWindowDays,
+      returnMethod: [
+        'https://schema.org/ReturnByMail',
+        'https://schema.org/ReturnInStore',
+      ],
+      returnFees: 'https://schema.org/FreeReturn',
+    },
   };
 }
 
@@ -135,13 +154,24 @@ export function breadcrumbSchema(trail: { name: string; path: string }[]): JsonL
 }
 
 export function productSchema(product: Product): JsonLd {
+  const description = product.description
+    ?.replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const colors = product.colors?.map((color) => color.name.trim()).filter(Boolean);
+
   return {
     '@type': 'Product',
     '@id': `${SITE.url}/produto/${product.slug}#product`,
     name: product.name,
+    ...(description ? { description } : {}),
     image: product.images.map((i) => i.src),
-    sku: product.id,
+    sku: product.sku ?? product.id,
     brand: { '@type': 'Brand', name: SITE.shortName },
+    ...(product.fabric ? { material: product.fabric } : {}),
+    ...(colors?.length ? { color: [...new Set(colors)].join(', ') } : {}),
     ...(product.rating
       ? {
           aggregateRating: {
@@ -159,16 +189,25 @@ export function productSchema(product: Product): JsonLd {
       availability: product.sizes.some((s) => s.available)
         ? 'https://schema.org/InStock'
         : 'https://schema.org/OutOfStock',
+      itemCondition: 'https://schema.org/NewCondition',
+      seller: { '@id': `${SITE.url}#organization` },
     },
   };
 }
 
-export function itemListSchema(products: Product[], listName: string): JsonLd {
+export function itemListSchema(products: Product[], listName: string, limit = products.length): JsonLd {
+  const uniqueProducts = Array.from(
+    products.reduce((bySlug, product) => {
+      if (!bySlug.has(product.slug)) bySlug.set(product.slug, product);
+      return bySlug;
+    }, new Map<string, Product>()).values(),
+  ).slice(0, Math.max(0, limit));
+
   return {
     '@type': 'ItemList',
     name: listName,
-    numberOfItems: products.length,
-    itemListElement: products.map((p, i) => ({
+    numberOfItems: uniqueProducts.length,
+    itemListElement: uniqueProducts.map((p, i) => ({
       '@type': 'ListItem',
       position: i + 1,
       url: `${SITE.url}/produto/${p.slug}`,

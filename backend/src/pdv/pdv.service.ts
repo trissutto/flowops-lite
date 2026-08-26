@@ -19,8 +19,9 @@ import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
 import { PedidoOnlineService } from './pedido-online.service';
 import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
+import { vendaViraPedidoOnline } from '../common/venda-vira-pedido-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
-import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
+import { SQL_SEM_LOJA_CANAL, ehLojaCanal } from '../common/loja-canal';
 import {
   assumirAtendimentoCarrinho,
   atendimentosAtivosCarrinho,
@@ -83,6 +84,13 @@ type CarrinhoDoPdv = {
   phone: string;
   cart_total: number;
   items_count: number;
+  /**
+   * As peças que ela escolheu, no formato da casa (REF · COR TAM) — o modal
+   * lista até 4 sob o nome da cliente. Mesma montagem da retaguarda
+   * (`abandoned-carts.service`): as duas telas trabalham a MESMA fila e não
+   * podem contar histórias diferentes sobre o mesmo carrinho.
+   */
+  cart_items: Array<{ name: string; sku: string | null; quantity: number }>;
   time: string | null;
   utmCampaign: string | null;
   source: 'ecommerce' | 'ecommerce-contact';
@@ -352,13 +360,22 @@ export class PdvService {
         createdAt: true,
         utmCampaign: true,
         trackingInfo: true,
-        items: { select: { quantity: true } },
+        items: { select: { productName: true, sku: true, quantity: true } },
       },
     });
 
     const items: CarrinhoDoPdv[] = pedidos.map((o) => {
       const nome = String(o.customerName ?? '').trim();
       const sp = nome.indexOf(' ');
+      // As peças na linha (dono, 26/08: "não aparece qual peça, cor e tamanho").
+      // O modal do PDV já desenhava `cart_items` — era ESTA rota que não mandava
+      // (selecionava só `quantity`). Mesma montagem da retaguarda: o nome do
+      // item do pedido já sai completo do checkout.
+      const cartItems = (o.items || []).map((it: any) => ({
+        name: String(it.productName || it.sku || 'peça'),
+        sku: it.sku != null ? String(it.sku) : null,
+        quantity: Number(it.quantity ?? 1),
+      }));
       return {
         id: Number(o.wcOrderId),
         chave: chaveCarrinhoPedido(o.wcOrderId),
@@ -370,7 +387,8 @@ export class PdvService {
         email: o.customerEmail ?? '',
         phone: o.customerPhone ?? '',
         cart_total: Number(o.totalAmount ?? 0),
-        items_count: (o.items || []).reduce((s: number, i: any) => s + Number(i.quantity ?? 1), 0),
+        items_count: cartItems.reduce((s, i) => s + i.quantity, 0),
+        cart_items: cartItems,
         time: o.createdAt ? o.createdAt.toISOString() : null,
         // A campanha só existe no carrinho — é o que liga a venda ao anúncio.
         utmCampaign: o.utmCampaign ?? null,
@@ -528,6 +546,20 @@ export class PdvService {
         const nome = String(r.nome ?? '').trim();
         const sp = nome.indexOf(' ');
         const itens = Array.isArray(r.items) ? r.items : [];
+        // COR E TAMANHO NA LINHA — a captura grava `color`/`size` soltos e o
+        // `name` vem sem eles. Formato da casa REF · COR TAM, a MESMA montagem
+        // da retaguarda (carimbo de 17/08): é o que deixa a vendedora conferir
+        // a arara antes de ligar.
+        const cartItems = itens.map((it: any) => {
+          const cor = String(it.color || '').trim();
+          const tam = String(it.size || '').trim();
+          const variacao = [cor, tam].filter(Boolean).join(' ');
+          return {
+            name: String(it.name || it.productId || 'peça') + (variacao ? ` · ${variacao}` : ''),
+            sku: it.productId != null ? String(it.productId) : null,
+            quantity: Number(it.quantity ?? 1),
+          };
+        });
         return {
           id: 970_000_000 + index,
           chave: chaveCarrinhoContato(r.id),
@@ -542,7 +574,8 @@ export class PdvService {
           email: '',
           phone: r.telefone ?? '',
           cart_total: Number(r.subtotal ?? 0),
-          items_count: itens.reduce((s: number, i: any) => s + Number(i.quantity ?? 1), 0),
+          items_count: cartItems.reduce((s, i) => s + i.quantity, 0),
+          cart_items: cartItems,
           time: r.updatedAt?.toISOString?.() ?? null,
           utmCampaign:
             (r.attribution as any)?.utm_campaign ?? (r.attribution as any)?.campaign ?? null,
@@ -2540,7 +2573,12 @@ export class PdvService {
    * entra na mesma regra pelo mesmo motivo: a 13 não tem moto — quem tem é
    * a loja na cidade da cliente, e é a vendedora quem sabe qual.
    */
-  async setEntrega(saleId: string, tipoRaw: string, entregaStoreCodeRaw?: string | null) {
+  async setEntrega(
+    saleId: string,
+    tipoRaw: string,
+    entregaStoreCodeRaw?: string | null,
+    pecasNaMaoRaw?: boolean | null,
+  ) {
     const tipo = String(tipoRaw || '').trim().toLowerCase();
     if (!(PdvService.ENTREGA_TIPOS as readonly string[]).includes(tipo)) {
       throw new BadRequestException(
@@ -2557,16 +2595,33 @@ export class PdvService {
 
     const entregaStoreCode = await this.resolverLojaQueAtende(tipo, sale.storeCode, entregaStoreCodeRaw);
 
-    // REGRA A só quando o motoboy sai DAQUI, agora: a peça tem que estar na
-    // arara. Se outra loja foi escolhida pra entregar, é ela quem recebe o
-    // card (e por transferência o que não tiver) — a regra não se aplica.
-    if (tipo === 'motoboy' && !entregaStoreCode) await this.exigirEstoqueLocalParaMotoboy(saleId);
+    // Sem trava de estoque aqui (26/08). A escolha de QUEM ENTREGA vem depois
+    // de a tela mostrar o que cada loja tem (`lojasParaEntrega`), e a loja
+    // escolhida junta por transferência o que não tiver — inclusive quando
+    // ela é a própria vendedora. Ver `PedidoOnlineService.coberturaPorLoja`.
+
+    // A PEÇA JÁ ESTÁ NA MÃO? Só faz sentido no motoboy que sai da PRÓPRIA
+    // loja: em qualquer outro arranjo (SEDEX/PAC/retirada, ou outra loja
+    // mandando a moto) a resposta seria sobre uma arara que não é a de quem
+    // está no caixa. Fora desses casos grava null — quem decide volta a ser
+    // o estoque.
+    //
+    // LOJA-CANAL NUNCA (13/SITE): ela não tem arara, balcão nem moto — um
+    // "sim" ali fecharia o pedido numa loja sem peça nenhuma e baixaria
+    // estoque fantasma. Ver `common/loja-canal.ts`.
+    const pecasNaMao =
+      tipo === 'motoboy' &&
+      !entregaStoreCode &&
+      !ehLojaCanal(sale.storeCode) &&
+      typeof pecasNaMaoRaw === 'boolean'
+        ? pecasNaMaoRaw
+        : null;
 
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
-      data: { entregaTipo: tipo, entregaStoreCode },
+      data: { entregaTipo: tipo, entregaStoreCode, entregaPecasNaMao: pecasNaMao },
     });
-    return { ok: true, entregaTipo: tipo, entregaStoreCode };
+    return { ok: true, entregaTipo: tipo, entregaStoreCode, entregaPecasNaMao: pecasNaMao };
   }
 
   /**
@@ -2593,19 +2648,13 @@ export class PdvService {
   }
 
   /**
-   * REGRA A DO MOTOBOY (dono, 17/08): só sai da loja vendedora. Ver
-   * `PedidoOnlineService.faltaParaMotoboy`. A mensagem lista o que falta —
-   * "não pode" sem dizer por quê é o que faz a vendedora tentar de novo.
+   * QUEM PODE ENTREGAR — o que cada loja tem das peças desta venda, pra tela
+   * escolher a loja do motoboy/retirada sabendo o que está escolhendo.
+   * Substituiu a Regra A do motoboy (que recusava em vez de informar) —
+   * ver `PedidoOnlineService.coberturaPorLoja`.
    */
-  private async exigirEstoqueLocalParaMotoboy(saleId: string) {
-    const faltam = await this.pedidoOnline.faltaParaMotoboy(saleId).catch(() => [] as string[]);
-    if (!faltam.length) return;
-    throw new BadRequestException(
-      `Motoboy só sai da SUA loja, e ela não tem: ${faltam.slice(0, 6).join(
-)}` +
-        (faltam.length > 6 ? ` e mais ${faltam.length - 6}` : '') +
-        '. Escolha SEDEX/PAC (outra loja envia) ou retirada.',
-    );
+  lojasParaEntrega(saleId: string) {
+    return this.pedidoOnline.coberturaPorLoja(saleId);
   }
 
   /**
@@ -3461,6 +3510,10 @@ export class PdvService {
      *  escolha que está na tela no momento do fechamento é a verdade. */
     entregaTipo?: string | null;
     entregaStoreCode?: string | null;
+    /** AS PEÇAS JÁ ESTÃO NA LOJA (26/08) — resposta da vendedora no motoboy
+     *  que sai da própria loja. `undefined` aqui NÃO apaga o que ela já
+     *  respondeu no POST /entrega: o valor da venda é o fallback. */
+    entregaPecasNaMao?: boolean | null;
   }) {
     let sale = await this.getSale(input.saleId);
 
@@ -3469,7 +3522,14 @@ export class PdvService {
     // passa por aqui com body, e não pode apagar o que a vendedora escolheu.
     if (sale.status === 'open' && input.entregaTipo) {
       try {
-        await this.setEntrega(sale.id, input.entregaTipo, input.entregaStoreCode ?? null);
+        await this.setEntrega(
+          sale.id,
+          input.entregaTipo,
+          input.entregaStoreCode ?? null,
+          typeof input.entregaPecasNaMao === 'boolean'
+            ? input.entregaPecasNaMao
+            : (sale as any).entregaPecasNaMao,
+        );
         sale = await this.getSale(input.saleId);
       } catch (e: any) {
         // Regra A do motoboy ou loja de retirada inválida: erro DE VERDADE —
@@ -3762,9 +3822,13 @@ export class PdvService {
     }
 
     // ── PEDIDO ONLINE (flag PEDIDO_ONLINE_ROTEAMENTO, 14/08) ──
-    // Venda 100% 'venda_online' vira um Order no trilho do site: card verde
-    // ONLINE, roteamento (ou auto-atende na própria loja) e acerto
-    // fornecedora→vendedora. A venda segue normal no caixa desta loja.
+    // Venda que `vendaViraPedidoOnline` aprova vira um Order no trilho do
+    // site: card verde ONLINE, roteamento (ou auto-atende na própria loja) e
+    // acerto fornecedora→vendedora. A venda segue normal no caixa desta loja.
+    // A régua NÃO é mais "100% venda_online" (26/08): a TROCA ONLINE fecha
+    // com vale_troca + venda_online da diferença, e o every() derrubava ela
+    // pro balcão — caixa fechado, estoque baixado na vendedora e nenhum card
+    // (caso loja 08, R$ 739,40 pra São Sebastião, 25/08).
     //
     // ⚠️ TRAVA DE BAIXA DUPLA: com o Order criado, o finalize NÃO baixa aqui —
     // marca stockDecreasedAt ANTES de enfileirar o outbox, então o passo de
@@ -3785,13 +3849,15 @@ export class PdvService {
       lojaEscolhida: { code: string; name: string } | null;
       storeName: string | null;
     } | null = null;
-    if (isAllVendaOnline && this.pedidoOnline.enabled()) {
-      // Regra A do motoboy vale no fechamento também: a sacola pode ter
-      // mudado depois da escolha, e o front guarda a escolha mesmo quando a
-      // API recusa. Recusar aqui é ANTES de gravar qualquer coisa.
-      if (String((sale as any).entregaTipo || '').toLowerCase() === 'motoboy') {
-        await this.exigirEstoqueLocalParaMotoboy(sale.id);
-      }
+    if (vendaViraPedidoOnline(payments as any[], (sale as any).entregaTipo) && this.pedidoOnline.enabled()) {
+      /**
+       * A Regra A do motoboy morava aqui também (26/08 — removida). Ela media
+       * o estoque da LOJA VENDEDORA mesmo quando outra loja tinha sido
+       * escolhida pra entregar: Itanhaém escolhia Piracicaba na tela, passava,
+       * e o fechamento recusava a venda inteira falando de Itanhaém. Hoje o
+       * pedido nasce travado na loja escolhida e ela junta o que falta por
+       * transferência (`routePickup`).
+       */
       onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
       if (onlineOrder) {
         const agora = new Date();

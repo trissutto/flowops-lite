@@ -77,7 +77,13 @@ export class PickOrdersController {
     if (user.role !== 'admin' && user.role !== 'operator') {
       throw new ForbiddenException('Apenas matriz pode remover pick-order');
     }
-    return this.svc.removePickOrder(id);
+    // QUEM removeu (26/08) — o remove do ON-000106 saiu como "[sistema]" e a
+    // pergunta "quem tirou o card?" ficou sem resposta possível.
+    const u: any = req.user ?? {};
+    return this.svc.removePickOrder(id, {
+      userId: u.userId ?? u.sub ?? u.id ?? null,
+      nome: (u.name ?? u.nome ?? u.email ?? null) as string | null,
+    });
   }
 
   /**

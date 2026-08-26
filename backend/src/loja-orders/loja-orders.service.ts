@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
+import { localBrPhone } from '../lib/phone-br';
 import { CarrinhoGuardService, ItemRecusado, MotivoRecusa } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
@@ -295,6 +296,16 @@ export class LojaOrdersService {
     return String(v ?? '').replace(/\D/g, '');
   }
 
+  /**
+   * Telefone SEM o DDI 55 — em tudo que o pedido guarda. A cliente que colava
+   * "+55 11 …" no checkout gravava "55119959582" (a máscara antiga cortava em
+   * 11 dígitos e o DDI engolia o fim do número). A máscara do site foi
+   * consertada, mas aba velha aberta ainda manda o formato antigo por dias.
+   */
+  private fone(v: any): string {
+    return localBrPhone(v);
+  }
+
   private dinheiro(v: any): number {
     const n = Number(v);
     return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
@@ -360,7 +371,7 @@ export class LojaOrdersService {
     if (!/^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/.test(email) || email.length > 120) {
       return 'O e-mail informado não parece válido.';
     }
-    if (this.digits(input.customer.phone).length < 10) return 'O telefone precisa vir com DDD.';
+    if (this.fone(input.customer.phone).length < 10) return 'O telefone precisa vir com DDD.';
 
     if (!Array.isArray(input.items) || input.items.length === 0) {
       return 'Sua sacola está vazia.';
@@ -686,7 +697,7 @@ export class LojaOrdersService {
     const personKey = computePersonKeyFromCpf(cpf);
     const nome = String(c.name || '').trim();
     const email = String(c.email || '').trim().toLowerCase() || null;
-    const phone = this.digits(c.phone) || null;
+    const phone = this.fone(c.phone) || null;
 
     try {
       // CPF pode estar gravado com ou sem máscara (base histórica do Giga).
@@ -892,7 +903,7 @@ export class LojaOrdersService {
       city: e?.city || '',
       state: (e?.uf || '').toUpperCase().slice(0, 2),
       postcode: this.digits(e?.cep),
-      phone: this.digits(input.customer.phone),
+      phone: this.fone(input.customer.phone),
     };
   }
 
@@ -998,7 +1009,7 @@ export class LojaOrdersService {
      */
     const marcarCarrinhoRecuperado = async () => {
       const sessao = trackingInfo?.session_id || null;
-      const fone = String(input.customer?.phone ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+      const fone = this.fone(input.customer?.phone);
       const alvos: any[] = [];
       if (sessao) alvos.push({ sessionId: sessao });
       if (fone.length >= 10) alvos.push({ telefone: fone });
@@ -1042,7 +1053,7 @@ export class LojaOrdersService {
       status: 'awaiting_payment',
       customerName: String(input.customer.name || '').trim() || null,
       customerEmail: String(input.customer.email || '').trim() || null,
-      customerPhone: this.digits(input.customer.phone) || null,
+      customerPhone: this.fone(input.customer.phone) || null,
       customerCpf: this.digits(input.customer.cpf) || null,
       shippingCep: this.digits(input.shippingAddress?.cep) || null,
       shippingAddress: JSON.stringify(shipping),
@@ -1311,7 +1322,7 @@ export class LojaOrdersService {
       customerName: String(input.customer.name || '').trim(),
       customerCpf: this.digits(input.customer.cpf),
       customerEmail: String(input.customer.email || '').trim(),
-      customerPhone: this.digits(input.customer.phone),
+      customerPhone: this.fone(input.customer.phone),
       expiresInMinutes: LojaOrdersService.PIX_EXPIRA_MIN,
     });
     return {

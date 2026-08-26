@@ -105,6 +105,8 @@ type Sale = {
   /** Forma de entrega da venda online (sedex/pac/motoboy/retirada). Vazio no balcão. */
   entregaTipo?: string | null;
   entregaStoreCode?: string | null;
+  /** Motoboy desta loja: as peças já estavam aqui? (null = não perguntado) */
+  entregaPecasNaMao?: boolean | null;
   status: 'open' | 'finalized' | 'cancelled' | string;
   subtotal: number;
   desconto: number;
@@ -5275,6 +5277,9 @@ function PaymentModal({
         if (s?.entregaTipo) {
           setEntregaTipo(s.entregaTipo);
           setEntregaStoreCode(s.entregaStoreCode || '');
+          // A resposta sobre a arara também é retomada: sem isso o fechamento
+          // mandaria `null` e apagaria o que ela já tinha respondido.
+          setPecasNaMao(typeof s.entregaPecasNaMao === 'boolean' ? s.entregaPecasNaMao : null);
         }
         // FRETE JÁ GRAVADO — o campo nascia VAZIO mesmo com a linha FRETE na
         // venda. Reabrir o modal (link pendente, F5, "fechar depois") mostrava
@@ -5405,6 +5410,8 @@ function PaymentModal({
   const [etapaOnline, setEtapaOnline] = useState<
     | 'frete_tipo'
     | 'frete_loja'
+    // AS PEÇAS JÁ ESTÃO AQUI? (26/08) — só no motoboy que sai desta loja.
+    | 'frete_mao'
     | 'frete_valor'
     | 'confirma_total'
     | 'pagamento'
@@ -5439,6 +5446,8 @@ function PaymentModal({
   const escolherEntregaGuiada = async (tipo: 'sedex' | 'pac' | 'motoboy' | 'retirada') => {
     setEntregaTipo(tipo);
     setEntregaStoreCode('');
+    // Trocou a forma de envio → a resposta sobre a arara não vale mais.
+    setPecasNaMao(null);
     const sugerido = freteSugerido(tipo, clienteOnline?.uf);
     // Só preenche o campo se ela ainda não digitou um valor próprio.
     if (!freteStr || freteStr === freteAutoRef.current) {
@@ -5450,35 +5459,59 @@ function PaymentModal({
     // loja com balcão/moto. A loja-canal 13/SITE vende pra cliente de qualquer
     // cidade e não tem nenhum dos dois — sem esta pergunta o pedido nascia
     // "retira NA LOJA 13" e a matriz roteava na mão, 2 dias parado.
-    setEtapaOnline(tipo === 'retirada' || tipo === 'motoboy' ? 'frete_loja' : 'frete_valor');
+    const perguntaLoja = tipo === 'retirada' || tipo === 'motoboy';
+    setEtapaOnline(perguntaLoja ? 'frete_loja' : 'frete_valor');
     if (!saleId) return;
+    /**
+     * NÃO GRAVA ANTES DE PERGUNTAR (26/08). Este POST mandava
+     * `entregaStoreCode: null` = "sai DAQUI" no instante do clique — antes de
+     * a vendedora ver a lista de lojas. O servidor então media o estoque da
+     * loja errada e recusava: Itanhaém vendendo pra entregar em PIRACICABA
+     * levava "sua loja não tem: 5354658" e voltava pro passo 1, sem nunca
+     * chegar na tela onde Piracicaba estava listada. A escolha da loja é que
+     * grava agora (`escolherLojaGuiada`).
+     */
+    if (perguntaLoja) return;
     try {
       await api(`/pdv/sales/${saleId}/entrega`, {
         method: 'POST',
         body: JSON.stringify({ tipo, entregaStoreCode: null }),
       });
     } catch (e: any) {
-      // REGRA A (17/08): motoboy só sai desta loja. Servidor recusou por falta
-      // de peça aqui — a escolha NÃO fica, senão o fechamento recusa de novo.
-      if (tipo === 'motoboy') {
-        setEntregaTipo(null);
-        setEtapaOnline('frete_tipo');
-        toast('error', 'Motoboy não disponível', e?.message || humanizeError(e).hint);
-        return;
-      }
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
     }
   };
 
   /**
-   * QUEM ATENDE a retirada/motoboy. Grava e segue pro valor do frete; se o
-   * servidor recusar (Regra A: motoboy só sai de loja que tem a peça), desfaz
-   * a escolha em vez de deixar a venda com uma entrega que o fechamento nega.
+   * QUEM ATENDE a retirada/motoboy — e é AQUI que a entrega é gravada na
+   * venda (o passo anterior só pergunta a forma). Se o servidor recusar
+   * (loja inativa, venda já fechada), desfaz a escolha em vez de deixar a
+   * venda com uma entrega que o fechamento nega.
    */
   const escolherLojaGuiada = async (code: string) => {
     const anterior = entregaStoreCode;
     setEntregaStoreCode(code);
+    setPecasNaMao(null);
+    /**
+     * MOTOBOY QUE SAI DAQUI: falta a pergunta que o estoque não responde —
+     * "as peças já estão aqui?". Enquanto ela não responde, não grava: a
+     * resposta faz parte da mesma escolha (é ela que decide se o pedido nasce
+     * fechado ou se abre separação). Ver `pecasNaMao`.
+     */
+    if (entregaTipo === 'motoboy' && (!code || code === storeCode)) {
+      /**
+       * ...menos na LOJA-CANAL (13/SITE), que não tem arara, balcão nem moto:
+       * lá a resposta seria sempre uma peça que não existe. Ela nunca vem na
+       * lista do servidor (`lojas-entrega` a exclui), então a ausência é o
+       * sinal — e o backend recusa a resposta de qualquer jeito.
+       */
+      const ehCanal = !!lojasEntrega && !lojasEntrega.some((l) => l.code === (code || storeCode));
+      if (!ehCanal) {
+        setEtapaOnline('frete_mao');
+        return;
+      }
+    }
     setEtapaOnline('frete_valor');
     if (!saleId) return;
     try {
@@ -5489,6 +5522,36 @@ function PaymentModal({
     } catch (err: any) {
       setEntregaStoreCode(anterior);
       setEtapaOnline('frete_loja');
+      const h = humanizeError(err);
+      toast('error', h.title, err?.message || h.hint);
+    }
+  };
+
+  /**
+   * A RESPOSTA QUE O ESTOQUE NÃO DÁ (26/08) — e é ela que grava a entrega no
+   * motoboy desta loja.
+   *
+   * SIM: o pedido nasce FECHADO no fechamento da venda (estoque baixado aqui,
+   * nada pra separar) mesmo que o sistema ache que falta peça — ele erra, e
+   * quem está com a sacola na mão não. NÃO: separação normal, as outras lojas
+   * mandam pra cá.
+   */
+  const responderPecasNaMao = async (naMao: boolean) => {
+    setPecasNaMao(naMao);
+    setEtapaOnline('frete_valor');
+    if (!saleId) return;
+    try {
+      await api(`/pdv/sales/${saleId}/entrega`, {
+        method: 'POST',
+        body: JSON.stringify({
+          tipo: entregaTipo,
+          entregaStoreCode: entregaStoreCode || null,
+          pecasNaMao: naMao,
+        }),
+      });
+    } catch (err: any) {
+      setPecasNaMao(null);
+      setEtapaOnline('frete_mao');
       const h = humanizeError(err);
       toast('error', h.title, err?.message || h.hint);
     }
@@ -5636,6 +5699,63 @@ function PaymentModal({
   // (quem sai de moto). '' = esta loja. A loja-canal SITE fecha venda pra
   // cliente de qualquer cidade: quem atende quase nunca é quem vendeu.
   const [entregaStoreCode, setEntregaStoreCode] = useState<string>('');
+  /**
+   * AS PEÇAS JÁ ESTÃO NA LOJA? (26/08) — só quando o motoboy sai DAQUI.
+   *
+   * `true` = a peça está na mão e a moto sai agora: o pedido nasce fechado,
+   * sem separação pra ninguém, mesmo que o estoque do sistema diga que falta.
+   * `false` = ela precisa que as outras lojas mandem pra cá → separação
+   * normal. `null` = ninguém perguntou (a pergunta não se aplica).
+   *
+   * Existe por causa do ON-000164: a peça saiu de moto na hora e o pedido
+   * abriu separação assim mesmo, porque até aqui quem decidia era o saldo do
+   * espelho — e ele estava errado. Quem sabe se a peça está na arara é quem
+   * está no balcão.
+   */
+  const [pecasNaMao, setPecasNaMao] = useState<boolean | null>(null);
+  /**
+   * QUEM ENTREGA, COM O ESTOQUE NA FRENTE (26/08). A lista de lojas do passo
+   * 1b era só nome+código: pra saber quem tinha a peça a vendedora teria que
+   * adivinhar. Agora o servidor devolve, por loja, o que ela cobre desta
+   * sacola — cidade da cliente primeiro, porque motoboy é distância, e o que
+   * faltar chega por transferência.
+   */
+  const [lojasEntrega, setLojasEntrega] = useState<Array<{
+    code: string;
+    name: string;
+    city: string | null;
+    cobertas: number;
+    total: number;
+    temTudo: boolean;
+    faltam: string[];
+    cidadeDaCliente: boolean;
+    ehVendedora: boolean;
+  }> | null>(null);
+  const [lojasEntregaLoading, setLojasEntregaLoading] = useState(false);
+  useEffect(() => {
+    if (etapaOnline !== 'frete_loja' || !saleId) return;
+    let vivo = true;
+    // Zera antes de perguntar: a sacola pode ter mudado desde a última vez
+    // que esta tela abriu, e cobertura velha diz "tem tudo" de uma peça que
+    // acabou de entrar na venda. Enquanto não chega, vale a lista simples.
+    setLojasEntrega(null);
+    setLojasEntregaLoading(true);
+    api(`/pdv/sales/${saleId}/lojas-entrega`)
+      .then((r: any) => {
+        if (vivo) setLojasEntrega(Array.isArray(r?.lojas) ? r.lojas : []);
+      })
+      // Falhou? A lista simples (`stores`) continua aparecendo — escolher a
+      // loja é mais importante do que saber o estoque dela.
+      .catch(() => {
+        if (vivo) setLojasEntrega(null);
+      })
+      .finally(() => {
+        if (vivo) setLojasEntregaLoading(false);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [etapaOnline, saleId]);
   /**
    * A escolha VIVA da vendedora, ou a que já está gravada na venda enquanto o
    * `useEffect` de cima não trouxe o estado do servidor. Sem esse fallback o
@@ -6203,7 +6323,13 @@ function PaymentModal({
       try {
         await api(`/pdv/sales/${saleId}/entrega`, {
           method: 'POST',
-          body: JSON.stringify({ tipo: entregaTipo, entregaStoreCode: entregaStoreCode || null }),
+          body: JSON.stringify({
+            tipo: entregaTipo,
+            entregaStoreCode: entregaStoreCode || null,
+            // A resposta da arara viaja junto: é ela que decide se o pedido
+            // nasce fechado ou abre separação (ver `pecasNaMao`).
+            pecasNaMao: typeof pecasNaMao === 'boolean' ? pecasNaMao : null,
+          }),
         });
       } catch (e: any) {
         const h = humanizeError(e);
@@ -7175,27 +7301,78 @@ function PaymentModal({
                 <h3 className="mt-1 text-2xl font-black text-slate-900">
                   {entregaTipo === 'retirada' ? 'Ela busca em qual loja?' : 'Qual loja manda o motoboy?'}
                 </h3>
+                <p className="mt-1 text-xs text-amber-800">
+                  {entregaTipo === 'retirada'
+                    ? 'A loja separa e guarda no balcão. O que ela não tiver, as outras mandam.'
+                    : 'A loja escolhida entrega. O que ela não tiver, as outras mandam pra ela.'}
+                </p>
               </div>
               <div className="mt-4 max-h-64 space-y-1.5 overflow-y-auto">
-                <button
-                  type="button"
-                  onClick={() => void escolherLojaGuiada('')}
-                  className="w-full rounded-xl border-2 border-amber-400 bg-white py-3 text-sm font-black text-slate-800 hover:bg-amber-100"
-                >
-                  🏬 Esta loja ({storeCode})
-                </button>
-                {stores
-                  .filter((s) => s.code !== storeCode)
-                  .map((s) => (
+                {/* Enquanto o estoque não chega, a lista simples já deixa
+                    escolher — a resposta demorar não pode travar a venda. */}
+                {lojasEntregaLoading && !lojasEntrega && (
+                  <div className="py-2 text-center text-xs font-bold text-amber-700">
+                    Vendo o que cada loja tem...
+                  </div>
+                )}
+                {(lojasEntrega ??
+                  stores.map((s) => ({
+                    code: s.code,
+                    name: s.name,
+                    city: null,
+                    cobertas: 0,
+                    total: 0,
+                    temTudo: false,
+                    faltam: [] as string[],
+                    cidadeDaCliente: false,
+                    ehVendedora: s.code === storeCode,
+                  }))
+                ).map((s) => {
+                  const semEstoque = !lojasEntrega;
+                  return (
                     <button
                       key={s.code}
                       type="button"
                       onClick={() => void escolherLojaGuiada(s.code)}
-                      className="w-full rounded-xl border-2 border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 hover:border-amber-400 hover:bg-amber-50"
+                      className={`w-full rounded-xl border-2 bg-white px-3 py-2.5 text-left hover:bg-amber-50 ${
+                        s.cidadeDaCliente || s.temTudo
+                          ? 'border-amber-400'
+                          : 'border-slate-200 hover:border-amber-400'
+                      }`}
                     >
-                      {s.name} ({s.code})
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-sm font-black text-slate-800">
+                          {s.ehVendedora ? '🏬 ' : ''}
+                          {s.name} ({s.code})
+                        </span>
+                        {s.cidadeDaCliente && (
+                          <span className="shrink-0 rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-900">
+                            📍 cidade da cliente
+                          </span>
+                        )}
+                      </div>
+                      {/* O ESTOQUE ANTES DA ESCOLHA: "não tem" NÃO é bloqueio —
+                          é o aviso de que a peça vem por transferência (e por
+                          isso demora). Quem decide se dá pra esperar é quem
+                          está com a cliente. */}
+                      {!semEstoque && (
+                        <div
+                          className={`mt-0.5 text-[11px] font-bold ${
+                            s.temTudo ? 'text-amber-800' : 'text-slate-500'
+                          }`}
+                        >
+                          {s.temTudo
+                            ? `Tem as ${s.total} ${s.total === 1 ? 'peça' : 'peças'} aqui`
+                            : `Tem ${s.cobertas} de ${s.total} · falta ${s.faltam
+                                .slice(0, 2)
+                                .join(', ')}${
+                                s.faltam.length > 2 ? ` +${s.faltam.length - 2}` : ''
+                              } (vem por transferência)`}
+                        </div>
+                      )}
                     </button>
-                  ))}
+                  );
+                })}
               </div>
               <button
                 type="button"
@@ -7206,6 +7383,77 @@ function PaymentModal({
               </button>
             </div>
           )}
+
+          {/* ── 1c · AS PEÇAS JÁ ESTÃO AQUI? (só motoboy que sai desta loja) ──
+              A pergunta que o estoque não responde. No ON-000164 a peça saiu
+              de moto na hora e o pedido abriu separação assim mesmo, porque
+              quem decidia era o saldo do espelho — e ele estava errado. */}
+          {etapaOnline === 'frete_mao' && (() => {
+            const cob = (lojasEntrega ?? []).find(
+              (l) => l.code === (entregaStoreCode || storeCode),
+            );
+            return (
+              <div className="w-full max-w-md rounded-2xl border-4 border-amber-400 bg-amber-50 p-5 shadow-2xl">
+                <div className="text-center">
+                  <div className="text-[11px] font-black uppercase tracking-widest text-amber-700">
+                    🛵 Motoboy desta loja
+                  </div>
+                  <h3 className="mt-1 text-2xl font-black text-slate-900">As peças já estão aqui?</h3>
+                  <p className="mt-1 text-xs text-amber-800">
+                    É isto que decide se sobra separação pra alguém.
+                  </p>
+                </div>
+                <div className="mt-4 space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={() => void responderPecasNaMao(true)}
+                    className="w-full rounded-xl border-2 border-amber-500 bg-white px-4 py-3 text-left hover:bg-amber-100 active:scale-[0.99]"
+                  >
+                    <div className="text-sm font-black text-slate-900">
+                      ✅ SIM — estão aqui, a moto sai agora
+                    </div>
+                    <div className="mt-0.5 text-[11px] font-semibold text-slate-600">
+                      O pedido já nasce fechado: estoque baixado aqui e nada pra separar.
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void responderPecasNaMao(false)}
+                    className="w-full rounded-xl border-2 border-slate-200 bg-white px-4 py-3 text-left hover:border-amber-400 hover:bg-amber-50 active:scale-[0.99]"
+                  >
+                    <div className="text-sm font-black text-slate-900">
+                      📦 NÃO — preciso que mandem pra cá
+                    </div>
+                    <div className="mt-0.5 text-[11px] font-semibold text-slate-600">
+                      Abre separação: a peça chega por transferência antes de a moto sair.
+                    </div>
+                  </button>
+                </div>
+                {/* O QUE O SISTEMA ACHA — dito como palpite, não como lei. Ele
+                    já errou (ON-000164) e a arara é que manda. */}
+                {cob && !cob.temTudo && (
+                  <div className="mt-3 rounded-xl border-2 border-amber-300 bg-white p-3">
+                    <div className="text-[11px] font-bold text-slate-700">
+                      O sistema acha que aqui falta{' '}
+                      {cob.faltam.slice(0, 3).join(', ')}
+                      {cob.faltam.length > 3 ? ` +${cob.faltam.length - 3}` : ''}.
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-500">
+                      Se a peça está na sua mão, responda SIM assim mesmo — o saldo fica negativo
+                      e a conferência acerta depois. Peça entregue vale mais que saldo bonito.
+                    </div>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setEtapaOnline('frete_loja')}
+                  className="mt-3 w-full rounded-xl border-2 border-slate-300 bg-white py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Voltar
+                </button>
+              </div>
+            );
+          })()}
 
           {/* ── 2/5 · QUANTO É O FRETE ──
               Vem preenchido com o valor de tabela da modalidade e é EDITÁVEL:
@@ -7239,7 +7487,18 @@ function PaymentModal({
               <div className="mt-4 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setEtapaOnline(entregaTipo === 'retirada' || entregaTipo === 'motoboy' ? 'frete_loja' : 'frete_tipo')}
+                  onClick={() =>
+                    setEtapaOnline(
+                      // Volta pro passo IMEDIATAMENTE anterior — no motoboy
+                      // desta loja, ele é a pergunta da arara, não a lista.
+                      entregaTipo === 'motoboy' &&
+                      (!entregaStoreCode || entregaStoreCode === storeCode)
+                        ? 'frete_mao'
+                        : entregaTipo === 'retirada' || entregaTipo === 'motoboy'
+                          ? 'frete_loja'
+                          : 'frete_tipo',
+                    )
+                  }
                   className="rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-600 hover:bg-slate-50"
                 >
                   Voltar
@@ -10752,6 +11011,11 @@ function CarrinhosAbandonadosModal({
     phone?: string;
     cart_total?: number;
     items_count?: number;
+    /**
+     * As peças que ela escolheu. O backend manda `name` já no formato da casa
+     * (REF · COR TAM) — ver `abandoned-carts.service`, carimbo de 17/08.
+     */
+    cart_items?: Array<{ name?: string; sku?: string; quantity?: number }>;
     time?: string | null;
     utmCampaign?: string | null;
     /** Alguém (matriz ou outra loja) já abriu a conversa com esta cliente. */
@@ -11092,6 +11356,30 @@ function CarrinhosAbandonadosModal({
                   {soContato && (
                     <div className="text-[11px] text-violet-700 font-semibold mt-0.5">
                       Só nome e WhatsApp — peça CPF, e-mail e endereço pra fechar
+                    </div>
+                  )}
+                  {/* O QUE ELA ESCOLHEU (dono, 26/08: "não aparece qual peça,
+                      cor e tamanho a cliente escolheu"). A vendedora ligava
+                      sabendo só "2 peça(s)": não dava pra conferir se tem na
+                      arara, nem pra oferecer outra cor se o tamanho acabou — e
+                      é essa a primeira pergunta da cliente do outro lado.
+                      O backend já mandava `cart_items` no formato da casa
+                      (REF · COR TAM) desde 17/08; faltava desenhar aqui.
+                      Corta em 4 porque isto é FILA: numa lista de 70 linhas,
+                      carrinho grande empurraria os botões pra fora da dobra. */}
+                  {Array.isArray(c.cart_items) && c.cart_items.length > 0 && (
+                    <div className="mt-1 rounded-md border border-[#EDEAE1] bg-[#FAFAF7] px-2 py-1">
+                      {c.cart_items.slice(0, 4).map((p: any, i: number) => (
+                        <div key={i} className="text-[11px] leading-snug text-slate-700">
+                          <span className="font-bold tabular-nums">{Number(p.quantity || 1)}×</span>{' '}
+                          {p.name || p.sku || 'peça'}
+                        </div>
+                      ))}
+                      {c.cart_items.length > 4 && (
+                        <div className="text-[11px] italic text-slate-500">
+                          + {c.cart_items.length - 4} peça(s)
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

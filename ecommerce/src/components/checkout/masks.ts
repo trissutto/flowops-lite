@@ -46,9 +46,25 @@ export function isValidCpf(value: string): boolean {
 
 /* ------------------------------------------------------------- TELEFONE */
 
+/**
+ * Dígitos do telefone com o DDI 55 FORA quando veio colado junto.
+ *
+ * Sem isto, "+55 11 99595-8222" passava pelo `slice(0, 11)` como
+ * "55119959582": o DDI entrava e ENGOLIA os dois últimos dígitos — 11
+ * dígitos certinhos pro regex, número de NINGUÉM pro WhatsApp (pedido real
+ * de 26/08 gravado assim). O 55 só é tratado como DDI acima de 11 dígitos:
+ * número local do DDD 55 (região de Santa Maria/RS) tem no máximo 11 e
+ * passa intacto. O zero de operadora ("011 9…") também cai.
+ */
+function phoneDigits(value: string): string {
+  let d = onlyDigits(value).replace(/^0+/, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+  return d.slice(0, 11);
+}
+
 /** (11) 98765-4321 — aceita fixo (10 dígitos) e celular (11). */
 export function maskPhone(value: string): string {
-  const d = onlyDigits(value).slice(0, 11);
+  const d = phoneDigits(value);
   if (d.length === 0) return '';
   if (d.length <= 2) return `(${d}`;
   if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
@@ -56,8 +72,14 @@ export function maskPhone(value: string): string {
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
 
+/**
+ * Celular exige o 9 depois do DDD: 11 dígitos com outro número ali é o
+ * rastro clássico do +55 truncado — melhor travar aqui, com a cliente na
+ * tela, do que gravar telefone que não recebe o aviso do pedido.
+ */
 export function isValidPhone(value: string): boolean {
-  return [10, 11].includes(onlyDigits(value).length);
+  const d = phoneDigits(value);
+  return d.length === 10 || (d.length === 11 && d[2] === '9');
 }
 
 /* ----------------------------------------------------------------- CEP */

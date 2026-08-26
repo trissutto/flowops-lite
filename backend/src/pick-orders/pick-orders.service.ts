@@ -2128,14 +2128,26 @@ export class PickOrdersService {
       const ehFeederJuntada = r.isTransfer && !r.order?.isPickup;
       const caixa = ehFeederJuntada ? caixaDoPick.get(r.id) ?? null : null;
       /**
-       * Sou ÂNCORA? Card próprio (não-transferência) de pedido que NÃO é
-       * retirada — a MESMA fronteira do `ehFeederJuntada` acima. Pedido de
-       * RETIRADA dividido também tem card `isTransfer` apontando pra loja de
-       * retirada, e aquilo é o pickup-transfer de sempre, não juntada:
-       * mostrar "esta loja junta e envia" ali seria alarme falso (a cliente
-       * é que vem buscar).
+       * Sou quem MONTA o pedido? Card próprio (não-transferência) que recebe
+       * peça das outras lojas. São dois casos, e os dois precisam do mesmo
+       * aviso — o que muda é o desfecho:
+       *   - ENVIO (juntada, 21/08): a âncora junta tudo e POSTA um pacote só.
+       *   - RETIRADA (26/08, pedido do dono): a cliente vem buscar AQUI, e as
+       *     peças das outras lojas chegam por transferência.
+       *
+       * A retirada dividida ficava de fora (`souAncora` exigia `!isPickup`) e
+       * o card mostrava só o pedaço desta loja: Jundiaí via 1 peça no
+       * LP-000254 sem saber que a outra estava vindo de Itanhaém, e entregava
+       * pedido pela metade sem ninguém perceber. Medido em 26/08: 14 de 123
+       * retiradas dos últimos 180 dias são divididas.
+       *
+       * O filtro que protege é o `feedersDoPedido`, que só traz card irmão
+       * apontando PRA MINHA LOJA — card não-transferência de outra loja num
+       * pedido de retirada alheio continua sem ver nada.
        */
-      const souAncora = !r.isTransfer && !r.order?.isPickup;
+      const souAncora = !r.isTransfer;
+      // Onde a cliente encosta a mão no pedido: buscando na loja ou pelos Correios.
+      const ehRetiradaComposta = souAncora && !!r.order?.isPickup;
       // As caixas que JÁ nasceram (só existem depois do Finalizar do feeder).
       const caixasChegando = souAncora
         ? (caixasDoPedido.get(r.orderId) ?? []).filter(
@@ -2151,13 +2163,31 @@ export class PickOrdersService {
       const chegando = souAncora
         ? (feedersDoPedido.get(r.orderId) ?? []).map((f: any) => {
             const caixa = caixaPorPick.get(f.id) ?? null;
+            /**
+             * SEM CAIXA, o sinal é o PRÓPRIO CARD da outra loja.
+             *
+             * Retirada dividida não gera caixa automática — o
+             * `criarCaixaDoFeederSePreciso` pula pedido de retirada de
+             * propósito ("retirada tem o próprio trilho"). Se a etapa só
+             * soubesse ler caixa, a linha diria "ainda separando" pra
+             * sempre, inclusive depois da peça já ter saído da loja de
+             * origem: fila que mente é pior que fila vazia.
+             *
+             * Vale também pro feeder de juntada cuja caixa não nasceu
+             * (falha no Finalizar): "separada, aguardando sair" é a
+             * verdade, "ainda separando" não é.
+             */
             const etapa = caixa
               ? caixa.status === 'received'
                 ? 'chegou'
                 : 'a_caminho'
               : f.issueReason
                 ? 'problema'
-                : 'separando';
+                : f.status === 'shipped'
+                  ? 'a_caminho'
+                  : f.status === 'separated' || f.status === 'ready'
+                    ? 'pronta'
+                    : 'separando';
             return {
               code: caixa?.code ?? null,
               status: caixa?.status ?? f.status,
@@ -2214,6 +2244,15 @@ export class PickOrdersService {
           : null,
         juntadaChegando: chegando.length
           ? {
+              /**
+               * O DESFECHO do pedido composto — e o card fala diferente em
+               * cada um. 'envio': junta e posta (o envio trava até tudo
+               * chegar). 'retirada': a cliente vem buscar aqui, e a trava
+               * não existe — quem sabe se a peça chegou na arara é a
+               * vendedora, não o sistema (a transferência de retirada não
+               * tem entrada carimbada).
+               */
+              modo: ehRetiradaComposta ? ('retirada' as const) : ('envio' as const),
               total: chegando.length,
               // "Recebidas" conta CAIXA QUE CHEGOU — é o que libera o envio.
               // Feeder ainda separando (sem caixa) não conta, de propósito.
@@ -3225,6 +3264,7 @@ export class PickOrdersService {
     const itens = await this.prisma.orderItem.findMany({
       where: { orderId: order.id },
       select: {
+        id: true,
         sku: true,
         productName: true,
         ref: true,
@@ -3235,12 +3275,39 @@ export class PickOrdersService {
       },
     });
     const soUmaLoja = rows.length === 1;
-    const itensDaStore = (storeId: string) =>
-      itens.filter((i) => i.assignedStoreId === storeId || (soUmaLoja && !i.assignedStoreId));
-    const skusPorStore = (storeId: string): string[] =>
-      Array.from(new Set(itensDaStore(storeId).map((i) => String(i.sku || '').trim()).filter(Boolean)));
-    const itemsPorStore = (storeId: string) =>
-      itensDaStore(storeId).map((i) => ({
+    // BIPE É PROVA (26/08 — flagra do ON-000106): o fallback antigo atribuía
+    // toda peça SEM loja ao card único — inclusive quando o card já tinha
+    // ENVIADO e a peça órfã era efeito de um remove/swap posterior. A tela
+    // dizia "3 PEÇAS NESTA LOJA" numa loja que só teve 2 na mão, ao lado do
+    // raio-x dizendo a verdade. Card enviado só assume órfã com bipe não
+    // estornado DELE; sem nenhum bipe no card (venda antiga, sem conferência)
+    // mantém o comportamento de sempre — não há evidência pra negar.
+    const scansDoPedido = await this.prisma.pickOrderScan.findMany({
+      where: { orderId: order.id, stockDecreasedAt: { not: null }, stockIncreasedAt: null },
+      select: { pickOrderId: true, sku: true },
+    });
+    const skusProvadosPorCard = new Map<string, Set<string>>();
+    for (const s of scansDoPedido) {
+      if (!skusProvadosPorCard.has(s.pickOrderId)) skusProvadosPorCard.set(s.pickOrderId, new Set());
+      skusProvadosPorCard.get(s.pickOrderId)!.add(String(s.sku || '').trim());
+    }
+    const itensDaStore = (row: { id: string; storeId: string; status: string }) =>
+      itens.filter((i) => {
+        if (i.assignedStoreId === row.storeId) return true;
+        if (!i.assignedStoreId && soUmaLoja) {
+          const enviado = row.status === 'shipped' || row.status === 'delivered';
+          if (!enviado) return true;
+          const provados = skusProvadosPorCard.get(row.id);
+          if (!provados || provados.size === 0) return true;
+          return provados.has(String(i.sku || '').trim());
+        }
+        return false;
+      });
+    const skusPorStore = (row: { id: string; storeId: string; status: string }): string[] =>
+      Array.from(new Set(itensDaStore(row).map((i) => String(i.sku || '').trim()).filter(Boolean)));
+    const itemsPorStore = (row: { id: string; storeId: string; status: string }) =>
+      itensDaStore(row).map((i) => ({
+        id: String((i as any).id || ''),
         sku: String(i.sku || '').trim(),
         descricao: i.productName || null,
         ref: (i as any).ref || null,
@@ -3289,10 +3356,10 @@ export class PickOrdersService {
         storeName: r.store?.name ?? null,
         storeCity: r.store?.city ?? null,
         // SKUs desta loja (pra cobertura do "Trocar loja" — ver acima).
-        skus: skusPorStore(r.storeId),
+        skus: skusPorStore(r),
         // Peças que ESTA loja separa (descrição + qtd) — a operadora vê o que
         // foi roteado pra cada uma e decide consolidar (evitar 2 SEDEX).
-        items: itemsPorStore(r.storeId),
+        items: itemsPorStore(r),
         isTransfer: (r as any).isTransfer ?? false,
         transferToStoreCode: (r as any).transferToStoreCode ?? null,
         // ── JUNTADA (21/08): a caixa deste feeder, se existir ──
@@ -3388,7 +3455,11 @@ export class PickOrdersService {
    *
    * Bloqueia se status=shipped/delivered (envio já feito, não cancelar).
    */
-  async removePickOrder(pickOrderId: string): Promise<{
+  async removePickOrder(
+    pickOrderId: string,
+    /** QUEM removeu (26/08). O remove do ON-000106 saiu anônimo. */
+    ator?: { userId: string | null; nome: string | null },
+  ): Promise<{
     ok: boolean;
     pickOrderId: string;
     storeCode: string;
@@ -3440,17 +3511,23 @@ export class PickOrdersService {
       });
       // Deleta pick-order
       await tx.pickOrder.delete({ where: { id: pickOrderId } });
-      // Histórico
+      // Histórico — assinado: FK conferida antes (user de token velho não pode
+      // derrubar o create e levar a nota junto).
+      const userOk = ator?.userId
+        ? await tx.user.findUnique({ where: { id: ator.userId }, select: { id: true } })
+        : null;
       await tx.orderHistory.create({
         data: {
           orderId,
           fromStatus: po.status,
           toStatus: po.status,
+          userId: userOk?.id ?? null,
           note:
             `Pick-order da loja ${storeCode} REMOVIDO manualmente pela retaguarda. ` +
             `${itemsLiberados} item(ns) liberado(s) (sem reatribuição). ` +
             (estorno.pecas ? `${estorno.pecas} peça(s) já bipada(s) devolvida(s) ao estoque da ${storeCode}. ` : '') +
-            (po.issueReason ? `Motivo do problema reportado: ${po.issueReason}.` : ''),
+            (po.issueReason ? `Motivo do problema reportado: ${po.issueReason}.` : '') +
+            (ator?.nome ? ` · por ${ator.nome}` : ''),
         },
       });
     });
@@ -4395,6 +4472,50 @@ export class PickOrdersService {
     const note = (input.note ?? '').toString().trim().slice(0, 500) || null;
     const now = new Date();
 
+    // ── FANTASMA DO "SEM ESTOQUE" (26/08 — carrossel ON-000110/ON-000162) ──
+    // Card de peça ÚNICA só tem ESTE reporte (o por-item recusa e manda pra cá),
+    // e ele não tirava a quantidade fantasma do estoque: a peça continuava
+    // "existindo", a Consulta e o "Trocar loja" seguiam apontando a loja, e o
+    // card rodava de loja em loja (4 negativas no ON-000110). Mesma régua do
+    // reporte por item — só out_of_stock, mesmas portas — mas SEM allowNegative:
+    // aqui o comum é a loja já estar zerada (card forçado sem estoque), e saldo
+    // negativo seria trocar uma mentira por outra.
+    // Conta ANTES do estorno dos bipes: o que a loja bipou existe físico e
+    // volta pra arara; fantasma é só o que ela NÃO conseguiu bipar.
+    const fantasmas: Array<{ sku: string; qty: number; storeCode: string }> = [];
+    const storeCode = String(po.store?.code ?? '').trim();
+    if (reason === 'out_of_stock' && storeCode) {
+      const linhas = await this.prisma.orderItem.findMany({
+        where: { orderId: po.orderId, assignedStoreId: po.storeId },
+      });
+      const bipes = await this.prisma.pickOrderScan.findMany({
+        where: { pickOrderId, revertedAt: null },
+        select: { sku: true },
+      });
+      const bipadoPorSku = new Map<string, number>();
+      for (const b of bipes) {
+        const s = String(b.sku || '').trim();
+        bipadoPorSku.set(s, (bipadoPorSku.get(s) ?? 0) + 1);
+      }
+      const esperadoPorSku = new Map<string, number>();
+      for (const l of linhas) {
+        if ((l as any).cancelledAt) continue;
+        if (ehItemSemEstoque(l)) continue;
+        const s = String(l.sku || '').trim();
+        if (!s) continue;
+        esperadoPorSku.set(s, (esperadoPorSku.get(s) ?? 0) + l.quantity);
+      }
+      for (const [sku, esperado] of esperadoPorSku) {
+        const faltam = esperado - (bipadoPorSku.get(sku) ?? 0);
+        if (faltam > 0) fantasmas.push({ sku, qty: faltam, storeCode });
+      }
+    }
+    const fantasmaSkippedReason = !this.itemReportDebitEnabled
+      ? 'killswitch'
+      : !this.erp.isWriteEnabled
+        ? 'shadow'
+        : null;
+
     // O card sai da fila da loja e a matriz vai mandar o pedido pra OUTRA loja.
     // As peças que já tinham sido bipadas voltam pro estoque daqui — senão
     // somem do sistema exatamente na hora em que a loja precisa vendê-las de
@@ -4403,6 +4524,18 @@ export class PickOrdersService {
       reason: 'issue',
       userId,
     });
+
+    let fantasmaBaixado: Array<{ sku: string; qty: number; previousStock: number; newStock: number }> = [];
+    if (fantasmas.length && !fantasmaSkippedReason) {
+      const applied = await this.prisma.$transaction((tx) =>
+        this.erp.applyStockDeltaInTx(tx, fantasmas, -1, {
+          allowNegative: false,
+          skipNotFound: true,
+        }),
+      );
+      // Só conta como "zerado" o que de fato saiu (loja já em 0 é no-op).
+      fantasmaBaixado = applied.filter((a) => a.previousStock > a.newStock);
+    }
 
     const updated = await this.prisma.pickOrder.update({
       where: { id: pickOrderId },
@@ -4422,7 +4555,12 @@ export class PickOrdersService {
         toStatus: po.status,
         note:
           `Loja ${po.store?.code ?? ''} reportou problema: ${reason}${note ? ' — ' + note : ''}` +
-          (estorno.pecas ? ` · ${estorno.pecas} peça(s) bipada(s) devolvida(s) ao estoque da loja.` : ''),
+          (estorno.pecas ? ` · ${estorno.pecas} peça(s) bipada(s) devolvida(s) ao estoque da loja.` : '') +
+          (fantasmaBaixado.length
+            ? ` · Estoque fantasma zerado na loja: ${fantasmaBaixado
+                .map((f) => `${f.sku} (${f.previousStock}→${f.newStock})`)
+                .join(', ')}.`
+            : ''),
       },
     });
 
@@ -4439,6 +4577,8 @@ export class PickOrdersService {
           reason,
           note,
           pecasEstornadas: estorno.pecas,
+          fantasmaBaixado,
+          fantasmaSkippedReason,
         }),
         status: 200,
       },

@@ -946,6 +946,15 @@ model OrderItem {
   tamanho         String?
   quantity        Int
   unitPrice       Float?  @map("unit_price")
+  // ── PEÇA CANCELADA DO PEDIDO (26/08 — caso ON-000106) ──
+  // Quando NENHUMA loja tem a peça e o resto do pedido JÁ FOI, a matriz
+  // cancela SÓ esta peça e devolve o valor: o pedido segue vivo com as
+  // outras. Motivo e autor obrigatórios — mesma régua do cancelamento de
+  // pedido (motivo-cancelamento.ts). O estorno do dinheiro é manual no
+  // gateway; o valor a devolver fica gravado na nota do histórico.
+  cancelledAt     DateTime? @map("cancelled_at")
+  cancelReason    String?   @map("cancel_reason")
+  cancelledBy     String?   @map("cancelled_by")
   // Preço CHEIO (sem promoção) — base da obrigação intercompany ÷2,5.
   // Pedido da LIVE grava o basePriceCents; site fica null (unitPrice é o cheio).
   baseUnitPrice   Float?  @map("base_unit_price")
@@ -1783,6 +1792,19 @@ model PdvSale {
   // Vira Order.pickupStoreCode: a engine TRAVA a separação nessa loja e o que
   // ela não tem chega por transferência antes de sair pra cliente.
   entregaStoreCode    String?  @map("entrega_store_code")
+  // AS PEÇAS JÁ ESTÃO NA LOJA? (26/08) — só motoboy que sai da PRÓPRIA loja
+  // vendedora. `true` = a vendedora está com a peça na mão e a moto sai agora,
+  // então o pedido nasce FECHADO (sem card de separação pra ninguém), mesmo
+  // que o espelho de estoque diga que falta. `false` = ela precisa que as
+  // outras lojas juntem aqui → roteamento normal, mesmo que o espelho diga
+  // que tem. `null` = ninguém perguntou (outra loja entrega, venda fechada
+  // pelo cron do PIX) → decide o estoque, como antes.
+  //
+  // Existe porque o ON-000164 (26/08, Piracicaba) foi entregue de moto na
+  // hora e MESMO ASSIM abriu roteamento: o espelho dizia que faltava peça, e
+  // até aqui era o espelho quem decidia se a moto já tinha saído. Quem sabe
+  // isso é a pessoa no caixa, não o saldo. Ver `PedidoOnlineService`.
+  entregaPecasNaMao   Boolean? @map("entrega_pecas_na_mao")
   // CARRINHO DE ORIGEM (17/08) — `Order.id` do carrinho abandonado que virou
   // esta venda, quando ela nasceu de "Importar carrinho pro PDV". Serve pra
   // duas coisas no finalize: copiar a UTM/fbc do carrinho pro pedido novo (é

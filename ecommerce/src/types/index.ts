@@ -59,6 +59,8 @@ export interface Product {
   id: Id;
   slug: string;
   name: string;
+  /** Descrição editorial real da peça, usada também nos dados estruturados. */
+  description?: string;
   /** Categoria principal (slug). */
   category: string;
   subcategory?: string;
