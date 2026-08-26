@@ -2,6 +2,7 @@ import type { MetadataRoute } from 'next';
 import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
 import { navigation } from '@/data/navigation';
+import { fetchColecoesMenu } from '@/services/colecoes';
 import lojasData from '@/data/lojas.json';
 
 /**
@@ -97,6 +98,20 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }));
 
   /**
+   * COLEÇÕES PONTUAIS (26/08) — as que estão no menu agora (`/colecao/<slug>`).
+   * São páginas de temporada: entram no mapa enquanto existem e saem sozinhas
+   * na próxima remontagem quando o dono apagar a coleção. A fixa
+   * (/mais-top-da-semana) já entra pela lista do menu, acima.
+   */
+  const colecoes: MetadataRoute.Sitemap = ((await fetchColecoesMenu()) ?? [])
+    .filter((c) => c.href.startsWith('/colecao/'))
+    .map((c) => ({
+      url: `${SITE.url}${c.href}`,
+      changeFrequency: 'weekly' as const,
+      priority: 0.7,
+    }));
+
+  /**
    * O catálogo. Mesma fonte do feed do Meta — uma consulta, um cache, dois
    * consumidores. Se o backend não responder, o sitemap sai só com as páginas
    * fixas em vez de sair vazio: mapa incompleto é ruim, mapa vazio o Google
@@ -126,7 +141,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // Dedup por URL — o mesmo destino aparece em mais de uma coluna do menu, e
   // uma peça pode repetir slug se o catálogo vier com linha duplicada.
   const vistas = new Set<string>();
-  return [...estaticas, ...menu, ...lojas, ...produtos].filter((entry) => {
+  return [...estaticas, ...menu, ...lojas, ...colecoes, ...produtos].filter((entry) => {
     if (vistas.has(entry.url)) return false;
     vistas.add(entry.url);
     return true;

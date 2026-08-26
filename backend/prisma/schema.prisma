@@ -5859,15 +5859,27 @@ model SiteCupom {
 /// tabela não cria nem apaga categoria, só VESTE a que já existe — foto,
 /// nome de exibição, texto e ordem no menu. Sem linha aqui, o site segue
 /// com o nome derivado do slug e sem foto, como hoje.
-/// Coleção CURADA e ORDENADA de peças (ex.: "Mais Top da Semana" — os 20 que o dono
-/// mais quer vender na semana). É PARALELA à categoria real da peça: NÃO troca
+/// Coleção CURADA e ORDENADA de peças. É PARALELA à categoria real da peça: NÃO troca
 /// `SiteProduto.categoria` (a blusa continua em Blusas), diferente de classificar. Uma
 /// linha por coleção; `refs` = array ORDENADO de REF (a mesma REF do feed/pixel). A
-/// ordem do array É a ordem na vitrine e no carimbo do feed. Alimenta: página do site,
-/// item do menu e o `custom_label_1=top-semana` do feed do Meta.
+/// ordem do array É a ordem na vitrine e no carimbo do feed. Três moradores:
+///   · 'mais-top-da-semana'    — a fixa (feed carimba `custom_label_1=top-semana`)
+///   · coleções PONTUAIS       — criadas na tela /retaguarda/colecoes ("Coleção
+///                               Resort" com as peças da JOIN da semana); página
+///                               própria em /colecao/<slug> e vaga no menu
+///   · 'ordem-categoria-<cat>' — INTERNA (tela Ordem da vitrine); nunca aparece
+///                               como coleção do site.
 model SiteColecao {
   slug          String   @id
   nome          String?
+  /// Subtítulo da página `/colecao/<slug>` no site. Vazio = frase padrão.
+  descricao     String?  @db.Text
+  /// Sai como item do MENU do site (dono, 26/08: coleção PONTUAL — "Coleção
+  /// Resort" com as peças da JOIN — no lugar que era fixo da "Mais Top da
+  /// Semana"). `null` = padrão histórico: só a mais-top-da-semana aparece —
+  /// assim a linha antiga não some do menu no deploy que cria esta coluna.
+  /// O menu só mostra coleção com peça NO AR (menu pra vitrine vazia não sai).
+  noMenu        Boolean? @map("no_menu")
   refs          Json     @default("[]")
   atualizadoEm  DateTime @updatedAt @map("atualizado_em")
   atualizadoPor String?  @map("atualizado_por")

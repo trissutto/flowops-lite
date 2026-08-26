@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { refBaseOf } from '../common/ref-base';
 import { avisarVitrine } from '../common/avisar-vitrine';
@@ -2453,6 +2453,8 @@ export class LojaCatalogService {
       create: { slug, nome: nome ?? null, refs: limpos, atualizadoPor: quem },
       update: { refs: limpos, ...(nome !== undefined ? { nome } : {}), atualizadoPor: quem },
     });
+    // Curadoria salva tem que aparecer no site na hora — não depois do ISR.
+    this.avisarColecoes(slug);
     return { ok: true, slug, total: limpos.length };
   }
 
@@ -2469,6 +2471,222 @@ export class LojaCatalogService {
     }
     const itens = refs.map((r) => porRef.get(r)).filter(Boolean);
     return { itens, total: itens.length };
+  }
+
+  // ── COLEÇÕES DO SITE (dono, 26/08) — a tela /retaguarda/colecoes ──────────
+  // A "Mais Top da Semana" deixou de ser a única coleção com página e vaga no
+  // menu: agora o dono cria coleção PONTUAL ("Coleção Resort" com as peças da
+  // JOIN que chegaram na semana), cura a lista e escolhe quem ocupa o menu.
+  // O slug `ordem-categoria-<cat>` continua sendo mecanismo interno da tela
+  // Ordem da vitrine — nunca aparece como coleção.
+
+  /** A fixa: tem página própria histórica (/mais-top-da-semana) e o selo do feed. */
+  private readonly SLUG_TOP_SEMANA = 'mais-top-da-semana';
+
+  /** Coleção interna de mecanismo (ordem manual de categoria) — não é coleção do site. */
+  private colecaoInterna(slug: string): boolean {
+    return String(slug || '').startsWith('ordem-categoria-');
+  }
+
+  /**
+   * `noMenu` é tri-estado de propósito: `null` (linha de antes da coluna
+   * existir) = o padrão histórico — só a Mais Top da Semana no menu. Assim o
+   * deploy não some com o item do menu de ninguém; o interruptor da tela grava
+   * true/false e passa a mandar.
+   */
+  private colecaoNoMenu(row: { slug: string; noMenu?: boolean | null }): boolean {
+    return row?.noMenu ?? row?.slug === this.SLUG_TOP_SEMANA;
+  }
+
+  /** "resort" → "Resort" (fallback quando a linha não tem nome digitado). */
+  private nomeDaColecao(row: { slug: string; nome?: string | null }): string {
+    const nome = String(row?.nome || '').trim();
+    if (nome) return nome;
+    const s = String(row?.slug || '').replace(/[-_]+/g, ' ').trim();
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : String(row?.slug || '');
+  }
+
+  /**
+   * O slug nasce do nome e é o ENDEREÇO da página (/colecao/<slug>). "Coleção
+   * Resort" vira `resort`, não `colecao-resort` — a rota já diz "colecao" e
+   * /colecao/colecao-resort é gagueira de URL.
+   */
+  private slugDeColecao(nome: string): string {
+    return String(nome || '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/^colecao-/, '');
+  }
+
+  /** Mexeu em coleção → o site atualiza na hora (menu, página, home e vitrine). */
+  private avisarColecoes(slug: string) {
+    avisarVitrine(
+      ['catalogo', 'vitrine', 'vitrines-home', 'colecoes-menu', `curadoria:${slug}`],
+      this.logger,
+      'colecoes',
+    );
+  }
+
+  /**
+   * A TELA: todas as coleções do site com o retrato de cada uma. `noArTotal`
+   * separa "REFs guardadas" de "peças no ar agora" — é o número que explica a
+   * coleção que está no menu mas não aparece (tudo esgotou/despublicou).
+   */
+  async listarColecoes() {
+    const [linhas, catalogo] = await Promise.all([
+      (this.prisma as any).siteColecao.findMany(),
+      this.catalogoDaVitrine(),
+    ]);
+    const noAr = new Set((catalogo as any[]).map((p) => this.refKey(p.ref)));
+
+    const lista = (linhas as any[])
+      .filter((l) => !this.colecaoInterna(l.slug))
+      .map((l) => {
+        const refs = (Array.isArray(l.refs) ? l.refs : []).map((r: any) => this.refKey(r)).filter(Boolean);
+        return {
+          slug: l.slug,
+          nome: this.nomeDaColecao(l),
+          descricao: String(l.descricao || '').trim() || null,
+          noMenu: this.colecaoNoMenu(l),
+          fixa: l.slug === this.SLUG_TOP_SEMANA,
+          refsTotal: refs.length,
+          noArTotal: refs.filter((r: string) => noAr.has(r)).length,
+          atualizadoEm: l.atualizadoEm ?? null,
+          atualizadoPor: l.atualizadoPor || null,
+        };
+      });
+
+    // A fixa aparece mesmo antes da primeira curadoria salvar a linha dela —
+    // a tela nasce com ela, não com uma lista vazia.
+    if (!lista.some((c) => c.fixa)) {
+      lista.push({
+        slug: this.SLUG_TOP_SEMANA,
+        nome: 'Mais Top da Semana',
+        descricao: null,
+        noMenu: true,
+        fixa: true,
+        refsTotal: 0,
+        noArTotal: 0,
+        atualizadoEm: null,
+        atualizadoPor: null,
+      });
+    }
+
+    return lista.sort((a, b) =>
+      a.fixa ? -1 : b.fixa ? 1 : a.nome.localeCompare(b.nome, 'pt-BR'),
+    );
+  }
+
+  /** Cria a coleção (slug derivado do nome) já dona de uma vaga no menu. */
+  async criarColecao(nome: string, quem: string) {
+    const nomeLimpo = String(nome || '').trim();
+    if (nomeLimpo.length < 2) throw new BadRequestException('Dê um nome pra coleção');
+    const slug = this.slugDeColecao(nomeLimpo);
+    if (!slug) throw new BadRequestException('O nome precisa de letras ou números');
+    if (this.colecaoInterna(slug)) throw new BadRequestException('Esse nome é reservado do sistema');
+    const existe = await (this.prisma as any).siteColecao.findUnique({ where: { slug } });
+    if (existe) throw new BadRequestException(`Já existe uma coleção nesse endereço (/colecao/${slug})`);
+    // `noMenu: true` de fábrica: coleção pontual existe PRA ocupar o menu — e
+    // enquanto estiver sem peça no ar, o menu não a mostra (sem risco de vaga vazia).
+    await (this.prisma as any).siteColecao.create({
+      data: { slug, nome: nomeLimpo, refs: [], noMenu: true, atualizadoPor: quem },
+    });
+    this.avisarColecoes(slug);
+    return { ok: true, slug };
+  }
+
+  /** Nome, subtítulo e a vaga no menu. PATCH parcial: `undefined` = não mexe. */
+  async salvarColecaoMeta(
+    slug: string,
+    body: { nome?: string; descricao?: string | null; noMenu?: boolean },
+    quem: string,
+  ) {
+    const s = String(slug || '').toLowerCase();
+    if (this.colecaoInterna(s)) throw new BadRequestException('Coleção interna do sistema');
+    const dados: any = { atualizadoPor: quem };
+    if (body.nome !== undefined) {
+      const n = String(body.nome || '').trim();
+      if (n.length < 2) throw new BadRequestException('Dê um nome pra coleção');
+      dados.nome = n;
+    }
+    if (body.descricao !== undefined) dados.descricao = String(body.descricao || '').trim() || null;
+    if (body.noMenu !== undefined) dados.noMenu = !!body.noMenu;
+    // Upsert, não update: a fixa pode ainda não ter linha (curadoria nunca salva).
+    await (this.prisma as any).siteColecao.upsert({
+      where: { slug: s },
+      create: { slug: s, refs: [], ...dados },
+      update: dados,
+    });
+    this.avisarColecoes(s);
+    return { ok: true, slug: s };
+  }
+
+  /** Some da tabela E da home junto — vitrine apontando pra coleção apagada é link morto. */
+  async excluirColecao(slug: string) {
+    const s = String(slug || '').toLowerCase();
+    if (s === this.SLUG_TOP_SEMANA) {
+      throw new BadRequestException('A "Mais Top da Semana" é fixa — tire do menu ou esvazie a lista');
+    }
+    if (this.colecaoInterna(s)) throw new BadRequestException('Coleção interna do sistema');
+    const apagada = await (this.prisma as any).siteColecao.deleteMany({ where: { slug: s } });
+    if (!apagada?.count) throw new NotFoundException('Coleção não encontrada');
+    await (this.prisma as any).siteHomeVitrine
+      .deleteMany({ where: { tipo: 'colecao', chave: s } })
+      .catch(() => undefined);
+    this.avisarColecoes(s);
+    return { ok: true };
+  }
+
+  /**
+   * O MENU DO SITE: as coleções marcadas, SÓ com peça no ar — item de menu que
+   * abre vitrine vazia gasta a confiança da cliente (mesma regra das
+   * categorias). Nunca lança: menu é navegação, falha aqui não derruba layout.
+   */
+  async colecoesMenu(): Promise<Array<{ slug: string; nome: string; qtd: number }>> {
+    try {
+      const linhas: any[] = await (this.prisma as any).siteColecao.findMany();
+      const doMenu = linhas.filter((l) => !this.colecaoInterna(l.slug) && this.colecaoNoMenu(l));
+      if (!doMenu.length) return [];
+      const catalogo = await this.catalogoDaVitrine();
+      const noAr = new Set((catalogo as any[]).map((p) => this.refKey(p.ref)));
+      return doMenu
+        .map((l) => {
+          const refs = (Array.isArray(l.refs) ? l.refs : []).map((r: any) => this.refKey(r));
+          return {
+            slug: l.slug,
+            nome: this.nomeDaColecao(l),
+            qtd: refs.filter((r: string) => noAr.has(r)).length,
+          };
+        })
+        .filter((c) => c.qtd > 0)
+        .sort((a, b) =>
+          a.slug === this.SLUG_TOP_SEMANA ? -1
+          : b.slug === this.SLUG_TOP_SEMANA ? 1
+          : a.nome.localeCompare(b.nome, 'pt-BR'),
+        );
+    } catch (e: any) {
+      this.logger.warn(`[colecoes] menu indisponível: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /** A página /colecao/<slug>: cabeçalho + peças na ordem curada. `null` = 404. */
+  async colecaoPublica(slug: string) {
+    const s = String(slug || '').toLowerCase();
+    if (!s || this.colecaoInterna(s)) return null;
+    const row = await (this.prisma as any).siteColecao.findUnique({ where: { slug: s } });
+    if (!row) return null;
+    const { itens, total } = await this.curadoriaProdutos(s);
+    return {
+      slug: s,
+      nome: this.nomeDaColecao(row),
+      descricao: String(row.descricao || '').trim() || null,
+      itens,
+      total,
+    };
   }
 
   // ── OS MAIS VENDIDOS NAS LOJAS (dono, 19/08) ───────────────────────────────

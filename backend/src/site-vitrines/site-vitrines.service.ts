@@ -187,11 +187,15 @@ export class SiteVitrinesService {
     try {
       const linhas: Array<{ slug: string; nome: string | null; refs: any }> =
         await (this.prisma as any).siteColecao.findMany();
-      return linhas.map((l) => ({
-        slug: l.slug,
-        nome: l.nome || this.nomeDoSlug(l.slug),
-        qtd: Array.isArray(l.refs) ? l.refs.length : 0,
-      }));
+      return linhas
+        // `ordem-categoria-*` é mecanismo da tela Ordem da vitrine, não coleção
+        // do site — aparecer aqui viraria carrossel "Ordem categoria blusas".
+        .filter((l) => !String(l.slug || '').startsWith('ordem-categoria-'))
+        .map((l) => ({
+          slug: l.slug,
+          nome: l.nome || this.nomeDoSlug(l.slug),
+          qtd: Array.isArray(l.refs) ? l.refs.length : 0,
+        }));
     } catch {
       return [];
     }
@@ -202,10 +206,7 @@ export class SiteVitrinesService {
    * à mão na retaguarda é 404 esperando acontecer.
    *
    * `nome` é o longo da tela ("Outlet (só peça em promoção)") e `curto` é o
-   * que sai no site ("Outlet"). `href: null` = a seção sai sem o "Ver tudo":
-   * é o caso de coleção que não seja a "Mais Top da Semana", a única com
-   * página no site — mandar a cliente pra rota inexistente é pior que não ter
-   * link nenhum.
+   * que sai no site ("Outlet").
    */
   private rotulo(
     tipo: string, chave: string, nomes: Map<string, string>,
@@ -219,7 +220,13 @@ export class SiteVitrinesService {
         return { nome: 'Outlet (só peça em promoção)', curto: 'Outlet', href: '/outlet' };
       case 'colecao': {
         const curto = nomes.get(chave) || this.nomeDoSlug(chave);
-        return { nome: curto, curto, href: chave === 'mais-top-da-semana' ? '/mais-top-da-semana' : null };
+        // Desde 26/08 TODA coleção tem página: a fixa na rota histórica dela,
+        // as pontuais em /colecao/<slug> (a página genérica do site).
+        return {
+          nome: curto,
+          curto,
+          href: chave === 'mais-top-da-semana' ? '/mais-top-da-semana' : `/colecao/${chave}`,
+        };
       }
       default: {
         const curto = nomes.get(chave) || this.nomeDoSlug(chave);
@@ -239,11 +246,8 @@ export class SiteVitrinesService {
         t === 'categoria' ? 'Escolha a categoria da vitrine' : 'Escolha a coleção da vitrine',
       );
     }
-    // Coleção curada não vira card de atalho: o card leva a uma página, e só a
-    // "Mais Top da Semana" tem página. Sem destino, o card não faz nada.
-    if (b === 'atalho' && t === 'colecao' && c !== 'mais-top-da-semana') {
-      throw new BadRequestException('Essa coleção não tem página no site — não dá pra virar atalho');
-    }
+    // Coleção como atalho vale desde 26/08: toda coleção tem página agora
+    // (/colecao/<slug>), então o card sempre tem destino.
     return { bloco: b, tipo: t, chave: c };
   }
 
@@ -324,7 +328,6 @@ export class SiteVitrinesService {
           .sort((a, b) => b.qtdPecas - a.qtdPecas),
         ...colecoes
           .filter((c) => !usadas.has(`colecao:${c.slug}`))
-          .filter((c) => bloco === 'carrossel' || c.slug === 'mais-top-da-semana')
           .map((c) => ({ bloco, tipo: 'colecao', chave: c.slug, nome: c.nome, qtdPecas: c.qtd })),
       ];
     };
