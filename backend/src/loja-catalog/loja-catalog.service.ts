@@ -2406,11 +2406,33 @@ export class LojaCatalogService {
         tamanhos: string[];
       }>;
       topSemana: boolean;
+      /** Slug da coleção PONTUAL que contém a REF ('resort') — carimba o feed. */
+      colecaoSlug: string | null;
       lancamento: boolean;
     }>
   > {
     // REFs curadas da "Mais Top da Semana" — pra carimbar custom_label_1 no feed.
     const topSemanaRefs = new Set(await this.colecaoRefs('mais-top-da-semana'));
+    /**
+     * COLEÇÕES PONTUAIS (26/08) — REF → slug da coleção que a contém, pro feed
+     * carimbar `custom_label_1=colecao-<slug>` e o conjunto do Meta seguir a
+     * curadoria sozinho (mesmo desenho do top-semana). Primeira coleção vence
+     * quando a REF está em duas. A fixa fica de fora: o carimbo dela é o
+     * histórico `top-semana`.
+     */
+    const colecaoPorRef = new Map<string, string>();
+    try {
+      const linhas: any[] = await (this.prisma as any).siteColecao.findMany();
+      for (const l of linhas) {
+        if (this.colecaoInterna(l.slug) || l.slug === this.SLUG_TOP_SEMANA) continue;
+        for (const r of (Array.isArray(l.refs) ? l.refs : [])) {
+          const k = this.refKey(r);
+          if (k && !colecaoPorRef.has(k)) colecaoPorRef.set(k, l.slug);
+        }
+      }
+    } catch {
+      /* sem coleções o feed segue sem o carimbo */
+    }
     /**
      * `listar` trava `perPage` em 60 (proteção da rota pública de vitrine),
      * então pedir 5.000 numa chamada só devolvia a PRIMEIRA página — o feed
@@ -2475,6 +2497,7 @@ export class LojaCatalogService {
         tamanhos: (c.tamanhos ?? []).filter((t: any) => t?.disponivel).map((t: any) => t.label),
       })).filter((c: any) => c.nome),
       topSemana: topSemanaRefs.has(this.refKey(p.ref)),
+      colecaoSlug: colecaoPorRef.get(this.refKey(p.ref)) ?? null,
       // ≤30 dias desde a PRIMEIRA VENDA (a mesma flag do badge "novo"). O feed usa
       // pra carimbar Novidade só em peça nova DE VERDADE (senão enche com peça de
       // 60-90 dias pra completar 20 — o "peça velha como nova" que o dono pegou).

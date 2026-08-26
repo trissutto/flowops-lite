@@ -69,6 +69,8 @@ interface PecaFeed {
     tamanhos: string[];
   }>;
   topSemana?: boolean;
+  /** Slug da coleção PONTUAL que contém a REF ('resort') — vira carimbo do feed. */
+  colecaoSlug?: string | null;
   lancamento?: boolean;
   /** Quantidade em estoque somada — o critério das vitrines. Ver `carimbarTop30`. */
   estoqueTotal?: number;
@@ -382,10 +384,13 @@ function item(p: PecaFeed, v: Variante, novidade?: string, top30?: string, top30
   if (p.subcategoria) campos.push(`<g:custom_label_0>${escapar(p.subcategoria)}</g:custom_label_0>`);
   // Ver `carimbarNovidades`. Só as 20 do topo de cada categoria recebem.
   if (novidade) campos.push(`<g:custom_label_2>${escapar(novidade)}</g:custom_label_2>`);
-  // Curadoria "mais top da semana": o backend marca a peça com `topSemana` e o
-  // carimbo entra no `custom_label_1` (o que estava de reserva). Vira conjunto
-  // de produtos no Meta com um `eq "top-semana"`, igual às novidades.
+  // Curadoria do site no `custom_label_1` — vira conjunto de produtos no Meta:
+  //   · coleção fixa  → `top-semana` (o carimbo histórico, `eq "top-semana"`)
+  //   · coleção PONTUAL ('Resort') → `colecao-<slug>` (`eq "colecao-resort"`) —
+  //     assim o conjunto do Meta segue a curadoria da tela sozinho (26/08).
+  // Um valor só por peça: a fixa vence quando a REF está nas duas.
   if (p.topSemana) campos.push(`<g:custom_label_1>top-semana</g:custom_label_1>`);
+  else if (p.colecaoSlug) campos.push(`<g:custom_label_1>colecao-${escapar(p.colecaoSlug)}</g:custom_label_1>`);
   // As 30 mais recentes da categoria e do site — ver `carimbarTop30`.
   if (top30) campos.push(`<g:custom_label_3>${escapar(top30)}</g:custom_label_3>`);
   if (top30Geral) campos.push(`<g:custom_label_4>${TOP30_GERAL}</g:custom_label_4>`);
