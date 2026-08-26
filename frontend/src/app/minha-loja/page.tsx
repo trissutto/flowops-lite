@@ -116,6 +116,14 @@ interface PickOrderRow {
    * primeiro minuto que o pedido é COMPOSTO e não sai só com o pedaço dela.
    */
   juntadaChegando?: {
+    /**
+     * O DESFECHO do pedido composto (26/08):
+     *  - 'envio'    → esta loja junta tudo e POSTA um pacote só (juntada).
+     *  - 'retirada' → a cliente vem BUSCAR aqui e as peças das outras lojas
+     *    chegam por transferência. Não há trava de envio: quem sabe se a peça
+     *    já está na arara é a vendedora.
+     */
+    modo?: 'retirada' | 'envio';
     total: number;
     /** Caixas que JÁ chegaram — é o que libera o envio. */
     recebidas: number;
@@ -124,8 +132,8 @@ interface PickOrderRow {
     caixas: Array<{
       code: string | null;
       status: string;
-      /** separando (sem caixa ainda) · problema (loja reportou) · a_caminho · chegou */
-      etapa?: 'separando' | 'problema' | 'a_caminho' | 'chegou';
+      /** separando · pronta (separada, ainda na origem) · problema · a_caminho · chegou */
+      etapa?: 'separando' | 'pronta' | 'problema' | 'a_caminho' | 'chegou';
       fromStoreName: string | null;
       trackingCode: string | null;
       pecas?: number;
@@ -174,6 +182,37 @@ interface PickOrderRow {
     shippingMethod?: string | null;
     items?: PickOrderItem[];
   };
+}
+
+/**
+ * A PERGUNTA DO FECHAMENTO SEM RASTREIO (motoboy / retirada).
+ *
+ * Num pedido de RETIRADA DIVIDIDO a pergunta genérica "a cliente retirou a
+ * peça?" era uma armadilha: o card mostra só o pedaço desta loja, então a
+ * vendedora confirmava olhando 1 peça e fechava um pedido de 2 (LP-000254,
+ * Jundiaí × Itanhaém). Aqui a confirmação diz o TAMANHO do pedido e de onde
+ * vem o que falta — continua sendo decisão dela (o sistema não carimba a
+ * entrada da transferência de retirada; quem vê a arara é quem está lá).
+ */
+function perguntaEntregaSemRastreio(row: PickOrderRow, modo: 'Motoboy' | 'Retirada'): string {
+  if (modo === 'Motoboy') return 'Confirmar: a peça SAIU com o motoboy?';
+  // Card de transferência: quem entrega é a loja de retirada, não esta.
+  if (row.isTransfer && row.order.isPickup) {
+    const destino = row.transferToStoreName ?? row.transferToStoreCode ?? 'loja de retirada';
+    return `Confirmar: as peças SAÍRAM desta loja pra ${destino}? A cliente retira lá, não aqui.`;
+  }
+  const j = row.juntadaChegando;
+  if (j?.modo === 'retirada' && (j.pecasChegando ?? 0) > 0) {
+    const minhas = (row.order.items ?? []).reduce((s, i) => s + (i.quantity ?? 0), 0);
+    const total = minhas + (j.pecasChegando ?? 0);
+    const lojas = j.caixas.map((c) => c.fromStoreName ?? 'outra loja').join(', ');
+    return (
+      `⚠️ PEDIDO COMPOSTO — são ${total} peça(s): ${minhas} desta loja e ` +
+      `${j.pecasChegando} de ${lojas}.\n\n` +
+      `Confirmar que a cliente levou TODAS as ${total} peça(s)?`
+    );
+  }
+  return 'Confirmar: a cliente RETIROU a peça na loja?';
 }
 
 /**
@@ -1591,8 +1630,7 @@ export default function MinhaLojaPage() {
               onBip={() => setShowBipModal(row)}
               onShip={() => setShowShippedModal(row)}
               onEntregaSemRastreio={(modo) => {
-                const q = modo === 'Motoboy' ? 'Confirmar: a peça SAIU com o motoboy?' : 'Confirmar: a cliente RETIROU a peça na loja?';
-                if (confirm(q)) void submitShipped(row, '', modo);
+                if (confirm(perguntaEntregaSemRastreio(row, modo))) void submitShipped(row, '', modo);
               }}
               onCorreios={() => gerarEnvioCorreios(row)}
               onReabrir={() => reabrirEnvio(row)}
@@ -2448,11 +2486,20 @@ function PickOrderCard({
   // etiqueta de cliente aqui seria envio errado (o backend bloqueia, mas o
   // botão nem deve aparecer). O caminho é "Documentos da caixa".
   const ehFeederJuntada = !!row.juntadaFeeder;
-  // ÂNCORA aguardando caixas das outras lojas: o envio final só libera com o
-  // pedido completo (o backend trava) — botão ativo aqui viraria toast de
-  // erro em loop enquanto a faixa acima diz "aguarde as caixas".
+  /**
+   * PEDIDO COMPOSTO — peças de outra(s) loja(s) fazem parte deste mesmo
+   * pedido. Dois desfechos, e eles NÃO podem compartilhar trava:
+   *  - `chegandoEnvio`: juntada. O envio final só libera com tudo aqui (o
+   *    backend recusa) — botão ativo viraria toast de erro em loop.
+   *  - `chegandoRetirada` (26/08): a cliente vem buscar. NÃO trava nada — a
+   *    transferência de retirada não tem entrada carimbada, então o sistema
+   *    não sabe se a peça chegou na arara; quem sabe é a vendedora. O card
+   *    AVISA e o "Cliente retirou" pede confirmação.
+   */
+  const composto = row.juntadaChegando ?? null;
+  const chegandoRetirada = composto?.modo === 'retirada' ? composto : null;
   const aguardandoCaixas =
-    !!row.juntadaChegando && row.juntadaChegando.recebidas < row.juntadaChegando.total;
+    !!composto && composto.modo !== 'retirada' && composto.recebidas < composto.total;
   const podeGerarEnvio = !order.isPickup && !ehMotoboy && !ehFeederJuntada && !aguardandoCaixas;
   /**
    * ETIQUETA JÁ GERADA continua administrável mesmo esperando as caixas.
@@ -2469,6 +2516,14 @@ function PickOrderCard({
   const [docsBusy, setDocsBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
+  /**
+   * CARD DE TRANSFERÊNCIA NUM PEDIDO DE RETIRADA (26/08): a cliente NÃO
+   * busca aqui — esta loja manda a peça pra loja onde ela vai retirar. O
+   * botão verde era o mesmo "🏬 Cliente retirou" da loja de destino, e a
+   * vendedora fechava o card como se tivesse entregado. Mesma ação (o
+   * pedido fecha pelo lado de quem entrega), texto que diz a verdade.
+   */
+  const ehTransferRetirada = isTransfer && !!order.isPickup;
   // CARD VERDE ONLINE (14/08): pedido criado pela Venda Online do PDV de outra
   // loja (ou desta). Processo idêntico ao pedido do site — a cor/tag só dizem
   // de onde veio.
@@ -2652,37 +2707,49 @@ function PickOrderCard({
         );
       })()}
 
-      {/* Card da ÂNCORA da juntada — caixas das outras lojas vindo pra cá.
-          O bipe das peças próprias segue igual; o envio final só libera
-          quando o pedido estiver completo (todas as caixas recebidas). */}
-      {row.juntadaChegando && (() => {
-        const j = row.juntadaChegando!;
+      {/* PEDIDO COMPOSTO — as peças das outras lojas deste MESMO pedido.
+          ENVIO (juntada): esta loja junta e posta; o envio final só libera
+          com todas as caixas recebidas.
+          RETIRADA (26/08): a cliente vem buscar AQUI. Nada trava — o card
+          informa o pedido inteiro e o "Cliente retirou" pede confirmação. */}
+      {composto && (() => {
+        const j = composto;
+        const ehRet = j.modo === 'retirada';
         const faltam = j.total - j.recebidas;
         const minhasPecas = items.reduce((s, i) => s + (i.quantity ?? 0), 0);
-        const totalPedido = minhasPecas + (j.pecasChegando ?? 0);
+        const deFora = j.pecasChegando ?? 0;
+        const totalPedido = minhasPecas + deFora;
+        // Paleta por desfecho: âmbar casa com a faixa RETIRADA EM LOJA logo
+        // acima; violeta é a cor da juntada desde 21/08.
+        const c1 = ehRet
+          ? { borda: 'border-amber-400', fundo: 'bg-amber-50', forte: 'text-amber-900', suave: 'text-amber-700', seta: 'text-amber-400', barra: 'border-amber-200' }
+          : { borda: 'border-violet-300', fundo: 'bg-violet-50', forte: 'text-violet-900', suave: 'text-violet-700', seta: 'text-violet-400', barra: 'border-violet-200' };
         return (
-        <section className="mx-4 mt-3 rounded-lg border-2 border-violet-300 bg-violet-50 p-3">
-          {/* O TÍTULO diz o que a loja precisa entender ANTES de embalar: este
-              pedido não é só o que está na tela dela. */}
-          <div className="text-sm font-bold text-violet-900">
-            🧲 PEDIDO COMPOSTO — esta loja junta e envia
+        <section className={`mx-4 mt-3 rounded-lg border-2 ${c1.borda} ${c1.fundo} p-3`}>
+          {/* O TÍTULO diz o que a loja precisa entender ANTES de mexer no
+              pedido: ele não é só o que está na tela dela. */}
+          <div className={`text-sm font-bold ${c1.forte}`}>
+            {ehRet
+              ? '🏬 PEDIDO COMPOSTO — a cliente retira AQUI, e nem tudo está aqui'
+              : '🧲 PEDIDO COMPOSTO — esta loja junta e envia'}
           </div>
-          {j.pecasChegando ? (
-            <div className="mt-1 text-xs text-violet-900">
+          {deFora ? (
+            <div className={`mt-1 text-xs ${c1.forte}`}>
               São <span className="font-bold">{totalPedido} peça(s)</span> no total:{' '}
               <span className="font-bold">{minhasPecas}</span> daqui e{' '}
-              <span className="font-bold">{j.pecasChegando}</span> de outra(s) loja(s).
+              <span className="font-bold">{deFora}</span> de outra(s) loja(s).
             </div>
           ) : null}
-          <ul className="mt-1.5 space-y-1 text-xs text-violet-900">
+          <ul className={`mt-1.5 space-y-1 text-xs ${c1.forte}`}>
             {j.caixas.map((c, i) => (
               <li key={c.code ?? `${c.fromStoreName}-${i}`} className="flex items-center gap-1.5 flex-wrap">
                 <span className="font-semibold">{c.fromStoreName ?? 'Loja da rede'}</span>
-                {c.pecas ? <span className="text-violet-700">({c.pecas} peça{c.pecas > 1 ? 's' : ''})</span> : null}
-                <span className="text-violet-400">→</span>
-                {/* Sem caixa ainda: a outra loja nem terminou de separar. Dizer
-                    isso é o que faltava — antes o card ficava mudo até a caixa
-                    nascer e a âncora achava que era um pedido comum. */}
+                {c.pecas ? <span className={c1.suave}>({c.pecas} peça{c.pecas > 1 ? 's' : ''})</span> : null}
+                <span className={c1.seta}>→</span>
+                {/* O ESTÁGIO de cada loja de origem. Na retirada não existe
+                    caixa (a peça vem por transferência comum), então o estado
+                    vem do card da outra loja — sem isso a linha ficaria
+                    "ainda separando" pra sempre. */}
                 {c.etapa === 'problema' ? (
                   // A loja reportou problema: o card sumiu da fila DELA e a
                   // matriz vai remanejar. Dizer "ainda separando" aqui seria a
@@ -2690,30 +2757,44 @@ function PickOrderCard({
                   <span className="font-semibold text-red-700">
                     ⚠️ loja reportou problema — a matriz vai remanejar
                   </span>
-                ) : c.etapa === 'separando' || !c.code ? (
-                  <span className="font-semibold text-amber-700">✋ ainda separando na loja</span>
                 ) : (
                   <>
-                    <span>
-                      caixa <span className="font-mono font-semibold">{c.code}</span>
-                    </span>
+                    {c.code && (
+                      <span>
+                        caixa <span className="font-mono font-semibold">{c.code}</span>
+                      </span>
+                    )}
                     {c.etapa === 'chegou' || c.status === 'received' ? (
                       <span className="font-semibold text-emerald-700">✅ chegou</span>
+                    ) : c.etapa === 'a_caminho' ? (
+                      <span className="font-semibold text-sky-700">
+                        {c.code
+                          ? '📦 em trânsito'
+                          : ehRet
+                          ? '🚚 já saiu de lá — confira se chegou aqui'
+                          : '📦 já saiu da loja de origem'}
+                      </span>
+                    ) : c.etapa === 'pronta' ? (
+                      <span className="font-semibold text-sky-700">
+                        📦 separada — ainda na loja de origem
+                      </span>
                     ) : (
-                      <span>📦 em trânsito</span>
+                      <span className="font-semibold text-amber-700">✋ ainda separando na loja</span>
                     )}
-                    {c.trackingCode && <span className="font-mono text-violet-700">{c.trackingCode}</span>}
+                    {c.trackingCode && <span className={`font-mono ${c1.suave}`}>{c.trackingCode}</span>}
                   </>
                 )}
                 {/* AS PEÇAS DE FORA, uma a uma (25/08). Elas NÃO entram no bipe
                     deste card — foram conferidas no bipe da loja de origem e de
                     novo na entrada da caixa. O que faltava era vê-las na hora de
                     embalar: a lista de cima é só a desta loja, e a caixa saía
-                    com 6 de 8 se a vendedora não abrisse o romaneio de papel. */}
+                    com 6 de 8 se a vendedora não abrisse o romaneio de papel.
+                    Na RETIRADA é o mesmo furo com outro final: a cliente ia
+                    embora com meio pedido. */}
                 {!!c.itens?.length && (
-                  <ul className="mt-1 w-full space-y-0.5 border-l-2 border-violet-200 pl-2">
+                  <ul className={`mt-1 w-full space-y-0.5 border-l-2 ${c1.barra} pl-2`}>
                     {c.itens.map((it, k) => (
-                      <li key={`${c.code ?? i}-${it.sku}-${k}`} className="text-[11px] text-violet-900">
+                      <li key={`${c.code ?? i}-${it.sku}-${k}`} className={`text-[11px] ${c1.forte}`}>
                         <span className="font-semibold">{it.qty}x</span>{' '}
                         {refCorTam({
                           ref: it.ref ?? null,
@@ -2727,8 +2808,15 @@ function PickOrderCard({
               </li>
             ))}
           </ul>
-          <div className="mt-1.5 text-xs text-violet-800 font-medium">
-            {faltam > 0 ? (
+          <div className={`mt-1.5 text-xs font-medium ${c1.forte}`}>
+            {ehRet ? (
+              <>
+                <span className="font-bold">CONFIRA O PEDIDO INTEIRO ANTES DE ENTREGAR.</span>{' '}
+                {deFora} peça(s) {deFora > 1 ? 'vêm' : 'vem'} de outra loja por transferência,
+                e a entrada dela não é carimbada no pedido — quem confere que chegou é você.
+                Se ainda não estiver aqui, avise a cliente antes de ela vir.
+              </>
+            ) : faltam > 0 ? (
               <>
                 <span className="font-bold">NÃO ENVIE AINDA.</span> Separe e deixe as peças
                 daqui prontas; falta(m) {faltam} caixa(s). Dê entrada na tela de
@@ -2744,8 +2832,15 @@ function PickOrderCard({
 
       {/* Itens — qty em badge circular de destaque */}
       <section className="px-4 py-3 space-y-2 text-sm">
+        {/* Num pedido COMPOSTO esta lista é só o pedaço desta loja — dizer
+            "Peças (1)" num pedido de 2 é o que fazia a vendedora entregar
+            metade achando que era tudo. */}
         <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 mb-1">
-          Peças ({items.reduce((s, i) => s + (i.quantity ?? 0), 0)})
+          {composto?.pecasChegando
+            ? `Peças nesta loja (${items.reduce((s, i) => s + (i.quantity ?? 0), 0)} de ${
+                items.reduce((s, i) => s + (i.quantity ?? 0), 0) + composto.pecasChegando
+              } do pedido)`
+            : `Peças (${items.reduce((s, i) => s + (i.quantity ?? 0), 0)})`}
         </div>
         {items.length === 0 ? (
           <div className="text-slate-400 italic">Sem itens atribuídos</div>
@@ -2988,10 +3083,20 @@ function PickOrderCard({
         {(status === 'separated' || status === 'ready') && (ehMotoboy || order.isPickup) && !ehFeederJuntada && (
           <button
             onClick={(e) => { e.stopPropagation(); onEntregaSemRastreio(ehMotoboy ? 'Motoboy' : 'Retirada'); }}
-            title={ehMotoboy ? 'A peça saiu com o motoboy — fecha o pedido sem rastreio' : 'A cliente levou a peça — fecha o pedido sem rastreio'}
+            title={
+              ehMotoboy
+                ? 'A peça saiu com o motoboy — fecha o pedido sem rastreio'
+                : ehTransferRetirada
+                ? `As peças saíram pra loja ${row.transferToStoreName ?? row.transferToStoreCode ?? 'de retirada'} — a cliente retira lá`
+                : 'A cliente levou a peça — fecha o pedido sem rastreio'
+            }
             className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
-            {ehMotoboy ? '🛵 Entregue por motoboy' : '🏬 Cliente retirou'}
+            {ehMotoboy
+              ? '🛵 Entregue por motoboy'
+              : ehTransferRetirada
+              ? `📦 Enviei pra loja ${row.transferToStoreName ?? row.transferToStoreCode ?? ''}`.trim()
+              : '🏬 Cliente retirou'}
           </button>
         )}
         {/* Âncora com o próprio bipe pronto, aguardando as caixas das feeders */}

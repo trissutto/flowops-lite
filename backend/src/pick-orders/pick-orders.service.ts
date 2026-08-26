@@ -2128,14 +2128,26 @@ export class PickOrdersService {
       const ehFeederJuntada = r.isTransfer && !r.order?.isPickup;
       const caixa = ehFeederJuntada ? caixaDoPick.get(r.id) ?? null : null;
       /**
-       * Sou ÂNCORA? Card próprio (não-transferência) de pedido que NÃO é
-       * retirada — a MESMA fronteira do `ehFeederJuntada` acima. Pedido de
-       * RETIRADA dividido também tem card `isTransfer` apontando pra loja de
-       * retirada, e aquilo é o pickup-transfer de sempre, não juntada:
-       * mostrar "esta loja junta e envia" ali seria alarme falso (a cliente
-       * é que vem buscar).
+       * Sou quem MONTA o pedido? Card próprio (não-transferência) que recebe
+       * peça das outras lojas. São dois casos, e os dois precisam do mesmo
+       * aviso — o que muda é o desfecho:
+       *   - ENVIO (juntada, 21/08): a âncora junta tudo e POSTA um pacote só.
+       *   - RETIRADA (26/08, pedido do dono): a cliente vem buscar AQUI, e as
+       *     peças das outras lojas chegam por transferência.
+       *
+       * A retirada dividida ficava de fora (`souAncora` exigia `!isPickup`) e
+       * o card mostrava só o pedaço desta loja: Jundiaí via 1 peça no
+       * LP-000254 sem saber que a outra estava vindo de Itanhaém, e entregava
+       * pedido pela metade sem ninguém perceber. Medido em 26/08: 14 de 123
+       * retiradas dos últimos 180 dias são divididas.
+       *
+       * O filtro que protege é o `feedersDoPedido`, que só traz card irmão
+       * apontando PRA MINHA LOJA — card não-transferência de outra loja num
+       * pedido de retirada alheio continua sem ver nada.
        */
-      const souAncora = !r.isTransfer && !r.order?.isPickup;
+      const souAncora = !r.isTransfer;
+      // Onde a cliente encosta a mão no pedido: buscando na loja ou pelos Correios.
+      const ehRetiradaComposta = souAncora && !!r.order?.isPickup;
       // As caixas que JÁ nasceram (só existem depois do Finalizar do feeder).
       const caixasChegando = souAncora
         ? (caixasDoPedido.get(r.orderId) ?? []).filter(
@@ -2151,13 +2163,31 @@ export class PickOrdersService {
       const chegando = souAncora
         ? (feedersDoPedido.get(r.orderId) ?? []).map((f: any) => {
             const caixa = caixaPorPick.get(f.id) ?? null;
+            /**
+             * SEM CAIXA, o sinal é o PRÓPRIO CARD da outra loja.
+             *
+             * Retirada dividida não gera caixa automática — o
+             * `criarCaixaDoFeederSePreciso` pula pedido de retirada de
+             * propósito ("retirada tem o próprio trilho"). Se a etapa só
+             * soubesse ler caixa, a linha diria "ainda separando" pra
+             * sempre, inclusive depois da peça já ter saído da loja de
+             * origem: fila que mente é pior que fila vazia.
+             *
+             * Vale também pro feeder de juntada cuja caixa não nasceu
+             * (falha no Finalizar): "separada, aguardando sair" é a
+             * verdade, "ainda separando" não é.
+             */
             const etapa = caixa
               ? caixa.status === 'received'
                 ? 'chegou'
                 : 'a_caminho'
               : f.issueReason
                 ? 'problema'
-                : 'separando';
+                : f.status === 'shipped'
+                  ? 'a_caminho'
+                  : f.status === 'separated' || f.status === 'ready'
+                    ? 'pronta'
+                    : 'separando';
             return {
               code: caixa?.code ?? null,
               status: caixa?.status ?? f.status,
@@ -2214,6 +2244,15 @@ export class PickOrdersService {
           : null,
         juntadaChegando: chegando.length
           ? {
+              /**
+               * O DESFECHO do pedido composto — e o card fala diferente em
+               * cada um. 'envio': junta e posta (o envio trava até tudo
+               * chegar). 'retirada': a cliente vem buscar aqui, e a trava
+               * não existe — quem sabe se a peça chegou na arara é a
+               * vendedora, não o sistema (a transferência de retirada não
+               * tem entrada carimbada).
+               */
+              modo: ehRetiradaComposta ? ('retirada' as const) : ('envio' as const),
               total: chegando.length,
               // "Recebidas" conta CAIXA QUE CHEGOU — é o que libera o envio.
               // Feeder ainda separando (sem caixa) não conta, de propósito.
