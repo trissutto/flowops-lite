@@ -7,6 +7,13 @@ import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { pedidoPago } from '../common/pedido-pago';
 import { voltariaProFluxo, motivoDaRecusa } from '../common/volta-pro-fluxo';
 import {
+  ehCancelamento,
+  normalizarMotivo,
+  faltaMotivo,
+  textoMotivoObrigatorio,
+  assinaturaDoCancelamento,
+} from '../common/motivo-cancelamento';
+import {
   RASTREIO_JANELA_DIAS as JANELA_DIAS,
   inicioDaJanela,
   despachadoEm,
@@ -2125,10 +2132,17 @@ export class OrdersController {
       trackingCarrier?: string;
       trackingUrl?: string;
       customerNote?: string;
+      /** Por que está cancelando/reembolsando — OBRIGATÓRIO nesses dois status. */
+      cancelReason?: string;
       addNote?: { text: string; notifyCustomer?: boolean };
     },
+    @Req() req: any,
   ) {
     const wcOrderId = Number(wcId);
+    // Quem está mexendo. Vai pro `order_history` — até 26/08 TODO cancelamento
+    // era anônimo (18 em 60 dias, 0 com user_id).
+    const ator = this.atorDoRequest(req);
+    const motivoCancelamento = normalizarMotivo(body.cancelReason, body.addNote?.text);
 
     /**
      * Pedido de origem SINTÉTICA (live 900M, site novo 950M): existe SÓ no
@@ -2184,6 +2198,24 @@ export class OrdersController {
       };
     }
 
+    /**
+     * 🔴 CANCELAR EXIGE MOTIVO (26/08/2026, dono) — ver
+     * `common/motivo-cancelamento.ts`. Antes daqui o pedido morria com a nota
+     * fixa "Pedido CANCELADO pelo Flow", sem autor e sem porquê (ON-000017).
+     * A trava fica ANTES de qualquer escrita: nada de cancelar no WooCommerce
+     * e recusar depois.
+     */
+    if (faltaMotivo(body.status, body.cancelReason, body.addNote?.text)) {
+      return {
+        ok: false,
+        id: wcOrderId,
+        status: localForSource?.status ?? null,
+        requestedStatus: body.status,
+        statusApplied: false,
+        warning: textoMotivoObrigatorio(body.status),
+      };
+    }
+
     // 1) Se está indo pra 'separacao', garante pick-orders criados ANTES.
     //    Se não conseguir (sem estoque etc), aborta sem mexer no WC — não faz
     //    sentido marcar "separação" se ninguém vai separar.
@@ -2235,6 +2267,7 @@ export class OrdersController {
               fromStatus: localForSource!.status,
               toStatus: localForSource!.status,
               note: body.addNote.text.trim(),
+              userId: await this.userIdGravavel(ator.userId),
             },
           })
           .catch(() => {});
@@ -2242,8 +2275,8 @@ export class OrdersController {
       // Pedido da live/loja não tem WooCommerce pra recusar nada — o status
       // é aplicado aqui mesmo (cancelar mexe nas ordens de separação;
       // concluir/processar/separar só trocam o status do pedido).
-      await this.cancelarLocalmente(wcOrderId, body.status);
-      await this.aplicarStatusLocal(wcOrderId, body.status, body.addNote?.text);
+      await this.cancelarLocalmente(wcOrderId, body.status, ator, motivoCancelamento);
+      await this.aplicarStatusLocal(wcOrderId, body.status, body.addNote?.text, ator);
       return {
         ok: true,
         id: wcOrderId,
@@ -2276,7 +2309,7 @@ export class OrdersController {
     // continuava mostrando o pedido em "Processando" e a ordem de separação
     // seguia viva na filial — alguém ia empacotar peça de pedido cancelado.
     if (statusApplied && !rejectedStatus) {
-      await this.cancelarLocalmente(wcOrderId, requestedStatus);
+      await this.cancelarLocalmente(wcOrderId, requestedStatus, ator, motivoCancelamento);
     }
 
     let warning: string | undefined;
@@ -2362,7 +2395,45 @@ export class OrdersController {
     );
   }
 
-  private async aplicarStatusLocal(wcOrderId: number, statusPedido?: string, nota?: string) {
+  /**
+   * QUEM está mexendo no pedido, do jeito que o JWT entrega (a estratégia
+   * devolve `sub`/`userId`/`id` pro mesmo usuário — ver `auth/jwt.strategy`).
+   * Login de loja também é usuário: no histórico ele aparece com o nome da
+   * loja, igual ao reporte de ruptura.
+   */
+  private atorDoRequest(req: any): { userId: string | null; nome: string | null } {
+    const u = req?.user ?? {};
+    const nome = u.name ?? u.nome ?? u.storeName ?? u.email ?? null;
+    return {
+      userId: u.userId ?? u.sub ?? u.id ?? null,
+      nome: nome ? String(nome).trim() : null,
+    };
+  }
+
+  /**
+   * `order_history.user_id` tem FK pra `users` — id de token velho (usuário
+   * apagado) derrubaria o create INTEIRO e a gente perderia também a nota e o
+   * motivo. Confere antes; o nome continua na nota de qualquer jeito.
+   */
+  private async userIdGravavel(userId: string | null): Promise<string | null> {
+    if (!userId) return null;
+    try {
+      const u = await (this.prisma as any).user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      });
+      return u?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async aplicarStatusLocal(
+    wcOrderId: number,
+    statusPedido?: string,
+    nota?: string,
+    ator?: { userId: string | null; nome: string | null },
+  ) {
     const s = String(statusPedido || '').toLowerCase();
     const mapa: Record<string, string> = {
       completed: 'shipped',
@@ -2403,7 +2474,10 @@ export class OrdersController {
             orderId: local.id,
             fromStatus: local.status,
             toStatus: destino,
-            note: nota?.trim() || `Status alterado pra ${destino} pelo Flow`,
+            note:
+              (nota?.trim() || `Status alterado pra ${destino} pelo Flow`) +
+              (ator?.nome ? ` · por ${ator.nome}` : ''),
+            userId: await this.userIdGravavel(ator?.userId ?? null),
           },
         })
         .catch(() => {});
@@ -2413,9 +2487,14 @@ export class OrdersController {
     }
   }
 
-  private async cancelarLocalmente(wcOrderId: number, statusPedido?: string) {
+  private async cancelarLocalmente(
+    wcOrderId: number,
+    statusPedido?: string,
+    ator?: { userId: string | null; nome: string | null },
+    motivo?: string | null,
+  ) {
     const s = String(statusPedido || '').toLowerCase();
-    if (!['cancelled', 'canceled', 'refunded'].includes(s)) return;
+    if (!ehCancelamento(s)) return;
     try {
       const local = await (this.prisma as any).order.findUnique({
         where: { wcOrderId },
@@ -2455,10 +2534,14 @@ export class OrdersController {
             orderId: local.id,
             fromStatus: local.status,
             toStatus: 'cancelled',
+            // MOTIVO e AUTOR primeiro: é o que alguém vai procurar daqui a um
+            // mês pra explicar por que a cliente ficou sem a peça.
             note:
               `Pedido ${s === 'refunded' ? 'REEMBOLSADO' : 'CANCELADO'} pelo Flow` +
+              assinaturaDoCancelamento(motivo, ator?.nome) +
               (picks.count ? ` · ${picks.count} ordem(ns) de separação cancelada(s)` : '') +
               (estorno.pecas ? ` · ${estorno.pecas} peça(s) bipada(s) devolvida(s) ao estoque` : ''),
+            userId: await this.userIdGravavel(ator?.userId ?? null),
           },
         })
         .catch(() => {});
