@@ -125,11 +125,34 @@ function rotulo(slug: string | null): string {
  * vitrine com peça que não vende e encolheria o conjunto na prática.
  */
 const NOVIDADES_TETO = 20;
-const NOVIDADES_CATEGORIA: Record<string, string> = {
-  blusas: 'novidades-blusas',
-  vestidos: 'novidades-vestidos',
-  macacoes: 'novidades-macacoes',
-};
+
+/**
+ * O CARIMBO SAI DO PRÓPRIO SLUG DA CATEGORIA (25/08/2026).
+ *
+ * Até aqui isto era um mapa fixo com blusas, vestidos e macacões. O efeito era
+ * invisível e caro: calça, saia, shorts, conjunto, jaqueta, moda praia,
+ * lingerie e linha conforto NUNCA entravam na vitrine de novidade, por mais
+ * nova que fosse a peça — oito categorias fora, sem erro nenhum aparecer. O
+ * dono abriu a vitrine, viu 17 modelos e perguntou por que não pegava as mais
+ * novas. Era isso.
+ *
+ * Derivar do slug resolve os dois lados: as categorias que faltavam entram
+ * agora, e categoria criada no futuro entra sozinha, sem ninguém lembrar de
+ * mexer aqui.
+ *
+ * O que NÃO mudou, de propósito: o teto de `NOVIDADES_TETO` continua sendo POR
+ * categoria (uma categoria cheia não come a vaga da outra) e a trava de
+ * `lancamento` continua intacta — é ela que impede peça velha de voltar à
+ * vitrine (incidente de 19/08, ver o cabeçalho do TOP30).
+ *
+ * Peça sem categoria vai pra `novidades-outros` em vez de ser descartada: ela é
+ * peça nova do mesmo jeito, e o conjunto no Meta casa por `custom_label_2`
+ * contendo `novidades-`, então entra na vitrine junto.
+ */
+function carimboNovidade(categoria: unknown): string {
+  const slug = String(categoria ?? '').trim();
+  return slug ? `novidades-${slug}` : 'novidades-outros';
+}
 
 /**
  * AS 30 DE MAIOR ESTOQUE DE CADA CATEGORIA — `custom_label_3` e `custom_label_4`.
@@ -249,12 +272,12 @@ function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   const usadas = new Map<string, number>();
   const carimbo = new Map<string, string>();
   for (const p of pecas) {
-    const alvo = NOVIDADES_CATEGORIA[String(p.categoria || '').trim()];
+    const alvo = carimboNovidade(p.categoria);
     // SÓ peça NOVA de verdade (≤30 dias da 1ª venda, `lancamento`) e disponível.
     // Sem a trava de lancamento o feed completava as 20 com peça de 60-90 dias
     // (o "peça velha como nova" — dono 16/08). Com ela o conjunto varia (às vezes
     // <20) e cresce sozinho conforme entra peça nova; peça envelhece 30d e sai.
-    if (!alvo || !p.disponivel || !p.lancamento) continue;
+    if (!p.disponivel || !p.lancamento) continue;
     const n = usadas.get(alvo) ?? 0;
     if (n >= NOVIDADES_TETO) continue;
     usadas.set(alvo, n + 1);
