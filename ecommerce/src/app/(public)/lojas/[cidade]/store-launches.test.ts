@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Product } from '@/types';
-import { selectStoreLaunches, storeLaunchProductHref } from './store-launches';
+import lojasData from '@/data/lojas.json';
+import {
+  selectStoreLaunches,
+  storeLaunchHeroTitle,
+  storeLaunchProductHref,
+} from './store-launches';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -19,6 +24,16 @@ function product(overrides: Partial<Product> = {}): Product {
 }
 
 describe('vitrine de lançamentos da loja', () => {
+  it('gera um hero de novidades para todas as 14 unidades', () => {
+    const titles = lojasData.stores.map((store) => storeLaunchHeroTitle(store.unit));
+
+    expect(titles).toHaveLength(14);
+    expect(titles).toContain("Novidades Lurd's em Anália Franco");
+    expect(titles).toContain("Novidades Lurd's em Limeira");
+    expect(titles).toContain("Novidades Lurd's em Vinhedo");
+    expect(new Set(titles)).toHaveLength(14);
+  });
+
   it('limita a seis produtos elegíveis', () => {
     const products = Array.from({ length: 8 }, (_, index) => product({ id: String(index) }));
     expect(selectStoreLaunches(products)).toHaveLength(6);
