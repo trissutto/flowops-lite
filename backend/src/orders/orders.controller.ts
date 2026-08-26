@@ -3377,6 +3377,94 @@ export class OrdersController {
   }
 
   /**
+   * CANCELAR UMA PEÇA DO PEDIDO E DEVOLVER O VALOR (26/08 — pergunta do dono
+   * no ON-000106: "e a peça que faltou? como faço?").
+   *
+   * O caso: o resto do pedido JÁ FOI (Campinas postou 2 de 3) e a peça que
+   * sobrou não existe em loja nenhuma. As saídas são duas — outra loja envia
+   * com um 2º frete (botão Mover peça) OU cancela SÓ esta peça e devolve o
+   * dinheiro dela. Este endpoint é a segunda: marca a peça cancelada (o
+   * pedido segue vivo com as outras), grava motivo+autor no histórico e
+   * devolve o VALOR a estornar — o estorno em si é manual no gateway, e a
+   * nota do histórico fica cobrando isso.
+   *
+   * Só aceita peça que NÃO está em card ativo — peça com loja trabalhando
+   * usa Mover/reporte primeiro (cancelar por baixo do card criaria peça
+   * fantasma na bipagem).
+   */
+  @Post('wc/:wcId/cancelar-peca')
+  async cancelarPeca(
+    @Param('wcId') wcId: string,
+    @Body() body: { orderItemId?: string; motivo?: string },
+    @Req() req?: any,
+  ) {
+    const orderItemId = String(body?.orderItemId ?? '').trim();
+    const motivo = String(body?.motivo ?? '').trim();
+    if (!orderItemId) throw new BadRequestException('orderItemId é obrigatório');
+    if (motivo.length < 5) {
+      throw new BadRequestException(
+        'Cancelar peça exige o MOTIVO (mín. 5 letras) — é o que explica depois por que a cliente recebeu menos peças e o dinheiro de volta.',
+      );
+    }
+    const local: any = await this.prisma.order.findFirst({
+      where: { wcOrderId: Number(wcId) },
+      select: { id: true, status: true, wcOrderNumber: true },
+    });
+    if (!local) throw new BadRequestException('Pedido não existe no banco local.');
+    const item: any = await (this.prisma as any).orderItem.findUnique({ where: { id: orderItemId } });
+    if (!item || item.orderId !== local.id) {
+      throw new BadRequestException('Essa peça não é deste pedido — recarregue a tela.');
+    }
+    if (item.cancelledAt) {
+      return { ok: true as const, jaCancelada: true, valorEstornar: (item.unitPrice ?? 0) * (item.quantity ?? 1) };
+    }
+    // Peça em card ATIVO não cancela por baixo dos panos.
+    if (item.assignedStoreId) {
+      const cardVivo = await this.prisma.pickOrder.findFirst({
+        where: {
+          orderId: local.id,
+          storeId: item.assignedStoreId,
+          status: { in: ['new', 'separating', 'separated', 'ready'] },
+        },
+        include: { store: { select: { code: true } } },
+      });
+      if (cardVivo) {
+        throw new BadRequestException(
+          `A peça está no card da loja ${cardVivo.store?.code} — tire de lá primeiro (Mover peça) ou espere a loja reportar.`,
+        );
+      }
+    }
+    const atorReq = this.atorDoRequest(req);
+    const userId = await this.userIdGravavel(atorReq.userId);
+    const valor = (Number(item.unitPrice) || 0) * (Number(item.quantity) || 1);
+    const pecaTxt = [item.ref, item.cor, item.tamanho].filter(Boolean).join(' ') || item.sku;
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.orderItem.update({
+        where: { id: orderItemId },
+        data: {
+          cancelledAt: new Date(),
+          cancelReason: motivo,
+          cancelledBy: atorReq.nome ?? null,
+          assignedStoreId: null,
+        },
+      });
+      await tx.orderHistory.create({
+        data: {
+          orderId: local.id,
+          fromStatus: local.status,
+          toStatus: local.status,
+          userId,
+          note:
+            `Peça CANCELADA do pedido: ${pecaTxt} (${item.quantity}x). Motivo: ${motivo}. ` +
+            `🔴 DEVOLVER R$ ${valor.toFixed(2)} à cliente (estorno manual no gateway).` +
+            (atorReq.nome ? ` · por ${atorReq.nome}` : ''),
+        },
+      });
+    });
+    return { ok: true as const, valorEstornar: valor, peca: pecaTxt };
+  }
+
+  /**
    * JUNTADA (21/08): escolhe a LOJA ÂNCORA de um pedido dividido já
    * confirmado — os outros cards passam a mandar as peças PRA ELA (caixa
    * com NF de transferência + etiqueta pra loja), e só ela envia pra

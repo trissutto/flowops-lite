@@ -29,6 +29,7 @@ export interface PecaRaioX {
   cor: string | null;
   tamanho: string | null;
   quantity: number;
+  unitPrice: number | null;
   /** com_loja | na_caixa | enviada | entregue | sem_dono | reportada | cancelada */
   estado: string;
   /** Frase pronta pra tela ("na caixa REM-x a caminho de LIMEIRA"). */
@@ -274,10 +275,26 @@ export class LinhaDoTempoService {
         cor: it.cor ?? null,
         tamanho: it.tamanho ?? null,
         quantity: it.quantity,
+        unitPrice: it.unitPrice ?? null,
         trackingCode: null as string | null,
       };
       if (order.status === 'cancelled') {
         return { ...base, estado: 'cancelada', onde: 'pedido cancelado', cor_semaforo: 'verde' as const, storeCode: null, storeName: null };
+      }
+      // Peça cancelada individualmente (26/08): decisão tomada — o pedido
+      // segue com as outras. O valor a devolver fica na frase até o estorno.
+      if (it.cancelledAt) {
+        const valor = (Number(it.unitPrice) || 0) * (Number(it.quantity) || 1);
+        return {
+          ...base,
+          estado: 'cancelada',
+          onde:
+            `CANCELADA do pedido (${it.cancelReason || 'sem motivo'}) — devolver R$ ${valor.toFixed(2)} à cliente` +
+            (it.cancelledBy ? ` · por ${it.cancelledBy}` : ''),
+          cor_semaforo: 'verde' as const,
+          storeCode: null,
+          storeName: null,
+        };
       }
       const card = cardDaLoja(it.assignedStoreId);
       if (card) {

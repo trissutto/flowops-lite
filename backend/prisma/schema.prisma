@@ -946,6 +946,15 @@ model OrderItem {
   tamanho         String?
   quantity        Int
   unitPrice       Float?  @map("unit_price")
+  // ── PEÇA CANCELADA DO PEDIDO (26/08 — caso ON-000106) ──
+  // Quando NENHUMA loja tem a peça e o resto do pedido JÁ FOI, a matriz
+  // cancela SÓ esta peça e devolve o valor: o pedido segue vivo com as
+  // outras. Motivo e autor obrigatórios — mesma régua do cancelamento de
+  // pedido (motivo-cancelamento.ts). O estorno do dinheiro é manual no
+  // gateway; o valor a devolver fica gravado na nota do histórico.
+  cancelledAt     DateTime? @map("cancelled_at")
+  cancelReason    String?   @map("cancel_reason")
+  cancelledBy     String?   @map("cancelled_by")
   // Preço CHEIO (sem promoção) — base da obrigação intercompany ÷2,5.
   // Pedido da LIVE grava o basePriceCents; site fica null (unitPrice é o cheio).
   baseUnitPrice   Float?  @map("base_unit_price")
