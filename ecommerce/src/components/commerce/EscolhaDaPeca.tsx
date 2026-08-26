@@ -332,6 +332,42 @@ export function EscolhaDaPeca({
        o mesmo número vira um buraco entre a foto e o nome da peça. O desktop
        segue nos 64px do `lg:gap-16`. */
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+      {/* UM ÚNICO H1 no DOM. No celular, `contents` coloca título e buy box
+          em linhas separadas ao redor da galeria; no desktop o wrapper volta
+          a ser a coluna direita, sticky, com título e decisão juntos. */}
+      <div className="contents lg:sticky lg:top-28 lg:col-start-2 lg:row-start-1 lg:block lg:self-start">
+        <TituloDaPeca product={pecaDaCor} className="order-1 min-w-0 mb-2 lg:mb-0" />
+        <div className="order-3 min-w-0">
+          <BuyBox
+            showHeading={false}
+            alertaEstoque={alertaEstoque}
+            look={look}
+            product={pecaDaCor}
+            cores={coresParaBuyBox}
+            corSelecionada={cor}
+            tamanho={tamanho}
+            onTamanho={setTamanho}
+            corPendente={temVariasCores && !cor}
+            onPedirCor={pedirCor}
+            seletorCores={
+              temVariasCores ? (
+                <GradeDeCores
+                  id="grade-de-cores-desktop"
+                  slug={product.slug}
+                  cores={cores}
+                  corAtualNome={corAtual?.nome ?? null}
+                  tamanho={tamanho}
+                  erro={corError}
+                  onEscolher={trocarCor}
+                />
+              ) : null
+            }
+            irmas={irmas}
+            irmasHref={irmasHref}
+            irmasLabel={irmasLabel}
+          />
+        </div>
+      </div>
       {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
@@ -342,12 +378,11 @@ export function EscolhaDaPeca({
           grid se recusava a encolher. O viewport de layout do celular esticava
           pra 620px e a PDP INTEIRA cortava à direita — grade de tamanhos,
           "Adicionar à sacola", tudo. Quanto mais cores a peça ganhava, pior. */}
-      <div id="galeria-da-peca" className="min-w-0 scroll-mt-24">
+      <div id="galeria-da-peca" className="order-2 min-w-0 scroll-mt-24 lg:col-start-1 lg:row-start-1">
         {/* ORDEM DO CELULAR (dono, 20/08, preview aprovado): NOME no topo →
             foto → PREÇO → cor escolhida + grade → tamanhos. Nome e preço
             são os MESMOS componentes da coluna de compra, que no desktop os
             mostra à direita — aqui só aparecem no empilhado do celular. */}
-        <TituloDaPeca product={pecaDaCor} className="mb-2 lg:hidden" />
         <ProductGallery
           key={cor ?? 'unica'}
           images={galeria}
@@ -390,46 +425,6 @@ export function EscolhaDaPeca({
             onEscolher={trocarCor}
           />
         )}
-      </div>
-      <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
-        <BuyBox
-          alertaEstoque={alertaEstoque}
-          look={look}
-          product={pecaDaCor}
-          /* `tamanhos` entra aqui (17/08) porque agora o TAMANHO vem primeiro:
-             é a grade de cada cor que decide qual bolinha sai riscada quando
-             ela já escolheu o número. */
-          /* `capa` e `nomeAmigavel` entram em 19/08 pela FOLHA DE CORES do
-             BuyBox: ela mostra a mesma foto que a fita de miniaturas mostra
-             (a primeira da cor) e o nome que a cliente lê — o cru do ERP
-             ("VD MUSGO ESC") segue sendo só a chave da seleção. */
-          cores={coresParaBuyBox}
-          corSelecionada={cor}
-          tamanho={tamanho}
-          onTamanho={setTamanho}
-          /* A cor ainda não foi escolhida: o BuyBox trava o tamanho e o
-             botão, e qualquer tentativa cai no `pedirCor` — que rola até a
-             grade e acende o passo (dono, 20/08: "se a pessoa clicar no
-             tamanho sem escolher a cor, o site pede para escolher a cor"). */
-          corPendente={temVariasCores && !cor}
-          onPedirCor={pedirCor}
-          seletorCores={
-            temVariasCores ? (
-              <GradeDeCores
-                id="grade-de-cores-desktop"
-                slug={product.slug}
-                cores={cores}
-                corAtualNome={corAtual?.nome ?? null}
-                tamanho={tamanho}
-                erro={corError}
-                onEscolher={trocarCor}
-              />
-            ) : null
-          }
-          irmas={irmas}
-          irmasHref={irmasHref}
-          irmasLabel={irmasLabel}
-        />
       </div>
     </div>
   );

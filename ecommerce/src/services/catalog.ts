@@ -183,6 +183,7 @@ function toProduct(item: WcListItem, detail?: WcDetail): Product {
     sku: item.sku ?? undefined,
     slug: item.slug,
     name: nomeComReferencia(item.name, item.sku),
+    description: detail?.shortDescription || detail?.description || undefined,
     category: detectCategory(item.categories),
     price,
     compareAtPrice: hasDiscount ? item.regularPrice! : undefined,
