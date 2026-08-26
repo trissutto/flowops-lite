@@ -70,8 +70,9 @@ import { refBaseOf } from '../common/ref-base';
  * checkout — o guard recusa quando o catálogo está mais caro que a página que
  * a cliente leu. Uma resposta, dois chamadores.
  *
- * Kill-switch: `SITE_PROMO_50=0` desliga o desconto automático do site (o
- * `precoPromo` manual por peça continua valendo).
+ * Kill-switch: `SITE_PROMO_50=0` desliga o desconto automático do site.
+ * (O `precoPromo` manual por peça morreu em 26/08 — o site segue o preço da
+ * loja, sempre; promoção manual se faz baixando o preço no editor.)
  */
 
 export interface PromoDaPeca {

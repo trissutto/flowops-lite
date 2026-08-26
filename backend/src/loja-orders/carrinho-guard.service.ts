@@ -13,9 +13,11 @@ import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
  * mas token vaza — e preço inventado é o furo mais caro que existe.
  *
  * O QUE ESTE SERVIÇO RESPONDE, peça a peça:
- *   preço  → o `vendaUn` do espelho Wincred, que é a MESMA fonte da vitrine
- *   promo  → `precoPromo` digitado na retaguarda ou os 50% do caixa
- *            (`PromoSiteService`) — o mesmo serviço que a vitrine consulta
+ *   preço  → o `vendaUn` do espelho Wincred, que é a MESMA fonte da vitrine —
+ *            e o MESMO preço do caixa das 14 lojas ("o site segue o da loja
+ *            SEMPRE", ordem do dono 26/08; o `precoPromo` digitado morreu)
+ *   promo  → só os 50% do caixa (`PromoSiteService`) — o mesmo serviço que a
+ *            vitrine consulta
  *   estoque→ soma de `wincred_estoque` (todas as lojas), no momento de fechar
  *   gate   → `site_produto.publicado` — despublicou no meio da sessão, não vende
  *
@@ -203,31 +205,10 @@ export class CarrinhoGuardService {
   /**
    * Gate de publicação. Devolve o conjunto de REFs EXPLICITAMENTE
    * despublicadas — ausência de linha não conta (ver regra (a) no topo).
+   *
+   * (O `precosPromo` que morava aqui morreu em 26/08 junto com o
+   * `precoPromo` da vitrine — o preço do site é o da loja, sempre.)
    */
-  /**
-   * PREÇO PROMOCIONAL DO SITE por REF (14/08). Quando setado, é o preço que a
-   * loja REALMENTE cobra no site — a trava passa a compará-lo, não o do ERP,
-   * senão recusaria a venda promocional como fraude. Ref sem promo não entra
-   * no Map (cai no preço normal do ERP).
-   */
-  private async precosPromo(refs: string[]): Promise<Map<string, number>> {
-    const m = new Map<string, number>();
-    if (!refs.length) return m;
-    try {
-      const rows: any[] = await (this.prisma as any).siteProduto.findMany({
-        where: { ref: { in: refs }, precoPromo: { not: null } },
-        select: { ref: true, precoPromo: true },
-      });
-      for (const r of rows) {
-        const p = this.dinheiro(r.precoPromo);
-        if (p > 0) m.set(this.normRef(r.ref), p);
-      }
-    } catch (e: any) {
-      this.logger.warn(`[guard] preços promo indisponíveis (segue no ERP): ${e?.message || e}`);
-    }
-    return m;
-  }
-
   private async despublicadas(refs: string[]): Promise<Set<string>> {
     if (!refs.length) return new Set();
     try {
@@ -437,7 +418,6 @@ export class CarrinhoGuardService {
     }
 
     const bloqueadas = await this.despublicadas(Array.from(porRef.keys()));
-    const promo = await this.precosPromo(Array.from(porRef.keys()));
     /**
      * Os 50% de peça antiga (a promoção do caixa). Vem pelas MESMAS chaves que
      * a vitrine usou pra montar a peça — a resposta tem que ser a mesma dos
@@ -531,19 +511,16 @@ export class CarrinhoGuardService {
         };
       }
       /**
-       * PROMO DO SITE VENCE O ERP (14/08): se a REF tem `precoPromo`, é ele o
-       * preço que a loja cobra no site — a trava compara contra ele, não
-       * contra o `vendaUn`. Sem promo, segue o menor do catálogo (ERP).
-       *
-       * Sem `precoPromo` digitado, entra a promoção de 50% do caixa (15/08):
-       * peça de MODA cadastrada até 2023 sai por metade na vitrine, e a
-       * cobrança tem que fechar com a página. A ordem é a mesma do catálogo —
-       * preço digitado à mão vence a regra automática.
+       * O PREÇO É O DA LOJA (26/08): `vendaUn` — o mesmo do caixa das 14
+       * lojas. O `precoPromo` digitado só no site saiu da fórmula junto com a
+       * vitrine (CHIC/SMILE a 59,90 no site com o caixa em 79,90 foi a gota).
+       * A única promoção é a de 50% do caixa (15/08): peça de MODA cadastrada
+       * até 2023 sai por metade na vitrine, e a cobrança tem que fechar com a
+       * página — a regra é a MESMA do catálogo, pelo MESMO serviço.
        */
       const precoCheio = Math.min(...precos);
       const daPromo50 = !!(promo50.get(chave) ?? promo50.get(ref))?.elegivel;
-      const precoCatalogo =
-        promo.get(chave) ?? (daPromo50 ? this.promoSite.precoComDesconto(precoCheio) : precoCheio);
+      const precoCatalogo = daPromo50 ? this.promoSite.precoComDesconto(precoCheio) : precoCheio;
 
       /**
        * 4) Item 5 — ESTOQUE no fechamento, não só ao adicionar.

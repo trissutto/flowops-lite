@@ -20,8 +20,8 @@ import { LinhaDoTempoService } from './linha-do-tempo.service';
   // WincredMirrorModule → WincredCatalogService (troca manual de item lê a
   // peça nova pelo espelho, mesmo caminho do bipe do PDV).
   // PagarmeModule → link de pagamento da diferença da troca de peça.
-  // PromoSiteModule → o preço que o SITE cobra hoje pela peça nova (precoPromo
-  // digitado / promoção de 50%), pra sugerir a diferença certa.
+  // PromoSiteModule → o preço que o SITE cobra hoje pela peça nova (preço da
+  // loja, com a promoção de 50% quando elegível), pra sugerir a diferença certa.
   imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoSiteModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
   // DespachoBackfillService → preenche `shipped_at` do que já estava
   // despachado quando a coluna nasceu (25/08). Roda uma vez e some.

@@ -25,8 +25,12 @@ const linha = (over: Partial<any> = {}) => ({
   ...over,
 });
 
-const montar = (promo: any, linhas = [linha(), linha({ codigo: '1002', tamanho: '48' })], site: any = null) =>
-  svc.montarPeca('700979', linhas, site, null, [], undefined, 0, [], promo);
+const montar = (
+  promo: any,
+  linhas = [linha(), linha({ codigo: '1002', tamanho: '48' })],
+  site: any = null,
+  precoAnterior: Map<string, number> | null = null,
+) => svc.montarPeca('700979', linhas, site, null, [], undefined, 0, [], promo, precoAnterior);
 
 describe('montarPeca — promoção de 50%', () => {
   it('peça elegível sai pela metade, com o "de" riscado no preço cheio', () => {
@@ -61,27 +65,70 @@ describe('montarPeca — promoção de 50%', () => {
     expect(p.promocao).toBe(false);
   });
 
-  it('preço digitado à mão vence os 50% — nunca desconto sobre desconto', () => {
+  /**
+   * O SITE SEGUE O PREÇO DA LOJA — SEMPRE (ordem do dono, 26/08). O
+   * `precoPromo` digitado só no site morreu: CHIC e SMILE a R$ 59,90 no site
+   * com o caixa cobrando R$ 79,90 era exatamente a divergência proibida.
+   */
+  it('precoPromo digitado é IGNORADO — o site vende pelo preço da loja (26/08)', () => {
+    const p = montar(null, [linha(), linha({ codigo: '1002', tamanho: '48' })], { precoPromo: 149.9 });
+    expect(p.preco).toBe(199.9);
+    expect(p.precoDe).toBeNull();
+    expect(p.variacoes.every((v: any) => v.preco === 199.9)).toBe(true);
+  });
+
+  it('peça elegível aos 50% com precoPromo digitado: vale a regra do caixa, não o digitado', () => {
     const p = montar(
       { elegivel: true, motivo: 'x', dataCadastro: '2022-05-10' },
       [linha(), linha({ codigo: '1002', tamanho: '48' })],
       { precoPromo: 149.9 },
     );
-    expect(p.preco).toBe(149.9);
+    expect(p.preco).toBe(99.95);
     expect(p.precoDe).toBe(199.9);
-    // A grade não pode sair pela metade — mas também não pode ficar no preço
-    // do ERP: quem tem `precoPromo` é vendida por ele (a trava do carrinho
-    // cobra 149,90), e a bolinha/grade mostrando 199,90 anuncia um preço que
-    // a loja não pratica. O desconto digitado chega em TODA linha, igual ao
-    // automático — só nunca em cima do outro.
-    expect(p.variacoes.every((v: any) => v.preco === 149.9)).toBe(true);
-    expect(p.cores[0].preco).toBe(149.9);
-    expect(p.cores[0].tamanhos.map((t: any) => t.preco)).toEqual([149.9, 149.9]);
   });
 
   it('a marquinha do cadastro NÃO faz mais promoção sozinha (o bug do Outlet)', () => {
     const p = montar({ elegivel: false, motivo: 'x', dataCadastro: '2026-01-02' }, undefined, { promocao: true });
     expect(p.promocao).toBe(false);
     expect(p.selecaoComercial).toBe(true);
+  });
+});
+
+describe('montarPeca — "de/por" automático pelo histórico da loja (26/08)', () => {
+  it('a loja baixou o preço: o "de" riscado é o preço anterior dela', () => {
+    const p = montar(null, undefined, null, new Map([['1001', 249.9]]));
+    expect(p.preco).toBe(199.9);
+    expect(p.precoDe).toBe(249.9);
+    expect(p.promocao).toBe(true);
+  });
+
+  it('aumento de preço NÃO vira "de" — subir preço não é promoção', () => {
+    const p = montar(null, undefined, null, new Map([['1001', 149.9]]));
+    expect(p.preco).toBe(199.9);
+    expect(p.precoDe).toBeNull();
+    expect(p.promocao).toBe(false);
+  });
+
+  it('o código do histórico casa SEM zeros à esquerda (regra do espelho)', () => {
+    // A linha do catálogo vem com codigo '1001'; o audit pode ter '0001001'.
+    const p = montar(null, [linha({ codigo: '0001001' })], null, new Map([['1001', 249.9]]));
+    expect(p.precoDe).toBe(249.9);
+  });
+
+  it('peça dos 50% mantém o preço cheio como âncora, não o histórico', () => {
+    const p = montar(
+      { elegivel: true, motivo: 'x', dataCadastro: '2022-05-10' },
+      undefined,
+      null,
+      new Map([['1001', 249.9]]),
+    );
+    expect(p.preco).toBe(99.95);
+    expect(p.precoDe).toBe(199.9);
+  });
+
+  it('precoDe digitado no site também morreu — sem queda real, sem riscado', () => {
+    const p = montar(null, undefined, { precoDe: 299.9 });
+    expect(p.precoDe).toBeNull();
+    expect(p.promocao).toBe(false);
   });
 });

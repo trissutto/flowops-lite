@@ -41,9 +41,9 @@ import { LOJA_CANAL_CODES } from '../common/loja-canal';
  *  pela peça que continua parada no card de outra.
  *
  *  O VALOR É SUGERIDO, NÃO IMPOSTO: o preview calcula a diferença pela régua
- *  do site (precoPromo digitado > promoção de 50% > preço do ERP), mas quem
- *  confirma o número é a matriz — ela é quem negociou com a cliente, e
- *  cortesia/arredondamento existe todo dia.
+ *  do site (preço da loja, com a promoção de 50% quando elegível — 26/08),
+ *  mas quem confirma o número é a matriz — ela é quem negociou com a cliente,
+ *  e cortesia/arredondamento existe todo dia.
  * ═══════════════════════════════════════════════════════════════════════════
  */
 @Injectable()
@@ -623,8 +623,8 @@ export class TrocaPecaService {
 
   /**
    * A peça nova, com o preço QUE O SITE COBRA hoje — a mesma régua do
-   * catálogo: `precoPromo` digitado vence tudo; senão, a promoção de 50%
-   * automática; senão, o preço do ERP.
+   * catálogo (26/08): o preço da LOJA (`vendaUn`), com a promoção de 50%
+   * automática quando elegível.
    */
   private async resolverPeca(codigo: string) {
     const sku = String(codigo || '').trim();
@@ -636,23 +636,17 @@ export class TrocaPecaService {
     const precoErp = Number(info.preco || 0);
     const ref = info.ref ? String(info.ref).trim() : null;
 
+    // O preço do site É o da loja (26/08) — `vendaUn` com a única promoção
+    // compartilhada (50% do caixa). O `precoPromo` digitado saiu da fórmula
+    // aqui junto com a vitrine e a trava do carrinho.
     let precoSite = precoErp;
-    let motivoDoPreco = 'preço do ERP';
+    let motivoDoPreco = 'preço da loja (ERP)';
     if (ref) {
-      const site: any = await (this.prisma as any).siteProduto
-        .findFirst({ where: { ref }, select: { precoPromo: true } })
-        .catch(() => null);
-      const digitado = site?.precoPromo != null && Number(site.precoPromo) > 0 ? Number(site.precoPromo) : null;
-      if (digitado) {
-        precoSite = Math.round(digitado * 100) / 100;
-        motivoDoPreco = 'preço promocional digitado no site';
-      } else {
-        const chave = ref.toUpperCase().replace(/\s+/g, '');
-        const promo = await this.promo.porChave(chave).catch(() => null);
-        if (promo?.elegivel && this.promo.ligada && precoErp > 0) {
-          precoSite = this.promo.precoComDesconto(precoErp);
-          motivoDoPreco = `promoção de 50% (${promo.motivo})`;
-        }
+      const chave = ref.toUpperCase().replace(/\s+/g, '');
+      const promo = await this.promo.porChave(chave).catch(() => null);
+      if (promo?.elegivel && this.promo.ligada && precoErp > 0) {
+        precoSite = this.promo.precoComDesconto(precoErp);
+        motivoDoPreco = `promoção de 50% (${promo.motivo})`;
       }
     }
 
