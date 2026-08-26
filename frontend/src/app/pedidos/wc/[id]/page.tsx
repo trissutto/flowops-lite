@@ -558,6 +558,44 @@ export default function PedidoDetailPage() {
       .catch(() => {});
   };
 
+  // ── RAIO-X + LINHA DO TEMPO (26/08 — contrato do dono) ──────────────────
+  // ON-000106/LP-000244: o estado do pedido mora em 5 tabelas e ninguém via o
+  // todo — Campinas foi cobrada por não enviar o que já tinha postado. Aqui a
+  // tela mostra ONDE cada peça está AGORA e TUDO que aconteceu, com QUEM.
+  interface PecaRaioX {
+    orderItemId: string;
+    sku: string;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    quantity: number;
+    estado: string;
+    onde: string;
+    cor_semaforo: 'vermelho' | 'amarelo' | 'verde';
+    storeCode: string | null;
+    storeName: string | null;
+    trackingCode: string | null;
+  }
+  interface EventoLT {
+    em: string;
+    quem: string | null;
+    tipoAtor: string;
+    origem: string;
+    titulo: string;
+    detalhe: string | null;
+  }
+  const [raiox, setRaiox] = useState<{
+    pecas: PecaRaioX[];
+    eventos: EventoLT[];
+    alertas: string[];
+  } | null>(null);
+  const loadRaiox = () => {
+    if (!wcId) return;
+    api<any>(`/orders/wc/${wcId}/linha-do-tempo`)
+      .then((r) => setRaiox(r?.found ? { pecas: r.pecas ?? [], eventos: r.eventos ?? [], alertas: r.alertas ?? [] } : null))
+      .catch(() => setRaiox(null));
+  };
+
   // ── MOVER UMA PEÇA DE LOJA (26/08) ──────────────────────────────────────
   // "↔ Trocar loja" move o CARD INTEIRO. No LP-000244 a loja tinha 2 das 3
   // peças e faltava só uma: trocar o card mandou as três juntas pra loja
@@ -649,7 +687,7 @@ export default function PedidoDetailPage() {
       setTimeout(() => setFlash(null), 8000);
       const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
       setLiveStatus(Array.isArray(fresh) ? fresh : []);
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       if (res.avisoJuntada) setSepError(`🧲 ${res.avisoJuntada}`);
     } catch (e: any) {
       setMoverErro(e?.body?.message || e?.message || 'Não deu pra mover a peça.');
@@ -683,7 +721,7 @@ export default function PedidoDetailPage() {
       .catch((e) => console.warn('Falha ao carregar pick-orders:', e?.message));
     loadItemReports();
     loadCreditos();
-    loadJuntada();
+    loadJuntada(); loadRaiox();
     loadTrocas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wcId]);
@@ -712,7 +750,7 @@ export default function PedidoDetailPage() {
       });
       // A feeder que finaliza a bipagem faz a CAIXA da juntada nascer — o
       // evento de status é a deixa pra faixa "JUNTANDO PEÇAS" atualizar.
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       // Flash visual (linha pisca verde por 3s)
       setLiveStatusFlash((prev) => ({ ...prev, [payload.id]: Date.now() }));
       setTimeout(() => {
@@ -729,7 +767,7 @@ export default function PedidoDetailPage() {
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
       loadItemReports(); // re-rotear pode ter dado destino à peça reportada
-      loadJuntada();
+      loadJuntada(); loadRaiox();
     };
     const onNew = () => {
       // Idem — pick-order novo apareceu (recalcular ou primeira confirmação)
@@ -737,7 +775,7 @@ export default function PedidoDetailPage() {
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
       loadItemReports();
-      loadJuntada();
+      loadJuntada(); loadRaiox();
     };
     // Reporte novo (do card inteiro OU por peça) — atualiza o banner na hora.
     const onIssue = () => loadItemReports();
@@ -787,7 +825,7 @@ export default function PedidoDetailPage() {
     void load();
     loadTrocas();
     loadItemReports();
-    loadJuntada();
+    loadJuntada(); loadRaiox();
     api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
       .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
       .catch(() => {});
@@ -1324,7 +1362,7 @@ export default function PedidoDetailPage() {
             .join(' · ')} — essa caixa NÃO muda de destino. Combine com a loja pra reencaminhar pra ${nome}.`,
         );
       }
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
@@ -1344,7 +1382,7 @@ export default function PedidoDetailPage() {
       await api(`/orders/wc/${wcId}/juntar/desfazer`, { method: 'POST' });
       setFlash('✓ Juntada desfeita — cada loja envia direto pra cliente.');
       setTimeout(() => setFlash(null), 5000);
-      loadJuntada();
+      loadJuntada(); loadRaiox();
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
         .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
         .catch(() => {});
@@ -2883,6 +2921,87 @@ export default function PedidoDetailPage() {
                 </>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── RAIO-X: onde está CADA peça agora (26/08) ─────────────────────
+            A resposta que faltou no ON-000106: Campinas levou a culpa por não
+            enviar o que JÁ estava em rota porque nenhuma tela mostrava o
+            pedido peça por peça. Vermelho = parado/sem dono, nunca some. */}
+        {raiox && raiox.pecas.length > 0 && (
+          <div className="bg-white border border-slate-300 rounded p-3 mb-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
+              🧭 Onde está cada peça
+              {raiox.pecas.some((p) => p.cor_semaforo === 'vermelho') && (
+                <span className="text-[11px] font-bold text-white bg-red-600 rounded px-1.5 py-0.5">
+                  {raiox.pecas.filter((p) => p.cor_semaforo === 'vermelho').length} parada(s)
+                </span>
+              )}
+            </div>
+            {raiox.alertas.map((a, i) => (
+              <div key={i} className="mb-2 text-xs font-semibold text-red-800 bg-red-50 border border-red-300 rounded px-2 py-1.5">
+                ⚠ {a}
+              </div>
+            ))}
+            <div className="space-y-1">
+              {raiox.pecas.map((p) => {
+                const cores = {
+                  vermelho: 'bg-red-50 border-red-300 text-red-900',
+                  amarelo: 'bg-amber-50 border-amber-300 text-amber-900',
+                  verde: 'bg-emerald-50 border-emerald-300 text-emerald-900',
+                } as const;
+                const bolinha = { vermelho: '🔴', amarelo: '🟡', verde: '🟢' } as const;
+                return (
+                  <div
+                    key={p.orderItemId}
+                    className={`flex items-start gap-2 text-xs border rounded px-2 py-1.5 ${cores[p.cor_semaforo]}`}
+                  >
+                    <span className="shrink-0">{bolinha[p.cor_semaforo]}</span>
+                    <span className="font-bold shrink-0">
+                      {[p.ref, p.cor, p.tamanho].filter(Boolean).join(' ') || p.sku}
+                      {p.quantity > 1 ? ` ×${p.quantity}` : ''}
+                    </span>
+                    <span className="flex-1">{p.onde}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* ── LINHA DO TEMPO: tudo que aconteceu, com QUEM ── */}
+            <details className="mt-3">
+              <summary className="text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                📜 Linha do tempo completa ({raiox.eventos.length} registro{raiox.eventos.length === 1 ? '' : 's'})
+              </summary>
+              <div className="mt-2 max-h-96 overflow-y-auto space-y-1 pr-1">
+                {raiox.eventos.map((ev, i) => {
+                  const badge: Record<string, string> = {
+                    pedido: 'bg-slate-200 text-slate-700',
+                    bipe: 'bg-blue-100 text-blue-800',
+                    reporte: 'bg-red-100 text-red-800',
+                    caixa: 'bg-violet-100 text-violet-800',
+                    rastreio: 'bg-emerald-100 text-emerald-800',
+                  };
+                  const quando = new Date(ev.em).toLocaleString('pt-BR', {
+                    timeZone: 'America/Sao_Paulo',
+                    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                  });
+                  return (
+                    <div key={i} className="flex items-start gap-2 text-[11px] leading-snug border-b border-slate-100 pb-1">
+                      <span className="text-slate-500 shrink-0 font-mono">{quando}</span>
+                      <span className={`shrink-0 rounded px-1 font-bold ${badge[ev.origem] ?? 'bg-slate-100 text-slate-600'}`}>
+                        {ev.origem}
+                      </span>
+                      <span className="flex-1 text-slate-800">
+                        <b>{ev.titulo}</b>
+                        {ev.detalhe ? <> — {ev.detalhe}</> : null}
+                        <span className={ev.quem ? 'text-slate-600' : 'text-slate-400 italic'}>
+                          {' '}· {ev.quem ?? (ev.tipoAtor === 'sistema' ? 'sistema' : 'sem autor (registro antigo)')}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
           </div>
         )}
 

@@ -28,6 +28,7 @@ import { ErpService } from '../erp/erp.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
 import { JuntadaService } from '../pick-orders/juntada.service';
 import { TrocaPecaService } from './troca-peca.service';
+import { LinhaDoTempoService } from './linha-do-tempo.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { montarCascataAtribuicao, EntradaAtribuicao } from './atribuicao-cascata.util';
@@ -323,6 +324,8 @@ export class OrdersController {
     private readonly catalog: WincredCatalogService,
     // Troca de peça COM acerto do dinheiro (link da diferença / vale).
     private readonly trocaPeca: TrocaPecaService,
+    // Raio-X + linha do tempo assinada da tela do pedido (26/08).
+    private readonly linhaDoTempo: LinhaDoTempoService,
   ) {}
 
   /**
@@ -1870,6 +1873,16 @@ export class OrdersController {
   }
 
   /** Detalhe de 1 pedido direto do WC. */
+  /**
+   * RAIO-X + LINHA DO TEMPO (26/08 — contrato do dono, casos ON-000106 e
+   * LP-000244): onde está CADA peça agora + tudo que aconteceu, com QUEM.
+   * Leitura pura — costura history/bipes/reportes/caixas/rastreio.
+   */
+  @Get('wc/:wcId/linha-do-tempo')
+  async linhaDoTempoDoPedido(@Param('wcId') wcId: string) {
+    return this.linhaDoTempo.porWcOrderId(Number(wcId));
+  }
+
   @Get('wc/:wcId')
   async wcGetOne(@Param('wcId') wcId: string) {
     // Pedido da LIVE: monta o MESMO payload de detalhe a partir do Order local
@@ -3263,7 +3276,18 @@ export class OrdersController {
   async recalculateSeparation(
     @Param('wcId') wcId: string,
     @Body() body?: { excludeStoreCodes?: string[]; pickOrderId?: string; forceStoreCode?: string },
+    @Req() req?: any,
   ) {
+    // QUEM mandou trocar/forçar (26/08). Nos 7 dias antes disto, 79 de 79
+    // swaps/forces no order_history estavam SEM autor — a loja que reportava
+    // ficava assinada e quem forçava a peça pra loja zerada ficava anônimo
+    // (foi assim no carrossel do ON-000106 e do LP-000244).
+    const atorReq = this.atorDoRequest(req);
+    const ator = {
+      userId: await this.userIdGravavel(atorReq.userId),
+      nome: atorReq.nome,
+    };
+
     // SWAP CIRÚRGICO: se vier pickOrderId, troca SÓ aquele pick-order específico,
     // sem mexer nos outros (caso onde uma loja já enviou e outra precisa ser trocada).
     if (body?.pickOrderId) {
@@ -3272,6 +3296,7 @@ export class OrdersController {
           ? body.excludeStoreCodes
           : undefined,
         forceStoreCode: body?.forceStoreCode,
+        ator,
       });
     }
 
@@ -3289,6 +3314,7 @@ export class OrdersController {
         ? body!.excludeStoreCodes
         : undefined,
       forceStoreCode: body?.forceStoreCode,
+      ator,
     });
   }
 
@@ -3316,11 +3342,14 @@ export class OrdersController {
       select: { id: true },
     });
     if (!local) throw new BadRequestException('Pedido não existe no banco local.');
+    // Assinado do jeito certo (26/08): o JWT entrega `sub`, não `userId` —
+    // era por isso que o "Conserto manual" de hoje saiu SEM AUTOR.
+    const ator = this.atorDoRequest(req);
     return this.routing.moverItensParaLoja(
       local.id,
       body.orderItemIds.map(String),
       String(body.toStoreCode),
-      { userId: req?.user?.userId ?? null },
+      { userId: await this.userIdGravavel(ator.userId), nome: ator.nome },
     );
   }
 

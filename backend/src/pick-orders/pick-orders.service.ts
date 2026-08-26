@@ -3429,7 +3429,11 @@ export class PickOrdersService {
    *
    * Bloqueia se status=shipped/delivered (envio já feito, não cancelar).
    */
-  async removePickOrder(pickOrderId: string): Promise<{
+  async removePickOrder(
+    pickOrderId: string,
+    /** QUEM removeu (26/08). O remove do ON-000106 saiu anônimo. */
+    ator?: { userId: string | null; nome: string | null },
+  ): Promise<{
     ok: boolean;
     pickOrderId: string;
     storeCode: string;
@@ -3481,17 +3485,23 @@ export class PickOrdersService {
       });
       // Deleta pick-order
       await tx.pickOrder.delete({ where: { id: pickOrderId } });
-      // Histórico
+      // Histórico — assinado: FK conferida antes (user de token velho não pode
+      // derrubar o create e levar a nota junto).
+      const userOk = ator?.userId
+        ? await tx.user.findUnique({ where: { id: ator.userId }, select: { id: true } })
+        : null;
       await tx.orderHistory.create({
         data: {
           orderId,
           fromStatus: po.status,
           toStatus: po.status,
+          userId: userOk?.id ?? null,
           note:
             `Pick-order da loja ${storeCode} REMOVIDO manualmente pela retaguarda. ` +
             `${itemsLiberados} item(ns) liberado(s) (sem reatribuição). ` +
             (estorno.pecas ? `${estorno.pecas} peça(s) já bipada(s) devolvida(s) ao estoque da ${storeCode}. ` : '') +
-            (po.issueReason ? `Motivo do problema reportado: ${po.issueReason}.` : ''),
+            (po.issueReason ? `Motivo do problema reportado: ${po.issueReason}.` : '') +
+            (ator?.nome ? ` · por ${ator.nome}` : ''),
         },
       });
     });
