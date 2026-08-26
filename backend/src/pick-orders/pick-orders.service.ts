@@ -4472,6 +4472,50 @@ export class PickOrdersService {
     const note = (input.note ?? '').toString().trim().slice(0, 500) || null;
     const now = new Date();
 
+    // ── FANTASMA DO "SEM ESTOQUE" (26/08 — carrossel ON-000110/ON-000162) ──
+    // Card de peça ÚNICA só tem ESTE reporte (o por-item recusa e manda pra cá),
+    // e ele não tirava a quantidade fantasma do estoque: a peça continuava
+    // "existindo", a Consulta e o "Trocar loja" seguiam apontando a loja, e o
+    // card rodava de loja em loja (4 negativas no ON-000110). Mesma régua do
+    // reporte por item — só out_of_stock, mesmas portas — mas SEM allowNegative:
+    // aqui o comum é a loja já estar zerada (card forçado sem estoque), e saldo
+    // negativo seria trocar uma mentira por outra.
+    // Conta ANTES do estorno dos bipes: o que a loja bipou existe físico e
+    // volta pra arara; fantasma é só o que ela NÃO conseguiu bipar.
+    const fantasmas: Array<{ sku: string; qty: number; storeCode: string }> = [];
+    const storeCode = String(po.store?.code ?? '').trim();
+    if (reason === 'out_of_stock' && storeCode) {
+      const linhas = await this.prisma.orderItem.findMany({
+        where: { orderId: po.orderId, assignedStoreId: po.storeId },
+      });
+      const bipes = await this.prisma.pickOrderScan.findMany({
+        where: { pickOrderId, revertedAt: null },
+        select: { sku: true },
+      });
+      const bipadoPorSku = new Map<string, number>();
+      for (const b of bipes) {
+        const s = String(b.sku || '').trim();
+        bipadoPorSku.set(s, (bipadoPorSku.get(s) ?? 0) + 1);
+      }
+      const esperadoPorSku = new Map<string, number>();
+      for (const l of linhas) {
+        if ((l as any).cancelledAt) continue;
+        if (ehItemSemEstoque(l)) continue;
+        const s = String(l.sku || '').trim();
+        if (!s) continue;
+        esperadoPorSku.set(s, (esperadoPorSku.get(s) ?? 0) + l.quantity);
+      }
+      for (const [sku, esperado] of esperadoPorSku) {
+        const faltam = esperado - (bipadoPorSku.get(sku) ?? 0);
+        if (faltam > 0) fantasmas.push({ sku, qty: faltam, storeCode });
+      }
+    }
+    const fantasmaSkippedReason = !this.itemReportDebitEnabled
+      ? 'killswitch'
+      : !this.erp.isWriteEnabled
+        ? 'shadow'
+        : null;
+
     // O card sai da fila da loja e a matriz vai mandar o pedido pra OUTRA loja.
     // As peças que já tinham sido bipadas voltam pro estoque daqui — senão
     // somem do sistema exatamente na hora em que a loja precisa vendê-las de
@@ -4480,6 +4524,18 @@ export class PickOrdersService {
       reason: 'issue',
       userId,
     });
+
+    let fantasmaBaixado: Array<{ sku: string; qty: number; previousStock: number; newStock: number }> = [];
+    if (fantasmas.length && !fantasmaSkippedReason) {
+      const applied = await this.prisma.$transaction((tx) =>
+        this.erp.applyStockDeltaInTx(tx, fantasmas, -1, {
+          allowNegative: false,
+          skipNotFound: true,
+        }),
+      );
+      // Só conta como "zerado" o que de fato saiu (loja já em 0 é no-op).
+      fantasmaBaixado = applied.filter((a) => a.previousStock > a.newStock);
+    }
 
     const updated = await this.prisma.pickOrder.update({
       where: { id: pickOrderId },
@@ -4499,7 +4555,12 @@ export class PickOrdersService {
         toStatus: po.status,
         note:
           `Loja ${po.store?.code ?? ''} reportou problema: ${reason}${note ? ' — ' + note : ''}` +
-          (estorno.pecas ? ` · ${estorno.pecas} peça(s) bipada(s) devolvida(s) ao estoque da loja.` : ''),
+          (estorno.pecas ? ` · ${estorno.pecas} peça(s) bipada(s) devolvida(s) ao estoque da loja.` : '') +
+          (fantasmaBaixado.length
+            ? ` · Estoque fantasma zerado na loja: ${fantasmaBaixado
+                .map((f) => `${f.sku} (${f.previousStock}→${f.newStock})`)
+                .join(', ')}.`
+            : ''),
       },
     });
 
@@ -4516,6 +4577,8 @@ export class PickOrdersService {
           reason,
           note,
           pecasEstornadas: estorno.pecas,
+          fantasmaBaixado,
+          fantasmaSkippedReason,
         }),
         status: 200,
       },

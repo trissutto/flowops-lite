@@ -1470,6 +1470,14 @@ export default function PedidoDetailPage() {
       const issueCodes = new Set(
         liveStatus.filter((p) => p.issueReason && p.storeCode).map((p) => p.storeCode as string),
       );
+      // O swap APAGA o card reportado — e o issueReason morre junto: quem já
+      // negou voltava a aparecer "limpa" e recebia o card DE NOVO (Suzano no
+      // ON-000110/162, minutos depois de gritar "não temos"). O histórico da
+      // linha do tempo é quem lembra ("Loja 17 reportou problema/a peça...").
+      (raiox?.eventos ?? []).forEach((ev) => {
+        const m = /\bLoja\s+(\w+)\s+reportou\b/i.exec(`${ev.titulo} ${ev.detalhe ?? ''}`);
+        if (m) issueCodes.add(m[1]);
+      });
 
       // Set de SKUs do pedido (inferido do groups + missing + alternativesBySku)
       const allSkus = new Set<string>();
@@ -2786,12 +2794,20 @@ export default function PedidoDetailPage() {
                     onClick={() => {
                       const issue = liveStatus.find((r) => r.issueReason && r.id);
                       if (issue) {
-                        setSwapTarget({
+                        // Alvo por PARÂMETRO: setState não reflete no closure desta
+                        // render — sem isso o modal media cobertura contra o pedido
+                        // INTEIRO e loja com QUALQUER outra peça aparecia "1 un.
+                        // disponíveis" (carrossel do ON-000110: 4 lojas forçadas
+                        // atrás de peça que não existia em nenhuma).
+                        const sTarget = {
                           pickOrderId: issue.id,
                           fromStoreCode: issue.storeCode!,
                           fromStoreName: issue.storeName,
                           fromStatus: issue.status,
-                        });
+                        };
+                        setSwapTarget(sTarget);
+                        openPickStoreModal({ swap: sTarget });
+                        return;
                       }
                       openPickStoreModal();
                     }}
@@ -4374,7 +4390,7 @@ export default function PedidoDetailPage() {
                             )}
                             {c.hasReportedIssue && (
                               <span className="text-xs px-2 py-0.5 bg-red-200 text-red-900 rounded font-medium">
-                                ⚠ reportou problema
+                                🚫 já negou este pedido
                               </span>
                             )}
                             {full && !c.hasReportedIssue && (
@@ -4421,6 +4437,14 @@ export default function PedidoDetailPage() {
                                 `${c.name} (${c.code}) NÃO TEM estoque de nenhuma peça desse pedido.\n\n` +
                                 `Forçando essa loja, ela vai precisar buscar transferência das outras lojas pra atender.\n\n` +
                                 `Confirma forçar mesmo assim?`,
+                              );
+                              if (!ok) return;
+                            } else if (c.hasReportedIssue) {
+                              // Já negou = quase sempre volta negado (carrossel do
+                              // ON-000110). Fricção de propósito, não bloqueio.
+                              const ok = window.confirm(
+                                `${c.name} (${c.code}) JÁ NEGOU peça deste pedido ("não temos").\n\n` +
+                                `Mandar de novo quase sempre volta negado. Confirma mesmo assim?`,
                               );
                               if (!ok) return;
                             }
