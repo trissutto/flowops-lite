@@ -2906,6 +2906,27 @@ function CarrinhosTab() {
                       </span>
                     )}
                   </div>
+                  {/* O QUE ELA ESCOLHEU (dono, 26/08). A linha dizia só "2 itens"
+                      e o detalhe com as peças só abria clicando — quem varre 70
+                      carrinhos por dia não clica em 70. Sem isto a menina liga
+                      sem saber o que separar nem o que oferecer se o tamanho
+                      acabou, que é a primeira pergunta da cliente.
+                      Corta em 4: é fila, não é ficha. */}
+                  {Array.isArray(c.cart_items) && c.cart_items.length > 0 && (
+                    <div className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1">
+                      {c.cart_items.slice(0, 4).map((p: any, i: number) => (
+                        <div key={i} className="text-[11px] leading-snug text-slate-700">
+                          <span className="font-bold tabular-nums">{Number(p.quantity || 1)}×</span>{' '}
+                          {p.name || p.sku || 'peça'}
+                        </div>
+                      ))}
+                      {c.cart_items.length > 4 && (
+                        <div className="text-[11px] italic text-slate-500">
+                          + {c.cart_items.length - 4} peça(s)
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className={`font-black tabular-nums text-lg whitespace-nowrap ${baixa ? 'text-slate-400 line-through' : 'text-rose-700'}`}>{BRL(valor)}</div>
                 {/* NÃO FECHOU — a saída ruim, que antes não existia. Discreto de

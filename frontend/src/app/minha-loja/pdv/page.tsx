@@ -10752,6 +10752,11 @@ function CarrinhosAbandonadosModal({
     phone?: string;
     cart_total?: number;
     items_count?: number;
+    /**
+     * As peças que ela escolheu. O backend manda `name` já no formato da casa
+     * (REF · COR TAM) — ver `abandoned-carts.service`, carimbo de 17/08.
+     */
+    cart_items?: Array<{ name?: string; sku?: string; quantity?: number }>;
     time?: string | null;
     utmCampaign?: string | null;
     /** Alguém (matriz ou outra loja) já abriu a conversa com esta cliente. */
@@ -11092,6 +11097,30 @@ function CarrinhosAbandonadosModal({
                   {soContato && (
                     <div className="text-[11px] text-violet-700 font-semibold mt-0.5">
                       Só nome e WhatsApp — peça CPF, e-mail e endereço pra fechar
+                    </div>
+                  )}
+                  {/* O QUE ELA ESCOLHEU (dono, 26/08: "não aparece qual peça,
+                      cor e tamanho a cliente escolheu"). A vendedora ligava
+                      sabendo só "2 peça(s)": não dava pra conferir se tem na
+                      arara, nem pra oferecer outra cor se o tamanho acabou — e
+                      é essa a primeira pergunta da cliente do outro lado.
+                      O backend já mandava `cart_items` no formato da casa
+                      (REF · COR TAM) desde 17/08; faltava desenhar aqui.
+                      Corta em 4 porque isto é FILA: numa lista de 70 linhas,
+                      carrinho grande empurraria os botões pra fora da dobra. */}
+                  {Array.isArray(c.cart_items) && c.cart_items.length > 0 && (
+                    <div className="mt-1 rounded-md border border-[#EDEAE1] bg-[#FAFAF7] px-2 py-1">
+                      {c.cart_items.slice(0, 4).map((p: any, i: number) => (
+                        <div key={i} className="text-[11px] leading-snug text-slate-700">
+                          <span className="font-bold tabular-nums">{Number(p.quantity || 1)}×</span>{' '}
+                          {p.name || p.sku || 'peça'}
+                        </div>
+                      ))}
+                      {c.cart_items.length > 4 && (
+                        <div className="text-[11px] italic text-slate-500">
+                          + {c.cart_items.length - 4} peça(s)
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
