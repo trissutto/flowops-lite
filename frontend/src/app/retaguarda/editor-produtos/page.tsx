@@ -879,10 +879,76 @@ export default function EditorProdutosPage() {
         </Modal>
       )}
 
-      {/* ── Modal: Preço em bloco ── */}
-      {modalPreco && (
+      {/* ── Modal: Preço em bloco ──────────────────────────────────────────
+          "AONDE VAI O PREÇO DE (239,90) POR (139,90)????" (dono, 26/08).
+
+          A versão anterior tinha UM campo sem nome no topo e escondia o campo
+          do DE atrás do terceiro botão: quem abria via um "Ex.: 129,90" solto
+          e não tinha como saber qual dos dois números digitar ali. Agora:
+            1º  a ESCOLHA (é promoção ou não) — ela decide o resto do modal;
+            2º  os campos com o nome que a loja usa, DE e POR, cada um dizendo
+                o que faz na tela da cliente;
+            3º  a PRÉVIA com o desconto calculado, que é onde o erro aparece
+                antes de virar 72 variações com preço trocado.
+      */}
+      {modalPreco && (() => {
+        const por = parsePreco(precoValor);
+        const temPor = isFinite(por);
+        const de = deValor.trim() ? parsePreco(deValor) : NaN;
+        const temDe = isFinite(de) && de > 0;
+        // Prévia só no modo "Fixar valor": no percentual cada peça termina com
+        // um POR diferente, e prever um número só seria mentira.
+        const previa = promoAcao === 'registrar' && precoModo === 'fixar' && temPor && temDe;
+        const invertido = previa && de <= por;
+        const economia = previa && !invertido ? de - por : 0;
+        const pct = previa && !invertido ? Math.round((economia / de) * 100) : 0;
+        const reais = (n: number) => n.toFixed(2).replace('.', ',');
+
+        return (
         <Modal title="Preço em bloco" onClose={() => setModalPreco(false)}>
-          <div className="flex gap-2 mb-3">
+          {/* ── 1. A ESCOLHA ── */}
+          <label className="text-[11px] font-bold uppercase text-slate-500">
+            1. O que você vai fazer nas {sel.size} selecionadas?
+          </label>
+          <div className="flex gap-2 mt-1.5 mb-4">
+            {([
+              ['nao', 'Só mudar o preço', 'sem riscado'],
+              ['registrar', 'Colocar em promoção', 'DE riscado → POR'],
+              ['limpar', 'Encerrar promoção', 'tira o riscado'],
+            ] as const).map(([k, label, hint]) => (
+              <button key={k} onClick={() => setPromoAcao(k)}
+                className={`flex-1 px-2 py-2 rounded-lg border-2 leading-tight ${
+                  promoAcao === k ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-slate-200 text-slate-500'
+                }`}>
+                <span className="block text-[11px] font-bold">{label}</span>
+                <span className="block text-[10px] opacity-70">{hint}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* ── 2. O DE (só na promoção; vem ANTES do POR, como se fala) ── */}
+          {promoAcao === 'registrar' && (
+            <div className="mb-4">
+              <label className="text-[11px] font-bold uppercase text-slate-500">
+                2. DE — o preço cheio, que sai <span className="line-through">riscado</span>
+              </label>
+              <input value={deValor}
+                onChange={(e) => setDeValor(e.target.value)}
+                placeholder="Ex.: 239,90"
+                inputMode="decimal"
+                className="w-full mt-1.5 px-3 py-2.5 border-2 border-amber-300 rounded-xl font-bold tabular-nums focus:border-amber-500 focus:outline-none" />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Vazio = o preço que a peça tem hoje vira o DE.
+              </p>
+            </div>
+          )}
+
+          {/* ── 3. O POR — o preço que vale de verdade ── */}
+          <label className="text-[11px] font-bold uppercase text-slate-500">
+            {promoAcao === 'registrar' ? '3. POR' : '2. Preço'} — o que a cliente paga
+            {promoAcao === 'limpar' && ' (opcional)'}
+          </label>
+          <div className="flex gap-2 mt-1.5 mb-2">
             <button onClick={() => setPrecoModo('fixar')}
               className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold border-2 ${precoModo === 'fixar' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-500'}`}>
               Fixar valor (R$)
@@ -894,60 +960,59 @@ export default function EditorProdutosPage() {
           </div>
           <input value={precoValor}
             onChange={(e) => setPrecoValor(e.target.value)}
-            placeholder={precoModo === 'fixar' ? 'Ex.: 129,90' : 'Ex.: -20 (baixa 20%) ou 10 (sobe 10%)'}
+            placeholder={precoModo === 'fixar' ? 'Ex.: 139,90' : 'Ex.: -20 (baixa 20%) ou 10 (sobe 10%)'}
             inputMode="decimal"
-            className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl font-bold tabular-nums focus:border-emerald-400 focus:outline-none" />
+            className="w-full px-3 py-2.5 border-2 border-emerald-300 rounded-xl font-bold tabular-nums focus:border-emerald-500 focus:outline-none" />
           <p className="text-[11px] text-slate-500 mt-1.5">
-            {precoModo === 'fixar'
-              ? `Todas as ${sel.size} variações selecionadas ficam com esse preço (em REAIS).`
-              : `Aplica o percentual sobre o preço atual de cada uma das ${sel.size} selecionadas.`}
+            {promoAcao === 'limpar'
+              ? 'Vazio mantém o preço como está — só o riscado sai.'
+              : precoModo === 'fixar'
+                ? `É o preço do caixa E do site. Todas as ${sel.size} ficam com ele.`
+                : `Aplica o percentual sobre o preço atual de cada uma das ${sel.size}.`}
           </p>
 
-          {/* ── DE/POR (dono, 26/08): registrar a promoção junto do preço ── */}
-          <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
-            <div className="flex gap-2">
-              {([
-                ['nao', 'Só mudar o preço'],
-                ['registrar', 'É promoção: registrar DE/POR'],
-                ['limpar', 'Encerrar promoção (limpar DE)'],
-              ] as const).map(([k, label]) => (
-                <button key={k} onClick={() => setPromoAcao(k)}
-                  className={`flex-1 px-2 py-2 rounded-lg text-[11px] font-bold border-2 leading-tight ${
-                    promoAcao === k ? 'border-amber-500 bg-amber-50 text-amber-800' : 'border-slate-200 text-slate-500'
-                  }`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {promoAcao === 'registrar' && (
-              <>
-                <input value={deValor}
-                  onChange={(e) => setDeValor(e.target.value)}
-                  placeholder="DE (R$) — vazio = o preço ATUAL de cada peça vira o DE"
-                  inputMode="decimal"
-                  className="w-full px-3 py-2.5 border-2 border-amber-200 rounded-xl font-bold tabular-nums focus:border-amber-400 focus:outline-none" />
-                <p className="text-[11px] text-slate-500">
-                  O DE sai riscado no site e no PDV (&quot;você economizou R$ X&quot;). O POR é o preço
-                  acima — o mesmo do caixa e do site, sempre. DE que não ficar MAIOR que o POR é pulado.
+          {/* ── A PRÉVIA — o erro aparece aqui, não nas 72 variações ── */}
+          {promoAcao === 'registrar' && (
+            <div className={`mt-3 rounded-xl px-3 py-2.5 border-2 ${
+              invertido ? 'border-red-300 bg-red-50' : previa ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'
+            }`}>
+              {invertido ? (
+                <p className="text-[12px] text-red-800 font-semibold leading-snug">
+                  ⚠️ O DE (R$ {reais(de)}) não é maior que o POR (R$ {reais(por)}) — isso não é
+                  promoção, e essas peças vão ser PULADAS. O DE é o preço cheio, o maior dos dois.
                 </p>
-              </>
-            )}
-            {promoAcao === 'limpar' && (
-              <p className="text-[11px] text-slate-500">
-                Remove o DE das selecionadas (o riscado some do site e do PDV). O campo de preço
-                acima é opcional — vazio mantém o preço como está.
-              </p>
-            )}
-          </div>
+              ) : previa ? (
+                <p className="text-[13px] text-emerald-900 leading-snug">
+                  A cliente vai ver: <span className="line-through opacity-70">R$ {reais(de)}</span>{' '}
+                  <b className="text-base">R$ {reais(por)}</b>
+                  <span className="block text-[11px] mt-0.5">
+                    Economia de R$ {reais(economia)} ({pct}% off) — riscado no site e &quot;você
+                    economizou&quot; no cupom do PDV.
+                  </span>
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-500 leading-snug">
+                  Preencha o DE e o POR pra ver aqui como fica pra cliente.
+                  {precoModo === 'percentual' && ' (no modo percentual cada peça fica com um POR diferente)'}
+                </p>
+              )}
+            </div>
+          )}
+          {promoAcao === 'limpar' && (
+            <p className="mt-3 text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+              O riscado some do site e do PDV nas {sel.size} selecionadas.
+            </p>
+          )}
 
           <ModalActions
             okLabel="Calcular e revisar"
-            okDisabled={promoAcao === 'limpar' ? false : !isFinite(parsePreco(precoValor))}
+            okDisabled={promoAcao === 'limpar' ? false : !temPor}
             onOk={aplicarPreco}
             onCancel={() => setModalPreco(false)}
           />
         </Modal>
-      )}
+        );
+      })()}
 
       {/* ── Modal: Marca em bloco ── */}
       {modalMarca && (
