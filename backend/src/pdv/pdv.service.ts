@@ -2557,10 +2557,10 @@ export class PdvService {
 
     const entregaStoreCode = await this.resolverLojaQueAtende(tipo, sale.storeCode, entregaStoreCodeRaw);
 
-    // REGRA A só quando o motoboy sai DAQUI, agora: a peça tem que estar na
-    // arara. Se outra loja foi escolhida pra entregar, é ela quem recebe o
-    // card (e por transferência o que não tiver) — a regra não se aplica.
-    if (tipo === 'motoboy' && !entregaStoreCode) await this.exigirEstoqueLocalParaMotoboy(saleId);
+    // Sem trava de estoque aqui (26/08). A escolha de QUEM ENTREGA vem depois
+    // de a tela mostrar o que cada loja tem (`lojasParaEntrega`), e a loja
+    // escolhida junta por transferência o que não tiver — inclusive quando
+    // ela é a própria vendedora. Ver `PedidoOnlineService.coberturaPorLoja`.
 
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
@@ -2593,19 +2593,13 @@ export class PdvService {
   }
 
   /**
-   * REGRA A DO MOTOBOY (dono, 17/08): só sai da loja vendedora. Ver
-   * `PedidoOnlineService.faltaParaMotoboy`. A mensagem lista o que falta —
-   * "não pode" sem dizer por quê é o que faz a vendedora tentar de novo.
+   * QUEM PODE ENTREGAR — o que cada loja tem das peças desta venda, pra tela
+   * escolher a loja do motoboy/retirada sabendo o que está escolhendo.
+   * Substituiu a Regra A do motoboy (que recusava em vez de informar) —
+   * ver `PedidoOnlineService.coberturaPorLoja`.
    */
-  private async exigirEstoqueLocalParaMotoboy(saleId: string) {
-    const faltam = await this.pedidoOnline.faltaParaMotoboy(saleId).catch(() => [] as string[]);
-    if (!faltam.length) return;
-    throw new BadRequestException(
-      `Motoboy só sai da SUA loja, e ela não tem: ${faltam.slice(0, 6).join(
-)}` +
-        (faltam.length > 6 ? ` e mais ${faltam.length - 6}` : '') +
-        '. Escolha SEDEX/PAC (outra loja envia) ou retirada.',
-    );
+  lojasParaEntrega(saleId: string) {
+    return this.pedidoOnline.coberturaPorLoja(saleId);
   }
 
   /**
@@ -3786,12 +3780,14 @@ export class PdvService {
       storeName: string | null;
     } | null = null;
     if (isAllVendaOnline && this.pedidoOnline.enabled()) {
-      // Regra A do motoboy vale no fechamento também: a sacola pode ter
-      // mudado depois da escolha, e o front guarda a escolha mesmo quando a
-      // API recusa. Recusar aqui é ANTES de gravar qualquer coisa.
-      if (String((sale as any).entregaTipo || '').toLowerCase() === 'motoboy') {
-        await this.exigirEstoqueLocalParaMotoboy(sale.id);
-      }
+      /**
+       * A Regra A do motoboy morava aqui também (26/08 — removida). Ela media
+       * o estoque da LOJA VENDEDORA mesmo quando outra loja tinha sido
+       * escolhida pra entregar: Itanhaém escolhia Piracicaba na tela, passava,
+       * e o fechamento recusava a venda inteira falando de Itanhaém. Hoje o
+       * pedido nasce travado na loja escolhida e ela junta o que falta por
+       * transferência (`routePickup`).
+       */
       onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
       if (onlineOrder) {
         const agora = new Date();

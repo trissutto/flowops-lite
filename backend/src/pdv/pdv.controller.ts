@@ -913,6 +913,18 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/sales/:id/lojas-entrega
+   * QUEM ENTREGA: cada loja com o que ela cobre das peças desta venda, em
+   * ordem de utilidade (cidade da cliente primeiro — motoboy é distância).
+   * A tela do PDV pergunta isto ANTES de gravar a escolha de motoboy/retirada.
+   */
+  @Get('sales/:id/lojas-entrega')
+  lojasParaEntrega(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    return this.svc.lojasParaEntrega(id);
+  }
+
+  /**
    * POST /pdv/sales/:id/gift-voucher { valor, compradorNome?, presenteadoNome? }
    * VALE PRESENTE: item manual na venda + crédito (trilho do vale-troca) que
    * ativa quando a venda finaliza. Código VP- sai impresso no cupom.
