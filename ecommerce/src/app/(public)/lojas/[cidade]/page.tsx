@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Clock, MapPin, Store as StoreIcon } from 'lucide-react';
@@ -13,7 +14,9 @@ import {
   stores,
   type Store,
 } from '../lib';
-import StoreCtas from './StoreCtas';
+import { fetchStoreLaunches } from '@/services/store-launches.server';
+import StoreCtas, { StoreHeroActions } from './StoreCtas';
+import StoreLaunches from './StoreLaunches';
 
 /**
  * A PÁGINA DE UMA LOJA — a landing que faltava desde a virada de 19/08/2026.
@@ -168,6 +171,9 @@ export default async function LojaCidadePage({ params }: Params) {
   if (!s) notFound();
 
   const outras = stores.filter((o) => o.slug !== s.slug);
+  const isLimeira = s.slug === 'limeira';
+  const launches = isLimeira ? await fetchStoreLaunches(6) : [];
+  const heroImage = launches[0]?.images[0];
 
   return (
     <main className="bg-[var(--lj-ivory)] pb-16">
@@ -180,9 +186,24 @@ export default async function LojaCidadePage({ params }: Params) {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd(s)) }}
       />
 
-      {/* Capa editorial — tipografia como protagonista, igual ao drawer da listagem */}
-      <header className="lojas-grain bg-[var(--lj-ink)] px-5 pb-10 pt-8 sm:px-8 sm:pt-12">
-        <div className="mx-auto max-w-3xl">
+      {/* Capa editorial — Limeira ganha a foto do lançamento; as outras lojas
+          preservam a capa tipográfica atual. */}
+      <header className="lojas-grain relative overflow-hidden bg-[var(--lj-ink)] px-5 pb-10 pt-8 sm:px-8 sm:pt-12">
+        {isLimeira && heroImage && (
+          <>
+            <Image
+              src={heroImage.src}
+              alt=""
+              aria-hidden
+              fill
+              priority
+              sizes="100vw"
+              className="object-cover object-[center_25%] opacity-35"
+            />
+            <div className="absolute inset-0 bg-gradient-to-r from-[var(--lj-ink)] via-[var(--lj-ink)]/85 to-[var(--lj-ink)]/35" />
+          </>
+        )}
+        <div className="relative z-[1] mx-auto max-w-3xl">
           <nav aria-label="Você está em" className="text-[10px] uppercase tracking-[0.2em] text-white/60">
             <Link href="/" className="hover:text-white">
               Início
@@ -198,13 +219,16 @@ export default async function LojaCidadePage({ params }: Params) {
           <p className="mt-6 text-[11px] font-light uppercase tracking-[0.22em] text-[var(--lj-gold-soft)]">
             {s.address.city} · {s.address.uf}
           </p>
-          <h1 className="lojas-serif mt-2 text-[2rem] font-semibold uppercase leading-[1.08] tracking-[0.03em] text-white sm:text-[2.6rem]">
-            Lurd&apos;s Plus Size {s.unit}
+          <h1 className="lojas-serif mt-2 max-w-2xl text-[2rem] font-semibold uppercase leading-[1.08] tracking-[0.03em] text-white sm:text-[2.6rem]">
+            {isLimeira ? <>Novidades Lurd&apos;s em Limeira</> : <>Lurd&apos;s Plus Size {s.unit}</>}
           </h1>
           <div className="lojas-rule mt-5 opacity-70" />
-          <p className="lojas-serif mt-5 text-[15px] font-light italic leading-relaxed text-white/80">
-            {s.description}
+          <p className="lojas-serif mt-5 max-w-xl text-[15px] font-light italic leading-relaxed text-white/80">
+            {isLimeira
+              ? 'Looks plus size do 44 ao 60, com caimento que valoriza você e atendimento acolhedor para experimentar sem pressa.'
+              : s.description}
           </p>
+          {isLimeira && <StoreHeroActions store={s} />}
         </div>
       </header>
 
@@ -221,6 +245,22 @@ export default async function LojaCidadePage({ params }: Params) {
         </ul>
 
         <StoreCtas store={s} />
+
+        {isLimeira && <StoreLaunches products={launches} store={s} />}
+
+        {isLimeira && (
+          <section className="mt-10 rounded-2xl border border-[var(--lj-line)] bg-[var(--lj-cream)] p-6 sm:p-8" aria-labelledby="acolhimento-titulo">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--lj-gold-strong)]">
+              Atendimento Lurd&apos;s
+            </p>
+            <h2 id="acolhimento-titulo" className="lojas-serif mt-2 text-[1.55rem] font-semibold text-[var(--lj-ink)]">
+              Uma loja feita para você se sentir à vontade
+            </h2>
+            <p className="mt-3 text-[15px] leading-relaxed text-[var(--lj-ink-soft)]">
+              Atendimento próximo, consultoras que entendem de caimento e numeração plus size do 46 ao 60.
+            </p>
+          </section>
+        )}
 
         <dl className="mt-8 space-y-4 border-t border-[var(--lj-line)] pt-7">
           <div className="flex gap-3">
