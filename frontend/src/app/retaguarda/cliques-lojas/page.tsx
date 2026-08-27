@@ -125,7 +125,20 @@ type TrafegoLojas = {
   navegaram: { viramPeca: number; sacola: number; checkout: number; compraram: number };
   valorComprado: number;
   porUnidade: Array<{ loja: string; contatos: number }>;
-  porCampanha: Array<{ campanha: string; canal: string | null; pessoas: number }>;
+  porCampanha: Array<{
+    campanha: string;
+    canal: string | null;
+    /** `campaign.id` — a chave que casa com o espelho de gasto. */
+    utmId: string | null;
+    pessoas: number;
+    contataram: number;
+    /**
+     * `null` = o espelho não conhece essa campanha (visita orgânica, link sem
+     * `utm_id`, conta de anúncio que ninguém coleta). NÃO é zero — escrever
+     * "R$ 0,00" num anúncio que custou dinheiro é pior que dizer "—".
+     */
+    gasto: number | null;
+  }>;
 };
 /** Tráfego pago, orgânico ou direto — o primeiro nível da cascata. */
 type Trafego = 'pago' | 'organico' | 'direto';
@@ -1429,22 +1442,46 @@ function TrafegoDeLojas({ dados }: { dados: TrafegoLojas }) {
 
         <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
           <div className="px-4 py-2.5 border-b border-[#E7E2D8]">
-            <h3 className="font-semibold text-slate-800 text-sm">De qual anúncio vieram</h3>
+            <h3 className="font-semibold text-slate-800 text-sm">De qual anúncio vieram — e quanto custou</h3>
             <p className="text-xs text-slate-500 mt-0.5">
               Vem do UTM do link. Sessão antes de 16/08 — ou visita orgânica — aparece como “sem campanha”.
+              O custo é do espelho de gasto e casa pelo <strong>id</strong> da campanha; “—” quer dizer que
+              não se sabe, nunca que foi de graça.
             </p>
           </div>
           <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-1.5 text-left font-semibold">Campanha</th>
+                <th className="px-4 py-1.5 text-right font-semibold">Chegaram</th>
+                <th className="px-4 py-1.5 text-right font-semibold">Falaram</th>
+                <th className="px-4 py-1.5 text-right font-semibold">Custo</th>
+                <th className="px-4 py-1.5 text-right font-semibold">Por contato</th>
+              </tr>
+            </thead>
             <tbody>
-              {porCampanha.map((c) => (
-                <tr key={`${c.campanha}:${c.canal ?? ''}`} className="border-t border-[#E7E2D8] first:border-t-0">
-                  <td className="px-4 py-2 text-slate-700">
-                    {c.campanha}
-                    {c.canal && <span className="text-slate-400"> · {c.canal}</span>}
-                  </td>
-                  <td className="px-4 py-2 text-right font-bold tabular-nums text-slate-800">{c.pessoas}</td>
-                </tr>
-              ))}
+              {porCampanha.map((c) => {
+                // Custo por CONTATO, não por visita: o que a loja ganha é a
+                // conversa, e é esse número que decide se o anúncio continua.
+                const porContato =
+                  c.gasto != null && c.contataram > 0 ? c.gasto / c.contataram : null;
+                return (
+                  <tr key={`${c.campanha}:${c.canal ?? ''}`} className="border-t border-[#E7E2D8] first:border-t-0">
+                    <td className="px-4 py-2 text-slate-700">
+                      {c.campanha}
+                      {c.canal && <span className="text-slate-400"> · {c.canal}</span>}
+                    </td>
+                    <td className="px-4 py-2 text-right font-bold tabular-nums text-slate-800">{c.pessoas}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-slate-700">{c.contataram}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-slate-700">
+                      {c.gasto != null ? brl(c.gasto) : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums font-semibold text-slate-800">
+                      {porContato != null ? brl(porContato) : <span className="text-slate-300">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

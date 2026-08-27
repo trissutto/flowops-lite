@@ -1085,21 +1085,68 @@ export class SiteMetricsService {
     // anterior a isso — ou visita orgânica — cai em "sem campanha", e isso é
     // informação: mostra quanto do tráfego da /lojas não é do anúncio.
     const porCampanha = await this.prisma.$queryRawUnsafe<
-      Array<{ campanha: string; canal: string | null; pessoas: number }>
+      Array<{
+        campanha: string; canal: string | null; utm_id: string | null;
+        pessoas: number; contataram: number; gasto: number | null;
+      }>
     >(
       `WITH segmento AS (${SQL_SESSOES_DO_SEGMENTO}),
             lojas AS (${SiteMetricsService.SESSOES_DE_LOJA}),
             marca AS (
               SELECT DISTINCT ON (e.session_id) e.session_id,
                      COALESCE(e.dados->>'campanha', 'sem campanha') AS campanha,
-                     e.dados->>'canal' AS canal
+                     e.dados->>'canal' AS canal,
+                     -- O ID da campanha é o que casa com o espelho de gasto. O
+                     -- NOME não serve: é renomeado no Gerenciador e chega com
+                     -- codificação dupla (a mesma pegadinha da tela de ROAS).
+                     e.dados->>'utm_id' AS utm_id
                 FROM site_eventos e JOIN lojas l ON l.session_id = e.session_id
                WHERE e.criado_em >= $1 AND e.criado_em <= $2
                  AND ${doSegmento('e')}
                ORDER BY e.session_id, (e.dados->>'campanha') IS NULL, e.criado_em
+            ),
+            -- Quem FALOU com a loja, por sessão. Sem isto a tabela responde
+            -- "quantas vieram" e não "quantas serviram pra alguma coisa" — e é
+            -- a segunda pergunta que decide se o anúncio continua no ar.
+            contatou AS (
+              SELECT DISTINCT e.session_id
+                FROM site_eventos e JOIN lojas l ON l.session_id = e.session_id
+               WHERE e.criado_em >= $1 AND e.criado_em <= $2
+                 AND e.evento IN ${CONTATO}
+                 AND ${doSegmento('e')}
+            ),
+            agg AS (
+              SELECT m.campanha, m.canal,
+                     MAX(m.utm_id) AS utm_id,
+                     COUNT(*)::int AS pessoas,
+                     COUNT(*) FILTER (WHERE c.session_id IS NOT NULL)::int AS contataram
+                FROM marca m
+                LEFT JOIN contatou c ON c.session_id = m.session_id
+               GROUP BY 1, 2
+            ),
+            -- Gasto do PERÍODO por campanha. Vem de TODAS as contas do espelho
+            -- (inclusive as de loja, que entraram em 26/08/2026): aqui é o
+            -- lugar certo desse dinheiro — ver common/contas-de-anuncio.ts.
+            -- Os DOIS espelhos: Google traz loja também (o Pmax Local sozinho
+            -- fez 45 pessoas em 20→26/08). Ler só o Meta deixaria metade da
+            -- tabela com custo em branco parecendo tráfego de graça.
+            custo AS (
+              SELECT campanha_id, SUM(gasto)::numeric AS gasto FROM (
+                SELECT campanha_id, gasto FROM meta_ads_gasto_dia
+                 WHERE dia >= $1::date AND dia <= $2::date
+                UNION ALL
+                SELECT campanha_id, gasto FROM google_ads_gasto_dia
+                 WHERE dia >= $1::date AND dia <= $2::date
+              ) t GROUP BY campanha_id
             )
-       SELECT campanha, canal, COUNT(*)::int AS pessoas
-         FROM marca GROUP BY 1, 2 ORDER BY pessoas DESC LIMIT 12`,
+       SELECT a.campanha, a.canal, a.utm_id, a.pessoas, a.contataram,
+              -- NULL de propósito quando o espelho não conhece a campanha:
+              -- ausência não é zero, e escrever "R$ 0,00" num anúncio que
+              -- custou dinheiro é pior que admitir que não se sabe.
+              cu.gasto::float AS gasto
+         FROM agg a
+         LEFT JOIN custo cu ON cu.campanha_id = a.utm_id
+        ORDER BY a.pessoas DESC LIMIT 12`,
       ...argsLojas(de, ate, seg, campanhasLojas),
     );
 
@@ -1123,7 +1170,12 @@ export class SiteMetricsService {
       porCampanha: porCampanha.map((c) => ({
         campanha: c.campanha,
         canal: c.canal,
+        utmId: c.utm_id,
         pessoas: Number(c.pessoas),
+        contataram: Number(c.contataram),
+        // `null` = o espelho não conhece essa campanha (orgânico, campanha de
+        // conta não coletada, sessão sem utm_id). Não vira 0.
+        gasto: c.gasto == null ? null : Number(c.gasto),
       })),
     };
   }

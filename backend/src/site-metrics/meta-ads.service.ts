@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { contasDeLoja, contasEcommerce } from '../common/contas-de-anuncio';
 
 /**
  * O GASTO DE ANÚNCIO, ESPELHADO NO POSTGRES.
@@ -44,16 +45,24 @@ export class MetaAdsService {
     return this.config.get<string>('META_ADS_TOKEN')?.trim() || null;
   }
 
-  /** Contas a coletar, separadas por vírgula. Sem `act_`. */
-  private contas(): string[] {
-    return (this.config.get<string>('META_ADS_CONTAS') || '')
-      .split(',')
-      .map((c) => c.trim().replace(/^act_/, ''))
-      .filter(Boolean);
+  /**
+   * Tudo que o espelho coleta: e-commerce + loja física.
+   *
+   * As duas listas e o porquê da separação estão em `common/contas-de-anuncio.ts`
+   * — a MESMA régua que a tela de ROAS usa pra excluir as de loja. `Set` porque
+   * a mesma conta nas duas envs viraria upsert duplicado.
+   */
+  private todasAsContas(): string[] {
+    return [
+      ...new Set([
+        ...contasEcommerce(this.config.get<string>('META_ADS_CONTAS')),
+        ...contasDeLoja(this.config.get<string>('META_ADS_CONTAS_LOJA')),
+      ]),
+    ];
   }
 
   configurado(): boolean {
-    return Boolean(this.token() && this.contas().length);
+    return Boolean(this.token() && this.todasAsContas().length);
   }
 
   /**
@@ -86,7 +95,7 @@ export class MetaAdsService {
     const ate = this.diaSP(0);
     let gravadas = 0;
 
-    for (const conta of this.contas()) {
+    for (const conta of this.todasAsContas()) {
       const linhas = await this.buscarConta(conta, desde, ate, token);
       for (const l of linhas) {
         await (this.prisma as any).metaAdsGastoDia.upsert({

@@ -8,6 +8,7 @@ import { pedidoPago, pedidoCancelado } from '../common/pedido-pago';
 import { cpfValido, emailOk } from '../common/dados-cliente-online';
 import { localBrPhone, localBrPhoneValido } from '../lib/phone-br';
 import { SQL_CAMPANHAS_ROAS } from './campanhas-roas.sql';
+import { contasDeLoja } from '../common/contas-de-anuncio';
 
 /**
  * Uma linha como o Postgres devolve. Tudo que é dinheiro sai da query já em
@@ -293,6 +294,9 @@ export class OrdersService {
       SQL_CAMPANHAS_ROAS,
       from,
       to,
+      // Contas de LOJA FÍSICA fora do denominador desta tela — ver
+      // `common/contas-de-anuncio.ts`. Lista vazia não exclui nada.
+      contasDeLoja(),
     );
 
     const SEM = 'Sem campanha / Direto';

@@ -5,7 +5,8 @@
  * Mora num arquivo só porque o \`orders.service.ts\` já passa de 5.000 linhas e
  * porque SQL montada por string tem que ser conferível de uma olhada.
  *
- * Parâmetros: $1 = início, $2 = fim (timestamptz, fuso de São Paulo).
+ * Parâmetros: $1 = início, $2 = fim (timestamptz, fuso de São Paulo),
+ *             $3 = contas de LOJA a excluir do gasto (text[], pode ser vazio).
  *
  * As três decisões que essa query embute, e o porquê de cada uma:
  *
@@ -21,7 +22,7 @@
 export const SQL_CAMPANHAS_ROAS = `
 -- ═══════════════════════════════════════════════════════════════════════════
 -- /retaguarda/campanhas — GASTO → RECEITA → ROAS, por campanha.
--- $1 = de (timestamptz), $2 = ate (timestamptz)
+-- $1 = de (timestamptz), $2 = ate (timestamptz), $3 = contas de loja (text[])
 -- Contas: só as de ECOMM (META_ADS_CONTAS / GOOGLE_ADS_CONTAS no Railway).
 -- ═══════════════════════════════════════════════════════════════════════════
 WITH
@@ -33,9 +34,17 @@ nomes AS (
   SELECT campanha_id, MAX(campanha_nome) AS nome, 'google'     FROM google_ads_gasto_dia GROUP BY campanha_id
 ),
 gasto AS (
+  -- \`conta_id <> ALL($3)\`: as contas de LOJA FÍSICA ficam de fora desta tela.
+  -- O espelho passou a coletá-las em 26/08/2026 (R$ 41,5 mil/30d que não
+  -- existiam em lugar nenhum), mas aqui o gasto é dividido por receita do
+  -- SITE — e anúncio de loja não existe pra vender no site. Somar os dois
+  -- afunda o ROAS do e-commerce com custo que não é dele. Lista vazia = nada
+  -- é excluído, que é o comportamento de antes.
   SELECT campanha_id, 'meta' AS rede, SUM(gasto)::numeric AS gasto,
          SUM(impressoes)::bigint AS impressoes, SUM(cliques)::bigint AS cliques
-    FROM meta_ads_gasto_dia WHERE dia >= $1::date AND dia <= $2::date GROUP BY campanha_id
+    FROM meta_ads_gasto_dia
+   WHERE dia >= $1::date AND dia <= $2::date AND conta_id <> ALL ($3::text[])
+   GROUP BY campanha_id
   UNION ALL
   SELECT campanha_id, 'google', SUM(gasto)::numeric, SUM(impressoes)::bigint, SUM(cliques)::bigint
     FROM google_ads_gasto_dia WHERE dia >= $1::date AND dia <= $2::date GROUP BY campanha_id
