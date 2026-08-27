@@ -1907,29 +1907,58 @@ export default function PedidoDetailPage() {
   const pecaPorItem = (li: { id: number | string }) =>
     raiox?.pecas.find((p) => String(p.orderItemId) === String(li.id)) ?? null;
 
+  /**
+   * QUAL CARD ESTÁ COM ESTA PEÇA — lido dos próprios cards (27/08, ON-000176).
+   *
+   * O raio-x resolve a loja pelo carimbo `assignedStoreId` do item, que só
+   * existe quando o roteamento DIVIDE o pedido. Em pedido de loja única a peça
+   * fica sem carimbo, e a tela mostrava "escolher loja / Aguardando" ao lado de
+   * um card que listava a mesma peça. O backend passou a cobrir esse caso, mas
+   * a tela não pode depender só disso: o card é a fonte que ela já desenha.
+   */
+  const cardComAPeca = (li: { id: number | string; sku?: string }) =>
+    liveStatus.find((r) =>
+      (r.items ?? []).some(
+        (it) =>
+          (it.id && String(it.id) === String(li.id)) ||
+          (!!li.sku && String(it.sku || '').trim() === String(li.sku || '').trim()),
+      ),
+    ) ?? null;
+
   /** Estado da peça em três cores — a mesma régua do Semáforo. */
-  const estadoDaPeca = (p: PecaRaioX | null) => {
+  const estadoDaPeca = (
+    p: PecaRaioX | null,
+    /** Card que LISTA esta peça — manda mais que o carimbo do item. */
+    cardDoItem?: (typeof liveStatus)[number] | null,
+  ) => {
     if (!p) return null;
-    const card = liveStatus.find((r) => r.storeCode && r.storeCode === p.storeCode);
-    // "Sem loja" dizia a mesma coisa pra ruptura e pra pedido não roteado —
-    // agora o backend separa os dois (27/08, LP-000215).
-    if (p.estado === 'nao_roteado') {
-      return { tom: 'warn' as const, texto: 'Aguardando separação' };
+    const card =
+      liveStatus.find((r) => r.storeCode && r.storeCode === p.storeCode) ?? cardDoItem ?? null;
+    if (card?.issueReason) {
+      return { tom: 'crit' as const, texto: card.issueReasonLabel ?? 'Loja reportou problema' };
     }
-    if (p.cor_semaforo === 'vermelho') {
-      return {
-        tom: 'crit' as const,
-        texto:
-          p.estado === 'sem_estoque_rede'
-            ? 'Nenhuma loja tem'
-            : p.estado === 'sem_dono'
-              ? 'Sem loja'
-              : 'Loja reportou problema',
-      };
+    // "Sem loja" só vale quando NENHUM card tem a peça — senão a tela
+    // contradizia o card que ela mesma desenha logo abaixo (ON-000176).
+    if (!card) {
+      if (p.estado === 'nao_roteado') {
+        return { tom: 'warn' as const, texto: 'Aguardando separação' };
+      }
+      if (p.cor_semaforo === 'vermelho') {
+        return {
+          tom: 'crit' as const,
+          texto:
+            p.estado === 'sem_estoque_rede'
+              ? 'Nenhuma loja tem'
+              : p.estado === 'sem_dono'
+                ? 'Sem loja'
+                : 'Loja reportou problema',
+        };
+      }
     }
     if (card?.status === 'shipped') return { tom: 'ok' as const, texto: 'Enviada' };
     if (card && ['separated', 'ready'].includes(card.status)) return { tom: 'ok' as const, texto: 'Separada' };
     if (card?.status === 'separating') return { tom: 'warn' as const, texto: 'Separando' };
+    if (card?.status === 'new') return { tom: 'warn' as const, texto: 'Aguardando a loja iniciar' };
     if (p.cor_semaforo === 'verde') return { tom: 'ok' as const, texto: 'Separada' };
     return { tom: 'warn' as const, texto: 'Aguardando' };
   };
@@ -2571,14 +2600,19 @@ export default function PedidoDetailPage() {
           <tbody>
             {pecasDoPedido.map((li) => {
               const peca = pecaPorItem(li);
-              const est = estadoDaPeca(peca);
+              const cardItem = cardComAPeca(li);
+              const est = estadoDaPeca(peca, cardItem);
+              // A loja da linha: o carimbo do raio-x quando existe, senão a
+              // loja do card que lista a peça (pedido de loja única).
+              const lojaCode = peca?.storeCode ?? cardItem?.storeCode ?? null;
+              const lojaNome = peca?.storeName ?? cardItem?.storeName ?? null;
               // Trocar a loja DESTA peça = a mesma modal do "→ outra loja" do
               // trilho: escolhe entre as lojas que têm a peça. Só enquanto
               // ninguém bipou — depois o estoque já saiu de lá.
               const podeTrocarLoja =
                 !!peca &&
                 !['shipped', 'delivered'].includes(
-                  liveStatus.find((r) => r.storeCode === peca.storeCode)?.status ?? 'new',
+                  (liveStatus.find((r) => r.storeCode === lojaCode) ?? cardItem)?.status ?? 'new',
                 );
               return (
                 <tr key={li.id} className="border-t">
@@ -2608,12 +2642,12 @@ export default function PedidoDetailPage() {
                           onClick={() =>
                             abrirMoverPeca(
                               { id: String(li.id), sku: li.sku, ref: li.ref, cor: li.cor, tamanho: li.tamanho, descricao: li.name },
-                              { storeCode: peca.storeCode, storeName: peca.storeName, total: 1 },
+                              { storeCode: lojaCode, storeName: lojaNome, total: 1 },
                             )
                           }
                           disabled={!podeTrocarLoja || sepLoading}
                           className={`rounded-field border px-2 py-1 text-xs font-semibold transition ${
-                            peca.storeCode || peca.estado === 'nao_roteado'
+                            lojaCode || peca.estado === 'nao_roteado'
                               ? 'border-line bg-surface text-ink hover:bg-surface-2'
                               : 'border-crit/40 bg-crit-soft text-crit hover:bg-crit/10'
                           } disabled:cursor-not-allowed disabled:opacity-60`}
@@ -2623,7 +2657,7 @@ export default function PedidoDetailPage() {
                               : peca.onde
                           }
                         >
-                          {peca.storeName || peca.storeCode || 'escolher loja'}
+                          {lojaNome || lojaCode || 'escolher loja'}
                           {podeTrocarLoja && <span className="ml-1 text-ink-faint">▾</span>}
                         </button>
                         <span
@@ -2635,7 +2669,8 @@ export default function PedidoDetailPage() {
                         </span>
                         {/* Peça vermelha sem dono: as duas saídas (26/08) — o
                             2º frete de outra loja, ou cancelar e devolver. */}
-                        {peca.cor_semaforo === 'vermelho' &&
+                        {!cardItem &&
+                          peca.cor_semaforo === 'vermelho' &&
                           ['sem_dono', 'reportada', 'sem_estoque_rede'].includes(peca.estado) && (
                           <button
                             type="button"

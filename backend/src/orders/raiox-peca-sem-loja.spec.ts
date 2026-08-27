@@ -110,6 +110,41 @@ describe('Raio-X do pedido — por que a peça está sem loja', () => {
     expect(r.pecas[0].cor_semaforo).toBe('vermelho');
   });
 
+  /**
+   * ON-000176 (27/08): card da MOEMA com a peça listada dentro e o raio-x
+   * dizendo "sem loja" na MESMA tela. Em pedido de loja única o roteamento
+   * não carimba `assignedStoreId` no item — o card assume implicitamente, e é
+   * essa régua (a mesma do `listByWcOrderId`) que faltava aqui.
+   */
+  it('pedido de UMA loja: peça sem carimbo é da loja do card', async () => {
+    const service = montar({
+      routingResult: null,
+      pickOrders: [
+        { id: 'p1', storeId: 's15', status: 'new', createdAt: new Date(), isTransfer: false, transferToStoreCode: null, store: { code: '15', name: 'MOEMA' } },
+      ],
+    });
+    const r: any = await service.porWcOrderId(950000215);
+
+    expect(r.pecas[0].estado).toBe('com_loja');
+    expect(r.pecas[0].storeName).toBe('MOEMA');
+    expect(r.pecas[0].cor_semaforo).toBe('amarelo');
+    expect(r.pecas[0].onde).toContain('MOEMA');
+  });
+
+  it('pedido de DUAS lojas sem carimbo: continua sem dono (não chuta loja)', async () => {
+    const service = montar({
+      routingResult: null,
+      pickOrders: [
+        { id: 'p1', storeId: 's15', status: 'new', createdAt: new Date(), store: { code: '15', name: 'MOEMA' } },
+        { id: 'p2', storeId: 's05', status: 'new', createdAt: new Date(), store: { code: '05', name: 'PIRACICABA' } },
+      ],
+    });
+    const r: any = await service.porWcOrderId(950000215);
+
+    expect(r.pecas[0].estado).toBe('sem_dono');
+    expect(r.pecas[0].storeCode).toBeNull();
+  });
+
   it('JSON corrompido no routingResult não derruba o raio-x', async () => {
     const service = montar({ routingResult: '{isso não é json' });
     const r: any = await service.porWcOrderId(950000215);

@@ -325,7 +325,36 @@ export class LinhaDoTempoService {
           storeName: null,
         };
       }
-      const card = cardDaLoja(it.assignedStoreId);
+      /**
+       * PEÇA SEM LOJA GRAVADA NUM PEDIDO DE UMA LOJA SÓ (27/08, flagra do dono
+       * no ON-000176: card da MOEMA com a peça dentro e o raio-x dizendo
+       * "sem loja").
+       *
+       * `orderItem.assignedStoreId` só é preenchido quando o roteamento
+       * DIVIDE o pedido; na loja única a peça fica sem carimbo e o card a
+       * assume implicitamente — é a régua que `PickOrdersService.listByWcOrderId`
+       * já usava pra montar "N peças nesta loja". O raio-x lia só o carimbo e
+       * por isso discordava do card na MESMA tela.
+       *
+       * A proteção do bipe vale igual: card que JÁ ENVIOU só assume a peça
+       * órfã se tiver bipe não estornado dela (buraco do ON-000106).
+       */
+      const cardUnico = (() => {
+        if (it.assignedStoreId) return null;
+        if (order.pickOrders.length !== 1) return null;
+        const unico: any = order.pickOrders[0];
+        if (unico.status === 'cancelled') return null; // card morto não assume peça
+        if (!['shipped', 'delivered'].includes(unico.status)) return unico;
+        const bipesDoCard = scans.filter(
+          (s: any) => s.pickOrderId === unico.id && s.stockDecreasedAt && !s.stockIncreasedAt,
+        );
+        if (!bipesDoCard.length) return unico; // sem bipe nenhum não há como negar
+        return bipesDoCard.some((s: any) => String(s.sku || '').trim() === String(it.sku || '').trim())
+          ? unico
+          : null;
+      })();
+
+      const card = cardDaLoja(it.assignedStoreId) ?? cardUnico;
       if (card) {
         const loja = { storeCode: card.store?.code ?? null, storeName: card.store?.name ?? null };
         if (card.status === 'shipped' || card.status === 'delivered') {
