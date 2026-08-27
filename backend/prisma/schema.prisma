@@ -522,10 +522,33 @@ model Order {
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 
+  /// IP DA CLIENTE no momento do checkout — sinal de risco, não de métrica.
+  ///
+  /// Ele SEMPRE chegou no backend (o BFF do site repassa em `x-cliente-ip`,
+  /// ver `LojaOrdersController.ipDe`) e era usado só pra encher o balde do
+  /// rate-limit e ser jogado fora. Guardar é o que permite responder "estes
+  /// dois pedidos com CPF diferente saíram da mesma conexão".
+  ///
+  /// Vale menos do que parece sozinho: 4G troca de IP o tempo todo e prédio
+  /// inteiro sai pelo mesmo NAT. Por isso pesa POUCO no score e nunca aparece
+  /// como motivo isolado — o sinal forte é o APARELHO
+  /// (`trackingInfo.anonymous_id`, que vive ~2 anos no navegador dela).
+  clienteIp       String?  @map("cliente_ip") @db.VarChar(60)
+  /// ENDEREÇO DE COBRANÇA do cartão, quando um dia for coletado no checkout.
+  ///
+  /// Hoje NÃO é coletado: o checkout manda o endereço de ENTREGA como proxy
+  /// pra Pagar.me (`billingAddressPagarme`), então "cobrança ≠ entrega" não
+  /// existe como sinal. Pedir mais um endereço no checkout troca conversão
+  /// por sinal de risco, e essa conta é do dono (27/08: "não sei") — a coluna
+  /// fica pronta pra ligar sem migração no dia em que ele decidir.
+  billingAddress  String?  @map("billing_address") @db.Text
   items      OrderItem[]
   pickOrders PickOrder[]
   history    OrderHistory[]
   itemSwaps  OrderItemSwap[]
+  riskKeys     OrderRiskKey[]
+  riskAnalysis OrderRiskAnalysis?
+  chargebacks  Chargeback[]
   // Convite de avaliacao pos-venda (D+5 da entrega). A LINHA e a marca: pedido
   // entregue SEM convite ainda nao foi chamado pra avaliar.
   avaliacaoConvite AvaliacaoConvite?
@@ -8009,4 +8032,167 @@ model WaAuth {
 
   @@id([sessao, chave])
   @@map("wa_auth")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ANÁLISE DE RISCO, CRUZAMENTO DE PEDIDOS E CHARGEBACK (27/08/2026)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// O módulo responde UMA pergunta: "este pedido novo tem relação com pedido
+// anterior que deu problema?" — e responde com o MOTIVO, nunca com um rótulo
+// seco de "risco alto".
+//
+// TRÊS REGRAS DE ARQUITETURA QUE NÃO SE NEGOCIAM:
+//
+// 1. NÃO É O GRAFO DE IDENTIDADE DO CRM. O `PersonIdentifier` funde pessoa, e
+//    funde só por identificador FORTE (CPF válido, Instagram oficial) — de
+//    propósito. Risco cruza por telefone e endereço, que são sinais FRACOS:
+//    duas pessoas moram no mesmo endereço, mãe e filha dividem telefone. Se
+//    risco escrevesse lá, a suspeita seria fundida com a cliente boa e
+//    contaminaria ficha, cashback e crediário. Por isso tabela própria.
+//
+// 2. O MÓDULO NUNCA MUDA O PEDIDO (ordem do dono, 27/08). Não bloqueia, não
+//    cancela, não tira da fila, não toca estoque. Ele ALERTA e registra a
+//    decisão humana. Quem cancela é o caminho de cancelamento que já existe,
+//    com a régua de peça bipada/caixa fechada que já existe.
+//
+// 3. CHAVE NORMALIZADA EM TABELA INDEXADA, não em JSON. O endereço mora dentro
+//    de `Order.shippingAddress` (JSON em texto) e telefone/e-mail não têm
+//    índice em `orders` — cruzar direto seria varredura da tabela inteira a
+//    cada pedido novo.
+
+/// UMA CHAVE DE CRUZAMENTO DE UM PEDIDO — a linha que faz o pedido "encostar"
+/// em outro.
+///
+/// Um pedido gera várias: cpf, email, telefone, endereço normalizado,
+/// cep+número, cartão (4 últimos), titular do cartão, ip, aparelho.
+/// Cruzar = achar outra linha com o MESMO (tipo, valor).
+///
+/// ⚠️ RETIRADA EM LOJA NÃO GERA CHAVE DE ENDEREÇO. O endereço de um pedido de
+/// retirada é o da LOJA — dezenas de clientes diferentes com o mesmo endereço.
+/// Seria alarme falso em massa no primeiro dia, e alarme falso mata a
+/// confiança na fila inteira (a mesma regra da fila "O QUE FAZER AGORA").
+/// Quem filtra é o `RiscoChavesService`, na origem.
+model OrderRiskKey {
+  id        String   @id @default(uuid())
+  orderId   String   @map("order_id")
+  /// cpf | email | telefone | endereco | cep_numero | cartao | titular | ip | aparelho
+  tipo      String   @db.VarChar(20)
+  /// Valor JÁ normalizado (só dígitos, minúsculo, sem acento/pontuação).
+  /// É por ele que o cruzamento acontece — o valor cru nunca entra aqui.
+  valor     String   @db.VarChar(200)
+  /// Data do PEDIDO, copiada de propósito. A janela do cruzamento ("mesmo
+  /// cartão em 7 dias") filtra por ela sem precisar de JOIN com `orders`.
+  pedidoEm  DateTime @map("pedido_em")
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// O índice do cruzamento. Toda consulta do motor entra por (tipo, valor).
+  @@index([tipo, valor])
+  @@index([orderId])
+  /// Reprocessar um pedido não pode duplicar chave.
+  @@unique([orderId, tipo, valor])
+  @@map("order_risk_keys")
+}
+
+/// UM CHARGEBACK — a contestação que o banco da cliente abriu contra a venda.
+///
+/// Nasce por DUAS portas de propósito: o webhook da Pagar.me e o cadastro
+/// manual da matriz. A segunda existe porque contestação também chega por
+/// e-mail do adquirente e por carta — e um chargeback que o sistema não
+/// conhece não ensina nada aos pedidos seguintes.
+model Chargeback {
+  id            String   @id @default(uuid())
+  orderId       String?  @map("order_id")
+  /// Pedido do PDV (venda de loja) quando a contestação for de venda física.
+  saleId        String?  @map("sale_id")
+  /// em_analise | contestado | ganho | perdido | encerrado
+  status        String   @default("em_analise") @db.VarChar(20)
+  /// Quando o banco abriu a contestação.
+  abertoEm      DateTime @map("aberto_em")
+  valor         Float
+  /// Motivo como o adquirente mandou ("fraude", "produto não recebido"…).
+  motivo        String?  @db.VarChar(200)
+  /// true = o adquirente classificou como FRAUDE. É o que dispara o
+  /// reaprendizado do item 15 — contestação por "não recebi" é problema de
+  /// logística, não de fraude, e não pode envenenar o score da rede.
+  fraude        Boolean  @default(false)
+  transacaoId   String?  @map("transacao_id") @db.VarChar(120)
+  /// pagarme | pagbank | stone | manual
+  plataforma    String?  @db.VarChar(30)
+  resultado     String?  @db.VarChar(200)
+  observacoes   String?  @db.Text
+  /// Anexos do dossiê: [{ nome, url }]. Só referência — arquivo não mora aqui.
+  documentos    Json?
+  /// webhook | manual
+  origem        String   @default("manual") @db.VarChar(20)
+  registradoPor String?  @map("registrado_por") @db.VarChar(160)
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @default(now()) @updatedAt @map("atualizado_em")
+
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([status, abertoEm(sort: Desc)])
+  @@index([abertoEm(sort: Desc)])
+  @@map("chargebacks")
+}
+
+/// O ESTADO DA ANÁLISE DE UM PEDIDO — score congelado + decisão humana.
+///
+/// O score é recalculado sob demanda (abrir o pedido, chargeback novo chegar),
+/// mas fica gravado pra fila e pros relatórios não recalcularem 200 pedidos a
+/// cada render.
+///
+/// `status` NÃO é status do pedido. Um pedido "bloqueado" aqui continua
+/// andando normalmente na separação — a matriz é que decide o que fazer com
+/// ele pelo caminho de cancelamento que já existe. (Ordem do dono, 27/08:
+/// alertar, nunca bloquear.)
+model OrderRiskAnalysis {
+  id           String   @id @default(uuid())
+  orderId      String   @unique @map("order_id")
+  score        Int      @default(0)
+  /// baixo | moderado | alto | critico
+  nivel        String   @default("baixo") @db.VarChar(12)
+  /// Os MOTIVOS, prontos pra tela: [{ chave, peso, cor, texto, pedidos:[] }].
+  /// Nunca mostrar score sem isto (item 24 do documento).
+  motivos      Json?
+  /// Pedidos relacionados, com o que gerou a relação.
+  relacionados Json?
+  /// aguardando | em_analise | liberado | suspeito | revisar
+  /// "suspeito" no lugar de "bloqueado": o pedido não é bloqueado por aqui.
+  status       String   @default("aguardando") @db.VarChar(20)
+  responsavel  String?  @db.VarChar(160)
+  observacao   String?  @db.Text
+  analisadoEm  DateTime? @map("analisado_em")
+  calculadoEm  DateTime @default(now()) @map("calculado_em")
+  criadoEm     DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @default(now()) @updatedAt @map("atualizado_em")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([status, score(sort: Desc)])
+  @@index([nivel, calculadoEm(sort: Desc)])
+  @@map("order_risk_analysis")
+}
+
+/// TRILHA DA DECISÃO — quem disse o quê sobre o risco deste pedido, e quando.
+///
+/// Append-only. `OrderRiskAnalysis` guarda o estado ATUAL; aqui fica o
+/// caminho até ele, que é o que o item 16 pede e o que a auditoria cobra.
+model RiskDecisionLog {
+  id          String   @id @default(uuid())
+  orderId     String   @map("order_id")
+  /// liberado | suspeito | revisar | em_analise | recalculo | chargeback
+  acao        String   @db.VarChar(20)
+  de          String?  @db.VarChar(20)
+  para        String?  @db.VarChar(20)
+  motivo      String?  @db.Text
+  responsavel String?  @db.VarChar(160)
+  criadoEm    DateTime @default(now()) @map("criado_em")
+
+  @@index([orderId, criadoEm(sort: Desc)])
+  @@index([criadoEm(sort: Desc)])
+  @@map("risk_decision_log")
 }

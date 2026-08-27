@@ -7,6 +7,7 @@ import { PagarmeController } from './pagarme.controller';
 import { PagamentoLinkPublicController } from './pagamento-link-public.controller';
 import { CrediariosModule } from '../crediarios/crediarios.module';
 import { LojaOrdersModule } from '../loja-orders/loja-orders.module';
+import { RiscoModule } from '../risco/risco.module';
 
 // forwardRef no LojaOrdersModule: o loja-orders usa o PagarmeService pra
 // cobrar e o webhook daqui chama o confirmarPagamento de lá — dependência
@@ -17,6 +18,9 @@ import { LojaOrdersModule } from '../loja-orders/loja-orders.module';
     HttpModule,
     forwardRef(() => CrediariosModule),
     forwardRef(() => LojaOrdersModule),
+    // O webhook é a porta do gateway pro chargeback (item 2 do módulo de
+    // risco). Sem forwardRef: o RiscoModule não conhece este.
+    RiscoModule,
   ],
   controllers: [PagarmeController, PagamentoLinkPublicController],
   providers: [PagarmeService, PagarmeReconcileService],

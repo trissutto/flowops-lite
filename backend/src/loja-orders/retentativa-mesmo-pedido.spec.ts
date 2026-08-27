@@ -32,7 +32,14 @@ describe('LojaOrdersService — retentativa recobra o mesmo pedido', () => {
   };
 
   const makeService = (prisma: any) =>
-    new LojaOrdersService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    // As dependências viram stub — este teste é do reaproveitamento do
+    // pedido recusado, não da injeção. As duas últimas são o módulo de
+    // risco (chaves + análise), acrescentadas em 27/08.
+    new LojaOrdersService(
+      prisma,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any,
+    );
 
   const prismaMock = (over: any = {}) => ({
     order: {

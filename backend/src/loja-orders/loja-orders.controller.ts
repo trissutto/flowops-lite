@@ -262,7 +262,12 @@ export class LojaOrdersController {
       };
     }
 
-    const r = await this.svc.criarPedido(body);
+    // O IP JÁ ESTAVA AQUI — só era usado pra encher o balde do rate-limit
+    // logo acima e jogado fora. Passar adiante é o que permite ao módulo de
+    // risco cruzar dois pedidos de cadastros diferentes saídos da mesma
+    // conexão. Confiar no header é seguro NESTE ponto pelo mesmo motivo do
+    // `ipDe`: o `exigirToken` já rodou.
+    const r = await this.svc.criarPedido({ ...body, clienteIp: this.ipDe(req) });
     res.status(r.ok ? 201 : 200);
     return r;
   }

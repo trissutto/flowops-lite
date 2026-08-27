@@ -22,6 +22,7 @@ import { PedidoEmailService } from './pedido-email.service';
 import { PixResgateCron } from './pix-resgate.cron';
 import { PedidoExpiraCron } from './pedido-expira.cron';
 import { ProgressiveDiscountModule } from '../progressive-discount/progressive-discount.module';
+import { RiscoModule } from '../risco/risco.module';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -40,6 +41,9 @@ import { ProgressiveDiscountModule } from '../progressive-discount/progressive-d
     PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule, WhatsappModule,
     PromoSiteModule,
     ProgressiveDiscountModule,
+    // Análise de risco: o pedido novo gera as chaves de cruzamento assim que
+    // fecha. Seta de mão única — o RiscoModule não conhece este.
+    RiscoModule,
     forwardRef(() => PagarmeModule),
   ],
   controllers: [LojaOrdersController, LojaAdminController],

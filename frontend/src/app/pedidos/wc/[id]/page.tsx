@@ -17,6 +17,7 @@ import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
 import TrocaPecaModal from './TrocaPecaModal';
 import CampanhaCascata, { Atribuicao } from './CampanhaCascata';
+import PainelRisco from './PainelRisco';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X, FileText } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -2194,6 +2195,13 @@ export default function PedidoDetailPage() {
           de pedido travado, que é o único que deveria ser vermelho na tela.
           Retirada continua com o banner próprio azul/âmbar mais abaixo, que
           diz o que a loja tem que FAZER — esse não é decoração. */}
+
+      {/* 🛡️ ANÁLISE DE RISCO — relação com pedidos anteriores que deram
+          problema. Fica ANTES da campanha de propósito: quem abre o pedido
+          precisa saber que existe alerta antes de qualquer outra coisa. O
+          painel se recolhe sozinho quando o risco é baixo, e NÃO bloqueia
+          pedido nenhum — só alerta e registra a decisão (dono, 27/08). */}
+      <PainelRisco pedidoRef={wcId} />
 
       {/* DE QUAL CAMPANHA VEIO — o nome do anúncio que trouxe a cliente, com a
           cascata inteira a um clique. Antes isso era uma linha cinza de 12px no

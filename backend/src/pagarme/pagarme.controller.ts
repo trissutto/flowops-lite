@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagarmeService } from './pagarme.service';
+import { ChargebackService } from '../risco/chargeback.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { conferirCobrancaCobreVendaOnline } from '../common/cobranca-venda-online';
 import { LojaOrdersService } from '../loja-orders/loja-orders.service';
@@ -28,6 +29,7 @@ export class PagarmeController {
     private readonly crediarioBaixa: CrediarioBaixaService,
     @Inject(forwardRef(() => LojaOrdersService))
     private readonly lojaOrders: LojaOrdersService,
+    private readonly chargebacks: ChargebackService,
   ) {}
 
   @UseGuards(JwtAuthGuard)
@@ -409,6 +411,33 @@ export class PagarmeController {
       } catch (e: any) {
         this.logger.warn(
           `[pagarme] recusa tardia do pedido do site falhou (${result.saleId}): ${e?.message || e}`,
+        );
+      }
+    }
+
+    /**
+     * CHARGEBACK — a contestação chegando pela porta do gateway.
+     *
+     * MESMO GATE do bloco de confirmação acima, e pelo mesmo motivo: o
+     * `saleId` vem do `PagarmePayment` que o `handleWebhook` resolveu com a
+     * assinatura conferida, NUNCA do `metadata` do corpo. Aqui o estrago de
+     * confiar no corpo cru seria diferente do que era no pagamento (não
+     * despacharia peça), mas seria pior de outro jeito: um POST anônimo
+     * carimbaria uma cliente com chargeback e envenenaria o score de todo
+     * mundo que divide endereço ou telefone com ela.
+     *
+     * O nome do evento é reconhecido por PADRÃO (`ehEventoDeChargeback`) em
+     * vez de lista fechada: a Pagar.me muda sufixo entre versões, e um
+     * evento não reconhecido aqui é uma contestação que ninguém fica sabendo.
+     *
+     * TRY/CATCH LARGO como os blocos acima: nada impede o ack do webhook.
+     */
+    if (result.ok && result.saleId && this.chargebacks.ehEventoDeChargeback(eventType)) {
+      try {
+        await this.chargebacks.doWebhook(eventType, result.saleId, body);
+      } catch (e: any) {
+        this.logger.warn(
+          `[pagarme] chargeback do webhook não registrou (${result.saleId}): ${e?.message || e}`,
         );
       }
     }

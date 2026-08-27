@@ -12,6 +12,8 @@ import { FreteService } from './frete.service';
 import { PersonIdentityService } from '../person-identity/person-identity.service';
 import { PedidoEmailService } from './pedido-email.service';
 import { ProgressiveDiscountService, DiscountResult } from '../progressive-discount/progressive-discount.service';
+import { RiscoChavesService } from '../risco/risco-chaves.service';
+import { RiscoService } from '../risco/risco.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -173,6 +175,36 @@ export interface CriarPedidoInput {
     cardToken?: string;
   };
   tracking?: LojaTrackingInput;
+  /**
+   * IP REAL DA CLIENTE, repassado pelo controller (`x-cliente-ip`).
+   *
+   * Sempre existiu no caminho e morria no rate-limit. Guardar é o que
+   * permite responder "estes dois pedidos com CPF diferente saíram da mesma
+   * conexão" — ver `Order.clienteIp`.
+   */
+  clienteIp?: string;
+}
+
+/**
+ * O QUE SOBRA DA COBRANÇA NO CARTÃO — sem PAN, sem CVV, sem validade.
+ *
+ * Vai pra dentro do `Order.paymentInfo` (chave `transacao`), que é a
+ * convenção da casa pra dado de gateway. Serve a dois donos: o dossiê de
+ * contestação (que precisa de autorização/NSU/antifraude) e o módulo de
+ * risco (que cruza cartão e titular entre pedidos).
+ */
+export interface DadosTransacao {
+  ultimos4: string | null;
+  bandeira: string | null;
+  titular: string | null;
+  tid: string | null;
+  nsu: string | null;
+  autorizacao: string | null;
+  status: string | null;
+  codigoRetorno: string | null;
+  antifraudeStatus: string | null;
+  antifraudeScore: number | null;
+  capturadoEm: string;
 }
 
 /** Resposta do POST — `ok:false` sempre vem com mensagem pronta pra cliente. */
@@ -301,6 +333,8 @@ export class LojaOrdersService {
     private readonly identity: PersonIdentityService,
     private readonly pedidoEmail: PedidoEmailService,
     private readonly progressiveDiscount: ProgressiveDiscountService,
+    private readonly riscoChaves: RiscoChavesService,
+    private readonly risco: RiscoService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -1093,6 +1127,8 @@ export class LojaOrdersService {
       gclid: attr.gclid || null,
       checkoutInfo: JSON.stringify(checkoutInfo),
       trackingInfo: trackingInfo ? JSON.stringify(trackingInfo) : null,
+      // Sinal de risco, não de métrica — ver `Order.clienteIp`.
+      clienteIp: input.clienteIp || null,
     };
 
     // RETENTATIVA RECOBRA O MESMO PEDIDO (dono, 24/08) — ver `reaproveitarRecusado`.
@@ -1478,7 +1514,13 @@ export class LojaOrdersService {
     order: any,
     input: CriarPedidoInput,
   ): Promise<
-    | { ok: true; status: 'paid' | 'pending'; gatewayOrderId: string; gatewayChargeId: string | null }
+    | {
+        ok: true;
+        status: 'paid' | 'pending';
+        gatewayOrderId: string;
+        gatewayChargeId: string | null;
+        transacao: DadosTransacao | null;
+      }
     | {
         ok: false;
         kind: 'recusa' | 'integracao';
@@ -1702,7 +1744,13 @@ export class LojaOrdersService {
       );
     }
 
-    return { ok: true, status: classe, gatewayOrderId: gw.id, gatewayChargeId: charge?.id || null };
+    return {
+      ok: true,
+      status: classe,
+      gatewayOrderId: gw.id,
+      gatewayChargeId: charge?.id || null,
+      transacao: this.extrairTransacao(charge),
+    };
   }
 
   /**
@@ -1734,6 +1782,50 @@ export class LojaOrdersService {
       state: 'SP',
       country: 'BR',
     };
+  }
+
+  /**
+   * O QUE A PAGAR.ME DEVOLVE E A GENTE JOGAVA FORA.
+   *
+   * `charge.last_transaction` sempre veio inteiro na resposta da cobrança —
+   * a gente lia só o `status` e a mensagem de recusa e descartava o resto.
+   * Nele estão os quatro últimos dígitos, a bandeira, o titular digitado por
+   * ela, o NSU, o TID, o código de autorização e o retorno do adquirente:
+   * exatamente a lista que o dossiê de contestação precisa e que hoje é
+   * remontada à mão no painel do gateway, com prazo correndo.
+   *
+   * ⚠️ PAN E CVV NÃO PASSAM POR AQUI e não podem passar. O cartão é
+   * tokenizado no navegador da cliente (ver `CardForm.tsx`); o que chega ao
+   * backend é o que a Pagar.me devolve DEPOIS de cobrar — máscara e
+   * metadados. Guardar isto não muda o nosso escopo de PCI.
+   */
+  private extrairTransacao(charge: any): DadosTransacao | null {
+    const tx = charge?.last_transaction;
+    if (!tx) return null;
+    const card = tx.card || {};
+    const anti = tx.antifraud_response || {};
+    const limpo = (v: any, max = 60) => {
+      const s = String(v ?? "").trim();
+      return s ? s.slice(0, max) : null;
+    };
+    const dados: DadosTransacao = {
+      ultimos4: limpo(card.last_four_digits, 4),
+      bandeira: limpo(card.brand, 30),
+      titular: limpo(card.holder_name, 80),
+      tid: limpo(tx.acquirer_tid, 60),
+      nsu: limpo(tx.acquirer_nsu, 60),
+      autorizacao: limpo(tx.acquirer_auth_code, 60),
+      status: limpo(tx.status, 30),
+      codigoRetorno: limpo(tx.acquirer_return_code ?? tx.gateway_response?.code, 30),
+      // O antifraude só vem quando está ativo na conta. Ausente = ausente:
+      // campo vazio no dossiê é honesto, campo inventado perde a disputa.
+      antifraudeStatus: limpo(anti.status, 30),
+      antifraudeScore: Number.isFinite(Number(anti.score)) ? Number(anti.score) : null,
+      capturadoEm: new Date().toISOString(),
+    };
+    // Tudo nulo = a Pagar.me não mandou nada útil; não suja o paymentInfo.
+    const temAlgo = Object.entries(dados).some(([k, v]) => k !== "capturadoEm" && v != null);
+    return temAlgo ? dados : null;
   }
 
   /**
@@ -1908,6 +2000,10 @@ export class LojaOrdersService {
           ...paymentInfo,
           gatewayOrderId: r.gatewayOrderId,
           gatewayChargeId: r.gatewayChargeId,
+          // Bandeira, 4 últimos, titular, NSU, TID, autorização e antifraude.
+          // Sempre estiveram na resposta da cobrança e eram descartados —
+          // ver `extrairTransacao`. Sem PAN e sem CVV.
+          ...(r.transacao ? { transacao: r.transacao } : {}),
           /**
            * EM ANÁLISE (17/08): a operadora ainda não disse sim nem não. O
            * pedido fica `awaiting_payment` como um PIX que ainda não caiu, e
@@ -1964,6 +2060,27 @@ export class LojaOrdersService {
       where: { id: order.id },
       data: { paymentInfo: JSON.stringify(paymentInfo) },
     });
+
+    /**
+     * ANÁLISE DE RISCO — depois do pagamento, e NUNCA no caminho crítico.
+     *
+     * Depois porque só aqui o `paymentInfo.transacao` existe: antes, o
+     * pedido nasceria sem chave de cartão nem de titular. `void` + `catch`
+     * porque risco é OBSERVAÇÃO — um erro aqui não pode, em hipótese
+     * nenhuma, virar pedido que a cliente não consegue fechar. O que falhar
+     * aqui, o backfill e a abertura do pedido recuperam.
+     *
+     * E, de novo: isto só CALCULA e ALERTA. Não bloqueia, não cancela e não
+     * segura estoque — ordem do dono (27/08).
+     */
+    void this.riscoChaves
+      .gravarChavesSeguro(order.id)
+      .then(() => this.risco.analisar(order.id))
+      .catch((e: any) =>
+        this.logger.warn(
+          `[loja] análise de risco falhou pedido=${order.wcOrderNumber}: ${e?.message || e}`,
+        ),
+      );
 
     this.logger.log(
       `[loja] pedido ${order.wcOrderNumber} criado (${input.payment.method}) R$ ${this.dinheiro(input.total).toFixed(2)}`,
