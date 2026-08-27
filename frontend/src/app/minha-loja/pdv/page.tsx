@@ -5239,6 +5239,84 @@ function CustomerModal({
   );
 }
 
+/**
+ * SEMÁFORO DE LASTRO DA REDE (26/08 — casos ON-000110/ON-000162).
+ *
+ * Duas vendas online fecharam com ZERO peça real na rede: a vendedora não viu
+ * aviso nenhum, o pedido rodou 4 lojas em 2 dias e todas negaram. O servidor
+ * (`POST /pdv/lastro-rede`) responde por SKU: verde tem, amarelo com ressalva
+ * (parcial / prometida / peça em caixa em trânsito), vermelho não existe em
+ * loja nenhuma NEM em trânsito. Só vale pra venda À DISTÂNCIA — balcão com a
+ * peça bipada na mão nunca chama a checagem (a peça física é a prova).
+ */
+type LastroRedeInfo = {
+  status: 'verde' | 'amarelo' | 'vermelho';
+  motivo: 'parcial' | 'transito' | 'prometida' | 'inexistente' | null;
+  precisa: number;
+  disponivel: number;
+  bruto: number;
+  prometidas: number;
+  transito: Array<{ caixa: string; paraLoja: string; paraLojaNome: string; qty: number; dias: number | null }>;
+};
+type LastroRedeResultado = {
+  porSku: Record<string, LastroRedeInfo>;
+  /** Itens da venda no momento da checagem — é daqui que sai o REF COR TAM. */
+  itens: Array<{ sku: string; ref: string | null; cor: string | null; tamanho: string | null }>;
+};
+
+/** SKU sem zeros à esquerda — a MESMA régua do servidor (as chaves de `porSku` vêm assim). */
+const lastroSku = (sku: string | null | undefined) => String(sku ?? '').trim().replace(/^0+/, '');
+
+/** Nome curto da peça pras linhas do semáforo e pro confirm do vermelho. */
+const lastroNomePeca = (it: { sku: string; ref: string | null; cor: string | null; tamanho: string | null }) =>
+  [it.ref, it.cor, it.tamanho].filter(Boolean).join(' ') || it.sku;
+
+/**
+ * As linhas do semáforo — verde é SILÊNCIO (não renderiza nada), amarelo é
+ * informativo (não trava), vermelho é o aviso forte. Quem trava (com o
+ * "vender mesmo assim") é a revalidação do Finalizar, não este banner.
+ */
+function LastroRedeAviso({ lastro, className }: { lastro: LastroRedeResultado | null; className?: string }) {
+  if (!lastro) return null;
+  const linhas = lastro.itens
+    .map((it) => ({ it, info: lastro.porSku[lastroSku(it.sku)] }))
+    .filter((l): l is { it: LastroRedeResultado['itens'][number]; info: LastroRedeInfo } =>
+      !!l.info && l.info.status !== 'verde');
+  if (!linhas.length) return null;
+  return (
+    <div className={`space-y-1${className ? ` ${className}` : ''}`}>
+      {linhas.map(({ it, info }) => {
+        const nome = lastroNomePeca(it);
+        if (info.status === 'vermelho') {
+          return (
+            <div
+              key={it.sku}
+              className="rounded-lg border-2 border-rose-400 bg-rose-50 px-2.5 py-1.5 text-[11px] font-black leading-snug text-rose-800"
+            >
+              🔴 {nome} — NÃO EXISTE em nenhuma loja nem em trânsito
+            </div>
+          );
+        }
+        const t = info.transito[0];
+        const texto =
+          info.motivo === 'transito' && t
+            ? `está CHEGANDO: caixa ${t.caixa} pra ${t.paraLojaNome}${t.dias != null ? ` (há ${t.dias} ${t.dias === 1 ? 'dia' : 'dias'})` : ''}`
+            : info.motivo === 'prometida'
+              ? 'última(s) unidade(s) já prometida(s) a outro pedido'
+              : `só ${info.disponivel} de ${info.precisa} disponíveis na rede`;
+        return (
+          <div
+            key={it.sku}
+            className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold leading-snug text-amber-800"
+          >
+            🟡 {nome} — {texto}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PaymentModal({
   saleId,
   total,
@@ -5337,6 +5415,9 @@ function PaymentModal({
           // A resposta sobre a arara também é retomada: sem isso o fechamento
           // mandaria `null` e apagaria o que ela já tinha respondido.
           setPecasNaMao(typeof s.entregaPecasNaMao === 'boolean' ? s.entregaPecasNaMao : null);
+          // Venda À DISTÂNCIA retomada (entrega já escolhida): o semáforo de
+          // lastro volta pra tela — quem retoma não repassa pelo passo 1.
+          void checarLastroRede();
         }
         // FRETE JÁ GRAVADO — o campo nascia VAZIO mesmo com a linha FRETE na
         // venda. Reabrir o modal (link pendente, F5, "fechar depois") mostrava
@@ -5496,6 +5577,92 @@ function PaymentModal({
   const freteAutoRef = useRef<string | null>(null);
 
   /**
+   * SEMÁFORO DE LASTRO (26/08 — ON-000110/162): o resultado da última checagem
+   * de `/pdv/lastro-rede` pros itens desta venda. `null` = nunca checou (ou a
+   * checagem caiu — fail-open: aviso é aviso, nunca segura venda). Só o fluxo
+   * de venda à distância alimenta isto; balcão nunca chama.
+   */
+  const [lastroRede, setLastroRede] = useState<LastroRedeResultado | null>(null);
+
+  /**
+   * Checa o lastro da rede pros itens ATUAIS da venda. Busca a venda de novo
+   * em vez de confiar num snapshot — na revalidação do Finalizar o carrinho
+   * pode ter mudado desde a escolha da entrega. Qualquer falha (rede, 500)
+   * devolve `null` e mantém o último resultado na tela: fail-open silencioso.
+   */
+  const checarLastroRede = async (): Promise<LastroRedeResultado | null> => {
+    if (!saleId) return null;
+    try {
+      const s = await api<any>(`/pdv/sales/${saleId}`);
+      // Agrega por SKU (a linha FRETE fica de fora — não é peça).
+      const porChave = new Map<string, { sku: string; qty: number; ref: string | null; cor: string | null; tamanho: string | null }>();
+      for (const i of Array.isArray(s?.items) ? s.items : []) {
+        if (!i?.sku || i?.ref === 'FRETE') continue;
+        const chave = lastroSku(i.sku);
+        if (!chave) continue;
+        const atual = porChave.get(chave);
+        if (atual) atual.qty += i.qty || 1;
+        else porChave.set(chave, { sku: String(i.sku), qty: i.qty || 1, ref: i.ref ?? null, cor: i.cor ?? null, tamanho: i.tamanho ?? null });
+      }
+      const itens = Array.from(porChave.values());
+      if (!itens.length) { setLastroRede(null); return null; }
+      const r = await api<{ porSku: Record<string, LastroRedeInfo> }>('/pdv/lastro-rede', {
+        method: 'POST',
+        body: JSON.stringify({ items: itens.map((i) => ({ sku: i.sku, qty: i.qty })) }),
+      });
+      const resultado: LastroRedeResultado = { porSku: r?.porSku || {}, itens };
+      setLastroRede(resultado);
+      return resultado;
+    } catch {
+      return null; // fail-open — a venda nunca para porque a checagem caiu
+    }
+  };
+
+  /**
+   * A ÚLTIMA PORTA DO SEMÁFORO: revalida o lastro na hora de concluir e, com
+   * QUALQUER vermelho, exige o "vender mesmo assim" — que fica assinado no
+   * log (`/pdv/lastro-rede/override`). Amarelo segue sem perguntar (é
+   * informativo). Retorna `false` só quando a vendedora desiste.
+   */
+  const confirmarLastroFinal = async (): Promise<boolean> => {
+    const r = await checarLastroRede();
+    if (!r) return true; // checagem fora do ar = fail-open
+    const vermelhos = r.itens.filter((i) => r.porSku[lastroSku(i.sku)]?.status === 'vermelho');
+    if (!vermelhos.length) return true;
+    const ok = window.confirm(
+      `⚠ ${vermelhos.length} peça(s) NÃO EXISTEM em nenhuma loja nem em trânsito:\n` +
+        `${vermelhos.map(lastroNomePeca).join('\n')}\n\n` +
+        'Vender mesmo assim promete o que a rede não tem. Confirma?',
+    );
+    if (!ok) return false;
+    // Assina a decisão no log — fire-and-forget: registrar não segura a venda.
+    void api('/pdv/lastro-rede/override', {
+      method: 'POST',
+      body: JSON.stringify({ saleId, skus: vermelhos.map((i) => i.sku) }),
+    }).catch(() => {});
+    return true;
+  };
+
+  // Fecha a venda passando pela última porta do semáforo quando há pagamento
+  // venda_online. Os TRÊS caminhos que finalizam do estado pago100 — botão
+  // "Finalizar venda", Enter e o auto-finalize de 250ms — passam por AQUI:
+  // gate só no botão deixava os outros dois pular o semáforo. Balcão
+  // (sem venda_online) segue direto, sem chamada nem await.
+  const finalizandoLastroRef = useRef(false);
+  const finalizarComLastro = async () => {
+    if (finalizandoLastroRef.current) return;
+    if (payments.some((p) => String(p.method || '').toLowerCase() === 'venda_online')) {
+      finalizandoLastroRef.current = true;
+      try {
+        if (!(await confirmarLastroFinal())) return;
+      } finally {
+        finalizandoLastroRef.current = false;
+      }
+    }
+    onConfirm('', undefined);
+  };
+
+  /**
    * PASSO 1 do fluxo guiado: grava a entrega e já traz o valor de tabela pro
    * campo do passo 2. NÃO aplica o frete aqui — quem aplica é a confirmação
    * do passo 2, pra nunca existir frete gravado que a vendedora não viu.
@@ -5518,6 +5685,9 @@ function PaymentModal({
     // "retira NA LOJA 13" e a matriz roteava na mão, 2 dias parado.
     const perguntaLoja = tipo === 'retirada' || tipo === 'motoboy';
     setEtapaOnline(perguntaLoja ? 'frete_loja' : 'frete_valor');
+    // GATILHO 1 do semáforo de lastro: escolheu a entrega = a peça vai viajar.
+    // Fire-and-forget — o resultado aparece nos passos seguintes quando chegar.
+    void checarLastroRede();
     if (!saleId) return;
     /**
      * NÃO GRAVA ANTES DE PERGUNTAR (26/08). Este POST mandava
@@ -6444,6 +6614,15 @@ function PaymentModal({
           return;
         }
       }
+      /**
+       * GATILHO 2 do semáforo de lastro (26/08 — ON-000110/162): revalida na
+       * hora de concluir. O que era amarelo na escolha da entrega pode ter
+       * virado vermelho — e as duas vendas do carrossel fechariam caladas de
+       * novo. Vermelho não trava sozinho: quem decide é a vendedora, e o
+       * "vender mesmo assim" fica assinado no log. Vem DEPOIS de todas as
+       * outras portas pra não interrogar clique de quem ainda nem pode fechar.
+       */
+      if (!(await confirmarLastroFinal())) return;
     }
     // PIX: SEMPRE exige QR gerado (clique no botão "PIX"). Se for provider
     // Pagar.me/PagBank, exige TAMBÉM confirmação automática (pixPaid=true via
@@ -7104,7 +7283,7 @@ function PaymentModal({
       if (e.key === 'Enter' && !isTyping) {
         e.preventDefault();
         if (pago100 && !finalizing) {
-          onConfirm('', undefined);
+          void finalizarComLastro();
         } else if (selected && !addingPayment && valorParcial && (!needsBandeira || bandeira)) {
           adicionarPagamento();
         }
@@ -7137,7 +7316,7 @@ function PaymentModal({
     if (m === 'crediario') return; // crediário precisa imprimir promissória/carnê
     autoFinalizeRef.current = true;
     const t = setTimeout(() => {
-      onConfirm('', undefined);
+      void finalizarComLastro();
     }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -7364,6 +7543,10 @@ function PaymentModal({
                     : 'A loja escolhida entrega. O que ela não tiver, as outras mandam pra ela.'}
                 </p>
               </div>
+              {/* SEMÁFORO DE LASTRO — a lista abaixo promete "vem por
+                  transferência"; se a rede inteira não tem a peça, é aqui que
+                  a mentira aparece (ON-000110/162). */}
+              <LastroRedeAviso lastro={lastroRede} className="mt-3" />
               <div className="mt-4 max-h-64 space-y-1.5 overflow-y-auto">
                 {/* Enquanto o estoque não chega, a lista simples já deixa
                     escolher — a resposta demorar não pode travar a venda. */}
@@ -7541,6 +7724,9 @@ function PaymentModal({
                   className="w-40 rounded-xl border-4 border-amber-300 bg-white px-3 py-3 text-center text-3xl font-black tabular-nums text-slate-900 focus:border-amber-500 focus:outline-none"
                 />
               </div>
+              {/* SEMÁFORO DE LASTRO — SEDEX/PAC caem aqui direto do passo 1;
+                  é a primeira tela onde o resultado da checagem dá pra ler. */}
+              <LastroRedeAviso lastro={lastroRede} className="mt-3" />
               <div className="mt-4 flex gap-2">
                 <button
                   type="button"
@@ -8090,6 +8276,10 @@ function PaymentModal({
                 <span className="shrink-0 text-[11px] font-bold text-teal-700 underline">alterar</span>
               </button>
             )}
+            {/* SEMÁFORO DE LASTRO — fica à vista enquanto ela cobra: amarelo
+                informa, vermelho volta a perguntar no Finalizar. Verde (ou
+                checagem que caiu) = silêncio. */}
+            <LastroRedeAviso lastro={lastroRede} />
             {/* A ESCOLHA DO PAGAMENTO VIROU POPUP (dono, 24/08) — a grade de 4
                 botões ficava no meio do painel e competia com tudo o mais.
                 Aqui sobrou o RECIBO, com "alterar" pra reabrir o popup. */}
@@ -9194,7 +9384,9 @@ function PaymentModal({
           {/* Botão "Finalizar venda" — quando pago = total */}
           {pago100 && (
             <button
-              onClick={() => onConfirm('', undefined)}
+              onClick={() => {
+                void finalizarComLastro();
+              }}
               disabled={finalizing}
               className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 ring-4 ring-emerald-300/60 pdv-cta-attention"
             >
