@@ -2894,6 +2894,30 @@ export class RealignmentShipmentService {
     if (shipment.status !== 'in_transit')
       throw new BadRequestException(`Remessa não está em trânsito (status=${shipment.status})`);
 
+    /**
+     * ENTRADA JÁ APLICADA NUMA TENTATIVA ANTERIOR (27/08).
+     *
+     * Caixa `in_transit` COM `stockIncreasedAt` não deveria existir — mas
+     * existe: até hoje o delta ia pro Flow e o erro do Giga derrubava a
+     * requisição antes de fechar a remessa. Somar de novo aqui criaria peça
+     * do nada. Fecha a caixa sem tocar no estoque.
+     */
+    if (shipment.stockIncreasedAt) {
+      this.logger.warn(
+        `[shipment] ${shipment.code}: entrada JÁ aplicada em ${new Date(shipment.stockIncreasedAt).toISOString()} — fechando a caixa SEM somar de novo`,
+      );
+      await (this.prisma as any).realignmentShipment.update({
+        where: { id: shipment.id },
+        data: { status: 'received', receivedAt: new Date(), receivedByUserId: input.userId ?? null } as any,
+      });
+      return {
+        ok: true as const,
+        code: shipment.code,
+        jaAplicada: true,
+        aviso: 'A entrada desta caixa já tinha sido aplicada no estoque numa tentativa anterior — a caixa foi fechada sem somar de novo.',
+      };
+    }
+
     // Verifica que TODOS itens estão em status final.
     // ⚡ Inclui codigoBipado pra evitar refazer lookup no Giga na entrada
     // (codigoBipado já foi resolvido e salvo durante o bipe).
@@ -2991,17 +3015,32 @@ export class RealignmentShipmentService {
        * volta a existir aqui, e a réplica vai pro `erp_outbox` com retry.
        * Recebimento de caixa não pode depender do ERP legado estar vivo.
        */
-      increaseResult = await this.erp.increaseStockAsync(stockItems);
-      if (!increaseResult.success) {
-        throw new BadRequestException(
-          `Falha ao dar entrada no estoque: ${increaseResult.error}. Remessa NÃO foi finalizada.`,
-        );
-      }
-      if (increaseResult.gigaEnfileirado) {
-        this.logger.log(
-          `[shipment] ${shipment.code}: entrada aplicada no Flow (${increaseResult.applied?.length || 0} SKU) — réplica do Giga na fila do outbox`,
-        );
-      }
+      /**
+       * ENTRADA E CARIMBO NA MESMA TRANSAÇÃO — ou soma e fecha, ou nada.
+       *
+       * Era `increaseStock` inline: o Flow aplicava o delta, o Giga caía
+       * ("Access denied" da KingHost), a exceção virava HTTP 500 e o carimbo
+       * `stockIncreasedAt` NUNCA era gravado. A remessa ficava `in_transit`
+       * com o estoque já somado — e o próximo clique somava de novo. Foi o
+       * que travou a Moema na REM-2026-001458 (27/08).
+       *
+       * `applyStockDeltaInTx` grava o delta no Flow e enfileira a réplica do
+       * Giga no `erp_outbox` DENTRO da transação, sem tocar o MySQL: chamada
+       * de rede dentro de transação Postgres é o que pendura o app quando o
+       * legado trava.
+       */
+      const applied = await this.prisma.$transaction(async (tx: any) => {
+        const ap = await this.erp.applyStockDeltaInTx(tx, stockItems, 1, { allowNegative: true });
+        await tx.realignmentShipment.update({
+          where: { id: shipment.id },
+          data: { stockIncreasedAt: new Date() } as any,
+        });
+        return ap;
+      });
+      increaseResult = { success: true, applied: applied ?? [], gigaEnfileirado: true };
+      this.logger.log(
+        `[shipment] ${shipment.code}: entrada aplicada no Flow (${applied?.length || 0} SKU) — réplica do Giga na fila do outbox`,
+      );
     }
     const appliedIncreaseCount = increaseResult.applied?.length || 0;
     if (!ehJuntada && stockItems.length > 0 && appliedIncreaseCount === 0) {
