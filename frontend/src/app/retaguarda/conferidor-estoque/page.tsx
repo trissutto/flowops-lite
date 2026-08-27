@@ -20,7 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, RefreshCw, Loader2, AlertTriangle, Download, History,
-  X, Search,
+  X, Search, Check,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -93,10 +93,53 @@ export default function ConferidorEstoquePage() {
       p.set('limite', '2000');
       const r = await api<Resultado>(`/stock-conferidor/conferir?${p.toString()}`);
       setRes(r);
+      // PEÇAS EXTRAVIADAS (27/08): esta é a tela onde a loja DESCOBRE que a
+      // peça existe — está contando a arara. Se o SKU divergente está marcado
+      // como "não achei", o botão de desmarcar tem que estar aqui, e não numa
+      // tela que ninguém abre no meio da contagem.
+      void carregarExtraviadas(r.linhas.map((l) => l.codigo));
     } catch (e: any) {
       setErr(e?.message || 'Falha na conferência');
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** Chave `loja|sku` das peças marcadas como extraviadas — pinta a linha. */
+  const [extraviadas, setExtraviadas] = useState<Set<string>>(new Set());
+  const [achando, setAchando] = useState<string | null>(null);
+
+  const carregarExtraviadas = async (skus: string[]) => {
+    const unicos = Array.from(new Set(skus.filter(Boolean))).slice(0, 300);
+    if (!unicos.length) { setExtraviadas(new Set()); return; }
+    try {
+      const r = await api<Array<{ storeCode: string; sku: string }>>(
+        `/pecas-extraviadas?skus=${encodeURIComponent(unicos.join(','))}`,
+      );
+      setExtraviadas(new Set(r.map((e) => `${e.storeCode}|${e.sku}`)));
+    } catch {
+      setExtraviadas(new Set()); // sem marca é melhor que marca errada
+    }
+  };
+
+  const acheiAqui = async (l: Linha) => {
+    if (!window.confirm(
+      `Confirmar que a peça FOI ENCONTRADA na loja ${l.loja}?\n\n` +
+      `${[l.ref, l.descricao].filter(Boolean).join(' · ') || l.codigo}\n\n` +
+      'Ela volta a ser escolhida pelo sistema nos próximos pedidos.',
+    )) return;
+    const k = `${l.loja}|${l.codigo}`;
+    setAchando(k);
+    try {
+      await api('/pecas-extraviadas/achei', {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: l.loja, sku: l.codigo }),
+      });
+      setExtraviadas((s) => { const n = new Set(s); n.delete(k); return n; });
+    } catch (e: any) {
+      alert(`Não consegui desmarcar: ${e?.message || e}`);
+    } finally {
+      setAchando(null);
     }
   };
 
@@ -294,11 +337,21 @@ export default function ConferidorEstoquePage() {
                 <tbody>
                   {visiveis.map((l) => {
                     const k = `${l.codigo}|${l.loja}`;
+                    const extraviada = extraviadas.has(`${l.loja}|${l.codigo}`);
                     return (
-                      <tr key={k} className="border-t">
+                      <tr key={k} className={`border-t ${extraviada ? 'bg-red-50' : ''}`}>
                         <td className="px-3 py-2 font-mono text-xs">{l.codigo}</td>
                         <td className="px-3 py-2 font-mono text-xs text-slate-500">{l.ref || '—'}</td>
-                        <td className="max-w-xs truncate px-3 py-2">{l.descricao || '—'}</td>
+                        <td className="max-w-xs truncate px-3 py-2">
+                          {l.descricao || '—'}
+                          {/* A loja está com a arara na mão AGORA — é o momento
+                              certo de dizer "essa foi dada como sumida". */}
+                          {extraviada && (
+                            <span className="ml-1.5 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
+                              extraviada
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs">{l.loja} · {nomeLoja(l.loja)}</td>
                         <td className={`px-3 py-2 text-right tabular-nums font-semibold ${l.flow < 0 ? 'text-red-600' : ''}`}>{l.flow}</td>
                         <td className={`px-3 py-2 text-right tabular-nums ${l.giga < 0 ? 'text-red-600' : ''}`}>{l.giga}</td>
@@ -307,6 +360,19 @@ export default function ConferidorEstoquePage() {
                         </td>
                         <td className="px-3 py-2">
                           <div className="flex items-center justify-end gap-1">
+                            {extraviada && (
+                              <button
+                                onClick={() => acheiAqui(l)}
+                                disabled={achando === `${l.loja}|${l.codigo}`}
+                                title="A peça apareceu: volta a ser escolhida pelo sistema"
+                                className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                              >
+                                {achando === `${l.loja}|${l.codigo}`
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : <Check className="h-3 w-3" />}
+                                Achei
+                              </button>
+                            )}
                             <button onClick={() => abrirHist(l)} title="Histórico" className="rounded p-1.5 hover:bg-slate-100">
                               <History className="h-3.5 w-3.5" />
                             </button>

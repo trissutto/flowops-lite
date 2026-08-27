@@ -134,13 +134,65 @@ export class PecasExtraviadasService {
 
   /** Lista pra tela de gestão (abertas por padrão). */
   async listar(opts: { incluirAchadas?: boolean; storeCode?: string } = {}) {
-    return (this.prisma as any).pecaExtraviada.findMany({
+    const linhas = await (this.prisma as any).pecaExtraviada.findMany({
       where: {
         ...(opts.incluirAchadas ? {} : { achadaEm: null }),
         ...(opts.storeCode ? { storeCode: opts.storeCode } : {}),
       },
       orderBy: { marcadaEm: 'desc' },
       take: 500,
+    });
+    if (!linhas.length) return [];
+
+    /**
+     * SKU SOZINHO NÃO SERVE PRA NINGUÉM PROCURAR PEÇA.
+     *
+     * Quem vai à arara precisa de REF · COR · TAMANHO — é assim que a peça é
+     * achada fisicamente (a mesma razão de o `OrderItem` congelar esses três
+     * campos). Nome da loja idem: "15" não diz nada pra quem não decorou os
+     * códigos. Duas consultas em lote, não N+1.
+     */
+    const skus: string[] = Array.from(new Set<string>(linhas.map((l: any) => String(l.sku))));
+    const lojas: string[] = Array.from(new Set<string>(linhas.map((l: any) => String(l.storeCode))));
+    const pedidoIds: string[] = linhas.map((l: any) => l.orderId).filter(Boolean);
+
+    const [produtos, stores, pedidos] = await Promise.all([
+      (this.prisma as any).wincredProduto
+        .findMany({
+          where: { codigo: { in: skus } },
+          select: { codigo: true, ref: true, cor: true, tamanho: true, descricaoCompleta: true, descricaoPdv: true },
+        })
+        .catch(() => [] as any[]) as Promise<any[]>,
+      this.prisma.store
+        .findMany({ where: { code: { in: lojas } }, select: { code: true, name: true } })
+        .catch(() => [] as any[]) as Promise<any[]>,
+      this.prisma.order
+        .findMany({ where: { id: { in: pedidoIds } }, select: { id: true, wcOrderNumber: true } })
+        .catch(() => [] as any[]) as Promise<any[]>,
+    ]);
+    const prodPorSku = new Map<string, any>(produtos.map((p: any) => [String(p.codigo), p]));
+    const nomePorLoja = new Map<string, string>(stores.map((s: any) => [String(s.code), String(s.name)]));
+    const pedidoPorId = new Map<string, string | null>(
+      pedidos.map((o: any) => [String(o.id), o.wcOrderNumber ?? null]),
+    );
+
+    return linhas.map((l: any) => {
+      const p: any = prodPorSku.get(String(l.sku));
+      const rotulo = [p?.ref, p?.cor, p?.tamanho].filter(Boolean).join(' · ');
+      return {
+        ...l,
+        storeName: nomePorLoja.get(l.storeCode) ?? null,
+        ref: p?.ref ?? null,
+        cor: p?.cor ?? null,
+        tamanho: p?.tamanho ?? null,
+        descricao: p?.descricaoCompleta || p?.descricaoPdv || null,
+        // O que a pessoa lê na tela — cai pro SKU quando a peça não está no
+        // catálogo (peça antiga, código digitado errado).
+        rotulo: rotulo || String(l.sku),
+        pedido: l.orderId ? pedidoPorId.get(l.orderId) ?? null : null,
+        /** Dias parada — é o que separa "aconteceu hoje" de "ninguém olhou". */
+        diasParada: Math.floor((Date.now() - new Date(l.marcadaEm).getTime()) / 86_400_000),
+      };
     });
   }
 
