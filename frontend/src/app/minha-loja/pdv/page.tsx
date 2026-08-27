@@ -5264,6 +5264,18 @@ type LastroRedeResultado = {
   itens: Array<{ sku: string; ref: string | null; cor: string | null; tamanho: string | null }>;
 };
 
+/**
+ * Resultado da checagem, com "não deu pra conferir" SEPARADO de "não há o que
+ * conferir" (27/08). Antes os dois voltavam `null` e a venda seguia calada nos
+ * dois casos — foi assim que a ON-000178 fechou sem aviso.
+ */
+type LastroChecagem =
+  | { estado: 'ok'; resultado: LastroRedeResultado }
+  /** Venda sem peça (só frete) ou sem venda aberta — nada a checar. */
+  | { estado: 'sem-itens' }
+  /** A checagem CAIU (rede/500) — ninguém sabe se tem lastro. */
+  | { estado: 'falhou' };
+
 /** SKU sem zeros à esquerda — a MESMA régua do servidor (as chaves de `porSku` vêm assim). */
 const lastroSku = (sku: string | null | undefined) => String(sku ?? '').trim().replace(/^0+/, '');
 
@@ -5590,8 +5602,8 @@ function PaymentModal({
    * pode ter mudado desde a escolha da entrega. Qualquer falha (rede, 500)
    * devolve `null` e mantém o último resultado na tela: fail-open silencioso.
    */
-  const checarLastroRede = async (): Promise<LastroRedeResultado | null> => {
-    if (!saleId) return null;
+  const checarLastroRede = async (): Promise<LastroChecagem> => {
+    if (!saleId) return { estado: 'sem-itens' };
     try {
       const s = await api<any>(`/pdv/sales/${saleId}`);
       // Agrega por SKU (a linha FRETE fica de fora — não é peça).
@@ -5605,16 +5617,18 @@ function PaymentModal({
         else porChave.set(chave, { sku: String(i.sku), qty: i.qty || 1, ref: i.ref ?? null, cor: i.cor ?? null, tamanho: i.tamanho ?? null });
       }
       const itens = Array.from(porChave.values());
-      if (!itens.length) { setLastroRede(null); return null; }
+      if (!itens.length) { setLastroRede(null); return { estado: 'sem-itens' }; }
       const r = await api<{ porSku: Record<string, LastroRedeInfo> }>('/pdv/lastro-rede', {
         method: 'POST',
         body: JSON.stringify({ items: itens.map((i) => ({ sku: i.sku, qty: i.qty })) }),
       });
       const resultado: LastroRedeResultado = { porSku: r?.porSku || {}, itens };
       setLastroRede(resultado);
-      return resultado;
+      return { estado: 'ok', resultado };
     } catch {
-      return null; // fail-open — a venda nunca para porque a checagem caiu
+      // Falha de verdade (rede/500). Não é a mesma coisa que "não há o que
+      // checar" — quem decide o que fazer com isso é o `confirmarLastroFinal`.
+      return { estado: 'falhou' };
     }
   };
 
@@ -5625,8 +5639,26 @@ function PaymentModal({
    * informativo). Retorna `false` só quando a vendedora desiste.
    */
   const confirmarLastroFinal = async (): Promise<boolean> => {
-    const r = await checarLastroRede();
-    if (!r) return true; // checagem fora do ar = fail-open
+    const c = await checarLastroRede();
+    if (c.estado === 'sem-itens') return true;
+    /**
+     * CHECAGEM FORA DO AR NÃO PASSA MAIS CALADA (27/08 — caso ON-000178).
+     *
+     * Era `fail-open` silencioso: qualquer soluço da API e a venda fechava sem
+     * ninguém saber que o estoque não tinha sido conferido. A ON-000178 vendeu
+     * uma peça zerada na rede HÁ 8 DIAS e não ficou registro de aviso nenhum.
+     *
+     * Continua sem TRAVAR (a decisão é da vendedora, ordem do dono), mas ela
+     * fica sabendo que está fechando às cegas. Um clique a mais, e só quando a
+     * checagem realmente cai.
+     */
+    if (c.estado === 'falhou') {
+      return window.confirm(
+        'Não consegui conferir o estoque da rede agora.\n\n' +
+          'Pode ser que alguma peça não exista em loja nenhuma. Fechar assim mesmo?',
+      );
+    }
+    const r = c.resultado;
     const vermelhos = r.itens.filter((i) => r.porSku[lastroSku(i.sku)]?.status === 'vermelho');
     if (!vermelhos.length) return true;
     const ok = window.confirm(
@@ -5643,15 +5675,36 @@ function PaymentModal({
     return true;
   };
 
-  // Fecha a venda passando pela última porta do semáforo quando há pagamento
-  // venda_online. Os TRÊS caminhos que finalizam do estado pago100 — botão
-  // "Finalizar venda", Enter e o auto-finalize de 250ms — passam por AQUI:
-  // gate só no botão deixava os outros dois pular o semáforo. Balcão
-  // (sem venda_online) segue direto, sem chamada nem await.
+  /**
+   * É VENDA A DISTÂNCIA? — quem manda é a ENTREGA, não a forma de pagamento
+   * (27/08 — caso ON-000178).
+   *
+   * O gate era `payments.some(method === 'venda_online')`, e isso deixava o
+   * semáforo de fora em toda venda a distância paga de outro jeito (pix na
+   * mão, link, cartão, dinheiro). A ON-000178 fechou com a BMM-100 VINHO 54
+   * ZERADA na rede há 8 dias e nenhum aviso apareceu: não houve assinatura
+   * de "vender mesmo assim" no log porque a pergunta nunca foi feita.
+   *
+   * O que define venda a distância é a peça VIAJAR: `entregaTipo` preenchido
+   * (sedex/pac/motoboy/retirada). Ele vem do fluxo de entrega e também é
+   * restaurado na retomada da venda (o servidor guarda em `pdv_sales`).
+   *
+   * O `venda_online` continua no OU pra não perder nenhum caminho que já
+   * funcionava — a cobertura só cresce, nunca encolhe.
+   *
+   * Balcão (sem entrega e sem venda_online) segue direto, sem chamada nem
+   * await: a peça bipada na mão é a prova, e o caixa não pode ficar mais lento.
+   */
+  const ehVendaADistancia = () =>
+    !!entregaTipo || payments.some((p) => String(p.method || '').toLowerCase() === 'venda_online');
+
+  // Os TRÊS caminhos que finalizam do estado pago100 — botão "Finalizar
+  // venda", Enter e o auto-finalize de 250ms — passam por AQUI: gate só no
+  // botão deixava os outros dois pular o semáforo.
   const finalizandoLastroRef = useRef(false);
   const finalizarComLastro = async () => {
     if (finalizandoLastroRef.current) return;
-    if (payments.some((p) => String(p.method || '').toLowerCase() === 'venda_online')) {
+    if (ehVendaADistancia()) {
       finalizandoLastroRef.current = true;
       try {
         if (!(await confirmarLastroFinal())) return;
