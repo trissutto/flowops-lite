@@ -47,6 +47,10 @@ export default function ReposicaoPage() {
   useEffect(() => { api<EtiquetaConfig>('/etiqueta-config').then(setEtiquetaCfg).catch(() => {}); }, []);
   const [resultados, setResultados] = useState<Produto[]>([]);
   const [loading, setLoading] = useState(false);
+  // Busca QUEBRADA e busca VAZIA nao podem ter a mesma cara: a tela dizia
+  // "Nenhum produto encontrado" quando o backend erguia erro, e a vendedora
+  // ia atras da peca achando que ela nao existia (27/08).
+  const [erroBusca, setErroBusca] = useState<string | null>(null);
   const [selecionados, setSelecionados] = useState<Selecionado[]>([]);
   const [confirmando, setConfirmando] = useState(false);
   const [resultado, setResultado] = useState<{ ok: boolean; total: number; labels: Label[] } | null>(null);
@@ -55,6 +59,7 @@ export default function ReposicaoPage() {
   useEffect(() => {
     if (busca.trim().length < 2) {
       setResultados([]);
+      setErroBusca(null);
       return;
     }
     const t = setTimeout(async () => {
@@ -62,8 +67,10 @@ export default function ReposicaoPage() {
       try {
         const r = await api<Produto[]>(`/purchase-orders/reposicao/buscar?q=${encodeURIComponent(busca.trim())}`);
         setResultados(r);
-      } catch {
+        setErroBusca(null);
+      } catch (e: any) {
         setResultados([]);
+        setErroBusca(e?.message || "nao deu pra consultar o catalogo agora");
       } finally {
         setLoading(false);
       }
@@ -269,7 +276,18 @@ export default function ReposicaoPage() {
           </section>
         )}
 
-        {busca.length >= 2 && !loading && resultados.length === 0 && (
+        {busca.length >= 2 && !loading && erroBusca && (
+          <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-8 text-center">
+            <div className="text-lg font-black text-rose-800 mb-1">Erro ao buscar</div>
+            <div className="text-sm text-rose-700">
+              A busca falhou — <b>nao</b> quer dizer que a peca nao existe. Tente de novo em alguns
+              segundos e, se continuar, avise a matriz.
+            </div>
+            <div className="text-xs font-mono text-rose-500 mt-2">{erroBusca}</div>
+          </div>
+        )}
+
+        {busca.length >= 2 && !loading && !erroBusca && resultados.length === 0 && (
           <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500">
             <Package className="w-12 h-12 text-slate-300 mx-auto mb-2" />
             Nenhum produto encontrado pra "<b>{busca}</b>"

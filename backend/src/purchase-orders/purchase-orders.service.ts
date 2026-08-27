@@ -1299,59 +1299,83 @@ export class PurchaseOrdersService {
   }
 
   /**
-   * Busca produtos no Wincred por REF, DESCRICAOCOMPLETA ou DESCRICAOPDV (LIKE). Limit 100.
-   * Colunas reais da tabela `produtos` no Wincred:
-   *   REF, DESCRICAOCOMPLETA, DESCRICAOPDV, VENDAUN, COR, TAMANHO, CODIGO, MARCA
+   * Busca produtos pra reposicao NO POSTGRES DO FLOW.
+   *
+   * Le as DUAS tabelas de catalogo e mescla por codigo (nativa vence):
+   * `product` (curada no Flow) e `wincred_produtos` (espelho). Consultar so
+   * uma escondia metade da familia quando a outra estava parcial — pegadinha
+   * do incidente BMM-100 (03/08).
+   *
+   * ⚠ Antes esta busca ia DIRETO no MySQL do Giga e o `catch` devolvia lista
+   * VAZIA. Com a KingHost recusando o IP do Railway ("Access denied for user
+   * 'gigasistemas21'@..."), a tela dizia "Nenhum produto encontrado pra
+   * BMM-100" — 115 SKUs que estavam aqui no Postgres o tempo todo (27/08).
+   * Por isso o erro agora SOBE: vazio e quebrado nao podem ter a mesma cara.
+   *
+   * Termo casa por: REF (LIKE), REF sem hifen/espaco, descricao completa/PDV,
+   * CODIGO exato e — com 2+ palavras — TODAS as palavras na descricao.
+   * `vendaUn` ja esta em REAIS: nao dividir por 100.
    */
   async reposicaoBuscar(q: string) {
     const termo = (q || '').trim();
     if (termo.length < 2) return [];
-    try {
-      const pool = (this.erp as any).pool;
-      if (!pool) return [];
-      const termoUp = termo.toUpperCase();
-      const normalizado = termoUp.replace(/[\s\-]/g, '');
-      const likeOrig = `%${termoUp}%`;
-      const likeNorm = `%${normalizado}%`;
-      // Tolerante a qualquer separador: '%V%L%M%2%2%2%'
-      const tolerante = '%' + normalizado.split('').join('%') + '%';
 
-      const [rows] = await pool.query(
-        `SELECT CODIGO AS codigo,
-                REF AS referencia,
-                COR AS cor,
-                TAMANHO AS tamanho,
-                VENDAUN AS preco,
-                DESCRICAOCOMPLETA AS descricao,
-                MARCA AS marca
-           FROM produtos
-          WHERE REF LIKE ?
-             OR DESCRICAOCOMPLETA LIKE ?
-             OR DESCRICAOPDV LIKE ?
-             OR CODIGO = ?
-             OR REPLACE(REPLACE(REF, '-', ''), ' ', '') LIKE ?
-             OR REPLACE(REPLACE(DESCRICAOCOMPLETA, '-', ''), ' ', '') LIKE ?
-             OR REF LIKE ?
-          ORDER BY REF, COR, TAMANHO
-          LIMIT 100`,
-        [likeOrig, likeOrig, likeOrig, termo, likeNorm, likeNorm, tolerante],
-      );
-      const list = rows as any[];
-      this.logger.log(`reposicaoBuscar "${termo}" → ${list.length} resultados`);
+    const termoUp = termo.toUpperCase();
+    const normalizado = termoUp.replace(/[\s-]/g, '');
+    const palavras = termoUp.split(/\s+/).filter((w) => w.length >= 2);
+    // So faz sentido exigir "todas as palavras" quando ha mais de uma.
+    const todasPalavras = palavras.length >= 2 ? palavras.map((w) => `%${w}%`) : null;
 
-      return list.map((r) => ({
-        codigo: String(r.codigo || '').trim(),
-        ref: String(r.referencia || '').trim(),
-        cor: String(r.cor || '').trim(),
-        tamanho: String(r.tamanho || '').trim(),
-        preco: Number(r.preco || 0),
-        descricao: String(r.descricao || '').trim(),
-        marca: r.marca ? String(r.marca).trim() : null,
-      }));
-    } catch (e: any) {
-      this.logger.error(`reposicaoBuscar falhou: ${e?.message}`);
-      return [];
-    }
+    const cond = (a: string) => `(
+           upper(${a}.ref) LIKE $1
+        OR replace(replace(upper(${a}.ref), '-', ''), ' ', '') LIKE $2
+        OR upper(${a}."descricaoCompleta") LIKE $1
+        OR upper(${a}."descricaoPdv") LIKE $1
+        OR ${a}.codigo = $3
+        OR ($4::text[] IS NOT NULL AND upper(${a}."descricaoCompleta") LIKE ALL ($4::text[]))
+      )`;
+
+    const sql = `
+      WITH base AS (
+        SELECT p.codigo, p.ref, p.cor, p.tamanho, p."vendaUn" AS preco,
+               COALESCE(p."descricaoCompleta", p."descricaoPdv") AS descricao,
+               p.marca, 0 AS prio
+          FROM product p
+         WHERE p.ativo = true AND ${cond('p')}
+        UNION ALL
+        SELECT w.codigo, w.ref, w.cor, w.tamanho, w."vendaUn",
+               COALESCE(w."descricaoCompleta", w."descricaoPdv"), w.marca, 1
+          FROM wincred_produtos w
+         WHERE ${cond('w')}
+      ), dedup AS (
+        SELECT DISTINCT ON (codigo)
+               codigo, ref, cor, tamanho, preco, descricao, marca, prio
+          FROM base
+         ORDER BY codigo, prio
+      )
+      SELECT codigo, ref, cor, tamanho, preco, descricao, marca
+        FROM dedup
+       ORDER BY ref, cor, tamanho
+       LIMIT 300`;
+
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      sql,
+      `%${termoUp}%`,
+      `%${normalizado}%`,
+      termo,
+      todasPalavras,
+    );
+    this.logger.log(`reposicaoBuscar "${termo}" → ${rows.length} resultados (Postgres)`);
+
+    return rows.map((r) => ({
+      codigo: String(r.codigo || '').trim(),
+      ref: String(r.ref || '').trim(),
+      cor: String(r.cor || '').trim(),
+      tamanho: String(r.tamanho || '').trim(),
+      preco: Number(r.preco || 0),
+      descricao: String(r.descricao || '').trim(),
+      marca: r.marca ? String(r.marca).trim() : null,
+    }));
   }
 
   /**
