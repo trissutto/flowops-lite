@@ -64,3 +64,29 @@ export const MOTIVO_REPLICA_DESLIGADA =
 export function escritaGigaBloqueada(isWriteEnabled: boolean): boolean {
   return replicaGigaLigada() && !isWriteEnabled;
 }
+
+/**
+ * PULL DO GIGA — DESLIGADO.
+ *
+ * A outra metade do problema. Desligar a RÉPLICA (acima) sem desligar o PULL
+ * abre um buraco pior que o original: os crons que copiam Giga→Flow fazem
+ * `deleteMany` + recarga, e o que eles trazem é um Giga que NÃO recebe mais as
+ * baixas, as vendas e os movimentos do Flow.
+ *
+ * O caso concreto que forçou esta trava (27/08, medido): o cron
+ * `crediario-nativo-sync` roda às **04:10**, apaga `crediario_parcelas` onde
+ * `flowIsSource=false` e recarrega da `movimento` do Giga. Cliente que pagou
+ * hoje no Flow voltaria a aparecer DEVENDO amanhã — e a loja cobraria de novo.
+ * Mesmo desenho do incidente em que o Giga carimbava o saldo de estoque por
+ * cima do Flow, agora valendo dinheiro de crediário.
+ *
+ * E não adianta apostar que "o Giga está fora, então o cron não roda": o acesso
+ * é INTERMITENTE. Em 27/08, no meio de dois dias de `Access denied`, houve um
+ * sync bem-sucedido às 05:20.
+ *
+ * Religar (só com a réplica religada junto, senão volta o buraco):
+ * `ERP_PULL_GIGA=1`.
+ */
+export function pullGigaLigado(): boolean {
+  return String(process.env.ERP_PULL_GIGA ?? '').trim() === '1';
+}

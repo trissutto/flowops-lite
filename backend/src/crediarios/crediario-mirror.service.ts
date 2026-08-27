@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { pullGigaLigado } from '../common/replica-giga';
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from './crediarios.service';
 import { sqlParcelaAberta } from '../common/crediario-pago';
@@ -88,6 +89,9 @@ export class CrediarioMirrorService {
   // ── SYNC: PARCELAS ABERTAS ───────────────────────────────────────────────
 
   async syncAbertas(): Promise<{ processed: number; durationMs: number }> {
+    // Com o pull do Giga desligado (o normal desde 27/08) o espelho passa a
+    // ser uma cópia da tabela NATIVA, não do Giga. Ver espelharDaNativa().
+    if (!pullGigaLigado()) return this.espelharDaNativa();
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
     if (!pool) throw new Error('MySQL pool nao inicializado');
@@ -189,6 +193,14 @@ export class CrediarioMirrorService {
   // ── SYNC: CLIENTES SLIM ──────────────────────────────────────────────────
 
   async syncClientes(): Promise<{ processed: number; durationMs: number }> {
+    // Nome/telefone do cliente de crediário ainda só existem no Giga. Com o
+    // pull desligado o espelho CONGELA no último sync — cliente novo entra
+    // sem telefone na tela de recebimentos. É pendência conhecida: a fonte
+    // definitiva é a base de clientes do Flow, não este espelho.
+    if (!pullGigaLigado()) {
+      this.logger.log('[clientes] sync PULADO — pull do Giga desligado (espelho congelado)');
+      return { processed: 0, durationMs: 0 };
+    }
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
     if (!pool) throw new Error('MySQL pool nao inicializado');
@@ -237,6 +249,78 @@ export class CrediarioMirrorService {
     }, { timeout: 120_000 });
 
     this.logger.log(`[clientes] OK — ${data.length} em ${Date.now() - t0}ms`);
+    return { processed: data.length, durationMs: Date.now() - t0 };
+  }
+
+  /**
+   * ESPELHO DE ABERTAS A PARTIR DA TABELA NATIVA — sem Giga.
+   *
+   * `wincred_movimento_aberto` nasceu como cópia da `movimento` do Giga, e
+   * dez pontos do crediário leem dela ("presente = em aberto AGORA", com
+   * write-through na baixa). Em vez de reescrever esses dez leitores, o
+   * espelho passa a ser uma cópia de `crediario_parcelas` — a mesma tabela
+   * que a ficha da cliente lê e que já recebe baixa e estorno na hora.
+   *
+   * Medido em 27/08 antes de trocar a fonte: das 43.740 linhas do espelho,
+   * ZERO faltavam na nativa; a nativa tinha 43.746 abertas (as 6 a mais são
+   * parcelas nascidas no Flow, que o Giga nunca teve) e estava MAIS FRESCA
+   * que o espelho (21:01 contra 05:20). Nome e observação batem em 100% das
+   * linhas. Trocar a fonte só melhora.
+   *
+   * Única diferença: 559 parcelas (R$ 38.723,52) que o Giga não atribuía a
+   * loja nenhuma vêm como `00` (o default da nativa) onde o espelho tinha
+   * string vazia. As duas formas são "sem loja" e nenhum filtro da tela pede
+   * loja 00, então a lista não muda.
+   */
+  private async espelharDaNativa(): Promise<{ processed: number; durationMs: number }> {
+    const t0 = Date.now();
+    const abertas: any[] = await (this.prisma as any).crediarioParcela.findMany({
+      where: { pago: false, cancelado: false },
+      select: {
+        registro: true, controle: true, numeroCompra: true, loja: true,
+        codCliente: true, nomeCliente: true, parcela: true, totalParcelas: true,
+        vencimento: true, valorParcela: true, obs: true,
+      },
+    });
+
+    const data = abertas.map((r) => ({
+      registro: String(r.registro).trim(),
+      controle: r.controle != null ? String(r.controle).trim() : null,
+      numeroCompra: r.numeroCompra != null ? String(r.numeroCompra).trim() : null,
+      loja: r.loja != null ? String(r.loja).trim() : null,
+      codCliente: r.codCliente != null ? String(r.codCliente).trim() : null,
+      nome: r.nomeCliente != null ? String(r.nomeCliente).trim() : null,
+      parcela: r.parcela != null ? Number(r.parcela) : null,
+      totalParcelas: r.totalParcelas != null ? Number(r.totalParcelas) : null,
+      vencimento: r.vencimento ?? null,
+      valorParcela: r.valorParcela ?? null,
+      obs: r.obs != null ? String(r.obs).trim().slice(0, 300) || null : null,
+    }));
+
+    // Mesma guarda do caminho antigo: leitura vazia não substitui espelho
+    // cheio. A nativa nunca está vazia de verdade (711 mil linhas).
+    if (!data.length) {
+      const tinha = await (this.prisma as any).wincredMovimentoAberto.count();
+      if (tinha > 0) {
+        throw new Error('nativa devolveu 0 parcelas abertas — espelho preservado');
+      }
+      return { processed: 0, durationMs: Date.now() - t0 };
+    }
+
+    // Replace atômico — a tela nunca vê o espelho pela metade.
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.wincredMovimentoAberto.deleteMany({});
+      for (let i = 0; i < data.length; i += 1000) {
+        await tx.wincredMovimentoAberto.createMany({
+          data: data.slice(i, i + 1000),
+          skipDuplicates: true,
+        });
+      }
+    }, { timeout: 60_000 });
+
+    this.logger.log(
+      `[abertas] OK — ${data.length} parcelas da tabela nativa (sem Giga) em ${Date.now() - t0}ms`,
+    );
     return { processed: data.length, durationMs: Date.now() - t0 };
   }
 

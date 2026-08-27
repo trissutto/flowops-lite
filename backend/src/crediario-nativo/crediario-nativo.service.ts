@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { pullGigaLigado } from '../common/replica-giga';
 import { ErpService } from '../erp/erp.service';
 import { sqlParcelaAberta } from '../common/crediario-pago';
 
@@ -48,6 +49,14 @@ export class CrediarioNativoService {
   @Cron('10 4 * * *', { name: 'crediario-nativo-sync' })
   async cronDiario(): Promise<void> {
     if (process.env.WINCRED_MIRROR_CRON_ENABLED !== '1') return;
+    // 🔴 O PULL DO GIGA MATA BAIXA (27/08). Este cron apaga as parcelas com
+    // flowIsSource=false e recarrega da `movimento` — de um Giga que não
+    // recebe mais a réplica das baixas do Flow. Cliente que pagou hoje
+    // voltaria devendo amanhã. Ver common/replica-giga.ts.
+    if (!pullGigaLigado()) {
+      this.logger.log('[crediario-nativo] sync diário PULADO — pull do Giga desligado (o Flow é a fonte)');
+      return;
+    }
     try {
       const r = await this.syncAll();
       this.logger.log(`[crediario-nativo] sync diário: ${JSON.stringify(r)}`);
