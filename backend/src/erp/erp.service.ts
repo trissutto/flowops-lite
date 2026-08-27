@@ -5,6 +5,7 @@ import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
 import { PrismaService } from '../prisma/prisma.service';
 import { SombraService } from './sombra.service';
+import { replicaGigaLigada } from '../common/replica-giga';
 
 /**
  * Início da faixa de REGISTRO/CONTROLE reservada às parcelas de crediário
@@ -354,6 +355,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     deferred = false,
     db?: any,
   ): Promise<void> {
+    // Réplica pro Giga desligada (27/08) — o delta já está no Flow, que é a
+    // fonte. Enfileirar aqui só criaria passivo pro cron descartar depois.
+    if (!replicaGigaLigada()) return;
     // Com `db` (transação do caller) o erro sobe: perder a réplica do Giga em
     // silêncio quando o próprio delta está commitando junto é o tipo de furo
     // que só aparece semanas depois, na conferência.
@@ -1636,7 +1640,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     attempts?: number;
     gigaEnfileirado?: boolean;
   }> {
-    if (!this.isWriteEnabled || !this.pool || !items.length) {
+    if (!items.length) return { success: true, applied: [] };
+    // O FLOW É A FONTE: o delta aplica aqui SEMPRE, e antes de qualquer flag
+    // do Giga. Com a réplica desligada (o normal desde 27/08) acaba aqui —
+    // sem MySQL, sem fila. Ver common/replica-giga.ts.
+    if (!replicaGigaLigada()) {
+      const soFlow = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
+      return { success: true, applied: soFlow };
+    }
+    if (!this.isWriteEnabled || !this.pool) {
       return this.decreaseStockGigaOnly(items, opts); // shadow/sem pool: comportamento legado
     }
     const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
@@ -1899,7 +1911,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     attempts?: number;
     gigaEnfileirado?: boolean;
   }> {
-    if (!this.isWriteEnabled || !this.pool || !items.length) {
+    if (!items.length) return { success: true, applied: [] };
+    // Simétrico à baixa: Flow primeiro e sempre; Giga só se a réplica estiver
+    // ligada (não está desde 27/08). Ver common/replica-giga.ts.
+    if (!replicaGigaLigada()) {
+      const soFlow = await this.mirrorStockApplyDelta(items, +1, true);
+      return { success: true, applied: soFlow };
+    }
+    if (!this.isWriteEnabled || !this.pool) {
       return this.increaseStockGigaOnly(items);
     }
     const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
@@ -1945,7 +1964,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
     const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
     await this.enqueueStockDelta('inc', items, undefined, undefined, true);
-    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+    return { success: true, applied: flowApplied, gigaEnfileirado: replicaGigaLigada() };
   }
 
   /**
@@ -1972,7 +1991,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
     const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
     await this.enqueueStockDelta('dec', items, opts, undefined, true);
-    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+    return { success: true, applied: flowApplied, gigaEnfileirado: replicaGigaLigada() };
   }
 
   private async increaseStockGigaOnly(

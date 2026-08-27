@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { escritaGigaBloqueada } from '../common/replica-giga';
 import { startOfDayBR, startOfNextDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd } from '../lib/date-br';
 import { ErpService } from '../erp/erp.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
@@ -4323,7 +4324,11 @@ export class PdvService {
       });
       if (fresh?.stockDecreasedAt) return { ok: true };
 
-      if (!this.erp.isWriteEnabled) {
+      // A baixa é NO FLOW (decreaseStock é flow-primeiro) — ERP_WRITE_ENABLED
+      // governa a escrita no Giga. Com a réplica desligada a flag não segura
+      // mais nada: segurar aqui fazia a loja vender sem baixar peça em lugar
+      // nenhum. Ver common/replica-giga.ts.
+      if (escritaGigaBloqueada(this.erp.isWriteEnabled)) {
         this.logger.warn(
           `[pdv→estoque] Venda ${sale.id}: ERP_WRITE_ENABLED=false — estoque NAO baixado no Wincred.`,
         );
@@ -5048,7 +5053,8 @@ export class PdvService {
 
         if (dryRun) continue;
 
-        if (!this.erp.isWriteEnabled) {
+        // Mesma régua do erpStepBaixarEstoque: a baixa é do Flow.
+        if (escritaGigaBloqueada(this.erp.isWriteEnabled)) {
           falhas.push({
             saleId: sale.id,
             storeCode: sale.storeCode,
@@ -5208,7 +5214,8 @@ export class PdvService {
       return { mode: 'dry-run', ...base, aplicados: 0, falhas: [] };
     }
 
-    if (!this.erp.isWriteEnabled) {
+    // Mesma régua do erpStepBaixarEstoque: a baixa é do Flow.
+    if (escritaGigaBloqueada(this.erp.isWriteEnabled)) {
       return {
         mode: 'executed', ...base, aplicados: 0,
         falhas: items.map((it) => ({

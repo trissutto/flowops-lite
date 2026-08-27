@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { escritaGigaBloqueada } from '../common/replica-giga';
 import { MarcadosMirrorService } from './marcados-mirror.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 
@@ -253,7 +254,8 @@ export class MarcadosService {
     // 4. Baixa estoque (igual venda — peças saem do estoque; isto é o outbox
     // GERAL de inventário, não o mecanismo de marcado — fora do escopo desta
     // regra, segue como já era).
-    if (this.erp.isWriteEnabled) {
+    // A peça marcada sai do estoque do FLOW — não depende da escrita no Giga.
+    if (!escritaGigaBloqueada(this.erp.isWriteEnabled)) {
       const stockItems = sale.items.map((it: any) => ({
         sku: String(it.sku || it.ref || '').trim(),
         qty: Number(it.qty) || 1,

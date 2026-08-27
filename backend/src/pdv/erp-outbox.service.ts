@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { replicaGigaLigada, MOTIVO_REPLICA_DESLIGADA } from '../common/replica-giga';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
@@ -93,6 +94,20 @@ export class ErpOutboxService {
 
   /** true = job concluído; false = re-agendado (ou failed). */
   private async processJob(job: any): Promise<boolean> {
+    // 🔴 RÉPLICA PRO GIGA DESLIGADA (27/08, ordem do dono: "já saímos dele faz
+    // um mês"). Todo kind daqui é CÓPIA de algo que já vale no Flow, com uma
+    // exceção: o job de `venda` também carrega a baixa de estoque, que é do
+    // Flow — esse é tratado mais abaixo, não aqui. O resto é descartado com o
+    // motivo gravado (status done, NÃO é DELETE: a linha fica pra auditoria).
+    // Ver common/replica-giga.ts.
+    if (!replicaGigaLigada() && job.kind !== 'venda') {
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: MOTIVO_REPLICA_DESLIGADA },
+      });
+      this.logger.log(`[outbox] ${job.kind} ${job.id}: descartado — réplica pro Giga desligada`);
+      return true;
+    }
     if (job.kind === 'produto_cadastro') return this.processProdutoCadastro(job);
     if (job.kind === 'produto_exclusao') return this.processProdutoExclusao(job);
     if (job.kind === 'estoque_delta') return this.processEstoqueDelta(job);
@@ -152,6 +167,31 @@ export class ErpOutboxService {
     let stockDoneAt: Date | null = job.stockDoneAt ? new Date(job.stockDoneAt) : null;
     const erros: string[] = [];
 
+    // ⚠ Réplica desligada NÃO significa "pular o job de venda": dentro dele há
+    // um passo que é do FLOW e não do Giga — a baixa de estoque
+    // (`erpStepBaixarEstoque` → `decreaseStock`, flow-primeiro). Descartar o
+    // job inteiro deixaria a loja vendendo sem baixar peça. Então a baixa roda;
+    // a gravação na caixa do Giga e o fechamento de marcados lá, não.
+    if (!replicaGigaLigada()) {
+      if (!stockDoneAt) {
+        const r = await this.pdv.erpStepBaixarEstoque(sale);
+        if (!r.ok) {
+          return this.reagendarOuFalhar(job, `estoque: ${r.error || 'falha'}`, caixaDoneAt, stockDoneAt);
+        }
+        stockDoneAt = new Date();
+      }
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: {
+          status: 'done',
+          stockDoneAt,
+          doneAt: new Date(),
+          lastError: MOTIVO_REPLICA_DESLIGADA,
+        },
+      });
+      return true;
+    }
+
     // ── Passo 1: caixa (NUNCA re-executa depois de done — duplicaria a venda) ──
     if (!caixaDoneAt) {
       const r = await this.pdv.erpStepGravarCaixa(sale, payments, finalMethod);
@@ -203,6 +243,21 @@ export class ErpOutboxService {
     }
 
     // Falhou em algum passo → re-agenda com backoff (preservando progresso).
+    return this.reagendarOuFalhar(job, stepError as string, caixaDoneAt, stockDoneAt);
+  }
+
+  /**
+   * Re-agenda o job de venda com backoff, preservando o progresso dos passos
+   * (`caixaDoneAt`/`stockDoneAt` são a idempotência: retry nunca duplica a
+   * venda na caixa nem a baixa de estoque). No teto de tentativas vira
+   * `failed` e espera ação manual.
+   */
+  private async reagendarOuFalhar(
+    job: any,
+    stepError: string,
+    caixaDoneAt: Date | null,
+    stockDoneAt: Date | null,
+  ): Promise<boolean> {
     const attempts = (job.attempts || 0) + 1;
     if (attempts >= ErpOutboxService.MAX_ATTEMPTS) {
       await (this.prisma as any).erpOutbox.update({
