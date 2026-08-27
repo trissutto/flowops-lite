@@ -10,6 +10,7 @@ import DadosClienteModal from '@/components/DadosClienteModal';
 import { fmtTelefoneBr, telefoneProblema } from '@/lib/telefone-br';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
+import { Table, Th, Tr, Td } from '@/components/ui';
 import { ruaComNumero } from '@/lib/format-address';
 import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import TrackingTimeline from '@/components/TrackingTimeline';
@@ -2657,99 +2658,11 @@ export default function PedidoDetailPage() {
           </div>
         )}
 
-        {/* ── FAIXA "JUNTANDO PEÇAS" ─────────────────────────────────────
-            Pedido dividido com loja ÂNCORA: as caixas das feeders viajam pra
-            ela e o envio final só libera com o pedido completo. A faixa é o
-            raio-X — uma linha por caixa, do "separando" ao "chegou". */}
-        {juntada?.juntando && (
-          <div className="mb-4 rounded-lg border-2 border-violet-400 bg-violet-50 p-4">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="font-bold text-violet-900 text-base">
-                🧲 JUNTANDO PEÇAS na LOJA {juntada.ancoraStoreName || juntada.ancoraStoreCode}
-                <span className="ml-2 text-sm font-semibold text-violet-700">
-                  — {juntada.recebidas ?? 0} de {juntada.totalCaixas ?? 0} caixa(s) chegaram
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={desfazerJuntada}
-                disabled={desfazendoJuntada}
-                className="px-3 py-1.5 rounded text-xs font-semibold bg-white border border-violet-300 text-violet-800 hover:bg-violet-100 disabled:opacity-60"
-                title="Cada loja volta a enviar direto pra cliente (só dá antes de alguma caixa nascer)"
-              >
-                {desfazendoJuntada ? 'Desfazendo…' : 'Desfazer juntada'}
-              </button>
-            </div>
-            <ul className="mt-2 space-y-1 text-sm text-violet-900">
-              {(juntada.caixas ?? []).map((c) => (
-                <li key={c.pickOrderId} className="flex items-center gap-2 flex-wrap">
-                  <span className="font-semibold">{c.storeName || c.storeCode}</span>
-                  <span className="text-violet-400">→</span>
-                  {!c.caixa ? (
-                    <span>⏳ separando</span>
-                  ) : c.caixa.status === 'received' ? (
-                    <span>✅ chegou</span>
-                  ) : (
-                    <span>
-                      📦 caixa <span className="font-mono font-semibold">{c.caixa.code}</span> em trânsito
-                      {c.caixa.transporte === 'proprio' && <> · 🚚 carro da rede</>}
-                      {c.caixa.trackingCode && (
-                        <span className="font-mono ml-1 text-violet-700">{c.caixa.trackingCode}</span>
-                      )}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-            <div className={`mt-2 text-xs font-semibold ${juntada.completa ? 'text-emerald-700' : 'text-violet-700'}`}>
-              {juntada.completa
-                ? '✅ Pedido completo na âncora — o envio dela está liberado.'
-                : 'O envio final libera quando todas as caixas chegarem.'}
-            </div>
-          </div>
-        )}
-
-        {/* Header de resumo — aparece SEMPRE que já houver pick-order criado, mesmo
-             que o user não tenha clicado em "Gerar separação" nessa aba (ex: chegou
-             via bulk WhatsApp). Mostra em qual loja o pedido ficou alocado. */}
-        {liveStatus.length > 0 && !separation && (() => {
-          // O banner verde mentia (26/08 — flagra do ON-000106): dizia
-          // "Separação já criada, 1 loja responsável" com peça SEM DONO no
-          // pedido. Verde só quando TODAS as peças têm dono; com vermelha no
-          // raio-x, o banner vira âmbar e diz o que falta.
-          const paradas = raiox?.pecas.filter((p) => p.cor_semaforo === 'vermelho').length ?? 0;
-          if (paradas > 0) {
-            return (
-              <div className="bg-amber-50 border border-amber-300 rounded p-3 mb-3 text-sm">
-                <div className="font-semibold text-amber-900">
-                  ⚠ Separação INCOMPLETA — {paradas} peça{paradas === 1 ? '' : 's'} sem dono
-                </div>
-                <div className="text-amber-800 text-xs mt-0.5">
-                  {liveStatus.map((r) => `${r.storeName} (${r.storeCode})`).join(' · ')} cobre{liveStatus.length === 1 ? '' : 'm'} só uma parte do pedido — veja
-                  <b> Onde está cada peça</b> abaixo e decida a{paradas === 1 ? '' : 's'} vermelha{paradas === 1 ? '' : 's'}.
-                </div>
-              </div>
-            );
-          }
-          return (
-            <div className="bg-emerald-50 border border-emerald-200 rounded p-3 mb-3 text-sm">
-              <div className="flex items-start gap-2">
-                <Check className="w-4 h-4 text-emerald-700 flex-shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-semibold text-emerald-900">
-                    Separação já criada — {liveStatus.length} loja{liveStatus.length === 1 ? '' : 's'} responsável{liveStatus.length === 1 ? '' : 'is'}
-                  </div>
-                  <div className="text-emerald-800 text-xs mt-0.5">
-                    {liveStatus.map((r) => `${r.storeName} (${r.storeCode})`).join(' · ')}
-                  </div>
-                  <div className="text-emerald-700 text-xs mt-1">
-                    Veja status em tempo real abaixo. Clica em <b>Recalcular separação</b> só se quiser reatribuir (ex: loja original sem estoque).
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {/* A faixa roxa "JUNTANDO PEÇAS" e o banner verde "Separação já
+           criada" viraram o cabeçalho do TRILHO, mais abaixo: as duas diziam
+           o que o trilho mostra numa linha ("2 lojas · 0 de 1 caixa chegou").
+           A checagem de peça sem dono que o banner âmbar fazia virou o
+           contador vermelho do trilho — o mesmo flagra do ON-000106. */}
 
         {sepError && (
           <div className="bg-red-50 text-red-700 p-3 rounded text-sm mb-3">{sepError}</div>
@@ -3041,510 +2954,555 @@ export default function PedidoDetailPage() {
           </div>
         )}
 
-        {/* ── RAIO-X: onde está CADA peça agora (26/08) ─────────────────────
-            A resposta que faltou no ON-000106: Campinas levou a culpa por não
-            enviar o que JÁ estava em rota porque nenhuma tela mostrava o
-            pedido peça por peça. Vermelho = parado/sem dono, nunca some. */}
-        {raiox && raiox.pecas.length > 0 && (
-          <div className="bg-white border border-slate-300 rounded p-3 mb-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
-              🧭 Onde está cada peça
-              {raiox.pecas.some((p) => p.cor_semaforo === 'vermelho') && (
-                <span className="text-[11px] font-bold text-white bg-red-600 rounded px-1.5 py-0.5">
-                  {raiox.pecas.filter((p) => p.cor_semaforo === 'vermelho').length} parada(s)
-                </span>
-              )}
-            </div>
-            {raiox.alertas.map((a, i) => (
-              <div key={i} className="mb-2 text-xs font-semibold text-red-800 bg-red-50 border border-red-300 rounded px-2 py-1.5">
-                ⚠ {a}
-              </div>
-            ))}
-            <div className="space-y-1">
-              {raiox.pecas.map((p) => {
-                const cores = {
-                  vermelho: 'bg-red-50 border-red-300 text-red-900',
-                  amarelo: 'bg-amber-50 border-amber-300 text-amber-900',
-                  verde: 'bg-emerald-50 border-emerald-300 text-emerald-900',
-                } as const;
-                const bolinha = { vermelho: '🔴', amarelo: '🟡', verde: '🟢' } as const;
-                // Peça vermelha SEM decisão ganha os dois botões da saída
-                // (26/08 — "e a peça que faltou? como faço?"): outra loja
-                // envia (2º frete) ou cancela e devolve o valor.
-                const decidivel = p.cor_semaforo === 'vermelho' && ['sem_dono', 'reportada'].includes(p.estado);
-                return (
-                  <div
-                    key={p.orderItemId}
-                    className={`flex items-start gap-2 text-xs border rounded px-2 py-1.5 ${cores[p.cor_semaforo]}`}
-                  >
-                    <span className="shrink-0">{bolinha[p.cor_semaforo]}</span>
-                    <span className="font-bold shrink-0">
-                      {[p.ref, p.cor, p.tamanho].filter(Boolean).join(' ') || p.sku}
-                      {p.quantity > 1 ? ` ×${p.quantity}` : ''}
-                    </span>
-                    <span className="flex-1">{p.onde}</span>
-                    {decidivel && (
-                      <span className="shrink-0 flex gap-1">
-                        <button
-                          onClick={() =>
-                            abrirMoverPeca(
-                              { id: p.orderItemId, sku: p.sku, ref: p.ref, cor: p.cor, tamanho: p.tamanho },
-                              { storeCode: p.storeCode, storeName: p.storeName, total: 1 },
-                            )
-                          }
-                          className="px-1.5 py-0.5 rounded border border-slate-400 bg-white hover:bg-slate-100 text-slate-800 font-bold"
-                          title="Outra loja envia esta peça pra cliente (2º frete)"
-                        >
-                          📦 Outra loja envia
-                        </button>
-                        <button
-                          onClick={() => { setCancelarPeca(p); setCancelarMotivo(''); setCancelarErro(null); }}
-                          className="px-1.5 py-0.5 rounded border border-red-400 bg-white hover:bg-red-100 text-red-700 font-bold"
-                          title="Cancela SÓ esta peça e devolve o valor dela — o pedido segue com as outras"
-                        >
-                          ✂ Cancelar e devolver
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {/* ── MODAL: cancelar a peça e devolver o valor ── */}
-            {cancelarPeca && (
-              <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-                <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-4">
-                  <div className="font-bold text-slate-900 mb-1">✂ Cancelar peça e devolver o valor</div>
-                  <div className="text-sm text-slate-700 mb-2">
-                    <b>{[cancelarPeca.ref, cancelarPeca.cor, cancelarPeca.tamanho].filter(Boolean).join(' ') || cancelarPeca.sku}</b>
-                    {cancelarPeca.quantity > 1 ? ` ×${cancelarPeca.quantity}` : ''} — devolver{' '}
-                    <b className="text-red-700">
-                      R$ {(((cancelarPeca.unitPrice ?? 0) * cancelarPeca.quantity) || 0).toFixed(2)}
-                    </b>{' '}
-                    à cliente. O pedido segue com as outras peças.
-                  </div>
-                  <label className="block text-xs font-semibold text-red-800 mb-1">Motivo (obrigatório) *</label>
-                  <textarea
-                    value={cancelarMotivo}
-                    onChange={(e) => setCancelarMotivo(e.target.value)}
-                    rows={2}
-                    placeholder="Ex: ruptura — nenhuma loja da rede tem a peça; cliente será avisada e o PIX da peça devolvido"
-                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm mb-2"
-                  />
-                  {cancelarErro && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-2">{cancelarErro}</div>}
-                  <div className="flex justify-end gap-2">
-                    <button
-                      onClick={() => setCancelarPeca(null)}
-                      disabled={cancelarBusy}
-                      className="px-3 py-1.5 rounded border border-slate-300 text-sm font-bold text-slate-700 hover:bg-slate-100"
-                    >
-                      Voltar
-                    </button>
-                    <button
-                      onClick={confirmarCancelarPeca}
-                      disabled={cancelarBusy || cancelarMotivo.trim().length < 5}
-                      className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-bold"
-                    >
-                      {cancelarBusy ? 'Cancelando…' : 'Cancelar peça e devolver'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-            {/* ── LINHA DO TEMPO: tudo que aconteceu, com QUEM ── */}
-            <details className="mt-3">
-              <summary className="text-xs font-semibold text-slate-700 cursor-pointer select-none">
-                📜 Linha do tempo completa ({raiox.eventos.length} registro{raiox.eventos.length === 1 ? '' : 's'})
-              </summary>
-              <div className="mt-2 max-h-96 overflow-y-auto space-y-1 pr-1">
-                {raiox.eventos.map((ev, i) => {
-                  const badge: Record<string, string> = {
-                    pedido: 'bg-slate-200 text-slate-700',
-                    bipe: 'bg-blue-100 text-blue-800',
-                    reporte: 'bg-red-100 text-red-800',
-                    caixa: 'bg-violet-100 text-violet-800',
-                    rastreio: 'bg-emerald-100 text-emerald-800',
-                  };
-                  const quando = new Date(ev.em).toLocaleString('pt-BR', {
-                    timeZone: 'America/Sao_Paulo',
-                    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-                  });
-                  return (
-                    <div key={i} className="flex items-start gap-2 text-[11px] leading-snug border-b border-slate-100 pb-1">
-                      <span className="text-slate-500 shrink-0 font-mono">{quando}</span>
-                      <span className={`shrink-0 rounded px-1 font-bold ${badge[ev.origem] ?? 'bg-slate-100 text-slate-600'}`}>
-                        {ev.origem}
-                      </span>
-                      <span className="flex-1 text-slate-800">
-                        <b>{ev.titulo}</b>
-                        {ev.detalhe ? <> — {ev.detalhe}</> : null}
-                        <span className={ev.quem ? 'text-slate-600' : 'text-slate-400 italic'}>
-                          {' '}· {ev.quem ?? (ev.tipoAtor === 'sistema' ? 'sistema' : 'sem autor (registro antigo)')}
-                        </span>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
-          </div>
-        )}
+        {/* ═══ TRILHO DA SEPARAÇÃO ═══════════════════════════════════════
+            Isto aqui era QUATRO caixas dizendo a mesma coisa em quatro cores:
+            a faixa roxa "JUNTANDO PEÇAS", a verde "Separação já criada", o
+            "Onde está cada peça" e o painel "Status ao vivo das lojas". No
+            LP-000289 as quatro juntas diziam uma frase só — "Vinhedo separa,
+            manda pra Piracicaba, Piracicaba posta; nenhuma começou".
 
-        {liveStatus.length > 0 && (
-          <div className="bg-slate-50 border border-slate-200 rounded p-3 mb-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
-              <Zap className="w-4 h-4 text-emerald-500" />
-              Status ao vivo das lojas
-              <span className="text-xs text-slate-500 font-normal ml-auto">
-                atualiza automático
-              </span>
-            </div>
-            {/* Dica: troca manual de loja (só faz sentido enquanto alguma ainda
-                está em new/separating — depois que bipou não dá mais).
-                Sem card nenhum este painel inteiro não renderiza: o caminho
-                pra escolher loja na ruptura é o painel de ruptura acima. */}
-            {liveStatus.some((p) => ['new', 'separating'].includes(p.status)) && (
-              <div className="mb-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
-                <span className="text-amber-700">💡</span>
-                <span className="flex-1 min-w-[180px]">
-                  Quer trocar a loja que vai enviar/transferir? Use <b>↔ Trocar loja</b> no
-                  card (automático) ou <b>escolha manualmente</b> da lista de lojas.
-                </span>
-                <button
-                  onClick={() => openPickStoreModal()}
-                  disabled={sepLoading}
-                  className="text-xs px-2 py-1 bg-white border border-amber-400 text-amber-900 rounded hover:bg-amber-100 font-semibold disabled:opacity-60"
+            Agora é um trilho: quem tem a peça → quem junta e posta → a
+            cliente, na ordem em que acontece. Nada de ação se perdeu —
+            imprimir, remover, trocar loja, mover peça, desfazer juntada e a
+            linha do tempo continuam aqui dentro. */}
+        {liveStatus.length > 0 && (() => {
+          const destinoObrigatorio = destinoLogisticoObrigatorio(order);
+          const ehRetirada = !!order.pickup?.isPickup;
+          // Feeder = loja que manda caixa pra outra em vez de postar pra cliente.
+          const feeders = liveStatus.filter(
+            (r) => r.isTransfer && r.transferToStoreCode && !ehRetirada,
+          );
+          const finais = liveStatus.filter((r) => !feeders.includes(r));
+          const paradas = raiox?.pecas.filter((p) => p.cor_semaforo === 'vermelho').length ?? 0;
+          const algumEnviou = liveStatus.some((r) => r.status === 'shipped');
+          const metodo = order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
+          const envioLabel = metodo
+            ? classifyShipping(metodo, order.shipping?.state ?? order.billing?.state ?? null).label
+            : null;
+
+          /** Uma loja dentro de uma coluna do trilho. */
+          const cardLoja = (r: (typeof liveStatus)[number]) => {
+            const hasIssue = !!r.issueReason;
+            const tom = hasIssue
+              ? 'crit'
+              : r.status === 'shipped' || r.status === 'ready' || r.status === 'separated'
+                ? 'ok'
+                : 'warn';
+            const label = hasIssue
+              ? r.issueReasonLabel ?? 'Problema reportado'
+              : r.status === 'shipped' ? 'Enviado'
+              : r.status === 'ready' ? 'Pronto pra envio'
+              : r.status === 'separated' ? 'Separado (bipe completo)'
+              : r.status === 'separating' ? 'Separando agora'
+              : 'Aguardando iniciar';
+            const qtdNoCard = quantidadeDoCard(r);
+            const ehReceptor =
+              qtdNoCard === 0 && !!destinoObrigatorio && r.storeCode === destinoObrigatorio.code;
+            const ehAncora =
+              juntada?.juntando && !r.isTransfer && r.storeCode === juntada.ancoraStoreCode;
+            const flash = !!liveStatusFlash[r.id];
+            const st = printState[r.id] ?? 'idle';
+            const err = printError[r.id];
+            const canSwap = ['new', 'separating'].includes(r.status);
+
+            return (
+              <div
+                key={r.id}
+                className={`rounded-card border bg-surface p-3 transition-colors ${
+                  flash ? 'border-ok' : 'border-line'
+                }`}
+                style={{
+                  boxShadow: `inset 3px 0 0 var(--tom-${tom}, ${
+                    tom === 'crit' ? '#C4291A' : tom === 'ok' ? '#2E9E5B' : '#B4720F'
+                  })`,
+                }}
+              >
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[13.5px] font-bold tracking-tight">{r.storeName}</span>
+                  <span className="font-mono text-[11px] text-ink-faint">({r.storeCode})</span>
+                  {flash && <span className="text-[11px] font-semibold text-ok">atualizado agora</span>}
+                </div>
+
+                {/* PAPEL da loja no trilho — o que ela faz, em português. */}
+                <div className="mt-0.5 text-[11.5px] text-ink-soft">
+                  {ehAncora
+                    ? 'junta as caixas e envia o pedido completo'
+                    : r.isTransfer && r.transferToStoreCode && !ehRetirada
+                      ? `manda pra ${
+                          juntada?.ancoraStoreName ||
+                          liveStatus.find((x) => x.storeCode === r.transferToStoreCode)?.storeName ||
+                          r.transferToStoreCode
+                        }`
+                      : ehReceptor
+                        ? `destino do ${destinoObrigatorio!.tipo === 'motoboy' ? 'motoboy' : 'pedido'} — aguardando peças`
+                        : ehRetirada
+                          ? 'entrega pra cliente na loja'
+                          : 'posta pra cliente'}
+                </div>
+
+                <div
+                  className={`mt-1.5 text-[12px] font-bold ${
+                    tom === 'crit' ? 'text-crit' : tom === 'ok' ? 'text-ok' : 'text-warn'
+                  }`}
+                  title={r.issueNote || undefined}
                 >
-                  🎯 Escolher loja manualmente
-                </button>
-              </div>
-            )}
-            {/* JUNTAR NUMA LOJA — só com 2+ cards ativos, pedido de ENTREGA
-                (retirada tem o próprio trilho de transferência) e sem juntada
-                em andamento. As feeders mandam caixa pra âncora e só ela
-                posta o pacote único pra cliente. */}
-            {/* ÂNCORA ÓRFÃ — a juntada aponta pra uma loja que saiu do pedido.
-                Acontece quando a retaguarda troca/remove o card da âncora: o
-                `transferToStoreCode` dos feeders não acompanha, e a caixa segue
-                viajando pra quem não separa nada (LP-000244, caixa
-                REM-2026-001480 indo pra Limeira depois de Limeira sair). Antes
-                a tela ficava MUDA e o botão de juntar sumia — dava pra ver o
-                problema e não dava pra consertar. */}
-            {(() => {
-              if (destinoLogisticoObrigatorio(order)) return null;
-              const cardsAtivos = liveStatus.filter((p) =>
-                ['new', 'separating', 'separated', 'ready'].includes(p.status),
-              );
-              const feeders = cardsAtivos.filter((p) => p.isTransfer && p.transferToStoreCode);
-              if (!feeders.length) return null;
-              const anc = String(feeders[0].transferToStoreCode);
-              const ancoraViva = cardsAtivos.some((p) => !p.isTransfer && p.storeCode === anc);
-              if (ancoraViva) return null;
-              return (
-                <div className="mb-2 text-xs bg-red-50 border border-red-300 text-red-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
-                  <span>🚨</span>
-                  <span className="flex-1 min-w-[200px]">
-                    A juntada aponta pra loja <b>{anc}</b>, que <b>não tem card</b> neste pedido — a
-                    caixa dos feeders está indo pra quem não separa nada. Escolha a loja final de
-                    novo, ou mande uma peça pra {anc}.
-                  </span>
-                  <button
-                    onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
-                    disabled={sepLoading || cardsAtivos.length < 2}
-                    className="text-xs px-2 py-1 bg-white border border-red-400 text-red-900 rounded hover:bg-red-100 font-semibold disabled:opacity-60"
-                  >
-                    🧲 Escolher a loja final de novo
-                  </button>
+                  {label}
+                  {hasIssue && r.issueNote ? ` — “${r.issueNote}”` : ''}
                 </div>
-              );
-            })()}
-            {(() => {
-              const cardsAtivos = liveStatus.filter((p) =>
-                ['new', 'separating', 'separated', 'ready'].includes(p.status),
-              );
-              const cardsComPecas = cardsAtivos.filter((p) => quantidadeDoCard(p) > 0);
-              const destino = destinoLogisticoObrigatorio(order);
-              // Blindagem: se o GET /juntada falhou (juntada=null) mas os
-              // cards já mostram feeder (isTransfer sem retirada), a juntada
-              // EXISTE — oferecer o botão de novo só geraria erro no modal.
-              const jaTemFeeder = cardsComPecas.some((p) => p.isTransfer && !destino);
-              if (destino || juntada?.juntando === true || jaTemFeeder) return null;
-              const totalPedido = (order.lineItems ?? []).reduce(
-                (s, item) => s + (Number(item.quantity) || 0),
-                0,
-              );
-              if (
-                cardsComPecas.length === 1 &&
-                quantidadeDoCard(cardsComPecas[0]) >= totalPedido &&
-                cardsAtivos.length > 1
-              ) {
-                const unica = cardsComPecas[0];
-                return (
-                  <div className="mb-2 text-xs bg-emerald-50 border border-emerald-300 text-emerald-900 rounded px-2 py-1.5 flex items-start gap-1.5">
-                    <span>✓</span>
-                    <span>
-                      <b>{unica.storeName || unica.storeCode}</b> possui as {quantidadeDoCard(unica)} peças.
-                      O envio deve sair diretamente desta loja; card vazio não entra como segundo frete.
-                    </span>
-                  </div>
-                );
-              }
-              if (cardsComPecas.length < 2) return null;
-              return (
-                <div className="mb-2 text-xs bg-violet-50 border border-violet-200 text-violet-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
-                  <span>🧲</span>
-                  <span className="flex-1 min-w-[180px]">
-                    Pedido dividido em {cardsComPecas.length} lojas = {cardsComPecas.length} fretes.
-                    Dá pra <b>juntar tudo numa loja</b> e mandar um pacote só pra cliente.
-                  </span>
-                  <button
-                    onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
-                    disabled={sepLoading}
-                    className="text-xs px-2 py-1 bg-white border border-violet-400 text-violet-900 rounded hover:bg-violet-100 font-semibold disabled:opacity-60"
-                  >
-                    🧲 Juntar numa loja
-                  </button>
-                </div>
-              );
-            })()}
-            <div className="space-y-2">
-              {liveStatus.map((r) => {
-                const qtdNoCard = quantidadeDoCard(r);
-                const destinoObrigatorio = destinoLogisticoObrigatorio(order);
-                const ehReceptor =
-                  qtdNoCard === 0 &&
-                  !!destinoObrigatorio &&
-                  r.storeCode === destinoObrigatorio.code;
-                const flash = !!liveStatusFlash[r.id];
-                const hasIssue = !!r.issueReason;
-                const badgeColor = hasIssue
-                  ? 'bg-red-600 text-white'
-                  : r.status === 'shipped' ? 'bg-emerald-600 text-white'
-                  : r.status === 'ready' || r.status === 'separated' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                  : r.status === 'separating' ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                  : 'bg-amber-100 text-amber-900 border border-amber-300';
-                // 'separated' = bipagem 100% — no feeder da juntada é o momento
-                // em que a caixa nasce; deixar cair no fallback "Aguardando
-                // iniciar" contradizia o "caixa em trânsito" da linha de baixo.
-                const label = hasIssue
-                  ? `⚠ ${r.issueReasonLabel ?? 'Problema reportado'}`
-                  : r.status === 'shipped' ? 'Enviado'
-                  : r.status === 'ready' ? 'Pronto pra envio'
-                  : r.status === 'separated' ? 'Separado (bipe completo)'
-                  : r.status === 'separating' ? 'Separando'
-                  : 'Aguardando iniciar';
-                const st = printState[r.id] ?? 'idle';
-                const err = printError[r.id];
-                return (
-                  <div
-                    key={r.id}
-                    className={`bg-white rounded border p-2 text-sm transition-colors ${
-                      flash ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <StoreIcon className="w-4 h-4 text-slate-500" />
-                      <span className="font-semibold">{r.storeName}</span>
-                      <span className="text-xs text-slate-500">({r.storeCode})</span>
-                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${badgeColor}`}>
-                        {label}
-                      </span>
-                      {ehReceptor && (
-                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-cyan-100 text-cyan-900 border border-cyan-300">
-                          DESTINO DO {destinoObrigatorio.tipo === 'motoboy' ? 'MOTOBOY' : 'PEDIDO'} · aguardando peças
+
+                {/* PEÇAS desta loja — com o "→ outra loja" por item, que move
+                    UMA peça sem arrastar o card inteiro (LP-000244). */}
+                {(r.items?.length ?? 0) > 0 && (
+                  <ul className="mt-2 space-y-0.5 border-t border-line-soft pt-2">
+                    {r.items!.map((it, i) => (
+                      <li key={`${it.sku}-${i}`} className="group flex items-center gap-1.5 text-[12px]">
+                        <span className="shrink-0 font-mono font-semibold text-ink-soft">{it.qty}×</span>
+                        <span className="truncate">
+                          {it.ref
+                            ? [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
+                            : it.descricao || it.sku}
                         </span>
-                      )}
-                      {/* JUNTADA: papel deste card — feeder manda caixa pra
-                          âncora; âncora envia o pacote completo pra cliente. */}
-                      {r.isTransfer && !order.pickup?.isPickup && r.transferToStoreCode && (
-                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-violet-100 text-violet-800 border border-violet-300">
-                          🧲 manda pra {juntada?.ancoraStoreName
-                            || liveStatus.find((x) => x.storeCode === r.transferToStoreCode)?.storeName
-                            || r.transferToStoreCode}
-                        </span>
-                      )}
-                      {juntada?.juntando && !r.isTransfer && r.storeCode === juntada.ancoraStoreCode && (
-                        <span className="text-xs px-2 py-0.5 rounded font-bold bg-violet-600 text-white">
-                          🧲 ÂNCORA — envia o pedido completo
-                        </span>
-                      )}
-                      {flash && (
-                        <span className="text-xs text-emerald-600 font-semibold animate-pulse">
-                          ✓ atualizado agora
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => sendPrintRemote(r.id, r.storeName || '')}
-                        disabled={st === 'sending'}
-                        className={`ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-xs border ${
-                          st === 'sent'
-                            ? 'bg-emerald-600 text-white border-emerald-700'
-                            : st === 'error'
-                            ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
-                            : st === 'sending'
-                            ? 'bg-gray-100 text-gray-500 border-gray-300 cursor-wait'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-                        }`}
-                        title="Imprimir na térmica da loja"
-                      >
-                        {st === 'sending' && '…'}
-                        {st === 'sent' && '✓ Impresso'}
-                        {st === 'error' && '⚠ Reimprimir'}
-                        {st === 'idle' && '🖨️ Imprimir'}
-                      </button>
-                      {/* Remover pick-order — pra casos onde a retaguarda
-                          resolveu MANUALMENTE em outra loja (ex: cliente pegou
-                          em outra) e quer só limpar o card problemático.
-                          Aparece se status NÃO é shipped/delivered. */}
-                      {r.storeCode && !['shipped', 'delivered'].includes(r.status) && (
-                        <button
-                          type="button"
-                          onClick={() => removerPickOrder(r.id, r.storeCode!, r.storeName)}
-                          disabled={sepLoading}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                          title={`Remover ${r.storeCode} do pedido (resolvido manualmente)`}
-                        >
-                          🗑️ Remover
-                        </button>
-                      )}
-                      {/* Trocar loja — SEMPRE visível pra retaguarda ter essa opção
-                          na cara, mas desabilita (com tooltip) se já avançou de
-                          "separating" pra "ready/shipped". Nesses estágios trocar
-                          desperdiça trabalho da loja. */}
-                      {r.storeCode && (() => {
-                        const canSwap = ['new', 'separating'].includes(r.status);
-                        const tooltip = canSwap
-                          ? `Escolher outra loja no lugar de ${r.storeCode}. Só funciona se a loja ainda não bipou.`
-                          : `Já passou de "separando" (status: ${r.status}). Não dá pra trocar sem perder trabalho da loja.`;
-                        return (
+                        {it.id && ['new', 'separating'].includes(r.status) && (
                           <button
                             type="button"
-                            onClick={() => swapStore(r.storeCode!, r.storeName)}
-                            disabled={sepLoading || !canSwap}
-                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border transition ${
-                              canSwap
-                                ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 disabled:opacity-60'
-                                : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                            }`}
-                            title={tooltip}
+                            onClick={() =>
+                              abrirMoverPeca(
+                                { id: it.id!, sku: it.sku, ref: it.ref, cor: it.cor, tamanho: it.tamanho, descricao: it.descricao },
+                                { storeCode: r.storeCode, storeName: r.storeName, total: r.items?.length ?? 1 },
+                              )
+                            }
+                            disabled={sepLoading}
+                            className="ml-auto shrink-0 rounded-field px-1.5 py-0.5 text-[11px] text-ink-faint opacity-60 transition hover:bg-line-soft hover:text-ink group-hover:opacity-100 disabled:opacity-40"
+                            title={`Mandar SÓ esta peça pra outra loja (o resto do card fica na ${r.storeCode})`}
                           >
-                            ↔ Trocar loja
+                            → outra loja
                           </button>
-                        );
-                      })()}
-                    </div>
-                    {/* PEÇAS desta loja (15/07): a operadora vê o que foi
-                        roteado pra cada loja e decide se dá pra consolidar
-                        (juntar tudo numa só via ↔ Trocar loja, evitando 2 SEDEX). */}
-                    {(r.items?.length ?? 0) > 0 && (
-                      <div className="mt-1.5 pl-6">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-0.5">
-                          {r.items!.reduce((s, it) => s + (it.qty || 1), 0)} peça(s) nesta loja
-                        </div>
-                        <ul className="space-y-0.5">
-                          {r.items!.map((it, i) => (
-                            <li key={`${it.sku}-${i}`} className="text-xs text-slate-600 flex gap-1.5 items-center group">
-                              <span className="font-bold tabular-nums text-slate-500 shrink-0">{it.qty}×</span>
-                              <span className="truncate">
-                                {it.ref
-                                  ? [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
-                                  : it.descricao || it.sku}
-                              </span>
-                              <span className="text-slate-300 shrink-0 font-mono">· {it.sku}</span>
-                              {/* SÓ ESTA PEÇA pra outra loja — sem arrastar o
-                                  resto do card junto (LP-000244). Some depois
-                                  que a loja bipou: aí o estoque já saiu de lá. */}
-                              {it.id && ['new', 'separating'].includes(r.status) && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    abrirMoverPeca(
-                                      { id: it.id!, sku: it.sku, ref: it.ref, cor: it.cor, tamanho: it.tamanho, descricao: it.descricao },
-                                      { storeCode: r.storeCode, storeName: r.storeName, total: r.items?.length ?? 1 },
-                                    )
-                                  }
-                                  disabled={sepLoading}
-                                  className="ml-auto shrink-0 px-1.5 py-0.5 rounded border border-slate-200 text-slate-500 bg-white hover:bg-amber-50 hover:border-amber-300 hover:text-amber-800 opacity-60 group-hover:opacity-100 transition disabled:opacity-40"
-                                  title={`Mandar SÓ esta peça pra outra loja (o resto do card fica na ${r.storeCode})`}
-                                >
-                                  → outra loja
-                                </button>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {/* Caixa da JUNTADA deste feeder — nasce quando a loja
-                        finaliza a bipagem (antes disso a linha nem aparece). */}
-                    {r.caixaJuntada && (
-                      <div className="mt-1 pl-6 text-xs text-violet-800">
-                        📦 Caixa <span className="font-mono font-semibold">{r.caixaJuntada.code}</span>
-                        {' · '}
-                        {r.caixaJuntada.status === 'received' ? '✅ chegou na âncora' : 'em trânsito'}
-                        {r.caixaJuntada.transportMode === 'proprio' && <> · 🚚 carro da rede</>}
-                        {r.caixaJuntada.trackingCode && (
-                          <span className="font-mono ml-1.5">{r.caixaJuntada.trackingCode}</span>
                         )}
-                        {r.caixaJuntada.carrier && (
-                          <span className="text-violet-600 ml-1">via {r.caixaJuntada.carrier}</span>
-                        )}
-                      </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* Caixa da juntada / rastreio / baixa no ERP — o que a linha
+                    roxa e o rodapé dos cards diziam, agora no mesmo lugar. */}
+                {r.caixaJuntada && (
+                  <div className="mt-2 text-[11.5px] text-ink-soft">
+                    Caixa <span className="font-mono font-semibold text-ink">{r.caixaJuntada.code}</span>
+                    {r.caixaJuntada.status === 'received' ? (
+                      <span className="font-semibold text-ok"> · chegou na âncora</span>
+                    ) : (
+                      <span className="font-semibold text-warn"> · em trânsito</span>
                     )}
-                    {r.status === 'shipped' && r.trackingCode && (
-                      <div className="mt-1 pl-6 text-xs text-slate-700">
-                        <Truck className="w-3 h-3 inline mr-1" />
-                        <span className="font-mono font-semibold">{r.trackingCode}</span>
-                        {r.carrier && <span className="text-slate-500 ml-2">via {r.carrier}</span>}
-                      </div>
-                    )}
-                    {/* Baixa no Gigasistemas — garante ao usuário que o estoque físico
-                        já foi debitado no ERP. O autoDebitOnShipped() roda quando
-                        a loja marca 'shipped' com rastreio. Se falhou (missing),
-                        redireciona pro log de baixas pra resolver manualmente. */}
-                    {r.debitStatus === 'applied' && (
-                      <div className="mt-1 pl-6 text-xs text-emerald-700 flex items-center gap-1">
-                        <Check className="w-3 h-3" />
-                        <span className="font-medium">Baixa aplicada no Gigasistemas</span>
-                        {r.debitApprovedAt && (
-                          <span className="text-emerald-600 ml-1">
-                            ({new Date(r.debitApprovedAt).toLocaleString('pt-BR')})
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    {r.debitStatus === 'missing' && (
-                      <div className="mt-1 pl-6 text-xs text-red-700 flex items-center gap-1.5">
-                        <AlertCircle className="w-3 h-3" />
-                        <span className="font-semibold">Baixa no Giga falhou</span>
-                        <Link
-                          href="/retaguarda/baixas-log"
-                          className="underline hover:text-red-900 font-medium"
-                        >
-                          resolver em Log de Baixas →
-                        </Link>
-                      </div>
-                    )}
-                    {r.debitStatus === 'pending' && r.status !== 'new' && (
-                      <div className="mt-1 pl-6 text-xs text-slate-500">
-                        Baixa no Giga: aguardando envio
-                      </div>
-                    )}
-                    {!!r.updatedAt && (
-                      <div className="pl-6 text-xs text-slate-400 mt-0.5">
-                        Última atualização: {new Date(r.updatedAt).toLocaleString('pt-BR')}
-                      </div>
-                    )}
-                    {st === 'error' && err && (
-                      <div className="mt-1 pl-6 text-xs text-red-700">{err}</div>
+                    {r.caixaJuntada.transportMode === 'proprio' && <> · carro da rede</>}
+                    {r.caixaJuntada.trackingCode && (
+                      <span className="ml-1 font-mono">{r.caixaJuntada.trackingCode}</span>
                     )}
                   </div>
-                );
-              })}
+                )}
+                {r.status === 'shipped' && r.trackingCode && (
+                  <div className="mt-2 text-[11.5px] text-ink-soft">
+                    <Truck className="mr-1 inline h-3 w-3" />
+                    <span className="font-mono font-semibold text-ink">{r.trackingCode}</span>
+                    {r.carrier && <span className="ml-1.5">via {r.carrier}</span>}
+                  </div>
+                )}
+                {r.debitStatus === 'missing' && (
+                  <div className="mt-1 text-[11.5px] font-semibold text-crit">
+                    Baixa no Giga falhou —{' '}
+                    <Link href="/retaguarda/baixas-log" className="underline">
+                      resolver no log
+                    </Link>
+                  </div>
+                )}
+
+                {/* AÇÕES da loja — cinza, sem competir com o estado. */}
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-line-soft pt-2">
+                  <button
+                    type="button"
+                    onClick={() => sendPrintRemote(r.id, r.storeName || '')}
+                    disabled={st === 'sending'}
+                    className={`rounded-field border px-2 py-1 text-[11.5px] font-semibold ${
+                      st === 'sent'
+                        ? 'border-ok bg-ok-soft text-ok'
+                        : st === 'error'
+                          ? 'border-crit bg-crit-soft text-crit'
+                          : 'border-line bg-surface text-ink hover:bg-surface-2'
+                    }`}
+                    title="Imprimir na térmica da loja"
+                  >
+                    {st === 'sending' ? '…' : st === 'sent' ? 'Impresso' : st === 'error' ? 'Reimprimir' : 'Imprimir'}
+                  </button>
+                  {r.storeCode && (
+                    <button
+                      type="button"
+                      onClick={() => swapStore(r.storeCode!, r.storeName)}
+                      disabled={sepLoading || !canSwap}
+                      className="rounded-field border border-line bg-surface px-2 py-1 text-[11.5px] font-semibold text-ink hover:bg-surface-2 disabled:cursor-not-allowed disabled:text-ink-faint"
+                      title={
+                        canSwap
+                          ? `Escolher outra loja no lugar de ${r.storeCode}. Só funciona se a loja ainda não bipou.`
+                          : `Já passou de "separando" (status: ${r.status}). Não dá pra trocar sem perder trabalho da loja.`
+                      }
+                    >
+                      ↔ Trocar loja
+                    </button>
+                  )}
+                  {r.storeCode && !['shipped', 'delivered'].includes(r.status) && (
+                    <button
+                      type="button"
+                      onClick={() => removerPickOrder(r.id, r.storeCode!, r.storeName)}
+                      disabled={sepLoading}
+                      className="rounded-field px-2 py-1 text-[11.5px] font-semibold text-ink-soft underline hover:text-crit disabled:opacity-60"
+                      title={`Remover ${r.storeCode} do pedido (resolvido manualmente)`}
+                    >
+                      Remover
+                    </button>
+                  )}
+                  {!!r.updatedAt && (
+                    <span className="ml-auto text-[11px] text-ink-faint">
+                      {new Date(r.updatedAt).toLocaleString('pt-BR', {
+                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  )}
+                </div>
+                {st === 'error' && err && <div className="mt-1 text-[11.5px] text-crit">{err}</div>}
+              </div>
+            );
+          };
+
+          const colunas: Array<{ titulo: string; cards: typeof liveStatus }> = [];
+          if (feeders.length) colunas.push({ titulo: 'Quem tem a peça', cards: feeders });
+          if (finais.length) {
+            colunas.push({
+              titulo: juntada?.juntando
+                ? 'Junta e envia'
+                : ehRetirada
+                  ? 'Entrega na loja'
+                  : finais.length > 1
+                    ? 'Enviam pra cliente'
+                    : 'Envia pra cliente',
+              cards: finais,
+            });
+          }
+
+          return (
+            <div className="mb-4">
+              <div className="mb-2 flex flex-wrap items-baseline gap-2">
+                <h4 className="text-[11px] font-bold uppercase tracking-[.13em] text-ink-faint">
+                  {ehRetirada ? 'Até a mão da cliente' : 'A caminho da cliente'}
+                </h4>
+                <span className="text-[12px] text-ink-soft">
+                  {liveStatus.length} loja{liveStatus.length === 1 ? '' : 's'}
+                  {juntada?.juntando && (
+                    <>
+                      {' · '}
+                      <b className={juntada.completa ? 'text-ok' : 'text-warn'}>
+                        {juntada.recebidas ?? 0} de {juntada.totalCaixas ?? 0} caixa
+                        {(juntada.totalCaixas ?? 0) === 1 ? '' : 's'} chegaram
+                      </b>
+                    </>
+                  )}
+                  {paradas > 0 && (
+                    <>
+                      {' · '}
+                      <b className="text-crit">
+                        {paradas} peça{paradas === 1 ? '' : 's'} sem dono
+                      </b>
+                    </>
+                  )}
+                </span>
+                {juntada?.juntando && (
+                  <button
+                    type="button"
+                    onClick={desfazerJuntada}
+                    disabled={desfazendoJuntada}
+                    className="ml-auto text-[12px] text-ink-soft underline hover:text-crit disabled:opacity-60"
+                    title="Cada loja volta a enviar direto pra cliente (só dá antes de alguma caixa nascer)"
+                  >
+                    {desfazendoJuntada ? 'Desfazendo…' : 'Desfazer juntada'}
+                  </button>
+                )}
+              </div>
+
+              {/* As colunas do trilho. A seta só existe onde há fluxo de
+                  verdade: loja → loja → cliente. Lojas que postam sozinhas
+                  ficam EMPILHADAS na mesma coluna, sem seta entre elas. */}
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-stretch lg:gap-0">
+                {colunas.map((col, i) => (
+                  <div
+                    key={col.titulo}
+                    className={`flex min-w-0 flex-1 flex-col gap-2 ${i > 0 ? 'lg:ml-6 lg:border-l lg:border-line lg:pl-6' : ''}`}
+                  >
+                    <div className="text-[10.5px] font-bold uppercase tracking-[.11em] text-ink-faint">
+                      {i > 0 && <span className="mr-1 lg:hidden">↓</span>}
+                      {col.titulo}
+                    </div>
+                    {col.cards.map((r) => cardLoja(r))}
+                  </div>
+                ))}
+
+                {/* Última etapa: a cliente. Fecha a frase — sem ela o trilho
+                    termina numa loja e ninguém vê se o pacote saiu. */}
+                <div className="flex min-w-0 flex-1 flex-col gap-2 lg:ml-6 lg:border-l lg:border-line lg:pl-6">
+                  <div className="text-[10.5px] font-bold uppercase tracking-[.11em] text-ink-faint">
+                    <span className="mr-1 lg:hidden">↓</span>
+                    {ehRetirada ? 'Cliente retira' : 'Cliente recebe'}
+                  </div>
+                  <div className="rounded-card border border-line bg-surface p-3">
+                    <div className="text-[13.5px] font-bold tracking-tight">
+                      {[order.shipping?.first_name || order.billing?.first_name,
+                        order.shipping?.last_name || order.billing?.last_name]
+                        .filter(Boolean).join(' ') || 'Cliente'}
+                    </div>
+                    <div className="mt-0.5 text-[11.5px] text-ink-soft">
+                      {order.shipping?.city
+                        ? `${order.shipping.city} / ${order.shipping.state}`
+                        : 'endereço no bloco de entrega'}
+                      {envioLabel ? ` · ${envioLabel}` : ''}
+                    </div>
+                    <div className={`mt-1.5 text-[12px] font-bold ${algumEnviou ? 'text-ok' : 'text-ink-faint'}`}>
+                      {order.tracking?.number
+                        ? 'Objeto postado'
+                        : algumEnviou
+                          ? 'Enviado pela loja'
+                          : ehRetirada
+                            ? 'Aguardando a cliente buscar'
+                            : 'Não postado ainda'}
+                    </div>
+                    {order.tracking?.number && (
+                      <div className="mt-2 text-[11.5px]">
+                        <span className="font-mono font-semibold">{order.tracking.number}</span>
+                        {order.tracking.carrier && (
+                          <span className="ml-1.5 text-ink-soft">via {order.tracking.carrier}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ONDE ESTÁ CADA PEÇA — o raio-x, agora como tabela embaixo do
+                  trilho em vez de terceira caixa colorida. Vermelho = parada,
+                  e é ela que ganha os dois botões da saída. */}
+              {raiox && raiox.pecas.length > 0 && (
+                <div className="mt-4">
+                  {raiox.alertas.map((a, i) => (
+                    <div key={i} className="mb-2 rounded-card border border-crit/30 bg-crit-soft px-3 py-2 text-[12.5px] font-semibold text-crit">
+                      {a}
+                    </div>
+                  ))}
+                  <Table>
+                    <thead>
+                      <tr>
+                        <Th>Peça</Th>
+                        <Th align="right">Qtd</Th>
+                        <Th>Onde está agora</Th>
+                        <Th align="right">Decisão</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {raiox.pecas.map((p) => {
+                        const estado =
+                          p.cor_semaforo === 'vermelho' ? 'crit' : p.cor_semaforo === 'amarelo' ? 'warn' : 'ok';
+                        // Peça vermelha SEM decisão ganha as duas saídas (26/08 —
+                        // "e a peça que faltou?"): outra loja envia ou cancela e devolve.
+                        const decidivel =
+                          p.cor_semaforo === 'vermelho' && ['sem_dono', 'reportada'].includes(p.estado);
+                        return (
+                          <Tr key={p.orderItemId} estado={estado}>
+                            <Td className="font-medium">
+                              {[p.ref, p.cor, p.tamanho].filter(Boolean).join(' ') || p.sku}
+                              <span className="mt-0.5 block font-mono text-[11px] text-ink-faint">{p.sku}</span>
+                            </Td>
+                            <Td align="right" num>{p.quantity}</Td>
+                            <Td className={estado === 'crit' ? 'font-semibold text-crit' : 'text-ink-soft'}>
+                              {p.onde}
+                            </Td>
+                            <Td align="right">
+                              {decidivel ? (
+                                <div className="flex flex-wrap justify-end gap-1.5">
+                                  <button
+                                    onClick={() =>
+                                      abrirMoverPeca(
+                                        { id: p.orderItemId, sku: p.sku, ref: p.ref, cor: p.cor, tamanho: p.tamanho },
+                                        { storeCode: p.storeCode, storeName: p.storeName, total: 1 },
+                                      )
+                                    }
+                                    className="rounded-field border border-line bg-surface px-2 py-1 text-[11.5px] font-semibold text-ink hover:bg-surface-2"
+                                    title="Outra loja envia esta peça pra cliente (2º frete)"
+                                  >
+                                    Outra loja envia
+                                  </button>
+                                  <button
+                                    onClick={() => { setCancelarPeca(p); setCancelarMotivo(''); setCancelarErro(null); }}
+                                    className="rounded-field border border-crit/40 bg-surface px-2 py-1 text-[11.5px] font-semibold text-crit hover:bg-crit-soft"
+                                    title="Cancela SÓ esta peça e devolve o valor dela — o pedido segue com as outras"
+                                  >
+                                    Cancelar e devolver
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-ink-faint">—</span>
+                              )}
+                            </Td>
+                          </Tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+
+                  {/* LINHA DO TEMPO — tudo que aconteceu, com QUEM. */}
+                  <details className="mt-2">
+                    <summary className="cursor-pointer select-none text-[12px] font-semibold text-ink-soft hover:text-ink">
+                      Linha do tempo completa ({raiox.eventos.length} registro
+                      {raiox.eventos.length === 1 ? '' : 's'})
+                    </summary>
+                    <div className="mt-2 max-h-96 space-y-1 overflow-y-auto pr-1">
+                      {raiox.eventos.map((ev, i) => {
+                        const quando = new Date(ev.em).toLocaleString('pt-BR', {
+                          timeZone: 'America/Sao_Paulo',
+                          day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                        });
+                        return (
+                          <div key={i} className="flex items-start gap-2 border-b border-line-soft pb-1 text-[11.5px] leading-snug">
+                            <span className="shrink-0 font-mono text-ink-faint">{quando}</span>
+                            <span className="w-14 shrink-0 text-[10.5px] font-bold uppercase tracking-wider text-ink-faint">
+                              {ev.origem}
+                            </span>
+                            <span className="flex-1 text-ink">
+                              <b>{ev.titulo}</b>
+                              {ev.detalhe ? <> — {ev.detalhe}</> : null}
+                              <span className={ev.quem ? 'text-ink-soft' : 'italic text-ink-faint'}>
+                                {' '}· {ev.quem ?? (ev.tipoAtor === 'sistema' ? 'sistema' : 'sem autor (registro antigo)')}
+                              </span>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                </div>
+              )}
+
+              {/* Trocar a loja escolhendo da lista, e juntar/desfazer juntada —
+                  as portas que viviam em caixas amarelas soltas acima dos cards. */}
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-[12px]">
+                {liveStatus.some((p) => ['new', 'separating'].includes(p.status)) && (
+                  <button
+                    onClick={() => openPickStoreModal()}
+                    disabled={sepLoading}
+                    className="rounded-field border border-line bg-surface px-3 py-1.5 font-semibold text-ink hover:bg-surface-2 disabled:opacity-60"
+                  >
+                    Escolher loja manualmente
+                  </button>
+                )}
+                {(() => {
+                  // JUNTAR NUMA LOJA — só com 2+ cards COM PEÇA, pedido de
+                  // ENTREGA (retirada tem trilho próprio) e sem juntada ativa.
+                  const cardsAtivos = liveStatus.filter((p) =>
+                    ['new', 'separating', 'separated', 'ready'].includes(p.status),
+                  );
+                  const cardsComPecas = cardsAtivos.filter((p) => quantidadeDoCard(p) > 0);
+                  const jaTemFeeder = cardsComPecas.some((p) => p.isTransfer && !destinoObrigatorio);
+                  if (destinoObrigatorio || juntada?.juntando === true || jaTemFeeder) return null;
+                  if (cardsComPecas.length < 2) return null;
+                  return (
+                    <>
+                      <button
+                        onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
+                        disabled={sepLoading}
+                        className="rounded-field border border-line bg-surface px-3 py-1.5 font-semibold text-ink hover:bg-surface-2 disabled:opacity-60"
+                      >
+                        Juntar numa loja só
+                      </button>
+                      <span className="text-ink-soft">
+                        Pedido dividido em {cardsComPecas.length} lojas = {cardsComPecas.length} fretes.
+                      </span>
+                    </>
+                  );
+                })()}
+                {/* ÂNCORA ÓRFÃ — a juntada aponta pra loja que saiu do pedido e
+                    a caixa está viajando pra quem não separa nada (LP-000244).
+                    Antes a tela ficava MUDA: dava pra ver e não dava pra
+                    consertar. */}
+                {(() => {
+                  if (destinoObrigatorio) return null;
+                  const cardsAtivos = liveStatus.filter((p) =>
+                    ['new', 'separating', 'separated', 'ready'].includes(p.status),
+                  );
+                  const fd = cardsAtivos.filter((p) => p.isTransfer && p.transferToStoreCode);
+                  if (!fd.length) return null;
+                  const anc = String(fd[0].transferToStoreCode);
+                  if (cardsAtivos.some((p) => !p.isTransfer && p.storeCode === anc)) return null;
+                  return (
+                    <div className="flex w-full flex-wrap items-center gap-2 rounded-card border border-crit/30 bg-crit-soft px-3 py-2 font-semibold text-crit">
+                      A juntada aponta pra loja <b>{anc}</b>, que não tem card neste pedido — a caixa
+                      está indo pra quem não separa nada.
+                      <button
+                        onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
+                        disabled={sepLoading || cardsAtivos.length < 2}
+                        className="ml-auto rounded-field border border-crit/40 bg-surface px-3 py-1.5 font-semibold text-crit hover:bg-crit/10 disabled:opacity-60"
+                      >
+                        Escolher a loja final de novo
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* ── MODAL: cancelar a peça e devolver o valor ── */}
+              {cancelarPeca && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                  <div className="w-full max-w-md rounded-card bg-surface p-4 shadow-xl">
+                    <div className="mb-1 font-bold text-ink">Cancelar peça e devolver o valor</div>
+                    <div className="mb-2 text-[13px] text-ink-soft">
+                      <b className="text-ink">
+                        {[cancelarPeca.ref, cancelarPeca.cor, cancelarPeca.tamanho].filter(Boolean).join(' ') || cancelarPeca.sku}
+                      </b>
+                      {cancelarPeca.quantity > 1 ? ` ×${cancelarPeca.quantity}` : ''} — devolver{' '}
+                      <b className="text-crit">
+                        R$ {(((cancelarPeca.unitPrice ?? 0) * cancelarPeca.quantity) || 0).toFixed(2)}
+                      </b>{' '}
+                      à cliente. O pedido segue com as outras peças.
+                    </div>
+                    <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-ink-soft">
+                      Motivo (obrigatório)
+                    </label>
+                    <textarea
+                      value={cancelarMotivo}
+                      onChange={(e) => setCancelarMotivo(e.target.value)}
+                      rows={2}
+                      placeholder="Ex: ruptura — nenhuma loja da rede tem a peça; cliente será avisada e o PIX da peça devolvido"
+                      className="mb-2 w-full rounded-field border border-line px-2 py-1.5 text-[13px]"
+                    />
+                    {cancelarErro && (
+                      <div className="mb-2 rounded-field border border-crit/30 bg-crit-soft p-2 text-[12px] text-crit">
+                        {cancelarErro}
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => setCancelarPeca(null)}
+                        disabled={cancelarBusy}
+                        className="rounded-field border border-line px-3 py-1.5 text-[13px] font-bold text-ink hover:bg-surface-2"
+                      >
+                        Voltar
+                      </button>
+                      <button
+                        onClick={confirmarCancelarPeca}
+                        disabled={cancelarBusy || cancelarMotivo.trim().length < 5}
+                        className="rounded-field bg-crit px-3 py-1.5 text-[13px] font-bold text-white hover:opacity-90 disabled:opacity-50"
+                      >
+                        {cancelarBusy ? 'Cancelando…' : 'Cancelar peça e devolver'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {!separation && !sepLoading && !sepError && liveStatus.length === 0 && (
           <p className="text-sm text-slate-500">
