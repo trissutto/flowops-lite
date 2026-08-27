@@ -288,9 +288,19 @@ export class JuntadaService {
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Cria a caixa (remessa) do card feeder — chamada no fim da bipagem e no
-   * "juntar" pra card que já estava bipado. No-op para card que não é
-   * feeder de juntada. Idempotente (a remessa é única por pick).
+   * Cria a caixa (remessa) do card de TRANSFERÊNCIA — chamada no fim da
+   * bipagem e no "juntar" pra card que já estava bipado. No-op para card que
+   * não é transferência. Idempotente (a remessa é única por pick).
+   *
+   * DOIS DESTINOS, MESMO TRILHO:
+   *  - JUNTADA (21/08): a caixa vai pra loja ÂNCORA, que junta tudo e posta
+   *    um pacote só pra cliente.
+   *  - RETIRADA EM OUTRA LOJA (27/08): a caixa vai pra loja onde a CLIENTE
+   *    vai buscar. Até aqui a retirada era pulada de propósito ("retirada tem
+   *    o próprio trilho") — só que trilho nenhum existia: a peça saía da loja
+   *    de origem SEM etiqueta, SEM nota de transferência e SEM romaneio, e o
+   *    card não tinha botão nenhum pra gerar isso (caso LP-000296, Indaiatuba).
+   *    Ordem do dono: bipou a peça, sai o Correios pra loja de destino.
    */
   async criarCaixaDoFeederSePreciso(pickOrderId: string, userId?: string) {
     const pick: any = await this.prisma.pickOrder.findUnique({
@@ -298,15 +308,15 @@ export class JuntadaService {
       include: { store: { select: { code: true, name: true } }, order: true },
     });
     if (!pick?.isTransfer || !pick.transferToStoreCode) return null;
-    if (pick.order?.isPickup) return null; // retirada tem o próprio trilho (sem caixa automática)
     if (!['separated', 'ready'].includes(pick.status)) return null;
+    const ehRetirada = !!pick.order?.isPickup;
 
     const destino: any = await this.prisma.store.findUnique({
       where: { code: pick.transferToStoreCode },
       select: { code: true, name: true },
     });
     if (!destino) {
-      this.logger.warn(`[juntada] loja âncora ${pick.transferToStoreCode} não existe — caixa não criada`);
+      this.logger.warn(`[juntada] loja destino ${pick.transferToStoreCode} não existe — caixa não criada`);
       return null;
     }
 
@@ -316,7 +326,7 @@ export class JuntadaService {
       })
     ).filter((i: any) => !ehItemSemEstoque(i));
     if (!itens.length) {
-      this.logger.warn(`[juntada] feeder ${pickOrderId} sem itens atribuídos — caixa não criada`);
+      this.logger.warn(`[juntada] card ${pickOrderId} sem itens atribuídos — caixa não criada`);
       return null;
     }
 
@@ -328,6 +338,7 @@ export class JuntadaService {
       orderId: pick.orderId,
       pickOrderId: pick.id,
       wcOrderNumber: String(pick.order?.wcOrderNumber || pick.order?.wcOrderId || ''),
+      isPickup: ehRetirada,
       userId: userId ?? null,
       itens: itens.map((i: any) => ({
         sku: String(i.sku || ''),
@@ -357,11 +368,15 @@ export class JuntadaService {
   }
 
   /**
-   * DOCUMENTOS DA CAIXA do feeder, num PDF só:
-   *   etiqueta pra loja âncora + DANFE da transferência (trecho Correios)
+   * DOCUMENTOS DA CAIXA do card de transferência, num PDF só:
+   *   etiqueta pra loja de destino + DANFE da transferência (trecho Correios)
    *   + romaneio carimbado "PEÇAS DO PEDIDO #X".
    * Rota própria (carro da rede): sai só o romaneio — etiqueta seria papel
    * jogado fora.
+   *
+   * Vale pros DOIS destinos (27/08): loja âncora da juntada e loja onde a
+   * cliente vai RETIRAR. A retirada era recusada aqui e ficava sem nenhum
+   * caminho pra tirar etiqueta.
    */
   async docsDaCaixa(pickOrderId: string, storeId: string | null, userId?: string) {
     const pick: any = await this.prisma.pickOrder.findUnique({
@@ -370,8 +385,8 @@ export class JuntadaService {
     });
     if (!pick) throw new NotFoundException('Card não encontrado');
     if (storeId && pick.storeId !== storeId) throw new ForbiddenException('Card de outra loja');
-    if (!pick.isTransfer || pick.order?.isPickup) {
-      throw new BadRequestException('Este card não é de juntada — use o envio normal.');
+    if (!pick.isTransfer) {
+      throw new BadRequestException('Este card não é de transferência — use o envio normal.');
     }
 
     let shipment: any = await (this.prisma as any).realignmentShipment.findFirst({
@@ -524,7 +539,19 @@ export class JuntadaService {
       });
       if (!caixas.length) return;
       const abertos = await this.prisma.pickOrder.findMany({
-        where: { id: { in: caixas.map((c) => c.pickOrderId) }, status: { not: 'shipped' } },
+        /**
+         * RETIRADA FICA DE FORA (27/08). A caixa da retirada em outra loja
+         * usa o mesmo trilho desde hoje, mas quem fecha aquele card é a
+         * vendedora no "📦 Enviei pra loja X" — com carrier `Retirada`, que é
+         * o que faz o pedido virar ENTREGUE quando a cliente busca. Fechar
+         * aqui carimbaria `Juntada entre lojas` e o pedido pararia em
+         * "enviado" pra sempre.
+         */
+        where: {
+          id: { in: caixas.map((c) => c.pickOrderId) },
+          status: { not: 'shipped' },
+          order: { isPickup: false },
+        },
         select: { id: true },
       });
       for (const p of abertos) {

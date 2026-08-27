@@ -3009,10 +3009,25 @@ function PickOrderCard({
             <Barcode className="w-6 h-6" /> Bipar peças
           </button>
         )}
-        {/* FEEDER DE JUNTADA finalizado → o caminho é a CAIXA pra loja âncora:
-            PDF único com etiqueta pra loja + DANFE da transferência + romaneio
-            (rota do carro sai só o romaneio). Nada de etiqueta de cliente. */}
-        {ehFeederJuntada && (status === 'separated' || status === 'ready') && (
+        {/* CARD DE TRANSFERÊNCIA finalizado → o caminho é a CAIXA pra outra
+            loja: PDF único com etiqueta pra loja + DANFE da transferência +
+            romaneio (rota do carro sai só o romaneio). Nada de etiqueta de
+            cliente — a peça não vai pro endereço dela.
+
+            Dois destinos, mesmo botão (27/08):
+             - JUNTADA: vai pra loja ÂNCORA, que posta o pacote único.
+             - RETIRADA EM OUTRA LOJA: vai pra loja onde a CLIENTE busca. Este
+               caso não tinha botão NENHUM — a peça saía sem etiqueta, sem nota
+               e sem romaneio (caso LP-000296 → Indaiatuba). */}
+        {(ehFeederJuntada || ehTransferRetirada) &&
+          (status === 'separated' ||
+            status === 'ready' ||
+            /* A ETIQUETA NÃO PODE SUMIR COM O CLIQUE (27/08). Na retirada o
+               "📦 Enviei pra loja X" vive na MESMA janela deste botão: quem
+               clica nele primeiro fecharia o card com a caixa a caminho e sem
+               como imprimir o papel. Enquanto a caixa não chegou no destino, o
+               PDF continua acessível. */
+            (ehTransferRetirada && !!row.caixaJuntada && row.caixaJuntada.status !== 'received')) && (
           <div className="flex-1 flex flex-col gap-1.5">
             <button
               onClick={async (e) => {
@@ -3022,21 +3037,34 @@ function PickOrderCard({
                 try { await onDocsJuntada(); } finally { setDocsBusy(false); }
               }}
               disabled={docsBusy}
-              title="Baixa etiqueta pra loja + NF de transferência + romaneio num PDF único"
-              className="w-full bg-violet-600 hover:bg-violet-700 active:scale-[0.98] disabled:opacity-50 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
+              title={`Baixa etiqueta pra loja ${row.transferToStoreName ?? row.transferToStoreCode ?? 'destino'} + NF de transferência + romaneio num PDF único`}
+              className={`w-full ${ehFeederJuntada ? 'bg-violet-600 hover:bg-violet-700' : 'bg-sky-600 hover:bg-sky-700'} active:scale-[0.98] disabled:opacity-50 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition`}
             >
-              <Printer className="w-6 h-6" /> {docsBusy ? 'Gerando…' : '📄 Documentos da caixa'}
+              <Printer className="w-6 h-6" />
+              {docsBusy
+                ? 'Gerando…'
+                : ehFeederJuntada
+                ? '📄 Documentos da caixa'
+                : `📮 Etiqueta + NF pra loja ${row.transferToStoreName ?? row.transferToStoreCode ?? ''}`.trim()}
             </button>
             {row.caixaJuntada && (
-              <div className="rounded-lg border-2 border-violet-200 bg-violet-50 px-3 py-1.5 text-center text-sm font-bold text-violet-900">
+              <div className={`rounded-lg border-2 px-3 py-1.5 text-center text-sm font-bold ${ehFeederJuntada ? 'border-violet-200 bg-violet-50 text-violet-900' : 'border-sky-200 bg-sky-50 text-sky-900'}`}>
                 Caixa <span className="font-mono">{row.caixaJuntada.code}</span>
-                {row.caixaJuntada.status === 'received' && ' · ✅ chegou na âncora'}
+                {row.caixaJuntada.status === 'received' && (ehFeederJuntada ? ' · ✅ chegou na âncora' : ' · ✅ chegou na loja de retirada')}
                 {row.caixaJuntada.trackingCode && (
-                  <div className="text-[11px] font-normal text-violet-700">
+                  <div className={`text-[11px] font-normal ${ehFeederJuntada ? 'text-violet-700' : 'text-sky-700'}`}>
                     <span className="font-mono font-semibold">{row.caixaJuntada.trackingCode}</span>
                     {row.caixaJuntada.carrier && <> · {row.caixaJuntada.carrier}</>}
                   </div>
                 )}
+              </div>
+            )}
+            {/* Etiqueta ainda não saiu: a caixa nasce no Finalizar da bipagem e
+                a pré-postagem vem junto. Sem código aqui é NF ou Correios que
+                falhou — o clique no botão re-tenta. */}
+            {row.caixaJuntada && !row.caixaJuntada.trackingCode && row.caixaJuntada.transportMode !== 'proprio' && (
+              <div className="rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-1.5 text-center text-xs font-bold text-amber-900">
+                ⚠ Etiqueta ainda não saiu — clique no botão acima pra gerar de novo
               </div>
             )}
             {row.caixaJuntada?.transportMode === 'proprio' && (

@@ -60,12 +60,15 @@ export class ShipmentPdfService {
       const order: any = await (this.prisma as any).order
         .findUnique({
           where: { id: shipment.orderId },
-          select: { wcOrderNumber: true, customerName: true },
+          select: { wcOrderNumber: true, customerName: true, isPickup: true },
         })
         .catch(() => null);
       (shipment as any).__juntada = {
         pedido: order?.wcOrderNumber || shipment.orderId,
         cliente: order?.customerName || '',
+        // RETIRADA (27/08): a caixa não vai ser postada — a cliente vem
+        // buscar na loja destino. Quem abre precisa GUARDAR, não embalar.
+        retirada: !!order?.isPickup,
       };
     }
 
@@ -119,7 +122,9 @@ export class ShipmentPdfService {
               // Sem emoji: as fontes padrão do pdfkit (WinAnsi) não têm o
               // glifo e a geração inteira morre com "glyph not found".
               `ATENÇÃO: PEÇAS DO PEDIDO #${j.pedido}${j.cliente ? ` — ${j.cliente}` : ''} · ` +
-                `JUNTANDO NA LOJA ${shipment.toStoreName} · NÃO COLOCAR NA ARARA`,
+                (j.retirada
+                  ? `CLIENTE RETIRA NA LOJA ${shipment.toStoreName} · GUARDAR SEPARADO · NÃO COLOCAR NA ARARA`
+                  : `JUNTANDO NA LOJA ${shipment.toStoreName} · NÃO COLOCAR NA ARARA`),
               40,
               doc.page.height - 70,
               { width: doc.page.width - 80, align: 'center' },

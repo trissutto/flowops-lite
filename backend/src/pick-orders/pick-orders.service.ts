@@ -2127,7 +2127,15 @@ export class PickOrdersService {
       }
       // JUNTADA: feeder = isTransfer num pedido que NÃO é retirada.
       const ehFeederJuntada = r.isTransfer && !r.order?.isPickup;
-      const caixa = ehFeederJuntada ? caixaDoPick.get(r.id) ?? null : null;
+      /**
+       * A CAIXA É DE TODO CARD DE TRANSFERÊNCIA (27/08), não só do feeder de
+       * juntada: desde hoje a retirada em outra loja também gera remessa com
+       * etiqueta e nota. Ler só quando `ehFeederJuntada` deixava o card da
+       * retirada sem código de caixa e sem rastreio na tela, mesmo com a
+       * remessa criada. O que continua SÓ do feeder é o `juntadaFeeder` —
+       * ele é quem pinta a faixa violeta e some com a etiqueta de cliente.
+       */
+      const caixa = r.isTransfer ? caixaDoPick.get(r.id) ?? null : null;
       /**
        * Sou quem MONTA o pedido? Card próprio (não-transferência) que recebe
        * peça das outras lojas. São dois casos, e os dois precisam do mesmo

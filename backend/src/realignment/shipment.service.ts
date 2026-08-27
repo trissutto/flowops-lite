@@ -142,6 +142,14 @@ export class RealignmentShipmentService {
     orderId: string;
     pickOrderId: string;
     wcOrderNumber: string;
+    /**
+     * RETIRADA EM OUTRA LOJA (27/08) — mesma caixa, outro desfecho: a peça
+     * não vai ser juntada e postada, vai ficar guardada esperando a cliente
+     * aparecer. Só muda o TEXTO (romaneio, mensagem da transferência): quem
+     * abre a caixa precisa saber que aquilo não é reposição nem pacote a
+     * postar. As regras derivadas de `orderId` são as mesmas.
+     */
+    isPickup?: boolean;
     userId?: string | null;
     itens: Array<{
       sku: string;
@@ -185,8 +193,10 @@ export class RealignmentShipmentService {
             lojaOrigemName: input.fromStoreName,
             lojaDestinoCode: input.toStoreCode,
             lojaDestinoName: input.toStoreName,
-            solicitanteNome: 'JUNTADA DE PEDIDO',
-            mensagem: `Peças do pedido #${input.wcOrderNumber} — juntando na loja ${input.toStoreName} pra envio à cliente`,
+            solicitanteNome: input.isPickup ? 'RETIRADA EM LOJA' : 'JUNTADA DE PEDIDO',
+            mensagem: input.isPickup
+              ? `Peças do pedido #${input.wcOrderNumber} — a cliente RETIRA na loja ${input.toStoreName}`
+              : `Peças do pedido #${input.wcOrderNumber} — juntando na loja ${input.toStoreName} pra envio à cliente`,
             createdByUserId: input.userId ?? null,
             realignmentStatus: 'sent',
             realignmentSentAt: now,
@@ -208,7 +218,9 @@ export class RealignmentShipmentService {
           stockDecreasedAt: now,
           orderId: input.orderId,
           pickOrderId: input.pickOrderId,
-          notes: `JUNTADA do pedido #${input.wcOrderNumber}`,
+          notes: input.isPickup
+            ? `RETIRADA do pedido #${input.wcOrderNumber} na loja ${input.toStoreName}`
+            : `JUNTADA do pedido #${input.wcOrderNumber}`,
         },
       });
     });
@@ -228,12 +240,14 @@ export class RealignmentShipmentService {
           totalItems: input.itens.length,
           totalQty,
           juntadaPedido: input.wcOrderNumber,
+          retiradaPedido: input.isPickup ? input.wcOrderNumber : null,
         });
       }
     } catch { /* aviso é best-effort */ }
 
     this.logger.log(
-      `[juntada] caixa ${shipment.code} criada: ${input.fromStoreCode} → ${input.toStoreCode} ` +
+      `[${input.isPickup ? 'retirada' : 'juntada'}] caixa ${shipment.code} criada: ` +
+        `${input.fromStoreCode} → ${input.toStoreCode} ` +
         `(${totalQty} peça(s) do pedido #${input.wcOrderNumber})`,
     );
     const fresh = await (this.prisma as any).realignmentShipment.findUnique({ where: { id: shipment.id } });
