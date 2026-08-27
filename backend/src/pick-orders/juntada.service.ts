@@ -14,6 +14,7 @@ import { RealignmentShipmentService } from '../realignment/shipment.service';
 import { RemessaEnvioService } from '../realignment/remessa-envio.service';
 import { ShipmentPdfService } from '../realignment/shipment-pdf.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { janelaEtiquetaRetiradaDias, podeGanharCaixa } from '../common/etiqueta-retirada';
 import { PickOrdersService } from './pick-orders.service';
 
 /**
@@ -287,6 +288,7 @@ export class JuntadaService {
   //  A CAIXA DO FEEDER
   // ─────────────────────────────────────────────────────────────────────────
 
+
   /**
    * Cria a caixa (remessa) do card de TRANSFERÊNCIA — chamada no fim da
    * bipagem e no "juntar" pra card que já estava bipado. No-op para card que
@@ -308,8 +310,8 @@ export class JuntadaService {
       include: { store: { select: { code: true, name: true } }, order: true },
     });
     if (!pick?.isTransfer || !pick.transferToStoreCode) return null;
-    if (!['separated', 'ready'].includes(pick.status)) return null;
     const ehRetirada = !!pick.order?.isPickup;
+    if (!podeGanharCaixa(pick, ehRetirada)) return null;
 
     const destino: any = await this.prisma.store.findUnique({
       where: { code: pick.transferToStoreCode },
@@ -396,6 +398,15 @@ export class JuntadaService {
       const criado = await this.criarCaixaDoFeederSePreciso(pickOrderId, userId);
       shipment = criado?.shipment;
       if (!shipment) {
+        // Card já despachado há mais tempo que a janela: a peça dessa idade
+        // não está esperando etiqueta — dizer "termine a bipagem" mandaria a
+        // vendedora procurar um botão que não existe mais.
+        if (pick.status === 'shipped') {
+          throw new BadRequestException(
+            `Este card foi fechado há mais de ${janelaEtiquetaRetiradaDias()} dia(s) e não gera mais etiqueta. ` +
+              'Se a peça ainda não saiu, fale com a matriz — o envio precisa ser resolvido pela remessa.',
+          );
+        }
         throw new BadRequestException('Termine a bipagem do card primeiro — a caixa nasce no Finalizar.');
       }
     }

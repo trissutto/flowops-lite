@@ -19,6 +19,7 @@ import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { caixaDoSite } from '../common/caixa-site';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { podeGanharCaixa } from '../common/etiqueta-retirada';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { JuntadaService } from './juntada.service';
@@ -2242,6 +2243,17 @@ export class PickOrdersService {
         freteGratis: freteFoiGratis(r.order as any),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,
+        /**
+         * O BOTÃO DE ETIQUETA AINDA VALE NESTE CARD? (27/08)
+         *
+         * A tela perguntava sozinha, olhando o status — e por isso o card da
+         * retirada JÁ fechado no "Enviei pra loja X" ficava sem saída: o
+         * papel nunca tinha sido tirado e não havia mais botão nenhum
+         * (LP-000296, São José → Indaiatuba). Quem responde agora é a régua
+         * de `common/etiqueta-retirada`, a MESMA que o `JuntadaService` usa
+         * pra criar a caixa — botão e porta não podem discordar.
+         */
+        podeGerarCaixa: r.isTransfer && podeGanharCaixa(r as any, !!r.order?.isPickup),
         caixaJuntada: caixa
           ? {
               code: caixa.code,

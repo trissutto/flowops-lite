@@ -87,6 +87,13 @@ interface PickOrderRow {
    */
   juntadaFeeder?: boolean;
   /**
+   * O card ainda pode gerar a CAIXA (etiqueta + NF de transferência)?
+   * Resposta do backend, régua `common/etiqueta-retirada` — a tela não
+   * recalcula por status: a retirada continua podendo alguns dias DEPOIS do
+   * "Enviei pra loja X", e sem isso o botão e a porta divergiriam.
+   */
+  podeGerarCaixa?: boolean;
+  /**
    * A MODALIDADE DE VERDADE (21/08) — o que a loja tem que POSTAR, resolvido
    * no backend pela mesma régua da etiqueta. Antes a faixa classificava pelo
    * título e "Frete Grátis" virava "TRANSPORTADORA": a vendedora não sabia se
@@ -3020,14 +3027,18 @@ function PickOrderCard({
                caso não tinha botão NENHUM — a peça saía sem etiqueta, sem nota
                e sem romaneio (caso LP-000296 → Indaiatuba). */}
         {(ehFeederJuntada || ehTransferRetirada) &&
-          (status === 'separated' ||
-            status === 'ready' ||
-            /* A ETIQUETA NÃO PODE SUMIR COM O CLIQUE (27/08). Na retirada o
-               "📦 Enviei pra loja X" vive na MESMA janela deste botão: quem
-               clica nele primeiro fecharia o card com a caixa a caminho e sem
-               como imprimir o papel. Enquanto a caixa não chegou no destino, o
-               PDF continua acessível. */
-            (ehTransferRetirada && !!row.caixaJuntada && row.caixaJuntada.status !== 'received')) && (
+          (/* QUEM DECIDE É O BACKEND (`common/etiqueta-retirada`), não a tela.
+              A ETIQUETA NÃO PODE SUMIR COM O CLIQUE: na retirada o "📦 Enviei
+              pra loja X" vive na MESMA janela deste botão, e quem clicou nele
+              antes de tirar o papel ficava sem saída nenhuma — `shipped` é
+              ponto final do card (LP-000296, São José → Indaiatuba, 27/08).
+              A régua deixa a retirada gerar a caixa por mais alguns dias
+              depois do envio; a caixa que JÁ chegou no destino encerra.
+              O `??` é a janela do deploy: a Vercel sobe antes do Railway e
+              por ~1min a resposta ainda vem sem o campo — sem o fallback, o
+              botão SUMIRIA do card normal nesse intervalo. */
+          (row.podeGerarCaixa ?? (status === 'separated' || status === 'ready')) ||
+            (!!row.caixaJuntada && row.caixaJuntada.status !== 'received')) && (
           <div className="flex-1 flex flex-col gap-1.5">
             <button
               onClick={async (e) => {
@@ -3057,6 +3068,14 @@ function PickOrderCard({
                     {row.caixaJuntada.carrier && <> · {row.caixaJuntada.carrier}</>}
                   </div>
                 )}
+              </div>
+            )}
+            {/* Card JÁ FECHADO no "Enviei pra loja X" e sem caixa nenhuma: a
+                peça saiu (ou está pra sair) sem papel. Diz por que o botão
+                ainda está aqui — senão parece card fantasma na aba Enviados. */}
+            {status === 'shipped' && !row.caixaJuntada && (
+              <div className="rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-1.5 text-center text-xs font-bold text-amber-900">
+                ⚠ Este card foi fechado sem etiqueta — ainda dá pra gerar a caixa e o papel da peça
               </div>
             )}
             {/* Etiqueta ainda não saiu: a caixa nasce no Finalizar da bipagem e
