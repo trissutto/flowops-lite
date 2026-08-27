@@ -1642,6 +1642,26 @@ function SeparacaoPageInner() {
               .map((x) => x.storeName || x.storeCode || '?')
               .join(' + ');
 
+            /**
+             * O QUE A LOJA JÁ FEZ — a coluna Situação vivia vazia ("—") em
+             * TODA a aba "Em separação", que é justamente onde ela precisa
+             * dizer alguma coisa. O status de cada pick-order já vinha no
+             * payload; faltava lê-lo.
+             */
+            const cards = o.pickOrders ?? [];
+            const jaTemSeparacao = cards.length > 0;
+            const andamento = (() => {
+              if (!cards.length) return null;
+              const st = cards.map((c) => c.status);
+              if (st.every((s) => s === 'shipped')) return { texto: 'Enviado pela loja', tom: 'ok' as const };
+              if (st.some((s) => s === 'shipped')) return { texto: 'Parte já enviada', tom: 'warn' as const };
+              if (st.every((s) => ['separated', 'ready'].includes(s)))
+                return { texto: 'Separado — esperando postagem', tom: 'ok' as const };
+              if (st.some((s) => s === 'separating')) return { texto: 'Loja separando agora', tom: 'warn' as const };
+              if (st.every((s) => s === 'new')) return { texto: 'Aguardando a loja iniciar', tom: 'warn' as const };
+              return { texto: 'Em separação', tom: 'warn' as const };
+            })();
+
             return (
               <Fragment key={o.id}>
                 <Tr
@@ -1760,8 +1780,12 @@ function SeparacaoPageInner() {
                       <span className="font-semibold text-crit">Ruptura — nenhuma loja cobre</span>
                     ) : p && p.groups.length > 1 ? (
                       <span className="text-warn">Dividido em {p.groups.length} lojas</span>
+                    ) : andamento ? (
+                      <span className={andamento.tom === 'ok' ? 'font-semibold text-ok' : 'font-semibold text-warn'}>
+                        {andamento.texto}
+                      </span>
                     ) : (
-                      <span className="text-ink-faint">—</span>
+                      <span className="text-ink-faint">sem loja ainda</span>
                     )}
                   </Td>
 
@@ -1798,7 +1822,21 @@ function SeparacaoPageInner() {
                     {esperaDesde ? fmtDate(esperaDesde) : '—'}
                   </Td>
 
-                  <Td align="right" num className="font-semibold">{fmtMoney(o.total)}</Td>
+                  {/* VERIFICAÇÃO MANUAL (27/08, ordem do dono): acima de
+                      R$ 499,99 alguém TEM que falar com a cliente e conferir os
+                      dados antes de mandar separar. Só nas abas de fila — em
+                      "Concluídos" o aviso seria alarme velho. */}
+                  <Td align="right" num className="font-semibold">
+                    {fmtMoney(o.total)}
+                    {abaDeFila && Number(o.total || 0) > 499.99 && (
+                      <span
+                        className="mt-0.5 block text-[11px] font-semibold text-warn"
+                        title="Pedido acima de R$ 499,99: confirme os dados com a cliente antes de mandar separar"
+                      >
+                        conferir com a cliente
+                      </span>
+                    )}
+                  </Td>
 
                   <Td align="right">
                     <div className="flex items-center justify-end gap-1.5">
@@ -1852,6 +1890,19 @@ function SeparacaoPageInner() {
                         >
                           Ver as {p.groups.length} lojas
                         </button>
+                      ) : jaTemSeparacao ? (
+                        /* JÁ ESTÁ COM A LOJA — "Enviar separação" aqui NÃO é a
+                           ação certa: ele recalcula a rota e dispara WhatsApp
+                           de novo pra quem já recebeu o pedido. A tela oferecia
+                           isso em toda a aba "Em separação". Quem quer trocar a
+                           loja faz isso dentro do pedido, com o card na frente. */
+                        <Link
+                          href={`/pedidos/wc/${o.id}`}
+                          className="inline-flex items-center gap-1.5 rounded-field border border-line bg-surface px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-surface-2"
+                          title="Abrir o pedido — trilho da separação, trocar loja, rastreio"
+                        >
+                          Abrir
+                        </Link>
                       ) : !['pronto-postar', 'completed', 'em-transito'].includes(status) ? (
                         /* O botão se chamava "1-CLIQUE" — nome do mecanismo, não
                            da ação. Ele calcula a loja, registra a separação e

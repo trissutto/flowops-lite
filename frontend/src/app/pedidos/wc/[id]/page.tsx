@@ -614,6 +614,34 @@ export default function PedidoDetailPage() {
       .catch(() => setRaiox(null));
   };
 
+  // ── VERIFICAÇÃO MANUAL DO PEDIDO CARO (27/08) ───────────────────────────
+  // Registra no histórico QUEM falou com a cliente. Nota (não status): o
+  // pedido não muda de fase por causa da conferência, e a linha do tempo já
+  // lê `orderHistory` — então o carimbo sobrevive ao F5 sem tabela nova.
+  const [conferindo, setConferindo] = useState(false);
+  async function marcarConferido() {
+    if (!wcId) return;
+    setConferindo(true);
+    try {
+      await api(`/orders/wc/${wcId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          addNote: {
+            text: 'VERIFICACAO MANUAL: falei com a cliente e confirmei os dados do pedido.',
+            notifyCustomer: false,
+          },
+        }),
+      });
+      setFlash('Verificação registrada no histórico do pedido.');
+      setTimeout(() => setFlash(null), 6000);
+      loadRaiox();
+    } catch (e: any) {
+      setError(e?.message || 'Não deu pra registrar a verificação.');
+    } finally {
+      setConferindo(false);
+    }
+  }
+
   // ── CANCELAR UMA PEÇA E DEVOLVER O VALOR (26/08 — "e a peça que faltou?").
   // As duas saídas da peça vermelha: outra loja envia (2º frete, modal do
   // Mover) OU cancela SÓ esta peça e devolve o dinheiro dela. Motivo
@@ -1867,6 +1895,45 @@ export default function PedidoDetailPage() {
    */
   const podeTrocarItem =
     !!order.canEditItems && !['cancelled', 'refunded'].includes(status);
+
+  /**
+   * ONDE ESTÁ CADA PEÇA — agora no quadro PRINCIPAL (27/08, ordem do dono:
+   * "temos dois quadros com as informações da peça").
+   *
+   * A tabela de peças que morava dentro do trilho repetia, linha por linha, o
+   * que a tabela de ITENS já listava. Some de lá; o dado vem pra cá:
+   * bolinha de estado + etiqueta da loja que separa, clicável pra trocar.
+   */
+  const pecaPorItem = (li: { id: number | string }) =>
+    raiox?.pecas.find((p) => String(p.orderItemId) === String(li.id)) ?? null;
+
+  /** Estado da peça em três cores — a mesma régua do Semáforo. */
+  const estadoDaPeca = (p: PecaRaioX | null) => {
+    if (!p) return null;
+    const card = liveStatus.find((r) => r.storeCode && r.storeCode === p.storeCode);
+    if (p.cor_semaforo === 'vermelho') {
+      return {
+        tom: 'crit' as const,
+        texto: p.estado === 'sem_dono' ? 'Sem loja' : 'Loja reportou problema',
+      };
+    }
+    if (card?.status === 'shipped') return { tom: 'ok' as const, texto: 'Enviada' };
+    if (card && ['separated', 'ready'].includes(card.status)) return { tom: 'ok' as const, texto: 'Separada' };
+    if (card?.status === 'separating') return { tom: 'warn' as const, texto: 'Separando' };
+    if (p.cor_semaforo === 'verde') return { tom: 'ok' as const, texto: 'Separada' };
+    return { tom: 'warn' as const, texto: 'Aguardando' };
+  };
+
+  /**
+   * VERIFICAÇÃO MANUAL (27/08, ordem do dono): pedido acima de R$ 499,99 só
+   * anda depois que alguém FALA com a cliente e confere os dados. A régua é
+   * o total do pedido; o registro fica no histórico (a nota entra na linha do
+   * tempo, então sobrevive ao F5 e diz QUEM confirmou).
+   */
+  const TETO_SEM_CONFERIR = 499.99;
+  const MARCA_CONFERIDO = 'VERIFICACAO MANUAL';
+  const precisaConferir = Number(order.total || 0) > TETO_SEM_CONFERIR;
+  const conferidoEvento = raiox?.eventos.find((ev) => (ev.detalhe || '').includes(MARCA_CONFERIDO)) ?? null;
   const freteDoPedido = {
     // Valor: o que o pedido guarda no método de envio; se o frete ainda estiver
     // como item (pedido de antes desta correção), soma a linha.
@@ -1963,6 +2030,61 @@ export default function PedidoDetailPage() {
           </span>
         </div>
       </div>
+
+      {/* VERIFICAÇÃO MANUAL — pedido acima de R$ 499,99 (27/08, ordem do dono).
+          A atendente TEM que falar com a cliente e confirmar os dados antes de
+          o pedido seguir. Fica no topo, com o WhatsApp a um clique e o botão
+          que carimba quem confirmou no histórico. */}
+      {precisaConferir && (
+        <div
+          className={`mb-4 rounded-card border px-4 py-3 ${
+            conferidoEvento ? 'border-ok/30 bg-ok-soft' : 'border-warn/40 bg-warn-soft'
+          }`}
+        >
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className={`text-[13px] font-bold ${conferidoEvento ? 'text-ok' : 'text-warn'}`}>
+              {conferidoEvento ? 'Dados confirmados com a cliente' : 'Pedido acima de R$ 499,99 — confirme os dados com a cliente'}
+            </span>
+            <span className="text-[12px] text-ink-soft">
+              {conferidoEvento ? (
+                <>
+                  por <b>{conferidoEvento.quem || 'sem autor'}</b> em{' '}
+                  {new Date(conferidoEvento.em).toLocaleString('pt-BR', {
+                    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                  })}
+                </>
+              ) : (
+                <>
+                  {fmtMoney(order.total)} · ligue ou mande WhatsApp antes de mandar separar
+                </>
+              )}
+            </span>
+            {!conferidoEvento && (
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                {order.billing?.phone && (
+                  <a
+                    href={`https://wa.me/${String(order.billing.phone).replace(/\D/g, '').replace(/^(?!55)/, '55')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-field border border-line bg-surface px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-surface-2"
+                  >
+                    Falar no WhatsApp
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={marcarConferido}
+                  disabled={conferindo}
+                  className="rounded-field bg-action px-3 py-1.5 text-[12px] font-semibold text-action-ink hover:opacity-90 disabled:opacity-60"
+                  title="Registra no histórico do pedido que você falou com a cliente e conferiu os dados"
+                >
+                  {conferindo ? 'Registrando…' : 'Falei com a cliente e confirmei'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {flash && (
         <div className="bg-green-50 text-green-800 border border-green-200 p-3 rounded mb-4 text-sm flex items-center gap-2">
@@ -2140,9 +2262,15 @@ export default function PedidoDetailPage() {
         </div>
       )}
 
-      <div className="grid md:grid-cols-2 gap-4 mb-4">
+      {/* CLIENTE E ENTREGA — um quadro só (27/08, ordem do dono). Eram dois
+          cartões lado a lado com o MESMO nome no topo de cada um; quem lê
+          precisa dos dois juntos pra decidir qualquer coisa. Cada metade
+          mantém o seu "Corrigir" — o de contato e o de endereço são modais
+          diferentes e escrevem em campos diferentes. */}
+      <div className="bg-white rounded shadow mb-4 p-4">
+        <div className="grid gap-6 md:grid-cols-2 md:divide-x md:divide-slate-200">
         {/* Dados do cliente */}
-        <div className="bg-white rounded shadow p-4">
+        <div className="md:pr-6">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-semibold text-sm text-slate-600 uppercase tracking-wide">Cliente</h3>
             {/* Corrigir CPF/e-mail/WhatsApp: irmão do "Corrigir" da Entrega.
@@ -2246,7 +2374,7 @@ export default function PedidoDetailPage() {
         </div>
 
         {/* Entrega */}
-        <div className="bg-white rounded shadow p-4">
+        <div className="md:pl-6">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-semibold text-sm text-slate-600 uppercase tracking-wide">Entrega</h3>
             {/* Corrigir endereco: mesma modal da tela da loja. O endereco do
@@ -2371,7 +2499,42 @@ export default function PedidoDetailPage() {
                 Método: {order.shippingLines[0].method} ({fmtMoney(order.shippingLines[0].total)})
               </div>
             )}
+
+            {/* ENDEREÇO PRINCIPAL (o do cadastro/cobrança) — só aparece quando
+                é DIFERENTE do de entrega. A etiqueta e a NF-e leem o de
+                ENTREGA, então ele é o exposto; o outro fica a um clique, pra
+                conferir com a cliente sem sair da tela nem abrir o CRM. */}
+            {(() => {
+              const chave = (e: any) =>
+                [e?.address_1, e?.address_2, e?.city, e?.state, e?.postcode]
+                  .map((x) => String(x || '').trim().toUpperCase())
+                  .join('|');
+              const temCobranca = !!(order.billing?.address_1 || order.billing?.postcode);
+              if (!temCobranca || chave(order.billing) === chave(order.shipping)) return null;
+              return (
+                <details className="mt-2 text-xs">
+                  <summary className="cursor-pointer select-none font-semibold text-brand hover:underline">
+                    A cliente tem outro endereço no cadastro — ver
+                  </summary>
+                  <div className="mt-1 rounded border border-slate-200 bg-slate-50 p-2 text-slate-600">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Endereço principal (cadastro/cobrança)
+                    </div>
+                    <div>{ruaComNumero(order.billing)}</div>
+                    {order.billing.address_2 && <div>{order.billing.address_2}</div>}
+                    <div>
+                      {order.billing.city} / {order.billing.state}
+                      {order.billing.postcode ? ` · CEP ${order.billing.postcode}` : ''}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      A entrega sai pro endereço de cima. Se a cliente pedir este, use <b>Corrigir</b>.
+                    </div>
+                  </div>
+                </details>
+              );
+            })()}
           </div>
+        </div>
         </div>
       </div>
 
@@ -2387,6 +2550,7 @@ export default function PedidoDetailPage() {
           <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="text-left p-3">Produto</th>
+              <th className="text-left p-3">Onde está</th>
               <th className="text-left p-3">SKU</th>
               <th className="text-right p-3">Qtd</th>
               <th className="text-right p-3">Preço</th>
@@ -2395,37 +2559,110 @@ export default function PedidoDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {pecasDoPedido.map((li) => (
-              <tr key={li.id} className="border-t">
-                <td className="p-3">
-                  <div className="font-medium text-slate-800">{tituloPeca(li)}</div>
-                  {li.ref && (
-                    <div className="text-xs text-slate-500">
-                      {nomeSemVariacao(li.name, li.cor, li.tamanho)}
-                    </div>
-                  )}
-                </td>
-                <td className="p-3 font-mono text-xs text-slate-600">{li.sku || '—'}</td>
-                <td className="p-3 text-right">{li.quantity}</td>
-                <td className="p-3 text-right">{fmtMoney(li.price)}</td>
-                <td className="p-3 text-right font-medium">{fmtMoney(li.total)}</td>
-                {podeTrocarItem && (
-                  <td className="p-3 text-right">
-                    <button
-                      onClick={() => setTrocaItem({ id: String(li.id), label: tituloPeca(li) })}
-                      className="rounded-lg border border-[#E6DFC8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#8C7325] hover:bg-[#FBF6E6]"
-                      title="Trocar esta peça por outra — a diferença vira cobrança ou vale, e o pedido é re-roteado."
-                    >
-                      Trocar
-                    </button>
+            {pecasDoPedido.map((li) => {
+              const peca = pecaPorItem(li);
+              const est = estadoDaPeca(peca);
+              // Trocar a loja DESTA peça = a mesma modal do "→ outra loja" do
+              // trilho: escolhe entre as lojas que têm a peça. Só enquanto
+              // ninguém bipou — depois o estoque já saiu de lá.
+              const podeTrocarLoja =
+                !!peca &&
+                !['shipped', 'delivered'].includes(
+                  liveStatus.find((r) => r.storeCode === peca.storeCode)?.status ?? 'new',
+                );
+              return (
+                <tr key={li.id} className="border-t">
+                  <td className="p-3">
+                    <div className="font-medium text-slate-800">{tituloPeca(li)}</div>
+                    {li.ref && (
+                      <div className="text-xs text-slate-500">
+                        {nomeSemVariacao(li.name, li.cor, li.tamanho)}
+                      </div>
+                    )}
                   </td>
-                )}
-              </tr>
-            ))}
+
+                  {/* ONDE ESTÁ — bolinha do estado + etiqueta da loja. Clicar
+                      na etiqueta abre a lista de lojas pra trocar a escolha. */}
+                  <td className="p-3">
+                    {peca ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
+                            est?.tom === 'crit' ? 'bg-crit' : est?.tom === 'ok' ? 'bg-ok' : 'bg-warn'
+                          }`}
+                          title={peca.onde}
+                          aria-label={est?.texto}
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            abrirMoverPeca(
+                              { id: String(li.id), sku: li.sku, ref: li.ref, cor: li.cor, tamanho: li.tamanho, descricao: li.name },
+                              { storeCode: peca.storeCode, storeName: peca.storeName, total: 1 },
+                            )
+                          }
+                          disabled={!podeTrocarLoja || sepLoading}
+                          className={`rounded-field border px-2 py-1 text-xs font-semibold transition ${
+                            peca.storeCode
+                              ? 'border-line bg-surface text-ink hover:bg-surface-2'
+                              : 'border-crit/40 bg-crit-soft text-crit hover:bg-crit/10'
+                          } disabled:cursor-not-allowed disabled:opacity-60`}
+                          title={
+                            podeTrocarLoja
+                              ? `${peca.onde} — clique pra escolher outra loja`
+                              : peca.onde
+                          }
+                        >
+                          {peca.storeName || peca.storeCode || 'escolher loja'}
+                          {podeTrocarLoja && <span className="ml-1 text-ink-faint">▾</span>}
+                        </button>
+                        <span
+                          className={`text-xs font-semibold ${
+                            est?.tom === 'crit' ? 'text-crit' : est?.tom === 'ok' ? 'text-ok' : 'text-warn'
+                          }`}
+                        >
+                          {est?.texto}
+                        </span>
+                        {/* Peça vermelha sem dono: as duas saídas (26/08) — o
+                            2º frete de outra loja, ou cancelar e devolver. */}
+                        {peca.cor_semaforo === 'vermelho' && ['sem_dono', 'reportada'].includes(peca.estado) && (
+                          <button
+                            type="button"
+                            onClick={() => { setCancelarPeca(peca); setCancelarMotivo(''); setCancelarErro(null); }}
+                            className="text-xs font-semibold text-crit underline hover:opacity-80"
+                            title="Cancela SÓ esta peça e devolve o valor dela — o pedido segue com as outras"
+                          >
+                            cancelar e devolver
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">sem separação ainda</span>
+                    )}
+                  </td>
+
+                  <td className="p-3 font-mono text-xs text-slate-600">{li.sku || '—'}</td>
+                  <td className="p-3 text-right">{li.quantity}</td>
+                  <td className="p-3 text-right">{fmtMoney(li.price)}</td>
+                  <td className="p-3 text-right font-medium">{fmtMoney(li.total)}</td>
+                  {podeTrocarItem && (
+                    <td className="p-3 text-right">
+                      <button
+                        onClick={() => setTrocaItem({ id: String(li.id), label: tituloPeca(li) })}
+                        className="rounded-lg border border-[#E6DFC8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#8C7325] hover:bg-[#FBF6E6]"
+                        title="Trocar esta peça por outra — a diferença vira cobrança ou vale, e o pedido é re-roteado."
+                      >
+                        Trocar
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
           <tfoot className="border-t-2 bg-slate-50 text-slate-700">
             <tr>
-              <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 5 : 4}>
+              <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 6 : 5}>
                 Frete cobrado da cliente{freteDoPedido.metodo ? ` · ${freteDoPedido.metodo}` : ''}
               </td>
               <td className="p-3 text-right font-bold tabular-nums">
@@ -3292,65 +3529,10 @@ export default function PedidoDetailPage() {
                       {a}
                     </div>
                   ))}
-                  <Table>
-                    <thead>
-                      <tr>
-                        <Th>Peça</Th>
-                        <Th align="right">Qtd</Th>
-                        <Th>Onde está agora</Th>
-                        <Th align="right">Decisão</Th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {raiox.pecas.map((p) => {
-                        const estado =
-                          p.cor_semaforo === 'vermelho' ? 'crit' : p.cor_semaforo === 'amarelo' ? 'warn' : 'ok';
-                        // Peça vermelha SEM decisão ganha as duas saídas (26/08 —
-                        // "e a peça que faltou?"): outra loja envia ou cancela e devolve.
-                        const decidivel =
-                          p.cor_semaforo === 'vermelho' && ['sem_dono', 'reportada'].includes(p.estado);
-                        return (
-                          <Tr key={p.orderItemId} estado={estado}>
-                            <Td className="font-medium">
-                              {[p.ref, p.cor, p.tamanho].filter(Boolean).join(' ') || p.sku}
-                              <span className="mt-0.5 block font-mono text-[11px] text-ink-faint">{p.sku}</span>
-                            </Td>
-                            <Td align="right" num>{p.quantity}</Td>
-                            <Td className={estado === 'crit' ? 'font-semibold text-crit' : 'text-ink-soft'}>
-                              {p.onde}
-                            </Td>
-                            <Td align="right">
-                              {decidivel ? (
-                                <div className="flex flex-wrap justify-end gap-1.5">
-                                  <button
-                                    onClick={() =>
-                                      abrirMoverPeca(
-                                        { id: p.orderItemId, sku: p.sku, ref: p.ref, cor: p.cor, tamanho: p.tamanho },
-                                        { storeCode: p.storeCode, storeName: p.storeName, total: 1 },
-                                      )
-                                    }
-                                    className="rounded-field border border-line bg-surface px-2 py-1 text-[11.5px] font-semibold text-ink hover:bg-surface-2"
-                                    title="Outra loja envia esta peça pra cliente (2º frete)"
-                                  >
-                                    Outra loja envia
-                                  </button>
-                                  <button
-                                    onClick={() => { setCancelarPeca(p); setCancelarMotivo(''); setCancelarErro(null); }}
-                                    className="rounded-field border border-crit/40 bg-surface px-2 py-1 text-[11.5px] font-semibold text-crit hover:bg-crit-soft"
-                                    title="Cancela SÓ esta peça e devolve o valor dela — o pedido segue com as outras"
-                                  >
-                                    Cancelar e devolver
-                                  </button>
-                                </div>
-                              ) : (
-                                <span className="text-ink-faint">—</span>
-                              )}
-                            </Td>
-                          </Tr>
-                        );
-                      })}
-                    </tbody>
-                  </Table>
+                  {/* A tabela peça-a-peça saiu daqui (27/08, ordem do dono:
+                      "temos dois quadros com as informações da peça"). Onde
+                      cada peça está agora é COLUNA do quadro ITENS lá em cima,
+                      com a bolinha do estado e a etiqueta da loja clicável. */}
 
                   {/* LINHA DO TEMPO — tudo que aconteceu, com QUEM. */}
                   <details className="mt-2">
