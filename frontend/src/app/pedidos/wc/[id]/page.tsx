@@ -1908,10 +1908,23 @@ export default function PedidoDetailPage() {
     raiox?.pecas.find((p) => String(p.orderItemId) === String(li.id)) ?? null;
 
   /** Estado da peça em três cores — a mesma régua do Semáforo. */
+  /**
+   * NUNCA FOI ROTEADO ≠ RUPTURA (27/08, flagra do dono no LP-000215).
+   *
+   * Pedido sem NENHUM card ainda tem toda peça "sem dono" no raio-x — não
+   * porque falta estoque, mas porque ninguém clicou em "Gerar separação". A
+   * tela pintava isso de VERMELHO e oferecia "cancelar e devolver" na peça:
+   * o botão mais destrutivo da tela, no estado mais comum de todos.
+   */
+  const semRotaAinda = liveStatus.length === 0;
+
   const estadoDaPeca = (p: PecaRaioX | null) => {
     if (!p) return null;
     const card = liveStatus.find((r) => r.storeCode && r.storeCode === p.storeCode);
     if (p.cor_semaforo === 'vermelho') {
+      if (semRotaAinda && p.estado === 'sem_dono') {
+        return { tom: 'warn' as const, texto: 'Aguardando separação' };
+      }
       return {
         tom: 'crit' as const,
         texto: p.estado === 'sem_dono' ? 'Sem loja' : 'Loja reportou problema',
@@ -2603,7 +2616,7 @@ export default function PedidoDetailPage() {
                           }
                           disabled={!podeTrocarLoja || sepLoading}
                           className={`rounded-field border px-2 py-1 text-xs font-semibold transition ${
-                            peca.storeCode
+                            peca.storeCode || semRotaAinda
                               ? 'border-line bg-surface text-ink hover:bg-surface-2'
                               : 'border-crit/40 bg-crit-soft text-crit hover:bg-crit/10'
                           } disabled:cursor-not-allowed disabled:opacity-60`}
@@ -2624,8 +2637,14 @@ export default function PedidoDetailPage() {
                           {est?.texto}
                         </span>
                         {/* Peça vermelha sem dono: as duas saídas (26/08) — o
-                            2º frete de outra loja, ou cancelar e devolver. */}
-                        {peca.cor_semaforo === 'vermelho' && ['sem_dono', 'reportada'].includes(peca.estado) && (
+                            2º frete de outra loja, ou cancelar e devolver.
+                            NÃO aparece em pedido que ainda não foi roteado:
+                            ali "sem loja" significa "ninguém clicou em Gerar
+                            separação", e o caminho é o roteamento, não o
+                            estorno. */}
+                        {!semRotaAinda &&
+                          peca.cor_semaforo === 'vermelho' &&
+                          ['sem_dono', 'reportada'].includes(peca.estado) && (
                           <button
                             type="button"
                             onClick={() => { setCancelarPeca(peca); setCancelarMotivo(''); setCancelarErro(null); }}
