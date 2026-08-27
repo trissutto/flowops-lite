@@ -4714,7 +4714,12 @@ export class PickOrdersService {
             ? ` · Estoque fantasma zerado na loja: ${fantasmaBaixado
                 .map((f) => `${f.sku} (${f.previousStock}→${f.newStock})`)
                 .join(', ')}.`
-            : ''),
+            // Sem baixa (o padrão desde 27/08): dizer isso EXPLICITAMENTE, senão
+            // a matriz olha a Consulta, vê o saldo intacto e acha que o reporte
+            // não gravou. O saldo continuar de pé é a decisão, não um esquecimento.
+            : reason === 'out_of_stock'
+              ? ' · Estoque da loja NÃO foi alterado — o saldo segue como estava.'
+              : ''),
       },
     });
 
@@ -4774,9 +4779,29 @@ export class PickOrdersService {
     };
   }
 
-  /** `0` desliga a baixa da quantidade fantasma no reporte por item. */
+  /**
+   * REPORTE DE "NÃO ACHEI" NÃO MEXE MAIS NO ESTOQUE (27/08 — ordem do dono:
+   * "não zere estoque do que for reportado como não achado").
+   *
+   * Até aqui o reporte zerava o saldo da loja (o "fantasma"), pra tirar da
+   * frente o número que alimentava o carrossel de swap. O custo disso é alto e
+   * silencioso: **destrói dado de inventário na palavra de uma pessoa**. Peça
+   * fora do lugar, arara trocada, bipe errado — tudo virava "não existe", e o
+   * saldo real não voltava sozinho. No caso da Moema (`8000000002433`, 1→0) foi
+   * exatamente isso que a tela registrou.
+   *
+   * Agora o reporte só REGISTRA (a linha em `pick_order_item_reports` continua,
+   * o card sai da fila, a matriz decide). O saldo fica como está.
+   *
+   * ⚠️ EFEITO CONHECIDO: o número que a loja negou continua contando na
+   * Consulta e no roteamento — a mesma loja pode ser escolhida de novo pra
+   * aquela peça. A defesa que sobra é a da TELA (badge "já negou este pedido" +
+   * confirmação ao insistir), que é por pedido, não por SKU.
+   *
+   * `PICK_ITEM_REPORT_DEBIT=1` volta a zerar, se algum dia for a decisão.
+   */
   private get itemReportDebitEnabled(): boolean {
-    return String(process.env.PICK_ITEM_REPORT_DEBIT ?? '1').trim() !== '0';
+    return String(process.env.PICK_ITEM_REPORT_DEBIT ?? '0').trim() === '1';
   }
 
   private static readonly ITEM_REPORT_REASON_LABELS: Record<string, string> = {
