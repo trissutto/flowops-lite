@@ -596,15 +596,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return map;
   }
 
-  private async findSkuByAnyEanFromMirror(list: string[]): Promise<string | null> {
-    // 1) codigo primeiro (mesma prioridade do caminho ao vivo: etiquetas da
-    //    Lurd's carregam o CODIGO interno como barcode).
+  /**
+   * Bipe resolvido pelo CÓDIGO no espelho — NÃO depende da coluna `ean`.
+   *
+   * As etiquetas da Lurd's carregam o CODIGO interno como código de barras
+   * (a confecção não usa EAN13 internacional), então esta é a busca que
+   * resolve a maioria dos bipes da loja — com 354 mil peças no espelho.
+   */
+  private async findSkuByCodigoFromMirror(list: string[]): Promise<string | null> {
     const norms = Array.from(new Set(list.map((v) => this.wincredCodigo(v))));
     const byCodigo: any = await (this.prismaFlow as any).wincredProduto.findFirst({
       where: { codigo: { in: norms } },
       select: { codigo: true },
     });
-    if (byCodigo?.codigo) return String(byCodigo.codigo).trim();
+    return byCodigo?.codigo ? String(byCodigo.codigo).trim() : null;
+  }
+
+  private async findSkuByAnyEanFromMirror(list: string[]): Promise<string | null> {
+    // 1) codigo primeiro (mesma prioridade do caminho ao vivo: etiquetas da
+    //    Lurd's carregam o CODIGO interno como barcode).
+    const porCodigo = await this.findSkuByCodigoFromMirror(list);
+    if (porCodigo) return porCodigo;
     // 2) colunas de EAN propriamente ditas.
     const byEan: any = await (this.prismaFlow as any).wincredProduto.findFirst({
       where: { ean: { in: list } },
@@ -4659,14 +4671,30 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (/^8\d{12}$/.test(raw)) return raw;
     if (this.mirrorReadsEnabled) {
       try {
+        const strippedM = raw.replace(/^0+/, '');
+        const variantsM = new Set<string>([raw, strippedM]);
+        if (/^\d+$/.test(raw)) {
+          variantsM.add(raw.padStart(13, '0'));
+          variantsM.add(raw.padStart(14, '0'));
+        }
+        const listaM = Array.from(variantsM).filter(Boolean);
+
+        /**
+         * BUSCA POR CÓDIGO NÃO PODE DEPENDER DA COLUNA `ean` (27/08).
+         *
+         * A guarda `mirrorEanReady()` (exige >100 linhas com EAN) protegia o
+         * caminho inteiro — e a coluna `ean` do espelho está VAZIA: 0 de
+         * 354.309 peças. Resultado: 100% dos bipes iam pro Giga, inclusive os
+         * que o espelho resolveria pelo CODIGO, que é o que a etiqueta da casa
+         * carrega. Com o MySQL da KingHost recusando o IP do Railway, o bipe
+         * da loja simplesmente não achava a peça (28 falhas em minutos).
+         */
+        const porCodigo = await this.findSkuByCodigoFromMirror(listaM);
+        if (porCodigo) return porCodigo;
+
+        // Coluna de EAN: só quando o espelho realmente tiver EAN.
         if (await this.mirrorEanReady()) {
-          const strippedM = raw.replace(/^0+/, '');
-          const variantsM = new Set<string>([raw, strippedM]);
-          if (/^\d+$/.test(raw)) {
-            variantsM.add(raw.padStart(13, '0'));
-            variantsM.add(raw.padStart(14, '0'));
-          }
-          const hit = await this.findSkuByAnyEanFromMirror(Array.from(variantsM).filter(Boolean));
+          const hit = await this.findSkuByAnyEanFromMirror(listaM);
           if (hit) return hit;
           // miss no espelho → deixa o Giga tentar (EAN recém-cadastrado)
         }
