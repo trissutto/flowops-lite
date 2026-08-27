@@ -1526,7 +1526,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return this.decreaseStockGigaOnly(items, opts); // shadow/sem pool: comportamento legado
     }
     const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
-    const giga = await this.decreaseStockGigaOnly(items, opts);
+    // Mesmo motivo do `increaseStock`: exceção do MySQL (Access denied /
+    // EHOSTUNREACH) vira ENFILEIRAMENTO, não erro na cara de quem vende.
+    let giga: Awaited<ReturnType<typeof this.decreaseStockGigaOnly>>;
+    try {
+      giga = await this.decreaseStockGigaOnly(items, opts);
+    } catch (e) {
+      giga = { success: false, applied: [], error: (e as Error).message } as any;
+    }
     if (giga.success) return giga;
     await this.enqueueStockDelta('dec', items, opts, giga.error);
     return { success: true, applied: flowApplied, gigaEnfileirado: true };
@@ -1782,7 +1789,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return this.increaseStockGigaOnly(items);
     }
     const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
-    const giga = await this.increaseStockGigaOnly(items);
+    // O Giga LANÇA (não devolve `success:false`) quando a KingHost recusa o IP
+    // do Railway — "Access denied for user 'gigasistemas21'". Sem este catch a
+    // exceção subia como HTTP 500 DEPOIS do Flow já ter aplicado o delta: a
+    // tela dizia que falhou, a loja clicava de novo e somava outra vez.
+    // Erro do Giga é assunto do outbox, não da operação (27/08).
+    let giga: Awaited<ReturnType<typeof this.increaseStockGigaOnly>>;
+    try {
+      giga = await this.increaseStockGigaOnly(items);
+    } catch (e) {
+      giga = { success: false, applied: [], error: (e as Error).message } as any;
+    }
     if (giga.success) return giga;
     await this.enqueueStockDelta('inc', items, undefined, giga.error);
     return { success: true, applied: flowApplied, gigaEnfileirado: true };
@@ -7023,7 +7040,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return this.findCodigoByRefCorTamGiga(refCode, cor, tamanho);
     }
 
-    const doGiga = await this.findCodigoByRefCorTamGiga(refCode, cor, tamanho);
+    // Giga FORA (Access denied / EHOSTUNREACH) não pode significar "peça não
+    // existe": esse lookup trava a entrada da remessa (27/08, Moema). Se o
+    // legado cai, o Postgres responde — é a MESMA tradução que a sombra faz.
+    let doGiga: string | null;
+    try {
+      doGiga = await this.findCodigoByRefCorTamGiga(refCode, cor, tamanho);
+    } catch (e) {
+      this.logger.warn(
+        `findCodigoByRefCorTam: Giga falhou (${(e as Error).message}) — tentando o espelho do Flow`,
+      );
+      if (!this.sombra) throw e;
+      return this.sombra.findCodigoByRefCorTam(refCode, cor, tamanho);
+    }
 
     // `void`: não espera pela comparação. O usuário já tem a resposta, e a
     // validação não pode custar latência nem derrubar a tela se falhar.

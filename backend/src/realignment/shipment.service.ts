@@ -2978,10 +2978,28 @@ export class RealignmentShipmentService {
         `[shipment] ${shipment.code}: caixa de JUNTADA recebida — SEM entrada de estoque (peças do pedido, não da arara)`,
       );
     } else if (stockItems.length > 0) {
-      increaseResult = await this.erp.increaseStock(stockItems);
+      /**
+       * ENTRADA NO FLOW NA HORA, GIGA PELO OUTBOX (27/08 — Moema travada).
+       *
+       * Era `increaseStock` (inline): o Flow aplicava o delta e, logo depois,
+       * o MySQL da KingHost recusava o IP do Railway ("Access denied for user
+       * 'gigasistemas21'"). A exceção subia como HTTP 500, a tela dizia "Erro
+       * 500 — Internal server error" e a remessa NÃO fechava — mesmo com o
+       * estoque já somado no Flow. A loja clicava de novo e somava outra vez.
+       *
+       * O Flow é a fonte do estoque desde 14/07 e o Giga é réplica: a peça
+       * volta a existir aqui, e a réplica vai pro `erp_outbox` com retry.
+       * Recebimento de caixa não pode depender do ERP legado estar vivo.
+       */
+      increaseResult = await this.erp.increaseStockAsync(stockItems);
       if (!increaseResult.success) {
         throw new BadRequestException(
-          `Falha ao dar entrada Giga: ${increaseResult.error}. Remessa NÃO foi finalizada.`,
+          `Falha ao dar entrada no estoque: ${increaseResult.error}. Remessa NÃO foi finalizada.`,
+        );
+      }
+      if (increaseResult.gigaEnfileirado) {
+        this.logger.log(
+          `[shipment] ${shipment.code}: entrada aplicada no Flow (${increaseResult.applied?.length || 0} SKU) — réplica do Giga na fila do outbox`,
         );
       }
     }
