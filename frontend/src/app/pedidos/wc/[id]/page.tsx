@@ -3,7 +3,7 @@ import { overlayClose } from '@/lib/overlayClose';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { api } from '@/lib/api';
+import { api, API_URL, getAuthToken } from '@/lib/api';
 import { abrirWhatsApp } from '@/lib/whatsapp';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import DadosClienteModal from '@/components/DadosClienteModal';
@@ -17,7 +17,7 @@ import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
 import TrocaPecaModal from './TrocaPecaModal';
 import CampanhaCascata, { Atribuicao } from './CampanhaCascata';
-import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X } from 'lucide-react';
+import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X, FileText } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
 
@@ -432,6 +432,25 @@ export default function PedidoDetailPage() {
       sentAt?: string | null;
       receivedAt?: string | null;
     } | null;
+    // ── NOTA FISCAL deste envio (27/08) ──
+    // Nasce por CARD (`envio:<pickId>`), não por pedido: pedido dividido tem
+    // uma nota por loja, cada uma com o CNPJ da loja que despachou. `null` =
+    // despachou sem emitir — pendência fiscal, e a tela diz isso.
+    nota?: {
+      id: string;
+      numero: number;
+      serie: string;
+      chave: string | null;
+      status: string;
+      cStat: string | null;
+      xMotivo: string | null;
+      protocolo: string | null;
+      /** tpAmb '2' — nota de TESTE, sem valor fiscal. */
+      homologacao: boolean;
+      valorCents: number;
+      emitidaEm: string;
+      danfeDisponivel: boolean;
+    } | null;
     // SKUs desta loja — usados pra medir a cobertura do "Trocar loja" só
     // contra os itens que realmente vão mudar de loja.
     skus?: string[];
@@ -511,6 +530,44 @@ export default function PedidoDetailPage() {
       .then((d) => setCreditosEmitidos(Array.isArray(d) ? d : []))
       .catch(() => {});
   };
+  /**
+   * DANFE da nota deste envio (27/08).
+   *
+   * Mesma rota que o relatório fiscal já usa (`GET /nfe/:id/danfe`), que
+   * devolve PDF binário — por isso `fetch` cru com o token, e não o helper
+   * `api()`, que faz `res.json()` e engasgaria no PDF.
+   *
+   * Abre em aba nova; se o navegador bloquear o popup, cai pro download —
+   * bloqueio de popup não pode virar "o botão não faz nada".
+   */
+  const [danfeBaixando, setDanfeBaixando] = useState<string | null>(null);
+  const abrirDanfe = async (nota: { id: string; numero: number }) => {
+    setDanfeBaixando(nota.id);
+    try {
+      const token = getAuthToken();
+      const r = await fetch(`${API_URL}/api/nfe/${nota.id}/danfe`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) {
+        throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      }
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const w = window.open(blobUrl, '_blank');
+      if (!w) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `danfe-${nota.numero}.pdf`;
+        a.click();
+      }
+      // Solta o blob depois que o navegador já leu (revogar na hora mata a aba).
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (e: any) {
+      alert(`Não consegui gerar o DANFE: ${e?.message || e}`);
+    } finally {
+      setDanfeBaixando(null);
+    }
+  };
+
   const abrirCredito = (r: ReportLinha) => {
     setCreditoAlvo(r);
     setCreditoErro(null);
@@ -3395,6 +3452,60 @@ export default function PedidoDetailPage() {
                     <Link href="/retaguarda/baixas-log" className="underline">
                       resolver no log
                     </Link>
+                  </div>
+                )}
+                {/* ── NOTA FISCAL deste envio (27/08, pedido do dono) ──
+                    Colada no rastreio de propósito: são as duas metades da mesma
+                    pergunta — o que saiu e com que documento. A nota nasce por
+                    CARD (`envio:<pickId>`), então pedido dividido tem uma nota
+                    por loja, cada uma com o CNPJ de quem despachou. */}
+                {r.nota && r.nota.status === 'authorized' && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-ink-soft">
+                    <FileText className="h-3 w-3 shrink-0" />
+                    <span>
+                      NF-e <span className="font-mono font-semibold text-ink">{r.nota.numero}</span>
+                      <span className="text-ink-soft">/{r.nota.serie}</span>
+                    </span>
+                    <span>
+                      {(r.nota.valorCents / 100).toLocaleString('pt-BR', {
+                        style: 'currency',
+                        currency: 'BRL',
+                      })}
+                    </span>
+                    {r.nota.homologacao && (
+                      <span className="rounded-field bg-warn-soft px-1.5 py-0.5 text-[10px] font-bold uppercase text-warn">
+                        homologação · sem valor fiscal
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => abrirDanfe(r.nota!)}
+                      disabled={danfeBaixando === r.nota.id}
+                      className="ml-auto rounded-field border border-line bg-surface px-2 py-1 text-[11.5px] font-semibold text-ink hover:bg-surface-2 disabled:opacity-50"
+                      title={r.nota.chave ? `Chave ${r.nota.chave}` : 'Baixar DANFE'}
+                    >
+                      {danfeBaixando === r.nota.id ? '…' : 'DANFE'}
+                    </button>
+                  </div>
+                )}
+                {r.nota?.status === 'authorized' && r.nota.chave && (
+                  // Chave de acesso: o que o contador pede e o que a cliente usa
+                  // pra consultar no portal da SEFAZ.
+                  <div className="mt-0.5 break-all font-mono text-[10px] text-ink-soft opacity-70">
+                    {r.nota.chave}
+                  </div>
+                )}
+                {r.nota && r.nota.status !== 'authorized' && (
+                  <div className="mt-1 text-[11.5px] font-semibold text-crit">
+                    NF-e {r.nota.status === 'rejected' ? 'REJEITADA' : r.nota.status}
+                    {r.nota.xMotivo && <span className="font-normal"> — {r.nota.xMotivo}</span>}
+                  </div>
+                )}
+                {/* Despachou sem nota: 99 de 647 cards em 30 dias. Pendência
+                    fiscal — a tela mostra o buraco em vez de omitir. */}
+                {r.status === 'shipped' && !r.nota && (
+                  <div className="mt-1 text-[11.5px] font-semibold text-warn">
+                    Despachado sem nota fiscal
                   </div>
                 )}
 

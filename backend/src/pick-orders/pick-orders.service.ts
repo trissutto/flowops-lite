@@ -3326,6 +3326,63 @@ export class PickOrdersService {
       },
     });
     const caixaDoPick = new Map(caixasJuntada.map((c) => [c.pickOrderId, c]));
+
+    /**
+     * ── NOTA FISCAL DE CADA CARD (27/08, pedido do dono) ──
+     *
+     * A NF-e do envio nasce por PICK-ORDER, não por pedido: o link é
+     * `shipment_id = 'envio:<pickOrderId>'` (`nfe-transfer.service.ts`). Num
+     * pedido dividido são DUAS notas, uma por loja — cada loja emite a dela,
+     * com o CNPJ dela. Por isso a nota mora aqui, na linha da loja, do lado do
+     * rastreio: são as duas metades da mesma pergunta ("o que saiu e com que
+     * documento").
+     *
+     * Uma consulta só pro pedido inteiro. Quando a mesma loja tem mais de uma
+     * tentativa (rejeitada e depois autorizada), vale a AUTORIZADA — é a que
+     * existe pro fisco; a rejeitada aparece só se não houver nenhuma boa, pra
+     * a operadora ver o motivo em vez de um vazio sem explicação.
+     */
+    const notas = await this.prisma.nfeDoc.findMany({
+      where: { shipmentId: { in: rows.map((r) => `envio:${r.id}`) } },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true, shipmentId: true, numero: true, serie: true, chave: true,
+        status: true, cStat: true, xMotivo: true, tpAmb: true, protocolo: true,
+        valorTotalCents: true, createdAt: true, erro: true,
+      },
+    });
+    const notaDoPick = new Map<string, (typeof notas)[number]>();
+    for (const n of notas) {
+      const pickId = String(n.shipmentId || '').replace(/^envio:/, '');
+      const atual = notaDoPick.get(pickId);
+      if (!atual) { notaDoPick.set(pickId, n); continue; }
+      // autorizada ganha de qualquer outra; entre iguais, a mais recente (já
+      // vem ordenada desc, então a primeira encontrada basta).
+      if (atual.status !== 'authorized' && n.status === 'authorized') notaDoPick.set(pickId, n);
+    }
+    const montarNota = (pickId: string) => {
+      const n = notaDoPick.get(pickId);
+      if (!n) return null;
+      return {
+        id: n.id,
+        numero: n.numero,
+        serie: n.serie,
+        chave: n.chave,
+        status: n.status,
+        cStat: n.cStat,
+        xMotivo: n.xMotivo ?? n.erro ?? null,
+        protocolo: n.protocolo,
+        // '2' = homologação: nota de TESTE, sem valor fiscal. A tela precisa
+        // gritar isso — DANFE de homologação já foi confundida com a real.
+        homologacao: n.tpAmb === '2',
+        valorCents: n.valorTotalCents,
+        emitidaEm: n.createdAt,
+        // O PDF é gerado sob demanda em GET /nfe/:id/danfe (mesma rota que o
+        // relatório fiscal já usa). Só faz sentido oferecer se foi autorizada.
+        danfeDisponivel: n.status === 'authorized',
+      };
+    };
+
     const reasonLabels: Record<string, string> = {
       out_of_stock: 'Sem estoque físico',
       defective: 'Peça com defeito',
@@ -3365,6 +3422,10 @@ export class PickOrdersService {
         transferToStoreCode: (r as any).transferToStoreCode ?? null,
         // ── JUNTADA (21/08): a caixa deste feeder, se existir ──
         caixaJuntada: caixaDoPick.get(r.id) ?? null,
+        // ── NOTA FISCAL deste envio (27/08) — null quando a loja despachou
+        // sem emitir (99 de 647 cards em 30 dias). A tela mostra o buraco em
+        // vez de esconder: card enviado sem nota é pendência fiscal.
+        nota: montarNota(r.id),
         issueReason,
         issueReasonLabel: issueReason ? reasonLabels[issueReason] ?? issueReason : null,
         issueNote: (r as any).issueNote ?? null,
