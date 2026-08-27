@@ -1479,9 +1479,9 @@ export class RoutingService {
       },
     });
     if (!order) throw new BadRequestException('Pedido não encontrado.');
-    if (['delivered', 'cancelled'].includes(String(order.status))) {
+    if (String(order.status) === 'cancelled') {
       throw new BadRequestException(
-        `Pedido está "${order.status}" — não se remexe na separação de pedido entregue ou cancelado.`,
+        'Pedido está "cancelled" — pedido cancelado não recebe separação nova.',
       );
     }
     /**
@@ -1490,8 +1490,22 @@ export class RoutingService {
      * vira shipped com a caixa de UMA loja na rua e a peça órfã pra trás — é
      * exatamente ela que a matriz precisa poder mover. O que continua proibido
      * é mexer em peça cujo card do dono JÁ POSTOU (checado abaixo, por peça).
+     *
+     * ── `delivered` TAMBÉM ABRE (27/08 — caso LP-000136) ──
+     *
+     * A trava antiga recusava `delivered` em bloco, e prendia justamente o
+     * caso que ela deveria resolver: pedido cujas CAIXAS chegaram mas que tem
+     * uma peça que NUNCA saiu (reportada pela loja, sem dono desde então).
+     * Fechar o pedido não entregou essa peça — a cliente pagou por ela e
+     * continua sem. "Não remexer no que foi entregue" é a intenção certa, e
+     * quem garante isso é a checagem POR PEÇA logo abaixo (card do dono em
+     * shipped/delivered = não move), não um bloqueio do pedido inteiro.
+     *
+     * Isto NÃO reabre o buraco do [[volta-pro-fluxo]]: lá o problema era
+     * `PATCH status=separacao` recriando card pra peça JÁ POSTADA. Aqui só
+     * anda a peça que o guard por peça deixa passar — a que nunca viajou.
      */
-    const cardsDoPedido: any[] = ['shipped'].includes(String(order.status))
+    const cardsDoPedido: any[] = ['shipped', 'delivered'].includes(String(order.status))
       ? await this.prisma.pickOrder.findMany({
           where: { orderId },
           select: { storeId: true, status: true },
@@ -1649,6 +1663,31 @@ export class RoutingService {
       ),
     ) as string[];
 
+    /**
+     * PEDIDO ENTREGUE QUE GANHOU PEÇA PRA ENVIAR VOLTA A SER `shipped` (27/08).
+     *
+     * Sem isto a peça anda e o pedido continua dizendo "concluído": some das
+     * filas, e o `RastreioSyncCron` — que só fecha pedido `shipped` — nunca
+     * mais olha pra ele. Ficaria um card vivo pendurado num pedido que o
+     * sistema considera terminado.
+     *
+     * `shipped` e não `separating` de propósito: as outras caixas SAÍRAM
+     * mesmo. Quando esta peça chegar, o cron fecha de novo — e agora passando
+     * pela régua da peça pendente (`pedido-completo`), que é o que faltava em
+     * 26/08 e deixou este pedido fechar torto.
+     *
+     * `deliveredAt` é ZERADO junto: é dele que corre o prazo de troca da
+     * cliente, e o prazo não pode contar de uma entrega que não aconteceu
+     * inteira.
+     */
+    const voltouPraRua = String(order.status) === 'delivered';
+    if (voltouPraRua) {
+      await this.prisma.order.updateMany({
+        where: { id: orderId, status: 'delivered' },
+        data: { status: OrderStatus.shipped, deliveredAt: null },
+      });
+    }
+
     // Assinado (26/08): FK conferida — id de token velho não derruba o create.
     const moveuUser = opts?.userId
       ? await this.prisma.user.findUnique({ where: { id: opts.userId }, select: { id: true } })
@@ -1657,7 +1696,7 @@ export class RoutingService {
       data: {
         orderId,
         fromStatus: order.status,
-        toStatus: order.status,
+        toStatus: voltouPraRua ? OrderStatus.shipped : order.status,
         userId: moveuUser?.id ?? null,
         note:
           `Peça movida na mão: ${mover.map(nomeDaPeca).join(', ')}` +
@@ -1666,6 +1705,9 @@ export class RoutingService {
           `${mover.length} peça(s) — o resto do card ficou onde estava.` +
           (cardsRemovidos.length
             ? ` Card da ${cardsRemovidos.join('/')} ficou sem peça e foi removido.`
+            : '') +
+          (voltouPraRua
+            ? ' Pedido estava ENTREGUE com esta peça pendente: voltou pra "enviado" e só fecha de novo quando ela chegar.'
             : '') +
           (opts?.nome ? ` · por ${opts.nome}` : ''),
       },
