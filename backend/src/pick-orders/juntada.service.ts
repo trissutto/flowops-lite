@@ -78,6 +78,7 @@ export class JuntadaService {
       where: { wcOrderId },
       include: {
         pickOrders: { include: { store: { select: { code: true, name: true } } } },
+        items: { select: { assignedStoreId: true, quantity: true, sku: true } },
       },
     });
     if (!order) throw new NotFoundException('Pedido não encontrado no banco local.');
@@ -85,16 +86,48 @@ export class JuntadaService {
       throw new BadRequestException('Pedido de RETIRADA já junta sozinho na loja da retirada.');
     }
 
+    // MOTOBOY COM LOJA ESCOLHIDA usa o mesmo destino logístico da retirada:
+    // `pickupStoreCode`. Não é uma âncora livre de juntada — as fornecedoras
+    // precisam mandar pra loja que fará o motoboy, mesmo que ela tenha 0 peça.
+    const motoboyComLoja =
+      !!order.pickupStoreCode && /motoboy|moto\s*boy/i.test(String(order.shippingMethod || ''));
+    if (motoboyComLoja) {
+      throw new BadRequestException(
+        `Pedido de MOTOBOY já tem destino obrigatório na loja ${order.pickupStoreCode}. ` +
+          'Para mudar a loja, use Trocar entrega.',
+      );
+    }
+
     const ativos = order.pickOrders.filter((p: any) => JuntadaService.STATUS_ATIVOS.includes(p.status));
-    const ancora = ativos.find((p: any) => p.store?.code === anchorStoreCode);
+    const qtdPorLoja = new Map<string, number>();
+    for (const item of order.items ?? []) {
+      if (!item.assignedStoreId || ehItemSemEstoque(item)) continue;
+      qtdPorLoja.set(
+        item.assignedStoreId,
+        (qtdPorLoja.get(item.assignedStoreId) ?? 0) + (Number(item.quantity) || 1),
+      );
+    }
+    const ativosComPeca = ativos.filter((p: any) => (qtdPorLoja.get(p.storeId) ?? 0) > 0);
+    const ancora = ativosComPeca.find((p: any) => p.store?.code === anchorStoreCode);
     if (!ancora) {
+      const cardVazio = ativos.find((p: any) => p.store?.code === anchorStoreCode);
+      if (cardVazio) {
+        throw new BadRequestException(
+          `A loja ${anchorStoreCode} está com card vazio neste pedido e não pode ser âncora. ` +
+            'Escolha uma loja que realmente tenha peças.',
+        );
+      }
       throw new BadRequestException(
         `A loja ${anchorStoreCode} não tem card ativo neste pedido — a âncora precisa ser uma das lojas da separação.`,
       );
     }
-    const feeders = ativos.filter((p: any) => p.id !== ancora.id);
+    const feeders = ativosComPeca.filter((p: any) => p.id !== ancora.id);
     if (!feeders.length) {
-      throw new BadRequestException('Só existe um card ativo — não há o que juntar.');
+      const qtd = qtdPorLoja.get(ancora.storeId) ?? 0;
+      throw new BadRequestException(
+        `${ancora.store?.name ?? anchorStoreCode} já possui ${qtd} peça(s), cobrindo sozinho o pedido. ` +
+          'O correto é enviar diretamente desta loja para a cliente.',
+      );
     }
 
     /**

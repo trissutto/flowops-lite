@@ -204,6 +204,19 @@ function tituloPeca(li: { name: string; sku: string; ref?: string | null; cor?: 
   return refCorTam(li) || li.name || li.sku;
 }
 
+function quantidadeDoCard(card: { items?: Array<{ qty: number }> }): number {
+  return (card.items ?? []).reduce((s, item) => s + (Number(item.qty) || 0), 0);
+}
+
+function destinoLogisticoObrigatorio(order: WcOrderDetail | null): { code: string; tipo: 'retirada' | 'motoboy' } | null {
+  const code = String(order?.pickup?.storeCode || '').trim();
+  if (!code) return null;
+  if (order?.pickup?.isPickup) return { code, tipo: 'retirada' };
+  const method = String(order?.pickup?.shippingMethodTitle || order?.shippingLines?.[0]?.method || '');
+  if (/motoboy|moto\s*boy/i.test(method)) return { code, tipo: 'motoboy' };
+  return null;
+}
+
 export default function PedidoDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -3238,7 +3251,7 @@ export default function PedidoDetailPage() {
                 a tela ficava MUDA e o botão de juntar sumia — dava pra ver o
                 problema e não dava pra consertar. */}
             {(() => {
-              if (order.pickup?.isPickup) return null;
+              if (destinoLogisticoObrigatorio(order)) return null;
               const cardsAtivos = liveStatus.filter((p) =>
                 ['new', 'separating', 'separated', 'ready'].includes(p.status),
               );
@@ -3269,16 +3282,39 @@ export default function PedidoDetailPage() {
               const cardsAtivos = liveStatus.filter((p) =>
                 ['new', 'separating', 'separated', 'ready'].includes(p.status),
               );
+              const cardsComPecas = cardsAtivos.filter((p) => quantidadeDoCard(p) > 0);
+              const destino = destinoLogisticoObrigatorio(order);
               // Blindagem: se o GET /juntada falhou (juntada=null) mas os
               // cards já mostram feeder (isTransfer sem retirada), a juntada
               // EXISTE — oferecer o botão de novo só geraria erro no modal.
-              const jaTemFeeder = cardsAtivos.some((p) => p.isTransfer && !order.pickup?.isPickup);
-              if (cardsAtivos.length < 2 || juntada?.juntando === true || jaTemFeeder || order.pickup?.isPickup) return null;
+              const jaTemFeeder = cardsComPecas.some((p) => p.isTransfer && !destino);
+              if (destino || juntada?.juntando === true || jaTemFeeder) return null;
+              const totalPedido = (order.lineItems ?? []).reduce(
+                (s, item) => s + (Number(item.quantity) || 0),
+                0,
+              );
+              if (
+                cardsComPecas.length === 1 &&
+                quantidadeDoCard(cardsComPecas[0]) >= totalPedido &&
+                cardsAtivos.length > 1
+              ) {
+                const unica = cardsComPecas[0];
+                return (
+                  <div className="mb-2 text-xs bg-emerald-50 border border-emerald-300 text-emerald-900 rounded px-2 py-1.5 flex items-start gap-1.5">
+                    <span>✓</span>
+                    <span>
+                      <b>{unica.storeName || unica.storeCode}</b> possui as {quantidadeDoCard(unica)} peças.
+                      O envio deve sair diretamente desta loja; card vazio não entra como segundo frete.
+                    </span>
+                  </div>
+                );
+              }
+              if (cardsComPecas.length < 2) return null;
               return (
                 <div className="mb-2 text-xs bg-violet-50 border border-violet-200 text-violet-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
                   <span>🧲</span>
                   <span className="flex-1 min-w-[180px]">
-                    Pedido dividido em {cardsAtivos.length} lojas = {cardsAtivos.length} fretes.
+                    Pedido dividido em {cardsComPecas.length} lojas = {cardsComPecas.length} fretes.
                     Dá pra <b>juntar tudo numa loja</b> e mandar um pacote só pra cliente.
                   </span>
                   <button
@@ -3293,6 +3329,12 @@ export default function PedidoDetailPage() {
             })()}
             <div className="space-y-2">
               {liveStatus.map((r) => {
+                const qtdNoCard = quantidadeDoCard(r);
+                const destinoObrigatorio = destinoLogisticoObrigatorio(order);
+                const ehReceptor =
+                  qtdNoCard === 0 &&
+                  !!destinoObrigatorio &&
+                  r.storeCode === destinoObrigatorio.code;
                 const flash = !!liveStatusFlash[r.id];
                 const hasIssue = !!r.issueReason;
                 const badgeColor = hasIssue
@@ -3327,6 +3369,11 @@ export default function PedidoDetailPage() {
                       <span className={`text-xs px-2 py-0.5 rounded font-medium ${badgeColor}`}>
                         {label}
                       </span>
+                      {ehReceptor && (
+                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-cyan-100 text-cyan-900 border border-cyan-300">
+                          DESTINO DO {destinoObrigatorio.tipo === 'motoboy' ? 'MOTOBOY' : 'PEDIDO'} · aguardando peças
+                        </span>
+                      )}
                       {/* JUNTADA: papel deste card — feeder manda caixa pra
                           âncora; âncora envia o pacote completo pra cliente. */}
                       {r.isTransfer && !order.pickup?.isPickup && r.transferToStoreCode && (
@@ -4540,9 +4587,13 @@ export default function PedidoDetailPage() {
                 </div>
               )}
               {liveStatus
-                .filter((p) => ['new', 'separating', 'separated', 'ready'].includes(p.status))
+                .filter(
+                  (p) =>
+                    ['new', 'separating', 'separated', 'ready'].includes(p.status) &&
+                    quantidadeDoCard(p) > 0,
+                )
                 .map((p) => {
-                  const pecas = (p.items ?? []).reduce((s, it) => s + (it.qty || 1), 0);
+                  const pecas = quantidadeDoCard(p);
                   return (
                     <div
                       key={p.id}
