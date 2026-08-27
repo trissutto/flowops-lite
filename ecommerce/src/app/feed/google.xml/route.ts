@@ -1,6 +1,6 @@
 import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
-import { variantes, type PecaFeed, type Variante } from '@/lib/feed/variantes';
+import { tituloShopping, variantes, type PecaFeed, type Variante } from '@/lib/feed/variantes';
 
 /**
  * FEED DO GOOGLE MERCHANT CENTER — o maior canal da loja, medido.
@@ -109,9 +109,11 @@ function item(p: PecaFeed, v: Variante): string {
   const campos: string[] = [
     `<g:id>${escapar(v.id)}</g:id>`,
     ...(v.grupo ? [`<g:item_group_id>${escapar(v.grupo)}</g:item_group_id>`] : []),
-    // Com a COR no nome: sem isto a peça de 8 cores vira 8 anúncios de
-    // título idêntico e a cliente não sabe qual é qual.
-    `<g:title>${escapar(v.grupo ? `${p.nome} · ${v.cor}` : p.nome)}</g:title>`,
+    // Tipo da peça + plus size + cor + Ref + marca. Ver `tituloShopping`: o
+    // nome sozinho deixava 561 dos 977 itens chamados só de "Blusa Manga
+    // Curta", disputando a busca errada. A cor entra sempre que existe — sem
+    // ela a peça de 8 cores vira 8 anúncios idênticos.
+    `<g:title>${escapar(tituloShopping(p, v))}</g:title>`,
     // Descrição vazia reprova o item. O nome é um fallback honesto: descreve a
     // peça, mesmo que sem charme.
     `<g:description>${escapar(p.descricao || p.nome)}</g:description>`,

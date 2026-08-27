@@ -103,3 +103,58 @@ export function chaveDeCor(nome: string | null | undefined): string {
     .trim()
     .toUpperCase();
 }
+
+/**
+ * O TÍTULO QUE O SHOPPING LÊ — e que hoje não diz nada.
+ *
+ * Medido em 27/08/2026: **561 dos 977 itens** do feed saíam com título que é
+ * só a categoria — 73 peças diferentes chamadas "Blusa Manga Curta", 30
+ * "Vestido Manga Curta". Para o Google, título é o principal sinal de
+ * relevância do Shopping: sem Ref, sem cor e sem "plus size", a peça disputa
+ * a busca errada e some da certa. O feed velho do WooCommerce, que ainda leva
+ * três quartos do gasto, tem títulos como "Blusa Feminina Plus Size Manga
+ * Curta Ref 207372 Preto" — e é ele que converte.
+ *
+ * A ordem segue o que o Google recomenda para vestuário: tipo da peça,
+ * público, atributo (cor), identificador e marca. Nada promocional — "frete
+ * grátis" e afins reprovam o item, e a caixa alta em excesso também, por isso
+ * a cor vem capitalizada e não como o ERP a entrega ("PRETO").
+ *
+ * A vitrine NÃO usa isto: `p.nome` continua sendo o nome da peça no site.
+ * Aqui é só o rótulo do anúncio.
+ */
+export function tituloShopping(p: PecaFeed, v: Variante): string {
+  const partes: string[] = [p.nome.trim()];
+  /**
+   * A comparação é por texto simples, sem acento e sem caixa — nunca por
+   * regex montada com o nome da peça dentro. Nome de cadastro vem com `(`,
+   * `+` e `*`, e isso explodiria na hora de gerar o feed inteiro.
+   */
+  const simples = (t: string) =>
+    String(t ?? '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase();
+  const jaTem = (t: string) => simples(partes.join(' ')).includes(simples(t));
+
+  // "Plus size" é o que a cliente digita. Nome que já traz, não repete.
+  if (!jaTem('plus size') && !jaTem('plussize')) partes.push('Plus Size');
+  if (v.cor && !jaTem(v.cor)) partes.push(capitalizar(v.cor));
+  // A Ref é como a loja e a cliente se referem à peça no WhatsApp.
+  if (p.ref && !jaTem(`ref ${p.ref}`)) partes.push(`Ref ${p.ref}`);
+  const marca = (p.marca || '').trim();
+  if (marca && !jaTem(marca)) partes.push(marca);
+
+  // Teto do Google é 150; o que decide é o começo, então cortar o fim é seguro.
+  return partes.join(' ').replace(/\s+/g, ' ').trim().slice(0, 150).trim();
+}
+
+/** "PRETO" → "Preto"; "AZUL MARINHO" → "Azul Marinho". */
+function capitalizar(texto: string): string {
+  return String(texto ?? '')
+    .toLocaleLowerCase('pt-BR')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((palavra) => palavra.charAt(0).toLocaleUpperCase('pt-BR') + palavra.slice(1))
+    .join(' ');
+}
