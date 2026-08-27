@@ -603,6 +603,108 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * (a confecção não usa EAN13 internacional), então esta é a busca que
    * resolve a maioria dos bipes da loja — com 354 mil peças no espelho.
    */
+  /**
+   * BUSCA DE CATÁLOGO NO FLOW — o recuo de quem hoje pergunta ao Giga.
+   *
+   * A KingHost encerra o servidor do ERP legado, e `searchProductsLike` /
+   * `searchByRef` respondiam `[]` quando o MySQL falhava: a Consulta de loja e
+   * o dropdown de busca simplesmente diziam "não achei". As 354.309 peças
+   * estão na `product` do Postgres — a busca passa a sair daqui.
+   *
+   * Devolve o MESMO shape do caminho do Giga (chaves em MAIÚSCULA) porque as
+   * telas e os `.map()` de quem chama já esperam esse formato.
+   */
+  private async buscaCatalogoNoFlow(opts: {
+    termo?: string;
+    refExata?: string;
+    refPrefixo?: string;
+    limite?: number;
+  }): Promise<any[]> {
+    const prisma: any = this.prismaFlow;
+    if (!prisma?.product) return [];
+    const limite = opts.limite ?? 200;
+    const where: any = { ativo: true };
+
+    if (opts.refExata) {
+      where.ref = opts.refExata;
+    } else if (opts.refPrefixo) {
+      where.ref = { startsWith: opts.refPrefixo };
+    } else {
+      const termo = String(opts.termo ?? '').trim();
+      if (!termo) return [];
+      // Numérico = código ou REF (o jeito que a vendedora digita a etiqueta);
+      // texto = todas as palavras na descrição, em qualquer ordem.
+      if (/^\d{3,}$/.test(termo)) {
+        const semZeros = termo.replace(/^0+/, '');
+        where.OR = [
+          { codigo: { in: Array.from(new Set([termo, semZeros])) } },
+          { ref: termo },
+          { ref: { startsWith: termo } },
+        ];
+      } else {
+        const palavras = termo.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2);
+        if (!palavras.length) return [];
+        where.AND = palavras.map((p) => ({
+          descricaoCompleta: { contains: p, mode: 'insensitive' },
+        }));
+      }
+    }
+
+    const rows = await prisma.product.findMany({
+      where,
+      select: {
+        codigo: true, ref: true, cor: true, tamanho: true,
+        descricaoCompleta: true, vendaUn: true, ean: true,
+      },
+      take: limite,
+      orderBy: [{ ref: 'asc' }, { tamanho: 'asc' }],
+    });
+    return rows.map((r: any) => ({
+      CODIGO: r.codigo,
+      REF: r.ref,
+      COR: r.cor,
+      TAMANHO: r.tamanho,
+      DESCRICAOCOMPLETA: r.descricaoCompleta,
+      VENDAUN: r.vendaUn == null ? null : Number(r.vendaUn),
+      EAN13: r.ean ?? r.codigo,
+      ID: r.codigo,
+    }));
+  }
+
+  /**
+   * EAN das peças que existem no catálogo do Flow: o próprio código.
+   * Só entra quem EXISTE na `product` — assim uma peça inventada não vira
+   * "EAN válido" só porque alguém digitou um número.
+   */
+  private async eansPeloCodigoNoFlow(skus: string[]): Promise<Record<string, string>> {
+    const prisma: any = this.prismaFlow;
+    if (!prisma?.product) return {};
+    const limpos = Array.from(
+      new Set(skus.map((s) => String(s || '').trim()).filter(Boolean)),
+    );
+    if (!limpos.length) return {};
+    const variantes = new Set<string>();
+    for (const s of limpos) {
+      variantes.add(s);
+      variantes.add(s.replace(/^0+/, '') || s);
+    }
+    const rows = await prisma.product
+      .findMany({ where: { codigo: { in: Array.from(variantes) } }, select: { codigo: true, ean: true } })
+      .catch(() => []);
+    const achados = new Map<string, string>();
+    for (const r of rows as any[]) {
+      const cod = String(r.codigo).trim();
+      achados.set(cod, String(r.ean || cod).trim());
+      achados.set(cod.replace(/^0+/, '') || cod, String(r.ean || cod).trim());
+    }
+    const out: Record<string, string> = {};
+    for (const s of limpos) {
+      const hit = achados.get(s) ?? achados.get(s.replace(/^0+/, '') || s);
+      if (hit) out[s] = hit;
+    }
+    return out;
+  }
+
   private async findSkuByCodigoFromMirror(list: string[]): Promise<string | null> {
     const norms = Array.from(new Set(list.map((v) => this.wincredCodigo(v))));
     const byCodigo: any = await (this.prismaFlow as any).wincredProduto.findFirst({
@@ -4096,7 +4198,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Limita a 20 resultados. Retorna os campos relevantes pra entender o match.
    */
   async searchProductsLike(term: string, storeCode?: string): Promise<any[]> {
-    if (!this.pool || !term) return [];
+    if (!term) return [];
+    // Sem pool (ERP legado desligado) a busca sai DIRETO do catálogo do Flow.
+    if (!this.pool) return this.buscaCatalogoNoFlow({ termo: String(term).trim(), limite: 60 }).catch(() => []);
     const cleanTerm = String(term).trim();
     const fullLike = `%${cleanTerm}%`;
     // BUSCA MAGICA: divide o termo em palavras (>=2 chars cada) e exige
@@ -4234,8 +4338,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         };
       });
     } catch (e) {
-      this.logger.error(`searchProductsLike falhou: ${(e as Error).message}`);
-      return [];
+      // Giga fora não pode virar "não achei": a busca cai no catálogo do Flow
+      // (354 mil peças). Era `return []` — e a vendedora lia isso como peça
+      // inexistente.
+      this.logger.warn(`searchProductsLike: Giga falhou (${(e as Error).message}) — buscando no Flow`);
+      return this.buscaCatalogoNoFlow({ termo: cleanTerm, limite: 60 }).catch(() => []);
     }
   }
 
@@ -4268,9 +4375,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *   - base + dÃ­gito (ex: "9002" + "71" = "900271")
    */
   async searchByRef(ref: string): Promise<any[]> {
-    if (!this.pool || !ref) return [];
+    if (!ref) return [];
     const clean = String(ref).trim();
     if (!clean) return [];
+    // Sem pool (ERP legado desligado) a Consulta de loja sai do catálogo do Flow.
+    if (!this.pool) return this.buscaCatalogoNoFlow({ refPrefixo: String(ref).trim(), limite: 300 }).catch(() => []);
     try {
       // Busca tudo que comeÃ§a com a REF base â€” cada cor pode estar com sufixo
       // diferente no Giga. Filtramos os falsos positivos no JS abaixo.
@@ -4333,8 +4442,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       );
       return deduped;
     } catch (e) {
-      this.logger.error(`searchByRef falhou: ${(e as Error).message}`);
-      return [];
+      // Mesmo motivo do `searchProductsLike`: a Consulta de loja não pode
+      // dizer "essa REF não existe" só porque o ERP legado caiu. O prefixo
+      // pega as variações de cor da REF base, como o SQL do Giga fazia.
+      this.logger.warn(`searchByRef: Giga falhou (${(e as Error).message}) — buscando no Flow`);
+      return this.buscaCatalogoNoFlow({ refPrefixo: clean, limite: 300 }).catch(() => []);
     }
   }
 
@@ -4608,7 +4720,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`[mirror-reads] getEansBySkus: ${(e as Error).message} → Giga ao vivo`);
       }
     }
-    if (!this.pool) return selfEan;
+    /**
+     * SEM O ERP LEGADO: o EAN da casa É O PRÓPRIO CÓDIGO (27/08).
+     *
+     * A etiqueta da Lurd's imprime o CODIGO interno como código de barras — não
+     * EAN13 de fornecedor. Tanto que `product.ean` só tem valor nas peças novas,
+     * e ali `ean == codigo`. Então, com o Giga fora, a resposta correta é o
+     * próprio código das peças que existem no catálogo do Flow — e não um mapa
+     * vazio, que faz a bipagem da filial dizer "peça sem EAN".
+     */
+    if (!this.pool) return { ...(await this.eansPeloCodigoNoFlow(pendentes)), ...selfEan };
     const skusVivos = pendentes;
     {
       const skus = skusVivos; // caminho vivo abaixo intacto (só sem os prefixo-8)
@@ -4648,7 +4769,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (totalSet.size === 0) {
-      this.logger.warn(`getEansBySkus: nenhuma coluna resolveu EANs pros SKUs ${skus.slice(0, 3).join(',')}...`);
+      // Nenhuma coluna do Giga respondeu (ou ele está fora): o EAN da casa é o
+      // próprio código — resolve pelo catálogo do Flow em vez de devolver vazio.
+      this.logger.warn(`getEansBySkus: Giga não resolveu nenhum EAN — usando o código do catálogo do Flow`);
+      const doFlow = await this.eansPeloCodigoNoFlow(skus).catch(() => ({}));
+      return { ...doFlow, ...map, ...selfEan };
     }
     return { ...map, ...selfEan };
     }
