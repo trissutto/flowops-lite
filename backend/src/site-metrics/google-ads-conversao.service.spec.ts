@@ -27,6 +27,9 @@ const CREDENCIAIS = {
  * integração nova. Se um teste chamar o transporte errado, o outro mock nem é
  * tocado e a falha aparece.
  */
+/** O canal do alarme de silêncio. Guarda o que sairia, não envia nada. */
+const whatsFake = () => ({ sendText: jest.fn(async () => ({ ok: true })) });
+
 const adsFake = (envio: any, tipo = 'UPLOAD_CLICKS') => {
   const requisitar = jest.fn().mockImplementation((caminho: string) => {
     if (caminho.includes('searchStream')) {
@@ -65,6 +68,7 @@ describe('GoogleAdsConversaoService', () => {
         {} as any,
         env({ GOOGLE_ADS_CONTAS: '8925231246' }),
         adsFake({}) as any,
+        whatsFake() as any,
       );
       expect(svc.configurado()).toBe(false);
     });
@@ -74,6 +78,7 @@ describe('GoogleAdsConversaoService', () => {
         {} as any,
         env({ ...CREDENCIAIS, GOOGLE_ADS_CONVERSAO_UPLOAD: '0' }),
         adsFake({}) as any,
+        whatsFake() as any,
       );
       expect(svc.configurado()).toBe(false);
     });
@@ -90,7 +95,7 @@ describe('GoogleAdsConversaoService', () => {
     it('NÃO sobe nada quando a ação é do gtag (WEBPAGE)', async () => {
       const { prisma, findMany } = prismaFake([pedido('a', 'LP-1')]);
       const ads = adsFake({}, 'WEBPAGE');
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any, whatsFake() as any);
 
       const r = await svc.enviarPendentes();
 
@@ -103,7 +108,7 @@ describe('GoogleAdsConversaoService', () => {
     it('confere o tipo UMA vez só, não a cada ciclo', async () => {
       const { prisma } = prismaFake([]);
       const ads = adsFake({ results: [] });
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any, whatsFake() as any);
 
       await svc.enviarPendentes();
       await svc.enviarPendentes();
@@ -122,7 +127,7 @@ describe('GoogleAdsConversaoService', () => {
      */
     it('filtra por PROVA DE PAGAMENTO, não por lista de status', async () => {
       const { prisma, findMany } = prismaFake([]);
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), adsFake({}) as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), adsFake({}) as any, whatsFake() as any);
 
       await svc.enviarPendentes();
 
@@ -136,7 +141,7 @@ describe('GoogleAdsConversaoService', () => {
     /** O Google recusa clique com menos de 6h (TOO_RECENT_EVENT). */
     it('segura a venda por 6h antes de tentar subir', async () => {
       const { prisma, findMany } = prismaFake([]);
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), adsFake({}) as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), adsFake({}) as any, whatsFake() as any);
 
       await svc.enviarPendentes();
 
@@ -147,7 +152,7 @@ describe('GoogleAdsConversaoService', () => {
 
     it('não reapresenta quem já estourou as tentativas', async () => {
       const { prisma, findMany } = prismaFake([]);
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), adsFake({}) as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), adsFake({}) as any, whatsFake() as any);
 
       await svc.enviarPendentes();
 
@@ -163,6 +168,7 @@ describe('GoogleAdsConversaoService', () => {
         prisma,
         env({ ...CREDENCIAIS, GOOGLE_ADS_LOGIN_CUSTOMER_ID: '178-496-3045' }),
         ads as any,
+        whatsFake() as any,
       );
 
       const r = await svc.enviarPendentes();
@@ -197,7 +203,7 @@ describe('GoogleAdsConversaoService', () => {
     it('omite loginAccount quando não há MCC', async () => {
       const { prisma } = prismaFake([pedido('a', 'LP-1')]);
       const ads = adsFake({ requestId: 'req-1' });
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any, whatsFake() as any);
 
       await svc.enviarPendentes();
 
@@ -205,7 +211,7 @@ describe('GoogleAdsConversaoService', () => {
     });
 
     it('vira o dia pelo fuso da loja, não por UTC', () => {
-      const svc = new GoogleAdsConversaoService({} as any, env(CREDENCIAIS), adsFake({}) as any);
+      const svc = new GoogleAdsConversaoService({} as any, env(CREDENCIAIS), adsFake({}) as any, whatsFake() as any);
       const texto = (svc as any).momentoRfc3339(new Date('2026-08-23T02:30:00.000Z'));
       expect(texto.startsWith('2026-08-22T23:30:00')).toBe(true);
     });
@@ -213,7 +219,7 @@ describe('GoogleAdsConversaoService', () => {
     it('no modo validar não carimba nada', async () => {
       const { prisma, updateMany, update } = prismaFake([pedido('a', 'LP-1')]);
       const ads = adsFake({ requestId: 'req-1' });
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any, whatsFake() as any);
 
       const r = await svc.enviarPendentes(200, true);
 
@@ -237,6 +243,7 @@ describe('GoogleAdsConversaoService', () => {
         prisma,
         env(CREDENCIAIS),
         adsFake(new Error('DataManager 403: CUSTOMER_NOT_ALLOWLISTED_FOR_THIS_FEATURE')) as any,
+        whatsFake() as any,
       );
 
       await expect(svc.enviarPendentes()).rejects.toThrow('CUSTOMER_NOT_ALLOWLISTED');
@@ -256,7 +263,7 @@ describe('GoogleAdsConversaoService', () => {
         requestId: 'req-1',
         fieldWarnings: [{ fieldPath: 'events[0].userData', warning: 'sem dado de usuário' }],
       });
-      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any);
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any, whatsFake() as any);
 
       const r = await svc.enviarPendentes();
 
@@ -270,6 +277,7 @@ describe('GoogleAdsConversaoService', () => {
         prisma,
         env(CREDENCIAIS),
         adsFake({ requestId: 'req-1' }) as any,
+        whatsFake() as any,
       );
 
       const r = await svc.enviarPendentes();
@@ -277,6 +285,59 @@ describe('GoogleAdsConversaoService', () => {
       expect(r).toMatchObject({ enviadas: 2, recusadas: 0 });
       expect(updateMany.mock.calls[0][0].where.id.in).toEqual(['a', 'b']);
       expect(update).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * O ALARME DE SILÊNCIO.
+   *
+   * A quebra de 19/08/2026 durou 10 dias porque nada avisa quando a medição
+   * para: o gasto continua saindo, o status da ação continua "Ativa" e o total
+   * do período continua grande (é histórico). Estes testes fixam as três
+   * perguntas que denunciam — e, principalmente, fixam quando ele deve FICAR
+   * CALADO: alarme que grita à toa treina todo mundo a ignorá-lo.
+   */
+  describe('alarme de silêncio', () => {
+    const prismaDiag = (contagens: number[], gastoOntem = 0) => {
+      const count = jest.fn();
+      contagens.forEach((n) => count.mockResolvedValueOnce(n));
+      return {
+        order: { count },
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ gasto: gastoOntem }]),
+      } as any;
+    };
+    // A ordem das contagens é a das chamadas: aceitas, naFila, googleComGclid, googleTotal.
+    const svcCom = (prisma: any) =>
+      new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), adsFake({}) as any, whatsFake() as any);
+
+    it('cala a boca quando a fila anda', async () => {
+      const problemas = await svcCom(prismaDiag([4, 2, 3, 3])).diagnosticarSilencio();
+      expect(problemas).toEqual([]);
+    });
+
+    it('cala a boca quando não há nada na fila (dia fraco não é defeito)', async () => {
+      const problemas = await svcCom(prismaDiag([0, 0, 0, 0])).diagnosticarSilencio();
+      expect(problemas).toEqual([]);
+    });
+
+    it('grita quando tem venda esperando e nada foi aceito em 24h', async () => {
+      const problemas = await svcCom(prismaDiag([0, 7, 2, 2])).diagnosticarSilencio();
+      expect(problemas.join(' ')).toMatch(/7 venda\(s\) esperando/);
+    });
+
+    it('grita quando o gclid some do checkout', async () => {
+      const problemas = await svcCom(prismaDiag([3, 0, 0, 5])).diagnosticarSilencio();
+      expect(problemas.join(' ')).toMatch(/nenhuma trouxe gclid/);
+    });
+
+    it('grita quando gastou ontem e ninguém chegou marcado como Google', async () => {
+      const problemas = await svcCom(prismaDiag([0, 0, 0, 0], 640.12)).diagnosticarSilencio();
+      expect(problemas.join(' ')).toMatch(/R\$ 640\.12 gastos ontem/);
+    });
+
+    it('uma venda solta sem gclid não vira alarme — é ruído, não sintoma', async () => {
+      const problemas = await svcCom(prismaDiag([1, 0, 0, 2])).diagnosticarSilencio();
+      expect(problemas).toEqual([]);
     });
   });
 });

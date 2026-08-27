@@ -47,6 +47,9 @@ export interface WebhookPurchase {
     session_id?: string;
     fbp?: string;
     fbc?: string;
+    /** Cookies do gtag guardados no checkout — sem eles o GA4 não casa a venda. */
+    ga4_client_id?: string;
+    ga4_session_id?: string;
     attribution?: Record<string, string | undefined>;
   };
   /**
@@ -111,6 +114,15 @@ export async function emitirPurchaseConfirmado(
         // o evento válido — a atribuição se perde, a venda não.
         anonymous_id: purchase.tracking?.anonymous_id ?? `order-${orderId}`,
         session_id: purchase.tracking?.session_id,
+        // O que costura a compra à visita que veio do anúncio. Vazio aqui =
+        // venda contada como tráfego direto no GA4 e invisível pro Ads.
+        ga4:
+          purchase.tracking?.ga4_client_id || purchase.tracking?.ga4_session_id
+            ? {
+                client_id: purchase.tracking?.ga4_client_id,
+                session_id: purchase.tracking?.ga4_session_id,
+              }
+            : undefined,
         attribution: purchase.tracking?.attribution,
         loja: purchase.store_slug ?? null,
       },

@@ -184,10 +184,30 @@ export interface Attribution {
   landing_page?: string;
 }
 
+/**
+ * Os identificadores que o gtag do GA4 grava em cookie no navegador.
+ *
+ * Existem porque o `purchase` nasce no SERVIDOR, e o Measurement Protocol só
+ * costura a compra à visita que veio do anúncio se receber o MESMO
+ * `client_id` do gtag. Mandando o nosso `anonymous_id`, o GA4 abre um usuário
+ * novo sem clique na bagagem: a venda vira tráfego direto e o Google Ads não
+ * tem o que importar. Foi exatamente isso que matou a conversão de compra em
+ * 19/08/2026 — quando o site novo assumiu o domínio e a tag do WordPress, que
+ * disparava o purchase pelo navegador, saiu de cena.
+ */
+export interface Ga4BrowserIds {
+  /** Do cookie `_ga`: os dois últimos campos de `GA1.1.<a>.<b>` → `<a>.<b>`. */
+  client_id?: string;
+  /** Do cookie `_ga_<SUFIXO>`: a sessão que o próprio GA4 está contando. */
+  session_id?: string;
+}
+
 export interface EventContext {
   session_id: string;
   anonymous_id: string;
   user_id: string | null;
+  /** Ver `Ga4BrowserIds`. Ausente quando o gtag ainda não gravou o cookie. */
+  ga4?: Ga4BrowserIds;
   page: PageContext;
   device: DeviceContext;
   attribution: Attribution;

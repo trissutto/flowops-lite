@@ -35,6 +35,7 @@ import {
 import {
   captureAttribution,
   getAnonymousId,
+  getGa4BrowserIds,
   getMetaBrowserIds,
   getSessionId,
 } from '@/lib/tracking/identity';
@@ -437,6 +438,7 @@ export default function CheckoutPage() {
 
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
     // ao GA4, fbp/fbc casam a CAPI, attribution fecha o "de onde veio".
+    const ga4Ids = getGa4BrowserIds().ga4;
     const input: CreateOrderInput & { shippingPriceSeen: number; totalSeen: number } = {
       shippingPriceSeen: freteVisto,
       totalSeen: totalVisto,
@@ -455,6 +457,10 @@ export default function CheckoutPage() {
         anonymous_id: getAnonymousId(),
         session_id: getSessionId(),
         ...getMetaBrowserIds(),
+        // Os cookies do gtag, achatados: o `purchase` nasce no servidor e
+        // precisa deles pra cair na mesma visita que veio do anúncio.
+        ...(ga4Ids?.client_id ? { ga4_client_id: ga4Ids.client_id } : {}),
+        ...(ga4Ids?.session_id ? { ga4_session_id: ga4Ids.session_id } : {}),
         attribution: { ...captureAttribution() },
         recovery_consent: contact?.recoveryConsent === true,
       },

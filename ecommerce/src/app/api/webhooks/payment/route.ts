@@ -84,6 +84,10 @@ const purchaseSchema = z.object({
       session_id: texto,
       fbp: texto,
       fbc: texto,
+      // ⚠️ zod poda chave desconhecida: sem estas duas linhas o cookie do
+      // gtag chega do backend e morre aqui, e o purchase volta a ser "direto".
+      ga4_client_id: texto,
+      ga4_session_id: texto,
       attribution: z.record(z.string(), z.string().optional()).nullish().transform((v) => v ?? undefined),
     })
     .nullish()

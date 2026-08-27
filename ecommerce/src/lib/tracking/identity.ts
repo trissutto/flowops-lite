@@ -397,6 +397,33 @@ export function getMetaBrowserIds(): { fbp?: string; fbc?: string } {
 }
 
 /**
+ * Os ids que o gtag do GA4 grava em cookie — o equivalente do `_fbp`/`_fbc`
+ * para o Google. Ver `Ga4BrowserIds` em `types.ts` para o porquê.
+ *
+ * `_ga` = `GA1.1.<a>.<b>` e o client_id é `<a>.<b>`. O prefixo (`GA1.1`) é
+ * versão de cookie e domínio; mandá-lo junto faz o GA4 tratar como usuário
+ * diferente — o mesmo tipo de erro que estamos consertando.
+ *
+ * `_ga_<SUFIXO>` guarda a sessão. Já teve dois formatos e vai ter outros:
+ * `GS1.1.<sessao>.<n>...` e `GS2.1.s<sessao>$o<n>$g...`. A regex pega o
+ * primeiro número dos dois; se um formato novo aparecer, devolve `undefined`
+ * e o purchase continua saindo com a nossa sessão — pior atribuição, nunca
+ * venda perdida.
+ */
+export function getGa4BrowserIds(): { ga4?: { client_id?: string; session_id?: string } } {
+  const bruto = readCookie('_ga');
+  const client_id = bruto ? (bruto.match(/^GA\d\.\d\.(.+)$/)?.[1] ?? undefined) : undefined;
+
+  const medicao = (process.env.NEXT_PUBLIC_GA4_ID || '').split(',')[0].trim();
+  const sufixo = medicao.replace(/^G-/, '');
+  const sessaoBruta = sufixo ? readCookie(`_ga_${sufixo}`) : undefined;
+  const session_id = sessaoBruta ? (sessaoBruta.match(/^GS\d\.\d\.s?(\d+)/)?.[1] ?? undefined) : undefined;
+
+  if (!client_id && !session_id) return {};
+  return { ga4: { ...(client_id ? { client_id } : {}), ...(session_id ? { session_id } : {}) } };
+}
+
+/**
  * Monta o `_fbc` no formato oficial `fb.1.<timestamp>.<fbclid>` e GUARDA.
  *
  * Guardar não é detalhe: o lote só é despachado até 5s depois do evento, e
@@ -435,6 +462,7 @@ export function buildContext(): EventContext {
     session_id: getSessionId(),
     anonymous_id: getAnonymousId(),
     user_id: getUserId(),
+    ...getGa4BrowserIds(),
     page: {
       path,
       url: typeof window !== 'undefined' ? window.location.href : path,

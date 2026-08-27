@@ -71,6 +71,25 @@ function toItem(item: TrackedItem, index: number): Record<string, unknown> {
 }
 
 /**
+ * O `client_id` do gtag, e só ele, costura o evento do servidor à visita.
+ *
+ * ⚠️ Até 27/08/2026 aqui ia o `anonymous_id` (o nosso uuid do localStorage).
+ * O comentário abaixo já dizia que "PRECISA ser o mesmo do gtag" — e não era.
+ * Consequência medida: `purchase` chegava ao GA4 como um usuário novo, sem o
+ * clique do anúncio, virava tráfego direto e a importação GA4 → Google Ads
+ * ficou **10 dias com zero compras** enquanto `add_to_cart` e
+ * `begin_checkout` (que nascem no navegador, com o cookie certo) continuavam
+ * chegando todo dia. O Shopping se estrangulou sozinho por falta de sinal.
+ *
+ * Reserva: sem cookie (bloqueador, primeira visita, consentimento negado) cai
+ * no `anonymous_id`. Aí o evento vale para o nosso funil e não vale para a
+ * atribuição — que é exatamente o que era possível antes.
+ */
+function clientIdDe(ev: TrackingEvent): string {
+  return ev.context.ga4?.client_id || ev.context.anonymous_id;
+}
+
+/**
  * O MP aceita um `client_id` por chamada, então agrupamos por visitante.
  * `client_id` PRECISA ser o mesmo do gtag do navegador, senão a mesma pessoa
  * vira dois usuários e a sessão se parte em duas no relatório.
@@ -88,7 +107,7 @@ export async function sendToGa4Mp(
 
   const porCliente = new Map<string, TrackingEvent[]>();
   for (const ev of events) {
-    const key = ev.context.anonymous_id;
+    const key = clientIdDe(ev);
     porCliente.set(key, [...(porCliente.get(key) ?? []), ev]);
   }
 
@@ -108,7 +127,10 @@ export async function sendToGa4Mp(
         name: ev.event,
         params: {
           ...ev.params,
-          session_id: ev.context.session_id,
+          // A sessão do PRÓPRIO GA4 quando o cookie veio junto. A nossa só
+          // serve de reserva: sessão que o GA4 não conhece não recebe a
+          // atribuição do clique, e o purchase volta a nascer "direto".
+          session_id: ev.context.ga4?.session_id ?? ev.context.session_id,
           engagement_time_msec: 1,
           currency: ev.context.currency,
           value: ev.value,

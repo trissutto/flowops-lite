@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { GoogleAdsService } from './google-ads.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 /**
  * A VENDA VOLTA PRO GOOGLE PELO SERVIDOR — sem GA4 no meio.
@@ -78,7 +79,139 @@ export class GoogleAdsConversaoService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly ads: GoogleAdsService,
+    private readonly whats: WhatsappService,
   ) {}
+
+  /**
+   * ALARME DE SILÊNCIO — 10h BRT (13h UTC no Railway).
+   *
+   * A quebra de 19/08/2026 durou **10 dias** por um motivo só: nada avisa
+   * quando a medição para. O gasto continua saindo normal, o status da ação de
+   * conversão continua escrito "Ativa" e o total do período continua grande
+   * (é histórico). Só "Última conversão registrada" denuncia, e ninguém abre
+   * essa tela todo dia.
+   *
+   * São três perguntas, e qualquer uma respondida errado vira mensagem:
+   *
+   *  1. **A fila anda?** Tem pedido elegível esperando e nenhuma conversão
+   *     aceita em 24h → o upload parou (token, cota, ação trocada).
+   *  2. **O `gclid` ainda é gravado?** Pedido do Google chegando sem ele → a
+   *     captura no checkout quebrou, e o upload fica sem matéria-prima.
+   *  3. **O dinheiro sai e ninguém chega?** Gasto ontem sem um único pedido
+   *     com UTM do Google → é a assinatura da migração de domínio que apagou
+   *     o rastreamento.
+   *
+   * Sem `GOOGLE_ADS_ALERTA_WHATS` só loga — ninguém é acordado por engano.
+   */
+  @Cron('0 13 * * *', { name: 'google-ads-conversao-silencio' })
+  async alertaSilencio(): Promise<void> {
+    try {
+      const problemas = await this.diagnosticarSilencio();
+      if (!problemas.length) {
+        this.logger.log('[google-ads] alarme de silêncio: medição de compra saudável 🎉');
+        return;
+      }
+
+      const texto =
+        '🚨 GOOGLE ADS — a medição de compra pode ter parado:\n\n' +
+        problemas.map((p) => `• ${p}`).join('\n') +
+        '\n\nConfira "Última conversão registrada" da ação principal em ' +
+        'Ferramentas → Conversões. Com o sinal cortado o robô não corta o ' +
+        'gasto: ele corta a ENTREGA da campanha que mais vende.';
+
+      const destinos = String(process.env.GOOGLE_ADS_ALERTA_WHATS || '')
+        .split(',')
+        .map((n) => n.replace(/\D/g, ''))
+        .filter((n) => n.length >= 10);
+
+      if (!destinos.length) {
+        this.logger.error(`[google-ads] ${problemas.join(' | ')} (GOOGLE_ADS_ALERTA_WHATS vazia — só log)`);
+        return;
+      }
+      for (const numero of destinos) {
+        const r = await this.whats
+          .sendText(numero, texto)
+          .catch((e: any) => ({ ok: false, error: e?.message }));
+        if (!(r as any)?.ok) {
+          this.logger.warn(`[google-ads] alarme não saiu pra ${numero}: ${(r as any)?.error}`);
+        }
+      }
+    } catch (e: any) {
+      // Alarme que derruba processo é pior que alarme que não toca.
+      this.logger.warn(`[google-ads] alarme de silêncio falhou: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * As três perguntas do alarme, em SQL. Devolve a lista de problemas em
+   * português — vazia quando está tudo de pé. Exposta para a rota de
+   * diagnóstico poder responder a mesma coisa sob demanda.
+   */
+  async diagnosticarSilencio(): Promise<string[]> {
+    const problemas: string[] = [];
+    const agora = Date.now();
+    const desde24h = new Date(agora - 24 * 3600 * 1000);
+    const order = (this.prisma as any).order;
+
+    // 1. Fila parada.
+    const [aceitas, naFila] = await Promise.all([
+      order.count({ where: { adsConversaoEnviadaEm: { gte: desde24h } } }),
+      order.count({
+        where: {
+          source: 'ecommerce',
+          paidAt: {
+            not: null,
+            lte: new Date(agora - this.CARENCIA_MS),
+            gte: new Date(agora - 60 * 24 * 3600 * 1000),
+          },
+          status: { notIn: ['cancelled', 'failed'] },
+          gclid: { not: null },
+          adsConversaoEnviadaEm: null,
+          adsConversaoTentativas: { lt: this.MAX_TENTATIVAS },
+        },
+      }),
+    ]);
+    if (naFila > 0 && aceitas === 0) {
+      problemas.push(`${naFila} venda(s) esperando na fila e NENHUMA aceita pelo Google em 24h`);
+    }
+
+    // 2. `gclid` sumiu do checkout.
+    const [googleComGclid, googleTotal] = await Promise.all([
+      order.count({
+        where: { source: 'ecommerce', paidAt: { gte: desde24h }, gclid: { not: null } },
+      }),
+      order.count({
+        where: {
+          source: 'ecommerce',
+          paidAt: { gte: desde24h },
+          utmSource: { contains: 'google', mode: 'insensitive' },
+        },
+      }),
+    ]);
+    if (googleTotal >= 3 && googleComGclid === 0) {
+      problemas.push(
+        `${googleTotal} venda(s) com UTM do Google em 24h e nenhuma trouxe gclid — a captura do checkout quebrou`,
+      );
+    }
+
+    // 3. Gastou e ninguém chegou.
+    const gasto = await this.prisma.$queryRawUnsafe<Array<{ gasto: number }>>(
+      `SELECT COALESCE(SUM(gasto), 0)::float AS gasto FROM google_ads_gasto_dia
+        WHERE dia = (CURRENT_DATE - INTERVAL '1 day')::date`,
+    );
+    const gastoOntem = Number(gasto?.[0]?.gasto || 0);
+    if (gastoOntem > 100 && googleTotal === 0) {
+      problemas.push(
+        `R$ ${gastoOntem.toFixed(2)} gastos ontem e nenhuma venda chegou marcada como Google — rastreamento cortado`,
+      );
+    }
+
+    // 4. A ação de conversão em si.
+    if (this.acaoValida === false) {
+      problemas.push('a ação de conversão configurada não é UPLOAD_CLICKS (nenhum upload é aceito)');
+    }
+    return problemas;
+  }
 
   private env(nome: string): string | null {
     return this.config.get<string>(nome)?.trim() || null;

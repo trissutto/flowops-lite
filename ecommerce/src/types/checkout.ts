@@ -139,6 +139,13 @@ export interface Order {
     session_id?: string;
     fbp?: string;
     fbc?: string;
+    /**
+     * Cookies do gtag — o `fbp`/`fbc` do Google. Viajam com o pedido porque o
+     * `purchase` é emitido no servidor, quando o pagamento confirma: naquele
+     * momento não há navegador nenhum pra ler cookie.
+     */
+    ga4_client_id?: string;
+    ga4_session_id?: string;
     attribution?: Record<string, string | undefined>;
     recovery_consent?: boolean;
   };

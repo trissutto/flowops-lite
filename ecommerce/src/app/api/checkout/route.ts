@@ -130,6 +130,13 @@ const trackingSchema = z
     session_id: z.string().max(200).optional().catch(undefined),
     fbp: z.string().max(300).optional().catch(undefined),
     fbc: z.string().max(1000).optional().catch(undefined),
+    /**
+     * Cookies do gtag (`_ga` e `_ga_<sufixo>`). São o `fbp`/`fbc` do Google:
+     * sem eles o `purchase`, que nasce no servidor, chega ao GA4 como visitante
+     * novo e a importação pro Ads não acha clique nenhum pra creditar.
+     */
+    ga4_client_id: z.string().max(120).optional().catch(undefined),
+    ga4_session_id: z.string().max(60).optional().catch(undefined),
     attribution: z.record(z.string(), z.string().optional()).optional().catch(undefined),
     /**
      * O "sim" do lembrete de WhatsApp. Faltava aqui, e zod PODA chave

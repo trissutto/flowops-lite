@@ -6,6 +6,8 @@ import { SiteMetricsService } from './site-metrics.service';
 import { MetaAdsService } from './meta-ads.service';
 import { GoogleAdsService } from './google-ads.service';
 import { GoogleAdsConversaoService } from './google-ads-conversao.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { EvolutionClient } from '../whatsapp-campaign/evolution.client';
 
 /**
  * MÉTRICA DOS BOTÕES DA LOJA — dado nosso, não do Google.
@@ -26,6 +28,21 @@ import { GoogleAdsConversaoService } from './google-ads-conversao.service';
 @Module({
   imports: [PrismaModule, AuthModule],
   controllers: [SiteMetricsPublicController, SiteMetricsController],
-  providers: [SiteMetricsService, MetaAdsService, GoogleAdsService, GoogleAdsConversaoService],
+  /**
+   * `WhatsappService` + `EvolutionClient` entram como PROVIDERS, e não pelo
+   * import do WhatsappModule — a mesma receita já usada lá dentro pro próprio
+   * EvolutionClient, e pelo mesmo motivo: import de módulo novo foi o que
+   * fechou um ciclo e derrubou o backend em 07/08. Os dois são stateless o
+   * bastante (leem env e Prisma), então a segunda instância não duplica estado.
+   * Servem só ao alarme de silêncio da conversão do Google.
+   */
+  providers: [
+    SiteMetricsService,
+    MetaAdsService,
+    GoogleAdsService,
+    GoogleAdsConversaoService,
+    WhatsappService,
+    EvolutionClient,
+  ],
 })
 export class SiteMetricsModule {}

@@ -112,6 +112,19 @@ export interface LojaTrackingInput {
   session_id?: string;
   fbp?: string;
   fbc?: string;
+  /**
+   * Cookies do gtag do GA4 (`_ga` e `_ga_<sufixo>`) — o `fbp`/`fbc` do Google.
+   *
+   * Guardados no pedido porque o `purchase` é emitido pelo site QUANDO O
+   * PAGAMENTO CONFIRMA, e nessa hora não há navegador aberto pra ler cookie.
+   * Sem eles o GA4 abre um usuário novo, a compra vira tráfego direto e a
+   * importação pro Google Ads não acha clique nenhum pra creditar — foi o que
+   * deixou a conta 10 dias com zero compras medidas depois de 19/08/2026.
+   * Mesmo tipo de buraco do `gclid` e do `recovery_consent` abaixo: o dado
+   * viaja, o tipo não o conhece, e a feature nunca liga.
+   */
+  ga4_client_id?: string;
+  ga4_session_id?: string;
   attribution?: {
     source?: string;
     medium?: string;
@@ -984,6 +997,11 @@ export class LojaOrdersService {
           session_id: input.tracking.session_id || null,
           fbp: input.tracking.fbp || null,
           fbc: input.tracking.fbc || null,
+          // Ver `ga4_client_id` em LojaTrackingInput: sem estas duas linhas o
+          // cookie do gtag chega do site e é descartado aqui, e o purchase
+          // volta a nascer sem dono.
+          ga4_client_id: input.tracking.ga4_client_id || null,
+          ga4_session_id: input.tracking.ga4_session_id || null,
           attribution: input.tracking.attribution || null,
           // Ver `recovery_consent` em LojaTrackingInput: sem esta linha o
           // cron de resgate do PIX não acha ninguém pra avisar.
@@ -2477,6 +2495,11 @@ export class LojaOrdersService {
             session_id: tr.session_id || undefined,
             fbp: tr.fbp || undefined,
             fbc: tr.fbc || undefined,
+            // Ida e volta completa do cookie do gtag: navegador → BFF → aqui →
+            // `trackingInfo` → de volta ao site no purchase. Qualquer elo que
+            // esqueça a chave desliga a medição do Google inteira, em silêncio.
+            ga4_client_id: tr.ga4_client_id || undefined,
+            ga4_session_id: tr.ga4_session_id || undefined,
             attribution: tr.attribution || undefined,
           },
           // Retirada em loja: o slug segue junto pro evento de compra carimbar

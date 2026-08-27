@@ -63,10 +63,19 @@ export const attributionSchema = z.object({
   landing_page: z.string().optional(),
 });
 
+/** Cookies do gtag — ver `Ga4BrowserIds`. Sem isto o purchase não casa. */
+export const ga4BrowserIdsSchema = z.object({
+  client_id: z.string().max(120).optional(),
+  session_id: z.string().max(60).optional(),
+});
+
 export const eventContextSchema = z.object({
   session_id: z.string(),
   anonymous_id: z.string(),
   user_id: z.string().nullable(),
+  // ⚠️ zod PODA chave desconhecida em silêncio: sem esta linha o `ga4` sai do
+  // navegador, morre aqui e o purchase volta a virar tráfego direto.
+  ga4: ga4BrowserIdsSchema.optional(),
   page: pageContextSchema,
   device: deviceContextSchema,
   attribution: attributionSchema,

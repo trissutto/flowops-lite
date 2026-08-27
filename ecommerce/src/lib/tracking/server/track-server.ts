@@ -38,6 +38,9 @@ function fullContext(partial: ServerPurchaseInput['context']): EventContext {
   return {
     session_id: partial.session_id ?? `server-${partial.anonymous_id}`,
     anonymous_id: partial.anonymous_id,
+    // Os cookies do gtag capturados no checkout. É o que faz o purchase
+    // server-side cair na MESMA visita que veio do anúncio — ver `Ga4BrowserIds`.
+    ga4: partial.ga4,
     user_id: partial.user_id ?? null,
     page: partial.page ?? { path: '/checkout/confirmacao', url: 'https://www.lurdsplussize.com.br/checkout/confirmacao' },
     device: partial.device ?? { type: 'desktop' },
