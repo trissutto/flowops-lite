@@ -1902,47 +1902,51 @@ export default function PedidoDetailPage() {
         </a>
       </div>
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold">Pedido #{order.number}</h1>
-            {(() => {
-              // Badge de forma de envio em destaque — ao lado do número do pedido.
-              // Fonte: shipping_lines do WC (via order.pickup.shippingMethodTitle) ou
-              // fallback pra separation.shippingMethod quando o pickup não foi detectado.
-              const raw =
-                order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
-              if (!raw) return null;
-              const m = classifyShipping(raw, order.shipping?.state ?? order.billing?.state ?? null);
-              return (
-                <span
-                  className={`px-3 py-1 text-sm font-bold rounded shadow-sm ${m.colorBold}`}
-                  title={m.raw}
-                >
-                  {m.label}
-                </span>
-              );
-            })()}
-            {/* Tag de vendedora — atribuir Karine/Manu/etc pra relatório mensal */}
+      {/* CABEÇALHO — uma linha de identificação e uma de contexto.
+          O banner de forma de envio que vinha logo abaixo era um retângulo
+          VERMELHO de 90px dizendo "SEDEX": cor de alarme gasta num dado que
+          não é problema nenhum. No Semáforo o vermelho fica guardado pro que
+          está parado — o envio virou mais um item desta linha. */}
+      <div className="mb-5 border-b border-line pb-4">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="font-mono text-[19px] font-semibold tracking-tight">#{order.number}</h1>
+          {(order.shipping?.first_name || order.billing?.first_name) && (
+            <span className="text-[19px] font-bold tracking-tight">
+              {[
+                order.shipping?.first_name || order.billing?.first_name,
+                order.shipping?.last_name || order.billing?.last_name,
+              ].filter(Boolean).join(' ')}
+            </span>
+          )}
+          <span className="ml-auto text-[22px] font-bold tabular-nums">{fmtMoney(order.total)}</span>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-y-1 text-[12.5px] text-ink-soft [&>*]:border-l [&>*]:border-line [&>*]:px-3 [&>*:first-child]:border-l-0 [&>*:first-child]:pl-0">
+          {(() => {
+            const raw = order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
+            if (!raw) return null;
+            const m = classifyShipping(raw, order.shipping?.state ?? order.billing?.state ?? null);
+            return <span className="font-semibold text-ink" title={m.raw}>{m.label}</span>;
+          })()}
+          {order.shipping?.city && (
+            <span>{order.shipping.city} / {order.shipping.state}</span>
+          )}
+          <span title={`Criado em ${fmtDate(order.dateCreatedGmt)}`}>
+            Criado em {fmtDate(order.dateCreatedGmt)}
+          </span>
+          {order.paymentMethodTitle && <span>{order.paymentMethodTitle}</span>}
+          {/* Tag de vendedora — atribuir Karine/Manu/etc pra relatório mensal */}
+          <span className="inline-flex items-center">
             <SellerTag
               wcOrderId={order.id}
               currentSellerId={order.sellerId ?? null}
               currentSellerName={order.sellerName ?? null}
+              compact
               onChange={(sellerId, sellerName) => {
                 setOrder((prev) => (prev ? { ...prev, sellerId, sellerName } : prev));
               }}
             />
-          </div>
-          <p className="text-sm text-slate-500 mt-1">
-            Criado em {fmtDate(order.dateCreatedGmt)}
-            {order.dateModifiedGmt && order.dateModifiedGmt !== order.dateCreatedGmt &&
-              <> · modificado em {fmtDate(order.dateModifiedGmt)}</>
-            }
-          </p>
-        </div>
-        <div className="text-right">
-          <div className="text-3xl font-bold text-brand">{fmtMoney(order.total)}</div>
-          <div className="text-xs text-slate-500">{order.paymentMethodTitle}</div>
+          </span>
         </div>
       </div>
 
@@ -1953,35 +1957,11 @@ export default function PedidoDetailPage() {
       )}
       {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4 text-sm whitespace-pre-line">{error}</div>}
 
-      {/* BANNER DE FORMA DE ENVIO — grande, cor sólida, sempre no topo.
-           A retaguarda precisa bater o olho e já saber SEDEX/PAC/RETIRADA
-           antes de decidir como separar. Fallback: se for pickup, o banner
-           azul/âmbar específico abaixo já cobre o caso (mais informativo),
-           então aqui renderiza só pra não-pickup. */}
-      {(() => {
-        const raw =
-          order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
-        if (!raw) return null;
-        const m = classifyShipping(raw, order.shipping?.state ?? order.billing?.state ?? null);
-        if (m.kind === 'pickup') return null; // já tem banner próprio abaixo
-        const icon =
-          m.kind === 'sedex' ? '⚡' :
-          m.kind === 'pac' ? '📦' :
-          m.kind === 'motoboy' ? '🛵' :
-          m.kind === 'transportadora' ? '🚚' : '📨';
-        return (
-          <div className={`mb-4 rounded-lg p-4 shadow-sm ${m.colorBold} flex items-center gap-3`}>
-            <div className="text-3xl">{icon}</div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs uppercase tracking-widest opacity-80">Forma de envio</div>
-              <div className="text-2xl font-black leading-tight">{m.label}</div>
-              {m.raw && m.raw.toUpperCase() !== m.label && (
-                <div className="text-xs opacity-90 mt-0.5 truncate">{m.raw}</div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
+      {/* O banner gigante de forma de envio saiu daqui (o dado subiu pro
+          cabeçalho): 90px de vermelho pra dizer "SEDEX" competia com o alarme
+          de pedido travado, que é o único que deveria ser vermelho na tela.
+          Retirada continua com o banner próprio azul/âmbar mais abaixo, que
+          diz o que a loja tem que FAZER — esse não é decoração. */}
 
       {/* DE QUAL CAMPANHA VEIO — o nome do anúncio que trouxe a cliente, com a
           cascata inteira a um clique. Antes isso era uma linha cinza de 12px no

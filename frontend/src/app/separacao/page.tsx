@@ -20,7 +20,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * Atualiza sozinho a cada 30s.
  */
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Fragment, Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -61,6 +61,7 @@ import {
   Settings,
 } from 'lucide-react';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
+import { Table, Th, Tr, Td } from '@/components/ui';
 
 const SEP_NAV: AdminNavItem[] = [
   { key: 'dashboard', label: 'Dashboard', href: '/',           icon: LayoutDashboard },
@@ -171,18 +172,32 @@ interface ActiveIssue {
   reportedAt: string | null;
 }
 
+/**
+ * ABAS — divididas em FILA (exige alguém) e ACOMPANHAR (consulta).
+ *
+ * As onze abas moravam na mesma barra, com o mesmo peso e a mesma pílula rosa:
+ * os ~30 pedidos que precisam de ação ficavam visualmente MENORES que os 410 já
+ * entregues. Agora a fila é a barra de abas de verdade e o resto é uma linha de
+ * links abaixo — e o contador só ganha cor quando o número É uma pendência
+ * (regra do Semáforo: cor é propriedade exclusiva do estado).
+ *
+ * `travados` não é status de pedido: é a lista de problemas que as lojas
+ * reportaram, que vive em `/pick-orders/issues-active` e antes era um banner
+ * vermelho de 100px repetido em TODAS as abas. Painel próprio, como `enviados`.
+ */
 const FILTROS = [
-  { slug: 'processing',  label: 'Processando',         color: 'bg-emerald-100 text-emerald-800' },
-  { slug: 'pending',     label: 'Pagto pendente',      color: 'bg-amber-100 text-amber-800' },
-  { slug: 'on-hold',     label: 'Aguardando',          color: 'bg-yellow-100 text-yellow-800' },
+  { slug: 'travados',    label: 'Travados',            color: 'bg-red-100 text-red-800',        grupo: 'fila' },
+  { slug: 'processing',  label: 'Processando',         color: 'bg-emerald-100 text-emerald-800', grupo: 'fila' },
+  { slug: 'pending',     label: 'Pagto pendente',      color: 'bg-amber-100 text-amber-800',    grupo: 'fila' },
+  { slug: 'on-hold',     label: 'Aguardando',          color: 'bg-yellow-100 text-yellow-800',  grupo: 'fila' },
   { slug: 'carrinhos',   label: 'Carrinhos',           color: 'bg-rose-100 text-rose-800' },
-  { slug: 'separacao',   label: 'Em separação',        color: 'bg-blue-100 text-blue-800' },
+  { slug: 'separacao',   label: 'Em separação',        color: 'bg-blue-100 text-blue-800',      grupo: 'fila' },
   // PRONTO PRA POSTAR (24/08, ordem do dono): "entre separação e em trânsito
   // ele fica parado, sem movimentar status". A peça já foi bipada e a caixa
   // espera etiqueta/postagem — 31 cards nesse limbo na medição do dia, 36h de
   // média e o pior com 6,3 dias, todos escondidos dentro de "Em separação".
   // Reparte aquela aba (não duplica): ver `whereNativoDaAba` no backend.
-  { slug: 'pronto-postar', label: 'Pronto pra postar', color: 'bg-orange-100 text-orange-800' },
+  { slug: 'pronto-postar', label: 'Pronto pra postar', color: 'bg-orange-100 text-orange-800', grupo: 'fila' },
   // "Enviados por Loja" não é um status de pedido WC — é um painel diferente
   // (tracking do dia por filial). Reaproveitamos a aba pra evitar que a matriz
   // precise ir pra /retaguarda/enviados-hoje só pra ver quem despachou.
@@ -317,6 +332,9 @@ function SeparacaoPageInner() {
     () => orders.filter((o) => !sourceFilter || ((o as any).orderSource || 'site') === sourceFilter),
     [orders, sourceFilter],
   );
+
+  /** Pedidos com problema reportado por alguma loja — alimenta a aba "Travados". */
+  const totalTravados = useMemo(() => Object.keys(issuesByWcId).length, [issuesByWcId]);
 
   // Carrega as lojas com o que CADA UMA tem na mão na aba atual: em "Em
   // separação" é o card ainda na arara; em "Pronto pra postar", a caixa
@@ -906,7 +924,7 @@ function SeparacaoPageInner() {
   async function load() {
     // Abas com painel PRÓPRIO não usam a lista de pedidos WC — elas renderizam
     // um componente que busca os dados dele. Pula fetch pra não poluir a rede.
-    if (status === 'enviados' || status === 'pos-venda') {
+    if (status === 'enviados' || status === 'pos-venda' || status === 'travados') {
       setOrders([]);
       setLoading(false);
       return;
@@ -1150,37 +1168,88 @@ function SeparacaoPageInner() {
           Some sozinho quando não há código de postagem preso. */}
       <AlertaAvisosTroca />
 
-      {/* Filtros de status com contadores */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {FILTROS.map((f) => {
+      {/* ─── ALARME DOS TRAVADOS ───
+          Barra baixa, uma linha, igual à fila da /minha-loja: o alarme continua
+          na tela de qualquer aba, mas parou de ser a parede vermelha de 100px
+          que aparecia inclusive em cima de lista vazia. Clique leva pra aba. */}
+      {totalTravados > 0 && status !== 'travados' && (
+        <button
+          type="button"
+          onClick={() => setStatus('travados')}
+          className="mb-3 flex w-full items-center gap-2 rounded-card border border-crit/30 bg-crit-soft px-3 py-2 text-left text-[13px] font-semibold text-crit hover:bg-crit/10"
+        >
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          {totalTravados} pedido{totalTravados === 1 ? '' : 's'} travado{totalTravados === 1 ? '' : 's'} —
+          a loja reportou problema e ninguém decidiu
+          <span className="ml-auto text-[12px] font-normal underline">ver</span>
+        </button>
+      )}
+
+      {/* ─── FILA: o que exige alguém agora ─── */}
+      <div role="tablist" className="mb-3 flex flex-wrap items-center gap-1 border-b border-line">
+        {FILTROS.filter((f) => f.grupo === 'fila').map((f) => {
+          const count = f.slug === 'travados' ? totalTravados : tabCounts[f.slug];
+          const active = status === f.slug;
+          const tom = f.slug === 'travados' ? 'crit' : 'warn';
+          return (
+            <button
+              key={f.slug}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setStatus(f.slug)}
+              className={`relative -mb-px inline-flex items-center gap-2 border-b-2 px-3.5 py-2.5 text-[13px] font-semibold transition-colors ${
+                active
+                  ? 'border-action text-ink'
+                  : 'border-transparent text-ink-soft hover:text-ink'
+              }`}
+            >
+              {f.slug === 'pronto-postar' && <PackageCheck className="w-3.5 h-3.5" />}
+              <span>{f.label}</span>
+              {count != null && (
+                <span
+                  className={`rounded-field px-1.5 py-0.5 text-[11px] font-bold tabular-nums ${
+                    count === 0
+                      ? 'bg-line-soft text-ink-faint'
+                      : tom === 'crit'
+                        ? 'bg-crit-soft text-crit'
+                        : 'bg-warn-soft text-warn'
+                  }`}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ─── ACOMPANHAR: consulta, não trabalho ───
+          Mesmo peso visual que a fila era o que fazia 410 concluídos parecerem
+          mais importantes que os 15 pedidos esperando separação. */}
+      <div className="mb-4 flex flex-wrap items-center gap-x-1 gap-y-1 text-[12.5px]">
+        <span className="mr-1 text-[11px] font-bold uppercase tracking-[.11em] text-ink-faint">
+          Acompanhar
+        </span>
+        {FILTROS.filter((f) => f.grupo !== 'fila').map((f) => {
           const count = tabCounts[f.slug];
           const active = status === f.slug;
           return (
             <button
               key={f.slug}
               onClick={() => setStatus(f.slug)}
-              className={`px-3 py-2 rounded-lg text-sm border transition inline-flex items-center gap-2 font-semibold ${
+              className={`inline-flex items-center gap-1.5 rounded-field px-2.5 py-1 transition-colors ${
                 active
-                  ? 'bg-[#0f7a82] text-white border-[#0f7a82] shadow-sm'
-                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                  ? 'bg-action text-action-ink font-semibold'
+                  : 'text-ink-soft hover:bg-line-soft hover:text-ink'
               }`}
             >
-              {f.slug === 'enviados' && <Truck className="w-3.5 h-3.5" />}
-              {f.slug === 'pronto-postar' && <PackageCheck className="w-3.5 h-3.5" />}
-              {f.slug === 'em-transito' && <Plane className="w-3.5 h-3.5" />}
-              {f.slug === 'completed' && <CheckCircle2 className="w-3.5 h-3.5" />}
-              {f.slug === 'pos-venda' && <Star className="w-3.5 h-3.5" />}
+              {f.slug === 'enviados' && <Truck className="w-3 h-3" />}
+              {f.slug === 'em-transito' && <Plane className="w-3 h-3" />}
+              {f.slug === 'completed' && <CheckCircle2 className="w-3 h-3" />}
+              {f.slug === 'pos-venda' && <Star className="w-3 h-3" />}
               <span>{f.label}</span>
               {count != null && f.slug !== 'enviados' && (
-                <span
-                  className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full min-w-[22px] text-center ${
-                    active
-                      ? 'bg-white/25 text-white'
-                      : count > 0
-                      ? 'bg-rose-100 text-rose-700'
-                      : 'bg-slate-100 text-slate-500'
-                  }`}
-                >
+                <span className={`tabular-nums ${active ? 'opacity-70' : 'text-ink-faint'}`}>
                   {count}
                 </span>
               )}
@@ -1196,6 +1265,87 @@ function SeparacaoPageInner() {
         <EnviadosByStore />
       ) : status === 'pos-venda' ? (
         <PosVenda />
+      ) : status === 'travados' ? (
+        /* ─── TRAVADOS ───
+           O que era banner vermelho repetido em toda aba. Aqui cada problema é
+           uma LINHA com a ação que resolve — "Recalcular" reroteia excluindo a
+           loja que reportou, exatamente como o botão da lista fazia. */
+        totalTravados === 0 ? (
+          <div className="rounded-card border border-line bg-surface p-10 text-center text-[13px] text-ink-soft">
+            Nenhuma loja reportou problema. Quando alguma bater “sem estoque / defeito /
+            divergência”, o pedido aparece aqui.
+          </div>
+        ) : (
+          <Table>
+            <thead>
+              <tr>
+                <Th>Pedido</Th>
+                <Th>Loja que reportou</Th>
+                <Th>Motivo</Th>
+                <Th>Peça</Th>
+                <Th align="right">Reportado</Th>
+                <Th align="right">Ação</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(issuesByWcId).map(([wcIdStr, issues]) => {
+                const wcId = Number(wcIdStr);
+                const first = issues[0];
+                return (
+                  <Tr key={wcIdStr} estado="crit">
+                    <Td>
+                      <Link
+                        href={`/pedidos/wc/${wcId}`}
+                        className="font-mono font-semibold text-ink hover:underline"
+                      >
+                        {first.wcOrderNumber || wcId}
+                      </Link>
+                    </Td>
+                    <Td className="text-ink-soft">
+                      {issues
+                        .map((i) => i.storeName || i.storeCode || '?')
+                        .join(' · ')}
+                    </Td>
+                    <Td className="font-semibold text-crit">
+                      {first.reasonLabel}
+                      {issues.length > 1 && ` (+${issues.length - 1})`}
+                    </Td>
+                    <Td className="text-ink-soft">{first.note || '—'}</Td>
+                    <Td align="right" num className="text-ink-soft">
+                      {first.reportedAt ? `${fmtDate(first.reportedAt)} atrás` : '—'}
+                    </Td>
+                    <Td align="right">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => recalcularRota(wcId)}
+                          disabled={recalculating[wcId]}
+                          className="inline-flex items-center gap-1.5 rounded-field bg-crit px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                          title={`Recalcular excluindo: ${issues
+                            .map((i) => i.storeCode)
+                            .filter(Boolean)
+                            .join(', ')}`}
+                        >
+                          {recalculating[wcId] ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          )}
+                          Recalcular
+                        </button>
+                        <Link
+                          href={`/pedidos/wc/${wcId}`}
+                          className="inline-flex items-center rounded-field border border-line px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-surface-2"
+                        >
+                          Abrir
+                        </Link>
+                      </div>
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        )
       ) : (
       <>
       {/* Busca */}
@@ -1238,16 +1388,13 @@ function SeparacaoPageInner() {
               key={val || 'todos'}
               type="button"
               onClick={() => setSourceFilter(val)}
-              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition ${
+              /* Filtro é escolha, não estado — no Semáforo ele não ganha cor
+                 própria: o selecionado é o grafite da ação. Rosa/violeta/teal
+                 aqui eram três cores gastas num seletor. */
+              className={`rounded-field border px-3 py-1.5 text-xs font-semibold transition ${
                 sourceFilter === val
-                  ? val === 'live'
-                    ? 'bg-rose-600 border-rose-600 text-white'
-                    : val === 'ecommerce'
-                      ? 'bg-violet-600 border-violet-600 text-white'
-                      : val === 'pdv_online'
-                        ? 'bg-teal-600 border-teal-600 text-white'
-                        : 'bg-slate-800 border-slate-800 text-white'
-                  : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
+                  ? 'border-action bg-action text-action-ink'
+                  : 'border-line bg-surface text-ink-soft hover:bg-surface-2 hover:text-ink'
               }`}
               title={
                 val === 'live'
@@ -1261,7 +1408,7 @@ function SeparacaoPageInner() {
                         : 'Todas as origens'
               }
             >
-              {val === 'live' ? '🔴 ' : val === 'pdv_online' ? '🏬 ' : ''}{label}
+              {label}
             </button>
           ))}
         </div>
@@ -1312,69 +1459,25 @@ function SeparacaoPageInner() {
         </div>
       )}
 
-      {/* Banner de issues ativos — alerta matriz que lojas reportaram problema */}
-      {Object.keys(issuesByWcId).length > 0 && (
-        <div className="mb-4 bg-red-50 border-2 border-red-300 rounded-lg p-4 shadow-sm">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="font-bold text-red-900 mb-1">
-                {Object.keys(issuesByWcId).length} pedido(s) com problema reportado pela filial
-              </div>
-              <div className="text-sm text-red-800 mb-2">
-                Alguma loja bateu &quot;sem estoque / defeito / divergência&quot;. Clique <b>Recalcular</b> na linha vermelha pra reroteiar automaticamente (a loja que reportou é excluída).
-              </div>
-              <div className="flex flex-wrap gap-2 text-xs">
-                {Object.entries(issuesByWcId).map(([wcId, issues]) => {
-                  const first = issues[0];
-                  return (
-                    <Link
-                      key={wcId}
-                      href={`/pedidos/wc/${wcId}`}
-                      className="px-2 py-1 bg-white border border-red-300 rounded hover:bg-red-100 transition"
-                      title={issues
-                        .map(
-                          (i) =>
-                            `${i.storeCode}: ${i.reasonLabel}${i.note ? ` — ${i.note}` : ''}`,
-                        )
-                        .join('\n')}
-                    >
-                      <span className="font-mono font-semibold text-red-900">
-                        #{first.wcOrderNumber || wcId}
-                      </span>{' '}
-                      <span className="text-red-700">
-                        · {first.storeCode} · {first.reasonLabel}
-                        {issues.length > 1 && ` (+${issues.length - 1})`}
-                      </span>
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* A antiga parede vermelha de issues virou a aba "Travados" + a barra
+          baixa lá em cima. Alarme que fica sempre na tela deixa de ser alarme. */}
 
       {/* Barra de seleção em bloco — SEMPRE VISÍVEL quando há pedidos */}
       {visiveis.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3 bg-white border rounded-lg p-3 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <button
               onClick={toggleAll}
-              className={`flex items-center gap-2 px-4 py-2 rounded font-semibold text-sm transition ${
-                selected.size === visiveis.length
-                  ? 'bg-brand text-white hover:bg-brand-dark'
-                  : 'bg-brand text-white hover:bg-brand-dark'
-              }`}
+              className="flex items-center gap-2 rounded-field border border-line bg-surface px-3 py-1.5 text-[12.5px] font-semibold text-ink transition hover:bg-surface-2"
               title="Selecionar/desmarcar todos os pedidos da lista"
             >
               {selected.size === visiveis.length ? (
                 <>
-                  <CheckSquare className="w-5 h-5" /> Desmarcar todos
+                  <CheckSquare className="w-4 h-4" /> Desmarcar todos
                 </>
               ) : (
                 <>
-                  <Square className="w-5 h-5" /> Marcar todos ({visiveis.length})
+                  <Square className="w-4 h-4" /> Marcar todos ({visiveis.length})
                 </>
               )}
             </button>
@@ -1382,22 +1485,22 @@ function SeparacaoPageInner() {
             {selected.size > 0 && selected.size < visiveis.length && (
               <button
                 onClick={clearSelection}
-                className="text-sm text-slate-500 hover:text-slate-800 underline"
+                className="text-[12.5px] text-ink-soft underline hover:text-ink"
               >
                 Limpar seleção
               </button>
             )}
           </div>
 
-          <div className="text-sm text-slate-600">
+          <div className="text-[12.5px] text-ink-soft">
             {loading ? (
-              'Carregando...'
+              'Carregando…'
             ) : (
               <>
-                <span className="font-semibold">{visiveis.length}</span> pedido(s) na fila
+                <span className="font-semibold text-ink tabular-nums">{visiveis.length}</span> pedido{visiveis.length === 1 ? '' : 's'} nesta fila
                 {selected.size > 0 && (
-                  <span className="ml-2 text-brand font-bold">
-                    · {selected.size} selecionado(s)
+                  <span className="ml-2 font-semibold text-ink">
+                    · {selected.size} selecionado{selected.size === 1 ? '' : 's'}
                   </span>
                 )}
               </>
@@ -1407,7 +1510,7 @@ function SeparacaoPageInner() {
       )}
 
       {!visiveis.length && !loading && !search && (
-        <div className="text-sm text-slate-500 mb-3">0 pedido(s) na fila</div>
+        <div className="mb-3 text-[12.5px] text-ink-faint">0 pedidos nesta fila</div>
       )}
 
       {/* BUSCA ATIVA — a lista deixou de ser a aba (25/08).
@@ -1446,15 +1549,15 @@ function SeparacaoPageInner() {
           /* Busca vazia NÃO é motivo de festa: nada achado é problema de quem
              procura, não conquista da operação. Diz o que foi procurado e
              onde — e avisa se algum filtro ainda está cortando o resultado. */
-          <div className="bg-white rounded-lg shadow p-8 text-center text-slate-500">
-            <div className="text-slate-700 font-semibold">
+          <div className="rounded-card border border-line bg-surface p-10 text-center text-[13px] text-ink-soft">
+            <div className="font-semibold text-ink">
               Nenhum pedido encontrado para <span className="font-mono">{search}</span>
             </div>
-            <div className="mt-1 text-sm">
+            <div className="mt-1">
               Procuramos por nº do pedido, nome, e-mail, telefone e rastreio — em todos os status.
             </div>
             {(sourceFilter || storeCode) && (
-              <div className="mt-2 text-sm text-amber-700">
+              <div className="mt-2 font-semibold text-warn">
                 ⚠ Ainda há filtro ligado
                 {sourceFilter ? ` de origem (${sourceFilter})` : ''}
                 {sourceFilter && storeCode ? ' e' : ''}
@@ -1463,7 +1566,7 @@ function SeparacaoPageInner() {
             )}
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
+          <div className="rounded-card border border-line bg-surface p-10 text-center text-[13px] text-ink-soft">
             Nenhum pedido{' '}
             {sourceFilter === 'live'
               ? 'da LIVE '
@@ -1474,11 +1577,36 @@ function SeparacaoPageInner() {
                   : sourceFilter === 'pdv_online'
                     ? 'de venda online das lojas '
                     : ''}
-            com esse status no momento. 🎉
+            nesta fila agora.
           </div>
         )
       ) : (
-        <div className="space-y-2">
+        /* ─── A LISTA ───
+           Era um cartão por pedido com até 8 badges inline em ordem variável:
+           cada linha tinha uma largura diferente e não dava pra descer a lista
+           comparando loja com loja. Agora é tabela de coluna fixa, e o ESTADO
+           é a faixa lateral do primitivo (crit/warn/ok) — a mesma régua do
+           Semáforo usada em /retaguarda/produtos.
+
+           `min-w`: sem piso a tabela ESPREME as dez colunas em 341px no celular
+           e o texto vira sopa. Com piso ela rola dentro da própria caixa — a
+           página nunca rola de lado. */
+        <Table className="min-w-[1080px]">
+          <thead>
+            <tr>
+              <Th className="w-10"> </Th>
+              <Th>Pedido</Th>
+              <Th>Cliente</Th>
+              <Th>Envio</Th>
+              <Th>Loja que separa</Th>
+              <Th>Situação</Th>
+              <Th>Vendedora</Th>
+              <Th align="right">Esperando</Th>
+              <Th align="right">Valor</Th>
+              <Th align="right">Ação</Th>
+            </tr>
+          </thead>
+          <tbody>
           {visiveis.map((o) => {
             const p = preview[o.id];
             const err = errorByOrder[o.id];
@@ -1490,332 +1618,280 @@ function SeparacaoPageInner() {
             const hasIssue = orderIssues.length > 0;
             const isRecalculating = recalculating[o.id];
 
+            // HÁ QUANTO TEMPO ESTE PEDIDO ESTÁ PARADO — não é a idade dele.
+            // Em "Pronto pra postar" a conta começa quando a loja terminou de
+            // separar (`prontoDesde`); nas outras, da entrada na fila. É esse
+            // número que acende a faixa: 24h = a fazer, 72h = parado.
+            const esperaDesde = (status === 'pronto-postar' && o.prontoDesde) || o.dateCreatedGmt;
+            const esperaHoras = esperaDesde
+              ? (Date.now() - new Date(esperaDesde.endsWith('Z') ? esperaDesde : esperaDesde + 'Z').getTime()) / 3600000
+              : 0;
+            // Aba de consulta não tem "atraso": pedido entregue não está esperando ninguém.
+            const abaDeFila = !['completed', 'em-transito', 'cancelled'].includes(status);
+            const estadoLinha: 'crit' | 'warn' | 'ok' | undefined =
+              hasIssue || (abaDeFila && esperaHoras >= 72)
+                ? 'crit'
+                : abaDeFila && esperaHoras >= 24
+                  ? 'warn'
+                  : o.shipped
+                    ? 'ok'
+                    : undefined;
+
+            const shipBadge = classifyShipping(o.shippingMethod, o.shippingState);
+            const lojas = (o.pickOrders || [])
+              .map((x) => x.storeName || x.storeCode || '?')
+              .join(' + ');
+
             return (
-              <div
-                key={o.id}
-                className={`bg-white rounded shadow overflow-hidden transition ${
-                  hasIssue ? 'ring-2 ring-red-400' : isChecked ? 'ring-2 ring-brand' : ''
-                }`}
-              >
-                {/* Linha principal */}
-                <div className="flex items-center p-4 gap-3">
-                  {/* Checkbox de seleção em bloco */}
-                  <label
-                    className="p-1 cursor-pointer shrink-0"
-                    title={isChecked ? 'Remover da seleção' : 'Adicionar à seleção'}
-                  >
+              <Fragment key={o.id}>
+                <Tr
+                  estado={estadoLinha}
+                  className={isChecked ? 'bg-surface-2' : undefined}
+                >
+                  <Td>
                     <input
                       type="checkbox"
                       checked={isChecked}
                       onChange={() => toggleOne(o.id)}
-                      className="w-4 h-4 accent-brand cursor-pointer"
+                      className="w-4 h-4 accent-action cursor-pointer align-middle"
+                      title={isChecked ? 'Remover da seleção' : 'Adicionar à seleção'}
                     />
-                  </label>
+                  </Td>
 
-                  <button
-                    onClick={() => toggleExpanded(o.id)}
-                    className="text-slate-400 hover:text-slate-700 p-1"
-                    title={isExpanded ? 'Recolher' : 'Expandir'}
-                  >
-                    {isExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
-                  </button>
-
-                  <div className="flex-1 flex flex-col gap-2 sm:grid sm:grid-cols-12 sm:gap-3 sm:items-center text-sm min-w-0">
-                    <div className="sm:col-span-2">
+                  {/* PEDIDO — o prefixo do número já diz a origem (LP- site novo,
+                      ON- venda da loja), então as pílulas coloridas de origem
+                      saíram: eram cor gasta em informação que o número carrega. */}
+                  <Td>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => toggleExpanded(o.id)}
+                        className="text-ink-faint hover:text-ink"
+                        title={isExpanded ? 'Recolher' : 'Ver itens e lojas avaliadas'}
+                      >
+                        {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                      </button>
                       <Link
                         href={`/pedidos/wc/${o.id}`}
-                        className="font-mono font-semibold text-brand hover:underline"
+                        className="font-mono text-[12.5px] font-semibold text-ink hover:underline"
                       >
-                        #{o.number}
+                        {o.number}
                       </Link>
                       {(o as any).orderSource === 'live' && (
-                        <span className="ml-1 inline-block rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
-                          🔴 LIVE
-                        </span>
-                      )}
-                      {/* Site NOVO (sprint 011): pedido nasce no Postgres do Flow,
-                          não vem do WooCommerce. Roxo pra não confundir com o
-                          vermelho da live nem com o pedido do site antigo, que
-                          não tem selo nenhum. */}
-                      {(o as any).orderSource === 'ecommerce' && (
-                        <span className="ml-1 inline-block rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
-                          ECOMMERCE
-                        </span>
-                      )}
-                      {/* ONDE ESTE PEDIDO ESTÁ — só na busca, que é a única
-                          hora em que a lista mistura status. Clicável quando
-                          existe aba pra ir; texto seco quando o status não
-                          mora em aba nenhuma (aguardando pagamento, recusado,
-                          cancelado) — link que não leva a lugar nenhum é pior
-                          que badge sem link. */}
-                      {search && (o.statusLabel || o.statusLocal) && (
-                        o.abaSlug && o.abaSlug !== status ? (
-                          <button
-                            type="button"
-                            onClick={() => { setSearchInput(''); setSearch(''); setStatus(o.abaSlug!); }}
-                            className="ml-1 inline-block rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 align-middle hover:bg-slate-300"
-                            title={`Este pedido está na aba "${FILTROS.find((f) => f.slug === o.abaSlug)?.label ?? o.abaSlug}" — clique pra ir`}
-                          >
-                            {o.statusLabel || o.statusLocal} ↗
-                          </button>
-                        ) : (
-                          <span
-                            className="ml-1 inline-block rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 align-middle"
-                            title={o.abaSlug ? 'Status do pedido' : 'Status que nenhuma aba lista'}
-                          >
-                            {o.statusLabel || o.statusLocal}
-                          </span>
-                        )
-                      )}
-                      <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
-                      {/* PARADO HÁ QUANTO TEMPO — só na aba "Pronto pra postar".
-                          A caixa já está fechada esperando etiqueta; sem a
-                          idade na linha, 1h e 6 dias se parecem. Vermelho a
-                          partir de 24h, o mesmo semáforo da fila da loja. */}
-                      {status === 'pronto-postar' && o.prontoDesde && (() => {
-                        const horas = (Date.now() - new Date(o.prontoDesde).getTime()) / 3600000;
-                        return (
-                          <div
-                            className={`mt-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                              horas >= 24 ? 'bg-rose-600 text-white' : 'bg-amber-100 text-amber-800'
-                            }`}
-                            title="Tempo desde que a loja terminou de separar"
-                          >
-                            ⏱ parado há {fmtDate(o.prontoDesde)}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div className="sm:col-span-4 sm:truncate min-w-0">
-                      {(() => {
-                        const shipBadge = classifyShipping(o.shippingMethod, o.shippingState);
-                        if (!o.shippingMethod) return null;
-                        return (
-                          <span
-                            className={`mr-2 inline-flex items-center px-2 py-0.5 text-[10px] font-bold rounded align-middle ${shipBadge.colorBold}`}
-                            title={shipBadge.raw}
-                          >
-                            {shipBadge.short}
-                          </span>
-                        );
-                      })()}
-                      {o.customerName || '—'}
-
-                      {/* Badge ENVIADO + rastreio — quando TODOS os pick-orders estão shipped */}
-                      {o.shipped && (
-                        <span
-                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded align-middle"
-                          title={
-                            o.trackingCode
-                              ? `Enviado · ${o.trackingCarrier || ''} ${o.trackingCode}`
-                              : 'Enviado pela loja'
-                          }
-                        >
-                          <CheckCircle2 className="w-3 h-3" />
-                          ENVIADO
-                          {o.trackingCode && (
-                            <span className="font-mono font-normal opacity-90">
-                              · {o.trackingCode}
-                            </span>
-                          )}
-                        </span>
-                      )}
-
-                      {/* Tag de vendedora atribuída (Karine, Manu, etc.) */}
-                      <span className="ml-2 align-middle inline-block">
-                        <SellerTag
-                          wcOrderId={o.id}
-                          currentSellerId={o.sellerId ?? null}
-                          currentSellerName={o.sellerName ?? null}
-                          compact
-                          onChange={(sellerId, sellerName) => {
-                            setOrders((prev) =>
-                              prev.map((x) =>
-                                x.id === o.id ? { ...x, sellerId, sellerName } : x,
-                              ),
-                            );
-                          }}
-                        />
-                      </span>
-
-                      {/* Campanha de origem (Order Attribution do WC) */}
-                      {o.utmCampaign && (
-                        <span
-                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-800 text-[10px] font-bold rounded align-middle max-w-[220px] truncate"
-                          title={`Veio da campanha: ${o.utmCampaign}`}
-                        >
-                          📣 {o.utmCampaign}
-                        </span>
-                      )}
-
-                      {/* Badge da(s) loja(s) responsável(is) pela separação */}
-                      {o.pickOrders && o.pickOrders.length > 0 && (
-                        <span
-                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-semibold rounded align-middle"
-                          title={o.pickOrders
-                            .map(
-                              (p) =>
-                                `${p.storeName || p.storeCode || '?'}${
-                                  p.trackingCode ? ` · ${p.carrier || ''} ${p.trackingCode}` : ''
-                                } · ${p.status}`,
-                            )
-                            .join('\n')}
-                        >
-                          <StoreIcon className="w-3 h-3" />
-                          {o.pickOrders.length === 1
-                            ? o.pickOrders[0].storeName || o.pickOrders[0].storeCode || '?'
-                            : o.pickOrders
-                                .map((p) => p.storeName || p.storeCode || '?')
-                                .join(' + ')}
-                        </span>
-                      )}
-
-                      {hasIssue && (
-                        <span
-                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-800 text-xs font-semibold rounded-full align-middle"
-                          title={orderIssues
-                            .map(
-                              (i) =>
-                                `${i.storeCode || '?'}: ${i.reasonLabel}${
-                                  i.note ? ` — ${i.note}` : ''
-                                }`,
-                            )
-                            .join('\n')}
-                        >
-                          <AlertCircle className="w-3 h-3" />
-                          {orderIssues.length === 1
-                            ? orderIssues[0].reasonLabel
-                            : `${orderIssues.length} problemas`}
-                        </span>
-                      )}
-
-                      {/* ONDE O OBJETO ESTÁ (aba Em trânsito).
-                          Vem do cache `rastreio_objetos`, NUNCA da API dos
-                          Correios: a lista tem que abrir mesmo com a
-                          transportadora fora do ar, e é a mesma leitura que
-                          dispara o "seu pedido chegou" pra cliente — divergir
-                          aqui faria a tela dizer uma coisa e ela ouvir outra. */}
-                      {o.rastreio && (
-                        <span
-                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-sky-50 text-sky-900 border border-sky-200 text-[10px] font-semibold rounded align-middle max-w-[340px] truncate"
-                          title={[
-                            o.rastreio.status,
-                            o.rastreio.local,
-                            o.rastreio.eventoEm
-                              ? `em ${new Date(o.rastreio.eventoEm).toLocaleString('pt-BR')}`
-                              : null,
-                            o.volumes && o.volumes > 1 ? `${o.volumes} volumes` : null,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        >
-                          <Plane className="w-3 h-3" />
-                          {o.rastreio.status || 'sem movimento ainda'}
-                          {o.rastreio.local ? ` · ${o.rastreio.local}` : ''}
-                        </span>
-                      )}
-                      {status === 'em-transito' && !o.rastreio && o.trackingCode && (
-                        <span
-                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-slate-50 text-slate-500 border border-slate-200 text-[10px] font-semibold rounded align-middle"
-                          title="O objeto entrou na fila do rastreio e ainda não foi consultado (o ciclo roda de 30 em 30 minutos)."
-                        >
-                          aguardando 1ª leitura
+                        <span className="text-[10px] font-bold text-ink-soft" title="Pedido da Live Commerce">
+                          LIVE
                         </span>
                       )}
                     </div>
-                    <div className="sm:col-span-2 font-mono text-left sm:text-right text-base sm:text-sm font-bold sm:font-normal">{fmtMoney(o.total)}</div>
-                    <div className="sm:col-span-4 flex flex-wrap sm:justify-end gap-1.5 sm:gap-2">
-                      {hasIssue && (
+                    {/* Na busca a lista deixa de ser a aba: dizer em qual delas
+                        o pedido mora é o que impede a matriz de achar que a
+                        tela mentiu. */}
+                    {search && (o.statusLabel || o.statusLocal) && (
+                      o.abaSlug && o.abaSlug !== status ? (
                         <button
-                          onClick={() => recalcularRota(o.id)}
-                          disabled={isRecalculating}
-                          className="px-3 py-1.5 bg-red-600 text-white rounded hover:bg-red-700 text-sm disabled:opacity-50 flex items-center gap-1.5 font-semibold"
-                          title={`Recalcular excluindo: ${orderIssues
-                            .map((i) => i.storeCode)
-                            .filter(Boolean)
-                            .join(', ')}`}
+                          type="button"
+                          onClick={() => { setSearchInput(''); setSearch(''); setStatus(o.abaSlug!); }}
+                          className="mt-0.5 block text-[11px] text-ink-soft underline hover:text-ink"
+                          title={`Este pedido está na aba "${FILTROS.find((f) => f.slug === o.abaSlug)?.label ?? o.abaSlug}" — clique pra ir`}
                         >
-                          {isRecalculating ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <RefreshCw className="w-3.5 h-3.5" />
-                          )}
-                          Recalcular
+                          {o.statusLabel || o.statusLocal} ↗
                         </button>
-                      )}
-                      {!p && !hasIssue && (
+                      ) : (
+                        <span className="mt-0.5 block text-[11px] text-ink-faint">
+                          {o.statusLabel || o.statusLocal}
+                        </span>
+                      )
+                    )}
+                  </Td>
+
+                  <Td>
+                    <span className="font-medium">{o.customerName || '—'}</span>
+                    {o.utmCampaign && (
+                      <span
+                        className="mt-0.5 block max-w-[220px] truncate text-[11px] text-ink-faint"
+                        title={`Veio da campanha: ${o.utmCampaign}`}
+                      >
+                        {o.utmCampaign}
+                      </span>
+                    )}
+                  </Td>
+
+                  <Td className="text-ink-soft" title={shipBadge.raw || undefined}>
+                    {o.shippingMethod ? shipBadge.short : '—'}
+                  </Td>
+
+                  <Td className="text-ink-soft">
+                    {lojas || <span className="text-ink-faint">a calcular</span>}
+                  </Td>
+
+                  {/* SITUAÇÃO — uma frase por linha, na cor do estado. Antes eram
+                      até cinco badges disputando a mesma linha de texto. */}
+                  <Td>
+                    {hasIssue ? (
+                      <span
+                        className="font-semibold text-crit"
+                        title={orderIssues
+                          .map((i) => `${i.storeCode || '?'}: ${i.reasonLabel}${i.note ? ` — ${i.note}` : ''}`)
+                          .join('\n')}
+                      >
+                        {orderIssues.length === 1 ? orderIssues[0].reasonLabel : `${orderIssues.length} problemas`}
+                      </span>
+                    ) : o.rastreio ? (
+                      <span
+                        className="block max-w-[260px] truncate text-ink-soft"
+                        title={[
+                          o.rastreio.status,
+                          o.rastreio.local,
+                          o.rastreio.eventoEm ? `em ${new Date(o.rastreio.eventoEm).toLocaleString('pt-BR')}` : null,
+                          o.volumes && o.volumes > 1 ? `${o.volumes} volumes` : null,
+                        ].filter(Boolean).join(' · ')}
+                      >
+                        {o.rastreio.status || 'sem movimento ainda'}
+                        {o.rastreio.local ? ` · ${o.rastreio.local}` : ''}
+                      </span>
+                    ) : status === 'em-transito' && o.trackingCode ? (
+                      <span className="text-ink-faint" title="O objeto entrou na fila do rastreio e ainda não foi consultado (o ciclo roda de 30 em 30 minutos).">
+                        aguardando 1ª leitura
+                      </span>
+                    ) : o.shipped ? (
+                      <span className="font-semibold text-ok" title={o.trackingCode ? `${o.trackingCarrier || ''} ${o.trackingCode}` : 'Enviado pela loja'}>
+                        Enviado{o.trackingCode ? ` · ${o.trackingCode}` : ''}
+                      </span>
+                    ) : p && !p.success ? (
+                      <span className="font-semibold text-crit">Ruptura — nenhuma loja cobre</span>
+                    ) : p && p.groups.length > 1 ? (
+                      <span className="text-warn">Dividido em {p.groups.length} lojas</span>
+                    ) : (
+                      <span className="text-ink-faint">—</span>
+                    )}
+                  </Td>
+
+                  {/* Vendedora: continua editável na linha, mas parou de gritar
+                      "◎ Vendedora? ▾" quinze vezes numa tela de quinze pedidos. */}
+                  <Td>
+                    <SellerTag
+                      wcOrderId={o.id}
+                      currentSellerId={o.sellerId ?? null}
+                      currentSellerName={o.sellerName ?? null}
+                      compact
+                      onChange={(sellerId, sellerName) => {
+                        setOrders((prev) =>
+                          prev.map((x) => (x.id === o.id ? { ...x, sellerId, sellerName } : x)),
+                        );
+                      }}
+                    />
+                  </Td>
+
+                  <Td
+                    align="right"
+                    num
+                    className={
+                      estadoLinha === 'crit' ? 'font-semibold text-crit'
+                      : estadoLinha === 'warn' ? 'font-semibold text-warn'
+                      : 'text-ink-soft'
+                    }
+                    title={
+                      status === 'pronto-postar' && o.prontoDesde
+                        ? 'Tempo desde que a loja terminou de separar'
+                        : 'Tempo desde que o pedido entrou na fila'
+                    }
+                  >
+                    {esperaDesde ? fmtDate(esperaDesde) : '—'}
+                  </Td>
+
+                  <Td align="right" num className="font-semibold">{fmtMoney(o.total)}</Td>
+
+                  <Td align="right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      {/* SECUNDÁRIAS: ícone fantasma. Elas existiam com borda e
+                          cor própria, e junto com a primária verde davam três
+                          botões gritando por linha — 45 na tela. */}
+                      {!hasIssue && !p && (
                         <>
                           <button
                             onClick={() => imprimirPedido(o.id)}
-                            className="px-2.5 py-1.5 bg-white border border-slate-300 text-slate-700 rounded hover:bg-slate-50 text-sm flex items-center gap-1.5"
+                            className="rounded-field p-1.5 text-ink-faint hover:bg-line-soft hover:text-ink"
                             title="Imprimir ordem de separação"
                           >
-                            <Printer className="w-3.5 h-3.5" />
+                            <Printer className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => calcular(o.id)}
                             disabled={isBusy}
-                            className="px-2.5 py-1.5 bg-white border border-slate-300 text-slate-700 rounded hover:bg-slate-50 text-sm disabled:opacity-50 flex items-center gap-1.5"
+                            className="rounded-field p-1.5 text-ink-faint hover:bg-line-soft hover:text-ink disabled:opacity-40"
                             title="Só calcula e mostra qual loja separaria (prévia, sem enviar)"
                           >
-                            {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <StoreIcon className="w-3.5 h-3.5" />}
-                            Prévia
+                            {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <StoreIcon className="w-4 h-4" />}
                           </button>
-                          {/* 1-CLIQUE calcula a loja e MANDA SEPARAR. Na aba
-                              "Pronto pra postar" a peça já está separada e a
-                              caixa fechada: clicar aqui rerotearia o pedido e
-                              dispararia o WhatsApp de novo pra uma loja que já
-                              fez o trabalho. Fora da aba.
-                              Em "Concluídos"/"Em trânsito" (25/08) o pedido JÁ
-                              ACABOU: o botão aqui foi o que transformou os 22
-                              relançamentos de 24/08 em separação fantasma pras
-                              lojas. O backend agora recusa (confirmRoute), mas
-                              botão que só devolve erro é pegadinha — some. */}
-                          {!['pronto-postar', 'completed', 'em-transito'].includes(status) && (
-                            <button
-                              onClick={() => umClique(o.id)}
-                              disabled={isBusy}
-                              className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-50 flex items-center gap-1.5 font-semibold shadow-sm ring-1 ring-green-500"
-                              title="1 clique faz TUDO: calcula loja → envia WhatsApp → muda status pra Separação"
-                            >
-                              {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                              1-CLIQUE
-                            </button>
-                          )}
                         </>
                       )}
-                      {!hasIssue && p && p.success && p.groups.length === 1 && (
+
+                      {hasIssue ? (
+                        <button
+                          onClick={() => recalcularRota(o.id)}
+                          disabled={isRecalculating}
+                          className="inline-flex items-center gap-1.5 rounded-field bg-crit px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                          title={`Recalcular excluindo: ${orderIssues.map((i) => i.storeCode).filter(Boolean).join(', ')}`}
+                        >
+                          {isRecalculating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                          Recalcular
+                        </button>
+                      ) : p && p.success && p.groups.length === 1 ? (
                         <button
                           onClick={() => dispararWhatsapp(o.id, p.groups[0])}
                           disabled={isBusy || !p.groups[0].whatsapp}
-                          className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-50 flex items-center gap-1.5"
+                          className="inline-flex items-center gap-1.5 rounded-field bg-action px-3 py-1.5 text-[12px] font-semibold text-action-ink hover:opacity-90 disabled:opacity-40"
                           title={p.groups[0].whatsapp ? `Enviar pra ${p.groups[0].storeName}` : 'Loja sem WhatsApp cadastrado'}
                         >
                           {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                          WhatsApp → {p.groups[0].storeName}
+                          Enviar pra {p.groups[0].storeName}
+                        </button>
+                      ) : p && p.success && p.groups.length > 1 ? (
+                        <button
+                          onClick={() => toggleExpanded(o.id)}
+                          className="inline-flex items-center gap-1.5 rounded-field border border-line px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-surface-2"
+                        >
+                          Ver as {p.groups.length} lojas
+                        </button>
+                      ) : !['pronto-postar', 'completed', 'em-transito'].includes(status) ? (
+                        /* O botão se chamava "1-CLIQUE" — nome do mecanismo, não
+                           da ação. Ele calcula a loja, registra a separação e
+                           dispara o WhatsApp: é "Enviar separação". */
+                        <button
+                          onClick={() => umClique(o.id)}
+                          disabled={isBusy}
+                          className="inline-flex items-center gap-1.5 rounded-field bg-action px-3 py-1.5 text-[12px] font-semibold text-action-ink hover:opacity-90 disabled:opacity-50"
+                          title="Calcula a loja, registra a separação e avisa a loja no WhatsApp"
+                        >
+                          {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                          Enviar separação
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => imprimirPedido(o.id)}
+                          className="inline-flex items-center gap-1.5 rounded-field border border-line px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-surface-2"
+                          title="Imprimir ordem de separação"
+                        >
+                          <Printer className="w-3.5 h-3.5" />
+                          Imprimir
                         </button>
                       )}
-                      {!hasIssue && p && p.success && p.groups.length > 1 && (
-                        <span className="px-3 py-1.5 bg-amber-100 text-amber-800 rounded text-xs font-medium">
-                          Dividido em {p.groups.length} lojas (expande pra ver)
-                        </span>
-                      )}
-                      {!hasIssue && p && !p.success && (
-                        <span className="px-3 py-1.5 bg-red-100 text-red-800 rounded text-xs font-medium flex items-center gap-1">
-                          <AlertTriangle className="w-3.5 h-3.5" /> Ruptura
-                        </span>
-                      )}
                     </div>
-                  </div>
-                </div>
+                  </Td>
+                </Tr>
 
                 {err && (
-                  <div className="px-4 pb-3 text-xs text-red-700 bg-red-50">{err}</div>
+                  <tr>
+                    <td colSpan={10} className="border-b border-line-soft bg-crit-soft px-4 py-2 text-[12px] font-medium text-crit">
+                      {err}
+                    </td>
+                  </tr>
                 )}
 
-                {/* Área expandida */}
+                {/* Área expandida — itens, lojas avaliadas e mensagem do WhatsApp */}
                 {isExpanded && p && (
-                  <div className="bg-slate-50 border-t px-4 py-3">
+                  <tr>
+                    <td colSpan={10} className="border-b border-line-soft p-0">
+                  <div className="bg-surface-2 px-4 py-3">
                     <div className="text-xs text-slate-500 mb-2">
                       <b>Envio:</b> {p.shippingMethod}
                     </div>
@@ -1982,11 +2058,14 @@ function SeparacaoPageInner() {
                       </Link>
                     </div>
                   </div>
+                    </td>
+                  </tr>
                 )}
-              </div>
+              </Fragment>
             );
           })}
-        </div>
+          </tbody>
+        </Table>
       )}
 
       {/* BARRA DE AÇÃO EM BLOCO — aparece quando tem pedidos selecionados */}
