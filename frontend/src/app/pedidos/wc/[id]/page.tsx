@@ -1911,10 +1911,20 @@ export default function PedidoDetailPage() {
   const estadoDaPeca = (p: PecaRaioX | null) => {
     if (!p) return null;
     const card = liveStatus.find((r) => r.storeCode && r.storeCode === p.storeCode);
+    // "Sem loja" dizia a mesma coisa pra ruptura e pra pedido não roteado —
+    // agora o backend separa os dois (27/08, LP-000215).
+    if (p.estado === 'nao_roteado') {
+      return { tom: 'warn' as const, texto: 'Aguardando separação' };
+    }
     if (p.cor_semaforo === 'vermelho') {
       return {
         tom: 'crit' as const,
-        texto: p.estado === 'sem_dono' ? 'Sem loja' : 'Loja reportou problema',
+        texto:
+          p.estado === 'sem_estoque_rede'
+            ? 'Nenhuma loja tem'
+            : p.estado === 'sem_dono'
+              ? 'Sem loja'
+              : 'Loja reportou problema',
       };
     }
     if (card?.status === 'shipped') return { tom: 'ok' as const, texto: 'Enviada' };
@@ -2603,7 +2613,7 @@ export default function PedidoDetailPage() {
                           }
                           disabled={!podeTrocarLoja || sepLoading}
                           className={`rounded-field border px-2 py-1 text-xs font-semibold transition ${
-                            peca.storeCode
+                            peca.storeCode || peca.estado === 'nao_roteado'
                               ? 'border-line bg-surface text-ink hover:bg-surface-2'
                               : 'border-crit/40 bg-crit-soft text-crit hover:bg-crit/10'
                           } disabled:cursor-not-allowed disabled:opacity-60`}
@@ -2625,7 +2635,8 @@ export default function PedidoDetailPage() {
                         </span>
                         {/* Peça vermelha sem dono: as duas saídas (26/08) — o
                             2º frete de outra loja, ou cancelar e devolver. */}
-                        {peca.cor_semaforo === 'vermelho' && ['sem_dono', 'reportada'].includes(peca.estado) && (
+                        {peca.cor_semaforo === 'vermelho' &&
+                          ['sem_dono', 'reportada', 'sem_estoque_rede'].includes(peca.estado) && (
                           <button
                             type="button"
                             onClick={() => { setCancelarPeca(peca); setCancelarMotivo(''); setCancelarErro(null); }}

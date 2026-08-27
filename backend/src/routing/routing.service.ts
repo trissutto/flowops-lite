@@ -328,7 +328,13 @@ export class RoutingService {
     if (!result.success) {
       await this.prisma.order.update({
         where: { id: orderId },
-        data: { status: OrderStatus.awaiting_stock, routingResult: JSON.stringify(result) },
+        data: {
+          status: OrderStatus.awaiting_stock,
+          // `tentadoEm` (27/08): sem a hora, a tela sabia QUE deu ruptura mas
+          // não QUANDO — e "nenhuma loja tem a peça" de 5 dias atrás não é a
+          // mesma notícia de "nenhuma loja tem a peça agora há pouco".
+          routingResult: JSON.stringify({ ...result, tentadoEm: new Date().toISOString() }),
+        },
       });
       return { persisted: false };
     }

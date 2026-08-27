@@ -30,7 +30,12 @@ export interface PecaRaioX {
   tamanho: string | null;
   quantity: number;
   unitPrice: number | null;
-  /** com_loja | na_caixa | enviada | entregue | sem_dono | reportada | cancelada */
+  /**
+   * com_loja | na_caixa | enviada | entregue | reportada | cancelada
+   * | sem_estoque_rede (roteou e nenhuma loja tem — ruptura)
+   * | nao_roteado    (ninguém rodou "Gerar separação" ainda)
+   * | sem_dono       (tem tentativa e nem ruptura explica — decidir na mão)
+   */
   estado: string;
   /** Frase pronta pra tela ("na caixa REM-x a caminho de LIMEIRA"). */
   onde: string;
@@ -267,6 +272,30 @@ export class LinhaDoTempoService {
     const caixaDoCard = (pickOrderId: string) =>
       caixas.filter((c) => c.pickOrderId === pickOrderId && c.status !== 'cancelled').pop() ?? null;
 
+    /**
+     * O QUE A ÚLTIMA TENTATIVA DE ROTEAMENTO DISSE.
+     *
+     * `confirmRoute` grava `routingResult` (JSON do RoutingResult) sempre que
+     * roda; quando não cobre o pedido, `success:false` + a lista `missing`.
+     * É o que diferencia "nenhuma loja tem a peça" de "ninguém tentou ainda".
+     */
+    const rupturaSkus = new Set<string>();
+    let rupturaEm: string | null = null;
+    try {
+      const rr = order.routingResult ? JSON.parse(order.routingResult) : null;
+      if (rr && rr.success === false) {
+        for (const m of rr.missing ?? []) if (m?.sku) rupturaSkus.add(String(m.sku));
+        rupturaEm = typeof rr.tentadoEm === 'string' ? rr.tentadoEm : null;
+      }
+    } catch {
+      /* JSON velho/corrompido não pode derrubar o raio-x */
+    }
+    /**
+     * Houve ALGUMA tentativa? `routingResult` preenchido, ou card em qualquer
+     * status (o "Recalcular" zera o routingResult mas deixa os cancelados).
+     */
+    const houveTentativaDeRota = !!order.routingResult || order.pickOrders.length > 0;
+
     const pecas: PecaRaioX[] = order.items.map((it: any) => {
       const base = {
         orderItemId: it.id,
@@ -400,6 +429,42 @@ export class LinhaDoTempoService {
           storeCode: null, storeName: null,
         };
       }
+      /**
+       * "SEM LOJA" TEM DOIS SIGNIFICADOS — e a tela não conseguia separar
+       * (27/08, flagra do dono no LP-000215).
+       *
+       *  1. RUPTURA: o roteamento rodou e NENHUMA loja da rede tem a peça.
+       *     Sai daqui só com 2º frete de outra loja ou cancelando e
+       *     devolvendo o dinheiro. É vermelho de verdade.
+       *  2. AINDA NÃO ROTEADO: ninguém clicou em "Gerar separação". Não é
+       *     problema de estoque — é trabalho que não foi feito. Amarelo.
+       *
+       * A diferença já estava no banco e ninguém lia: quando a engine não
+       * cobre o pedido, `confirmRoute` grava `routingResult` com a lista
+       * `missing` e joga o pedido pra `awaiting_stock`.
+       */
+      if (rupturaSkus.has(String(it.sku))) {
+        return {
+          ...base,
+          estado: 'sem_estoque_rede',
+          onde:
+            'NENHUMA LOJA DA REDE TEM ESTA PEÇA' +
+            (rupturaEm
+              ? ` — o roteamento tentou em ${new Date(rupturaEm).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} e não achou`
+              : ' — o roteamento tentou e não achou'),
+          cor_semaforo: 'vermelho',
+          storeCode: null, storeName: null,
+        };
+      }
+      if (!houveTentativaDeRota) {
+        return {
+          ...base,
+          estado: 'nao_roteado',
+          onde: 'aguardando separação — ninguém rodou o roteamento ainda',
+          cor_semaforo: 'amarelo',
+          storeCode: null, storeName: null,
+        };
+      }
       return {
         ...base,
         estado: 'sem_dono',
@@ -412,7 +477,17 @@ export class LinhaDoTempoService {
     // ── ALERTAS de pedido doente (os mesmos invariantes da sentinela) ─────
     const alertas: string[] = [];
     const semDono = pecas.filter((p) => p.cor_semaforo === 'vermelho').length;
-    if (semDono) alertas.push(`${semDono} peça(s) sem dono ou reportada(s) — ninguém vai separar até a matriz decidir.`);
+    // Ruptura ganha alerta PRÓPRIO: "sem dono" manda decidir; "nenhuma loja
+    // tem" já diz QUAL é a decisão possível (2º frete ou devolver o dinheiro).
+    const semEstoque = pecas.filter((p) => p.estado === 'sem_estoque_rede').length;
+    if (semEstoque) {
+      alertas.push(
+        `${semEstoque} peça(s) que NENHUMA loja da rede tem — ou outra loja envia com um 2º frete, ou cancela a peça e devolve o valor à cliente.`,
+      );
+    }
+    if (semDono - semEstoque > 0) {
+      alertas.push(`${semDono - semEstoque} peça(s) sem dono ou reportada(s) — ninguém vai separar até a matriz decidir.`);
+    }
     for (const p of order.pickOrders) {
       if (!p.isTransfer || !p.transferToStoreCode) continue;
       if (!cardsAtivos.concat('shipped').includes(p.status)) continue;
