@@ -49,6 +49,7 @@ import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { NfeModule } from './nfe/nfe.module';
+import { PecasExtraviadasModule } from './pecas-extraviadas/pecas-extraviadas.module';
 import { DceModule } from './dce/dce.module';
 import { ClientesGigaModule } from './clientes-giga/clientes-giga.module';
 import { CrediarioNativoModule } from './crediario-nativo/crediario-nativo.module';
@@ -159,6 +160,7 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     UsersModule,
     PickOrdersModule,
     NfeModule,
+    PecasExtraviadasModule,
     DceModule,
     ClientesGigaModule,
     CrediarioNativoModule,

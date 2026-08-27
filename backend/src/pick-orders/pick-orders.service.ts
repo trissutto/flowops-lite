@@ -19,6 +19,7 @@ import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { caixaDoSite } from '../common/caixa-site';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
@@ -199,6 +200,7 @@ export class PickOrdersService {
     // também chama de volta (marcarCaixaJuntadaRecebida) quando a caixa chega.
     @Inject(forwardRef(() => JuntadaService))
     private readonly juntada: JuntadaService,
+    private readonly extraviadas: PecasExtraviadasService,
   ) {}
 
   /**
@@ -4691,6 +4693,27 @@ export class PickOrdersService {
       fantasmaBaixado = applied.filter((a) => a.previousStock > a.newStock);
     }
 
+    /**
+     * PEÇA EXTRAVIADA (27/08 — ordem do dono: "anote como peça extraviada,
+     * não peça mais ela, mas não desapareça — senão vira festa").
+     *
+     * O saldo da loja FICA (Consulta, balcão, inventário: nada muda). O que
+     * sai é a OPÇÃO no roteamento — aquela loja deixa de ser escolhida pra
+     * aquele SKU, inclusive nos próximos pedidos. A trava que existia era de
+     * tela ("já negou este pedido") e só valia pro pedido em curso.
+     *
+     * Fora da transação e com `catch` de propósito: falhar a marcação não pode
+     * impedir a loja de reportar o problema.
+     */
+    if (fantasmas.length) {
+      await this.extraviadas
+        .marcar(
+          fantasmas.map((x) => ({ storeCode: x.storeCode, sku: x.sku, qty: x.qty })),
+          { orderId: po.orderId, pickOrderId, motivo: reason, nota: note ?? null, userId },
+        )
+        .catch((e) => this.logger.warn(`[extraviada] card ${pickOrderId}: ${e?.message || e}`));
+    }
+
     const updated = await this.prisma.pickOrder.update({
       where: { id: pickOrderId },
       data: {
@@ -5005,6 +5028,24 @@ export class PickOrdersService {
     const reasonLabel = PickOrdersService.ITEM_REPORT_REASON_LABELS[reason];
     const peca = [out.report.ref, out.report.cor, out.report.tamanho].filter(Boolean).join(' · ') || out.sku;
 
+    /**
+     * PEÇA EXTRAVIADA (27/08) — o mesmo desta rota e do reporte de card:
+     * o saldo fica, a loja sai do roteamento pra este SKU. Só no "não achei"
+     * (`out_of_stock`): peça com DEFEITO ou trocada existe na arara, é outro
+     * problema e continua roteável depois de resolvido.
+     */
+    let marcadaExtraviada = false;
+    if (reason === 'out_of_stock') {
+      marcadaExtraviada = (await this.extraviadas
+        .marcar([{ storeCode, sku: out.sku, qty: out.faltam }], {
+          orderId: po.orderId, pickOrderId, motivo: reason, nota: note ?? null, userId,
+        })
+        .catch((e) => {
+          this.logger.warn(`[extraviada] item ${pickOrderId}/${out.sku}: ${e?.message || e}`);
+          return 0;
+        })) > 0;
+    }
+
     await this.prisma.orderHistory.create({
       data: {
         orderId: po.orderId,
@@ -5017,6 +5058,11 @@ export class PickOrdersService {
           (out.report.stockDecreasedAt
             ? '. Quantidade fantasma baixada do estoque da loja.'
             : '.') +
+          // Dizer o que aconteceu com o saldo: a matriz vai ver o número
+          // intacto na Consulta e precisa saber que isso é de propósito.
+          (marcadaExtraviada
+            ? ` Marcada como EXTRAVIADA na loja ${storeCode}: o saldo continua como estava, mas ela não será mais escolhida pra esta peça.`
+            : '') +
           ' Item aguardando decisão da matriz (mandar de outra loja ou reembolsar).',
       },
     });

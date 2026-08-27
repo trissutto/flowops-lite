@@ -17,6 +17,7 @@ import { ErpService } from '../erp/erp.service';
 import { PushService } from '../push/push.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
 import { LOJA_CANAL_CODES } from '../common/loja-canal';
+import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 
 @Injectable()
 export class RoutingService {
@@ -34,6 +35,7 @@ export class RoutingService {
     // caminho daqui que apaga ou reatribui um card tem que devolver o que a
     // loja já tinha separado.
     private readonly pickScans: PickScanService,
+    private readonly extraviadas: PecasExtraviadasService,
   ) {}
 
   /**
@@ -202,7 +204,13 @@ export class RoutingService {
     // pra não descontar a si mesmo se já tinha sido roteado antes — caso de recalcular).
     const ownPickOrderIds = order.pickOrders.map((p) => p.id);
     const committed = await this.getCommittedStock(skus, storeCodes, ownPickOrderIds);
-    const liquidStock = this.subtractCommitted(stock, committed);
+    const extraviadas = await this.extraviadas.mapaParaRoteamento(skus, storeCodes);
+    // Loja que disse "não achei" sai do jogo PRA AQUELE SKU (27/08). O saldo
+    // dela continua de pé — o que muda é só a escolha da loja.
+    const liquidStock = this.subtractExtraviadas(
+      this.subtractCommitted(stock, committed),
+      extraviadas,
+    );
 
     const result = this.engine.route({
       items: routeItems,
@@ -1944,6 +1952,42 @@ export class RoutingService {
    * aberto há dias segura a peça pra sempre — e sem esta linha o diagnóstico
    * vira "sumiu estoque".
    */
+  /**
+   * PEÇA EXTRAVIADA SAI DO ROTEAMENTO, MAS NÃO DO ESTOQUE (27/08).
+   *
+   * Ordem do dono: "anote como peça extraviada, não peça mais ela, mas não
+   * desapareça — senão vira festa". Zerar o saldo apagava inventário de
+   * verdade na palavra de uma pessoa; não fazer nada devolvia o carrossel de
+   * "não temos". Aqui as duas coisas se separam: o saldo continua inteiro na
+   * Consulta e no balcão, e o que encolhe é só a opção que a engine enxerga.
+   *
+   * Roda DEPOIS do `subtractCommitted` de propósito: o que já foi prometido a
+   * outro card não pode ser contado duas vezes como disponível antes de tirar
+   * a extraviada.
+   */
+  private subtractExtraviadas(
+    stockEntries: StockEntry[],
+    extraviadas: Map<string, number>,
+  ): StockEntry[] {
+    if (extraviadas.size === 0) return stockEntries;
+    const out: StockEntry[] = [];
+    const fora: string[] = [];
+    for (const e of stockEntries) {
+      const perdidas = extraviadas.get(`${e.storeCode}::${e.sku}`) ?? 0;
+      const liquid = e.availableQty - perdidas;
+      if (liquid > 0) out.push({ ...e, availableQty: liquid });
+      else if (perdidas > 0) fora.push(`${e.storeCode}/${e.sku} (${e.availableQty}−${perdidas})`);
+    }
+    if (fora.length) {
+      // LOGA o que saiu: sem isto o diagnóstico vira "sumiu estoque" — foi
+      // exatamente o que aconteceu quando o anti-overbooking entrou calado.
+      this.logger.log(
+        `[routing] ${fora.length} opção(ões) fora por peça EXTRAVIADA (loja disse que não achou): ` +
+          fora.slice(0, 10).join(', ') + (fora.length > 10 ? ` … +${fora.length - 10}` : ''),
+      );
+    }
+    return out;
+  }
   private subtractCommitted(
     stockEntries: StockEntry[],
     committed: Map<string, number>,
@@ -2061,7 +2105,13 @@ export class RoutingService {
     // do próprio (vão ser cancelados/recriados pelo recalcular).
     const ownPickOrderIds = await this.findOwnPickOrderIdsForWc(input.wcOrderId);
     const committed = await this.getCommittedStock(skus, storeCodes, ownPickOrderIds);
-    const liquidStock = this.subtractCommitted(stockEntries, committed);
+    const extraviadas = await this.extraviadas.mapaParaRoteamento(skus, storeCodes);
+    // Loja que disse "não achei" sai do jogo PRA AQUELE SKU (27/08). O saldo
+    // dela continua de pé — o que muda é só a escolha da loja.
+    const liquidStock = this.subtractExtraviadas(
+      this.subtractCommitted(stockEntries, committed),
+      extraviadas,
+    );
 
     // Troca manual do preview: a loja excluída sai SÓ do roteamento — a lista
     // completa (`stores`) continua alimentando alternativesBySku, senão a loja

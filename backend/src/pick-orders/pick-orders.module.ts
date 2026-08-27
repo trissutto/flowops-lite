@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { PecasExtraviadasModule } from '../pecas-extraviadas/pecas-extraviadas.module';
 import { PickOrdersController } from './pick-orders.controller';
 import { PickOrdersService } from './pick-orders.service';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -36,7 +37,8 @@ import { JuntadaService } from './juntada.service';
   // routing e orders, por isso mora em módulo próprio).
   // RealignmentModule → JuntadaService cria a CAIXA do feeder (remessa +
   // etiqueta pra loja âncora + NF de transferência + romaneio carimbado).
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule, PickScanModule, TrackingModule, RealignmentModule],
+  imports: [
+    PecasExtraviadasModule,PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule, PickScanModule, TrackingModule, RealignmentModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService, JuntadaService, CorreiosPostagemReconcileCron, EntregaAvisoCron, PedidoEmailService],
   exports: [PickOrdersService, JuntadaService],

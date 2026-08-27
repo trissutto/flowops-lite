@@ -747,6 +747,8 @@ export default function PedidoDetailPage() {
   } | null>(null);
   const [moverOpcoes, setMoverOpcoes] = useState<Array<{
     storeCode: string; storeName: string; qty: number; jaNoPedido: boolean; reportou: boolean;
+    /** Já disse "não achei" ESTA peça — o saldo fica, mas ela sai do roteamento. */
+    extraviada?: boolean;
   }>>([]);
   const [moverLoading, setMoverLoading] = useState(false);
   const [moverBusy, setMoverBusy] = useState<string | null>(null);
@@ -767,10 +769,17 @@ export default function PedidoDetailPage() {
     setMoverErro(null);
     setMoverLoading(true);
     try {
-      const [stores, preview] = await Promise.all([
+      const [stores, preview, extraviadas] = await Promise.all([
         api<Array<{ code: string; name: string; active: boolean }>>('/stores'),
         api<SeparationPreview>(`/orders/wc/${wcId}/prepare-separation`),
+        // PEÇA EXTRAVIADA (27/08): loja que já disse "não achei" ESTA peça.
+        // O saldo dela continua aparecendo — o que a tela faz é avisar, em
+        // vermelho, que aquele número não se sustentou na arara.
+        api<Array<{ storeCode: string; sku: string }>>(
+          `/pecas-extraviadas?skus=${encodeURIComponent(item.sku)}`,
+        ).catch(() => [] as Array<{ storeCode: string; sku: string }>),
       ]);
+      const perdidas = new Set((extraviadas || []).map((e) => e.storeCode));
       const saldo = new Map(
         (preview.alternativesBySku?.[item.sku] ?? []).map((a) => [a.storeCode, a.availableQty ?? 0]),
       );
@@ -792,10 +801,16 @@ export default function PedidoDetailPage() {
             qty: saldo.get(s.code) ?? 0,
             jaNoPedido: noPedido.has(s.code),
             reportou: reportou.has(s.code),
+            extraviada: perdidas.has(s.code),
           }))
-          // Loja que JÁ está no pedido primeiro (não cria caixa nova), depois saldo.
+          // EXTRAVIADA vai pro FIM da lista, mesmo com saldo: o número está
+          // lá, mas a peça já não foi encontrada nessa arara. Depois disso,
+          // loja que JÁ está no pedido (não cria caixa nova) e então saldo.
           .sort((a, b) =>
-            Number(b.jaNoPedido) - Number(a.jaNoPedido) || b.qty - a.qty || a.storeCode.localeCompare(b.storeCode),
+            Number(a.extraviada) - Number(b.extraviada) ||
+            Number(b.jaNoPedido) - Number(a.jaNoPedido) ||
+            b.qty - a.qty ||
+            a.storeCode.localeCompare(b.storeCode),
           ),
       );
     } catch (e: any) {
@@ -4565,13 +4580,25 @@ export default function PedidoDetailPage() {
                         onClick={() => moverPecaPara(o.storeCode)}
                         disabled={!!moverBusy}
                         className={`w-full text-left px-3 py-2 rounded border flex items-center gap-2 transition disabled:opacity-50 ${
-                          o.qty > 0
-                            ? 'border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50'
-                            : 'border-red-200 bg-red-50/40 hover:bg-red-50'
+                          o.extraviada
+                            ? 'border-red-300 bg-red-50 hover:bg-red-100'
+                            : o.qty > 0
+                              ? 'border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50'
+                              : 'border-red-200 bg-red-50/40 hover:bg-red-50'
                         }`}
                       >
-                        <span className="font-semibold text-slate-800">{o.storeName}</span>
+                        <span className={`font-semibold ${o.extraviada ? 'text-red-900' : 'text-slate-800'}`}>
+                          {o.storeName}
+                        </span>
                         <span className="text-xs text-slate-500">({o.storeCode})</span>
+                        {/* EXTRAVIADA (27/08): o saldo continua aparecendo, mas
+                            esta loja já procurou e não achou. Vermelho porque a
+                            decisão de insistir tem que ser consciente. */}
+                        {o.extraviada && (
+                          <span className="text-[11px] px-1.5 py-0.5 rounded bg-red-600 text-white font-bold uppercase">
+                            extraviada aqui
+                          </span>
+                        )}
                         {o.jaNoPedido && (
                           <span className="text-[11px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 border border-violet-200">
                             já está no pedido
@@ -4583,7 +4610,10 @@ export default function PedidoDetailPage() {
                           </span>
                         )}
                         <span
-                          className={`ml-auto text-xs font-bold ${o.qty > 0 ? 'text-emerald-700' : 'text-red-700'}`}
+                          className={`ml-auto text-xs font-bold ${
+                            o.extraviada ? 'text-red-700 line-through' : o.qty > 0 ? 'text-emerald-700' : 'text-red-700'
+                          }`}
+                          title={o.extraviada ? 'O saldo continua no sistema, mas a loja não achou a peça' : undefined}
                         >
                           {o.qty > 0 ? `${o.qty} em estoque` : 'SEM SALDO'}
                         </span>
@@ -4597,6 +4627,11 @@ export default function PedidoDetailPage() {
                 Loja com <b className="text-red-700">SEM SALDO</b> aparece de propósito: dá pra
                 forçar, mas foi assim que esta peça passou por três lojas zeradas antes de chegar
                 em alguém que a tivesse.
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                <b className="text-red-700">EXTRAVIADA AQUI</b> = essa loja já procurou esta peça e
+                não achou. O saldo dela continua no sistema (ninguém apagou estoque), mas ela deixou
+                de ser escolhida sozinha. Se a peça aparecer, marque como encontrada.
               </p>
             </div>
             <div className="p-3 border-t flex justify-end">

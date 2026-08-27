@@ -20,6 +20,9 @@ describe('RoutingService — saneamento de cards vazios', () => {
       {} as any,
       {} as any,
       pickScans,
+      // PecasExtraviadasService (27/08) — o saneamento de card vazio não passa
+      // por ele; mapa vazio mantém o teste focado no que ele mede.
+      { mapaParaRoteamento: async () => new Map() } as any,
     );
     return { service, prisma, gateway, pickScans };
   };

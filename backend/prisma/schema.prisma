@@ -8196,3 +8196,42 @@ model RiskDecisionLog {
   @@index([criadoEm(sort: Desc)])
   @@map("risk_decision_log")
 }
+
+/// ── PEÇA EXTRAVIADA (27/08 — ordem do dono) ──
+/// "anote como PEÇA extraviada (deixe em vermelho), não peça mais ela, mas não
+/// desapareça — senão vira festa."
+///
+/// A loja diz "não achei". Antes disso o sistema ZERAVA o saldo dela, e com
+/// isso apagava inventário de verdade na palavra de uma pessoa. Agora o saldo
+/// FICA (continua na Consulta, continua vendável no balcão se a peça aparecer)
+/// e o que muda é o ROTEAMENTO: aquela loja não é mais escolhida pra aquele SKU.
+///
+/// É por LOJA + SKU, não por pedido: a loja que não achou hoje não vai achar
+/// no pedido de amanhã. Era esse o buraco da trava de tela ("já negou este
+/// pedido"), que só valia pro pedido em curso.
+///
+/// `achadaEm` preenchido = apareceu depois. A linha fica no histórico (quem
+/// marcou, quem achou, quando) em vez de sumir — extraviada que vira e mexe
+/// reaparece é sintoma de arara bagunçada, e isso precisa de rastro.
+model PecaExtraviada {
+  id          String    @id @default(uuid())
+  storeCode   String    @map("store_code")
+  sku         String
+  qty         Int       @default(1)
+  /// De onde veio o reporte — rastro pra auditoria.
+  orderId     String?   @map("order_id")
+  pickOrderId String?   @map("pick_order_id")
+  /// out_of_stock | defective | divergence | other
+  motivo      String?
+  nota        String?
+  marcadaEm   DateTime  @default(now()) @map("marcada_em")
+  marcadaPor  String?   @map("marcada_por")
+  /// Achou depois: volta a valer no roteamento, sem nunca ter sumido do saldo.
+  achadaEm    DateTime? @map("achada_em")
+  achadaPor   String?   @map("achada_por")
+
+  @@index([storeCode, sku, achadaEm])
+  @@index([achadaEm])
+  @@index([sku])
+  @@map("pecas_extraviadas")
+}
