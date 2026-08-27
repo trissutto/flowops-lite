@@ -8010,3 +8010,34 @@ model WaAuth {
   @@id([sessao, chave])
   @@map("wa_auth")
 }
+
+/// ── ENVIO DA NOTA FISCAL PRA CLIENTE (27/08) ──
+/// Registro do que JÁ FOI mandado. Serve pra três coisas, nessa ordem:
+///   1. não mandar a mesma nota duas vezes pra mesma pessoa (o reenvio existe,
+///      mas é decisão de alguém, não acidente de retry);
+///   2. responder "a cliente recebeu a nota?" sem depender da caixa de saída;
+///   3. deixar rastro de quem disparou, quando o envio for manual.
+/// Sem `@@unique`: reenvio legítimo (cliente pediu de novo, e-mail trocado)
+/// precisa poder acontecer — a trava de duplicata é no serviço, com `force`.
+model NfeEnvioCliente {
+  id          String   @id @default(uuid())
+  nfeDocId    String   @map("nfe_doc_id")
+  orderId     String?  @map("order_id")
+  pickOrderId String?  @map("pick_order_id")
+  /// email | whatsapp — hoje só email; a coluna já nasce preparada.
+  canal       String
+  /// Destino CONGELADO no envio: o cadastro da cliente muda depois, e a
+  /// pergunta "pra onde foi?" tem que continuar tendo resposta.
+  destino     String
+  /// sent | failed | skipped
+  status      String
+  erro        String?  @db.Text
+  enviadoEm   DateTime @default(now()) @map("enviado_em")
+  /// null = disparo automático; preenchido = alguém clicou.
+  enviadoPor  String?  @map("enviado_por")
+
+  @@index([nfeDocId])
+  @@index([orderId])
+  @@index([enviadoEm])
+  @@map("nfe_envio_cliente")
+}

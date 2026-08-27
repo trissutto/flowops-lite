@@ -73,8 +73,20 @@ export class EmailService implements OnModuleInit {
     return nome ? `${nome} <${user}>` : user;
   }
 
-  /** Envia um email. Retorna true se OK, false se falhou ou não configurado. */
-  async send(to: string, subject: string, html: string, text?: string): Promise<boolean> {
+  /**
+   * Envia um email. Retorna true se OK, false se falhou ou não configurado.
+   *
+   * `attachments` (27/08) é opcional e repassado direto pro nodemailer — foi
+   * adicionado pro envio da NF-e, que precisa mandar o DANFE em PDF junto.
+   * Aditivo de propósito: quem já chamava com 4 argumentos não muda.
+   */
+  async send(
+    to: string,
+    subject: string,
+    html: string,
+    text?: string,
+    attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>,
+  ): Promise<boolean> {
     if (!this.transporter) return false;
     if (!to || !to.includes('@')) return false;
 
@@ -85,6 +97,7 @@ export class EmailService implements OnModuleInit {
         subject,
         html,
         text: text || stripHtml(html),
+        ...(attachments?.length ? { attachments } : {}),
       });
       this.logger.log(`[email] enviado pra ${to}: "${subject}"`);
       return true;

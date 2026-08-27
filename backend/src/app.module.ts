@@ -48,6 +48,7 @@ import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { NfeModule } from './nfe/nfe.module';
+import { NfeEnvioClienteModule } from './nfe-envio-cliente/nfe-envio-cliente.module';
 import { DceModule } from './dce/dce.module';
 import { ClientesGigaModule } from './clientes-giga/clientes-giga.module';
 import { CrediarioNativoModule } from './crediario-nativo/crediario-nativo.module';
@@ -157,6 +158,10 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     UsersModule,
     PickOrdersModule,
     NfeModule,
+    // 🚨 Envio da NF pra cliente — NASCE DESLIGADO (NFE_ENVIO_CLIENTE).
+    // Registrado pra ser testável em produção sem enviar nada; sem a env,
+    // os endpoints devolvem o que SAIRIA, e-mail nenhum sai.
+    NfeEnvioClienteModule,
     DceModule,
     ClientesGigaModule,
     CrediarioNativoModule,
