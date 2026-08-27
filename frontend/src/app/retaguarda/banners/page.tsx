@@ -47,7 +47,7 @@ const SLOTS: { id: string; nome: string; ajuda: string; comFoto: boolean }[] = [
   {
     id: 'home-hero',
     nome: 'Hero da home',
-    ajuda: 'O banner grande da entrada. Foto na horizontal (2400×1350 ou maior) e, se quiser, um recorte vertical pro celular.',
+    ajuda: 'O banner grande da entrada. Use 2400×900 no computador e, se quiser, uma composição 1080×1350 para o celular.',
     comFoto: true,
   },
   {
@@ -73,6 +73,17 @@ const SLOTS: { id: string; nome: string; ajuda: string; comFoto: boolean }[] = [
 
 /** Resposta de `GET /site-banners/status-site` — ver o controller. */
 type StatusSite = { ligado: boolean; motivo: string | null };
+
+function linkSeguro(v: string | null): boolean {
+  const link = String(v ?? '').trim();
+  if (!link) return true;
+  if (link.startsWith('/') && !link.startsWith('//')) return true;
+  try {
+    return new URL(link).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function paraInput(v: string | null): string {
   // <input type="datetime-local"> não aceita ISO com fuso; corta no minuto.
@@ -224,6 +235,7 @@ function CardBanner({
   const [salvando, setSalvando] = useState(false);
   const [subindo, setSubindo] = useState<'desktop' | 'mobile' | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [sucesso, setSucesso] = useState<string | null>(null);
   const fileDesktop = useRef<HTMLInputElement>(null);
   const fileMobile = useRef<HTMLInputElement>(null);
 
@@ -254,27 +266,51 @@ function CardBanner({
   }, [banner]);
 
   function campo<K extends keyof Banner>(k: K, v: Banner[K]) {
+    setSucesso(null);
     setForm((f) => ({ ...f, [k]: v }));
   }
 
-  async function salvar() {
+  function dadosDoFormulario(ativo = form.ativo) {
+    return {
+      eyebrow: form.eyebrow, titulo: form.titulo, destaque: form.destaque,
+      subtitulo: form.subtitulo, alt: form.alt,
+      ctaLabel: form.ctaLabel, ctaHref: form.ctaHref,
+      cta2Label: form.cta2Label, cta2Href: form.cta2Href,
+      ordem: form.ordem, ativo,
+      inicioEm: form.inicioEm || null, fimEm: form.fimEm || null,
+    };
+  }
+
+  function erroDePublicacao(): string | null {
+    if (comFoto && !form.imagemUrl) return 'Suba a foto para computador antes de publicar.';
+    if (!linkSeguro(form.ctaHref)) return 'O Link 1 deve começar com / ou usar https://.';
+    if (!linkSeguro(form.cta2Href)) return 'O Link 2 deve começar com / ou usar https://.';
+    return null;
+  }
+
+  async function salvar(publicar = false) {
+    if (publicar) {
+      const validacao = erroDePublicacao();
+      if (validacao) {
+        setErro(validacao);
+        return;
+      }
+    }
     setSalvando(true);
     setErro(null);
+    setSucesso(null);
     try {
       const salvo = await api<Banner>(`/site-banners/${form.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          eyebrow: form.eyebrow, titulo: form.titulo, destaque: form.destaque,
-          subtitulo: form.subtitulo, alt: form.alt,
-          ctaLabel: form.ctaLabel, ctaHref: form.ctaHref,
-          cta2Label: form.cta2Label, cta2Href: form.cta2Href,
-          ordem: form.ordem, ativo: form.ativo,
-          inicioEm: form.inicioEm || null, fimEm: form.fimEm || null,
-        }),
+        body: JSON.stringify(dadosDoFormulario(publicar ? true : form.ativo)),
       });
+      setForm(salvo);
       onMudou(salvo);
+      setSucesso(publicar ? 'Banner salvo e publicado no site.' : 'Rascunho salvo.');
     } catch (e: any) {
-      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui salvar');
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || (publicar
+        ? 'Não consegui salvar e publicar'
+        : 'Não consegui salvar'));
     } finally {
       setSalvando(false);
     }
@@ -290,9 +326,14 @@ function CardBanner({
    * Agora é um botão que diz o que faz e grava na hora.
    */
   async function alternarAtivo() {
+    if (!form.ativo) {
+      await salvar(true);
+      return;
+    }
     const novo = !form.ativo;
     setSalvando(true);
     setErro(null);
+    setSucesso(null);
     campo('ativo', novo);
     try {
       const salvo = await api<Banner>(`/site-banners/${form.id}`, {
@@ -300,6 +341,7 @@ function CardBanner({
         body: JSON.stringify({ ativo: novo }),
       });
       onMudou(salvo);
+      setSucesso('Banner retirado do site. O cadastro foi preservado.');
     } catch (e: any) {
       campo('ativo', !novo); // desfaz: a tela não pode mentir sobre o que está no ar
       setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui mudar a publicação');
@@ -311,6 +353,7 @@ function CardBanner({
   async function subir(arquivo: File, variante: 'desktop' | 'mobile') {
     setSubindo(variante);
     setErro(null);
+    setSucesso(null);
     try {
       const fd = new FormData();
       fd.append('file', arquivo);
@@ -321,6 +364,9 @@ function CardBanner({
         // FormData — passar {} aqui NÃO removia nada (ver lib/api.ts).
       });
       onMudou(salvo);
+      setSucesso(variante === 'desktop'
+        ? 'Imagem para computador enviada.'
+        : 'Imagem para celular enviada.');
     } catch (e: any) {
       setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui subir a imagem');
     } finally {
@@ -363,10 +409,10 @@ function CardBanner({
           <button
             type="button"
             onClick={() => void alternarAtivo()}
-            disabled={salvando || (comFoto && !form.imagemUrl && !form.ativo)}
+            disabled={salvando}
             title={
               comFoto && !form.imagemUrl && !form.ativo
-                ? 'Suba a foto do computador antes de publicar'
+                ? 'Ao clicar, a tela informa o que falta antes de publicar'
                 : form.ativo
                   ? 'Tira do site agora (não apaga o banner)'
                   : 'Coloca no site agora — sem precisar salvar depois'
@@ -377,7 +423,7 @@ function CardBanner({
                 : 'bg-emerald-600 text-white hover:bg-emerald-700'
             }`}
           >
-            {salvando ? '...' : form.ativo ? 'Tirar do ar' : 'Publicar no site'}
+            {salvando ? '...' : form.ativo ? 'Tirar do ar' : 'Salvar e publicar'}
           </button>
         </div>
         <div className="flex items-center gap-2">
@@ -409,6 +455,11 @@ function CardBanner({
                   <Icone className="w-3 h-3 inline mr-1" />
                   {variante === 'desktop' ? 'Foto (computador)' : 'Recorte vertical (celular) — opcional'}
                 </p>
+                {form.slot === 'home-hero' && (
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    {variante === 'desktop' ? 'Recomendado: 2400 × 900 px' : 'Recomendado: 1080 × 1350 px'}
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => ref.current?.click()}
@@ -510,7 +561,12 @@ function CardBanner({
         )}
       </div>
 
-      {erro && <p className="text-xs text-rose-700">{erro}</p>}
+      {erro && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{erro}</p>}
+      {sucesso && (
+        <p role="status" className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" /> {sucesso}
+        </p>
+      )}
 
       {/* TEXTO NÃO SALVO PRECISA GRITAR. Foto e publicação gravam sozinhas; os
           textos não — e nada dizia isso. O botão fica âmbar e escrito "Salvar
@@ -518,14 +574,14 @@ function CardBanner({
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={() => void salvar()}
+          onClick={() => void salvar(false)}
           disabled={salvando}
           className={`inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg text-white disabled:opacity-50 ${
             temMudanca ? 'bg-amber-600 hover:bg-amber-700' : 'bg-violet-600 hover:bg-violet-700'
           }`}
         >
           {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          {temMudanca ? 'Salvar textos' : 'Salvar'}
+          {form.ativo ? (temMudanca ? 'Salvar alterações' : 'Salvar') : 'Salvar rascunho'}
         </button>
         {temMudanca && (
           <span className="text-[11px] font-bold text-amber-700">
