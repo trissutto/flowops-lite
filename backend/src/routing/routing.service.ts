@@ -36,6 +36,108 @@ export class RoutingService {
   ) {}
 
   /**
+   * Remove cards operacionais que ficaram sem nenhuma peça atribuída.
+   *
+   * Exceção legítima: retirada ou motoboy com loja escolhida podem manter um
+   * card RECEPTOR vazio na `pickupStoreCode`, desde que exista feeder com peça
+   * apontando pra ela. Em SEDEX/PAC/transportadora, card vazio é sempre órfão.
+   *
+   * Limitado a new/separating: card separated/ready pode representar trabalho
+   * físico já concluído e segue as travas logísticas próprias.
+   */
+  private async cleanupEmptyActivePickOrders(
+    orderId: string,
+    opts?: { userId?: string | null; nome?: string | null; reason?: string },
+  ): Promise<string[]> {
+    const order: any = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true, status: true, isPickup: true, pickupStoreCode: true, shippingMethod: true,
+        items: { select: { assignedStoreId: true, quantity: true, sku: true } },
+        pickOrders: {
+          where: { status: { in: ['new', 'separating'] } },
+          select: {
+            id: true, storeId: true, status: true, isTransfer: true, transferToStoreCode: true,
+            store: { select: { code: true, name: true } },
+          },
+        },
+      } as any,
+    });
+    if (!order) return [];
+
+    const storesComPeca = new Set<string>();
+    for (const item of order.items ?? []) {
+      if (item.assignedStoreId && !ehItemSemEstoque(item)) storesComPeca.add(item.assignedStoreId);
+    }
+
+    const destinoCode = String(order.pickupStoreCode || '').trim();
+    const temDestinoObrigatorio =
+      !!destinoCode &&
+      (order.isPickup || /motoboy|moto\s*boy/i.test(String(order.shippingMethod || '')));
+    const feederComPecaParaDestino = temDestinoObrigatorio && order.pickOrders.some(
+      (p: any) =>
+        p.isTransfer &&
+        p.transferToStoreCode === destinoCode &&
+        storesComPeca.has(p.storeId),
+    );
+
+    const vazios = order.pickOrders.filter((p: any) => !storesComPeca.has(p.storeId));
+    const removidos: string[] = [];
+    for (const card of vazios) {
+      const receptorLegitimo =
+        temDestinoObrigatorio &&
+        card.store?.code === destinoCode &&
+        feederComPecaParaDestino;
+      if (receptorLegitimo) continue;
+
+      // Revalida imediatamente antes de apagar: uma atribuição concorrente não
+      // pode perder o card recém-preenchido.
+      const ganhouPeca = await this.prisma.orderItem.count({
+        where: { orderId, assignedStoreId: card.storeId },
+      });
+      if (ganhouPeca > 0) continue;
+
+      try {
+        await this.pickScans.revertPickOrderStock(card.id, {
+          reason: 'store_swap',
+          userId: opts?.userId ?? null,
+        });
+      } catch (e: any) {
+        // Segurança: sem confirmação do estorno, o card permanece visível para
+        // tratamento humano. Apagá-lo aqui esconderia uma possível baixa física.
+        this.logger.warn(
+          `[routing] card vazio ${card.id} preservado porque o estorno falhou: ${e?.message || e}`,
+        );
+        continue;
+      }
+      await this.prisma.pickOrder.delete({ where: { id: card.id } });
+      removidos.push(card.store?.code ?? card.storeId);
+      try {
+        this.gateway.emitPickOrderRemoved?.(card.storeId, { orderId, pickOrderId: card.id });
+      } catch { /* best-effort */ }
+    }
+
+    if (removidos.length) {
+      const actor = opts?.userId
+        ? await this.prisma.user.findUnique({ where: { id: opts.userId }, select: { id: true } })
+        : null;
+      await this.prisma.orderHistory.create({
+        data: {
+          orderId,
+          fromStatus: order.status,
+          toStatus: order.status,
+          userId: actor?.id ?? null,
+          note:
+            `Card(s) vazio(s) removido(s) automaticamente: ${removidos.join(', ')}.` +
+            (opts?.reason ? ` Motivo: ${opts.reason}.` : '') +
+            (opts?.nome ? ` · por ${opts.nome}` : ''),
+        },
+      });
+    }
+    return removidos;
+  }
+
+  /**
    * Calcula o roteamento SEM persistir (preview para aprovação manual).
    * Retorna também info de contato das lojas para montar mensagens WhatsApp.
    */
@@ -314,6 +416,14 @@ export class RoutingService {
       });
     });
 
+    // Resultado não pode carregar card órfão. Preserva somente receptor
+    // legítimo de retirada/motoboy com feeder apontando para ele.
+    await this.cleanupEmptyActivePickOrders(orderId, {
+      userId: ator?.userId ?? null,
+      nome: ator?.nome ?? null,
+      reason: 'confirmação do roteamento',
+    });
+
     // Emite por socket pra cada loja — dispara notificação + impressão no app desktop
     try {
       const order = await this.prisma.order.findUnique({
@@ -335,6 +445,13 @@ export class RoutingService {
       });
 
       for (const po of createdPickOrders) {
+        // O saneamento acima pode ter removido um assignment vazio legado ou
+        // inconsistente. Não notifica a loja sobre um card que já não existe.
+        const aindaExiste = await this.prisma.pickOrder.findUnique({
+          where: { id: po.id },
+          select: { id: true },
+        });
+        if (!aindaExiste) continue;
         const assignment = result.assignments.find((a) => a.storeId === po.storeId);
         const items = await this.prisma.orderItem.findMany({
           where: { orderId, assignedStoreId: po.storeId },
@@ -1426,25 +1543,13 @@ export class RoutingService {
       }
     });
 
-    // Card de origem que ficou sem peça nenhuma sai da fila da loja.
-    const cardsRemovidos: string[] = [];
-    for (const storeId of origemIds) {
-      const card = cardAtivoDa(storeId);
-      if (!card) continue;
-      const resto = await this.prisma.orderItem.count({
-        where: { orderId, assignedStoreId: storeId },
-      });
-      if (resto > 0) continue;
-      // Bipe órfão (peça bipada e depois desatribuída) volta pro estoque da loja.
-      await this.pickScans
-        .revertPickOrderStock(card.id, { reason: 'store_swap', userId: opts?.userId ?? null })
-        .catch(() => null);
-      await this.prisma.pickOrder.delete({ where: { id: card.id } });
-      cardsRemovidos.push(card.store.code);
-      try {
-        this.gateway.emitPickOrderRemoved?.(storeId, { orderId, pickOrderId: card.id });
-      } catch { /* best-effort */ }
-    }
+    // Remove origem que ficou vazia, mas preserva a loja escolhida quando ela
+    // é receptor legítimo de retirada/motoboy.
+    const cardsRemovidos = await this.cleanupEmptyActivePickOrders(orderId, {
+      userId: opts?.userId ?? null,
+      nome: opts?.nome ?? null,
+      reason: 'movimentação manual de peça',
+    });
 
     const nomeDaPeca = (i: any) =>
       [i.ref || i.sku, [i.cor, i.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' ');
