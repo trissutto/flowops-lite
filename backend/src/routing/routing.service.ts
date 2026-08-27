@@ -10,6 +10,7 @@ import { diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import { lojasDaRotaPropria } from '../common/rota-propria';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { computeCommittedStock } from './committed-stock.util';
+import { planSplitAssignment, SplitDemand } from './split-assign.util';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { ErpService } from '../erp/erp.service';
@@ -376,6 +377,27 @@ export class RoutingService {
       wcOrderNumber: orderForSnapshot.wcOrderNumber,
     });
 
+    /**
+     * QUEM FICOU DE SEPARAR CADA SKU — e QUANTAS peças (27/08, caso LP-000289).
+     *
+     * A REGRA 4 do engine divide um SKU entre lojas quando nenhuma tem a
+     * quantidade inteira. Antes, a gravação era `updateMany({orderId, sku})`
+     * por assignment: filtrava por SKU, IGNORAVA a quantidade, e a segunda
+     * loja regravava a linha da primeira. Resultado no LP-000289 (2× VOGUE,
+     * cada loja com 1): card da PIRACICABA vazio e card da VINHEDO pedindo 2
+     * peças de uma loja que tem 1. Ver `split-assign.util.ts`.
+     */
+    const demandsBySku = new Map<string, SplitDemand[]>();
+    for (const a of result.assignments) {
+      for (const item of a.items) {
+        const sku = String(item?.sku ?? '').trim();
+        const qty = Number(item?.quantity) || 0;
+        if (!sku || qty <= 0) continue;
+        if (!demandsBySku.has(sku)) demandsBySku.set(sku, []);
+        demandsBySku.get(sku)!.push({ storeId: a.storeId, quantity: qty });
+      }
+    }
+
     await this.prisma.$transaction(async (tx) => {
       for (const a of result.assignments) {
         const po = await tx.pickOrder.create({
@@ -390,11 +412,73 @@ export class RoutingService {
           },
         });
         createdPickOrders.push({ id: po.id, storeId: a.storeId });
-        for (const item of a.items) {
+      }
+
+      for (const [sku, demands] of demandsBySku) {
+        // Caminho de sempre: o SKU inteiro numa loja só. Mantido IDÊNTICO de
+        // propósito — é o que vale em ~todo pedido, e o rateio abaixo não
+        // precisa entrar onde não há divisão.
+        if (demands.length === 1) {
           await tx.orderItem.updateMany({
-            where: { orderId, sku: item.sku },
-            data: { assignedStoreId: a.storeId },
+            where: { orderId, sku },
+            data: { assignedStoreId: demands[0].storeId },
           });
+          continue;
+        }
+
+        // SKU DIVIDIDO: a linha se divide junto. Peça cancelada fica de fora —
+        // ela não se separa, então nunca ganha loja.
+        const rows = await tx.orderItem.findMany({
+          where: { orderId, sku, cancelledAt: null },
+          select: {
+            id: true, quantity: true, orderId: true, sku: true, productName: true,
+            ref: true, cor: true, tamanho: true, unitPrice: true, baseUnitPrice: true,
+          },
+          orderBy: { id: 'asc' }, // determinístico entre execuções
+        });
+        const rowById = new Map(rows.map((r) => [r.id, r]));
+        const plan = planSplitAssignment(
+          rows.map((r) => ({ id: r.id, quantity: r.quantity })),
+          demands,
+        );
+
+        for (const u of plan.updates) {
+          await tx.orderItem.update({
+            where: { id: u.id },
+            data: { quantity: u.quantity, assignedStoreId: u.assignedStoreId },
+          });
+        }
+        for (const c of plan.creates) {
+          const base = rowById.get(c.cloneOfRowId);
+          if (!base) continue;
+          await tx.orderItem.create({
+            data: {
+              orderId: base.orderId,
+              sku: base.sku,
+              productName: base.productName,
+              ref: base.ref,
+              cor: base.cor,
+              tamanho: base.tamanho,
+              unitPrice: base.unitPrice,
+              baseUnitPrice: base.baseUnitPrice,
+              quantity: c.quantity,
+              assignedStoreId: c.assignedStoreId,
+            },
+          });
+        }
+
+        this.logger.log(
+          `[split] order ${orderId} SKU ${sku} dividido entre ${demands.length} loja(s): ` +
+            `${demands.map((d) => `${d.quantity}`).join('+')} — ` +
+            `${plan.updates.length} linha(s) atualizada(s), ${plan.creates.length} criada(s)`,
+        );
+        if (plan.leftover > 0) {
+          // Não deveria acontecer (só grava com `missing: []`). Se acontecer, a
+          // peça fica ÓRFÃ no pedido em vez de sumir — e isto é o rastro.
+          this.logger.warn(
+            `[split] order ${orderId} SKU ${sku}: ${plan.leftover} peça(s) sem loja ` +
+              `(demanda do routing não fechou com as linhas do pedido)`,
+          );
         }
       }
 

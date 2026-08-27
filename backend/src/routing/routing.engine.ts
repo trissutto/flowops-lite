@@ -82,6 +82,14 @@ export class RoutingEngine {
   private readonly W_PROP_DISTANCE = 2;
 
   route(ctx: RoutingContext): RoutingResult {
+    // O MESMO SKU PODE CHEGAR EM DUAS LINHAS (27/08). Desde o conserto do
+    // LP-000289, um SKU dividido entre lojas vira DUAS linhas de `order_items`
+    // (ver `split-assign.util.ts`) — e o pedido do site também pode nascer com
+    // a mesma peça em duas linhas. Sem somar antes, `remaining.set()` embaixo
+    // SOBRESCREVE (2 linhas de 1 viram "preciso de 1", não de 2) e o
+    // `canFulfillAll` aprova uma loja com 1 peça dando `>= 1` duas vezes.
+    ctx = { ...ctx, items: this.mergeItemsBySku(ctx.items) };
+
     const activeStores = ctx.stores.filter((s) => s.active);
     if (activeStores.length === 0) {
       return this.insufficient(ctx.items, 'Nenhuma loja ativa.');
@@ -181,6 +189,29 @@ export class RoutingEngine {
   }
 
   // ─── helpers ─────────────────────────────────────────────────────────────
+
+  /**
+   * Soma as linhas repetidas do mesmo SKU numa só, preservando a ordem de
+   * aparição. A engine raciocina em "quanto desse SKU o pedido precisa" — duas
+   * linhas de 1 são um pedido de 2, não dois pedidos de 1.
+   */
+  private mergeItemsBySku(items: OrderItemInput[]): OrderItemInput[] {
+    const out: OrderItemInput[] = [];
+    const idxBySku = new Map<string, number>();
+    for (const item of items ?? []) {
+      const sku = String(item?.sku ?? '').trim();
+      const qty = Number(item?.quantity) || 0;
+      if (!sku || qty <= 0) continue;
+      const at = idxBySku.get(sku);
+      if (at == null) {
+        idxBySku.set(sku, out.length);
+        out.push({ ...item, sku, quantity: qty });
+      } else {
+        out[at] = { ...out[at], quantity: out[at].quantity + qty };
+      }
+    }
+    return out;
+  }
 
   /**
    * JUNTADA DA ROTA PRÓPRIA — tenta cobrir o pedido SÓ com as lojas do grupo

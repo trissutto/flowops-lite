@@ -298,4 +298,55 @@ describe('RoutingEngine', () => {
       expect(r.consolidateStoreCode ?? null).toBeNull();
     });
   });
+// ──────────────────────────────────────────────────────────────────────
+  // SKU REPETIDO EM DUAS LINHAS (27/08 — conserto do LP-000289)
+  //
+  // Depois que um SKU dividido passou a virar DUAS linhas de order_items,
+  // o re-roteamento recebe o mesmo SKU duas vezes. Sem somar antes, o motor
+  // acha que o pedido é menor do que é — e manda a peça pra loja errada.
+  // ──────────────────────────────────────────────────────────────────────
+  describe('linhas repetidas do mesmo SKU', () => {
+    test('duas linhas de 1 são um pedido de 2 (não de 1)', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 1 },
+          { sku: 'A', quantity: 1 },
+        ],
+        stores: stores.slice(0, 3),
+        stock: [
+          { storeCode: 'LJ01', sku: 'A', availableQty: 1 }, // NÃO cobre 2
+          { storeCode: 'LJ02', sku: 'A', availableQty: 5 }, // cobre
+        ],
+        shippingCep: '01310-000',
+      };
+      const r = engine.route(ctx);
+      expect(r.success).toBe(true);
+      // Se as linhas não fossem somadas, LJ01 (1 peça) passaria no canFulfillAll.
+      expect(r.assignments).toHaveLength(1);
+      expect(r.assignments[0].storeCode).toBe('LJ02');
+      expect(r.assignments[0].items).toEqual([{ sku: 'A', quantity: 2 }]);
+    });
+
+    test('LP-000289: 2 linhas de 1, nenhuma loja com 2 → divide 1+1', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'VOGUE', quantity: 1 },
+          { sku: 'VOGUE', quantity: 1 },
+        ],
+        stores: stores.slice(0, 3),
+        stock: [
+          { storeCode: 'LJ01', sku: 'VOGUE', availableQty: 1 },
+          { storeCode: 'LJ02', sku: 'VOGUE', availableQty: 1 },
+        ],
+        shippingCep: '01310-000',
+      };
+      const r = engine.route(ctx);
+      expect(r.success).toBe(true);
+      expect(r.missing).toHaveLength(0);
+      expect(r.assignments).toHaveLength(2);
+      const total = r.assignments.reduce(
+        (s, a) => s + a.items.reduce((x, i) => x + i.quantity, 0), 0);
+      expect(total).toBe(2);
+    });
+  });
 });
