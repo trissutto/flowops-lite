@@ -21,6 +21,7 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { HttpModule } from '@nestjs/axios';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { PedidoOnlineService } from './pedido-online.service';
+import { LastroRedeService } from './lastro-rede.service';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { ConferenciaVendasService } from './conferencia-vendas.service';
@@ -66,7 +67,7 @@ import { CobrancasOnlineService } from './cobrancas-online.service';
   // motivo: fecha a venda quando o link Pagar.me é pago (antes ninguém
   // fechava — venda ficava aberta pra sempre com o dinheiro na conta) e lê
   // `pagarme_payment` pelo Prisma, sem importar o PagarmeModule.
-  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService, CobrancasOnlineService],
+  providers: [PdvService, PedidoOnlineService, LastroRedeService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService, CobrancasOnlineService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}

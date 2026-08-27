@@ -36,6 +36,7 @@ import { CrediarioPrintService } from './crediario-print.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ReturnsService } from './returns.service';
 import { CobrancasOnlineService } from './cobrancas-online.service';
+import { LastroRedeService } from './lastro-rede.service';
 import type { CobrancaOnline } from './cobrancas-online.service';
 
 /**
@@ -65,7 +66,34 @@ export class PdvController {
     private readonly sombra: SombraService,
     private readonly crediarioCriacao: CrediarioCriacaoService,
     private readonly cobrancasOnlineSvc: CobrancasOnlineService,
+    private readonly lastroRede: LastroRedeService,
   ) {}
+
+  // ── LASTRO DA VENDA À DISTÂNCIA (26/08 — carrossel ON-000110/162) ────────
+  // Semáforo por SKU do carrinho: verde tem, amarelo com ressalva (parcial /
+  // prometida / peça em caixa em trânsito), vermelho não existe na rede.
+  // Chamado pelo fluxo de venda online do PDV (entrega + finalizar) — balcão
+  // com a peça na mão não passa por aqui.
+  @Post('lastro-rede')
+  lastroRedeChecar(@Req() req: any, @Body() body: { items?: Array<{ sku: string; qty?: number }> }) {
+    this.requireRole(req);
+    return this.lastroRede.checar(Array.isArray(body?.items) ? body.items : []);
+  }
+
+  /** "Vender mesmo assim" no vermelho — só assina no log, não bloqueia. */
+  @Post('lastro-rede/override')
+  lastroRedeOverride(
+    @Req() req: any,
+    @Body() body: { saleId?: string; skus?: string[] },
+  ) {
+    this.requireRole(req);
+    return this.lastroRede.registrarOverride({
+      storeId: req?.user?.storeId ?? null,
+      userId: req?.user?.userId ?? req?.user?.sub ?? null,
+      saleId: body?.saleId ?? null,
+      skus: Array.isArray(body?.skus) ? body.skus.map(String) : [],
+    });
+  }
 
   private requireRole(req: any) {
     const role = req?.user?.role;
