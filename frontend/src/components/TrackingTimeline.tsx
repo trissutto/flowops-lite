@@ -333,7 +333,10 @@ export default function TrackingTimeline({
    * cotação de hoje também não serve de fallback no dividido — ela cota UM
    * trajeto, e o pedido pagou vários.
    */
-  const multiEtiqueta = (qtdEtiquetas ?? 0) > 1 && custoTotalEtiquetas != null;
+  // "Multi" = a história do frete é maior que UMA etiqueta: ou já são várias,
+  // ou a conta ainda está aberta (card sem enviar / etiqueta sem custo).
+  const multiEtiqueta =
+    custoTotalEtiquetas != null && ((qtdEtiquetas ?? 0) > 1 || !!custoIncompleto);
   const custoDaConta = multiEtiqueta
     ? (custoIncompleto ? null : custoTotalEtiquetas)
     : custoEtiqueta;
@@ -482,12 +485,13 @@ export default function TrackingTimeline({
                 Pedido dividido: a SOMA das etiquetas, com esta discriminada. */}
             {multiEtiqueta ? (
               <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-800">
-                Pagamos ({qtdEtiquetas} etiquetas): <b className="text-sm">{brl(custoTotalEtiquetas!)}</b>
-                {custoEtiqueta != null && (
+                Pagamos{custoIncompleto ? ' até agora' : ''} ({qtdEtiquetas} etiqueta{(qtdEtiquetas ?? 0) === 1 ? '' : 's'}):{' '}
+                <b className="text-sm">{brl(custoTotalEtiquetas!)}</b>
+                {custoEtiqueta != null && (qtdEtiquetas ?? 0) > 1 && (
                   <span className="text-slate-500"> · esta etiqueta: {brl(custoEtiqueta)}</span>
                 )}
                 {custoIncompleto && (
-                  <span className="font-semibold text-amber-700"> · soma incompleta</span>
+                  <span className="font-semibold text-amber-700"> · conta ainda aberta</span>
                 )}
               </span>
             ) : custoEtiqueta != null ? (
@@ -526,7 +530,8 @@ export default function TrackingTimeline({
             )}
             {multiEtiqueta && custoIncompleto && (
               <span className="text-[11px] text-amber-700">
-                sem veredito — há etiqueta enviada sem custo gravado (anteriores a 25/08)
+                sem veredito de prejuízo — ainda falta etiqueta ser emitida (ou envio antigo sem
+                custo gravado); a conta fecha quando todas as lojas despacharem
               </span>
             )}
           </div>

@@ -2126,17 +2126,30 @@ export default function PedidoDetailPage() {
     cardQuePostou?.freteCustoCentavos != null ? cardQuePostou.freteCustoCentavos / 100 : null;
   /**
    * FRETE MÚLTIPLO (29/08 — "o cálculo do frete não soma"): pedido dividido
-   * paga uma etiqueta POR CARD (inclusive a caixa da juntada), e a cliente
-   * paga UM frete. A margem honesta compara com a SOMA de todas as etiquetas
-   * com custo gravado. `etiquetasSemCusto` = card já enviado sem o custo na
-   * emissão (etiquetas anteriores a 25/08): soma incompleta → sem veredito.
+   * paga uma etiqueta POR CARD, e a cliente paga UM frete. A margem honesta
+   * compara com a SOMA — e só quando a conta FECHOU.
+   *
+   * Caso 960000110 que motivou isto: Santos postou (R$ 11,94 gravado), a
+   * loja 08 AINDA NEM ENVIOU (a etiqueta dela vai ser paga) e a caixa da
+   * juntada foi de carro (sem etiqueta). Comparar o frete da cliente com a
+   * única etiqueta conhecida gritava "prejuízo R$ 2,04" de uma conta pela
+   * metade. Régua:
+   *  - `cardsComCusto`  → somam.
+   *  - conta ABERTA se algum card ativo ainda não enviou (etiqueta por vir)
+   *    OU enviou COM rastreio mas sem custo gravado (etiqueta de antes de
+   *    25/08). Conta aberta = sem veredito.
+   *  - enviado SEM rastreio e sem custo (caixa de juntada por carro, rota) não
+   *    trava a conta: nunca vai ter etiqueta.
    */
-  const cardsComCusto = liveStatus.filter((p) => p.freteCustoCentavos != null);
+  const cardsAtivosFrete = liveStatus.filter((p) => p.status !== 'cancelled');
+  const cardsComCusto = cardsAtivosFrete.filter((p) => p.freteCustoCentavos != null);
   const custoTotalEtiquetas = cardsComCusto.length
     ? cardsComCusto.reduce((s, p) => s + (p.freteCustoCentavos || 0), 0) / 100
     : null;
-  const etiquetasSemCusto = liveStatus.filter(
-    (p) => p.status === 'shipped' && p.freteCustoCentavos == null,
+  const etiquetasSemCusto = cardsAtivosFrete.filter(
+    (p) =>
+      p.freteCustoCentavos == null &&
+      (p.status !== 'shipped' ? quantidadeDoCard(p) > 0 : !!p.trackingCode),
   ).length;
 
   return (
