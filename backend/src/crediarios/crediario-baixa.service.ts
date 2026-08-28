@@ -882,6 +882,27 @@ export class CrediarioBaixaService {
       if (CARD_NAME_REGEX.test(String(c.nome || '').trim())) cardCodes.add(cod);
     }
 
+    // Cliente NOVO de crediário (ficha criada no Flow depois que o espelho
+    // de clientes congelou junto com o Giga, 27/08): completa nome/telefone
+    // pela ficha nativa. Sem isto ele entra na cobrança sem telefone.
+    const semTelefone = codClientes.filter((cod) => !phones.get(cod)?.telefone);
+    if (semTelefone.length) {
+      const fichas: any[] = await (this.prisma as any).gigaCliente
+        .findMany({
+          where: { codigo: { in: semTelefone }, ...(safeStore ? { loja: safeStore } : {}) },
+        })
+        .catch(() => []);
+      for (const f of fichas) {
+        const cod = String(f.codigo);
+        const atual: any = phones.get(cod) || {};
+        phones.set(cod, {
+          nome: atual.nome || f.nome || null,
+          telefone: atual.telefone || f.foneCel || f.foneRes || f.foneRec || null,
+        });
+        if (CARD_NAME_REGEX.test(String(f.nome || '').trim())) cardCodes.add(cod);
+      }
+    }
+
     return this.montarRespostaAbertas(filteredRows, phones, cardCodes);
   }
 
@@ -966,6 +987,26 @@ export class CrediarioBaixaService {
               codCliente: cod,
               nome,
               telefone: (String(c.telefone || '').trim()) || (String(c.telefone2 || '').trim()) || null,
+              loja: lojaCli === '00' ? null : lojaCli,
+            });
+          }
+          // Fichas criadas NO FLOW depois do congelamento do espelho (27/08):
+          // sem isto o cliente novo nem aparece na lista de cobrança.
+          const novas: any[] = await (this.prisma as any).gigaCliente
+            .findMany({ where: { flowIsSource: true, nome: { not: null } } })
+            .catch(() => []);
+          for (const f of novas) {
+            const cod = String(f.codigo || '').trim();
+            const nome = String(f.nome || '').trim();
+            if (!cod || !nome || CARD_NAME_REGEX.test(nome)) continue;
+            const lojaCli = String(f.loja || '').trim() || null;
+            const dedupKey = `${lojaCli || ''}|${cod}|${nome.toUpperCase()}`;
+            if (seen.has(dedupKey)) continue;
+            seen.add(dedupKey);
+            out.push({
+              codCliente: cod,
+              nome,
+              telefone: f.foneCel || f.foneRes || f.foneRec || null,
               loja: lojaCli === '00' ? null : lojaCli,
             });
           }

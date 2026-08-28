@@ -40,6 +40,8 @@ export class ClientesGigaService {
   @Cron('40 4 * * *', { name: 'clientes-giga-sync' })
   async cronDiario(): Promise<void> {
     if (process.env.WINCRED_MIRROR_CRON_ENABLED !== '1') return;
+    // Giga desligado (28/08): sem fonte, o sync só falharia — no-op limpo.
+    if (!require('../common/replica-giga').pullGigaLigado()) return;
     try {
       const r = await this.syncAll();
       this.logger.log(`[clientes-giga] sync diário: ${JSON.stringify(r)}`);

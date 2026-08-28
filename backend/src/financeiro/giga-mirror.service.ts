@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { pullGigaLigado } from '../common/replica-giga';
@@ -64,6 +65,14 @@ export class GigaMirrorService implements OnModuleInit {
         this.logger.error(`backfill inicial falhou: ${e?.message || e}`),
       );
     }, 8000);
+    // CAIXA DETALHADA DO FLOW (28/08): alimenta o espelho com as vendas do
+    // PDV logo no boot — o cron horário mantém depois. É o que faz a
+    // Inteligência/Faturamento/DRE enxergarem os dias pós-Giga.
+    setTimeout(() => {
+      this.espelharCaixaMovDoFlow(35).catch((e) =>
+        this.logger.error(`caixa_mov do Flow (boot) falhou: ${e?.message || e}`),
+      );
+    }, 20_000);
     // Backfill da CAIXA DETALHADA (14/07): histórico mensal desde
     // GIGA_MIRROR_FROM quando a tabela está vazia. Atraso maior pra não
     // competir com o boot nem com o backfill acima.
@@ -167,6 +176,16 @@ export class GigaMirrorService implements OnModuleInit {
         this.logger.error(`sync estoque falhou (espelho preservado): ${e?.message || e}`);
         await this.setState('estoque', null, String(e?.message || e));
       }
+      // CAIXA DETALHADA DO FLOW (28/08) — roda SEMPRE, com ou sem Giga:
+      // as vendas do PDV entram no espelho e todos os leitores (BI,
+      // faturamento, DRE, vendedoras) seguem funcionando sem porte.
+      try {
+        const nf = await this.espelharCaixaMovDoFlow(35);
+        this.logger.log(`espelho giga_caixa_mov (Flow): ${nf} linhas`);
+      } catch (e: any) {
+        this.logger.error(`caixa_mov do Flow falhou (espelho preservado): ${e?.message || e}`);
+        await this.setState('caixa_mov_flow', null, String(e?.message || e));
+      }
       // CAIXA DETALHADA (14/07): janela deslizante de 3 dias a cada hora.
       // Backfill histórico roda no boot quando a tabela está vazia.
       try {
@@ -222,6 +241,143 @@ export class GigaMirrorService implements OnModuleInit {
       obsPedido: r.OBS_PEDIDO != null ? String(r.OBS_PEDIDO).trim().slice(0, 200) : null,
       valorUnitario: r.VALORUNITARIO != null ? Number(r.VALORUNITARIO) : null,
     };
+  }
+
+  /**
+   * CAIXA DETALHADA A PARTIR DO PRÓPRIO FLOW — o Giga morreu, a caixa segue.
+   *
+   * `giga_caixa_mov` virou a espinha dorsal de TODOS os relatórios de venda
+   * (Inteligência, faturamento, DRE, top REFs/marcas, vendedoras — os
+   * *FromMirror do ErpService leem daqui). O Giga parou de alimentá-la em
+   * 24/08; sem esta ponte, todo relatório subcontava os dias novos EM
+   * SILÊNCIO (o covers() só confere o INÍCIO do período).
+   *
+   * Regras:
+   *  - corte em 25/08/2026: antes disso a tabela é história do Giga e
+   *    NINGUÉM toca; deste dia em diante as linhas nascem daqui.
+   *  - registro sintético `f<md5(itemId)>` (venda) / `r<md5(itemId)>`
+   *    (devolução, valores NEGATIVOS — a caixa do Giga também lançava
+   *    negativo). Registros do Giga são numéricos: prefixo nunca colide.
+   *  - obsPedido = "flowops-<saleId>" — a MESMA chave híbrida que o
+   *    faturamento usa pra contar cupom sem duplicar.
+   *  - o delete da janela só alcança linhas com o prefixo sintético.
+   *  - São Paulo é UTC-3 fixo (DST acabou em 2019): a DATA da linha é o
+   *    dia local da venda, gravado como meia-noite UTC (convenção do sync).
+   */
+  async espelharCaixaMovDoFlow(days = 35): Promise<number> {
+    const CORTE = new Date('2026-08-25T00:00:00Z');
+    const agora = new Date();
+    const ini = new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), agora.getUTCDate() - days));
+    const from = ini < CORTE ? CORTE : ini;
+    // margem de 12h na leitura: o filtro fino é pela data SP por linha
+    const lidoDesde = new Date(from.getTime() - 12 * 3600_000);
+
+    const spDia = (d: Date) => {
+      const sp = new Date(d.getTime() - 3 * 3600_000);
+      return sp.toISOString().slice(0, 10);
+    };
+    const spHora = (d: Date) => {
+      const sp = new Date(d.getTime() - 3 * 3600_000);
+      return sp.toISOString().slice(11, 16);
+    };
+    const md5 = (s: string) => createHash('md5').update(s).digest('hex');
+    const loja2 = (s: any) => String(s || '').replace(/\D/g, '').padStart(2, '0').slice(-2);
+
+    const vendas: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        isTraining: false,
+        createdAt: { gte: lidoDesde },
+      },
+      include: { items: true },
+    });
+    const devolucoes: any[] = await (this.prisma as any).pdvReturn.findMany({
+      where: { isTraining: false, createdAt: { gte: lidoDesde } },
+      include: { items: true },
+    });
+
+    const fromDia = from.toISOString().slice(0, 10);
+    const rows: any[] = [];
+    for (const v of vendas) {
+      const quando = v.finalizedAt || v.createdAt;
+      const dia = spDia(new Date(quando));
+      if (dia < fromDia) continue;
+      const numero =
+        (v.nfceNumber && String(v.nfceNumber).trim()) || String(v.id).slice(0, 8);
+      for (const it of v.items || []) {
+        rows.push({
+          registro: 'f' + md5(String(it.id)).slice(0, 19),
+          numero: numero.slice(0, 20),
+          codigo: it.sku ? String(it.sku).slice(0, 14) : null,
+          data: new Date(dia + 'T00:00:00Z'),
+          dataFec: new Date(dia + 'T00:00:00Z'),
+          hora: spHora(new Date(quando)),
+          descricao: it.descricao ? String(it.descricao).slice(0, 120) : null,
+          quantidade: Number(it.qty) || 1,
+          valor: it.precoUnit != null ? Number(it.precoUnit) : null,
+          valorTotal: it.total != null ? Number(it.total) : null,
+          vendedor: (it.sellerName || v.sellerName || null)?.slice?.(0, 40) ?? null,
+          vendedora: (it.sellerName || v.sellerName || null)?.slice?.(0, 40) ?? null,
+          cliente: v.customerName ? String(v.customerName).slice(0, 80) : null,
+          nomeCliente: v.customerName ? String(v.customerName).slice(0, 80) : null,
+          cpf: v.customerCpf ? String(v.customerCpf).slice(0, 20) : null,
+          loja: loja2(v.storeCode),
+          marcado: null,
+          fpag: v.paymentMethod ? String(v.paymentMethod).slice(0, 30) : null,
+          obsPedido: ('flowops-' + v.id).slice(0, 200),
+          valorUnitario: it.precoUnit != null ? Number(it.precoUnit) : null,
+        });
+      }
+    }
+    for (const r of devolucoes) {
+      const dia = spDia(new Date(r.createdAt));
+      if (dia < fromDia) continue;
+      for (const it of r.items || []) {
+        rows.push({
+          registro: 'r' + md5(String(it.id)).slice(0, 19),
+          numero: String(r.id).slice(0, 8),
+          codigo: it.sku ? String(it.sku).slice(0, 14) : null,
+          data: new Date(dia + 'T00:00:00Z'),
+          dataFec: new Date(dia + 'T00:00:00Z'),
+          hora: spHora(new Date(r.createdAt)),
+          descricao: it.descricao ? String(it.descricao).slice(0, 120) : null,
+          quantidade: -(Number(it.qty) || 1),
+          valor: it.precoUnit != null ? Number(it.precoUnit) : null,
+          valorTotal: it.total != null ? -Number(it.total) : null,
+          vendedor: null,
+          vendedora: null,
+          cliente: r.customerName ? String(r.customerName).slice(0, 80) : null,
+          nomeCliente: r.customerName ? String(r.customerName).slice(0, 80) : null,
+          cpf: r.customerCpf ? String(r.customerCpf).slice(0, 20) : null,
+          loja: loja2(r.storeCode),
+          marcado: null,
+          fpag: 'DEVOLUCAO',
+          obsPedido: ('flowret-' + r.id).slice(0, 200),
+          valorUnitario: it.precoUnit != null ? Number(it.precoUnit) : null,
+        });
+      }
+    }
+
+    // dedup por registro (itens re-lidos entre janelas)
+    const byReg = new Map(rows.map((r) => [r.registro, r]));
+    const unique = Array.from(byReg.values());
+
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.gigaCaixaMov.deleteMany({
+        where: {
+          data: { gte: from },
+          OR: [{ registro: { startsWith: 'f' } }, { registro: { startsWith: 'r' } }],
+        },
+      });
+      for (let i = 0; i < unique.length; i += 5000) {
+        await tx.gigaCaixaMov.createMany({
+          data: unique.slice(i, i + 5000),
+          skipDuplicates: true,
+        });
+      }
+    }, { timeout: 120_000 });
+    await this.setState('caixa_mov_flow', unique.length, null);
+    return unique.length;
   }
 
   /** Re-copia [hoje-days, amanhã): pega vendas novas, canceladas e marcados. */

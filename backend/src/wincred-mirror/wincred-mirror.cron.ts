@@ -22,6 +22,12 @@ export class WincredMirrorCron {
 
   constructor(private readonly mirror: WincredMirrorService) {}
 
+  /** Giga desligado (28/08): não há de onde puxar — os crons viram no-op
+   *  silencioso em vez de errar de hora em hora no log. */
+  private get gigaVivo(): boolean {
+    return require('../common/replica-giga').pullGigaLigado();
+  }
+
   private get enabled(): boolean {
     return String(process.env.WINCRED_MIRROR_CRON_ENABLED || '').trim() === '1';
   }
@@ -30,6 +36,7 @@ export class WincredMirrorCron {
   @Cron('*/10 * * * *', { name: 'wincred-mirror-incremental' })
   async runIncremental() {
     if (!this.enabled) return;
+    if (!this.gigaVivo) return;
     if (this.isRunningIncremental || this.isRunningFull) {
       this.logger.log('[cron] incremental skipped — outro sync em andamento');
       return;
@@ -57,6 +64,7 @@ export class WincredMirrorCron {
   @Cron('23 * * * *', { name: 'wincred-mirror-estoque' })
   async runEstoqueHourly() {
     if (!this.enabled) return;
+    if (!this.gigaVivo) return;
     if (this.isRunningEstoque || this.isRunningFull) {
       this.logger.log('[cron] estoque hourly skipped — outro sync em andamento');
       return;
@@ -76,6 +84,7 @@ export class WincredMirrorCron {
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { name: 'wincred-mirror-full' })
   async runFull() {
     if (!this.enabled) return;
+    if (!this.gigaVivo) return;
     if (this.isRunningFull) return;
     this.isRunningFull = true;
     try {
