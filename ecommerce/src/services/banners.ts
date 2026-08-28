@@ -67,7 +67,7 @@ export interface HeroDaHome {
   emphasis: string;
   subtitle: string;
   primaria: { label: string; href: string };
-  secundaria: { label: string; href: string };
+  secundaria?: { label: string; href: string };
   /**
    * Veio da retaguarda = ARTE FECHADA (campanha com texto e logo embutidos).
    * A home usa isto pra deixar a arte mandar na altura, em vez de recortar
@@ -149,7 +149,7 @@ export async function getHeroDaHome(): Promise<HeroDaHome> {
       : HERO_ESTATICO.primaria,
     secundaria: banner.cta2Label && banner.cta2Href
       ? { label: banner.cta2Label, href: banner.cta2Href }
-      : HERO_ESTATICO.secundaria,
+      : undefined,
   };
 }
 

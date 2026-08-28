@@ -187,6 +187,7 @@ export function Hero({
         subtitle={subtitle}
         primaryAction={primaryAction}
         secondaryAction={secondaryAction}
+        contentTone={contentTone}
         className={className}
       />
     );
@@ -430,14 +431,16 @@ const HeroArte = forwardRef<HTMLElement, {
   subtitle?: string;
   primaryAction?: HeroAction;
   secondaryAction?: HeroAction;
+  contentTone?: HeroContentTone;
   className?: string;
 }>(function HeroArte(
   { image, imageMobile, priority, overlay = 'none', align = 'center',
-    eyebrow, title, subtitle, primaryAction, secondaryAction, className },
+    eyebrow, title, subtitle, primaryAction, secondaryAction, contentTone = 'light', className },
   ref,
 ) {
   const temTexto = !!(eyebrow || title || subtitle);
   const temBotao = !!(primaryAction || secondaryAction);
+  const tintaEscura = contentTone === 'ink';
 
   /**
    * A ALTURA RESERVADA VEM DO ARQUIVO, NÃO DE UM CHUTE (12/08/2026).
@@ -543,17 +546,37 @@ const HeroArte = forwardRef<HTMLElement, {
 
       {overlay !== 'none' && <div className={cn('absolute inset-0', OVERLAYS[overlay])} />}
 
-      {/* PERTO DA BASE (dono 07/08). Centralizado, o botão caía em cima do
-          "Indomável" — a arte já usa o meio. Embaixo ele fica sobre a área
-          calma da foto e vira o último passo natural da leitura. */}
+      {/* Campanhas claras usam texto escuro na área livre: no desktop ela
+          costuma ficar à esquerda; no mobile, acima das modelos. As artes
+          fotográficas anteriores preservam o conteúdo junto à base. */}
       {(temTexto || temBotao) && (
-        <div className="absolute inset-0 flex items-end">
-          <Container width="page" className="relative z-10 pb-6 sm:pb-8 lg:pb-12">
+        <div
+          className={cn(
+            'absolute inset-0 flex',
+            tintaEscura
+              ? 'items-start pt-[clamp(1.5rem,6vw,5rem)] lg:items-center lg:pt-0'
+              : 'items-end',
+          )}
+        >
+          <Container
+            width="page"
+            className={cn('relative z-10', !tintaEscura && 'pb-6 sm:pb-8 lg:pb-12')}
+          >
             <div className={cn('flex flex-col', ALIGNMENTS[align])}>
-              {eyebrow && <p className="eyebrow text-primary-soft">{eyebrow}</p>}
-              {title && <h1 className="mt-4 max-w-3xl text-display text-light">{title}</h1>}
+              {eyebrow && (
+                <p className={cn('eyebrow', tintaEscura ? 'text-primary-strong' : 'text-primary-soft')}>
+                  {eyebrow}
+                </p>
+              )}
+              {title && (
+                <h1 className={cn('mt-4 max-w-3xl text-display', tintaEscura ? 'text-ink' : 'text-light')}>
+                  {title}
+                </h1>
+              )}
               {subtitle && (
-                <p className="mt-5 max-w-xl text-body-lg font-light text-light/85">{subtitle}</p>
+                <p className={cn('mt-5 max-w-xl text-body-lg font-light', tintaEscura ? 'text-ink/80' : 'text-light/85')}>
+                  {subtitle}
+                </p>
               )}
               {temBotao && (
                 <div
@@ -567,7 +590,7 @@ const HeroArte = forwardRef<HTMLElement, {
                     <Button
                       href={primaryAction.href}
                       external={primaryAction.external}
-                      variant={primaryAction.variant ?? 'light'}
+                      variant={primaryAction.variant ?? (tintaEscura ? 'primary' : 'light')}
                       size="lg"
                       className="sm:w-auto"
                       block
@@ -579,7 +602,7 @@ const HeroArte = forwardRef<HTMLElement, {
                     <Button
                       href={secondaryAction.href}
                       external={secondaryAction.external}
-                      variant={secondaryAction.variant ?? 'outlineLight'}
+                      variant={secondaryAction.variant ?? (tintaEscura ? 'secondary' : 'outlineLight')}
                       size="lg"
                       className="sm:w-auto"
                       block
