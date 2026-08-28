@@ -666,68 +666,49 @@ export class CrediarioPrintService {
       });
     }
 
-    // Busca dados completos do cliente no Giga via CrediariosService
-    // (que tem o detectClientesTable correto). Pega: codCliente, NOME, ENDERECO,
-    // BAIRRO, CIDADE, CEP, CPF, etc.
+    // Busca dados completos do cliente no ESPELHO `giga_clientes` (Postgres) —
+    // código, endereço, cidade etc. pro carnê e pra promissória.
     //
-    // Robustez de busca:
-    //  1) Tenta CPF só com dígitos
-    //  2) Se não achar, tenta CPF formatado (123.456.789-00) — algumas
-    //     instalações Giga gravam o campo CPF formatado.
-    //  3) Se ainda não achar, tenta REPLACE no MySQL (remove pontuação no DB).
+    // Até 29/08 isso era SQL no MySQL do Giga VIVO. Com o Giga desligado em
+    // definitivo (pool trancado na nascente — NUNCA religar), a busca voltava
+    // vazia SEM erro e a ficha saía pela metade: Nº virava o fim do UUID da
+    // venda ("74FAEA", caso TEREZA 28/08), a promissória numerava com o CPF e
+    // o endereço ficava em branco — sendo que a cliente estava no espelho com
+    // código 243 e ficha completa. O espelho cobre as duas populações: cliente
+    // antiga (sync histórico) e ficha nova/editada NO Flow (flowIsSource).
+    //
+    // CPF no espelho é MAJORITARIAMENTE só dígitos, mas há um punhado
+    // formatado (11 de 5.597 em 28/08) — por isso o regexp_replace dos DOIS
+    // lados. Empate (mesma pessoa em mais de uma loja): ficha não arquivada >
+    // nascida no Flow > a da loja da venda > sync mais recente.
     let clienteFull: any = null;
-    let cmTable: any = null;
     if (sale.customerCpf) {
       try {
-        cmTable = await this.crediarios.detectClientesTable();
-        if (cmTable) {
-          const safeCpf = String(sale.customerCpf).replace(/\D/g, '').slice(0, 14);
-          const formattedCpf = safeCpf.length === 11
-            ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
-            : safeCpf;
-
-          // Tentativa 1: CPF só dígitos
-          let r = await this.erp.runReadOnly(
-            `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${safeCpf}' LIMIT 1`,
-            { maxRows: 1, timeoutMs: 10000 },
+        const safeCpf = String(sale.customerCpf).replace(/\D/g, '').slice(0, 14);
+        if (safeCpf) {
+          const rows: any[] = await this.prisma.$queryRawUnsafe(
+            `SELECT loja, codigo, nome, endereco, numero, complemento, bairro,
+                    cidade, uf, cep
+               FROM giga_clientes
+              WHERE regexp_replace(COALESCE(cpf,''),'[^0-9]','','g') = $1
+              ORDER BY (arquivado_em IS NULL) DESC, flow_is_source DESC,
+                       (loja = $2) DESC, synced_at DESC
+              LIMIT 1`,
+            safeCpf,
+            String(sale.storeCode || ''),
           );
-          clienteFull = r.rows[0] || null;
-
-          // Tentativa 2: CPF formatado
-          if (!clienteFull && formattedCpf !== safeCpf) {
-            r = await this.erp.runReadOnly(
-              `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${formattedCpf}' LIMIT 1`,
-              { maxRows: 1, timeoutMs: 10000 },
-            );
-            clienteFull = r.rows[0] || null;
-          }
-
-          // Tentativa 3: REPLACE no DB (remove pontuação na coluna)
-          if (!clienteFull) {
-            r = await this.erp.runReadOnly(
-              `SELECT * FROM \`${cmTable.table}\` WHERE REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}' LIMIT 1`,
-              { maxRows: 1, timeoutMs: 10000 },
-            );
-            clienteFull = r.rows[0] || null;
-          }
-
+          clienteFull = rows[0] || null;
           this.logger.log(
-            `[crediario-print] cliente Giga: cpf=${safeCpf} found=${!!clienteFull}` +
-            (clienteFull ? ` cols=[${Object.keys(clienteFull).join(',')}]` : ''),
+            `[crediario-print] cliente no espelho: cpf=${safeCpf} found=${!!clienteFull}` +
+            (clienteFull ? ` codigo=${clienteFull.codigo} loja=${clienteFull.loja}` : ''),
           );
         }
       } catch (e: any) {
-        this.logger.warn(`[crediario-print] falha buscar cliente Giga: ${e?.message}`);
+        this.logger.warn(`[crediario-print] falha buscar cliente no espelho: ${e?.message}`);
       }
     }
 
-    // codCliente: prioriza a coluna detectada dinamicamente (cm.codCliente).
-    // Senão tenta CODCLIENTE/CODIGO/cod_cliente como fallback.
-    const codCliente = clienteFull && cmTable?.codCliente
-      ? String(clienteFull[cmTable.codCliente] ?? '').trim()
-      : String(
-          clienteFull?.CODCLIENTE ?? clienteFull?.CODIGO ?? clienteFull?.cod_cliente ?? '',
-        ).trim();
+    const codCliente = String(clienteFull?.codigo ?? '').trim();
 
     // Loja pra "Pagável em" (cidade)
     const store = await this.prisma.store.findFirst({
