@@ -1063,7 +1063,11 @@ export class PickOrdersService {
         cidade: cart.customerCidade || '',
         uf: cart.customerUf || '',
         telefone: String(cart.customerPhone || '').replace(/\D/g, ''),
-        email: cart.customerEmail || '',
+        // E-MAIL NÃO VAI (28/08): com ele, a plataforma do Mais Envios
+        // notifica a destinatária direto — com a marca e o SUPORTE deles, que
+        // a cliente entende como canal da loja. Telefone fica (entregador
+        // usa). Mesma regra do caminho da etiqueta de venda avulsa.
+        email: '',
       },
       pesoGramas,
       valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
@@ -1130,7 +1134,9 @@ export class PickOrdersService {
         cidade: cidade || '',
         uf: uf || '',
         telefone: String(order.customerPhone || '').replace(/\D/g, ''),
-        email: String(order.customerEmail || ''),
+        // E-mail não vai — ver comentário no caminho da live (o Mais Envios
+        // notificaria a cliente com o suporte DELES; caso de 28/08).
+        email: '',
       },
       pesoGramas,
       valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,

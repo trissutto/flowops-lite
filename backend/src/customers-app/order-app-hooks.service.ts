@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { CustomerCashbackService } from './customer-cashback.service';
 import { CustomerPushService } from './customer-push.service';
 
@@ -184,7 +185,9 @@ export class OrderAppHooksService {
       select: { trackingCode: true, carrier: true },
     });
     const tracking = local?.trackingCode;
-    const carrier = local?.carrier || 'Correios';
+    // Nome amigável — "Mais Envios SEDEX" no push mandava a cliente pro
+    // suporte deles (ver common/transportadora-cliente).
+    const carrier = transportadoraParaCliente(local?.carrier);
 
     const body = tracking
       ? `Seu pedido foi postado! 📦 Código: ${tracking} (${carrier})`

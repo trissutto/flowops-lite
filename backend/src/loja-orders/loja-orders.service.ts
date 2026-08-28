@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
+import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { localBrPhone } from '../lib/phone-br';
 import { CarrinhoGuardService, ItemRecusado, MotivoRecusa } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
@@ -2250,7 +2251,9 @@ export class LojaOrdersService {
       const r = cache.get(c.codigo.toUpperCase());
       return {
         codigo: c.codigo,
-        carrier: c.carrier,
+        // Nome amigável: "Mais Envios" é contrato, não transportadora — pra
+        // cliente é Correios (ver common/transportadora-cliente).
+        carrier: transportadoraParaCliente(c.carrier),
         loja: c.loja,
         posicao: i + 1,
         total: caixas.length,
@@ -2331,7 +2334,8 @@ export class LojaOrdersService {
         tracking: order.trackingCode
           ? {
               code: order.trackingCode,
-              carrier: order.carrier || null,
+              // Nome amigável — ver common/transportadora-cliente.
+              carrier: transportadoraParaCliente(order.carrier),
               // Link direto dos Correios: colar o código no site deles é o
               // passo que faz a cliente desistir e ligar.
               url: `https://rastreamento.correios.com.br/app/index.php?objeto=${encodeURIComponent(order.trackingCode)}`,

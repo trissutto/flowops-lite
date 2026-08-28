@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { situacaoPublica, SituacaoPublica } from '../common/situacao-pedido';
+import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { EmailService } from '../email/email.service';
 import { AppLoginDto, AppRegisterDto } from './dto/app-auth.dto';
 
@@ -700,7 +701,9 @@ export class CustomersAppService {
           date: o.wcDateCreated,
           paidAt: o.paidAt,
           tracking: o.trackingCode
-            ? { code: o.trackingCode, carrier: o.carrier }
+            // Nome amigável: "Mais Envios" é contrato, não transportadora —
+            // pra cliente é Correios (ver common/transportadora-cliente).
+            ? { code: o.trackingCode, carrier: transportadoraParaCliente(o.carrier) }
             : null,
           /**
            * SEGUNDA VIA DO PIX (item 65).

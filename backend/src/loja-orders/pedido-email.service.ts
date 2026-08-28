@@ -4,6 +4,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { EmailService } from '../email/email.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { transportadoraParaCliente } from '../common/transportadora-cliente';
 
 /**
  * O E-MAIL QUE A CLIENTE ESPERA — e que não existia (achado de 12/08/2026).
@@ -102,8 +103,8 @@ export class PedidoEmailService {
         `Se o Pix vencer, o pedido é liberado e as peças voltam pro estoque — nada é cobrado.`;
     } else if (evento === 'pedido_enviado') {
       const codigo = String(order?.trackingCode || '').trim();
-      const transportadora = String(order?.carrier || 'Correios');
-      const link = this.linkRastreio(codigo, transportadora);
+      const transportadora = this.transportadoraParaCliente(order?.carrier);
+      const link = this.linkRastreio(codigo, String(order?.carrier || 'Correios'));
       texto =
         `Oi, ${nome}! 💛\n\nSeu pedido${numero} saiu pra entrega com a ${transportadora}.` +
         (codigo ? `\n\n📦 Código: *${codigo}*` : '') +
@@ -250,7 +251,7 @@ export class PedidoEmailService {
               ? {
                   rastreio: {
                     codigo: order?.trackingCode ?? null,
-                    transportadora: order?.carrier ?? 'Correios',
+                    transportadora: this.transportadoraParaCliente(order?.carrier),
                     link: this.linkRastreio(order?.trackingCode, order?.carrier),
                   },
                 }
@@ -277,6 +278,11 @@ export class PedidoEmailService {
     } catch {
       return { copiaECola: null, expiraEm: null, minutosRestantes: null };
     }
+  }
+
+  /** Nome amigável da transportadora — ver `common/transportadora-cliente`. */
+  private transportadoraParaCliente(carrier?: string | null): string {
+    return transportadoraParaCliente(carrier);
   }
 
   /** Link de acompanhamento — Correios tem página pública; outras, só o código. */
