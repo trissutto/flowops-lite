@@ -113,3 +113,14 @@ export function pullGigaLigado(): boolean {
 export function gigaDesligado(): boolean {
   return String(process.env.ERP_GIGA_OFF ?? '1').trim() === '1';
 }
+
+/**
+ * O SERVIDOR DA KINGHOST (WordPress/WooCommerce legado) também morreu junto
+ * com o desligamento de 27/08 — Giga e WP dividiam a hospedagem. Tudo que
+ * ainda batia lá (poller de pedidos WC de 1 em 1 min, sync de conteúdo das
+ * 04:35, fotos antigas, CPF via Woo) só colhe erro. `KINGHOST_WP=1` religa
+ * se um dia houver um WP novo pra apontar.
+ */
+export function wordpressLegadoLigado(): boolean {
+  return String(process.env.KINGHOST_WP ?? '').trim() === '1';
+}

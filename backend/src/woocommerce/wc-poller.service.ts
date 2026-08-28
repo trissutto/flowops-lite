@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { wordpressLegadoLigado } from '../common/replica-giga';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
@@ -38,6 +39,9 @@ export class WcPollerService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async poll() {
+    // WordPress/WooCommerce legado apagado com a KingHost (27/08) — sem
+    // servidor pra pollar. KINGHOST_WP=1 religa.
+    if (!wordpressLegadoLigado()) return;
     if (this.running) {
       this.logger.debug('Polling anterior ainda rodando, pulando ciclo.');
       return;

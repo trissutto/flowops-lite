@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { wordpressLegadoLigado } from '../common/replica-giga';
 import { Cron } from '@nestjs/schedule';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
@@ -234,6 +235,8 @@ export class SiteSyncService {
   @Cron('0 35 4 * * *')
   async cronDiario() {
     if (process.env.SITE_SYNC_ENABLED === '0') return;
+    // WP legado apagado (KingHost, 27/08) — não há de onde puxar conteúdo.
+    if (!wordpressLegadoLigado()) return;
     await this.sincronizarConteudo('cron');
   }
 
