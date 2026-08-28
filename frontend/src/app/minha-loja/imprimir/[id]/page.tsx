@@ -60,6 +60,9 @@ interface PickDetail {
     shippingAddress: string | null;
     shippingMethod?: string | null;
     isPickup?: boolean;
+    pickupStoreCode?: string | null;
+    /** Nome da loja onde a CLIENTE retira — resolvido pelo backend. */
+    pickupStoreName?: string | null;
     totalAmount: number | null;
     wcDateCreated?: string | null;
     items: PickItem[];
@@ -220,8 +223,12 @@ function ImprimirCupomPageInner() {
     : new Date(pick.createdAt).toLocaleString('pt-BR');
   const dataImpressao = new Date().toLocaleString('pt-BR');
 
-  // Passa UF pra resolver PROMOCIONAL → SEDEX (SP) ou PAC (outros estados)
-  const shippingBadge = classifyShipping(pick.order.shippingMethod ?? '', addr?.state ?? null);
+  // Passa UF pra resolver PROMOCIONAL → SEDEX (SP) ou PAC (outros estados).
+  // Retirada: o nome da loja entra no rótulo ("RETIRADA · INDAIATUBA") pra
+  // quem separa saber pra onde a peça vai.
+  const shippingBadge = classifyShipping(pick.order.shippingMethod ?? '', addr?.state ?? null, {
+    pickupStoreName: pick.order.pickupStoreName ?? null,
+  });
 
   return (
     <>

@@ -51,7 +51,11 @@ function normalize(s: string): string {
     .trim();
 }
 
-export function classifyShipping(raw: string | null | undefined, state?: string | null): ShippingBadge {
+export function classifyShipping(
+  raw: string | null | undefined,
+  state?: string | null,
+  opts?: { pickupStoreName?: string | null },
+): ShippingBadge {
   if (!raw) return FALLBACK;
 
   const text = normalize(raw);
@@ -64,10 +68,15 @@ export function classifyShipping(raw: string | null | undefined, state?: string 
     text.includes('pickup') ||
     text.includes('local_pickup')
   ) {
+    // EM QUAL loja o cliente retira: quem chama pode passar o nome resolvido
+    // (Order.pickupStoreCode → Store.name); sem ele, extrai do próprio texto.
+    // "RETIRADA EM LOJA" seco fez Piracicaba separar sem saber que a cliente
+    // retirava em Indaiatuba.
+    const loja = cleanPickupStore(opts?.pickupStoreName) ?? extractPickupStore(rawStr);
     return {
       kind: 'pickup',
-      label: 'RETIRADA EM LOJA',
-      short: 'RETIRADA',
+      label: loja ? `RETIRADA · ${loja}` : 'RETIRADA EM LOJA',
+      short: loja ? `RET. ${loja}` : 'RETIRADA',
       color: 'bg-amber-100 text-amber-900',
       colorBold: 'bg-amber-500 text-white',
       raw: rawStr,
@@ -162,4 +171,37 @@ export function classifyShipping(raw: string | null | undefined, state?: string 
     short: rawStr.length > 14 ? rawStr.slice(0, 14) + '…' : rawStr,
     raw: rawStr,
   };
+}
+
+/**
+ * Extrai o nome da loja de retirada do texto cru do método de envio.
+ * Formatos reais em produção:
+ *  - "Retirar Gratuitamente na Loja de Piracicaba (3 a 5 dias úteis)"  (WC)
+ *  - "Retirada em loja (Indaiatuba)"                                   (site novo)
+ *  - "RETIRADA NA LOJA — Moema"                                        (venda online do PDV)
+ *  - "Retirada em loja (LIVE)" → null (LIVE não é loja; nome vem do pedido)
+ */
+function extractPickupStore(raw: string): string | null {
+  const tries = [
+    /lojas?\s+de\s+([^()\-–—,|]+)/i, // "na Loja de Piracicaba"
+    /lojas?\s*[—–-]\s*([^()\-–—,|]+)/i, // "NA LOJA — Moema"
+    /lojas?\s*\(\s*([^)]+?)\s*\)/i, // "em loja (Indaiatuba)"
+    /(?:na|em)\s+lojas?\s+([^()\-–—,|]+)/i, // "na loja Indaiatuba"
+  ];
+  for (const re of tries) {
+    const nome = cleanPickupStore(raw.match(re)?.[1]);
+    if (nome) return nome;
+  }
+  return null;
+}
+
+/** Valida/normaliza um candidato a nome de loja; null quando não é nome de loja. */
+function cleanPickupStore(s: string | null | undefined): string | null {
+  const nome = String(s ?? '').replace(/\s+/g, ' ').trim();
+  if (!nome || nome.length < 2) return null;
+  const norm = normalize(nome);
+  // Prazo ("3 a 5 dias úteis"), "LIVE" e sobras de preposição não são loja.
+  if (/\d/.test(norm) || /\bdias?\b|\buteis\b|\blive\b/.test(norm)) return null;
+  if (norm === 'de' || norm === 'da' || norm === 'do') return null;
+  return nome.toUpperCase().slice(0, 24);
 }
