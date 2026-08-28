@@ -438,6 +438,25 @@ export class GigaMirrorService implements OnModuleInit {
    * (a caixa do Giga também tinha lançamento negativo — daí a loja 19
    * aparecer com saldo negativo no espelho antigo). Dia e loja no fuso de
    * São Paulo, que é como a loja fecha o caixa.
+   *
+   * 🔴 E O HISTÓRICO ANTERIOR AO PDV DO FLOW.
+   *
+   * `syncCaixa` faz `deleteMany({})` e recria a tabela inteira com o que a
+   * fonte devolve. Na primeira execução com a fonte nova isso APAGOU o que só
+   * o Giga tinha: a tabela caiu de 7.678 para 921 linhas, perdendo de
+   * jan/2025 a abr/2026 — o PDV do Flow só começa em 27/04/2026. Erro meu, e
+   * o servidor do Giga já estava inacessível pra refazer o pull.
+   *
+   * O que salva é `giga_caixa_mov` (a caixa DETALHADA, 249 mil linhas desde
+   * 02/01/2025, sincronizada até 24/08/2026): ela é dado do próprio Giga e
+   * permite remontar o diário por loja e dia. Então a fonte é uma UNIÃO —
+   * venda do Flow onde ela existe, caixa detalhada no resto.
+   *
+   * ⚠️ A remontagem NÃO reproduz número por número o que o diário do Giga
+   * trazia: agosto/2026 fecha em R$ 805.423,41 pela detalhada contra
+   * R$ 855.145,25 que o diário marcava (~6%). A detalhada é uma janela
+   * deslizante de 3 dias com backfill, então tem buraco. Onde a venda do Flow
+   * existe ela vence, justamente por ser a fonte completa.
    */
   private async vendaDiariaDoFlow(): Promise<Array<{ loja: string; data: string; bruto: number }>> {
     const from = this.windowFrom();
@@ -462,13 +481,31 @@ export class GigaMirrorService implements OnModuleInit {
            AND created_at >= ${from}
            AND created_at < ${to}
          GROUP BY 1, 2
+      ), flow AS (
+        SELECT COALESCE(v.loja, d.loja) AS loja,
+               COALESCE(v.dia, d.dia) AS dia,
+               COALESCE(v.valor, 0) - COALESCE(d.valor, 0) AS bruto
+          FROM venda v
+          FULL OUTER JOIN devolucao d ON d.loja = v.loja AND d.dia = v.dia
+         WHERE COALESCE(v.loja, d.loja) IS NOT NULL
+      ), historico AS (
+        -- Caixa DETALHADA do Giga: cobre o que existia antes do PDV do Flow.
+        -- Peça MARCADA é reserva, não venda — fica de fora dos dois lados.
+        SELECT lpad(regexp_replace(loja, '[^0-9]', '', 'g'), 2, '0') AS loja,
+               data::date AS dia,
+               sum(valor_total) AS bruto
+          FROM giga_caixa_mov
+         WHERE COALESCE(upper(marcado), '') <> 'SIM'
+           AND data >= ${from}
+           AND data < ${to}
+         GROUP BY 1, 2
       )
-      SELECT COALESCE(v.loja, d.loja) AS loja,
-             to_char(COALESCE(v.dia, d.dia), 'YYYY-MM-DD') AS data,
-             COALESCE(v.valor, 0) - COALESCE(d.valor, 0) AS bruto
-        FROM venda v
-        FULL OUTER JOIN devolucao d ON d.loja = v.loja AND d.dia = v.dia
-       WHERE COALESCE(v.loja, d.loja) IS NOT NULL`;
+      SELECT COALESCE(f.loja, h.loja) AS loja,
+             to_char(COALESCE(f.dia, h.dia), 'YYYY-MM-DD') AS data,
+             COALESCE(f.bruto, h.bruto) AS bruto
+        FROM flow f
+        FULL OUTER JOIN historico h ON h.loja = f.loja AND h.dia = f.dia
+       WHERE COALESCE(f.loja, h.loja) IS NOT NULL`;
 
     return rows.map((r) => ({
       loja: String(r.loja),
