@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { wordpressLegadoLigado } from '../common/replica-giga';
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
 import { EventLoopService } from '../health/event-loop.service';
@@ -50,6 +51,13 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    // Servidor da KingHost APAGADO (27/08) — Giga e WordPress moravam juntos.
+    // Sem pool: quem dependia daqui (fotos WC antigas, CartFlows) já trata
+    // 'sem dado' e segue. KINGHOST_WP=1 religa se um dia houver WP novo.
+    if (!wordpressLegadoLigado()) {
+      this.logger.warn('WpDbService INATIVO — servidor WordPress da KingHost apagado (27/08)');
+      return;
+    }
     const host = this.config.get<string>('WP_DB_HOST');
     if (!host) {
       this.logger.warn('⚠️  WP_DB_HOST não configurado — WpDbService inativo');
