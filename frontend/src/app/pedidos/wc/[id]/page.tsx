@@ -1488,11 +1488,18 @@ export default function PedidoDetailPage() {
    */
   async function aplicarJuntada(anchorStoreCode: string, anchorStoreName: string | null) {
     const nome = anchorStoreName || anchorStoreCode;
+    const trocando = juntada?.juntando === true;
+    const antiga = juntada?.ancoraStoreName || juntada?.ancoraStoreCode || null;
     if (!confirm(
-      `Juntar o pedido na LOJA ${nome}?\n\n` +
+      (trocando && antiga
+        ? `Trocar a loja que junta: de ${antiga} para ${nome}?\n\n`
+        : `Juntar o pedido na LOJA ${nome}?\n\n`) +
       `As outras lojas mandam as peças pra ela (caixa com NF de transferência + ` +
       `etiqueta pra loja, ou carro da rede no litoral) e SÓ ${nome} envia o ` +
-      `pacote pra cliente.`,
+      `pacote pra cliente.` +
+      (trocando
+        ? `\n\nCaixa que JÁ saiu continua indo pro endereço antigo — se houver, a tela diz qual.`
+        : ''),
     )) return;
     setJuntarBusy(anchorStoreCode);
     setJuntarErro(null);
@@ -3760,15 +3767,35 @@ export default function PedidoDetailPage() {
                   </button>
                 )}
                 {(() => {
-                  // JUNTAR NUMA LOJA — só com 2+ cards COM PEÇA, pedido de
-                  // ENTREGA (retirada tem trilho próprio) e sem juntada ativa.
+                  /**
+                   * JUNTAR NUMA LOJA — e TROCAR a loja depois de junto.
+                   *
+                   * Até 28/08 este bloco sumia quando a juntada já existia
+                   * (`juntada?.juntando === true` devolvia null). Consequência:
+                   * pedido que o sistema juntou SOZINHO — o trio do litoral,
+                   * que escolhe a âncora pela contagem de peças — ficava sem
+                   * porta nenhuma pra mudar de ideia. A retaguarda via
+                   * "JUNTANDO na LOJA X" e só tinha "Desfazer".
+                   *
+                   * O backend sempre aceitou re-ancorar (o `juntarPedido`
+                   * inclusive avisa qual caixa já saiu pro endereço antigo,
+                   * lição do LP-000244). Faltava só o botão.
+                   */
                   const cardsAtivos = liveStatus.filter((p) =>
                     ['new', 'separating', 'separated', 'ready'].includes(p.status),
                   );
                   const cardsComPecas = cardsAtivos.filter((p) => quantidadeDoCard(p) > 0);
                   const jaTemFeeder = cardsComPecas.some((p) => p.isTransfer && !destinoObrigatorio);
-                  if (destinoObrigatorio || juntada?.juntando === true || jaTemFeeder) return null;
+                  if (destinoObrigatorio) return null;
                   if (cardsComPecas.length < 2) return null;
+
+                  const juntando = juntada?.juntando === true || jaTemFeeder;
+                  const ancoraNome =
+                    juntada?.ancoraStoreName ||
+                    juntada?.ancoraStoreCode ||
+                    cardsAtivos.find((p) => p.isTransfer && p.transferToStoreCode)?.transferToStoreCode ||
+                    null;
+
                   return (
                     <>
                       <button
@@ -3776,10 +3803,17 @@ export default function PedidoDetailPage() {
                         disabled={sepLoading}
                         className="rounded-field border border-line bg-surface px-3 py-1.5 font-semibold text-ink hover:bg-surface-2 disabled:opacity-60"
                       >
-                        Juntar numa loja só
+                        {juntando ? 'Trocar a loja que junta' : 'Juntar numa loja só'}
                       </button>
                       <span className="text-ink-soft">
-                        Pedido dividido em {cardsComPecas.length} lojas = {cardsComPecas.length} fretes.
+                        {juntando ? (
+                          <>
+                            As peças se encontram em <b className="text-ink">{ancoraNome}</b>
+                            {' '}— dá pra escolher outra.
+                          </>
+                        ) : (
+                          <>Pedido dividido em {cardsComPecas.length} lojas = {cardsComPecas.length} fretes.</>
+                        )}
                       </span>
                     </>
                   );
@@ -4883,11 +4917,22 @@ export default function PedidoDetailPage() {
           >
             <div className="p-4 border-b flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-lg text-slate-800">🧲 Juntar numa loja</h3>
+                <h3 className="font-bold text-lg text-slate-800">
+                  🧲 {juntada?.juntando ? 'Trocar a loja que junta' : 'Juntar numa loja'}
+                </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   As outras lojas vão mandar as peças pra loja escolhida, que envia TUDO
                   num pacote só pra cliente. Sai NF de transferência e etiqueta pra loja
                   (Itanhaém/Praia Grande/Santos vai de carro).
+                  {juntada?.juntando && (
+                    <>
+                      {' '}
+                      <b className="text-slate-700">
+                        Caixa que já saiu não muda de rota — se houver alguma a caminho, a tela
+                        avisa qual.
+                      </b>
+                    </>
+                  )}
                 </p>
               </div>
               <button
@@ -4914,21 +4959,37 @@ export default function PedidoDetailPage() {
                 )
                 .map((p) => {
                   const pecas = quantidadeDoCard(p);
+                  // Quem junta HOJE. Sem isso a lista fica igual antes e depois
+                  // da juntada, e o operador reclica na mesma loja achando que
+                  // trocou.
+                  const ehAncoraAtual =
+                    !!p.storeCode &&
+                    (p.storeCode === juntada?.ancoraStoreCode ||
+                      liveStatus.some(
+                        (f) => f.isTransfer && f.transferToStoreCode === p.storeCode,
+                      ));
                   return (
                     <div
                       key={p.id}
-                      className="border border-slate-200 rounded-lg p-3 flex items-center gap-3"
+                      className={`border rounded-lg p-3 flex items-center gap-3 ${
+                        ehAncoraAtual ? 'border-violet-300 bg-violet-50' : 'border-slate-200'
+                      }`}
                     >
                       <div className="flex-1 min-w-0">
                         <div className="font-semibold text-slate-800">
                           {p.storeName}{' '}
                           <span className="text-xs font-mono text-slate-500">({p.storeCode})</span>
+                          {ehAncoraAtual && (
+                            <span className="ml-2 rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                              junta aqui hoje
+                            </span>
+                          )}
                         </div>
                         <div className="text-xs text-slate-500">{pecas} peça(s) neste card</div>
                       </div>
                       <button
                         onClick={() => p.storeCode && aplicarJuntada(p.storeCode, p.storeName)}
-                        disabled={!!juntarBusy || !p.storeCode}
+                        disabled={!!juntarBusy || !p.storeCode || ehAncoraAtual}
                         className="px-3 py-2 rounded text-xs font-semibold bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60 flex items-center gap-1 flex-shrink-0"
                         title={`As outras lojas mandam as peças pra ${p.storeName || p.storeCode}`}
                       >

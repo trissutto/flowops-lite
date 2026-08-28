@@ -48,6 +48,11 @@ export const AdminOnly = (opts: { strict?: boolean } = {}) =>
  *
  *   @PermiteLoja('CARRINHO_LOJAS')
  *   @Controller('abandoned-carts')
+ *
+ * A env aceita **`*` = a rede inteira** (28/08/2026), que é o que atende
+ * "libera pra todos os PDVs" sem virar lista pra alguém esquecer de atualizar
+ * quando abrir loja nova. `*` ainda exige `storeCode` no token, e `strict`
+ * segue imune.
  */
 export const PermiteLoja = (envVar: string) => SetMetadata(PERMITE_LOJA_KEY, envVar);
 
@@ -109,6 +114,22 @@ export class AdminOnlyGuard implements CanActivate {
       .map((s) => s.trim())
       .filter(Boolean);
     if (!permitidas.length) return false;
+
+    /**
+     * `*` = A REDE INTEIRA, qualquer loja autenticada.
+     *
+     * A régua nasceu loja a loja (piloto em Santos) e isso estava certo pra
+     * validar. Quando a decisão vira "libera pra todo mundo", lista fixa passa
+     * a ser armadilha: no dia em que uma loja nova abre, ninguém lembra de
+     * editar a env e a vendedora leva 403 sem explicação nenhuma. Hoje a rede
+     * tem 17 lojas ativas e já mudou duas vezes este ano.
+     *
+     * Continua exigindo `storeCode` no token: `*` abre pra loja, não pra
+     * qualquer autenticado sem loja.
+     */
+    if (permitidas.includes('*')) {
+      return Boolean(String(req?.user?.storeCode ?? '').trim());
+    }
 
     // `storeCode` é o código da loja no JWT ('02' = Santos). Comparo como texto
     // e sem zero à esquerda também, porque o código vive como '02' no cadastro

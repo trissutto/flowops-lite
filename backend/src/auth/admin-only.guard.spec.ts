@@ -86,3 +86,63 @@ describe('AdminOnlyGuard', () => {
     );
   });
 });
+
+/**
+ * `*` — A REDE INTEIRA (28/08/2026).
+ *
+ * A régua nasceu loja a loja e isso valeu pro piloto. Quando a ordem virou
+ * "libera o carrinho em todos os PDVs", lista fixa passou a ser armadilha:
+ * loja nova abre e a vendedora leva 403 sem ninguém entender por quê.
+ */
+describe('AdminOnlyGuard · curinga', () => {
+  const ENV = 'CARRINHO_LOJAS_TESTE';
+
+  function contexto(user: any, meta: any, envVar?: string): ExecutionContext {
+    return {
+      getHandler: () => 'handler',
+      getClass: () => 'class',
+      switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    } as any;
+  }
+
+  function guardPara(meta: any, envVar?: string) {
+    const reflector = {
+      get: (key: string, alvo: any) => {
+        if (alvo !== 'class') return undefined;
+        if (key === ADMIN_ONLY_KEY) return meta;
+        if (key === PERMITE_LOJA_KEY) return envVar;
+        return undefined;
+      },
+    } as unknown as Reflector;
+    return new AdminOnlyGuard(reflector);
+  }
+
+  afterEach(() => {
+    delete process.env[ENV];
+  });
+
+  it('`*` libera QUALQUER loja, inclusive uma que ninguém listou', () => {
+    process.env[ENV] = '*';
+    const g = guardPara({ strict: false }, ENV);
+    expect(g.canActivate(contexto({ role: 'store', storeCode: '19' }, { strict: false }, ENV))).toBe(true);
+    expect(g.canActivate(contexto({ role: 'store', storeCode: '99' }, { strict: false }, ENV))).toBe(true);
+  });
+
+  it('`*` NÃO libera autenticado sem loja — curinga abre pra PDV, não pra qualquer token', () => {
+    process.env[ENV] = '*';
+    const g = guardPara({ strict: false }, ENV);
+    expect(() => g.canActivate(contexto({ role: 'store' }, { strict: false }, ENV))).toThrow();
+  });
+
+  it('`*` no meio da lista também vale', () => {
+    process.env[ENV] = '02, *';
+    const g = guardPara({ strict: false }, ENV);
+    expect(g.canActivate(contexto({ role: 'store', storeCode: '07' }, { strict: false }, ENV))).toBe(true);
+  });
+
+  it('strict continua imune ao curinga — `*` não fura senha master', () => {
+    process.env[ENV] = '*';
+    const g = guardPara({ strict: true }, ENV);
+    expect(() => g.canActivate(contexto({ role: 'store', storeCode: '02' }, { strict: true }, ENV))).toThrow();
+  });
+});
