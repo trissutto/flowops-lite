@@ -93,46 +93,6 @@ const LOJAS_COM_FICHA = new Set([
 /** `1`, `07`, ` 7 ` → `07`. A mesma chave que o `codigoDaFicha` usa. */
 const numeroDaLoja = (loja: string) => String(loja).trim().padStart(2, '0');
 
-/**
- * OS DOIS CÓDIGOS ANTIGOS — hoje são os ÚNICOS que o Merchant reconhece.
- * NÃO REMOVER sem antes reler os números abaixo. (medido 24/08/2026)
- *
- * Isto nasceu como sonda, com a hipótese de atraso de sincronismo depois da
- * virada de códigos de 23/08. **A sonda foi respondida: é atraso mesmo, e o
- * atraso está do lado do Merchant.** Três leituras do mesmo dado discordam:
- *
- *   · **Gerenciador de Perfis** (a fonte): 14 empresas, 100% verificadas, a
- *     coluna "Código da loja" mostra `LURDS-01` … `LURDS-18` nas catorze.
- *     Do lado da ficha o trabalho ACABOU — inclusive Anália Franco.
- *   · **Google Ads** (`LOCATION_SYNC` da conta 956-499-8046, lido pela API em
- *     `asset.location_asset.business_profile_locations`): 13 já vieram com
- *     `LURDS-nn`; Anália Franco ainda responde `07281599556208318742`.
- *   · **Merchant Center** (fonte `PRODUCTS_INVENTORY_FULL SOURCE 1`, lida
- *     hoje às 08:30): **1.616 linhas casaram, 10.295 recusadas** com
- *     "[Perfil da Empresa] Código da loja inválido", 14 lojas afetadas.
- *
- * 1.616 de 11.911 é ~13,6%. O feed sai hoje com 16 variações de código (as 14
- * novas + estas 2 antigas), e 2/15 ≈ 13,3%. **A conta fecha com a hipótese de
- * que o que casou foram exatamente estas duas linhas legadas** — ou seja, a
- * cópia que o Merchant tem do Perfil ainda é a de ANTES de 23/08.
- *
- * Consequência prática, e o motivo deste bloco existir: **apagar daqui hoje é
- * apagar as duas únicas lojas com vitrine local no ar.** Sorocaba chegou a sair
- * desta constante durante esta mesma sessão, por parecer "migrada nas duas
- * outras leituras" — e voltou quando o número do Merchant apareceu. Duas
- * leituras concordando não valem contra a terceira, que é a que serve a página.
- *
- * 🧹 Só sai quando o Merchant mostrar as 14 lojas casando (o contador de
- * "Produtos correspondentes" subindo pra perto de 11.911, e a aba
- * Produtos → Canais de vendas deixando de dizer "Adicione produtos às lojas").
- * Código inválido o Google descarta em silêncio: manter as duas linhas custa
- * ~13% de arquivo e é o que impede a vitrine de sumir sem ninguém ver.
- */
-const CODIGO_LEGADO: Record<string, string> = {
-  '06': 'LURDSSOROCABA', // Sorocaba — já é LURDS-06 na ficha e no Ads, mas não no Merchant
-  '18': '07281599556208318742', // Anália Franco — id numérico antigo, ainda vivo nos espelhos
-};
-
 /** Uma linha de estoque por (peça × cor × loja), vinda do backend. */
 interface EstoqueLoja {
   loja: string;
@@ -228,9 +188,9 @@ export async function GET() {
         // Depósito, matriz, estoque do site e loja fechada não têm ficha.
         if (!LOJAS_COM_FICHA.has(numeroDaLoja(loja))) continue;
 
-        const item = (codigo: string) =>
+        linhas.push(
           '<item>' +
-          `<g:store_code>${escapar(codigo)}</g:store_code>` +
+          `<g:store_code>${escapar(codigoDaFicha(loja))}</g:store_code>` +
           `<g:id>${escapar(v.id)}</g:id>` +
           `<g:quantity>${quantidade}</g:quantity>` +
           `<g:availability>in_stock</g:availability>` +
@@ -239,12 +199,8 @@ export async function GET() {
           // comportamento que a rede já tem no balcão.
           `<g:pickup_method>buy</g:pickup_method>` +
           `<g:pickup_sla>same_day</g:pickup_sla>` +
-          '</item>';
-
-        linhas.push(item(codigoDaFicha(loja)));
-
-        const legado = CODIGO_LEGADO[numeroDaLoja(loja)];
-        if (legado) linhas.push(item(legado));
+          '</item>',
+        );
       }
     }
   }
