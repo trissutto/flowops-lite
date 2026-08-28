@@ -112,15 +112,21 @@ export default function DashboardHome() {
       setVisitor(true);
       return;
     }
-    api<{ role: string; name?: string; email?: string }>('/auth/me')
+    api<{ role: string; name?: string; email?: string; impersonatedByEmail?: string | null }>('/auth/me')
       .then((me) => {
         if (me.role === 'store') router.push('/minha-loja/pdv');
         else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
         else if (me.role === 'master_franquia') router.push('/retaguarda/super-painel-caixas');
         else if (me.role === 'franquias') router.push('/franquias');
         if (me.name) setUserName(me.name);
-        // SUPREMO: só este e-mail enxerga o módulo Imóveis.
-        setSupremo(String(me.email || '').trim().toLowerCase() === 'trissutto@gmail.com');
+        // SUPREMO: só este e-mail enxerga o módulo Imóveis. Vale TAMBÉM quando
+        // ele está impersonando outro usuário (29/08 — "sumiu a aba Imóveis"):
+        // o token de impersonação fica preso na aba (sessionStorage) e o
+        // /auth/me passa a responder como o outro usuário — mas o
+        // impersonatedByEmail diz quem está por trás, e é ele que manda.
+        const eu = (e?: string | null) =>
+          String(e || '').trim().toLowerCase() === 'trissutto@gmail.com';
+        setSupremo(eu(me.email) || eu(me.impersonatedByEmail));
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
