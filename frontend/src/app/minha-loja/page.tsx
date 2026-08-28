@@ -186,6 +186,8 @@ interface PickOrderRow {
     wcDateCreated?: string | null;
     isPickup?: boolean;
     pickupStoreCode?: string | null;
+    /** Nome da loja onde a CLIENTE retira — resolvido pelo backend. */
+    pickupStoreName?: string | null;
     shippingMethod?: string | null;
     items?: PickOrderItem[];
   };
@@ -2651,13 +2653,29 @@ function PickOrderCard({
         if (!servico && !raw) return null;
 
         const addrPar = parseShippingAddress(order.shippingAddress);
-        const m = classifyShipping(raw, addrPar?.state ?? null);
+        const m = classifyShipping(raw, addrPar?.state ?? null, {
+          pickupStoreName: order.pickupStoreName ?? null,
+        });
         const kind: string = servico
           ? servico === 'RETIRADA'
             ? 'pickup'
             : servico.toLowerCase()
           : m.kind;
-        const label = servico === 'RETIRADA' ? 'RETIRADA EM LOJA' : servico ?? m.label;
+        /**
+         * RETIRADA mostra EM QUAL LOJA a cliente busca (dono, 28/08) — o card
+         * dizia só "RETIRADA EM LOJA" e Piracicaba separava sem saber que a
+         * cliente retirava em Indaiatuba. Nome vem do backend
+         * (pickupStoreName); sem ele, o classificador extrai do título.
+         */
+        const lojaRetirada = order.pickupStoreName?.trim() || null;
+        const label =
+          servico === 'RETIRADA'
+            ? m.kind === 'pickup'
+              ? m.label
+              : lojaRetirada
+                ? `RETIRADA · ${lojaRetirada.toUpperCase()}`
+                : 'RETIRADA EM LOJA'
+            : servico ?? m.label;
 
         const Icon =
           kind === 'sedex' ? Truck : kind === 'pac' ? Package : kind === 'motoboy' ? Truck : kind === 'pickup' ? Package2 : kind === 'transportadora' ? Truck : Package2;

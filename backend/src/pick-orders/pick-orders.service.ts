@@ -1974,21 +1974,25 @@ export class PickOrdersService {
       itemsByOrder.set(it.orderId, arr);
     }
 
-    // Resolve transferToStoreName para os pick-orders de transferência
-    const transferStoreCodes = [
+    // Resolve nome de loja pros códigos que o card precisa mostrar: destino da
+    // transferência E loja de RETIRADA — a loja que separa tem que ver ONDE a
+    // cliente vai buscar, não só "retirada em loja" (caso Piracicaba separando
+    // pedido que a cliente retira em Indaiatuba).
+    const lookupStoreCodes = [
       ...new Set(
-        rows
-          .map((r) => r.transferToStoreCode)
-          .filter((c): c is string => !!c),
+        [
+          ...rows.map((r) => r.transferToStoreCode),
+          ...rows.map((r) => (r.order as any)?.pickupStoreCode),
+        ].filter((c): c is string => !!c),
       ),
     ];
-    const transferStores = transferStoreCodes.length
+    const lookupStores = lookupStoreCodes.length
       ? await this.prisma.store.findMany({
-          where: { code: { in: transferStoreCodes } },
+          where: { code: { in: lookupStoreCodes } },
           select: { code: true, name: true, city: true, state: true },
         })
       : [];
-    const storeByCode = new Map(transferStores.map((s) => [s.code, s]));
+    const storeByCode = new Map(lookupStores.map((s) => [s.code, s]));
 
     // ── JUNTADA (21/08): estado das caixas pros cards ─────────────────────
     // Card FEEDER mostra a própria caixa (código/rastreio/transporte); card
@@ -2296,6 +2300,11 @@ export class PickOrdersService {
           : null,
         order: {
           ...r.order,
+          // Nome da loja de retirada resolvido — o card mostra "RETIRADA ·
+          // INDAIATUBA" em vez de "retirada em loja" seco.
+          pickupStoreName: (r.order as any)?.pickupStoreCode
+            ? storeByCode.get((r.order as any).pickupStoreCode)?.name ?? null
+            : null,
           items: itemsByOrder.get(r.orderId) ?? [],
         },
       };
@@ -3492,6 +3501,15 @@ export class PickOrdersService {
         customerSnapshotObj = null;
       }
     }
+    // Nome da loja de retirada — o romaneio impresso mostra ONDE a cliente
+    // vai buscar ("RETIRADA · INDAIATUBA"), não só "retirada em loja".
+    const pickupCode = (row.order as any).pickupStoreCode ?? null;
+    const pickupStore = pickupCode
+      ? await this.prisma.store.findFirst({
+          where: { code: pickupCode },
+          select: { name: true },
+        })
+      : null;
     return {
       id: row.id,
       status: row.status,
@@ -3519,7 +3537,8 @@ export class PickOrdersService {
         shippingAddress: row.order.shippingAddress,
         shippingMethod: (row.order as any).shippingMethod ?? null,
         isPickup: (row.order as any).isPickup ?? false,
-        pickupStoreCode: (row.order as any).pickupStoreCode ?? null,
+        pickupStoreCode: pickupCode,
+        pickupStoreName: pickupStore?.name ?? null,
         totalAmount: row.order.totalAmount,
         wcDateCreated: row.order.wcDateCreated,
         items,
