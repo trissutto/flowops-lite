@@ -2421,6 +2421,13 @@ function PdvPageInner() {
             </div>
           </Link>
 
+          {/* TESTE DE DEPLOY — bolinha amarela. Remover depois de validar. */}
+          <span
+            title="Teste de deploy"
+            aria-hidden="true"
+            className="w-3 h-3 rounded-full bg-yellow-400 shrink-0"
+          />
+
           {/*
             O NOME DA LOJA NÃO É DA VENDA.
 
