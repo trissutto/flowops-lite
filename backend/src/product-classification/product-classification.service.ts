@@ -90,7 +90,7 @@ export class ProductClassificationService {
 
     this.snapshotLoading = (async () => {
       try {
-        const rows = await this.erp.getRefCatalogSnapshot();
+        const rows = await this.carregarSnapshotDoEspelho();
         // Dedup defensivo por REF normalizada (o GROUP BY já agrupa, mas garante)
         const seen = new Map<string, RefRow>();
         for (const r of rows) {
@@ -106,6 +106,89 @@ export class ProductClassificationService {
       }
     })();
     return this.snapshotLoading;
+  }
+
+  /**
+   * Catálogo por REF lido do ESPELHO (`wincred_produtos`, Postgres) — 28/08.
+   *
+   * Até aqui vinha de `erp.getRefCatalogSnapshot()` = MySQL do GIGA vivo. Com
+   * o Giga desligado em definitivo (pool nem é criado — ver
+   * `common/replica-giga.ts` e a regra NUNCA religar), aquele método devolve
+   * `[]` SEM ERRO, e a tela inteira zerou em silêncio: "TOTAL DE PRODUTOS 0"
+   * na noite de 28/08 — a mesma doença da busca da /loja/reposicao, corrigida
+   * um dia antes. O espelho serve: espelha o catálogo INTEIRO, o cadastro de
+   * produto NOVO grava nele (product-registration upserta wincred_produtos), e
+   * preço/busca desta tela JÁ liam dele.
+   *
+   * Réplica 1:1 da query do Giga (GROUP BY REF + "#<codigo>" pra produto sem
+   * REF; `busca` concatena TODAS as descrições da REF — com só MAX() a
+   * pesquisa enxergava UMA variação e produto novo na mesma REF sumia).
+   * Fornecedor no produto é CNPJ — traduzido pro nome via
+   * `wincred_fornecedores` em memória, como o original fazia.
+   *
+   * Erro aqui SOBE (a tela mostra a faixa vermelha) — erro engolido virando
+   * "0 produtos" é exatamente o buraco que esta troca conserta.
+   */
+  private async carregarSnapshotDoEspelho(): Promise<RefRow[]> {
+    const t0 = Date.now();
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT UPPER(TRIM(p.ref)) AS ref,
+              MAX(COALESCE(p."descricaoCompleta", p."descricaoPdv", '')) AS descricao,
+              LEFT(STRING_AGG(DISTINCT UPPER(COALESCE(p."descricaoCompleta", p."descricaoPdv", '')), ' '), 8000) AS busca,
+              MAX(COALESCE(p.marca, ''))       AS marca,
+              MAX(COALESCE(p.fornecedor, ''))  AS fornecedor,
+              MAX(COALESCE(p."nomeGrupo", '')) AS categoria,
+              MAX(CASE WHEN p."plusSize" IN (1, 2) THEN 1 ELSE 0 END) AS plus_size
+         FROM wincred_produtos p
+        WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
+        GROUP BY UPPER(TRIM(p.ref))
+
+       UNION ALL
+
+       SELECT '#' || TRIM(p.codigo)                                    AS ref,
+              COALESCE(p."descricaoCompleta", p."descricaoPdv", '')    AS descricao,
+              UPPER(COALESCE(p."descricaoCompleta", p."descricaoPdv", '')) AS busca,
+              COALESCE(p.marca, '')       AS marca,
+              COALESCE(p.fornecedor, '')  AS fornecedor,
+              COALESCE(p."nomeGrupo", '') AS categoria,
+              CASE WHEN p."plusSize" IN (1, 2) THEN 1 ELSE 0 END AS plus_size
+         FROM wincred_produtos p
+        WHERE (p.ref IS NULL OR TRIM(p.ref) = '')
+          AND p.codigo IS NOT NULL AND TRIM(p.codigo) <> ''`,
+    );
+
+    // produtos.fornecedor guarda o CNPJ — traduz pro NOME em memória.
+    const fornNome = new Map<string, string>();
+    try {
+      const fs: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT cnpj, fantasia, "razaoSocial" FROM wincred_fornecedores`,
+      );
+      for (const f of fs) {
+        const cnpj = String(f.cnpj || '').trim();
+        const nome = String(f.fantasia || '').trim() || String(f.razaoSocial || '').trim();
+        if (cnpj && nome) fornNome.set(cnpj, nome);
+      }
+    } catch (e) {
+      this.logger.warn(
+        `[classificacao] mapa de fornecedores falhou (${(e as Error).message}) — mantendo CNPJ cru`,
+      );
+    }
+
+    this.logger.log(
+      `[classificacao] snapshot do espelho: ${rows.length} REF(s) em ${Date.now() - t0}ms`,
+    );
+    return rows.map((r) => {
+      const fornRaw = String(r.fornecedor || '').trim();
+      return {
+        ref: String(r.ref || '').trim(),
+        descricao: String(r.descricao || '').trim(),
+        busca: String(r.busca || '').trim(),
+        marca: String(r.marca || '').trim(),
+        fornecedor: fornNome.get(fornRaw) || fornRaw,
+        categoria: String(r.categoria || '').trim(),
+        plusSize: Number(r.plus_size) === 1,
+      };
+    });
   }
 
   private async getClsMap(): Promise<Map<string, ClsRow>> {
