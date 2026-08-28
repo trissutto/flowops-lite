@@ -23,6 +23,7 @@ import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
+import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { JuntadaService } from './juntada.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
@@ -393,6 +394,44 @@ export class PickOrdersService {
       await this.prisma.pickOrder.updateMany({ where: { id, trackingCode: null }, data: { correiosGeneratedAt: null } }).catch(() => undefined);
       throw e;
     }
+  }
+
+  /**
+   * A CAIXA do aviso de rastreio: posição/total entre as caixas que vão PRA
+   * CLIENTE e as peças que viajam nesta (28/08 — pedido fracionado avisava só
+   * o primeiro código e sem dizer o que vinha em cada caixa).
+   *
+   * Caixa "de cliente" = card não-transferência (feeder de juntada e
+   * transferência de retirada mandam pra LOJA, não pra cliente). As peças da
+   * caixa são as do pedido que NÃO pertencem a outra caixa de cliente — assim
+   * a âncora da juntada (única caixa) leva o pedido inteiro, e o fracionado
+   * direto lista só o pedaço de cada loja.
+   */
+  private caixaDoAviso(
+    order: any,
+    po: any,
+  ): { posicao: number; total: number; itens: Array<{ nome: string; qty: number }> } {
+    const paraCliente = ((order?.pickOrders || []) as any[])
+      .filter((p) => !p.isTransfer)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const idx = paraCliente.findIndex((p) => p.id === po.id);
+    const total = Math.max(1, paraCliente.length);
+    const posicao = idx >= 0 ? idx + 1 : 1;
+    const outrasLojas = paraCliente
+      .filter((p) => p.id !== po.id)
+      .map((p) => p.storeId);
+    const daCaixa = ((order?.items || []) as any[]).filter(
+      (i) => !i.assignedStoreId || !outrasLojas.includes(i.assignedStoreId),
+    );
+    const fonte = daCaixa.length ? daCaixa : ((order?.items || []) as any[]);
+    return {
+      posicao,
+      total,
+      itens: fonte.map((i) => ({
+        nome: String(i.productName || i.sku || 'Peça'),
+        qty: Number(i.quantity) || 1,
+      })),
+    };
   }
 
   /**
@@ -4152,9 +4191,10 @@ export class PickOrdersService {
           include: {
             items: true,
             // Cards IRMÃOS deste pedido — precisa deles pra saber o que chegou
-            // aqui por transferência (bloco da PERNA 2, logo abaixo).
+            // aqui por transferência (bloco da PERNA 2, logo abaixo) e pra
+            // numerar a CAIXA no aviso de rastreio ("caixa 2 de 3").
             pickOrders: {
-              select: { storeId: true, isTransfer: true, transferToStoreCode: true },
+              select: { id: true, storeId: true, isTransfer: true, transferToStoreCode: true, createdAt: true },
             },
           },
         },
@@ -4335,26 +4375,36 @@ export class PickOrdersService {
     // ── 2b) Rastreio pra cliente do SITE NOVO (e-mail + evento n8n) ──
     // O e-mail de "Pagamento confirmado" promete o código de rastreio, e até
     // 14/08 ninguém cumpria: o ManyChat abaixo é só da LIVE e o site novo não
-    // passa pelo WooCommerce que avisava o site velho. Guard atômico no
-    // pedido: dividido despacha um pacote por loja, e só o PRIMEIRO com
-    // rastreio avisa (updateMany com null → 1 linha = este pacote venceu).
-    // 'pdv_online' entra aqui junto (14/08): a venda online do PDV nasceu muda
-    // — a cliente é atendida no WhatsApp da vendedora, mas o código de
-    // rastreio ninguém mandava. Mesmo trilho, mesma trava.
+    // passa pelo WooCommerce que avisava o site velho.
+    //
+    // AVISO POR CAIXA (28/08, pedido do dono). O guard atômico era no PEDIDO
+    // e só o primeiro pacote com rastreio avisava — num fracionado a cliente
+    // ficava sem os outros códigos e sem saber qual peça vinha em qual caixa.
+    // O carimbo desceu pro CARD (`pickOrder.rastreioAvisadoEm`): cada caixa
+    // avisa uma vez, com o próprio código e AS PEÇAS dela.
+    // 'pdv_online' entra aqui junto (14/08): mesmo trilho, mesma trava.
     // Sem código (motoboy/retirada) não há rastreio pra avisar — o aviso de
     // "saiu pra entrega" fica com a vendedora, que já fala com a cliente.
     if ((order.source === 'ecommerce' || order.source === 'pdv_online') && input.trackingCode?.trim()) {
       try {
-        const venceu = await (this.prisma as any).order.updateMany({
-          where: { id: order.id, rastreioAvisadoEm: null },
+        const venceu = await (this.prisma as any).pickOrder.updateMany({
+          where: { id: pickOrderId, rastreioAvisadoEm: null },
           data: { rastreioAvisadoEm: new Date() },
         });
         if (venceu.count === 1) {
-          void this.pedidoEmail.aoEnviarPedido({
-            ...order,
-            trackingCode: input.trackingCode,
-            carrier: input.carrier ?? order.carrier ?? 'Correios',
-          });
+          // O carimbo antigo no pedido segue significando "a cliente já ouviu
+          // do rastreio ao menos uma vez" — outros fluxos leem isso.
+          await (this.prisma as any).order
+            .updateMany({ where: { id: order.id, rastreioAvisadoEm: null }, data: { rastreioAvisadoEm: new Date() } })
+            .catch(() => {});
+          void this.pedidoEmail.aoEnviarPedido(
+            {
+              ...order,
+              trackingCode: input.trackingCode,
+              carrier: input.carrier ?? order.carrier ?? 'Correios',
+            },
+            this.caixaDoAviso(order, po),
+          );
         }
       } catch (e: any) {
         this.logger.warn(`[rastreio-site] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
@@ -4377,17 +4427,22 @@ export class PickOrdersService {
         // TRAVA DE DUPLICIDADE (14/08): a live não tinha nenhuma, enquanto o
         // ramo do site ao lado tinha. Carrinho separado por 2 lojas chamava
         // este bloco 2× e a cliente recebia 2 WhatsApps do mesmo pedido.
-        // Reclamado só como "chegou repetido" — nunca como bug.
+        // AVISO POR CAIXA (28/08): o carimbo desceu pro CARD — cada caixa do
+        // fracionado avisa uma vez com o próprio código, em vez de só a
+        // primeira ("cadê o rastreio do resto?").
         // Reivindicação atômica ANTES do envio, depois dos guards baratos
         // (sem flow/telefone não queima o carimbo).
-        const venceuWhats = await (this.prisma as any).order.updateMany({
-          where: { id: order.id, rastreioAvisadoEm: null },
+        const venceuWhats = await (this.prisma as any).pickOrder.updateMany({
+          where: { id: pickOrderId, rastreioAvisadoEm: null },
           data: { rastreioAvisadoEm: new Date() },
         });
         if (venceuWhats.count !== 1) {
-          this.logger.log(`[rastreio-whats] pedido ${order.wcOrderNumber}: já avisado — 2º pacote não repete`);
+          this.logger.log(`[rastreio-whats] pedido ${order.wcOrderNumber}: esta caixa já avisou — não repete`);
           return;
         }
+        await (this.prisma as any).order
+          .updateMany({ where: { id: order.id, rastreioAvisadoEm: null }, data: { rastreioAvisadoEm: new Date() } })
+          .catch(() => {});
         let subId = await this.manychat.findWhatsAppSubscriber(phone);
         if (!subId) {
           const created = await this.manychat.createWhatsAppSubscriber(phone, order.customerName);
@@ -4395,10 +4450,17 @@ export class PickOrdersService {
         }
         if (!subId) return;
         const primeiroNome = String(order.customerName || '').trim().split(/\s+/)[0] || 'cliente';
+        // Fracionado: o nº do pedido carrega a caixa ("LIVE-123 · caixa 2 de 2")
+        // — o flow do ManyChat mostra a var como texto, então nada quebra.
+        const caixa = this.caixaDoAviso(order, po);
+        const pedidoVar =
+          caixa.total > 1
+            ? `${order.wcOrderNumber || ''} · caixa ${caixa.posicao} de ${caixa.total}`
+            : String(order.wcOrderNumber || '');
         await this.manychat.setCustomFieldByName(subId, 'rastreio_nome', primeiroNome);
         await this.manychat.setCustomFieldByName(subId, 'rastreio_codigo', String(input.trackingCode || ''));
-        await this.manychat.setCustomFieldByName(subId, 'rastreio_transportadora', String(input.carrier || 'Correios'));
-        await this.manychat.setCustomFieldByName(subId, 'rastreio_pedido', String(order.wcOrderNumber || ''));
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_transportadora', transportadoraParaCliente(input.carrier));
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_pedido', pedidoVar);
         const r = await this.manychat.sendFlow(subId, flowNs);
         this.logger.log(
           `[rastreio-whats] pedido ${order.wcOrderNumber}: ${r.ok ? 'enviado' : `falhou (${r.error})`}`,

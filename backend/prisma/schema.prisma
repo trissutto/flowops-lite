@@ -1032,6 +1032,11 @@ model PickOrder {
   issueNote            String?   @map("issue_note")
   issueReportedAt      DateTime? @map("issue_reported_at")
   issueReportedBy      String?   @map("issue_reported_by")
+  // ── Aviso de rastreio DESTA caixa (28/08) ──
+  // Pedido fracionado despacha uma caixa por loja e a cliente recebia SÓ o
+  // primeiro código (guard antigo era no Order). O carimbo desceu pro card:
+  // cada caixa avisa uma vez, com o próprio rastreio e as peças dela.
+  rastreioAvisadoEm    DateTime? @map("rastreio_avisado_em")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
