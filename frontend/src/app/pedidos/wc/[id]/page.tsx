@@ -2141,7 +2141,8 @@ export default function PedidoDetailPage() {
    *  - enviado SEM rastreio e sem custo (caixa de juntada por carro, rota) não
    *    trava a conta: nunca vai ter etiqueta.
    */
-  const cardsAtivosFrete = liveStatus.filter((p) => p.status !== 'cancelled');
+  // (card cancelado nem chega no payload do by-wc — não precisa filtrar)
+  const cardsAtivosFrete = liveStatus;
   const cardsComCusto = cardsAtivosFrete.filter((p) => p.freteCustoCentavos != null);
   const custoTotalEtiquetas = cardsComCusto.length
     ? cardsComCusto.reduce((s, p) => s + (p.freteCustoCentavos || 0), 0) / 100
