@@ -7,6 +7,17 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 
 /**
+ * A CAIXA do aviso de rastreio (28/08) — pedido fracionado despacha uma caixa
+ * por loja e cada aviso diz qual caixa é e quais peças viajam nela.
+ * Montada pelo afterShipped do pick-orders (`caixaDoAviso`).
+ */
+export interface CaixaAviso {
+  posicao: number;
+  total: number;
+  itens: Array<{ nome: string; qty: number }>;
+}
+
+/**
  * O E-MAIL QUE A CLIENTE ESPERA — e que não existia (achado de 12/08/2026).
  *
  * Medido na revisão de prontidão do site: o pedido do e-commerce **não
@@ -81,6 +92,7 @@ export class PedidoEmailService {
   private async avisarWhatsDireto(
     evento: 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
     order: any,
+    caixa?: CaixaAviso | null,
   ): Promise<boolean> {
     if (!this.whatsDiretoLigado) return false;
     const telefone = String(order?.customerPhone || '').replace(/\D/g, '');
@@ -105,8 +117,18 @@ export class PedidoEmailService {
       const codigo = String(order?.trackingCode || '').trim();
       const transportadora = this.transportadoraParaCliente(order?.carrier);
       const link = this.linkRastreio(codigo, String(order?.carrier || 'Correios'));
+      // FRACIONADO (28/08): cada caixa manda o próprio aviso, dizendo qual
+      // caixa é, o que vem nela e que as outras têm código próprio — antes só
+      // o primeiro código chegava e a cliente perguntava "cadê o resto?".
+      const fracionado = (caixa?.total ?? 1) > 1;
+      const intro = fracionado
+        ? `Parte do seu pedido${numero} saiu pra entrega com a ${transportadora}! ` +
+          `Suas peças vêm em ${caixa!.total} caixas — esta é a caixa ${caixa!.posicao} de ${caixa!.total}, ` +
+          `e cada caixa tem o próprio código de rastreio (te aviso de cada uma por aqui).`
+        : `Seu pedido${numero} saiu pra entrega com a ${transportadora}.`;
       texto =
-        `Oi, ${nome}! 💛\n\nSeu pedido${numero} saiu pra entrega com a ${transportadora}.` +
+        `Oi, ${nome}! 💛\n\n${intro}` +
+        this.linhaItensCaixa(caixa) +
         (codigo ? `\n\n📦 Código: *${codigo}*` : '') +
         (link ? `\n${link}` : '');
     } else {
@@ -171,6 +193,7 @@ export class PedidoEmailService {
   private async avisarN8n(
     evento: 'pedido_criado' | 'pagamento_confirmado' | 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
     order: any,
+    caixa?: CaixaAviso | null,
   ): Promise<boolean> {
     const url = this.webhookN8n;
     if (!url) {
@@ -253,6 +276,10 @@ export class PedidoEmailService {
                     codigo: order?.trackingCode ?? null,
                     transportadora: this.transportadoraParaCliente(order?.carrier),
                     link: this.linkRastreio(order?.trackingCode, order?.carrier),
+                    // FRACIONADO (28/08): qual caixa é esta e o que vem nela —
+                    // o fluxo do n8n monta a mensagem por caixa.
+                    caixa: caixa ? { posicao: caixa.posicao, total: caixa.total } : null,
+                    itens: (caixa?.itens ?? []).map((i) => ({ nome: i.nome, qtd: i.qty })),
                   },
                 }
               : {}),
@@ -283,6 +310,35 @@ export class PedidoEmailService {
   /** Nome amigável da transportadora — ver `common/transportadora-cliente`. */
   private transportadoraParaCliente(carrier?: string | null): string {
     return transportadoraParaCliente(carrier);
+  }
+
+  /** "O que vem nesta caixa" pro WhatsApp — até 6 peças, resto agregado. */
+  private linhaItensCaixa(caixa?: CaixaAviso | null): string {
+    const itens = caixa?.itens ?? [];
+    if (!itens.length) return '';
+    const titulo = (caixa?.total ?? 1) > 1 ? '\n\n👗 Nesta caixa:' : '\n\n👗 Suas peças:';
+    const mostra = itens
+      .slice(0, 6)
+      .map((i) => `\n• ${i.qty > 1 ? `${i.qty}x ` : ''}${i.nome}`)
+      .join('');
+    const resto = itens.length - 6;
+    return `${titulo}${mostra}${resto > 0 ? `\n• … e mais ${resto} peça(s)` : ''}`;
+  }
+
+  /** O mesmo bloco de peças, em HTML, pro e-mail. */
+  private blocoItensCaixaHtml(caixa?: CaixaAviso | null): string {
+    const itens = caixa?.itens ?? [];
+    if (!itens.length) return '';
+    const titulo = (caixa?.total ?? 1) > 1 ? 'Nesta caixa' : 'Suas peças';
+    const linhas = itens
+      .slice(0, 8)
+      .map((i) => `• ${i.qty > 1 ? `${i.qty}x ` : ''}${this.escapar(i.nome)}`)
+      .join('<br>');
+    const resto = itens.length - 8;
+    return (
+      `<br><br><strong>${titulo}:</strong><br>${linhas}` +
+      (resto > 0 ? `<br>• … e mais ${resto} peça(s)` : '')
+    );
   }
 
   /** Link de acompanhamento — Correios tem página pública; outras, só o código. */
@@ -483,9 +539,9 @@ export class PedidoEmailService {
    * (`rastreioAvisadoEm`) — pedido dividido despacha por loja e só o
    * PRIMEIRO pacote com rastreio gera o aviso.
    */
-  async aoEnviarPedido(order: any): Promise<void> {
-    void this.avisarN8n('pedido_enviado', order);
-    void this.avisarWhatsDireto('pedido_enviado', order);
+  async aoEnviarPedido(order: any, caixa?: CaixaAviso | null): Promise<void> {
+    void this.avisarN8n('pedido_enviado', order, caixa);
+    void this.avisarWhatsDireto('pedido_enviado', order, caixa);
     if (!this.emailProprioLigado) return;
 
     const para = this.destinatario(order);
@@ -495,15 +551,23 @@ export class PedidoEmailService {
     }
     const nome = this.primeiroNome(order?.customerName);
     const codigo = String(order?.trackingCode || '').trim();
-    const transportadora = String(order?.carrier || 'Correios');
-    const link = this.linkRastreio(codigo, transportadora);
-    const titulo = 'Seu pedido saiu pra entrega';
+    const transportadora = this.transportadoraParaCliente(order?.carrier);
+    const link = this.linkRastreio(codigo, String(order?.carrier || 'Correios'));
+    const fracionado = (caixa?.total ?? 1) > 1;
+    const titulo = fracionado
+      ? `Caixa ${caixa!.posicao} de ${caixa!.total} do seu pedido saiu pra entrega`
+      : 'Seu pedido saiu pra entrega';
     const chamada =
-      `${nome}, suas peças já estão com a ${this.escapar(transportadora)}.` +
+      (fracionado
+        ? `${nome}, suas peças vêm em ${caixa!.total} caixas — esta é a caixa ` +
+          `<strong>${caixa!.posicao} de ${caixa!.total}</strong>, já com a ${this.escapar(transportadora)}. ` +
+          `Cada caixa tem o próprio código de rastreio, e você recebe um aviso como este pra cada uma.`
+        : `${nome}, suas peças já estão com a ${this.escapar(transportadora)}.`) +
       (codigo
         ? ` Acompanhe a entrega com o código <strong style="font-family:monospace">${this.escapar(codigo)}</strong>` +
           (link ? ` — ou <a href="${link}" style="color:#b8912b">clique aqui pra rastrear</a>.` : '.')
-        : '');
+        : '') +
+      this.blocoItensCaixaHtml(caixa);
     const rodape =
       `Não serviu? Você tem ${PedidoEmailService.DIAS_TROCA} dias corridos a partir do recebimento pra trocar ` +
       `pelo portal de trocas ou em qualquer uma das nossas lojas.`;
