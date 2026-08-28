@@ -35,16 +35,48 @@ export interface EventQueueStore {
 interface ServerDestination {
   id: string;
   isEnabled(): boolean;
+  /**
+   * Filtro por destino. Omitido = o destino recebe o lote inteiro.
+   *
+   * Existe porque Meta e GA4 tratam evento repetido de formas OPOSTAS.
+   */
+  aceita?(event: TrackingEvent): boolean;
   send(events: TrackingEvent[], signals: MetaUserSignals): Promise<{ ok: boolean; error?: string }>;
 }
 
 const SERVER_DESTINATIONS: ServerDestination[] = [
+  // A Meta recebe TUDO de propósito: a CAPI é feita pra andar em paralelo com
+  // o Pixel e deduplica pelo `event_id`. Mandar dos dois lados é o que ela
+  // recomenda — aumenta o casamento sem contar duas vezes.
   { id: 'meta_capi', isEnabled: isMetaCapiEnabled, send: (events, signals) => sendToMetaCapi(events, signals) },
-  // O GA4 recebe os MESMOS sinais que a Meta (e-mail/telefone, hasheados lá
-  // dentro): é isso que alimenta o Enhanced Conversions do Google Ads. Antes
-  // os sinais chegavam aqui e eram descartados na porta do GA4 — a flag do
-  // recurso estava ligada no gtag sem nunca ter dado pra processar.
-  { id: 'ga4_mp', isEnabled: isGa4MpEnabled, send: (events, signals) => sendToGa4Mp(events, signals) },
+  /**
+   * 🚨 O GA4 SÓ RECEBE O QUE O NAVEGADOR NÃO PODE MANDAR.
+   *
+   * O Measurement Protocol **não deduplica nada** — não existe `event_id` do
+   * lado do GA4. Até 27/08/2026 este destino recebia o lote inteiro, incluindo
+   * os eventos que o gtag do navegador já tinha acabado de enviar (o destino
+   * `ga4` do cliente tem `accepts: () => true`). Cada `view_item`, `scroll` e
+   * `add_to_cart` de quem aceitou o banner chegava DUAS vezes.
+   *
+   * E chegava com identidade diferente: a cópia do servidor ia com o
+   * `anonymous_id`, então nascia numa sessão órfã. Medido no GA4 em 28 dias:
+   * **"Unassigned" com 7.032 sessões, 289 mil eventos (41 por sessão, contra
+   * 5-20 dos canais de gente), taxa de engajamento de 5,77% e R$ 45.156 —
+   * quase METADE da receita da propriedade** carimbada como origem
+   * desconhecida. O relatório de aquisição inteiro mentia por causa disto.
+   *
+   * `source === 'server'` deixa passar exatamente `purchase` e `refund`, que
+   * são `SERVER_ONLY_EVENTS` e nascem depois do pagamento, sem navegador
+   * aberto. É o único caso em que o servidor é a ÚNICA rota até o GA4 — e é
+   * também o que leva os sinais de Enhanced Conversions (e-mail/telefone
+   * hasheados em `ga4-mp.ts`), que o gtag nunca teve.
+   */
+  {
+    id: 'ga4_mp',
+    isEnabled: isGa4MpEnabled,
+    aceita: (event) => event.source === 'server',
+    send: (events, signals) => sendToGa4Mp(events, signals),
+  },
 ];
 
 /**
@@ -131,35 +163,41 @@ export async function dispatchBatch(
         return;
       }
 
+      // O filtro do destino (ver `aceita`). Lote vazio depois dele não vira
+      // requisição — e não vira log: evento que este destino nunca deveria
+      // receber não é "pulado", é fora de escopo.
+      const doDestino = dest.aceita ? novos.filter((ev) => dest.aceita!(ev)) : novos;
+      if (!doDestino.length) return;
+
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const t0 = Date.now();
         try {
-          const result = await dest.send(novos, signals);
+          const result = await dest.send(doDestino, signals);
           const duration = Date.now() - t0;
 
           if (result.ok) {
-            for (const ev of novos) {
+            for (const ev of doDestino) {
               await registrar({ event_id: ev.event_id, event: ev.event, destination: dest.id, status: 'success', duration_ms: duration, attempt });
             }
             return;
           }
           if (attempt === MAX_ATTEMPTS) {
-            for (const ev of novos) {
+            for (const ev of doDestino) {
               await registrar({ event_id: ev.event_id, event: ev.event, destination: dest.id, status: 'error', duration_ms: duration, attempt, error: result.error });
             }
             return;
           }
-          await registrar({ event_id: novos[0].event_id, event: novos[0].event, destination: dest.id, status: 'retrying', duration_ms: duration, attempt, error: result.error });
+          await registrar({ event_id: doDestino[0].event_id, event: doDestino[0].event, destination: dest.id, status: 'retrying', duration_ms: duration, attempt, error: result.error });
         } catch (err) {
           const duration = Date.now() - t0;
           const error = err instanceof Error ? err.message : String(err);
           if (attempt === MAX_ATTEMPTS) {
-            for (const ev of novos) {
+            for (const ev of doDestino) {
               await registrar({ event_id: ev.event_id, event: ev.event, destination: dest.id, status: 'error', duration_ms: duration, attempt, error });
             }
             return;
           }
-          await registrar({ event_id: novos[0].event_id, event: novos[0].event, destination: dest.id, status: 'retrying', duration_ms: duration, attempt, error });
+          await registrar({ event_id: doDestino[0].event_id, event: doDestino[0].event, destination: dest.id, status: 'retrying', duration_ms: duration, attempt, error });
         }
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
       }
