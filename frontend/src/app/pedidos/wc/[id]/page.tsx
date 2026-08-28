@@ -569,6 +569,45 @@ export default function PedidoDetailPage() {
     }
   };
 
+  /**
+   * CANCELAR a NF-e do envio (29/08 — caso CAJ224 do 960000214).
+   *
+   * A troca de peça trava quando o card já tem nota AUTORIZADA ("trocar agora
+   * deixaria a nota errada") — e o destravamento é exatamente este: cancelar a
+   * nota na SEFAZ (evento 110111, prazo 24h, mercadoria ainda não circulada),
+   * trocar a peça e emitir a nota de novo no despacho. O endpoint sempre
+   * existiu (`POST /nfe/:id/cancel`, só matriz); faltava o botão.
+   *
+   * Só aparece enquanto o card NÃO foi postado — depois da circulação,
+   * cancelar a nota seria errado fiscal, e a troca vira devolução.
+   */
+  const [notaCancelando, setNotaCancelando] = useState<string | null>(null);
+  const cancelarNota = async (nota: { id: string; numero: number }) => {
+    const just = window.prompt(
+      `Cancelar a NF-e ${nota.numero} na SEFAZ?\n\n` +
+        'Escreva a justificativa (entre 15 e 255 letras — ex.: "Troca de peça do pedido antes do envio, nota será reemitida"):',
+      'Troca de peça do pedido antes do envio; nota sera reemitida no despacho.',
+    );
+    if (just == null) return;
+    if (just.trim().length < 15 || just.trim().length > 255) {
+      alert('A justificativa precisa ter entre 15 e 255 caracteres.');
+      return;
+    }
+    setNotaCancelando(nota.id);
+    try {
+      await api(`/nfe/${nota.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ justificativa: just.trim() }),
+      });
+      alert(`NF-e ${nota.numero} cancelada na SEFAZ. Agora a troca de peça está liberada — a nota nova sai na hora do despacho.`);
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Não consegui cancelar a NF-e: ${e?.message || e}`);
+    } finally {
+      setNotaCancelando(null);
+    }
+  };
+
   const abrirCredito = (r: ReportLinha) => {
     setCreditoAlvo(r);
     setCreditoErro(null);
@@ -3516,6 +3555,19 @@ export default function PedidoDetailPage() {
                     >
                       {danfeBaixando === r.nota.id ? '…' : 'DANFE'}
                     </button>
+                    {/* Cancelar só ANTES da postagem: é o destravamento da troca
+                        de peça (a nota errada morre e a certa nasce no despacho). */}
+                    {r.status !== 'shipped' && (
+                      <button
+                        type="button"
+                        onClick={() => cancelarNota(r.nota!)}
+                        disabled={notaCancelando === r.nota.id}
+                        className="rounded-field border border-crit/40 bg-surface px-2 py-1 text-[11.5px] font-semibold text-crit hover:bg-crit-soft disabled:opacity-50"
+                        title="Cancela na SEFAZ (prazo 24h, antes da postagem). Libera a troca de peça — a nota nova sai no despacho."
+                      >
+                        {notaCancelando === r.nota.id ? '…' : 'Cancelar nota'}
+                      </button>
+                    )}
                   </div>
                 )}
                 {r.nota?.status === 'authorized' && r.nota.chave && (
