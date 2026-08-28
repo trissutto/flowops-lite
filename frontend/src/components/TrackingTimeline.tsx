@@ -119,6 +119,18 @@ interface Props {
   custoEtiquetaFonte?: string | null;
   /** Método pago ("PAC", "SEDEX (Correios)"…) — casa a cotação com o serviço certo. */
   metodoPago?: string | null;
+  /**
+   * FRETE MÚLTIPLO (29/08 — "o cálculo do frete não soma"). Pedido dividido
+   * paga uma etiqueta POR LOJA, mas a cliente paga UM frete só — comparar o
+   * frete dela com UMA etiqueta mentia a margem (960000110: cliente R$ 9,90,
+   * "pagamos R$ 11,94" quando a casa pagou N etiquetas). A soma de TODAS as
+   * etiquetas com custo gravado chega aqui, junto de quantas são e se alguma
+   * enviada ficou SEM custo (etiquetas de antes de 25/08) — soma incompleta
+   * não dá veredito de prejuízo.
+   */
+  custoTotalEtiquetas?: number | null;
+  qtdEtiquetas?: number | null;
+  custoIncompleto?: boolean;
 }
 
 const brl = (n: number | null | undefined) =>
@@ -203,6 +215,9 @@ export default function TrackingTimeline({
   custoEtiqueta,
   custoEtiquetaFonte,
   metodoPago,
+  custoTotalEtiquetas,
+  qtdEtiquetas,
+  custoIncompleto,
 }: Props) {
   const [data, setData] = useState<TrackingResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -310,12 +325,24 @@ export default function TrackingTimeline({
    * envio do Mais Envios cotado no balcão dos Correios, saindo de uma cidade
    * a 300 km de onde a caixa saiu.
    */
+  /**
+   * FRETE MÚLTIPLO (29/08): com mais de uma etiqueta, a conta é contra a
+   * SOMA — e só quando ela está completa. Soma incompleta (etiqueta enviada
+   * sem custo gravado) não dá veredito nenhum: acusar "sobra" comparando a
+   * cliente com METADE das etiquetas é o mesmo erro na outra direção. A
+   * cotação de hoje também não serve de fallback no dividido — ela cota UM
+   * trajeto, e o pedido pagou vários.
+   */
+  const multiEtiqueta = (qtdEtiquetas ?? 0) > 1 && custoTotalEtiquetas != null;
+  const custoDaConta = multiEtiqueta
+    ? (custoIncompleto ? null : custoTotalEtiquetas)
+    : custoEtiqueta;
   const margem =
     fretePago == null
       ? null
-      : custoEtiqueta != null
-        ? fretePago - custoEtiqueta
-        : frete?.comparavel && opcaoPaga?.precoReais != null
+      : custoDaConta != null
+        ? fretePago - custoDaConta
+        : !multiEtiqueta && frete?.comparavel && opcaoPaga?.precoReais != null
           ? fretePago - opcaoPaga.precoReais
           : null;
   const nomeProvedor = frete?.provedor === 'maisenvios' ? 'Mais Envios' : 'Correios';
@@ -451,15 +478,26 @@ export default function TrackingTimeline({
                 Frete pago pela cliente: <b className="text-sm text-slate-900">{brl(fretePago)}</b>
               </span>
             )}
-            {/* O QUE A CASA PAGOU — o número que a cotação nunca vai ser. */}
-            {custoEtiqueta != null && (
+            {/* O QUE A CASA PAGOU — o número que a cotação nunca vai ser.
+                Pedido dividido: a SOMA das etiquetas, com esta discriminada. */}
+            {multiEtiqueta ? (
+              <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-800">
+                Pagamos ({qtdEtiquetas} etiquetas): <b className="text-sm">{brl(custoTotalEtiquetas!)}</b>
+                {custoEtiqueta != null && (
+                  <span className="text-slate-500"> · esta etiqueta: {brl(custoEtiqueta)}</span>
+                )}
+                {custoIncompleto && (
+                  <span className="font-semibold text-amber-700"> · soma incompleta</span>
+                )}
+              </span>
+            ) : custoEtiqueta != null ? (
               <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-800">
                 Pagamos: <b className="text-sm">{brl(custoEtiqueta)}</b>
                 {custoEtiquetaFonte === 'cotacao' ? (
                   <span className="text-slate-500"> (cotado na emissão)</span>
                 ) : null}
               </span>
-            )}
+            ) : null}
             {freteLoading && <span className="text-slate-400">cotando o frete…</span>}
             {frete?.opcoes
               .filter((o) => o.precoReais != null)
@@ -483,6 +521,12 @@ export default function TrackingTimeline({
                 }`}
               >
                 {margem < 0 ? `frete no prejuízo: ${brl(-margem)}` : `sobra ${brl(margem)}`}
+                {multiEtiqueta ? ` (soma das ${qtdEtiquetas} etiquetas)` : ''}
+              </span>
+            )}
+            {multiEtiqueta && custoIncompleto && (
+              <span className="text-[11px] text-amber-700">
+                sem veredito — há etiqueta enviada sem custo gravado (anteriores a 25/08)
               </span>
             )}
           </div>

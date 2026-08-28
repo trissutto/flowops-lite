@@ -2124,6 +2124,20 @@ export default function PedidoDetailPage() {
   // O que a casa pagou nesta etiqueta — centavos no banco, reais na tela.
   const custoEtiqueta =
     cardQuePostou?.freteCustoCentavos != null ? cardQuePostou.freteCustoCentavos / 100 : null;
+  /**
+   * FRETE MÚLTIPLO (29/08 — "o cálculo do frete não soma"): pedido dividido
+   * paga uma etiqueta POR CARD (inclusive a caixa da juntada), e a cliente
+   * paga UM frete. A margem honesta compara com a SOMA de todas as etiquetas
+   * com custo gravado. `etiquetasSemCusto` = card já enviado sem o custo na
+   * emissão (etiquetas anteriores a 25/08): soma incompleta → sem veredito.
+   */
+  const cardsComCusto = liveStatus.filter((p) => p.freteCustoCentavos != null);
+  const custoTotalEtiquetas = cardsComCusto.length
+    ? cardsComCusto.reduce((s, p) => s + (p.freteCustoCentavos || 0), 0) / 100
+    : null;
+  const etiquetasSemCusto = liveStatus.filter(
+    (p) => p.status === 'shipped' && p.freteCustoCentavos == null,
+  ).length;
 
   return (
     <div className="max-w-5xl mx-auto p-6">
@@ -4555,6 +4569,9 @@ export default function PedidoDetailPage() {
                   custoEtiqueta={custoEtiqueta}
                   custoEtiquetaFonte={cardQuePostou?.freteCustoFonte ?? null}
                   metodoPago={freteDoPedido.metodo || null}
+                  custoTotalEtiquetas={custoTotalEtiquetas}
+                  qtdEtiquetas={cardsComCusto.length}
+                  custoIncompleto={etiquetasSemCusto > 0}
                 />
               </div>
             )}
