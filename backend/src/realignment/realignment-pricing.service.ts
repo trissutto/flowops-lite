@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { gigaDesligado } from '../common/replica-giga';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma/prisma.service';
 import * as mysql from 'mysql2/promise';
 
 /**
@@ -24,7 +25,15 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
   private readonly logger = new Logger(RealignmentPricingService.name);
   private pool: mysql.Pool | null = null;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    // ESPELHO (29/08): com o Giga desligado em definitivo o pool nunca nasce e
+    // os dois métodos saíam no `!this.pool` com Map VAZIO — toda peça do
+    // relatório de transferências ia pra tela como R$ 0,00 e o recálculo da
+    // obrigação rede×franquia marcava 100% `semPreco`. O preço vive no
+    // espelho (`wincred_produtos.vendaUn`, em REAIS) — é ele a fonte agora.
+    private readonly prisma: PrismaService,
+  ) {}
 
   async onModuleInit() {
     // Servidor do Giga desligado (27/08): pool nenhum. Ver common/replica-giga.ts.
@@ -117,7 +126,37 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
    */
   async getPricesByCodigos(codigos: string[]): Promise<Map<string, number>> {
     const result = new Map<string, number>();
-    if (!this.pool || codigos.length === 0) return result;
+    if (codigos.length === 0) return result;
+
+    // ESPELHO primeiro: `ltrim` dos dois lados substitui as variantes de
+    // padding (wincred_produtos.codigo é normalizado sem zeros à esquerda).
+    try {
+      const coreToOriginal = new Map<string, string>();
+      for (const original of codigos) {
+        const orig = String(original || '').trim();
+        if (!orig) continue;
+        const core = orig.replace(/^0+/, '') || orig;
+        if (!coreToOriginal.has(core)) coreToOriginal.set(core, orig);
+      }
+      if (coreToOriginal.size) {
+        const rows: any[] = await (this.prisma as any).$queryRawUnsafe(
+          `SELECT ltrim(codigo, '0') AS core, "vendaUn"::float AS preco
+             FROM wincred_produtos
+            WHERE ltrim(codigo, '0') = ANY($1::text[])`,
+          Array.from(coreToOriginal.keys()),
+        );
+        for (const r of rows) {
+          const original = coreToOriginal.get(String(r.core || '').trim());
+          const preco = Number(r.preco) || 0;
+          if (original && preco > 0 && !result.has(original)) result.set(original, preco);
+        }
+        this.logger.log(`getPricesByCodigos (espelho): pediu=${codigos.length}, encontrou=${result.size}`);
+        return result;
+      }
+    } catch (e: any) {
+      this.logger.warn(`getPricesByCodigos espelho falhou (${e?.message}) — tentando Giga`);
+    }
+    if (!this.pool) return result;
 
     // Gera todas as variantes pra UMA query massiva
     const variantToOriginal = new Map<string, string>();
@@ -168,7 +207,37 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
    */
   async getPricesByRefs(refs: string[]): Promise<Map<string, number>> {
     const result = new Map<string, number>();
-    if (!this.pool || refs.length === 0) return result;
+    if (refs.length === 0) return result;
+
+    // ESPELHO primeiro — média de `vendaUn` por REF, match por UPPER/TRIM.
+    try {
+      const upperToOriginal = new Map<string, string>();
+      for (const r of refs) {
+        const orig = String(r || '').trim();
+        if (!orig) continue;
+        const up = orig.toUpperCase();
+        if (!upperToOriginal.has(up)) upperToOriginal.set(up, orig);
+      }
+      if (upperToOriginal.size) {
+        const rows: any[] = await (this.prisma as any).$queryRawUnsafe(
+          `SELECT UPPER(TRIM(ref)) AS ref, AVG("vendaUn")::float AS preco
+             FROM wincred_produtos
+            WHERE UPPER(TRIM(COALESCE(ref, ''))) = ANY($1::text[])
+              AND "vendaUn" > 0
+            GROUP BY 1`,
+          Array.from(upperToOriginal.keys()),
+        );
+        for (const r of rows) {
+          const original = upperToOriginal.get(String(r.ref || '').trim());
+          const preco = Number(r.preco) || 0;
+          if (original && preco > 0) result.set(original, preco);
+        }
+        return result;
+      }
+    } catch (e: any) {
+      this.logger.warn(`getPricesByRefs espelho falhou (${e?.message}) — tentando Giga`);
+    }
+    if (!this.pool) return result;
 
     const uniqueRefs = Array.from(new Set(refs.map((r) => String(r).trim()).filter(Boolean)));
     if (uniqueRefs.length === 0) return result;

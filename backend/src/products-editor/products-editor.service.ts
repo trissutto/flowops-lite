@@ -338,21 +338,30 @@ export class ProductsEditorService {
     const codNum = Number(codigo);
     const skuNorm = codigo.replace(/^0+/, '') || codigo;
 
-    // 1) Vendas/marcados no Giga (caixa) — read-only, todas as lojas.
+    // 1) Vendas/marcados — ESPELHO `giga_caixa_mov` (29/08). Era `runReadOnly`
+    // na `caixa` do Giga vivo: com o pool trancado (atestado 28/08) o erro era
+    // engolido e o histórico saía SEMPRE vazio. O espelho tem o histórico
+    // sincronizado do Giga até 24/08 e, dali em diante, nasce do `pdv_sales`
+    // (espelharCaixaMovDoFlow) — pro histórico mais fundo que o espelho,
+    // existe o dump completo do Giga guardado offline.
     let caixaRows: any[] = [];
+    void codNum; // era o parâmetro do CAST no MySQL; o match agora é por ltrim
     try {
-      const res = await this.erp.runReadOnly(
-        `SELECT REGISTRO, DATA, HORA, LOJA, NOMECLIENTE, VENDEDOR,
-                QUANTIDADE, VALORTOTAL, MARCADO
-           FROM caixa
-          WHERE CAST(CODIGO AS UNSIGNED) = ?
-          ORDER BY DATA DESC, HORA DESC`,
-        { maxRows: 500, timeoutMs: 20000 },
-        [codNum],
+      caixaRows = await (this.prisma as any).$queryRawUnsafe(
+        `SELECT registro AS "REGISTRO", data AS "DATA", hora AS "HORA", loja AS "LOJA",
+                COALESCE(nome_cliente, cliente) AS "NOMECLIENTE",
+                COALESCE(vendedora_code, vendedor) AS "VENDEDOR",
+                quantidade::float AS "QUANTIDADE",
+                valor_total::float AS "VALORTOTAL",
+                marcado AS "MARCADO"
+           FROM giga_caixa_mov
+          WHERE ltrim(COALESCE(codigo, ''), '0') = $1
+          ORDER BY data DESC, hora DESC
+          LIMIT 500`,
+        skuNorm,
       );
-      caixaRows = res.rows || [];
     } catch (e: any) {
-      this.logger.warn(`[historico] caixa falhou p/ ${codigo}: ${e?.message || e}`);
+      this.logger.warn(`[historico] caixa (espelho) falhou p/ ${codigo}: ${e?.message || e}`);
     }
 
     // 2) Nome da vendedora (espelho) + nome da loja.

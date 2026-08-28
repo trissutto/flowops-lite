@@ -1638,6 +1638,76 @@ export class CrediarioBaixaService {
       throw new BadRequestException('Informe pelo menos 2 caracteres pra buscar');
     }
 
+    // ── ESPELHO PRIMEIRO (29/08) ────────────────────────────────────────────
+    // Este método era 100% Giga vivo (detectColumns + SELECTs na movimento) e,
+    // com o pool trancado (atestado 28/08), morria em "Pool ERP não
+    // inicializado" — o `catch` do customer-info engolia e a aba crediário do
+    // PDV mostrava o cliente SEM as pendências: parecia sem dívida quem devia.
+    //
+    // Agora: resolve o cliente no espelho de fichas (`giga_clientes`) e filtra
+    // a MESMA lista de abertas do espelho que a tela Recebimentos usa
+    // (`listAbertasDoEspelho` = wincred_movimento_aberto + parcelas nativas do
+    // Flow, com todas as réguas de pseudo-cliente/cartão). Espelho vazio ou
+    // erro → cai pro caminho Giga antigo (que hoje devolve o erro honesto).
+    if (String(process.env.PDV_MIRROR_READS ?? '').trim() !== '0') {
+      try {
+        const onlyDigitsM = /^\d+$/.test(busca);
+        const safeBuscaM = busca.replace(/['"\\]/g, '').slice(0, 100);
+        const safeStoreM = input.storeCode
+          ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+          : null;
+        const strip = (s: any) => String(s ?? '').trim().replace(/^0+/, '') || String(s ?? '').trim();
+
+        const cods = new Set<string>();
+        if (onlyDigitsM) {
+          cods.add(strip(safeBuscaM));
+          const cpfDigits = safeBuscaM.replace(/\D/g, '');
+          const cpfFmt = cpfDigits.length === 11
+            ? `${cpfDigits.slice(0, 3)}.${cpfDigits.slice(3, 6)}.${cpfDigits.slice(6, 9)}-${cpfDigits.slice(9)}`
+            : null;
+          const fichas: any[] = await (this.prisma as any).gigaCliente
+            .findMany({
+              where: {
+                ...(safeStoreM ? { loja: safeStoreM } : {}),
+                OR: [
+                  { codigo: safeBuscaM },
+                  { codigo: strip(safeBuscaM) },
+                  ...(cpfFmt ? [{ cpf: { in: [cpfDigits, cpfFmt] } }] : []),
+                ],
+              },
+              select: { codigo: true },
+              take: 50,
+            })
+            .catch(() => []);
+          for (const f of fichas) cods.add(strip(f.codigo));
+        } else {
+          const fichas: any[] = await (this.prisma as any).gigaCliente
+            .findMany({
+              where: {
+                ...(safeStoreM ? { loja: safeStoreM } : {}),
+                nome: { contains: safeBuscaM, mode: 'insensitive' },
+              },
+              select: { codigo: true },
+              take: 50,
+            })
+            .catch(() => []);
+          for (const f of fichas) cods.add(strip(f.codigo));
+        }
+
+        if (cods.size) {
+          const lista = await this.listAbertasDoEspelho(input.storeCode);
+          if (lista) {
+            return lista.parcelas.filter((p: any) => cods.has(strip(p.codCliente)));
+          }
+        }
+        // sem código resolvido ou espelho vazio → caminho Giga antigo abaixo
+      } catch (e: any) {
+        this.logger.warn(
+          `[crediario-baixa] pendências via espelho falharam (${e?.message || e}) → Giga ao vivo`,
+        );
+      }
+    }
+
     // Força refresh do cache pra garantir detecção atualizada
     let map = await this.crediarios.detectColumns();
     if (!map.codCliente || !map.vencimento || !map.valorParcela) {
