@@ -1,5 +1,5 @@
 import { HomeBenefitsAndStores, HomeCategoryNav, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
-import { HomeVlm222Hero } from '@/components/sections/HomeVlm222Hero';
+import { Hero } from '@/components/sections/Hero';
 import { VitrineGrid } from '@/components/sections/VitrineGrid';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -8,6 +8,7 @@ import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { PERFIL_INSTAGRAM } from '@/data/content';
 import { stores } from '@/data/stores';
 import { getInstagram } from '@/services/instagram';
+import { getHeroDaHome } from '@/services/banners';
 import { getBlocosDaHome } from '@/services/vitrines-home';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
 // HOME_CATEGORY_BASE saiu daqui: os atalhos agora vêm da retaguarda. A
@@ -40,7 +41,8 @@ export default async function HomePage() {
    * Continua tudo JUNTO com o hero: a cascata "hero → vitrine" atrasava o
    * HTML que revela a imagem LCP.
    */
-  const [blocos, posts] = await Promise.all([
+  const [hero, blocos, posts] = await Promise.all([
+    getHeroDaHome(),
     getBlocosDaHome(),
     getInstagram(6),
   ]);
@@ -65,7 +67,25 @@ export default async function HomePage() {
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
-      <HomeVlm222Hero href="/produto/ref-vlm-222" />
+      <Hero
+        image={hero.image}
+        imageMobile={hero.imageMobile}
+        eyebrow={hero.eyebrow}
+        title={
+          <>
+            {hero.lead}{' '}
+            <span className="text-primary-strong">{hero.emphasis}</span>
+          </>
+        }
+        subtitle={hero.subtitle}
+        primaryAction={hero.primaria}
+        secondaryAction={hero.secundaria}
+        height={hero.daRetaguarda ? 'arte' : 'home'}
+        align="left"
+        overlay="none"
+        contentTone="ink"
+        priority
+      />
 
       <HomeCategoryNav categories={categories} />
 
