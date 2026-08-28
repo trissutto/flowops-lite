@@ -3701,6 +3701,60 @@ export default function PedidoDetailPage() {
                 )}
               </div>
 
+              {/* ── BARRA DE OPERAÇÕES (29/08 — ordem do dono: "botões mais
+                  expostos, o JUNTAR virou uma frase escondida"). As duas
+                  operações do dia a dia moram AQUI, no topo do trilho, como
+                  botão de verdade — não mais numa fileira text-[12px] cinza
+                  depois da linha do tempo. A regra do quadro único vale:
+                  a fileira de baixo morreu junto. */}
+              {(() => {
+                const cardsAtivos = liveStatus.filter((p) =>
+                  ['new', 'separating', 'separated', 'ready'].includes(p.status),
+                );
+                const cardsComPecas = cardsAtivos.filter((p) => quantidadeDoCard(p) > 0);
+                const jaTemFeeder = cardsComPecas.some((p) => p.isTransfer && !destinoObrigatorio);
+                const podeJuntar = !destinoObrigatorio && cardsComPecas.length >= 2;
+                const podeEscolherLoja = liveStatus.some((p) => ['new', 'separating'].includes(p.status));
+                if (!podeJuntar && !podeEscolherLoja) return null;
+                const juntando = juntada?.juntando === true || jaTemFeeder;
+                const ancoraNome =
+                  juntada?.ancoraStoreName ||
+                  juntada?.ancoraStoreCode ||
+                  cardsAtivos.find((p) => p.isTransfer && p.transferToStoreCode)?.transferToStoreCode ||
+                  null;
+                return (
+                  <div className="mb-4 flex flex-wrap items-center gap-2.5 rounded-card border border-line bg-surface-2 px-3 py-2.5">
+                    {podeJuntar && (
+                      <>
+                        <button
+                          onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
+                          disabled={sepLoading}
+                          className="rounded-field border-2 border-violet-300 bg-violet-50 px-4 py-2 text-[13px] font-bold text-violet-900 hover:bg-violet-100 disabled:opacity-60"
+                        >
+                          🧲 {juntando ? 'Trocar a loja que junta' : 'Juntar peças numa loja só'}
+                        </button>
+                        <span className="text-[12px] text-ink-soft">
+                          {juntando ? (
+                            <>Encontro em <b className="text-ink">{ancoraNome}</b> — 1 pacote só.</>
+                          ) : (
+                            <>Dividido em {cardsComPecas.length} lojas = {cardsComPecas.length} fretes.</>
+                          )}
+                        </span>
+                      </>
+                    )}
+                    {podeEscolherLoja && (
+                      <button
+                        onClick={() => openPickStoreModal()}
+                        disabled={sepLoading}
+                        className={`rounded-field border-2 border-line bg-surface px-4 py-2 text-[13px] font-bold text-ink hover:bg-surface-2 disabled:opacity-60 ${podeJuntar ? 'ml-auto' : ''}`}
+                      >
+                        🏬 Escolher loja manualmente
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* As colunas do trilho. A seta só existe onde há fluxo de
                   verdade: loja → loja → cliente. Lojas que postam sozinhas
                   ficam EMPILHADAS na mesma coluna, sem seta entre elas. */}
@@ -3806,70 +3860,11 @@ export default function PedidoDetailPage() {
                 </div>
               )}
 
-              {/* Trocar a loja escolhendo da lista, e juntar/desfazer juntada —
-                  as portas que viviam em caixas amarelas soltas acima dos cards. */}
+              {/* A fileira de "Escolher loja" + "Juntar" que vivia AQUI subiu
+                  pra BARRA DE OPERAÇÕES no topo do trilho (29/08, ordem do
+                  dono: operação de uso diário é botão exposto, não frase
+                  text-[12px] depois da linha do tempo). Ficou só o alerta. */}
               <div className="mt-3 flex flex-wrap items-center gap-3 text-[12px]">
-                {liveStatus.some((p) => ['new', 'separating'].includes(p.status)) && (
-                  <button
-                    onClick={() => openPickStoreModal()}
-                    disabled={sepLoading}
-                    className="rounded-field border border-line bg-surface px-3 py-1.5 font-semibold text-ink hover:bg-surface-2 disabled:opacity-60"
-                  >
-                    Escolher loja manualmente
-                  </button>
-                )}
-                {(() => {
-                  /**
-                   * JUNTAR NUMA LOJA — e TROCAR a loja depois de junto.
-                   *
-                   * Até 28/08 este bloco sumia quando a juntada já existia
-                   * (`juntada?.juntando === true` devolvia null). Consequência:
-                   * pedido que o sistema juntou SOZINHO — o trio do litoral,
-                   * que escolhe a âncora pela contagem de peças — ficava sem
-                   * porta nenhuma pra mudar de ideia. A retaguarda via
-                   * "JUNTANDO na LOJA X" e só tinha "Desfazer".
-                   *
-                   * O backend sempre aceitou re-ancorar (o `juntarPedido`
-                   * inclusive avisa qual caixa já saiu pro endereço antigo,
-                   * lição do LP-000244). Faltava só o botão.
-                   */
-                  const cardsAtivos = liveStatus.filter((p) =>
-                    ['new', 'separating', 'separated', 'ready'].includes(p.status),
-                  );
-                  const cardsComPecas = cardsAtivos.filter((p) => quantidadeDoCard(p) > 0);
-                  const jaTemFeeder = cardsComPecas.some((p) => p.isTransfer && !destinoObrigatorio);
-                  if (destinoObrigatorio) return null;
-                  if (cardsComPecas.length < 2) return null;
-
-                  const juntando = juntada?.juntando === true || jaTemFeeder;
-                  const ancoraNome =
-                    juntada?.ancoraStoreName ||
-                    juntada?.ancoraStoreCode ||
-                    cardsAtivos.find((p) => p.isTransfer && p.transferToStoreCode)?.transferToStoreCode ||
-                    null;
-
-                  return (
-                    <>
-                      <button
-                        onClick={() => { setJuntarErro(null); setJuntarOpen(true); }}
-                        disabled={sepLoading}
-                        className="rounded-field border border-line bg-surface px-3 py-1.5 font-semibold text-ink hover:bg-surface-2 disabled:opacity-60"
-                      >
-                        {juntando ? 'Trocar a loja que junta' : 'Juntar numa loja só'}
-                      </button>
-                      <span className="text-ink-soft">
-                        {juntando ? (
-                          <>
-                            As peças se encontram em <b className="text-ink">{ancoraNome}</b>
-                            {' '}— dá pra escolher outra.
-                          </>
-                        ) : (
-                          <>Pedido dividido em {cardsComPecas.length} lojas = {cardsComPecas.length} fretes.</>
-                        )}
-                      </span>
-                    </>
-                  );
-                })()}
                 {/* ÂNCORA ÓRFÃ — a juntada aponta pra loja que saiu do pedido e
                     a caixa está viajando pra quem não separa nada (LP-000244).
                     Antes a tela ficava MUDA: dava pra ver e não dava pra
