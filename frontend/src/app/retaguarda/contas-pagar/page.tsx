@@ -15,7 +15,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Plus, Search, Loader2, Check, X, Wallet, AlertTriangle,
   CalendarDays, Users, Scale, RefreshCw, Trash2, Pencil, History,
-  ListChecks, Printer,
+  ListChecks, Printer, Paperclip,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -180,6 +180,24 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const acao = async (fn: () => Promise<any>, ok: string) => {
     try { await fn(); avisar('ok', ok); carregar(); carregarBase(); }
     catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+
+  // ── Comprovante de pagamento (28/08): 1 input escondido serve a tabela toda.
+  // Clique no 📎 da linha → guarda o id, abre o seletor; escolher o arquivo já
+  // sobe (FormData — o api() cuida do Content-Type). Re-upload substitui.
+  const comprovanteRef = useRef<HTMLInputElement>(null);
+  const anexandoId = useRef<string | null>(null);
+  const pedirComprovante = (id: string) => { anexandoId.current = id; comprovanteRef.current?.click(); };
+  const enviarComprovante = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = ''; // deixa escolher o mesmo arquivo de novo
+    const id = anexandoId.current;
+    anexandoId.current = null;
+    if (!f || !id) return;
+    if (f.size > 10 * 1024 * 1024) { avisar('erro', 'Arquivo grande demais — máx 10MB'); return; }
+    const fd = new FormData();
+    fd.append('file', f);
+    await acao(() => api(`/admin/contas-pagar/${id}/comprovante`, { method: 'POST', body: fd }), 'Comprovante anexado');
   };
 
   // ── Melhorias 17/07 (aprovadas 1,2,3,5,7,8,9) ──
@@ -439,6 +457,27 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     ) : (
                       <button onClick={() => acao(() => api(`/admin/contas-pagar/${r.id}/reabrir`, { method: 'PATCH' }), 'Conta reaberta')} className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6] mr-1">Reabrir</button>
                     )}
+                    {/* Comprovante: verde = tem (abre; × no hover remove) · cinza = paga sem anexo (clique anexa) */}
+                    {r.comprovanteUrl ? (
+                      <span className="relative inline-block mr-1 align-middle group">
+                        <a
+                          href={r.comprovanteUrl} target="_blank" rel="noreferrer"
+                          title={`Ver comprovante — ${r.comprovanteNome || 'anexo'}`}
+                          className="p-1.5 rounded-lg border border-[#2E7D46] text-[#2E7D46] hover:bg-emerald-50 inline-flex"
+                        ><Paperclip className="w-3.5 h-3.5" /></a>
+                        <button
+                          onClick={() => { if (confirm(`Remover o comprovante "${r.comprovanteNome || 'anexo'}" desta conta?`)) acao(() => api(`/admin/contas-pagar/${r.id}/comprovante`, { method: 'DELETE' }), 'Comprovante removido'); }}
+                          title="Remover comprovante"
+                          className="absolute -top-1.5 -right-1.5 hidden group-hover:flex w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] font-bold items-center justify-center leading-none"
+                        >×</button>
+                      </span>
+                    ) : r.status === 'paga' ? (
+                      <button
+                        onClick={() => pedirComprovante(r.id)}
+                        title="Anexar comprovante de pagamento (PDF ou foto)"
+                        className="p-1.5 rounded-lg border border-dashed border-[#E7E2D8] text-slate-400 hover:bg-[#FBF6E6] hover:text-[#8C7325] mr-1"
+                      ><Paperclip className="w-3.5 h-3.5" /></button>
+                    ) : null}
                     <button onClick={() => setEditando(r)} title="Editar lançamento" className="p-1.5 rounded-lg border border-[#E7E2D8] text-slate-400 hover:bg-[#FBF6E6] mr-1"><Pencil className="w-3.5 h-3.5" /></button>
                     <button onClick={() => setLogsDe(r)} title="Histórico/auditoria" className="p-1.5 rounded-lg border border-[#E7E2D8] text-slate-400 hover:bg-[#FBF6E6] mr-1"><History className="w-3.5 h-3.5" /></button>
                     <button
@@ -506,6 +545,9 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           </div>
         </div>
       )}
+
+      {/* input único do comprovante (📎 das linhas pagas) */}
+      <input ref={comprovanteRef} type="file" accept="application/pdf,image/*" className="hidden" onChange={enviarComprovante} />
 
       {pagando && (
         <PagarModal
@@ -685,8 +727,15 @@ function PagarModal({ conta, onClose, onOk, avisar }: any) {
   const [pagamento, setPagamento] = useState(hojeStr());
   const [juros, setJuros] = useState('');
   const [desconto, setDesconto] = useState('');
+  const [arquivo, setArquivo] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const toCents = (s: string) => Math.round((parseFloat(String(s).replace(/\./g, '').replace(',', '.')) || 0) * 100);
+  const escolher = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] || null;
+    e.target.value = '';
+    if (f && f.size > 10 * 1024 * 1024) { avisar('erro', 'Arquivo grande demais — máx 10MB'); return; }
+    setArquivo(f);
+  };
   const confirmar = async () => {
     setSaving(true);
     try {
@@ -694,7 +743,20 @@ function PagarModal({ conta, onClose, onOk, avisar }: any) {
         method: 'PATCH',
         body: JSON.stringify({ pagamento, jurosCents: toCents(juros), descontoCents: toCents(desconto) }),
       });
-      avisar('ok', 'Pagamento registrado');
+      // Comprovante vai NUM SEGUNDO request (multipart) — se falhar, a conta já
+      // está paga: avisa e deixa anexar pelo 📎 da linha, sem desfazer nada.
+      if (arquivo) {
+        try {
+          const fd = new FormData();
+          fd.append('file', arquivo);
+          await api(`/admin/contas-pagar/${conta.id}/comprovante`, { method: 'POST', body: fd });
+          avisar('ok', 'Pagamento registrado + comprovante anexado');
+        } catch (e: any) {
+          avisar('erro', `Conta PAGA, mas o comprovante falhou (${e?.message || 'erro'}) — anexe pelo 📎 da linha`);
+        }
+      } else {
+        avisar('ok', 'Pagamento registrado');
+      }
       onOk();
     } catch (e: any) {
       avisar('erro', e?.message || 'Falhou');
@@ -707,6 +769,23 @@ function PagarModal({ conta, onClose, onOk, avisar }: any) {
         <Campo label="Juros (R$)"><input value={juros} onChange={(e) => setJuros(e.target.value)} placeholder="0,00" className="inp" /></Campo>
         <Campo label="Desconto (R$)"><input value={desconto} onChange={(e) => setDesconto(e.target.value)} placeholder="0,00" className="inp" /></Campo>
       </div>
+      <label className={`mt-3 flex items-center gap-2 rounded-xl border-2 border-dashed px-3 py-2.5 cursor-pointer text-sm ${arquivo ? 'border-[#2E7D46] bg-emerald-50' : 'border-[#E7E2D8] hover:bg-[#FBF6E6]'}`}>
+        <Paperclip className={`w-4 h-4 shrink-0 ${arquivo ? 'text-[#2E7D46]' : 'text-[#B8912B]'}`} />
+        {arquivo ? (
+          <>
+            <span className="font-bold text-slate-700 truncate flex-1">{arquivo.name}</span>
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); setArquivo(null); }}
+              className="p-1 rounded-lg hover:bg-white text-slate-400"
+              title="Tirar o arquivo"
+            ><X className="w-4 h-4" /></button>
+          </>
+        ) : (
+          <span className="text-slate-400">Anexar comprovante (PDF ou foto) — opcional</span>
+        )}
+        <input type="file" accept="application/pdf,image/*" className="hidden" onChange={escolher} />
+      </label>
       <div className="flex justify-end gap-2 mt-4">
         <button onClick={onClose} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Cancelar</button>
         <button onClick={confirmar} disabled={saving} className="px-4 py-2 rounded-lg bg-[#2E7D46] text-white font-bold text-sm flex items-center gap-2">
@@ -1079,6 +1158,35 @@ function AFazerHoje({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
     } finally { setMarcando(null); }
   };
 
+  // 📎 Feito (28/08): escolhe o comprovante PRIMEIRO e aí paga + anexa numa
+  // tacada — a linha some da lista, então não dá pra anexar depois por aqui.
+  const comprovanteRef = useRef<HTMLInputElement>(null);
+  const anexandoRow = useRef<any | null>(null);
+  const feitoComComprovante = (r: any) => { anexandoRow.current = r; comprovanteRef.current?.click(); };
+  const pagarAnexando = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    const r = anexandoRow.current;
+    anexandoRow.current = null;
+    if (!f || !r) return;
+    if (f.size > 10 * 1024 * 1024) { avisar('erro', 'Arquivo grande demais — máx 10MB'); return; }
+    setMarcando(r.id);
+    try {
+      await api(`/admin/contas-pagar/${r.id}/pagar`, { method: 'PATCH', body: JSON.stringify({ pagamento: hojeStr() }) });
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        await api(`/admin/contas-pagar/${r.id}/comprovante`, { method: 'POST', body: fd });
+        avisar('ok', `Feito + comprovante: ${r.beneficiario || ''} ${brl(r.valorCents)}`);
+      } catch (e2: any) {
+        avisar('erro', `Conta PAGA, mas o comprovante falhou (${e2?.message || 'erro'}) — anexe pelo 📎 no Painel`);
+      }
+      carregar();
+    } catch (e3: any) {
+      avisar('erro', e3?.message || 'Falhou');
+    } finally { setMarcando(null); }
+  };
+
   const imprimir = () => {
     const linha = (r: any) =>
       `<tr><td class="cb">☐</td><td>${fmtData(r.vencimento)}</td><td><b>${r.beneficiario || '—'}</b>${r.observacao ? `<br><small>${r.observacao}</small>` : ''}</td><td>${r.especie}</td><td>${r.banco || '—'}</td><td>${r.lojaCode}</td><td class="v">${brl(r.valorCents)}</td></tr>`;
@@ -1130,10 +1238,17 @@ function AFazerHoje({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
               <td className="px-3 py-2 text-slate-500 w-16">{r.parcela || ''}</td>
               <td className="px-3 py-2 text-center w-20">{r.emMaos && <span className="text-[11px] font-extrabold px-2 py-0.5 rounded-full border bg-emerald-50 border-[#2E7D46] text-[#2E7D46]">✋ em mãos</span>}</td>
               <td className="px-3 py-2 text-right font-extrabold text-[#2E7D46] whitespace-nowrap">{brl(r.valorCents)}</td>
-              <td className="px-3 py-2 text-right w-28">
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                <button
+                  onClick={() => feitoComComprovante(r)}
+                  disabled={marcando === r.id}
+                  title="Escolher o comprovante (PDF ou foto) e marcar como paga"
+                  className="text-[12px] font-bold px-2.5 py-1.5 rounded-lg border border-[#2E7D46] text-[#2E7D46] hover:bg-emerald-50 disabled:opacity-50 mr-1"
+                ><Paperclip className="w-3.5 h-3.5 inline" /> Feito</button>
                 <button
                   onClick={() => feito(r)}
                   disabled={marcando === r.id}
+                  title="Marcar como paga sem comprovante"
                   className="text-[12px] font-bold px-3 py-1.5 rounded-lg border border-[#2E7D46] text-[#2E7D46] hover:bg-emerald-50 disabled:opacity-50"
                 >{marcando === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin inline" /> : '✓ Feito'}</button>
               </td>
@@ -1146,6 +1261,8 @@ function AFazerHoje({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
 
   return (
     <div className="space-y-4">
+      {/* input único do "📎 Feito" (pagar anexando o comprovante) */}
+      <input ref={comprovanteRef} type="file" accept="application/pdf,image/*" className="hidden" onChange={pagarAnexando} />
       <div className="bg-white border border-[#E7E2D8] rounded-xl p-4 flex flex-wrap items-center gap-2 text-sm">
         {([['tudo', '📋 Tudo'], ['depositos', '🏦 Só depósitos'], ['emMaos', '✋ Só em mãos']] as const).map(([k, label]) => (
           <button

@@ -6545,6 +6545,12 @@ model ContaPagar {
   descontoCents  Int       @default(0) @map("desconto_cents")
   pagoPor        String?   @map("pago_por") @db.VarChar(80)
 
+  // Comprovante de pagamento (28/08): arquivo no R2, 1 por conta — re-upload substitui
+  comprovanteUrl  String?   @map("comprovante_url") @db.VarChar(500)
+  comprovanteNome String?   @map("comprovante_nome") @db.VarChar(200)
+  comprovanteEm   DateTime? @map("comprovante_em")
+  comprovantePor  String?   @map("comprovante_por") @db.VarChar(80)
+
   emMaos         Boolean @default(false) @map("em_maos")
   emMaosOriginal String? @map("em_maos_original") @db.VarChar(3) // PEND cru do GIGA
   observacao     String? @db.VarChar(200)

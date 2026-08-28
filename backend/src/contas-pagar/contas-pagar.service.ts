@@ -315,6 +315,8 @@ export class ContasPagarService {
         descontoCents: r.descontoCents,
         emMaos: r.emMaos,
         observacao: r.observacao,
+        comprovanteUrl: r.comprovanteUrl,
+        comprovanteNome: r.comprovanteNome,
         parcela: r.parcelaNum && r.parcelaTotal ? `${r.parcelaNum}/${r.parcelaTotal}` : null,
         status: r.status,
         vencida: r.status === 'aberta' && r.vencimento && new Date(r.vencimento).getTime() < hoje,
