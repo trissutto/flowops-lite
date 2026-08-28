@@ -239,13 +239,12 @@ export class IntelligenceController {
       minTotal: minTotal ? Number(minTotal) : 2,
       limit: limit ? Number(limit) : 1500,
     };
-    // BRANCH:
-    //  - ?source=mirror => forca Postgres
-    //  - ?source=giga   => forca MySQL Wincred
-    //  - sem param      => respeita flag USE_LOCAL_CATALOG (default Giga)
-    const useLocalDefault = String(process.env.USE_LOCAL_CATALOG || '').trim() === '1';
-    const wantsMirror = source === 'mirror' || (!source && useLocalDefault);
-    if (wantsMirror && source !== 'giga') {
+    // BRANCH (29/08 — Giga MORTO): o padrão virou o ESPELHO. O default antigo
+    // ("sem param = Giga, a menos de USE_LOCAL_CATALOG=1") deixou a tela vazia
+    // na noite de 28/08: o front nunca manda ?source, a env nunca foi setada, e
+    // o ramo Giga devolve vazio SEM erro com o pool trancado na nascente.
+    // ?source=giga continua existindo só como museu/diagnóstico.
+    if (source !== 'giga') {
       return this.mirror.getStockDistribution(filters);
     }
     return this.erp.getStockDistribution(filters);
@@ -275,7 +274,8 @@ export class IntelligenceController {
     @Query('diasMin') diasMin?: string,
   ) {
     this.requireAdmin(req);
-    return this.erp.getStockDistributionByRef({
+    // ESPELHO (29/08): a versão Giga devolvia vazio sem erro com o pool morto.
+    return this.mirror.getStockDistributionByRef({
       grupoCodigo: grupo ? Number(grupo) : null,
       subgrupoCodigo: subgrupo ? Number(subgrupo) : null,
       search: search || null,

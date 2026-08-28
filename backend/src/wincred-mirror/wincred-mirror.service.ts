@@ -1209,6 +1209,234 @@ export class WincredMirrorService {
     };
   }
 
+  /**
+   * Visão RAIZ (REF+COR) da distribuição de estoque — porta 1:1 do
+   * `ErpService.getStockDistributionByRef` pro ESPELHO (29/08).
+   *
+   * O original rodava no MySQL do Giga vivo; com o pool trancado (atestado
+   * 28/08) a tela /retaguarda/distribuicao-estoque no modo raiz voltava vazia
+   * SEM erro. Mesmo contrato de saída (a tela não sabe a diferença), mesma
+   * mecânica: 1 query de produtos agrupada por REF+COR + 1 de estoque por
+   * código + nomes de grupo/subgrupo em batch. Fonte de estoque:
+   * `wincred_estoque` (igual ao `getStockDistribution` clássico acima).
+   */
+  async getStockDistributionByRef(filters: {
+    grupoCodigo?: number | null;
+    subgrupoCodigo?: number | null;
+    search?: string | null;
+    tamanhos?: string[] | null;
+    diasMaximos?: number | null;
+    diasMinimos?: number | null;
+    mode?: 'imbalanced' | 'all';
+    minTotal?: number;
+    limit?: number;
+  } = {}): Promise<{
+    refs: Array<{
+      ref: string;
+      cor: string | null;
+      descricao: string;
+      preco: number;
+      dataAlt: string | null;
+      grupoCodigo: number | null;
+      subgrupoCodigo: number | null;
+      grupoNome: string | null;
+      subgrupoNome: string | null;
+      tamanhos: string[];
+      variacoes: number;
+      lojasComEstoque: number;
+      estoquePorLoja: Record<string, number>;
+      total: number;
+    }>;
+    lojas: string[];
+    totalRows: number;
+    truncated: boolean;
+  }> {
+    const t0 = Date.now();
+    const limit = Math.max(50, Math.min(10000, filters.limit || 3000));
+    const mode = filters.mode || 'imbalanced';
+    const minTotal = Math.max(0, filters.minTotal ?? 2);
+    const defaultPlusSize = [
+      '46', '48', '50', '52', '54', '56', '58', '60',
+      '46/48', '48/50', '50/52', '52/54', '54/56', '56/58', '58/60',
+    ];
+    const tamanhos = (filters.tamanhos && filters.tamanhos.length > 0)
+      ? filters.tamanhos.map((t) => t.toUpperCase().trim()).filter(Boolean)
+      : defaultPlusSize;
+    const ignoredLojas = new Set(['SITE', 'PF']);
+
+    // ── 1) Produtos agrupados por REF+COR ──
+    const conds: string[] = [
+      `TRIM(UPPER(COALESCE(p.tamanho, ''))) IN (${tamanhos.map((t) => `'${t.replace(/'/g, "''")}'`).join(',')})`,
+      `TRIM(COALESCE(p.ref, '')) <> ''`,
+    ];
+    const params: any[] = [];
+    if (filters.grupoCodigo) {
+      conds.push(`p.grupo = $${params.length + 1}`);
+      params.push(filters.grupoCodigo);
+    }
+    if (filters.subgrupoCodigo) {
+      conds.push(`p.subgrupo = $${params.length + 1}`);
+      params.push(filters.subgrupoCodigo);
+    }
+    if (filters.search?.trim()) {
+      const tokens = filters.search.trim().toUpperCase().split(/\s+/).filter(Boolean);
+      for (const tok of tokens) {
+        const term = `%${tok}%`;
+        conds.push(
+          `(UPPER(COALESCE(p.ref, '')) LIKE $${params.length + 1} OR UPPER(COALESCE(p."descricaoCompleta", '')) LIKE $${params.length + 2} OR p.codigo LIKE $${params.length + 3})`,
+        );
+        params.push(term, term, term);
+      }
+    }
+    if (filters.diasMaximos != null) {
+      conds.push(`p."dataAlt" >= CURRENT_DATE - $${params.length + 1}::int`);
+      params.push(Math.max(1, Math.round(filters.diasMaximos)));
+    }
+    if (filters.diasMinimos != null) {
+      conds.push(`p."dataAlt" <= CURRENT_DATE - $${params.length + 1}::int`);
+      params.push(Math.max(1, Math.round(filters.diasMinimos)));
+    }
+    params.push(limit);
+
+    let rawRefs: any[] = [];
+    try {
+      rawRefs = await this.prisma.$queryRawUnsafe(
+        `SELECT TRIM(p.ref) AS ref,
+                COALESCE(p.cor, '') AS cor,
+                MAX(COALESCE(p."descricaoCompleta", '')) AS descricao,
+                ROUND(AVG(COALESCE(p."vendaUn", 0))::numeric, 2)::float AS preco,
+                MAX(p."dataAlt") AS data_alt,
+                MAX(p.grupo) AS grupo_codigo,
+                MAX(p.subgrupo) AS subgrupo_codigo,
+                array_agg(DISTINCT p.codigo) AS codigos,
+                array_agg(DISTINCT TRIM(p.tamanho)) FILTER (WHERE COALESCE(TRIM(p.tamanho), '') <> '') AS tamanhos
+           FROM wincred_produtos p
+          WHERE ${conds.join(' AND ')}
+          GROUP BY TRIM(p.ref), COALESCE(p.cor, '')
+          ORDER BY MAX(COALESCE(p."descricaoCompleta", '')) ASC
+          LIMIT $${params.length}`,
+        ...params,
+      );
+    } catch (e) {
+      this.logger.error(`getStockDistributionByRef (espelho) falhou: ${(e as Error).message}`);
+      return { refs: [], lojas: [], totalRows: 0, truncated: false };
+    }
+    this.logger.log(`[mirror] getStockDistributionByRef: ${rawRefs.length} refs em ${Date.now() - t0}ms`);
+    if (rawRefs.length === 0) return { refs: [], lojas: [], totalRows: 0, truncated: false };
+
+    // ── 2) Estoque agregado dos códigos envolvidos ──
+    const allCodigos = new Set<string>();
+    for (const r of rawRefs) {
+      for (const c of (r.codigos || []) as string[]) {
+        const trimmed = String(c || '').trim();
+        if (trimmed) allCodigos.add(trimmed);
+      }
+    }
+    const estoquePorCodigo = new Map<string, Record<string, number>>();
+    const lojasSet = new Set<string>();
+    if (allCodigos.size > 0) {
+      try {
+        const est: any[] = await this.prisma.$queryRawUnsafe(
+          `SELECT codigo, loja, SUM(estoque)::float AS est
+             FROM wincred_estoque
+            WHERE codigo = ANY($1::text[])
+            GROUP BY codigo, loja`,
+          Array.from(allCodigos),
+        );
+        for (const r of est) {
+          const cod = String(r.codigo).trim();
+          const loja = String(r.loja || '').trim().toUpperCase();
+          if (!loja || ignoredLojas.has(loja)) continue;
+          const qty = Number(r.est) || 0;
+          if (qty === 0) continue;
+          if (!estoquePorCodigo.has(cod)) estoquePorCodigo.set(cod, {});
+          const mapa = estoquePorCodigo.get(cod)!;
+          mapa[loja] = (mapa[loja] || 0) + qty;
+          lojasSet.add(loja);
+        }
+      } catch (e) {
+        this.logger.warn(`getStockDistributionByRef (espelho) estoque falhou: ${(e as Error).message}`);
+      }
+    }
+
+    // ── 3) Nomes de grupo/subgrupo ──
+    const grupoCodes = Array.from(new Set(rawRefs.map((r) => r.grupo_codigo).filter((v) => v != null).map(Number)));
+    const subgrupoCodes = Array.from(new Set(rawRefs.map((r) => r.subgrupo_codigo).filter((v) => v != null).map(Number)));
+    const grupoNames = new Map<number, string>();
+    const subgrupoNames = new Map<number, string>();
+    if (grupoCodes.length) {
+      const gs = await (this.prisma as any).wincredGrupo
+        .findMany({ where: { codigo: { in: grupoCodes } } })
+        .catch(() => []);
+      for (const g of gs) grupoNames.set(Number(g.codigo), String(g.grupo || '').trim());
+    }
+    if (subgrupoCodes.length) {
+      const sgs = await (this.prisma as any).wincredSubgrupo
+        .findMany({ where: { codigo: { in: subgrupoCodes } } })
+        .catch(() => []);
+      for (const s of sgs) subgrupoNames.set(Number(s.codigo), String(s.subgrupo || '').trim());
+    }
+
+    // ── 4) Monta lista final (mesma régua do original) ──
+    const out: Array<any> = [];
+    for (const r of rawRefs) {
+      const codigos = ((r.codigos || []) as string[]).map((c) => String(c).trim()).filter(Boolean);
+      const estoquePorLoja: Record<string, number> = {};
+      let total = 0;
+      const variacoesComEstoque = new Set<string>();
+      for (const cod of codigos) {
+        const mapa = estoquePorCodigo.get(cod);
+        if (!mapa) continue;
+        let temEstoque = false;
+        for (const [loja, qty] of Object.entries(mapa)) {
+          if (qty <= 0) continue;
+          estoquePorLoja[loja] = (estoquePorLoja[loja] || 0) + qty;
+          total += qty;
+          temEstoque = true;
+        }
+        if (temEstoque) variacoesComEstoque.add(cod);
+      }
+      const lojasComEstoque = Object.values(estoquePorLoja).filter((v) => v > 0).length;
+      const gCode = r.grupo_codigo != null ? Number(r.grupo_codigo) : null;
+      const sCode = r.subgrupo_codigo != null ? Number(r.subgrupo_codigo) : null;
+      out.push({
+        ref: String(r.ref || '').trim(),
+        cor: r.cor ? String(r.cor).trim() : null,
+        descricao: String(r.descricao || '').trim(),
+        preco: Number(r.preco) || 0,
+        dataAlt: r.data_alt ? new Date(r.data_alt).toISOString() : null,
+        grupoCodigo: gCode,
+        subgrupoCodigo: sCode,
+        grupoNome: gCode != null ? grupoNames.get(gCode) || null : null,
+        subgrupoNome: sCode != null ? subgrupoNames.get(sCode) || null : null,
+        tamanhos: ((r.tamanhos || []) as string[]).sort((a, b) => {
+          const na = parseInt(a, 10);
+          const nb = parseInt(b, 10);
+          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+          return a.localeCompare(b);
+        }),
+        variacoes: variacoesComEstoque.size,
+        lojasComEstoque,
+        estoquePorLoja,
+        total,
+      });
+    }
+
+    let filtered = out.filter((r) => r.total > 0);
+    if (minTotal > 0) filtered = filtered.filter((r) => r.total >= minTotal);
+    if (mode === 'imbalanced') {
+      filtered = filtered.filter((r) => {
+        const vals = Object.values(r.estoquePorLoja) as number[];
+        if (vals.length === 0) return false;
+        const max = Math.max(...vals);
+        const min = Math.min(0, ...vals);
+        return max >= 2 && min === 0;
+      });
+    }
+    const lojas = Array.from(lojasSet).filter((l) => !ignoredLojas.has(l)).sort();
+    return { refs: filtered, lojas, totalRows: filtered.length, truncated: rawRefs.length >= limit };
+  }
+
   // Helper para tabelas pequenas (1 batch so)
   private async syncSmallTable<T>(
     tableName: string,

@@ -3046,6 +3046,44 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     fim: string;    // YYYY-MM-DD (exclusive â€” passe o dia SEGUINTE ao Ãºltimo dia desejado)
     descricaoContains?: string;
   }): Promise<Array<{ ref: string; descricao: string; variantCount: number; dataCadastro: string | null }>> {
+    // ESPELHO (29/08): REFs por data de cadastro lidas de `wincred_produtos`
+    // ("dataAlt" = a DATAALT espelhada). O caminho Giga abaixo devolve vazio
+    // sem erro com o pool trancado (atestado 28/08) — era um dos 3 buscadores
+    // mortos da tela de Realinhamento.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const conds = [
+          `p."dataAlt" >= $1::date`,
+          `p."dataAlt" < $2::date`,
+          `TRIM(COALESCE(p.ref, '')) <> ''`,
+        ];
+        const vals: any[] = [input.inicio, input.fim];
+        if (input.descricaoContains?.trim()) {
+          conds.push(`UPPER(COALESCE(p."descricaoCompleta", '')) LIKE $3`);
+          vals.push(`%${input.descricaoContains.trim().toUpperCase()}%`);
+        }
+        const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+          `SELECT TRIM(p.ref) AS ref,
+                  MAX(COALESCE(p."descricaoCompleta", '')) AS descricao,
+                  MAX(p."dataAlt") AS data_cadastro,
+                  COUNT(*)::int AS variant_count
+             FROM wincred_produtos p
+            WHERE ${conds.join(' AND ')}
+            GROUP BY TRIM(p.ref)
+            ORDER BY MAX(p."dataAlt") DESC
+            LIMIT 500`,
+          ...vals,
+        );
+        return rows.map((r) => ({
+          ref: String(r.ref).trim(),
+          descricao: String(r.descricao || '').trim(),
+          variantCount: Number(r.variant_count) || 0,
+          dataCadastro: r.data_cadastro ? String(new Date(r.data_cadastro).toISOString().slice(0, 10)) : null,
+        }));
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] searchRefsByDateRange: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
 
     const candidatas = [
@@ -3104,6 +3142,76 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Porta espelho de `searchRefsComSobraPorSku` — mesma régua, Postgres. */
+  private async refsComSobraPorSkuFromMirror(input: {
+    minQty?: number;
+    descricaoContains?: string;
+    plusSizeOnly?: boolean;
+    storeCode?: string | null;
+    limit?: number;
+  }): Promise<Array<{
+    ref: string;
+    descricao: string;
+    variantesComSobra: number;
+    estoqueTotalSobra: number;
+    skuExemplo: string | null;
+  }>> {
+    const minQty = Math.max(1, Math.min(100, input.minQty || 2));
+    const limit = Math.max(1, Math.min(2000, input.limit || 500));
+    const conds: string[] = [
+      `e.estoque >= $1`,
+      `TRIM(COALESCE(p.ref, '')) <> ''`,
+    ];
+    const vals: any[] = [minQty];
+    if (input.storeCode) {
+      const lojaStr = String(input.storeCode).trim();
+      const lojaPadded = lojaStr.padStart(2, '0');
+      conds.push(`TRIM(e.loja) IN ($${vals.length + 1}, $${vals.length + 2}, $${vals.length + 3})`);
+      vals.push(lojaStr, lojaPadded, lojaStr.replace(/^0+/, '') || lojaStr);
+    }
+    if (input.plusSizeOnly) {
+      // Mesma heurística do Giga + a coluna plusSize do espelho (mais precisa).
+      conds.push(`(
+        COALESCE(p."plusSize", 0) > 0
+        OR UPPER(COALESCE(p."descricaoCompleta", '')) ~ 'PLUS[ -]?SIZE|PLUSSIZE'
+        OR UPPER(COALESCE(p."descricaoPdv", '')) ~ 'PLUS[ -]?SIZE|PLUSSIZE'
+        OR UPPER(COALESCE(p."nomeGrupo", '')) LIKE '%PLUS%'
+      )`);
+    }
+    if (input.descricaoContains?.trim()) {
+      const palavras = input.descricaoContains.trim().toUpperCase().split(/\s+/).filter(Boolean);
+      for (const palavra of palavras) {
+        conds.push(`(
+          UPPER(COALESCE(p."descricaoCompleta", '')) LIKE $${vals.length + 1}
+          OR UPPER(COALESCE(p."descricaoPdv", '')) LIKE $${vals.length + 2}
+        )`);
+        vals.push(`%${palavra}%`, `%${palavra}%`);
+      }
+    }
+    vals.push(limit);
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT TRIM(p.ref) AS ref,
+              MAX(COALESCE(p."descricaoCompleta", p."descricaoPdv", '')) AS descricao,
+              COUNT(DISTINCT p.codigo)::int AS variantes,
+              SUM(e.estoque)::float AS estoque_total,
+              MAX(p.codigo) AS sku_exemplo
+         FROM giga_estoque e
+         JOIN wincred_produtos p ON ltrim(p.codigo, '0') = ltrim(e.codigo, '0')
+        WHERE ${conds.join(' AND ')}
+        GROUP BY TRIM(p.ref)
+        ORDER BY estoque_total DESC, variantes DESC
+        LIMIT $${vals.length}`,
+      ...vals,
+    );
+    return rows.map((r) => ({
+      ref: String(r.ref).trim(),
+      descricao: String(r.descricao || '').trim(),
+      variantesComSobra: Number(r.variantes) || 0,
+      estoqueTotalSobra: Number(r.estoque_total) || 0,
+      skuExemplo: r.sku_exemplo ? String(r.sku_exemplo).trim() : null,
+    }));
+  }
+
   /**
    * BUSCA REFs com SOBRA DE ESTOQUE â€” quaisquer SKUs (cor Ã— tamanho) que
    * tenham >= minQty unidades em estoque. Ãštil pra encontrar candidatas a
@@ -3126,6 +3234,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     estoqueTotalSobra: number;
     skuExemplo: string | null;
   }>> {
+    // ESPELHO (29/08): sobras por SKU lidas de `giga_estoque` (fonte do
+    // estoque) × `wincred_produtos`. Caminho Giga abaixo = vazio sem erro.
+    if (this.mirrorReadsEnabled) {
+      try {
+        return await this.refsComSobraPorSkuFromMirror(input);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] searchRefsComSobraPorSku: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     const minQty = Math.max(1, Math.min(100, input.minQty || 2));
     const limit = Math.max(1, Math.min(2000, input.limit || 500));
@@ -4486,7 +4603,31 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * ver os outros tamanhos/cores sem precisar buscar de novo.
    */
   async searchByCodeAndExpandRef(code: string): Promise<any[]> {
-    if (!this.pool || !code) return [];
+    if (!code) return [];
+    // ESPELHO (29/08): resolve a REF pelo `wincred_produtos` (código com
+    // ltrim dos dois lados + coluna `ean`) e expande via `searchByRef`, que
+    // já sabe cair pro Flow. Fallback da Consulta de loja (F10) no modo
+    // código — com o Giga morto, o miss virava "essa peça não existe".
+    if (this.mirrorReadsEnabled) {
+      try {
+        const cleanM = String(code).trim();
+        const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+          `SELECT TRIM(ref) AS ref FROM wincred_produtos
+            WHERE ltrim(codigo, '0') = ltrim($1, '0')
+               OR ($2 AND ean = $1)
+            LIMIT 1`,
+          cleanM,
+          /^\d{6,}$/.test(cleanM),
+        );
+        const refM = rows[0]?.ref ? String(rows[0].ref).trim() : null;
+        if (refM) return this.searchByRef(refM);
+        // sem match no espelho: segue pro caminho antigo (que hoje é vazio) —
+        // manter o shape "não achou" honesto.
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] searchByCodeAndExpandRef: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
     const clean = String(code).trim();
     try {
       // FIX zeros Ã  esquerda: gera TODAS as variaÃ§Ãµes de padding (3 a 14
@@ -4551,7 +4692,50 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     cor: string | null,
     tamanho: string | null,
   ): Promise<Array<{ CODIGO: string; REF: string; COR: string; TAMANHO: string; DESCRICAOCOMPLETA: string; TOTAL_EST: number }>> {
-    if (!this.pool || !descricao) return [];
+    if (!descricao) return [];
+    // ESPELHO (29/08): reconciliação de remessa resolvia CODIGO no Giga morto
+    // e o miss virava "não-encontrado" silencioso. Mesma régua no Postgres.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const palavrasM = String(descricao).trim().split(/\s+/).filter((p) => p.length > 1);
+        if (!palavrasM.length) return [];
+        const conds = palavrasM.map((_, i) => `UPPER(COALESCE(p."descricaoCompleta", '')) LIKE UPPER($${i + 1})`);
+        const vals: any[] = palavrasM.map((p) => `%${p}%`);
+        const corNormM = (cor || '').trim();
+        const tamNormM = (tamanho || '').trim();
+        if (corNormM) {
+          conds.push(`TRIM(UPPER(COALESCE(p.cor, ''))) = TRIM(UPPER($${vals.length + 1}))`);
+          vals.push(corNormM);
+        }
+        if (tamNormM) {
+          conds.push(`TRIM(UPPER(COALESCE(p.tamanho, ''))) = TRIM(UPPER($${vals.length + 1}))`);
+          vals.push(tamNormM);
+        }
+        const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+          `SELECT p.codigo AS "CODIGO", COALESCE(p.ref, '') AS "REF",
+                  COALESCE(p.cor, '') AS "COR", COALESCE(p.tamanho, '') AS "TAMANHO",
+                  COALESCE(p."descricaoCompleta", '') AS "DESCRICAOCOMPLETA",
+                  COALESCE((SELECT SUM(e.estoque) FROM giga_estoque e
+                             WHERE ltrim(e.codigo, '0') = ltrim(p.codigo, '0')), 0)::float AS "TOTAL_EST"
+             FROM wincred_produtos p
+            WHERE ${conds.join(' AND ')}
+            ORDER BY "TOTAL_EST" DESC, p.codigo DESC
+            LIMIT 5`,
+          ...vals,
+        );
+        return rows.map((r) => ({
+          CODIGO: String(r.CODIGO).trim(),
+          REF: String(r.REF || '').trim(),
+          COR: String(r.COR || '').trim(),
+          TAMANHO: String(r.TAMANHO || '').trim(),
+          DESCRICAOCOMPLETA: String(r.DESCRICAOCOMPLETA || '').trim(),
+          TOTAL_EST: Number(r.TOTAL_EST) || 0,
+        }));
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] searchByDescriptionPlusCorTam: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
     const palavras = String(descricao).trim().split(/\s+/).filter((p) => p.length > 1);
     if (palavras.length === 0) return [];
 
@@ -4593,7 +4777,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async searchByDescriptionGrouped(
     term: string,
   ): Promise<Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>> {
-    if (!this.pool || !term) return [];
+    if (!term) return [];
+    // ESPELHO (29/08): mesma cascata (REF exata → prefixo → texto livre) em
+    // `wincred_produtos`. Alimenta a busca do Realinhamento E o fallback da
+    // Consulta de loja (F10) — os dois voltavam vazio com o Giga morto.
+    if (this.mirrorReadsEnabled) {
+      try {
+        return await this.descriptionGroupedFromMirror(String(term).trim());
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] searchByDescriptionGrouped: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
     const trimmed = String(term).trim();
     if (!trimmed) return [];
 
@@ -4663,6 +4858,50 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`searchByDescriptionGrouped falhou: ${(e as Error).message}`);
       return [];
     }
+  }
+
+  /** Porta espelho de `searchByDescriptionGrouped` — mesma cascata, Postgres. */
+  private async descriptionGroupedFromMirror(
+    trimmed: string,
+  ): Promise<Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>> {
+    if (!trimmed) return [];
+    const isRefLike = /^[A-Z0-9]+(-[A-Z0-9]+)*$/i.test(trimmed) && !trimmed.includes(' ');
+    if (isRefLike) {
+      const exact: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+        `SELECT TRIM(ref) AS "REF", COALESCE("descricaoCompleta", '') AS "DESCRICAOCOMPLETA"
+           FROM wincred_produtos
+          WHERE UPPER(TRIM(COALESCE(ref, ''))) = UPPER($1)`,
+        trimmed,
+      );
+      if (exact.length > 0) return this.groupRowsByFamily(exact);
+      const pref: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+        `SELECT TRIM(ref) AS "REF", COALESCE("descricaoCompleta", '') AS "DESCRICAOCOMPLETA"
+           FROM wincred_produtos
+          WHERE UPPER(TRIM(COALESCE(ref, ''))) LIKE UPPER($1)
+            AND TRIM(COALESCE(ref, '')) <> ''
+          ORDER BY ref ASC
+          LIMIT 500`,
+        `${trimmed}%`,
+      );
+      return this.groupRowsByFamily(pref);
+    }
+
+    const words = trimmed.split(/\s+/).filter((w) => w.length >= 2).slice(0, 6);
+    if (!words.length) return [];
+    const conds = words.map((_, i) => `UPPER(COALESCE("descricaoCompleta", '')) LIKE UPPER($${i + 1})`);
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT TRIM(ref) AS "REF",
+              MAX(COALESCE("descricaoCompleta", '')) AS "DESCRICAOCOMPLETA",
+              COUNT(*)::int AS "VARIANT_COUNT"
+         FROM wincred_produtos
+        WHERE ${conds.join(' AND ')}
+          AND TRIM(COALESCE(ref, '')) <> ''
+        GROUP BY TRIM(ref)
+        ORDER BY "VARIANT_COUNT" DESC
+        LIMIT 200`,
+      ...words.map((w) => `%${w}%`),
+    );
+    return rows;
   }
 
   /**
@@ -5941,11 +6180,76 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *
    * Retorna Map<storeCode, totalPecas>. Lojas sem estoque NÃƒO aparecem (caller trata como 0).
    */
+  /**
+   * ESPELHO (29/08): estoque por loja lido de `giga_estoque` (+ join em
+   * `wincred_produtos` quando há filtro) — a fonte do estoque desde 14/07.
+   *
+   * Nasceu na noite em que a Inteligência de Estoque zerou: sem mirror branch,
+   * o `!this.pool` de baixo devolvia Map vazio SEM erro (Giga morto — ver
+   * atestado de 28/08) e a tela mostrava "estoque 0" em toda loja com as
+   * vendas certinhas do lado. Mesma doença da Classificação e do carnê.
+   *
+   * Detalhes que importam:
+   *  - match de código por `ltrim(...,'0')` — `wincred_produtos.codigo` é
+   *    normalizado SEM zeros à esquerda e `giga_estoque` herdou padding do
+   *    Giga; igualar cru perderia peça (regra da casa: padding inconsistente).
+   *  - loja normalizada pra 2 dígitos ('1' → '01') — o delta de estoque grava
+   *    variantes e o consumidor compara com Store.code de 2 dígitos.
+   *  - INNER JOIN derruba código sem cadastro (MANUAL-...) igual ao Giga fazia.
+   */
+  private async stockTotalByStoresFromMirror(
+    plusSize: boolean,
+    year?: string,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const lojaExpr = `CASE WHEN e.loja ~ '^[0-9]$' THEN '0' || e.loja ELSE e.loja END`;
+    const conds: string[] = ['e.estoque > 0'];
+    const params: any[] = [];
+    if (plusSize) {
+      conds.push(`(COALESCE(p."plusSize", 0) > 0 OR UPPER(COALESCE(p."descricaoCompleta", '')) LIKE '%PLUS SIZE%')`);
+    }
+    if (year === 'pre2020') {
+      conds.push(`p."dataAlt" < '2021-01-01'`);
+    } else if (year) {
+      const y = parseInt(year, 10);
+      if (!isNaN(y) && y >= 2000 && y <= 2100) {
+        conds.push(`p."dataAlt" >= '${y}-01-01' AND p."dataAlt" < '${y + 1}-01-01'`);
+      }
+    }
+    const needsJoin = conds.length > 1;
+    const sql = needsJoin
+      ? `SELECT ${lojaExpr} AS loja, SUM(e.estoque)::float AS pecas
+           FROM giga_estoque e
+           JOIN wincred_produtos p ON ltrim(p.codigo, '0') = ltrim(e.codigo, '0')
+          WHERE ${conds.join(' AND ')}
+          GROUP BY 1`
+      : `SELECT ${lojaExpr} AS loja, SUM(e.estoque)::float AS pecas
+           FROM giga_estoque e
+          WHERE e.estoque > 0
+          GROUP BY 1`;
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(sql, ...params);
+    for (const r of rows) {
+      const code = String(r.loja || '').trim();
+      const pecas = Number(r.pecas) || 0;
+      if (code && pecas > 0) out.set(code, pecas);
+    }
+    return out;
+  }
+
   async getStockTotalByStores(
     plusSize = false,
     year?: string,
   ): Promise<Map<string, number>> {
     const out = new Map<string, number>();
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) {
+          return await this.stockTotalByStoresFromMirror(plusSize, year);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockTotalByStores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return out;
     try {
       const yf = await this.buildYearFilter(year, 'p');
@@ -5987,9 +6291,44 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * por ano. Uma query só (GROUP BY loja, bucket de ano). Bucket: 'pre2020'
    * (< 2021), o ano (2021..), ou 'sem_data' (DATAALT nulo). Pro relatório PDF.
    */
+  /** ESPELHO (29/08): matriz LOJA × ANO — mesma régua do método acima. */
+  private async stockByYearByStoreFromMirror(
+    plusSize: boolean,
+  ): Promise<Array<{ loja: string; ano: string; pecas: number }>> {
+    const lojaExpr = `CASE WHEN e.loja ~ '^[0-9]$' THEN '0' || e.loja ELSE e.loja END`;
+    const anoExpr = `CASE WHEN p."dataAlt" IS NULL THEN 'sem_data'
+                          WHEN p."dataAlt" < '2021-01-01' THEN 'pre2020'
+                          ELSE EXTRACT(YEAR FROM p."dataAlt")::int::text END`;
+    const conds: string[] = ['e.estoque > 0'];
+    if (plusSize) {
+      conds.push(`(COALESCE(p."plusSize", 0) > 0 OR UPPER(COALESCE(p."descricaoCompleta", '')) LIKE '%PLUS SIZE%')`);
+    }
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT ${lojaExpr} AS loja, ${anoExpr} AS ano, SUM(e.estoque)::float AS pecas
+         FROM giga_estoque e
+         JOIN wincred_produtos p ON ltrim(p.codigo, '0') = ltrim(e.codigo, '0')
+        WHERE ${conds.join(' AND ')}
+        GROUP BY 1, 2`,
+    );
+    return rows.map((r) => ({
+      loja: String(r.loja || '').trim(),
+      ano: String(r.ano || 'sem_data').trim(),
+      pecas: Number(r.pecas) || 0,
+    }));
+  }
+
   async getStockByYearByStore(
     plusSize = false,
   ): Promise<Array<{ loja: string; ano: string; pecas: number }>> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) {
+          return await this.stockByYearByStoreFromMirror(plusSize);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockByYearByStore: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const dataCol = await this.getCadastroDateCol();
@@ -7549,6 +7888,72 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return out;
   }
 
+  /** Porta espelho de `batchFindAllCodigosByRefCorTam` — ltrim no lugar das variantes. */
+  private async batchAllCodigosByRefCorTamFromMirror(
+    items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
+  ): Promise<Map<string, Set<string>>> {
+    const out = new Map<string, Set<string>>();
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const stripZeros = (s: string) => s.replace(/^0+/, '') || '0';
+    const keyOf = (ref: string, cor: any, tam: any) => `${norm(ref)}|${norm(cor)}|${norm(tam)}`;
+
+    const seen = new Set<string>();
+    const uniq: Array<{ ref: string; refCore: string; cor: string; tam: string }> = [];
+    for (const it of items) {
+      const ref = norm(it.refCode);
+      if (!ref) continue;
+      const cor = norm(it.cor);
+      const tam = norm(it.tamanho);
+      const k = `${ref}|${cor}|${tam}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push({ ref, refCore: stripZeros(ref), cor, tam });
+    }
+    if (!uniq.length) return out;
+
+    const byRefCore = new Map<string, typeof uniq>();
+    for (const u of uniq) {
+      const arr = byRefCore.get(u.refCore) || [];
+      arr.push(u);
+      byRefCore.set(u.refCore, arr);
+    }
+
+    for (let i = 0; i < uniq.length; i += 500) {
+      const chunk = uniq.slice(i, i + 500);
+      const conds: string[] = [];
+      const params: any[] = [];
+      for (const u of chunk) {
+        conds.push(
+          `(ltrim(TRIM(UPPER(COALESCE(ref, ''))), '0') = $${params.length + 1}` +
+          ` AND TRIM(UPPER(COALESCE(cor, ''))) = $${params.length + 2}` +
+          ` AND TRIM(UPPER(COALESCE(tamanho, ''))) = $${params.length + 3})`,
+        );
+        params.push(u.refCore === '0' ? '0' : stripZeros(u.refCore), u.cor, u.tam);
+      }
+      const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+        `SELECT COALESCE(ref, '') AS ref, COALESCE(cor, '') AS cor,
+                COALESCE(tamanho, '') AS tamanho, codigo
+           FROM wincred_produtos
+          WHERE ${conds.join(' OR ')}`,
+        ...params,
+      );
+      for (const r of rows) {
+        const refCore = stripZeros(norm(r.ref));
+        const cor = norm(r.cor);
+        const tam = norm(r.tamanho);
+        const codigo = String(r.codigo).trim();
+        for (const m of byRefCore.get(refCore) || []) {
+          if (m.cor === cor && m.tam === tam) {
+            const k = keyOf(m.ref, m.cor, m.tam);
+            if (!out.has(k)) out.set(k, new Set());
+            out.get(k)!.add(codigo);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   /**
    * Variante do batchFindCodigosByRefCorTam que retorna TODOS os CODIGOs
    * candidatos pra cada (REF+COR+TAM) â€” nÃ£o sÃ³ o "melhor" com mais estoque.
@@ -7565,7 +7970,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
   ): Promise<Map<string, Set<string>>> {
     const out = new Map<string, Set<string>>();
-    if (!this.pool || !items.length) return out;
+    if (!items.length) return out;
+    // ESPELHO (29/08): bipe de remessa resolvia os CODIGOs candidatos no Giga
+    // morto e o miss virava "peça não cadastrada". Mesma régua no Postgres,
+    // com `ltrim` no lugar das 5 variantes de padding do MySQL.
+    if (this.mirrorReadsEnabled) {
+      try {
+        return await this.batchAllCodigosByRefCorTamFromMirror(items);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] batchFindAllCodigosByRefCorTam: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return out;
 
     const norm = (s: any) => String(s ?? '').trim().toUpperCase();
     const stripZeros = (s: string) => s.replace(/^0+/, '') || '0';
@@ -10186,9 +10602,47 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     dias: number;
   }> {
     const empty = { vendas: [], totalQty: 0, totalValor: 0, dias };
-    if (!this.pool || !ref?.trim()) return empty;
+    if (!ref?.trim()) return empty;
     const refClean = String(ref).trim();
     const diasClamped = Math.max(7, Math.min(730, Math.round(dias) || 180));
+
+    // ESPELHO (29/08): vendas por REF lidas de `giga_caixa_mov` (alimentada
+    // pelo Flow desde 25/08) + `wincred_produtos`. O caminho Giga abaixo
+    // devolve vazio sem erro com o pool trancado (atestado 28/08).
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+          `SELECT CASE WHEN c.loja ~ '^[0-9]$' THEN '0' || c.loja ELSE c.loja END AS loja,
+                  SUM(c.quantidade)::float AS qty,
+                  SUM(c.valor_total)::float AS valor
+             FROM giga_caixa_mov c
+             JOIN wincred_produtos p ON ltrim(p.codigo, '0') = ltrim(c.codigo, '0')
+            WHERE UPPER(TRIM(p.ref)) = UPPER($1)
+              AND c.data >= CURRENT_DATE - $2::int
+              AND (c.marcado IS NULL OR c.marcado <> 'SIM')
+            GROUP BY 1
+            ORDER BY qty DESC`,
+          refClean,
+          diasClamped,
+        );
+        const vendas: Array<{ loja: string; qty: number; valor: number }> = [];
+        let totalQty = 0;
+        let totalValor = 0;
+        for (const r of rows) {
+          const loja = String(r.loja || '').trim().toUpperCase();
+          if (!loja || ['SITE', 'PF'].includes(loja)) continue;
+          const qty = Number(r.qty) || 0;
+          const valor = Number(r.valor) || 0;
+          vendas.push({ loja, qty, valor });
+          totalQty += qty;
+          totalValor += valor;
+        }
+        return { vendas, totalQty, totalValor, dias: diasClamped };
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getSalesByRef: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return empty;
 
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
