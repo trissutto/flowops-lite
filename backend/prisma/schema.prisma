@@ -8245,3 +8245,27 @@ model PecaExtraviada {
   @@index([sku])
   @@map("pecas_extraviadas")
 }
+
+/// Tentativas de checkout BARRADAS pelo escudo anti-teste-de-cartao (28/08/2026).
+///
+/// Nasceu na noite do ataque: ~650 cobrancas de cartao em 3h, CPF/nome/e-mail
+/// gerados, botnet com 1 IP por tentativa, todas chegando na Pagar.me (custo por
+/// transacao + risco de bloqueio da conta). Linha aqui = pedido que NAO nasceu:
+/// sem Order, sem LP, sem cliente no CRM e sem chamada ao gateway.
+model CheckoutBloqueio {
+  id       String   @id @default(uuid())
+  criadoEm DateTime @default(now()) @map("criado_em")
+  ip       String?  @db.VarChar(60)
+  /// BR, US... — vem do `x-vercel-ip-country` repassado pelo BFF do site.
+  pais     String?  @db.VarChar(8)
+  nome     String?  @db.VarChar(120)
+  email    String?  @db.VarChar(140)
+  cpf      String?  @db.VarChar(14)
+  total    Float?
+  metodo   String?  @db.VarChar(10)
+  /// ip_bloqueado | pais | escudo (velocity de recusas + cliente desconhecida)
+  motivo   String   @db.VarChar(30)
+
+  @@index([criadoEm])
+  @@map("checkout_bloqueios")
+}

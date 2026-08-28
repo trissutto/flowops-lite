@@ -21,6 +21,7 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from './pedido-email.service';
 import { PixResgateCron } from './pix-resgate.cron';
 import { PedidoExpiraCron } from './pedido-expira.cron';
+import { EscudoCheckoutService } from './escudo-checkout.service';
 import { ProgressiveDiscountModule } from '../progressive-discount/progressive-discount.module';
 import { RiscoModule } from '../risco/risco.module';
 
@@ -63,6 +64,9 @@ import { RiscoModule } from '../risco/risco.module';
     // Resgate do PIX não pago: toque único aos 30min, dentro da validade.
     PixResgateCron,
     PedidoExpiraCron,
+    // Escudo anti-teste-de-cartão (28/08): bloqueia ANTES de criar Order e de
+    // chamar a Pagar.me quando o checkout vira banco de testes de cartão.
+    EscudoCheckoutService,
   ],
   exports: [LojaOrdersService, CupomService],
 })

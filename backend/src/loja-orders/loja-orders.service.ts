@@ -15,6 +15,7 @@ import { PedidoEmailService } from './pedido-email.service';
 import { ProgressiveDiscountService, DiscountResult } from '../progressive-discount/progressive-discount.service';
 import { RiscoChavesService } from '../risco/risco-chaves.service';
 import { RiscoService } from '../risco/risco.service';
+import { EscudoCheckoutService } from './escudo-checkout.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -184,6 +185,12 @@ export interface CriarPedidoInput {
    * conexão" — ver `Order.clienteIp`.
    */
   clienteIp?: string;
+  /**
+   * PAÍS DO IP (`x-cliente-pais`, BFF ← `x-vercel-ip-country` da Vercel).
+   * Sinal do escudo anti-teste-de-cartão: a loja só entrega no Brasil e a
+   * botnet de 28/08 era ~toda estrangeira. Ausente = passa (site antigo).
+   */
+  clientePais?: string;
 }
 
 /**
@@ -336,6 +343,7 @@ export class LojaOrdersService {
     private readonly progressiveDiscount: ProgressiveDiscountService,
     private readonly riscoChaves: RiscoChavesService,
     private readonly risco: RiscoService,
+    private readonly escudo: EscudoCheckoutService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -1869,6 +1877,26 @@ export class LojaOrdersService {
     if (erro) return { ok: false, error: erro, code: 'validation_error' };
 
     /**
+     * ESCUDO ANTI-TESTE-DE-CARTÃO — ANTES de qualquer efeito (28/08).
+     *
+     * Vem antes do `reprecificar` (não gasta catálogo com bot), antes do
+     * `upsertCustomer` (bot não vira lead no CRM) e antes do `criarOrder`
+     * (bloqueado NÃO ganha LP — os ~650 pedidos-lixo do ataque nasceram
+     * porque não existia este degrau). PIX passa sempre.
+     */
+    const bloqueio = await this.escudo.avaliar({
+      metodo: input.payment?.method,
+      ip: input.clienteIp,
+      pais: input.clientePais,
+      nome: input.customer?.name,
+      email: input.customer?.email,
+      cpf: input.customer?.cpf,
+      fone: input.customer?.phone,
+      total: input.total,
+    });
+    if (bloqueio) return { ok: false, error: bloqueio.error, code: bloqueio.code };
+
+    /**
      * A CONTA É REFEITA ANTES DE QUALQUER COISA (bloco A).
      *
      * Vem antes até do CRM: preço errado, peça esgotada ou despublicada não
@@ -1941,6 +1969,10 @@ export class LojaOrdersService {
       } else {
         const r = await this.cobrarCartao(order, input);
         if (!r.ok) {
+          // Recusa REAL da operadora arma o escudo anti-teste-de-cartão: é a
+          // contagem dela que separa "uma cliente sem limite" (1/dia) de
+          // "bot com lista de cartões" (dezenas/minuto).
+          if (r.kind === 'recusa') this.escudo.registrarRecusa();
           /**
            * CARTÃO RECUSADO VIRA CARRINHO RESGATÁVEL (dono, 14/08).
            *

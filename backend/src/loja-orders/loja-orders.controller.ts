@@ -267,7 +267,12 @@ export class LojaOrdersController {
     // risco cruzar dois pedidos de cadastros diferentes saídos da mesma
     // conexão. Confiar no header é seguro NESTE ponto pelo mesmo motivo do
     // `ipDe`: o `exigirToken` já rodou.
-    const r = await this.svc.criarPedido({ ...body, clienteIp: this.ipDe(req) });
+    //
+    // `x-cliente-pais` = `x-vercel-ip-country` repassado pelo BFF: sinal do
+    // escudo anti-teste-de-cartão (cartão de IP estrangeiro numa loja que só
+    // entrega no Brasil). Ausente (site antigo no ar) o escudo deixa passar.
+    const pais = String(req?.headers?.['x-cliente-pais'] || '').trim() || undefined;
+    const r = await this.svc.criarPedido({ ...body, clienteIp: this.ipDe(req), clientePais: pais });
     res.status(r.ok ? 201 : 200);
     return r;
   }

@@ -132,6 +132,12 @@ export interface OrderStatusSnapshot {
  */
 export interface CreateOrderOptions {
   clientIp?: string;
+  /**
+   * País do IP (`x-vercel-ip-country`), repassado como `x-cliente-pais`.
+   * Sinal do escudo anti-teste-de-cartão do backend (28/08): cartão de IP
+   * fora do Brasil numa loja que só entrega no Brasil é assinatura de botnet.
+   */
+  clientePais?: string;
 }
 
 /**
@@ -311,6 +317,8 @@ async function chamar(
      * `loja-orders.controller.ts`.
      */
     clientIp?: string;
+    /** País do IP (Vercel) → header `x-cliente-pais` do escudo do backend. */
+    clientePais?: string;
   },
 ): Promise<{ httpStatus: number; body: BackendEnvelope }> {
   const { baseUrl, token } = config();
@@ -324,6 +332,7 @@ async function chamar(
         Accept: 'application/json',
         'x-loja-token': token,
         ...(init.clientIp ? { 'x-cliente-ip': init.clientIp } : {}),
+        ...(init.clientePais ? { 'x-cliente-pais': init.clientePais } : {}),
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: init.body ? JSON.stringify(init.body) : undefined,
@@ -439,6 +448,7 @@ class BackendOrderStore implements OrderStore {
       body: payload,
       timeoutMs: TIMEOUT_CREATE_MS,
       clientIp: opts?.clientIp,
+      clientePais: opts?.clientePais,
     });
 
     // `ok:false` com 200 é o "recusa elegante" do contrato: cupom morto,

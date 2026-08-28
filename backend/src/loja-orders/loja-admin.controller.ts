@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
 import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.service';
+import { EscudoCheckoutService } from './escudo-checkout.service';
 
 /**
  * RETAGUARDA DO SITE — conciliação financeira e cupons.
@@ -41,12 +42,40 @@ export class LojaAdminController {
     private readonly cupons: CupomService,
     private readonly frete: FreteService,
     private readonly reconcile: LojaPagamentoReconcileService,
+    private readonly escudo: EscudoCheckoutService,
   ) {}
 
   private exigirAdmin(req: any): string {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'master') throw new ForbiddenException('Apenas admin/master');
     return String(req?.user?.name || req?.user?.username || 'admin');
+  }
+
+  /* ─────────────── ESCUDO ANTI-TESTE-DE-CARTÃO (28/08) ─────────────────── */
+
+  /**
+   * GET /admin/loja/escudo — armado?, recusas na janela, últimos bloqueios.
+   * É o painel do ataque: responde "está travando?" e "quem está batendo?".
+   */
+  @Get('escudo')
+  async escudoStatus(@Req() req: any) {
+    this.exigirAdmin(req);
+    return { ok: true, ...(await this.escudo.status()) };
+  }
+
+  /**
+   * POST /admin/loja/escudo { modo: 'auto' | 'on' | 'off' } — botão de pânico
+   * ('on' trava cartão de cliente nova JÁ) e de desarme sem deploy ('off').
+   */
+  @Post('escudo')
+  async escudoModo(@Req() req: any, @Body() body: { modo?: string }) {
+    const quem = this.exigirAdmin(req);
+    const modo = String(body?.modo || '').trim() as 'auto' | 'on' | 'off';
+    if (!['auto', 'on', 'off'].includes(modo)) {
+      return { ok: false, error: "modo precisa ser 'auto', 'on' ou 'off'" };
+    }
+    await this.escudo.salvarModo(modo);
+    return { ok: true, modo, por: quem };
   }
 
   /** `2026-08-06` → Date local no início do dia. Vazio → fallback. */

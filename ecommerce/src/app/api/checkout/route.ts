@@ -209,6 +209,16 @@ function clientIp(req: Request): string {
   return fwd?.split(',')[0].trim() || req.headers.get('x-real-ip') || '0.0.0.0';
 }
 
+/**
+ * País do IP, resolvido pela PRÓPRIA Vercel (`x-vercel-ip-country`) — de graça
+ * e sem chamada externa. Vai pro backend em `x-cliente-pais`: é o sinal do
+ * escudo anti-teste-de-cartão (28/08 — botnet estrangeira testando cartões
+ * numa loja que só entrega no Brasil). Vazio quando não há o header (local).
+ */
+function clientPais(req: Request): string {
+  return (req.headers.get('x-vercel-ip-country') || '').trim().toUpperCase();
+}
+
 /* ────────────────────────────────────────────────────────────────────────────
  * Handler
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -487,7 +497,8 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   let ack;
   try {
     // Mesmo `x-cliente-ip` da cotação acima: balde do backend por cliente.
-    ack = await getOrderStore().create(payload, { clientIp: ipCliente });
+    // `clientePais` (x-vercel-ip-country) alimenta o escudo anti-teste-de-cartão.
+    ack = await getOrderStore().create(payload, { clientIp: ipCliente, clientePais: clientPais(req) });
   } catch (err) {
     if (err instanceof OrderStoreError) {
       console.error('[checkout] backend recusou/falhou ao criar pedido:', err.message);
