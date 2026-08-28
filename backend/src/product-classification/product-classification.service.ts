@@ -7,8 +7,9 @@ import { ProductSearchService } from '../product-search/product-search.service';
 /**
  * Serviço da tela "Classificação de Produtos" (Cadastros).
  *
- * Fonte do catálogo: snapshot agregado por REF vindo do ERP ao vivo
- * (ErpService.getRefCatalogSnapshot), cacheado em memória — uma query por
+ * Fonte do catálogo: snapshot agregado por REF vindo do ESPELHO Postgres
+ * (`carregarSnapshotDoEspelho` → wincred_produtos; era o Giga vivo até 28/08),
+ * cacheado em memória — uma query por
  * refresh em vez de uma por tecla. Busca/filtro/paginação/contadores rodam
  * TUDO em memória cruzando com a tabela product_classification do Postgres
  * (a fonte de verdade da classificação, owned pelo Flow).
