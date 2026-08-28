@@ -1,10 +1,13 @@
 import {
-  Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards,
+  Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req,
+  UploadedFile, UseGuards, UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ContasPagarMigracaoService } from './contas-pagar-migracao.service';
 import { ContasPagarService } from './contas-pagar.service';
 import { ContasPagarAssociacaoService } from './contas-pagar-associacao.service';
+import { ContasPagarComprovanteService } from './contas-pagar-comprovante.service';
 
 /**
  * Contas a Pagar 100% Flow — v1 é ferramenta da MATRIZ (admin/master).
@@ -25,6 +28,7 @@ export class ContasPagarController {
     private readonly migracao: ContasPagarMigracaoService,
     private readonly svc: ContasPagarService,
     private readonly assoc: ContasPagarAssociacaoService,
+    private readonly comprovante: ContasPagarComprovanteService,
   ) {}
 
   private requireAdmin(req: any): string {
@@ -143,6 +147,20 @@ export class ContasPagarController {
   pagar(@Req() req: any, @Param('id') id: string, @Body() body: any) {
     const usuario = this.requireAdmin(req);
     return this.svc.pagar(id, body, usuario);
+  }
+
+  /** Comprovante de pagamento — multipart campo 'file' (PDF/imagem, máx 10MB). Re-upload SUBSTITUI. */
+  @Post(':id/comprovante')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  uploadComprovante(@Req() req: any, @Param('id') id: string, @UploadedFile() file: any) {
+    const usuario = this.requireAdmin(req);
+    return this.comprovante.upload(id, file, usuario);
+  }
+
+  @Delete(':id/comprovante')
+  removerComprovante(@Req() req: any, @Param('id') id: string) {
+    const usuario = this.requireAdmin(req);
+    return this.comprovante.remover(id, usuario);
   }
 
   @Patch(':id/reabrir')

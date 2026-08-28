@@ -5,6 +5,7 @@ import { AdiantamentosModule } from '../adiantamentos/adiantamentos.module';
 import { ContasPagarMigracaoService } from './contas-pagar-migracao.service';
 import { ContasPagarService } from './contas-pagar.service';
 import { ContasPagarAssociacaoService } from './contas-pagar-associacao.service';
+import { ContasPagarComprovanteService } from './contas-pagar-comprovante.service';
 import { ContasPagarController } from './contas-pagar.controller';
 
 /**
@@ -14,7 +15,7 @@ import { ContasPagarController } from './contas-pagar.controller';
  */
 @Module({
   imports: [PrismaModule, ErpModule, AdiantamentosModule],
-  providers: [ContasPagarMigracaoService, ContasPagarService, ContasPagarAssociacaoService],
+  providers: [ContasPagarMigracaoService, ContasPagarService, ContasPagarAssociacaoService, ContasPagarComprovanteService],
   controllers: [ContasPagarController],
 })
 export class ContasPagarModule {}
