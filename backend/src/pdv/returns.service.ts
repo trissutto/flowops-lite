@@ -64,6 +64,44 @@ export class ReturnsService {
       });
     }
 
+    // PEDIDO ONLINE no balcão (28/08): id do Order ou nº digitado
+    // ("LP-000123"/"ON-000045") — mesmo shape de resposta da venda do PDV.
+    if (!sale) {
+      const pedido = await this.carregarPedidoDevolvivel(cleanQ);
+      if (pedido) {
+        const devolucoesAnteriores = await (this.prisma as any).pdvReturn.findMany({
+          where: this.whereDevolucoesDe(pedido),
+          include: { items: true },
+        });
+        const devolvido = new Map<string, number>();
+        for (const ret of devolucoesAnteriores as any[]) {
+          for (const it of ret.items) {
+            const id = it.originalItemId || it.sku;
+            devolvido.set(id, (devolvido.get(id) || 0) + (it.qty || 0));
+          }
+        }
+        return {
+          sale: {
+            id: pedido.id,
+            storeCode: pedido.storeCode,
+            storeName: pedido.storeName,
+            customerName: pedido.customerName,
+            customerCpf: pedido.customerCpf,
+            total: pedido.total,
+            finalizedAt: pedido.finalizedAt,
+            nfceNumber: null,
+            origem: 'pedido_online',
+            pedidoNumero: pedido.pedidoNumero,
+          },
+          items: (pedido.items as any[]).map((it) => {
+            const jaDev = devolvido.get(it.id) || 0;
+            return { ...it, jaDevolvido: jaDev, disponivel: Math.max(0, (it.qty || 0) - jaDev) };
+          }),
+          previousReturns: devolucoesAnteriores.length,
+        };
+      }
+    }
+
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'finalized') {
       throw new BadRequestException(`Venda está ${sale.status}, não dá pra devolver`);
@@ -209,8 +247,98 @@ export class ReturnsService {
       sales = [...localR, ...otherR];
     }
 
-    if (sales.length === 0) {
+    // ── PEDIDO ONLINE com essa peça (28/08 — troca do site no balcão) ──
+    // Site novo/live/venda online: pago. Site velho (WC, sem paidAt): já
+    // despachado. Mesma janela de 90d do PDV.
+    const filtroItemPedido: any = {
+      cancelledAt: null,
+      OR: [
+        { sku: { in: variants } },
+        { ref: { in: variants } },
+        ...(useStartsWith
+          ? [
+              { sku: { startsWith: cleanSku, mode: 'insensitive' as const } },
+              { ref: { startsWith: cleanSku, mode: 'insensitive' as const } },
+            ]
+          : []),
+      ],
+    };
+    const pedidos: any[] = await (this.prisma as any).order
+      .findMany({
+        where: {
+          createdAt: { gte: dataLimite },
+          status: { notIn: ['cancelled', 'canceled', 'refunded'] },
+          OR: [
+            { paidAt: { not: null } },
+            { source: 'site', status: { in: ['separating', 'shipped', 'delivered'] } },
+          ],
+          items: { some: filtroItemPedido },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        include: { items: { where: filtroItemPedido } },
+      })
+      .catch(() => []);
+
+    let linhasPedidos: any[] = [];
+    if (pedidos.length) {
+      const devolucoesPedidos = await (this.prisma as any).pdvReturn.findMany({
+        where: { originalOrderId: { in: pedidos.map((o: any) => o.id) } },
+        include: { items: true },
+      });
+      const devolvidoPedido = new Map<string, number>();
+      for (const ret of devolucoesPedidos as any[]) {
+        for (const it of ret.items) {
+          const id = it.originalItemId || it.sku;
+          devolvidoPedido.set(id, (devolvidoPedido.get(id) || 0) + (it.qty || 0));
+        }
+      }
+      linhasPedidos = pedidos.map((o: any) => {
+        const fator = this.fatorPagoDoPedido(o);
+        const numero = o.wcOrderNumber || String(o.wcOrderId || o.id.slice(0, 8));
+        const matchedItems = (o.items as any[]).map((it: any) => {
+          const qty = Number(it.quantity) || 1;
+          const precoUnit = Math.round((Number(it.unitPrice) || 0) * fator * 100) / 100;
+          const jaDev = devolvidoPedido.get(it.id) || 0;
+          return {
+            id: it.id,
+            sku: it.sku,
+            ref: it.ref ?? null,
+            cor: it.cor ?? null,
+            tamanho: it.tamanho ?? null,
+            descricao: it.productName || it.sku,
+            qty,
+            precoUnit,
+            total: Math.round(precoUnit * qty * 100) / 100,
+            jaDevolvido: jaDev,
+            disponivel: Math.max(0, qty - jaDev),
+          };
+        });
+        return {
+          saleId: o.id,
+          nfceNumber: null,
+          origem: 'pedido_online',
+          pedidoNumero: numero,
+          storeCode: null,
+          storeName: `Pedido online ${numero}`,
+          sameStore: false,
+          customerName: o.customerName,
+          customerCpf: o.customerCpf,
+          finalizedAt: o.paidAt || o.wcDateCreated || o.createdAt,
+          totalVenda: Number(o.totalAmount) || 0,
+          sellerName: o.sellerName ?? null,
+          status: 'finalized',
+          matchedItems,
+          totalmenteDevolvido: matchedItems.every((it: any) => it.disponivel === 0),
+        };
+      });
+    }
+
+    if (sales.length === 0 && linhasPedidos.length === 0) {
       return { sku: cleanSku, homeStoreCode: home, sales: [] };
+    }
+    if (sales.length === 0) {
+      return { sku: cleanSku, homeStoreCode: home, sales: linhasPedidos };
     }
 
     // Pra cada venda, calcula quanto desse SKU ainda pode ser devolvido
@@ -266,7 +394,135 @@ export class ReturnsService {
       };
     });
 
-    return { sku: cleanSku, homeStoreCode: home, sales: result };
+    // Vendas do PDV primeiro (loja local em destaque), pedidos online depois.
+    return { sku: cleanSku, homeStoreCode: home, sales: [...result, ...linhasPedidos] };
+  }
+
+  // ── PEDIDO ONLINE NO BALCÃO (28/08 — "troca site igual troca loja") ──
+  //
+  // A cliente do site chegava na loja com a peça e o bipe não achava NADA:
+  // venda online mora em Order/OrderItem, e o lookup só olhava PdvSale (e o
+  // fallback manual, o Giga). A loja mandava a cliente pro portal de trocas —
+  // dias de reversa pra quem estava com a peça NA MÃO, no balcão.
+  //
+  // Agora o pedido online entra no MESMO fluxo do botão verde: o bipe acha,
+  // a devolução registra (PdvReturn.originalOrderId + source='pedido_online'),
+  // a peça entra no estoque da loja que atendeu e o vale-troca sai na hora.
+
+  /** Aceita devolução: pago (site novo/live/online) ou, no site velho (WC), já despachado. */
+  private pedidoAceitaDevolucao(o: any): boolean {
+    if (!o) return false;
+    if (['cancelled', 'canceled', 'refunded'].includes(String(o.status || ''))) return false;
+    if (o.paidAt) return true;
+    return o.source === 'site' && ['separating', 'shipped', 'delivered'].includes(String(o.status || ''));
+  }
+
+  /**
+   * Quanto do preço de etiqueta a cliente PAGOU de fato (desconto de pedido
+   * rateado). O site novo guarda cupom/PIX no checkoutInfo — sem ratear, o
+   * vale sairia maior do que entrou. Sem checkoutInfo (live/online/WC), o
+   * unitPrice já é o pago → fator 1.
+   */
+  private fatorPagoDoPedido(order: any): number {
+    try {
+      const ck = JSON.parse(String(order?.checkoutInfo || '{}'));
+      const subtotal = Number(ck?.subtotal);
+      const desconto = Number(ck?.discount) || 0;
+      if (!Number.isFinite(subtotal) || subtotal <= 0 || desconto <= 0) return 1;
+      return Math.min(1, Math.max(0, (subtotal - desconto) / subtotal));
+    } catch {
+      return 1;
+    }
+  }
+
+  /** OrderItems no shape que o fluxo de devolução já entende (id/sku/qty/total…). */
+  private itensDevolviveisDoPedido(order: any): any[] {
+    const fator = this.fatorPagoDoPedido(order);
+    return ((order?.items || []) as any[])
+      .filter((it) => !it.cancelledAt)
+      .map((it) => {
+        const qty = Number(it.quantity) || 1;
+        const precoUnit = Math.round((Number(it.unitPrice) || 0) * fator * 100) / 100;
+        return {
+          id: it.id,
+          sku: String(it.sku || ''),
+          ref: it.ref ?? null,
+          cor: it.cor ?? null,
+          tamanho: it.tamanho ?? null,
+          descricao: it.productName || it.sku || 'Peça',
+          qty,
+          precoUnit,
+          desconto: null,
+          total: Math.round(precoUnit * qty * 100) / 100,
+        };
+      });
+  }
+
+  /**
+   * Localiza um PEDIDO devolvível por id OU nº (`LP-000123`/`ON-000045`) e o
+   * devolve NORMALIZADO no shape de venda que o resto do fluxo usa.
+   * `null` = não é pedido (deixa o chamador seguir o caminho normal).
+   */
+  private async carregarPedidoDevolvivel(query: string): Promise<any | null> {
+    const q = String(query || '').replace(/#/g, '').trim();
+    if (!q) return null;
+    const order = await (this.prisma as any).order
+      .findFirst({
+        where: {
+          OR: [{ id: q }, { wcOrderNumber: { equals: q, mode: 'insensitive' } }],
+        },
+        include: { items: true },
+      })
+      .catch(() => null);
+    if (!order) return null;
+    if (!this.pedidoAceitaDevolucao(order)) {
+      throw new BadRequestException(
+        `Pedido ${order.wcOrderNumber || q} está "${order.status}"${order.paidAt ? '' : ' e sem pagamento confirmado'} — não dá pra devolver.`,
+      );
+    }
+    const numero = order.wcOrderNumber || String(order.wcOrderId || order.id.slice(0, 8));
+    return {
+      origem: 'pedido_online' as const,
+      id: order.id,
+      // Mesmos nomes de campo da PdvSale — o resto do fluxo não sabe a origem.
+      nfceNumber: numero,
+      pedidoNumero: numero,
+      storeCode: null,
+      storeName: `Pedido online ${numero}`,
+      customerCpf: order.customerCpf || null,
+      customerName: order.customerName || null,
+      total: Number(order.totalAmount) || 0,
+      finalizedAt: order.paidAt || order.wcDateCreated || order.createdAt,
+      isTraining: false,
+      items: this.itensDevolviveisDoPedido(order),
+    };
+  }
+
+  /**
+   * Venda original de uma devolução — PdvSale OU pedido online, no mesmo
+   * shape. Lança os MESMOS erros do caminho antigo quando não dá.
+   */
+  private async carregarVendaDevolvivel(id: string): Promise<any> {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (sale) {
+      if (sale.status !== 'finalized') {
+        throw new BadRequestException(`Venda está ${sale.status}, não dá pra devolver`);
+      }
+      return { ...sale, origem: 'pdv' as const };
+    }
+    const pedido = await this.carregarPedidoDevolvivel(id);
+    if (!pedido) throw new NotFoundException('Venda original não encontrada');
+    return pedido;
+  }
+
+  /** Filtro das devoluções anteriores da MESMA origem (venda ou pedido). */
+  private whereDevolucoesDe(venda: any): any {
+    return venda.origem === 'pedido_online'
+      ? { originalOrderId: venda.id }
+      : { originalSaleId: venda.id };
   }
 
   // ── Criar devolução ─────────────────────────────────────────────────
@@ -315,28 +571,26 @@ export class ReturnsService {
     }
     if (!items?.length) throw new BadRequestException('Selecione ao menos uma peça');
 
-    // Carrega venda original com itens
-    const sale = await (this.prisma as any).pdvSale.findUnique({
-      where: { id: originalSaleId },
-      include: { items: true },
-    });
-    if (!sale) throw new NotFoundException('Venda original não encontrada');
-    if (sale.status !== 'finalized') {
-      throw new BadRequestException(`Venda está ${sale.status}, não dá pra devolver`);
-    }
+    // Carrega venda original com itens — PdvSale OU pedido online (28/08),
+    // no mesmo shape. Erros iguais aos de antes quando não dá.
+    const sale = await this.carregarVendaDevolvivel(originalSaleId);
+    const ehPedidoOnline = sale.origem === 'pedido_online';
 
     // ── ALERTA CROSS-STORE ─────────────────────────────────────────────
     // Se a venda original foi em loja DIFERENTE da loja atual da devolução,
     // pede confirmação explícita antes de seguir. A peça VAI ENTRAR no
-    // estoque da loja atual (não da loja que vendeu).
-    const isCrossStore = sale.storeCode && storeCode && sale.storeCode !== storeCode;
+    // estoque da loja atual (não da loja que vendeu). Pedido online SEMPRE
+    // confirma — a peça saiu do estoque de quem separou, e vai entrar aqui.
+    const isCrossStore = ehPedidoOnline || (sale.storeCode && storeCode && sale.storeCode !== storeCode);
     if (isCrossStore && !input.confirmCrossStore) {
       throw new BadRequestException({
         crossStoreAlert: true,
-        message:
-          `Esta peça foi vendida na loja ${sale.storeName || sale.storeCode}, ` +
-          `mas a devolução está sendo feita na loja ${storeName || storeCode}. ` +
-          `Se confirmar, a peça entrará no estoque da loja ${storeName || storeCode}.`,
+        message: ehPedidoOnline
+          ? `Esta peça é do ${sale.storeName} (compra online). ` +
+            `Se confirmar, ela entrará no estoque da loja ${storeName || storeCode} e a devolução fica registrada no pedido.`
+          : `Esta peça foi vendida na loja ${sale.storeName || sale.storeCode}, ` +
+            `mas a devolução está sendo feita na loja ${storeName || storeCode}. ` +
+            `Se confirmar, a peça entrará no estoque da loja ${storeName || storeCode}.`,
         originalStoreCode: sale.storeCode,
         originalStoreName: sale.storeName,
         currentStoreCode: storeCode,
@@ -346,7 +600,7 @@ export class ReturnsService {
 
     // Mapeia disponibilidade já considerando devoluções anteriores
     const previousReturns = await (this.prisma as any).pdvReturn.findMany({
-      where: { originalSaleId },
+      where: this.whereDevolucoesDe(sale),
       include: { items: true },
     });
     const devolvidoPorItem = new Map<string, number>();
@@ -448,8 +702,10 @@ export class ReturnsService {
     // Persiste tudo
     const ret = await (this.prisma as any).pdvReturn.create({
       data: {
-        originalSaleId,
-        originalSaleNumber: sale.nfceNumber || null,
+        originalSaleId: ehPedidoOnline ? null : originalSaleId,
+        originalOrderId: ehPedidoOnline ? sale.id : null,
+        source: ehPedidoOnline ? 'pedido_online' : 'flowops',
+        originalSaleNumber: sale.nfceNumber || (ehPedidoOnline ? sale.pedidoNumero : null) || null,
         storeCode,
         storeName,
         cashSessionId: cashSession?.id || null,
@@ -488,7 +744,7 @@ export class ReturnsService {
     // fecha a brecha de comprar caro, pegar 10%, gastar e devolver.
     // Devolução parcial cancela proporcionalmente ao que voltou.
     // Best-effort: cashback nunca derruba uma devolução com a cliente no balcão.
-    if (!isTraining) {
+    if (!isTraining && !ehPedidoOnline) {
       try {
         await this.cashback.estornarDevolucao({
           saleId: originalSaleId,
@@ -499,24 +755,47 @@ export class ReturnsService {
       } catch (e: any) {
         this.logger.error(`[devolução] estorno de cashback falhou: ${e?.message || e}`);
       }
+    } else if (ehPedidoOnline) {
+      // Cashback de compra online não estorna por aqui (o vínculo é da venda
+      // do PDV) — se um dia o site der cashback, o estorno entra na mesma
+      // régua. Registrado no log pra auditoria.
+      this.logger.log(`[devolução] pedido online ${sale.pedidoNumero}: sem estorno de cashback (fluxo do PDV)`);
+      // Rastro na FICHA DO PEDIDO: a matriz que abrir o pedido vê que a peça
+      // voltou no balcão (loja, modo, valor). Best-effort.
+      try {
+        await (this.prisma as any).orderHistory.create({
+          data: {
+            orderId: sale.id,
+            note:
+              `Devolução no balcão da loja ${storeName || storeCode}: ` +
+              `${itemsToCreate.reduce((s, it) => s + it.qty, 0)} peça(s), ` +
+              `R$ ${valorTotal.toFixed(2)} em ${modo}` +
+              (creditoCode ? ` (vale ${creditoCode})` : '') +
+              (userName ? ` — por ${userName}` : ''),
+          },
+        });
+      } catch (e: any) {
+        this.logger.warn(`[devolução] histórico do pedido não gravado: ${e?.message || e}`);
+      }
     }
 
     // Sangria automatica se for em dinheiro OU pix (saiu valor do caixa).
     // PULA se treinamento (não mexe no caixa real).
     if ((modo === 'dinheiro' || modo === 'pix') && cashSession && !isTraining) {
       const tipoLabel = modo === 'pix' ? 'PIX devolucao' : 'Devolucao dinheiro';
+      const origemLabel = ehPedidoOnline ? `pedido ${sale.pedidoNumero}` : `venda ${sale.nfceNumber || sale.id.slice(0, 8)}`;
       await this.cash.addMovement({
         storeCode,
         tipo: 'sangria',
         valor: valorTotal,
-        motivo: `${tipoLabel} — venda ${sale.nfceNumber || sale.id.slice(0, 8)}${motivo ? ' · ' + motivo : ''}`,
+        motivo: `${tipoLabel} — ${origemLabel}${motivo ? ' · ' + motivo : ''}`,
         userId,
         userName,
       });
     }
 
     this.logger.log(
-      `[devolução] ${ret.id} loja=${storeCode} venda=${originalSaleId.slice(0, 8)} ` +
+      `[devolução] ${ret.id} loja=${storeCode} ${ehPedidoOnline ? `pedido=${sale.pedidoNumero}` : `venda=${originalSaleId.slice(0, 8)}`} ` +
         `modo=${modo} R$${valorTotal.toFixed(2)} ` +
         (creditoCode ? `código=${creditoCode}` : ''),
     );
@@ -1635,20 +1914,27 @@ export class ReturnsService {
 
     // ── ALERTA CROSS-STORE (mesma regra do createReturn) ──
     if (!input.confirmCrossStore && storeCode) {
+      const ids = vendas.map((v) => v.originalSaleId);
       const salesLojas: any[] = await (this.prisma as any).pdvSale.findMany({
-        where: { id: { in: vendas.map((v) => v.originalSaleId) } },
-        select: { storeCode: true, storeName: true },
+        where: { id: { in: ids } },
+        select: { id: true, storeCode: true, storeName: true },
       });
       const outra = salesLojas.find((s) => s.storeCode && s.storeCode !== storeCode);
-      if (outra) {
+      // Id que não é PdvSale = pedido online no meio do lote (28/08) — também
+      // pede confirmação: a peça vai entrar no estoque da loja atual.
+      const achados = new Set(salesLojas.map((s) => s.id));
+      const temPedidoOnline = ids.some((id) => !achados.has(id));
+      if (outra || temPedidoOnline) {
         throw new BadRequestException({
           crossStoreAlert: true,
           message:
-            `Tem peça vendida na loja ${outra.storeName || outra.storeCode}, ` +
-            `mas a devolução está sendo feita na loja ${storeName || storeCode}. ` +
+            (outra
+              ? `Tem peça vendida na loja ${outra.storeName || outra.storeCode}`
+              : `Tem peça de COMPRA ONLINE no meio`) +
+            `, mas a devolução está sendo feita na loja ${storeName || storeCode}. ` +
             `Se confirmar, as peças entrarão no estoque da loja ${storeName || storeCode}.`,
-          originalStoreCode: outra.storeCode,
-          originalStoreName: outra.storeName,
+          originalStoreCode: outra?.storeCode ?? null,
+          originalStoreName: outra?.storeName ?? (temPedidoOnline ? 'Pedido online' : null),
           currentStoreCode: storeCode,
           currentStoreName: storeName,
         });
@@ -1667,18 +1953,12 @@ export class ReturnsService {
     let alguemTreino = false;
 
     for (const v of vendas) {
-      const sale = await (this.prisma as any).pdvSale.findUnique({
-        where: { id: v.originalSaleId },
-        include: { items: true },
-      });
-      if (!sale) throw new NotFoundException(`Venda ${v.originalSaleId.slice(0, 8)} não encontrada`);
-      if (sale.status !== 'finalized') {
-        throw new BadRequestException(`Venda ${v.originalSaleId.slice(0, 8)} está ${sale.status}`);
-      }
+      // PdvSale OU pedido online (28/08) — mesmo shape, mesmos erros.
+      const sale = await this.carregarVendaDevolvivel(v.originalSaleId);
 
-      // Devoluções anteriores pra essa venda
+      // Devoluções anteriores pra essa venda/pedido
       const previousReturns = await (this.prisma as any).pdvReturn.findMany({
-        where: { originalSaleId: v.originalSaleId },
+        where: this.whereDevolucoesDe(sale),
         include: { items: true },
       });
       const devolvidoPorItem = new Map<string, number>();
@@ -1775,9 +2055,12 @@ export class ReturnsService {
       for (let i = 0; i < processadas.length; i++) {
         const p = processadas[i];
         const isPrimeiro = i === 0;
+        const ehPedidoOnline = p.sale.origem === 'pedido_online';
         const ret = await tx.pdvReturn.create({
           data: {
-            originalSaleId: p.sale.id,
+            originalSaleId: ehPedidoOnline ? null : p.sale.id,
+            originalOrderId: ehPedidoOnline ? p.sale.id : null,
+            source: ehPedidoOnline ? 'pedido_online' : 'flowops',
             originalSaleNumber: p.sale.nfceNumber || null,
             storeCode,
             storeName,
@@ -1820,6 +2103,27 @@ export class ReturnsService {
         returnsCreated.push(ret);
       }
     });
+
+    // Rastro na ficha dos PEDIDOS online do lote (best-effort) — a matriz
+    // que abrir o pedido vê que a peça voltou no balcão.
+    for (const p of processadas) {
+      if (p.sale.origem !== 'pedido_online') continue;
+      try {
+        await (this.prisma as any).orderHistory.create({
+          data: {
+            orderId: p.sale.id,
+            note:
+              `Devolução no balcão da loja ${storeName || storeCode}: ` +
+              `${p.itemsToCreate.reduce((s: number, it: any) => s + it.qty, 0)} peça(s), ` +
+              `R$ ${p.valorParcial.toFixed(2)} em ${modo}` +
+              (creditoCodeMaster ? ` (vale ${creditoCodeMaster})` : '') +
+              (userName ? ` — por ${userName}` : ''),
+          },
+        });
+      } catch {
+        /* rastro é conveniência */
+      }
+    }
 
     // 6. UMA sangria total (se dinheiro/pix)
     if ((modo === 'dinheiro' || modo === 'pix') && cashSession && !alguemTreino) {
