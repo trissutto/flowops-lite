@@ -150,7 +150,43 @@ export class RoutingEngine {
     if (juntada) return juntada;
 
     // REGRA 2 — mínimo de lojas (greedy set cover)
-    const plan = this.greedySetCover(activeStores, ctx, stockMap);
+    let plan = this.greedySetCover(activeStores, ctx, stockMap);
+
+    /**
+     * A VENDEDORA NÃO PODE CUSTAR UMA CAIXA A MAIS (28/08/2026).
+     *
+     * A semeadura de 17/08 (ver `greedySetCover`) parte de uma premissa certa —
+     * peça na mão de quem vendeu tem frete zero — mas entrava SEM PERGUNTAR se
+     * ela economiza um pacote ou CRIA um. Quando a vendedora tem só uma peça e
+     * outra loja do plano também tem aquela peça, semear abre um pacote inteiro
+     * pra um item só: mais um frete, mais uma etiqueta, mais uma loja separando.
+     *
+     * Caso que originou (ON-000201, venda online do PDV de Moema): a engine
+     * mandou pra 4 lojas — Moema com UMA peça (223248-DUp PRETO 52) que
+     * Sorocaba (3 un) e Campinas (2 un) tinham, e as duas entraram no plano do
+     * mesmo jeito. Héllen e Elisa desfizeram na mão em 4 movimentos.
+     *
+     * A regra agora é comparativa: monta o plano SEM a vendedora e fica com ele
+     * só se usar MENOS lojas. Empate mantém a vendedora — ali ela é frete zero
+     * de verdade, que é exatamente o que a decisão de 17/08 queria.
+     *
+     * Loja FIXADA na mão (`pinStoreCodes`) não entra nessa conta: o operador
+     * acabou de apontar, e a escolha dele manda sobre a heurística.
+     */
+    if (ctx.sellerStoreCode && !(ctx.pinStoreCodes ?? []).length && plan.length > 1) {
+      const semVendedora = this.greedySetCover(activeStores, ctx, stockMap, { seedSeller: false });
+      const cobreTudo = (p: PickAssignment[]) =>
+        new Set(p.flatMap((a) => a.items.map((i) => i.sku))).size ===
+        new Set(ctx.items.map((i) => i.sku)).size;
+      if (semVendedora.length < plan.length && cobreTudo(semVendedora)) {
+        this.logger.log(
+          `[split] loja vendedora ${ctx.sellerStoreCode} SAIU do plano: com ela seriam ` +
+            `${plan.length} pacote(s), sem ela ${semVendedora.length} — as peças dela já ` +
+            `estão em loja que o pedido usa de qualquer jeito`,
+        );
+        plan = semVendedora;
+      }
+    }
     const coveredSkus = new Set(plan.flatMap((p) => p.items.map((i) => i.sku)));
     let missing = ctx.items.filter((i) => !coveredSkus.has(i.sku));
 
@@ -511,7 +547,9 @@ export class RoutingEngine {
     stores: StoreInput[],
     ctx: RoutingContext,
     stockMap: Map<string, number>,
+    opts: { seedSeller?: boolean } = {},
   ): PickAssignment[] {
+    const seedSeller = opts.seedSeller !== false;
     const remaining = new Map<string, number>();
     for (const item of ctx.items) remaining.set(item.sku, item.quantity);
 
@@ -566,9 +604,10 @@ export class RoutingEngine {
      * Não vale pra RETIRADA: ali quem manda é o `routePickup` (REGRA 0), que
      * roda antes e trava na loja da retirada.
      */
-    const vendedora = ctx.sellerStoreCode
-      ? stores.find((s) => s.code === ctx.sellerStoreCode)
-      : undefined;
+    const vendedora =
+      seedSeller && ctx.sellerStoreCode
+        ? stores.find((s) => s.code === ctx.sellerStoreCode)
+        : undefined;
     if (vendedora && !usedStores.has(vendedora.id)) {
       const covered: OrderItemInput[] = [];
       for (const [sku, qty] of remaining.entries()) {
