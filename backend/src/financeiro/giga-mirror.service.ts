@@ -234,6 +234,14 @@ export class GigaMirrorService implements OnModuleInit {
   }
 
   private async syncCaixaMovRange(from: Date, to: Date): Promise<number> {
+    // 🔴 Pull do Giga desligado: NÃO tocar a tabela. Com o pool nulo o getter
+    // devolve [] em silêncio e o replace atômico viraria DELETE de tudo +
+    // INSERT de nada — apagaria inclusive dado RESTAURADO de backup. O que
+    // está no espelho é o último retrato do Giga e fica como está.
+    if (!pullGigaLigado()) {
+      this.logger.log('[syncCaixaMovRange] pulado — pull do Giga desligado (espelho preservado como está)');
+      return 0;
+    }
     // Busca o Giga ANTES de tocar o Postgres (falha → espelho intacto).
     const rows = await this.erp.getCaixaMovRows(from, to);
     const data = rows.map((r) => this.mapCaixaMovRow(r)).filter(Boolean) as any[];
@@ -349,6 +357,14 @@ export class GigaMirrorService implements OnModuleInit {
   // ── FUNCIONÁRIOS (wincred_funcionarios) ───────────────────────────────────
 
   private async syncFuncionarios(): Promise<number> {
+    // 🔴 Pull do Giga desligado: NÃO tocar a tabela. Com o pool nulo o getter
+    // devolve [] em silêncio e o replace atômico viraria DELETE de tudo +
+    // INSERT de nada — apagaria inclusive dado RESTAURADO de backup. O que
+    // está no espelho é o último retrato do Giga e fica como está.
+    if (!pullGigaLigado()) {
+      this.logger.log('[syncFuncionarios] pulado — pull do Giga desligado (espelho preservado como está)');
+      return 0;
+    }
     const rows = await this.erp.getFuncionariosRawAll();
     if (!rows.length) return 0; // Giga vazio/fora → preserva o espelho
     const data = rows.map((r) => ({
@@ -372,6 +388,14 @@ export class GigaMirrorService implements OnModuleInit {
   }
 
   private async syncTransferencias(): Promise<number> {
+    // 🔴 Pull do Giga desligado: NÃO tocar a tabela. Com o pool nulo o getter
+    // devolve [] em silêncio e o replace atômico viraria DELETE de tudo +
+    // INSERT de nada — apagaria inclusive dado RESTAURADO de backup. O que
+    // está no espelho é o último retrato do Giga e fica como está.
+    if (!pullGigaLigado()) {
+      this.logger.log('[syncTransferencias] pulado — pull do Giga desligado (espelho preservado como está)');
+      return 0;
+    }
     // Busca o Giga ANTES de mexer no Postgres. Se falhar, joga e o espelho
     // antigo fica intacto.
     const rows = await this.erp.getGigaTransfersDetailed(this.windowFrom(), this.windowTo());
@@ -515,6 +539,14 @@ export class GigaMirrorService implements OnModuleInit {
   }
 
   private async syncItens(): Promise<number> {
+    // 🔴 Pull do Giga desligado: NÃO tocar a tabela. Com o pool nulo o getter
+    // devolve [] em silêncio e o replace atômico viraria DELETE de tudo +
+    // INSERT de nada — apagaria inclusive dado RESTAURADO de backup. O que
+    // está no espelho é o último retrato do Giga e fica como está.
+    if (!pullGigaLigado()) {
+      this.logger.log('[syncItens] pulado — pull do Giga desligado (espelho preservado como está)');
+      return 0;
+    }
     const rows = await this.erp.getGigaTransferItems(this.windowFrom(), this.windowTo());
     const data = rows
       .filter((r) => r.controle && r.codigo && r.data)
@@ -549,6 +581,14 @@ export class GigaMirrorService implements OnModuleInit {
   }
 
   private async syncProdutos(): Promise<number> {
+    // 🔴 Pull do Giga desligado: NÃO tocar a tabela. Com o pool nulo o getter
+    // devolve [] em silêncio e o replace atômico viraria DELETE de tudo +
+    // INSERT de nada — apagaria inclusive dado RESTAURADO de backup. O que
+    // está no espelho é o último retrato do Giga e fica como está.
+    if (!pullGigaLigado()) {
+      this.logger.log('[syncProdutos] pulado — pull do Giga desligado (espelho preservado como está)');
+      return 0;
+    }
     const rows = await this.erp.getGigaProdutos();
     const data = rows.map((r) => ({
       codigo: r.codigo,
