@@ -2115,6 +2115,10 @@ model PdvReturn {
   // Venda original — NULL pra devoluções manuais (peça vendida no Giga
   // antigo, sem cupom flowops). Source identifica a origem.
   originalSaleId  String?  @map("original_sale_id")
+  // PEDIDO ONLINE devolvido no balcão (28/08 — "troca site igual troca
+  // loja"). Preenchido quando a origem é um Order (site/live/venda online)
+  // em vez de uma PdvSale; source vira 'pedido_online'.
+  originalOrderId String?  @map("original_order_id")
   originalSaleNumber String? @map("original_sale_number")
   // Origem: 'flowops' (venda do PDV novo, com originalSaleId) ou
   // 'giga_manual' (peça do Giga sem cupom). Default flowops.
@@ -2150,6 +2154,7 @@ model PdvReturn {
   items           PdvReturnItem[]
 
   @@index([originalSaleId])
+  @@index([originalOrderId])
   @@index([storeCode, createdAt(sort: Desc)])
   @@index([customerCpf])
   @@index([status])

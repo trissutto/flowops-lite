@@ -45,6 +45,9 @@ type Sale = {
   total: number;
   finalizedAt: string;
   nfceNumber?: string;
+  /** 'pedido_online' = compra do site/live/venda online devolvida no balcão (28/08). */
+  origem?: string;
+  pedidoNumero?: string | null;
 };
 
 type LookupResult = {
@@ -758,8 +761,23 @@ export default function DevolucaoPage() {
                       {s.customerCpf && <span className="ml-2 text-xs text-slate-500 font-mono">{s.customerCpf}</span>}
                     </div>
                     <div className="text-xs text-slate-600 mt-0.5">
-                      {dataFmt} · <b className={s.sameStore ? '' : 'text-amber-700'}>{s.storeName || '—'}</b>
-                      {s.nfceNumber && <> · NFC-e {s.nfceNumber}</>}
+                      {dataFmt}
+                      {/* PEDIDO ONLINE (28/08): selo violeta — mesma cor do
+                          selo ECOMMERCE da /separacao. A troca segue o fluxo
+                          normal do balcão. */}
+                      {s.origem === 'pedido_online' ? (
+                        <>
+                          {' · '}
+                          <span className="inline-block rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
+                            🌐 PEDIDO ONLINE {s.pedidoNumero ? `#${s.pedidoNumero}` : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          {' · '}<b className={s.sameStore ? '' : 'text-amber-700'}>{s.storeName || '—'}</b>
+                          {s.nfceNumber && <> · NFC-e {s.nfceNumber}</>}
+                        </>
+                      )}
                       {s.sellerName && <> · {s.sellerName}</>}
                     </div>
                     <div className="text-xs text-slate-700 mt-1">
@@ -994,7 +1012,15 @@ export default function DevolucaoPage() {
             <div className="bg-white rounded-xl shadow-sm px-3 py-2 text-xs">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="font-bold text-rose-900">
-                  {data.sale.nfceNumber ? `NFC-e #${data.sale.nfceNumber}` : 'Venda original'}
+                  {(data.sale as any).origem === 'pedido_online' ? (
+                    <span className="inline-block rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
+                      🌐 PEDIDO ONLINE {(data.sale as any).pedidoNumero ? `#${(data.sale as any).pedidoNumero}` : ''}
+                    </span>
+                  ) : data.sale.nfceNumber ? (
+                    `NFC-e #${data.sale.nfceNumber}`
+                  ) : (
+                    'Venda original'
+                  )}
                   <span className="text-gray-500 font-normal ml-2">
                     {data.sale.storeName} · {new Date(data.sale.finalizedAt).toLocaleDateString('pt-BR')}
                   </span>
@@ -1019,7 +1045,9 @@ export default function DevolucaoPage() {
               <div key={vex.sale.id} className="bg-white rounded-xl shadow-sm px-3 py-2 text-xs border-l-4 border-amber-400">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="font-bold text-amber-900">
-                    + {vex.sale.nfceNumber ? `NFC-e #${vex.sale.nfceNumber}` : 'Venda extra'}
+                    + {(vex.sale as any).origem === 'pedido_online'
+                      ? `🌐 PEDIDO ONLINE ${(vex.sale as any).pedidoNumero ? `#${(vex.sale as any).pedidoNumero}` : ''}`
+                      : vex.sale.nfceNumber ? `NFC-e #${vex.sale.nfceNumber}` : 'Venda extra'}
                     <span className="text-gray-500 font-normal ml-2">
                       {vex.sale.storeName} · {new Date(vex.sale.finalizedAt).toLocaleDateString('pt-BR')}
                     </span>
