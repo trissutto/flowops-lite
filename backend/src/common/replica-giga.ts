@@ -90,3 +90,26 @@ export function escritaGigaBloqueada(isWriteEnabled: boolean): boolean {
 export function pullGigaLigado(): boolean {
   return String(process.env.ERP_PULL_GIGA ?? '').trim() === '1';
 }
+
+/**
+ * O SERVIDOR DO GIGA FOI DESLIGADO — nem tenta conectar.
+ *
+ * Ordem do dono (27/08/2026): **"o servidor desliga hoje meia-noite"**.
+ *
+ * Enquanto ele recusava login, cada tentativa voltava rápido com
+ * `Access denied`. Um servidor DESLIGADO não responde nada: o TCP fica
+ * esperando o `connectTimeout` de 12s, e cada chamada que ainda passa por
+ * ali segura uma das 15 vagas do pool por 12 segundos. Foi assim que o Giga
+ * derrubou a live de 01/07 — pendurado, não caído.
+ *
+ * Com esta trava o pool NÃO é criado. `this.pool` fica nulo e todo método do
+ * ErpService que o consulta sai na hora, como já sai quando o pool não
+ * inicializa. Quem lê catálogo, estoque, REF/cor/tamanho e crediário já
+ * responde do Postgres — o Giga era só o recuo.
+ *
+ * `ERP_GIGA_OFF=0` (ou apagar a env) volta a criar o pool, se um dia o
+ * servidor voltar.
+ */
+export function gigaDesligado(): boolean {
+  return String(process.env.ERP_GIGA_OFF ?? '1').trim() === '1';
+}

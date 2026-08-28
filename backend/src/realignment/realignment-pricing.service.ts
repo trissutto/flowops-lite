@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { gigaDesligado } from '../common/replica-giga';
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
 
@@ -26,6 +27,11 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
   constructor(private readonly config: ConfigService) {}
 
   async onModuleInit() {
+    // Servidor do Giga desligado (27/08): pool nenhum. Ver common/replica-giga.ts.
+    if (gigaDesligado()) {
+      this.logger.warn('pricing service inativo — servidor do Giga desligado (ERP_GIGA_OFF)');
+      return;
+    }
     const host = this.config.get<string>('ERP_HOST');
     if (!host) {
       this.logger.warn('ERP_HOST não configurado — pricing service inativo');

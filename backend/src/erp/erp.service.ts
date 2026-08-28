@@ -5,7 +5,7 @@ import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
 import { PrismaService } from '../prisma/prisma.service';
 import { SombraService } from './sombra.service';
-import { replicaGigaLigada } from '../common/replica-giga';
+import { replicaGigaLigada, gigaDesligado } from '../common/replica-giga';
 
 /**
  * Início da faixa de REGISTRO/CONTROLE reservada às parcelas de crediário
@@ -1222,6 +1222,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
+    // Servidor do Giga desligado (27/08): sem pool, sem espera de 12s por
+    // conexão em cada chamada que ainda passa por aqui. Ver
+    // common/replica-giga.ts.
+    if (gigaDesligado()) {
+      this.pool = null as any;
+      this.logger.warn(
+        'ERP MySQL NÃO inicializado — servidor do Giga desligado (ERP_GIGA_OFF). ' +
+          'Catálogo, estoque, crediário e cadastro respondem do Postgres.',
+      );
+      return;
+    }
     this.pool = mysql.createPool({
       host: this.config.get<string>('ERP_HOST'),
       port: Number(this.config.get<string>('ERP_PORT') ?? 3306),

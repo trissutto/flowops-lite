@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { pullGigaLigado } from '../common/replica-giga';
 import { ErpService } from '../erp/erp.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 
@@ -398,7 +399,9 @@ export class GigaMirrorService implements OnModuleInit {
   }
 
   private async syncCaixa(): Promise<number> {
-    const rows = await this.erp.getSalesGrossDailyByStore(this.windowFrom(), this.windowTo());
+    const rows = pullGigaLigado()
+      ? await this.erp.getSalesGrossDailyByStore(this.windowFrom(), this.windowTo())
+      : await this.vendaDiariaDoFlow();
     const data = rows
       .filter((r) => r.loja && r.data)
       .map((r) => ({ loja: r.loja, data: new Date(`${r.data}T00:00:00Z`), bruto: r.bruto }));
@@ -413,6 +416,65 @@ export class GigaMirrorService implements OnModuleInit {
     );
     await this.setState('caixa', data.length, null);
     return data.length;
+  }
+
+  /**
+   * VENDA POR LOJA E DIA, DAS VENDAS DO PRÓPRIO FLOW — sem Giga.
+   *
+   * `giga_caixa_diario` alimenta a conta corrente (royalties 8% + marketing
+   * 4% por filial), o painel de franquias e os relatórios de caixa. A fonte
+   * era a `caixa` do Giga, que é uma CÓPIA das vendas do Flow — e a cópia
+   * vinha incompleta: em agosto/2026 marcava R$ 855.145,25 contra
+   * R$ 955.881,42 de venda real, e a partir de 25/08 parou de receber
+   * qualquer coisa (27/08 fechou o dia em R$ 0,00 com R$ 39,5 mil vendidos).
+   * Com o servidor desligado, a cópia vira zero pra sempre.
+   *
+   * ⚠ Isto MUDA A BASE DO ROYALTY, pra mais: agosto sairia de R$ 102.617,43
+   * para R$ 114.705,77 na rede inteira (a maior parte é loja 01, que é
+   * matriz e não paga). Foi decisão do dono em 27/08, com o servidor
+   * desligando — ou a base é a venda do Flow, ou não existe base.
+   *
+   * Regra: venda FINALIZADA, sem treinamento, MENOS as devoluções do dia
+   * (a caixa do Giga também tinha lançamento negativo — daí a loja 19
+   * aparecer com saldo negativo no espelho antigo). Dia e loja no fuso de
+   * São Paulo, que é como a loja fecha o caixa.
+   */
+  private async vendaDiariaDoFlow(): Promise<Array<{ loja: string; data: string; bruto: number }>> {
+    const from = this.windowFrom();
+    const to = this.windowTo();
+    const rows: any[] = await (this.prisma as any).$queryRaw`
+      WITH venda AS (
+        SELECT lpad(regexp_replace(store_code, '[^0-9]', '', 'g'), 2, '0') AS loja,
+               ((COALESCE(finalized_at, created_at) AT TIME ZONE 'America/Sao_Paulo'))::date AS dia,
+               sum(total) AS valor
+          FROM pdv_sales
+         WHERE status = 'finalized'
+           AND COALESCE(is_training, false) = false
+           AND COALESCE(finalized_at, created_at) >= ${from}
+           AND COALESCE(finalized_at, created_at) < ${to}
+         GROUP BY 1, 2
+      ), devolucao AS (
+        SELECT lpad(regexp_replace(store_code, '[^0-9]', '', 'g'), 2, '0') AS loja,
+               ((created_at AT TIME ZONE 'America/Sao_Paulo'))::date AS dia,
+               sum(valor_total) AS valor
+          FROM pdv_returns
+         WHERE COALESCE(is_training, false) = false
+           AND created_at >= ${from}
+           AND created_at < ${to}
+         GROUP BY 1, 2
+      )
+      SELECT COALESCE(v.loja, d.loja) AS loja,
+             to_char(COALESCE(v.dia, d.dia), 'YYYY-MM-DD') AS data,
+             COALESCE(v.valor, 0) - COALESCE(d.valor, 0) AS bruto
+        FROM venda v
+        FULL OUTER JOIN devolucao d ON d.loja = v.loja AND d.dia = v.dia
+       WHERE COALESCE(v.loja, d.loja) IS NOT NULL`;
+
+    return rows.map((r) => ({
+      loja: String(r.loja),
+      data: String(r.data),
+      bruto: Number(r.bruto) || 0,
+    }));
   }
 
   private async syncItens(): Promise<number> {
