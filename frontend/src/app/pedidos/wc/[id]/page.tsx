@@ -166,6 +166,17 @@ interface WcOrderDetail {
   shipping: any;
   lineItems: Array<{
     id: number; name: string; sku: string; quantity: number; total: string; price: number; image: string | null;
+    /**
+     * OS DOIS PREÇOS DA PEÇA (29/08 — ON-000215).
+     *
+     * `price` é o COBRADO, o que soma com o total do pedido. `basePrice` é o
+     * CHEIO de tabela e só vem quando houve promoção de verdade — peça sem
+     * desconto volta null. Sem os dois, a lista mostrava R$ 179,90 + R$ 129,90
+     * num pedido de R$ 154,90 e ninguém na separação sabia qual número valia.
+     */
+    basePrice?: number | null;
+    /** "PROMO 50% · 2022", "4 LEVA 3 · 1 grátis" — o motivo do preço menor. */
+    promoTag?: string | null;
     /** REF · COR · TAM — vêm preenchidos no pedido do site novo (13/08). */
     ref?: string | null; cor?: string | null; tamanho?: string | null;
   }>;
@@ -2092,6 +2103,13 @@ export default function PedidoDetailPage() {
   const MARCA_CONFERIDO = 'VERIFICACAO MANUAL';
   const precisaConferir = Number(order.total || 0) > TETO_SEM_CONFERIR;
   const conferidoEvento = raiox?.eventos.find((ev) => (ev.detalhe || '').includes(MARCA_CONFERIDO)) ?? null;
+  /**
+   * Peça com PROMOÇÃO: tem preço cheio gravado E ele é maior que o cobrado.
+   * A comparação é em centavos — comparar float rende risco em preço igual.
+   */
+  const temPromo = (li: { price: number; basePrice?: number | null }) =>
+    Math.round(Number(li.basePrice ?? 0) * 100) > Math.round(Number(li.price ?? 0) * 100);
+
   const freteDoPedido = {
     // Valor: o que o pedido guarda no método de envio; se o frete ainda estiver
     // como item (pedido de antes desta correção), soma a linha.
@@ -2100,6 +2118,31 @@ export default function PedidoDetailPage() {
       order.lineItems.filter(ehLinhaFrete).reduce((s, li) => s + Number(li.total || 0), 0),
     metodo: order.shippingLines?.[0]?.method || order.pickup?.shippingMethodTitle || '',
   };
+
+  /**
+   * A CONTA DO PEDIDO, de cima pra baixo: preço cheio → promoção → cobrado →
+   * frete → total. `outros` é o resíduo (desconto da venda inteira, cupom,
+   * Pix) — o pedaço que antes ficava invisível e fazia a soma não bater com o
+   * número grande do topo da tela.
+   */
+  const contaDoPedido = (() => {
+    const cents = (v: number | string) => Math.round((Number(v) || 0) * 100);
+    let cheio = 0;
+    let cobrado = 0;
+    for (const li of pecasDoPedido) {
+      const qtd = Number(li.quantity) || 1;
+      const pago = Number(li.total || 0);
+      cobrado += cents(pago);
+      cheio += temPromo(li) ? cents(Number(li.basePrice) * qtd) : cents(pago);
+    }
+    const sobra = cobrado + cents(freteDoPedido.valor) - cents(order.total);
+    return {
+      cheio: cheio / 100,
+      cobrado: cobrado / 100,
+      desconto: Math.max(0, cheio - cobrado) / 100,
+      outros: Math.max(0, sobra) / 100,
+    };
+  })();
 
   /**
    * A LOJA QUE POSTOU — quem casa o rastreio do pedido com o card de
@@ -2843,8 +2886,37 @@ export default function PedidoDetailPage() {
 
                   <td className="p-3 font-mono text-xs text-slate-600">{li.sku || '—'}</td>
                   <td className="p-3 text-right">{li.quantity}</td>
-                  <td className="p-3 text-right">{fmtMoney(li.price)}</td>
-                  <td className="p-3 text-right font-medium">{fmtMoney(li.total)}</td>
+                  {/* PREÇO — cheio riscado em cima, cobrado embaixo. A loja
+                      que separa confere a peça pela etiqueta (preço cheio) e
+                      acerta pelo que a cliente pagou: mostrar um número só
+                      obriga ela a adivinhar qual dos dois vale. */}
+                  <td className="p-3 text-right tabular-nums">
+                    {temPromo(li) ? (
+                      <>
+                        <div className="text-xs text-slate-400 line-through">{fmtMoney(li.basePrice ?? 0)}</div>
+                        <div className="font-semibold text-emerald-700">{fmtMoney(li.price)}</div>
+                        {li.promoTag && (
+                          <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                            {li.promoTag}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      fmtMoney(li.price)
+                    )}
+                  </td>
+                  <td className="p-3 text-right font-medium tabular-nums">
+                    {temPromo(li) ? (
+                      <>
+                        <div className="text-xs font-normal text-slate-400 line-through">
+                          {fmtMoney(Number(li.basePrice) * (Number(li.quantity) || 1))}
+                        </div>
+                        <div className="text-emerald-700">{fmtMoney(li.total)}</div>
+                      </>
+                    ) : (
+                      fmtMoney(li.total)
+                    )}
+                  </td>
                   {podeTrocarItem && (
                     <td className="p-3 text-right">
                       <button
@@ -2860,7 +2932,35 @@ export default function PedidoDetailPage() {
               );
             })}
           </tbody>
+          {/* A CONTA QUE FECHA (29/08 — ON-000215). Antes a tela listava peças
+              somando R$ 309,80 embaixo de um total de R$ 154,90, sem nada no
+              meio explicando a diferença. Agora a promoção é uma LINHA: dá pra
+              seguir a conta da primeira peça até o total do pedido. */}
           <tfoot className="border-t-2 bg-slate-50 text-slate-700">
+            {contaDoPedido.desconto > 0.009 && (
+              <>
+                <tr>
+                  <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 6 : 5}>
+                    Peças a preço cheio
+                  </td>
+                  <td className="p-3 text-right tabular-nums">{fmtMoney(contaDoPedido.cheio)}</td>
+                </tr>
+                <tr className="text-emerald-700">
+                  <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 6 : 5}>
+                    Promoção nas peças
+                  </td>
+                  <td className="p-3 text-right font-semibold tabular-nums">
+                    −{fmtMoney(contaDoPedido.desconto)}
+                  </td>
+                </tr>
+              </>
+            )}
+            <tr>
+              <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 6 : 5}>
+                Peças cobradas da cliente
+              </td>
+              <td className="p-3 text-right font-bold tabular-nums">{fmtMoney(contaDoPedido.cobrado)}</td>
+            </tr>
             <tr>
               <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 6 : 5}>
                 Frete cobrado da cliente{freteDoPedido.metodo ? ` · ${freteDoPedido.metodo}` : ''}
@@ -2868,6 +2968,25 @@ export default function PedidoDetailPage() {
               <td className="p-3 text-right font-bold tabular-nums">
                 {freteDoPedido.valor > 0 ? fmtMoney(freteDoPedido.valor) : '—'}
               </td>
+            </tr>
+            {/* O que sobra depois de peças + frete é o desconto da VENDA
+                INTEIRA (avulso do caixa, cupom, Pix). Só aparece quando
+                existe — e existir sem aparecer é o que faz a conta não fechar. */}
+            {contaDoPedido.outros > 0.009 && (
+              <tr className="text-emerald-700">
+                <td className="p-3 text-xs uppercase tracking-wide" colSpan={podeTrocarItem ? 6 : 5}>
+                  Desconto na venda inteira
+                </td>
+                <td className="p-3 text-right font-semibold tabular-nums">
+                  −{fmtMoney(contaDoPedido.outros)}
+                </td>
+              </tr>
+            )}
+            <tr className="border-t-2 border-slate-300">
+              <td className="p-3 text-xs font-bold uppercase tracking-wide" colSpan={podeTrocarItem ? 6 : 5}>
+                Total do pedido
+              </td>
+              <td className="p-3 text-right text-base font-black tabular-nums">{fmtMoney(order.total)}</td>
             </tr>
           </tfoot>
         </table>

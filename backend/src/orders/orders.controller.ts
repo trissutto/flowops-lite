@@ -1672,7 +1672,10 @@ export class OrdersController {
      * Sem esse fallback, os pedidos que já existem ficariam com a coluna vazia
      * justamente na tela em que o dono foi olhar.
      */
-    const doSnapshot = new Map<string, { ref: string | null; cor: string | null; tamanho: string | null }>();
+    const doSnapshot = new Map<
+      string,
+      { ref: string | null; cor: string | null; tamanho: string | null; basePrice: number | null; promoTag: string | null }
+    >();
     for (const it of (ck.items || []) as any[]) {
       const chave = String(it?.sku || '').trim();
       if (!chave || doSnapshot.has(chave)) continue;
@@ -1680,8 +1683,22 @@ export class OrdersController {
         ref: it?.ref || it?.productId || null,
         cor: it?.color || null,
         tamanho: it?.size || null,
+        // Preço CHEIO e a etiqueta da promoção ("PROMO 50% · 2022"), do snapshot
+        // do caixa. É o que deixa a lista mostrar os DOIS preços — sem isso a
+        // tela mostra um número e o total do pedido mostra outro, sem ninguém
+        // conseguir dizer qual está errado (caso ON-000215).
+        basePrice: Number.isFinite(Number(it?.basePrice)) ? Number(it.basePrice) : null,
+        promoTag: it?.promoTag || null,
       });
     }
+
+    /**
+     * PREÇO CHEIO da peça. `OrderItem.baseUnitPrice` é a fonte (a live e a
+     * venda online da loja gravam nele); o snapshot do checkout é a rede pro
+     * pedido criado antes de a coluna ser preenchida.
+     */
+    const precoCheio = (it: any, snap?: { basePrice: number | null }): number =>
+      Number(it?.baseUnitPrice ?? snap?.basePrice ?? 0) || 0;
 
     const pagamento =
       pi.method === 'card'
@@ -1698,6 +1715,12 @@ export class OrdersController {
     const notas: string[] = [];
     if (ck.couponCode) notas.push(`Cupom ${ck.couponCode}: −${this.reaisBr(ck.descontoCupom)}`);
     if (Number(ck.descontoPix) > 0) notas.push(`Desconto Pix: −${this.reaisBr(ck.descontoPix)}`);
+    // Desconto avulso do CAIXA (venda online da loja). A promoção por peça já
+    // aparece na lista de itens; este aqui é da venda inteira e não está em
+    // item nenhum — sem a nota, some da tela e vira "conta que não fecha".
+    if (ck.origem === 'pdv_online' && Number(ck.discount) > 0) {
+      notas.push(`Desconto da loja: −${this.reaisBr(ck.discount)}`);
+    }
 
     // QUAL FILIAL PEDIU — só o pedido nascido no PDV tem loja pedinte
     // (`sellerStoreCode`). O nome vem da lista de lojas ativas; se a loja
@@ -1762,6 +1785,12 @@ export class OrdersController {
           quantity: it.quantity,
           total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
           price: it.unitPrice,
+          // DOIS PREÇOS: `price` é o COBRADO — o que fecha com o total do
+          // pedido — e `basePrice` é o CHEIO de tabela. `basePrice` só vem
+          // quando houve promoção DE VERDADE: peça vendida a preço cheio volta
+          // null, pra tela não riscar um preço igual ao outro.
+          basePrice: precoCheio(it, snap) > Number(it.unitPrice ?? 0) ? precoCheio(it, snap) : null,
+          promoTag: snap?.promoTag ?? null,
           image: null,
         };
       }),
@@ -1969,6 +1998,11 @@ export class OrdersController {
           quantity: it.quantity,
           total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
           price: it.unitPrice,
+          // A live grava o preço cheio em `baseUnitPrice` desde sempre — mesma
+          // leitura da tela, mesma coluna.
+          basePrice:
+            Number(it.baseUnitPrice ?? 0) > Number(it.unitPrice ?? 0) ? Number(it.baseUnitPrice) : null,
+          promoTag: null,
           image: null,
         })),
         shippingLines: [

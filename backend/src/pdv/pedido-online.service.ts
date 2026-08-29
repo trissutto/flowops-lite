@@ -55,6 +55,31 @@ export class PedidoOnlineService {
     return String(v ?? '').replace(/\D+/g, '');
   }
 
+  /**
+   * PREÇO COBRADO POR UNIDADE — o que a cliente PAGOU, já com a promoção.
+   *
+   * 🔴 Bug do ON-000215 (29/08, Suzano): o Order copiava `precoUnit`, que é o
+   * preço CHEIO de tabela. A peça de R$ 179,90 na promoção de 50% entrou no
+   * pedido por R$ 179,90 enquanto o `totalAmount` (= `sale.total`) era o
+   * correto R$ 154,90 — a tela somava R$ 309,80 em peças num pedido de
+   * R$ 154,90. E não é só a tela: `unitPrice` é o que vira FATURAMENTO, item
+   * da NF-e e valor da declaração de conteúdo.
+   *
+   * No PDV o item guarda os DOIS lados (`applyAutoDiscounts`):
+   *   precoUnit × qty = bruto · desconto = promoção da linha · total = cobrado.
+   * Aqui o cobrado vira `unitPrice` e o cheio segue em `baseUnitPrice` — que
+   * é a base do acerto ÷2,5 e NÃO pode cair com a promoção (a promoção é da
+   * loja vendedora, não muda o que ela deve à fornecedora).
+   */
+  private precoCobradoUnit(it: any): number {
+    const qty = Math.max(1, Number(it?.qty || 1));
+    const total = Number(it?.total);
+    if (Number.isFinite(total) && total > 0) return Math.round((total / qty) * 100) / 100;
+    const cheio = Number(it?.precoUnit || 0);
+    const desconto = (Number(it?.desconto) || 0) / qty;
+    return Math.max(0, Math.round((cheio - desconto) * 100) / 100);
+  }
+
   /** Mesma normalização do espelho: loja/código sem zeros à esquerda. */
   private semZeros(v: any): string {
     return String(v ?? '').trim().replace(/^0+/, '') || '0';
@@ -740,8 +765,22 @@ export class PedidoOnlineService {
           size: it.tamanho || null,
           color: it.cor || null,
           quantity: Number(it.qty || 1),
-          unitPrice: Number(it.precoUnit || 0),
+          // COBRADO (com promoção) — o mesmo que vai pro OrderItem.unitPrice.
+          unitPrice: this.precoCobradoUnit(it),
+          // CHEIO + a etiqueta da promoção ("PROMO 50% · 2022"). É o que deixa
+          // a tela do pedido mostrar os DOIS preços em vez de um número só sem
+          // explicação — pedido de R$ 154,90 com peça de R$ 179,90 na lista.
+          basePrice: Number(it.precoUnit || 0),
+          promoTag: it.promoTag || null,
         })),
+        /**
+         * Desconto da VENDA INTEIRA (o avulso do caixa, `sale.desconto`). Não
+         * está em item nenhum — o `applyAutoDiscounts` só mexe na linha — então
+         * sem carimbar aqui a soma das peças fica acima do `totalAmount` e a
+         * NF-e sai sem o abatimento. Mesmo campo do checkout do site
+         * (`discount`), que a nota já sabe ratear.
+         */
+        discount: Math.max(0, Math.round((Number(sale.desconto) || 0) * 100) / 100),
       };
 
       const base = PedidoOnlineService.ONLINE_WC_ID_BASE;
@@ -802,7 +841,9 @@ export class PedidoOnlineService {
                   cor: it.cor || null,
                   tamanho: it.tamanho || null,
                   quantity: Number(it.qty || 1),
-                  unitPrice: Number(it.precoUnit || 0),
+                  // COBRADO da cliente (promoção já aplicada) — é o que soma
+                  // com o `totalAmount`, com o faturamento e com a NF-e.
+                  unitPrice: this.precoCobradoUnit(it),
                   // Base do acerto ÷2,5 — preço de tabela do PDV (o desconto
                   // da venda é da loja vendedora, não muda o acerto).
                   baseUnitPrice: Number(it.precoUnit || 0),
