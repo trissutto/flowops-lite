@@ -79,10 +79,19 @@ Reskin bege/vinho por override de CSS escopado em classe. A direção visual foi
 
 ### Etapa 5 — Migração
 - **Ambiente de teste — pergunta do dono (29/08): "aplicar na loja Itu (encerrada) como sandbox, ou o Treinamento me traz tudo?"** Recomendação registrada: **Treinamento + toggle "Visual novo × atual" por PC**, sem reativar Itu. O treino já isola TUDO por construção (estoque, Giga, NFC-e, cashback, WooCommerce pulados; relatórios filtram `isTraining`) e funciona em qualquer loja/PC. Reativar Itu exigiria isolamento novo em routing/lastro da rede, outbox ERP, NFC-e e todos os relatórios — reimplementar o treinamento em nível de loja, sem ganho. Quando a tela nova existir (etapa 6), o teste é: ligar o toggle num PC + entrar em treino → opera tudo sem tocar nada real. ⏳ Aguarda confirmação do dono.
-- [ ] Loja piloto real (pós-teste em treino), critério de rollback, convivência com telas não reformadas.
+- [x] **Lojas piloto ESCOLHIDAS pelo dono (29/08): MOEMA (15) e ITANHAÉM (01)** — "aplique esta tela por enquanto em Moema e Itanhaém somente". Mecanismo: flag por loja (storeCode), kill-switch de volta ao visual atual, teste prévio em modo treinamento. ⚠️ Alinhado com o dono: o artifact é MOCKUP — aplicar exige implementar; o primeiro incremento é decisão de escopo (trilho do cartão no PDV atual × reforma completa).
+- [ ] Critério de rollback formal e convivência com telas não reformadas.
 
-### Etapa 6 — Plano técnico
-- [ ] Só depois das etapas 1–4 fechadas.
+### Etapa 6 — Plano técnico (ABERTA em 29/08 por ordem do dono)
+**Decisão do dono (29/08, noite): implementar "TUDO como está na amostra" nas lojas MOEMA (15) e ITANHAÉM (01), com botão "↩ REVERTER AGORA" na própria tela** (volta ao PDV atual naquele PC, na hora). Reforma completa não sobe de uma vez — vai por **incrementos entregáveis**, cada um atrás da flag por loja (storeCode 15/01) + reverter, testado em treino antes:
+1. **Shell da tela nova**: flag por loja + botão REVERTER AGORA + header/menu lateral/rodapé em semáforo, com o miolo atual funcionando dentro (nada de fluxo muda ainda). Só frontend — deploy Vercel, sem restart de backend.
+2. **Trilho do cartão** (crédito/débito): bandeira 3+2 com logos → parcelas 1–12× (números grandes, sem rolagem) → confirmação com logo e letras grandes. ⚠️ 12× é mudança funcional (hoje 10×).
+3. **Painel direito novo**: total grafite gigante, pagamentos na ordem do uso, MARCAR no painel, cifrão/símbolo PIX.
+4. **Carrinho novo**: REF em chip, ações por item (% ⬆ 🚫), desfazer, DE/POR, faixa de campanha dourada + Trocar ▾.
+5. **Descontos**: F2 com faixas visíveis + desconto por peça (validação continua no servidor).
+6. **Pendências em barra** (une pausadas com apelido + cobranças + pedidos site + realinhamento) + rodapé de status decomposto.
+7. **Trilhos restantes** (dinheiro com troco, PIX, vale-troca, crediário, venda online reformada) + Metas chip + Carrinhos no menu.
+Regras de execução: trabalhar em worktree/branch isolada (há WIP de outra sessão no working tree), assets oficiais de bandeiras/PIX no repo, socket push do pagamento entra no incremento 2-3 (contrato da etapa 2), revisor de frontend antes de cada merge, deploy fora de horário de loja quando tocar backend.
 
 ---
 
