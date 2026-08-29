@@ -238,9 +238,15 @@ export class PickScanService {
     });
     if (!po) throw new NotFoundException('Pick-order não encontrado');
     if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
-    if (po.status !== 'new' && po.status !== 'separating') {
-      throw new BadRequestException(`Status atual é "${po.status}" — bipagem só em "new"/"separating"`);
-    }
+    /**
+     * BIPE TARDIO (caso ON-000201, Sorocaba, 29/08): peça movida pro card
+     * DEPOIS do finish (e até depois do envio) ficava impossível de bipar —
+     * a trava de status recusava e o estoque da peça nunca saía. Agora o
+     * bipe é aceito em QUALQUER status do card: o teto por SKU dentro da
+     * transação continua garantindo que só a peça FALTANTE passa (card 100%
+     * bipado recusa qualquer bipe extra do mesmo jeito). O bipe é a baixa —
+     * negar o bipe é negar a verdade do estoque.
+     */
     if ((po as any).issueReason) {
       throw new BadRequestException('Este pedido está com problema reportado — fale com a matriz antes de bipar.');
     }
@@ -282,9 +288,8 @@ export class PickScanService {
         if (!atual) {
           throw new BadRequestException('Este pedido saiu da sua fila — não bipe mais nada nele.');
         }
-        if (atual.status !== 'new' && atual.status !== 'separating') {
-          throw new BadRequestException(`Este pedido mudou pra "${atual.status}" — não dá mais pra bipar.`);
-        }
+        // Status NÃO recusa mais (bipe tardio, 29/08) — o teto por SKU abaixo
+        // é quem decide: peça faltante passa, bipe a mais é recusado.
         if (atual.issueReason) {
           throw new BadRequestException('Este pedido está com problema reportado — fale com a matriz antes de bipar.');
         }
@@ -345,6 +350,16 @@ export class PickScanService {
         pickOrderId, orderId: po.orderId, storeId, storeCode, sku, ean,
         scanUid, userId, debitSkippedReason: skip,
       });
+
+      // BIPE TARDIO em card que já passou do finish: fica marcado na auditoria
+      // — é o rastro de que uma peça entrou no card depois do fechamento
+      // (caso ON-000201: enviada sem bipe, estoque acertado só agora).
+      if (po.status !== 'new' && po.status !== 'separating') {
+        await this.log('pick-order.scan.late', {
+          pickOrderId, orderId: po.orderId, storeId, storeCode, sku,
+          scanUid, userId, cardStatus: po.status,
+        });
+      }
 
       return {
         ok: true as const,

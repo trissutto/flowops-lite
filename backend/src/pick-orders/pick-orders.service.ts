@@ -338,6 +338,9 @@ export class PickOrdersService {
         const gate = await pacotesAguardandoLiberacao(this.prisma as any, pick.orderId);
         if (gate.travado) throw new BadRequestException(gate.motivo);
       }
+      // PEÇA SEM BIPE NÃO EMBARCA (ON-000201, 29/08) — mesma trava do envio
+      // manual: a etiqueta só sai com o card 100% bipado.
+      await this.travarEnvioSemBipe(pick);
     }
     // ── IDEMPOTÊNCIA (28/07: 17 pré-postagens do MESMO pedido no Mais Envios,
     // uma por clique enquanto o request anterior pendurava) ──────────────────
@@ -466,6 +469,68 @@ export class PickOrdersService {
    * lojas feeder chegaram (remessa `received`). Feeder que nem terminou de
    * bipar ainda não tem caixa — conta como pendente do mesmo jeito.
    */
+  /**
+   * PEÇA SEM BIPE NÃO EMBARCA (caso ON-000201, 29/08).
+   *
+   * A calça 223248-DU chegou no card de Sorocaba DEPOIS do finish (ajuste do
+   * pedido em Campinas moveu a peça) e o card foi enviado sem bipá-la — o
+   * finish tinha validado só o que existia no card na hora dele. Peça
+   * embarcada sem bipe = estoque inflado pra sempre (o bipe É a baixa).
+   *
+   * Esta trava roda NA PORTA DO ENVIO (updateStatus→shipped e etiqueta) e
+   * reconfere o card inteiro CONTRA O AGORA: toda peça atribuída e não
+   * cancelada precisa de bipe ativo. Não importa por onde a peça entrou nem
+   * quando — o pacote só sai 100% bipado.
+   *
+   * Exceções:
+   *  - `ENVIO_EXIGE_BIPE=0` desliga (kill-switch).
+   *  - Card LEGADO: zero bipes no servidor E `debitApprovedAt` carimbado —
+   *    é o card de antes do bipe-servidor (18/08), cujo finish validou os
+   *    bipes do navegador. Bloquear obrigaria a loja a re-bipar pacote pronto.
+   *
+   * O destravamento é o BIPE TARDIO: o card aceita bipar a peça faltante em
+   * qualquer status (botão "Bipar peça faltante" no card da loja).
+   */
+  private async travarEnvioSemBipe(pick: {
+    id: string;
+    orderId: string;
+    storeId: string;
+    debitApprovedAt?: Date | null;
+  }): Promise<void> {
+    if (String(process.env.ENVIO_EXIGE_BIPE ?? '').trim() === '0') return;
+    const itens = await this.prisma.orderItem.findMany({
+      where: { orderId: pick.orderId, assignedStoreId: pick.storeId, cancelledAt: null },
+      select: { sku: true, quantity: true, ref: true, cor: true, tamanho: true },
+    });
+    if (!itens.length) return;
+    const scans = await this.scans.listActiveScans(pick.id);
+    if (scans.length === 0 && pick.debitApprovedAt) return; // card legado (ver doc)
+    const bipado = new Map<string, number>();
+    for (const s of scans) bipado.set(s.sku, (bipado.get(s.sku) ?? 0) + 1);
+    const esperado = new Map<string, { qtd: number; nome: string }>();
+    for (const it of itens) {
+      const cur = esperado.get(it.sku) ?? {
+        qtd: 0,
+        nome: [it.ref || it.sku, [it.cor, it.tamanho].filter(Boolean).join(' ')]
+          .filter(Boolean)
+          .join(' '),
+      };
+      cur.qtd += it.quantity;
+      esperado.set(it.sku, cur);
+    }
+    const faltando: string[] = [];
+    for (const [sku, e] of esperado) {
+      const falta = e.qtd - (bipado.get(sku) ?? 0);
+      if (falta > 0) faltando.push(`${e.nome}${falta > 1 ? ` (${falta}×)` : ''}`);
+    }
+    if (!faltando.length) return;
+    throw new BadRequestException(
+      `🚫 PEÇA SEM BIPE — este pedido tem ${faltando.length} peça(s) que nunca foram bipadas: ` +
+        `${faltando.join(' · ')}. O bipe é a baixa de estoque — bipe pelo botão "Bipar peça faltante" ` +
+        `do card antes de enviar. Peça que não está fisicamente aí: use "Reportar problema".`,
+    );
+  }
+
   private async travarEnvioAncoraSeFaltamCaixas(pick: any): Promise<void> {
     const store = await this.prisma.store.findUnique({
       where: { id: pick.storeId },
@@ -2024,6 +2089,38 @@ export class PickOrdersService {
       itemsByOrder.set(it.orderId, arr);
     }
 
+    // PEÇA SEM BIPE (29/08): quantas peças do card ainda não têm bipe ativo.
+    // Alimenta o botão "Bipar peça faltante" — inclusive em card já enviado
+    // (caso ON-000201: peça movida pro card depois do finish embarcou sem
+    // bipe e o estoque dela nunca saiu).
+    const scansAtivos: any[] = rows.length
+      ? await (this.prisma as any).pickOrderScan.groupBy({
+          by: ['pickOrderId', 'sku'],
+          where: { pickOrderId: { in: rows.map((r) => r.id) }, revertedAt: null },
+          _count: { _all: true },
+        })
+      : [];
+    const bipesPorCardSku = new Map<string, number>();
+    for (const s of scansAtivos) {
+      bipesPorCardSku.set(`${s.pickOrderId}::${s.sku}`, Number(s._count?._all) || 0);
+    }
+    const faltamBiparDe = (r: any): number => {
+      const doCard = (itemsByOrder.get(r.orderId) ?? []).filter((i: any) => !i.cancelledAt);
+      const porSku = new Map<string, number>();
+      for (const i of doCard) porSku.set(i.sku, (porSku.get(i.sku) ?? 0) + i.quantity);
+      let faltam = 0;
+      let temBipe = false;
+      for (const [sku, qtd] of porSku) {
+        const b = bipesPorCardSku.get(`${r.id}::${sku}`) ?? 0;
+        if (b > 0) temBipe = true;
+        faltam += Math.max(0, qtd - b);
+      }
+      // Card legado (zero bipes no servidor, finish carimbado): o finish
+      // validou os bipes do navegador — não é peça faltante.
+      if (!temBipe && r.debitApprovedAt) return 0;
+      return faltam;
+    };
+
     // Resolve nome de loja pros códigos que o card precisa mostrar: destino da
     // transferência E loja de RETIRADA — a loja que separa tem que ver ONDE a
     // cliente vai buscar, não só "retirada em loja" (caso Piracicaba separando
@@ -2297,6 +2394,9 @@ export class PickOrdersService {
         // avisa em vez de afirmar um serviço que não foi escolhido.
         servicoEnvioIncerto: envioIncerto(r.order as any),
         freteGratis: freteFoiGratis(r.order as any),
+        // PEÇA SEM BIPE (29/08): >0 pinta o botão "Bipar peça faltante" —
+        // inclusive em card enviado (o bipe tardio acerta o estoque).
+        faltamBipar: faltamBiparDe(r),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,
         /**
@@ -3864,6 +3964,15 @@ export class PickOrdersService {
         const gate = await pacotesAguardandoLiberacao(this.prisma as any, current.orderId);
         if (gate.travado) throw new BadRequestException(gate.motivo);
       }
+      /**
+       * PEÇA SEM BIPE NÃO EMBARCA (caso ON-000201, Sorocaba, 29/08). O finish
+       * valida os bipes, mas valida SÓ o que está no card NAQUELA hora — peça
+       * movida pro card depois do finish embarcava sem bipe e o estoque dela
+       * nunca saía. A porta do envio agora reconfere TUDO, em todo caminho
+       * (envio manual, etiqueta, retirada, feeder). Bipe tardio destrava:
+       * o card aceita bipar a peça faltante em qualquer status.
+       */
+      await this.travarEnvioSemBipe(current);
       /**
        * ARRUMA O CÓDIGO NA ENTRADA (22/08) — a loja digita na mão e um em
        * cada dez sai com espaço ou minúscula ("AD 717 071 708 BR",

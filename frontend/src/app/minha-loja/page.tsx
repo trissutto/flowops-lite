@@ -97,6 +97,9 @@ interface PickOrderRow {
    * cliente). Diferente da transferência de retirada: a cliente NÃO busca.
    */
   juntadaFeeder?: boolean;
+  /** Peças do card SEM bipe ativo (29/08) — >0 mostra "Bipar peça faltante",
+   *  inclusive em card já enviado (bipe tardio acerta o estoque). */
+  faltamBipar?: number;
   /**
    * O card ainda pode gerar a CAIXA (etiqueta + NF de transferência)?
    * Resposta do backend, régua `common/etiqueta-retirada` — a tela não
@@ -3077,6 +3080,17 @@ function PickOrderCard({
             className="flex-1 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
             <Barcode className="w-6 h-6" /> Bipar peças
+          </button>
+        )}
+        {/* BIPE TARDIO (29/08, caso ON-000201): peça que entrou no card DEPOIS
+            do finish — até em card já enviado — precisa de bipe pra sair do
+            estoque. O envio trava enquanto isso existir; este botão destrava. */}
+        {status !== 'new' && status !== 'separating' && (row.faltamBipar ?? 0) > 0 && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onBip(); }}
+            className="flex-1 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
+          >
+            <Barcode className="w-6 h-6" /> Bipar peça faltante ({row.faltamBipar})
           </button>
         )}
         {/* CARD DE TRANSFERÊNCIA finalizado → o caminho é a CAIXA pra outra

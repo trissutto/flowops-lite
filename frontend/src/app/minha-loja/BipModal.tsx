@@ -645,6 +645,13 @@ export default function BipModal({
     setSubmitting(true);
     setErroFinal(null);
     try {
+      // BIPE TARDIO (29/08): card que já passou do finish (separated/ready/
+      // shipped) só precisava dos bipes — cada um já baixou o estoque no 200.
+      // Chamar o finish aqui daria 400 ("essa separação já foi finalizada").
+      if (data && data.status !== 'new' && data.status !== 'separating') {
+        onFinished();
+        return;
+      }
       // O servidor conta pelos bipes que ele mesmo gravou; `scans` vai junto
       // só como fallback pros cards abertos antes deste deploy.
       await api(`/pick-orders/${pickOrderId}/finish-separation`, {
