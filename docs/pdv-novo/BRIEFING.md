@@ -2,7 +2,7 @@
 
 **Projeto:** reforma visual + hierarquia por uso do PDV de loja física (`frontend/src/app/minha-loja/pdv/`).
 **Método:** briefing em etapas; cada etapa fecha decisões POR ESCRITO aqui, antes de qualquer código de produção. Decisão fechada não reabre sem fato novo.
-**Status:** etapa 0 fechada (29/08/2026) · etapa 1 em andamento · etapas 2–6 pendentes.
+**Status:** etapa 0 fechada (29/08/2026) · etapa 1 com inventário (378 itens) e medição de uso PRONTOS — falta a marcação FICA/MUDA/MORRE do dono · etapas 2–6 pendentes.
 
 ---
 
@@ -14,6 +14,9 @@
 | Dor nº 1 | **Salto visual** — qualidade percebida de outro nível |
 | Plataforma | **PC da loja, como hoje** — mantém Electron, impressoras, heartbeat de IP do ponto |
 | Consequência de escopo | Backend, endpoints e regras de venda **não mudam** nesta reforma. Muda apresentação, hierarquia e organização da tela |
+
+### Direção de UX dada pelo dono (29/08, via screenshots do fluxo guiado)
+"Um formato assim seria legal levar em consideração: **botões maiores, sequência em popups com instruções**." Referência: os passos "Como vai enviar?" / "Como a cliente vai pagar?" do fluxo guiado de Venda Online que JÁ existe no PDV (itens 330–348 do inventário) — nascido da diretriz "não quero um manual, quero que facilite a operação". Status: **direção a discutir na etapa 3, não é ordem de codar**. Tese de trabalho registrada: *trilho guiado (wizard) pro fluxo RARO ou cheio de regra; pista livre (zero passo extra) pro fluxo FREQUENTE — a medição de uso decide qual operação ganha qual tratamento.* Instruções curtas de consequência em cada passo ("a venda fecha sozinha quando o dinheiro cair") são parte do formato.
 
 ---
 
@@ -38,9 +41,21 @@ Reskin bege/vinho por override de CSS escopado em classe. A direção visual foi
 
 ## Decisões abertas — próximas etapas
 
-### Etapa 1 — Inventário + medição de uso (EM ANDAMENTO)
-- [ ] Inventário funcional completo do PDV atual (agente rodando desde 29/08) → dono marca cada item: **FICA / MUDA / MORRE / v2**.
-- [ ] **Medição de uso em produção** (fundamenta a hierarquia): frequência real por operação — venda, devolução/troca, marcado, crediário, vale-troca, cashback, sangria, reimpressão, cobrança online, consulta — por loja/dia, últimos 30–60 dias, no Postgres. O ranking vira a ordem de visibilidade da tela nova.
+### Etapa 1 — Inventário + medição de uso (MATERIAL PRONTO, aguarda marcação do dono)
+- [x] **Inventário funcional**: 378 itens em [INVENTARIO-PDV-ATUAL.md](INVENTARIO-PDV-ATUAL.md) (29/08). `page.tsx` = 12.493 linhas / 32 componentes.
+- [x] **Medição de uso em produção** (60 dias, sem treino — script `backend/scripts/q-pdv-uso-operacoes.js`):
+  - **5.934 vendas** (98,9/dia, 16 lojas; loja 01 lidera com 19/dia) · 3,1 peças/venda · **2.456 canceladas** (~41/dia — o modal de motivo é fluxo FREQUENTE).
+  - **Pagamentos**: crédito 2.667 (o rei) · débito 1.015 · venda_online 709 · PIX 702 · dinheiro **só 433 (7%)** · **vale-troca 413 (quase empata com dinheiro)** · crediário 269 · convênio 4. Split em 8,1% das vendas.
+  - **Ciclo de TROCA é gigante**: 482 devoluções/trocas (8/dia) + 416 vales consumidos + 413 payments vale_troca → merece cidadania de 1ª classe no layout.
+  - **Marcados muito vivos**: 12,8 puxados pra venda/dia + 8,9 criados/dia + 7,5 devolvidos/dia. (5.777 "baixados" em 60d = provável mutirão de limpeza, conferir antes de tratar como uso diário.)
+  - **Crediário: o RECEBIMENTO (9,9 baixas/dia) é 2x mais frequente que a venda a crediário (4,4/dia)** — a tela de recebimentos pesa mais que o crediário do PaymentModal.
+  - Caixa: 11,9 sessões/dia + 11,5 sangrias manuais/dia. Adiantamento (6), convênio (4-6) e ajuste master (8) são RAROS.
+  - Cliente identificado em só **26,5%** das vendas (com cashback ativo — fricção ou oportunidade?).
+  - Promo automática em **50,9% dos itens**; desconto POR ITEM (5.213) é muito mais usado que desconto no cabeçalho (670).
+  - **Mortos na prática**: cupom por WhatsApp **0** e por e-mail **0** em 60 dias; FOUR_FOR_THREE sem botão na tela.
+  - NFC-e: 96,6% tentada, mas o grosso fica em `preview` (4.039) vs `authorized` (924) e `skipped` (722) — funil a entender fora da reforma.
+  - Pagar.me: 690 failed × 552 paid — confirma o aviso de tentativas (item 127).
+- [ ] **Dono marca a shortlist FICA / MUDA / MORRE / v2** (lista curta levada no chat de 29/08; o resto do inventário é regra de carga que fica por padrão).
 
 ### Etapa 2 — Contrato de arquitetura da reforma
 - [ ] Reskin POR CIMA do monólito × QUEBRAR o `page.tsx` em componentes enquanto aplica o semáforo. Recomendação preliminar: quebrar por região (bipagem, carrinho, pagamento, modais) — o monólito é a causa da lentidão de digitação; reformar o visual sem quebrar é pagar o custo duas vezes.
@@ -66,3 +81,4 @@ Reskin bege/vinho por override de CSS escopado em classe. A direção visual foi
 
 ## Registro de sessões
 - **29/08/2026** — Etapa 0 fechada (natureza, dor, plataforma). Inventário funcional disparado. Achados: tokens semáforo prontos (21/08), análise de junho reaproveitável, `.pdv-lab` identificado como experimento anterior.
+- **29/08/2026 (noite)** — Inventário entregue (378 itens). Medição de uso 60d rodada em produção. Dono deu direção de UX: botões grandes + sequência de popups com instrução (formato do fluxo guiado existente) — registrada como tese "trilho × pista livre" pra etapa 3. Nota: outra sessão trabalha em paralelo no repo (Metas/gamificação + lote 3 da separação); push do briefing adiado pra não empilhar restart do backend em horário de loja.
