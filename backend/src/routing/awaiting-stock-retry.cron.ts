@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoutingService } from './routing.service';
+import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 
 /**
  * RE-ROTEAMENTO DO `awaiting_stock` (dono, 29/08 — sugestão nº 6).
@@ -38,16 +39,35 @@ export class AwaitingStockRetryCron {
     if (this.rodando) return; // guard de overlap — rodada longa não empilha
     this.rodando = true;
     try {
-      const pedidos = await this.prisma.order.findMany({
+      // `updatedAt asc` = fila que ROTACIONA: cada tentativa carimba o pedido
+      // (o confirmRoute regrava awaiting_stock), então quem acabou de ser
+      // tentado vai pro fim. Com `createdAt` os 20 mais velhos em ruptura
+      // permanente monopolizariam toda rodada e os novos nunca seriam vistos.
+      const pedidos: any[] = await this.prisma.order.findMany({
         where: { status: 'awaiting_stock' },
-        select: { id: true, wcOrderNumber: true },
-        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true, wcOrderNumber: true, source: true,
+          vendaConferidaEm: true, checkoutInfo: true,
+        } as any,
+        orderBy: { updatedAt: 'asc' },
         take: 20,
       });
       if (!pedidos.length) return;
       let roteados = 0;
       for (const p of pedidos) {
         try {
+          // Checagem BARATA antes da cara: pedido online sem conferência de
+          // pagamento vai falhar no confirmRoute de qualquer jeito — pular
+          // aqui poupa a leitura de estoque inteira.
+          if (!(await pedidoOnlineLiberado(this.prisma, p as any))) {
+            // Carimba pra rotacionar mesmo sem tentar (senão ele volta pro
+            // topo da fila em toda rodada).
+            await this.prisma.order.update({
+              where: { id: p.id },
+              data: { updatedAt: new Date() } as any,
+            });
+            continue;
+          }
           const r: any = await this.routing.routeOrder(p.id);
           if (r?.persisted) {
             roteados++;
@@ -60,6 +80,12 @@ export class AwaitingStockRetryCron {
           this.logger.debug(
             `[awaiting-retry] ${p.wcOrderNumber || p.id} ainda não: ${e?.message || e}`,
           );
+          // Carimba pra rotacionar: erro que estoura ANTES do confirmRoute
+          // (troca pendente etc.) não regrava o pedido, e sem carimbo ele
+          // voltaria pro topo da fila em toda rodada.
+          await this.prisma.order
+            .update({ where: { id: p.id }, data: { updatedAt: new Date() } as any })
+            .catch(() => null);
         }
       }
       if (roteados > 0) {
