@@ -25,13 +25,25 @@
  * 30 dias corridos sem estourar. Este módulo devolve os dois — `limiteInicio`
  * (o que interessa pra programar) e `fimConcessivo` (a linha da dobra).
  *
- * ── O QUE ELE NÃO SABE ──
+ * ── FALTAS (art. 130) — LIGADO EM 28/08/2026 ──
  *
- * Não desconta faltas (art. 130 reduz o direito a partir de 6 faltas
- * injustificadas), não trata afastamento pelo INSS acima de 6 meses (que zera
- * o aquisitivo, art. 133 IV), licença-maternidade, nem o fracionamento em até
- * 3 períodos (art. 134 §1º, com um deles ≥ 14 dias). São regras que dependem
- * de dado que o sistema ainda não guarda — quando guardar, é aqui que entram.
+ * O direito NÃO é sempre 30 dias: cada faixa de faltas injustificadas no
+ * período aquisitivo derruba um degrau. Quem passa de 32 faltas perde as
+ * férias inteiras. Enquanto o sistema não guardava o motivo do dia vazio, esta
+ * conta era impossível e o módulo assumia 30 dias pra todo mundo.
+ *
+ * Agora a contagem vem de `rh-eventos` (`faltasInjustificadas`), que só conta
+ * o tipo FALTA_INJUSTIFICADA — atestado, férias e treinamento não entram, que
+ * é justamente o ponto de existir a régua de eventos.
+ *
+ * A falta é passada por FORA (`opts.faltasInjustificadas`) de propósito: este
+ * arquivo é puro e testável, e quem tem banco é o service.
+ *
+ * ── O QUE ELE AINDA NÃO SABE ──
+ *
+ * Não trata afastamento pelo INSS acima de 6 meses (que zera o aquisitivo,
+ * art. 133 IV), licença-maternidade, nem o fracionamento em até 3 períodos
+ * (art. 134 §1º, com um deles ≥ 14 dias).
  */
 
 /** Soma meses mantendo o dia; cai no último dia do mês quando ele não existe
@@ -79,6 +91,32 @@ export interface Ferias {
   situacao: SituacaoFerias;
   /** Quanto custaria conceder fora do prazo (art. 137): dobra. */
   emDobra: boolean;
+  /** Faltas injustificadas contadas no aquisitivo deste ciclo. */
+  faltasInjustificadas: number;
+  /** Dias de férias a que ela tem direito depois do art. 130. */
+  diasDireito: number;
+  /** true quando as faltas já derrubaram o direito abaixo de 30 dias. */
+  reduzidoPorFaltas: boolean;
+}
+
+/**
+ * ART. 130 — quantos dias de férias sobram depois das faltas injustificadas.
+ *
+ * A escada é a da lei, e é escada mesmo: a 6ª falta derruba 6 dias de uma vez.
+ *
+ *   até 5 faltas ...... 30 dias
+ *   de  6 a 14 ........ 24 dias
+ *   de 15 a 23 ........ 18 dias
+ *   de 24 a 32 ........ 12 dias
+ *   acima de 32 ....... 0 dias (perde as férias)
+ */
+export function diasDeFeriasPorFaltas(faltas: number): number {
+  const f = Number.isFinite(faltas) && faltas > 0 ? Math.floor(faltas) : 0;
+  if (f <= 5) return 30;
+  if (f <= 14) return 24;
+  if (f <= 23) return 18;
+  if (f <= 32) return 12;
+  return 0;
 }
 
 export interface OpcoesFerias {
@@ -90,6 +128,12 @@ export interface OpcoesFerias {
   diasFerias?: number;
   /** "Hoje" — injetável pra teste e pra fuso. */
   hoje?: Date;
+  /**
+   * Faltas injustificadas DENTRO do aquisitivo vigente (art. 130). Vem de fora
+   * porque este módulo é puro; quem conta é `RhEventosService`. Omitido = 0,
+   * que devolve os 30 dias cheios — o comportamento de antes de 28/08/2026.
+   */
+  faltasInjustificadas?: number;
 }
 
 /**
@@ -130,6 +174,9 @@ export function calcularFerias(admissao: Date, opts: OpcoesFerias = {}): Ferias 
   else if (diasAteLimite <= 90) situacao = 'proximo';
   else situacao = 'no_prazo';
 
+  const faltasInjustificadas = Math.max(0, Math.floor(opts.faltasInjustificadas ?? 0));
+  const diasDireito = diasDeFeriasPorFaltas(faltasInjustificadas);
+
   return {
     ciclo,
     inicioAquisitivo,
@@ -139,6 +186,9 @@ export function calcularFerias(admissao: Date, opts: OpcoesFerias = {}): Ferias 
     diasAteLimite,
     situacao,
     emDobra: situacao === 'dobra',
+    faltasInjustificadas,
+    diasDireito,
+    reduzidoPorFaltas: diasDireito < 30,
   };
 }
 

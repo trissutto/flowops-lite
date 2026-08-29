@@ -4,6 +4,7 @@ import { ErpService } from '../erp/erp.service';
 import { calcularFerias, rotuloSituacao } from '../common/ferias-clt';
 import { motivoValido, rotuloMotivo, MOTIVOS_DESLIGAMENTO } from '../common/motivos-desligamento';
 import { hojeBrasilia } from '../common/tz';
+import { RhEventosService } from '../rh-eventos/rh-eventos.service';
 
 /**
  * SellersService — CRUD de vendedoras + atribuição de pedido + relatório.
@@ -21,6 +22,8 @@ export class SellersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    // Conta as faltas injustificadas do aquisitivo pro art. 130 do mapa de férias.
+    private readonly eventos: RhEventosService,
   ) {}
 
   /**
@@ -1056,7 +1059,17 @@ export class SellersService {
         continue;
       }
 
-      const f = calcularFerias(new Date(s.dataAdmissao), { hoje });
+      // ART. 130 — as faltas injustificadas DO AQUISITIVO deste ciclo derrubam
+      // o direito (6 faltas já tiram 6 dias). Duas passadas de propósito: a
+      // primeira descobre qual é o aquisitivo vigente, a segunda recalcula com
+      // as faltas de dentro dele. Contar faltas de ciclo errado punia a
+      // funcionária por falta que já prescreveu.
+      const preview = calcularFerias(new Date(s.dataAdmissao), { hoje });
+      const faltasInjustificadas = await this.eventos.faltasInjustificadas(
+        s.id, preview.inicioAquisitivo, preview.fimAquisitivo,
+      );
+      const f = calcularFerias(new Date(s.dataAdmissao), { hoje, faltasInjustificadas });
+
       comAdmissao.push({
         ...base,
         ciclo: f.ciclo,
@@ -1067,6 +1080,9 @@ export class SellersService {
         situacao: f.situacao,
         situacaoLabel: rotuloSituacao(f.situacao),
         emDobra: f.emDobra,
+        faltasInjustificadas: f.faltasInjustificadas,
+        diasDireito: f.diasDireito,
+        reduzidoPorFaltas: f.reduzidoPorFaltas,
       });
     }
 

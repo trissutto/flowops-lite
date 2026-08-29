@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, CalendarDays, Loader2, Plus, X, AlertTriangle, Ban,
-  FileText, Clock, Info, RefreshCw,
+  FileText, Clock, Info, RefreshCw, Inbox, Wallet,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -65,6 +65,38 @@ type Evento = {
 
 type Seller = { id: string; name: string; active: boolean };
 
+/** Atestado que chegou (celular ou upload) e ainda não virou evento. */
+type Pendente = {
+  id: string;
+  sellerId: string;
+  nome: string;
+  titulo: string;
+  fileUrl: string;
+  dataReferencia: string | null;
+  observacoes: string | null;
+  uploadedAt: string;
+};
+
+type Folha = {
+  ano: number;
+  mes: number;
+  totalDias: number;
+  totalValor: number;
+  itens: Array<{
+    sellerId: string;
+    nome: string;
+    salarioBase: number;
+    diasDescontados: number;
+    dsrPerdidos: number;
+    diasTotais: number;
+    valorDia: number;
+    valorDesconto: number;
+  }>;
+};
+
+const brl = (n: number) =>
+  n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
 const ymd = (d: Date) => {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -106,11 +138,31 @@ export default function EventosRhPage() {
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [abrirForm, setAbrirForm] = useState(false);
+  const [prefill, setPrefill] = useState<Pendente | null>(null);
+  const [pendentes, setPendentes] = useState<Pendente[]>([]);
+  const [folha, setFolha] = useState<Folha | null>(null);
+  const [verFolha, setVerFolha] = useState(false);
 
   useEffect(() => {
     api<Tipo[]>('/rh/eventos/tipos').then(setTipos).catch(() => setTipos([]));
     api<Seller[]>('/sellers?includeInactive=0').then(setSellers).catch(() => setSellers([]));
   }, []);
+
+  const carregarPendentes = useCallback(() => {
+    api<Pendente[]>('/rh/eventos/atestados-pendentes')
+      .then(setPendentes)
+      .catch(() => setPendentes([]));
+  }, []);
+  useEffect(() => { carregarPendentes(); }, [carregarPendentes]);
+
+  // A folha usa o MÊS do "Até" — o RH fecha por mês, não pelo recorte livre.
+  useEffect(() => {
+    if (!verFolha) return;
+    const [ano, mes] = ate.split('-');
+    api<Folha>(`/rh/eventos/folha?ano=${ano}&mes=${Number(mes)}`)
+      .then(setFolha)
+      .catch(() => setFolha(null));
+  }, [verFolha, ate]);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -168,7 +220,15 @@ export default function EventosRhPage() {
             </p>
           </div>
           <button
-            onClick={() => setAbrirForm(true)}
+            onClick={() => setVerFolha((v) => !v)}
+            className={`flex items-center gap-2 font-bold px-4 py-2 rounded-lg transition ${
+              verFolha ? 'bg-white/20 text-white' : 'text-white/80 hover:bg-white/10'
+            }`}
+          >
+            <Wallet className="w-4 h-4" /> Folha
+          </button>
+          <button
+            onClick={() => { setPrefill(null); setAbrirForm(true); }}
             className="flex items-center gap-2 bg-white text-slate-800 font-bold px-4 py-2 rounded-lg hover:bg-slate-100 transition"
           >
             <Plus className="w-4 h-4" /> Lançar evento
@@ -177,6 +237,94 @@ export default function EventosRhPage() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+        {/* CAIXA DE ENTRADA — atestado que chegou (celular ou upload) e ainda
+            não virou evento. Sem esta lista o PDF entra no prontuário e fica
+            parado, e o dia da funcionária segue contando como FALTA. */}
+        {pendentes.length > 0 && (
+          <div className="bg-amber-50 border-2 border-amber-300 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-amber-100 flex items-center gap-2">
+              <Inbox className="w-4 h-4 text-amber-800" />
+              <span className="font-bold text-amber-900 text-sm">
+                {pendentes.length} atestado{pendentes.length === 1 ? '' : 's'} recebido{pendentes.length === 1 ? '' : 's'} — falta lançar
+              </span>
+            </div>
+            <div className="divide-y divide-amber-200">
+              {pendentes.map((p) => (
+                <div key={p.id} className="px-4 py-2.5 flex items-center gap-3 text-sm">
+                  <div className="flex-1 min-w-0">
+                    <span className="font-bold">{p.nome}</span>
+                    <span className="text-slate-500 ml-2">{p.titulo}</span>
+                    {p.dataReferencia && (
+                      <span className="text-slate-500 ml-2">· {fmtData(p.dataReferencia)}</span>
+                    )}
+                  </div>
+                  <a href={p.fileUrl} target="_blank" rel="noreferrer"
+                    className="text-[11px] text-sky-700 underline shrink-0">ver</a>
+                  <button
+                    onClick={() => { setPrefill(p); setAbrirForm(true); }}
+                    className="text-xs font-bold bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700 shrink-0"
+                  >
+                    Lançar
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* FOLHA — o que o mês desconta. Régua "faltou 1, perdeu 2". */}
+        {verFolha && (
+          <div className="bg-white rounded-xl border-2 border-slate-300 overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-100 flex items-center justify-between">
+              <span className="font-bold text-sm flex items-center gap-2">
+                <Wallet className="w-4 h-4" /> Desconto de folha — {ate.slice(5, 7)}/{ate.slice(0, 4)}
+              </span>
+              {folha && (
+                <span className="text-sm font-bold text-rose-700">
+                  {folha.totalDias} dia(s) · {brl(folha.totalValor)}
+                </span>
+              )}
+            </div>
+            {!folha || folha.itens.length === 0 ? (
+              <div className="p-6 text-center text-sm text-slate-400">
+                Nenhum desconto neste mês.
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-left text-[11px] uppercase text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Funcionária</th>
+                    <th className="px-3 py-2 text-right">Dias</th>
+                    <th className="px-3 py-2 text-right">DSR</th>
+                    <th className="px-3 py-2 text-right">Total dias</th>
+                    <th className="px-3 py-2 text-right">Valor dia</th>
+                    <th className="px-3 py-2 text-right">Desconto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {folha.itens.map((i) => (
+                    <tr key={i.sellerId} className="border-t">
+                      <td className="px-3 py-2 font-bold">{i.nome}</td>
+                      <td className="px-3 py-2 text-right">{i.diasDescontados}</td>
+                      <td className="px-3 py-2 text-right">{i.dsrPerdidos}</td>
+                      <td className="px-3 py-2 text-right font-bold">{i.diasTotais}</td>
+                      <td className="px-3 py-2 text-right text-slate-500">{brl(i.valorDia)}</td>
+                      <td className="px-3 py-2 text-right font-bold text-rose-700">
+                        {brl(i.valorDesconto)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className="px-4 py-2 text-[11px] text-slate-500 border-t bg-slate-50">
+              Falta injustificada custa o dia <strong>mais</strong> o DSR da semana
+              (Lei 605/49). Duas faltas na mesma semana perdem só um DSR. Valor do
+              dia = salário base ÷ 30.
+            </div>
+          </div>
+        )}
+
         {/* Recorte De/Até — padrão da casa, nunca dropdown de período fixo */}
         <div className="bg-white rounded-xl border p-4 flex flex-wrap items-end gap-3">
           <div>
@@ -315,8 +463,9 @@ export default function EventosRhPage() {
         <FormEvento
           tipos={tipos}
           sellers={sellers}
-          onFechar={() => setAbrirForm(false)}
-          onSalvo={() => { setAbrirForm(false); void carregar(); }}
+          prefill={prefill}
+          onFechar={() => { setAbrirForm(false); setPrefill(null); }}
+          onSalvo={() => { setAbrirForm(false); setPrefill(null); void carregar(); carregarPendentes(); }}
         />
       )}
     </div>
@@ -325,25 +474,31 @@ export default function EventosRhPage() {
 
 /** Formulário de lançamento. O TIPO escolhido comanda o que aparece. */
 function FormEvento({
-  tipos, sellers, onFechar, onSalvo,
+  tipos, sellers, prefill, onFechar, onSalvo,
 }: {
   tipos: Tipo[];
   sellers: Seller[];
+  /** Vem da caixa de entrada: atestado que a funcionária já mandou. */
+  prefill?: Pendente | null;
   onFechar: () => void;
   onSalvo: () => void;
 }) {
-  const [sellerId, setSellerId] = useState('');
-  const [tipo, setTipo] = useState('');
-  const [dataInicio, setDataInicio] = useState(ymd(new Date()));
-  const [dataFim, setDataFim] = useState(ymd(new Date()));
+  const [sellerId, setSellerId] = useState(prefill?.sellerId ?? '');
+  const [tipo, setTipo] = useState(prefill ? 'ATESTADO_MEDICO' : '');
+  const [dataInicio, setDataInicio] = useState(prefill?.dataReferencia ?? ymd(new Date()));
+  const [dataFim, setDataFim] = useState(prefill?.dataReferencia ?? ymd(new Date()));
   const [diaInteiro, setDiaInteiro] = useState(true);
   const [horaInicio, setHoraInicio] = useState('08:00');
   const [horaFim, setHoraFim] = useState('12:00');
   const [observacoes, setObservacoes] = useState('');
+  // Documento: ou já veio da caixa de entrada, ou a supervisão sobe agora.
+  const [documentoId, setDocumentoId] = useState<string | null>(prefill?.id ?? null);
+  const [arquivo, setArquivo] = useState<File | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
   const t = tipos.find((x) => x.codigo === tipo) ?? null;
+  const precisaDoc = !!t?.exigeDocumento && !documentoId;
 
   // Tipo que não admite parcial volta pro dia inteiro sozinho — senão a tela
   // mostraria campos de hora que o backend ignora, que é porta falsa.
@@ -355,6 +510,23 @@ function FormEvento({
     setSalvando(true);
     setErro(null);
     try {
+      // O anexo sobe ANTES: o backend recusa o evento sem documento quando o
+      // tipo exige, e falhar depois de criar deixaria evento órfão.
+      let docId = documentoId;
+      if (!docId && arquivo) {
+        const fd = new FormData();
+        fd.append('file', arquivo);
+        fd.append('tipo', tipo);
+        fd.append('dataReferencia', dataInicio);
+        const r = await api<{ documentoId: string | null }>(
+          `/rh/eventos/documento/${sellerId}`,
+          { method: 'POST', body: fd },
+        );
+        docId = r?.documentoId ?? null;
+        if (!docId) throw new Error('O anexo subiu mas não voltou id. Tente de novo.');
+        setDocumentoId(docId);
+      }
+
       await api('/rh/eventos', {
         method: 'POST',
         body: JSON.stringify({
@@ -363,6 +535,7 @@ function FormEvento({
           horaInicio: !diaInteiro ? horaInicio : null,
           horaFim: !diaInteiro ? horaFim : null,
           observacoes: observacoes || null,
+          documentoId: docId,
         }),
       });
       onSalvo();
@@ -473,6 +646,35 @@ function FormEvento({
             </div>
           )}
 
+          {/* ANEXO — o tipo que exige documento não fecha sem ele. Antes deste
+              campo o "Atestado médico" era impossível de lançar: o backend
+              recusava e a tela não tinha por onde anexar. */}
+          {t?.exigeDocumento && (
+            <div className={`border rounded-lg p-3 ${precisaDoc ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'}`}>
+              <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
+                Documento
+              </label>
+              {documentoId && !arquivo ? (
+                <div className="text-sm text-emerald-800 font-semibold flex items-center gap-2">
+                  <FileText className="w-4 h-4" />
+                  {prefill ? `Já anexado — ${prefill.titulo}` : 'Anexado'}
+                </div>
+              ) : (
+                <>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
+                    className="w-full text-sm"
+                  />
+                  <p className="text-[11px] text-slate-600 mt-1">
+                    Foto ou PDF, até 10MB. Vai pro prontuário da funcionária.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
           <div>
             <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Observação</label>
             <textarea value={observacoes} onChange={(e) => setObservacoes(e.target.value)}
@@ -493,7 +695,9 @@ function FormEvento({
           </button>
           <button
             onClick={() => void salvar()}
-            disabled={!sellerId || !tipo || salvando}
+            // O botão morre enquanto falta o anexo obrigatório — melhor um
+            // botão apagado do que um clique que volta 400.
+            disabled={!sellerId || !tipo || salvando || (precisaDoc && !arquivo)}
             className="px-4 py-2 rounded-lg bg-slate-800 text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {salvando && <Loader2 className="w-4 h-4 animate-spin" />}

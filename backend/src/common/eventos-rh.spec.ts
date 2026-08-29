@@ -1,5 +1,7 @@
 import {
   EVENTOS_RH,
+  chaveSemana,
+  descontoFolha,
   efeitosDoDia,
   minutosAbatidos,
   minutosPrevistos,
@@ -229,5 +231,93 @@ describe('efeitosDoDia — vários eventos no mesmo dia', () => {
     );
     expect(r.minAbatidos).toBe(480);
     expect(r.minCreditados).toBe(0);
+  });
+});
+
+describe('chaveSemana — a semana do DSR (segunda a domingo)', () => {
+  it('todos os dias da mesma semana caem na mesma chave', () => {
+    // 2026-08-24 é uma segunda-feira.
+    for (const d of ['2026-08-24', '2026-08-26', '2026-08-30']) {
+      expect(chaveSemana(d)).toBe('2026-08-24');
+    }
+  });
+
+  it('a segunda seguinte abre semana nova', () => {
+    expect(chaveSemana('2026-08-31')).toBe('2026-08-31');
+  });
+
+  it('domingo fecha a semana da segunda anterior, não abre a seguinte', () => {
+    expect(chaveSemana('2026-08-30')).toBe('2026-08-24');
+  });
+});
+
+describe('descontoFolha — o "faltou 1, perdeu 2"', () => {
+  it('mês limpo não desconta nada', () => {
+    expect(descontoFolha([])).toEqual({
+      diasDescontados: 0, dsrPerdidos: 0, diasTotais: 0, semanas: [],
+    });
+  });
+
+  it('uma falta custa o dia MAIS o DSR da semana', () => {
+    const r = descontoFolha([{ data: '2026-08-25', tipo: 'FALTA_INJUSTIFICADA' }]);
+    expect(r.diasDescontados).toBe(1);
+    expect(r.dsrPerdidos).toBe(1);
+    expect(r.diasTotais).toBe(2);
+  });
+
+  // O erro clássico de folha: cobrar um DSR por falta em vez de um por semana.
+  it('duas faltas na MESMA semana perdem só UM DSR', () => {
+    const r = descontoFolha([
+      { data: '2026-08-25', tipo: 'FALTA_INJUSTIFICADA' },
+      { data: '2026-08-26', tipo: 'FALTA_INJUSTIFICADA' },
+    ]);
+    expect(r.diasDescontados).toBe(2);
+    expect(r.dsrPerdidos).toBe(1);
+    expect(r.diasTotais).toBe(3);
+  });
+
+  it('faltas em semanas diferentes perdem um DSR cada', () => {
+    const r = descontoFolha([
+      { data: '2026-08-25', tipo: 'FALTA_INJUSTIFICADA' },
+      { data: '2026-09-01', tipo: 'FALTA_INJUSTIFICADA' },
+    ]);
+    expect(r.dsrPerdidos).toBe(2);
+    expect(r.diasTotais).toBe(4);
+  });
+
+  it('atestado NÃO desconta dia nem DSR', () => {
+    const r = descontoFolha([
+      { data: '2026-08-25', tipo: 'ATESTADO_MEDICO' },
+      { data: '2026-08-26', tipo: 'ATESTADO_MEDICO' },
+    ]);
+    expect(r.diasTotais).toBe(0);
+  });
+
+  it('férias e treinamento não descontam', () => {
+    const r = descontoFolha([
+      { data: '2026-08-10', tipo: 'FERIAS' },
+      { data: '2026-08-11', tipo: 'TREINAMENTO' },
+      { data: '2026-08-12', tipo: 'NOJO' },
+    ]);
+    expect(r.diasTotais).toBe(0);
+  });
+
+  // Suspensão é o outro caso que desconta: ela não trabalha e não recebe.
+  it('suspensão desconta dia e DSR igual à falta', () => {
+    const r = descontoFolha([{ data: '2026-08-25', tipo: 'SUSPENSAO' }]);
+    expect(r.diasTotais).toBe(2);
+  });
+
+  it('dois eventos no mesmo dia não descontam o dia em dobro', () => {
+    const r = descontoFolha([
+      { data: '2026-08-25', tipo: 'FALTA_INJUSTIFICADA' },
+      { data: '2026-08-25', tipo: 'SUSPENSAO' },
+    ]);
+    expect(r.diasDescontados).toBe(1);
+    expect(r.dsrPerdidos).toBe(1);
+  });
+
+  it('tipo desconhecido é ignorado, não vira desconto', () => {
+    expect(descontoFolha([{ data: '2026-08-25', tipo: 'CHUTE' }]).diasTotais).toBe(0);
   });
 });

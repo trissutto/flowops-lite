@@ -598,3 +598,65 @@ export function efeitosDoDia(
     faltaInjustificada: falta,
   };
 }
+
+// ── FOLHA: O QUE DESCONTA ────────────────────────────────────────
+
+/**
+ * Chave da SEMANA de um dia "YYYY-MM-DD", segunda a domingo.
+ *
+ * A semana existe aqui por causa do DSR: a Lei 605/49 tira o descanso
+ * REMUNERADO da semana em que houve falta injustificada — uma vez por semana,
+ * não uma por falta. Faltar segunda e terça da mesma semana custa 2 dias + 1
+ * DSR, não 2 + 2. Contar por falta seria descontar a mais da funcionária.
+ */
+export function chaveSemana(data: string): string {
+  const d = new Date(`${String(data).slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return String(data);
+  // getUTCDay: 0=DOM. Segunda vira o dia 0 da semana.
+  const desdeSegunda = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - desdeSegunda);
+  return d.toISOString().slice(0, 10);
+}
+
+export interface DescontoFolha {
+  /** Dias de trabalho a descontar do salário. */
+  diasDescontados: number;
+  /** DSRs perdidos — no máximo um por semana atingida. */
+  dsrPerdidos: number;
+  /** Total de dias a descontar (dias + DSR). É o número que vai pra folha. */
+  diasTotais: number;
+  /** Semanas atingidas, pra tela poder mostrar o porquê do DSR. */
+  semanas: string[];
+}
+
+/**
+ * O QUE ESTE MÊS DESCONTA.
+ *
+ * Recebe a lista já expandida de (dia, tipo) e devolve os dias de desconto.
+ * Puro de propósito: a régua do "faltou 1, perdeu 2" precisa ser conferível
+ * sem banco, porque erro aqui sai do bolso da funcionária.
+ *
+ * Dia repetido não conta duas vezes: dois eventos que descontam no mesmo dia
+ * (o que não deveria acontecer, mas acontece) descontariam o dia em dobro.
+ */
+export function descontoFolha(dias: Array<{ data: string; tipo: string }>): DescontoFolha {
+  const diasComDesconto = new Set<string>();
+  const semanas = new Set<string>();
+
+  for (const d of dias ?? []) {
+    const t = tipoEvento(d.tipo);
+    if (!t) continue;
+    const chave = String(d.data).slice(0, 10);
+    if (t.descontaSalario) diasComDesconto.add(chave);
+    if (t.descontaDSR) semanas.add(chaveSemana(chave));
+  }
+
+  const diasDescontados = diasComDesconto.size;
+  const dsrPerdidos = semanas.size;
+  return {
+    diasDescontados,
+    dsrPerdidos,
+    diasTotais: diasDescontados + dsrPerdidos,
+    semanas: [...semanas].sort(),
+  };
+}

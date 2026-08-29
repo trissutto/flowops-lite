@@ -39,10 +39,21 @@ import {
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
   Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone, AlertTriangle,
-  Globe, Copy, ChevronDown,
+  Globe, Copy, ChevronDown, UserMinus,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
+
+/** Funcionária fora hoje — só o que abona jornada (o backend já filtra). */
+type ForaHoje = {
+  id: string;
+  nome: string;
+  tipoLabel: string;
+  diaInteiro: boolean;
+  horaInicio: string | null;
+  horaFim: string | null;
+  ate: string;
+};
 
 interface PickOrderItem {
   id?: string;
@@ -385,6 +396,10 @@ export default function MinhaLojaPage() {
   const [openBoxes, setOpenBoxes] = useState<any[]>([]);
   const [incomingShipments, setIncomingShipments] = useState<any[]>([]);
   const [pendingPieces, setPendingPieces] = useState<any[]>([]);
+  const [foraHoje, setForaHoje] = useState<ForaHoje[]>([]);
+  // "Hoje" no fuso BR — 'en-CA' já sai YYYY-MM-DD. Serve pra não escrever
+  // "até 28/08" no próprio dia 28, que só ocupa espaço e não informa nada.
+  const ymdHoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
   // NÃO existe tarefa de "gerar etiqueta" aqui — e é de propósito (11/08).
   // A medição no banco derrubou a premissa: só 5 das 203 remessas em trânsito
   // têm etiqueta do sistema, e mesmo assim 639 caixas chegaram e foram
@@ -595,10 +610,13 @@ export default function MinhaLojaPage() {
   // e peças de realinhamento aguardando separação. Silencioso em erro — a
   // fila simplesmente não mostra aquela fonte.
   const loadTasksData = useCallback(async () => {
-    const [open, inc, mine] = await Promise.all([
+    const [open, inc, mine, fora] = await Promise.all([
       api<any[]>('/realignment/shipments/open').catch(() => []),
       api<any[]>('/realignment/shipments/incoming').catch(() => []),
       api<any[]>('/realignment/mine').catch(() => []),
+      // Quem está fora hoje (atestado/férias/treinamento). Silencioso em erro:
+      // some a faixa, e a fila de tarefas não é afetada.
+      api<ForaHoje[]>('/rh/eventos/hoje').catch(() => []),
     ]);
     // Caixa vazia não é tarefa — só entra caixa com peça dentro.
     setOpenBoxes(Array.isArray(open) ? open.filter((s) => (s?.items || []).length > 0) : []);
@@ -606,6 +624,7 @@ export default function MinhaLojaPage() {
     setPendingPieces(Array.isArray(mine) ? mine : []);
     setShipmentsIncoming(Array.isArray(inc) ? inc.length : 0);
     setRealignmentPending(Array.isArray(mine) ? mine.length : 0);
+    setForaHoje(Array.isArray(fora) ? fora : []);
   }, []);
 
   // ---------- Socket ----------
@@ -1369,6 +1388,32 @@ export default function MinhaLojaPage() {
           baixa, logo acima do painel de botões. A barra continua dizendo QUANTAS
           tarefas existem e quantas estão paradas — o que sai da tela é a parede
           de linhas, não o alarme. Um clique abre a lista inteira ali mesmo. */}
+      {/* QUEM ESTÁ FORA HOJE — informação, NÃO tarefa.
+          Fica FORA da fila de propósito: a fila é "o que fazer agora", e a
+          regra de ouro é que linha que não é pendência real da loja mata a
+          confiança na fila inteira. Saber que a Fulana está de atestado até
+          sexta é o que a gerente precisa pra montar a escala, e não há nada a
+          clicar. Só aparece quando tem alguém fora. */}
+      {foraHoje.length > 0 && (
+        <div className="max-w-3xl mx-auto px-3 pt-3">
+          <div className="rounded-xl border-2 border-sky-200 bg-sky-50 px-3 py-2 flex items-start gap-2">
+            <UserMinus className="w-4 h-4 text-sky-700 shrink-0 mt-0.5" />
+            <div className="text-[12px] leading-snug text-sky-900">
+              <span className="font-black uppercase tracking-wide mr-1">Hoje fora:</span>
+              {foraHoje.map((f, i) => (
+                <span key={f.id}>
+                  {i > 0 && ' · '}
+                  <span className="font-bold">{f.nome}</span>
+                  {' '}({f.tipoLabel.toLowerCase()}
+                  {!f.diaInteiro && f.horaInicio ? ` ${f.horaInicio}–${f.horaFim}` : ''}
+                  {f.ate && f.ate !== ymdHoje ? ` até ${f.ate.slice(8, 10)}/${f.ate.slice(5, 7)}` : ''})
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-3xl mx-auto px-3 pt-3">
         {storeTasks.length === 0 ? (
           <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center gap-2.5">

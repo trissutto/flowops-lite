@@ -14,7 +14,10 @@ function servicoCom(linhas: any[]) {
     },
     seller: { findUnique: jest.fn() },
   };
-  return { svc: new RhEventosService(prisma), prisma };
+  // O service de documentos não é exercido por estes testes (nenhum deles sobe
+  // arquivo) — entra como stub só pra satisfazer o construtor.
+  const docs: any = { upload: jest.fn() };
+  return { svc: new RhEventosService(prisma, docs), prisma, docs };
 }
 
 describe('mapaDoMes — um evento vira N dias', () => {
@@ -92,7 +95,7 @@ describe('mapaDoMes — um evento vira N dias', () => {
     const prisma: any = {
       sellerEvento: { findMany: jest.fn(async () => { throw new Error('relation does not exist'); }) },
     };
-    const svc = new RhEventosService(prisma);
+    const svc = new RhEventosService(prisma, { upload: jest.fn() } as any);
     await expect(svc.mapaDoMes('s1', 2026, 8)).resolves.toEqual({});
   });
 });
@@ -158,5 +161,63 @@ describe('foraHoje — quem está fora de verdade', () => {
     const where = prisma.sellerEvento.findMany.mock.calls[0][0].where;
     expect(where.dataInicio.lte.toISOString()).toBe('2026-08-28T00:00:00.000Z');
     expect(where.dataFim.gte.toISOString()).toBe('2026-08-28T00:00:00.000Z');
+  });
+});
+
+describe('descontosFolha — o que a folha tem que fazer no mês', () => {
+  const seller = (salario: number) => ({ id: 's1', name: 'Fulana', salarioBase: salario });
+
+  it('mês sem desconto devolve lista vazia, não linha zerada', async () => {
+    const { svc } = servicoCom([
+      { sellerId: 's1', tipo: 'ATESTADO_MEDICO', seller: seller(3000),
+        dataInicio: dbDate('2026-08-10'), dataFim: dbDate('2026-08-12') },
+    ]);
+    const r = await svc.descontosFolha(2026, 8);
+    expect(r.itens).toEqual([]);
+    expect(r.totalValor).toBe(0);
+  });
+
+  // Salário 3000 → dia = 100. Uma falta = 1 dia + 1 DSR = R$ 200.
+  it('uma falta custa dois dias de salário', async () => {
+    const { svc } = servicoCom([
+      { sellerId: 's1', tipo: 'FALTA_INJUSTIFICADA', seller: seller(3000),
+        dataInicio: dbDate('2026-08-25'), dataFim: dbDate('2026-08-25') },
+    ]);
+    const r = await svc.descontosFolha(2026, 8);
+    expect(r.itens).toHaveLength(1);
+    expect(r.itens[0].diasDescontados).toBe(1);
+    expect(r.itens[0].dsrPerdidos).toBe(1);
+    expect(r.itens[0].valorDesconto).toBe(200);
+    expect(r.totalValor).toBe(200);
+  });
+
+  // A falta atravessa a virada do mês: agosto só pode cobrar os dias de agosto.
+  it('evento que cruza a virada do mês é recortado no mês pedido', async () => {
+    const { svc } = servicoCom([
+      { sellerId: 's1', tipo: 'FALTA_INJUSTIFICADA', seller: seller(3000),
+        dataInicio: dbDate('2026-08-30'), dataFim: dbDate('2026-09-02') },
+    ]);
+    const r = await svc.descontosFolha(2026, 8);
+    expect(r.itens[0].diasDescontados).toBe(2); // 30 e 31 de agosto
+  });
+
+  it('sem salário cadastrado conta os dias mas não inventa valor', async () => {
+    const { svc } = servicoCom([
+      { sellerId: 's1', tipo: 'FALTA_INJUSTIFICADA', seller: seller(0),
+        dataInicio: dbDate('2026-08-25'), dataFim: dbDate('2026-08-25') },
+    ]);
+    const r = await svc.descontosFolha(2026, 8);
+    expect(r.itens[0].diasTotais).toBe(2);
+    expect(r.itens[0].valorDesconto).toBe(0);
+  });
+
+  it('tabela ausente não derruba a folha', async () => {
+    const prisma: any = {
+      sellerEvento: { findMany: jest.fn(async () => { throw new Error('nope'); }) },
+    };
+    const svc = new RhEventosService(prisma, { upload: jest.fn() } as any);
+    await expect(svc.descontosFolha(2026, 8)).resolves.toEqual({
+      ano: 2026, mes: 8, itens: [], totalDias: 0, totalValor: 0,
+    });
   });
 });

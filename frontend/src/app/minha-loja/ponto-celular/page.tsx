@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, CheckCircle2, Loader2, AlertTriangle, PartyPopper,
-  MapPin, Wifi, Download, Share,
+  MapPin, Wifi, Download, Share, FileText,
 } from 'lucide-react';
 import Link from 'next/link';
 import FaceCapture, { FaceCaptureHandle } from '@/components/rh/FaceCapture';
@@ -123,6 +123,9 @@ export default function PontoCelularPage() {
   const selectedRef = useRef<SellerDescriptors | null>(null);
   const [wrongFace, setWrongFace] = useState<string | null>(null);
   const wrongFaceRef = useRef<string | null>(null);
+  // Envio do atestado pelo celular — independente do ponto.
+  const [enviandoAtestado, setEnviandoAtestado] = useState(false);
+  const [atestadoMsg, setAtestadoMsg] = useState<{ ok: boolean; texto: string } | null>(null);
   const [lastSuccess, setLastSuccess] = useState<{ name: string; tipo: string; at: Date } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [alreadyDone, setAlreadyDone] = useState<{ name: string } | null>(null);
@@ -311,6 +314,38 @@ export default function PontoCelularPage() {
     );
     return () => navigator.geolocation.clearWatch(id);
   }, []);
+
+  /**
+   * Manda a foto do atestado pra matriz. Não abona dia nenhum sozinho — cria
+   * um documento no prontuário que aparece na caixa de entrada da supervisão,
+   * que é quem lança o evento (ordem do dono, 28/08).
+   */
+  async function enviarAtestado(seller: SellerDescriptors, file: File) {
+    setEnviandoAtestado(true);
+    setAtestadoMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('sellerId', seller.id);
+      // Data de referência = hoje no fuso BR ('en-CA' já sai YYYY-MM-DD).
+      fd.append(
+        'dataReferencia',
+        new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }),
+      );
+      await api('/rh/eventos/atestado-recebido', { method: 'POST', body: fd });
+      setAtestadoMsg({
+        ok: true,
+        texto: 'Atestado enviado! A matriz vai lançar — não precisa trazer o papel.',
+      });
+    } catch (e: any) {
+      setAtestadoMsg({ ok: false, texto: e?.message || 'Não consegui enviar. Tente de novo.' });
+    } finally {
+      setEnviandoAtestado(false);
+      // A mensagem some sozinha: o quiosque fica aberto o dia todo e nada pode
+      // ficar grudado na tela pra próxima pessoa.
+      setTimeout(() => setAtestadoMsg(null), 8_000);
+    }
+  }
 
   async function baterAuto(match: { seller: SellerDescriptors; distance: number }) {
     if (!me?.storeId) return;
@@ -573,6 +608,47 @@ export default function PontoCelularPage() {
                 <p className="text-xs mt-0.5">
                   Se você é {wrongFace.split(' ')[0]}, toque em "Trocar nome" e escolha o seu.
                 </p>
+              </div>
+            )}
+
+            {/* ENVIAR ATESTADO — o papel chega na matriz no mesmo dia.
+                Antes disso ele levava semanas, e até chegar o dia dela contava
+                como FALTA. NÃO abona nada sozinho: vira um documento na caixa
+                de entrada e quem lança o evento continua sendo a supervisão. */}
+            <label className="block">
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                capture="environment"
+                className="hidden"
+                disabled={enviandoAtestado}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';   // permite reenviar o mesmo arquivo
+                  if (f) void enviarAtestado(selected, f);
+                }}
+              />
+              <span
+                className={`w-full rounded-xl p-3.5 flex items-center justify-center gap-2 font-bold text-sm cursor-pointer ${
+                  enviandoAtestado
+                    ? 'bg-slate-700 text-white/50'
+                    : 'bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                {enviandoAtestado ? 'Enviando…' : 'Enviar atestado'}
+              </span>
+            </label>
+
+            {atestadoMsg && (
+              <div
+                className={`rounded-xl p-3 text-center text-sm font-bold ${
+                  atestadoMsg.ok
+                    ? 'bg-emerald-100 border-2 border-emerald-300 text-emerald-800'
+                    : 'bg-rose-100 border-2 border-rose-300 text-rose-800'
+                }`}
+              >
+                {atestadoMsg.texto}
               </div>
             )}
           </>

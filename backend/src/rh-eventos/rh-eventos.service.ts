@@ -3,10 +3,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   EVENTOS_RH,
   EventoDoDia,
+  descontoFolha,
   tipoEvento,
   tipoEventoValido,
 } from '../common/eventos-rh';
 import { ymdBR } from '../lib/date-br';
+import { SellerDocumentsService } from '../sellers/seller-documents.service';
 
 /**
  * EVENTOS DE RH — o registro de POR QUE o dia ficou vazio.
@@ -20,7 +22,10 @@ import { ymdBR } from '../lib/date-br';
  */
 @Injectable()
 export class RhEventosService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly docs: SellerDocumentsService,
+  ) {}
 
   private get tabela() {
     return (this.prisma as any).sellerEvento;
@@ -376,6 +381,157 @@ export class RhEventosService {
       }
     }
     return mapa;
+  }
+
+  // ── ANEXO ────────────────────────────────────────────────────────
+
+  /**
+   * Sobe o atestado e devolve o `documentoId` pro evento.
+   *
+   * O arquivo vai pro PRONTUÁRIO (`SellerDocument`), não pra uma pasta própria
+   * do módulo: o RH já procura documento de funcionária num lugar só, e um
+   * segundo lugar viraria "o atestado está no outro sistema".
+   *
+   * A categoria sai do TIPO, não de quem chama — categoria digitada é como o
+   * mesmo atestado acaba arquivado em três gavetas diferentes.
+   */
+  async anexarDocumento(
+    sellerId: string,
+    file: any,
+    input: { tipo?: string; titulo?: string; dataReferencia?: string | null },
+    autorId: string | null,
+  ) {
+    const t = tipoEvento(input?.tipo);
+    const categoria =
+      t?.codigo === 'FERIAS' ? 'ferias' : t?.grupo === 'saude' ? 'atestado' : 'outro';
+
+    const r: any = await this.docs.upload(
+      sellerId,
+      file,
+      {
+        categoria,
+        titulo: input?.titulo || t?.label || 'Documento',
+        dataReferencia: input?.dataReferencia ?? null,
+      },
+      autorId,
+    );
+    return { ok: true, documentoId: r?.document?.id ?? null, document: r?.document ?? null };
+  }
+
+  /**
+   * ATESTADOS RECEBIDOS E AINDA NÃO LANÇADOS.
+   *
+   * É a caixa de entrada da supervisão. Nasceu pro atestado que a funcionária
+   * manda pelo celular: sem esta lista o PDF entraria no prontuário e ficaria
+   * lá parado, sem virar evento — e o dia dela seguiria como FALTA, que é
+   * exatamente o problema que o módulo veio resolver.
+   *
+   * "Não lançado" = nenhum `SellerEvento` aponta pro documento.
+   */
+  async atestadosPendentes(dias = 60) {
+    const desde = new Date(Date.now() - dias * 86_400_000);
+    try {
+      const docs = await (this.prisma as any).sellerDocument.findMany({
+        where: {
+          categoria: 'atestado',
+          uploadedAt: { gte: desde },
+          // `none` cobre o cancelado também: evento cancelado devolve o
+          // atestado pra caixa de entrada, que é o certo — alguém cancelou
+          // porque estava errado, e o papel continua valendo.
+          eventos: { none: { canceladoAt: null } },
+        },
+        orderBy: { uploadedAt: 'desc' },
+        take: 100,
+        include: { seller: { select: { id: true, name: true, apelido: true } } },
+      });
+      return docs.map((d: any) => ({
+        id: d.id,
+        sellerId: d.sellerId,
+        nome: d.seller?.name ?? '',
+        titulo: d.titulo,
+        fileUrl: d.fileUrl,
+        dataReferencia: d.dataReferencia ? this.chaveData(d.dataReferencia) : null,
+        observacoes: d.observacoes,
+        uploadedAt: d.uploadedAt,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  // ── FOLHA ────────────────────────────────────────────────────────
+
+  /**
+   * O QUE O MÊS DESCONTA, por funcionária.
+   *
+   * A régua do "faltou 1, perdeu 2" é pura (`descontoFolha`) e testada sem
+   * banco: erro aqui sai do bolso da funcionária. Este método só junta os dias.
+   *
+   * Valor do dia = salário base ÷ 30 (dia de salário mensal, não hora de
+   * jornada — o DSR descontado é um dia de REPOUSO, e repouso não tem jornada).
+   */
+  async descontosFolha(ano: number, mes: number, sellerId?: string) {
+    const inicio = new Date(Date.UTC(ano, mes - 1, 1));
+    const fim = new Date(Date.UTC(ano, mes, 0));
+
+    let linhas: any[] = [];
+    try {
+      linhas = await (this.prisma as any).sellerEvento.findMany({
+        where: {
+          ...(sellerId ? { sellerId } : {}),
+          canceladoAt: null,
+          dataInicio: { lte: fim },
+          dataFim: { gte: inicio },
+        },
+        select: {
+          sellerId: true, tipo: true, dataInicio: true, dataFim: true,
+          seller: { select: { id: true, name: true, salarioBase: true } },
+        },
+      });
+    } catch {
+      return { ano, mes, itens: [], totalDias: 0, totalValor: 0 };
+    }
+
+    // Expande evento → dias, recortando no mês pedido.
+    const porSeller = new Map<string, { seller: any; dias: Array<{ data: string; tipo: string }> }>();
+    for (const l of linhas) {
+      const de = new Date(Math.max(new Date(l.dataInicio).getTime(), inicio.getTime()));
+      const ate = new Date(Math.min(new Date(l.dataFim).getTime(), fim.getTime()));
+      const alvo = porSeller.get(l.sellerId) ?? { seller: l.seller, dias: [] };
+      for (const d = new Date(de); d <= ate; d.setUTCDate(d.getUTCDate() + 1)) {
+        alvo.dias.push({ data: d.toISOString().slice(0, 10), tipo: l.tipo });
+      }
+      porSeller.set(l.sellerId, alvo);
+    }
+
+    const itens = [...porSeller.entries()]
+      .map(([id, { seller, dias }]) => {
+        const d = descontoFolha(dias);
+        const salario = Number(seller?.salarioBase ?? 0);
+        const valorDia = salario > 0 ? salario / 30 : 0;
+        return {
+          sellerId: id,
+          nome: seller?.name ?? '',
+          salarioBase: salario,
+          diasDescontados: d.diasDescontados,
+          dsrPerdidos: d.dsrPerdidos,
+          diasTotais: d.diasTotais,
+          semanas: d.semanas,
+          valorDia: Math.round(valorDia * 100) / 100,
+          valorDesconto: Math.round(d.diasTotais * valorDia * 100) / 100,
+        };
+      })
+      // Mês sem desconto não é linha: a lista é do que a folha tem que fazer.
+      .filter((i) => i.diasTotais > 0)
+      .sort((a, b) => b.valorDesconto - a.valorDesconto);
+
+    return {
+      ano,
+      mes,
+      itens,
+      totalDias: itens.reduce((s, i) => s + i.diasTotais, 0),
+      totalValor: Math.round(itens.reduce((s, i) => s + i.valorDesconto, 0) * 100) / 100,
+    };
   }
 
   /**
