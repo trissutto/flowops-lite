@@ -123,6 +123,15 @@ export interface RoutingContext {
    * ou ruptura). A service liga/desliga por env `ROUTING_SPLIT_SKU=0`.
    */
   disableSkuSplit?: boolean;
+  /**
+   * POLÍTICA DE FRETE (29/08): true quando o pedido NÃO PODE sair em 2+
+   * pacotes — fora do estado (SEDEX interestadual caro) ou motoboy (uma loja
+   * de despacho só). Se o plano ficar multi-loja, a engine elege uma âncora
+   * global e transforma o resto em feeder (remessa interna). A service
+   * calcula via `common/politica-frete.ts`; kill-switches
+   * ROUTING_JUNTADA_FORA_ESTADO=0 / ROUTING_JUNTADA_MOTOBOY=0.
+   */
+  consolidacaoObrigatoria?: boolean;
 }
 
 export interface PickAssignment {

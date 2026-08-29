@@ -8,6 +8,7 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 import { diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import { lojasDaRotaPropria } from '../common/rota-propria';
+import { consolidacaoObrigatoria } from '../common/politica-frete';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { computeCommittedStock } from './committed-stock.util';
 import { planSplitAssignment, SplitDemand } from './split-assign.util';
@@ -234,6 +235,13 @@ export class RoutingService {
       // seja, no-op.
       sellerStoreCode: (order as any).sellerStoreCode ?? null,
       juntadaGroup: await this.grupoJuntada(!!order.pickupStoreCode),
+      // POLÍTICA DE FRETE (29/08): fora do estado / motoboy = 1 pacote sempre.
+      consolidacaoObrigatoria: consolidacaoObrigatoria({
+        isPickup: !!order.pickupStoreCode || (order as any).isPickup,
+        shippingCep: order.shippingCep,
+        shippingMethod: order.shippingMethod,
+        checkoutInfo: (order as any).checkoutInfo ?? null,
+      }),
     });
 
     // enriquece assignments com dados da loja (whatsapp, contato)
@@ -2170,6 +2178,12 @@ export class RoutingService {
       preferStoreCode: input.preferStoreCode ?? null,
       pinStoreCodes: input.pinStoreCodes ?? [],
       juntadaGroup: await this.grupoJuntada(!!input.pickupStoreCode),
+      // POLÍTICA DE FRETE (29/08): fora do estado / motoboy = 1 pacote sempre.
+      consolidacaoObrigatoria: consolidacaoObrigatoria({
+        isPickup: !!input.pickupStoreCode || !!input.isPickup,
+        shippingCep: input.address?.postcode ?? null,
+        shippingMethod: input.shippingMethod,
+      }),
     });
 
     // Enriquece cada grupo com dados da loja + itens completos + mensagem WhatsApp

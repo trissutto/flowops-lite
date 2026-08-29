@@ -6,6 +6,7 @@ import { OrderStatus } from '../common/enums';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoPago } from '../common/pedido-pago';
+import { dentroDeSaoPaulo } from '../common/politica-frete';
 import { voltariaProFluxo, motivoDaRecusa } from '../common/volta-pro-fluxo';
 import {
   ehCancelamento,
@@ -3543,6 +3544,108 @@ export class OrdersController {
   @Get('wc/:wcId/juntada')
   async statusJuntada(@Param('wcId') wcId: string) {
     return (await this.juntada.statusJuntada(Number(wcId))) ?? { juntando: false };
+  }
+
+  /**
+   * POLÍTICA DE FRETE (29/08) — fila "PACOTES A DECIDIR" da matriz.
+   *
+   * Pedido DENTRO de SP que ficou em 2+ pacotes pra cliente espera aqui: a
+   * matriz LIBERA os fretes (carimbo) ou JUNTA numa âncora (endpoint
+   * `wc/:wcId/juntar`, que já existe). A separação/bipe das lojas nunca
+   * espera — só a porta do envio. Fora do estado nem aparece: a juntada é
+   * obrigatória no routing.
+   */
+  @Get('pacotes/pendentes')
+  async pacotesPendentes() {
+    if (String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() === '0') return { itens: [] };
+    const candidatos: any[] = await this.prisma.order.findMany({
+      where: {
+        isPickup: false,
+        pacotesLiberadosEm: null,
+        status: { in: ['separating', 'ready'] },
+        pickOrders: { some: { status: { in: ['new', 'separating', 'separated', 'ready'] } } },
+      } as any,
+      select: {
+        id: true, wcOrderId: true, wcOrderNumber: true, customerName: true,
+        shippingCep: true, shippingMethod: true, createdAt: true,
+        pickOrders: {
+          where: { status: { in: ['new', 'separating', 'separated', 'ready', 'shipped'] } },
+          select: {
+            isTransfer: true, status: true, storeId: true,
+            store: { select: { code: true, name: true } },
+          },
+        },
+        items: { select: { quantity: true, assignedStoreId: true, cancelledAt: true } },
+      } as any,
+      orderBy: { createdAt: 'asc' },
+      take: 300,
+    });
+    const itens = candidatos
+      .filter((o) => dentroDeSaoPaulo(o.shippingCep) === true)
+      .map((o) => {
+        const pacotes = o.pickOrders.filter((p: any) => !p.isTransfer);
+        return { o, pacotes };
+      })
+      .filter(({ pacotes }) => pacotes.length > 1)
+      .map(({ o, pacotes }) => ({
+        orderId: o.id,
+        wcOrderId: o.wcOrderId,
+        numero: o.wcOrderNumber || String(o.wcOrderId || '').slice(0, 8),
+        cliente: o.customerName,
+        metodo: o.shippingMethod,
+        criadoEm: o.createdAt,
+        pecas: o.items.filter((i: any) => !i.cancelledAt).reduce((s: number, i: any) => s + i.quantity, 0),
+        pacotes: pacotes.map((p: any) => ({
+          storeCode: p.store?.code,
+          storeName: p.store?.name,
+          status: p.status,
+          pecas: (o.items as any[])
+            .filter((i) => !i.cancelledAt && i.assignedStoreId === p.storeId)
+            .reduce((s, i) => s + i.quantity, 0),
+        })),
+        // Sugestão de âncora pro 1-clique "Juntar": a loja com mais peças.
+        ancoraSugerida: (() => {
+          const ordenados = pacotes
+            .map((p: any) => ({
+              code: p.store?.code,
+              pecas: (o.items as any[])
+                .filter((i) => !i.cancelledAt && i.assignedStoreId === p.storeId)
+                .reduce((s: number, i: any) => s + i.quantity, 0),
+            }))
+            .sort((a: any, b: any) => b.pecas - a.pecas);
+          return ordenados[0]?.code ?? null;
+        })(),
+      }));
+    return { itens };
+  }
+
+  /** Carimbo da matriz: "pode sair em N pacotes". */
+  @Post(':id/pacotes/liberar')
+  async liberarPacotes(@Param('id') id: string, @Req() req?: any) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: { id: true, wcOrderNumber: true, pacotesLiberadosEm: true } as any,
+    });
+    if (!order) throw new NotFoundException('Pedido não encontrado.');
+    if ((order as any).pacotesLiberadosEm) {
+      return { ok: true as const, jaLiberado: true };
+    }
+    await this.prisma.order.update({
+      where: { id },
+      data: {
+        pacotesLiberadosEm: new Date(),
+        pacotesLiberadosPor: req?.user?.userId ?? null,
+      } as any,
+    });
+    await this.prisma.orderHistory.create({
+      data: {
+        orderId: id,
+        fromStatus: 'separating',
+        toStatus: 'separating',
+        note: 'Matriz LIBEROU o envio em múltiplos pacotes (política de frete).',
+      },
+    });
+    return { ok: true as const };
   }
 
   /**

@@ -19,6 +19,7 @@ import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { caixaDoSite } from '../common/caixa-site';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { pacotesAguardandoLiberacao } from '../common/politica-frete';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
@@ -332,6 +333,10 @@ export class PickOrdersService {
       }
       if (ordemJ && !ordemJ.isPickup && !pick.isTransfer) {
         await this.travarEnvioAncoraSeFaltamCaixas(pick);
+        // POLÍTICA DE FRETE (29/08): dentro de SP em 2+ pacotes, a etiqueta
+        // pra cliente só sai depois da decisão da matriz (liberar ou juntar).
+        const gate = await pacotesAguardandoLiberacao(this.prisma as any, pick.orderId);
+        if (gate.travado) throw new BadRequestException(gate.motivo);
       }
     }
     // ── IDEMPOTÊNCIA (28/07: 17 pré-postagens do MESMO pedido no Mais Envios,
@@ -3847,6 +3852,17 @@ export class PickOrdersService {
        */
       if (!pedidoDoCard?.isPickup) {
         await this.travarEnvioAncoraSeFaltamCaixas(current);
+      }
+      /**
+       * POLÍTICA DE FRETE (29/08) — pedido DENTRO de SP em 2+ pacotes espera
+       * a matriz decidir (liberar os fretes ou juntar) antes de QUALQUER
+       * pacote sair. Só vale pro card que vai PRA CLIENTE — caixa de feeder
+       * (isTransfer) segue pro fluxo da juntada normalmente. Separação/bipe
+       * nunca travam; só a porta do envio.
+       */
+      if (!pedidoDoCard?.isPickup && !current.isTransfer) {
+        const gate = await pacotesAguardandoLiberacao(this.prisma as any, current.orderId);
+        if (gate.travado) throw new BadRequestException(gate.motivo);
       }
       /**
        * ARRUMA O CÓDIGO NA ENTRADA (22/08) — a loja digita na mão e um em

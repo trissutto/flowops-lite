@@ -200,6 +200,9 @@ export class RoutingEngine {
     // Kill-switch: ctx.disableSkuSplit (env ROUTING_SPLIT_SKU=0 na service).
     const splitEnabled =
       ctx.disableSkuSplit != null ? !ctx.disableSkuSplit : process.env.ROUTING_SPLIT_SKU !== '0';
+    // Snapshot ANTES do split (que debita o stockMap): a REGRA 2.5 monta um
+    // plano alternativo do zero e precisa do estoque intacto.
+    const stockSnapshot = new Map(stockMap);
     if (missing.length > 0 && splitEnabled) {
       missing = this.splitFillAcrossStores(plan, missing, activeStores, ctx, stockMap);
     }
@@ -215,13 +218,197 @@ export class RoutingEngine {
       };
     }
 
+    /**
+     * REGRA 2.5 — TRIO COMO UM ESTOQUE SÓ (dono, 29/08).
+     *
+     * Itanhaém/Praia Grande/Santos trocam caixa de carro (frete interno
+     * zero), então pra efeito de PACOTE elas são UMA loja. O greedy acima
+     * não sabe disso e podia escolher [trio + loja de fora] onde [só trio]
+     * ou [trio consolidado + 1 fora] renderia menos pacotes — medido em
+     * 29/08: 36 pedidos/30d envolviam trio + outras lojas.
+     *
+     * Montamos um plano alternativo TRIO-PRIMEIRO (o trio pega tudo que
+     * consegue, o resto vai pro greedy de fora) e ficamos com o plano que
+     * gera MENOS PACOTES PRA CLIENTE — contando o trio inteiro como 1.
+     * Empate mantém o plano original (menos mudança de comportamento).
+     */
+    const planB = this.planoTrioPrimeiro(activeStores, ctx, stockSnapshot, splitEnabled);
+    if (planB && this.pacotesParaCliente(planB, ctx) < this.pacotesParaCliente(plan, ctx)) {
+      this.logger.log(
+        `[trio] plano trio-primeiro vence: ${this.pacotesParaCliente(planB, ctx)} pacote(s) ` +
+          `vs ${this.pacotesParaCliente(plan, ctx)} do greedy puro`,
+      );
+      plan = planB;
+    }
+
+    // Lojas do trio presentes no plano JUNTAM entre si (carro da rede):
+    // âncora = a mais à frente na rota, as demais viram feeder.
+    let consolidacao = this.consolidarTrioNoPlano(plan, ctx);
+
+    /**
+     * REGRA 3.5 — CONSOLIDAÇÃO OBRIGATÓRIA (dono, 29/08): pedido de FORA DO
+     * ESTADO ou MOTOBOY nunca sai em 2+ pacotes. Se depois do trio ainda há
+     * mais de um pacote pra cliente, elege uma âncora global: a que recebe o
+     * máximo de peças DE GRAÇA (carro do trio conta como grátis), desempate
+     * por mais peças e por posição na rota. Feeders mandam remessa interna.
+     */
+    if (ctx.consolidacaoObrigatoria) {
+      const global = this.consolidarPedidoInteiro(plan, ctx);
+      if (global) consolidacao = global;
+    }
+
     return {
       success: true,
       strategy: 'multi-store',
       assignments: plan,
       missing: [],
+      consolidateStoreCode: consolidacao?.code ?? null,
+      consolidateStoreName: consolidacao?.name ?? null,
       scoreBreakdown: allScores,
     };
+  }
+
+  /** Códigos do grupo do carro, MAIÚSCULOS, na ordem da rota (montante → jusante). */
+  private codigosDoTrio(ctx: RoutingContext): string[] {
+    return (ctx.juntadaGroup ?? []).map((c) => String(c).toUpperCase());
+  }
+
+  /**
+   * Quantos PACOTES o cliente recebe com esse plano: lojas do trio contam
+   * como UM pacote (a juntada interna do carro consolida), cada loja de fora
+   * é um pacote. Assignments já marcados como transfer não contam.
+   */
+  private pacotesParaCliente(plan: PickAssignment[], ctx: RoutingContext): number {
+    const codes = this.codigosDoTrio(ctx);
+    let trio = 0;
+    let fora = 0;
+    for (const p of plan) {
+      if (p.isTransfer) continue;
+      if (codes.includes(String(p.storeCode).toUpperCase())) trio = 1;
+      else fora++;
+    }
+    return trio + fora;
+  }
+
+  /**
+   * Plano TRIO-PRIMEIRO: o trio pega tudo que consegue (greedy + split
+   * restrito ao trio), lojas de fora cobrem só o que sobrar. Devolve null
+   * quando não fecha o pedido, quando o trio não contribui, ou quando o
+   * operador fixou loja na mão (a ação dele manda).
+   */
+  private planoTrioPrimeiro(
+    activeStores: StoreInput[],
+    ctx: RoutingContext,
+    stockSnapshot: Map<string, number>,
+    splitEnabled: boolean,
+  ): PickAssignment[] | null {
+    const codes = this.codigosDoTrio(ctx);
+    if (codes.length < 2) return null;
+    if (ctx.pinStoreCodes?.length) return null;
+    const trio = activeStores.filter((s) => codes.includes(String(s.code).toUpperCase()));
+    if (trio.length < 2) return null;
+    const fora = activeStores.filter((s) => !codes.includes(String(s.code).toUpperCase()));
+
+    const map = new Map(stockSnapshot);
+    const planTrio = this.greedySetCover(trio, ctx, map, { seedSeller: false });
+    let cobertos = new Set(planTrio.flatMap((p) => p.items.map((i) => i.sku)));
+    let resto = ctx.items.filter((i) => !cobertos.has(i.sku));
+    if (resto.length > 0 && splitEnabled && planTrio.length > 0) {
+      resto = this.splitFillAcrossStores(planTrio, resto, trio, ctx, map);
+    }
+    if (planTrio.length === 0) return null;
+    if (resto.length === 0) return planTrio;
+
+    const ctxResto: RoutingContext = { ...ctx, items: resto };
+    const planFora = this.greedySetCover(fora, ctxResto, map, { seedSeller: false });
+    cobertos = new Set(planFora.flatMap((p) => p.items.map((i) => i.sku)));
+    let faltando = resto.filter((i) => !cobertos.has(i.sku));
+    if (faltando.length > 0 && splitEnabled) {
+      faltando = this.splitFillAcrossStores(planFora, faltando, fora, ctxResto, map);
+    }
+    if (faltando.length > 0) return null;
+    return [...planTrio, ...planFora];
+  }
+
+  /**
+   * Lojas do trio presentes no plano juntam entre si: âncora = a mais À
+   * FRENTE na rota do carro (carga só anda pra frente), as outras viram
+   * feeder (`isTransfer` → âncora). Muta o plano. Devolve a âncora ou null
+   * quando o trio tem 0-1 loja no plano (nada a juntar).
+   */
+  private consolidarTrioNoPlano(
+    plan: PickAssignment[],
+    ctx: RoutingContext,
+  ): { code: string; name: string } | null {
+    const codes = this.codigosDoTrio(ctx);
+    if (codes.length < 2) return null;
+    const doTrio = plan.filter(
+      (p) => !p.isTransfer && codes.includes(String(p.storeCode).toUpperCase()),
+    );
+    if (doTrio.length < 2) return null;
+    const pos = (p: PickAssignment) => codes.indexOf(String(p.storeCode).toUpperCase());
+    const pecas = (p: PickAssignment) => p.items.reduce((s, i) => s + i.quantity, 0);
+    const ancora = [...doTrio].sort((a, b) => pos(b) - pos(a) || pecas(b) - pecas(a))[0];
+    for (const p of plan) {
+      if (p === ancora || p.isTransfer) continue;
+      if (!codes.includes(String(p.storeCode).toUpperCase())) continue;
+      p.isTransfer = true;
+      p.transferToStoreCode = ancora.storeCode;
+      p.transferToStoreName = ancora.storeName;
+    }
+    this.logger.log(
+      `[trio] juntada interna do carro: âncora ${ancora.storeCode} recebe de ` +
+        `${doTrio.length - 1} loja(s) do trio`,
+    );
+    return { code: ancora.storeCode, name: ancora.storeName };
+  }
+
+  /**
+   * CONSOLIDAÇÃO OBRIGATÓRIA: elege UMA âncora pro pedido inteiro e
+   * transforma todo o resto em feeder dela. Critério da âncora, na ordem:
+   *   1. menos remessas PAGAS (feeder do trio a montante chega de carro = grátis);
+   *   2. mais peças já na loja (menos volume viajando);
+   *   3. mais à frente na rota do carro;
+   *   4. priorityScore não entra — remessa paga e volume dominam o custo.
+   * Muta o plano. Devolve a âncora ou null quando já há 1 pacote só.
+   */
+  private consolidarPedidoInteiro(
+    plan: PickAssignment[],
+    ctx: RoutingContext,
+  ): { code: string; name: string } | null {
+    const clientes = plan.filter((p) => !p.isTransfer);
+    if (clientes.length <= 1) return null;
+    const codes = this.codigosDoTrio(ctx);
+    const idx = (c: string) => codes.indexOf(String(c).toUpperCase());
+    const chegaDeCarro = (de: string, para: string) =>
+      idx(de) >= 0 && idx(para) >= 0 && idx(de) <= idx(para);
+    const pecas = (p: PickAssignment) => p.items.reduce((s, i) => s + i.quantity, 0);
+    const remessasPagas = (candidata: PickAssignment) =>
+      clientes.filter(
+        (o) => o !== candidata && !chegaDeCarro(o.storeCode, candidata.storeCode),
+      ).length;
+
+    const ancora = [...clientes].sort((a, b) => {
+      const ra = remessasPagas(a);
+      const rb = remessasPagas(b);
+      if (ra !== rb) return ra - rb;
+      if (pecas(a) !== pecas(b)) return pecas(b) - pecas(a);
+      return idx(b.storeCode) - idx(a.storeCode);
+    })[0];
+
+    for (const p of plan) {
+      if (p === ancora) continue;
+      // Feeder já apontado pra âncora do trio: se a âncora global é OUTRA,
+      // re-aponta — um salto só, sem corrente de remessas.
+      p.isTransfer = true;
+      p.transferToStoreCode = ancora.storeCode;
+      p.transferToStoreName = ancora.storeName;
+    }
+    this.logger.log(
+      `[juntada-obrigatoria] pedido consolida na âncora ${ancora.storeCode}: ` +
+        `${plan.length - 1} loja(s) mandam remessa interna, cliente recebe 1 pacote`,
+    );
+    return { code: ancora.storeCode, name: ancora.storeName };
   }
 
   // ─── helpers ─────────────────────────────────────────────────────────────
@@ -298,9 +485,19 @@ export class RoutingEngine {
     const pecasDe = (p: PickAssignment) => p.items.reduce((s, i) => s + i.quantity, 0);
     const posDe = (p: PickAssignment) => {
       const i = codes.indexOf(String(p.storeCode).toUpperCase());
-      return i < 0 ? 99 : i;
+      return i < 0 ? -1 : i;
     };
-    const ancora = [...plan].sort((a, b) => pecasDe(b) - pecasDe(a) || posDe(a) - posDe(b))[0];
+    /**
+     * ÂNCORA NO SENTIDO DO CARRO (dono, 29/08). A rota do veículo é fixa:
+     * coleta em Itanhaém → Praia Grande → termina em Santos. Carga só anda
+     * PRA FRENTE — a âncora tem que ser a loja mais À FRENTE na rota entre as
+     * envolvidas, senão alguém teria que mandar peça pra trás (impossível).
+     * O critério antigo ("quem tem mais peças, empate → Itanhaém") podia
+     * eleger Itanhaém com Santos de feeder — contra o sentido do carro.
+     * A ordem em `juntadaGroup`/`realignment_rota_propria` agora significa
+     * SENTIDO DA ROTA, não prioridade.
+     */
+    const ancora = [...plan].sort((a, b) => posDe(b) - posDe(a) || pecasDe(b) - pecasDe(a))[0];
 
     const assignments = plan.map((p) =>
       p.storeId === ancora.storeId
