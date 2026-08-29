@@ -10,6 +10,7 @@ import { PickOrdersModule } from '../pick-orders/pick-orders.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
 import { PromoSiteModule } from '../promo-site/promo-site.module';
+import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { TrocaPecaService } from './troca-peca.service';
 import { DespachoBackfillService } from './despacho-backfill.service';
 import { LinhaDoTempoService } from './linha-do-tempo.service';
@@ -22,7 +23,7 @@ import { LinhaDoTempoService } from './linha-do-tempo.service';
   // PagarmeModule → link de pagamento da diferença da troca de peça.
   // PromoSiteModule → o preço que o SITE cobra hoje pela peça nova (preço da
   // loja, com a promoção de 50% quando elegível), pra sugerir a diferença certa.
-  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoSiteModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
+  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoSiteModule, MaisEnviosModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
   // DespachoBackfillService → preenche `shipped_at` do que já estava
   // despachado quando a coluna nasceu (25/08). Roda uma vez e some.
   // LinhaDoTempoService → raio-x "onde está cada peça" + histórico assinado

@@ -7,6 +7,9 @@ import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoPago } from '../common/pedido-pago';
 import { dentroDeSaoPaulo } from '../common/politica-frete';
+import { lojasDaRotaPropria } from '../common/rota-propria';
+import { MaisEnviosService } from '../mais-envios/mais-envios.service';
+import { VigilanciaSeparacaoCron } from '../routing/vigilancia-separacao.cron';
 import { voltariaProFluxo, motivoDaRecusa } from '../common/volta-pro-fluxo';
 import {
   ehCancelamento,
@@ -328,7 +331,69 @@ export class OrdersController {
     private readonly trocaPeca: TrocaPecaService,
     // Raio-X + linha do tempo assinada da tela do pedido (26/08).
     private readonly linhaDoTempo: LinhaDoTempoService,
+    // Cotação real de frete pro "juntar × liberar" (29/08, sugestão nº 13).
+    private readonly maisEnvios: MaisEnviosService,
+    // Vigilância semanal da separação (nº 17).
+    private readonly vigilancia: VigilanciaSeparacaoCron,
   ) {}
+
+  /**
+   * COTAÇÃO JUNTAR × LIBERAR (29/08) — a decisão da matriz com o número na
+   * mão: "liberar N fretes custa R$ X, juntar custa R$ Y". Cota pela API do
+   * Mais Envios (a mesma das etiquetas), peso = peças × PESO_MEDIO_PECA_GRAMAS
+   * (350g default). Perna entre lojas do trio no sentido do carro = R$ 0.
+   * Best-effort com cache de 10min: sem cotação a tela decide como antes.
+   */
+  private cotacaoPacotesCache = new Map<string, { at: number; dados: any }>();
+  private async cotarFreteLeg(cepOrigem: string, cepDestino: string, pesoGramas: number, servico: 'SEDEX' | 'PAC') {
+    try {
+      const r = await this.maisEnvios.calcularFrete({ cepOrigem, cepDestino, pesoGramas });
+      const op = (r.opcoes || []).find((o: any) => new RegExp(servico, 'i').test(String(o.servico)) && o.precoReais != null);
+      return op?.precoReais ?? null;
+    } catch {
+      return null;
+    }
+  }
+  private async cotarJuntarVsLiberar(item: any, cepCliente: string | null, cepPorLoja: Map<string, string>, rota: string[]) {
+    if (!cepCliente) return null;
+    const cacheKey = item.orderId;
+    const hit = this.cotacaoPacotesCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.dados;
+    const g = Math.max(100, Number(process.env.PESO_MEDIO_PECA_GRAMAS) || 350);
+    const servicoCliente: 'SEDEX' | 'PAC' = /sedex/i.test(String(item.metodo || '')) ? 'SEDEX' : 'PAC';
+    const idx = (c: string) => rota.indexOf(String(c || '').toUpperCase());
+    const chegaDeCarro = (de: string, para: string) => idx(de) >= 0 && idx(para) >= 0 && idx(de) <= idx(para);
+    const ancora = item.ancoraSugerida;
+    const cepAncora = ancora ? cepPorLoja.get(ancora) : null;
+    let liberar = 0;
+    let juntar = 0;
+    let completo = true;
+    for (const p of item.pacotes) {
+      const cepLoja = cepPorLoja.get(p.storeCode);
+      const v = cepLoja ? await this.cotarFreteLeg(cepLoja, cepCliente, Math.max(300, p.pecas * g), servicoCliente) : null;
+      if (v == null) completo = false;
+      else liberar += v;
+      if (p.storeCode !== ancora) {
+        if (chegaDeCarro(p.storeCode, ancora)) continue; // carro da rede = R$ 0
+        const vi = cepLoja && cepAncora ? await this.cotarFreteLeg(cepLoja, cepAncora, Math.max(300, p.pecas * g), 'PAC') : null;
+        if (vi == null) completo = false;
+        else juntar += vi;
+      }
+    }
+    const vFinal = cepAncora ? await this.cotarFreteLeg(cepAncora, cepCliente, Math.max(300, item.pecas * g), servicoCliente) : null;
+    if (vFinal == null) completo = false;
+    else juntar += vFinal;
+    const dados = completo
+      ? {
+          liberarReais: Number(liberar.toFixed(2)),
+          juntarReais: Number(juntar.toFixed(2)),
+          economiaReais: Number((liberar - juntar).toFixed(2)),
+          servico: servicoCliente,
+        }
+      : null;
+    this.cotacaoPacotesCache.set(cacheKey, { at: Date.now(), dados });
+    return dados;
+  }
 
   /**
    * A TELA DE SEPARAÇÃO AINDA PERGUNTA PRO WOOCOMMERCE?
@@ -3563,6 +3628,64 @@ export class OrdersController {
    * (era a causa dos 0 entregues em 90 dias, 18/08). Silêncio não é entrega:
    * vira tarefa de verificação da matriz.
    */
+  /**
+   * VIGILÂNCIA SEMANAL (nº 17) — último resumo gravado pelo cron de segunda
+   * (?agora=1 mede na hora, pra conferência).
+   */
+  @Get('vigilancia/separacao')
+  async vigilanciaSeparacao(@Query('agora') agora?: string) {
+    if (agora === '1') return this.vigilancia.medir();
+    const ultimo = await this.prisma.integrationLog.findFirst({
+      where: { source: 'vigilancia', event: 'vigilancia.separacao' },
+      orderBy: { createdAt: 'desc' },
+      select: { payload: true, createdAt: true },
+    });
+    if (!ultimo) return null;
+    try {
+      return { ...JSON.parse(ultimo.payload || '{}'), gravadoEm: ultimo.createdAt };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * PAINEL DE FRETE (nº 18) — o número que valida (ou derruba) a política de
+   * 29/08: pacotes por pedido, divididos e juntadas, semana a semana. O corte
+   * visual é a própria data da política.
+   */
+  @Get('frete/painel')
+  async fretePainel(@Query('dias') diasQ?: string) {
+    const dias = Math.min(Math.max(Number(diasQ) || 60, 14), 180);
+    const semanas: any[] = await this.prisma.$queryRawUnsafe(`
+      SELECT to_char(date_trunc('week', o.created_at), 'DD/MM') AS semana,
+             date_trunc('week', o.created_at) AS ini,
+             COUNT(DISTINCT o.id)::int AS pedidos,
+             COUNT(DISTINCT p.id) FILTER (WHERE p.is_transfer = false)::int AS pacotes_cliente,
+             COUNT(DISTINCT o.id) FILTER (WHERE div.lojas > 1)::int AS divididos,
+             COUNT(DISTINCT o.id) FILTER (WHERE div.lojas > 1 AND o.routing_result LIKE '%consolidateStoreCode%'
+                                            AND o.routing_result NOT LIKE '%"consolidateStoreCode":null%')::int AS juntados
+        FROM orders o
+        JOIN pick_orders p ON p.order_id = o.id
+        LEFT JOIN LATERAL (
+          SELECT COUNT(DISTINCT p2.store_id)::int AS lojas FROM pick_orders p2 WHERE p2.order_id = o.id
+        ) div ON true
+       WHERE o.created_at >= NOW() - interval '${dias} days' AND o.is_pickup = false
+       GROUP BY 1, 2 ORDER BY 2`);
+    return {
+      dias,
+      politicaDesde: '2026-08-29',
+      semanas: semanas.map((s) => ({
+        semana: s.semana,
+        pedidos: s.pedidos,
+        pacotesCliente: s.pacotes_cliente,
+        pacotesPorPedido: s.pedidos ? Number((s.pacotes_cliente / s.pedidos).toFixed(2)) : null,
+        divididos: s.divididos,
+        juntados: s.juntados,
+        fretesExtras: Math.max(0, s.pacotes_cliente - s.pedidos),
+      })),
+    };
+  }
+
   @Get('rastreio/parados')
   async rastreioParados(@Query('minDias') minDias?: string) {
     const dias = Math.min(Math.max(Number(minDias) || 15, 3), 120);
@@ -3689,7 +3812,23 @@ export class OrdersController {
             .sort((a: any, b: any) => b.pecas - a.pecas);
           return ordenados[0]?.code ?? null;
         })(),
+        shippingCep: o.shippingCep,
       }));
+
+    // COTAÇÃO juntar × liberar (nº 13) — best-effort: falha de API não segura
+    // a lista, só deixa a linha sem o número.
+    if (itens.length) {
+      const codes = [...new Set(itens.flatMap((i: any) => i.pacotes.map((p: any) => p.storeCode)))].filter(Boolean);
+      const lojasCep = await this.prisma.store.findMany({
+        where: { code: { in: codes as string[] } },
+        select: { code: true, cep: true },
+      });
+      const cepPorLoja = new Map(lojasCep.filter((l) => l.cep).map((l) => [l.code, String(l.cep)]));
+      const rota = (await lojasDaRotaPropria(this.prisma as any).catch(() => [])).map((c) => c.toUpperCase());
+      for (const item of itens as any[]) {
+        item.cotacao = await this.cotarJuntarVsLiberar(item, item.shippingCep ?? null, cepPorLoja, rota);
+      }
+    }
     return { itens };
   }
 

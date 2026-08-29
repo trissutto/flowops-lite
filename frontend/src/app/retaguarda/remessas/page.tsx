@@ -124,6 +124,9 @@ type PacotePendente = {
   pecas: number;
   pacotes: Array<{ storeCode: string; storeName: string; status: string; pecas: number }>;
   ancoraSugerida: string | null;
+  /** Cotação real (Mais Envios): liberar N fretes × juntar na âncora. Null =
+   *  API indisponível — a decisão segue sem o número. */
+  cotacao?: { liberarReais: number; juntarReais: number; economiaReais: number; servico: string } | null;
 };
 
 // Período De/Até (padrão da casa: datas livres + atalhos — nunca dropdown fixo)
@@ -173,6 +176,12 @@ export default function RemessasAdminPage() {
   // GARGALO POR LOJA (29/08) — tempo médio nascer→bipar→enviar, 30 dias.
   const [gargalo, setGargalo] = useState<any[]>([]);
   const [gargaloAberto, setGargaloAberto] = useState(false);
+  // PAINEL DE FRETE (nº 18) — pacotes/pedido semana a semana; valida a
+  // política de 29/08 com número.
+  const [fretePainel, setFretePainel] = useState<any | null>(null);
+  const [freteAberto, setFreteAberto] = useState(false);
+  // VIGILÂNCIA SEMANAL (nº 17) — último resumo do cron de segunda.
+  const [vigilancia, setVigilancia] = useState<any | null>(null);
   // Filtro rápido "só sem NF-e" — em cima do resultado atual da tabela.
   const [soSemNf, setSoSemNf] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -290,6 +299,8 @@ export default function RemessasAdminPage() {
       api<any[]>('/pick-orders/sem-bipe').then((r) => setSemBipe(Array.isArray(r) ? r : [])).catch(() => setSemBipe([]));
       api<{ itens: any[] }>('/orders/rastreio/parados').then((r) => setRastreioMudo(Array.isArray(r?.itens) ? r.itens : [])).catch(() => setRastreioMudo([]));
       api<{ lojas: any[] }>('/pick-orders/gargalo').then((r) => setGargalo(Array.isArray(r?.lojas) ? r.lojas : [])).catch(() => setGargalo([]));
+      api<any>('/orders/frete/painel').then((r) => setFretePainel(r?.semanas ? r : null)).catch(() => setFretePainel(null));
+      api<any>('/orders/vigilancia/separacao').then((r) => setVigilancia(r?.medidoEm ? r : null)).catch(() => setVigilancia(null));
       setRows(Array.isArray(list) ? list : []);
       setKpis(k);
       const agora = Date.now();
@@ -793,6 +804,74 @@ export default function RemessasAdminPage() {
           </div>
         )}
 
+        {/* 🩺 VIGILÂNCIA SEMANAL — o cron de segunda mede o que os
+            diagnósticos de 29/08 mediram na mão. foraSpSemJuntada > 0 =
+            a política furou. */}
+        {vigilancia && (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-slate-600">
+            <span className="font-black uppercase tracking-wide text-slate-500">Vigilância (7d)</span>
+            <span>{vigilancia.divididos} dividido(s) · {vigilancia.comJuntada} com juntada</span>
+            <span className={vigilancia.foraSpSemJuntada > 0 ? 'font-bold text-red-600' : 'text-emerald-700'}>
+              fora de SP sem juntada: {vigilancia.foraSpSemJuntada} {vigilancia.foraSpSemJuntada > 0 ? '⚠ a política furou' : '✓'}
+            </span>
+            <span className={vigilancia.estoqueDivergente > 50 ? 'font-bold text-red-600' : ''}>
+              estoque divergente: {vigilancia.estoqueDivergente} par(es)
+            </span>
+            <span className="ml-auto text-slate-400">{new Date(vigilancia.gravadoEm ?? vigilancia.medidoEm).toLocaleDateString('pt-BR')}</span>
+          </div>
+        )}
+
+        {/* 💸 PAINEL DE FRETE — pacotes por pedido, semana a semana. É o
+            número que valida (ou derruba) a política de frete de 29/08. */}
+        {fretePainel && fretePainel.semanas?.length > 0 && (
+          <div className="rounded-xl border-2 border-emerald-300 bg-white overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setFreteAberto((v) => !v)}
+              className="w-full px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white flex items-center gap-2 text-left transition"
+            >
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-black uppercase tracking-wide">Painel de frete — pacotes por pedido (semana a semana)</span>
+              <span className="ml-auto text-[11px] font-bold bg-white/20 rounded-full px-3 py-1 uppercase tracking-wide">
+                {freteAberto ? 'ocultar ↑' : 'ver ↓'}
+              </span>
+            </button>
+            {freteAberto && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[11px] uppercase text-slate-500 border-b border-slate-200">
+                      <th className="px-4 py-2">Semana</th>
+                      <th className="px-2 py-2 text-right">Pedidos</th>
+                      <th className="px-2 py-2 text-right">Pacotes</th>
+                      <th className="px-2 py-2 text-right">Pacotes/pedido</th>
+                      <th className="px-2 py-2 text-right">Divididos</th>
+                      <th className="px-2 py-2 text-right">Juntados</th>
+                      <th className="px-4 py-2 text-right">Fretes extras</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {fretePainel.semanas.map((s: any) => (
+                      <tr key={s.semana}>
+                        <td className="px-4 py-1.5 font-bold text-slate-800">{s.semana}</td>
+                        <td className="px-2 py-1.5 text-right">{s.pedidos}</td>
+                        <td className="px-2 py-1.5 text-right">{s.pacotesCliente}</td>
+                        <td className="px-2 py-1.5 text-right font-bold">{s.pacotesPorPedido ?? '—'}</td>
+                        <td className="px-2 py-1.5 text-right">{s.divididos}</td>
+                        <td className="px-2 py-1.5 text-right text-emerald-700 font-bold">{s.juntados}</td>
+                        <td className={`px-4 py-1.5 text-right ${s.fretesExtras > 0 ? 'text-red-600 font-bold' : ''}`}>{s.fretesExtras}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="px-4 py-2 text-[11px] text-slate-500">
+                  A política de frete entrou em 29/08 — a meta é "fretes extras" caindo semana a semana a partir daí.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ⏱ GARGALO POR LOJA — média de horas nascer→bipar e nascer→enviar
             (30d). Quem está no topo é quem atrasa a rede. */}
         {gargalo.length > 0 && (
@@ -891,6 +970,14 @@ export default function RemessasAdminPage() {
                     {p.pacotes.map((x) => `${x.storeCode} (${x.pecas} pç)`).join(' + ')}
                     {p.metodo ? ` · ${p.metodo}` : ''}
                   </span>
+                  {/* O NÚMERO da decisão (nº 13): cotação real Mais Envios. */}
+                  {p.cotacao && (
+                    <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${p.cotacao.economiaReais > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>
+                      {p.cotacao.economiaReais > 0
+                        ? `juntar economiza R$ ${p.cotacao.economiaReais.toFixed(2).replace('.', ',')}`
+                        : `liberar sai R$ ${Math.abs(p.cotacao.economiaReais).toFixed(2).replace('.', ',')} mais barato`}
+                    </span>
+                  )}
                   <span className="ml-auto flex items-center gap-2">
                     <button
                       type="button"
@@ -899,6 +986,7 @@ export default function RemessasAdminPage() {
                       className="rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-[12px] font-bold px-3 py-1.5"
                     >
                       Juntar na {p.ancoraSugerida ?? '—'}
+                      {p.cotacao ? ` · R$ ${p.cotacao.juntarReais.toFixed(2).replace('.', ',')}` : ''}
                     </button>
                     <button
                       type="button"
@@ -907,6 +995,7 @@ export default function RemessasAdminPage() {
                       className="rounded-lg border-2 border-sky-600 text-sky-800 hover:bg-sky-100 disabled:opacity-50 text-[12px] font-bold px-3 py-1.5"
                     >
                       Liberar {p.pacotes.length} fretes
+                      {p.cotacao ? ` · R$ ${p.cotacao.liberarReais.toFixed(2).replace('.', ',')}` : ''}
                     </button>
                   </span>
                 </div>

@@ -847,6 +847,24 @@ export default function MinhaLojaPage() {
       key: string; urgency: 'red' | 'yellow'; icon: any; title: string; subtitle: string; go: () => void;
     }> = [];
 
+    // CAIXA DA JUNTADA QUE NÃO NASCEU (nº 12) — o feeder finalizou o bipe e a
+    // caixa pra loja âncora falhou ao ser criada (antes era um warn no log do
+    // servidor que ninguém lia). Enquanto a caixa não existe, a âncora espera
+    // pra sempre. Vermelho: o botão "Documentos da caixa" do card resolve.
+    for (const r of rows) {
+      if (!r.juntadaFeeder) continue;
+      if (r.status !== 'separated' && r.status !== 'ready') continue;
+      if ((r as any).caixaJuntada) continue; // caixa existe — fluxo normal
+      tasks.push({
+        key: `caixa-juntada-${r.id}`,
+        urgency: 'red',
+        icon: Package,
+        title: `Gerar a caixa da juntada — pedido #${r.order?.wcOrderNumber ?? ''}`,
+        subtitle: `Suas peças estão bipadas mas a caixa pra loja âncora NÃO nasceu — a outra loja está esperando. Use "Documentos da caixa" no card.`,
+        go: () => setFilterTab('ready'),
+      });
+    }
+
     // PEÇA SEM BIPE — sempre VERMELHA: o pacote saiu (ou vai sair) com uma
     // peça que nunca bipou, e o estoque dela continua contando na arara.
     // O clique leva pra aba Enviados, onde o card mostra o botão âmbar

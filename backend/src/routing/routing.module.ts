@@ -3,6 +3,7 @@ import { PecasExtraviadasModule } from '../pecas-extraviadas/pecas-extraviadas.m
 import { RoutingEngine } from './routing.engine';
 import { RoutingService } from './routing.service';
 import { AwaitingStockRetryCron } from './awaiting-stock-retry.cron';
+import { VigilanciaSeparacaoCron } from './vigilancia-separacao.cron';
 import { SalesStatsService } from './sales-stats.service';
 import { StockModule } from '../stock/stock.module';
 import { WebsocketModule } from '../websocket/websocket.module';
@@ -15,7 +16,7 @@ import { PickScanModule } from '../pick-orders/pick-scan.module';
   // um card. Só depende de Prisma+Erp, então não fecha ciclo com pick-orders.
   imports: [
     PecasExtraviadasModule,StockModule, WebsocketModule, ErpModule, PushModule, PickScanModule],
-  providers: [RoutingEngine, RoutingService, SalesStatsService, AwaitingStockRetryCron],
-  exports: [RoutingEngine, RoutingService, SalesStatsService],
+  providers: [RoutingEngine, RoutingService, SalesStatsService, AwaitingStockRetryCron, VigilanciaSeparacaoCron],
+  exports: [RoutingEngine, RoutingService, SalesStatsService, VigilanciaSeparacaoCron],
 })
 export class RoutingModule {}
