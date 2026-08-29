@@ -262,31 +262,34 @@
   .m-logo{width:42px; height:42px; margin:2px auto 6px; border-radius:9px; background:var(--gold-soft); border:1px solid var(--gold-line);
     color:var(--gold-deep); font-weight:900; font-size:17px; display:flex; align-items:center; justify-content:center}
 
-  /* painel do CRÉDITO — estado pós-clique (substitui o grid, não abre modal) */
-  .cred{display:none; flex-direction:column; gap:9px; position:relative}
-  .cred.on{display:flex}
+  /* TRILHO DO CARTÃO (crédito e débito) — decisão do dono 29/08:
+     popup bandeira → popup parcelas 1–12 em linhas → popup confirmação */
   #pagGrid{display:flex; flex-direction:column; gap:8px}
-  #pagGrid.off{display:none}
-  .cred-head{display:flex; align-items:center; gap:8px}
-  .cred-head .volta{width:30px; height:30px; border:1px solid var(--line); background:var(--surface-2); border-radius:5px; font-size:14px; font-weight:900; color:var(--ink-soft)}
-  .cred-head .volta:hover{border-color:var(--ink-faint); color:var(--ink)}
-  .cred-head .t{font-size:15px; font-weight:900}
-  .cred-head .v{margin-left:auto; font-family:var(--font-mono); font-weight:700; font-size:13.5px; color:var(--ink-soft)}
-  .band{display:flex; gap:6px; flex-wrap:wrap; margin-top:6px}
-  .band button{flex:1; min-width:62px; border:1px solid var(--line); background:var(--surface); border-radius:var(--r-field);
-    padding:9px 4px; font-size:10.5px; font-weight:900; color:var(--ink-soft); letter-spacing:.03em}
-  .band button:hover{border-color:var(--ink-faint); color:var(--ink)}
-  .band button.sel{border:2px solid var(--ink); color:var(--ink); background:var(--surface-2); padding:8px 3px}
-  .parc{display:grid; grid-template-columns:repeat(2,1fr); gap:6px; margin-top:6px}
-  .parc button{display:flex; align-items:baseline; justify-content:space-between; border:1px solid var(--line); background:var(--surface);
-    border-radius:var(--r-field); padding:8px 10px; font-size:12.5px; font-weight:900; color:var(--ink)}
-  .parc button small{font-family:var(--font-mono); font-weight:600; color:var(--ink-soft); font-size:11.5px}
-  .parc button:hover{border-color:var(--ink-faint)}
-  .parc button.sel{border:2px solid var(--ink); background:var(--surface-2); padding:7px 9px}
-  .cred-valor{display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:var(--r-field); background:var(--surface-2); padding:8px 10px}
-  .cred-valor label{font-size:10.5px; font-weight:900; letter-spacing:.06em; color:var(--ink-soft)}
-  .cred-valor small{font-size:10px; color:var(--ink-faint)}
-  .cred-valor input{border:0; outline:0; background:transparent; font-family:var(--font-mono); font-weight:700; font-size:14.5px; color:var(--ink); width:88px; text-align:right; margin-left:auto}
+  #wizCartao .wiz-passo{color:var(--ink); background:var(--surface-2); border-color:var(--line)}
+  #wizCartao .wiz-steps i.atual{background:var(--ink)}
+  #wizCartao .wiz-steps i.done{background:var(--ink-faint)}
+  .bgrid{display:grid; grid-template-columns:repeat(2,1fr); gap:8px}
+  .bgrid button{display:flex; flex-direction:column; align-items:center; gap:6px; border:1px solid var(--line); background:var(--surface);
+    border-radius:var(--r-card); padding:14px 8px 11px; font-weight:900; font-size:12px; color:var(--ink); letter-spacing:.02em}
+  .bgrid button small{font-size:10px; font-weight:700; color:var(--ink-faint)}
+  .bgrid button:hover{border-color:var(--ink)}
+  .blogo{height:24px; display:flex; align-items:center; justify-content:center}
+  .plist{display:flex; flex-direction:column; gap:3px}
+  .plist button{display:flex; align-items:center; justify-content:space-between; border:1px solid var(--line); background:var(--surface);
+    border-radius:5px; padding:4px 14px; font-weight:900; font-size:12.5px; color:var(--ink); min-height:27px}
+  .plist button .pv{font-family:var(--font-mono); font-weight:700; font-size:13px; color:var(--ink-soft)}
+  .plist button:hover{border-color:var(--ink); background:var(--surface-2)}
+  .plist button:hover .pv{color:var(--ink)}
+  .conf{display:flex; flex-direction:column; align-items:center; gap:4px; border:1px solid var(--line); border-radius:var(--r-card);
+    background:var(--surface-2); padding:16px 12px 14px; text-align:center}
+  .conf .l1{font-size:12px; font-weight:900; letter-spacing:.08em; color:var(--ink-soft)}
+  .conf .l2{font-size:15px; font-weight:900}
+  .conf .l3{font-size:34px; font-weight:900; letter-spacing:-.01em; font-variant-numeric:tabular-nums; line-height:1.05}
+  .conf .l3 small{font-size:16px; color:var(--ink-soft); margin-right:3px}
+  .conf .l4{font-family:var(--font-mono); font-size:12px; color:var(--ink-soft)}
+  .wiz-links{display:flex; justify-content:center; gap:16px}
+  .wiz-links button{background:transparent; border:0; font-size:12px; font-weight:700; color:var(--ink-soft); padding:2px 4px}
+  .wiz-links button:hover{color:var(--ink)}
   .cred-hint{font-size:11px; color:var(--ink-faint); text-align:center}
 
   /* paleta de papéis */
@@ -334,7 +337,7 @@
     </div>
     <div class="intro-actions">
       <button class="btn-demo" onclick="abrirWiz()">▶ Ver o trilho guiado (exemplo)<span class="nota" style="top:-8px; right:-8px">9</span></button>
-      <button class="btn-demo" style="background:var(--surface); color:var(--ink); border-color:var(--line)" onclick="mostrarCredito()">▶ Passo do CRÉDITO<span class="nota" style="top:-8px; right:-8px">14</span></button>
+      <button class="btn-demo" style="background:var(--surface); color:var(--ink); border-color:var(--line)" onclick="abrirCartao('credito')">▶ Trilho do CRÉDITO<span class="nota" style="top:-8px; right:-8px">14</span></button>
       <button class="btn-ghost-top" onclick="document.getElementById('mapa').scrollIntoView({behavior:'smooth'})">Onde cada função mora ↓</button>
     </div>
   </header>
@@ -520,13 +523,13 @@
           <div id="pagGrid">
             <span class="pag-label">PAGAMENTO — na ordem do uso real</span>
             <div class="pag-grid">
-              <button class="pay" onclick="mostrarCredito()"><span class="t">CRÉDITO</span><span class="s">45% das vendas · 1–10×</span></button>
-              <button class="pay"><span class="t">DÉBITO</span><span class="s">17%</span></button>
-              <button class="pay"><span class="t">PIX</span><span class="s">12% · QR na tela</span></button>
+              <button class="pay" onclick="abrirCartao('credito')"><span class="t">CRÉDITO</span><span class="s">45% das vendas · 1–12×</span></button>
+              <button class="pay" onclick="abrirCartao('debito')"><span class="t">DÉBITO</span><span class="s">17%</span></button>
+              <button class="pay"><span class="t" style="display:flex; align-items:center; gap:7px"><svg viewBox="0 0 24 24" style="height:17px" aria-hidden="true"><g fill="#32BCAD"><path d="M12 1.5 17 6.5 12 11.5 7 6.5Z"/><path d="M12 12.5 17 17.5 12 22.5 7 17.5Z"/><path d="M1.5 12 6.5 7 11.5 12 6.5 17Z"/><path d="M12.5 12 17.5 7 22.5 12 17.5 17Z"/></g></svg>PIX</span><span class="s">12% · QR na tela</span></button>
               <button class="pay pay-online"><span class="t">VENDA ONLINE →</span><span class="s">trilho guiado · 4 passos</span></button>
             </div>
             <div class="pay-sec">
-              <button class="pay-mini">DINHEIRO</button>
+              <button class="pay-mini"><b style="font-size:13px">$</b> DINHEIRO</button>
               <button class="pay-mini">VALE-TROCA</button>
               <button class="pay-mini">MARCAR</button>
               <button class="pay-mini">CREDIÁRIO</button>
@@ -539,44 +542,6 @@
             </div>
           </div>
 
-          <!-- ESTADO PÓS-CLIQUE EM CRÉDITO: painel no MESMO lugar — sem modal,
-               carrinho e total continuam à vista. -->
-          <div class="cred" id="pagCredito">
-            <span class="nota" style="top:-14px; right:-10px">14</span>
-            <div class="cred-head">
-              <button class="volta" onclick="voltarPag()" aria-label="Voltar">←</button>
-              <span class="t">CRÉDITO</span>
-              <span class="v num">a cobrar R$ 411,70</span>
-            </div>
-            <div>
-              <span class="pag-label">BANDEIRA</span>
-              <div class="band">
-                <button class="sel" onclick="selUnico(this)">MASTER</button>
-                <button onclick="selUnico(this)">VISA</button>
-                <button onclick="selUnico(this)">CIELO</button>
-                <button onclick="selUnico(this)">HIPER</button>
-                <button onclick="selUnico(this)">AMEX</button>
-              </div>
-            </div>
-            <div>
-              <span class="pag-label">PARCELAS — teclas 1–9 e 0</span>
-              <div class="parc">
-                <button onclick="selUnico(this)">1× <small>R$ 411,70</small></button>
-                <button onclick="selUnico(this)">2× <small>R$ 205,85</small></button>
-                <button class="sel" onclick="selUnico(this)">3× <small>R$ 137,23</small></button>
-                <button onclick="selUnico(this)">4× <small>R$ 102,93</small></button>
-                <button onclick="selUnico(this)">6× <small>R$ 68,62</small></button>
-                <button onclick="selUnico(this)">7–10× <small>▾</small></button>
-              </div>
-            </div>
-            <div class="cred-valor">
-              <label>QUANTO COBRAR</label>
-              <small>menor que o total = split (8% dos casos)</small>
-              <input class="num" value="411,70" aria-label="Quanto cobrar no crédito">
-            </div>
-            <button class="finalizar">✓ REGISTRAR 3× MASTER · R$ 411,70</button>
-            <div class="cred-hint">Cobriu 100% → finaliza e imprime <b>sozinho</b> · Enter registra · Esc volta</div>
-          </div>
         </div>
       </div>
     </div>
@@ -622,6 +587,23 @@
           </div>
           <button class="wiz-volta" onclick="fecharWiz()">← Voltar pro total</button>
         </div>
+      </div>
+    </div>
+
+    <!-- TRILHO DO CARTÃO: bandeira → parcelas (1–12 em linhas) → confirmação.
+         Vale pra crédito E débito (débito pula parcelas). Ordem do dono, 29/08. -->
+    <div class="wiz" id="wizCartao" role="dialog" aria-modal="true" aria-labelledby="wcTitulo">
+      <div class="wiz-back" onclick="fecharCartao()"></div>
+      <div class="wiz-card">
+        <span class="nota" style="top:-9px; left:-9px">14</span>
+        <button class="wiz-x" onclick="fecharCartao()" aria-label="Fechar">✕</button>
+        <div class="wiz-head">
+          <div class="wiz-steps" id="wcSteps"></div>
+          <span class="wiz-passo" id="wcPasso">PASSO 1 DE 3 · CRÉDITO</span>
+          <h3 class="wiz-titulo" id="wcTitulo">Qual a bandeira do cartão?</h3>
+          <p class="wiz-conseq" id="wcSub">É o que concilia com a maquininha no fechamento.</p>
+        </div>
+        <div class="wiz-body" id="wcBody"></div>
       </div>
     </div>
 
@@ -737,12 +719,12 @@
       <div class="leg"><span class="n">6</span><span class="tx"><b>Descontos completos:</b> por peça na própria linha (% · ⬆ forçar · 🚫 tirar) e da venda no F2 com as faixas de senha (7% livre · 10% caixa · acima, gerente) — validação continua no servidor.</span></div>
       <div class="leg"><span class="n">7</span><span class="tx"><b>Cliente em 1 toque com cashback à vista</b> — hoje só 26,5% das vendas identificam.</span></div>
       <div class="leg"><span class="n">8</span><span class="tx"><b>Vendedora como pendência âmbar</b> desde o início; escolha segue no fechamento.</span></div>
-      <div class="leg"><span class="n">9</span><span class="tx"><b>Trilho guiado pro raro</b> (roxo = venda online), botão grande + frase de consequência; bipe → cartão → Enter segue sem passo extra.</span></div>
+      <div class="leg"><span class="n">9</span><span class="tx"><b>Trilho guiado é o padrão das DECISÕES</b> (decisão do dono, 29/08): uma pergunta por popup, botão grande, frase de consequência. A pista livre é o BIPE — ele nunca ganha passo extra.</span></div>
       <div class="leg"><span class="n">10</span><span class="tx"><b>Badge de promoção agora AZUL</b> (papel: promoção/informação) — resolve o ponto aberto da v1: vermelho fica exclusivo de problema.</span></div>
       <div class="leg"><span class="n">11</span><span class="tx"><b>Cor nunca sozinha:</b> todo estado = cor + ícone + palavra (✕ ▲ ✓) — regra do design system.</span></div>
       <div class="leg"><span class="n">12</span><span class="tx"><b>Menu SEM botão "Venda"</b> (pergunta do dono, 29/08): a venda É a tela-base — o slot virou o monograma. Nas telas-filhas, o 1º item do menu é <b>"← Venda"</b>. Badges por urgência nos demais.</span></div>
       <div class="leg"><span class="n">13</span><span class="tx"><b>Rodapé operacional:</b> Flow · pagamentos · impressora separados + régua de atalhos permanente.</span></div>
-      <div class="leg"><span class="n">14</span><span class="tx"><b>Passo do CRÉDITO</b> (clique no botão): painel no MESMO lugar — sem modal, carrinho e total à vista. Bandeira + parcelas com valor por parcela + quanto cobrar (menor = split). Teclas 1–9/0 escolhem parcelas, <b>Enter registra, cobriu 100% finaliza e imprime sozinho</b> — a venda de cartão inteira: bipe → CRÉDITO → Enter.</span></div>
+      <div class="leg"><span class="n">14</span><span class="tx"><b>Trilho do CARTÃO</b> (clique em CRÉDITO ou DÉBITO): <b>popup da bandeira → popup das parcelas em linhas de 1× a 12× com o valor de cada uma → popup de confirmação</b> com o resumo e o REGISTRAR. Débito pula as parcelas. Formato definido pelo dono em 29/08; no teclado: número + Enter em cada passo. Registrou 100% → finaliza e imprime sozinho.</span></div>
     </div>
     <p class="rodape-nota">Amostra v2 — etapa 4 do briefing (docs/pdv-novo/BRIEFING.md) · tokens de frontend/tailwind.config.ts + paleta de papéis (29/08) · dados da medição de 60 dias</p>
   </section>
@@ -765,19 +747,89 @@
     for(var i=0;i<all.length;i++){ all[i].classList.remove('sel'); }
     el.classList.add('sel');
   }
-  function mostrarCredito(){
-    document.getElementById('pagGrid').classList.add('off');
-    document.getElementById('pagCredito').classList.add('on');
+  // ── TRILHO DO CARTÃO (bandeira → parcelas 1–12 → confirmação) ──
+  var WC_TOTAL = 411.70;
+  var WC_BAND = {
+    credito: ['MASTERCARD','VISANET','CIELO','HIPERCARD','AMEX'],
+    debito:  ['REDESHOP','VISA ELECTRON','ELO']
+  };
+  var wc = {tipo:'credito', bandeira:'', parcelas:1};
+  // Logos como SVG embutido (o artifact bloqueia imagem externa).
+  // Na implementação real: assets oficiais das bandeiras/PIX no repo.
+  var WC_LOGO = {
+    'MASTERCARD': '<svg viewBox="0 0 36 22" style="height:22px"><circle cx="13" cy="11" r="9" fill="#EB001B"/><circle cx="23" cy="11" r="9" fill="#F79E1B" fill-opacity="0.88"/></svg>',
+    'VISANET': '<svg viewBox="0 0 44 16" style="height:15px"><text x="0" y="13.5" font-weight="900" font-style="italic" font-size="15" fill="#1A1F71" font-family="Archivo,sans-serif">VISA</text></svg>',
+    'CIELO': '<svg viewBox="0 0 40 16" style="height:15px"><text x="0" y="13" font-weight="900" font-size="14" fill="#0FB5EE" font-family="Archivo,sans-serif">cielo</text></svg>',
+    'HIPERCARD': '<svg viewBox="0 0 62 18" style="height:17px"><rect width="62" height="18" rx="4" fill="#B3131B"/><text x="31" y="13" text-anchor="middle" font-weight="900" font-style="italic" font-size="10.5" fill="#fff" font-family="Archivo,sans-serif">Hipercard</text></svg>',
+    'AMEX': '<svg viewBox="0 0 40 18" style="height:17px"><rect width="40" height="18" rx="3" fill="#2E77BC"/><text x="20" y="13" text-anchor="middle" font-weight="900" font-size="9.5" fill="#fff" font-family="Archivo,sans-serif">AMEX</text></svg>',
+    'REDESHOP': '<svg viewBox="0 0 66 15" style="height:13px"><text x="0" y="12.5" font-weight="900" font-size="12" fill="#EE7D00" font-family="Archivo,sans-serif">Redeshop</text></svg>',
+    'VISA ELECTRON': '<svg viewBox="0 0 66 16" style="height:14px"><text x="0" y="12.5" font-weight="900" font-style="italic" font-size="13" fill="#1A1F71" font-family="Archivo,sans-serif">VISA</text><text x="36" y="12.5" font-weight="700" font-size="7.5" fill="#1A1F71" font-family="Archivo,sans-serif">Electron</text></svg>',
+    'ELO': '<svg viewBox="0 0 36 16" style="height:15px"><text x="0" y="13.5" font-weight="900" font-size="14" fill="#17181A" font-family="Archivo,sans-serif">elo</text><circle cx="27" cy="5" r="2.2" fill="#FFCB05"/><circle cx="32" cy="8.5" r="2.2" fill="#00A4E0"/><circle cx="27" cy="12" r="2.2" fill="#EF4123"/></svg>'
+  };
+  function brl(v){ return 'R$ ' + v.toFixed(2).replace('.', ','); }
+  function wcSteps(atual){
+    var total = wc.tipo === 'credito' ? 3 : 2;
+    var h = '';
+    for (var i = 1; i <= total; i++) {
+      h += '<i class="' + (i < atual ? 'done' : (i === atual ? 'atual' : '')) + '"></i>';
+    }
+    document.getElementById('wcSteps').innerHTML = h;
+    document.getElementById('wcPasso').textContent = 'PASSO ' + atual + ' DE ' + total + ' · ' + (wc.tipo === 'credito' ? 'CRÉDITO' : 'DÉBITO');
+  }
+  function abrirCartao(tipo){
+    wc.tipo = tipo; wc.bandeira = ''; wc.parcelas = 1;
+    passoBandeira();
+    document.getElementById('wizCartao').classList.add('aberto');
     document.getElementById('tela').scrollIntoView({behavior:'smooth', block:'center'});
   }
-  function voltarPag(){
-    document.getElementById('pagGrid').classList.remove('off');
-    document.getElementById('pagCredito').classList.remove('on');
+  function fecharCartao(){ document.getElementById('wizCartao').classList.remove('aberto'); }
+  function passoBandeira(){
+    wcSteps(1);
+    document.getElementById('wcTitulo').textContent = 'Qual a bandeira do cartão?';
+    document.getElementById('wcSub').innerHTML = 'É o que concilia com a maquininha no fechamento do caixa.';
+    var h = '<div class="bgrid">';
+    var bs = WC_BAND[wc.tipo];
+    for (var i = 0; i < bs.length; i++) {
+      h += '<button onclick="escolheBandeira(\'' + bs[i] + '\')"><span class="blogo">' + (WC_LOGO[bs[i]] || '') + '</span>' + bs[i] + '</button>';
+    }
+    h += '</div>';
+    document.getElementById('wcBody').innerHTML = h;
   }
-  function selUnico(el){
-    var all=el.parentElement.querySelectorAll('button');
-    for(var i=0;i<all.length;i++){ all[i].classList.remove('sel'); }
-    el.classList.add('sel');
+  function escolheBandeira(b){
+    wc.bandeira = b;
+    if (wc.tipo === 'credito') { passoParcelas(); } else { passoConfirma(); }
   }
-  document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ fecharWiz(); voltarPag(); } });
+  function passoParcelas(){
+    wcSteps(2);
+    document.getElementById('wcTitulo').textContent = 'Em quantas vezes?';
+    document.getElementById('wcSub').innerHTML = 'Cada linha mostra o valor da parcela.';
+    var h = '<div class="plist">';
+    for (var n = 1; n <= 12; n++) {
+      h += '<button onclick="escolheParcelas(' + n + ')"><span>' + n + '×</span><span class="pv num">' + brl(WC_TOTAL / n) + '</span></button>';
+    }
+    h += '</div><div class="cred-hint">Toque na linha — ou digite o número e Enter.</div>';
+    document.getElementById('wcBody').innerHTML = h;
+  }
+  function escolheParcelas(n){ wc.parcelas = n; passoConfirma(); }
+  function passoConfirma(){
+    wcSteps(wc.tipo === 'credito' ? 3 : 2);
+    document.getElementById('wcTitulo').textContent = 'Confirmar cobrança';
+    document.getElementById('wcSub').innerHTML = 'Passou na maquininha? Registre — <b>cobriu 100%, a venda finaliza e imprime sozinha</b>.';
+    var l2 = (wc.tipo === 'credito' ? 'CRÉDITO' : 'DÉBITO') + ' · ' + wc.bandeira;
+    var l4 = wc.tipo === 'credito' ? (wc.parcelas + '× de ' + brl(WC_TOTAL / wc.parcelas)) : 'à vista';
+    var h = '<div class="conf">' +
+      '<span class="l1">A COBRAR</span>' +
+      '<span class="l3 num"><small>R$</small>411,70</span>' +
+      '<span class="l2">' + l2 + '</span>' +
+      '<span class="l4 num">' + l4 + '</span>' +
+      '</div>' +
+      '<button class="finalizar" onclick="fecharCartao()">✓ REGISTRAR NO CARTÃO</button>' +
+      '<div class="wiz-links">' +
+      (wc.tipo === 'credito' ? '<button onclick="passoParcelas()">← trocar parcelas</button>' : '') +
+      '<button onclick="passoBandeira()">← trocar bandeira</button>' +
+      '<button>cobrar só uma parte (split)…</button>' +
+      '</div>';
+    document.getElementById('wcBody').innerHTML = h;
+  }
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ fecharWiz(); fecharCartao(); } });
 </script>
