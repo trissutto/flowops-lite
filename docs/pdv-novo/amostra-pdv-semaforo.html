@@ -258,6 +258,37 @@
   .nota{position:absolute; z-index:30; width:20px; height:20px; border-radius:50%; background:var(--ink); color:#fff; font-size:11px; font-weight:900;
     display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px var(--ground), 0 2px 6px rgba(23,24,26,.3); pointer-events:none}
 
+  /* monograma no topo do menu (substitui o botão "Venda") */
+  .m-logo{width:42px; height:42px; margin:2px auto 6px; border-radius:9px; background:var(--gold-soft); border:1px solid var(--gold-line);
+    color:var(--gold-deep); font-weight:900; font-size:17px; display:flex; align-items:center; justify-content:center}
+
+  /* painel do CRÉDITO — estado pós-clique (substitui o grid, não abre modal) */
+  .cred{display:none; flex-direction:column; gap:9px; position:relative}
+  .cred.on{display:flex}
+  #pagGrid{display:flex; flex-direction:column; gap:8px}
+  #pagGrid.off{display:none}
+  .cred-head{display:flex; align-items:center; gap:8px}
+  .cred-head .volta{width:30px; height:30px; border:1px solid var(--line); background:var(--surface-2); border-radius:5px; font-size:14px; font-weight:900; color:var(--ink-soft)}
+  .cred-head .volta:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .cred-head .t{font-size:15px; font-weight:900}
+  .cred-head .v{margin-left:auto; font-family:var(--font-mono); font-weight:700; font-size:13.5px; color:var(--ink-soft)}
+  .band{display:flex; gap:6px; flex-wrap:wrap; margin-top:6px}
+  .band button{flex:1; min-width:62px; border:1px solid var(--line); background:var(--surface); border-radius:var(--r-field);
+    padding:9px 4px; font-size:10.5px; font-weight:900; color:var(--ink-soft); letter-spacing:.03em}
+  .band button:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .band button.sel{border:2px solid var(--ink); color:var(--ink); background:var(--surface-2); padding:8px 3px}
+  .parc{display:grid; grid-template-columns:repeat(2,1fr); gap:6px; margin-top:6px}
+  .parc button{display:flex; align-items:baseline; justify-content:space-between; border:1px solid var(--line); background:var(--surface);
+    border-radius:var(--r-field); padding:8px 10px; font-size:12.5px; font-weight:900; color:var(--ink)}
+  .parc button small{font-family:var(--font-mono); font-weight:600; color:var(--ink-soft); font-size:11.5px}
+  .parc button:hover{border-color:var(--ink-faint)}
+  .parc button.sel{border:2px solid var(--ink); background:var(--surface-2); padding:7px 9px}
+  .cred-valor{display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:var(--r-field); background:var(--surface-2); padding:8px 10px}
+  .cred-valor label{font-size:10.5px; font-weight:900; letter-spacing:.06em; color:var(--ink-soft)}
+  .cred-valor small{font-size:10px; color:var(--ink-faint)}
+  .cred-valor input{border:0; outline:0; background:transparent; font-family:var(--font-mono); font-weight:700; font-size:14.5px; color:var(--ink); width:88px; text-align:right; margin-left:auto}
+  .cred-hint{font-size:11px; color:var(--ink-faint); text-align:center}
+
   /* paleta de papéis */
   .paleta{margin-top:26px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card); padding:16px 18px}
   .paleta h2{font-size:17px; font-weight:900; margin:0 0 2px}
@@ -303,6 +334,7 @@
     </div>
     <div class="intro-actions">
       <button class="btn-demo" onclick="abrirWiz()">▶ Ver o trilho guiado (exemplo)<span class="nota" style="top:-8px; right:-8px">9</span></button>
+      <button class="btn-demo" style="background:var(--surface); color:var(--ink); border-color:var(--line)" onclick="mostrarCredito()">▶ Passo do CRÉDITO<span class="nota" style="top:-8px; right:-8px">14</span></button>
       <button class="btn-ghost-top" onclick="document.getElementById('mapa').scrollIntoView({behavior:'smooth'})">Onde cada função mora ↓</button>
     </div>
   </header>
@@ -314,6 +346,7 @@
       <span class="brand"><span class="logo">LURD'S</span><span class="sub">PLUS SIZE</span></span>
       <span class="store">ITANHAÉM · <b>PDV 01</b></span>
       <div class="hd-right">
+        <span class="chip" style="border-color:var(--gold-line); background:var(--gold-soft); color:var(--gold-deep)" title="Meta do mês — clique abre a tela de Metas"><span aria-hidden="true">🎯</span> Metas · <b class="num">&nbsp;87%</b></span>
         <span class="chip"><span aria-hidden="true">🕐</span> Caixa aberto · 10h12</span>
         <span class="chip chip-ok" style="position:relative"><span class="nota" style="top:-9px; right:-9px">11</span><span class="dot"></span> Conectado</span>
         <span class="chip">Treinamento</span>
@@ -358,7 +391,7 @@
       <!-- menu lateral -->
       <nav class="menu" aria-label="Telas do PDV">
         <span class="nota" style="top:-9px; right:-6px">12</span>
-        <button class="m-item on"><span class="ic" aria-hidden="true">🛒</span><span class="lb">Venda</span></button>
+        <div class="m-logo" title="Você está na Venda — a tela-base">L</div>
         <button class="m-item"><span class="ic" aria-hidden="true">↩</span><span class="lb">Trocas</span></button>
         <button class="m-item"><span class="m-badge mb-warn">3</span><span class="ic" aria-hidden="true">🏷</span><span class="lb">Marcados</span></button>
         <button class="m-item"><span class="ic" aria-hidden="true">💳</span><span class="lb">Crediário</span></button>
@@ -483,24 +516,66 @@
 
         <div class="pag">
           <span class="nota" style="top:-4px; right:-8px">2</span>
-          <span class="pag-label">PAGAMENTO — na ordem do uso real</span>
-          <div class="pag-grid">
-            <button class="pay"><span class="t">CRÉDITO</span><span class="s">45% das vendas · 1–10×</span></button>
-            <button class="pay"><span class="t">DÉBITO</span><span class="s">17%</span></button>
-            <button class="pay"><span class="t">PIX</span><span class="s">12% · QR na tela</span></button>
-            <button class="pay pay-online"><span class="t">VENDA ONLINE →</span><span class="s">trilho guiado · 4 passos</span></button>
+
+          <div id="pagGrid">
+            <span class="pag-label">PAGAMENTO — na ordem do uso real</span>
+            <div class="pag-grid">
+              <button class="pay" onclick="mostrarCredito()"><span class="t">CRÉDITO</span><span class="s">45% das vendas · 1–10×</span></button>
+              <button class="pay"><span class="t">DÉBITO</span><span class="s">17%</span></button>
+              <button class="pay"><span class="t">PIX</span><span class="s">12% · QR na tela</span></button>
+              <button class="pay pay-online"><span class="t">VENDA ONLINE →</span><span class="s">trilho guiado · 4 passos</span></button>
+            </div>
+            <div class="pay-sec">
+              <button class="pay-mini">DINHEIRO</button>
+              <button class="pay-mini">VALE-TROCA</button>
+              <button class="pay-mini">MARCAR</button>
+              <button class="pay-mini">CREDIÁRIO</button>
+              <button class="pay-mini">RAROS ▾</button>
+            </div>
+            <button class="finalizar">✓ FINALIZAR · R$ 411,70</button>
+            <div class="sub-acoes">
+              <button>❚❚ Pausar (dar apelido)</button>
+              <button class="cancelar">✕ Cancelar…</button>
+            </div>
           </div>
-          <div class="pay-sec">
-            <button class="pay-mini">DINHEIRO</button>
-            <button class="pay-mini">VALE-TROCA</button>
-            <button class="pay-mini">MARCAR</button>
-            <button class="pay-mini">CREDIÁRIO</button>
-            <button class="pay-mini">RAROS ▾</button>
-          </div>
-          <button class="finalizar">✓ FINALIZAR · R$ 411,70</button>
-          <div class="sub-acoes">
-            <button>❚❚ Pausar (dar apelido)</button>
-            <button class="cancelar">✕ Cancelar…</button>
+
+          <!-- ESTADO PÓS-CLIQUE EM CRÉDITO: painel no MESMO lugar — sem modal,
+               carrinho e total continuam à vista. -->
+          <div class="cred" id="pagCredito">
+            <span class="nota" style="top:-14px; right:-10px">14</span>
+            <div class="cred-head">
+              <button class="volta" onclick="voltarPag()" aria-label="Voltar">←</button>
+              <span class="t">CRÉDITO</span>
+              <span class="v num">a cobrar R$ 411,70</span>
+            </div>
+            <div>
+              <span class="pag-label">BANDEIRA</span>
+              <div class="band">
+                <button class="sel" onclick="selUnico(this)">MASTER</button>
+                <button onclick="selUnico(this)">VISA</button>
+                <button onclick="selUnico(this)">CIELO</button>
+                <button onclick="selUnico(this)">HIPER</button>
+                <button onclick="selUnico(this)">AMEX</button>
+              </div>
+            </div>
+            <div>
+              <span class="pag-label">PARCELAS — teclas 1–9 e 0</span>
+              <div class="parc">
+                <button onclick="selUnico(this)">1× <small>R$ 411,70</small></button>
+                <button onclick="selUnico(this)">2× <small>R$ 205,85</small></button>
+                <button class="sel" onclick="selUnico(this)">3× <small>R$ 137,23</small></button>
+                <button onclick="selUnico(this)">4× <small>R$ 102,93</small></button>
+                <button onclick="selUnico(this)">6× <small>R$ 68,62</small></button>
+                <button onclick="selUnico(this)">7–10× <small>▾</small></button>
+              </div>
+            </div>
+            <div class="cred-valor">
+              <label>QUANTO COBRAR</label>
+              <small>menor que o total = split (8% dos casos)</small>
+              <input class="num" value="411,70" aria-label="Quanto cobrar no crédito">
+            </div>
+            <button class="finalizar">✓ REGISTRAR 3× MASTER · R$ 411,70</button>
+            <div class="cred-hint">Cobriu 100% → finaliza e imprime <b>sozinho</b> · Enter registra · Esc volta</div>
           </div>
         </div>
       </div>
@@ -612,6 +687,7 @@
           <li><b>Recebimentos crediário</b> + extrato + estorno + PIX confirmados</li>
           <li><b>Notas fiscais</b> · produtos vendidos · consulta (F10)</li>
           <li><b>Pedidos do site</b> · realinhar · impressoras</li>
+          <li><b>Metas</b> (chip dourado no topo → tela própria; feature de 29/08)</li>
         </ul>
       </div>
       <div class="mcard">
@@ -664,8 +740,9 @@
       <div class="leg"><span class="n">9</span><span class="tx"><b>Trilho guiado pro raro</b> (roxo = venda online), botão grande + frase de consequência; bipe → cartão → Enter segue sem passo extra.</span></div>
       <div class="leg"><span class="n">10</span><span class="tx"><b>Badge de promoção agora AZUL</b> (papel: promoção/informação) — resolve o ponto aberto da v1: vermelho fica exclusivo de problema.</span></div>
       <div class="leg"><span class="n">11</span><span class="tx"><b>Cor nunca sozinha:</b> todo estado = cor + ícone + palavra (✕ ▲ ✓) — regra do design system.</span></div>
-      <div class="leg"><span class="n">12</span><span class="tx"><b>Menu lateral fino</b> com badges por urgência — as telas-filhas (caixa, trocas, marcados, recebimentos, notas…) continuam a 1 clique, sem roubar largura da venda.</span></div>
+      <div class="leg"><span class="n">12</span><span class="tx"><b>Menu SEM botão "Venda"</b> (pergunta do dono, 29/08): a venda É a tela-base — o slot virou o monograma. Nas telas-filhas, o 1º item do menu é <b>"← Venda"</b>. Badges por urgência nos demais.</span></div>
       <div class="leg"><span class="n">13</span><span class="tx"><b>Rodapé operacional:</b> Flow · pagamentos · impressora separados + régua de atalhos permanente.</span></div>
+      <div class="leg"><span class="n">14</span><span class="tx"><b>Passo do CRÉDITO</b> (clique no botão): painel no MESMO lugar — sem modal, carrinho e total à vista. Bandeira + parcelas com valor por parcela + quanto cobrar (menor = split). Teclas 1–9/0 escolhem parcelas, <b>Enter registra, cobriu 100% finaliza e imprime sozinho</b> — a venda de cartão inteira: bipe → CRÉDITO → Enter.</span></div>
     </div>
     <p class="rodape-nota">Amostra v2 — etapa 4 do briefing (docs/pdv-novo/BRIEFING.md) · tokens de frontend/tailwind.config.ts + paleta de papéis (29/08) · dados da medição de 60 dias</p>
   </section>
@@ -688,5 +765,19 @@
     for(var i=0;i<all.length;i++){ all[i].classList.remove('sel'); }
     el.classList.add('sel');
   }
-  document.addEventListener('keydown', function(e){ if(e.key==='Escape') fecharWiz(); });
+  function mostrarCredito(){
+    document.getElementById('pagGrid').classList.add('off');
+    document.getElementById('pagCredito').classList.add('on');
+    document.getElementById('tela').scrollIntoView({behavior:'smooth', block:'center'});
+  }
+  function voltarPag(){
+    document.getElementById('pagGrid').classList.remove('off');
+    document.getElementById('pagCredito').classList.remove('on');
+  }
+  function selUnico(el){
+    var all=el.parentElement.querySelectorAll('button');
+    for(var i=0;i<all.length;i++){ all[i].classList.remove('sel'); }
+    el.classList.add('sel');
+  }
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ fecharWiz(); voltarPag(); } });
 </script>

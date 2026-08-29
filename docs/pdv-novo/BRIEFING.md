@@ -76,7 +76,8 @@ Reskin bege/vinho por override de CSS escopado em classe. A direção visual foi
 - [ ] Validação de balcão (contraste, alvo de clique, legibilidade em pé — agente a11y-balcao).
 
 ### Etapa 5 — Migração
-- [ ] Loja piloto, critério de rollback, convivência com telas não reformadas.
+- **Ambiente de teste — pergunta do dono (29/08): "aplicar na loja Itu (encerrada) como sandbox, ou o Treinamento me traz tudo?"** Recomendação registrada: **Treinamento + toggle "Visual novo × atual" por PC**, sem reativar Itu. O treino já isola TUDO por construção (estoque, Giga, NFC-e, cashback, WooCommerce pulados; relatórios filtram `isTraining`) e funciona em qualquer loja/PC. Reativar Itu exigiria isolamento novo em routing/lastro da rede, outbox ERP, NFC-e e todos os relatórios — reimplementar o treinamento em nível de loja, sem ganho. Quando a tela nova existir (etapa 6), o teste é: ligar o toggle num PC + entrar em treino → opera tudo sem tocar nada real. ⏳ Aguarda confirmação do dono.
+- [ ] Loja piloto real (pós-teste em treino), critério de rollback, convivência com telas não reformadas.
 
 ### Etapa 6 — Plano técnico
 - [ ] Só depois das etapas 1–4 fechadas.
