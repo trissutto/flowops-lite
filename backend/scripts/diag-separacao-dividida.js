@@ -21,8 +21,10 @@
  *   [REAL]    ninguém cobria na hora nem hoje → divisão legítima.
  *
  * Também aponta o CARD ÓRFÃO: pick-order criado sem nenhum item apontando pra
- * ele (order_items.assigned_store_id sobrescrito quando o MESMO SKU foi
- * dividido entre 2 lojas — routing.service.ts:251 faz updateMany por SKU).
+ * ele. O confirmRoute HOJE rateia a linha quando o mesmo SKU é dividido entre
+ * lojas (`planSplitAssignment`), então órfão novo não deveria mais nascer — o
+ * que aparecer aqui é resíduo de pedido roteado ANTES desse conserto, ou sinal
+ * de que a divisão escapou por outro caminho.
  *
  *   railway run --service Postgres node backend/scripts/diag-separacao-dividida.js [dias]
  */
@@ -278,8 +280,9 @@ async function main() {
     for (const o of orfaos.slice(0, 25)) {
       console.log(`  #${o.pedido}  loja ${o.loja}  status=${o.status}`);
     }
-    console.log('  → sintoma do updateMany por SKU em routing.service.ts:251 quando o');
-    console.log('    MESMO SKU e dividido entre 2 lojas: a 2a sobrescreve a 1a.');
+    console.log('  → confirmRoute ja rateia a linha no SKU dividido (planSplitAssignment).');
+    console.log('    Orfao aqui = pedido roteado ANTES desse conserto, ou divisao por');
+    console.log('    outro caminho. Confira a data do pedido antes de concluir.');
   }
 
   await db.end();
