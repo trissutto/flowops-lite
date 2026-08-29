@@ -32,9 +32,11 @@ import {
  * referência (ano anterior) — captura sozinho se a loja abre domingo/feriado.
  * Sem histórico, cai pra seg–sáb do mês atual.
  *
- * RANKING DA REDE: últimos 30 dias vs os MESMOS 30 dias do ano anterior, em
- * PORCENTAGEM — decisão do dono: a vendedora vê quem está na frente sem ver
- * o faturamento em reais de loja nenhuma. O payload NÃO carrega valores.
+ * RANKING DA REDE (corrigido pelo dono na entrega, 29/08): quanto cada loja
+ * COLABOROU com as vendas GLOBAIS da rede nos últimos 30 dias — participação
+ * em %, a soma das lojas dá 100. Em porcentagem de propósito: a vendedora vê
+ * a fatia de cada loja sem ver o faturamento em reais de nenhuma. O payload
+ * NÃO carrega valores.
  *
  * Cache curto em memória: o modal do PDV fica aberto o dia inteiro no balcão
  * (poll de 60s por loja) — sem cache seriam ~8 queries por refresh por loja.
@@ -80,16 +82,14 @@ export type MetasLojaResponse = {
 export type RankingLojaRow = {
   storeCode: string;
   storeName: string;
-  /** % do que a loja vendeu no mesmo período do ano anterior (100 = repetiu). */
-  pct: number | null;
-  posicao: number | null;
-  semBase: boolean;
+  /** Participação da loja nas vendas da REDE no período (soma das lojas = 100). */
+  pct: number;
+  posicao: number;
   minha: boolean;
 };
 
 export type RankingResponse = {
   periodo: { from: string; to: string };
-  periodoRef: { from: string; to: string };
   lojas: RankingLojaRow[];
   atualizadoEm: string;
 };
@@ -244,35 +244,31 @@ export function montarVendedoras(args: {
   return rows;
 }
 
-/** Ranking em % — com base do ano anterior primeiro (posição 1..n), sem base no fim. */
+/** Ranking = fatia de cada loja no bolo da rede (soma 100%), maior primeiro. */
 export function montarRanking(args: {
   lojas: Array<{ code: string; name: string }>;
   atualPorCode: Map<string, number>;
-  refPorCode: Map<string, number>;
   minhaLoja?: string | null;
 }): RankingLojaRow[] {
-  const { lojas, atualPorCode, refPorCode, minhaLoja } = args;
+  const { lojas, atualPorCode, minhaLoja } = args;
+  // O bolo é a soma das LOJAS DO CADASTRO — código órfão no faturamento (loja
+  // desativada/renomeada sem canon) ficaria de fora da lista, e somá-lo faria
+  // as fatias exibidas não fecharem em 100.
+  const total = lojas.reduce((s, l) => s + (atualPorCode.get(l.code) || 0), 0);
   const rows = lojas.map((l) => {
     const atual = atualPorCode.get(l.code) || 0;
-    const ref = refPorCode.get(l.code) || 0;
-    const pct = pctDe(atual, ref);
     return {
       storeCode: l.code,
       storeName: l.name || l.code,
-      pct,
-      posicao: null as number | null,
-      semBase: pct === null,
+      pct: total > 0 ? Math.round((atual / total) * 1000) / 10 : 0,
+      posicao: 0,
       minha: !!minhaLoja && l.code === minhaLoja,
     };
   });
-  rows.sort((a, b) => {
-    if (a.semBase !== b.semBase) return a.semBase ? 1 : -1;
-    return (b.pct || 0) - (a.pct || 0) || a.storeName.localeCompare(b.storeName, 'pt-BR');
-  });
-  let pos = 0;
-  for (const r of rows) {
-    if (!r.semBase) r.posicao = ++pos;
-  }
+  rows.sort(
+    (a, b) => b.pct - a.pct || a.storeName.localeCompare(b.storeName, 'pt-BR'),
+  );
+  rows.forEach((r, i) => { r.posicao = i + 1; });
   return rows;
 }
 
@@ -285,7 +281,7 @@ export class MetasService {
   // em 8 queries × loja × minuto. Histórico (ano anterior) muda nunca; o que
   // muda a cada venda é o realizado, e 60s de atraso ninguém percebe no modal.
   private cacheMetas = new Map<string, { at: number; data: MetasLojaResponse }>();
-  private cacheRanking: { at: number; rows: RankingLojaRow[]; periodo: any; periodoRef: any } | null = null;
+  private cacheRanking: { at: number; rows: RankingLojaRow[]; periodo: any } | null = null;
   private static readonly TTL_METAS_MS = 60_000;
   private static readonly TTL_RANKING_MS = 120_000;
 
@@ -601,21 +597,15 @@ export class MetasService {
     const hojeYmd = ymdBR();
     const inicio = this.dataLocal(hojeYmd, -29); // "30 dias anteriores" inclui hoje
     const fimExclusive = this.dataLocal(hojeYmd, 1);
-    const inicioRef = new Date(inicio);
-    inicioRef.setFullYear(inicioRef.getFullYear() - 1);
-    const fimRefExclusive = new Date(fimExclusive);
-    fimRefExclusive.setFullYear(fimRefExclusive.getFullYear() - 1);
 
     const { paraCode, lojas, siteCode } = await this.canonLojas();
-    const [atualPorCode, refPorCode] = await Promise.all([
-      this.faturamentoPorLojaCanonizado(inicio, fimExclusive, paraCode, siteCode, true),
-      this.faturamentoPorLojaCanonizado(inicioRef, fimRefExclusive, paraCode, siteCode, false),
-    ]);
+    const atualPorCode = await this.faturamentoPorLojaCanonizado(
+      inicio, fimExclusive, paraCode, siteCode, true,
+    );
 
     const rows = montarRanking({
       lojas: lojas.filter((l) => l.active),
       atualPorCode,
-      refPorCode,
       minhaLoja: null, // a marcação "minha" é por request; o cache é da rede
     });
 
@@ -625,13 +615,12 @@ export class MetasService {
       at: Date.now(),
       rows,
       periodo: { from: iso(inicio), to: hojeYmd },
-      periodoRef: { from: iso(inicioRef), to: iso(new Date(fimRefExclusive.getTime() - 86400_000)) },
     };
     return this.montarRespostaRanking(this.cacheRanking, minha);
   }
 
   private montarRespostaRanking(
-    cache: { rows: RankingLojaRow[]; periodo: any; periodoRef: any },
+    cache: { rows: RankingLojaRow[]; periodo: any },
     minha: string | null,
   ): RankingResponse {
     // '6' e '06' são a mesma loja — compara pelos dígitos sem zero à esquerda.
@@ -643,7 +632,6 @@ export class MetasService {
     const minhaChave = minha ? chave(minha) : null;
     return {
       periodo: cache.periodo,
-      periodoRef: cache.periodoRef,
       lojas: cache.rows.map((r) => ({
         ...r,
         minha: !!minhaChave && chave(r.storeCode) === minhaChave,

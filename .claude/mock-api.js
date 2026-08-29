@@ -115,21 +115,21 @@ const server = http.createServer((req, res) => {
     });
   }
   if (url.pathname === '/api/pdv/metas/ranking') {
+    // Participação nas vendas globais da rede (soma = 100)
     const L = (code, name, pct, posicao, minha) => ({
-      storeCode: code, storeName: name, pct, posicao, semBase: pct === null, minha: !!minha,
+      storeCode: code, storeName: name, pct, posicao, minha: !!minha,
     });
     return json({
       periodo: { from: '2026-07-31', to: '2026-08-29' },
-      periodoRef: { from: '2025-07-31', to: '2025-08-29' },
       lojas: [
-        L('07', 'PRAIA GRANDE', 121.4, 1),
-        L('01', 'SANTOS', 112.3, 2, true),
-        L('06', 'SOROCABA', 104.9, 3),
-        L('11', 'ITANHAEM', 98.2, 4),
-        L('13', 'SITE', 93.7, 5),
-        L('08', 'INDAIATUBA', 88.1, 6),
-        L('05', 'CAMPINAS', 74.6, 7),
-        L('17', 'LOJA NOVA', null, null),
+        L('07', 'PRAIA GRANDE', 18.6, 1),
+        L('01', 'SANTOS', 16.2, 2, true),
+        L('06', 'SOROCABA', 14.8, 3),
+        L('11', 'ITANHAEM', 12.4, 4),
+        L('13', 'SITE', 11.1, 5),
+        L('08', 'INDAIATUBA', 10.3, 6),
+        L('05', 'CAMPINAS', 9.2, 7),
+        L('17', 'LOJA NOVA', 7.4, 8),
       ],
       atualizadoEm: new Date().toISOString(),
     });

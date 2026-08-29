@@ -18,8 +18,9 @@ import {
  *   3. Devolução dinheiro/pix abate da vendedora da venda original.
  *   4. Quem vendeu fora da whitelist aparece no FIM, não some — o total da
  *      loja precisa fechar com a soma das meninas.
- *   5. Ranking em %: sem base do ano anterior = sem posição, no fim da lista —
- *      nunca "0%" (loja nova não é loja ruim).
+ *   5. Ranking = PARTICIPAÇÃO nas vendas globais da rede (correção do dono na
+ *      entrega, 29/08): fatia de cada loja no bolo dos últimos 30 dias, soma
+ *      100 — e o payload NUNCA carrega valor em reais.
  */
 describe('metas — helpers puros', () => {
   describe('pctDe', () => {
@@ -163,36 +164,56 @@ describe('metas — helpers puros', () => {
       { code: '15', name: 'Loja Nova' },
     ];
 
-    it('ordena por % desc, posição 1..n só pra quem tem base', () => {
+    it('participação no bolo da rede: fatias somam 100, maior primeiro', () => {
       const rows = montarRanking({
         lojas,
         atualPorCode: new Map([
-          ['01', 90],
-          ['06', 120],
-          ['15', 50],
-        ]),
-        refPorCode: new Map([
-          ['01', 100],
-          ['06', 100],
-          // '15' sem ano anterior
+          ['01', 300],
+          ['06', 500],
+          ['15', 200],
         ]),
         minhaLoja: '06',
       });
       expect(rows.map((r) => r.storeCode)).toEqual(['06', '01', '15']);
-      expect(rows[0]).toMatchObject({ pct: 120, posicao: 1, minha: true });
-      expect(rows[1]).toMatchObject({ pct: 90, posicao: 2, minha: false });
-      expect(rows[2]).toMatchObject({ pct: null, posicao: null, semBase: true });
+      expect(rows[0]).toMatchObject({ pct: 50, posicao: 1, minha: true });
+      expect(rows[1]).toMatchObject({ pct: 30, posicao: 2, minha: false });
+      expect(rows[2]).toMatchObject({ pct: 20, posicao: 3 });
+      expect(rows.reduce((s, r) => s + r.pct, 0)).toBeCloseTo(100, 1);
+    });
+
+    it('loja sem venda aparece com 0% (rede zerada não divide por zero)', () => {
+      const zerada = montarRanking({ lojas, atualPorCode: new Map() });
+      expect(zerada.every((r) => r.pct === 0)).toBe(true);
+      const rows = montarRanking({
+        lojas,
+        atualPorCode: new Map([['01', 100]]),
+      });
+      expect(rows[0]).toMatchObject({ storeCode: '01', pct: 100 });
+      expect(rows[1].pct).toBe(0);
+    });
+
+    it('código órfão (fora do cadastro) não entra no bolo — as fatias exibidas fecham 100', () => {
+      const rows = montarRanking({
+        lojas,
+        atualPorCode: new Map([
+          ['01', 600],
+          ['06', 400],
+          ['99', 999999], // loja desativada/código não canonizado
+        ]),
+      });
+      expect(rows.map((r) => r.storeCode)).toEqual(['01', '06', '15']);
+      expect(rows[0].pct).toBe(60);
+      expect(rows[1].pct).toBe(40);
     });
 
     it('não vaza valor em reais no payload', () => {
       const rows = montarRanking({
         lojas,
         atualPorCode: new Map([['01', 123456.78]]),
-        refPorCode: new Map([['01', 100000]]),
       });
       for (const r of rows) {
         expect(Object.keys(r).sort()).toEqual(
-          ['minha', 'pct', 'posicao', 'semBase', 'storeCode', 'storeName'].sort(),
+          ['minha', 'pct', 'posicao', 'storeCode', 'storeName'].sort(),
         );
       }
     });

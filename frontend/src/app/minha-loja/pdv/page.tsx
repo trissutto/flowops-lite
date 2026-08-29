@@ -10830,13 +10830,12 @@ type MetasData = {
 
 type RankingData = {
   periodo: { from: string; to: string };
-  periodoRef: { from: string; to: string };
   lojas: Array<{
     storeCode: string;
     storeName: string;
-    pct: number | null;
-    posicao: number | null;
-    semBase: boolean;
+    /** Participação nas vendas da rede no período (soma das lojas = 100). */
+    pct: number;
+    posicao: number;
     minha: boolean;
   }>;
   atualizadoEm: string;
@@ -10937,9 +10936,10 @@ function MetasModal({
     ? new Date(data.atualizadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
     : null;
 
-  const rankingComBase = (ranking?.lojas || []).filter((l) => !l.semBase);
-  const rankingSemBase = (ranking?.lojas || []).filter((l) => l.semBase);
-  const maxPct = Math.max(100, ...rankingComBase.map((l) => l.pct || 0));
+  // Barras escaladas pela MAIOR fatia (a líder ocupa a barra inteira) — fatia
+  // absoluta (ex.: 12%) viraria um risquinho ilegível em 14+ lojas.
+  const rankingLojas = ranking?.lojas || [];
+  const maxShare = Math.max(1, ...rankingLojas.map((l) => l.pct || 0));
 
   return (
     <div
@@ -11158,9 +11158,9 @@ function MetasModal({
           {tab === 'ranking' && (
             <>
               <div className="rounded-xl border border-[#E5E2D9] bg-[#FAFAF7] px-3 py-2.5 text-[11px] text-slate-600">
-                Vendas dos <b>últimos 30 dias</b> comparadas com o mesmo período do ano
-                passado. <b>100% = repetiu o ano passado</b>; acima disso é crescimento.
-                Sem valores em reais — a régua é a evolução de cada loja.
+                Quanto cada loja <b>colaborou com as vendas da rede inteira</b> nos{' '}
+                <b>últimos 30 dias</b> — a soma das lojas dá 100%. Sem valores em
+                reais: a régua é a participação de cada uma no bolo.
               </div>
 
               {!ranking && rankingError ? (
@@ -11177,9 +11177,14 @@ function MetasModal({
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  {rankingComBase.map((l) => {
-                    const largura = Math.max(3, ((l.pct || 0) / maxPct) * 100);
-                    const bateu = (l.pct || 0) >= 100;
+                  {rankingLojas.map((l) => {
+                    const largura = Math.max(2, ((l.pct || 0) / maxShare) * 100);
+                    // Fatia com 1 decimal: com 14+ lojas as participações vivem
+                    // na casa dos 5–15% e o inteiro esconderia a disputa.
+                    const fatia = `${(l.pct || 0).toLocaleString('pt-BR', {
+                      minimumFractionDigits: 1,
+                      maximumFractionDigits: 1,
+                    })}%`;
                     return (
                       <div
                         key={l.storeCode}
@@ -11203,44 +11208,19 @@ function MetasModal({
                               </span>
                             )}
                           </span>
-                          <span className={`text-sm font-black tabular-nums shrink-0 ${bateu ? 'text-[#2E7D46]' : 'text-slate-600'}`}>
-                            {fmtPct(l.pct)}
+                          <span className="text-sm font-black tabular-nums shrink-0 text-slate-700">
+                            {fatia}
                           </span>
                         </div>
-                        <div className="relative mt-1.5 h-2.5 rounded-full bg-[#F3F1EA] border border-[#E5E2D9] overflow-hidden">
+                        <div className="mt-1.5 h-2.5 rounded-full bg-[#F3F1EA] border border-[#E5E2D9] overflow-hidden">
                           <div
-                            className={`h-full rounded-full ${bateu ? 'bg-[#2E7D46]' : 'bg-[#D4AF37]'}`}
+                            className="h-full rounded-full bg-[#D4AF37]"
                             style={{ width: `${largura}%` }}
-                          />
-                          {/* Marca dos 100% — a linha que separa "cresceu" de "caiu" */}
-                          <div
-                            className="absolute inset-y-0 w-px bg-slate-400/70"
-                            style={{ left: `${Math.min(100, (100 / maxPct) * 100)}%` }}
-                            aria-hidden
                           />
                         </div>
                       </div>
                     );
                   })}
-
-                  {rankingSemBase.length > 0 && (
-                    <div className="pt-2 space-y-1.5">
-                      {rankingSemBase.map((l) => (
-                        <div
-                          key={l.storeCode}
-                          className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 flex items-center gap-2"
-                        >
-                          <span className="w-7 text-center text-xs font-black text-slate-300 shrink-0">—</span>
-                          <span className="flex-1 min-w-0 truncate text-sm font-bold text-slate-400">
-                            {l.storeName}
-                          </span>
-                          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 shrink-0">
-                            sem base do ano passado
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               )}
             </>

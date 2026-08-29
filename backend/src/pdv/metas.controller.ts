@@ -10,10 +10,11 @@ import { MetasService } from './metas.service';
  *  GET /pdv/metas                → meta do mês da loja (= mesmo mês do ano
  *                                  anterior), quebrada por vendedora e por dia
  *                                  de venda, com o realizado em tempo real.
- *  GET /pdv/metas/ranking        → ranking das lojas nos últimos 30 dias vs o
- *                                  mesmo período do ano anterior, SÓ EM % —
- *                                  a vendedora vê a posição sem ver o
- *                                  faturamento em reais de nenhuma loja.
+ *  GET /pdv/metas/ranking        → quanto cada loja COLABOROU com as vendas
+ *                                  globais da rede nos últimos 30 dias —
+ *                                  participação em % (soma = 100). Só %: a
+ *                                  vendedora vê a fatia de cada loja sem ver
+ *                                  o faturamento em reais de nenhuma.
  *
  * `store` só enxerga a própria loja (mesma regra do /pdv/store-summary);
  * admin passa `?storeCode=`. O ranking é da rede inteira de propósito.
