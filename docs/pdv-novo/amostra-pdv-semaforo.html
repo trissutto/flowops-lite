@@ -533,7 +533,7 @@
               <button class="pay" onclick="abrirCartao('credito')"><span class="t">CRÉDITO</span><span class="s">45% das vendas · 1–12×</span></button>
               <button class="pay" onclick="abrirCartao('debito')"><span class="t">DÉBITO</span><span class="s">17%</span></button>
               <button class="pay"><span class="t" style="display:flex; align-items:center; gap:7px"><svg viewBox="0 0 24 24" style="height:17px" aria-hidden="true"><g fill="#32BCAD"><path d="M12 1.5 17 6.5 12 11.5 7 6.5Z"/><path d="M12 12.5 17 17.5 12 22.5 7 17.5Z"/><path d="M1.5 12 6.5 7 11.5 12 6.5 17Z"/><path d="M12.5 12 17.5 7 22.5 12 17.5 17Z"/></g></svg>PIX</span><span class="s">12% · QR na tela</span></button>
-              <button class="pay pay-online"><span class="t">VENDA ONLINE →</span><span class="s">trilho guiado · 4 passos</span></button>
+              <button class="pay pay-online"><span class="t">VENDA ONLINE →</span><span class="s">trilho guiado passo a passo</span></button>
             </div>
             <div class="pay-sec">
               <button class="pay-mini"><b style="font-size:13px">$</b> DINHEIRO</button>
@@ -656,12 +656,14 @@
           <li><b>Desconto da venda (F2)</b> — faixas 7/10% com senha</li>
           <li><b>Desconto por peça · forçar ⬆ · tirar 🚫</b></li>
           <li><b>Trocar campanha</b> (50% · Leve 4 Pague 3 · nenhuma)</li>
-          <li><b>Venda online</b> — trilho 4 passos (roxo)</li>
+          <li><b>Venda online</b> — trilho completo (frete: tipo/loja/na mão/valor → confirma → pagamento → vendedora → fecha)</li>
           <li><b>PIX QR / link cartão</b> — regen automática, tentativas</li>
           <li><b>Crediário</b> — parcelas, limite, override, carnê</li>
           <li><b>Vale-troca · vale presente · simular parcelas</b></li>
+          <li><b>Tela de FINALIZADA</b> — cupom, EMITIR NFC-e (cancela em 30min), CPF na nota, reimprimir</li>
+          <li><b>Recalcular preços</b> (marcado puxado com preço congelado)</li>
           <li><b>Cancelar com motivo · pausar com apelido</b></li>
-          <li><b>Cliente completo (F6)</b> — ViaCEP, copiar ficha</li>
+          <li><b>Cliente completo (F6)</b> — ViaCEP, copiar ficha, sugestões (1ª compra, cashback)</li>
           <li><b>Carrinhos abandonados</b> (lojas 13·15·01)</li>
           <li><b>Consulta de promoção 🏷 · item manual (0)</b></li>
         </ul>
@@ -671,22 +673,26 @@
         <div class="qt">operações com tela própria (como hoje)</div>
         <ul>
           <li><b>Caixa (F3)</b>: abrir, sangria + adiantamento, suprimento, relatório X, fechamento</li>
-          <li><b>Devolução (F4)</b>: 3 modos, lote, manual 60d</li>
+          <li><b>Devolução (F4)</b>: 3 modos, lote, manual 60d, vales/créditos emitidos</li>
           <li><b>Marcados</b>: marcar, puxar, devolver</li>
           <li><b>Recebimentos crediário</b> + extrato + estorno + PIX confirmados</li>
+          <li><b>Resumo da loja</b> (vendido hoje, devolvido, ranking de vendedoras) + stats do dia</li>
+          <li><b>Conferência de vendas</b> (pedido pago aguardando conferir → alimenta as pendências)</li>
           <li><b>Notas fiscais</b> · produtos vendidos · consulta (F10)</li>
-          <li><b>Pedidos do site</b> · realinhar · impressoras</li>
+          <li><b>Pedidos do site</b> · realinhar · impressoras (2 perfis + calibração)</li>
           <li><b>Metas</b> (chip dourado no topo → tela própria; feature de 29/08)</li>
         </ul>
       </div>
       <div class="mcard">
         <h3>MENU "RAROS ▾"</h3>
-        <div class="qt">4–8 usos em 60 dias — some da frente</div>
+        <div class="qt">4–28 usos em 60 dias — some da frente, não do sistema</div>
         <ul>
-          <li><b>Convênio</b> (aparece só em loja com convênio ativo)</li>
-          <li><b>PIX avulso</b> · vale presente</li>
-          <li><b>Ajustes master</b> (fundo, pagamento, vendedora)</li>
-          <li><b>PIX órfãos · crediários órfãos · diagnósticos</b></li>
+          <li><b>Convênio do sindicato</b> (vira botão normal SÓ em loja com convênio ativo)</li>
+          <li><b>PIX avulso</b> (cobrança de valor livre)</li>
+          <li><b>Vale presente</b> (vender VP)</li>
+          <li><b>Ajustes MASTER</b> (senha + auditoria): fundo de troco, editar/remover pagamento, trocar vendedora, cancelar zumbi/duplicada, estornar venda</li>
+          <li><b>PIX órfãos</b> (pago sem venda) · <b>crediários órfãos</b></li>
+          <li><b>Diagnósticos</b>: coords do carnê, régua de calibração, baixa retroativa</li>
         </ul>
       </div>
       <div class="mcard">
