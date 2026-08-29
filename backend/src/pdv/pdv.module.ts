@@ -54,10 +54,15 @@ import { CashbackModule } from '../cashback/cashback.module';
 import { PdvStoreSummaryController } from './store-summary.controller';
 import { PdvStoreSummaryService } from './store-summary.service';
 import { CobrancasOnlineService } from './cobrancas-online.service';
+// Gamificação (29/08): FaturamentoModule é seguro aqui — a cadeia dele é só
+// Prisma + Erp, nenhum caminho de volta pro PdvModule (lição do ciclo 07/08).
+import { FaturamentoModule } from '../faturamento/faturamento.module';
+import { MetasService } from './metas.service';
+import { MetasController } from './metas.controller';
 
 @Module({
-  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule],
-  controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController],
+  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule, FaturamentoModule],
+  controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController, MetasController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou
   // o ciclo e impediu o backend de subir em 07/08. Ele lê a tabela do PagBank
@@ -67,7 +72,7 @@ import { CobrancasOnlineService } from './cobrancas-online.service';
   // motivo: fecha a venda quando o link Pagar.me é pago (antes ninguém
   // fechava — venda ficava aberta pra sempre com o dinheiro na conta) e lê
   // `pagarme_payment` pelo Prisma, sem importar o PagarmeModule.
-  providers: [PdvService, PedidoOnlineService, LastroRedeService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService, CobrancasOnlineService],
+  providers: [PdvService, PedidoOnlineService, LastroRedeService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService, CobrancasOnlineService, MetasService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}

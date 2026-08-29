@@ -50,8 +50,12 @@ export class FaturamentoService {
    * identificada por `obs_pedido = 'flowops-<id>'` e fica de fora.
    * Vale pra QUALQUER período: em 2025 não existia venda do Flow, então o
    * primeiro pedaço vem zero e o resultado é idêntico ao de antes.
+   *
+   * PÚBLICO (29/08): o MetasService (gamificação do PDV) consome ESTE método
+   * pro realizado do mês/dia — mesma razão do getFlowopsSiteFaturamento:
+   * reimplementar a régua é como as telas divergem.
    */
-  private async faturamentoHibrido(
+  async faturamentoHibrido(
     dInicio: Date,
     dFimExclusive: Date,
   ): Promise<Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>> {

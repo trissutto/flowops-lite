@@ -320,6 +320,9 @@ export class MetasService {
       paraCode.set(code.toUpperCase(), code);
       const semZero = code.replace(/^0+/, '');
       if (semZero) paraCode.set(semZero.toUpperCase(), code);
+      // Variante 2 dígitos — o PDV manda '06' mesmo se o cadastro guardar '6'.
+      const doisDigitos = code.replace(/\D/g, '').padStart(2, '0').slice(-2);
+      if (doisDigitos !== '00') paraCode.set(doisDigitos, code);
       if (l.name) paraCode.set(String(l.name).trim().toUpperCase(), code);
       for (const antigo of String(l.nomesAntigos || '').split(',')) {
         const a = antigo.trim().toUpperCase();
@@ -631,10 +634,20 @@ export class MetasService {
     cache: { rows: RankingLojaRow[]; periodo: any; periodoRef: any },
     minha: string | null,
   ): RankingResponse {
+    // '6' e '06' são a mesma loja — compara pelos dígitos sem zero à esquerda.
+    const chave = (s: unknown) => {
+      const raw = String(s ?? '').trim().toUpperCase();
+      const dig = raw.replace(/\D/g, '').replace(/^0+/, '');
+      return dig || raw;
+    };
+    const minhaChave = minha ? chave(minha) : null;
     return {
       periodo: cache.periodo,
       periodoRef: cache.periodoRef,
-      lojas: cache.rows.map((r) => ({ ...r, minha: !!minha && r.storeCode === minha })),
+      lojas: cache.rows.map((r) => ({
+        ...r,
+        minha: !!minhaChave && chave(r.storeCode) === minhaChave,
+      })),
       atualizadoEm: new Date().toISOString(),
     };
   }

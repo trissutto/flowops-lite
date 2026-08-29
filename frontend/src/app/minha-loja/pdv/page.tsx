@@ -31,6 +31,7 @@ import {
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, Printer,
   RefreshCw, Handshake, Moon, Sun, Package, MessageCircle,
+  Target, Trophy,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -1753,6 +1754,9 @@ function PdvPageInner() {
   const [openCount, setOpenCount] = useState(0);
   const [showOpenList, setShowOpenList] = useState(false);
   const [showStoreSummary, setShowStoreSummary] = useState(false);
+  // Gamificação (dono, 29/08): meta do mês (= mesmo mês do ano anterior) por
+  // loja/vendedora/dia + ranking das lojas em % — botão 🎯 no header.
+  const [showMetas, setShowMetas] = useState(false);
 
   // ── Cobranças online aguardando pagamento (widget global) ──
   //
@@ -2490,6 +2494,19 @@ function PdvPageInner() {
           >
             <Package className="w-3.5 h-3.5 text-[#B8912B]" />
             <span className="hidden xl:inline">Resumo da Loja</span>
+          </button>
+
+          {/* Metas do mês (gamificação) — meta da loja, da vendedora e do dia,
+              com ranking da rede em %. Sempre visível: acompanhar é o ponto. */}
+          <button
+            type="button"
+            onClick={() => setShowMetas(true)}
+            disabled={!storeCode}
+            className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-slate-600 border border-slate-200 hover:border-[#CDA434] transition disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Meta do mês da loja e de cada vendedora, meta do dia e ranking das lojas"
+          >
+            <Target className="w-3.5 h-3.5 text-[#B8912B]" />
+            <span className="hidden xl:inline">Metas</span>
           </button>
 
           {/* Botão Cobranças Online — PIX + Link, aguardando/pago/não pagou.
@@ -3722,6 +3739,15 @@ function PdvPageInner() {
           storeCode={storeCode}
           storeName={sale?.storeName || stores.find((store) => store.code === storeCode)?.name || storeCode}
           onClose={() => setShowStoreSummary(false)}
+        />
+      )}
+
+      {/* Metas do mês + ranking da rede (gamificação, dono 29/08) */}
+      {showMetas && storeCode && (
+        <MetasModal
+          storeCode={storeCode}
+          storeName={sale?.storeName || stores.find((store) => store.code === storeCode)?.name || storeCode}
+          onClose={() => setShowMetas(false)}
         />
       )}
 
@@ -10757,6 +10783,471 @@ function QuickSecondaryPaymentPanel({
           </button>
         )}
     </section>
+  );
+}
+
+// ── METAS (gamificação, dono 29/08) ─────────────────────────────────────────
+// Meta do mês = o que A LOJA vendeu no MESMO mês do ano anterior; dividida
+// pelas vendedoras ativas e pelos dias de venda. Ranking da rede em % — sem
+// nenhum valor em reais de outra loja (decisão do dono). Poll de 60s enquanto
+// aberto: "tempo real" de balcão sem martelar o backend (cache server-side).
+
+type MetaVendedoraRow = {
+  nome: string;
+  apelido: string | null;
+  metaMes: number;
+  metaDia: number;
+  realizadoMes: number;
+  realizadoHoje: number;
+  pctMes: number | null;
+  pctHoje: number | null;
+  naWhitelist: boolean;
+};
+
+type MetasData = {
+  mesLabel: string;
+  mesRefLabel: string;
+  diasVendaRef: number;
+  diasVendaRefFallback: boolean;
+  diaDoMes: number;
+  diasNoMes: number;
+  loja: {
+    storeCode: string;
+    storeName: string;
+    metaMes: number;
+    metaDia: number;
+    realizadoMes: number;
+    realizadoHoje: number;
+    pctMes: number | null;
+    pctHoje: number | null;
+    faltaMes: number;
+    projecaoMes: number;
+    semBase: boolean;
+  };
+  vendedoras: MetaVendedoraRow[];
+  atualizadoEm: string;
+};
+
+type RankingData = {
+  periodo: { from: string; to: string };
+  periodoRef: { from: string; to: string };
+  lojas: Array<{
+    storeCode: string;
+    storeName: string;
+    pct: number | null;
+    posicao: number | null;
+    semBase: boolean;
+    minha: boolean;
+  }>;
+  atualizadoEm: string;
+};
+
+const fmtMetaBRL = (v: number | undefined | null) =>
+  (Number(v) || 0).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    maximumFractionDigits: 0,
+  });
+
+// Math.floor de propósito: 99,9% NÃO pode virar "100%" na tela — a cor e a
+// barra viram verde só em >=100, e "100% dourado com barra incompleta" é
+// exatamente o tipo de contestação que mata a confiança na gamificação.
+const fmtPct = (pct: number | null | undefined) =>
+  pct === null || pct === undefined
+    ? '—'
+    : `${Math.floor(pct).toLocaleString('pt-BR')}%`;
+
+/** Barra de progresso da meta: dourado no caminho, VERDE só quando bateu
+ *  (verde = dinheiro no PDV — meta batida é dinheiro). */
+function MetaBar({ pct }: { pct: number | null }) {
+  const cheio = (pct ?? 0) >= 100;
+  const largura = Math.max(0, Math.min(100, pct ?? 0));
+  return (
+    <div className="h-2.5 rounded-full bg-[#F3F1EA] border border-[#E5E2D9] overflow-hidden">
+      <div
+        className={`h-full rounded-full transition-all duration-500 ${cheio ? 'bg-[#2E7D46]' : 'bg-[#D4AF37]'}`}
+        style={{ width: `${largura}%` }}
+      />
+    </div>
+  );
+}
+
+const MEDALHAS = ['🥇', '🥈', '🥉'];
+
+function MetasModal({
+  storeCode,
+  storeName,
+  onClose,
+}: {
+  storeCode: string;
+  storeName: string;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<'loja' | 'ranking'>('loja');
+  const [data, setData] = useState<MetasData | null>(null);
+  const [ranking, setRanking] = useState<RankingData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // Erro PRÓPRIO do ranking: sem ele, ranking falhando com metas ok deixava a
+  // aba em "Montando ranking…" pra sempre, sem aviso nenhum.
+  const [rankingError, setRankingError] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const activeRef = useRef(true);
+
+  const loadMetas = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setLoading(true);
+    // As duas chamadas em paralelo — o ranking falhar não pode derrubar a aba
+    // da loja (e vice-versa).
+    const [m, r] = await Promise.allSettled([
+      api<MetasData>(`/pdv/metas?storeCode=${encodeURIComponent(storeCode)}`),
+      api<RankingData>(`/pdv/metas/ranking`),
+    ]);
+    busyRef.current = false;
+    if (!activeRef.current) return;
+    if (m.status === 'fulfilled') {
+      setData(m.value);
+      setError(null);
+    } else {
+      setError((m.reason as any)?.message || 'Não foi possível carregar as metas');
+    }
+    if (r.status === 'fulfilled') {
+      setRanking(r.value);
+      setRankingError(null);
+    } else {
+      setRankingError((r.reason as any)?.message || 'Não foi possível carregar o ranking');
+    }
+    setLoading(false);
+  }, [storeCode]);
+
+  useEffect(() => {
+    activeRef.current = true;
+    void loadMetas();
+    // 60s: acompanha a venda quase na hora sem virar polling agressivo (o
+    // backend segura com cache; a lição do flood da live vale pra cá também).
+    const t = setInterval(() => void loadMetas(), 60_000);
+    return () => {
+      activeRef.current = false;
+      clearInterval(t);
+    };
+  }, [loadMetas]);
+
+  const atualizadoAs = data?.atualizadoEm
+    ? new Date(data.atualizadoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    : null;
+
+  const rankingComBase = (ranking?.lojas || []).filter((l) => !l.semBase);
+  const rankingSemBase = (ranking?.lojas || []).filter((l) => l.semBase);
+  const maxPct = Math.max(100, ...rankingComBase.map((l) => l.pct || 0));
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+      {...overlayClose(onClose)}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="metas-title"
+        className="bg-white rounded-2xl border border-[#CDA434]/70 shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="px-5 py-4 border-b border-[#E5E2D9] flex items-start gap-3">
+          <div className="w-11 h-11 rounded-xl bg-[#FBF6E6] border border-[#E4C968] flex items-center justify-center shrink-0">
+            <Target className="w-5 h-5 text-[#8C7325]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 id="metas-title" className="text-lg font-black text-slate-900">
+              Metas · {data?.mesLabel || ''}
+            </h2>
+            <p className="text-xs text-slate-500 truncate">
+              {storeName} · PDV {storeCode}
+              {atualizadoAs ? ` · atualizado às ${atualizadoAs}` : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={loadMetas}
+            disabled={loading}
+            className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:text-[#8C7325] hover:border-[#CDA434] hover:bg-[#FBF6E6] transition disabled:opacity-50"
+            title="Atualizar agora"
+            aria-label="Atualizar metas agora"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+            aria-label="Fechar metas"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </header>
+
+        {/* Abas */}
+        <div className="px-5 pt-3 flex gap-2 border-b border-[#E5E2D9]">
+          {([
+            { id: 'loja' as const, rotulo: 'Minha loja', Icone: Target },
+            { id: 'ranking' as const, rotulo: 'Ranking da rede', Icone: Trophy },
+          ]).map(({ id, rotulo, Icone }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={`px-3.5 py-2 rounded-t-lg text-sm font-black flex items-center gap-1.5 border border-b-0 transition ${
+                tab === id
+                  ? 'bg-[#FBF6E6] border-[#E4C968] text-[#8C7325]'
+                  : 'bg-white border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+              }`}
+              aria-pressed={tab === id}
+            >
+              <Icone className="w-4 h-4" />
+              {rotulo}
+            </button>
+          ))}
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto" aria-live="polite">
+          {error && (
+            <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2.5 flex items-center gap-2 text-xs text-rose-700">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span className="flex-1">Não foi possível atualizar. {error}</span>
+              <button type="button" onClick={loadMetas} className="font-black underline underline-offset-2">
+                Tentar novamente
+              </button>
+            </div>
+          )}
+
+          {loading && !data && !error && (
+            <div className="py-10 flex items-center justify-center gap-2 text-sm text-slate-500">
+              <Loader2 className="w-4 h-4 animate-spin" /> Calculando metas…
+            </div>
+          )}
+
+          {tab === 'loja' && data && (
+            <>
+              {data.loja.semBase && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+                  Esta loja não tem vendas registradas em {data.mesRefLabel} — a meta do mês
+                  fica indisponível (loja nova). O vendido continua contando normalmente.
+                </div>
+              )}
+
+              {/* Loja: mês e hoje lado a lado */}
+              <div className="grid sm:grid-cols-2 gap-3">
+                <article className="rounded-2xl border-2 border-[#D4AF37] bg-[#FBF6E6] p-4 flex flex-col gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs uppercase tracking-wider font-black text-[#8C7325]">
+                      Loja no mês
+                    </span>
+                    <span className={`text-lg font-black tabular-nums ${(data.loja.pctMes ?? 0) >= 100 ? 'text-[#2E7D46]' : 'text-[#8C7325]'}`}>
+                      {fmtPct(data.loja.pctMes)}
+                    </span>
+                  </div>
+                  <div className="text-2xl font-black tabular-nums text-[#2E7D46] leading-none">
+                    {fmtMetaBRL(data.loja.realizadoMes)}
+                  </div>
+                  <div className="text-[11px] text-slate-600">
+                    meta {data.loja.semBase ? '—' : fmtMetaBRL(data.loja.metaMes)}
+                    {!data.loja.semBase && data.loja.faltaMes > 0 && (
+                      <> · falta {fmtMetaBRL(data.loja.faltaMes)}</>
+                    )}
+                  </div>
+                  <MetaBar pct={data.loja.pctMes} />
+                  <div className="text-[11px] text-slate-500">
+                    dia {data.diaDoMes} de {data.diasNoMes} · no ritmo de hoje fecha em{' '}
+                    <b>{fmtMetaBRL(data.loja.projecaoMes)}</b>
+                  </div>
+                </article>
+
+                <article className="rounded-2xl border border-[#E5E2D9] bg-white p-4 flex flex-col gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs uppercase tracking-wider font-black text-slate-600">
+                      Loja hoje
+                    </span>
+                    <span className={`text-lg font-black tabular-nums ${(data.loja.pctHoje ?? 0) >= 100 ? 'text-[#2E7D46]' : 'text-[#8C7325]'}`}>
+                      {fmtPct(data.loja.pctHoje)}
+                    </span>
+                  </div>
+                  <div className="text-2xl font-black tabular-nums text-[#2E7D46] leading-none">
+                    {fmtMetaBRL(data.loja.realizadoHoje)}
+                  </div>
+                  <div className="text-[11px] text-slate-600">
+                    meta do dia {data.loja.semBase ? '—' : fmtMetaBRL(data.loja.metaDia)}
+                  </div>
+                  <MetaBar pct={data.loja.pctHoje} />
+                  <div className="text-[11px] text-slate-500">
+                    meta do mês ÷ {data.diasVendaRef} dias de venda
+                  </div>
+                </article>
+              </div>
+
+              {/* Vendedoras */}
+              <section className="rounded-2xl border border-slate-200 overflow-hidden bg-white">
+                <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900">Vendedoras — {data.mesLabel}</h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Meta individual = meta da loja ÷ vendedoras ativas · desconta devolução em dinheiro/PIX
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-[#8C7325] bg-[#FBF6E6] border border-[#E4C968] rounded-full px-2.5 py-1 shrink-0">
+                    meta {data.loja.semBase || data.vendedoras.length === 0 ? '—' : fmtMetaBRL(data.vendedoras[0].metaMes)}
+                  </span>
+                </div>
+
+                {data.vendedoras.length === 0 ? (
+                  <div className="px-4 py-7 text-center text-sm text-slate-500">
+                    Nenhuma vendedora ativa configurada e nenhuma venda no mês ainda.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {data.vendedoras.map((v, index) => (
+                      <div
+                        key={`${v.nome}-${index}`}
+                        className={`px-4 py-3 flex items-center gap-3 ${index === 0 ? 'bg-[#FFFCF3]' : 'bg-white'}`}
+                      >
+                        <div className="w-8 text-center text-lg shrink-0" aria-hidden>
+                          {MEDALHAS[index] || (
+                            <span className="text-xs font-black text-slate-400">{index + 1}º</span>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-black text-slate-800 truncate">
+                              {v.apelido || v.nome.split(' ')[0]}
+                            </span>
+                            {!v.naWhitelist && (
+                              <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5 shrink-0">
+                                fora da lista
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-1.5"><MetaBar pct={v.pctMes} /></div>
+                          <div className="mt-1 text-[11px] text-slate-500 tabular-nums">
+                            hoje <b className="text-[#2E7D46]">{fmtMetaBRL(v.realizadoHoje)}</b>
+                            {!data.loja.semBase && <> / {fmtMetaBRL(v.metaDia)} ({fmtPct(v.pctHoje)})</>}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-black tabular-nums text-[#2E7D46]">
+                            {fmtMetaBRL(v.realizadoMes)}
+                          </div>
+                          <div className="text-[11px] font-bold tabular-nums text-slate-500">
+                            {data.loja.semBase ? 'mês' : `${fmtPct(v.pctMes)} da meta`}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <p className="text-[11px] text-slate-400">
+                Meta = vendas de {data.mesRefLabel} ·{' '}
+                {data.diasVendaRefFallback
+                  ? `${data.diasVendaRef} dias úteis (seg–sáb, sem histórico do ano passado)`
+                  : `${data.diasVendaRef} dias de venda em ${data.mesRefLabel}`}{' '}
+                · atualiza sozinho a cada minuto.
+              </p>
+            </>
+          )}
+
+          {tab === 'ranking' && (
+            <>
+              <div className="rounded-xl border border-[#E5E2D9] bg-[#FAFAF7] px-3 py-2.5 text-[11px] text-slate-600">
+                Vendas dos <b>últimos 30 dias</b> comparadas com o mesmo período do ano
+                passado. <b>100% = repetiu o ano passado</b>; acima disso é crescimento.
+                Sem valores em reais — a régua é a evolução de cada loja.
+              </div>
+
+              {!ranking && rankingError ? (
+                <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2.5 flex items-center gap-2 text-xs text-rose-700">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span className="flex-1">Não foi possível montar o ranking. {rankingError}</span>
+                  <button type="button" onClick={loadMetas} className="font-black underline underline-offset-2">
+                    Tentar novamente
+                  </button>
+                </div>
+              ) : !ranking ? (
+                <div className="py-10 flex items-center justify-center gap-2 text-sm text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Montando ranking…
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {rankingComBase.map((l) => {
+                    const largura = Math.max(3, ((l.pct || 0) / maxPct) * 100);
+                    const bateu = (l.pct || 0) >= 100;
+                    return (
+                      <div
+                        key={l.storeCode}
+                        className={`rounded-xl border px-3 py-2 ${
+                          l.minha
+                            ? 'border-[#D4AF37] bg-[#FBF6E6]'
+                            : 'border-slate-200 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="w-7 text-center text-base shrink-0" aria-hidden>
+                            {MEDALHAS[(l.posicao || 0) - 1] || (
+                              <span className="text-xs font-black text-slate-400">{l.posicao}º</span>
+                            )}
+                          </span>
+                          <span className={`flex-1 min-w-0 truncate text-sm font-black ${l.minha ? 'text-[#8C7325]' : 'text-slate-700'}`}>
+                            {l.storeName}
+                            {l.minha && (
+                              <span className="ml-2 text-[9px] font-black uppercase tracking-wider text-white bg-[#B8912B] rounded-full px-2 py-0.5 align-middle">
+                                sua loja
+                              </span>
+                            )}
+                          </span>
+                          <span className={`text-sm font-black tabular-nums shrink-0 ${bateu ? 'text-[#2E7D46]' : 'text-slate-600'}`}>
+                            {fmtPct(l.pct)}
+                          </span>
+                        </div>
+                        <div className="relative mt-1.5 h-2.5 rounded-full bg-[#F3F1EA] border border-[#E5E2D9] overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${bateu ? 'bg-[#2E7D46]' : 'bg-[#D4AF37]'}`}
+                            style={{ width: `${largura}%` }}
+                          />
+                          {/* Marca dos 100% — a linha que separa "cresceu" de "caiu" */}
+                          <div
+                            className="absolute inset-y-0 w-px bg-slate-400/70"
+                            style={{ left: `${Math.min(100, (100 / maxPct) * 100)}%` }}
+                            aria-hidden
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {rankingSemBase.length > 0 && (
+                    <div className="pt-2 space-y-1.5">
+                      {rankingSemBase.map((l) => (
+                        <div
+                          key={l.storeCode}
+                          className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 flex items-center gap-2"
+                        >
+                          <span className="w-7 text-center text-xs font-black text-slate-300 shrink-0">—</span>
+                          <span className="flex-1 min-w-0 truncate text-sm font-bold text-slate-400">
+                            {l.storeName}
+                          </span>
+                          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 shrink-0">
+                            sem base do ano passado
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 

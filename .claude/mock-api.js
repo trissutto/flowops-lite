@@ -57,6 +57,84 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // ── PDV mínimo pro header renderizar (metas, 29/08) ────────────────────────
+  if (url.pathname === '/api/stores') {
+    return json([
+      { code: '01', name: 'SANTOS', active: true },
+      { code: '06', name: 'SOROCABA', active: true },
+      { code: '07', name: 'PRAIA GRANDE', active: true },
+      { code: '11', name: 'ITANHAEM', active: true },
+      { code: '13', name: 'SITE', active: true },
+    ]);
+  }
+  if (url.pathname === '/api/auth/me') return json({ role: 'store', storeCode: '01', name: 'Loja Santos' });
+  if (url.pathname === '/api/pdv/discount-policy') return json({ freeUpToPct: 5, caixaUpToPct: 10 });
+  if (url.pathname === '/api/pdv/convenio/ativo') return json(null);
+  if (url.pathname === '/api/pick-orders/mine') return json([]);
+  if (url.pathname === '/api/realignment/mine') return json([]);
+  if (url.pathname === '/api/pdv/cobrancas-online') return json([]);
+  if (url.pathname === '/api/pdv/carrinhos-abandonados') return json([]);
+  if (url.pathname === '/api/pdv/sales' && req.method === 'GET') return json([]);
+
+  // ── Metas (gamificação) — números reais da loja 01 em 29/08/2026 ──────────
+  if (url.pathname === '/api/pdv/metas') {
+    const metaMes = 192595.57, diasRef = 27;
+    const metaV = metaMes / 10, metaDiaV = metaV / diasRef;
+    const v = (nome, mes, hoje, extra) => ({
+      nome, apelido: null, metaMes: metaV, metaDia: metaDiaV,
+      realizadoMes: mes, realizadoHoje: hoje,
+      pctMes: Math.round((mes / metaV) * 1000) / 10,
+      pctHoje: Math.round((hoje / metaDiaV) * 1000) / 10,
+      naWhitelist: extra ? false : true,
+    });
+    return json({
+      mesLabel: 'Agosto de 2026', mesRefLabel: 'Agosto de 2025',
+      diasVendaRef: diasRef, diasVendaRefFallback: false,
+      diaDoMes: 29, diasNoMes: 31,
+      loja: {
+        storeCode: '01', storeName: 'SANTOS',
+        metaMes, metaDia: metaMes / diasRef,
+        realizadoMes: 149850.44, realizadoHoje: 5095.25,
+        pctMes: 77.8, pctHoje: 71.4,
+        faltaMes: metaMes - 149850.44, projecaoMes: (149850.44 / 29) * 31,
+        semBase: false,
+      },
+      vendedoras: [
+        v('JOELMA', 36958.66, 1804.15),
+        v('LETICIA', 18209.66, 163.9),
+        v('MARIANA', 16792.95, 2165.35),
+        v('ELAINE', 14391.42, 691.95),
+        v('MARIA', 13993.49, 269.9),
+        v('ZORANTE', 8473.66, 0),
+        v('GERENTE REGIONAL', 5000, 0, true),
+        v('MAYARA', 159.8, 0),
+        v('CAMILA', 0, 0),
+        v('THIAGO', 0, 0),
+      ],
+      atualizadoEm: new Date().toISOString(),
+    });
+  }
+  if (url.pathname === '/api/pdv/metas/ranking') {
+    const L = (code, name, pct, posicao, minha) => ({
+      storeCode: code, storeName: name, pct, posicao, semBase: pct === null, minha: !!minha,
+    });
+    return json({
+      periodo: { from: '2026-07-31', to: '2026-08-29' },
+      periodoRef: { from: '2025-07-31', to: '2025-08-29' },
+      lojas: [
+        L('07', 'PRAIA GRANDE', 121.4, 1),
+        L('01', 'SANTOS', 112.3, 2, true),
+        L('06', 'SOROCABA', 104.9, 3),
+        L('11', 'ITANHAEM', 98.2, 4),
+        L('13', 'SITE', 93.7, 5),
+        L('08', 'INDAIATUBA', 88.1, 6),
+        L('05', 'CAMPINAS', 74.6, 7),
+        L('17', 'LOJA NOVA', null, null),
+      ],
+      atualizadoEm: new Date().toISOString(),
+    });
+  }
+
   json({ error: 'mock: rota nao coberta ' + url.pathname }, 404);
 });
 
