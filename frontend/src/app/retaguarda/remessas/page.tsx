@@ -164,6 +164,9 @@ export default function RemessasAdminPage() {
   // PACOTES A DECIDIR — pedido dentro de SP em 2+ pacotes (política 29/08).
   const [pacotes, setPacotes] = useState<PacotePendente[]>([]);
   const [pacoteBusy, setPacoteBusy] = useState<string | null>(null);
+  // PEÇA SEM BIPE (29/08) — card fechado/enviado com peça que nunca bipou:
+  // o estoque dela não saiu. A matriz cobra a loja; o bipe tardio resolve.
+  const [semBipe, setSemBipe] = useState<any[]>([]);
   // Filtro rápido "só sem NF-e" — em cima do resultado atual da tabela.
   const [soSemNf, setSoSemNf] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -276,6 +279,9 @@ export default function RemessasAdminPage() {
         api<{ itens: PacotePendente[] }>('/orders/pacotes/pendentes').catch(() => ({ itens: [] as PacotePendente[] })),
       ]);
       setPacotes(Array.isArray(pacotesResp?.itens) ? pacotesResp.itens : []);
+      // Fora do Promise.all de propósito: rota nova — se ainda não deployou,
+      // não derruba o resto da tela.
+      api<any[]>('/pick-orders/sem-bipe').then((r) => setSemBipe(Array.isArray(r) ? r : [])).catch(() => setSemBipe([]));
       setRows(Array.isArray(list) ? list : []);
       setKpis(k);
       const agora = Date.now();
@@ -746,6 +752,34 @@ export default function RemessasAdminPage() {
                   … e mais {abertasParadas.length - 10}. Clique no KPI “Em montagem” pra ver todas.
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* 🚫 PEÇA SEM BIPE — pacote fechado/enviado com peça que nunca bipou:
+            o estoque dela continua contando (caso ON-000201, Sorocaba). A loja
+            resolve pelo botão "Bipar peça faltante" do card; aqui a matriz
+            enxerga e cobra. */}
+        {semBipe.length > 0 && (
+          <div className="rounded-xl border-2 border-red-300 bg-red-50 overflow-hidden">
+            <div className="px-4 py-2.5 bg-red-600 text-white flex flex-wrap items-center gap-2">
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-black uppercase tracking-wide">
+                {semBipe.length} card{semBipe.length === 1 ? '' : 's'} com peça SEM BIPE — estoque não saiu
+              </span>
+              <span className="ml-auto text-[11px] font-bold bg-white/20 rounded-full px-3 py-1 uppercase tracking-wide">
+                a loja bipa pelo card (Enviados)
+              </span>
+            </div>
+            <div className="divide-y divide-red-200 max-h-[20rem] overflow-y-auto">
+              {semBipe.map((c) => (
+                <div key={c.pickOrderId} className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  <span className="font-mono font-black text-red-900">#{c.numero}</span>
+                  <span className="font-bold text-slate-800">{c.storeCode} {c.storeName}</span>
+                  <span className="text-slate-600">{c.faltam} peça(s): {(c.pecas || []).join(' · ')}</span>
+                  <span className="ml-auto text-[11px] uppercase font-bold text-red-700">{c.status}</span>
+                </div>
+              ))}
             </div>
           </div>
         )}

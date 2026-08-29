@@ -2912,21 +2912,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         // Se 2+ variantes do mesmo SKU original existem como produtos diferentes
         // (caso patolÃ³gico), prioriza a versÃ£o MAIS LONGA (com mais zeros Ã 
         // esquerda), que Ã© o padrÃ£o real do Giga (CODIGO sempre tem padding).
-        const existing = codigoGigaToOriginal.get(originalSku);
+        // FIX 29/08: o `get(originalSku)` antigo consultava o Map pela CHAVE
+        // ERRADA (ele é chaveado por codigoGiga) — nunca achava nada, a
+        // desduplicação nunca rodava e duas peças com o mesmo número SOMAVAM
+        // estoque (bug real de Piracicaba). Procura pelo VALOR.
+        const existing = Array.from(codigoGigaToOriginal.entries()).find(
+          ([, orig]) => orig === originalSku,
+        )?.[0];
         if (!existing) {
           // Primeira ocorrÃªncia: mapeia 1:1 (sku original â†’ codigoGiga)
           codigoGigaToOriginal.set(codigoGiga, originalSku);
-        } else {
-          // JÃ¡ tem um codigoGiga mapeado pra esse original.
-          // DecisÃ£o: se o NOVO codigoGiga Ã© mais longo (mais padding),
-          // troca; senÃ£o mantÃ©m o anterior.
-          const previous = Array.from(codigoGigaToOriginal.entries()).find(
-            ([, orig]) => orig === originalSku,
-          )?.[0];
-          if (previous && codigoGiga.length > previous.length) {
-            codigoGigaToOriginal.delete(previous);
-            codigoGigaToOriginal.set(codigoGiga, originalSku);
-          }
+        } else if (codigoGiga.length > existing.length) {
+          // JÃ¡ tem um codigoGiga mapeado pra esse original: fica o de
+          // padding mais longo (o padrÃ£o real do Giga).
+          codigoGigaToOriginal.delete(existing);
+          codigoGigaToOriginal.set(codigoGiga, originalSku);
         }
       }
     } catch (e) {

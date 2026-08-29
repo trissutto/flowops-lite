@@ -142,14 +142,28 @@ import { authorizeMinLevel } from '../auth/auth-levels.util';
 export type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
 const VALID_STATUSES: PickStatus[] = ['new', 'separating', 'separated', 'ready', 'shipped'];
 
-// Transições permitidas. Agora separated pode ir direto pra shipped (sem esperar matriz).
-const NEXT_ALLOWED: Record<PickStatus, PickStatus[]> = {
-  new: ['separating', 'separated', 'ready', 'shipped'], // admin pode pular tudo em casos raros
-  separating: ['separated', 'ready', 'shipped'],        // bipou ou marcou pronto
-  separated: ['shipped', 'separating', 'ready'],        // posta direto (rastreio), ou volta pra revisar
-  ready: ['shipped'],                                   // legado
-  shipped: [],                                          // ponto final
+// Transições permitidas. TRILHO FECHADO (29/08, decisão do dono): o envio só
+// existe DEPOIS do finish — new/separating não pulam mais direto pra shipped
+// (era a porta que deixava fechar pedido sem bipe). `TRILHO_ENVIO_LEGADO=1`
+// reabre os atalhos antigos em emergência.
+const trilhoLegado = () => String(process.env.TRILHO_ENVIO_LEGADO ?? '').trim() === '1';
+const NEXT_ALLOWED_TRILHO: Record<PickStatus, PickStatus[]> = {
+  new: ['separating', 'separated'],              // começa a separar, ou finish direto
+  separating: ['separated', 'ready'],            // bipou tudo → finish
+  separated: ['shipped', 'separating', 'ready'], // posta (rastreio), ou volta pra revisar
+  ready: ['shipped'],                            // legado
+  shipped: [],                                   // ponto final
 };
+const NEXT_ALLOWED_LEGADO: Record<PickStatus, PickStatus[]> = {
+  new: ['separating', 'separated', 'ready', 'shipped'],
+  separating: ['separated', 'ready', 'shipped'],
+  separated: ['shipped', 'separating', 'ready'],
+  ready: ['shipped'],
+  shipped: [],
+};
+const NEXT_ALLOWED: Record<PickStatus, PickStatus[]> = new Proxy({} as any, {
+  get: (_t, k: string) => (trilhoLegado() ? NEXT_ALLOWED_LEGADO : NEXT_ALLOWED_TRILHO)[k as PickStatus],
+});
 
 /**
  * Mapeamento do status INTERNO do pick-order (loja) → status no WooCommerce.
@@ -2017,6 +2031,87 @@ export class PickOrdersService {
    * Lista os pick-orders DA loja do user logado.
    * Filtro default: status ativos (new, separating, ready). `all=true` traz shipped também.
    */
+  /**
+   * PEÇA SEM BIPE (29/08) — cards que passaram do finish (separated/ready/
+   * shipped) com peça atribuída SEM bipe ativo. É a lista que vira tarefa
+   * VERMELHA na fila da loja e no mutirão da matriz: peça que embarcou (ou
+   * está pra embarcar) sem sair do estoque. Card legado (zero bipes no
+   * servidor + finish carimbado) fica de fora — os bipes dele foram do
+   * navegador, validados pelo finish da época.
+   */
+  async cardsComPecaSemBipe(storeId?: string) {
+    const desde = new Date(Date.now() - 60 * 86400000); // 60d cobre o backlog sem varrer o histórico
+    const cards = await this.prisma.pickOrder.findMany({
+      where: {
+        status: { in: ['separated', 'ready', 'shipped'] },
+        updatedAt: { gte: desde },
+        ...(storeId ? { storeId } : {}),
+      },
+      select: {
+        id: true, storeId: true, orderId: true, status: true, updatedAt: true,
+        debitApprovedAt: true, isTransfer: true,
+        store: { select: { code: true, name: true } },
+        order: { select: { wcOrderNumber: true, wcOrderId: true, customerName: true } },
+      } as any,
+      orderBy: { updatedAt: 'desc' },
+      take: 800,
+    });
+    if (!cards.length) return [];
+    const orderIds = [...new Set(cards.map((c) => c.orderId))];
+    const itens = await this.prisma.orderItem.findMany({
+      where: { orderId: { in: orderIds }, cancelledAt: null, assignedStoreId: { not: null } },
+      select: { orderId: true, sku: true, quantity: true, assignedStoreId: true, ref: true, cor: true, tamanho: true },
+    });
+    const scans: any[] = await (this.prisma as any).pickOrderScan.groupBy({
+      by: ['pickOrderId', 'sku'],
+      where: { pickOrderId: { in: cards.map((c) => c.id) }, revertedAt: null },
+      _count: { _all: true },
+    });
+    const bip = new Map<string, number>();
+    for (const s of scans) bip.set(`${s.pickOrderId}::${s.sku}`, Number(s._count?._all) || 0);
+
+    const out: any[] = [];
+    for (const c of cards) {
+      const doCard = itens.filter((i) => i.orderId === c.orderId && i.assignedStoreId === c.storeId);
+      if (!doCard.length) continue;
+      const porSku = new Map<string, { qtd: number; nome: string }>();
+      for (const i of doCard) {
+        const cur = porSku.get(i.sku) ?? {
+          qtd: 0,
+          nome: [i.ref || i.sku, [i.cor, i.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' '),
+        };
+        cur.qtd += i.quantity;
+        porSku.set(i.sku, cur);
+      }
+      let faltam = 0;
+      let temBipe = false;
+      const pecas: string[] = [];
+      for (const [sku, e] of porSku) {
+        const b = bip.get(`${c.id}::${sku}`) ?? 0;
+        if (b > 0) temBipe = true;
+        const falta = Math.max(0, e.qtd - b);
+        if (falta > 0) pecas.push(e.nome + (falta > 1 ? ` (${falta}×)` : ''));
+        faltam += falta;
+      }
+      if (!temBipe && (c as any).debitApprovedAt) continue; // card legado
+      if (faltam > 0) {
+        out.push({
+          pickOrderId: c.id,
+          storeCode: (c as any).store?.code,
+          storeName: (c as any).store?.name,
+          status: c.status,
+          isTransfer: (c as any).isTransfer ?? false,
+          numero: (c as any).order?.wcOrderNumber || String((c as any).order?.wcOrderId || '').slice(0, 10),
+          cliente: (c as any).order?.customerName ?? null,
+          faltam,
+          pecas,
+          updatedAt: c.updatedAt,
+        });
+      }
+    }
+    return out;
+  }
+
   async listMine(storeId: string, opts?: { all?: boolean; from?: string; to?: string }) {
     const where: any = { storeId };
     /**
@@ -3882,7 +3977,7 @@ export class PickOrdersService {
     id: string,
     storeId: string,
     userId: string,
-    input: { status: PickStatus; trackingCode?: string; carrier?: string },
+    input: { status: PickStatus; trackingCode?: string; carrier?: string; confirmacaoGerente?: boolean },
   ) {
     if (!VALID_STATUSES.includes(input.status)) {
       throw new BadRequestException(`Status inválido: ${input.status}`);
@@ -3952,6 +4047,33 @@ export class PickOrdersService {
        */
       if (!pedidoDoCard?.isPickup) {
         await this.travarEnvioAncoraSeFaltamCaixas(current);
+      } else {
+        /**
+         * RETIRADA DIVIDIDA: de AVISO pra TRAVA COM CARIMBO (29/08, decisão
+         * do dono — antes "avisa, não trava" de 26/08). Jundiaí quase
+         * entregou meio LP-000254: "Cliente retirou" com peça de outra loja
+         * ainda na estrada agora exige `confirmacaoGerente` explícita — o
+         * front pergunta, quem confirma fica na auditoria.
+         */
+        try {
+          await this.travarEnvioAncoraSeFaltamCaixas(current);
+        } catch (e: any) {
+          if (!input.confirmacaoGerente) {
+            throw new BadRequestException(
+              `RETIRADA INCOMPLETA — ${e?.message ?? 'faltam peças de outras lojas'} ` +
+                `Pra entregar MESMO ASSIM (cliente levou só a parte daqui), o GERENTE confirma na tela.`,
+            );
+          }
+          await this.prisma.integrationLog.create({
+            data: {
+              source: 'pick-order',
+              direction: 'internal',
+              event: 'pickup.entrega-incompleta-confirmada',
+              payload: JSON.stringify({ pickOrderId: id, userId, storeId, motivo: e?.message ?? null }),
+              status: 200,
+            },
+          });
+        }
       }
       /**
        * POLÍTICA DE FRETE (29/08) — pedido DENTRO de SP em 2+ pacotes espera

@@ -24,14 +24,26 @@ export class StockService {
     private readonly cache: MemoryCacheService,
   ) {}
 
-  async getStockFor(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
+  async getStockFor(
+    skus: string[],
+    storeCodes: string[],
+    opts?: {
+      /**
+       * LEITURA FRESCA (29/08): pula o cache de 30s. É o modo do ROUTING —
+       * a decisão de qual loja separa não pode trabalhar com número velho
+       * (dois pedidos na mesma janela prometiam a mesma peça). O resultado
+       * AINDA alimenta o cache, então bipe/consulta na sequência aproveitam.
+       */
+      fresh?: boolean;
+    },
+  ): Promise<StockEntry[]> {
     const missKeys: Array<{ sku: string; storeCode: string; cacheKey: string }> = [];
     const hits: StockEntry[] = [];
 
     for (const sku of skus) {
       for (const storeCode of storeCodes) {
         const cacheKey = `stock:${storeCode}:${sku}`;
-        const cached = this.cache.get(cacheKey);
+        const cached = opts?.fresh ? null : this.cache.get(cacheKey);
         if (cached !== null) {
           hits.push({ sku, storeCode, availableQty: Number(cached) });
         } else {
@@ -45,13 +57,40 @@ export class StockService {
     const uniqueSkus = [...new Set(missKeys.map((k) => k.sku))];
     const uniqueStores = [...new Set(missKeys.map((k) => k.storeCode))];
     let fresh: StockEntry[];
-    try {
-      fresh = await this.erp.getStock(uniqueSkus, uniqueStores);
-    } catch (e: any) {
-      this.logger.warn(
-        `[stock] Giga ao vivo falhou (${e?.message || e}) — usando espelho wincred_estoque como fallback`,
-      );
-      fresh = await this.catalog.getStockFromMirror(uniqueSkus, uniqueStores);
+    /**
+     * FONTE: `wincred_estoque` PRIMEIRO (29/08, ordem do dono: Giga fora do
+     * caminho do estoque). É a MESMA tabela que o site e o PDV leem — o
+     * routing decidia por outra (`giga_estoque` via ErpService) e podia ver
+     * um número que ninguém mais via. O ErpService (que ainda sabe cair pro
+     * Giga vivo) vira último recurso, só quando o espelho estiver vazio
+     * (nunca sincronizou) ou quebrar. Kill-switch: STOCK_WINCRED_FIRST=0
+     * volta à ordem antiga.
+     */
+    const wincredFirst = String(process.env.STOCK_WINCRED_FIRST ?? '').trim() !== '0';
+    if (wincredFirst) {
+      try {
+        fresh = await this.catalog.getStockFromMirror(uniqueSkus, uniqueStores);
+        if (!fresh.length && uniqueSkus.length > 0) {
+          // Espelho sem NENHUMA linha pros SKUs: ou é ruptura real da rede
+          // inteira, ou o espelho nunca carregou. O ErpService diferencia
+          // (ele checa se o espelho tem massa antes de usar o Giga).
+          fresh = await this.erp.getStock(uniqueSkus, uniqueStores);
+        }
+      } catch (e: any) {
+        this.logger.warn(
+          `[stock] wincred_estoque falhou (${e?.message || e}) — caindo pro ErpService`,
+        );
+        fresh = await this.erp.getStock(uniqueSkus, uniqueStores);
+      }
+    } else {
+      try {
+        fresh = await this.erp.getStock(uniqueSkus, uniqueStores);
+      } catch (e: any) {
+        this.logger.warn(
+          `[stock] Giga ao vivo falhou (${e?.message || e}) — usando espelho wincred_estoque como fallback`,
+        );
+        fresh = await this.catalog.getStockFromMirror(uniqueSkus, uniqueStores);
+      }
     }
 
     for (const e of fresh) {

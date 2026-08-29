@@ -1085,21 +1085,29 @@ export class LojaOrdersService {
       }
     };
 
-    const itensCreate = input.items.map((it) => ({
-      sku: String(it.sku),
-      productName: [it.name, it.color, it.size].filter(Boolean).join(' · '),
-      // REF/COR/TAMANHO em colunas próprias: o `productName` já trazia cor e
-      // tamanho grudados no nome, mas grudado não dá pra destacar na separação
-      // nem imprimir em coluna.
-      ref: it.ref || it.productId || null,
-      cor: it.color || null,
-      tamanho: it.size || null,
-      quantity: Number(it.quantity),
-      unitPrice: this.dinheiro(it.unitPrice),
-      // No site o preço praticado JÁ é o cheio — não há tabela promocional por
-      // peça como na live, então base = unitário.
-      baseUnitPrice: this.dinheiro(it.unitPrice),
-    }));
+    // PEÇA É PEÇA (caso LP-001005, 29/08): 2× do mesmo SKU numa linha só
+    // quebrava tudo que opera POR LINHA — troca, cancelamento, rateio do
+    // split entre lojas e a leitura do card. A linha de quantidade N vira N
+    // linhas de 1 já no nascimento do pedido.
+    const itensCreate = input.items.flatMap((it) => {
+      const qtd = Math.max(1, Math.floor(Number(it.quantity) || 1));
+      const linha = {
+        sku: String(it.sku),
+        productName: [it.name, it.color, it.size].filter(Boolean).join(' · '),
+        // REF/COR/TAMANHO em colunas próprias: o `productName` já trazia cor e
+        // tamanho grudados no nome, mas grudado não dá pra destacar na separação
+        // nem imprimir em coluna.
+        ref: it.ref || it.productId || null,
+        cor: it.color || null,
+        tamanho: it.size || null,
+        quantity: 1,
+        unitPrice: this.dinheiro(it.unitPrice),
+        // No site o preço praticado JÁ é o cheio — não há tabela promocional por
+        // peça como na live, então base = unitário.
+        baseUnitPrice: this.dinheiro(it.unitPrice),
+      };
+      return Array.from({ length: qtd }, () => ({ ...linha }));
+    });
 
     /**
      * Tudo o que descreve a COMPRA — vale igual pro pedido que nasce agora e

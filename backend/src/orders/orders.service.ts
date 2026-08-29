@@ -86,12 +86,19 @@ export class OrdersService {
     order?: { id: string; wcOrderNumber: string | null; customerName: string | null; totalAmount: number | null; status: string; createdAt: Date };
   }> {
     const wcOrderId = Number(wc.id);
-    const items = (wc.line_items ?? []).map((li: any) => ({
-      sku: String(li.sku || `wc-${li.product_id}`),
-      productName: li.name,
-      quantity: Number(li.quantity),
-      unitPrice: li.price ? Number(li.price) : null,
-    }));
+    // PEÇA É PEÇA (29/08): linha do WC com quantity N vira N linhas de 1 —
+    // troca, cancelamento, rateio do split e bipe operam POR LINHA (caso
+    // LP-001005: 2× do mesmo SKU numa linha só quebrava esses fluxos).
+    const items = (wc.line_items ?? []).flatMap((li: any) => {
+      const qtd = Math.max(1, Math.floor(Number(li.quantity) || 1));
+      const linha = {
+        sku: String(li.sku || `wc-${li.product_id}`),
+        productName: li.name,
+        quantity: 1,
+        unitPrice: li.price ? Number(li.price) : null,
+      };
+      return Array.from({ length: qtd }, () => ({ ...linha }));
+    });
 
     const shipping = wc.shipping ?? {};
     const status = this.mapStatus(wc.status);

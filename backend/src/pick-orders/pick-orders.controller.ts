@@ -106,6 +106,19 @@ export class PickOrdersController {
   }
 
   /**
+   * PEÇA SEM BIPE (29/08) — cards já fechados/enviados que têm peça sem bipe
+   * ativo. Alimenta a linha VERMELHA da fila "O QUE FAZER AGORA" da loja
+   * (role=store devolve só os dela) e o mutirão da matriz (admin devolve a
+   * rede inteira). O destravamento é o bipe tardio no próprio card.
+   */
+  @Get('sem-bipe')
+  async cardsSemBipe(@Req() req: any) {
+    const user = req.user as AuthUser;
+    const storeId = user.role === 'store' ? user.storeId ?? undefined : undefined;
+    return this.svc.cardsComPecaSemBipe(storeId);
+  }
+
+  /**
    * Loja — o que ELA VENDEU online (não o que ela separa). `/mine` é a fila de
    * quem ATENDE; esta é a de quem VENDEU: a vendedora fecha no WhatsApp, o
    * card nasce em outra loja e ela precisa saber em que pé está pra responder

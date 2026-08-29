@@ -831,7 +831,11 @@ export class PedidoOnlineService {
               trackingInfo: carrinho?.trackingInfo ?? null,
               checkoutInfo: JSON.stringify(checkoutInfo),
               items: {
-                create: pecas.map((it) => ({
+                // PEÇA É PEÇA (29/08): qty N vira N linhas de 1 — troca,
+                // cancelamento, rateio e bipe operam POR LINHA (caso LP-001005).
+                create: pecas.flatMap((it) => Array.from(
+                  { length: Math.max(1, Math.floor(Number(it.qty) || 1)) },
+                  () => ({
                   sku: String(it.sku),
                   productName: it.descricao || [it.ref, it.cor, it.tamanho].filter(Boolean).join(' · '),
                   // REF · COR · TAM em coluna — o formato que a loja lê na
@@ -840,14 +844,15 @@ export class PedidoOnlineService {
                   ref: it.ref || null,
                   cor: it.cor || null,
                   tamanho: it.tamanho || null,
-                  quantity: Number(it.qty || 1),
+                  quantity: 1,
                   // COBRADO da cliente (promoção já aplicada) — é o que soma
                   // com o `totalAmount`, com o faturamento e com a NF-e.
                   unitPrice: this.precoCobradoUnit(it),
                   // Base do acerto ÷2,5 — preço de tabela do PDV (o desconto
                   // da venda é da loja vendedora, não muda o acerto).
                   baseUnitPrice: Number(it.precoUnit || 0),
-                })),
+                }),
+                )),
               },
             },
             // `include` pro e-mail de confirmação listar as peças — sem ele o

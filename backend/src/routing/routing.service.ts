@@ -199,7 +199,7 @@ export class RoutingService {
     ).filter((i) => !ehItemSemEstoque(i));
     const skus = routeItems.map((i) => i.sku);
     const storeCodes = stores.map((s) => s.code);
-    const stock = await this.stock.getStockFor(skus, storeCodes);
+    const stock = await this.stock.getStockFor(skus, storeCodes, { fresh: true });
 
     // Estoque comprometido em pick-orders ativos de OUTROS pedidos (exclui o próprio,
     // pra não descontar a si mesmo se já tinha sido roteado antes — caso de recalcular).
@@ -2136,7 +2136,7 @@ export class RoutingService {
 
     const skus = [...new Set(validItems.map((i) => i.sku))];
     const storeCodes = stores.map((s) => s.code);
-    const stockEntries = await this.stock.getStockFor(skus, storeCodes);
+    const stockEntries = await this.stock.getStockFor(skus, storeCodes, { fresh: true });
 
     // Estoque comprometido em pick-orders ativos de OUTROS pedidos (mesma engine
     // do previewRoute pra evitar prometer a mesma peça duas vezes). Quando esse
@@ -2362,7 +2362,7 @@ export class RoutingService {
         if (it.sku && it.sku.trim()) allSkus.add(it.sku.trim());
       }
     }
-    const stockEntries = await this.stock.getStockFor([...allSkus], storeCodes);
+    const stockEntries = await this.stock.getStockFor([...allSkus], storeCodes, { fresh: true });
 
     // Estoque comprometido em pick-orders ativos de pedidos FORA da batelada (excluindo
     // os pick-orders dos próprios pedidos WC sendo recalculados, se existirem).
@@ -2400,6 +2400,8 @@ export class RoutingService {
     const previews: any[] = [];
 
     // 4) roda pedido por pedido usando o mesmo stockMap + cedeStats
+    // Rota do carro resolvida UMA vez pra batelada inteira (config muda raro).
+    const grupoBatelada = await this.grupoJuntada(false);
     for (const input of orders) {
       const validItems = input.items.filter((i) => i.sku?.trim() && !ehItemSemEstoque(i));
       if (validItems.length === 0) {
@@ -2445,6 +2447,15 @@ export class RoutingService {
         shippingCep: input.address?.postcode ?? undefined,
         pickupStoreCode: input.pickupStoreCode ?? null,
         cedeStats, // <-- HABILITA proporcionalidade
+        // POLÍTICA DE FRETE na batelada (29/08) — mesmo trio e mesma
+        // consolidação obrigatória do preview individual; sem isto a
+        // batelada da matriz decidia fora da regra.
+        juntadaGroup: input.pickupStoreCode ? [] : grupoBatelada,
+        consolidacaoObrigatoria: consolidacaoObrigatoria({
+          isPickup: !!input.pickupStoreCode || !!input.isPickup,
+          shippingCep: input.address?.postcode ?? null,
+          shippingMethod: input.shippingMethod,
+        }),
       });
 
       // 5) DECREMENTA stock virtual + incrementa cede counters

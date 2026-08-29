@@ -398,6 +398,8 @@ export default function MinhaLojaPage() {
   // 11/08). Tudo que está pendente vira tarefa clicável no topo da home.
   const [openBoxes, setOpenBoxes] = useState<any[]>([]);
   const [incomingShipments, setIncomingShipments] = useState<any[]>([]);
+  // PEÇA SEM BIPE (29/08) — cards fechados/enviados com peça sem bipe ativo.
+  const [cardsSemBipe, setCardsSemBipe] = useState<any[]>([]);
   const [pendingPieces, setPendingPieces] = useState<any[]>([]);
   const [foraHoje, setForaHoje] = useState<ForaHoje[]>([]);
   // "Hoje" no fuso BR — 'en-CA' já sai YYYY-MM-DD. Serve pra não escrever
@@ -613,13 +615,16 @@ export default function MinhaLojaPage() {
   // e peças de realinhamento aguardando separação. Silencioso em erro — a
   // fila simplesmente não mostra aquela fonte.
   const loadTasksData = useCallback(async () => {
-    const [open, inc, mine, fora] = await Promise.all([
+    const [open, inc, mine, fora, semBipe] = await Promise.all([
       api<any[]>('/realignment/shipments/open').catch(() => []),
       api<any[]>('/realignment/shipments/incoming').catch(() => []),
       api<any[]>('/realignment/mine').catch(() => []),
       // Quem está fora hoje (atestado/férias/treinamento). Silencioso em erro:
       // some a faixa, e a fila de tarefas não é afetada.
       api<ForaHoje[]>('/rh/eventos/hoje').catch(() => []),
+      // PEÇA SEM BIPE (29/08): card fechado/enviado com peça que nunca bipou
+      // — o estoque dela não saiu. Vira tarefa VERMELHA até alguém bipar.
+      api<any[]>('/pick-orders/sem-bipe').catch(() => []),
     ]);
     // Caixa vazia não é tarefa — só entra caixa com peça dentro.
     setOpenBoxes(Array.isArray(open) ? open.filter((s) => (s?.items || []).length > 0) : []);
@@ -628,6 +633,7 @@ export default function MinhaLojaPage() {
     setShipmentsIncoming(Array.isArray(inc) ? inc.length : 0);
     setRealignmentPending(Array.isArray(mine) ? mine.length : 0);
     setForaHoje(Array.isArray(fora) ? fora : []);
+    setCardsSemBipe(Array.isArray(semBipe) ? semBipe : []);
   }, []);
 
   // ---------- Socket ----------
@@ -841,6 +847,25 @@ export default function MinhaLojaPage() {
       key: string; urgency: 'red' | 'yellow'; icon: any; title: string; subtitle: string; go: () => void;
     }> = [];
 
+    // PEÇA SEM BIPE — sempre VERMELHA: o pacote saiu (ou vai sair) com uma
+    // peça que nunca bipou, e o estoque dela continua contando na arara.
+    // O clique leva pra aba Enviados, onde o card mostra o botão âmbar
+    // "Bipar peça faltante" (o bipe tardio acerta o estoque na hora).
+    for (const c of cardsSemBipe) {
+      tasks.push({
+        key: `sem-bipe-${c.pickOrderId}`,
+        urgency: 'red',
+        icon: Barcode,
+        title: `Bipar peça faltante — pedido #${c.numero}`,
+        subtitle: `${c.faltam} peça(s) sem bipe: ${(c.pecas || []).slice(0, 2).join(' · ')}${(c.pecas || []).length > 2 ? '…' : ''} · o estoque dela ainda não saiu`,
+        go: () => {
+          const d = c.updatedAt ? String(c.updatedAt).slice(0, 10) : seteDiasISO;
+          setEnvDe(d < seteDiasISO ? d : seteDiasISO);
+          setFilterTab('shipped');
+        },
+      });
+    }
+
     for (const s of openBoxes) {
       const h = horas(s.openedAt);
       tasks.push({
@@ -918,7 +943,7 @@ export default function MinhaLojaPage() {
     // (caixas → receber → separar → pedidos), que já é a ordem de prioridade.
     tasks.sort((a, b) => (a.urgency === b.urgency ? 0 : a.urgency === 'red' ? -1 : 1));
     return tasks;
-  }, [openBoxes, incomingShipments, pendingPieces, rows, liveRows, router]);
+  }, [openBoxes, incomingShipments, pendingPieces, rows, liveRows, router, cardsSemBipe, seteDiasISO]);
 
   // Quantas estão PARADAS (vermelhas) — é o único detalhe que a barra fechada
   // precisa dizer além do total.
@@ -1059,6 +1084,32 @@ export default function MinhaLojaPage() {
         pushToast(`⚠️ Baixa ERP falhou: ${ad.reason}. Matriz reabre em /baixas-log.`);
       }
     } catch (err: any) {
+      // RETIRADA INCOMPLETA (29/08): peça de outra loja ainda na estrada.
+      // A entrega parcial existe (cliente leva só a parte daqui), mas agora
+      // exige o carimbo do GERENTE — quem confirma fica na auditoria.
+      const msg = String(err?.message ?? '');
+      if (msg.includes('RETIRADA INCOMPLETA')) {
+        const ok = confirm(
+          `⚠️ ${msg}\n\nGERENTE: confirmar a entrega INCOMPLETA mesmo assim?\n` +
+            `(fica registrado quem confirmou)`,
+        );
+        if (ok) {
+          try {
+            const updated = await api(`/pick-orders/${row.id}/status`, {
+              method: 'PATCH',
+              body: JSON.stringify({ status: 'shipped', trackingCode, carrier, confirmacaoGerente: true }),
+            });
+            setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, ...updated } : r)));
+            setShowShippedModal(null);
+            pushToast(`Pedido #${row.order.wcOrderNumber ?? '—'} entregue INCOMPLETO — confirmado pelo gerente`);
+            return;
+          } catch (e2: any) {
+            pushToast(`Erro: ${e2?.message ?? 'falha ao enviar'}`);
+            return;
+          }
+        }
+        return;
+      }
       pushToast(`Erro: ${err?.message ?? 'falha ao enviar'}`);
     }
   }
