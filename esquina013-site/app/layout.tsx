@@ -8,10 +8,10 @@ const body = Manrope({ subsets: ['latin'], variable: '--font-body' });
 export const metadata: Metadata = {
   metadataBase: new URL('https://www.esquina013.com.br'),
   title: 'Esquina 013 | Lounge • Beach • Bar',
-  description: 'Gastronomia, drinks e música em uma experiência urbana com alma de praia, em Itanhaém.',
+  description: 'Porções, drinks, música e boas histórias — do almoço ao último brinde, em Itanhaém.',
   openGraph: {
     title: 'Esquina 013 | Lounge • Beach • Bar',
-    description: 'A noite começa na esquina. Gastronomia, drinks e música em Itanhaém.',
+    description: 'Seu ponto de encontro em Itanhaém. Porções, drinks, música e boas histórias.',
     url: 'https://www.esquina013.com.br',
     siteName: 'Esquina 013',
     locale: 'pt_BR',
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   twitter: {
     card: 'summary_large_image',
     title: 'Esquina 013 | Lounge • Beach • Bar',
-    description: 'A noite começa na esquina. Gastronomia, drinks e música em Itanhaém.',
+    description: 'Seu ponto de encontro em Itanhaém. Porções, drinks, música e boas histórias.',
     images: ['/og.png'],
   },
 };
