@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaService } from '../prisma/prisma.service';
+import { RhEventosService } from '../rh-eventos/rh-eventos.service';
+import { efeitosDoDia, rotuloEvento } from '../common/eventos-rh';
 
 /**
  * Retorna chave YYYY-MM-DD da data NA TIMEZONE DE SÃO PAULO (UTC-3).
@@ -81,7 +83,10 @@ export class PontoService {
   /** Idade máxima de um IP do PDV pra valer como referência do WiFi da loja. */
   static readonly PDV_IP_FRESH_H = 48; // horas
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventos: RhEventosService,
+  ) {}
 
   // ── IP DO PDV (regra "só no WiFi da loja" pro celular) ───────────
   //
@@ -667,10 +672,16 @@ export class PontoService {
       diasMap[dKey].push(r);
     }
 
+    // POR QUE o dia ficou vazio. Uma query pro mês inteiro — perguntar por dia
+    // seriam 31 idas ao banco por funcionária, e o espelho da LOJA já roda uma
+    // vez por vendedora.
+    const eventosDoMes = await this.eventos.mapaDoMes(sellerId, ano, mes);
+
     const dias: any[] = [];
     const lastDay = fim.getDate();
     let totalMinTrabalhado = 0;
     let totalMinPrevisto = 0;
+    let totalMinAbonado = 0;
 
     for (let d = 1; d <= lastDay; d++) {
       // Cria data alvo as 12h (meio-dia) pra fugir de qualquer borda de TZ.
@@ -720,8 +731,23 @@ export class PontoService {
         }
       }
 
+      // ── EVENTO DE RH ──────────────────────────────────────────────
+      // Atestado, férias, treinamento. O TIPO decide o efeito (régua em
+      // `common/eventos-rh.ts`); aqui só se aplica o resultado.
+      //
+      // Ordem do dono (28/08): atestado abate SOMENTE as horas do atestado —
+      // meio período derruba meia jornada, não o dia inteiro.
+      const efeito = efeitosDoDia(eventosDoMes[dKey], expected && !folga ? expected : null);
+      const minAbonado = efeito.minAbatidos;
+      // O previsto cai: sem isso o dia de atestado virava saldo NEGATIVO e a
+      // funcionária pagava com hora extra o dia em que estava doente.
+      minPrevisto = Math.max(0, minPrevisto - minAbonado);
+      // Treinamento/evento: ela estava trabalhando, só que fora da loja.
+      minTrabalhado += efeito.minCreditados;
+
       totalMinTrabalhado += minTrabalhado;
       totalMinPrevisto += minPrevisto;
+      totalMinAbonado += minAbonado;
 
       dias.push({
         data: dKey,
@@ -737,6 +763,11 @@ export class PontoService {
         batidas: batidas.length,
         completo: !!entrada && !!saida && (folga ? true : true),
         justificado: batidas.some((b: any) => b.justificado),
+        // Pra tela escrever "ATESTADO" no lugar de um dia vermelho vazio.
+        eventos: efeito.tipos.map((t) => ({ tipo: t, label: rotuloEvento(t) ?? t })),
+        minAbonado,
+        abonado: efeito.abonado,
+        faltaInjustificada: efeito.faltaInjustificada,
       });
     }
 
@@ -748,6 +779,9 @@ export class PontoService {
         minTrabalhado: totalMinTrabalhado,
         minPrevisto: totalMinPrevisto,
         saldoMin: totalMinTrabalhado - totalMinPrevisto,
+        // Quanto de jornada saiu por evento de RH. Fica explícito pra ninguém
+        // achar que o mês "encolheu" sozinho.
+        minAbonado: totalMinAbonado,
       },
     };
   }
@@ -767,9 +801,17 @@ export class PontoService {
         name: s.name,
         totais: esp.totais,
         diasTrabalhados: esp.dias.filter((d: any) => d.minTrabalhado > 0).length,
+        // FALTA é dia previsto, sem batida e SEM evento que abone. Antes disso
+        // atestado, férias e dia de treinamento entravam aqui como falta — o
+        // `minPrevisto` já vem descontado do abono, então o dia abonado deixa
+        // de satisfazer `minPrevisto > 0` sozinho; o `!d.abonado` é o cinto de
+        // segurança pro abono parcial (meio período ainda deixa previsto > 0).
         diasFalta: esp.dias.filter(
-          (d: any) => !d.folga && d.minPrevisto > 0 && d.minTrabalhado === 0,
+          (d: any) => !d.folga && d.minPrevisto > 0 && d.minTrabalhado === 0 && !d.abonado,
         ).length,
+        // Separado da falta de propósito: são coisas diferentes na conversa com
+        // a funcionária, e juntar as duas foi o que fez a fila perder crédito.
+        diasAbonados: esp.dias.filter((d: any) => d.abonado).length,
       });
     }
 

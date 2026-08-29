@@ -66,6 +66,7 @@ import { MaisEnviosModule } from './mais-envios/mais-envios.module';
 import { PilotModule } from './pilot/pilot.module';
 import { SellersModule } from './sellers/sellers.module';
 import { PontoModule } from './ponto/ponto.module';
+import { RhEventosModule } from './rh-eventos/rh-eventos.module';
 import { RealignmentModule } from './realignment/realignment.module';
 import { CrediariosModule } from './crediarios/crediarios.module';
 import { CommissionsModule } from './commissions/commissions.module';
@@ -177,6 +178,7 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     PilotModule,
     SellersModule,
     PontoModule,
+    RhEventosModule,
     RealignmentModule,
     CrediariosModule,
     CommissionsModule,

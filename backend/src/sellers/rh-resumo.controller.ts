@@ -45,8 +45,11 @@ export class RhResumoController {
     let pontoBatidoHojePct: number | null = null;
     try {
       if (totalAtivas && totalAtivas > 0) {
+        // `timestamp`, não `dia`: a coluna `dia` nunca existiu no PontoRegistro.
+        // O erro caía no `.catch(() => null)` e o card "Ponto batido hoje" do
+        // hub /retaguarda/rh vivia vazio sem ninguém saber por quê.
         const batidasHoje = await (this.prisma as any).pontoRegistro?.findMany({
-          where: { dia: { gte: today, lt: tomorrow } },
+          where: { timestamp: { gte: today, lt: tomorrow } },
           select: { sellerId: true },
           distinct: ['sellerId'],
         }).catch(() => null);

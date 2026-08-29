@@ -46,11 +46,17 @@ type Espelho = {
     batidas: number;
     completo: boolean;
     justificado: boolean;
+    // Evento de RH que explica o dia (atestado, férias, treinamento).
+    eventos?: Array<{ tipo: string; label: string }>;
+    minAbonado?: number;
+    abonado?: boolean;
+    faltaInjustificada?: boolean;
   }>;
   totais: {
     minTrabalhado: number;
     minPrevisto: number;
     saldoMin: number;
+    minAbonado?: number;
   };
 };
 
@@ -583,8 +589,13 @@ export default function EspelhoPontoPage() {
                   </thead>
                   <tbody>
                     {espelho.dias.map((d) => {
+                      // Dia com evento que abona NÃO é falta. O abono parcial
+                      // (atestado de meio período) deixa previsto > 0, então o
+                      // `!d.abonado` é o que segura — sem ele a tela voltaria a
+                      // chamar de FALTA quem estava com atestado até meio-dia.
                       const isFalta =
-                        !d.folga && d.minPrevisto > 0 && d.minTrabalhado === 0;
+                        !d.folga && d.minPrevisto > 0 && d.minTrabalhado === 0 && !d.abonado;
+                      const evento = d.eventos?.[0];
                       const isIncompleto =
                         !d.folga &&
                         d.batidas > 0 &&
@@ -597,7 +608,9 @@ export default function EspelhoPontoPage() {
                               ? 'bg-slate-50'
                               : isFalta
                                 ? 'bg-rose-50'
-                                : ''
+                                : evento
+                                  ? 'bg-sky-50'
+                                  : ''
                           }`}
                         >
                           <td className="px-3 py-2 font-bold">
@@ -623,6 +636,22 @@ export default function EspelhoPontoPage() {
                           <td className="px-3 py-2 text-center">
                             {d.folga ? (
                               <span className="text-xs text-slate-400">Folga</span>
+                            ) : evento ? (
+                              // O evento vem ANTES da falta: a razão do dia
+                              // vazio é a notícia, não o vazio.
+                              <span
+                                className="text-xs bg-sky-100 text-sky-800 px-2 py-0.5 rounded font-bold"
+                                title={
+                                  d.minAbonado
+                                    ? `Abonado ${fmtMin(d.minAbonado)}`
+                                    : undefined
+                                }
+                              >
+                                {evento.label.toUpperCase()}
+                                {d.eventos && d.eventos.length > 1
+                                  ? ` +${d.eventos.length - 1}`
+                                  : ''}
+                              </span>
                             ) : d.justificado ? (
                               <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
                                 Justific.

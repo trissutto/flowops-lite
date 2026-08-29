@@ -16,7 +16,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Users, Clock, DollarSign, GraduationCap, BarChart3,
   UserPlus, UserCheck, Fingerprint, ClipboardList, TrendingUp, Calendar,
-  Cake, BadgeAlert, FileText, Award, KeyRound, MapPin,
+  Cake, BadgeAlert, FileText, Award, KeyRound, MapPin, CalendarDays,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -121,6 +121,9 @@ export default function RhHubPage() {
         </Grupo>
 
         <Grupo titulo="PONTO ELETRÔNICO" icon={Clock}>
+          {/* Primeiro da fila de propósito: é o que explica os buracos que as
+              outras telas mostram. */}
+          <Botao href="/retaguarda/rh/eventos"             icon={CalendarDays}  label="Eventos de RH"      sub="Atestado · falta · férias" />
           <Botao href="/retaguarda/rh/espelho-ponto"       icon={ClipboardList} label="Espelho de ponto"   sub="Batidas do mês" />
           <Botao href="/retaguarda/rh/banco-horas"         icon={TrendingUp}    label="Banco de horas"     sub="Saldo + hora extra" />
           <Botao href="/retaguarda/rh/face-enroll"         icon={Fingerprint}   label="Face Enroll"        sub="Reconhecimento facial" />
