@@ -86,6 +86,10 @@ type TipoEvento = {
   exigeDocumento: boolean;
   admiteParcial: boolean;
   abonaJornada: boolean;
+  // Opcionais porque a API velha não manda durante a janela de deploy —
+  // tipar como obrigatório aqui derrubaria a tela nesse intervalo.
+  debitaBanco?: boolean;
+  contaComoTrabalhado?: boolean;
   nota: string | null;
 };
 
@@ -843,6 +847,7 @@ function ModalAjustarDia({
   );
   const [justificativa, setJustificativa] = useState('');
   const [marcarTipo, setMarcarTipo] = useState('');
+  const [anexo, setAnexo] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -852,9 +857,13 @@ function ModalAjustarDia({
   const mudou = SLOTS.some((s) => (horas[s.tipo] || '') !== (original[s.tipo]?.hora ?? ''));
   const precisaJust = mudou || !!marcarTipo || repetidas.length > 0;
 
-  // Só tipos que não pedem documento: anexar exige o fluxo da tela de Eventos,
-  // e um seletor que promete o que a caixa não entrega é porta falsa.
-  const tiposRapidos = tipos.filter((t) => !t.exigeDocumento);
+  // A lista é COMPLETA — inclusive Atestado (pedido do dono, 29/08). A versão
+  // anterior escondia tudo que exige documento pra não prometer o que a caixa
+  // não entregava; a solução certa não era esconder o tipo mais usado do RH, e
+  // sim a caixa passar a anexar. É o que o campo abaixo faz.
+  const tiposRapidos = tipos;
+  const tipoMarcado = tipos.find((t) => t.codigo === marcarTipo) ?? null;
+  const precisaAnexo = !!tipoMarcado?.exigeDocumento;
 
   const iso = (hhmm: string) => new Date(`${dia.data}T${hhmm}:00-03:00`).toISOString();
 
@@ -893,6 +902,21 @@ function ModalAjustarDia({
       }
 
       if (marcarTipo) {
+        // Anexo ANTES do evento: o backend recusa evento sem documento quando o
+        // tipo exige, e falhar depois deixaria evento órfão.
+        let documentoId: string | null = null;
+        if (anexo) {
+          const fd = new FormData();
+          fd.append('file', anexo);
+          fd.append('tipo', marcarTipo);
+          fd.append('dataReferencia', dia.data);
+          const up = await api<{ documentoId: string | null }>(
+            `/rh/eventos/documento/${seller.id}`,
+            { method: 'POST', body: fd },
+          );
+          documentoId = up?.documentoId ?? null;
+          if (!documentoId) throw new Error('O anexo subiu mas não voltou id. Tente de novo.');
+        }
         await api('/rh/eventos', {
           method: 'POST',
           body: JSON.stringify({
@@ -902,6 +926,7 @@ function ModalAjustarDia({
             dataFim: dia.data,
             diaInteiro: true,
             observacoes: motivo,
+            documentoId,
           }),
         });
       }
@@ -1072,10 +1097,36 @@ function ModalAjustarDia({
                 <option key={t.codigo} value={t.codigo}>{t.label}</option>
               ))}
             </select>
-            <p className="text-[11px] text-slate-500 mt-1">
-              Atestado e outros que pedem anexo saem por{' '}
-              <Link href="/retaguarda/rh/eventos" className="underline">Eventos de RH</Link>.
-            </p>
+            {tipoMarcado && (
+              <p className="text-[11px] text-slate-600 mt-1">
+                {tipoMarcado.abonaJornada
+                  ? 'Abona a jornada do dia — o saldo fica zerado.'
+                  : tipoMarcado.debitaBanco
+                    ? 'CONSOME o banco de horas: o dia entra negativo e o saldo do mês cai.'
+                    : tipoMarcado.contaComoTrabalhado
+                      ? 'Conta como jornada cumprida.'
+                      : 'NÃO abona — o dia continua devendo as horas.'}
+              </p>
+            )}
+
+            {/* ANEXO — o atestado só aparece nesta lista porque a caixa passou
+                a anexar. Sem isto o backend recusaria e o clique voltaria 400. */}
+            {precisaAnexo && (
+              <div className={`mt-2 border rounded-lg p-3 ${anexo ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'}`}>
+                <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
+                  Documento (obrigatório)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={(e) => setAnexo(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm"
+                />
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Foto ou PDF, até 10MB. Vai pro prontuário da funcionária.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* JUSTIFICATIVA */}
@@ -1108,7 +1159,9 @@ function ModalAjustarDia({
           </button>
           <button
             onClick={() => void salvar()}
-            disabled={busy || apiVelha || (!mudou && !marcarTipo)}
+            // Botão morto enquanto falta o anexo obrigatório — melhor apagado
+            // do que um clique que volta 400.
+            disabled={busy || apiVelha || (precisaAnexo && !anexo) || (!mudou && !marcarTipo)}
             className="px-4 py-2 rounded-lg bg-brand text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {busy && <Loader2 className="w-4 h-4 animate-spin" />}

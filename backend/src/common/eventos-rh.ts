@@ -32,6 +32,19 @@
  *     Quando cair o legado, esta régua já é a fonte.
  *  4. eSocial: o código da Tabela 18 (evento S-2230) fica GRAVADO desde já,
  *     custo zero. Exportação de verdade fica pra depois.
+ *
+ * ── CORREÇÃO DO DONO (29/08/2026): FOLGA COMPENSATÓRIA DEBITA ──
+ *
+ * A primeira versão tratava folga compensatória como as outras justificativas:
+ * abonava a jornada e o dia fechava em zero. Errado — assim o banco de horas
+ * só ENCHIA. A funcionária acumulava hora extra, tirava a folga pra compensar
+ * e o saldo continuava igual, porque o dia da folga não custava nada.
+ *
+ * Isso obrigou a separar duas perguntas que estavam grudadas num flag só:
+ *   · `justificaAusencia` → o dia está EXPLICADO (não é falta)
+ *   · `abonaJornada`      → o dia SAI da conta de horas
+ * Quase tudo tem as duas. A folga compensatória tem só a primeira: é
+ * justificada e mesmo assim pesa −8h, que é exatamente o consumo do banco.
  */
 
 export type GrupoEventoRh =
@@ -51,11 +64,37 @@ export interface TipoEventoRh {
   grupo: GrupoEventoRh;
 
   /**
-   * Tira os minutos do PREVISTO do dia. O dia deixa de ser falta e para de
-   * cavar buraco no banco de horas. É o efeito que faltava e que fazia o
-   * espelho da loja mentir.
+   * O DIA ESTÁ EXPLICADO — não é falta, mesmo sem batida nenhuma.
+   *
+   * Separado de `abonaJornada` porque são perguntas diferentes, e juntá-las foi
+   * um erro de desenho: "por que o dia ficou vazio" e "o dia sai da conta de
+   * horas" não andam sempre juntos. A folga compensatória é o contraexemplo —
+   * é justificadíssima E tem que pesar negativo no banco.
+   */
+  justificaAusencia: boolean;
+
+  /**
+   * Tira os minutos do PREVISTO do dia, deixando o saldo NEUTRO (zero).
+   *
+   * É o certo pra atestado, férias e licenças: a funcionária não deve essas
+   * horas a ninguém. NÃO é o certo pra folga compensatória — ver `debitaBanco`.
    */
   abonaJornada: boolean;
+
+  /**
+   * O dia CONSOME saldo do banco de horas: o previsto FICA de pé e ela não
+   * trabalha, então o saldo do dia nasce negativo e o total do mês cai na mesma
+   * medida (`saldo = trabalhado − previsto`).
+   *
+   * Ordem do dono (29/08). Enquanto a folga compensatória abonava a jornada,
+   * sair usando o banco não custava nada: a funcionária tirava o dia e o saldo
+   * continuava igual — o banco só enchia, nunca esvaziava. A dedução não precisa
+   * de conta própria; ela cai sozinha do momento em que se para de abonar.
+   *
+   * Meia folga funciona igual e de graça: ela trabalha 4h de uma jornada de 8h,
+   * o saldo do dia dá −4h. Por isso `admiteParcial` continua valendo.
+   */
+  debitaBanco: boolean;
 
   /**
    * SOMA os minutos no TRABALHADO em vez de tirá-los do previsto — a
@@ -107,8 +146,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'FALTA_INJUSTIFICADA',
     label: 'Falta injustificada',
     grupo: 'ausencia',
+    justificaAusencia: false,
     abonaJornada: false,       // o buraco no dia é dela mesmo
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: true,
     descontaDSR: true,
     contaArt130: true,
@@ -123,8 +164,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'ATESTADO_MEDICO',
     label: 'Atestado médico',
     grupo: 'saude',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -137,8 +180,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'AFASTAMENTO_INSS',
     label: 'Afastamento INSS (doença)',
     grupo: 'saude',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -151,8 +196,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'ACIDENTE_TRABALHO',
     label: 'Acidente de trabalho',
     grupo: 'saude',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -166,8 +213,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'NOJO',
     label: 'Falecimento na família',
     grupo: 'legal',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -181,8 +230,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'GALA',
     label: 'Casamento',
     grupo: 'legal',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -196,8 +247,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'DOACAO_SANGUE',
     label: 'Doação de sangue',
     grupo: 'legal',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -211,8 +264,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'ALISTAMENTO_ELEITORAL',
     label: 'Alistamento / título de eleitor',
     grupo: 'legal',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -226,8 +281,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'VESTIBULAR',
     label: 'Prova de vestibular / concurso',
     grupo: 'legal',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -240,8 +297,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'CONSULTA_FILHO',
     label: 'Acompanhar filho ao médico',
     grupo: 'legal',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -255,8 +314,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'PRE_NATAL',
     label: 'Consulta pré-natal',
     grupo: 'legal',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -271,8 +332,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'FERIAS',
     label: 'Férias',
     grupo: 'programado',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -293,8 +356,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'FOLGA',
     label: 'Folga (escala)',
     grupo: 'programado',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -307,22 +372,30 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'FOLGA_COMPENSATORIA',
     label: 'Folga compensatória (banco de horas)',
     grupo: 'programado',
-    abonaJornada: true,
+    justificaAusencia: true,
+    // NÃO abona (ordem do dono, 29/08). Abonando, o previsto sumia e o dia
+    // fechava em zero: a funcionária tirava a folga e o banco continuava
+    // cheio — só enchia, nunca esvaziava. Deixando o previsto de pé, o dia
+    // nasce com saldo negativo e o total do mês cai na mesma medida.
+    abonaJornada: false,
     contaComoTrabalhado: false,
+    debitaBanco: true,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
     exigeDocumento: false,
     admiteParcial: true,
     esocial: null,
-    nota: 'Abate do previsto — o saldo do banco cai sozinho pela conta do espelho.',
+    nota: 'CONSOME o banco: o dia entra negativo e o saldo do mês cai. Não é falta.',
   },
   {
     codigo: 'LICENCA_MATERNIDADE',
     label: 'Licença-maternidade',
     grupo: 'programado',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -334,8 +407,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'LICENCA_PATERNIDADE',
     label: 'Licença-paternidade',
     grupo: 'programado',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -351,8 +426,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'ATRASO_JUSTIFICADO',
     label: 'Atraso justificado',
     grupo: 'parcial',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -365,8 +442,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'SAIDA_ANTECIPADA',
     label: 'Saída antecipada autorizada',
     grupo: 'parcial',
+    justificaAusencia: true,
     abonaJornada: true,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -380,8 +459,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'ADVERTENCIA',
     label: 'Advertência',
     grupo: 'disciplinar',
+    justificaAusencia: false,
     abonaJornada: false,
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -394,8 +475,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'SUSPENSAO',
     label: 'Suspensão disciplinar',
     grupo: 'disciplinar',
+    justificaAusencia: true,
     abonaJornada: true,        // ela está suspensa: não deve essas horas
     contaComoTrabalhado: false,
+    debitaBanco: false,
     descontaSalario: true,     // mas também não recebe por elas
     descontaDSR: true,
     contaArt130: false,
@@ -411,8 +494,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'TREINAMENTO',
     label: 'Treinamento',
     grupo: 'presente',
-    abonaJornada: true,
+    justificaAusencia: true,
+    abonaJornada: false,        // não sai da conta: ela CUMPRIU a jornada
     contaComoTrabalhado: true,  // ela estava trabalhando
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -425,8 +510,10 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     codigo: 'EVENTO_EMPRESA',
     label: 'Evento da empresa',
     grupo: 'presente',
-    abonaJornada: true,
+    justificaAusencia: true,
+    abonaJornada: false,
     contaComoTrabalhado: true,
+    debitaBanco: false,
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
@@ -518,7 +605,24 @@ export function minutosAbatidos(
   janela: JanelaPrevista | null | undefined,
 ): number {
   const tipo = tipoEvento(evento.tipo);
-  if (!tipo || !tipo.abonaJornada) return 0;
+  if (!tipo?.abonaJornada) return 0;
+  return minutosDaJanela(evento, janela);
+}
+
+/**
+ * QUANTOS MINUTOS DE JORNADA ESTE EVENTO COBRE NESTE DIA — só a geometria.
+ *
+ * A conta da interseção é a mesma pros três efeitos possíveis (abater, creditar
+ * e debitar do banco); o que muda é quem recebe o número. Ficou separada dos
+ * flags pra folga compensatória poder dizer "quanto de banco isso consome" sem
+ * precisar abonar nada.
+ */
+export function minutosDaJanela(
+  evento: EventoDoDia,
+  janela: JanelaPrevista | null | undefined,
+): number {
+  const tipo = tipoEvento(evento.tipo);
+  if (!tipo) return 0;
 
   const previsto = minutosPrevistos(janela);
   if (previsto <= 0) return 0;
@@ -549,13 +653,21 @@ export function minutosAbatidos(
 }
 
 export interface EfeitoDoDia {
-  /** Minutos tirados do PREVISTO (atestado, férias, folga). */
+  /** Minutos tirados do PREVISTO (atestado, férias, folga de escala). */
   minAbatidos: number;
   /** Minutos somados no TRABALHADO (treinamento/evento). Nunca abatidos junto. */
   minCreditados: number;
+  /**
+   * Minutos de folga compensatória no dia — quanto do BANCO isto consome.
+   *
+   * Informativo: o débito já acontece sozinho, porque estes minutos ficam no
+   * previsto e ninguém os trabalha. Serve pra tela poder dizer "usou 8h do
+   * banco" em vez de deixar o saldo negativo parecendo falta.
+   */
+  minDebitadoBanco: number;
   /** Códigos dos eventos que pesaram no dia, na ordem em que vieram. */
   tipos: string[];
-  /** O dia deixou de poder ser chamado de falta. */
+  /** O dia está EXPLICADO — não pode ser chamado de falta. */
   abonado: boolean;
   /** Alguma falta injustificada caiu neste dia (art. 130 / DSR). */
   faltaInjustificada: boolean;
@@ -579,6 +691,7 @@ export function efeitosDoDia(
   const vazio: EfeitoDoDia = {
     minAbatidos: 0,
     minCreditados: 0,
+    minDebitadoBanco: 0,
     tipos: [],
     abonado: false,
     faltaInjustificada: false,
@@ -588,6 +701,7 @@ export function efeitosDoDia(
   const previsto = minutosPrevistos(janela);
   let abatidos = 0;
   let creditados = 0;
+  let debitados = 0;
   const tipos: string[] = [];
   let abonado = false;
   let falta = false;
@@ -597,13 +711,18 @@ export function efeitosDoDia(
     if (!t) continue;
     tipos.push(t.codigo);
     if (t.contaArt130) falta = true;
-    if (!t.abonaJornada) continue;
+    // O dia estar EXPLICADO não depende de mexer na jornada: folga
+    // compensatória justifica a ausência E deixa o previsto de pé.
+    if (t.justificaAusencia) abonado = true;
 
-    const m = minutosAbatidos(ev, janela);
-    if (m > 0) abonado = true;
-    // OU credita OU abate — ver o comentário de `contaComoTrabalhado`.
-    if (t.contaComoTrabalhado) creditados += m;
-    else abatidos += m;
+    const m = minutosDaJanela(ev, janela);
+    // Três destinos possíveis pro mesmo número, e só um vale por evento:
+    //  · abater   → o dia sai da conta (atestado, férias, folga de escala)
+    //  · creditar → contou como trabalhado (treinamento)
+    //  · debitar  → consome banco; NÃO mexe na jornada, o negativo é o efeito
+    if (t.abonaJornada) abatidos += m;
+    else if (t.contaComoTrabalhado) creditados += m;
+    else if (t.debitaBanco) debitados += m;
   }
 
   // Teto: o dia não abate mais jornada do que tem, e o crédito só preenche o
@@ -612,11 +731,15 @@ export function efeitosDoDia(
   if (previsto > 0) {
     abatidos = Math.min(abatidos, previsto);
     creditados = Math.min(creditados, previsto - abatidos);
+    // O débito também não passa do que restou de jornada: meia folga
+    // compensatória em cima de meio atestado consome só as horas que sobraram.
+    debitados = Math.min(debitados, previsto - abatidos);
   }
 
   return {
     minAbatidos: abatidos,
     minCreditados: creditados,
+    minDebitadoBanco: debitados,
     tipos,
     abonado,
     faltaInjustificada: falta,

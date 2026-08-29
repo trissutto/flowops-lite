@@ -685,6 +685,7 @@ export class PontoService {
     let totalMinTrabalhado = 0;
     let totalMinPrevisto = 0;
     let totalMinAbonado = 0;
+    let totalMinDebitadoBanco = 0;
 
     for (let d = 1; d <= lastDay; d++) {
       // Cria data alvo as 12h (meio-dia) pra fugir de qualquer borda de TZ.
@@ -748,9 +749,17 @@ export class PontoService {
       // Treinamento/evento: ela estava trabalhando, só que fora da loja.
       minTrabalhado += efeito.minCreditados;
 
+      // FOLGA COMPENSATÓRIA (dono 29/08) NÃO entra aqui de propósito: o
+      // previsto FICA de pé e ninguém trabalha, então `saldo = trabalhado −
+      // previsto` já nasce negativo e o total do mês cai sozinho. `minDebitado`
+      // só carrega o número pra tela poder dizer "usou 8h do banco" em vez de
+      // mostrar um negativo que parece falta.
+      const minDebitadoBanco = efeito.minDebitadoBanco;
+
       totalMinTrabalhado += minTrabalhado;
       totalMinPrevisto += minPrevisto;
       totalMinAbonado += minAbonado;
+      totalMinDebitadoBanco += minDebitadoBanco;
 
       dias.push({
         data: dKey,
@@ -788,6 +797,7 @@ export class PontoService {
           horaFim: e.horaFim ?? null,
         })),
         minAbonado,
+        minDebitadoBanco,
         abonado: efeito.abonado,
         faltaInjustificada: efeito.faltaInjustificada,
       });
@@ -809,6 +819,10 @@ export class PontoService {
         // Quanto de jornada saiu por evento de RH. Fica explícito pra ninguém
         // achar que o mês "encolheu" sozinho.
         minAbonado: totalMinAbonado,
+        // Quanto de BANCO o mês consumiu em folga compensatória. Já está
+        // embutido no saldo (que fica negativo); sai separado pra tela poder
+        // explicar o negativo em vez de deixá-lo parecendo falta.
+        minDebitadoBanco: totalMinDebitadoBanco,
       },
     };
   }
@@ -970,7 +984,12 @@ export class PontoService {
     const totalHe50Min = dias.reduce((acc: number, d: any) => acc + d.heMin50, 0);
     const totalHe100Min = dias.reduce((acc: number, d: any) => acc + d.heMin100, 0);
     const totalHeMin = totalHe50Min + totalHe100Min;
+    // O saldo do banco JÁ SAI DEDUZIDO da folga compensatória (dono 29/08): o
+    // dia de folga mantém o previsto e não tem trabalho, então entra negativo
+    // nesta subtração. Não há uma segunda conta em lugar nenhum — se houvesse,
+    // o desconto sairia em dobro.
     const saldoBancoMin = espelho.totais.minTrabalhado - espelho.totais.minPrevisto;
+    const folgaCompensatoriaMin = espelho.totais.minDebitadoBanco ?? 0;
     const diasAcima10h = dias.filter((d: any) => d.diaAcima10h).length;
 
     // Valor financeiro
@@ -1009,6 +1028,8 @@ export class PontoService {
         minPrevisto: espelho.totais.minPrevisto,
         minTrabalhado: espelho.totais.minTrabalhado,
         saldoBancoMin,
+        /** Quanto do banco o mês CONSUMIU em folga compensatória (já dentro do saldo). */
+        folgaCompensatoriaMin,
         totalHe50Min,
         totalHe100Min,
         totalHeMin,

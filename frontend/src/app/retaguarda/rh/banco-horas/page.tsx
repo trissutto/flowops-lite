@@ -43,6 +43,9 @@ type BancoHoras = {
     minPrevisto: number;
     minTrabalhado: number;
     saldoBancoMin: number;
+    /** Folga compensatória do mês — JÁ deduzida do saldo acima. Opcional
+     *  porque a API velha não manda durante a janela de deploy. */
+    folgaCompensatoriaMin?: number;
     totalHe50Min: number;
     totalHe100Min: number;
     totalHeMin: number;
@@ -272,6 +275,20 @@ export default function BancoHorasPage() {
                 color="amber"
               />
             </div>
+
+            {/* CONSUMO DO BANCO — o negativo explicado.
+                Sem esta linha, o mês em que a funcionária tira folga
+                compensatória mostra um saldo negativo que parece falta. */}
+            {(data.totais.folgaCompensatoriaMin ?? 0) > 0 && (
+              <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 text-sm text-sky-900 flex items-center gap-2">
+                <TrendingDown className="w-4 h-4 shrink-0" />
+                <span>
+                  <strong>{fmtMin(data.totais.folgaCompensatoriaMin ?? 0)}</strong> de folga
+                  compensatória neste mês — já descontados do saldo acima. Não é falta:
+                  é banco de horas usado.
+                </span>
+              </div>
+            )}
 
             {/* Quebra HE 50% vs HE 100% */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

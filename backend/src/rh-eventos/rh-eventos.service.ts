@@ -79,6 +79,11 @@ export class RhEventosService {
       exigeDocumento: t.exigeDocumento,
       admiteParcial: t.admiteParcial,
       abonaJornada: t.abonaJornada,
+      // A tela mostra o efeito ANTES de a supervisão confirmar — e efeito que
+      // não trafega vira tela adivinhando.
+      justificaAusencia: t.justificaAusencia,
+      debitaBanco: t.debitaBanco,
+      contaComoTrabalhado: t.contaComoTrabalhado,
       descontaSalario: t.descontaSalario,
       descontaDSR: t.descontaDSR,
       contaArt130: t.contaArt130,

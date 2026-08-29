@@ -38,10 +38,35 @@ describe('eventos-rh — a lista fechada', () => {
     expect(tipoEvento('ATESTADO_MEDICO')!.contaArt130).toBe(false);
   });
 
-  it('quem conta como trabalhado também abona — abonar é pré-requisito', () => {
+  // Os três destinos do mesmo número são EXCLUSIVOS. Dois marcados no mesmo
+  // tipo fariam o `else if` de `efeitosDoDia` escolher em silêncio, e o efeito
+  // dependeria da ordem em que os ifs foram escritos.
+  it('abater, creditar e debitar são mutuamente exclusivos', () => {
     for (const t of EVENTOS_RH) {
-      if (t.contaComoTrabalhado) expect(t.abonaJornada).toBe(true);
+      const ligados = [t.abonaJornada, t.contaComoTrabalhado, t.debitaBanco].filter(Boolean);
+      expect({ codigo: t.codigo, ligados: ligados.length }).toEqual({
+        codigo: t.codigo, ligados: ligados.length <= 1 ? ligados.length : 99,
+      });
+      expect(ligados.length).toBeLessThanOrEqual(1);
     }
+  });
+
+  it('quem mexe na jornada também justifica a ausência', () => {
+    for (const t of EVENTOS_RH) {
+      if (t.abonaJornada || t.contaComoTrabalhado || t.debitaBanco) {
+        expect(t.justificaAusencia).toBe(true);
+      }
+    }
+  });
+
+  it('só falta injustificada e advertência NÃO justificam o dia', () => {
+    const naoJustifica = EVENTOS_RH.filter((t) => !t.justificaAusencia).map((t) => t.codigo).sort();
+    expect(naoJustifica).toEqual(['ADVERTENCIA', 'FALTA_INJUSTIFICADA']);
+  });
+
+  it('só a folga compensatória consome banco', () => {
+    const debita = EVENTOS_RH.filter((t) => t.debitaBanco).map((t) => t.codigo);
+    expect(debita).toEqual(['FOLGA_COMPENSATORIA']);
   });
 });
 
@@ -143,7 +168,8 @@ describe('efeitosDoDia — vários eventos no mesmo dia', () => {
   it('dia sem evento é neutro', () => {
     const r = efeitosDoDia([], JORNADA);
     expect(r).toEqual({
-      minAbatidos: 0, minCreditados: 0, tipos: [], abonado: false, faltaInjustificada: false,
+      minAbatidos: 0, minCreditados: 0, minDebitadoBanco: 0,
+      tipos: [], abonado: false, faltaInjustificada: false,
     });
     expect(efeitosDoDia(null, JORNADA).abonado).toBe(false);
   });
@@ -344,5 +370,68 @@ describe('FOLGA de escala — o "FALTA que na verdade era folga"', () => {
     expect(r.abonado).toBe(true);
     expect(r.faltaInjustificada).toBe(false);
     expect(r.minAbatidos).toBe(480);
+  });
+});
+
+describe('FOLGA COMPENSATÓRIA — consome o banco (dono 29/08)', () => {
+  // O erro que isto corrige: enquanto a folga abonava a jornada, o dia fechava
+  // em zero. A funcionária acumulava hora extra, tirava a folga pra compensar,
+  // e o saldo continuava igual — o banco só enchia.
+  it('NÃO abona: o previsto fica de pé pro dia nascer negativo', () => {
+    expect(tipoEvento('FOLGA_COMPENSATORIA')!.abonaJornada).toBe(false);
+    expect(minutosAbatidos({ tipo: 'FOLGA_COMPENSATORIA', diaInteiro: true }, JORNADA)).toBe(0);
+  });
+
+  it('dia inteiro debita a jornada toda e não é falta', () => {
+    const r = efeitosDoDia([{ tipo: 'FOLGA_COMPENSATORIA', diaInteiro: true }], JORNADA);
+    expect(r.minAbatidos).toBe(0);        // previsto intacto → saldo −8h
+    expect(r.minDebitadoBanco).toBe(480);
+    expect(r.abonado).toBe(true);         // justificada: NÃO é falta
+    expect(r.faltaInjustificada).toBe(false);
+  });
+
+  // Meia folga não precisa de conta própria: ela trabalha 4h de 8h previstas e
+  // o saldo do dia dá −4h sozinho. O número só serve pra tela explicar.
+  it('meia folga debita só as horas da janela', () => {
+    const r = efeitosDoDia(
+      [{ tipo: 'FOLGA_COMPENSATORIA', diaInteiro: false, horaInicio: '14:00', horaFim: '18:00' }],
+      JORNADA,
+    );
+    expect(r.minDebitadoBanco).toBe(240);
+    expect(r.minAbatidos).toBe(0);
+  });
+
+  it('não desconta salário nem DSR, e não conta pro art. 130', () => {
+    const t = tipoEvento('FOLGA_COMPENSATORIA')!;
+    expect(t.descontaSalario).toBe(false);
+    expect(t.descontaDSR).toBe(false);
+    expect(t.contaArt130).toBe(false);
+    expect(descontoFolha([{ data: '2026-08-25', tipo: 'FOLGA_COMPENSATORIA' }]).diasTotais).toBe(0);
+  });
+
+  // Atestado de manhã abate 3h (previsto vira 5h); a folga da tarde só pode
+  // consumir o que sobrou, senão o débito passaria da jornada do dia.
+  it('débito respeita o previsto que sobrou do abate', () => {
+    const r = efeitosDoDia(
+      [
+        { tipo: 'ATESTADO_MEDICO', diaInteiro: false, horaInicio: '09:00', horaFim: '12:00' },
+        { tipo: 'FOLGA_COMPENSATORIA', diaInteiro: true },
+      ],
+      JORNADA,
+    );
+    expect(r.minAbatidos).toBe(180);
+    expect(r.minDebitadoBanco).toBe(300);
+  });
+
+  it('em dia de folga do cadastro não há banco a consumir', () => {
+    const r = efeitosDoDia([{ tipo: 'FOLGA_COMPENSATORIA', diaInteiro: true }], null);
+    expect(r.minDebitadoBanco).toBe(0);
+  });
+
+  // FOLGA (escala) e FOLGA_COMPENSATORIA sao vizinhas na tela e opostas na conta.
+  it('folga de ESCALA continua abonando — não mexe no banco', () => {
+    const r = efeitosDoDia([{ tipo: 'FOLGA', diaInteiro: true }], JORNADA);
+    expect(r.minAbatidos).toBe(480);
+    expect(r.minDebitadoBanco).toBe(0);
   });
 });
