@@ -1,6 +1,6 @@
 <title>PDV Semáforo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&family=IBM+Plex+Mono:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&family=IBM+Plex+Mono:wght@400;600;700&family=Baloo+2:wght@700;800&display=swap">
 <style>
   /* ── Tokens SEMÁFORO (frontend/tailwind.config.ts, 21/08) + PALETA DE PAPÉIS
      ampliada por ordem do dono em 29/08: mais cor pra destaque, mas cada cor
@@ -143,8 +143,10 @@
   .thumb{flex:none; width:34px; height:34px; border-radius:5px; background:var(--line-soft); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:900; color:var(--ink-faint)}
   .item-info{min-width:0; flex:1}
   .item-nome{font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-  .item-meta{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-soft); margin-top:1px; flex-wrap:wrap}
-  .item-meta .ref{font-family:var(--font-mono); font-weight:600}
+  .item-meta{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-soft); margin-top:2px; flex-wrap:wrap}
+  /* REF em destaque (pedido do dono 29/08): é o nome pelo qual a peça é falada no balcão */
+  .item-meta .ref{font-family:var(--font-mono); font-weight:700; font-size:13px; color:var(--ink);
+    background:var(--line-soft); border-radius:4px; padding:1px 8px; letter-spacing:.02em}
   .badge{font-size:10px; font-weight:900; letter-spacing:.05em; border-radius:4px; padding:1.5px 6px; white-space:nowrap}
   .badge-promo{position:relative; background:var(--info-soft); color:var(--info-deep); border:1px solid var(--info-line)}
   .badge-manual{background:var(--line-soft); color:var(--ink-soft)}
@@ -275,17 +277,19 @@
   .blogo{width:78px; height:26px; display:flex; align-items:center; justify-content:flex-start; flex:none}
   .plist{display:flex; flex-direction:column; gap:3px}
   .plist button{display:flex; align-items:center; justify-content:space-between; border:1px solid var(--line); background:var(--surface);
-    border-radius:5px; padding:4px 14px; font-weight:900; font-size:12.5px; color:var(--ink); min-height:27px}
-  .plist button .pv{font-family:var(--font-mono); font-weight:700; font-size:13px; color:var(--ink-soft)}
+    border-radius:8px; padding:1px 14px; min-height:33px; color:var(--ink)}
+  /* números "infantis" (pedido do dono): fonte arredondada e gorda, bem maior */
+  .pnum{font-family:'Baloo 2','Archivo',sans-serif; font-weight:800; font-size:22px; line-height:1; min-width:58px; text-align:left}
+  .plist button .pv{font-family:var(--font-mono); font-weight:700; font-size:13.5px; color:var(--ink-soft)}
   .plist button:hover{border-color:var(--ink); background:var(--surface-2)}
   .plist button:hover .pv{color:var(--ink)}
   .conf{display:flex; flex-direction:column; align-items:center; gap:4px; border:1px solid var(--line); border-radius:var(--r-card);
     background:var(--surface-2); padding:16px 12px 14px; text-align:center}
   .conf .l1{font-size:12px; font-weight:900; letter-spacing:.08em; color:var(--ink-soft)}
-  .conf .l2{font-size:15px; font-weight:900}
-  .conf .l3{font-size:34px; font-weight:900; letter-spacing:-.01em; font-variant-numeric:tabular-nums; line-height:1.05}
-  .conf .l3 small{font-size:16px; color:var(--ink-soft); margin-right:3px}
-  .conf .l4{font-family:var(--font-mono); font-size:12px; color:var(--ink-soft)}
+  .conf .l2{font-size:20px; font-weight:900; display:flex; align-items:center; gap:10px; margin-top:4px}
+  .conf .l3{font-size:36px; font-weight:900; letter-spacing:-.01em; font-variant-numeric:tabular-nums; line-height:1.05}
+  .conf .l3 small{font-size:17px; color:var(--ink-soft); margin-right:3px}
+  .conf .l4{font-family:'Baloo 2','Archivo',sans-serif; font-weight:800; font-size:21px; color:var(--ink); line-height:1.1}
   .wiz-links{display:flex; justify-content:center; gap:16px}
   .wiz-links button{background:transparent; border:0; font-size:12px; font-weight:700; color:var(--ink-soft); padding:2px 4px}
   .wiz-links button:hover{color:var(--ink)}
@@ -804,7 +808,7 @@
     document.getElementById('wcSub').innerHTML = 'Cada linha mostra o valor da parcela.';
     var h = '<div class="plist">';
     for (var n = 1; n <= 12; n++) {
-      h += '<button onclick="escolheParcelas(' + n + ')"><span>' + n + '×</span><span class="pv num">' + brl(WC_TOTAL / n) + '</span></button>';
+      h += '<button onclick="escolheParcelas(' + n + ')"><span class="pnum">' + n + '×</span><span class="pv num">' + brl(WC_TOTAL / n) + '</span></button>';
     }
     h += '</div><div class="cred-hint">Toque na linha — ou digite o número e Enter.</div>';
     document.getElementById('wcBody').innerHTML = h;
@@ -819,7 +823,7 @@
     var h = '<div class="conf">' +
       '<span class="l1">A COBRAR</span>' +
       '<span class="l3 num"><small>R$</small>411,70</span>' +
-      '<span class="l2">' + l2 + '</span>' +
+      '<span class="l2">' + (WC_LOGO[wc.bandeira] || '') + l2 + '</span>' +
       '<span class="l4 num">' + l4 + '</span>' +
       '</div>' +
       '<button class="finalizar" onclick="fecharCartao()">✓ REGISTRAR NO CARTÃO</button>' +
