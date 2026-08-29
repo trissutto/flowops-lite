@@ -270,11 +270,15 @@
   #wizCartao .wiz-passo{color:var(--ink); background:var(--surface-2); border-color:var(--line)}
   #wizCartao .wiz-steps i.atual{background:var(--ink)}
   #wizCartao .wiz-steps i.done{background:var(--ink-faint)}
-  .bgrid{display:flex; flex-direction:column; gap:6px}
-  .bgrid button{display:flex; align-items:center; gap:14px; border:1px solid var(--line); background:var(--surface);
-    border-radius:var(--r-card); padding:10px 16px; font-weight:900; font-size:13.5px; color:var(--ink); letter-spacing:.02em; min-height:52px}
+  /* bandeiras: linhas de quadrados CENTRALIZADAS (3 em cima, 2 embaixo no
+     crédito), logo GRANDE e nome abaixo, centralizado — pedido do dono */
+  .bgrid{display:flex; flex-wrap:wrap; justify-content:center; gap:10px}
+  .bgrid button{flex:0 0 148px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px;
+    border:1px solid var(--line); background:var(--surface); border-radius:var(--r-card); padding:16px 8px 12px;
+    font-weight:900; font-size:12.5px; color:var(--ink); letter-spacing:.03em; min-height:92px}
   .bgrid button:hover{border-color:var(--ink); background:var(--surface-2)}
-  .blogo{width:78px; height:26px; display:flex; align-items:center; justify-content:flex-start; flex:none}
+  .blogo{height:34px; display:flex; align-items:center; justify-content:center}
+  .blogo svg{height:100% !important; width:auto; max-width:120px}
   .plist{display:flex; flex-direction:column; gap:3px}
   .plist button{display:flex; align-items:center; justify-content:space-between; border:1px solid var(--line); background:var(--surface);
     border-radius:8px; padding:1px 14px; min-height:33px; color:var(--ink)}
