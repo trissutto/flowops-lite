@@ -818,6 +818,14 @@ function ModalAjustarDia({
   onSalvo: () => void;
 }) {
   const registros = dia.registros ?? [];
+
+  // JANELA VERCEL × RAILWAY: o front publica em segundos, o backend leva
+  // minutos (e em 28/08 ficou preso na fila do Railway por "upstream GCP
+  // issues"). Nesse intervalo a tela NOVA conversa com a API VELHA, que não
+  // manda `registros` — os quatro campos de horário viriam VAZIOS num dia que
+  // tem batida, e salvar tentaria CRIAR o que já existe. Melhor dizer a
+  // verdade e travar do que oferecer um formulário que mente.
+  const apiVelha = dia.batidas > 0 && dia.registros === undefined;
   // Primeiro registro de cada tipo. Repetições viram lista separada logo abaixo
   // — é justamente o caso do bipe em sequência (4 batidas no mesmo minuto).
   const original: Record<string, { id: string; hora: string } | null> = {};
@@ -958,6 +966,20 @@ function ModalAjustarDia({
         </div>
 
         <div className="p-5 space-y-4">
+          {apiVelha && (
+            <div className="bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-lg p-3 text-sm flex gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">O servidor ainda está subindo a versão nova.</p>
+                <p className="text-xs mt-0.5">
+                  Este dia tem batida, mas a API antiga não devolve os registros —
+                  editar aqui agora criaria batida duplicada. Espere alguns minutos
+                  e reabra.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* HORÁRIOS */}
           <div>
             <p className="text-[11px] font-bold uppercase text-slate-500 mb-2">Horários</p>
@@ -967,6 +989,7 @@ function ModalAjustarDia({
                   <label className="block text-[11px] text-slate-500 mb-1">{s.label}</label>
                   <input
                     type="time"
+                    disabled={apiVelha}
                     value={horas[s.tipo] || ''}
                     onChange={(e) => setHoras((h) => ({ ...h, [s.tipo]: e.target.value }))}
                     className={`w-full border rounded-lg px-3 py-2 text-sm font-mono ${
@@ -1085,7 +1108,7 @@ function ModalAjustarDia({
           </button>
           <button
             onClick={() => void salvar()}
-            disabled={busy || (!mudou && !marcarTipo)}
+            disabled={busy || apiVelha || (!mudou && !marcarTipo)}
             className="px-4 py-2 rounded-lg bg-brand text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {busy && <Loader2 className="w-4 h-4 animate-spin" />}
