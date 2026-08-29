@@ -79,6 +79,23 @@ Reskin bege/vinho por override de CSS escopado em classe. A direção visual foi
 
 ---
 
+## Triagem da lista externa de 50 pontos (29/08 — gerada por outro chat, analisada contra código real)
+
+**Veredicto do "alerta crítico" (pontos 1-3, polling de pagamento):** superdimensionado — a lista pattern-matchou com o incidente da live sem conhecer o contexto. O flood da live era N navegadores × N carrinhos × sem guard + Giga pendurado. O balcão hoje: **1 navegador, 1 QR ativo, guard `inFlight` construído citando a lição da live** (`page.tsx:7219-7221`), cleanup no unmount. Poll de 1s bate no status LOCAL (webhook grava); gateway só a cada 3s com QR na tela. Link Pagar.me (3s) e PIX venda online (4s) são 100% locais — quem fala com gateway é o reconciliador server-side. Exceção com substância: **PIX avulso** (1s local, mas o backend consulta a Pagar.me ao vivo enquanto pending — o mais pesado dos três). Mapa completo de intervalos: 30s relógio · 15s cobranças · 30s badges · 60s metas (WIP) · 1s/3s/4s pagamentos.
+**Decisão registrada:** NÃO fazer hotfix de arrancar polling antes da reforma. Na etapa 2 entra como contrato: *confirmação de pagamento via socket push (infra de rooms já existe; a live usa `live-pdv:cart-paid`), poll local vira fallback lento, check de gateway só server-side*.
+
+**Já existe no PDV atual** (a lista não conhecia o código): #5 (finalizingRef + overlay + banner fixo), #7 parcial (trava pixPaid + reconciliador + PIX órfãos), #16 (auto-focus universal), #18 parcial (flash verde + beep + thumb), #19 (Delete remove o último — falta botão visível), #28/31 (barra de progresso, restante, troco sobre restante), #33 parcial (expiração 15/60min sem contador visível), #37 (SimularParcelasModal), botão manual de conferência do #1 ("Conferir agora").
+
+**Aceitos → etapa 2:** #4 máquina de estados do checkout (generalizar a da venda online) · #48 quebrar o arquivo (já era a recomendação) · #49 testes de jornada · **#50 métricas operacionais — instrumentar ANTES da reforma pra ter baseline** · socket push (acima).
+
+**Aceitos → etapa 3 (fluxo):** #8 recuperação guiada "pagamento sem venda" (formato wizard do dono) · #10 rodapé de status decomposto · #11 três passos + revelação progressiva (= tese trilho × pista livre) · #14 cabeçalho enxuto · **#15 central de pendências (aplicar o padrão da fila da /minha-loja: barra fechada com contagem)** · #21-23 pausadas com apelido/idade/busca · #24 vendedora como pendência visível · #26 modificado (ordem dos métodos = USO MEDIDO, crédito primeiro) · #27 selecionar ≠ registrar · #32 pagamento manual registra responsável (padrão MasterAudit) · #36 drawer de comprovante · #38 Esc não fecha cobrança ativa.
+
+**Aceitos → etapa 4 (mockup/visual):** #6, #18, #19 (botão desfazer), #20, #25, #29, #30, #31, #33 (contador), #35, #37 (grade de parcelas), e o **pacote a11y inteiro #39-47** — sai de graça na componentização com primitivos semáforo; #46 vira REGRA do design system: *cor nunca sozinha — sempre ícone + palavra* (o próprio semáforo exige).
+
+**Coincidem com a shortlist já aberta:** #12 (um layout oficial — nuance: o toggle vira kill-switch DURANTE o piloto e morre depois) · #13 (= item 3 da shortlist, modo noturno).
+
+**Rejeitados com motivo:** **#9** (expor "sincronização ERP pendente" à vendedora — ela não tem ação a tomar; outbox é infra invisível de propósito com retry de ~3 dias e painel admin próprio; no máximo linha agregada no rodapé admin) · **#34 como proposto** (voltar regeneração manual do QR regride decisão consciente — o botão "Regerar" ninguém clicava e o cliente pagava o valor antigo; manter auto-regen + aviso visual "cobrança atualizada").
+
 ## Registro de sessões
 - **29/08/2026** — Etapa 0 fechada (natureza, dor, plataforma). Inventário funcional disparado. Achados: tokens semáforo prontos (21/08), análise de junho reaproveitável, `.pdv-lab` identificado como experimento anterior.
 - **29/08/2026 (noite)** — Inventário entregue (378 itens). Medição de uso 60d rodada em produção. Dono deu direção de UX: botões grandes + sequência de popups com instrução (formato do fluxo guiado existente) — registrada como tese "trilho × pista livre" pra etapa 3. Nota: outra sessão trabalha em paralelo no repo (Metas/gamificação + lote 3 da separação); push do briefing adiado pra não empilhar restart do backend em horário de loja.
