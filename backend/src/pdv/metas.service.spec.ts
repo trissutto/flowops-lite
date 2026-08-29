@@ -54,10 +54,12 @@ describe('metas — helpers puros', () => {
   describe('montarVendedoras', () => {
     const base = {
       metaMesLoja: 30000,
-      diasVendaRef: 25,
+      // Dias úteis seg–sáb do MÊS VIGENTE (correção do dono, 29/08 — não são
+      // mais os dias com venda do ano anterior).
+      diasUteisMes: 25,
     };
 
-    it('divide a meta pela whitelist e a meta-dia pelos dias de venda', () => {
+    it('divide a meta pela whitelist e a meta-dia pelos dias úteis do mês vigente', () => {
       const rows = montarVendedoras({
         ...base,
         ativas: [

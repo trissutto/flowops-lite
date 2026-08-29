@@ -78,8 +78,8 @@ const server = http.createServer((req, res) => {
 
   // ── Metas (gamificação) — números reais da loja 01 em 29/08/2026 ──────────
   if (url.pathname === '/api/pdv/metas') {
-    const metaMes = 192595.57, diasRef = 27;
-    const metaV = metaMes / 10, metaDiaV = metaV / diasRef;
+    const metaMes = 192595.57, diasUteis = 26; // seg–sáb de ago/2026
+    const metaV = metaMes / 10, metaDiaV = metaV / diasUteis;
     const v = (nome, mes, hoje, extra) => ({
       nome, apelido: null, metaMes: metaV, metaDia: metaDiaV,
       realizadoMes: mes, realizadoHoje: hoje,
@@ -89,11 +89,11 @@ const server = http.createServer((req, res) => {
     });
     return json({
       mesLabel: 'Agosto de 2026', mesRefLabel: 'Agosto de 2025',
-      diasVendaRef: diasRef, diasVendaRefFallback: false,
+      diasUteisMes: diasUteis,
       diaDoMes: 29, diasNoMes: 31,
       loja: {
         storeCode: '01', storeName: 'SANTOS',
-        metaMes, metaDia: metaMes / diasRef,
+        metaMes, metaDia: metaMes / diasUteis,
         realizadoMes: 149850.44, realizadoHoje: 5095.25,
         pctMes: 77.8, pctHoje: 71.4,
         faltaMes: metaMes - 149850.44, projecaoMes: (149850.44 / 29) * 31,

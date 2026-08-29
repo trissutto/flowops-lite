@@ -10807,8 +10807,8 @@ type MetaVendedoraRow = {
 type MetasData = {
   mesLabel: string;
   mesRefLabel: string;
-  diasVendaRef: number;
-  diasVendaRefFallback: boolean;
+  /** Dias úteis (seg–sáb) do mês VIGENTE — divisor da meta do dia. */
+  diasUteisMes: number;
   diaDoMes: number;
   diasNoMes: number;
   loja: {
@@ -11079,7 +11079,7 @@ function MetasModal({
                   </div>
                   <MetaBar pct={data.loja.pctHoje} />
                   <div className="text-[11px] text-slate-500">
-                    meta do mês ÷ {data.diasVendaRef} dias de venda
+                    meta do mês ÷ {data.diasUteisMes} dias úteis (seg–sáb)
                   </div>
                 </article>
               </div>
@@ -11146,11 +11146,9 @@ function MetasModal({
               </section>
 
               <p className="text-[11px] text-slate-400">
-                Meta = vendas de {data.mesRefLabel} ·{' '}
-                {data.diasVendaRefFallback
-                  ? `${data.diasVendaRef} dias úteis (seg–sáb, sem histórico do ano passado)`
-                  : `${data.diasVendaRef} dias de venda em ${data.mesRefLabel}`}{' '}
-                · atualiza sozinho a cada minuto.
+                Meta = vendas de {data.mesRefLabel} · meta do dia = meta ÷{' '}
+                {data.diasUteisMes} dias úteis (seg–sáb) de {data.mesLabel} · atualiza
+                sozinho a cada minuto.
               </p>
             </>
           )}

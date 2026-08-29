@@ -28,9 +28,9 @@ import {
  *   - Por vendedora → pdv_sales com a régua da folha de comissão
  *     (total − vale-troca − devolução dinheiro/pix da vendedora, MARCADO fora).
  *
- * DIAS DE VENDA: conta os dias em que a loja REALMENTE vendeu no mês de
- * referência (ano anterior) — captura sozinho se a loja abre domingo/feriado.
- * Sem histórico, cai pra seg–sáb do mês atual.
+ * DIAS ÚTEIS (correção do dono na entrega, 29/08): a meta do dia divide pelos
+ * dias úteis seg–sáb do MÊS VIGENTE — não pelos dias com venda do mês do ano
+ * anterior (a 1ª versão fazia isso e ele mandou trocar).
  *
  * RANKING DA REDE (corrigido pelo dono na entrega, 29/08): quanto cada loja
  * COLABOROU com as vendas GLOBAIS da rede nos últimos 30 dias — participação
@@ -58,8 +58,8 @@ export type MetaVendedoraRow = {
 export type MetasLojaResponse = {
   mesLabel: string;
   mesRefLabel: string;
-  diasVendaRef: number;
-  diasVendaRefFallback: boolean;
+  /** Dias úteis (seg–sáb) do mês VIGENTE — divisor da meta do dia. */
+  diasUteisMes: number;
   diaDoMes: number;
   diasNoMes: number;
   loja: {
@@ -102,7 +102,7 @@ export function pctDe(realizado: number, meta: number): number | null {
   return Math.round(((realizado || 0) / meta) * 1000) / 10;
 }
 
-/** Dias seg–sáb de um mês (fallback quando não há histórico do ano anterior). */
+/** Dias úteis seg–sáb de um mês — divisor da meta do dia (mês vigente). */
 export function diasSegASabado(ano: number, mes1a12: number): number {
   const total = new Date(ano, mes1a12, 0).getDate();
   let n = 0;
@@ -142,9 +142,9 @@ export function montarVendedoras(args: {
   vendas: LinhaVendaVendedora[];
   devolucoes: LinhaVendaVendedora[];
   metaMesLoja: number;
-  diasVendaRef: number;
+  diasUteisMes: number;
 }): MetaVendedoraRow[] {
-  const { ativas, vendas, devolucoes, metaMesLoja, diasVendaRef } = args;
+  const { ativas, vendas, devolucoes, metaMesLoja, diasUteisMes } = args;
 
   const nomesComVenda = new Set(
     vendas.filter((v) => normNome(v.sellerName)).map((v) => normNome(v.sellerName)),
@@ -153,7 +153,7 @@ export function montarVendedoras(args: {
   if (n === 0) return [];
 
   const metaMes = metaMesLoja / n;
-  const metaDia = diasVendaRef > 0 ? metaMes / diasVendaRef : 0;
+  const metaDia = diasUteisMes > 0 ? metaMes / diasUteisMes : 0;
 
   const consumidasVenda = new Set<number>();
   const consumidasDev = new Set<number>();
@@ -376,19 +376,6 @@ export class MetasService {
     return porCode;
   }
 
-  /** Dias com venda da loja no mês de referência (espelho do caixa detalhado). */
-  private async diasComVendaRef(gigaCodes: string[], inicio: Date, fimExclusive: Date): Promise<number> {
-    const rows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT COUNT(DISTINCT data_fec)::int AS dias
-         FROM giga_caixa_mov
-        WHERE BTRIM(loja) = ANY($1)
-          AND data_fec >= $2 AND data_fec < $3
-          AND (marcado IS NULL OR marcado <> 'SIM')`,
-      gigaCodes, inicio, fimExclusive,
-    );
-    return Number(rows?.[0]?.dias) || 0;
-  }
-
   /** Vendas por vendedora da loja (mês + hoje na mesma query), régua da folha. */
   private async vendasPorVendedora(
     saleCodes: string[],
@@ -491,10 +478,6 @@ export class MetasService {
           .filter(Boolean),
       ),
     );
-    const gigaCodes = Array.from(
-      new Set([meuCode, meuCode.replace(/^0+/, ''), storeCodeNormalizado, storeCodeNormalizado.replace(/^0+/, '')].filter(Boolean)),
-    );
-
     // Janelas — locais (server) pros agregados por loja, BR pros timestamps.
     const mesInicioLocal = this.dataLocal(`${ano}-${mm}-01`);
     const hojeLocal = this.dataLocal(hojeYmd);
@@ -505,12 +488,11 @@ export class MetasService {
     const hojeInicioBR = startOfDayBR();
     const amanhaBR = startOfNextDayBR();
 
-    const [metaPorLoja, mesPorLoja, hojePorLoja, diasRef, ativas, vendas, devolucoes] =
+    const [metaPorLoja, mesPorLoja, hojePorLoja, ativas, vendas, devolucoes] =
       await Promise.all([
         this.faturamentoPorLojaCanonizado(refInicioLocal, refFimLocal, paraCode, siteCode, false),
         this.faturamentoPorLojaCanonizado(mesInicioLocal, amanhaLocal, paraCode, siteCode, true),
         this.faturamentoPorLojaCanonizado(hojeLocal, amanhaLocal, paraCode, siteCode, true),
-        this.diasComVendaRef(gigaCodes, refInicioLocal, refFimLocal),
         this.listarAtivas(storeCodeNormalizado, meuCode),
         this.vendasPorVendedora(saleCodes, mesInicioBR, hojeInicioBR, amanhaBR),
         this.devolucoesPorVendedora(saleCodes, mesInicioBR, hojeInicioBR, amanhaBR),
@@ -520,16 +502,15 @@ export class MetasService {
     const realizadoMes = mesPorLoja.get(meuCode) || 0;
     const realizadoHoje = hojePorLoja.get(meuCode) || 0;
 
-    const diasVendaRefFallback = diasRef <= 0;
-    const diasVendaRef = diasVendaRefFallback ? diasSegASabado(ano, mes) : diasRef;
-    const metaDia = diasVendaRef > 0 ? metaMes / diasVendaRef : 0;
+    // Dias úteis seg–sáb do MÊS VIGENTE (ordem do dono na entrega, 29/08).
+    const diasUteisMes = diasSegASabado(ano, mes);
+    const metaDia = diasUteisMes > 0 ? metaMes / diasUteisMes : 0;
     const diasNoMes = new Date(ano, mes, 0).getDate();
 
     const data: MetasLojaResponse = {
       mesLabel: this.mesLabel(ano, mes),
       mesRefLabel: this.mesLabel(ano - 1, mes),
-      diasVendaRef,
-      diasVendaRefFallback,
+      diasUteisMes,
       diaDoMes: dia,
       diasNoMes,
       loja: {
@@ -550,7 +531,7 @@ export class MetasService {
         vendas,
         devolucoes,
         metaMesLoja: metaMes,
-        diasVendaRef,
+        diasUteisMes,
       }),
       atualizadoEm: new Date().toISOString(),
     };
