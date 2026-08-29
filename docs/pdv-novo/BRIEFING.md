@@ -68,7 +68,9 @@ Reskin bege/vinho por override de CSS escopado em classe. A direção visual foi
 - [ ] O que sai da primeira dobra / vira painel colapsável.
 
 ### Etapa 4 — Telas
-- [ ] Mockup clicável da tela principal em semáforo ANTES de código de produção; dono clica e reage.
+- [x] **Amostra visual nº 1 publicada (29/08, a pedido do dono):** https://claude.ai/code/artifact/8c2fc0a0-5f76-49e4-a254-8321abf70540 — cópia no repo em [amostra-pdv-semaforo.html](amostra-pdv-semaforo.html) (abrir no navegador). Mostra: tela principal em semáforo (total grafite gigante, pagamentos na ordem do uso medido, troca na 1ª dobra, pendências em barra fechada, vendedora como pendência, cliente+cashback em 1 toque, rodapé decomposto + atalhos) e o **trilho guiado** como overlay (formato dos popups do dono em linguagem semáforo). 10 marcadores numerados ancoram cada decisão; o ⑩ (badge de promo deixa de ser vermelha) é ponto aberto.
+- [ ] Reação do dono à amostra → iterar.
+- [ ] Mockup completo (demais estados/fluxos) após etapas 2–3 fechadas.
 - [ ] Validação de balcão (contraste, alvo de clique, legibilidade em pé — agente a11y-balcao).
 
 ### Etapa 5 — Migração
