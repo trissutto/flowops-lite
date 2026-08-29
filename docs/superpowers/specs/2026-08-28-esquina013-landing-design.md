@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Criar um site público independente para `www.esquina013.com.br` que inaugure a presença digital do Esquina 013, consolide a identidade **Urban Beach Night** e converta visitantes em reservas, consultas de programação e visualizações do cardápio.
+Criar um site público independente para `www.esquina013.com.br` que inaugure a presença digital do Esquina 013, consolide uma identidade de **bar descontraído do dia ao encontro** e converta visitantes em reservas, consultas de programação e visualizações do cardápio.
 
 O site não fará parte das telas operacionais do FlowOps. O código ficará isolado em uma aplicação própria dentro do repositório, sem dependências do backend das lojas.
 
@@ -10,10 +10,11 @@ O site não fará parte das telas operacionais do FlowOps. O código ficará iso
 
 - Nome principal: **ESQUINA 013**.
 - Assinatura oficial: **LOUNGE • BEACH • BAR**.
-- Posicionamento: beach club urbano, jovem, noturno e sofisticado.
-- Paleta principal: preto, grafite, branco quente e laranja-neon; azul-petróleo apenas como acento atmosférico.
-- Materiais visuais: concreto escuro, vidro fumê, reflexos molhados, luz âmbar e linhas abstratas inspiradas em ondas.
-- Evitar clichês tropicais, estética tiki, excesso de coqueiros, poluição visual e aparência genérica de balada.
+- Posicionamento: bar descontraído com porções, música e encontros, funcionando do almoço ao último brinde.
+- A narrativa visual acompanha o ciclo do dia: luz natural e tons quentes pela manhã e tarde, sunset no meio da experiência e noite acolhedora no encerramento.
+- Paleta principal: areia, branco quente, madeira, laranja queimado e preto; azul-petróleo aparece em pequenos acentos ligados ao litoral.
+- Materiais visuais: madeira, concreto claro, fibras naturais, vidro, sombra solar, reflexos do entardecer e neon apenas como assinatura noturna.
+- Evitar clichês tropicais, estética tiki, excesso de coqueiros, poluição visual, formalidade de restaurante e aparência exclusiva de balada.
 - O logotipo aprovado com fundo preto será usado no cabeçalho e no rodapé. A versão transparente poderá aparecer sobre imagens.
 
 ## Estrutura da página
@@ -24,11 +25,11 @@ Cabeçalho transparente sobre o hero, tornando-se preto sólido durante a rolage
 
 ### 2. Hero
 
-Primeira tela imersiva, com fotografia ou composição cinematográfica de lounge noturno e iluminação laranja. Conteúdo:
+Primeira tela acolhedora, com fotografia real do espaço em luz natural ou no fim de tarde, mostrando mesas, encontros, porções e clima descontraído. Conteúdo:
 
 - assinatura `LOUNGE • BEACH • BAR`;
-- título **A noite começa na esquina**;
-- texto curto apresentando gastronomia, drinks, música e atmosfera à beira-mar;
+- título **Seu ponto de encontro em Itanhaém**;
+- texto **Porções, drinks, música e boas histórias — do almoço ao último brinde**;
 - CTAs **Reservar agora**, **Ver programação** e **Conhecer o cardápio**;
 - indicação discreta de rolagem.
 
@@ -36,19 +37,19 @@ O botão de reserva abre o WhatsApp com uma mensagem pré-preenchida para o núm
 
 ### 3. Experiência
 
-Seção editorial que apresenta os três pilares da marca: **Lounge**, **Beach** e **Bar**. Cada pilar terá uma descrição curta e uma imagem ou recorte visual. A composição deve alternar áreas amplas, tipografia condensada e detalhes em neon.
+Seção editorial que apresenta os três pilares da experiência: **Comer**, **Brindar** e **Encontrar**. Cada pilar terá uma descrição curta e uma imagem real. A composição deve ser leve, convidativa e humana, usando tipografia forte e o laranja como acento.
 
 ### 4. Programação
 
-Agenda recorrente com cartões para sexta, sábado e domingo. Como atrações e horários específicos ainda não foram fornecidos, os cartões não inventarão artistas. Eles comunicarão a programação de fim de semana e encaminharão o visitante ao WhatsApp para confirmar a atração do dia.
+Agenda recorrente com cartões para sexta, sábado e domingo. Como atrações e horários específicos ainda não foram fornecidos, os cartões não inventarão artistas. Eles comunicarão música e encontros de fim de semana sem linguagem de balada e encaminharão o visitante ao WhatsApp para confirmar a atração do dia.
 
 ### 5. Cardápio
 
-Destaques visuais em três categorias: drinks autorais, gastronomia e porções para compartilhar. Nesta primeira versão, não haverá preços nem itens inventados. A chamada **Ver cardápio / pedir informações** abrirá o WhatsApp até que um cardápio oficial em PDF ou página própria seja fornecido.
+Destaques visuais em três categorias: porções para compartilhar, bebidas geladas e drinks. Porções e mesas terão mais destaque que coquetelaria. Nesta primeira versão, não haverá preços nem itens inventados. A chamada **Ver cardápio / pedir informações** abrirá o WhatsApp até que um cardápio oficial em PDF ou página própria seja fornecido.
 
 ### 6. Galeria
 
-Grade responsiva com atmosfera noturna, detalhes de drinks, iluminação, público e espaço. As imagens deverão manter tratamento consistente em preto, laranja e azul-petróleo, com carregamento otimizado.
+Grade responsiva organizada na sequência manhã/tarde, sunset e noite. As imagens deverão mostrar espaço, mesas, porções, bebidas, música e pessoas, com tratamento quente e natural. Fotos noturnas serão usadas somente no final da sequência.
 
 ### 7. Localização e contato
 
@@ -65,7 +66,8 @@ Logotipo, assinatura, navegação essencial, endereço, horário e direitos da m
 ## Interações e movimento
 
 - Entrada suave de textos e imagens conforme a rolagem.
-- Brilho neon controlado nos CTAs e elementos de destaque.
+- Mudança gradual de fundos claros para escuros ao longo da página, acompanhando o ciclo do dia.
+- Brilho neon reservado ao fechamento noturno e ao logotipo.
 - Microinterações rápidas em botões e cartões.
 - Respeito à preferência `prefers-reduced-motion`.
 - Nenhum efeito deverá prejudicar leitura, desempenho ou navegação pelo teclado.
@@ -103,4 +105,4 @@ Imagens serão otimizadas e servidas localmente. O site terá metadados de compa
 
 ## Critério de sucesso
 
-Ao abrir o site, o visitante deve reconhecer imediatamente uma marca de lounge beach bar premium e entender, sem esforço, como reservar, consultar a programação, conhecer a proposta gastronômica e chegar ao local.
+Ao abrir o site, o visitante deve reconhecer imediatamente um bar descontraído e acolhedor para comer, beber, ouvir música e encontrar pessoas durante o dia, no sunset e à noite. Também deve entender, sem esforço, como reservar, consultar a programação, conhecer a proposta gastronômica e chegar ao local.
