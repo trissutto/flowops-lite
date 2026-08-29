@@ -124,6 +124,83 @@ export class PickScanService {
   }
 
   /**
+   * PEÇA NOVA EM CARD JÁ BAIXADO — reabre a baixa quando dá, recusa quando
+   * reabrir dobraria estoque.
+   *
+   * O caso (ON-000214 Suzano 28/08, ON-000201 29/08): a loja bipa tudo,
+   * finaliza, o `runAutoDebit` carimba `debitApprovedAt`. DEPOIS a matriz
+   * recalcula o pedido — troca peça, move/inclui peça no card — e o card volta
+   * pra `separating`, mas o carimbo ficava. O `registerScan` recusava qualquer
+   * bipe ("Estoque deste pedido já foi baixado"): card na fila, peça nova na
+   * lista, bipe impossível — só destravava com script no banco.
+   *
+   * POR QUE LIMPAR O CARIMBO É SEGURO (no caminho normal): desde 18/08 a baixa
+   * é peça a peça no bipe. Quando o fechamento só CARIMBOU (`"applied":[]` nos
+   * logs `debit.real.*applied`), toda peça baixada tem `stockDecreasedAt` no
+   * próprio scan — sem o carimbo, `pendingDebitItems` enxerga exatamente as
+   * peças novas, e o próximo finish re-carimba sem baixar nada duas vezes.
+   *
+   * QUANDO NÃO PODE: se algum fechamento APLICOU baixa em nível de card
+   * (`applied` não-vazio — bipe que rodou em shadow/killswitch, card anterior
+   * a 18/08), essas peças não têm scan com `stockDecreasedAt`, e reabrir faria
+   * o próximo finish (e o teto por SKU do bipe) baixá-las DE NOVO. Aí lança
+   * `BadRequestException` com a mensagem do caller. Log antigo sem a chave
+   * `applied` cai no mesmo lado — na dúvida, não reabre.
+   *
+   * Chamar DENTRO da transação, com `lockPickOrder` já tomado e o carimbo lido
+   * DEPOIS da trava: quem carimba em new/separating é só o finish, que passa
+   * pela mesma fila — o carimbo visto sob a trava é o definitivo.
+   */
+  async reabrirBaixaPraPecaNova(
+    tx: any,
+    pickOrderId: string,
+    opts: {
+      reason: string;
+      userId?: string | null;
+      storeCode?: string | null;
+      previousApprovedAt?: Date | null;
+      erroSeInseguro: string;
+    },
+  ): Promise<void> {
+    const baixaDeCard = await tx.integrationLog.findFirst({
+      where: {
+        source: 'erp',
+        event: { in: ['debit.real.applied', 'debit.real.auto.applied'] },
+        payload: { contains: `"pickOrderId":"${pickOrderId}"` },
+        NOT: { payload: { contains: '"applied":[]' } },
+      },
+      select: { id: true },
+    });
+    if (baixaDeCard) {
+      this.logger.warn(
+        `[reabre-baixa] card ${pickOrderId} NÃO reaberto (${opts.reason}): ` +
+          `log #${baixaDeCard.id} tem baixa aplicada em nível de card — reabrir dobraria estoque.`,
+      );
+      throw new BadRequestException(opts.erroSeInseguro);
+    }
+    await tx.pickOrder.update({
+      where: { id: pickOrderId },
+      data: { debitApprovedAt: null, debitApprovedBy: null } as any,
+    });
+    await tx.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'debit.reopened',
+        payload: JSON.stringify({
+          pickOrderId,
+          reopenedBy: opts.userId || 'auto:peca-nova',
+          storeCode: opts.storeCode ?? null,
+          previousApprovedAt: opts.previousApprovedAt ?? null,
+          reason: opts.reason,
+        }),
+        status: 200,
+      },
+    });
+    this.logger.log(`[reabre-baixa] card ${pickOrderId} reaberto: ${opts.reason}`);
+  }
+
+  /**
    * REGISTRA UMA PEÇA BIPADA E BAIXA O ESTOQUE — na mesma transação.
    *
    * Devolve `duplicate: true` (sem baixar nada) quando o mesmo `scanUid`
@@ -167,11 +244,10 @@ export class PickScanService {
     if ((po as any).issueReason) {
       throw new BadRequestException('Este pedido está com problema reportado — fale com a matriz antes de bipar.');
     }
-    if ((po as any).debitApprovedAt) {
-      // Baixa do card inteiro já rodou (matriz aprovou, ou finish já passou).
-      // Bipar aqui tiraria a mesma peça duas vezes.
-      throw new BadRequestException('Estoque deste pedido já foi baixado — não dá pra bipar de novo.');
-    }
+    // `debitApprovedAt` preenchido NÃO recusa mais aqui: card fechado que
+    // GANHOU peça nova (recalculo/troca/mover) volta pra fila carimbado, e é o
+    // bipe da peça nova que reabre a baixa — dentro da transação, depois da
+    // trava, onde dá pra decidir com segurança (`reabrirBaixaPraPecaNova`).
     const storeCode = String(((po as any).store?.code) ?? '').trim();
     if (!storeCode) {
       throw new BadRequestException('Loja sem código configurado — não dá pra baixar o estoque no bipe.');
@@ -213,7 +289,18 @@ export class PickScanService {
           throw new BadRequestException('Este pedido está com problema reportado — fale com a matriz antes de bipar.');
         }
         if (atual.debitApprovedAt) {
-          throw new BadRequestException('Estoque deste pedido já foi baixado — não dá pra bipar de novo.');
+          // Card fechado que ganhou peça nova: reabre a baixa e deixa o bipe
+          // seguir. Se o bipe for de peça que já estourou o teto (não era peça
+          // nova coisa nenhuma), a transação inteira volta atrás no teto por
+          // SKU logo abaixo — o carimbo só cai quando um bipe VALE.
+          await this.reabrirBaixaPraPecaNova(tx, pickOrderId, {
+            reason: 'peça nova em card já baixado — bipe reabriu a baixa',
+            userId,
+            storeCode,
+            previousApprovedAt: atual.debitApprovedAt,
+            erroSeInseguro:
+              'Estoque deste pedido foi baixado em cima do card fechado — bipar de novo dobraria a baixa. Chame a matriz.',
+          });
         }
 
         const jaBipados = await tx.pickOrderScan.count({

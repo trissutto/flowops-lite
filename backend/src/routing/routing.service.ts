@@ -1626,19 +1626,50 @@ export class RoutingService {
     let statusAlvo: string = cardAlvo?.status ?? PickStatus.new;
 
     await this.prisma.$transaction(async (tx) => {
+      // Trava o card alvo ANTES de mexer — mesma fila do bipe/finish da loja.
+      // Sem a trava, um "Finalizar" simultâneo carimbava a baixa entre a
+      // leitura lá em cima e os updates daqui, e o carimbo visto abaixo já
+      // estaria velho.
+      if (cardAlvo) await this.pickScans.lockPickOrder(tx, cardAlvo.id);
+
       await tx.orderItem.updateMany({
         where: { id: { in: mover.map((i) => i.id) } },
         data: { assignedStoreId: alvo.id },
       });
 
       if (cardAlvo) {
+        const alvoAtual: any = await tx.pickOrder.findUnique({
+          where: { id: cardAlvo.id },
+          select: { status: true, debitApprovedAt: true } as any,
+        });
         // Card que já tinha terminado volta pra fila — chegou peça nova nele.
-        if (['separated', 'ready'].includes(cardAlvo.status)) {
+        if (['separated', 'ready'].includes(String(alvoAtual?.status))) {
           await tx.pickOrder.update({
             where: { id: cardAlvo.id },
             data: { status: PickStatus.separating },
           });
           statusAlvo = PickStatus.separating;
+        } else if (alvoAtual?.status) {
+          statusAlvo = alvoAtual.status;
+        }
+        // ... e SEM o carimbo da baixa. Devolver o card carimbado era o bug do
+        // ON-000214/ON-000201: o `registerScan` recusa card com
+        // `debitApprovedAt` ("Estoque deste pedido já foi baixado") e a loja
+        // não conseguia bipar justamente a peça que chegou. Quando reabrir é
+        // inseguro (baixa aplicada em nível de card), lança e o movimento
+        // inteiro volta atrás — melhor barrar a matriz aqui do que travar a
+        // loja no bipe depois.
+        if (alvoAtual?.debitApprovedAt) {
+          await this.pickScans.reabrirBaixaPraPecaNova(tx, cardAlvo.id, {
+            reason: 'peça nova movida pra card já baixado',
+            userId: opts?.userId ?? null,
+            storeCode: alvo.code,
+            previousApprovedAt: alvoAtual.debitApprovedAt,
+            erroSeInseguro:
+              `${alvo.code} já teve a baixa de estoque aplicada em cima do card fechado — ` +
+              `peça nova ali sairia do estoque duas vezes no próximo fechamento. ` +
+              `Use "↔ Trocar loja" (estorna o card inteiro) ou mande a peça pra outra loja.`,
+          });
         }
       } else {
         const ehAncora = !!ancoraCode && alvo.code === ancoraCode;
