@@ -640,6 +640,9 @@ export class PontoService {
         name: true,
         horarioTrabalho: true,
         cargo: true,
+        // Pra tela poder LANÇAR batida que faltou: `POST /ponto/manual` exige
+        // storeId, e num dia sem nenhuma batida não há de onde tirar.
+        responsibleStoreId: true,
       },
     });
     if (!seller) throw new NotFoundException('Funcionária não encontrada');
@@ -761,10 +764,29 @@ export class PontoService {
         minPrevisto,
         saldoMin: minTrabalhado - minPrevisto,
         batidas: batidas.length,
+        // As BATIDAS com id — sem elas a tela do espelho mensal só sabia
+        // MOSTRAR o horário errado, não corrigir: editar exige o id do
+        // registro, e a correção só existia na aba "Dia (ao vivo)".
+        registros: batidas.map((b: any) => ({
+          id: b.id,
+          tipo: b.tipo,
+          timestamp: b.timestamp,
+          source: b.source,
+          storeId: b.storeId,
+          justificado: b.justificado,
+        })),
         completo: !!entrada && !!saida && (folga ? true : true),
         justificado: batidas.some((b: any) => b.justificado),
-        // Pra tela escrever "ATESTADO" no lugar de um dia vermelho vazio.
-        eventos: efeito.tipos.map((t) => ({ tipo: t, label: rotuloEvento(t) ?? t })),
+        // Pra tela escrever "ATESTADO" no lugar de um dia vermelho vazio — e,
+        // com o id, poder REMOVER o evento errado direto do espelho.
+        eventos: (eventosDoMes[dKey] ?? []).map((e) => ({
+          id: e.id ?? null,
+          tipo: e.tipo,
+          label: rotuloEvento(e.tipo) ?? e.tipo,
+          diaInteiro: e.diaInteiro,
+          horaInicio: e.horaInicio ?? null,
+          horaFim: e.horaFim ?? null,
+        })),
         minAbonado,
         abonado: efeito.abonado,
         faltaInjustificada: efeito.faltaInjustificada,
@@ -772,7 +794,12 @@ export class PontoService {
     }
 
     return {
-      seller: { id: seller.id, name: seller.name, cargo: seller.cargo },
+      seller: {
+        id: seller.id,
+        name: seller.name,
+        cargo: seller.cargo,
+        storeId: seller.responsibleStoreId ?? null,
+      },
       periodo: { ano, mes, inicio, fim },
       dias,
       totais: {
@@ -801,13 +828,22 @@ export class PontoService {
         name: s.name,
         totais: esp.totais,
         diasTrabalhados: esp.dias.filter((d: any) => d.minTrabalhado > 0).length,
-        // FALTA é dia previsto, sem batida e SEM evento que abone. Antes disso
-        // atestado, férias e dia de treinamento entravam aqui como falta — o
-        // `minPrevisto` já vem descontado do abono, então o dia abonado deixa
-        // de satisfazer `minPrevisto > 0` sozinho; o `!d.abonado` é o cinto de
-        // segurança pro abono parcial (meio período ainda deixa previsto > 0).
+        // FALTA é dia previsto em que NINGUÉM bateu e não há evento que abone.
+        //
+        // `batidas === 0` no lugar de `minTrabalhado === 0`: quem bate a entrada
+        // e esquece a saída trabalha zero minuto pela conta, mas esteve na loja
+        // — chamar isso de falta é acusar a funcionária de um erro de batida.
+        // Esse dia é REGISTRO INCOMPLETO, e vai numa contagem própria.
+        //
+        // O `!d.abonado` é o cinto do abono PARCIAL: meio período de atestado
+        // ainda deixa previsto > 0.
         diasFalta: esp.dias.filter(
-          (d: any) => !d.folga && d.minPrevisto > 0 && d.minTrabalhado === 0 && !d.abonado,
+          (d: any) => !d.folga && d.minPrevisto > 0 && d.batidas === 0 && !d.abonado,
+        ).length,
+        // Dia com batida mas sem fechar o par — é o que a supervisão precisa
+        // corrigir no espelho, e não tem nada a ver com falta.
+        diasIncompletos: esp.dias.filter(
+          (d: any) => !d.folga && d.batidas > 0 && d.minTrabalhado === 0,
         ).length,
         // Separado da falta de propósito: são coisas diferentes na conversa com
         // a funcionária, e juntar as duas foi o que fez a fila perder crédito.

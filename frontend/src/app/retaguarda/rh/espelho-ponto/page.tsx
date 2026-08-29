@@ -13,7 +13,7 @@
  *  - Botão "Justificar" em cada batida
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Loader2, FileText, Calendar, CheckCircle2, AlertTriangle,
@@ -46,8 +46,24 @@ type Espelho = {
     batidas: number;
     completo: boolean;
     justificado: boolean;
+    // As batidas com id — é o que permite corrigir o horário aqui mesmo.
+    registros?: Array<{
+      id: string;
+      tipo: string;
+      timestamp: string;
+      source: string;
+      storeId: string;
+      justificado: boolean;
+    }>;
     // Evento de RH que explica o dia (atestado, férias, treinamento).
-    eventos?: Array<{ tipo: string; label: string }>;
+    eventos?: Array<{
+      id: string | null;
+      tipo: string;
+      label: string;
+      diaInteiro: boolean;
+      horaInicio: string | null;
+      horaFim: string | null;
+    }>;
     minAbonado?: number;
     abonado?: boolean;
     faltaInjustificada?: boolean;
@@ -59,6 +75,35 @@ type Espelho = {
     minAbonado?: number;
   };
 };
+
+type DiaEspelho = Espelho['dias'][0];
+
+/** Tipo de evento, como vem da régua única do backend. */
+type TipoEvento = {
+  codigo: string;
+  label: string;
+  grupo: string;
+  exigeDocumento: boolean;
+  admiteParcial: boolean;
+  abonaJornada: boolean;
+  nota: string | null;
+};
+
+/** Os quatro horários do dia, na ordem em que a jornada acontece. */
+const SLOTS: Array<{ tipo: string; label: string }> = [
+  { tipo: 'entrada', label: 'Entrada' },
+  { tipo: 'saida_almoco', label: 'Saída almoço' },
+  { tipo: 'volta_almoco', label: 'Volta almoço' },
+  { tipo: 'saida', label: 'Saída' },
+];
+
+/** ISO → "HH:MM" no fuso BR. String vazia quando não há batida. */
+const hhmmBR = (iso?: string | null) =>
+  iso
+    ? new Date(iso).toLocaleTimeString('pt-BR', {
+        hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+      })
+    : '';
 
 const fmtHora = (iso: string | null) => {
   if (!iso) return '—';
@@ -232,7 +277,7 @@ export default function EspelhoPontoPage() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
+  const loadEspelho = useCallback(() => {
     if (!sellerId) return;
     setLoading(true);
     api<Espelho>(`/ponto/espelho?sellerId=${sellerId}&ano=${ano}&mes=${mes}`)
@@ -240,6 +285,19 @@ export default function EspelhoPontoPage() {
       .catch(() => setEspelho(null))
       .finally(() => setLoading(false));
   }, [sellerId, ano, mes]);
+
+  useEffect(() => { loadEspelho(); }, [loadEspelho]);
+
+  // ── AJUSTAR O DIA (dono 28/08) ──
+  // Corrigir batida e reclassificar o dia (FALTA → FOLGA) só existia na aba
+  // "Dia (ao vivo)" e no cadastro da funcionária. Quem confere o mês olha ESTA
+  // tabela — mandar a supervisão pra outra tela pra consertar a linha que ela
+  // está vendo é o caminho que faz ninguém consertar.
+  const [ajusteDia, setAjusteDia] = useState<DiaEspelho | null>(null);
+  const [tiposEvento, setTiposEvento] = useState<TipoEvento[]>([]);
+  useEffect(() => {
+    api<TipoEvento[]>('/rh/eventos/tipos').then(setTiposEvento).catch(() => setTiposEvento([]));
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -585,16 +643,23 @@ export default function EspelhoPontoPage() {
                       <th className="px-3 py-2 text-right">Prev.</th>
                       <th className="px-3 py-2 text-right">Saldo</th>
                       <th className="px-3 py-2 text-center">Status</th>
+                      <th className="px-3 py-2 text-center">Ajustar</th>
                     </tr>
                   </thead>
                   <tbody>
                     {espelho.dias.map((d) => {
-                      // Dia com evento que abona NÃO é falta. O abono parcial
-                      // (atestado de meio período) deixa previsto > 0, então o
-                      // `!d.abonado` é o que segura — sem ele a tela voltaria a
-                      // chamar de FALTA quem estava com atestado até meio-dia.
+                      // FALTA = ninguém bateu. Antes era `minTrabalhado === 0`,
+                      // e aí o dia em que ela bateu a entrada e esqueceu a saída
+                      // aparecia como FALTA — acusando a funcionária de não ter
+                      // vindo por causa de um erro de batida (o 08/08 da Amanda,
+                      // com entrada 10:31 e saída-almoço 14:00, dizia FALTA).
+                      // Esse dia é REGISTRO INCOMPLETO, e é o que a supervisão
+                      // corrige no botão de ajuste.
+                      //
+                      // O `!d.abonado` segura o abono PARCIAL: atestado de meio
+                      // período ainda deixa previsto > 0.
                       const isFalta =
-                        !d.folga && d.minPrevisto > 0 && d.minTrabalhado === 0 && !d.abonado;
+                        !d.folga && d.minPrevisto > 0 && d.batidas === 0 && !d.abonado;
                       const evento = d.eventos?.[0];
                       const isIncompleto =
                         !d.folga &&
@@ -670,6 +735,15 @@ export default function EspelhoPontoPage() {
                               <span className="text-xs text-slate-300">—</span>
                             )}
                           </td>
+                          <td className="px-3 py-2 text-center">
+                            <button
+                              onClick={() => setAjusteDia(d)}
+                              className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800"
+                              title="Corrigir horários ou marcar o dia"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -704,6 +778,320 @@ export default function EspelhoPontoPage() {
         )}
         </>
         )}
+      </div>
+
+      {ajusteDia && espelho && (
+        <ModalAjustarDia
+          dia={ajusteDia}
+          seller={espelho.seller}
+          tipos={tiposEvento}
+          onFechar={() => setAjusteDia(null)}
+          onSalvo={() => { setAjusteDia(null); loadEspelho(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * AJUSTAR O DIA — corrige as batidas e reclassifica o dia.
+ *
+ * Duas coisas diferentes na mesma caixa porque, olhando a linha do espelho, a
+ * supervisão ainda não sabe qual das duas é o caso: "0h no sábado" pode ser
+ * batida esquecida (corrige o horário) ou folga de escala (marca o dia). Obrigar
+ * a escolher a tela antes de saber o problema é o que fazia ninguém corrigir.
+ *
+ * O que ela faz com os horários:
+ *   · preencheu um campo vazio → cria a batida (POST /ponto/manual)
+ *   · mudou um horário         → corrige (PATCH /ponto/registro/:id)
+ *   · apagou um campo          → exclui a batida (DELETE)
+ * A justificativa é obrigatória — o backend exige, e correção de ponto sem
+ * motivo registrado é o primeiro papel que o advogado pede.
+ */
+function ModalAjustarDia({
+  dia, seller, tipos, onFechar, onSalvo,
+}: {
+  dia: DiaEspelho;
+  seller: { id: string; name: string; storeId?: string | null };
+  tipos: TipoEvento[];
+  onFechar: () => void;
+  onSalvo: () => void;
+}) {
+  const registros = dia.registros ?? [];
+  // Primeiro registro de cada tipo. Repetições viram lista separada logo abaixo
+  // — é justamente o caso do bipe em sequência (4 batidas no mesmo minuto).
+  const original: Record<string, { id: string; hora: string } | null> = {};
+  const repetidas: Array<{ id: string; tipo: string; hora: string }> = [];
+  for (const s of SLOTS) {
+    const doTipo = registros.filter((r) => r.tipo === s.tipo);
+    original[s.tipo] = doTipo[0] ? { id: doTipo[0].id, hora: hhmmBR(doTipo[0].timestamp) } : null;
+    for (const extra of doTipo.slice(1)) {
+      repetidas.push({ id: extra.id, tipo: extra.tipo, hora: hhmmBR(extra.timestamp) });
+    }
+  }
+
+  const [horas, setHoras] = useState<Record<string, string>>(() =>
+    Object.fromEntries(SLOTS.map((s) => [s.tipo, original[s.tipo]?.hora ?? ''])),
+  );
+  const [justificativa, setJustificativa] = useState('');
+  const [marcarTipo, setMarcarTipo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  // A loja da batida nova: a do próprio dia, senão a loja da funcionária.
+  const storeId = registros[0]?.storeId || seller.storeId || '';
+
+  const mudou = SLOTS.some((s) => (horas[s.tipo] || '') !== (original[s.tipo]?.hora ?? ''));
+  const precisaJust = mudou || !!marcarTipo || repetidas.length > 0;
+
+  // Só tipos que não pedem documento: anexar exige o fluxo da tela de Eventos,
+  // e um seletor que promete o que a caixa não entrega é porta falsa.
+  const tiposRapidos = tipos.filter((t) => !t.exigeDocumento);
+
+  const iso = (hhmm: string) => new Date(`${dia.data}T${hhmm}:00-03:00`).toISOString();
+
+  const salvar = async () => {
+    if (justificativa.trim().length < 3) {
+      setErro('Escreva o motivo do ajuste (mínimo 3 letras).');
+      return;
+    }
+    setBusy(true);
+    setErro(null);
+    const motivo = justificativa.trim();
+    try {
+      for (const s of SLOTS) {
+        const antes = original[s.tipo];
+        const agora = (horas[s.tipo] || '').trim();
+
+        if (antes && !agora) {
+          await api(`/ponto/registro/${antes.id}`, {
+            method: 'DELETE', body: JSON.stringify({ motivo }),
+          });
+        } else if (antes && agora !== antes.hora) {
+          await api(`/ponto/registro/${antes.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ timestamp: iso(agora), justificativa: motivo }),
+          });
+        } else if (!antes && agora) {
+          if (!storeId) throw new Error('Loja da funcionária não identificada — não dá pra lançar a batida.');
+          await api('/ponto/manual', {
+            method: 'POST',
+            body: JSON.stringify({
+              sellerId: seller.id, storeId, tipo: s.tipo,
+              timestamp: iso(agora), justificativa: motivo,
+            }),
+          });
+        }
+      }
+
+      if (marcarTipo) {
+        await api('/rh/eventos', {
+          method: 'POST',
+          body: JSON.stringify({
+            sellerId: seller.id,
+            tipo: marcarTipo,
+            dataInicio: dia.data,
+            dataFim: dia.data,
+            diaInteiro: true,
+            observacoes: motivo,
+          }),
+        });
+      }
+      onSalvo();
+    } catch (e: any) {
+      setErro(e?.message || 'Não consegui salvar.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const excluirRepetida = async (id: string) => {
+    if (justificativa.trim().length < 3) {
+      setErro('Escreva o motivo antes de excluir.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api(`/ponto/registro/${id}`, {
+        method: 'DELETE', body: JSON.stringify({ motivo: justificativa.trim() }),
+      });
+      onSalvo();
+    } catch (e: any) {
+      setErro(e?.message || 'Não consegui excluir.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removerEvento = async (id: string) => {
+    if (justificativa.trim().length < 3) {
+      setErro('Escreva o motivo antes de remover.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api(`/rh/eventos/${id}/cancelar`, {
+        method: 'POST', body: JSON.stringify({ motivo: justificativa.trim() }),
+      });
+      onSalvo();
+    } catch (e: any) {
+      setErro(e?.message || 'Não consegui remover.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0 bg-white">
+          <div>
+            <h2 className="font-bold text-lg">Ajustar {fmtData(dia.data)}</h2>
+            <p className="text-xs text-slate-500">
+              {seller.name} · {dia.diaSemana}
+              {dia.folga && ' · folga no cadastro'}
+            </p>
+          </div>
+          <button onClick={onFechar} className="p-1.5 rounded hover:bg-slate-100">
+            <span className="text-xl leading-none">×</span>
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* HORÁRIOS */}
+          <div>
+            <p className="text-[11px] font-bold uppercase text-slate-500 mb-2">Horários</p>
+            <div className="grid grid-cols-2 gap-3">
+              {SLOTS.map((s) => (
+                <div key={s.tipo}>
+                  <label className="block text-[11px] text-slate-500 mb-1">{s.label}</label>
+                  <input
+                    type="time"
+                    value={horas[s.tipo] || ''}
+                    onChange={(e) => setHoras((h) => ({ ...h, [s.tipo]: e.target.value }))}
+                    className={`w-full border rounded-lg px-3 py-2 text-sm font-mono ${
+                      (horas[s.tipo] || '') !== (original[s.tipo]?.hora ?? '')
+                        ? 'border-amber-400 bg-amber-50'
+                        : ''
+                    }`}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-2">
+              Campo vazio que você preencher vira batida nova; campo preenchido
+              que você apagar exclui a batida.
+            </p>
+          </div>
+
+          {/* BATIDAS REPETIDAS — o bipe em sequência */}
+          {repetidas.length > 0 && (
+            <div className="border border-rose-200 bg-rose-50 rounded-lg p-3">
+              <p className="text-[11px] font-bold uppercase text-rose-700 mb-2">
+                Batidas repetidas neste dia
+              </p>
+              <div className="space-y-1.5">
+                {repetidas.map((r) => (
+                  <div key={r.id} className="flex items-center gap-2 text-sm">
+                    <span className="font-mono font-bold">{r.hora}</span>
+                    <span className="text-slate-500 text-xs">{TIPO_LABEL[r.tipo] || r.tipo}</span>
+                    <button
+                      onClick={() => void excluirRepetida(r.id)}
+                      disabled={busy}
+                      className="ml-auto text-xs font-bold text-rose-700 hover:underline disabled:opacity-40"
+                    >
+                      excluir
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* EVENTO JÁ LANÇADO NO DIA */}
+          {(dia.eventos ?? []).length > 0 && (
+            <div className="border border-sky-200 bg-sky-50 rounded-lg p-3">
+              <p className="text-[11px] font-bold uppercase text-sky-800 mb-2">Marcado como</p>
+              <div className="space-y-1.5">
+                {(dia.eventos ?? []).map((ev) => (
+                  <div key={ev.id ?? ev.tipo} className="flex items-center gap-2 text-sm">
+                    <span className="font-bold">{ev.label}</span>
+                    {!ev.diaInteiro && ev.horaInicio && (
+                      <span className="text-xs text-slate-500">{ev.horaInicio}–{ev.horaFim}</span>
+                    )}
+                    {ev.id && (
+                      <button
+                        onClick={() => void removerEvento(ev.id!)}
+                        disabled={busy}
+                        className="ml-auto text-xs font-bold text-rose-700 hover:underline disabled:opacity-40"
+                      >
+                        remover
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* MARCAR O DIA — é aqui que FALTA vira FOLGA */}
+          <div>
+            <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
+              Marcar o dia como
+            </label>
+            <select
+              value={marcarTipo}
+              onChange={(e) => setMarcarTipo(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">— não marcar —</option>
+              {tiposRapidos.map((t) => (
+                <option key={t.codigo} value={t.codigo}>{t.label}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Atestado e outros que pedem anexo saem por{' '}
+              <Link href="/retaguarda/rh/eventos" className="underline">Eventos de RH</Link>.
+            </p>
+          </div>
+
+          {/* JUSTIFICATIVA */}
+          <div>
+            <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
+              Motivo do ajuste {precisaJust && <span className="text-rose-600">*</span>}
+            </label>
+            <input
+              value={justificativa}
+              onChange={(e) => setJustificativa(e.target.value)}
+              placeholder="Ex: esqueceu de bater a saída · era folga da escala"
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Fica gravado no registro. Correção de ponto sem motivo é o primeiro
+              papel que falta numa reclamação trabalhista.
+            </p>
+          </div>
+
+          {erro && (
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-lg p-3 text-sm flex gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> {erro}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t flex justify-end gap-2 sticky bottom-0 bg-white">
+          <button onClick={onFechar} className="px-4 py-2 rounded-lg border font-semibold text-sm">
+            Fechar
+          </button>
+          <button
+            onClick={() => void salvar()}
+            disabled={busy || (!mudou && !marcarTipo)}
+            className="px-4 py-2 rounded-lg bg-brand text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
+          >
+            {busy && <Loader2 className="w-4 h-4 animate-spin" />}
+            Salvar
+          </button>
+        </div>
       </div>
     </div>
   );
