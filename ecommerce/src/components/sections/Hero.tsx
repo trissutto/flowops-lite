@@ -442,6 +442,62 @@ const HeroArte = forwardRef<HTMLElement, {
   const temBotao = !!(primaryAction || secondaryAction);
   const tintaEscura = contentTone === 'ink';
 
+  const conteudo = (mobile = false) => (
+    <Container width="page" className={cn('relative z-10', !mobile && !tintaEscura && 'pb-6 sm:pb-8 lg:pb-12')}>
+      <div className={cn('flex flex-col', ALIGNMENTS[align])}>
+        {eyebrow && (
+          <p className={cn('eyebrow', tintaEscura ? 'text-primary-strong' : 'text-primary-soft')}>
+            {eyebrow}
+          </p>
+        )}
+        {title && (
+          <h1 className={cn('mt-4 max-w-3xl text-display', tintaEscura ? 'text-ink' : 'text-light')}>
+            {title}
+          </h1>
+        )}
+        {subtitle && (
+          <p className={cn('mt-5 max-w-xl text-body-lg font-light', tintaEscura ? 'text-ink/80' : 'text-light/85')}>
+            {subtitle}
+          </p>
+        )}
+        {temBotao && (
+          <div
+            className={cn(
+              'mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4',
+              align === 'center' && 'sm:justify-center',
+              align === 'right' && 'sm:justify-end',
+            )}
+          >
+            {primaryAction && (
+              <Button
+                href={primaryAction.href}
+                external={primaryAction.external}
+                variant={primaryAction.variant ?? (tintaEscura ? 'primary' : 'light')}
+                size="lg"
+                className="sm:w-auto"
+                block
+              >
+                {primaryAction.label}
+              </Button>
+            )}
+            {secondaryAction && (
+              <Button
+                href={secondaryAction.href}
+                external={secondaryAction.external}
+                variant={secondaryAction.variant ?? (tintaEscura ? 'secondary' : 'outlineLight')}
+                size="lg"
+                className="sm:w-auto"
+                block
+              >
+                {secondaryAction.label}
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </Container>
+  );
+
   /**
    * A ALTURA RESERVADA VEM DO ARQUIVO, NÃO DE UM CHUTE (12/08/2026).
    *
@@ -519,6 +575,15 @@ const HeroArte = forwardRef<HTMLElement, {
         />
       )}
 
+      {/* No celular, campanhas claras viram dois blocos independentes. Texto
+          e CTA ficam acima da fotografia, portanto nenhum tamanho de tela
+          consegue cobrir rosto ou roupa. */}
+      {tintaEscura && (temTexto || temBotao) && (
+        <div className="bg-[#f8f5f1] py-6 sm:py-8 lg:hidden">
+          {conteudo(true)}
+        </div>
+      )}
+
       {desktop && (
         <picture>
           {/* `width`/`height` no <source>: o recorte de celular tem proporção
@@ -552,68 +617,13 @@ const HeroArte = forwardRef<HTMLElement, {
       {(temTexto || temBotao) && (
         <div
           className={cn(
-            'absolute inset-0 flex',
+            'absolute inset-0',
             tintaEscura
-              ? 'items-start pt-[clamp(1.5rem,6vw,5rem)] lg:items-center lg:pt-0'
-              : 'items-end',
+              ? 'hidden items-center lg:flex'
+              : 'flex items-end',
           )}
         >
-          <Container
-            width="page"
-            className={cn('relative z-10', !tintaEscura && 'pb-6 sm:pb-8 lg:pb-12')}
-          >
-            <div className={cn('flex flex-col', ALIGNMENTS[align])}>
-              {eyebrow && (
-                <p className={cn('eyebrow', tintaEscura ? 'text-primary-strong' : 'text-primary-soft')}>
-                  {eyebrow}
-                </p>
-              )}
-              {title && (
-                <h1 className={cn('mt-4 max-w-3xl text-display', tintaEscura ? 'text-ink' : 'text-light')}>
-                  {title}
-                </h1>
-              )}
-              {subtitle && (
-                <p className={cn('mt-5 max-w-xl text-body-lg font-light', tintaEscura ? 'text-ink/80' : 'text-light/85')}>
-                  {subtitle}
-                </p>
-              )}
-              {temBotao && (
-                <div
-                  className={cn(
-                    'mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4',
-                    align === 'center' && 'sm:justify-center',
-                    align === 'right' && 'sm:justify-end',
-                  )}
-                >
-                  {primaryAction && (
-                    <Button
-                      href={primaryAction.href}
-                      external={primaryAction.external}
-                      variant={primaryAction.variant ?? (tintaEscura ? 'primary' : 'light')}
-                      size="lg"
-                      className="sm:w-auto"
-                      block
-                    >
-                      {primaryAction.label}
-                    </Button>
-                  )}
-                  {secondaryAction && (
-                    <Button
-                      href={secondaryAction.href}
-                      external={secondaryAction.external}
-                      variant={secondaryAction.variant ?? (tintaEscura ? 'secondary' : 'outlineLight')}
-                      size="lg"
-                      className="sm:w-auto"
-                      block
-                    >
-                      {secondaryAction.label}
-                    </Button>
-                  )}
-                </div>
-              )}
-            </div>
-          </Container>
+          {conteudo()}
         </div>
       )}
     </section>
