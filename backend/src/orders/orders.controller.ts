@@ -3555,6 +3555,80 @@ export class OrdersController {
    * espera — só a porta do envio. Fora do estado nem aparece: a juntada é
    * obrigatória no routing.
    */
+  /**
+   * RASTREIO MUDO (29/08, sugestão nº 16) — pedido ENVIADO há 15+ dias cujo
+   * objeto não tem NENHUM evento de rastreio. "Todas as caixas chegam" só
+   * fecha pedido quando o rastreio fala; objeto de outro contrato volta
+   * SRO-009 com zero eventos e o pedido fica aberto PRA SEMPRE em silêncio
+   * (era a causa dos 0 entregues em 90 dias, 18/08). Silêncio não é entrega:
+   * vira tarefa de verificação da matriz.
+   */
+  @Get('rastreio/parados')
+  async rastreioParados(@Query('minDias') minDias?: string) {
+    const dias = Math.min(Math.max(Number(minDias) || 15, 3), 120);
+    const corte = new Date(Date.now() - dias * 86400000);
+    const pedidos: any[] = await this.prisma.order.findMany({
+      where: {
+        status: 'shipped',
+        OR: [{ shippedAt: { lte: corte } }, { shippedAt: null, updatedAt: { lte: corte } }],
+      } as any,
+      select: {
+        id: true, wcOrderNumber: true, wcOrderId: true, customerName: true,
+        shippedAt: true, updatedAt: true, shippingMethod: true,
+        pickOrders: {
+          where: { status: 'shipped', isTransfer: false },
+          select: { trackingCode: true, carrier: true, store: { select: { code: true } } },
+        },
+      } as any,
+      orderBy: { updatedAt: 'asc' },
+      take: 300,
+    });
+    const codigos = [
+      ...new Set(
+        pedidos.flatMap((p) => p.pickOrders.map((k: any) => String(k.trackingCode || '').trim())).filter(Boolean),
+      ),
+    ];
+    const objetos: any[] = codigos.length
+      ? await (this.prisma as any).rastreioObjeto.findMany({
+          where: { codigo: { in: codigos } },
+          select: { codigo: true, eventoEm: true, entregue: true, erro: true, consultadoEm: true },
+        })
+      : [];
+    const porCodigo = new Map(objetos.map((o) => [o.codigo, o]));
+    const itens = pedidos
+      .map((p) => {
+        const pacotes = p.pickOrders
+          .filter((k: any) => k.trackingCode)
+          .map((k: any) => {
+            const obj = porCodigo.get(String(k.trackingCode).trim());
+            return {
+              trackingCode: k.trackingCode,
+              carrier: k.carrier,
+              storeCode: k.store?.code,
+              // MUDO = sem NENHUM evento (sem linha no radar, ou linha sem eventoEm)
+              mudo: !obj || (!obj.eventoEm && !obj.entregue),
+              erro: obj?.erro ?? null,
+              consultadoEm: obj?.consultadoEm ?? null,
+            };
+          });
+        const mudos = pacotes.filter((x: any) => x.mudo);
+        // Card sem rastreio nenhum (motoboy/retirada fecham por outro trilho —
+        // aqui só entra envio com código que NUNCA falou).
+        if (!mudos.length) return null;
+        return {
+          orderId: p.id,
+          numero: p.wcOrderNumber || String(p.wcOrderId || '').slice(0, 10),
+          cliente: p.customerName,
+          metodo: p.shippingMethod,
+          enviadoEm: p.shippedAt ?? p.updatedAt,
+          diasMudo: Math.floor((Date.now() - new Date(p.shippedAt ?? p.updatedAt).getTime()) / 86400000),
+          pacotesMudos: mudos,
+        };
+      })
+      .filter(Boolean);
+    return { minDias: dias, itens };
+  }
+
   @Get('pacotes/pendentes')
   async pacotesPendentes() {
     if (String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() === '0') return { itens: [] };

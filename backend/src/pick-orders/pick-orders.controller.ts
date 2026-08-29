@@ -119,6 +119,16 @@ export class PickOrdersController {
   }
 
   /**
+   * GARGALO POR LOJA (29/08) — tempo médio nascer→bipar e nascer→enviar por
+   * loja. Matriz vê quem atrasa a rede; a fila da loja mostra a idade card a
+   * card, aqui é o AGREGADO.
+   */
+  @Get('gargalo')
+  async gargalo(@Query('dias') dias?: string) {
+    return this.svc.gargaloPorLoja(Number(dias) || 30);
+  }
+
+  /**
    * Loja — o que ELA VENDEU online (não o que ela separa). `/mine` é a fila de
    * quem ATENDE; esta é a de quem VENDEU: a vendedora fecha no WhatsApp, o
    * card nasce em outra loja e ela precisa saber em que pé está pra responder

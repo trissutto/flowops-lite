@@ -167,6 +167,12 @@ export default function RemessasAdminPage() {
   // PEÇA SEM BIPE (29/08) — card fechado/enviado com peça que nunca bipou:
   // o estoque dela não saiu. A matriz cobra a loja; o bipe tardio resolve.
   const [semBipe, setSemBipe] = useState<any[]>([]);
+  // RASTREIO MUDO (29/08) — pedido enviado 15+ dias sem NENHUM evento de
+  // rastreio: silêncio não é entrega, é objeto que o radar não enxerga.
+  const [rastreioMudo, setRastreioMudo] = useState<any[]>([]);
+  // GARGALO POR LOJA (29/08) — tempo médio nascer→bipar→enviar, 30 dias.
+  const [gargalo, setGargalo] = useState<any[]>([]);
+  const [gargaloAberto, setGargaloAberto] = useState(false);
   // Filtro rápido "só sem NF-e" — em cima do resultado atual da tabela.
   const [soSemNf, setSoSemNf] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -279,9 +285,11 @@ export default function RemessasAdminPage() {
         api<{ itens: PacotePendente[] }>('/orders/pacotes/pendentes').catch(() => ({ itens: [] as PacotePendente[] })),
       ]);
       setPacotes(Array.isArray(pacotesResp?.itens) ? pacotesResp.itens : []);
-      // Fora do Promise.all de propósito: rota nova — se ainda não deployou,
-      // não derruba o resto da tela.
+      // Fora do Promise.all de propósito: rotas novas — se ainda não
+      // deployaram, não derrubam o resto da tela.
       api<any[]>('/pick-orders/sem-bipe').then((r) => setSemBipe(Array.isArray(r) ? r : [])).catch(() => setSemBipe([]));
+      api<{ itens: any[] }>('/orders/rastreio/parados').then((r) => setRastreioMudo(Array.isArray(r?.itens) ? r.itens : [])).catch(() => setRastreioMudo([]));
+      api<{ lojas: any[] }>('/pick-orders/gargalo').then((r) => setGargalo(Array.isArray(r?.lojas) ? r.lojas : [])).catch(() => setGargalo([]));
       setRows(Array.isArray(list) ? list : []);
       setKpis(k);
       const agora = Date.now();
@@ -753,6 +761,81 @@ export default function RemessasAdminPage() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* 📡 RASTREIO MUDO — enviado 15+ dias e o objeto nunca deu UM evento.
+            Silêncio não é entrega (caso SRO-009): a matriz confere com a
+            cliente/agência e fecha ou reenvia. */}
+        {rastreioMudo.length > 0 && (
+          <div className="rounded-xl border-2 border-orange-300 bg-orange-50 overflow-hidden">
+            <div className="px-4 py-2.5 bg-orange-500 text-white flex flex-wrap items-center gap-2">
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-black uppercase tracking-wide">
+                {rastreioMudo.length} pedido{rastreioMudo.length === 1 ? '' : 's'} enviado{rastreioMudo.length === 1 ? '' : 's'} com rastreio MUDO (15+ dias sem evento)
+              </span>
+              <span className="ml-auto text-[11px] font-bold bg-white/20 rounded-full px-3 py-1 uppercase tracking-wide">
+                silêncio não é entrega
+              </span>
+            </div>
+            <div className="divide-y divide-orange-200 max-h-[20rem] overflow-y-auto">
+              {rastreioMudo.map((p) => (
+                <div key={p.orderId} className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  <span className="font-mono font-black text-orange-900">#{p.numero}</span>
+                  <span className="text-slate-700">{p.cliente || 'Cliente'}</span>
+                  <span className="text-[11px] text-slate-500">
+                    {(p.pacotesMudos || []).map((m: any) => `${m.storeCode}: ${m.trackingCode}`).join(' · ')}
+                  </span>
+                  <span className="ml-auto text-[11px] font-bold text-orange-700">{p.diasMudo} dias mudo</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ⏱ GARGALO POR LOJA — média de horas nascer→bipar e nascer→enviar
+            (30d). Quem está no topo é quem atrasa a rede. */}
+        {gargalo.length > 0 && (
+          <div className="rounded-xl border-2 border-slate-300 bg-white overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setGargaloAberto((v) => !v)}
+              className="w-full px-4 py-2.5 bg-slate-700 hover:bg-slate-800 text-white flex items-center gap-2 text-left transition"
+            >
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-black uppercase tracking-wide">Gargalo por loja — 30 dias</span>
+              <span className="ml-auto text-[11px] font-bold bg-white/20 rounded-full px-3 py-1 uppercase tracking-wide">
+                {gargaloAberto ? 'ocultar ↑' : 'ver ↓'}
+              </span>
+            </button>
+            {gargaloAberto && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[11px] uppercase text-slate-500 border-b border-slate-200">
+                      <th className="px-4 py-2">Loja</th>
+                      <th className="px-2 py-2 text-right">Cards</th>
+                      <th className="px-2 py-2 text-right">h até bipar</th>
+                      <th className="px-2 py-2 text-right">h até enviar</th>
+                      <th className="px-2 py-2 text-right">Pendentes</th>
+                      <th className="px-4 py-2 text-right">Mais velho parado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {gargalo.map((l) => (
+                      <tr key={l.storeCode} className={l.maisVelhoPendenteH >= 72 ? 'bg-red-50' : ''}>
+                        <td className="px-4 py-1.5 font-bold text-slate-800">{l.storeCode} {l.storeName}</td>
+                        <td className="px-2 py-1.5 text-right">{l.cards}</td>
+                        <td className="px-2 py-1.5 text-right">{l.horasAteBipar ?? '—'}</td>
+                        <td className="px-2 py-1.5 text-right font-bold">{l.horasAteEnviar ?? '—'}</td>
+                        <td className="px-2 py-1.5 text-right">{l.pendentes}</td>
+                        <td className="px-4 py-1.5 text-right">{l.maisVelhoPendenteH >= 24 ? `${Math.floor(l.maisVelhoPendenteH / 24)}d` : `${l.maisVelhoPendenteH}h`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 

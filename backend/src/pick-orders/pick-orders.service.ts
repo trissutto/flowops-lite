@@ -2112,6 +2112,75 @@ export class PickOrdersService {
     return out;
   }
 
+  /**
+   * GARGALO POR LOJA (29/08, sugestão nº 19) — tempo médio do card por loja
+   * nos últimos N dias: nascer→finish (bipagem) e nascer→envio, mais o que
+   * está parado agora. O finish vem do log de auditoria `separation.finished`
+   * (o card não guarda separatedAt); o envio usa o updatedAt do shipped (o
+   * último toque de um card despachado é a marcação de envio — mesma régua
+   * da aba Enviados).
+   */
+  async gargaloPorLoja(dias = 30) {
+    const desde = new Date(Date.now() - Math.min(Math.max(dias, 7), 120) * 86400000);
+    const cards: any[] = await this.prisma.pickOrder.findMany({
+      where: { createdAt: { gte: desde } },
+      select: {
+        id: true, storeId: true, status: true, createdAt: true, updatedAt: true,
+        isTransfer: true, store: { select: { code: true, name: true } },
+      },
+    });
+    if (!cards.length) return { dias, lojas: [] };
+    const finishLogs: any[] = await this.prisma.integrationLog.findMany({
+      where: { source: 'pick-order', event: 'separation.finished', createdAt: { gte: desde } },
+      select: { payload: true, createdAt: true },
+    });
+    const finishPorPick = new Map<string, Date>();
+    for (const l of finishLogs) {
+      try {
+        const pid = JSON.parse(l.payload || '{}')?.pickOrderId;
+        if (pid && !finishPorPick.has(pid)) finishPorPick.set(pid, l.createdAt);
+      } catch { /* payload torto não derruba o agregado */ }
+    }
+    const porLoja = new Map<string, any>();
+    for (const c of cards) {
+      const key = c.store?.code ?? c.storeId;
+      const agg = porLoja.get(key) ?? {
+        storeCode: c.store?.code, storeName: c.store?.name,
+        cards: 0, enviados: 0, pendentes: 0,
+        somaHFinish: 0, nFinish: 0, somaHEnvio: 0, nEnvio: 0, maisVelhoPendenteH: 0,
+      };
+      agg.cards++;
+      const fin = finishPorPick.get(c.id);
+      if (fin) {
+        agg.somaHFinish += (fin.getTime() - c.createdAt.getTime()) / 3_600_000;
+        agg.nFinish++;
+      }
+      if (c.status === 'shipped') {
+        agg.enviados++;
+        agg.somaHEnvio += (c.updatedAt.getTime() - c.createdAt.getTime()) / 3_600_000;
+        agg.nEnvio++;
+      } else {
+        agg.pendentes++;
+        const h = (Date.now() - c.createdAt.getTime()) / 3_600_000;
+        if (h > agg.maisVelhoPendenteH) agg.maisVelhoPendenteH = h;
+      }
+      porLoja.set(key, agg);
+    }
+    const lojas = [...porLoja.values()]
+      .map((a) => ({
+        storeCode: a.storeCode,
+        storeName: a.storeName,
+        cards: a.cards,
+        enviados: a.enviados,
+        pendentes: a.pendentes,
+        horasAteBipar: a.nFinish ? Number((a.somaHFinish / a.nFinish).toFixed(1)) : null,
+        horasAteEnviar: a.nEnvio ? Number((a.somaHEnvio / a.nEnvio).toFixed(1)) : null,
+        maisVelhoPendenteH: Math.round(a.maisVelhoPendenteH),
+      }))
+      .sort((x, y) => (y.horasAteEnviar ?? 0) - (x.horasAteEnviar ?? 0));
+    return { dias, lojas };
+  }
+
   async listMine(storeId: string, opts?: { all?: boolean; from?: string; to?: string }) {
     const where: any = { storeId };
     /**
