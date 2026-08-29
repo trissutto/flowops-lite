@@ -321,3 +321,28 @@ describe('descontoFolha — o "faltou 1, perdeu 2"', () => {
     expect(descontoFolha([{ data: '2026-08-25', tipo: 'CHUTE' }]).diasTotais).toBe(0);
   });
 });
+
+describe('FOLGA de escala — o "FALTA que na verdade era folga"', () => {
+  it('abona o dia inteiro sem descontar nada', () => {
+    const t = tipoEvento('FOLGA')!;
+    expect(t.abonaJornada).toBe(true);
+    expect(t.descontaSalario).toBe(false);
+    expect(t.descontaDSR).toBe(false);
+    expect(t.contaArt130).toBe(false);
+    expect(t.exigeDocumento).toBe(false);
+    expect(minutosAbatidos({ tipo: 'FOLGA', diaInteiro: true }, JORNADA)).toBe(480);
+  });
+
+  // São coisas diferentes: FOLGA é escala, FOLGA_COMPENSATORIA é banco de horas.
+  it('não se confunde com a folga compensatória', () => {
+    expect(tipoEvento('FOLGA')!.admiteParcial).toBe(false);
+    expect(tipoEvento('FOLGA_COMPENSATORIA')!.admiteParcial).toBe(true);
+  });
+
+  it('sai como abonado e não como falta', () => {
+    const r = efeitosDoDia([{ tipo: 'FOLGA', diaInteiro: true }], JORNADA);
+    expect(r.abonado).toBe(true);
+    expect(r.faltaInjustificada).toBe(false);
+    expect(r.minAbatidos).toBe(480);
+  });
+});

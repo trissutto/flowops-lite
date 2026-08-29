@@ -356,7 +356,7 @@ export class RhEventosService {
           dataFim: { gte: inicio },
         },
         select: {
-          tipo: true, dataInicio: true, dataFim: true,
+          id: true, tipo: true, dataInicio: true, dataFim: true,
           diaInteiro: true, horaInicio: true, horaFim: true,
         },
       });
@@ -373,6 +373,7 @@ export class RhEventosService {
       for (let d = new Date(ini); d <= fimE; d.setUTCDate(d.getUTCDate() + 1)) {
         const chave = d.toISOString().slice(0, 10);
         (mapa[chave] ||= []).push({
+          id: l.id,
           tipo: l.tipo,
           diaInteiro: l.diaInteiro,
           horaInicio: l.horaInicio,

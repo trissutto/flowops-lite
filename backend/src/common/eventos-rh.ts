@@ -282,6 +282,28 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     nota: 'Convive com Seller.dataInicioFerias/Fim até o dono mandar aposentar o legado.',
   },
   {
+    // FOLGA DE ESCALA — o dia não era pra ser trabalhado, ponto.
+    //
+    // Diferente da FOLGA_COMPENSATORIA, que é troca de banco de horas. Esta
+    // existe porque o `horarioTrabalho` do cadastro é uma semana FIXA, e a
+    // escala real do varejo gira: o sábado que o cadastro diz que ela trabalha
+    // é o sábado em que ela folgou. Sem este tipo, corrigir isso obrigava a
+    // mexer no cadastro da funcionária — e mexer no cadastro reescreve o
+    // passado inteiro dela, não só aquele dia.
+    codigo: 'FOLGA',
+    label: 'Folga (escala)',
+    grupo: 'programado',
+    abonaJornada: true,
+    contaComoTrabalhado: false,
+    descontaSalario: false,
+    descontaDSR: false,
+    contaArt130: false,
+    exigeDocumento: false,
+    admiteParcial: false,
+    esocial: null,
+    nota: 'O dia não era de trabalho. Use pra corrigir FALTA que na verdade era folga.',
+  },
+  {
     codigo: 'FOLGA_COMPENSATORIA',
     label: 'Folga compensatória (banco de horas)',
     grupo: 'programado',
@@ -441,6 +463,8 @@ export interface JanelaPrevista {
 
 /** Evento reduzido ao que a conta do dia precisa saber. */
 export interface EventoDoDia {
+  /** Só pra tela poder REMOVER o evento do dia. A conta não usa. */
+  id?: string;
   tipo: string;
   diaInteiro: boolean;
   horaInicio?: string | null;
