@@ -489,6 +489,12 @@ model Order {
   // venda" no acerto: a loja que o roteamento escolher pra enviar (fornecedora)
   // cobra DESTA loja, não da loja-canal 13. NULL em todo pedido não-online.
   sellerStoreCode        String?   @map("seller_store_code")
+  // POLÍTICA DE FRETE (29/08): pedido DENTRO de SP em 2+ pacotes só ENVIA
+  // depois que a matriz decide — liberar os fretes (carimba aqui) ou juntar
+  // numa âncora (aí vira 1 pacote e o carimbo nem é preciso). Fora do estado
+  // não passa por aqui: a juntada é obrigatória no routing.
+  pacotesLiberadosEm     DateTime? @map("pacotes_liberados_em")
+  pacotesLiberadosPor    String?   @map("pacotes_liberados_por")
   // Resgate do PIX não pago (14/08): quando o toque de 30min foi entregue ao
   // n8n. Preenchido = nunca mais toca esse pedido (um lembrete só — segundo
   // toque vira cobrança). Null com o PIX vencido = janela passou em silêncio.

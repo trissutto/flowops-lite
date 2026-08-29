@@ -111,6 +111,21 @@ type StuckRow = {
   envioGeneratedAt?: string | null;
 };
 
+/** PACOTES A DECIDIR (política de frete 29/08) — pedido DENTRO de SP que
+ *  ficou em 2+ pacotes pra cliente. O envio espera a matriz: LIBERAR os
+ *  fretes ou JUNTAR numa âncora. Separação/bipe das lojas seguem normais. */
+type PacotePendente = {
+  orderId: string;
+  wcOrderId: number | null;
+  numero: string;
+  cliente: string | null;
+  metodo: string | null;
+  criadoEm: string;
+  pecas: number;
+  pacotes: Array<{ storeCode: string; storeName: string; status: string; pecas: number }>;
+  ancoraSugerida: string | null;
+};
+
 // Período De/Até (padrão da casa: datas livres + atalhos — nunca dropdown fixo)
 const diasAtrasISO = (n: number) => {
   const d = new Date();
@@ -146,6 +161,9 @@ export default function RemessasAdminPage() {
   const [paradas, setParadas] = useState<StuckRow[]>([]);
   const [mutiraoBusy, setMutiraoBusy] = useState<string | null>(null);
   const [mutiraoAberto, setMutiraoAberto] = useState(false);
+  // PACOTES A DECIDIR — pedido dentro de SP em 2+ pacotes (política 29/08).
+  const [pacotes, setPacotes] = useState<PacotePendente[]>([]);
+  const [pacoteBusy, setPacoteBusy] = useState<string | null>(null);
   // Filtro rápido "só sem NF-e" — em cima do resultado atual da tabela.
   const [soSemNf, setSoSemNf] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -242,7 +260,7 @@ export default function RemessasAdminPage() {
       if (de) params.set('de', de);
       if (ate) params.set('ate', ate);
 
-      const [list, k, abertas, paradas] = await Promise.all([
+      const [list, k, abertas, paradas, pacotesResp] = await Promise.all([
         api<ShipmentRow[]>(`/realignment/shipments/admin/all?${params.toString()}`),
         api<KPIs>('/realignment/shipments/admin/kpis'),
         // Caixas ABERTAS da rede inteira, SEM recorte de data — a caixa
@@ -253,7 +271,11 @@ export default function RemessasAdminPage() {
         // loja até alguém dar entrada. 3 dias é o corte porque o ciclo normal
         // medido (639 recebidas em 30d) é de 4,1 dias.
         api<StuckRow[]>('/realignment/shipments/admin/paradas?minDias=3').catch(() => [] as StuckRow[]),
+        // PACOTES A DECIDIR: pedido dentro de SP em 2+ pacotes — o envio
+        // espera o carimbo da matriz (liberar ou juntar). Política 29/08.
+        api<{ itens: PacotePendente[] }>('/orders/pacotes/pendentes').catch(() => ({ itens: [] as PacotePendente[] })),
       ]);
+      setPacotes(Array.isArray(pacotesResp?.itens) ? pacotesResp.itens : []);
       setRows(Array.isArray(list) ? list : []);
       setKpis(k);
       const agora = Date.now();
@@ -311,6 +333,41 @@ export default function RemessasAdminPage() {
    * Os dois caminhos usam a MESMA rotina que a loja usaria; a matriz só não
    * depende do login dela. Confirma antes: mexem em estoque e não desfazem.
    */
+  /**
+   * PACOTES A DECIDIR (política 29/08) — a decisão da matriz num clique:
+   *  'liberar' → carimba o pedido: pode sair em N pacotes (N fretes).
+   *  'juntar'  → âncora sugerida (loja com mais peças): as outras mandam a
+   *              caixa pra ela e a cliente recebe 1 pacote só.
+   */
+  const decidirPacotes = async (p: PacotePendente, acao: 'liberar' | 'juntar') => {
+    const lojas = p.pacotes.map((x) => `${x.storeCode} ${x.storeName} (${x.pecas} pç)`).join(' + ');
+    const msg =
+      acao === 'liberar'
+        ? `LIBERAR o pedido #${p.numero} em ${p.pacotes.length} pacotes?\n\n${lojas}\n\n` +
+          `Cada loja posta o dela — ${p.pacotes.length} fretes pro mesmo endereço.`
+        : `JUNTAR o pedido #${p.numero} na loja ${p.ancoraSugerida}?\n\n${lojas}\n\n` +
+          `As outras lojas mandam a caixa pra ${p.ancoraSugerida} e a cliente recebe 1 pacote só.`;
+    if (!confirm(msg)) return;
+    setPacoteBusy(p.orderId);
+    try {
+      if (acao === 'liberar') {
+        await api(`/orders/${p.orderId}/pacotes/liberar`, { method: 'POST', body: JSON.stringify({}) });
+      } else {
+        if (!p.wcOrderId || !p.ancoraSugerida) throw new Error('Sem âncora sugerida — junte pela tela do pedido.');
+        await api(`/orders/wc/${p.wcOrderId}/juntar`, {
+          method: 'POST',
+          body: JSON.stringify({ anchorStoreCode: p.ancoraSugerida }),
+        });
+      }
+      setPacotes((prev) => prev.filter((x) => x.orderId !== p.orderId));
+      void load();
+    } catch (e: any) {
+      alert(`Não deu pra decidir o pedido #${p.numero}: ${e?.message ?? 'falha'}`);
+    } finally {
+      setPacoteBusy(null);
+    }
+  };
+
   const resolverParada = async (p: StuckRow, acao: 'chegou' | 'nunca-saiu') => {
     const msg =
       acao === 'chegou'
@@ -689,6 +746,54 @@ export default function RemessasAdminPage() {
                   … e mais {abertasParadas.length - 10}. Clique no KPI “Em montagem” pra ver todas.
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* 📮 PACOTES A DECIDIR — pedido DENTRO de SP que dividiu em 2+
+            pacotes. A regra de ouro é economizar frete: fora do estado o
+            sistema junta sozinho; dentro de SP a decisão é da matriz, caso a
+            caso (dono, 29/08). O envio espera; a separação nas lojas não. */}
+        {pacotes.length > 0 && (
+          <div className="rounded-xl border-2 border-sky-300 bg-sky-50 overflow-hidden">
+            <div className="px-4 py-2.5 bg-sky-600 text-white flex flex-wrap items-center gap-2">
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-black uppercase tracking-wide">
+                {pacotes.length} pedido{pacotes.length === 1 ? '' : 's'} em 2+ pacotes esperando decisão
+              </span>
+              <span className="ml-auto text-[11px] font-bold bg-white/20 rounded-full px-3 py-1 uppercase tracking-wide">
+                liberar os fretes ou juntar
+              </span>
+            </div>
+            <div className="divide-y divide-sky-200 max-h-[28rem] overflow-y-auto">
+              {pacotes.map((p) => (
+                <div key={p.orderId} className="px-4 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+                  <span className="font-mono font-black text-sky-900">#{p.numero}</span>
+                  <span className="text-slate-700">{p.cliente || 'Cliente'}</span>
+                  <span className="text-[11px] text-slate-500">
+                    {p.pacotes.map((x) => `${x.storeCode} (${x.pecas} pç)`).join(' + ')}
+                    {p.metodo ? ` · ${p.metodo}` : ''}
+                  </span>
+                  <span className="ml-auto flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={pacoteBusy === p.orderId || !p.ancoraSugerida}
+                      onClick={() => decidirPacotes(p, 'juntar')}
+                      className="rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-[12px] font-bold px-3 py-1.5"
+                    >
+                      Juntar na {p.ancoraSugerida ?? '—'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pacoteBusy === p.orderId}
+                      onClick={() => decidirPacotes(p, 'liberar')}
+                      className="rounded-lg border-2 border-sky-600 text-sky-800 hover:bg-sky-100 disabled:opacity-50 text-[12px] font-bold px-3 py-1.5"
+                    >
+                      Liberar {p.pacotes.length} fretes
+                    </button>
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         )}

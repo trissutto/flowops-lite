@@ -200,7 +200,7 @@ describe('RoutingEngine', () => {
     ];
     const GRUPO = ['01', '14', '02'];
 
-    test('trio cobre entre si → junta na loja com MAIS peças; as outras mandam pra ela', () => {
+    test('trio cobre entre si → âncora é a mais À FRENTE na rota (carga só anda pra frente)', () => {
       const ctx: RoutingContext = {
         items: [
           { sku: 'A', quantity: 2 }, // só PG tem
@@ -219,18 +219,38 @@ describe('RoutingEngine', () => {
       const r = engine.route(ctx);
       expect(r.success).toBe(true);
       expect(r.strategy).toBe('multi-store');
-      // PG tem 2 peças, Santos 1 → âncora = Praia Grande.
-      expect(r.consolidateStoreCode).toBe('14');
-      const ancora = r.assignments.find((a) => a.storeCode === '14');
-      const feeder = r.assignments.find((a) => a.storeCode === '02');
+      // PG tem MAIS peças (2 vs 1), mas o carro coleta PG ANTES de Santos:
+      // Santos não consegue mandar pra trás → âncora = Santos, sempre a
+      // mais à frente na rota entre as envolvidas.
+      expect(r.consolidateStoreCode).toBe('02');
+      const ancora = r.assignments.find((a) => a.storeCode === '02');
+      const feeder = r.assignments.find((a) => a.storeCode === '14');
       expect(ancora?.isTransfer ?? false).toBe(false);
       expect(feeder?.isTransfer).toBe(true);
-      expect(feeder?.transferToStoreCode).toBe('14');
+      expect(feeder?.transferToStoreCode).toBe('02');
       // Campinas fica de fora do plano.
       expect(r.assignments.some((a) => a.storeCode === '07')).toBe(false);
     });
 
-    test('empate de peças → âncora é quem vem primeiro no grupo (Itanhaém)', () => {
+    test('Itanhaém + Santos → âncora Santos (fim da rota), nunca Itanhaém', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 3 }, // Itanhaém tem MAIS peças...
+          { sku: 'B', quantity: 1 },
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '01', sku: 'A', availableQty: 3 },
+          { storeCode: '02', sku: 'B', availableQty: 1 },
+        ],
+        juntadaGroup: GRUPO,
+      };
+      const r = engine.route(ctx);
+      // ...e mesmo assim a âncora é Santos: o carro TERMINA lá.
+      expect(r.consolidateStoreCode).toBe('02');
+    });
+
+    test('Itanhaém + Praia Grande (sem Santos) → âncora PG (a mais à frente entre as duas)', () => {
       const ctx: RoutingContext = {
         items: [
           { sku: 'A', quantity: 1 },
@@ -239,12 +259,104 @@ describe('RoutingEngine', () => {
         stores: litoral,
         stock: [
           { storeCode: '01', sku: 'A', availableQty: 1 },
-          { storeCode: '02', sku: 'B', availableQty: 1 },
+          { storeCode: '14', sku: 'B', availableQty: 1 },
         ],
         juntadaGroup: GRUPO,
       };
       const r = engine.route(ctx);
-      expect(r.consolidateStoreCode).toBe('01');
+      expect(r.consolidateStoreCode).toBe('14');
+    });
+
+    test('REGRA 2.5: trio + loja de fora → lojas do trio juntam entre si (menos pacotes)', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 1 }, // Itanhaém
+          { sku: 'B', quantity: 1 }, // Santos
+          { sku: 'C', quantity: 1 }, // só Campinas
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '01', sku: 'A', availableQty: 1 },
+          { storeCode: '02', sku: 'B', availableQty: 1 },
+          { storeCode: '07', sku: 'C', availableQty: 5 },
+        ],
+        shippingCep: '01310-000', // dentro de SP: sem consolidação obrigatória
+        juntadaGroup: GRUPO,
+      };
+      const r = engine.route(ctx);
+      expect(r.success).toBe(true);
+      // Ita e Santos juntam de carro (âncora Santos); Campinas é o 2º pacote.
+      const ita = r.assignments.find((a) => a.storeCode === '01');
+      const santos = r.assignments.find((a) => a.storeCode === '02');
+      const campinas = r.assignments.find((a) => a.storeCode === '07');
+      expect(ita?.isTransfer).toBe(true);
+      expect(ita?.transferToStoreCode).toBe('02');
+      expect(santos?.isTransfer ?? false).toBe(false);
+      expect(campinas?.isTransfer ?? false).toBe(false);
+      expect(r.consolidateStoreCode).toBe('02');
+      // Cliente recebe 2 pacotes (Santos + Campinas), não 3.
+      expect(r.assignments.filter((a) => !a.isTransfer)).toHaveLength(2);
+    });
+
+    test('CONSOLIDAÇÃO OBRIGATÓRIA (fora do estado): tudo vira 1 pacote numa âncora', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 1 }, // Itanhaém
+          { sku: 'C', quantity: 3 }, // só Campinas (mais peças)
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '01', sku: 'A', availableQty: 1 },
+          { storeCode: '07', sku: 'C', availableQty: 5 },
+        ],
+        shippingCep: '80000-000', // Paraná — fora do estado
+        juntadaGroup: GRUPO,
+        consolidacaoObrigatoria: true,
+      };
+      const r = engine.route(ctx);
+      expect(r.success).toBe(true);
+      // Campinas tem mais peças (3 vs 1) e ninguém alcança ninguém de carro
+      // (Itanhaém → Campinas não é rota) → âncora = Campinas; Itanhaém manda
+      // remessa interna. Cliente recebe 1 pacote.
+      expect(r.consolidateStoreCode).toBe('07');
+      const clientes = r.assignments.filter((a) => !a.isTransfer);
+      expect(clientes).toHaveLength(1);
+      expect(clientes[0].storeCode).toBe('07');
+      const feeder = r.assignments.find((a) => a.storeCode === '01');
+      expect(feeder?.isTransfer).toBe(true);
+      expect(feeder?.transferToStoreCode).toBe('07');
+    });
+
+    test('CONSOLIDAÇÃO OBRIGATÓRIA com 2 lojas do trio + 1 fora: âncora no trio (feeders de carro são de graça)', () => {
+      const ctx: RoutingContext = {
+        items: [
+          { sku: 'A', quantity: 1 }, // Itanhaém
+          { sku: 'B', quantity: 1 }, // Praia Grande
+          { sku: 'C', quantity: 1 }, // só Campinas
+        ],
+        stores: litoral,
+        stock: [
+          { storeCode: '01', sku: 'A', availableQty: 1 },
+          { storeCode: '14', sku: 'B', availableQty: 1 },
+          { storeCode: '07', sku: 'C', availableQty: 5 },
+        ],
+        shippingCep: '80000-000',
+        juntadaGroup: GRUPO,
+        consolidacaoObrigatoria: true,
+      };
+      const r = engine.route(ctx);
+      expect(r.success).toBe(true);
+      // PG recebe Itanhaém DE CARRO (grátis) e só Campinas paga remessa →
+      // âncora PG (1 remessa paga) vence Campinas (2 pagas).
+      expect(r.consolidateStoreCode).toBe('14');
+      const clientes = r.assignments.filter((a) => !a.isTransfer);
+      expect(clientes).toHaveLength(1);
+      expect(clientes[0].storeCode).toBe('14');
+      for (const a of r.assignments) {
+        if (a.storeCode === '14') continue;
+        expect(a.isTransfer).toBe(true);
+        expect(a.transferToStoreCode).toBe('14');
+      }
     });
 
     test('trio NÃO cobre → segue o greedy normal, sem juntada', () => {
