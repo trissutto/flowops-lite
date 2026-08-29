@@ -2,18 +2,23 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&family=IBM+Plex+Mono:wght@400;600;700&display=swap">
 <style>
-  /* ── Tokens SEMÁFORO (frontend/tailwind.config.ts, escolhidos 21/08/2026) ──
-     Página de tema ÚNICO claro por decisão: o PDV é tema claro por convenção
-     e o semáforo é um sistema cinza/preto onde cor = estado. Tudo pintado
-     explicitamente. */
+  /* ── Tokens SEMÁFORO (frontend/tailwind.config.ts, 21/08) + PALETA DE PAPÉIS
+     ampliada por ordem do dono em 29/08: mais cor pra destaque, mas cada cor
+     com PAPEL FIXO — cor nunca é decoração aleatória.
+     Página de tema ÚNICO claro (convenção do PDV). */
   :root{
     --ground:#F6F6F5; --surface:#FFFFFF; --surface-2:#FAFAF9;
     --ink:#17181A; --ink-soft:#6C6E73; --ink-faint:#9A9CA1;
     --line:#E2E3E5; --line-soft:#EDEEEF;
     --action:#2B2D31; --action-ink:#FFFFFF;
-    --crit:#C4291A; --crit-soft:#FBE9E7;
-    --warn:#B4720F; --warn-soft:#FBF1DE;
-    --ok:#2E9E5B; --ok-soft:#E7F5ED;
+    /* estados */
+    --crit:#C4291A; --crit-soft:#FBE9E7; --crit-line:#F2C8C2;
+    --warn:#B4720F; --warn-soft:#FBF1DE; --warn-line:#EDD9B4;
+    --ok:#2E9E5B;  --ok-deep:#1D6E3E; --ok-soft:#E7F5ED; --ok-line:#CBE9D6;
+    /* papéis novos (29/08) */
+    --info:#2E75B6; --info-deep:#1F4E79; --info-soft:#E9F1F9; --info-line:#C6DAEE;   /* azul da casa: promoção · informação */
+    --gold:#B8912B; --gold-deep:#8C7325; --gold-soft:#FBF6E6; --gold-line:#E7D9A8;   /* dourado Lurd's: campanha · marca */
+    --online:#6B4FA8; --online-soft:#F0EBF9; --online-line:#D8CBEE;                  /* roxo: venda online · trilho guiado */
     --r-card:7px; --r-field:5px; --row:46px;
     --font-ui:'Archivo',system-ui,-apple-system,'Segoe UI',sans-serif;
     --font-mono:'IBM Plex Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
@@ -30,345 +35,295 @@
   .mono{font-family:var(--font-mono)}
   .num{font-variant-numeric:tabular-nums}
 
-  /* ── Página ── */
-  .page{max-width:1360px; margin:0 auto; padding:28px 20px 64px}
+  .page{max-width:1400px; margin:0 auto; padding:28px 20px 64px}
   .intro{display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px}
   .intro .eyebrow{font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 6px}
   .intro h1{font-size:34px; font-weight:900; letter-spacing:-.01em; margin:0; text-wrap:balance}
-  .intro p{margin:6px 0 0; color:var(--ink-soft); max-width:62ch}
+  .intro p{margin:6px 0 0; color:var(--ink-soft); max-width:64ch}
   .intro-actions{display:flex; gap:10px; flex-wrap:wrap}
-  .btn-demo{
-    position:relative;
-    background:var(--action); color:var(--action-ink); border:1px solid var(--action);
-    border-radius:var(--r-field); padding:12px 18px; font-size:14px; font-weight:700;
-  }
+  .btn-demo{position:relative; background:var(--action); color:var(--action-ink); border:1px solid var(--action);
+    border-radius:var(--r-field); padding:12px 18px; font-size:14px; font-weight:700}
   .btn-demo:hover{background:#3a3d42}
   .btn-ghost-top{background:var(--surface); color:var(--ink); border:1px solid var(--line);
     border-radius:var(--r-field); padding:12px 18px; font-size:14px; font-weight:600}
   .btn-ghost-top:hover{border-color:var(--ink-faint)}
 
-  /* ── Moldura da tela ── */
   .screen-scroll{overflow-x:auto; padding-bottom:6px}
   .screen{
-    position:relative; min-width:1180px; max-width:1320px; margin:0 auto;
+    position:relative; min-width:1240px; max-width:1360px; margin:0 auto;
     background:var(--ground); border:1px solid var(--line); border-radius:10px;
     box-shadow:0 1px 2px rgba(23,24,26,.05), 0 12px 32px rgba(23,24,26,.09);
     overflow:hidden;
   }
 
-  /* ── Header da tela ── */
-  .hd{
-    display:flex; align-items:center; gap:18px; padding:12px 18px;
-    background:var(--surface); border-bottom:1px solid var(--line);
-  }
+  /* header */
+  .hd{display:flex; align-items:center; gap:18px; padding:12px 18px; background:var(--surface); border-bottom:1px solid var(--line)}
   .brand{display:flex; align-items:baseline; gap:8px; white-space:nowrap}
-  .brand .logo{font-weight:900; font-size:19px; letter-spacing:-.01em}
+  .brand .logo{font-weight:900; font-size:19px; letter-spacing:-.01em; color:var(--gold-deep)}
   .brand .sub{font-size:10px; font-weight:700; letter-spacing:.18em; color:var(--ink-faint)}
   .hd .store{font-size:13px; font-weight:700; color:var(--ink-soft); white-space:nowrap}
   .hd .store b{color:var(--ink)}
   .hd-right{margin-left:auto; display:flex; align-items:center; gap:10px; white-space:nowrap}
-  .chip{
-    display:inline-flex; align-items:center; gap:6px;
-    border-radius:999px; padding:5px 11px; font-size:12px; font-weight:700;
-    border:1px solid var(--line); background:var(--surface-2); color:var(--ink-soft);
-  }
+  .chip{display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 11px; font-size:12px; font-weight:700;
+    border:1px solid var(--line); background:var(--surface-2); color:var(--ink-soft)}
   .chip .dot{width:7px; height:7px; border-radius:50%; flex:none}
-  .chip-ok{background:var(--ok-soft); border-color:#CBE9D6; color:#1D6E3E}
+  .chip-ok{background:var(--ok-soft); border-color:var(--ok-line); color:var(--ok-deep)}
   .chip-ok .dot{background:var(--ok)}
-  .chip-warn{background:var(--warn-soft); border-color:#EDD9B4; color:#8A5708}
-  .chip-crit{background:var(--crit-soft); border-color:#F2C8C2; color:#9E2114}
 
-  /* ── Barra de pendências (padrão /minha-loja: vive FECHADA) ── */
+  /* pendências */
   .pend{position:relative; border-bottom:1px solid var(--line)}
-  .pend-bar{
-    width:100%; display:flex; align-items:center; gap:12px;
-    background:var(--warn-soft); border:0; border-left:4px solid var(--warn);
-    padding:9px 18px; font-size:13px; font-weight:700; color:#7A4D06; text-align:left;
-  }
+  .pend-bar{width:100%; display:flex; align-items:center; gap:12px; background:var(--warn-soft); border:0; border-left:4px solid var(--warn);
+    padding:9px 18px; font-size:13px; font-weight:700; color:#7A4D06; text-align:left}
   .pend-bar:hover{filter:brightness(.985)}
   .pend-bar .crit-tag{color:var(--crit); font-weight:900}
   .pend-bar .open-hint{margin-left:auto; font-weight:600; color:var(--ink-soft); font-size:12px}
   .pend-list{display:none; background:var(--surface); border-top:1px solid var(--line-soft)}
   .pend.aberta .pend-list{display:block}
-  .pend-item{
-    display:flex; align-items:center; gap:12px; padding:0 18px; height:var(--row);
-    border-bottom:1px solid var(--line-soft); font-size:13.5px;
-  }
+  .pend-item{display:flex; align-items:center; gap:12px; padding:0 18px; height:var(--row); border-bottom:1px solid var(--line-soft); font-size:13.5px}
   .pend-item:last-child{border-bottom:0}
-  .pend-item .tag{flex:none; width:92px; font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase;
-    text-align:center; padding:4px 0; border-radius:4px}
+  .pend-item .tag{flex:none; width:92px; font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; text-align:center; padding:4px 0; border-radius:4px}
   .tag-crit{background:var(--crit-soft); color:var(--crit)}
   .tag-warn{background:var(--warn-soft); color:var(--warn)}
-  .tag-neutro{background:var(--line-soft); color:var(--ink-soft)}
+  .tag-info{background:var(--info-soft); color:var(--info)}
   .pend-item .quem{font-weight:700}
   .pend-item .idade{margin-left:auto; color:var(--ink-faint); font-size:12.5px}
-  .pend-item .acao{flex:none; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-field);
-    padding:6px 12px; font-size:12px; font-weight:700; color:var(--ink)}
+  .pend-item .acao{flex:none; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-field); padding:6px 12px; font-size:12px; font-weight:700; color:var(--ink)}
   .pend-item .acao:hover{border-color:var(--ink-faint)}
 
-  /* ── Corpo ── */
-  .body{display:grid; grid-template-columns:1fr 396px; gap:0}
+  /* corpo com MENU LATERAL */
+  .body{display:grid; grid-template-columns:78px 1fr 396px; gap:0}
 
-  /* Coluna esquerda: bipe + carrinho */
-  .left{padding:18px; display:flex; flex-direction:column; gap:14px; min-width:0}
+  .menu{position:relative; background:var(--surface); border-right:1px solid var(--line); padding:10px 6px; display:flex; flex-direction:column; gap:2px}
+  .m-item{position:relative; display:flex; flex-direction:column; align-items:center; gap:2px; padding:8px 2px 7px;
+    border:0; background:transparent; border-radius:6px; color:var(--ink-soft); width:100%}
+  .m-item .ic{font-size:16px; line-height:1}
+  .m-item .lb{font-size:9px; font-weight:800; letter-spacing:.03em; text-transform:uppercase}
+  .m-item:hover{background:var(--surface-2); color:var(--ink)}
+  .m-item.on{background:var(--action); color:var(--action-ink)}
+  .m-badge{position:absolute; top:2px; right:8px; min-width:15px; height:15px; padding:0 4px; border-radius:8px;
+    font-size:9.5px; font-weight:900; color:#fff; display:flex; align-items:center; justify-content:center}
+  .mb-warn{background:var(--warn)} .mb-crit{background:var(--crit)} .mb-info{background:var(--info)}
+  .m-sep{height:1px; background:var(--line-soft); margin:4px 6px}
+
+  .left{padding:16px; display:flex; flex-direction:column; gap:12px; min-width:0}
   .scanrow{display:flex; gap:10px; align-items:stretch}
-  .scan{
-    flex:1; display:flex; align-items:center; gap:12px;
-    background:var(--surface); border:2px solid var(--ink); border-radius:var(--r-card);
-    padding:0 16px; height:58px;
-  }
+  .scan{flex:1; display:flex; align-items:center; gap:12px; background:var(--surface); border:2px solid var(--ink); border-radius:var(--r-card); padding:0 16px; height:58px}
   .scan .cam{font-size:20px; color:var(--ink-soft)}
-  .scan input{
-    border:0; outline:0; flex:1; font-family:var(--font-mono); font-size:16px;
-    color:var(--ink); background:transparent; min-width:0;
-  }
+  .scan input{border:0; outline:0; flex:1; font-family:var(--font-mono); font-size:16px; color:var(--ink); background:transparent; min-width:0}
   .scan input::placeholder{color:var(--ink-faint)}
-  .scan kbd{
-    font-family:var(--font-ui); font-size:11px; font-weight:800; color:var(--ink-soft);
-    border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:2px 7px; background:var(--surface-2);
-  }
-  .btn-troca{
-    position:relative;
-    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
-    min-width:132px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card);
-    font-weight:800; font-size:13.5px; color:var(--ink);
-  }
+  .scan kbd{font-family:var(--font-ui); font-size:11px; font-weight:800; color:var(--ink-soft); border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:2px 7px; background:var(--surface-2)}
+  .btn-troca{position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; min-width:128px;
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card); font-weight:800; font-size:13.5px; color:var(--ink)}
   .btn-troca small{font-size:10.5px; font-weight:700; color:var(--ink-faint); letter-spacing:.04em}
   .btn-troca:hover{border-color:var(--ink-faint)}
 
+  /* CAMPANHA (dourado = comercial/marca) */
+  .campanha{position:relative; display:flex; align-items:center; gap:10px;
+    background:var(--gold-soft); border:1px solid var(--gold-line); border-left:4px solid var(--gold);
+    border-radius:var(--r-card); padding:8px 14px; font-size:13px}
+  .campanha .star{color:var(--gold); font-size:15px}
+  .campanha b{color:var(--gold-deep); font-weight:900; letter-spacing:.02em}
+  .campanha .regra{color:var(--ink-soft); font-size:12px}
+  .campanha .trocar{margin-left:auto; border:1px solid var(--gold-line); background:var(--surface); color:var(--gold-deep);
+    border-radius:var(--r-field); padding:6px 12px; font-size:12px; font-weight:800; white-space:nowrap}
+  .campanha .trocar:hover{border-color:var(--gold)}
+
   .cart{position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card); overflow:hidden}
-  .cart-head{
-    display:flex; align-items:baseline; gap:10px; padding:10px 16px;
-    border-bottom:1px solid var(--line-soft); background:var(--surface-2);
-  }
+  .cart-head{display:flex; align-items:baseline; gap:10px; padding:10px 16px; border-bottom:1px solid var(--line-soft); background:var(--surface-2)}
   .cart-head .qtd{font-size:15px; font-weight:900}
   .cart-head .linhas{font-size:12px; color:var(--ink-faint); font-weight:600}
   .cart-head .limpar{margin-left:auto; font-size:12px; color:var(--ink-faint); font-weight:600}
-  .item{
-    display:flex; align-items:center; gap:14px; padding:0 16px; min-height:var(--row);
-    border-bottom:1px solid var(--line-soft);
-  }
+  .item{display:flex; align-items:center; gap:12px; padding:6px 16px; min-height:var(--row); border-bottom:1px solid var(--line-soft)}
   .item:last-child{border-bottom:0}
   .item.flash{background:var(--ok-soft)}
   @media (prefers-reduced-motion:no-preference){
     .item.flash{animation:apaga 2.4s ease-out forwards}
     @keyframes apaga{0%,55%{background:var(--ok-soft)}100%{background:transparent}}
   }
-  .thumb{
-    flex:none; width:34px; height:34px; border-radius:5px; background:var(--line-soft);
-    display:flex; align-items:center; justify-content:center;
-    font-size:10px; font-weight:900; color:var(--ink-faint); letter-spacing:.02em;
-  }
+  .thumb{flex:none; width:34px; height:34px; border-radius:5px; background:var(--line-soft); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:900; color:var(--ink-faint)}
   .item-info{min-width:0; flex:1}
   .item-nome{font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-  .item-meta{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-soft); margin-top:1px}
+  .item-meta{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-soft); margin-top:1px; flex-wrap:wrap}
   .item-meta .ref{font-family:var(--font-mono); font-weight:600}
-  .badge-promo{
-    position:relative;
-    font-size:10px; font-weight:900; letter-spacing:.06em; color:var(--ink);
-    border:1.5px solid var(--ink); border-radius:4px; padding:1.5px 6px; white-space:nowrap;
-  }
+  .badge{font-size:10px; font-weight:900; letter-spacing:.05em; border-radius:4px; padding:1.5px 6px; white-space:nowrap}
+  .badge-promo{position:relative; background:var(--info-soft); color:var(--info-deep); border:1px solid var(--info-line)}
+  .badge-manual{background:var(--line-soft); color:var(--ink-soft)}
   .economia{font-size:11.5px; font-weight:800; color:var(--ok); white-space:nowrap}
-  .stepper{flex:none; display:flex; align-items:center; gap:0; border:1px solid var(--line); border-radius:var(--r-field); overflow:hidden}
-  .stepper button{width:30px; height:30px; border:0; background:var(--surface-2); font-size:15px; font-weight:700; color:var(--ink-soft)}
+  .acoes-item{position:relative; flex:none; display:flex; gap:4px}
+  .ai{width:28px; height:28px; border-radius:5px; border:1px solid var(--line); background:var(--surface); font-size:12px; font-weight:900; color:var(--ink-soft); display:flex; align-items:center; justify-content:center}
+  .ai:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .ai-forcar{color:var(--info); border-color:var(--info-line); background:var(--info-soft)}
+  .ai-forcar:hover{border-color:var(--info); color:var(--info-deep)}
+  .stepper{flex:none; display:flex; align-items:center; border:1px solid var(--line); border-radius:var(--r-field); overflow:hidden}
+  .stepper button{width:28px; height:28px; border:0; background:var(--surface-2); font-size:15px; font-weight:700; color:var(--ink-soft)}
   .stepper button:hover{background:var(--line-soft); color:var(--ink)}
-  .stepper .q{width:30px; text-align:center; font-weight:800; font-size:13.5px}
-  .prices{flex:none; text-align:right; min-width:106px}
+  .stepper .q{width:28px; text-align:center; font-weight:800; font-size:13.5px}
+  .prices{flex:none; text-align:right; min-width:104px}
   .preco-de{font-size:11px; color:var(--ink-faint); text-decoration:line-through}
   .preco{font-family:var(--font-mono); font-weight:700; font-size:14.5px}
-  .rm{
-    flex:none; width:30px; height:30px; margin-left:6px;
-    border:0; background:transparent; color:var(--ink-faint); font-size:15px; border-radius:5px;
-  }
+  .rm{flex:none; width:28px; height:28px; margin-left:2px; border:0; background:transparent; color:var(--ink-faint); font-size:14px; border-radius:5px}
   .rm:hover{background:var(--crit-soft); color:var(--crit)}
-  .desfazer{
-    display:flex; align-items:center; gap:8px; padding:8px 16px; font-size:12.5px; font-weight:700;
-    color:var(--ink-soft); background:var(--surface-2); border-top:1px solid var(--line-soft);
-  }
+  .desfazer{display:flex; align-items:center; gap:8px; padding:8px 16px; font-size:12.5px; font-weight:700; color:var(--ink-soft); background:var(--surface-2); border-top:1px solid var(--line-soft)}
   .desfazer button{border:1px solid var(--line); background:var(--surface); border-radius:4px; padding:4px 10px; font-size:12px; font-weight:700; color:var(--ink)}
   .desfazer button:hover{border-color:var(--ink-faint)}
+  .desfazer .dica{margin-left:auto; font-weight:600; color:var(--ink-faint); font-size:11.5px}
 
-  /* Coluna direita: painel da venda */
-  .right{
-    border-left:1px solid var(--line); background:var(--surface);
-    padding:16px; display:flex; flex-direction:column; gap:12px;
-  }
+  /* painel direito */
+  .right{border-left:1px solid var(--line); background:var(--surface); padding:14px 16px; display:flex; flex-direction:column; gap:11px}
   .pessoa{position:relative; display:flex; flex-direction:column; gap:8px}
-  .pessoa-chip{
-    display:flex; align-items:center; gap:10px; border:1px solid var(--line); border-radius:var(--r-card);
-    padding:9px 12px; background:var(--surface-2);
-  }
-  .pessoa-chip .avatar{flex:none; width:30px; height:30px; border-radius:50%; background:var(--action); color:var(--action-ink);
-    display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900}
+  .pessoa-chip{display:flex; align-items:center; gap:10px; border:1px solid var(--line); border-radius:var(--r-card); padding:9px 12px; background:var(--surface-2)}
+  .pessoa-chip .avatar{flex:none; width:30px; height:30px; border-radius:50%; background:var(--info); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900}
   .pessoa-chip .nome{font-weight:800; font-size:13.5px; line-height:1.2}
   .pessoa-chip .cpf{font-family:var(--font-mono); font-size:11px; color:var(--ink-soft)}
-  .cashback{
-    margin-left:auto; display:flex; align-items:center; gap:5px;
-    background:var(--ok-soft); color:#1D6E3E; border:1px solid #CBE9D6;
-    font-size:11px; font-weight:800; border-radius:999px; padding:4px 9px; white-space:nowrap;
-  }
-  .vendedora-chip{
-    position:relative;
-    display:flex; align-items:center; gap:8px; border:1px dashed #EDD9B4; border-radius:var(--r-card);
-    padding:8px 12px; background:var(--warn-soft); color:#8A5708; font-size:12.5px; font-weight:700;
-  }
-  .vendedora-chip .acao{margin-left:auto; border:1px solid #EDD9B4; background:var(--surface); color:#8A5708;
-    border-radius:4px; padding:4px 10px; font-size:11.5px; font-weight:800}
+  .cashback{margin-left:auto; display:flex; align-items:center; gap:5px; background:var(--ok-soft); color:var(--ok-deep); border:1px solid var(--ok-line);
+    font-size:11px; font-weight:800; border-radius:999px; padding:4px 9px; white-space:nowrap}
+  .vendedora-chip{position:relative; display:flex; align-items:center; gap:8px; border:1px dashed var(--warn-line); border-radius:var(--r-card);
+    padding:8px 12px; background:var(--warn-soft); color:#8A5708; font-size:12.5px; font-weight:700}
+  .vendedora-chip .acao{margin-left:auto; border:1px solid var(--warn-line); background:var(--surface); color:#8A5708; border-radius:4px; padding:4px 10px; font-size:11.5px; font-weight:800}
 
-  .totais{position:relative; padding:6px 2px 2px; border-top:1px solid var(--line-soft)}
-  .tot-linha{display:flex; justify-content:space-between; font-size:13px; color:var(--ink-soft); padding:2px 0}
+  .totais{position:relative; padding:4px 2px 0; border-top:1px solid var(--line-soft)}
+  .tot-linha{display:flex; align-items:center; justify-content:space-between; font-size:13px; color:var(--ink-soft); padding:2px 0}
   .tot-linha .v{font-family:var(--font-mono); font-weight:600}
-  .total-label{font-size:11px; font-weight:900; letter-spacing:.14em; color:var(--ink-faint); margin-top:8px}
-  .total{
-    font-size:52px; font-weight:900; letter-spacing:-.02em; line-height:1;
-    color:var(--ink); font-variant-numeric:tabular-nums; margin-top:2px;
-  }
-  .total small{font-size:22px; font-weight:900; color:var(--ink-soft); margin-right:4px}
+  .v-ok{color:var(--ok)}
+  .btn-desconto{position:relative; width:100%; display:flex; align-items:center; gap:8px; margin:6px 0 2px;
+    border:1px solid var(--line); background:var(--surface-2); border-radius:var(--r-field); padding:7px 10px; font-size:12.5px; font-weight:800; color:var(--ink)}
+  .btn-desconto small{font-weight:600; color:var(--ink-faint); font-size:10.5px; margin-left:auto; text-align:right}
+  .btn-desconto:hover{border-color:var(--ink-faint)}
+  .total-label{font-size:11px; font-weight:900; letter-spacing:.14em; color:var(--ink-faint); margin-top:6px}
+  .total{font-size:50px; font-weight:900; letter-spacing:-.02em; line-height:1; color:var(--ink); font-variant-numeric:tabular-nums; margin-top:2px}
+  .total small{font-size:21px; font-weight:900; color:var(--ink-soft); margin-right:4px}
 
-  .pag{position:relative; display:flex; flex-direction:column; gap:8px; margin-top:2px}
+  .pag{position:relative; display:flex; flex-direction:column; gap:8px}
   .pag-label{font-size:11px; font-weight:900; letter-spacing:.12em; color:var(--ink-faint)}
   .pag-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px}
-  .pay{
-    display:flex; flex-direction:column; align-items:flex-start; gap:2px;
-    border:1px solid var(--line); background:var(--surface); border-radius:var(--r-card);
-    padding:11px 12px 9px; min-height:58px;
-  }
+  .pay{display:flex; flex-direction:column; align-items:flex-start; gap:2px; border:1px solid var(--line); background:var(--surface);
+    border-radius:var(--r-card); padding:10px 12px 8px; min-height:54px}
   .pay:hover{border-color:var(--ink); box-shadow:inset 0 0 0 1px var(--ink)}
-  .pay .t{font-size:14px; font-weight:900; letter-spacing:.01em}
+  .pay .t{font-size:14px; font-weight:900}
   .pay .s{font-size:10.5px; font-weight:600; color:var(--ink-faint)}
-  .pay-sec{display:flex; gap:8px}
-  .pay-mini{
-    flex:1; border:1px solid var(--line); background:var(--surface-2); border-radius:var(--r-field);
-    padding:8px 6px; font-size:12px; font-weight:700; color:var(--ink-soft); white-space:nowrap;
-  }
+  .pay-online{border-color:var(--online-line); background:var(--online-soft)}
+  .pay-online .t{color:var(--online)}
+  .pay-online:hover{border-color:var(--online); box-shadow:inset 0 0 0 1px var(--online)}
+  .pay-sec{display:flex; gap:6px}
+  .pay-mini{flex:1; border:1px solid var(--line); background:var(--surface-2); border-radius:var(--r-field); padding:8px 4px; font-size:11.5px; font-weight:700; color:var(--ink-soft); white-space:nowrap}
   .pay-mini:hover{border-color:var(--ink-faint); color:var(--ink)}
-  .finalizar{
-    width:100%; margin-top:4px;
-    background:var(--action); color:var(--action-ink); border:1px solid var(--action);
-    border-radius:var(--r-card); padding:16px 14px; font-size:17px; font-weight:900; letter-spacing:.01em;
-  }
+  .finalizar{width:100%; margin-top:2px; background:var(--action); color:var(--action-ink); border:1px solid var(--action);
+    border-radius:var(--r-card); padding:15px 14px; font-size:17px; font-weight:900}
   .finalizar:hover{background:#3a3d42}
-  .sub-acoes{display:flex; gap:8px; justify-content:space-between}
-  .sub-acoes button{flex:1; background:transparent; border:1px solid var(--line); border-radius:var(--r-field);
-    padding:8px; font-size:12.5px; font-weight:700; color:var(--ink-soft)}
+  .sub-acoes{display:flex; gap:8px}
+  .sub-acoes button{flex:1; background:transparent; border:1px solid var(--line); border-radius:var(--r-field); padding:8px; font-size:12.5px; font-weight:700; color:var(--ink-soft)}
   .sub-acoes button:hover{border-color:var(--ink-faint); color:var(--ink)}
-  .sub-acoes .cancelar:hover{border-color:#F2C8C2; color:var(--crit); background:var(--crit-soft)}
+  .sub-acoes .cancelar:hover{border-color:var(--crit-line); color:var(--crit); background:var(--crit-soft)}
 
-  /* Rodapé da tela */
-  .ft{
-    position:relative;
-    display:flex; align-items:center; gap:14px; padding:9px 18px;
-    background:var(--surface); border-top:1px solid var(--line); font-size:12px;
-  }
+  .ft{position:relative; display:flex; align-items:center; gap:14px; padding:9px 18px; background:var(--surface); border-top:1px solid var(--line); font-size:12px}
   .st{display:inline-flex; align-items:center; gap:6px; font-weight:700; color:var(--ink-soft); white-space:nowrap}
   .st .dot{width:7px; height:7px; border-radius:50%}
-  .st-ok .dot{background:var(--ok)} .st-ok{color:#1D6E3E}
+  .st-ok .dot{background:var(--ok)} .st-ok{color:var(--ok-deep)}
   .st-warn .dot{background:var(--warn)} .st-warn{color:#8A5708}
   .atalhos{margin-left:auto; display:flex; gap:6px; flex-wrap:wrap}
-  .atalhos span{
-    font-size:11px; font-weight:700; color:var(--ink-soft);
-    border:1px solid var(--line); border-radius:4px; padding:3px 8px; background:var(--surface-2); white-space:nowrap;
-  }
+  .atalhos span{font-size:11px; font-weight:700; color:var(--ink-soft); border:1px solid var(--line); border-radius:4px; padding:3px 8px; background:var(--surface-2); white-space:nowrap}
   .atalhos b{font-weight:900; color:var(--ink)}
 
-  /* ── Overlay do trilho guiado ── */
+  /* trilho guiado */
   .wiz{position:absolute; inset:0; display:none; align-items:center; justify-content:center; z-index:40}
   .wiz.aberto{display:flex}
   .wiz-back{position:absolute; inset:0; background:rgba(23,24,26,.45)}
-  .wiz-card{
-    position:relative; width:540px; max-width:92%;
-    background:var(--surface); border-radius:10px; border:1px solid var(--line);
-    box-shadow:0 24px 64px rgba(23,24,26,.35); overflow:hidden;
-  }
-  .wiz-head{padding:18px 22px 0; text-align:center}
+  .wiz-card{position:relative; width:540px; max-width:92%; background:var(--surface); border-radius:10px; border:1px solid var(--line);
+    box-shadow:0 24px 64px rgba(23,24,26,.35); overflow:hidden}
+  .wiz-head{padding:16px 22px 0; text-align:center}
   .wiz-steps{display:flex; justify-content:center; gap:6px; margin-bottom:10px}
   .wiz-steps i{width:26px; height:4px; border-radius:2px; background:var(--line)}
-  .wiz-steps i.done{background:var(--ink-faint)}
-  .wiz-steps i.atual{background:var(--ink)}
-  .wiz-passo{font-size:10.5px; font-weight:900; letter-spacing:.16em; color:var(--ink-faint)}
-  .wiz-titulo{font-size:23px; font-weight:900; margin:4px 0 2px; letter-spacing:-.01em; text-wrap:balance}
+  .wiz-steps i.done{background:var(--online-line)}
+  .wiz-steps i.atual{background:var(--online)}
+  .wiz-passo{display:inline-block; font-size:10.5px; font-weight:900; letter-spacing:.14em; color:var(--online);
+    background:var(--online-soft); border:1px solid var(--online-line); border-radius:999px; padding:3px 12px}
+  .wiz-titulo{font-size:23px; font-weight:900; margin:8px 0 2px; letter-spacing:-.01em; text-wrap:balance}
   .wiz-conseq{font-size:12.5px; color:var(--ink-soft); margin:0 0 14px}
-  .wiz-body{padding:0 22px 20px; display:flex; flex-direction:column; gap:12px}
+  .wiz-body{padding:0 22px 18px; display:flex; flex-direction:column; gap:12px}
   .wiz-grupo{border:1px solid var(--line); border-radius:var(--r-card); padding:12px; background:var(--surface-2)}
   .wiz-grupo h4{margin:0 0 3px; font-size:12px; font-weight:900; letter-spacing:.08em}
   .wiz-grupo .desc{font-size:11.5px; color:var(--ink-soft); margin:0 0 10px}
   .wiz-opts{display:grid; grid-template-columns:1fr 1fr; gap:8px}
-  .wopt{
-    display:flex; flex-direction:column; align-items:center; gap:3px;
-    background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card);
-    padding:14px 8px 11px; font-weight:900; font-size:13.5px; color:var(--ink);
-  }
+  .wopt{display:flex; flex-direction:column; align-items:center; gap:3px; background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--r-card); padding:14px 8px 11px; font-weight:900; font-size:13.5px; color:var(--ink)}
   .wopt small{font-size:10.5px; font-weight:600; color:var(--ink-faint)}
   .wopt .ic{font-size:19px; line-height:1}
-  .wopt:hover{border-color:var(--ink)}
-  .wopt.sel{border:2px solid var(--ink); padding:13px 7px 10px}
+  .wopt:hover{border-color:var(--online)}
+  .wopt.sel{border:2px solid var(--online); padding:13px 7px 10px; background:var(--online-soft)}
   .wiz-volta{align-self:center; background:transparent; border:0; font-size:12.5px; font-weight:700; color:var(--ink-soft); padding:4px 8px}
   .wiz-volta:hover{color:var(--ink)}
-  .wiz-x{position:absolute; top:10px; right:10px; width:34px; height:34px; border:0; background:transparent;
-    font-size:16px; color:var(--ink-faint); border-radius:6px}
+  .wiz-x{position:absolute; top:10px; right:10px; width:34px; height:34px; border:0; background:transparent; font-size:16px; color:var(--ink-faint); border-radius:6px}
   .wiz-x:hover{background:var(--line-soft); color:var(--ink)}
 
-  /* ── Marcadores de anotação ── */
-  .nota{
-    position:absolute; z-index:30; width:20px; height:20px; border-radius:50%;
-    background:var(--ink); color:#fff; font-size:11px; font-weight:900;
-    display:flex; align-items:center; justify-content:center;
-    box-shadow:0 0 0 3px var(--ground), 0 2px 6px rgba(23,24,26,.3);
-    pointer-events:none;
-  }
+  .nota{position:absolute; z-index:30; width:20px; height:20px; border-radius:50%; background:var(--ink); color:#fff; font-size:11px; font-weight:900;
+    display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px var(--ground), 0 2px 6px rgba(23,24,26,.3); pointer-events:none}
 
-  /* ── Legenda ── */
+  /* paleta de papéis */
+  .paleta{margin-top:26px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card); padding:16px 18px}
+  .paleta h2{font-size:17px; font-weight:900; margin:0 0 2px}
+  .paleta .sub{font-size:12.5px; color:var(--ink-soft); margin:0 0 12px}
+  .sw-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px}
+  .sw{display:flex; gap:10px; align-items:flex-start; border:1px solid var(--line-soft); border-radius:var(--r-field); padding:9px 11px; background:var(--surface-2)}
+  .sw .c{flex:none; width:26px; height:26px; border-radius:6px; margin-top:1px}
+  .sw b{font-size:12.5px; display:block}
+  .sw span{font-size:11.5px; color:var(--ink-soft)}
+
+  /* mapa de funções */
+  .mapa{margin-top:26px}
+  .mapa h2{font-size:19px; font-weight:900; margin:0 0 4px}
+  .mapa .sub{color:var(--ink-soft); font-size:13.5px; margin:0 0 14px; max-width:78ch}
+  .mapa-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:10px}
+  .mcard{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card); padding:13px 15px}
+  .mcard h3{font-size:13px; font-weight:900; margin:0 0 2px; letter-spacing:.02em}
+  .mcard .qt{font-size:11px; color:var(--ink-faint); font-weight:700; margin-bottom:8px}
+  .mcard ul{margin:0; padding:0 0 0 16px; font-size:12.5px; color:var(--ink-soft); display:flex; flex-direction:column; gap:3px}
+  .mcard li b{color:var(--ink); font-weight:700}
+  .mcard.pende{border-style:dashed}
+
   .legenda{margin-top:26px}
   .legenda h2{font-size:19px; font-weight:900; margin:0 0 4px}
   .legenda .sub{color:var(--ink-soft); font-size:13.5px; margin:0 0 14px; max-width:70ch}
   .leg-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:10px}
-  .leg{
-    display:flex; gap:12px; background:var(--surface); border:1px solid var(--line);
-    border-radius:var(--r-card); padding:12px 14px;
-  }
-  .leg .n{
-    flex:none; width:22px; height:22px; border-radius:50%; background:var(--ink); color:#fff;
-    font-size:11.5px; font-weight:900; display:flex; align-items:center; justify-content:center; margin-top:1px;
-  }
+  .leg{display:flex; gap:12px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card); padding:12px 14px}
+  .leg .n{flex:none; width:22px; height:22px; border-radius:50%; background:var(--ink); color:#fff; font-size:11.5px; font-weight:900; display:flex; align-items:center; justify-content:center; margin-top:1px}
   .leg .tx{font-size:13px; color:var(--ink-soft)}
   .leg .tx b{color:var(--ink)}
-  .leg.discussao{border-style:dashed}
   .rodape-nota{margin-top:22px; font-size:12px; color:var(--ink-faint); text-align:center}
 </style>
 
 <div class="page">
   <header class="intro">
     <div>
-      <p class="eyebrow">Reforma do PDV · amostra pra discussão · 29/08/2026</p>
+      <p class="eyebrow">Reforma do PDV · amostra v2 pra discussão · 29/08/2026</p>
       <h1>PDV Semáforo</h1>
-      <p>Cinza e preto; <b>cor é propriedade exclusiva do estado</b>. A hierarquia da tela segue a medição
-      de 60 dias em produção — não o gosto. Nada aqui é código de produção.</p>
+      <p>Base cinza e preto; <b>cor com papel fixo</b> pra dar destaque sem virar ruído: vermelho parado ·
+      âmbar atenção · verde ok/ganho · <b style="color:var(--info)">azul promoção</b> ·
+      <b style="color:var(--gold-deep)">dourado campanha</b> · <b style="color:var(--online)">roxo venda online</b>.
+      Hierarquia pela medição de 60 dias. Nada aqui é código de produção.</p>
     </div>
     <div class="intro-actions">
-      <button class="btn-demo" onclick="abrirWiz()">▶ Ver o trilho guiado (exemplo)<span class="nota" style="top:-8px; right:-8px; pointer-events:none">9</span></button>
-      <button class="btn-ghost-top" onclick="document.getElementById('legenda').scrollIntoView({behavior:'smooth'})">O que observar ↓</button>
+      <button class="btn-demo" onclick="abrirWiz()">▶ Ver o trilho guiado (exemplo)<span class="nota" style="top:-8px; right:-8px">9</span></button>
+      <button class="btn-ghost-top" onclick="document.getElementById('mapa').scrollIntoView({behavior:'smooth'})">Onde cada função mora ↓</button>
     </div>
   </header>
 
   <div class="screen-scroll">
   <div class="screen" id="tela">
 
-    <!-- header -->
     <div class="hd">
       <span class="brand"><span class="logo">LURD'S</span><span class="sub">PLUS SIZE</span></span>
       <span class="store">ITANHAÉM · <b>PDV 01</b></span>
       <div class="hd-right">
         <span class="chip"><span aria-hidden="true">🕐</span> Caixa aberto · 10h12</span>
-        <span class="chip chip-ok" style="position:relative"><span class="nota" style="top:-9px; right:-9px">5</span><span class="dot"></span> Conectado</span>
+        <span class="chip chip-ok" style="position:relative"><span class="nota" style="top:-9px; right:-9px">11</span><span class="dot"></span> Conectado</span>
         <span class="chip">Treinamento</span>
       </div>
     </div>
 
-    <!-- pendências: barra fechada, padrão /minha-loja -->
     <div class="pend" id="pend">
       <span class="nota" style="top:8px; left:-9px">4</span>
       <button class="pend-bar" onclick="togglePend()" aria-expanded="false" id="pendbtn">
-        <span aria-hidden="true">▲</span> 3 pendências &nbsp;·&nbsp; <span class="crit-tag">✕ 1 PARADA</span>
+        <span aria-hidden="true">▲</span> 4 pendências &nbsp;·&nbsp; <span class="crit-tag">✕ 1 PARADA</span>
         <span class="open-hint" id="pendhint">abrir ▾</span>
       </button>
       <div class="pend-list" role="region" aria-label="Pendências da loja">
@@ -385,7 +340,13 @@
           <button class="acao">Conferir</button>
         </div>
         <div class="pend-item">
-          <span class="tag tag-neutro">Pausada</span>
+          <span class="tag tag-warn">▲ A fazer</span>
+          <span class="quem">Remessa REM-1204 chegando de Praia Grande — dar entrada</span>
+          <span class="idade">hoje</span>
+          <button class="acao">Receber</button>
+        </div>
+        <div class="pend-item">
+          <span class="tag tag-info">Pausada</span>
           <span class="quem">“Maria — vestido azul” · 3 peças · R$ 389,70</span>
           <span class="idade">há 1h05</span>
           <button class="acao">Retomar</button>
@@ -393,8 +354,22 @@
       </div>
     </div>
 
-    <!-- corpo -->
     <div class="body">
+      <!-- menu lateral -->
+      <nav class="menu" aria-label="Telas do PDV">
+        <span class="nota" style="top:-9px; right:-6px">12</span>
+        <button class="m-item on"><span class="ic" aria-hidden="true">🛒</span><span class="lb">Venda</span></button>
+        <button class="m-item"><span class="ic" aria-hidden="true">↩</span><span class="lb">Trocas</span></button>
+        <button class="m-item"><span class="m-badge mb-warn">3</span><span class="ic" aria-hidden="true">🏷</span><span class="lb">Marcados</span></button>
+        <button class="m-item"><span class="ic" aria-hidden="true">💳</span><span class="lb">Crediário</span></button>
+        <button class="m-item"><span class="m-badge mb-crit">1</span><span class="ic" aria-hidden="true">📮</span><span class="lb">Site</span></button>
+        <button class="m-item"><span class="m-badge mb-warn">2</span><span class="ic" aria-hidden="true">🚚</span><span class="lb">Realinhar</span></button>
+        <button class="m-item"><span class="ic" aria-hidden="true">🧾</span><span class="lb">Notas</span></button>
+        <button class="m-item"><span class="ic" aria-hidden="true">🗃</span><span class="lb">Caixa</span></button>
+        <div class="m-sep"></div>
+        <button class="m-item"><span class="ic" aria-hidden="true">⋯</span><span class="lb">Mais</span></button>
+      </nav>
+
       <div class="left">
         <div class="scanrow">
           <div class="scan">
@@ -407,6 +382,15 @@
             ↩ TROCA / VALE
             <small>devolução · F4</small>
           </button>
+        </div>
+
+        <!-- campanha promocional: DOURADO = comercial -->
+        <div class="campanha">
+          <span class="nota" style="top:-10px; left:-9px">5</span>
+          <span class="star" aria-hidden="true">★</span>
+          <b>CAMPANHA ATIVA — LIQUIDA 50%</b>
+          <span class="regra">peças cadastradas até 2023 · coleções -INV/-VER · básicos ficam fora</span>
+          <button class="trocar">Trocar ▾</button>
         </div>
 
         <div class="cart">
@@ -432,8 +416,14 @@
               <div class="item-nome">VESTIDO LONGO CETIM VERDE · G3</div>
               <div class="item-meta">
                 <span class="ref">REF VLM222</span>
-                <span class="badge-promo">PROMO 50% · 2023<span class="nota" style="top:-11px; right:-11px">10</span></span>
+                <span class="badge badge-promo">PROMO 50% · 2023<span class="nota" style="top:-11px; right:-11px">10</span></span>
               </div>
+            </div>
+            <div class="acoes-item">
+              <span class="nota" style="top:-11px; left:-10px">6</span>
+              <button class="ai" title="Desconto nesta peça">%</button>
+              <button class="ai ai-forcar" title="Colocar na promoção (ignora filtro básico)">⬆</button>
+              <button class="ai" title="Tirar da promoção">🚫</button>
             </div>
             <div class="stepper"><button aria-label="menos">−</button><span class="q num">2</span><button aria-label="mais">+</button></div>
             <div class="prices"><div class="preco-de num">R$ 379,80</div><div class="preco num">R$ 189,90</div></div>
@@ -444,21 +434,21 @@
             <div class="thumb">CPP</div>
             <div class="item-info">
               <div class="item-nome">CALÇA PANTALONA PRETA · 50</div>
-              <div class="item-meta"><span class="ref">REF CPP310</span></div>
+              <div class="item-meta"><span class="ref">REF CPP310</span><span class="badge badge-manual">−R$ 8,00 · MANUAL</span></div>
             </div>
             <div class="stepper"><button aria-label="menos">−</button><span class="q num">1</span><button aria-label="mais">+</button></div>
-            <div class="prices"><div class="preco num">R$ 159,90</div></div>
+            <div class="prices"><div class="preco-de num">R$ 159,90</div><div class="preco num">R$ 151,90</div></div>
             <button class="rm" aria-label="Remover item">✕</button>
           </div>
 
           <div class="desfazer">
             <span>Bipou errado?</span>
             <button>↺ Desfazer último (Del)</button>
+            <span class="dica">% ⬆ 🚫 aparecem ao passar o mouse na linha</span>
           </div>
         </div>
       </div>
 
-      <!-- painel da venda -->
       <div class="right">
         <div class="pessoa">
           <div class="pessoa-chip">
@@ -471,18 +461,24 @@
             <span class="cashback">✓ R$ 120,00 cashback</span>
           </div>
           <div class="vendedora-chip">
-            <span class="nota" style="top:-9px; left:-9px">6</span>
+            <span class="nota" style="top:-9px; left:-9px">8</span>
             <span aria-hidden="true">▲</span> Vendedora: <b>&nbsp;definir no fechamento</b>
             <button class="acao">Escolher</button>
           </div>
         </div>
 
         <div class="totais">
-          <span class="nota" style="top:34px; right:-8px">1</span>
+          <span class="nota" style="top:30px; right:-8px">1</span>
           <div class="tot-linha"><span>Subtotal</span><span class="v num">R$ 639,60</span></div>
-          <div class="tot-linha"><span>Promoções</span><span class="v num" style="color:var(--ok)">− R$ 219,90</span></div>
+          <div class="tot-linha"><span>Campanha 50%</span><span class="v num v-ok">− R$ 219,90</span></div>
+          <div class="tot-linha"><span>Desconto por peça</span><span class="v num v-ok">− R$ 8,00</span></div>
+          <button class="btn-desconto">
+            <span class="nota" style="top:-10px; left:-9px">6</span>
+            % Desconto na venda <b>(F2)</b>
+            <small>até 7% livre · 7–10% senha caixa · 10%+ gerente</small>
+          </button>
           <div class="total-label">TOTAL A PAGAR</div>
-          <div class="total num"><small>R$</small>419,70</div>
+          <div class="total num"><small>R$</small>411,70</div>
         </div>
 
         <div class="pag">
@@ -492,15 +488,16 @@
             <button class="pay"><span class="t">CRÉDITO</span><span class="s">45% das vendas · 1–10×</span></button>
             <button class="pay"><span class="t">DÉBITO</span><span class="s">17%</span></button>
             <button class="pay"><span class="t">PIX</span><span class="s">12% · QR na tela</span></button>
-            <button class="pay"><span class="t">VENDA ONLINE →</span><span class="s">trilho guiado · 4 passos</span></button>
+            <button class="pay pay-online"><span class="t">VENDA ONLINE →</span><span class="s">trilho guiado · 4 passos</span></button>
           </div>
           <div class="pay-sec">
             <button class="pay-mini">DINHEIRO</button>
             <button class="pay-mini">VALE-TROCA</button>
+            <button class="pay-mini">MARCAR</button>
             <button class="pay-mini">CREDIÁRIO</button>
             <button class="pay-mini">RAROS ▾</button>
           </div>
-          <button class="finalizar">✓ FINALIZAR · R$ 419,70</button>
+          <button class="finalizar">✓ FINALIZAR · R$ 411,70</button>
           <div class="sub-acoes">
             <button>❚❚ Pausar (dar apelido)</button>
             <button class="cancelar">✕ Cancelar…</button>
@@ -509,9 +506,8 @@
       </div>
     </div>
 
-    <!-- rodapé -->
     <div class="ft">
-      <span class="nota" style="top:-10px; left:10px">8</span>
+      <span class="nota" style="top:-10px; left:10px">13</span>
       <span class="st st-ok"><span class="dot"></span> Flow conectado</span>
       <span class="st st-ok"><span class="dot"></span> Pagamentos OK</span>
       <span class="st st-warn"><span class="dot"></span> ▲ Impressora não configurada</span>
@@ -521,14 +517,14 @@
       </div>
     </div>
 
-    <!-- TRILHO GUIADO (overlay demo) -->
+    <!-- trilho guiado -->
     <div class="wiz" id="wiz" role="dialog" aria-modal="true" aria-labelledby="wiztitulo">
       <div class="wiz-back" onclick="fecharWiz()"></div>
       <div class="wiz-card">
         <button class="wiz-x" onclick="fecharWiz()" aria-label="Fechar">✕</button>
         <div class="wiz-head">
           <div class="wiz-steps"><i class="done"></i><i class="atual"></i><i></i><i></i></div>
-          <div class="wiz-passo">PASSO 2 DE 4 · VENDA ONLINE</div>
+          <span class="wiz-passo">PASSO 2 DE 4 · VENDA ONLINE</span>
           <h3 class="wiz-titulo" id="wiztitulo">Como a cliente vai pagar?</h3>
           <p class="wiz-conseq">A venda fica aberta e <b>fecha sozinha quando o dinheiro cair</b>.</p>
         </div>
@@ -554,27 +550,124 @@
       </div>
     </div>
 
-  </div><!-- /screen -->
-  </div><!-- /screen-scroll -->
+  </div>
+  </div>
+
+  <!-- paleta de papéis -->
+  <section class="paleta">
+    <h2>A paleta de papéis — cor com significado fixo</h2>
+    <p class="sub">Seu pedido de 29/08 ("use amarelo, verde, laranja, azul pra destacar") aplicado sem quebrar a regra que faz o alarme funcionar: cada cor tem UM papel — nunca decoração aleatória.</p>
+    <div class="sw-grid">
+      <div class="sw"><span class="c" style="background:var(--crit)"></span><span><b>Vermelho — PARADO / problema</b><span>pedido parado, PIX falhou, erro</span></span></div>
+      <div class="sw"><span class="c" style="background:var(--warn)"></span><span><b>Âmbar — atenção / a fazer</b><span>pendência, vendedora indefinida, venceu</span></span></div>
+      <div class="sw"><span class="c" style="background:var(--ok)"></span><span><b>Verde — ok / ganho</b><span>conectado, pago, "cliente economizou"</span></span></div>
+      <div class="sw"><span class="c" style="background:var(--info)"></span><span><b>Azul — promoção / informação</b><span>badge de promo, forçar promo, cliente</span></span></div>
+      <div class="sw"><span class="c" style="background:var(--gold)"></span><span><b>Dourado — campanha / marca Lurd's</b><span>campanha ativa, destaque comercial</span></span></div>
+      <div class="sw"><span class="c" style="background:var(--online)"></span><span><b>Roxo — venda online / trilho</b><span>botão, passos do trilho guiado</span></span></div>
+    </div>
+  </section>
+
+  <!-- mapa de funções -->
+  <section class="mapa" id="mapa">
+    <h2>Onde cada função do PDV atual mora na tela nova</h2>
+    <p class="sub">Sua regra: <b>toda função devidamente associada</b>. Resumo das 378 do inventário por endereço — o mapa item a item vira a coluna DESTINO do INVENTARIO-PDV-ATUAL.md na etapa 3. Nada fica órfão.</p>
+    <div class="mapa-grid">
+      <div class="mcard">
+        <h3>SEMPRE NA TELA</h3>
+        <div class="qt">o que a medição mostrou ser frequente</div>
+        <ul>
+          <li><b>Bipe</b> + fila serial + busca por REF/nome</li>
+          <li><b>Carrinho</b>: stepper, desfazer, flash, DE/POR</li>
+          <li><b>Campanha ativa</b> (dourado) + regra resumida</li>
+          <li><b>Total</b> + descontos aplicados linha a linha</li>
+          <li><b>Pagamentos por uso</b> + Troca/Vale + Marcar</li>
+          <li><b>Cliente</b> (1 toque, cashback) + <b>vendedora</b></li>
+          <li><b>Pendências</b> em barra + status + atalhos</li>
+        </ul>
+      </div>
+      <div class="mcard">
+        <h3>A 1 CLIQUE — modais e trilhos</h3>
+        <div class="qt">decisão rara ou com regra = passo a passo</div>
+        <ul>
+          <li><b>Desconto da venda (F2)</b> — faixas 7/10% com senha</li>
+          <li><b>Desconto por peça · forçar ⬆ · tirar 🚫</b></li>
+          <li><b>Trocar campanha</b> (50% · Leve 4 Pague 3 · nenhuma)</li>
+          <li><b>Venda online</b> — trilho 4 passos (roxo)</li>
+          <li><b>PIX QR / link cartão</b> — regen automática, tentativas</li>
+          <li><b>Crediário</b> — parcelas, limite, override, carnê</li>
+          <li><b>Vale-troca · vale presente · simular parcelas</b></li>
+          <li><b>Cancelar com motivo · pausar com apelido</b></li>
+          <li><b>Cliente completo (F6)</b> — ViaCEP, copiar ficha</li>
+          <li><b>Carrinhos abandonados</b> (lojas 13·15·01)</li>
+          <li><b>Consulta de promoção 🏷 · item manual (0)</b></li>
+        </ul>
+      </div>
+      <div class="mcard">
+        <h3>TELAS-FILHAS — menu lateral</h3>
+        <div class="qt">operações com tela própria (como hoje)</div>
+        <ul>
+          <li><b>Caixa (F3)</b>: abrir, sangria + adiantamento, suprimento, relatório X, fechamento</li>
+          <li><b>Devolução (F4)</b>: 3 modos, lote, manual 60d</li>
+          <li><b>Marcados</b>: marcar, puxar, devolver</li>
+          <li><b>Recebimentos crediário</b> + extrato + estorno + PIX confirmados</li>
+          <li><b>Notas fiscais</b> · produtos vendidos · consulta (F10)</li>
+          <li><b>Pedidos do site</b> · realinhar · impressoras</li>
+        </ul>
+      </div>
+      <div class="mcard">
+        <h3>MENU "RAROS ▾"</h3>
+        <div class="qt">4–8 usos em 60 dias — some da frente</div>
+        <ul>
+          <li><b>Convênio</b> (aparece só em loja com convênio ativo)</li>
+          <li><b>PIX avulso</b> · vale presente</li>
+          <li><b>Ajustes master</b> (fundo, pagamento, vendedora)</li>
+          <li><b>PIX órfãos · crediários órfãos · diagnósticos</b></li>
+        </ul>
+      </div>
+      <div class="mcard">
+        <h3>AUTOMÁTICO — não vira botão</h3>
+        <div class="qt">regra que roda sozinha e só aparece quando importa</div>
+        <ul>
+          <li><b>Promo 50%</b>: ano ≤2023 · -INV/-VER · básicos fora · liberadas na mão</li>
+          <li><b>NFC-e</b>: pula venda online e troca par · janela 30min</li>
+          <li><b>Outbox ERP · reconciliadores PIX · upsert CRM · cashback</b></li>
+          <li><b>Lastro da rede</b> (aparece SÓ quando falta peça)</li>
+          <li><b>Treino</b> (banner quando ativo) · heartbeat ponto · multi-PC</li>
+        </ul>
+      </div>
+      <div class="mcard pende">
+        <h3>PENDENTE DA SUA DECISÃO</h3>
+        <div class="qt">shortlist da etapa 1 — aguardando</div>
+        <ul>
+          <li>Cupom WhatsApp/e-mail (0 usos) — morre?</li>
+          <li>Leve 4 Pague 3 — ganha botão ou morre?</li>
+          <li>Modo noturno · densidades · toggle visual</li>
+          <li>Lixo (bolinha, "v1.0.0", arquivos soltos)</li>
+        </ul>
+      </div>
+    </div>
+  </section>
 
   <!-- legenda -->
   <section class="legenda" id="legenda">
     <h2>O que observar — e por quê</h2>
-    <p class="sub">Cada número na tela corresponde a uma decisão. Quase todas vêm de dado medido ou de regra já
-    escolhida pelo dono; a ⑩ é ponto aberto de discussão.</p>
+    <p class="sub">Cada número na tela corresponde a uma decisão, quase todas ancoradas em dado medido ou regra já escolhida.</p>
     <div class="leg-grid">
-      <div class="leg"><span class="n">1</span><span class="tx"><b>Total em grafite gigante.</b> Dinheiro deixa de ser verde (decisão do semáforo, 21/08): número preto pesado lê melhor e não compete com alerta. Verde agora significa “em dia / ganho” — como no “cliente economizou”.</span></div>
-      <div class="leg"><span class="n">2</span><span class="tx"><b>Pagamentos na ordem do uso medido.</b> Crédito 45% · débito 17% · PIX 12% vêm GRANDES; dinheiro (7%) desce pra linha de baixo. Convênio, adiantamento e ajustes viram “Raros ▾”.</span></div>
-      <div class="leg"><span class="n">3</span><span class="tx"><b>Troca promovida à primeira dobra.</b> Vale-troca (413 usos) quase empata com dinheiro (433) e são 8 trocas/dia — sai do menu escondido e ganha botão do lado do bipe.</span></div>
-      <div class="leg"><span class="n">4</span><span class="tx"><b>Pendências fechadas numa barra</b> (padrão da /minha-loja): conta e prioriza sem empurrar a tela. Pausada com <b>apelido e idade</b> (“Maria — vestido azul · 1h05”).</span></div>
-      <div class="leg"><span class="n">5</span><span class="tx"><b>Cor nunca sozinha.</b> Todo estado carrega cor + ícone + palavra (✕ parada · ▲ a fazer · ✓ ok) — regra do design system, herdada da acessibilidade.</span></div>
-      <div class="leg"><span class="n">6</span><span class="tx"><b>Vendedora como pendência visível</b> desde o início (âmbar), mas a escolha continua no fechamento — não atrasa a cliente.</span></div>
-      <div class="leg"><span class="n">7</span><span class="tx"><b>Cliente em 1 toque, cashback à vista.</b> Só 26,5% das vendas identificam cliente hoje; o saldo visível dá motivo pra vendedora pedir o CPF.</span></div>
-      <div class="leg"><span class="n">8</span><span class="tx"><b>Rodapé operacional:</b> status decomposto (Flow · pagamentos · impressora) + régua de atalhos permanente — treinamento no próprio balcão.</span></div>
-      <div class="leg"><span class="n">9</span><span class="tx"><b>Trilho guiado pro raro, pista livre pro frequente.</b> Venda online (1 a cada 4 dias por vendedora) vai de passos com botão grande e frase de consequência — seu formato. Bipe → cartão → Enter segue sem NENHUM passo extra.</span></div>
-      <div class="leg discussao"><span class="n">10</span><span class="tx"><b>Ponto aberto:</b> a etiqueta de promoção era VERMELHA no PDV atual; no semáforo, vermelho é só problema. Aqui ela vira contorno preto forte. Funciona pra vendedora? É a primeira coisa a validar no piloto.</span></div>
+      <div class="leg"><span class="n">1</span><span class="tx"><b>Total em grafite gigante.</b> Dinheiro deixa de ser verde (semáforo, 21/08); verde vira "ok/ganho" — como no "cliente economizou".</span></div>
+      <div class="leg"><span class="n">2</span><span class="tx"><b>Pagamentos na ordem do uso medido.</b> Crédito 45% · débito 17% · PIX 12% grandes; dinheiro (7%) na linha de baixo; MARCAR entrou (12,8 usos/dia); raros no "Raros ▾".</span></div>
+      <div class="leg"><span class="n">3</span><span class="tx"><b>Troca promovida à primeira dobra</b> — vale-troca (413) quase empata com dinheiro (433); 8 trocas/dia.</span></div>
+      <div class="leg"><span class="n">4</span><span class="tx"><b>Pendências fechadas numa barra</b> (padrão /minha-loja), com pausada por <b>apelido e idade</b>.</span></div>
+      <div class="leg"><span class="n">5</span><span class="tx"><b>Campanha em DOURADO Lurd's</b> — cor de marca/comercial, sempre visível com a regra resumida e o "Trocar ▾" (50% · Leve 4 Pague 3 · nenhuma).</span></div>
+      <div class="leg"><span class="n">6</span><span class="tx"><b>Descontos completos:</b> por peça na própria linha (% · ⬆ forçar · 🚫 tirar) e da venda no F2 com as faixas de senha (7% livre · 10% caixa · acima, gerente) — validação continua no servidor.</span></div>
+      <div class="leg"><span class="n">7</span><span class="tx"><b>Cliente em 1 toque com cashback à vista</b> — hoje só 26,5% das vendas identificam.</span></div>
+      <div class="leg"><span class="n">8</span><span class="tx"><b>Vendedora como pendência âmbar</b> desde o início; escolha segue no fechamento.</span></div>
+      <div class="leg"><span class="n">9</span><span class="tx"><b>Trilho guiado pro raro</b> (roxo = venda online), botão grande + frase de consequência; bipe → cartão → Enter segue sem passo extra.</span></div>
+      <div class="leg"><span class="n">10</span><span class="tx"><b>Badge de promoção agora AZUL</b> (papel: promoção/informação) — resolve o ponto aberto da v1: vermelho fica exclusivo de problema.</span></div>
+      <div class="leg"><span class="n">11</span><span class="tx"><b>Cor nunca sozinha:</b> todo estado = cor + ícone + palavra (✕ ▲ ✓) — regra do design system.</span></div>
+      <div class="leg"><span class="n">12</span><span class="tx"><b>Menu lateral fino</b> com badges por urgência — as telas-filhas (caixa, trocas, marcados, recebimentos, notas…) continuam a 1 clique, sem roubar largura da venda.</span></div>
+      <div class="leg"><span class="n">13</span><span class="tx"><b>Rodapé operacional:</b> Flow · pagamentos · impressora separados + régua de atalhos permanente.</span></div>
     </div>
-    <p class="rodape-nota">Amostra de discussão — etapa 4 do briefing (docs/pdv-novo/BRIEFING.md) · tokens reais de frontend/tailwind.config.ts · dados da medição de 60 dias</p>
+    <p class="rodape-nota">Amostra v2 — etapa 4 do briefing (docs/pdv-novo/BRIEFING.md) · tokens de frontend/tailwind.config.ts + paleta de papéis (29/08) · dados da medição de 60 dias</p>
   </section>
 </div>
 

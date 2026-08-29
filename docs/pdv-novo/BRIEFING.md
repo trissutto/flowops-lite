@@ -18,6 +18,8 @@
 ### Direção de UX dada pelo dono (29/08, via screenshots do fluxo guiado)
 "Um formato assim seria legal levar em consideração: **botões maiores, sequência em popups com instruções**." Referência: os passos "Como vai enviar?" / "Como a cliente vai pagar?" do fluxo guiado de Venda Online que JÁ existe no PDV (itens 330–348 do inventário) — nascido da diretriz "não quero um manual, quero que facilite a operação". Status: **direção a discutir na etapa 3, não é ordem de codar**. Tese de trabalho registrada: *trilho guiado (wizard) pro fluxo RARO ou cheio de regra; pista livre (zero passo extra) pro fluxo FREQUENTE — a medição de uso decide qual operação ganha qual tratamento.* Instruções curtas de consequência em cada passo ("a venda fecha sozinha quando o dinheiro cair") são parte do formato.
 
+**Direção 2 (29/08, sobre a amostra v1):** (a) "todas as funções devem ser devidamente associadas à tela nova" → vira regra do projeto: o inventário ganha coluna **DESTINO** na etapa 3 (nada órfão); (b) "use amarelo, verde, laranja, azul etc. pra dar destaques" → o semáforo de 3 cores evolui pra **PALETA DE PAPÉIS** (cada cor com papel fixo, nunca decoração): vermelho=parado · âmbar=atenção · verde=ok/ganho · **azul (brand #2E75B6)=promoção/informação** · **dourado Lurd's (#B8912B)=campanha/marca** · **roxo (#6B4FA8)=venda online/trilho**. Dinheiro segue grafite. Tokens novos a formalizar no tailwind quando a etapa 4 fechar.
+
 ---
 
 ## O que JÁ existe e o projeto aproveita (levantado 29/08)
@@ -68,8 +70,8 @@ Reskin bege/vinho por override de CSS escopado em classe. A direção visual foi
 - [ ] O que sai da primeira dobra / vira painel colapsável.
 
 ### Etapa 4 — Telas
-- [x] **Amostra visual nº 1 publicada (29/08, a pedido do dono):** https://claude.ai/code/artifact/8c2fc0a0-5f76-49e4-a254-8321abf70540 — cópia no repo em [amostra-pdv-semaforo.html](amostra-pdv-semaforo.html) (abrir no navegador). Mostra: tela principal em semáforo (total grafite gigante, pagamentos na ordem do uso medido, troca na 1ª dobra, pendências em barra fechada, vendedora como pendência, cliente+cashback em 1 toque, rodapé decomposto + atalhos) e o **trilho guiado** como overlay (formato dos popups do dono em linguagem semáforo). 10 marcadores numerados ancoram cada decisão; o ⑩ (badge de promo deixa de ser vermelha) é ponto aberto.
-- [ ] Reação do dono à amostra → iterar.
+- [x] **Amostra visual v2 publicada (29/08):** https://claude.ai/code/artifact/8c2fc0a0-5f76-49e4-a254-8321abf70540 — cópia no repo em [amostra-pdv-semaforo.html](amostra-pdv-semaforo.html). v1 mostrou a base (total grafite, pagamentos por uso, troca na 1ª dobra, pendências em barra, trilho guiado em overlay). v2 incorporou o feedback do dono: **paleta de papéis** (azul promoção · dourado campanha · roxo online, além de crit/warn/ok), **campanha ativa em faixa dourada com "Trocar ▾"**, **desconto por peça na linha (% · ⬆ forçar · 🚫 tirar) e desconto da venda F2 com faixas de senha**, **menu lateral com badges**, **MARCAR no painel de pagamento**, e a seção **"Onde cada função mora"** (endereço de todas as 378 do inventário, em 6 grupos). Badge de promo virou AZUL (resolvido o ponto aberto da v1). 13 marcadores numerados.
+- [ ] Reação do dono à v2 → iterar.
 - [ ] Mockup completo (demais estados/fluxos) após etapas 2–3 fechadas.
 - [ ] Validação de balcão (contraste, alvo de clique, legibilidade em pé — agente a11y-balcao).
 
