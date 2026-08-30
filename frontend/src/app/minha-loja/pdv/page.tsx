@@ -1096,6 +1096,15 @@ function PdvPageInner() {
     });
   };
 
+  // TRILHO DO CARTÃO (incremento 2 da reforma — docs/pdv-novo/BRIEFING.md).
+  // Com o visual semáforo ativo, crédito/débito viram o passo-a-passo de
+  // popups (bandeira → parcelas 1–12× → confirmação), formato do dono 29/08.
+  // O PaymentModal clássico segue intacto — inclusive como saída do
+  // "cobrar só uma parte" (split) e pra quem não ligou o piloto.
+  // Declarado AQUI (antes do kbdRef) porque o handler global de teclado conta
+  // o trilho como modal aberto — senão F2/F6/F8 empilhavam modal por cima.
+  const [trilhoCartao, setTrilhoCartao] = useState<{ tipo: 'credito' | 'debito'; bandeira: string | null } | null>(null);
+
   const [quickConvenioAtivo, setQuickConvenioAtivo] = useState<{ id: string; nome: string } | null>(null);
   useEffect(() => {
     if (!storeCode) {
@@ -1427,11 +1436,11 @@ function PdvPageInner() {
   // cada render (logo abaixo), então o handler nunca vê estado velho.
   const kbdRef = useRef({
     sale, showCustomer, showPayment, showFinalized, showVendedora,
-    showConfirmSale, showDiscount, showShortcuts,
+    showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
   });
   kbdRef.current = {
     sale, showCustomer, showPayment, showFinalized, showVendedora,
-    showConfirmSale, showDiscount, showShortcuts,
+    showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
   };
   // `removeItem` é declarada mais abaixo — guardar por effect (que roda DEPOIS
   // do render) evita o erro de usar a const antes da declaração.
@@ -1441,13 +1450,13 @@ function PdvPageInner() {
     const handler = (e: KeyboardEvent) => {
       const {
         sale, showCustomer, showPayment, showFinalized, showVendedora,
-        showConfirmSale, showDiscount, showShortcuts,
+        showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
       } = kbdRef.current;
       const removeItem = removeItemRef.current;
       if (!sale || sale.status !== 'open') return;
       const anyModal =
         showCustomer || showPayment || showFinalized || showVendedora || showConfirmSale ||
-        !!showDiscount || showShortcuts;
+        !!showDiscount || showShortcuts || !!trilhoCartao;
       // ── PDV2: Esc fecha modais — roda ANTES do early-return de modal
       // (no PDV v1 o listener inteiro era desativado com modal aberto) ──
       if (e.key === 'Escape') {
@@ -2280,15 +2289,35 @@ function PdvPageInner() {
     setSale(null); // a próxima venda nasce no próximo bipe
   };
 
+  const abrirTrilhoCartao = (tipo: 'credito' | 'debito', brand?: string) => {
+    if (!sale || !(sale.items || []).length) {
+      toast('warning', 'Bipe uma peça primeiro', 'O carrinho está vazio — não há o que cobrar no cartão.');
+      return;
+    }
+    // Split no modal clássico pode já ter coberto 100% — cobrar R$ 0,00 só
+    // renderia um 400 do backend sem saída óbvia pra vendedora.
+    const restanteAgora = Math.max(
+      0,
+      Math.round((Number(sale.total || 0) - (sale.payments || []).reduce((s: number, p: any) => s + Number(p.valor || 0), 0)) * 100) / 100,
+    );
+    if (restanteAgora <= 0) {
+      toast('warning', 'Já está tudo pago', 'Não falta nada a cobrar — é só finalizar a venda.');
+      return;
+    }
+    setTrilhoCartao({ tipo, bandeira: brand || null });
+  };
+
   // Handlers compartilhados pelos dois blocos do pagamento rápido. A divisão
   // é somente visual: bandeiras ficam sob o carrinho e demais formas no resumo.
   const venderCredito = (brand?: string) => {
+    if (temaSemaforo) { abrirTrilhoCartao('credito', brand); return; }
     setPresetMethod('credito');
     setPresetBandeira(brand || null);
     setPaymentFilter('cartao');
     setShowPayment(true);
   };
   const venderDebito = (brand?: string) => {
+    if (temaSemaforo) { abrirTrilhoCartao('debito', brand); return; }
     setPresetMethod('debito');
     setPresetBandeira(brand || null);
     setPaymentFilter('cartao');
@@ -3744,6 +3773,27 @@ function PdvPageInner() {
             setShowConfirmSale(false);
           }}
           onConfirm={saveVendedora}
+        />
+      )}
+
+      {/* Trilho do cartão (visual semáforo) — bandeira → parcelas → confirma */}
+      {trilhoCartao && sale && (
+        <TrilhoCartaoModal
+          tipo={trilhoCartao.tipo}
+          bandeiraInicial={trilhoCartao.bandeira}
+          saleId={sale.id}
+          valor={Math.max(0, Math.round((Number(sale.total || 0) - (sale.payments || []).reduce((s: number, p: any) => s + Number(p.valor || 0), 0)) * 100) / 100)}
+          onFechar={() => setTrilhoCartao(null)}
+          onRegistrado={onPaymentsChanged}
+          onFinalizar={() => { void finalizeSale('', undefined); }}
+          onSplit={(bandeiraAtual) => {
+            const t = trilhoCartao;
+            setTrilhoCartao(null);
+            setPresetMethod(t.tipo);
+            setPresetBandeira(bandeiraAtual ?? t.bandeira);
+            setPaymentFilter('cartao');
+            setShowPayment(true);
+          }}
         />
       )}
 
@@ -10725,6 +10775,204 @@ function BandeiraLogo({ brand }: { brand: string }) {
       className="h-9 max-h-9 w-auto max-w-full object-contain"
       loading="lazy"
     />
+  );
+}
+
+type TrilhoCartaoModalProps = {
+  tipo: 'credito' | 'debito';
+  bandeiraInicial: string | null;
+  saleId: string;
+  /** RESTANTE da venda (total − pagamentos já registrados). O trilho cobra sempre ele inteiro. */
+  valor: number;
+  onFechar: () => void;
+  onRegistrado: () => Promise<void> | void;
+  onFinalizar: () => void;
+  /** Sai pro PaymentModal clássico levando a bandeira JÁ escolhida no trilho. */
+  onSplit: (bandeiraAtual: string | null) => void;
+};
+
+/**
+ * TRILHO DO CARTÃO (incremento 2 da reforma — formato definido pelo dono em
+ * 29/08): uma pergunta por popup, botão grande, frase de consequência.
+ *   1. Qual a bandeira? (crédito 3+2 · débito 3, com os logos reais)
+ *   2. Em quantas vezes? (1–12× em LINHAS, valor de cada parcela, sem rolagem)
+ *   3. Confirmar cobrança (letras grandes) → REGISTRAR
+ * Débito pula o passo 2. Registrado 100%, chama o finalize normal — que já
+ * cuida do gate de vendedora, NFC-e e cupom. Split sai pro PaymentModal.
+ */
+function TrilhoCartaoModal({
+  tipo, bandeiraInicial, saleId, valor, onFechar, onRegistrado, onFinalizar, onSplit,
+}: TrilhoCartaoModalProps) {
+  const { toast } = usePdvToast();
+  const ehCredito = tipo === 'credito';
+  const bandeiras = ehCredito ? BANDEIRAS_CREDITO : BANDEIRAS_DEBITO;
+  const [bandeira, setBandeira] = useState<string | null>(bandeiraInicial);
+  const [parcelas, setParcelas] = useState<number | null>(ehCredito ? null : 1);
+  const [posting, setPosting] = useState(false);
+  const postingRef = useRef(false);
+
+  const passo: 'bandeira' | 'parcelas' | 'confirma' =
+    !bandeira ? 'bandeira' : ehCredito && !parcelas ? 'parcelas' : 'confirma';
+  const totalPassos = ehCredito ? 3 : 2;
+  const passoNum = passo === 'bandeira' ? 1 : passo === 'parcelas' ? 2 : totalPassos;
+  const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  const registrar = async () => {
+    if (postingRef.current || !bandeira) return;
+    postingRef.current = true;
+    setPosting(true);
+    try {
+      const details: any = { bandeira };
+      if (ehCredito) {
+        const n = parcelas || 1;
+        details.parcelas = n;
+        const calc = calcularParcelas(valor, n);
+        details.valorIguais = calc.iguais;
+        details.qtdIguais = calc.qtdIguais;
+      }
+      const novo = await api<any>(`/pdv/sales/${saleId}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({ method: tipo, valor, details }),
+      });
+      await onRegistrado();
+      onFechar();
+      if (novo?.alreadyFinalized) {
+        toast('success', 'Venda já estava fechada', 'O sistema tinha confirmado o pagamento antes. Seguindo pro cupom.');
+        return;
+      }
+      onFinalizar();
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title || 'Não consegui registrar o cartão', h.hint);
+      postingRef.current = false;
+      setPosting(false);
+    }
+  };
+
+  // Teclado: Esc fecha · no passo de parcelas 1–9 escolhem e 0 = 10× · Enter confirma.
+  // Teclas vindas de INPUT/TEXTAREA/contentEditable passam reto — defesa contra
+  // qualquer campo que viva por cima (mesmo padrão do handler global do PDV).
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.key === 'Escape') { e.stopPropagation(); onFechar(); return; }
+      if (passo === 'parcelas') {
+        if (/^[1-9]$/.test(e.key)) { e.preventDefault(); setParcelas(Number(e.key)); return; }
+        if (e.key === '0') { e.preventDefault(); setParcelas(10); return; }
+      }
+      if (passo === 'confirma' && e.key === 'Enter') { e.preventDefault(); void registrar(); }
+    };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passo, parcelas, bandeira]);
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={`Pagamento no ${ehCredito ? 'crédito' : 'débito'}`}>
+      <div className="absolute inset-0 bg-black/45" onClick={onFechar} />
+      <div className="relative w-full max-w-[560px] bg-white rounded-2xl border border-[#E2E3E5] shadow-2xl overflow-hidden">
+        <button type="button" onClick={onFechar} className="absolute top-3 right-3 w-9 h-9 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 text-lg font-bold" aria-label="Fechar">✕</button>
+
+        <div className="pt-6 px-6 text-center">
+          <div className="flex justify-center gap-1.5 mb-3" aria-hidden="true">
+            {Array.from({ length: totalPassos }, (_, i) => i + 1).map((d) => (
+              <i key={d} className={`h-1 w-7 rounded-full ${d < passoNum ? 'bg-slate-400' : d === passoNum ? 'bg-[#17181A]' : 'bg-slate-200'}`} />
+            ))}
+          </div>
+          <div className="inline-block text-[11px] font-black tracking-[0.14em] text-slate-500 bg-slate-50 border border-slate-200 rounded-full px-3 py-1">
+            PASSO {passoNum} DE {totalPassos} · {ehCredito ? 'CRÉDITO' : 'DÉBITO'}
+          </div>
+          {passo === 'bandeira' && (
+            <>
+              <h3 className="text-[23px] font-black mt-2 text-[#17181A]">Qual a bandeira do cartão?</h3>
+              <p className="text-[12.5px] text-slate-500 mt-0.5 mb-4">É o que concilia com a maquininha no fechamento do caixa.</p>
+            </>
+          )}
+          {passo === 'parcelas' && (
+            <>
+              <h3 className="text-[23px] font-black mt-2 text-[#17181A]">Em quantas vezes?</h3>
+              <p className="text-[12.5px] text-slate-500 mt-0.5 mb-4">Cada linha mostra o valor da parcela · teclas 1–9 e 0 (10×).</p>
+            </>
+          )}
+          {passo === 'confirma' && (
+            <>
+              <h3 className="text-[23px] font-black mt-2 text-[#17181A]">Confirmar cobrança</h3>
+              <p className="text-[12.5px] text-slate-500 mt-0.5 mb-4">
+                Passou na maquininha? Registre — cobriu 100%, a venda <b>finaliza e imprime sozinha</b>.
+              </p>
+            </>
+          )}
+        </div>
+
+        <div className="px-6 pb-6">
+          {passo === 'bandeira' && (
+            <div className="flex flex-wrap justify-center gap-2.5">
+              {bandeiras.map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => setBandeira(b)}
+                  className="w-[158px] min-h-[96px] flex flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white hover:border-[#17181A] hover:bg-slate-50 transition p-3"
+                >
+                  <BandeiraLogo brand={b} />
+                  <span className="text-[12px] font-black tracking-wide text-[#17181A]">{b}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {passo === 'parcelas' && (
+            <div className="flex flex-col gap-1">
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => {
+                const c = calcularParcelas(valor, n);
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setParcelas(n)}
+                    className="flex items-center justify-between rounded-lg border border-slate-200 bg-white hover:border-[#17181A] hover:bg-slate-50 transition px-4 py-0.5 min-h-[33px]"
+                  >
+                    <span className="text-[22px] font-black text-[#17181A] leading-none">{n}×</span>
+                    <span className="text-[13.5px] font-bold text-slate-600 tabular-nums">{brl(c.iguais)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {passo === 'confirma' && bandeira && (
+            <div className="flex flex-col gap-3">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-center flex flex-col items-center gap-1.5">
+                <span className="text-[11px] font-black tracking-[0.1em] text-slate-500">A COBRAR</span>
+                <span className="text-[34px] font-black text-[#17181A] leading-none tabular-nums">{brl(valor)}</span>
+                <span className="flex items-center gap-2.5 text-[19px] font-black text-[#17181A] mt-1.5">
+                  <BandeiraLogo brand={bandeira} /> {ehCredito ? 'CRÉDITO' : 'DÉBITO'} · {bandeira}
+                </span>
+                <span className="text-[19px] font-black text-slate-700 tabular-nums">
+                  {ehCredito ? `${parcelas || 1}× de ${brl(calcularParcelas(valor, parcelas || 1).iguais)}` : 'à vista'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void registrar()}
+                disabled={posting}
+                className="w-full rounded-xl bg-[#2B2D31] hover:bg-[#3a3d42] text-white font-black text-[16px] py-4 disabled:opacity-60 disabled:cursor-wait"
+              >
+                {posting ? 'Registrando…' : '✓ REGISTRAR NO CARTÃO'}
+              </button>
+              <div className="flex justify-center gap-5 text-[12px] font-bold text-slate-500">
+                {ehCredito && (
+                  <button type="button" onClick={() => setParcelas(null)} className="hover:text-[#17181A]">← trocar parcelas</button>
+                )}
+                <button type="button" onClick={() => { setBandeira(null); if (ehCredito) setParcelas(null); }} className="hover:text-[#17181A]">← trocar bandeira</button>
+                <button type="button" onClick={() => onSplit(bandeira)} className="hover:text-[#17181A]">cobrar só uma parte…</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
