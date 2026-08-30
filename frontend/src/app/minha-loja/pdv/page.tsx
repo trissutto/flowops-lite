@@ -3089,10 +3089,18 @@ function PdvPageInner() {
                         );
                       })()}
                     </div>
-                    <div className="text-xs text-slate-400 font-medium mt-0.5 truncate">
-                      ref {it.ref || it.sku}
-                      {it.tamanho ? ` · ${it.tamanho}` : ''}
-                      {it.qty > 1 ? ` · ${it.qty} × ${brl(it.precoUnit)}` : ''}
+                    {/* No visual semáforo a REF ganha destaque (chip): é o nome
+                        pelo qual a peça é falada no balcão (dono, 29/08). */}
+                    <div className={`mt-0.5 truncate ${temaSemaforo ? 'text-xs text-slate-500 font-medium flex items-center gap-1.5' : 'text-xs text-slate-400 font-medium'}`}>
+                      {temaSemaforo ? (
+                        <span className="font-mono font-bold text-[12.5px] text-[#17181A] bg-[#EDEEEF] rounded px-1.5 py-0.5 tracking-wide">
+                          {it.ref || it.sku}
+                        </span>
+                      ) : (
+                        <>ref {it.ref || it.sku}</>
+                      )}
+                      {it.tamanho ? (temaSemaforo ? <span>{it.tamanho}</span> : ` · ${it.tamanho}`) : ''}
+                      {it.qty > 1 ? (temaSemaforo ? <span>{`${it.qty} × ${brl(it.precoUnit)}`}</span> : ` · ${it.qty} × ${brl(it.precoUnit)}`) : ''}
                     </div>
                     {/* DE/POR REGISTRADO (dono, 26/08): peça em promoção mostra
                         o preço original CORTADO + quanto a cliente economiza —
@@ -3372,14 +3380,29 @@ function PdvPageInner() {
             )}
           </div>
 
-          <div className="border-t border-[#F0EEE6] pt-2.5 flex justify-between items-baseline">
-            <span className="text-sm font-semibold text-slate-600">
-              {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
-            </span>
-            <span className={`text-[28px] font-black tabular-nums leading-none ${ehCredito ? 'text-rose-600' : 'text-[#2E7D46]'}`}>
-              {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
-            </span>
-          </div>
+          {/* TOTAL — no visual semáforo (piloto) o dinheiro é GRAFITE e ocupa a
+              linha inteira, bem maior: número preto e pesado lê melhor num fundo
+              cinza e para de competir com o alerta. Verde passa a significar
+              "em dia/ganho". Fora do piloto, segue o layout atual em verde. */}
+          {temaSemaforo ? (
+            <div className="border-t border-[#E2E3E5] pt-3">
+              <div className="text-[11px] font-black tracking-[0.14em] text-slate-400 uppercase">
+                {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
+              </div>
+              <div className={`font-black tabular-nums leading-none mt-1 ${ehCredito ? 'text-[#C4291A] text-[40px]' : 'text-[#17181A] text-[46px]'}`}>
+                {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
+              </div>
+            </div>
+          ) : (
+            <div className="border-t border-[#F0EEE6] pt-2.5 flex justify-between items-baseline">
+              <span className="text-sm font-semibold text-slate-600">
+                {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
+              </span>
+              <span className={`text-[28px] font-black tabular-nums leading-none ${ehCredito ? 'text-rose-600' : 'text-[#2E7D46]'}`}>
+                {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
+              </span>
+            </div>
+          )}
 
           {/* Grade de formas de pagamento — 2 colunas (espec) */}
           <div className={checkoutLayout === 'legacy' ? 'grid grid-cols-2 gap-2' : 'hidden'}>
@@ -3639,6 +3662,9 @@ function PdvPageInner() {
             onValePresente={() => setShowGiftVoucher(true)}
             onMarcar={() => markSaleButtonRef.current?.click()}
             onConvenio={() => venderOutro('convenio')}
+            semaforo={temaSemaforo}
+            onCredito={() => venderCredito()}
+            onDebito={() => venderDebito()}
           />
         )}
       </aside>
@@ -11037,6 +11063,10 @@ type QuickSecondaryPaymentPanelProps = {
   onValePresente: () => void;
   onMarcar: () => void;
   onConvenio: () => void;
+  /** Piloto do visual semáforo: hierarquia pela MEDIÇÃO de uso (60 dias). */
+  semaforo?: boolean;
+  onCredito?: () => void;
+  onDebito?: () => void;
 };
 
 /** Demais formas de pagamento, abaixo do resumo e sem regras próprias. */
@@ -11052,8 +11082,60 @@ function QuickSecondaryPaymentPanel({
   onValePresente,
   onMarcar,
   onConvenio,
+  semaforo = false,
+  onCredito,
+  onDebito,
 }: QuickSecondaryPaymentPanelProps) {
   const actionClass = 'min-h-[58px] min-w-0 rounded-xl border border-[#E5E2D9] bg-white px-2.5 py-2 flex items-center justify-center gap-2 text-xs font-extrabold text-slate-700 hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] transition disabled:opacity-35 disabled:cursor-not-allowed whitespace-nowrap';
+
+  /**
+   * VISUAL SEMÁFORO — a ordem da tela é a ordem do USO REAL (medição de 60
+   * dias, docs/pdv-novo/BRIEFING.md): crédito 45% e débito 17% vêm GRANDES no
+   * topo; PIX 12%; dinheiro caiu pra 7% e desce; vale-troca quase empata com
+   * dinheiro; convênio (4 usos em 60d) só aparece na loja que tem.
+   */
+  if (semaforo) {
+    const grande = 'min-h-[64px] min-w-0 rounded-xl border border-[#E2E3E5] bg-white px-3 py-2 flex flex-col items-start justify-center gap-0.5 hover:border-[#17181A] hover:bg-[#FAFAF9] transition disabled:opacity-35 disabled:cursor-not-allowed';
+    const menor = 'min-h-[44px] min-w-0 rounded-lg border border-[#E2E3E5] bg-[#FAFAF9] px-2 py-1.5 flex items-center justify-center gap-1.5 text-[11.5px] font-bold text-slate-600 hover:border-[#9A9CA1] hover:text-[#17181A] transition disabled:opacity-35 disabled:cursor-not-allowed whitespace-nowrap';
+    return (
+      <section
+        className="hidden lg:flex flex-col gap-2 bg-white rounded-2xl border border-[#E2E3E5] shadow-sm p-2.5"
+        aria-label="Formas de pagamento"
+      >
+        <span className="text-[10px] font-black tracking-[0.12em] text-slate-400 uppercase px-0.5">
+          Pagamento — na ordem do uso real
+        </span>
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={onCredito} disabled={disabled} className={grande}>
+            <span className="text-[14px] font-black text-[#17181A]">CRÉDITO</span>
+            <span className="text-[10px] font-semibold text-slate-400">45% das vendas · 1–12×</span>
+          </button>
+          <button type="button" onClick={onDebito} disabled={disabled} className={grande}>
+            <span className="text-[14px] font-black text-[#17181A]">DÉBITO</span>
+            <span className="text-[10px] font-semibold text-slate-400">17%</span>
+          </button>
+          <button type="button" onClick={onPix} disabled={disabled} className={grande}>
+            <span className="text-[14px] font-black text-[#17181A] flex items-center gap-1.5"><QrCode className="w-4 h-4 text-[#32BCAD]" />PIX</span>
+            <span className="text-[10px] font-semibold text-slate-400">12% · QR na tela</span>
+          </button>
+          <button type="button" onClick={onVendaOnline} disabled={disabled} className={`${grande} border-[#D8CBEE] bg-[#F7F4FC] hover:border-[#6B4FA8]`}>
+            <span className="text-[14px] font-black text-[#6B4FA8]">VENDA ONLINE →</span>
+            <span className="text-[10px] font-semibold text-slate-400">passo a passo</span>
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          <button type="button" onClick={onMoney} disabled={disabled} className={menor}><span className="font-black text-[13px]">$</span>Dinheiro</button>
+          <button type="button" onClick={onValeTroca} disabled={itemsDisabled} className={menor}><Tag className="w-3.5 h-3.5 shrink-0" />Vale-troca</button>
+          <button type="button" onClick={onValePresente} className={menor}><Sparkles className="w-3.5 h-3.5 shrink-0" />V. Presente</button>
+          <button type="button" onClick={onMarcar} disabled={itemsDisabled} className={menor}><ShoppingCart className="w-3.5 h-3.5 shrink-0" />Marcar</button>
+          <button type="button" onClick={onCrediario} disabled={disabled} className={`${menor} ${convenioNome ? '' : 'col-span-2'}`}><Receipt className="w-3.5 h-3.5 shrink-0" />Crediário</button>
+          {convenioNome && (
+            <button type="button" onClick={onConvenio} disabled={disabled} className={menor} title={convenioNome}><Handshake className="w-3.5 h-3.5 shrink-0" />Convênio</button>
+          )}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section
