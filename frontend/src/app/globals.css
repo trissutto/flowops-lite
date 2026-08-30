@@ -26,6 +26,37 @@
   }
 
   /* ═══════════════════════════════════════════════════════════════════════
+     VISUAL SEMÁFORO (piloto da reforma do PDV — 29/08/2026, docs/pdv-novo/).
+     Opt-in POR COMPUTADOR em qualquer loja: nada muda sem escolha, e o
+     "↩ REVERTER AGORA" tira a classe na hora, sem tocar na venda aberta.
+     Estratégia (a mesma do .pdv-lab): remapear o chrome bege/dourado do tema
+     claro → cinza/grafite do semáforo EM BLOCO. Dourado fica reservado ao
+     que é CAMPANHA/comercial (faixas com border dourada); CTA vira grafite.
+     ══════════════════════════════════════════════════════════════════════ */
+  .pdv-semaforo { background: #F6F6F5; }
+  /* fundo geral e superfícies */
+  .pdv-semaforo .bg-\[\#FAFAF7\] { background-color: #F6F6F5 !important; }
+  .pdv-semaforo .bg-\[\#FBF6E6\] { background-color: #EDEEEF !important; }
+  .pdv-semaforo .hover\:bg-\[\#FBF6E6\]:hover { background-color: #EDEEEF !important; }
+  /* fios: bege → cinza neutro */
+  .pdv-semaforo .border-\[\#E5E2D9\],
+  .pdv-semaforo .border-\[\#EDEAE1\] { border-color: #E2E3E5 !important; }
+  .pdv-semaforo .border-\[\#CDA434\],
+  .pdv-semaforo .hover\:border-\[\#CDA434\]:hover { border-color: #C9CBCE !important; }
+  .pdv-semaforo .divide-\[\#F0EEE6\] > :not([hidden]) ~ :not([hidden]) { border-color: #EDEEEF !important; }
+  /* textos dourados do chrome → tinta neutra (dourado não é mais decoração) */
+  .pdv-semaforo .text-\[\#8C7325\] { color: #44464B !important; }
+  .pdv-semaforo .text-\[\#B58A1E\],
+  .pdv-semaforo .text-\[\#B8912B\] { color: #6C6E73 !important; }
+  .pdv-semaforo .text-\[\#D4AF37\] { color: #8C7325 !important; }
+  .pdv-semaforo .ring-\[\#D4AF37\]\/50 { --tw-ring-color: rgb(23 24 26 / 0.35) !important; }
+  /* pílulas/CTAs dourados → ação grafite do semáforo */
+  .pdv-semaforo .bg-\[\#D4AF37\] { background-color: #2B2D31 !important; }
+  .pdv-semaforo .bg-\[\#D4AF37\].text-black,
+  .pdv-semaforo .bg-\[\#D4AF37\] .text-black { color: #FFFFFF !important; }
+  /* borda dourada de FAIXA (campanha, último bipe) segue dourada de propósito */
+
+  /* ═══════════════════════════════════════════════════════════════════════
      PDV LAB (/pdv2) — repaginação de marca Lurds Plus Size (boutique premium).
      Estratégia: REMAPEAR a paleta escura (preto/dourado) → vinho/dourado/creme
      em BLOCO, escopado em .pdv-lab, pra todas as ocorrências mudarem juntas
