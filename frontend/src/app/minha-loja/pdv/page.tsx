@@ -1076,6 +1076,26 @@ function PdvPageInner() {
   };
   const nightMode = colorTheme === 'dark';
 
+  // VISUAL SEMÁFORO (piloto da reforma do PDV, 29/08). Opt-in POR COMPUTADOR,
+  // em qualquer loja: os PDVs seguem iguais e só mudam se a loja escolher.
+  // "↩ REVERTER AGORA" volta na hora, sem tocar na venda aberta. Ativar força
+  // o modo claro — o semáforo é um sistema claro por definição.
+  const [temaSemaforo, setTemaSemaforo] = useState(false);
+  useEffect(() => {
+    try { if (localStorage.getItem('lurds_pdv_tema_semaforo') === '1') setTemaSemaforo(true); } catch {}
+  }, []);
+  const toggleTemaSemaforo = () => {
+    setTemaSemaforo((atual) => {
+      const next = !atual;
+      try { localStorage.setItem('lurds_pdv_tema_semaforo', next ? '1' : '0'); } catch {}
+      if (next && colorTheme === 'dark') {
+        setColorTheme('light');
+        try { localStorage.setItem('lurds_pdv_color_theme', 'light'); } catch {}
+      }
+      return next;
+    });
+  };
+
   const [quickConvenioAtivo, setQuickConvenioAtivo] = useState<{ id: string; nome: string } | null>(null);
   useEffect(() => {
     if (!storeCode) {
@@ -2380,9 +2400,9 @@ function PdvPageInner() {
 
   return (
     <div
-      className={`pdv1-skin pdv-dense-${densityUsada} ${nightMode ? 'pdv-night' : ''} min-h-screen flex flex-col`}
+      className={`pdv1-skin pdv-dense-${densityUsada} ${nightMode && !temaSemaforo ? 'pdv-night' : ''} ${temaSemaforo ? 'pdv-semaforo' : ''} min-h-screen flex flex-col`}
       style={{
-        background: nightMode ? '#0B1120' : '#FAFAF7',
+        background: temaSemaforo ? '#F6F6F5' : nightMode ? '#0B1120' : '#FAFAF7',
         zoom: uiZoom,
         // `zoom` reduz também os 100vh do root. Compensa a altura para não
         // deixar uma faixa do fundo global aparecendo abaixo do PDV.
@@ -2397,8 +2417,8 @@ function PdvPageInner() {
       <header
         className="sticky top-0 z-20"
         style={{
-          background: nightMode ? '#111827' : '#FFFFFF',
-          borderBottom: `1px solid ${nightMode ? '#334155' : '#EDEAE1'}`,
+          background: temaSemaforo ? '#FFFFFF' : nightMode ? '#111827' : '#FFFFFF',
+          borderBottom: `1px solid ${temaSemaforo ? '#E2E3E5' : nightMode ? '#334155' : '#EDEAE1'}`,
         }}
       >
         <div className="max-w-[1700px] mx-auto pl-3 pr-5 py-2.5 flex items-center gap-3">
@@ -2572,17 +2592,39 @@ function PdvPageInner() {
           <span className="hidden md:block"><HeaderClock /></span>
           <span className="hidden sm:block"><ConnBadge compact /></span>
 
-          {/* Preferência local deste computador; não interfere na venda aberta. */}
+          {/* Preferência local deste computador; não interfere na venda aberta.
+              Some com o visual semáforo ativo (o semáforo é claro por definição). */}
+          {!temaSemaforo && (
+            <button
+              type="button"
+              onClick={toggleColorTheme}
+              className="flex text-xs px-2.5 py-1.5 rounded-lg items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-slate-600 border border-slate-200 hover:border-[#CDA434] transition"
+              title={nightMode ? 'Voltar ao modo claro neste computador' : 'Escurecer o PDV neste computador'}
+              aria-label={nightMode ? 'Ativar modo claro' : 'Ativar modo noturno'}
+              aria-pressed={nightMode}
+            >
+              {nightMode ? <Sun className="w-3.5 h-3.5 text-[#D4AF37]" /> : <Moon className="w-3.5 h-3.5 text-slate-500" />}
+              <span className="hidden xl:inline">{nightMode ? 'Modo claro' : 'Modo noturno'}</span>
+            </button>
+          )}
+
+          {/* PILOTO DO VISUAL SEMÁFORO — opt-in por computador (29/08). Os PDVs
+              seguem iguais; só muda quem escolher, e reverte em 1 clique. */}
           <button
             type="button"
-            onClick={toggleColorTheme}
-            className="flex text-xs px-2.5 py-1.5 rounded-lg items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-slate-600 border border-slate-200 hover:border-[#CDA434] transition"
-            title={nightMode ? 'Voltar ao modo claro neste computador' : 'Escurecer o PDV neste computador'}
-            aria-label={nightMode ? 'Ativar modo claro' : 'Ativar modo noturno'}
-            aria-pressed={nightMode}
+            onClick={toggleTemaSemaforo}
+            className={`flex text-xs px-2.5 py-1.5 rounded-lg items-center gap-1.5 font-bold shrink-0 transition border ${
+              temaSemaforo
+                ? 'bg-white text-[#C4291A] border-[#F2C8C2] hover:bg-[#FBE9E7]'
+                : 'bg-[#2B2D31] text-white border-[#2B2D31] hover:bg-[#3a3d42]'
+            }`}
+            title={temaSemaforo
+              ? 'Volta pro visual atual NESTE computador, na hora — sem mexer na venda aberta'
+              : 'Testa o visual novo (semáforo) NESTE computador — dá pra reverter a qualquer momento'}
+            aria-pressed={temaSemaforo}
           >
-            {nightMode ? <Sun className="w-3.5 h-3.5 text-[#D4AF37]" /> : <Moon className="w-3.5 h-3.5 text-slate-500" />}
-            <span className="hidden xl:inline">{nightMode ? 'Modo claro' : 'Modo noturno'}</span>
+            {temaSemaforo ? <RotateCcw className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+            {temaSemaforo ? 'REVERTER AGORA' : 'Testar visual novo'}
           </button>
 
           {/* Rollback instantâneo do piloto visual — preferência local deste caixa. */}
