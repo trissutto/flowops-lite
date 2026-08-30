@@ -3850,6 +3850,7 @@ function PdvPageInner() {
           customerEmail={sale.customerEmail}
           customerPhone={sale.customerPhone}
           finalizing={finalizing}
+          semaforo={temaSemaforo}
           initialPayments={sale.payments || []}
           methodFilter={paymentFilter}
           presetMethod={presetMethod}
@@ -5505,6 +5506,7 @@ function PaymentModal({
   customerEmail,
   customerPhone,
   finalizing,
+  semaforo = false,
   initialPayments,
   methodFilter = 'all',
   presetMethod = null,
@@ -5531,6 +5533,8 @@ function PaymentModal({
   customerEmail?: string | null;
   customerPhone?: string | null;
   finalizing: boolean;
+  /** Piloto do visual semáforo: dinheiro em grafite, formas na ordem do uso. */
+  semaforo?: boolean;
   initialPayments?: Array<{ id: string; method: string; valor: number; details: string | null }>;
   /** Filtra quais métodos aparecem na grid: 'all' = todos, 'pix' = só PIX,
    *  'cartao' = débito + crédito, 'crediario' = só crediário. */
@@ -8216,12 +8220,29 @@ function PaymentModal({
             Mostra de uma vez: quanto foi pago, quanto falta, e o split visual em
             fatias coloridas (cada forma de pagamento tem cor). Quando completa 100%,
             barra fica toda verde com check. */}
-        <div className={`rounded-xl px-3 py-2 transition-colors ${pago100 ? 'bg-emerald-50 border border-emerald-300' : payments.length > 0 ? 'bg-amber-50 border border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
+        {/* No semáforo o dinheiro A COBRAR é GRAFITE (verde passa a significar
+            "em dia"): só o estado PAGO fica verde, e o que falta fica âmbar —
+            atenção, não erro. Fora do piloto, segue o visual atual. */}
+        <div className={`rounded-xl px-3 py-2 transition-colors ${
+          pago100
+            ? 'bg-emerald-50 border border-emerald-300'
+            : payments.length > 0
+              ? 'bg-amber-50 border border-amber-300'
+              : semaforo ? 'bg-[#FAFAF9] border border-[#E2E3E5]' : 'bg-slate-50 border border-slate-200'
+        }`}>
           <div className="flex items-baseline justify-between gap-2 mb-1.5">
-            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">
+            <span className={`uppercase font-bold tracking-wide ${semaforo ? 'text-[11px] text-[#6C6E73] font-black' : 'text-[10px] text-slate-500'}`}>
               {pago100 ? '✓ Pago' : payments.length > 0 ? 'Falta pagar' : 'Total a pagar'}
             </span>
-            <span className={`text-3xl font-black tabular-nums leading-none ${pago100 ? 'text-emerald-600' : payments.length > 0 ? 'text-rose-700' : 'text-[#2E7D46]'}`}>
+            <span className={`font-black tabular-nums leading-none whitespace-nowrap ${
+              semaforo && (brl(pago100 ? total : restante).length > 12) ? 'text-2xl' : 'text-3xl'
+            } ${
+              pago100
+                ? 'text-emerald-600'
+                : payments.length > 0
+                  ? (semaforo ? 'text-[#B4720F]' : 'text-rose-700')
+                  : (semaforo ? 'text-[#17181A]' : 'text-[#2E7D46]')
+            }`}>
               {pago100 ? brl(total) : brl(restante)}
             </span>
           </div>
@@ -8343,11 +8364,19 @@ function PaymentModal({
               )}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {[
-                ...PAYMENT_METHODS,
-                // CONVÊNIO só aparece na loja que tem convênio ativo (ex.: Indaiatuba)
-                ...(convenioAtivo ? [{ id: 'convenio', label: 'Convênio', icon: Handshake } as any] : []),
-              ]
+              {(() => {
+                const lista: any[] = [
+                  ...PAYMENT_METHODS,
+                  // CONVÊNIO só aparece na loja que tem convênio ativo (ex.: Indaiatuba)
+                  ...(convenioAtivo ? [{ id: 'convenio', label: 'Convênio', icon: Handshake } as any] : []),
+                ];
+                if (!semaforo) return lista;
+                // ORDEM DO USO REAL (medição de 60 dias): crédito 45% · débito
+                // 17% · PIX 12% · dinheiro 7%. A grade seguia a ordem em que as
+                // formas foram sendo criadas, com dinheiro no topo.
+                const ordem = ['credito', 'debito', 'pix', 'dinheiro', 'crediario', 'venda_online', 'convenio'];
+                return [...lista].sort((a, b) => ordem.indexOf(a.id) - ordem.indexOf(b.id));
+              })()
                 .filter((p) => {
                   if (effectiveFilter === 'all') return true;
                   if (effectiveFilter === 'pix') return p.id === 'pix';
@@ -8367,14 +8396,29 @@ function PaymentModal({
                     type="button"
                     onClick={() => !disabled && selectMethod(p.id)}
                     disabled={disabled}
-                    className={`px-3 py-2 rounded-lg border-2 text-sm font-bold transition-colors flex items-center justify-center gap-2 disabled:opacity-30 disabled:cursor-not-allowed ${
-                      isSelected
-                        ? isVendaOnline
-                          ? 'border-teal-600 bg-teal-50 text-teal-800'
-                          : 'border-[#CDA434] bg-[#FBF6E6] text-[#8C7325]'
-                        : isVendaOnline
-                        ? 'border-teal-300 bg-teal-50/40 text-teal-700 hover:border-teal-400'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                    className={`rounded-lg border-2 font-bold transition-colors flex items-center justify-center gap-2 disabled:opacity-30 disabled:cursor-not-allowed ${
+                      // No semáforo as duas formas que somam 62% das vendas
+                      // ganham corpo; a seleção é grafite (dourado sai de cena)
+                      // e a venda online usa o roxo do trilho guiado.
+                      semaforo
+                        ? `${(p.id === 'credito' || p.id === 'debito') ? 'px-3 py-3.5 text-[15px]' : 'px-3 py-2 text-sm'} ${
+                            isSelected
+                              ? isVendaOnline
+                                ? 'border-[#6B4FA8] bg-[#F0EBF9] text-[#6B4FA8]'
+                                : 'border-[#17181A] bg-[#F6F6F5] text-[#17181A]'
+                              : isVendaOnline
+                                ? 'border-[#D8CBEE] bg-[#F7F4FC] text-[#6B4FA8] hover:border-[#6B4FA8]'
+                                : 'border-[#E2E3E5] hover:border-[#9A9CA1] text-[#44464B]'
+                          }`
+                        : `px-3 py-2 text-sm ${
+                            isSelected
+                              ? isVendaOnline
+                                ? 'border-teal-600 bg-teal-50 text-teal-800'
+                                : 'border-[#CDA434] bg-[#FBF6E6] text-[#8C7325]'
+                              : isVendaOnline
+                                ? 'border-teal-300 bg-teal-50/40 text-teal-700 hover:border-teal-400'
+                                : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                          }`
                     }`}
                     title={
                       disabled
@@ -9569,8 +9613,10 @@ function PaymentModal({
             const valorAtualNum = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
             const vaiFinalizar = valorAtualNum > 0 && Math.abs(valorAtualNum - restante) < 0.01;
             const sobra = restante - valorAtualNum;
+            // O ✓ vem do ícone <Check> ao lado — no texto ele saía DUPLICADO
+            // ("✓ ✓ FINALIZAR") na tela da loja.
             const labelMain = vaiFinalizar
-              ? `✓ FINALIZAR · ${brl(valorAtualNum)}`
+              ? `FINALIZAR · ${brl(valorAtualNum)}`
               : selected === 'pix'
                 ? `Recebi o PIX · ${brl(valorAtualNum)} → faltam ${brl(sobra)}`
                 : `+ Adicionar ${brl(valorAtualNum)} · faltam ${brl(sobra)}`;
@@ -9586,9 +9632,20 @@ function PaymentModal({
                   (selected === 'convenio' && !convMembro)
                 }
                 className={`w-full px-3 py-4 font-black rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-all shadow-md ${
-                  vaiFinalizar
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-4 ring-emerald-300/60 text-lg'
-                    : 'bg-amber-500 hover:bg-amber-600 text-white'
+                  // Os dois estados do MESMO botão precisam se distinguir sem
+                  // depender do texto: FINALIZAR é grafite escuro com anel
+                  // (peso máximo) e ADICIONAR PARCIAL é um cinza claramente
+                  // mais claro. Os hovers escurecem cada um dentro da sua
+                  // faixa — o hover de um NÃO pode ser a cor de repouso do
+                  // outro, senão o ponteiro inverte a hierarquia bem na hora
+                  // do clique que fecha a venda.
+                  semaforo
+                    ? (vaiFinalizar
+                        ? 'bg-[#2B2D31] hover:bg-[#1F2124] text-white text-lg ring-4 ring-[#17181A]/20'
+                        : 'bg-[#6C6E73] hover:bg-[#5A5C61] text-white')
+                    : (vaiFinalizar
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-4 ring-emerald-300/60 text-lg'
+                        : 'bg-amber-500 hover:bg-amber-600 text-white')
                 }`}
               >
                 {addingPayment ? (
@@ -9608,7 +9665,11 @@ function PaymentModal({
                 void finalizarComLastro();
               }}
               disabled={finalizing}
-              className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 ring-4 ring-emerald-300/60 pdv-cta-attention"
+              className={`w-full px-3 py-3 text-white font-bold rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 ${
+                semaforo
+                  ? 'bg-[#2B2D31] hover:bg-[#1F2124] ring-4 ring-[#17181A]/20 pdv-cta-attention'
+                  : 'bg-emerald-600 hover:bg-emerald-700 ring-4 ring-emerald-300/60 pdv-cta-attention'
+              }`}
             >
               {finalizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-5 h-5" />}
               {finalizing ? 'Finalizando...' : 'Finalizar venda'}
@@ -9619,7 +9680,11 @@ function PaymentModal({
           <button
             onClick={onLater}
             disabled={finalizing}
-            className="w-full px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold rounded text-xs flex items-center justify-center gap-1.5"
+            className={`w-full px-3 py-1.5 font-semibold rounded text-xs flex items-center justify-center gap-1.5 border ${
+              semaforo
+                ? 'bg-[#FAFAF9] hover:bg-[#EDEEEF] text-[#44464B] border-[#E2E3E5]'
+                : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
+            }`}
             title="Pausar a venda — fica em aberto pra finalizar depois"
           >
             <Pause className="w-3.5 h-3.5" />
