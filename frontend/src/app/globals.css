@@ -32,29 +32,77 @@
      Estratégia (a mesma do .pdv-lab): remapear o chrome bege/dourado do tema
      claro → cinza/grafite do semáforo EM BLOCO. Dourado fica reservado ao
      que é CAMPANHA/comercial (faixas com border dourada); CTA vira grafite.
-     ══════════════════════════════════════════════════════════════════════ */
+
+     ⚠️ SELETOR POR ATRIBUTO, não por classe escapada (30/08): a 1ª versão
+     escrevia `.bg-\[\#FBF6E6\]` e NÃO pegava as variantes com opacidade
+     (`border-[#CDA434]/70`, `bg-[#FAF6E8]/60`) nem os `hover:` — o dourado
+     sobrava por toda a tela e o piloto parecia "não ter mudado nada". Com
+     `[class~="..."]` cada variante é coberta explicitamente. Lista extraída
+     do próprio page.tsx (32 classes douradas/bege em uso). */
   .pdv-semaforo { background: #F6F6F5; }
-  /* fundo geral e superfícies */
-  .pdv-semaforo .bg-\[\#FAFAF7\] { background-color: #F6F6F5 !important; }
-  .pdv-semaforo .bg-\[\#FBF6E6\] { background-color: #EDEEEF !important; }
-  .pdv-semaforo .hover\:bg-\[\#FBF6E6\]:hover { background-color: #EDEEEF !important; }
-  /* fios: bege → cinza neutro */
-  .pdv-semaforo .border-\[\#E5E2D9\],
-  .pdv-semaforo .border-\[\#EDEAE1\] { border-color: #E2E3E5 !important; }
-  .pdv-semaforo .border-\[\#CDA434\],
-  .pdv-semaforo .hover\:border-\[\#CDA434\]:hover { border-color: #C9CBCE !important; }
-  .pdv-semaforo .divide-\[\#F0EEE6\] > :not([hidden]) ~ :not([hidden]) { border-color: #EDEEEF !important; }
-  /* textos dourados do chrome → tinta neutra (dourado não é mais decoração) */
-  .pdv-semaforo .text-\[\#8C7325\] { color: #44464B !important; }
-  .pdv-semaforo .text-\[\#B58A1E\],
-  .pdv-semaforo .text-\[\#B8912B\] { color: #6C6E73 !important; }
-  .pdv-semaforo .text-\[\#D4AF37\] { color: #8C7325 !important; }
-  .pdv-semaforo .ring-\[\#D4AF37\]\/50 { --tw-ring-color: rgb(23 24 26 / 0.35) !important; }
-  /* pílulas/CTAs dourados → ação grafite do semáforo */
-  .pdv-semaforo .bg-\[\#D4AF37\] { background-color: #2B2D31 !important; }
-  .pdv-semaforo .bg-\[\#D4AF37\].text-black,
-  .pdv-semaforo .bg-\[\#D4AF37\] .text-black { color: #FFFFFF !important; }
-  /* borda dourada de FAIXA (campanha, último bipe) segue dourada de propósito */
+
+  /* ── superfícies bege/dourado-claro → cinza do semáforo ── */
+  .pdv-semaforo [class~="bg-[#FAFAF7]"] { background-color: #F6F6F5 !important; }
+  .pdv-semaforo [class~="bg-[#FBF6E6]"],
+  .pdv-semaforo [class~="bg-[#FBF6E6]/40"],
+  .pdv-semaforo [class~="bg-[#FBF6E6]/60"],
+  .pdv-semaforo [class~="bg-[#FAF6E8]"],
+  .pdv-semaforo [class~="bg-[#FAF6E8]/40"],
+  .pdv-semaforo [class~="bg-[#FAF6E8]/50"],
+  .pdv-semaforo [class~="bg-[#FAF6E8]/60"],
+  .pdv-semaforo [class~="bg-[#FAF6E8]/70"],
+  .pdv-semaforo [class~="bg-[#D4AF37]/15"],
+  .pdv-semaforo [class~="bg-[#EDEAE1]"] { background-color: #EDEEEF !important; }
+  /* variantes `hover:` ficam com a classe ESCAPADA: um `:` dentro do valor do
+     seletor de atributo faz o parser do postcss reclamar ("Expected a
+     pseudo-class or pseudo-element") e derruba o CSS inteiro. */
+  .pdv-semaforo .hover\:bg-\[\#FBF6E6\]:hover,
+  .pdv-semaforo .hover\:bg-\[\#FBF6E6\]\/40:hover,
+  .pdv-semaforo .hover\:bg-\[\#FAF6E8\]:hover,
+  .pdv-semaforo .hover\:bg-\[\#FAF6E8\]\/50:hover { background-color: #E6E7E9 !important; }
+
+  /* ── CTA dourado sólido → ação grafite ── */
+  .pdv-semaforo [class~="bg-[#D4AF37]"],
+  .pdv-semaforo [class~="bg-[#B8912B]"],
+  .pdv-semaforo [class~="bg-[#CDA434]"],
+  .pdv-semaforo [class~="bg-[#8C7325]"] { background-color: #2B2D31 !important; color: #FFFFFF !important; }
+  .pdv-semaforo [class~="bg-[#D4AF37]"] .text-black,
+  .pdv-semaforo [class~="bg-[#B8912B]"] .text-black { color: #FFFFFF !important; }
+
+  /* ── fios: bege e dourado → cinza neutro ── */
+  .pdv-semaforo [class~="border-[#E5E2D9]"],
+  .pdv-semaforo [class~="border-[#EDEAE1]"],
+  .pdv-semaforo [class~="border-[#F0EEE6]"] { border-color: #E2E3E5 !important; }
+  .pdv-semaforo [class~="border-[#CDA434]"],
+  .pdv-semaforo [class~="border-[#CDA434]/70"],
+  .pdv-semaforo [class~="border-[#D4AF37]"],
+  .pdv-semaforo [class~="border-[#D4AF37]/60"],
+  .pdv-semaforo [class~="border-[#B8912B]"],
+  .pdv-semaforo [class~="border-[#8C7325]"] { border-color: #C9CBCE !important; }
+  .pdv-semaforo .hover\:border-\[\#CDA434\]:hover,
+  .pdv-semaforo .hover\:border-\[\#CDA434\]\/70:hover,
+  .pdv-semaforo .hover\:border-\[\#D4AF37\]:hover { border-color: #9A9CA1 !important; }
+  .pdv-semaforo [class~="divide-[#F0EEE6]"] > :not([hidden]) ~ :not([hidden]) { border-color: #EDEEEF !important; }
+
+  /* ── tinta: dourado do chrome → neutro (dourado deixa de ser decoração) ── */
+  .pdv-semaforo [class~="text-[#8C7325]"] { color: #44464B !important; }
+  .pdv-semaforo [class~="text-[#B8912B]"],
+  .pdv-semaforo [class~="text-[#B58A1E]"],
+  .pdv-semaforo [class~="text-[#D4AF37]"] { color: #6C6E73 !important; }
+  .pdv-semaforo .hover\:text-\[\#8C7325\]:hover { color: #17181A !important; }
+
+  /* ── anéis e faixa do último bipe ── */
+  .pdv-semaforo [class~="ring-[#D4AF37]"],
+  .pdv-semaforo [class~="ring-[#D4AF37]/50"] { --tw-ring-color: rgb(23 24 26 / 0.30) !important; }
+  .pdv-semaforo [class~="shadow-[inset_3px_0_0_0_#D4AF37]"] { box-shadow: inset 3px 0 0 0 #17181A !important; }
+
+  /* ── dois casos que não vêm por classe ──
+     A lupa da bipagem pinta o dourado por STYLE INLINE (não há classe pra
+     remapear) e a bolinha "Teste de deploy" é resíduo de validação que nunca
+     saiu do header — no piloto ela some. O badge ÂMBAR de desconto manual
+     fica: âmbar = atenção, e desconto na mão é exatamente isso. */
+  .pdv-semaforo [title="Buscar / adicionar (Enter)"] { background: #2B2D31 !important; }
+  .pdv-semaforo [title="Teste de deploy"] { display: none !important; }
 
   /* ═══════════════════════════════════════════════════════════════════════
      PDV LAB (/pdv2) — repaginação de marca Lurds Plus Size (boutique premium).
