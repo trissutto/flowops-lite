@@ -3258,7 +3258,12 @@ function PdvPageInner() {
           </div>
         )}
 
-        {checkoutLayout === 'highlighted' && (!sale || sale.status === 'open') && (
+        {/* No visual semáforo o dock sai: CRÉDITO/DÉBITO passam a ser os dois
+            botões grandes do painel (hierarquia por uso) e as bandeiras
+            aparecem com logo GRANDE no passo 1 do trilho. Manter os dois seria
+            dois caminhos visíveis pro mesmo dinheiro, com comportamento
+            diferente — a hierarquia prometida não seria a que a vendedora vive. */}
+        {!temaSemaforo && checkoutLayout === 'highlighted' && (!sale || sale.status === 'open') && (
           <QuickCardBrandDock
             disabled={(saleView.items?.length ?? 0) === 0 || (saleView.total || 0) <= 0}
             onCredit={(brand) => venderCredito(brand)}
@@ -3384,16 +3389,27 @@ function PdvPageInner() {
               linha inteira, bem maior: número preto e pesado lê melhor num fundo
               cinza e para de competir com o alerta. Verde passa a significar
               "em dia/ganho". Fora do piloto, segue o layout atual em verde. */}
-          {temaSemaforo ? (
+          {temaSemaforo ? (() => {
+            // O número encolhe conforme cresce: a 46px o card (286px úteis)
+            // comporta até "R$ 9.999,99" — de R$ 10 mil pra cima o valor
+            // pintava PRA FORA do cartão (venda de crediário/atacado passa
+            // disso). Escada medida no DOM, não estimada.
+            const txt = ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido);
+            const corpo = txt.length <= 11 ? 'text-[46px]' : txt.length <= 13 ? 'text-[38px]' : 'text-[30px]';
+            return (
             <div className="border-t border-[#E2E3E5] pt-3">
-              <div className="text-[11px] font-black tracking-[0.14em] text-slate-400 uppercase">
+              {/* rótulo em ink-soft (contraste 5:1): é ele que separa
+                  "Total a pagar" de "Falta a pagar" e de "Sobra crédito" —
+                  três significados opostos pro mesmo número grande. */}
+              <div className="text-[12px] font-black tracking-[0.12em] text-[#6C6E73] uppercase">
                 {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
               </div>
-              <div className={`font-black tabular-nums leading-none mt-1 ${ehCredito ? 'text-[#C4291A] text-[40px]' : 'text-[#17181A] text-[46px]'}`}>
-                {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
+              <div className={`font-black tabular-nums leading-none mt-1 whitespace-nowrap ${corpo} ${ehCredito ? 'text-[#C4291A]' : 'text-[#17181A]'}`}>
+                {txt}
               </div>
             </div>
-          ) : (
+            );
+          })() : (
             <div className="border-t border-[#F0EEE6] pt-2.5 flex justify-between items-baseline">
               <span className="text-sm font-semibold text-slate-600">
                 {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
@@ -11095,7 +11111,7 @@ function QuickSecondaryPaymentPanel({
    * dinheiro; convênio (4 usos em 60d) só aparece na loja que tem.
    */
   if (semaforo) {
-    const grande = 'min-h-[64px] min-w-0 rounded-xl border border-[#E2E3E5] bg-white px-3 py-2 flex flex-col items-start justify-center gap-0.5 hover:border-[#17181A] hover:bg-[#FAFAF9] transition disabled:opacity-35 disabled:cursor-not-allowed';
+    const grande = 'min-h-[64px] min-w-0 rounded-xl border border-[#E2E3E5] bg-white px-3 py-2 flex flex-col items-start justify-center gap-0.5 whitespace-nowrap hover:border-[#17181A] hover:bg-[#FAFAF9] transition disabled:opacity-35 disabled:cursor-not-allowed';
     const menor = 'min-h-[44px] min-w-0 rounded-lg border border-[#E2E3E5] bg-[#FAFAF9] px-2 py-1.5 flex items-center justify-center gap-1.5 text-[11.5px] font-bold text-slate-600 hover:border-[#9A9CA1] hover:text-[#17181A] transition disabled:opacity-35 disabled:cursor-not-allowed whitespace-nowrap';
     return (
       <section
@@ -11118,8 +11134,11 @@ function QuickSecondaryPaymentPanel({
             <span className="text-[14px] font-black text-[#17181A] flex items-center gap-1.5"><QrCode className="w-4 h-4 text-[#32BCAD]" />PIX</span>
             <span className="text-[10px] font-semibold text-slate-400">12% · QR na tela</span>
           </button>
+          {/* sem a seta no rótulo: "VENDA ONLINE →" não cabe na coluna de
+              119px e quebrava deixando a seta órfã numa linha só, o que ainda
+              esticava o botão do PIX ao lado (grid stretch). */}
           <button type="button" onClick={onVendaOnline} disabled={disabled} className={`${grande} border-[#D8CBEE] bg-[#F7F4FC] hover:border-[#6B4FA8]`}>
-            <span className="text-[14px] font-black text-[#6B4FA8]">VENDA ONLINE →</span>
+            <span className="text-[14px] font-black text-[#6B4FA8]">VENDA ONLINE</span>
             <span className="text-[10px] font-semibold text-slate-400">passo a passo</span>
           </button>
         </div>
