@@ -4813,17 +4813,37 @@ export class PdvService {
 
     // Venda veio de "Puxar marcados" → DEVOLVE as peças pra tela de Marcados
     // (status 'puxado' → 'ativo'). Sem isso ficariam presas fora da tela.
+    //
+    // ⚠️ `marcadosRegistros` guarda `Marcado.id` (cuid) desde 07/08 — o nome do
+    // campo é histórico. Este trecho ficou pra trás fazendo `Number(id)`, que
+    // dá NaN num cuid e filtrava TUDO: cancelar a venda não devolvia peça
+    // nenhuma. A peça sumia da tela de Marcados (presa em 'puxado') e a
+    // vendedora, sem ela na tela, acabava resolvendo por outro caminho.
+    // Medido em 31/08: 50 peças presas, R$ 4.495,15. Mesma chave que o
+    // `erpStepFecharMarcados` já usava certo. As numéricas cobrem a venda
+    // legada (pré-07/08), quando o campo guardava REGISTRO do Giga de verdade.
     try {
-      const regsM = String((sale as any).marcadosRegistros || '')
+      const ids = String((sale as any).marcadosRegistros || '')
         .split(',')
-        .map((s: string) => Number(s.trim()))
-        .filter((n: number) => Number.isFinite(n) && n > 0);
-      if (regsM.length) {
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+      if (ids.length) {
+        const legados = ids
+          .filter((s) => /^\d+$/.test(s))
+          .map((s) => BigInt(s));
         const r = await (this.prisma as any).marcado.updateMany({
-          where: { registroGiga: { in: regsM.map((n) => BigInt(n)) }, status: 'puxado', saleId: sale.id },
+          where: {
+            status: 'puxado',
+            saleId: sale.id,
+            OR: [
+              { id: { in: ids } },
+              ...(legados.length ? [{ registroGiga: { in: legados } }] : []),
+            ],
+          },
           data: { status: 'ativo', saleId: null },
         });
         if (r?.count) this.logger.log(`[pdv] cancel: ${r.count} marcado(s) devolvido(s) pra tela (venda ${sale.id})`);
+        else this.logger.warn(`[pdv] cancel: venda ${sale.id} tinha ${ids.length} marcado(s) mas nenhum voltou pra 'ativo'`);
       }
     } catch (e: any) {
       this.logger.warn(`[pdv] cancel: erro ao devolver marcados pra tela: ${e?.message || e}`);
