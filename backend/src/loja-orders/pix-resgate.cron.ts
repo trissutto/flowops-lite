@@ -43,6 +43,14 @@ export class PixResgateCron {
   private static readonly MAX_POR_CICLO = 20;
 
   /**
+   * Quanto tempo separa dois checkouts da MESMA compra. Os dois casos reais
+   * (LP-001039 em 31/08 e LP-000285 em 27/08) refizeram em 5 minutos; 2h é
+   * folga pra cliente que sai, resolve com o banco e volta — sem alcançar a
+   * compra que ela fez de novo outro dia.
+   */
+  private static readonly JANELA_GEMEO_MS = 2 * 60 * 60 * 1000;
+
+  /**
    * Validade do PIX da Pagar.me — depois disso o código morreu.
    *
    * MESMA env e MESMA expressão de `LojaOrdersService.PIX_EXPIRA_MIN`
@@ -157,6 +165,29 @@ export class PixResgateCron {
       });
       if (fresco?.paidAt || fresco?.status !== 'awaiting_payment') continue;
 
+      /**
+       * ...E O PAGAMENTO PODE TER ENTRADO NO PEDIDO GÊMEO (31/08).
+       *
+       * O guard acima cobre "pagou ESTE pedido". Falta o que aconteceu de
+       * verdade com a Rosana (LP-001039, 31/08): ela abriu o checkout, não
+       * pagou aquele QR, REFEZ 5 minutos depois e pagou o segundo
+       * (LP-001041, 00:55). Às 01:20 o cron olhou o primeiro — sozinho,
+       * ainda `awaiting_payment` — e mandou "seu PIX não foi pago" pra uma
+       * cliente que tinha pago 25 minutos antes. Ela respondeu com o
+       * comprovante, e a loja passou a tarde tentando casar aquele
+       * comprovante com o pedido errado (o gêmeo já estava até enviado).
+       *
+       * Não é caso isolado: a mesma coisa com a LP-000285 em 27/08, também
+       * ~26 min depois de pagar. São os 30min de espera do resgate caindo
+       * exatamente na janela em que a cliente refaz a compra.
+       *
+       * Assinatura do checkout refeito, e só ela: MESMA cliente, MESMO
+       * valor, criados a menos de 2h um do outro. Cliente que faz dois
+       * pedidos DIFERENTES no mesmo dia continua recebendo o resgate — é a
+       * venda que o cron existe pra salvar.
+       */
+      if (await this.clienteJaPagouOGemeo(pedido)) continue;
+
       const entregue = await this.pedidoEmail.aoPixNaoPago(pedido);
       if (!entregue) continue; // rede/n8n fora — o próximo ciclo tenta de novo
 
@@ -168,6 +199,51 @@ export class PixResgateCron {
         `[pix-resgate] toque enviado — pedido ${pedido.wcOrderNumber ?? pedido.id} (R$ ${pedido.totalAmount ?? '?'})`,
       );
     }
+  }
+
+  /**
+   * A cliente já pagou um pedido GÊMEO deste? (checkout refeito)
+   *
+   * Casa por CPF quando existe, senão por telefone — o pedido do site pode
+   * chegar sem CPF, e aí o telefone é o que a cliente repete no segundo
+   * checkout. Sem nenhum dos dois não dá pra afirmar que é a mesma pessoa, e
+   * na dúvida o toque SAI (perder o resgate é venda perdida certa).
+   *
+   * NÃO carimba `pixResgateAvisadoEm` ao pular: o campo significa "o toque
+   * foi entregue", e aqui ele não foi. O fantasma sai da fila sozinho quando
+   * o PIX vence — o piso da busca é a validade do código.
+   */
+  private async clienteJaPagouOGemeo(pedido: any): Promise<boolean> {
+    const cpf = String(pedido?.customerCpf || '').replace(/\D/g, '');
+    const fone = String(pedido?.customerPhone || '').replace(/\D/g, '');
+    const quem = cpf ? { customerCpf: pedido.customerCpf } : fone ? { customerPhone: pedido.customerPhone } : null;
+    if (!quem) return false;
+    if (pedido?.totalAmount == null) return false;
+
+    const nascimento = new Date(pedido.createdAt).getTime();
+    const gemeo = await (this.prisma as any).order
+      .findFirst({
+        where: {
+          ...quem,
+          id: { not: pedido.id },
+          paidAt: { not: null },
+          totalAmount: pedido.totalAmount,
+          createdAt: {
+            gte: new Date(nascimento - PixResgateCron.JANELA_GEMEO_MS),
+            lte: new Date(nascimento + PixResgateCron.JANELA_GEMEO_MS),
+          },
+        },
+        select: { wcOrderNumber: true, paidAt: true },
+      })
+      .catch(() => null);
+    if (!gemeo) return false;
+
+    this.logger.log(
+      `[pix-resgate] toque RETIDO — ${pedido.wcOrderNumber ?? pedido.id} (R$ ${pedido.totalAmount}) é ` +
+        `checkout refeito: a cliente já pagou ${gemeo.wcOrderNumber ?? '(gêmeo)'}. ` +
+        `Dizer "você não pagou" pra quem pagou é o jeito mais rápido de perder a confiança dela.`,
+    );
+    return true;
   }
 
   private temConsentimento(trackingInfo: unknown): boolean {

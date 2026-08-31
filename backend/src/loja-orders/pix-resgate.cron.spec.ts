@@ -8,19 +8,25 @@ function montar(opts: {
   pendentes?: any[];
   env?: Record<string, string | undefined>;
   aoPixNaoPago?: jest.Mock;
+
+  findFirst?: jest.Mock;
 } = {}) {
   const findMany = jest.fn().mockResolvedValue(opts.pendentes ?? []);
   const findUnique = jest.fn().mockResolvedValue({ paidAt: null, status: 'awaiting_payment' });
+  // Pedido GÊMEO pago (checkout refeito) — por padrão não existe.
+
+  const findFirst = opts.findFirst ?? jest.fn().mockResolvedValue(null);
+
   const update = jest.fn().mockResolvedValue({});
   const aoPixNaoPago = opts.aoPixNaoPago ?? jest.fn().mockResolvedValue(true);
   const config = { get: jest.fn((chave: string) => opts.env?.[chave]) };
   const cron = new PixResgateCron(
-    { order: { findMany, findUnique, update } } as any,
+    { order: { findMany, findUnique, findFirst, update } } as any,
     config as any,
     { aoPixNaoPago } as any,
   );
   const warn = jest.spyOn((cron as any).logger, 'warn').mockImplementation(() => undefined);
-  return { cron, findMany, findUnique, update, aoPixNaoPago, warn };
+  return { cron, findMany, findUnique, findFirst, update, aoPixNaoPago, warn };
 }
 
 describe('PixResgateCron', () => {
@@ -176,5 +182,94 @@ describe('PixResgateCron', () => {
       expect(aoPixNaoPago).toHaveBeenCalledTimes(1);
       expect(aoPixNaoPago).toHaveBeenCalledWith(pixVivo);
     });
+  });
+});
+
+/**
+ * CHECKOUT REFEITO (31/08) — a cliente que pagou o gêmeo não pode ouvir
+ * "seu PIX não foi pago". Caso real: Rosana, LP-001039 × LP-001041.
+ */
+describe('PixResgateCron — cliente refez o checkout', () => {
+  beforeEach(() => {
+    jest.spyOn(Date, 'now').mockReturnValue(AGORA);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  /** O fantasma: criado 5min antes do gêmeo, nunca pago. */
+  const fantasma = (over: any = {}) => ({
+    id: 'LP-001039',
+    wcOrderNumber: 'LP-001039',
+    status: 'awaiting_payment',
+    paidAt: null,
+    customerCpf: '12545656801',
+    customerPhone: '11961365907',
+    totalAmount: 123.89,
+    createdAt: new Date(AGORA - 40 * MIN),
+    trackingInfo: JSON.stringify({ recovery_consent: true }),
+    items: [],
+    ...over,
+  });
+
+  it('NÃO toca a cliente que já pagou um pedido gêmeo', async () => {
+    const findFirst = jest.fn().mockResolvedValue({
+      wcOrderNumber: 'LP-001041',
+      paidAt: new Date(AGORA - 35 * MIN),
+    });
+    const { cron, aoPixNaoPago, update } = montar({ pendentes: [fantasma()], findFirst });
+
+    await cron.ciclo();
+
+    expect(aoPixNaoPago).not.toHaveBeenCalled();
+    // E não mente no carimbo: o toque não foi entregue, então não é "avisado".
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('procura o gêmeo pela MESMA cliente, MESMO valor e janela curta', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const { cron } = montar({ pendentes: [fantasma()], findFirst });
+
+    await cron.ciclo();
+
+    const where = findFirst.mock.calls[0][0].where;
+    expect(where.customerCpf).toBe('12545656801');
+    expect(where.totalAmount).toBe(123.89);
+    expect(where.paidAt).toEqual({ not: null });
+    expect(where.id).toEqual({ not: 'LP-001039' });
+    const janelaH =
+      (where.createdAt.lte.getTime() - where.createdAt.gte.getTime()) / 3_600_000;
+    expect(janelaH).toBe(4); // ±2h
+  });
+
+  it('sem gêmeo pago, o resgate sai normalmente — a venda que o cron existe pra salvar', async () => {
+    const { cron, aoPixNaoPago, update } = montar({ pendentes: [fantasma()] });
+
+    await cron.ciclo();
+
+    expect(aoPixNaoPago).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'LP-001039' } }),
+    );
+  });
+
+  it('cliente sem CPF casa por telefone', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const { cron } = montar({ pendentes: [fantasma({ customerCpf: null })], findFirst });
+
+    await cron.ciclo();
+
+    expect(findFirst.mock.calls[0][0].where.customerPhone).toBe('11961365907');
+  });
+
+  it('sem CPF e sem telefone o toque SAI — não dá pra afirmar que é a mesma pessoa', async () => {
+    const findFirst = jest.fn().mockResolvedValue({ wcOrderNumber: 'QUALQUER' });
+    const { cron, aoPixNaoPago } = montar({
+      pendentes: [fantasma({ customerCpf: null, customerPhone: null })],
+      findFirst,
+    });
+
+    await cron.ciclo();
+
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(aoPixNaoPago).toHaveBeenCalledTimes(1);
   });
 });
