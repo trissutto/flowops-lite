@@ -21,12 +21,27 @@ import type { Product } from '@/types';
  * peças: "o que custa R$ 340 e eu ia querer?". Na prática o aviso informava o
  * quanto faltava pra desistir.
  *
- * Aqui a diferença vira prateleira: peças cujo preço FECHA A CONTA sozinho —
- * de `falta` até `falta × 1,6`. O teto existe pra não oferecer um vestido de
- * R$ 900 pra fechar um buraco de R$ 40 (ela pagaria R$ 860 pra economizar o
- * frete, e isso não é oferta, é pegadinha). O piso é a própria falta: peça
- * mais barata que isso não resolve, e sugerir "leve mais três" é pedir
- * trabalho.
+ * Aqui a diferença vira prateleira: peças que aproximam a sacola do frete
+ * grátis. O TETO (`falta × 1,6`) existe pra não oferecer um vestido de R$ 900
+ * pra fechar um buraco de R$ 40 — ela pagaria R$ 860 pra economizar o frete, e
+ * isso não é oferta, é pegadinha.
+ *
+ * ── O PISO ESTAVA ERRADO (corrigido 31/08/2026, achado do dono) ──
+ *
+ * O piso era a PRÓPRIA FALTA: só entrava peça capaz de fechar a conta sozinha.
+ * A premissa é falsa — **a cliente pode levar mais de uma peça**, e é isso que
+ * ela faz.
+ *
+ * O estrago, medido: com a régua em R$ 499,90 e a mediana do pedido em
+ * R$ 149,89, faltam ~R$ 350 na sacola típica. O piso antigo mandava procurar
+ * peça de R$ 350 a R$ 560 — **49 das 734 no ar**, e todas erradas pro momento:
+ * "leve um vestido de R$ 400 pra economizar R$ 10 de frete". Deu **3 cliques em
+ * 7 dias**. Com o piso em `falta / 3`, a mesma sacola passa a ver **595 peças**,
+ * e ela soma as que quiser — a barra anda a cada uma, e este bloco recalcula
+ * sozinho porque `falta` é dependência do efeito.
+ *
+ * O título acompanha: prometer "qualquer uma destas fecha a conta" quando
+ * nenhuma fecha é a mesma mentira do sentido contrário.
  *
  * Não aparece quando o frete grátis está desligado, quando ela já bateu a
  * régua, ou quando o catálogo não tem nada na faixa — prateleira que não
@@ -35,6 +50,14 @@ import type { Product } from '@/types';
 
 /** Até quanto acima da falta ainda é uma sugestão honesta. */
 const TETO_DA_FAIXA = 1.6;
+
+/**
+ * Em quantas peças a cliente pode fechar a conta. Três é o que separa
+ * "sugestão" de "lista de compras": com a falta dividida por três, a peça mais
+ * barata da faixa ainda representa um terço do caminho — abaixo disso a
+ * prateleira viraria catálogo inteiro e não ajudaria a decidir nada.
+ */
+const PECAS_PARA_FECHAR = 3;
 
 export function CompletarFreteGratis({ subtotal }: { subtotal: number }) {
   const { freteGratis } = useLojaConfig();
@@ -52,7 +75,8 @@ export function CompletarFreteGratis({ subtotal }: { subtotal: number }) {
     }
     const controller = new AbortController();
     const params = new URLSearchParams({
-      precoMin: falta.toFixed(2),
+      // O piso é a falta DIVIDIDA, não a falta: ela pode levar mais de uma.
+      precoMin: (falta / PECAS_PARA_FECHAR).toFixed(2),
       precoMax: (falta * TETO_DA_FAIXA).toFixed(2),
       // Mais barata primeiro: entre as que resolvem, a que custa menos é a
       // que a cliente aceita sem pensar duas vezes.
@@ -78,13 +102,29 @@ export function CompletarFreteGratis({ subtotal }: { subtotal: number }) {
 
   if (!vale || !pecas?.length) return null;
 
+  /**
+   * Alguma das peças na tela fecha a conta SOZINHA? A resposta muda a promessa
+   * do título — e ela é lida das peças que de fato vieram, não do palpite da
+   * faixa. Com o frete grátis longe, nenhuma fecha, e prometer que fecha seria
+   * a mesma mentira que este bloco existe pra desfazer.
+   */
+  const alguemFecha = pecas.some((p) => p.price >= falta);
+
   return (
     <Section space="sm" width="wide" aria-labelledby="completar-frete">
       <SectionTitle
         id="completar-frete"
         eyebrow="Frete grátis"
-        title={`Faltam ${formatPrice(falta)} — qualquer uma destas fecha a conta`}
-        description="Peças que sozinhas levam sua sacola até o frete por nossa conta."
+        title={
+          alguemFecha
+            ? `Faltam ${formatPrice(falta)} — qualquer uma destas fecha a conta`
+            : `Faltam ${formatPrice(falta)} para o frete grátis`
+        }
+        description={
+          alguemFecha
+            ? 'Peças que sozinhas levam sua sacola até o frete por nossa conta.'
+            : 'Vá somando: a cada peça a barra anda, e esta lista se ajusta ao que ainda falta.'
+        }
         align="left"
       />
       <div className="mt-8">
