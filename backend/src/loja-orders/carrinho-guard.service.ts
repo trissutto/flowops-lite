@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { reservaLigada, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { PromoSiteService } from '../promo-site/promo-site.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 
@@ -126,7 +127,22 @@ export type ResultadoGuard =
   /** `item` só vem na recusa por PREÇO — as outras recusas (esgotou, saiu do
    *  site, cor/tamanho sumiu) já dizem o que fazer e não têm valor a corrigir.
    *  `motivo`/`ref` vêm SEMPRE: são o que a tela de Alertas lê. */
-  | { ok: false; erro: string; motivo: MotivoRecusa; ref?: string; item?: ItemRecusado }
+  | {
+      ok: false;
+      erro: string;
+      motivo: MotivoRecusa;
+      ref?: string;
+      item?: ItemRecusado;
+      /**
+       * Só em `estoque_insuficiente`: QUANTAS sobraram de verdade.
+       *
+       * Existe pro site poder oferecer "deixar N unidades e continuar" em vez
+       * de mandar a cliente sair do checkout, abrir a sacola, achar a peça e
+       * ajustar a quantidade na mão. Medido em 31/08: 151 tentativas de pagar
+       * em 41 sessões — 3,7 por pessoa — batendo nessa parede.
+       */
+      disponivel?: number;
+    }
   | { ok: true; itens: ItemConferido[]; subtotal: number };
 
 /** Linha crua do espelho. */
@@ -229,125 +245,28 @@ export class CarrinhoGuardService {
    * ESTOQUE JÁ PROMETIDO A OUTRA CLIENTE — a peça vendida que ainda não saiu
    * da arara.
    *
-   * ── O PROBLEMA ──
+   * ⚠️ A REGRA NÃO MORA MAIS AQUI. Ela é `common/estoque-reservado.ts`, e é a
+   * MESMA que a VITRINE lê desde 31/08 (`LojaCatalogService.SQL_VARIACOES`).
    *
-   * O estoque de um pedido do site só baixa quando a loja BIPA a peça na
-   * separação. Entre "cliente pagou" e "loja bipou" passam horas, e nessa
-   * janela `wincred_estoque` ainda conta a peça como disponível. Duas clientes
-   * comprando a última unidade com meia hora de diferença passam as duas: o
-   * sistema cobra as duas, e alguém liga pra uma delas desmarcando a compra.
+   * Enquanto eram dois textos de SQL, a grade da peça mostrava disponível e
+   * este guarda recusava no clique de pagar: **151 recusas por "esgotou" em 41
+   * sessões numa semana, 30 delas sem comprar nada**, e 108 dessas recusas numa
+   * peça só — a BMM-100, com 582 unidades na rede. O motivo, o porquê de
+   * deduzir em vez de reservar e os kill-switches estão documentados lá.
    *
-   * Não é só corrida de milissegundos entre dois checkouts simultâneos — essa
-   * é a versão rara. A versão comum é a janela de horas, e numa live ou
-   * campanha em peça de estoque baixo ela é quase garantida.
-   *
-   * ── POR QUE DEDUZIR EM VEZ DE RESERVAR ──
-   *
-   * A alternativa seria baixar o estoque na hora do pedido, ou manter uma
-   * tabela de reservas. As duas criam estado novo pra sincronizar, e estado
-   * que precisa ser liberado (pedido cancelado, PIX expirado, separação
-   * concluída) é estado que uma hora vaza: reserva órfã trava peça boa e
-   * ninguém descobre até a peça "sumir" da vitrine com estoque na arara.
-   *
-   * Aqui não há o que liberar. O compromisso é DERIVADO dos pedidos que
-   * existem: o pedido sai da lista de status vivos e para de reservar
-   * sozinho, no mesmo instante, sem cron e sem compensação.
-   *
-   * ── QUAIS PEDIDOS CONTAM ──
-   *
-   * Pago e ainda não separado conta sempre. AGUARDANDO PAGAMENTO NÃO CONTA
-   * MAIS (dono, 17/08: "não separa nada, se vender eu estorno") — pedido sem
-   * dinheiro na conta não tira peça da vitrine de ninguém. Enviado/entregue
-   * não conta — ali o estoque JÁ baixou, e contar de novo tiraria a peça
-   * duas vezes.
-   *
-   * Kill-switch: `CARRINHO_RESERVA=0` volta ao comportamento antigo.
+   * O filtro por SKU fica por FORA da consulta compartilhada porque aquele
+   * trecho não pode ter placeholder (ele é interpolado no `SQL_VARIACOES`, que
+   * já usa os seus). A consulta inteira custa 0,9 ms; filtrar depois não pesa.
    */
-  private static readonly STATUS_QUE_RESERVAM = [
-    'processing',
-    'routing',
-    'awaiting_stock',
-    'separating',
-  ];
-  /**
-   * ZERO. PEDIDO NÃO PAGO NÃO SEGURA PEÇA (dono, 17/08).
-   *
-   * Eram 3 horas. A decisão do dono foi explícita: "não separa nada, se
-   * vender eu estorno".
-   *
-   * A troca, dita por quem paga a conta: peça parada na vitrine por causa de
-   * um PIX que talvez nunca seja pago é venda perdida CERTA; venda dupla é
-   * um risco que existe, é raro, e tem conserto — estorno. Entre perder
-   * venda todo dia e estornar de vez em quando, ele escolhe estornar.
-   *
-   * Vale ainda mais com a validade do PIX em 24h: reservar por um dia
-   * inteiro tiraria da vitrine boa parte do catálogo de número escasso.
-   *
-   * Zero desliga a janela: nenhum `awaiting_payment` entra na conta do
-   * reservado, em nenhum momento. O que continua reservando é só pedido
-   * PAGO e ainda não separado — esse é compromisso de verdade.
-   */
-  private static readonly HORAS_PENDENTE = 0;
-
-  /**
-   * 🔴 TETO DE IDADE DA RESERVA (22/08) — reserva eterna é reserva errada.
-   *
-   * O que aconteceu: 103 pedidos parados em `separating`, o mais antigo de
-   * 27/04 (quase 4 meses), segurando 225 peças. Como `separating` reserva pra
-   * sempre, o disponível de 61 variações ficava <= 0 — e 25 delas tinham peça
-   * DE VERDADE na arara. O checkout recusava com `catalog_unavailable`, a
-   * frase mandava "atualize a página", e atualizar não mudava nada porque a
-   * recusa é server-side e determinística. Caso medido: cliente de anúncio
-   * pago, sacola de 4 peças, 11 tentativas de PIX em 7 minutos, zero compra.
-   *
-   * O conserto NÃO mexe em pedido nenhum (ordem do dono, 22/08: "não mexa em
-   * pedidos em separação"). O pedido continua exatamente como está — o que
-   * muda é que a CONFERÊNCIA DO CARRINHO para de contar reserva velha.
-   * Reversível por env, sem migração e sem UPDATE.
-   *
-   * Por que 15 dias: a separação real leva 4,1 dias em média (medição das 639
-   * caixas em 30 dias) e o lote recente mais antigo tem 7. Quinze dias é o
-   * dobro da pior separação legítima. Medido no banco: destrava 15 das 16
-   * variações que dá pra destravar (10 dias destravaria 16, e 30 só 10) sem
-   * deixar de honrar nenhum pedido dentro do prazo normal.
-   *
-   * O risco assumido é o MESMO que o dono já escolheu pro `HORAS_PENDENTE`:
-   * peça de pedido esquecido pode ser vendida duas vezes e isso tem conserto
-   * (estorno); recusar venda todo dia não tem.
-   *
-   * `CARRINHO_RESERVA_DIAS=0` desliga o teto (volta a reservar pra sempre).
-   */
-  private get diasDeReserva(): number {
-    const v = Number(process.env.CARRINHO_RESERVA_DIAS);
-    return Number.isFinite(v) && v >= 0 ? v : 15;
-  }
-
   private async reservado(codigos: string[]): Promise<Map<string, number>> {
     const vazio = new Map<string, number>();
-    if (String(process.env.CARRINHO_RESERVA ?? '1') === '0') return vazio;
+    if (!reservaLigada()) return vazio;
     if (!codigos.length) return vazio;
 
-    const desde = new Date(Date.now() - CarrinhoGuardService.HORAS_PENDENTE * 3600_000);
-    // Zero = sem teto: uma data no passado remoto faz todo pedido passar.
-    const dias = this.diasDeReserva;
-    const reservaDesde = dias > 0 ? new Date(Date.now() - dias * 86_400_000) : new Date(0);
     try {
       const rows = await this.prisma.$queryRawUnsafe<Array<{ sku: string; qtd: number }>>(
-        `
-        SELECT oi.sku AS sku, SUM(oi.quantity)::int AS qtd
-          FROM order_items oi
-          JOIN orders o ON o.id = oi.order_id
-         WHERE oi.sku = ANY($1)
-           AND (
-                 (o.status = ANY($2) AND o.created_at >= $4)
-              OR (o.status = 'pending' AND o.created_at >= $3)
-           )
-         GROUP BY oi.sku
-        `,
+        `SELECT z.sku, z.qtd FROM (${sqlReservadoPorSku()}) z WHERE z.sku = ANY($1)`,
         codigos,
-        CarrinhoGuardService.STATUS_QUE_RESERVAM,
-        desde,
-        reservaDesde,
       );
       const m = new Map<string, number>();
       for (const r of rows) m.set(String(r.sku), Number(r.qtd) || 0);
@@ -544,19 +463,27 @@ export class CarrinhoGuardService {
           `[guard] REF ${ref}: estoque ${estoqueBruto} − ${jaPrometido} prometido = ${estoque}`,
         );
       }
+      const itemDaSacola = {
+        indice: i,
+        productId: String(it.productId || it.sku),
+        size: it.size ? String(it.size) : null,
+        color: it.color ? String(it.color) : null,
+        precoAtual: precoCatalogo,
+        precoInformado: this.dinheiro(it.unitPrice),
+      };
       if (estoque <= 0) {
         return {
-          ok: false, motivo: 'esgotou', ref,
-          erro: `"${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''} acabou de esgotar. Remova da sacola pra fechar o resto do pedido. 💜`,
+          ok: false, motivo: 'esgotou', ref, item: itemDaSacola,
+          erro: `"${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''} acabou de esgotar enquanto você comprava. Toque em "Tirar da sacola e continuar" aqui embaixo — o resto do pedido segue normal. 💜`,
         };
       }
       if (estoque < qtd) {
         return {
-          ok: false, motivo: 'estoque_insuficiente', ref,
+          ok: false, motivo: 'estoque_insuficiente', ref, disponivel: estoque, item: itemDaSacola,
           erro:
             estoque === 1
-              ? `Sobrou só 1 unidade de "${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''}. Ajuste a quantidade pra continuar. 💜`
-              : `Temos ${estoque} unidades de "${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''}. Ajuste a quantidade pra continuar. 💜`,
+              ? `Sobrou só 1 unidade de "${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''}. Toque em "Deixar 1 e continuar" aqui embaixo. 💜`
+              : `Temos ${estoque} unidades de "${nomePeca}"${tam ? ` no tamanho ${it.size}` : ''}. Toque em "Deixar ${estoque} e continuar" aqui embaixo. 💜`,
         };
       }
 

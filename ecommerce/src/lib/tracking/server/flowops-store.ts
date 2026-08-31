@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { Robo } from '../bot-detect';
 import type { TrackingEvent } from '../types';
+import type { Dispositivo } from '../dispositivo';
 
 /**
  * CÓPIA NOSSA DOS CLIQUES DE LOJA.
@@ -62,6 +63,21 @@ const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
    * recebeu — o que faltava era ele sobreviver à poda no caminho de casa.
    */
   select_item: ['item_list_name'],
+  /**
+   * QUANTOS RESULTADOS A BUSCA DEVOLVEU (31/08).
+   *
+   * `trackSearch` manda `results_count` desde sempre e o GA4 recebe — aqui ele
+   * morria na poda em silêncio, porque `search` não tinha entrada nesta lista.
+   * Medido: **1.018 buscas em 364 sessões numa semana, TODAS com
+   * `resultados = null` no banco**. Não dava pra responder a pergunta mais
+   * básica da busca — quantas voltaram vazias —, e busca vazia é a saída mais
+   * rápida do site.
+   *
+   * `relaxed` vai junto: o motor afrouxa as facetas quando o passo estrito não
+   * acha nada (ver docs/search.md). Resultado que só existe porque a regra foi
+   * relaxada é quase-vazio, e contar como acerto esconderia o buraco.
+   */
+  search: ['results_count', 'relaxed'],
   color_switch: ['color'],
   size_switch: ['size'],
   add_to_cart_blocked: ['reason'],
@@ -167,6 +183,12 @@ export async function persistirEventosSite(
   events: TrackingEvent[],
   semAceite: boolean,
   robo: Robo = { bot: false, nome: null },
+  /**
+   * Vem carimbado do `/api/events` pelo mesmo motivo do `robo`: é o único
+   * ponto com o user-agent da cliente. Sem valor (o `track-server` interno,
+   * que dispara do servidor), a chave simplesmente não entra.
+   */
+  dispositivo?: Dispositivo,
 ): Promise<number> {
   const baseUrl = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
   const token = process.env.LOJA_ORDER_TOKEN ?? '';
@@ -178,6 +200,7 @@ export async function persistirEventosSite(
       : [];
     const dados: Record<string, unknown> = dadosSeguros(e);
     if (refs.length) dados.refs = refs;
+    if (dispositivo) dados.dispositivo = dispositivo;
     const termo = texto((e.params as Record<string, unknown>)?.search_term);
     if (termo) dados.busca = termo;
     const origem =

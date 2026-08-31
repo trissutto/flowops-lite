@@ -230,6 +230,25 @@ export class SiteMetricsController {
    * simplesmente não vai — mostrar o faturamento cheio ao lado de um funil
    * recortado faria parecer que aquela campanha faturou tudo aquilo.
    */
+  /**
+   * PRA ONDE O ANÚNCIO MANDOU GENTE — peça a peça (31/08).
+   *
+   * Mesma janela De/Até do resto da tela. Sem segmento: a pergunta aqui é
+   * "quais peças o dinheiro comprou", e recortar por campanha responderia
+   * outra (`funil` já faz isso).
+   */
+  @Get('pecas')
+  async pecas(
+    @Req() req: any,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const fim = this.fimDoDia(ate) ?? this.fimDoDia(this.hoje())!;
+    const inicio = this.inicioDoDia(de) ?? new Date(fim.getTime() - 29 * 24 * 60 * 60 * 1000);
+    return { pecas: await this.service.pecas(inicio, fim) };
+  }
+
   @Get('funil')
   async funil(
     @Req() req: any,

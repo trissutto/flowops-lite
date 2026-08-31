@@ -213,6 +213,8 @@ export default function CheckoutPage() {
   const lines = useCartStore((s) => s.lines);
   const clearCart = useCartStore((s) => s.clear);
   const refreshPrice = useCartStore((s) => s.refreshPrice);
+  const removeLine = useCartStore((s) => s.remove);
+  const setLineQuantity = useCartStore((s) => s.setQuantity);
   const subtotal = useCartSubtotal();
 
   /* Estado das 4 seções — a página é a dona da sequência. */
@@ -227,6 +229,15 @@ export default function CheckoutPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  /**
+   * A PEÇA QUE BARROU O PEDIDO — e o que fazer com ela SEM sair do checkout.
+   *
+   * `disponivel` presente e > 0 = sobrou peça, só não a quantidade pedida:
+   * baixa a quantidade. Ausente = esgotou/sumiu: remove a linha.
+   */
+  const [bloqueio, setBloqueio] = useState<
+    { lineId: string; nome: string; disponivel?: number } | null
+  >(null);
   const [failureCount, setFailureCount] = useState(0);
   const [lastErrorCode, setLastErrorCode] = useState<CheckoutErrorCode | null>(null);
   /**
@@ -418,6 +429,7 @@ export default function CheckoutPage() {
     enviandoRef.current = true;
     setSubmitting(true);
     setSubmitError(null);
+    setBloqueio(null);
     if (failureCount > 0) trackPaymentRetry(pagamento.method, failureCount + 1);
     trackCheckoutSubmission(pagamento.method);
 
@@ -518,6 +530,48 @@ export default function CheckoutPage() {
         // mesma sacola com o mesmo preço congelado. Nada foi criado no
         // servidor: a recusa acontece antes de pedido/cobrança existirem.
         const item = code === 'catalog_unavailable' ? itemRecusadoDe(result) : undefined;
+
+        /**
+         * ESGOTOU / SUMIU / SOBROU MENOS: a saída é um toque, aqui dentro.
+         *
+         * Até 31/08 a única saída era um link "Ajustar sacola" pra FORA do
+         * checkout — a cliente saía, procurava a peça, removia e recomeçava.
+         * Medido na semana de 24 a 31/08: **151 tentativas de pagar em 41
+         * sessões** (3,7 por pessoa), e só 26,8% delas compraram. Agora o
+         * guard devolve QUAL peça (`item`) e QUANTAS sobraram (`disponivel`),
+         * e o botão do próprio aviso resolve.
+         *
+         * NÃO reenvia sozinho de propósito: tirar peça muda o subtotal, e o
+         * subtotal muda frete e desconto. Ela precisa VER o total novo antes
+         * de pagar — é o mesmo caminho que a recusa por preço já usa.
+         */
+        const motivoEstoque = (result as { motivo?: string } | null)?.motivo;
+        if (
+          item &&
+          (motivoEstoque === 'esgotou' ||
+            motivoEstoque === 'estoque_insuficiente' ||
+            motivoEstoque === 'sku_inexistente' ||
+            motivoEstoque === 'despublicada' ||
+            motivoEstoque === 'sem_cor' ||
+            motivoEstoque === 'sem_tamanho' ||
+            motivoEstoque === 'preco_zerado')
+        ) {
+          const linha = linhaRecusada(lines, item);
+          if (linha) {
+            const sobrou = (result as { disponivel?: number } | null)?.disponivel;
+            setBloqueio({
+              lineId: linha.id,
+              nome: linha.name,
+              // Só oferece "deixar N" quando N é MENOR que o que ela pediu —
+              // senão o botão prometeria uma mudança que não muda nada.
+              disponivel:
+                typeof sobrou === 'number' && sobrou > 0 && sobrou < linha.quantity
+                  ? sobrou
+                  : undefined,
+            });
+          }
+        }
+
         if (item) {
           const linha = linhaRecusada(lines, item);
           if (linha && Math.abs(linha.unitPrice - item.precoAtual) > 0.009) {
@@ -793,6 +847,28 @@ export default function CheckoutPage() {
                   setSubmitError(null);
                   setStep(2);
                 }}
+                pecaBloqueada={
+                  bloqueio ? { nome: bloqueio.nome, disponivel: bloqueio.disponivel } : null
+                }
+                onResolverPeca={
+                  bloqueio
+                    ? () => {
+                        if (bloqueio.disponivel && bloqueio.disponivel > 0) {
+                          setLineQuantity(bloqueio.lineId, bloqueio.disponivel);
+                          setSubmitError(
+                            `Deixamos ${bloqueio.disponivel} de ${bloqueio.nome} na sacola. Confira o total e finalize.`,
+                          );
+                        } else {
+                          removeLine(bloqueio.lineId);
+                          setSubmitError(
+                            `Tiramos ${bloqueio.nome} da sacola. Confira o total e finalize — o resto do pedido segue normal.`,
+                          );
+                        }
+                        setBloqueio(null);
+                        setLastErrorCode(null);
+                      }
+                    : undefined
+                }
                 alertRef={erroRef}
                 onSubmit={() => void finalizar()}
                 reenvioNoFormulario={payment.method === 'card'}

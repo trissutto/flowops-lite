@@ -287,6 +287,12 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   // ficariam indistinguíveis no banco e "qual vitrine vende" não teria
   // resposta no painel de primeira parte. Mesma família da poda do UTM.
   select_item: ['item_list_name'],
+  // `results_count` e `relaxed` entram (31/08) pelo MESMO motivo do
+  // `item_list_name`: o site sempre mandou o total (`trackSearch`), o GA4
+  // sempre recebeu, e aqui `search` não tinha entrada — então 1.018 buscas de
+  // uma semana foram gravadas com `resultados` nulo. Sem o número não dá pra
+  // dizer quantas buscas voltaram vazias, que é a saída mais rápida do site.
+  search: ['results_count', 'relaxed'],
   color_switch: ['color'],
   size_switch: ['size'],
   add_to_cart_blocked: ['reason'],
@@ -347,6 +353,16 @@ const CAMPOS_DE_CONTEXTO = [
   'plataforma',
   'busca',
   'origem',
+  /**
+   * CELULAR, TABLET OU PC (31/08). Carimbado no servidor do site, a partir do
+   * user-agent — o único ponto que o enxerga (ver `tracking/dispositivo.ts`).
+   *
+   * Vale pra TODO evento, por isso mora aqui e não em `CAMPOS_DIAGNOSTICOS`:
+   * a pergunta "onde a venda morre no celular" atravessa o funil inteiro, de
+   * `page_view` a `purchase`. Medido antes de existir: 100% das 20.767 sessões
+   * de uma semana sem dispositivo, com 52% do tráfego vindo de paid_social.
+   */
+  'dispositivo',
 ] as const;
 
 /** Defesa final contra PII: só persiste chaves fechadas e valores curtos. */
@@ -731,6 +747,84 @@ export class SiteMetricsService {
        WHERE (o.campanha = ANY($6::text[]) OR g.nome = ANY($6::text[]))
     ) de_loja
      WHERE session_id IN (${SQL_SESSOES_DE_GENTE})`;
+
+/**
+   * PEÇA VISTA × TRÁFEGO PAGO × SACOLA — pra onde o anúncio está mandando gente.
+   *
+   * ── A MEDIÇÃO QUE PEDIU ESTA TELA (24 a 31/08/2026) ──
+   *
+   * Duas peças levaram **34,6% de todas as visualizações de peça do site**
+   * (BMM-100 com 5.651 sessões, VLM-222 com 3.025), e quase toda essa visita
+   * veio de anúncio (5.529 e 2.838). Só que a taxa de sacola delas é das
+   * PIORES da lista: BMM-100 em 10,2%, CON-200 em 3,0% com 893 visitas pagas.
+   * Enquanto isso CHIC converte 24,4% com 180 visitas pagas, SMILE 21,1% com
+   * 378 e BMM-008 18,4% com 139.
+   *
+   * Ou seja: o dinheiro compra visita pra peça que não converte, e a peça que
+   * converte recebe migalha. Isso não aparecia em lugar nenhum — o ROAS da
+   * tela é por campanha, e campanha não diz QUAL PEÇA a pessoa foi ver.
+   *
+   * ── O QUE A LINHA RESPONDE ──
+   *
+   * "Vale renovar o criativo desta peça?" Visitas, quanto veio de anúncio, e
+   * quantas sessões puseram na sacola. Ordenado por visita — é a lista de onde
+   * o dinheiro foi, não a de quem converte melhor (essa se lê na coluna).
+   *
+   * Mesmo corte de robô do funil (`soGente`): sem ele a varredura de catálogo,
+   * que dispara `view_item` em série e nunca põe nada na sacola, afundaria a
+   * taxa de toda peça pouco visitada.
+   */
+  async pecas(
+    de: Date,
+    ate: Date,
+    limite = 40,
+  ): Promise<
+    Array<{ ref: string; viram: number; deAnuncio: number; sacola: number; taxa: number }>
+  > {
+    const linhas = await this.prisma.$queryRawUnsafe<
+      Array<{ ref: string; viram: number; de_anuncio: number; sacola: number }>
+    >(
+      `WITH gente AS (${SQL_SESSOES_DE_GENTE}),
+        vistas AS (
+          SELECT jsonb_array_elements_text(e.dados->'refs') AS ref,
+                 e.session_id,
+                 (e.dados->>'campanha') IS NOT NULL AS pago
+            FROM site_eventos e
+           WHERE e.criado_em >= $1 AND e.criado_em <= $2
+             AND e.evento = 'view_item' AND e.dados ? 'refs'
+             AND ${soGente('e')}
+        ),
+        sacolas AS (
+          SELECT jsonb_array_elements_text(e.dados->'refs') AS ref, e.session_id
+            FROM site_eventos e
+           WHERE e.criado_em >= $1 AND e.criado_em <= $2
+             AND e.evento = 'add_to_cart' AND e.dados ? 'refs'
+             AND ${soGente('e')}
+        )
+        SELECT v.ref,
+               COUNT(DISTINCT v.session_id)::int                          AS viram,
+               COUNT(DISTINCT v.session_id) FILTER (WHERE v.pago)::int    AS de_anuncio,
+               COALESCE((SELECT COUNT(DISTINCT s.session_id)
+                           FROM sacolas s WHERE s.ref = v.ref), 0)::int   AS sacola
+          FROM vistas v
+         GROUP BY v.ref
+        HAVING COUNT(DISTINCT v.session_id) >= 30
+         ORDER BY viram DESC
+         LIMIT ${Math.max(1, Math.min(200, Math.trunc(limite)))}`,
+      de,
+      ate,
+    );
+
+    return linhas.map((l) => ({
+      ref: l.ref,
+      viram: Number(l.viram) || 0,
+      deAnuncio: Number(l.de_anuncio) || 0,
+      sacola: Number(l.sacola) || 0,
+      // Arredondado a uma casa aqui pra tela não repetir a conta — e pra duas
+      // telas não arredondarem diferente.
+      taxa: l.viram ? Math.round((1000 * Number(l.sacola)) / Number(l.viram)) / 10 : 0,
+    }));
+  }
 
   async funil(
     de: Date,

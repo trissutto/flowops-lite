@@ -69,6 +69,20 @@ interface ReviewCardProps {
    */
   onRemoveCoupon?: () => void;
   onEditShipping?: () => void;
+  /**
+   * A PEÇA QUE BARROU O PEDIDO, RESOLVIDA AQUI DENTRO (31/08).
+   *
+   * Antes, `catalog_unavailable` oferecia um link "Ajustar sacola" pra FORA do
+   * checkout: a cliente saía, procurava a peça entre as outras, removia e
+   * voltava pra recomeçar. Medido na semana de 24 a 31/08: **151 tentativas de
+   * pagar em 41 sessões** (3,7 por pessoa) e só 26,8% delas compraram.
+   *
+   * Com o `item` que o guard passou a devolver junto da recusa por estoque, a
+   * página sabe QUAL linha é — e a saída vira um toque no próprio aviso.
+   * `disponivel` presente = dá pra baixar a quantidade em vez de remover.
+   */
+  pecaBloqueada?: { nome: string; disponivel?: number } | null;
+  onResolverPeca?: () => void;
   /** Container do aviso — a página rola/foca nele quando o erro muda. */
   alertRef?: Ref<HTMLDivElement>;
 }
@@ -99,6 +113,8 @@ export function ReviewCard({
   onUsePix,
   onRemoveCoupon,
   onEditShipping,
+  pecaBloqueada,
+  onResolverPeca,
   alertRef,
 }: ReviewCardProps) {
   const retirada = shipping.quote.kind === 'retirada';
@@ -129,11 +145,22 @@ export function ReviewCard({
           {/* A saída específica do código, desde a PRIMEIRA falha. */}
           {(codigo === 'catalog_unavailable' || (codigo === 'coupon_invalid' && onRemoveCoupon) || ctaEntrega) && (
             <div className="mt-3 flex flex-wrap gap-2">
-              {codigo === 'catalog_unavailable' && (
+              {/* Quando a página sabe QUAL peça é, a saída resolve aqui. O link
+                  pra sacola só aparece quando não dá pra identificar a linha
+                  (REF repetida em duas cores sem tamanho na resposta) — mandar
+                  pra fora do checkout é o último recurso, não o primeiro. */}
+              {codigo === 'catalog_unavailable' && pecaBloqueada && onResolverPeca ? (
+                <Button type="button" size="sm" variant="secondary" onClick={onResolverPeca}>
+                  <ShoppingBag className="size-4" />
+                  {pecaBloqueada.disponivel && pecaBloqueada.disponivel > 0
+                    ? `Deixar ${pecaBloqueada.disponivel} e continuar`
+                    : 'Tirar da sacola e continuar'}
+                </Button>
+              ) : codigo === 'catalog_unavailable' ? (
                 <Link href="/carrinho" className={ctaClasses}>
                   <ShoppingBag className="size-4" /> Ajustar sacola
                 </Link>
-              )}
+              ) : null}
               {codigo === 'coupon_invalid' && onRemoveCoupon && (
                 <button type="button" onClick={onRemoveCoupon} className={ctaClasses}>
                   <Ticket className="size-4" /> Remover cupom
@@ -147,13 +174,22 @@ export function ReviewCard({
             </div>
           )}
 
+          {/* O PIX ENTRA NA PRIMEIRA RECUSA (31/08), NÃO NA SEGUNDA.
+              Medido: 121 tentativas de pagamento em 41 sessões — 3 por pessoa —
+              e 60 sessões que enviaram o pedido e não compraram. Quem teve o
+              cartão recusado precisa achar o PIX em um toque, não depois de
+              falhar de novo. O 5% vai no rótulo porque é o argumento: trocar de
+              meio de pagamento fica MAIS BARATO, não é castigo. */}
+          {payment.method === 'card' && failureCount >= 1 && (
+            <div className="mt-3">
+              <Button type="button" size="sm" variant="secondary" onClick={onUsePix}>
+                Pagar com Pix e ganhar {PIX_DESCONTO_PCT}%
+              </Button>
+            </div>
+          )}
+
           {failureCount >= 2 && (
             <div className="mt-3 flex flex-wrap gap-2">
-              {payment.method === 'card' && (
-                <Button type="button" size="sm" variant="secondary" onClick={onUsePix}>
-                  Tentar com Pix
-                </Button>
-              )}
               <Button type="button" size="sm" variant="secondary" onClick={onReviewData}>
                 <RefreshCw /> Revisar dados
               </Button>

@@ -8,6 +8,7 @@ import { aplicarDescontoPromo } from '../common/promo-julho';
 import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.service';
 import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
+import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -542,7 +543,7 @@ export class LojaCatalogService {
       NULLIF(TRIM(p.ean), '')                     AS ean,
       NULLIF(TRIM(p.ncm), '')                     AS ncm,
       NULLIF(TRIM(p.cst), '')                     AS cst,
-      COALESCE(e.total, 0)::int                   AS estoque,
+      ${sqlDisponivel('e.total', 'r.qtd')}        AS estoque,
       p."dataAlt"                                 AS "dataAlt"
     FROM wincred_produtos p
     LEFT JOIN (
@@ -552,6 +553,14 @@ export class LojaCatalogService {
       SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
         FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
     ) e ON e.codigo = p.codigo
+    -- ── MENOS O QUE JÁ ESTÁ PROMETIDO A OUTRA CLIENTE (31/08) ──
+    -- A vitrine passa a contar o MESMO número que o guarda do carrinho cobra
+    -- (common/estoque-reservado.ts). Enquanto eram duas contas, a peça aparecia
+    -- disponível na grade e o pedido era recusado no clique de pagar: 151
+    -- recusas por "esgotou" em 41 sessões numa semana, 108 delas na BMM-100 —
+    -- que tinha 582 peças na rede. O que esgotara era a cor+tamanho dela.
+    -- Custo medido da junção: 0,9 ms (índice de status + índice de order_id).
+    LEFT JOIN (${sqlReservadoPorSku()}) r ON r.sku = p.codigo
     WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
       AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
       AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%INFANTIL%'

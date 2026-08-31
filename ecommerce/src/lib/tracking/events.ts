@@ -97,8 +97,22 @@ export const trackSelectItem = (product: TrackableProduct, listName: string, ind
 export const trackQuickView = (product: TrackableProduct) =>
   track('quick_view', {}, { items: [toTrackedItem(product)] });
 
-export const trackSearch = (termo: string, resultados: number) =>
-  track('search', { search_term: termo, results_count: resultados }, { dedupe_key: `search:${termo}` });
+/**
+ * `relaxed` = o motor teve que AFROUXAR as facetas pra não devolver vazio
+ * (ver docs/search.md). Vai junto do total porque resultado que só existe
+ * depois do afrouxamento é quase-vazio — contar como acerto esconde o buraco
+ * que a busca tem. Opcional: quem não sabe informar não mente.
+ */
+export const trackSearch = (termo: string, resultados: number, relaxed?: boolean) =>
+  track(
+    'search',
+    {
+      search_term: termo,
+      results_count: resultados,
+      ...(relaxed === undefined ? {} : { relaxed: relaxed ? 'sim' : 'nao' }),
+    },
+    { dedupe_key: `search:${termo}` },
+  );
 
 export const trackFilterUsed = (filtro: string, valor: string | string[]) =>
   track('filter_used', { filter_name: filtro, filter_value: Array.isArray(valor) ? valor.join(',') : valor });

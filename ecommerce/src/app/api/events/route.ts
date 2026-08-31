@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { detectarRobo } from '@/lib/tracking/bot-detect';
+import { dispositivoDoUserAgent } from '@/lib/tracking/dispositivo';
 import { posturaDe, type PosturaConsentimento } from '@/lib/tracking/consent';
 import { dispatchBatch } from '@/lib/tracking/server/dispatch';
 import { persistirCliquesDeLoja, persistirEventosSite } from '@/lib/tracking/server/flowops-store';
@@ -170,6 +171,15 @@ export async function POST(req: Request) {
    */
   const robo = detectarRobo(userAgent);
 
+  /**
+   * CELULAR OU PC — pelo mesmo motivo e no mesmo lugar do `robo`: daqui pra
+   * frente ninguém mais tem o user-agent da cliente. Medido em 31/08: 100%
+   * das 20.767 sessões de uma semana estavam sem dispositivo, com 52% do
+   * tráfego vindo de paid_social (celular quase inteiro). Sem isto, dizer
+   * onde o funil quebra é palpite.
+   */
+  const dispositivo = dispositivoDoUserAgent(userAgent);
+
   const signals = {
     fbp: meta?.fbp,
     fbc: meta?.fbc,
@@ -196,7 +206,7 @@ export async function POST(req: Request) {
     const [despacho] = await Promise.allSettled([
       despacharPorPostura(postura, aceitos, signals),
       persistirCliquesDeLoja(aceitos),
-      persistirEventosSite(aceitos, !consentido, robo),
+      persistirEventosSite(aceitos, !consentido, robo, dispositivo),
     ]);
     const dispatched = despacho.status === 'fulfilled' ? despacho.value.dispatched : 0;
     if (despacho.status === 'rejected') throw despacho.reason;

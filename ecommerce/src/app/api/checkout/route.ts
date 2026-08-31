@@ -530,6 +530,9 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
           // pra tela — a frase da cliente continua sendo `error`.
           ...(err.motivo ? { motivo: err.motivo } : {}),
           ...(err.ref ? { ref: err.ref } : {}),
+          // QUANTAS SOBRARAM (31/08): a tela oferece "deixar N e continuar"
+          // em vez de mandar a cliente sair do checkout pra ajustar a sacola.
+          ...(typeof err.disponivel === 'number' ? { disponivel: err.disponivel } : {}),
         },
         { status: err.status },
       );

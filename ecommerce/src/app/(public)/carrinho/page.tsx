@@ -11,6 +11,8 @@ import { CartLineRow } from '@/components/commerce/CartLineRow';
 import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
 import { CompletarFreteGratis } from '@/components/commerce/CompletarFreteGratis';
 import { RecommendationRail } from '@/components/commerce/RecommendationRail';
+import { MaisDaFamilia } from '@/components/commerce/MaisDaFamilia';
+import { getRecommendations } from '@/lib/recommendations/engine';
 import { useCartStore } from '@/store/cart';
 import { useCepGuardado, useCepStore } from '@/store/cep';
 import { useMounted } from '@/hooks';
@@ -204,6 +206,23 @@ export default function CarrinhoPage() {
    * complementar.
    */
   const [pecasDaSacola, setPecasDaSacola] = useState<Product[]>([]);
+  /**
+   * AS SUGESTÕES QUE FICAM ANTES DO RESUMO (31/08).
+   *
+   * Os trilhos do rodapé desta página estavam mortos, e não por falta de
+   * qualidade: **em 7 dias, 1.989 sessões abriram a sacola e "Complete seu
+   * look" levou 3 cliques** — 0,15%. Eles moram DEPOIS do resumo e do botão
+   * "Finalizar compra"; no celular, ninguém rola além do botão de fechar.
+   *
+   * A mesma sugestão, subida pra logo abaixo das peças, encontra o olho onde
+   * ele já está. E é a fuga que mais custa: **52% dos pedidos pagos levam UMA
+   * peça só** (2,01 de média em 30 dias).
+   *
+   * Formato `MaisDaFamilia` porque é o único trilho desenhado pra viver DENTRO
+   * de uma coluna (é o que fica na coluna de compra da peça). `RecommendationRail`
+   * se embrulha em `Section` de largura própria e quebraria a grade daqui.
+   */
+  const [sugestoes, setSugestoes] = useState<Product[]>([]);
   const jaRevalidou = useRef(false);
 
   useEffect(() => {
@@ -253,6 +272,25 @@ export default function CarrinhoPage() {
 
     return () => controller.abort();
   }, [mounted, rawLines]);
+
+  /**
+   * MESMO MOTOR do trilho do rodapé (`complete-seu-look`), olhando a sacola
+   * INTEIRA: quem já tem calça e blusa não precisa de mais uma blusa. Sugestão
+   * é cortesia — falha vira seção ausente, nunca erro na tela de quem está
+   * fechando a compra.
+   */
+  useEffect(() => {
+    if (!pecasDaSacola.length) return;
+    let vivo = true;
+    void getRecommendations({ kind: 'complete-seu-look', seeds: pecasDaSacola, limit: 6 })
+      .then((r: Product[]) => {
+        if (vivo) setSugestoes(r);
+      })
+      .catch(() => {});
+    return () => {
+      vivo = false;
+    };
+  }, [pecasDaSacola]);
 
   /* ------------------------------------------------------------------ render */
 
@@ -347,6 +385,18 @@ export default function CarrinhoPage() {
                   ))}
                 </ul>
               </section>
+            )}
+
+            {/* A SEGUNDA PEÇA, ANTES DO BOTÃO DE FECHAR — ver `sugestoes`.
+                Na coluna das peças de propósito: no celular ela cai logo
+                depois da sacola e antes do resumo; no PC fica embaixo das
+                linhas, ao lado do resumo grudado. */}
+            {!vazio && sugestoes.length > 0 && (
+              <MaisDaFamilia
+                pecas={sugestoes}
+                titulo="Leve também"
+                lista="sacola-completa"
+              />
             )}
           </div>
 

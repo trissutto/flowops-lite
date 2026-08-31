@@ -90,7 +90,7 @@ export function SearchResults({ term }: { term: string }) {
   useEffect(() => {
     if (!outcome || term.length < 2 || trackedFor.current === term) return;
     trackedFor.current = term;
-    trackSearch(term, outcome.results.length);
+    trackSearch(term, outcome.results.length, outcome.relaxed);
   }, [outcome, term]);
 
   const carregando = outcome === null;

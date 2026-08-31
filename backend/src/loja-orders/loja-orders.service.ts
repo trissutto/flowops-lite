@@ -260,6 +260,14 @@ export interface CriarPedidoResult {
    */
   motivo?: MotivoRecusa;
   ref?: string;
+  /**
+   * Só em `estoque_insuficiente`: QUANTAS peças sobraram.
+   *
+   * O site usa pra oferecer "deixar N e continuar" DENTRO do checkout, em vez
+   * de mandar a cliente sair, abrir a sacola, achar a peça e ajustar na mão —
+   * o caminho que produziu 151 tentativas de pagar em 41 sessões (31/08).
+   */
+  disponivel?: number;
 }
 
 /* ─────────────────────────────── SERVICE ──────────────────────────────── */
@@ -493,7 +501,7 @@ export class LojaOrdersService {
    * na tela é o erro que não se desfaz com pedido de desculpas.
    */
   private async reprecificar(input: CriarPedidoInput): Promise<
-    | { ok: false; erro: string; code: CheckoutErrorCode; item?: ItemRecusado; motivo?: MotivoRecusa; ref?: string; quote?: CriarPedidoResult['quote'] }
+    | { ok: false; erro: string; code: CheckoutErrorCode; item?: ItemRecusado; motivo?: MotivoRecusa; ref?: string; disponivel?: number; quote?: CriarPedidoResult['quote'] }
     | {
         ok: true;
         subtotal: number;
@@ -519,6 +527,7 @@ export class LojaOrdersService {
         // sete recusas diferentes num rótulo só.
         motivo: conferencia.motivo,
         ...(conferencia.ref ? { ref: conferencia.ref } : {}),
+        ...(typeof conferencia.disponivel === 'number' ? { disponivel: conferencia.disponivel } : {}),
         ...(conferencia.item ? { item: conferencia.item } : {}),
       };
     }
@@ -1922,6 +1931,7 @@ export class LojaOrdersService {
         // Alertas parar de ser cega (22/08).
         ...(conta.motivo ? { motivo: conta.motivo } : {}),
         ...(conta.ref ? { ref: conta.ref } : {}),
+        ...(typeof conta.disponivel === 'number' ? { disponivel: conta.disponivel } : {}),
         ...(conta.item ? { item: conta.item } : {}),
         ...(conta.quote ? { quote: conta.quote } : {}),
       };

@@ -199,6 +199,15 @@ export class OrderStoreError extends Error {
      */
     readonly motivo?: string,
     readonly ref?: string,
+    /**
+     * Só em `estoque_insuficiente`: quantas peças sobraram de verdade.
+     *
+     * A tela usa pra oferecer "deixar N e continuar" ali mesmo. Sem isso, a
+     * frase manda ajustar a quantidade e a cliente precisa sair do checkout,
+     * abrir a sacola e achar a peça — 151 tentativas de pagar em 41 sessões
+     * numa semana bateram nessa parede (31/08).
+     */
+    readonly disponivel?: number,
   ) {
     super(tecnico);
     this.name = 'OrderStoreError';
@@ -264,6 +273,8 @@ type BackendEnvelope = {
   /** Causa exata da recusa (guard) e a REF — só pro funil, nunca pra tela. */
   motivo?: unknown;
   ref?: unknown;
+  /** Só em `estoque_insuficiente`: quantas peças sobraram de verdade. */
+  disponivel?: unknown;
 };
 
 /** `body.quote` de `shipping_changed` → cotação nova, ou `undefined` sem o shape. */
@@ -467,6 +478,9 @@ class BackendOrderStore implements OrderStore {
         // Causa/REF são diagnóstico: vêm em qualquer recusa que o guard emita.
         typeof body.motivo === 'string' ? body.motivo : undefined,
         typeof body.ref === 'string' ? body.ref : undefined,
+        typeof body.disponivel === 'number' && Number.isFinite(body.disponivel)
+          ? body.disponivel
+          : undefined,
       );
     }
 

@@ -166,7 +166,7 @@ export function SearchOverlay({ open, onClose }: { open: boolean; onClose: () =>
 
   function irParaBusca(query: string) {
     pushRecentSearch(query);
-    trackSearch(query, outcome?.results.length ?? 0);
+    trackSearch(query, outcome?.results.length ?? 0, outcome?.relaxed);
     fecharENavegar(`/busca?q=${encodeURIComponent(query)}`);
   }
 

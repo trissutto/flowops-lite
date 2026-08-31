@@ -1,5 +1,8 @@
+'use client';
+
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
+import { trackSelectItem } from '@/lib/tracking';
 import { BLUR_DATA_URL, formatPrice } from '@/lib/utils';
 import type { Product } from '@/types';
 
@@ -35,12 +38,21 @@ export function MaisDaFamilia({
   titulo = 'Peças parecidas',
   verTudoHref,
   verTudoLabel,
+  lista = 'irmas-pdp',
 }: {
   /** Já vêm filtradas e sem a peça atual — este componente só apresenta. */
   pecas: Product[];
   titulo?: string;
   verTudoHref?: string;
   verTudoLabel?: string;
+  /**
+   * O NOME DA LISTA NO `select_item` — é por ele que este trilho se separa
+   * dos outros no funil. Duas casas hoje: a coluna de compra da peça
+   * (`irmas-pdp`) e a sacola (`sacola-completa`). Sem nome próprio, os
+   * cliques das duas viravam a mesma linha e não dava pra dizer qual leva à
+   * segunda peça.
+   */
+  lista?: string;
 }) {
   if (!pecas.length) return null;
 
@@ -66,9 +78,9 @@ export function MaisDaFamilia({
         {/* ~36% da largura = 2,5 peças na tela de 390px: a terceira aparece
             cortada, que é o que faz o dedo entender que desliza. Medido no
             celular: 104px de foto era miniatura; 118px já mostra a peça. */}
-        {pecas.map((p) => (
+        {pecas.map((p, i) => (
           <li key={chave(p)} className="w-[36%] min-w-[118px] shrink-0 snap-start">
-            <PecaFoto peca={p} sizes="(max-width: 640px) 36vw, 200px" />
+            <PecaFoto peca={p} sizes="(max-width: 640px) 36vw, 200px" indice={i} lista={lista} />
           </li>
         ))}
       </ul>
@@ -76,9 +88,9 @@ export function MaisDaFamilia({
       {/* PC — grade 2×2 com nome. Duas colunas cabem na coluna da direita sem
           espremer a foto, e o nome ajuda a decidir sem abrir a peça. */}
       <ul className="hidden gap-x-4 gap-y-5 lg:grid lg:grid-cols-2">
-        {pecas.slice(0, 4).map((p) => (
+        {pecas.slice(0, 4).map((p, i) => (
           <li key={chave(p)}>
-            <PecaComNome peca={p} />
+            <PecaComNome peca={p} indice={i} lista={lista} />
           </li>
         ))}
       </ul>
@@ -101,11 +113,28 @@ function destino(p: Product): string {
     : `/produto/${p.slug}`;
 }
 
+/**
+ * O NOME DA LISTA É `irmas-pdp` E ELE IMPORTA.
+ *
+ * É por ele que o clique daqui se separa do feed do rodapé (`descobrir-pdp`)
+ * no `select_item`. Sem nome, os dois trilhos viravam a mesma linha e não
+ * dava pra dizer qual leva à segunda peça.
+ */
 /** Só foto + preço — o formato do celular, onde o espaço é curto. */
-function PecaFoto({ peca, sizes }: { peca: Product; sizes: string }) {
+function PecaFoto({
+  peca,
+  sizes,
+  indice,
+  lista,
+}: {
+  peca: Product;
+  sizes: string;
+  indice: number;
+  lista: string;
+}) {
   const foto = peca.images[0];
   return (
-    <Link href={destino(peca)} className="group block">
+    <Link href={destino(peca)} className="group block" onClick={() => trackSelectItem(peca, lista, indice)}>
       <div className="relative aspect-[3/4] overflow-hidden rounded-sm bg-surface-alt">
         {foto?.src && (
           <Image
@@ -125,10 +154,10 @@ function PecaFoto({ peca, sizes }: { peca: Product; sizes: string }) {
 }
 
 /** Foto pequena + nome + preço — o formato do PC. */
-function PecaComNome({ peca }: { peca: Product }) {
+function PecaComNome({ peca, indice, lista }: { peca: Product; indice: number; lista: string }) {
   const foto = peca.images[0];
   return (
-    <Link href={destino(peca)} className="group flex items-center gap-3">
+    <Link href={destino(peca)} className="group flex items-center gap-3" onClick={() => trackSelectItem(peca, lista, indice)}>
       <div className="relative aspect-[3/4] w-14 shrink-0 overflow-hidden rounded-sm bg-surface-alt">
         {foto?.src && (
           <Image

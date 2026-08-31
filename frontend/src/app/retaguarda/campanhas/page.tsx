@@ -27,6 +27,24 @@ import {
 
 type MotivoSemGasto = 'direto' | 'sem_id' | 'id_nao_casa' | null;
 
+/**
+ * PRA ONDE O ANÚNCIO MANDOU GENTE — peça a peça.
+ *
+ * O ROAS de cima responde "qual campanha deu retorno". Não responde "qual PEÇA
+ * o dinheiro comprou visita", e é aí que estava o buraco: medido de 24 a
+ * 31/08/2026, **duas peças levaram 34,6% de todas as visualizações do site**
+ * (BMM-100 e VLM-222), quase tudo vindo de anúncio — e a taxa de sacola delas
+ * é das piores da lista. A CON-200 recebeu 937 visitas pagas e converteu 3,4%,
+ * enquanto a CHIC converteu 24,4% com 181.
+ */
+interface PecaRow {
+  ref: string;
+  viram: number;
+  deAnuncio: number;
+  sacola: number;
+  taxa: number;
+}
+
 interface CampanhaRow {
   campanhaId: string | null;
   campanha: string;
@@ -167,6 +185,8 @@ export default function CampanhasPage() {
     if (!token) window.location.href = '/login';
   }, []);
 
+  const [pecas, setPecas] = useState<PecaRow[] | null>(null);
+
   async function carregar(e?: React.FormEvent) {
     e?.preventDefault();
     if (!from || !to) {
@@ -183,6 +203,11 @@ export default function CampanhasPage() {
       const q = new URLSearchParams({ from, to });
       const res = await api<CampanhasReport>(`/orders/report/campanhas?${q}`);
       setData(res);
+      // Em paralelo e tolerante: a lista de peças é leitura a mais, e falha
+      // nela não pode derrubar o ROAS, que é o motivo da tela existir.
+      api<{ pecas: PecaRow[] }>(`/site-metrics/pecas?de=${from}&ate=${to}`)
+        .then((r) => setPecas(r.pecas ?? []))
+        .catch(() => setPecas([]));
     } catch (e: any) {
       setError(e?.message ?? 'Falha ao carregar');
       setData(null);
@@ -606,6 +631,69 @@ export default function CampanhasPage() {
               <div className="mt-2 pt-2 border-t border-slate-200 text-slate-500">
                 O ROAS acima usa <b>só o que casou pelo id da campanha</b>. Gasto vem das contas de
                 ecomm do Meta e do Google; a origem do pedido vale 30 dias de último clique.
+              </div>
+            </div>
+          )}
+          {/* ── PRA ONDE O ANÚNCIO MANDOU GENTE ──
+              Fica DEPOIS da reconciliação porque responde a pergunta seguinte:
+              sabendo o que cada campanha rendeu, qual peça ela comprou visita
+              pra ver. Sem isto, "renovar o criativo de qual peça?" não tem
+              resposta em lugar nenhum do sistema. */}
+          {pecas && pecas.length > 0 && (
+            <div className="mt-6 rounded-lg border border-slate-200 bg-white">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <div className="flex items-center gap-2 font-semibold text-slate-800">
+                  <ShoppingBag className="w-4 h-4" /> Pra onde o anúncio mandou gente
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  Peça vista no período, quanto da visita veio de anúncio e quantas sessões
+                  puseram na sacola. Ordenado por visita — é a lista de <b>onde o dinheiro
+                  foi</b>, não a de quem converte melhor: essa se lê na última coluna.
+                </p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                      <th className="px-4 py-2 font-medium">Peça</th>
+                      <th className="px-4 py-2 text-right font-medium">Viram</th>
+                      <th className="px-4 py-2 text-right font-medium">De anúncio</th>
+                      <th className="px-4 py-2 text-right font-medium">Sacola</th>
+                      <th className="px-4 py-2 text-right font-medium">Taxa</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pecas.map((p) => (
+                      <tr key={p.ref} className="border-b border-slate-100 last:border-0">
+                        <td className="px-4 py-2 font-medium text-slate-800">{p.ref}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-slate-700">
+                          {p.viram.toLocaleString('pt-BR')}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular-nums text-slate-500">
+                          {p.viram ? Math.round((100 * p.deAnuncio) / p.viram) : 0}%
+                        </td>
+                        <td className="px-4 py-2 text-right tabular-nums text-slate-700">
+                          {p.sacola.toLocaleString('pt-BR')}
+                        </td>
+                        {/* Vermelho abaixo de 5%, verde a partir de 15%: são as
+                            duas pontas medidas (2,4% na 61140064, 24,4% na CHIC).
+                            No meio fica neutro — cor em tudo não destaca nada. */}
+                        <td
+                          className={
+                            'px-4 py-2 text-right font-semibold tabular-nums ' +
+                            (p.taxa < 5
+                              ? 'text-red-600'
+                              : p.taxa >= 15
+                                ? 'text-emerald-600'
+                                : 'text-slate-700')
+                          }
+                        >
+                          {p.taxa.toLocaleString('pt-BR', { minimumFractionDigits: 1 })}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

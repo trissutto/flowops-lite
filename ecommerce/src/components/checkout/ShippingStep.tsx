@@ -212,6 +212,20 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, salv
   const cotacaoNoParaquedas = origem === 'local' && quotes.length > 0;
   const cotacaoEstimadaBackend = origem === 'backend' && estimado && quotes.length > 0;
 
+  /**
+   * A ENTREGA JÁ VEM MARCADA (31/08) — ver o bloco no topo deste patch/arquivo.
+   *
+   * Roda também quando a lista TROCA (CEP novo): a opção velha deixa de existir
+   * e a seleção precisa cair na nova, senão a tela mostra a lista sem nada
+   * marcado de novo — exatamente o estado que reprovava a cliente.
+   */
+  useEffect(() => {
+    if (!quotes.length) return;
+    if (quoteId && quotes.some((q) => q.id === quoteId)) return;
+    const padrao = quotes.find((q) => q.kind !== 'retirada') ?? quotes[0];
+    if (padrao) setQuoteId(padrao.id);
+  }, [quotes, quoteId]);
+
   const selectedQuote = quotes.find((q) => q.id === quoteId);
   /**
    * O ENDEREÇO APARECE DURANTE A COTAÇÃO, NÃO DEPOIS DELA.
@@ -756,6 +770,11 @@ function QuoteOption({
             </span>
             {/* Item 27: o que levar e por quanto tempo a peça espera. Vai AQUI,
                 na hora da escolha — não numa página de ajuda que ninguém abre. */}
+            {checked && (
+              <span className="text-small font-medium text-ink">
+                O pagamento é agora, aqui no site — na loja você só retira.
+              </span>
+            )}
             {instrucoesRetirada && checked && (
               <span className="text-small text-ink-muted">{instrucoesRetirada}</span>
             )}
