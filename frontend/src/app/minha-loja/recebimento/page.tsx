@@ -47,9 +47,23 @@ type ShipmentItem = {
   realignmentReceivedAt: string | null;
   realignmentMissingAt: string | null;
   realignmentMissingNote: string | null;
+  realignmentTrocaAt?: string | null;
+  realignmentTrocaNote?: string | null;
 };
 
 type ShipmentDetail = Shipment & { items: ShipmentItem[] };
+
+/**
+ * A caixa dizia uma peça e chegou OUTRA da mesma REF+tamanho, cor diferente
+ * (origem errou a arara). O backend devolve isto no lugar de recusar o bipe —
+ * a vendedora confere as duas descrições na tela e confirma.
+ */
+type TrocaPendente = {
+  transferOrderId: string;
+  sku: string;
+  remessaDizia: { refCode: string; cor: string | null; tamanho: string | null; descricao: string | null };
+  chegou: { refCode: string | null; cor: string | null; tamanho: string | null; descricao: string | null };
+};
 
 type MeProfile = { storeId: string; storeName: string; role: string };
 
@@ -65,6 +79,8 @@ export default function RecebimentoPage() {
   const [confirming, setConfirming] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
+  const [troca, setTroca] = useState<TrocaPendente | null>(null);
+  const [trocando, setTrocando] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const prevPendingRef = useRef<number | null>(null);
 
@@ -152,10 +168,24 @@ export default function RecebimentoPage() {
       // Limpa input ANTES da resposta — vendedora pode bipar próximo já
       setScanInput('');
       try {
-        const res = await api<{ ok: boolean; transferOrderId: string; refCode: string }>(
+        const res = await api<{
+          ok: boolean;
+          transferOrderId: string;
+          refCode: string;
+          precisaConfirmar?: 'troca';
+          troca?: TrocaPendente;
+        }>(
           `/realignment/shipments/${selected.id}/scan`,
           { method: 'POST', body: JSON.stringify({ sku }) },
         );
+        // A peça chegou, mas é outra cor da mesma REF+tamanho: abre o
+        // comparativo em vez de recusar o bipe. Quem decide é quem está com a
+        // peça na mão.
+        if (res.precisaConfirmar === 'troca' && res.troca) {
+          setTroca(res.troca);
+          setFeedback(null);
+          return;
+        }
         setFeedback({ type: 'ok', msg: `✅ ${res.refCode} conferida` });
         // ─── Atualização OTIMISTA local — sem refetch ───
         // Atualiza só o item bipado pra status='received'. Evita chamada
@@ -186,6 +216,64 @@ export default function RecebimentoPage() {
     },
     [selected, scanInput],
   );
+
+  /**
+   * Confirma que a peça na mão é outra cor. O backend acerta o estoque da loja
+   * que MANDOU (devolve a cor que ela não enviou, baixa a que enviou) e marca
+   * o item conferido pela peça de verdade.
+   */
+  const handleConfirmarTroca = useCallback(async () => {
+    if (!selected || !troca) return;
+    setTrocando(true);
+    try {
+      const res = await api<{
+        ok: boolean;
+        transferOrderId: string;
+        refCode: string;
+        cor: string | null;
+        descricao: string | null;
+        acertoOrigem: { erro?: string } | null;
+      }>(`/realignment/shipments/${selected.id}/scan-troca`, {
+        method: 'POST',
+        body: JSON.stringify({ transferOrderId: troca.transferOrderId, sku: troca.sku }),
+      });
+      setSelected((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((it) =>
+                it.id === res.transferOrderId
+                  ? {
+                      ...it,
+                      cor: res.cor,
+                      descricao: res.descricao,
+                      realignmentStatus: 'received',
+                      realignmentReceivedAt: new Date().toISOString(),
+                      realignmentTrocaAt: new Date().toISOString(),
+                    }
+                  : it,
+              ),
+            }
+          : prev,
+      );
+      setFeedback(
+        res.acertoOrigem?.erro
+          ? {
+              type: 'err',
+              msg: `✅ ${res.refCode} ${res.cor || ''} conferida — mas o acerto de estoque na ${selected.fromStoreName} falhou. Avise a matriz.`,
+            }
+          : { type: 'ok', msg: `🔁 Trocada: ${res.refCode} ${res.cor || ''} conferida` },
+      );
+      setTroca(null);
+    } catch (e: any) {
+      const msg = String(e?.message || '').replace(/^\d+:\s*/, '');
+      setFeedback({ type: 'err', msg: `❌ ${msg}` });
+      setTroca(null);
+    } finally {
+      setTrocando(false);
+      inputRef.current?.focus();
+    }
+  }, [selected, troca]);
 
   const handleMarkMissing = useCallback(
     async (item: ShipmentItem) => {
@@ -449,6 +537,86 @@ export default function RecebimentoPage() {
           )}
         </main>
 
+        {/* ─── TROCA DE PEÇA: a caixa dizia uma cor, chegou outra ─── */}
+        {troca && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            {...overlayClose(() => !trocando && setTroca(null))}
+            role="dialog"
+            aria-label="Confirmar troca de peça"
+          >
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
+              <div className="bg-amber-500 text-white px-5 py-4 flex items-center gap-3">
+                <AlertCircle className="w-7 h-7 shrink-0" />
+                <div>
+                  <div className="font-black text-lg leading-tight">Veio uma cor diferente</div>
+                  <div className="text-xs opacity-90">
+                    Confira a etiqueta da peça antes de confirmar
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-5 space-y-3">
+                <div className="rounded-xl border-2 border-slate-200 bg-slate-50 p-3">
+                  <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">
+                    A caixa dizia
+                  </div>
+                  <div className="font-mono font-black text-slate-800">
+                    {troca.remessaDizia.refCode}{' '}
+                    <span className="text-slate-600">{troca.remessaDizia.cor || '—'}</span> ·{' '}
+                    {troca.remessaDizia.tamanho || '—'}
+                  </div>
+                  {troca.remessaDizia.descricao && (
+                    <div className="text-xs text-slate-500 mt-0.5">{troca.remessaDizia.descricao}</div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">
+                  <div className="text-[11px] font-black uppercase tracking-wide text-emerald-700">
+                    Você bipou
+                  </div>
+                  <div className="font-mono font-black text-emerald-900">
+                    {troca.chegou.refCode}{' '}
+                    <span className="text-emerald-700">{troca.chegou.cor || '—'}</span> ·{' '}
+                    {troca.chegou.tamanho || '—'}
+                  </div>
+                  {troca.chegou.descricao && (
+                    <div className="text-xs text-emerald-700 mt-0.5">{troca.chegou.descricao}</div>
+                  )}
+                  <div className="text-[11px] font-mono text-emerald-600 mt-1">{troca.sku}</div>
+                </div>
+
+                <div className="text-xs text-slate-600 leading-relaxed bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Confirmando, a peça que você tem na mão entra no seu estoque e o
+                  saldo da <b>{selected.fromStoreName}</b> é acertado nas duas cores.
+                  Se a peça na mão <b>não for</b> nenhuma dessas, cancele e marque
+                  como faltante.
+                </div>
+              </div>
+
+              <div className="px-5 pb-5 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTroca(null)}
+                  disabled={trocando}
+                  className="flex-1 py-3 rounded-xl font-bold border-2 border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmarTroca}
+                  disabled={trocando}
+                  className="flex-[2] py-3 rounded-xl font-black bg-emerald-600 hover:bg-emerald-700 text-white shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {trocando ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
+                  É esta que eu tenho
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ─── CELEBRAÇÃO 100% PERFEITO ─── */}
         {showCelebration && (
           <div
@@ -617,6 +785,11 @@ function ItemRow({
         {isMissing && item.realignmentMissingNote && (
           <div className="text-xs text-red-700 mt-0.5">
             Motivo: {item.realignmentMissingNote}
+          </div>
+        )}
+        {item.realignmentTrocaAt && (
+          <div className="text-xs text-amber-700 mt-0.5" title={item.realignmentTrocaNote || ''}>
+            🔁 Veio cor diferente da que a caixa dizia
           </div>
         )}
       </div>

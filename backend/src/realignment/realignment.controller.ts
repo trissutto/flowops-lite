@@ -880,6 +880,33 @@ export class RealignmentController {
   }
 
   /**
+   * Confirma a TROCA de peça: a caixa dizia uma cor, chegou outra da mesma
+   * REF+TAM. Acerta os saldos da ORIGEM (devolve a cor errada, baixa a que
+   * realmente saiu) e marca o item conferido pela peça que está na mão.
+   * Só entra por aqui depois de o `/scan` ter devolvido `precisaConfirmar`.
+   * POST /realignment/shipments/:id/scan-troca { transferOrderId, sku } · filial destino
+   */
+  @Post('shipments/:id/scan-troca')
+  confirmarTroca(
+    @Param('id') id: string,
+    @Body() body: { transferOrderId: string; sku: string },
+    @Req() req: any,
+  ) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja destino');
+    return this.shipment.confirmarTroca({
+      shipmentId: id,
+      transferOrderId: body?.transferOrderId,
+      sku: body?.sku || '',
+      storeId,
+      userId,
+    });
+  }
+
+  /**
    * Marca um item como FALTANTE (não chegou). Cancela obrigação financeira.
    * POST /realignment/shipments/:id/missing { transferOrderId, note? } · filial destino
    */

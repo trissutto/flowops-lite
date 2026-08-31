@@ -1777,6 +1777,8 @@ export class RealignmentShipmentService {
         realignmentReceivedAt: true,
         realignmentMissingAt: true,
         realignmentMissingNote: true,
+        realignmentTrocaAt: true,
+        realignmentTrocaNote: true,
       } as any,
     });
 
@@ -1944,6 +1946,7 @@ export class RealignmentShipmentService {
           refCode: true,
           cor: true,
           tamanho: true,
+          descricao: true,
           realignmentStatus: true,
           codigoBipado: true,
         } as any,
@@ -2071,6 +2074,38 @@ export class RealignmentShipmentService {
       } else {
         this.logger.error(`[scanItem] cache VAZIO`);
       }
+      // ── E5: TROCA DE PEÇA — a origem separou OUTRA cor da mesma REF+TAM ──
+      // Não é erro de bipe: a peça CHEGOU, só não é a que a caixa dizia.
+      // Antes disto a única saída era "Faltante", que é mentira e deixa três
+      // saldos errados (a cor certa e a errada na origem, e nada no destino).
+      const troca = this.acharCandidatoTroca(info, pendingItems, items as any[], skuBipadoStripped);
+      if (troca) {
+        this.logger.warn(
+          `[scanItem] TROCA candidata em ${shipment.code}: remessa dizia ${troca.refCode}/${troca.cor}/${troca.tamanho}, ` +
+            `chegou ${info!.ref}/${info!.cor}/${info!.tamanho} (${skuNormalizado})`,
+        );
+        return {
+          ok: false as const,
+          precisaConfirmar: 'troca' as const,
+          troca: {
+            transferOrderId: troca.id,
+            sku: skuNormalizado,
+            remessaDizia: {
+              refCode: troca.refCode,
+              cor: troca.cor,
+              tamanho: troca.tamanho,
+              descricao: troca.descricao,
+            },
+            chegou: {
+              refCode: info!.ref,
+              cor: info!.cor,
+              tamanho: info!.tamanho,
+              descricao: info!.descricao,
+            },
+          },
+        };
+      }
+
       throw new BadRequestException(
         `SKU ${skuBipado} nao pertence a essa remessa (ou ja foi bipado). ` +
           (info?.ref ? `Resolvido como ${info.ref}/${info.cor || ''}/${info.tamanho || ''}.` : 'SKU nao encontrado no Wincred.'),
@@ -2088,7 +2123,245 @@ export class RealignmentShipmentService {
       } as any,
     });
 
-    return { ok: true, transferOrderId: matchedItemId, refCode: matchedRefCode };
+    return { ok: true as const, transferOrderId: matchedItemId, refCode: matchedRefCode };
+  }
+
+  /**
+   * TROCA DE PEÇA — acha o item da remessa que a peça bipada VEIO SUBSTITUIR.
+   *
+   * Caso real (REM-2026-000852, 31/08): a caixa pedia `124131 GOIABA 54`
+   * (7891426031883) e veio `124131 ROSE 54` (7891426031890) — mesma REF, mesmo
+   * tamanho, dois rosas quase idênticos e código de barras VIZINHO. A caixa
+   * ficou 26 dias travada por 1 peça porque o bipe casa REF+COR+TAM e não
+   * existia caminho pra "chegou outra".
+   *
+   * As travas existem porque trocar a peça errada é PIOR que recusar o bipe:
+   *   - só entra com REF e TAMANHO idênticos (REF comparada pela base, sem o
+   *     sufixo de letra da cor — mesmo strip da E3);
+   *   - a COR tem que estar resolvida nos dois lados e ser DIFERENTE;
+   *   - o SKU bipado não pode já ser de outro item da caixa (aí é re-bipe ou
+   *     peça repetida — trocar apagaria um item legítimo);
+   *   - tem que sobrar UM candidato. Dois pendentes da mesma REF+TAM em cores
+   *     diferentes = não dá pra adivinhar qual a origem trocou, e erro seco é
+   *     melhor que estoque errado.
+   */
+  private acharCandidatoTroca(
+    info: { ref: string | null; cor: string | null; tamanho: string | null } | null,
+    pendingItems: any[],
+    todosItems: any[],
+    skuBipadoStripped: string,
+  ): any | null {
+    if (!info?.ref || !info?.tamanho || !info?.cor) return null;
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const stripZeros = (s: string) => String(s || '').trim().replace(/^0+/, '') || '0';
+    const refBase = (s: any) => norm(s).replace(/[A-Z]+$/, '');
+
+    for (const it of todosItems) {
+      if (it.codigoBipado && stripZeros(it.codigoBipado) === skuBipadoStripped) return null;
+    }
+
+    const alvoRef = refBase(info.ref);
+    const alvoTam = norm(info.tamanho);
+    const alvoCor = norm(info.cor);
+    if (!alvoRef || !alvoTam || !alvoCor) return null;
+
+    const candidatos = pendingItems.filter(
+      (it) =>
+        refBase(it.refCode) === alvoRef &&
+        norm(it.tamanho) === alvoTam &&
+        norm(it.cor) &&
+        norm(it.cor) !== alvoCor,
+    );
+    return candidatos.length === 1 ? candidatos[0] : null;
+  }
+
+  /**
+   * CONFIRMA A TROCA — a loja destino olhou a peça, confirmou que é outra cor,
+   * e o sistema acerta os TRÊS saldos que a separação errada bagunçou.
+   *
+   * O "Fechar e enviar" baixou da origem a cor que a caixa DIZIA. A cor que
+   * realmente saiu da arara continua com saldo lá. Então:
+   *   ORIGEM  → devolve +1 da cor errada (peça que nunca saiu da loja)
+   *             e baixa −1 da cor certa (peça que está dentro da caixa);
+   *   DESTINO → nada aqui: a entrada sai no "Dar Entrada", e sai pela cor
+   *             certa porque o `confirmReceived` usa o `codigoBipado`, não a
+   *             cor escrita no pedido. Somar aqui criaria peça do nada.
+   *
+   * O que a remessa dizia fica gravado em `realignmentTrocaNote` pra matriz
+   * saber que arara errou.
+   */
+  async confirmarTroca(input: {
+    shipmentId: string;
+    transferOrderId: string;
+    sku: string;
+    storeId: string;
+    userId?: string;
+  }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.toStoreCode !== (store as any).code)
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+    if (shipment.status !== 'in_transit')
+      throw new BadRequestException(`Remessa não está em trânsito (status=${shipment.status})`);
+
+    const skuBipado = String(input.sku || '').trim();
+    if (!skuBipado) throw new BadRequestException('SKU vazio');
+
+    const [info, items] = await Promise.all([
+      this.erp.resolveSkuInfo(skuBipado),
+      this.prisma.transferOrder.findMany({
+        where: { shipmentId: shipment.id } as any,
+        select: {
+          id: true,
+          refCode: true,
+          cor: true,
+          tamanho: true,
+          descricao: true,
+          qtyOrigem: true,
+          realignmentStatus: true,
+          codigoBipado: true,
+        } as any,
+      }),
+    ]);
+    if (!info?.ref)
+      throw new BadRequestException(`SKU ${skuBipado} não existe no catálogo — confira a etiqueta.`);
+
+    const item = (items as any[]).find((i) => i.id === input.transferOrderId);
+    if (!item) throw new BadRequestException('Item não pertence a essa remessa');
+    if (item.realignmentStatus === 'received')
+      throw new BadRequestException('Item já foi conferido');
+    if (item.realignmentStatus === 'missing')
+      throw new BadRequestException('Item está marcado como faltante — desmarque antes de trocar');
+
+    // Revalida a troca NO SERVIDOR. O cliente manda qual item quer trocar, mas
+    // quem decide se pode é aqui — senão um POST à mão troca qualquer peça.
+    const pendingItems = (items as any[]).filter(
+      (i) => i.realignmentStatus !== 'received' && i.realignmentStatus !== 'missing',
+    );
+    const skuNormalizado = info.codigo || skuBipado;
+    const skuStripped = String(skuNormalizado).trim().replace(/^0+/, '') || '0';
+    const candidato = this.acharCandidatoTroca(info, pendingItems, items as any[], skuStripped);
+    if (!candidato || candidato.id !== item.id)
+      throw new BadRequestException(
+        'A peça bipada não bate mais com esse item da remessa. Bipe de novo pra conferir.',
+      );
+
+    const corAntiga = item.cor;
+    const codigoAntigo = item.codigoBipado ? String(item.codigoBipado) : null;
+    const qty = item.qtyOrigem || 1;
+
+    // ── ACERTO DO ESTOQUE NA ORIGEM ────────────────────────────────────────
+    // Só mexe se a caixa REALMENTE baixou no envio — mesmo marcador que o
+    // reprocessamento usa. Caixa que nunca baixou não tem o que devolver, e
+    // somar aqui inventaria peça (mesmo cuidado do `stockIncreasedAt` na
+    // entrada).
+    let acertoOrigem: {
+      loja: string;
+      devolvido: string | null;
+      baixado: string;
+      erro?: string;
+    } | null = null;
+    if (shipment.stockDecreasedAt) {
+      acertoOrigem = { loja: shipment.fromStoreCode, devolvido: codigoAntigo, baixado: skuNormalizado };
+      try {
+        if (codigoAntigo) {
+          await this.erp.increaseStockAsync([
+            { sku: codigoAntigo, qty, storeCode: shipment.fromStoreCode },
+          ]);
+        }
+        await this.erp.decreaseStockAsync([
+          { sku: skuNormalizado, qty, storeCode: shipment.fromStoreCode },
+        ]);
+      } catch (e) {
+        // Não derruba a troca: a peça chegou e a loja precisa fechar a caixa.
+        // O acerto vira pendência visível no log e no retorno.
+        acertoOrigem.erro = (e as Error).message;
+        this.logger.error(
+          `[troca] ${shipment.code}: acerto de estoque na origem ${shipment.fromStoreCode} falhou: ${(e as Error).message}`,
+        );
+      }
+    } else {
+      this.logger.warn(
+        `[troca] ${shipment.code}: caixa sem stockDecreasedAt — origem NÃO acertada (nada foi baixado no envio).`,
+      );
+    }
+
+    // ── REESCREVE O ITEM PRO QUE REALMENTE CHEGOU ──────────────────────────
+    // `refCode` fica como está: a REF base é a mesma (o strip de sufixo da
+    // E3/`acharCandidatoTroca` já garantiu) e trocá-la mexeria em relatório e
+    // obrigação que indexam por REF. O que conta pra entrada é o codigoBipado.
+    const noteTroca =
+      `Remessa dizia ${item.refCode}/${corAntiga || '-'}/${item.tamanho || '-'}` +
+      (codigoAntigo ? ` (${codigoAntigo})` : '') +
+      `; chegou ${info.ref}/${info.cor || '-'}/${info.tamanho || '-'} (${skuNormalizado}).`;
+
+    await this.prisma.transferOrder.update({
+      where: { id: item.id },
+      data: {
+        cor: info.cor ?? item.cor,
+        descricao: info.descricao ?? item.descricao,
+        codigoBipado: skuNormalizado,
+        realignmentStatus: 'received',
+        realignmentReceivedAt: new Date(),
+        realignmentReceivedByUserId: input.userId ?? null,
+        realignmentTrocaAt: new Date(),
+        realignmentTrocaNote: noteTroca,
+      } as any,
+    });
+
+    // ── OBRIGAÇÃO FINANCEIRA — passa a nomear a peça certa ─────────────────
+    // Preço da nova cor quase sempre é igual (mesma REF), mas "quase sempre"
+    // não é sempre: quando muda, a filial pagaria pela peça que não recebeu.
+    try {
+      const obrigacoes = await (this.prisma as any).interStoreObligation.findMany({
+        where: { transferOrderId: item.id, status: { in: ['pending', 'closed'] } },
+        select: { id: true, qty: true, divisor: true, precoUnitario: true },
+      });
+      if (obrigacoes.length) {
+        const precos = await this.pricing.getPricesByCodigos([skuNormalizado]);
+        const novoPreco = precos.get(skuNormalizado) ?? null;
+        for (const ob of obrigacoes) {
+          const precoUnitario = novoPreco ?? ob.precoUnitario;
+          const precoTotal = precoUnitario * (ob.qty || 1);
+          await (this.prisma as any).interStoreObligation.update({
+            where: { id: ob.id },
+            data: {
+              sku: skuNormalizado,
+              cor: info.cor ?? null,
+              descricao: info.descricao ?? null,
+              precoUnitario,
+              precoTotal,
+              valorObrigacao: precoTotal / (ob.divisor || 2.5),
+            },
+          });
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`[troca] falha atualizando obrigação de ${item.id}: ${(e as Error).message}`);
+    }
+
+    this.invalidateSkuCache(shipment.id);
+    this.logger.log(`[troca] ${shipment.code}: ${noteTroca}`);
+
+    return {
+      ok: true as const,
+      trocado: true as const,
+      transferOrderId: item.id,
+      refCode: item.refCode,
+      cor: info.cor,
+      tamanho: info.tamanho,
+      descricao: info.descricao,
+      codigoBipado: skuNormalizado,
+      acertoOrigem,
+    };
   }
 
   /**
