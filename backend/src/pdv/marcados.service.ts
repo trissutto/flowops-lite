@@ -1203,7 +1203,34 @@ export class MarcadosService {
     for (const row of rows) {
       const qty = Math.max(1, Number(row.QUANTIDADE) || 1);
       const valorTotal = Number(row.VALORTOTAL) || (Number(row.VALOR) || 0) * qty;
-      const precoUnit = qty > 0 ? Math.round((valorTotal / qty) * 100) / 100 : Number(row.VALOR) || 0;
+      /**
+       * PEÇA MARCADA COM DESCONTO VOLTAVA SEM O DESCONTO APARECER (31/08).
+       *
+       * Na marcação, `VALOR` guarda o preço CHEIO e `VALORTOTAL` o que a
+       * cliente vai pagar (já com o desconto embutido). O retorno usava o
+       * LÍQUIDO como preço unitário e gravava `desconto: 0` — então a peça
+       * de R$ 80 marcada por R$ 40 voltava como se R$ 40 fosse o preço de
+       * tabela: sem riscado, sem "economizou", sem nada na tela que
+       * denunciasse o desconto já concedido.
+       *
+       * Pior que o visual: com `desconto: 0` a campanha do dia enxergava
+       * uma peça "sem desconto" e aplicava os 50% EM CIMA do preço já pela
+       * metade (R$ 80 → 40 → 20) assim que a vendedora bipasse qualquer
+       * outra peça — o recálculo automático roda a venda inteira.
+       *
+       * Agora o preço volta CHEIO com o desconto explícito na linha, que é
+       * o que a tela sabe mostrar (riscado + economia) e o que a trava do
+       * recálculo sabe respeitar.
+       */
+      const brutoUnit = Math.round((Number(row.VALOR) || 0) * 100) / 100;
+      const liquidoUnit = qty > 0 ? Math.round((valorTotal / qty) * 100) / 100 : brutoUnit;
+      // Só confia no bruto quando ele é coerente (>= líquido). Marcado antigo
+      // ou vindo do Giga sem VALOR cai no comportamento de antes.
+      const temBruto = brutoUnit > 0 && brutoUnit * qty >= valorTotal - 0.01;
+      const precoUnit = temBruto ? brutoUnit : liquidoUnit;
+      const descontoMarcado = temBruto
+        ? Math.max(0, Math.round((brutoUnit * qty - valorTotal) * 100) / 100)
+        : 0;
       const descricao = String(row.DESCRICAO || row.CODIGO || 'Item marcado').slice(0, 80);
       const sku = String(row.CODIGO || `MARCADO-${row.id}`);
       // Resolve REF real + dataCadastro (+cor/tam/ncm/cfop/ean) pelo catálogo,
@@ -1227,9 +1254,12 @@ export class MarcadosService {
             dataCadastro: info?.dataCadastro ?? null,
             qty,
             precoUnit,
-            desconto: 0,
-            total: precoUnit * qty,
+            desconto: descontoMarcado,
+            total: Math.round((precoUnit * qty - descontoMarcado) * 100) / 100,
             promoTag: 'MARCADO',
+            // Ancora o "de/por" riscado na linha — o mesmo campo que o bipe
+            // usa pra mostrar quanto a cliente economizou.
+            precoDeCents: descontoMarcado > 0 ? Math.round(brutoUnit * 100) : null,
           },
         });
         total += precoUnit * qty;
