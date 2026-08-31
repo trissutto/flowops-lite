@@ -56,24 +56,25 @@ describe('politica-frete', () => {
     pickOrder: { count: async () => pacotes },
   });
 
-  test('gate: 2+ pacotes dentro de SP sem carimbo TRAVA; 1 pacote não', async () => {
+  test('gate CANCELADO pelo dono (31/08): default DESLIGADO — nada trava', async () => {
+    const dentro = { isPickup: false, shippingCep: '01310-000', wcOrderNumber: 'X1', pacotesLiberadosEm: null };
+    expect((await pacotesAguardandoLiberacao(prismaFake(dentro, 5) as any, 'o1')).travado).toBe(false);
+  });
+
+  test('gate religado (=1): 2+ pacotes dentro de SP sem carimbo trava; 1 pacote não', async () => {
+    process.env.PACOTES_GATE_DENTRO_SP = '1';
     const dentro = { isPickup: false, shippingCep: '01310-000', wcOrderNumber: 'X1', pacotesLiberadosEm: null };
     expect((await pacotesAguardandoLiberacao(prismaFake(dentro, 2) as any, 'o1')).travado).toBe(true);
     expect((await pacotesAguardandoLiberacao(prismaFake(dentro, 1) as any, 'o1')).travado).toBe(false);
   });
 
-  test('gate: carimbo da matriz, retirada e fora-de-SP passam direto', async () => {
+  test('gate religado: carimbo da matriz, retirada e fora-de-SP passam direto', async () => {
+    process.env.PACOTES_GATE_DENTRO_SP = '1';
     const liberado = { isPickup: false, shippingCep: '01310-000', pacotesLiberadosEm: new Date() };
     expect((await pacotesAguardandoLiberacao(prismaFake(liberado, 3) as any, 'o1')).travado).toBe(false);
     const pickup = { isPickup: true, shippingCep: '01310-000', pacotesLiberadosEm: null };
     expect((await pacotesAguardandoLiberacao(prismaFake(pickup, 3) as any, 'o1')).travado).toBe(false);
     const fora = { isPickup: false, shippingCep: '20040-002', pacotesLiberadosEm: null };
     expect((await pacotesAguardandoLiberacao(prismaFake(fora, 3) as any, 'o1')).travado).toBe(false);
-  });
-
-  test('gate: kill-switch PACOTES_GATE_DENTRO_SP=0 desliga tudo', async () => {
-    process.env.PACOTES_GATE_DENTRO_SP = '0';
-    const dentro = { isPickup: false, shippingCep: '01310-000', pacotesLiberadosEm: null };
-    expect((await pacotesAguardandoLiberacao(prismaFake(dentro, 5) as any, 'o1')).travado).toBe(false);
   });
 });

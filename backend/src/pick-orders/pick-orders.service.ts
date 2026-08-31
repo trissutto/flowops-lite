@@ -2277,7 +2277,8 @@ export class PickOrdersService {
         })
       : [];
     const nPacotes = new Map(pacotesPorPedido.map((g) => [g.orderId, Number(g._count?._all) || 0]));
-    const gateLigado = String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() !== '0';
+    // Gate CANCELADO pelo dono (31/08) — só volta com PACOTES_GATE_DENTRO_SP=1.
+    const gateLigado = String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() === '1';
     const aguardaDecisaoDe = (r: any): boolean => {
       if (!gateLigado) return false;
       const o: any = r.order;

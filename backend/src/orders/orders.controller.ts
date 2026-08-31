@@ -3754,7 +3754,8 @@ export class OrdersController {
 
   @Get('pacotes/pendentes')
   async pacotesPendentes() {
-    if (String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() === '0') return { itens: [] };
+    // Gate CANCELADO (31/08) — a fila só existe se alguém religar a flag.
+    if (String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() !== '1') return { itens: [] };
     const candidatos: any[] = await this.prisma.order.findMany({
       where: {
         isPickup: false,

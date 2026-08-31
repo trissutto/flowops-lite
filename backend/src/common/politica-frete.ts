@@ -77,7 +77,12 @@ export async function pacotesAguardandoLiberacao(
   },
   orderId: string,
 ): Promise<{ travado: boolean; pacotes: number; motivo?: string }> {
-  if (String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() === '0') {
+  // CANCELADO PELO DONO (31/08): "cancele esta regra de MATRIZ LIBERAR".
+  // O gate travou a operação no primeiro dia útil (LP-000999/1015/1044) e a
+  // decisão caso-a-caso não compensou o atrito. DESLIGADO por padrão —
+  // `PACOTES_GATE_DENTRO_SP=1` religa se um dia fizer falta. A cotação
+  // juntar × liberar continua na tela de Remessas como INFORMAÇÃO.
+  if (String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() !== '1') {
     return { travado: false, pacotes: 0 };
   }
   const order: any = await prisma.order.findUnique({
