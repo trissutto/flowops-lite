@@ -182,6 +182,60 @@ export class LojaAdminController {
     return { ok: true, ...r };
   }
 
+  /* ────────────────────── AVISOS ENVIADOS PRA CLIENTE ──────────────────── */
+
+  /**
+   * GET /admin/loja/avisos?pedido=LP-001041 — o que o sistema mandou pra ela.
+   *
+   * A pergunta que custou uma tarde em 31/08 (caso Rosana): "a cliente recebeu
+   * a confirmação?" não tinha resposta em lugar nenhum — o sistema disparava
+   * WhatsApp e e-mail e não guardava nada. Agora responde em um clique: cada
+   * evento, por qual canal saiu, se o canal aceitou e quando.
+   *
+   * Sem `pedido`, devolve os últimos avisos da rede — útil pra flagrar canal
+   * caído (uma parede de `ok=false` no mesmo canal) antes de a cliente
+   * reclamar. `?falhas=1` filtra só o que NÃO saiu.
+   *
+   * ⚠️ `ok=true` quer dizer "o canal aceitou", não "a cliente leu".
+   */
+  @Get('avisos')
+  async avisos(
+    @Req() req: any,
+    @Query('pedido') pedido?: string,
+    @Query('falhas') falhas?: string,
+    @Query('limite') limite?: string,
+  ) {
+    this.exigirAdmin(req);
+    const busca = String(pedido || '').trim();
+    const where: any = {};
+    if (busca) {
+      where.OR = [{ wcOrderNumber: busca }, { orderId: busca }];
+    }
+    if (String(falhas || '') === '1') where.ok = false;
+
+    const linhas = await (this.prisma as any).avisoEnviado.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(Number(limite) || 100, 1), 500),
+    });
+    return {
+      ok: true,
+      total: linhas.length,
+      // `ok` do registro é "o canal aceitou o envio", NUNCA "foi entregue" —
+      // o nome vai explícito pra ninguém ler mais do que o dado diz.
+      legenda: 'ok = o canal aceitou o envio (não é confirmação de leitura)',
+      avisos: linhas.map((a: any) => ({
+        pedido: a.wcOrderNumber ?? a.orderId,
+        evento: a.evento,
+        canal: a.canal,
+        destino: a.destino,
+        saiu: a.ok,
+        erro: a.erro,
+        quando: a.createdAt,
+      })),
+    };
+  }
+
   /* ───────────────────────────── FRETE ─────────────────────────────────── */
 
   /** GET /admin/loja/frete — config + tabela promocional pra tela (item 24). */

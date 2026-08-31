@@ -8361,3 +8361,55 @@ model CheckoutBloqueio {
   @@index([criadoEm])
   @@map("checkout_bloqueios")
 }
+
+/// ═══════════════════════════════════════════════════════════════════════════
+///  AVISO ENVIADO PRA CLIENTE — o registro que não existia (31/08/2026).
+///
+///  O caso que obrigou: a Rosana (LP-001039 × LP-001041) recebeu "seu PIX não
+///  foi pago" 25min DEPOIS de pagar, mandou o comprovante, e a loja passou a
+///  tarde tentando descobrir se ela tinha recebido a confirmação do pedido
+///  certo. A resposta não existia em lugar nenhum: o sistema disparava
+///  WhatsApp e e-mail e não guardava NADA. "A cliente recebeu?" era uma
+///  investigação, e mesmo assim terminava em "não dá pra saber".
+///
+///  Agora toda saída passa por aqui: qual pedido, qual evento, por qual
+///  canal, deu certo ou não, e quando.
+///
+///  ⚠️ SEM RELAÇÃO (FK) COM `Order`, de propósito. Este registro é
+///  observação, nunca dono de nada: uma FK quebrada (pedido apagado, id de
+///  outra origem) faria o INSERT do log falhar DENTRO do envio — e log que
+///  derruba o que ele observa é pior do que log nenhum. Quem junta é a
+///  consulta, por `orderId`/`wcOrderNumber`.
+/// ═══════════════════════════════════════════════════════════════════════════
+model AvisoEnviado {
+  id String @id @default(uuid())
+
+  /// Pedido observado. Nulo só se o aviso não nasceu de um pedido.
+  orderId       String? @map("order_id")
+  /// Redundante de propósito: é por ele que a gente procura ("LP-001041"), e
+  /// ele sobrevive ao pedido sumir.
+  wcOrderNumber String? @map("wc_order_number")
+
+  /// pedido_criado | pagamento_confirmado | pix_nao_pago | pedido_enviado |
+  /// pedido_entregue | pedido_online_registro
+  evento String @db.VarChar(40)
+  /// n8n (WhatsApp do fluxo) | whatsapp (direto) | email
+  canal String @db.VarChar(20)
+  /// Pra onde foi — telefone ou e-mail. É o dado que responde "foi pro
+  /// contato certo?", a segunda pergunta de toda investigação dessas.
+  destino String? @db.VarChar(120)
+
+  /// O canal aceitou o envio. NÃO é confirmação de leitura — o n8n pode
+  /// aceitar e o WhatsApp não entregar. `ok=false` é certeza de que falhou;
+  /// `ok=true` é "saiu daqui".
+  ok   Boolean @default(false)
+  erro String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@index([wcOrderNumber])
+  @@index([evento, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("avisos_enviados")
+}

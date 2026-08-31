@@ -4,6 +4,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { EmailService } from '../email/email.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 
 /**
@@ -66,7 +67,50 @@ export class PedidoEmailService {
     private readonly config: ConfigService,
     private readonly http: HttpService,
     private readonly whats: WhatsappService,
+    private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * REGISTRA A SAÍDA (31/08) — ver o model `AvisoEnviado`.
+   *
+   * Regra única: **nunca derruba, nunca atrasa o envio**. Todo caminho está
+   * dentro de try/catch e é chamado sem `await` — se o banco estiver fora, a
+   * cliente ainda recebe a mensagem e a gente perde só a linha do log. O
+   * contrário (log que impede o aviso) seria trocar um problema de auditoria
+   * por um problema de atendimento.
+   *
+   * `ok` significa "o canal aceitou", não "a cliente leu": o n8n pode aceitar
+   * o POST e o WhatsApp não entregar. `ok=false` é certeza de falha; `ok=true`
+   * é o ponto até onde a gente enxerga.
+   */
+  private registrar(
+    evento: string,
+    canal: 'n8n' | 'whatsapp' | 'email' | 'regra',
+    order: any,
+    ok: boolean,
+    destino?: string | null,
+    erro?: string | null,
+  ): void {
+    try {
+      void (this.prisma as any).avisoEnviado
+        ?.create({
+          data: {
+            orderId: order?.id ? String(order.id) : null,
+            wcOrderNumber: order?.wcOrderNumber ? String(order.wcOrderNumber) : null,
+            evento: String(evento).slice(0, 40),
+            canal,
+            destino: destino ? String(destino).slice(0, 120) : null,
+            ok,
+            erro: erro ? String(erro).slice(0, 2000) : null,
+          },
+        })
+        .catch((e: any) =>
+          this.logger.warn(`[aviso-log] não registrou ${evento}/${canal}: ${e?.message || e}`),
+        );
+    } catch (e: any) {
+      this.logger.warn(`[aviso-log] não registrou ${evento}/${canal}: ${e?.message || e}`);
+    }
+  }
 
   /**
    * WHATSAPP DIRETO — o plano B do n8n (liberado pelo dono, 14/08).
@@ -145,9 +189,11 @@ export class PedidoEmailService {
       if (!r?.ok) {
         this.logger.warn(`[pedido-whats] ${evento} não saiu (pedido ${order?.wcOrderNumber}): ${r?.error}`);
       }
+      this.registrar(evento, 'whatsapp', order, !!r?.ok, telefone, r?.ok ? null : r?.error);
       return !!r?.ok;
     } catch (e: any) {
       this.logger.warn(`[pedido-whats] ${evento} falhou (pedido ${order?.wcOrderNumber}): ${e?.message || e}`);
+      this.registrar(evento, 'whatsapp', order, false, telefone, e?.message || String(e));
       return false;
     }
   }
@@ -198,6 +244,9 @@ export class PedidoEmailService {
     const url = this.webhookN8n;
     if (!url) {
       this.logger.debug(`[pedido-msg] ${evento} não disparado — N8N_PEDIDO_WEBHOOK_URL ausente`);
+      // Registra o NÃO-envio: canal desconfigurado é a causa mais silenciosa
+      // de "a cliente não recebeu", e é exatamente o que some do log.
+      this.registrar(evento, 'n8n', order, false, null, 'N8N_PEDIDO_WEBHOOK_URL ausente');
       return false;
     }
 
@@ -288,9 +337,12 @@ export class PedidoEmailService {
         ),
       );
       this.logger.log(`[pedido-msg] ${evento} entregue ao n8n (pedido ${order?.wcOrderNumber ?? order?.id})`);
+      this.registrar(evento, 'n8n', order, true, telefone || null);
       return true;
     } catch (e: any) {
-      this.logger.warn(`[pedido-msg] n8n não recebeu ${evento}: ${e?.response?.status ?? ''} ${e?.message || e}`);
+      const erro = `${e?.response?.status ?? ''} ${e?.message || e}`.trim();
+      this.logger.warn(`[pedido-msg] n8n não recebeu ${evento}: ${erro}`);
+      this.registrar(evento, 'n8n', order, false, telefone || null, erro);
       return false;
     }
   }
@@ -477,7 +529,7 @@ export class PedidoEmailService {
       : `${nome}, recebemos seu pedido. Assim que o pagamento for confirmado, avisamos por aqui e começamos a separar as peças.`;
     const rodape = `Se o pagamento não for concluído, o pedido é liberado automaticamente e as peças voltam pro estoque. Nada é cobrado.`;
 
-    await this.enviar(para, `${titulo} · ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+    await this.enviar(para, `${titulo} · ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape, 'pedido_criado');
   }
 
   /**
@@ -523,7 +575,7 @@ export class PedidoEmailService {
       emailOk = await this.enviar(
         para,
         `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(),
-        titulo, chamada, order, rodape,
+        titulo, chamada, order, rodape, 'pix_nao_pago',
       );
     }
     return n8nOk || whatsOk || emailOk;
@@ -572,7 +624,7 @@ export class PedidoEmailService {
       `Não serviu? Você tem ${PedidoEmailService.DIAS_TROCA} dias corridos a partir do recebimento pra trocar ` +
       `pelo portal de trocas ou em qualquer uma das nossas lojas.`;
 
-    await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+    await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape, 'pedido_enviado');
   }
 
   /**
@@ -627,13 +679,15 @@ export class PedidoEmailService {
       const r = await this.whats.sendText(telefone, texto);
       if (!r?.ok) {
         this.logger.warn(
-          `[pedido-whats] registro sem prova não saiu (pedido ${order?.wcOrderNumber}): ${r?.error}`,
+          `[pedido-whats] registro do pedido online não saiu (pedido ${order?.wcOrderNumber}): ${r?.error}`,
         );
       }
+      this.registrar('pedido_online_registro', 'whatsapp', order, !!r?.ok, telefone, r?.ok ? null : r?.error);
     } catch (e: any) {
       this.logger.warn(
-        `[pedido-whats] registro sem prova falhou (pedido ${order?.wcOrderNumber}): ${e?.message || e}`,
+        `[pedido-whats] registro do pedido online falhou (pedido ${order?.wcOrderNumber}): ${e?.message || e}`,
       );
+      this.registrar('pedido_online_registro', 'whatsapp', order, false, telefone, e?.message || String(e));
     }
   }
 
@@ -664,6 +718,13 @@ export class PedidoEmailService {
         `[pedido-msg] pedido ${order?.wcOrderNumber ?? order?.id}: confirmação automática de ` +
           `pagamento RETIDA — venda online lançada pela vendedora (ela confirma no atendimento).`,
       );
+      // Fica no registro: "por que a cliente não recebeu a confirmação?" tem
+      // que ter resposta também quando a resposta é "porque a regra manda".
+      // Silêncio combinado e silêncio por defeito são idênticos de fora.
+      this.registrar(
+        'pagamento_confirmado', 'regra', order, false, null,
+        'retido: venda online da vendedora (a vendedora confirma no atendimento)',
+      );
       return;
     }
 
@@ -682,7 +743,7 @@ export class PedidoEmailService {
       `Não serviu? Você tem ${PedidoEmailService.DIAS_TROCA} dias corridos a partir do recebimento pra trocar ` +
       `pelo portal de trocas ou em qualquer uma das nossas lojas.`;
 
-    await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+    await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape, 'pagamento_confirmado');
   }
 
   /**
@@ -717,7 +778,7 @@ export class PedidoEmailService {
       'e sua opinião ajuda outra cliente a escolher o tamanho certo.';
 
     const emailOk = await this.enviar(
-      para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape,
+      para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape, 'pedido_entregue',
     );
     return n8nOk || whatsOk || emailOk;
   }
@@ -725,6 +786,8 @@ export class PedidoEmailService {
   /** Devolve se o e-mail SAIU — o resgate do PIX usa isso pra decidir o carimbo. */
   private async enviar(
     para: string, assunto: string, titulo: string, chamada: string, order: any, rodape: string,
+    /** Qual aviso é este — só pro registro em `avisos_enviados`. */
+    evento = 'email',
   ): Promise<boolean> {
     try {
       const ok = await this.email.send(
@@ -732,6 +795,10 @@ export class PedidoEmailService {
         assunto,
         this.montarHtml(titulo, chamada, order, rodape),
         this.montarTexto(titulo, order),
+      );
+      this.registrar(
+        evento, 'email', order, !!ok, para,
+        ok ? null : 'email.send devolveu falso (SMTP configurado?)',
       );
       if (ok) {
         this.logger.log(`[pedido-email] "${titulo}" enviado pro pedido ${order?.wcOrderNumber ?? order?.id}`);
@@ -746,6 +813,7 @@ export class PedidoEmailService {
       return !!ok;
     } catch (e: any) {
       this.logger.warn(`[pedido-email] falhou: ${e?.message || e}`);
+      this.registrar(evento, 'email', order, false, para, e?.message || String(e));
       return false;
     }
   }
