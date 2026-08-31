@@ -216,9 +216,33 @@ export class ReturnsService {
     };
 
     const home = (homeStoreCode || '').trim() || null;
+
+    /**
+     * MARCAÇÃO FORA DA BUSCA DE DEVOLUÇÃO (31/08).
+     *
+     * A marcação ("levou pra provar") é gravada como PdvSale `finalized` com
+     * `paymentMethod='MARCADO'` e zero pagamento. Sem este filtro ela aparecia
+     * aqui como venda devolvível: a vendedora bipava a peça que a cliente
+     * trouxe de volta, escolhia a marcação, e o sistema emitia VALE DE TROCA
+     * pelo valor cheio — crédito de um dinheiro que nunca entrou.
+     *
+     * Barrar só no `createReturn` não bastava: a peça continuaria aparecendo
+     * na tela pra ela escolher e tomar erro. Peça de marcado volta pela tela
+     * de Marcados → "Devolver ao estoque".
+     */
+    const naoEhMarcacao = {
+      OR: [{ paymentMethod: null }, { paymentMethod: { not: 'MARCADO' } }],
+    };
+
     const findFinalized = (extra: any, take: number) =>
       (this.prisma as any).pdvSale.findMany({
-        where: { status: 'finalized', finalizedAt: { gte: dataLimite }, items: { some: itemFilter }, ...extra },
+        where: {
+          status: 'finalized',
+          finalizedAt: { gte: dataLimite },
+          items: { some: itemFilter },
+          ...naoEhMarcacao,
+          ...extra,
+        },
         orderBy: { finalizedAt: 'desc' },
         take,
         include: { items: { where: itemFilter } },
@@ -237,7 +261,10 @@ export class ReturnsService {
       dataRecente.setDate(dataRecente.getDate() - 7);
       const findRecent = (extra: any, take: number) =>
         (this.prisma as any).pdvSale.findMany({
-          where: { createdAt: { gte: dataRecente }, items: { some: itemFilter }, ...extra },
+          // `naoEhMarcacao` também aqui: sem isso o fallback reabria justamente
+          // o caminho que o filtro de cima fechou — marcação é o caso mais
+          // comum de "venda recente com essa peça" quando não há venda real.
+          where: { createdAt: { gte: dataRecente }, items: { some: itemFilter }, ...naoEhMarcacao, ...extra },
           orderBy: { createdAt: 'desc' },
           take,
           include: { items: { where: itemFilter } },
@@ -510,6 +537,33 @@ export class ReturnsService {
     if (sale) {
       if (sale.status !== 'finalized') {
         throw new BadRequestException(`Venda está ${sale.status}, não dá pra devolver`);
+      }
+      /**
+       * MARCAÇÃO NÃO É VENDA (31/08).
+       *
+       * "Marcado" é a peça que a cliente leva pra PROVAR em casa: não comprou,
+       * não pagou, não assinou nada. Só que a marcação é gravada como PdvSale
+       * `finalized` com `paymentMethod='MARCADO'` e ZERO pagamento — e a única
+       * pergunta feita aqui era o status. Resultado: a marcação aparecia na
+       * tela de devolução do PDV como venda devolvível, e devolver por ali
+       * emitia VALE DE TROCA pelo valor cheio da peça. A cliente saía com
+       * crédito de um dinheiro que nunca entrou.
+       *
+       * Medido em 31/08: 3 vales, R$ 173,70 — valor do vale IGUAL ao da
+       * marcação nos três, um deles já gasto. E 204 marcações em 60 dias
+       * (R$ 89.879,12) estavam expostas ao mesmo caminho.
+       *
+       * Regra do dono: "ao devolver simplesmente devolve e pronto — não gera
+       * crédito nem vale troca nem nada". O caminho certo é a tela de Marcados
+       * → "Devolver ao estoque" (`MarcadosService.devolverItemMarcado`), que
+       * estorna o estoque e fecha a marcação, sem criar nada financeiro.
+       */
+      if (String((sale as any).paymentMethod || '').trim().toUpperCase() === 'MARCADO') {
+        throw new BadRequestException(
+          'Isso é uma MARCAÇÃO (peça que a cliente levou pra provar), não uma venda paga — ' +
+            'devolver por aqui geraria vale de troca de um valor que nunca foi pago. ' +
+            'Use a tela Marcados → "Devolver ao estoque": a peça volta pro estoque e não gera crédito nenhum.',
+        );
       }
       return { ...sale, origem: 'pdv' as const };
     }
