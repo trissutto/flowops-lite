@@ -1787,10 +1787,45 @@ export class RoutingService {
           transferToStoreCode: cardCriado.transferToStoreCode ?? null,
         });
       } else if (cardAlvo) {
-        this.gateway.emitPickOrderStatus(alvo.id, { id: cardAlvo.id, status: statusAlvo });
+        // COM AS PEÇAS (31/08): o card de destino já existia e ganhou item —
+        // só o status não redesenha a lista; a tela ficava sem a peça nova
+        // até um reload manual.
+        this.gateway.emitPickOrderStatus(alvo.id, {
+          id: cardAlvo.id,
+          status: statusAlvo,
+          items: itensDoAlvo,
+        });
       }
     } catch (e: any) {
       this.logger.warn(`[mover-item] socket pra ${alvo.code} falhou: ${e?.message || e}`);
+    }
+
+    // A loja de ORIGEM que ficou com o card mais magro também vê NA HORA
+    // (31/08): sem isto a tela dela seguia mostrando a peça movida — a
+    // atendente ia bipar uma peça que já não era dela e levava recusa sem
+    // entender. Card esvaziado já sai pelo `pick-order:removed` do cleanup.
+    try {
+      const removidosSet = new Set(cardsRemovidos);
+      const origensAtivas = cards.filter(
+        (c: any) =>
+          origemIds.includes(c.storeId) &&
+          c.storeId !== alvo.id &&
+          ATIVOS.includes(c.status) &&
+          !removidosSet.has(c.store?.code ?? c.storeId),
+      );
+      for (const c of origensAtivas) {
+        const itensDaOrigem = await this.prisma.orderItem.findMany({
+          where: { orderId, assignedStoreId: c.storeId },
+        });
+        if (!itensDaOrigem.length) continue; // esvaziou — o removed cobre
+        this.gateway.emitPickOrderStatus(c.storeId, {
+          id: c.id,
+          status: c.status,
+          items: itensDaOrigem,
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[mover-item] socket pras lojas de origem falhou: ${e?.message || e}`);
     }
 
     // A JUNTADA ficou coerente? Âncora sem card = caixa viajando pra ninguém.

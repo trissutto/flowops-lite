@@ -721,6 +721,13 @@ export default function MinhaLojaPage() {
                 status: pickOrder.status ?? r.status,
                 trackingCode: pickOrder.trackingCode ?? r.trackingCode,
                 carrier: pickOrder.carrier ?? r.carrier,
+                // PEÇAS JUNTO (31/08): a matriz moveu peça pelo grid do pedido
+                // — quando o evento traz a lista nova, o card redesenha na
+                // hora (origem perde a linha, destino ganha).
+                order:
+                  Array.isArray(pickOrder.items) && r.order
+                    ? { ...r.order, items: pickOrder.items }
+                    : r.order,
               }
             : r,
         ),
