@@ -1083,6 +1083,106 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }));
   }
 
+  /** RUPTURAS pelo espelho: REF vendendo na janela com estoque atual ZERO.
+   *  Fiel ao SQL do Giga (marcado≠SIM, loja opcional, filtro plus size);
+   *  join por código sem zeros à esquerda (ltrim), o CAST do MySQL daqui. */
+  private async rupturasFromMirror(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+    plusSize?: boolean;
+    limit?: number;
+  }): Promise<Array<{ refCode: string; descricao: string | null; pecasVendidas: number; estoqueAtual: number }>> {
+    const limit = Math.max(1, Math.min(100, input.limit || 10));
+    const lojas = this.lojaVariants2(input.storeCode);
+    const P: any[] = [];
+    const par = (v: any) => { P.push(v); return `$${P.length}`; };
+    const lojaVenda = lojas ? ` AND c.loja IN (${lojas.map(par).join(',')})` : '';
+    const pi = par(input.inicio);
+    const pf = par(input.fim);
+    const plus = input.plusSize
+      ? ` AND (COALESCE(p."plusSize",0) > 0 OR upper(COALESCE(p."descricaoCompleta",\'\')) LIKE \'%PLUS SIZE%\')`
+      : '';
+    const lojaEst = lojas ? ` WHERE e.loja IN (${lojas.map(par).join(',')})` : '';
+    const sql = `
+      WITH venda AS (
+        SELECT ltrim(c.codigo,'0') AS cod, SUM(c.quantidade) AS pecas
+          FROM giga_caixa_mov c
+         WHERE c.data >= ${pi} AND c.data < ${pf}
+           AND (c.marcado IS NULL OR c.marcado <> 'SIM')${lojaVenda}
+         GROUP BY 1
+      ), vref AS (
+        SELECT p.ref, MAX(COALESCE(p."descricaoCompleta", p."descricaoPdv")) AS descricao, SUM(v.pecas) AS pecas
+          FROM venda v JOIN product p ON ltrim(p.codigo,'0') = v.cod
+         WHERE p.ref IS NOT NULL AND p.ref <> ''${plus}
+         GROUP BY p.ref
+      ), est AS (
+        SELECT p.ref, COALESCE(SUM(e.estoque),0) AS qtd
+          FROM wincred_estoque e JOIN product p ON ltrim(p.codigo,'0') = ltrim(e.codigo,'0')
+         ${lojaEst}
+         GROUP BY p.ref
+      )
+      SELECT v.ref AS "refCode", v.descricao, v.pecas AS "pecasVendidas", COALESCE(est.qtd,0) AS "estoqueAtual"
+        FROM vref v LEFT JOIN est ON est.ref = v.ref
+       WHERE COALESCE(est.qtd,0) = 0 AND v.pecas > 0
+       ORDER BY v.pecas DESC LIMIT ${limit}`;
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(sql, ...P);
+    return rows.map((r) => ({
+      refCode: String(r.refCode).trim(),
+      descricao: r.descricao ? String(r.descricao).trim() : null,
+      pecasVendidas: Number(r.pecasVendidas) || 0,
+      estoqueAtual: Number(r.estoqueAtual) || 0,
+    }));
+  }
+
+  /** PARADOS pelo espelho: estoque >= minStock e SEM venda há N dias. */
+  private async paradosFromMirror(input: {
+    storeCode?: string | null;
+    daysSemVenda?: number;
+    minStock?: number;
+    plusSize?: boolean;
+    limit?: number;
+  }): Promise<Array<{ refCode: string; descricao: string | null; estoqueAtual: number; ultimaVenda: string | null }>> {
+    const days = Math.max(1, Math.min(365, input.daysSemVenda || 30));
+    const minStock = Math.max(1, input.minStock || 5);
+    const limit = Math.max(1, Math.min(100, input.limit || 10));
+    const lojas = this.lojaVariants2(input.storeCode);
+    const P: any[] = [];
+    const par = (v: any) => { P.push(v); return `$${P.length}`; };
+    const lojaEst = lojas ? ` AND e.loja IN (${lojas.map(par).join(',')})` : '';
+    const plus = input.plusSize
+      ? ` AND (COALESCE(p."plusSize",0) > 0 OR upper(COALESCE(p."descricaoCompleta",\'\')) LIKE \'%PLUS SIZE%\')`
+      : '';
+    const pMin = par(minStock);
+    const lojaVenda = lojas ? ` AND c.loja IN (${lojas.map(par).join(',')})` : '';
+    const corte = par(new Date(Date.now() - days * 86400_000));
+    const sql = `
+      WITH est AS (
+        SELECT p.ref, MAX(COALESCE(p."descricaoCompleta", p."descricaoPdv")) AS descricao, SUM(e.estoque) AS estoque
+          FROM wincred_estoque e JOIN product p ON ltrim(p.codigo,'0') = ltrim(e.codigo,'0')
+         WHERE e.estoque > 0${lojaEst}${plus}
+           AND p.ref IS NOT NULL AND p.ref <> ''
+         GROUP BY p.ref
+        HAVING SUM(e.estoque) >= ${pMin}
+      ), uv AS (
+        SELECT p.ref, MAX(c.data) AS ultima
+          FROM giga_caixa_mov c JOIN product p ON ltrim(p.codigo,'0') = ltrim(c.codigo,'0')
+         WHERE (c.marcado IS NULL OR c.marcado <> 'SIM')${lojaVenda}
+         GROUP BY p.ref
+      )
+      SELECT est.ref AS "refCode", est.descricao, est.estoque AS "estoqueAtual",
+             to_char(uv.ultima, 'YYYY-MM-DD') AS "ultimaVenda"
+        FROM est LEFT JOIN uv ON uv.ref = est.ref
+       WHERE uv.ultima IS NULL OR uv.ultima < ${corte}
+       ORDER BY est.estoque DESC LIMIT ${limit}`;
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(sql, ...P);
+    return rows.map((r) => ({
+      refCode: String(r.refCode).trim(),
+      descricao: r.descricao ? String(r.descricao).trim() : null,
+      estoqueAtual: Number(r.estoqueAtual) || 0,
+      ultimaVenda: r.ultimaVenda || null,
+    }));
+  }
   private async lookupSaleHistoryFromMirror(storeCode: string, sku: string, dias: number) {
     const lojaClean = String(storeCode).trim().toUpperCase();
     const lojas = this.lojaVariants2(lojaClean)!;
@@ -7011,6 +7111,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     plusSize?: boolean;
     limit?: number;
   }): Promise<Array<{ refCode: string; descricao: string | null; pecasVendidas: number; estoqueAtual: number }>> {
+    // Espelho primeiro (31/08): caixa_mov (vendas, agora alimentada pelo Flow)
+    // × wincred_estoque × product. Era Giga-puro — com o pool nulo o cartão
+    // de RUPTURAS da Inteligência voltava vazio CALADO.
+    try {
+      if (await this.caixaMovUsable(input.inicio)) {
+        return await this.rupturasFromMirror(input);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getRupturas: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     const limit = Math.max(1, Math.min(100, input.limit || 10));
     // OtimizaÃ§Ã£o igual getTopRefsBySales: agrega caixa por CODIGO antes do JOIN.
@@ -7096,6 +7206,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     plusSize?: boolean;
     limit?: number;
   }): Promise<Array<{ refCode: string; descricao: string | null; estoqueAtual: number; ultimaVenda: string | null }>> {
+    // Espelho primeiro (31/08) — mesma família do getRupturas acima.
+    try {
+      if (this.mirrorReadsEnabled && (await this.mirrorCaixaMovReady())) {
+        return await this.paradosFromMirror(input);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getParados: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     const days = Math.max(1, Math.min(365, input.daysSemVenda || 30));
     const minStock = Math.max(1, input.minStock || 5);
