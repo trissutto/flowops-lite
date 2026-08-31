@@ -1,12 +1,12 @@
 import NextLink from 'next/link';
-import { isBuiltRoute } from '@/lib/routes';
 
 /**
  * Substituto do `next/link` em toda a navegação da vitrine.
  *
- * Só faz uma coisa: não prefetcha rota que ainda não existe (ver
- * `lib/routes.ts`). Fora isso é o `Link` do Next, com a mesma API — quem
- * passar `prefetch` explícito continua mandando.
+ * O prefetch automático foi desligado por padrão depois de medição na home:
+ * links visíveis do menu puxavam 40 KiB de uma rota com Framer Motion antes
+ * do LCP. Quem tiver evidência de que uma navegação merece antecipação pode
+ * continuar passando `prefetch` explicitamente.
  *
  * Não é client component de propósito: assim continua utilizável dentro de
  * Server Components sem arrastar a árvore pro cliente.
@@ -17,7 +17,7 @@ export function AppLink({ href, prefetch, ...rest }: AppLinkProps) {
   return (
     <NextLink
       href={href}
-      prefetch={prefetch ?? (isBuiltRoute(href) ? undefined : false)}
+      prefetch={prefetch ?? false}
       {...rest}
     />
   );

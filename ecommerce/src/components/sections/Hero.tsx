@@ -1,7 +1,4 @@
-'use client';
-
 import Image, { getImageProps } from 'next/image';
-import { forwardRef } from 'react';
 import { preload } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { Button, type ButtonVariant } from '@/components/ui/Button';
@@ -64,6 +61,8 @@ interface HeroProps {
   image?: Media;
   /** Recorte vertical pro celular (opcional) — arte dirigida. */
   imageMobile?: Media;
+  /** AVIF mobile já otimizada e embutida no HTML crítico. */
+  imageMobileInline?: string;
   video?: VideoMedia;
   eyebrow?: string;
   title: React.ReactNode;
@@ -124,7 +123,15 @@ interface ArtePreload {
   srcSet?: string;
 }
 
-function PreloadArte({ desktop, mobile }: { desktop?: ArtePreload; mobile?: ArtePreload }) {
+function PreloadArte({
+  desktop,
+  mobile,
+  mobileInline = false,
+}: {
+  desktop?: ArtePreload;
+  mobile?: ArtePreload;
+  mobileInline?: boolean;
+}) {
   if (!desktop) return null;
 
   // A API de recursos do React envia estes hints para o <head>. O JSX <link>
@@ -142,7 +149,7 @@ function PreloadArte({ desktop, mobile }: { desktop?: ArtePreload; mobile?: Arte
   }
   preload(desktop.src, {
     as: 'image',
-    media: mobile ? '(min-width: 1024px)' : undefined,
+    media: mobile || mobileInline ? '(min-width: 1024px)' : undefined,
     imageSrcSet: desktop.srcSet,
     imageSizes: '100vw',
     fetchPriority: 'high',
@@ -154,6 +161,7 @@ function PreloadArte({ desktop, mobile }: { desktop?: ArtePreload; mobile?: Arte
 export function Hero({
   image,
   imageMobile,
+  imageMobileInline,
   video,
   eyebrow,
   title,
@@ -179,6 +187,7 @@ export function Hero({
       <HeroArte
         image={image}
         imageMobile={imageMobile}
+        imageMobileInline={imageMobileInline}
         priority={priority}
         overlay={overlay}
         align={align}
@@ -420,9 +429,24 @@ export function Hero({
  * ficam SOBREPOSTOS em absoluto — nunca esticam a seção. Em tela estreita, o
  * `min-h` do conteúdo garante que os botões não amassem em cima da arte.
  */
-const HeroArte = forwardRef<HTMLElement, {
+function HeroArte({
+  image,
+  imageMobile,
+  imageMobileInline,
+  priority,
+  overlay = 'none',
+  align = 'center',
+  eyebrow,
+  title,
+  subtitle,
+  primaryAction,
+  secondaryAction,
+  contentTone = 'light',
+  className,
+}: {
   image?: Media;
   imageMobile?: Media;
+  imageMobileInline?: string;
   priority?: boolean;
   overlay?: HeroOverlay;
   align?: HeroAlign;
@@ -433,11 +457,7 @@ const HeroArte = forwardRef<HTMLElement, {
   secondaryAction?: HeroAction;
   contentTone?: HeroContentTone;
   className?: string;
-}>(function HeroArte(
-  { image, imageMobile, priority, overlay = 'none', align = 'center',
-    eyebrow, title, subtitle, primaryAction, secondaryAction, contentTone = 'light', className },
-  ref,
-) {
+}) {
   const temTexto = !!(eyebrow || title || subtitle);
   const temBotao = !!(primaryAction || secondaryAction);
   const tintaEscura = contentTone === 'ink';
@@ -535,10 +555,9 @@ const HeroArte = forwardRef<HTMLElement, {
   const comum = {
     alt: image?.alt ?? '',
     priority,
-    // O hero é o LCP da home. `getImageProps` usa `decoding="async"` por
-    // padrão, o que deixou a imagem já baixada esperando mais 1,36 s para ser
-    // desenhada no Lighthouse mobile. Para a única imagem prioritária acima
-    // da dobra, a decodificação síncrona mantém o paint no caminho crítico.
+    // A variante mobile prioritária já viaja no HTML. `sync` faz a arte ser
+    // pintada assim que o parser chega nela; com `async`, execuções repetidas
+    // deixaram a imagem pronta esperando até 1,18 s pelo agendamento do decode.
     decoding: priority ? ('sync' as const) : ('async' as const),
     sizes: '100vw',
     className: cn('w-full h-auto', medido && 'arte-reservada'),
@@ -546,11 +565,16 @@ const HeroArte = forwardRef<HTMLElement, {
   };
   const desktop = image ? getImageProps({ ...comum, ...dimDesktop, src: image.src }) : null;
   const mobile = imageMobile
-    ? getImageProps({ ...comum, ...dimMobile, src: imageMobile.src })
+    ? getImageProps({
+        ...comum,
+        ...dimMobile,
+        src: imageMobileInline || imageMobile.src,
+        ...(imageMobileInline ? { unoptimized: true } : {}),
+      })
     : null;
 
   return (
-    <section ref={ref} className={cn('relative w-full', className)}>
+    <section className={cn('relative w-full', className)}>
       {/**
        * PRELOAD DO LCP NA MÃO — o `<Image>` emite sozinho, o `getImageProps`
        * NÃO (10/08/2026).
@@ -571,7 +595,10 @@ const HeroArte = forwardRef<HTMLElement, {
       {priority && desktop && (
         <PreloadArte
           desktop={{ src: desktop.props.src, srcSet: desktop.props.srcSet }}
-          mobile={mobile ? { src: mobile.props.src, srcSet: mobile.props.srcSet } : undefined}
+          mobile={mobile && !imageMobileInline
+            ? { src: mobile.props.src, srcSet: mobile.props.srcSet }
+            : undefined}
+          mobileInline={!!imageMobileInline}
         />
       )}
 
@@ -593,7 +620,7 @@ const HeroArte = forwardRef<HTMLElement, {
           {mobile && (
             <source
               media="(max-width: 1023px)"
-              srcSet={mobile.props.srcSet}
+              srcSet={mobile.props.srcSet ?? mobile.props.src}
               width={dimMobile.width}
               height={dimMobile.height}
             />
@@ -628,4 +655,4 @@ const HeroArte = forwardRef<HTMLElement, {
       )}
     </section>
   );
-});
+}

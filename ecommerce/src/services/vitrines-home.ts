@@ -4,6 +4,7 @@ import { mapPecasDaVitrine, type PecaApi } from '@/services/products';
 import { fetchMaisTopDaSemana, fetchVitrine } from '@/services/vitrine';
 import { HOME_CATEGORY_BASE } from '@/data/home';
 import type { Product } from '@/types';
+import { compactarProdutoDaHome } from '@/lib/home-product';
 
 /**
  * OS BLOCOS DA HOME — quais saem e em que ordem.
@@ -45,6 +46,13 @@ export interface VitrineHome {
   ctaLabel: string | null;
   ctaHref: string | null;
   produtos: Product[];
+}
+
+function compactarVitrine(vitrine: VitrineHome): VitrineHome {
+  return {
+    ...vitrine,
+    produtos: vitrine.produtos.map(compactarProdutoDaHome),
+  };
 }
 
 interface RespostaApi {
@@ -146,13 +154,20 @@ export async function getBlocosDaHome(): Promise<{ atalhos: AtalhoHome[]; carros
     // Resposta pela metade não vira home pela metade: cada lista cai no seu
     // próprio padrão. Backend novo com tabela vazia devolve as duas vazias.
     if (atalhos.length || carrosseis.length) {
-      return {
+      const resultado = {
         atalhos: atalhos.length ? atalhos : atalhosPadrao(),
         carrosseis: carrosseis.length ? carrosseis : await vitrinesPadrao(),
+      };
+      return {
+        ...resultado,
+        carrosseis: resultado.carrosseis.map(compactarVitrine),
       };
     }
   } catch {
     /* cai no padrão abaixo */
   }
-  return { atalhos: atalhosPadrao(), carrosseis: await vitrinesPadrao() };
+  return {
+    atalhos: atalhosPadrao(),
+    carrosseis: (await vitrinesPadrao()).map(compactarVitrine),
+  };
 }

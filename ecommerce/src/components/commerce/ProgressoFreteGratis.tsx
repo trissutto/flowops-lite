@@ -1,10 +1,8 @@
 'use client';
 
-import { motion, useReducedMotion } from 'framer-motion';
 import { Sparkles, Truck } from 'lucide-react';
 import { freeShippingGap } from '@/lib/commerce/frete';
 import { useLojaConfig } from '@/hooks/useLojaConfig';
-import { transition } from '@/lib/motion';
 import { cn, formatPrice } from '@/lib/utils';
 
 /**
@@ -37,7 +35,6 @@ const QUASE_LA = 0.7;
 
 export function ProgressoFreteGratis({ subtotal, className }: { subtotal: number; className?: string }) {
   const { freteGratis } = useLojaConfig();
-  const reduzirMovimento = useReducedMotion();
   const gap = freeShippingGap(subtotal, freteGratis.minimo);
   if (!freteGratis.ativo || !(freteGratis.minimo > 0)) return null;
 
@@ -63,15 +60,10 @@ export function ProgressoFreteGratis({ subtotal, className }: { subtotal: number
           )}
         </span>
         {gap.reached ? (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.97 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={transition.base}
-            className="min-w-0 flex-1"
-          >
+          <div className="min-w-0 flex-1 animate-[widget-enter_560ms_cubic-bezier(0.22,1,0.36,1)_both]">
             <p className="font-display text-h4 italic text-primary-strong">Você ganhou frete grátis</p>
             <p className="text-small font-light text-ink-soft">A entrega desta sacola é por nossa conta.</p>
-          </motion.div>
+          </div>
         ) : (
           <div className="min-w-0 flex-1">
             <p className="text-body text-ink">
@@ -98,24 +90,18 @@ export function ProgressoFreteGratis({ subtotal, className }: { subtotal: number
         aria-label="Progresso até o frete grátis"
         className="mt-3 h-2 overflow-hidden rounded-pill bg-primary/15"
       >
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${gap.progress * 100}%` }}
-          transition={transition.slow}
+        <div
+          style={{ width: `${gap.progress * 100}%` }}
           className="relative h-full overflow-hidden rounded-pill bg-gradient-to-r from-primary-soft via-primary to-primary-strong"
         >
           {/* Brilho que varre o preenchido — chama o olho pra quanto JÁ andou.
               Some com `prefers-reduced-motion`, e o x é relativo ao próprio
               span (w-1/3): -140% começa fora à esquerda, 340% sai à direita. */}
-          {!reduzirMovimento && (
-            <motion.span
+          <span
               aria-hidden
-              animate={{ x: ['-140%', '340%'] }}
-              transition={{ duration: 2.2, ease: 'linear', repeat: Infinity, repeatDelay: 1.8 }}
-              className="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/50 to-transparent"
+              className="frete-progress-shine absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/50 to-transparent motion-reduce:hidden"
             />
-          )}
-        </motion.div>
+        </div>
       </div>
     </div>
   );
