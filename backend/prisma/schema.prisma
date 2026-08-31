@@ -1546,6 +1546,13 @@ model TransferOrder {
   // Marcação como faltante (extraviada na remessa)
   realignmentMissingAt        DateTime? @map("realignment_missing_at")
   realignmentMissingNote      String?   @map("realignment_missing_note")
+  // TROCA DE PEÇA no recebimento (31/08). A caixa foi montada com uma peça e
+  // separada com OUTRA da mesma REF+TAM, cor diferente. A loja destino bipa o
+  // que tem na mão, confirma a divergência, e este campo guarda o que a remessa
+  // DIZIA — pra matriz auditar quem errou a arara. Sem isto a única saída era
+  // "Faltante", que é mentira: a peça chegou, só não era essa.
+  realignmentTrocaNote        String?   @map("realignment_troca_note")
+  realignmentTrocaAt          DateTime? @map("realignment_troca_at")
   // FK pra remessa que agrupou esse item
   shipmentId                  String?   @map("shipment_id")
 
