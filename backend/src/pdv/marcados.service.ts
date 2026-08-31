@@ -389,19 +389,31 @@ export class MarcadosService {
    * preso pra sempre. Isto é o remendo pro que já ficou preso; o conserto da
    * causa é em `PdvService.erpStepFecharMarcados`.
    *
-   * Escopo deliberadamente estreito: só toca `status='puxado'` cuja
-   * `PdvSale` já está `finalized` — nunca uma venda `open`/`cancelled`, onde
-   * "puxado" pode ainda ser legítimo ou precisar voltar pro estoque.
+   * Escopo: `status='puxado'` cuja `PdvSale` já terminou.
+   *   venda `finalized` → 'fechado' (a peça foi vendida mesmo);
+   *   venda `cancelled` → 'ativo' de volta pra tela (31/08).
+   * Venda `open` NUNCA é tocada — ali 'puxado' ainda é legítimo.
+   *
+   * O ramo `cancelled` nasceu do bug do `PdvService.cancel`, que fazia
+   * `Number()` no `marcadosRegistros` (cuid desde 07/08 → NaN) e por isso não
+   * devolvia peça NENHUMA ao cancelar. A causa está consertada lá; isto limpa
+   * o que já ficou preso. A peça volta pra 'ativo' e não pra estoque: ela
+   * nunca saiu do estoque — quem baixa é a marcação, não o "puxar".
    *
    * 100% Flow — sem nenhuma tentativa de tocar o Giga (07/08).
    */
-  async reconciliarPuxadosOrfaos(): Promise<{ verificados: number; fechados: number; erros: string[] }> {
+  async reconciliarPuxadosOrfaos(): Promise<{
+    verificados: number;
+    fechados: number;
+    devolvidosPraTela: number;
+    erros: string[];
+  }> {
     const presos: any[] = await (this.prisma as any).marcado.findMany({
       where: { status: 'puxado', saleId: { not: null } },
       select: { id: true, saleId: true },
       take: 500,
     });
-    if (!presos.length) return { verificados: 0, fechados: 0, erros: [] };
+    if (!presos.length) return { verificados: 0, fechados: 0, devolvidosPraTela: 0, erros: [] };
 
     const saleIds = [...new Set(presos.map((p) => p.saleId).filter(Boolean))];
     const vendas: any[] = await (this.prisma as any).pdvSale.findMany({
@@ -411,21 +423,29 @@ export class MarcadosService {
     const statusPorVenda = new Map(vendas.map((v) => [v.id, v.status]));
 
     let fechados = 0;
+    let devolvidosPraTela = 0;
     const erros: string[] = [];
     for (const m of presos) {
-      if (statusPorVenda.get(m.saleId) !== 'finalized') continue;
+      const st = statusPorVenda.get(m.saleId);
+      if (st !== 'finalized' && st !== 'cancelled') continue;
       try {
         await (this.prisma as any).marcado.update({
           where: { id: m.id },
-          data: { status: 'fechado', fechadoAt: new Date() },
+          data:
+            st === 'finalized'
+              ? { status: 'fechado', fechadoAt: new Date() }
+              : { status: 'ativo', saleId: null },
         });
-        fechados++;
+        if (st === 'finalized') fechados++;
+        else devolvidosPraTela++;
       } catch (e: any) {
         erros.push(`marcado ${m.id} (venda ${m.saleId}): ${e?.message || e}`);
       }
     }
-    this.logger.log(`[marcados.reconciliar] ${presos.length} preso(s) verificado(s), ${fechados} fechado(s)`);
-    return { verificados: presos.length, fechados, erros };
+    this.logger.log(
+      `[marcados.reconciliar] ${presos.length} preso(s) verificado(s), ${fechados} fechado(s), ${devolvidosPraTela} devolvido(s) pra tela`,
+    );
+    return { verificados: presos.length, fechados, devolvidosPraTela, erros };
   }
 
   /**
