@@ -1,6 +1,7 @@
 import { api, ApiError } from '@/lib/api';
 import { homeHero } from '@/data/content';
 import { medirArte } from './medir-arte';
+import { gerarHeroMobileInline } from './hero-inline';
 
 /**
  * BANNERS DA VITRINE — servidor.
@@ -62,6 +63,8 @@ export interface HeroDaHome {
   image?: { src: string; alt: string; largura?: number; altura?: number };
   /** Recorte vertical do banner, quando a retaguarda subiu um. */
   imageMobile?: { src: string; alt: string; largura?: number; altura?: number };
+  /** Variante AVIF embutida para eliminar a requisição do LCP mobile. */
+  imageMobileInline?: string;
   eyebrow: string;
   lead: string;
   emphasis: string;
@@ -119,9 +122,10 @@ export async function getHeroDaHome(): Promise<HeroDaHome> {
    * chegar. Em paralelo porque são duas leituras independentes de 64 KB, e em
    * `Promise.all` com o resto do hero elas nem aparecem no tempo da home.
    */
-  const [medidaDesktop, medidaMobile] = await Promise.all([
+  const [medidaDesktop, medidaMobile, imageMobileInline] = await Promise.all([
     medirArte(banner.imagemUrl),
     medirArte(banner.imagemMobileUrl),
+    gerarHeroMobileInline(banner.imagemMobileUrl),
   ]);
 
   return {
@@ -138,6 +142,7 @@ export async function getHeroDaHome(): Promise<HeroDaHome> {
             alt: banner.alt || banner.titulo || '',
             ...(medidaMobile ?? {}),
           },
+          ...(imageMobileInline ? { imageMobileInline } : {}),
         }
       : {}),
     eyebrow: banner.eyebrow || '',

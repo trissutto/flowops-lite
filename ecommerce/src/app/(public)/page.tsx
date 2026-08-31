@@ -1,6 +1,7 @@
 import { HomeBenefitsAndStores, HomeCategoryNav, HomeSizeNav, HomeStoreCta, type HomeCategory } from '@/components/sections/HomeDiscovery';
 import { Hero } from '@/components/sections/Hero';
-import { VitrineGrid } from '@/components/sections/VitrineGrid';
+import { HomeShelf } from '@/components/sections/HomeShelf';
+import { DeferredHomeShelves } from '@/components/sections/DeferredHomeShelves';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { InstagramCard } from '@/components/cards/InstagramCard';
@@ -70,6 +71,7 @@ export default async function HomePage() {
       <Hero
         image={hero.image}
         imageMobile={hero.imageMobile}
+        imageMobileInline={hero.imageMobileInline}
         eyebrow={hero.eyebrow}
         title={
           <>
@@ -93,62 +95,11 @@ export default async function HomePage() {
         <HomeStoreCta storesHref={storesHref} className="flex" />
       </div>
 
-      {/* AS VITRINES, NA ORDEM DA RETAGUARDA — hoje Mais Top da semana e
-          Novidades, que antes eram duas seções escritas à mão aqui. Vitrine
-          sem peça não chega até aqui (o backend já tira): carrossel vazio é
-          pior que uma seção a menos.
-
-          EM GRADE, NÃO CARROSSEL (dono, 18/08; 4 colunas desde 20/08):
-          4 colunas no desktop ("pelo menos 12 produtos"), 2 no celular. O
-          carrossel mostrava 2,5 peças e exigia arrastar pra ver o resto — a
-          vitrine virava enfeite. QUANTAS peças cada uma mostra continua sendo
-          o `limite` da própria vitrine em /retaguarda/vitrines-home (teto
-          24); a grade corta em VITRINE_GRID_MAX (18). */}
-      {blocos.carrosseis.map((vitrine) => (
-        <Section
-          key={vitrine.id}
-          width="wide"
-          aria-labelledby={`vitrine-${vitrine.id}`}
-          className="!py-5 sm:!py-12"
-        >
-          <SectionTitle
-            id={`vitrine-${vitrine.id}`}
-            eyebrow={vitrine.eyebrow ?? undefined}
-            title={vitrine.titulo}
-            mobileTitle={vitrine.tituloMobile ?? undefined}
-            description={vitrine.descricao ?? undefined}
-            cta={
-              vitrine.ctaHref
-                ? { label: vitrine.ctaLabel ?? 'Ver todas', href: vitrine.ctaHref }
-                : undefined
-            }
-            align="left"
-            compactMobile
-            titleFont="editorial"
-          />
-          <div className="mt-3 sm:mt-10">
-            <VitrineGrid products={vitrine.produtos} listName={vitrine.titulo} />
-          </div>
-
-          {/* "VER TODAS" NO PÉ DA PRATELEIRA — só no celular.
-              No desktop o CTA do `SectionTitle` fica à direita do título e é
-              visto de relance. No celular ele some lá em cima assim que a
-              cliente rola a grade, e é justamente no FIM da prateleira que ela
-              decide se quer mais daquilo. Com a vitrine cortada em 8 (ver
-              `VITRINE_GRID_MAX_MOBILE`), este link deixa de ser conveniência e
-              vira o caminho pro resto do estoque. */}
-          {vitrine.ctaHref && (
-            <div className="mt-5 sm:hidden">
-              <a
-                href={vitrine.ctaHref}
-                className="flex h-12 w-full items-center justify-center rounded-pill border border-border-strong bg-surface text-[0.6875rem] font-medium tracking-[0.16em] text-ink uppercase transition-colors hover:border-primary hover:text-primary-strong"
-              >
-                {vitrine.ctaLabel ?? `Ver tudo em ${vitrine.titulo}`}
-              </a>
-            </div>
-          )}
-        </Section>
-      ))}
+      {/* A primeira prateleira continua no HTML para SEO e para a primeira
+          jornada. As demais chegam quando a visitante se aproxima delas: a
+          home deixa de serializar dezenas de cards antes de pintar o hero. */}
+      {blocos.carrosseis[0] && <HomeShelf vitrine={blocos.carrosseis[0]} />}
+      {blocos.carrosseis.length > 1 && <DeferredHomeShelves />}
 
       <HomeSizeNav sizes={sizeLinks} />
 

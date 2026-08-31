@@ -362,6 +362,15 @@
   to { transform: scale(1); }
 }
 
+@keyframes frete-progress-shine {
+  0% { transform: translateX(-140%); }
+  55%, 100% { transform: translateX(340%); }
+}
+
+.frete-progress-shine {
+  animation: frete-progress-shine 4s linear infinite;
+}
+
 /* ============================================================================
    ACESSIBILIDADE — respeita quem pediu menos movimento
    ========================================================================== */

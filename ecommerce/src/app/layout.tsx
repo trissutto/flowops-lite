@@ -24,6 +24,8 @@ const cormorant = Cormorant_Garamond({
   weight: ['500'],
   style: ['normal'],
   display: 'swap',
+  // Usada nos títulos das prateleiras, sempre abaixo da primeira dobra.
+  preload: false,
 });
 
 /** Inter — UI e corpo. Light (300) é o peso padrão do texto da marca. */
