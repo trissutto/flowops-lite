@@ -311,7 +311,10 @@ export async function searchProducts(term: string, limit = 24): Promise<SearchOu
 
   try {
     let produtos: Product[] = [];
-    for (const params of tentativasDeBusca(term, intent, perPage)) {
+    /** Em qual degrau a lista apareceu. > 0 = precisou abrir o recorte. */
+    let degrau = 0;
+    const escada = tentativasDeBusca(term, intent, perPage);
+    for (const params of escada) {
       const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);
       if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
       const dados = await resposta.json();
@@ -319,11 +322,37 @@ export async function searchProducts(term: string, limit = 24): Promise<SearchOu
       // Achou alguma coisa: para aqui. Tentativa seguinte só existe pra lista
       // vazia — que é o estado que quebrava a busca inteira.
       if (produtos.length) break;
+      degrau += 1;
     }
 
     const outcome = rankSearch(createSearchIndex(produtos), { term, limit });
-    reportSearch(term, outcome.results.length);
-    return outcome;
+
+    /**
+     * ABRIR O RECORTE TAMBÉM É RELAXAR — e a tela tem que avisar (31/08).
+     *
+     * O `rankSearch` marca `relaxed` quando ELE afrouxa facetas. Mas quando a
+     * lista só apareceu num degrau mais aberto da escada de FETCH, o motor não
+     * ficou sabendo: ele recebeu uma lista já mexida e ranqueou achando que era
+     * o recorte pedido.
+     *
+     * O estrago apareceu no teste: "Sutia numero 54" passou a mostrar dois
+     * VESTIDOS sob o título "2 peças encontradas", sem o "não achamos
+     * exatamente isso". Zero resultado é ruim; resultado errado apresentado
+     * como acerto é pior — treina a cliente a não confiar na busca.
+     */
+    const relaxouNoFetch = degrau > 0;
+    const final: SearchOutcome = relaxouNoFetch
+      ? {
+          ...outcome,
+          relaxed: true,
+          suggestions: outcome.suggestions.length
+            ? outcome.suggestions
+            : FALLBACK_SUGGESTIONS.slice(0, 4),
+        }
+      : outcome;
+
+    reportSearch(term, final.results.length);
+    return final;
   } catch (error) {
     console.error('[busca] catálogo indisponível, degradando pro índice navegacional', error);
     reportSearch(term, 0);

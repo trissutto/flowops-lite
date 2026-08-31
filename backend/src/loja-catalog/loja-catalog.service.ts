@@ -9,6 +9,7 @@ import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.ser
 import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
+import { casaBusca } from '../common/busca-texto';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -2258,11 +2259,18 @@ export class LojaCatalogService {
     // 3) Filtros (em memória: o universo é o publicado, não o catálogo todo)
     const norm = (v: any) => String(v ?? '').trim().toUpperCase();
     if (params.busca) {
-      const termos = norm(params.busca).split(/\s+/).filter(Boolean);
-      pecas = pecas.filter((p) => {
-        const alvo = norm(`${p.nome} ${p.marca} ${p.categoria} ${p.ref} ${p.descricaoCurta ?? ''}`);
-        return termos.every((t) => alvo.includes(t));
-      });
+      /**
+       * A RÉGUA DO TEXTO MORA EM `common/busca-texto.ts` (31/08/2026) — sem
+       * acento e tolerante a plural, com spec própria. Era aqui um
+       * `toUpperCase` + `includes` que fazia "sutia" não achar "Sutiã" e
+       * "regatas" devolver 0 com "regata" devolvendo 37.
+       */
+      pecas = pecas.filter((p) =>
+        casaBusca(
+          `${p.nome} ${p.marca} ${p.categoria} ${p.ref} ${p.descricaoCurta ?? ''}`,
+          params.busca!,
+        ),
+      );
     }
     if (params.marca) pecas = pecas.filter((p) => norm(p.marca) === norm(params.marca));
     if (params.cor) pecas = pecas.filter((p) => p.cores.some((c) => norm(c.nome) === norm(params.cor)));
