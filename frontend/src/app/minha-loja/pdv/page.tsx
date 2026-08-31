@@ -3069,6 +3069,12 @@ function PdvPageInner() {
                       {it.promoTag && (() => {
                         const semPromo =
                           it.promoTag === 'SEM_PROMO' || /SEM PROMO/i.test(it.promoTag);
+                        // MARCADO que voltou COM desconto: a etiqueta diz o
+                        // valor já concedido. Antes saía só "MARCADO" com
+                        // "Desconto: R$ 0,00" e a vendedora podia dar outro
+                        // desconto em cima sem saber (31/08).
+                        const marcadoComDesconto =
+                          it.promoTag === 'MARCADO' && Number(it.desconto) > 0;
                         return (
                           <span
                             className={`text-[12px] font-bold px-2 py-1 rounded shrink-0 ${
@@ -3078,12 +3084,20 @@ function PdvPageInner() {
                                 ? 'bg-slate-600 text-white border border-slate-600'
                                 : 'bg-red-600 text-white border border-red-700'
                             }`}
-                            title={semPromo ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
+                            title={
+                              semPromo
+                                ? 'Fora da promoção (não participa)'
+                                : marcadoComDesconto
+                                  ? `Desconto de ${brl(it.desconto)} JÁ concedido quando a peça foi marcada — não dê outro por cima`
+                                  : `Desconto: ${brl(it.desconto)}`
+                            }
                           >
                             {semPromo
                               ? (it.promoTag === 'SEM_PROMO' ? '🚫 Fora da promo' : `🚫 ${it.promoTag}`)
                               : it.promoTag === 'MANUAL'
                               ? '✏️ MANUAL'
+                              : marcadoComDesconto
+                              ? `🎁 MARCADO −${brl(it.desconto)}`
                               : `🎁 ${it.promoTag}`}
                           </span>
                         );

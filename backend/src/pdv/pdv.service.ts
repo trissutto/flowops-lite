@@ -3056,8 +3056,17 @@ export class PdvService {
     // Helper: itens "travados" que a promoção automática NUNCA toca:
     //   - promoTag='MANUAL'    → desconto fixado pela vendedora.
     //   - promoTag='SEM_PROMO' → peça que a loja tirou da campanha (não participa).
+    //   - promoTag='MARCADO' COM desconto → a peça saiu da loja com um preço
+    //     combinado com a cliente (promo do dia da marcação ou desconto de
+    //     senha). Aplicar a campanha de novo daria 50% em cima de 50% — a peça
+    //     de R$ 80 marcada por R$ 40 fecharia a R$ 20 (31/08). Marcado SEM
+    //     desconto continua elegível: é peça a preço cheio, e a campanha do
+    //     dia do fechamento vale pra ela como pra qualquer outra.
     // Promoção automática só mexe nos demais.
-    const isManual = (it: any) => it.promoTag === 'MANUAL' || it.promoTag === 'SEM_PROMO';
+    const isManual = (it: any) =>
+      it.promoTag === 'MANUAL' ||
+      it.promoTag === 'SEM_PROMO' ||
+      (it.promoTag === 'MARCADO' && Number(it.desconto) > 0);
 
     if (activePromotion === 'NONE' || !activePromotion) {
       // Zera tudo (apenas resetando o que veio de promo automática)
