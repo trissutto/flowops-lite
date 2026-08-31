@@ -5655,6 +5655,21 @@ function PaymentModal({
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
   const restante = Math.max(0, Math.round((totalVivo - jaPago) * 100) / 100);
   const pago100 = restante < 0.01;
+  /**
+   * ABATIMENTO JÁ REGISTRADO — o que a cliente NÃO vai pagar agora.
+   *
+   * A venda online mostrava sempre o total CHEIO ("Frete R$ 0,00 · total
+   * R$ 279,60") mesmo com o vale-troca já tendo abatido metade, enquanto o
+   * PIX/link saía com o valor certo (R$ 139,80, via `restante`). A vendedora
+   * conferia um número e cobrava outro — troca de 31/08, loja 01.
+   *
+   * Não é só telinha: o "Confere o total?" é o passo em que ela CONFIRMA o
+   * valor antes de cobrar. Sem o desconto à vista ali, o passo confirma a
+   * coisa errada.
+   */
+  const temAbatimento = jaPago > 0.005 && restante > 0.005;
+  const soValeTroca = payments.length > 0 && payments.every((p) => p.method === 'vale_troca');
+  const abatimentoLabel = soValeTroca ? 'Vale-troca' : 'Já pago';
   // Auto-seleciona quando filtro tem só 1 método (PIX, crediario) OU quando
   // veio um presetMethod dos atalhos rápidos (MASTERCARD/VISANET/REDESHOP/...).
   const initialSelected = presetMethod
@@ -8015,9 +8030,32 @@ function PaymentModal({
                   <span className="tabular-nums">{brl(freteAplicado)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between border-t border-slate-700 pt-2">
-                  <span className="text-base font-black">TOTAL</span>
-                  <span className="text-2xl font-black tabular-nums text-emerald-400">{brl(totalVivo)}</span>
+                  <span className={temAbatimento ? 'text-sm font-bold text-slate-300' : 'text-base font-black'}>TOTAL</span>
+                  <span
+                    className={`font-black tabular-nums ${
+                      temAbatimento ? 'text-lg text-slate-300' : 'text-2xl text-emerald-400'
+                    }`}
+                  >
+                    {brl(totalVivo)}
+                  </span>
                 </div>
+                {/* O DESCONTO PRECISA APARECER AQUI (31/08). Este é o passo em
+                    que ela confirma o valor; sem a linha do vale-troca ela
+                    confirmava R$ 279,60 e cobrava R$ 139,80. O número grande
+                    passa a ser o que vai ser COBRADO — é esse que tem que
+                    bater com o PIX/link e com o Finalizar. */}
+                {temAbatimento && (
+                  <>
+                    <div className="flex items-center justify-between py-1 text-sm text-emerald-300">
+                      <span>{abatimentoLabel}</span>
+                      <span className="tabular-nums">− {brl(jaPago)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between border-t border-slate-700 pt-2">
+                      <span className="text-base font-black">A COBRAR</span>
+                      <span className="text-2xl font-black tabular-nums text-emerald-400">{brl(restante)}</span>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="mt-4 flex gap-2">
                 <button
@@ -8549,7 +8587,10 @@ function PaymentModal({
                   {ENTREGA_LABEL[entregaTipo] || entregaTipo}
                 </span>
                 <span className="flex-1 truncate text-xs font-semibold text-teal-900">
-                  Frete {brl(freteAplicado)} · total {brl(totalVivo)}
+                  Frete {brl(freteAplicado)} ·{' '}
+                  {temAbatimento
+                    ? `a cobrar ${brl(restante)} de ${brl(totalVivo)}`
+                    : `total ${brl(totalVivo)}`}
                 </span>
                 <span className="shrink-0 text-[11px] font-bold text-teal-700 underline">alterar</span>
               </button>
