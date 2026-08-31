@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { Image as ImageIcon, Loader2, Plus, Save, Trash2, Star } from 'lucide-react';
+import { Image as ImageIcon, Layers, Loader2, Plus, Save, Trash2, Star } from 'lucide-react';
 
 type Categoria = {
   id: string | null;
@@ -44,6 +44,12 @@ type Categoria = {
   ordem: number;
   ativo: boolean;
   destaque: boolean;
+  /**
+   * A grade da categoria sai AGRUPADA pelas subcategorias, na ordem delas
+   * (dono 31/08: "Linha Conforto tem que abrir nas blusas e depois os
+   * vestidos"). Desligado = a página abre em novidades, como sempre.
+   */
+  agruparPorSub: boolean;
   qtdPecas: number;
   configurada: boolean;
 };
@@ -461,6 +467,29 @@ function CardCategoria({
                   className="ml-1 w-12 px-1 py-0.5 border border-slate-300 rounded text-xs"
                 />
               </label>
+              {/*
+                * Só na categoria de CIMA: quem agrupa é o pai, e subcategoria
+                * não tem filha pra agrupar. Mostrar aqui embaixo seria um
+                * botão que não faz nada — o pior tipo de botão.
+                */}
+              {!paiNome && (
+                <button
+                  type="button"
+                  title={
+                    form.agruparPorSub
+                      ? 'Voltar à ordem normal (novidades primeiro, tudo misturado)'
+                      : 'Agrupar a grade pelas subcategorias, na ordem delas'
+                  }
+                  onClick={() => void salvar({ agruparPorSub: !form.agruparPorSub } as any)}
+                  className={`p-1.5 rounded border ${
+                    form.agruparPorSub
+                      ? 'bg-violet-100 border-violet-400 text-violet-700'
+                      : 'bg-white border-slate-300 text-slate-400 hover:text-violet-600'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
                 type="button"
                 title={form.destaque ? 'Tirar o destaque' : 'Destacar no menu do site'}

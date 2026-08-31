@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CorIaService } from '../product-photos/cor-ia.service';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { avisarVitrine } from '../common/avisar-vitrine';
+import { LojaCatalogService } from '../loja-catalog/loja-catalog.service';
 
 /**
  * CATEGORIAS DA VITRINE — foto, nome e texto de cada /categoria/<slug>.
@@ -46,6 +47,7 @@ export interface CategoriaInput {
   ordem?: number;
   ativo?: boolean;
   destaque?: boolean;
+  agruparPorSub?: boolean;
 }
 
 interface FotoResolvida {
@@ -63,6 +65,14 @@ export class SiteCategoriasService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly corIa: CorIaService,
+    /**
+     * Só pra DERRUBAR o cache da taxonomia do catálogo (10 min) quando alguém
+     * mexe aqui. Sem isto, ligar "blusas antes de vestidos" e abrir o site na
+     * sequência mostraria a página velha — a mesma armadilha do ISR de 1h que
+     * o dono mandou eliminar em 10/08 ("classificar uma peça e conferir na
+     * vitrine eram coisas separadas por uma hora").
+     */
+    private readonly catalogo: LojaCatalogService,
   ) {}
 
   private texto(v: unknown): string | null {
@@ -80,8 +90,9 @@ export class SiteCategoriasService {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : slug;
   }
 
-  /** Avisa a vitrine — ver `avisarVitrine`. */
+  /** Avisa a vitrine — ver `avisarVitrine` — e zera o cache daqui. */
   private avisarSite() {
+    this.catalogo.invalidarCache();
     avisarVitrine(['categorias', 'filtros'], this.logger, 'categorias');
   }
 
@@ -293,6 +304,7 @@ export class SiteCategoriasService {
           ordem: c?.ordem ?? 0,
           ativo: c?.ativo ?? true,
           destaque: c?.destaque ?? false,
+          agruparPorSub: c?.agruparPorSub ?? false,
           qtdPecas,
           configurada: !!c,
         };
@@ -422,6 +434,7 @@ export class SiteCategoriasService {
     if (dados.ordem !== undefined) patch.ordem = Number(dados.ordem) || 0;
     if (dados.ativo !== undefined) patch.ativo = Boolean(dados.ativo);
     if (dados.destaque !== undefined) patch.destaque = Boolean(dados.destaque);
+    if (dados.agruparPorSub !== undefined) patch.agruparPorSub = Boolean(dados.agruparPorSub);
 
     const salvo = await (this.prisma as any).siteCategoria.update({
       where: { id: atual.id },

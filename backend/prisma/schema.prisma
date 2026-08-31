@@ -6130,6 +6130,29 @@ model SiteCategoria {
   /// Ganha o card editorial grande do mega menu.
   destaque Boolean @default(false)
 
+  /// A GRADE SEGUE A ORDEM DAS SUBCATEGORIAS (dono, 31/08/2026).
+  ///
+  /// `false` (padrão): a página da categoria abre em NOVIDADES e pronto — o
+  /// que entrou por último aparece primeiro, misturando os tipos de peça. É o
+  /// certo pra "Blusas" e "Vestidos", onde a cliente já sabe o que vai achar e
+  /// volta pra ver o que chegou.
+  ///
+  /// `true`: as peças saem AGRUPADAS pelas subcategorias desta categoria, na
+  /// `ordem` que cada uma tem aqui — e só DENTRO de cada bloco vale a
+  /// ordenação normal. Existe pra vitrine de CAMPANHA montada por cima do
+  /// catálogo ("Linha Conforto" = 36 blusas + 3 vestidos): sem isto a ordem por
+  /// novidade espalha os três vestidos no meio das blusas, e a cliente que abre
+  /// a linha não vê que ela tem duas famílias.
+  ///
+  /// Opt-in de propósito. Ligar pra toda categoria mudaria "Blusas" de
+  /// novidades pra "manga curta primeiro" — o oposto da ordem de 07/08 ("a
+  /// cliente que volta toda semana precisa ver o que ENTROU").
+  ///
+  /// Só vale na página de UMA categoria e nas ordenações EDITORIAIS: se a
+  /// cliente pediu "menor preço", a escolha DELA manda. Régua única em
+  /// `common/ordem-por-subcategoria.ts`.
+  agruparPorSub Boolean @default(false) @map("agrupar_por_sub")
+
   atualizadoPor String?  @map("atualizado_por")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")

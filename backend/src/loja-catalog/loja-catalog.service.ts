@@ -10,6 +10,7 @@ import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { casaBusca } from '../common/busca-texto';
+import { ordenarPorSubcategoria } from '../common/ordem-por-subcategoria';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -2336,6 +2337,36 @@ export class LojaCatalogService {
         ? String(params.categoria).split(',').map((c) => c.trim().toLowerCase()).filter(Boolean)
         : [];
     if (catsDaOrdem.length === 1) {
+      /**
+       * 4a) BLOCOS POR SUBCATEGORIA (dono, 31/08) — "na Linha Conforto a
+       * cliente tem que ver primeiro as blusas e depois os vestidos".
+       *
+       * Vale só pra categoria que PEDIU (`SiteCategoria.agruparPorSub`), e os
+       * blocos saem na `ordem` das subcategorias — a mesma que ordena os
+       * chips no topo da página. Régua e porquês em
+       * `common/ordem-por-subcategoria.ts`.
+       *
+       * Roda ANTES da ordem manual de propósito: REF posicionada à mão é
+       * escolha explícita do dono e continua abrindo a vitrine, por cima dos
+       * blocos. Heurística não atropela curadoria — a mesma regra que já vale
+       * pro filtro da cliente.
+       *
+       * Fica de fora quando a cliente já escolheu um chip (a grade é de UMA
+       * subcategoria, agrupar não teria o que separar) e no caminho do feed
+       * (`incluirEsgotado`), onde a peça esgotada tem de continuar por último.
+       */
+      if (!params.subcategoria && !params.incluirEsgotado) {
+        const taxonomia = await this.taxonomia();
+        const pai = taxonomia.find((t: any) => this.slugTaxonomia(t.slug) === catsDaOrdem[0]);
+        if (pai?.agruparPorSub) {
+          const subs = taxonomia
+            .filter((t: any) => this.slugTaxonomia(t.paiSlug) === catsDaOrdem[0] && t.ativo !== false)
+            .sort((a: any, b: any) => (a.ordem ?? 0) - (b.ordem ?? 0))
+            .map((t: any) => this.slugTaxonomia(t.slug));
+          ordenarPorSubcategoria(pecas, subs);
+        }
+      }
+
       const manual = await this.colecaoRefs(`ordem-categoria-${catsDaOrdem[0]}`);
       if (manual.length) {
         const pos = new Map(manual.map((r, i) => [r, i] as const));
@@ -3386,7 +3417,10 @@ export class LojaCatalogService {
     let linhas: any[] = [];
     try {
       linhas = await (this.prisma as any).siteCategoria.findMany({
-        select: { slug: true, nome: true, paiSlug: true, ordem: true, ativo: true },
+        // `agruparPorSub` entra aqui porque `listar` decide o agrupamento da
+        // grade com esta mesma tabela — dois caminhos de leitura pra taxonomia
+        // seriam dois caches divergindo no primeiro ajuste.
+        select: { slug: true, nome: true, paiSlug: true, ordem: true, ativo: true, agruparPorSub: true },
         orderBy: { ordem: 'asc' },
       });
     } catch (e: any) {
