@@ -2581,6 +2581,24 @@ export class ProductsService {
     // Se for SÓ DÍGITOS com 5+ chars, tenta como código/EAN antes de REF.
     // Cobre o caso "vendedora bipa código de etiqueta na aba REF/Descrição".
     const isLikelyCodeOrEan = /^\d{5,14}$/.test(term);
+    /**
+     * COLISÃO REF × CÓDIGO — QUALQUER número, não só os de 5+ dígitos (31/08).
+     *
+     * O desempate "REF exata primeiro, código depois" nasceu pro caso 223263
+     * (REF do MARRIE que também é CÓDIGO de uma peça do REF 6168) e ficou
+     * preso atrás do `isLikelyCodeOrEan`. Só que a colisão não tem nada a ver
+     * com o TAMANHO do número: a REF 7023 (CALÇA PANTALONA DIVAS, cadastrada
+     * em 21/08) é o CÓDIGO de uma blusa do REF 5604 — 4 dígitos, fora do
+     * guard. A busca única testa código PRIMEIRO e devolve na hora, então a
+     * loja digitava 7023 e recebia a família 5604: a calça não existia pra
+     * rede nenhuma, com 76 peças em 14 lojas.
+     *
+     * Medição do dia: 1.605 REFs numéricas colidem com um código. As de 5-14
+     * dígitos já estavam protegidas; sobravam 454 (1-4 dígitos), 268 delas
+     * com estoque na rede AGORA. Por isso a regra passa a valer pra classe
+     * inteira, não pro número que apareceu no chamado.
+     */
+    const isSoDigitos = /^\d+$/.test(term);
     let detectedAs: 'ean' | 'text' = 'text';
     let matchedSkuForResult: string | null = null;
 
@@ -2647,9 +2665,20 @@ export class ProductsService {
     if (effectiveMode === 'desc') {
       // Busca única primeiro; agrupa por REF aqui mesmo.
       const rowsBU = await viaBuscaUnica(term);
-      if (rowsBU.length) {
+      /**
+       * TERMO SÓ NÚMEROS na lista de REFs: a busca única resolve CÓDIGO antes
+       * de REF e devolve só a família do código — a REF homônima nem entra na
+       * lista. Aqui a vendedora está ESCOLHENDO entre REFs, então as duas
+       * leituras cabem: junta a REF exata na frente e deixa ela decidir.
+       * Chega neste ramo a REF curta que o atalho do front não promove a
+       * `mode=ref` (mínimo de 3 dígitos lá) — a REF "22", por exemplo, tem 624
+       * peças na rede e caía inteira no código homônimo.
+       */
+      const rowsRef = isSoDigitos ? await this.catalog.searchByRef(term).catch(() => []) : [];
+      const rowsDesc = [...rowsRef.filter((r: any) => String(r.REF ?? '').trim() === term), ...rowsBU];
+      if (rowsDesc.length) {
         const porRefBU = new Map<string, { ref: string; nome: string; codigos: Set<string> }>();
-        for (const r of rowsBU) {
+        for (const r of rowsDesc) {
           const refKey = String(r.REF ?? '').trim();
           if (!refKey) continue;
           if (!porRefBU.has(refKey)) porRefBU.set(refKey, { ref: refKey, nome: String(r.DESCRICAOCOMPLETA || refKey), codigos: new Set() });
@@ -2692,16 +2721,18 @@ export class ProductsService {
       rawRows = await viaBuscaUnica(term);
       if (!rawRows.length) rawRows = await this.catalog.searchByCodeAndExpandRef(term);
       if (!rawRows.length) rawRows = await this.catalog.searchByRef(term);
-    } else if (effectiveMode === 'ref' && !isLikelyCodeOrEan) {
+    } else if (effectiveMode === 'ref' && !isSoDigitos) {
       // REF textual (BMM-100, VLM-222): busca única primeiro — foi a classe
       // que ficou invisível na cadeia antiga. Fallback preserva o legado.
       rawRows = await viaBuscaUnica(term);
       if (!rawRows.length) rawRows = await this.catalog.searchByRef(term);
-    } else if (effectiveMode === 'ref' && isLikelyCodeOrEan) {
+    } else if (effectiveMode === 'ref' && isSoDigitos) {
       // Aba REF/Descrição com termo SÓ NÚMEROS: pode ser uma REF numérica
-      // (ex.: "223263" = família MARRIE) OU o código de etiqueta bipado por
-      // engano. O número colide entre os dois namespaces do Giga — "223263"
-      // é REF do MARRIE E TAMBÉM o CÓDIGO de uma peça do REF 6168.
+      // (ex.: "223263" = família MARRIE, "7023" = CALÇA PANTALONA DIVAS) OU o
+      // código de etiqueta bipado por engano. O número colide entre os dois
+      // namespaces do Giga — "223263" é REF do MARRIE E TAMBÉM o CÓDIGO de uma
+      // peça do REF 6168; "7023" é REF da calça DIVAS E TAMBÉM o CÓDIGO de uma
+      // blusa do REF 5604. NÃO depende do tamanho do número (ver `isSoDigitos`).
       // REF EXATA tem prioridade (igual à consulta da Giga); só cai pro código
       // se NÃO existir REF com esse número (aí é etiqueta bipada na aba errada).
       rawRows = await this.catalog.searchByRef(term);
@@ -2723,7 +2754,7 @@ export class ProductsService {
     }
     // Termo numérico que caiu no legado e continuou vazio: última chance na
     // busca única (cobre código recém-nascido que só o nativo conhece).
-    if (!rawRows.length && isLikelyCodeOrEan) {
+    if (!rawRows.length && isSoDigitos) {
       rawRows = await viaBuscaUnica(term);
       if (rawRows.length && rawRows.some((r) => String(r.CODIGO) === term)) {
         matchedSkuForResult = term;
