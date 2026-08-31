@@ -347,10 +347,13 @@ export class PickOrdersService {
       }
       if (ordemJ && !ordemJ.isPickup && !pick.isTransfer) {
         await this.travarEnvioAncoraSeFaltamCaixas(pick);
-        // POLÍTICA DE FRETE (29/08): dentro de SP em 2+ pacotes, a etiqueta
-        // pra cliente só sai depois da decisão da matriz (liberar ou juntar).
-        const gate = await pacotesAguardandoLiberacao(this.prisma as any, pick.orderId);
-        if (gate.travado) throw new BadRequestException(gate.motivo);
+        // POLÍTICA DE FRETE (29/08, recalibrada 31/08): o gate segura SÓ a
+        // COMPRA da etiqueta — o único momento em que dá pra economizar
+        // frete. Etiqueta JÁ comprada (reimpressão) passa: o dinheiro saiu.
+        if (!pick.trackingCode && !pick.correiosPrepostagemId) {
+          const gate = await pacotesAguardandoLiberacao(this.prisma as any, pick.orderId);
+          if (gate.travado) throw new BadRequestException(gate.motivo);
+        }
       }
       // PEÇA SEM BIPE NÃO EMBARCA (ON-000201, 29/08) — mesma trava do envio
       // manual: a etiqueta só sai com o card 100% bipado.
@@ -2280,6 +2283,9 @@ export class PickOrdersService {
       const o: any = r.order;
       if (!o || o.isPickup || (o as any).pacotesLiberadosEm) return false;
       if (r.isTransfer) return false; // feeder segue o trilho da caixa
+      // Etiqueta JÁ comprada = decisão de fato tomada — o card segue livre
+      // (o gate só existe pra segurar a COMPRA da etiqueta).
+      if (r.trackingCode || r.correiosPrepostagemId) return false;
       if (dentroDeSaoPaulo(o.shippingCep) !== true) return false;
       return (nPacotes.get(r.orderId) ?? 0) > 1;
     };
@@ -4178,16 +4184,15 @@ export class PickOrdersService {
         }
       }
       /**
-       * POLÍTICA DE FRETE (29/08) — pedido DENTRO de SP em 2+ pacotes espera
-       * a matriz decidir (liberar os fretes ou juntar) antes de QUALQUER
-       * pacote sair. Só vale pro card que vai PRA CLIENTE — caixa de feeder
-       * (isTransfer) segue pro fluxo da juntada normalmente. Separação/bipe
-       * nunca travam; só a porta do envio.
+       * GATE DE PACOTES SAIU DAQUI (31/08, ordem do dono: "tá travando a
+       * operação"). O "Já postei"/envio manual REGISTRA um fato que já
+       * aconteceu no mundo real — o pacote foi postado, a etiqueta já foi
+       * paga (caso LP-000999: etiqueta comprada e o card travado no verde).
+       * Bloquear aqui não economiza frete nenhum, só trava a loja. O gate
+       * vive onde o dinheiro ainda NÃO saiu: a COMPRA da etiqueta
+       * (`gerarEnvioCorreios`). A trava do bipe acima continua — essa sim
+       * protege estoque.
        */
-      if (!pedidoDoCard?.isPickup && !current.isTransfer) {
-        const gate = await pacotesAguardandoLiberacao(this.prisma as any, current.orderId);
-        if (gate.travado) throw new BadRequestException(gate.motivo);
-      }
       /**
        * PEÇA SEM BIPE NÃO EMBARCA (caso ON-000201, Sorocaba, 29/08). O finish
        * valida os bipes, mas valida SÓ o que está no card NAQUELA hora — peça

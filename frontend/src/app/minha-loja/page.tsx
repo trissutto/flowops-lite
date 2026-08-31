@@ -3309,7 +3309,8 @@ function PickOrderCard({
             que desenhava em cima de OUTRO card (caso LP-001015). */}
         {(status === 'separated' || status === 'ready') && row.aguardaDecisaoPacotes && (
           <div className="flex-1 rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-3 text-center text-sm font-bold text-amber-800">
-            🕒 Pedido em 2+ pacotes — o envio libera quando a MATRIZ decidir (liberar os fretes ou juntar numa loja)
+            🕒 Pedido em 2+ pacotes — a ETIQUETA libera quando a matriz decidir (juntar ou liberar os fretes).
+            Já postou por fora? "Já postei" segue normal.
           </div>
         )}
         {/* Âncora com o próprio bipe pronto, aguardando as caixas das feeders */}
@@ -3319,7 +3320,7 @@ function PickOrderCard({
           </div>
         )}
         {/* Fallback manual → envio com rastreio digitado (só quem posta) */}
-        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !ehFeederJuntada && !aguardandoCaixas && !row.trackingCode && !row.aguardaDecisaoPacotes && (
+        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !ehFeederJuntada && !aguardandoCaixas && !row.trackingCode && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
             title="Digitar o rastreio manualmente (fallback se o Gerar envio falhar)"
