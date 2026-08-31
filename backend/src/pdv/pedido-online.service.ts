@@ -7,7 +7,6 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { ehLojaCanal } from '../common/loja-canal';
 import { fechaMotoboySemSeparacao } from '../common/fechamento-motoboy';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
-import { vendaOnlineTemProva } from '../common/prova-pagamento';
 import { ErpService } from '../erp/erp.service';
 
 /**
@@ -999,30 +998,23 @@ export class PedidoOnlineService {
         }
       }
 
-      // CONFIRMAÇÃO PRA CLIENTE (14/08) — a venda online nasceu muda. A
-      // vendedora já falou com ela no WhatsApp, mas ninguém mandava o número
-      // do pedido nem o registro do que foi comprado. Fire-and-forget e sem
-      // e-mail no cadastro simplesmente não sai (o `destinatario` filtra).
+      // MENSAGEM PRA CLIENTE (14/08) — a venda online nasceu muda. A vendedora
+      // já falou com ela no WhatsApp, mas ninguém mandava o número do pedido
+      // nem o registro do que foi comprado. Fire-and-forget.
       //
-      // ⚠️ "O pedido já nasce PAGO" era MENTIRA em parte dos casos (20/08,
-      // ON-000049): "PIX recebido" e "Link externo" finalizam no braço, sem
-      // gateway nenhum conferindo — a vendedora fechou, a cliente recebeu
-      // "Recebemos o seu pagamento" às 17:26 e respondeu "Nao paguei ainda"
-      // às 17:27. Então a mensagem de PAGAMENTO CONFIRMADO só sai quando um
-      // gateway PAGO lastreia a venda (Link Pagar.me / PIX gerado PagBank);
-      // sem prova, sai o registro do pedido SEM afirmar pagamento.
-      void vendaOnlineTemProva(this.prisma, sale.id)
-        .then((temProva) => {
-          if (temProva) {
-            return this.pedidoEmail.aoConfirmarPagamento({ ...order, items: order.items ?? [] });
-          }
-          this.logger.warn(
-            `[pedido-online] ${order.wcOrderNumber}: venda ${sale.id} finalizada SEM prova de ` +
-              `pagamento no gateway (PIX recebido/Link externo) — aviso "pagamento confirmado" ` +
-              `retido; enviado registro neutro do pedido.`,
-          );
-          return this.pedidoEmail.aoRegistrarPedidoOnlineSemProva({ ...order, items: order.items ?? [] });
-        })
+      // NUNCA "pagamento confirmado" (31/08 — ordem do dono). Antes isso
+      // dependia de haver prova no gateway; agora a venda online não manda
+      // confirmação de pagamento em caso NENHUM, porque quem recebeu o
+      // dinheiro foi a vendedora e é ela quem confirma, no atendimento que já
+      // está acontecendo. O automático chegava depois dela, por outro número,
+      // e quando errava, errava na frente de quem estava atendendo (ON-000049,
+      // 19/08: confirmação às 17:26, "Nao paguei ainda" às 17:27).
+      //
+      // A trava de verdade mora no `aoConfirmarPagamento` (ele recusa
+      // `pdv_online`). Aqui a gente só escolhe a mensagem certa direto — e o
+      // pedido do SITE segue com a confirmação automática, intacto.
+      void this.pedidoEmail
+        .aoRegistrarPedidoOnline({ ...order, items: order.items ?? [] })
         .catch((e: any) => this.logger.warn(`[pedido-online] aviso ao cliente falhou: ${e?.message || e}`));
 
       const destino = fechadoNaLoja

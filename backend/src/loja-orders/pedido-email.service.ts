@@ -576,17 +576,20 @@ export class PedidoEmailService {
   }
 
   /**
-   * PEDIDO REGISTRADO SEM PROVA DE PAGAMENTO (20/08 — caso ON-000049).
+   * A MENSAGEM DA VENDA ONLINE DO PDV — registra o pedido, não afirma pagamento.
    *
-   * A venda online do PDV também fecha por "PIX recebido" e "Link externo" —
-   * registro no braço, sem nenhum gateway confirmando (decisão do dono de
-   * 01/08: esses botões ficam). Nesses casos o sistema NÃO SABE se o dinheiro
-   * entrou, e mandar "Recebemos o seu pagamento" é mentira em potencial: a
-   * Claudia (ON-000049, 19/08) recebeu a confirmação às 17:26 e respondeu
-   * "Nao paguei ainda" às 17:27 — a vendedora finalizou antes do Pix cair.
+   * Nasceu em 20/08 (caso ON-000049) só pro pedido SEM prova de gateway: "PIX
+   * recebido" e "Link externo" fecham no braço, o sistema não sabe se o
+   * dinheiro entrou, e a Claudia recebeu "recebemos o seu pagamento" às 17:26
+   * e respondeu "Nao paguei ainda" às 17:27.
    *
-   * Então o pedido sem prova ganha ESTA mensagem: registra o número e as
-   * peças (o motivo do aviso existir desde 14/08) sem afirmar pagamento.
+   * Desde 31/08 (ordem do dono) vale pra TODA venda online da vendedora, com
+   * prova ou sem: a confirmação de pagamento automática saiu do trilho do
+   * `pdv_online` inteiro — quem confirma o dinheiro é a vendedora, no
+   * atendimento que ela já está tendo. Ver `aoConfirmarPagamento`.
+   *
+   * O que esta mensagem faz continua igual e é o motivo de ela existir desde
+   * 14/08: manda o número do pedido e as peças pra cliente conferir.
    *
    * ⚠️ NUNCA sai pelo n8n: o `avisarN8n` manda `order.status`, que no pedido
    * do PDV é 'processing' — exatamente o gatilho do IF do fluxo "Pedido
@@ -594,7 +597,7 @@ export class PedidoEmailService {
    * pagamento" no WhatsApp da cliente. Por isso o canal é o WhatsApp direto
    * (mesmo kill-switch `WHATS_PEDIDO_DIRETO`).
    */
-  async aoRegistrarPedidoOnlineSemProva(order: any): Promise<void> {
+  async aoRegistrarPedidoOnline(order: any): Promise<void> {
     if (!this.whatsDiretoLigado) return;
     const telefone = String(order?.customerPhone || '').replace(/\D/g, '');
     if (telefone.length < 10) return;
@@ -636,6 +639,34 @@ export class PedidoEmailService {
 
   /** Pagamento confirmado — a mensagem que a cliente realmente espera. */
   async aoConfirmarPagamento(order: any): Promise<void> {
+    /**
+     * VENDA ONLINE DA VENDEDORA NÃO CONFIRMA PAGAMENTO SOZINHA (31/08 — dono).
+     *
+     * No pedido `pdv_online` quem recebeu o dinheiro foi a vendedora, dentro de
+     * uma conversa que ela já está tendo com a cliente no WhatsApp da loja. O
+     * "recebemos o seu pagamento" automático chega DEPOIS dela, por outro
+     * número, dizendo o que a cliente já sabe — e quando o sistema erra a
+     * leitura, erra na frente de quem estava atendendo (caso ON-000049, 19/08:
+     * confirmação às 17:26, "Nao paguei ainda" às 17:27).
+     *
+     * O pedido do SITE não muda em nada: lá não existe vendedora do outro lado,
+     * e a confirmação automática é a única coisa que a cliente recebe.
+     *
+     * A trava mora AQUI, e não só em quem chama, porque este método é a porta
+     * dos dois canais (n8n → WhatsApp e e-mail próprio): quem escrever o
+     * terceiro caminho amanhã não precisa lembrar da regra.
+     *
+     * A venda online não fica muda — ela manda `aoRegistrarPedidoOnline`, que
+     * registra número e peças SEM afirmar pagamento.
+     */
+    if (String(order?.source ?? '').trim() === 'pdv_online') {
+      this.logger.log(
+        `[pedido-msg] pedido ${order?.wcOrderNumber ?? order?.id}: confirmação automática de ` +
+          `pagamento RETIDA — venda online lançada pela vendedora (ela confirma no atendimento).`,
+      );
+      return;
+    }
+
     void this.avisarN8n('pagamento_confirmado', order);
     if (!this.emailProprioLigado) return;
 
