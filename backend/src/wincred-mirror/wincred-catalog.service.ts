@@ -392,6 +392,47 @@ export class WincredCatalogService {
     return this.erp.searchByRef(ref);
   }
 
+  /**
+   * SÓ POSTGRES — nunca encosta no Giga (31/08, reclamação do dono).
+   *
+   * `searchByRef`/`searchByCodeAndExpandRef` caem no MySQL quando o espelho
+   * volta vazio, e quem precisa perguntar AS DUAS COISAS (é REF? é CÓDIGO?)
+   * pra desempatar uma colisão pagava DOIS timeouts do Giga numa busca que
+   * não achou nada. Com `queueLimit: 0` no pool, cada uma dessas idas é uma
+   * chance de pendurar o app inteiro — foi assim que a live de 01/07 caiu.
+   *
+   * Quem chama estas duas decide a hora de arriscar UMA ida ao Giga (o caso
+   * legítimo é a peça cadastrada há menos de 10min, que o espelho ainda não
+   * puxou), em vez de arriscar a cada pergunta intermediária.
+   */
+  async searchByRefSemGiga(ref: string): Promise<any[]> {
+    if (!this.enabled) return [];
+    try {
+      return await this.searchByRefFromMirror(ref);
+    } catch (e: any) {
+      this.logger.warn(`[consulta] ref "${ref}": espelho ERRO (${e?.message || e}) — SEM ida ao Giga`);
+      return [];
+    }
+  }
+
+  /** Par do `searchByRefSemGiga` pro lado do CÓDIGO. Só Postgres. */
+  async searchByCodeAndExpandRefSemGiga(code: string): Promise<any[]> {
+    if (!this.enabled) return [];
+    try {
+      const codigo = this.normalizeCodigo(code);
+      if (!codigo) return [];
+      const p: any = await this.produtoTable.findUnique({
+        where: { codigo },
+        select: { ref: true },
+      });
+      if (!p?.ref) return [];
+      return await this.searchByRefFromMirror(String(p.ref).trim(), codigo);
+    } catch (e: any) {
+      this.logger.warn(`[consulta] codigo "${code}": espelho ERRO (${e?.message || e}) — SEM ida ao Giga`);
+      return [];
+    }
+  }
+
   private async searchByRefFromMirror(
     ref: string,
     /** Código bipado — imune à dedup (ver o comentário da chave, abaixo). */

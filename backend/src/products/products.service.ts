@@ -2674,7 +2674,9 @@ export class ProductsService {
        * `mode=ref` (mínimo de 3 dígitos lá) — a REF "22", por exemplo, tem 624
        * peças na rede e caía inteira no código homônimo.
        */
-      const rowsRef = isSoDigitos ? await this.catalog.searchByRef(term).catch(() => []) : [];
+      // Só Postgres: aqui é enriquecimento de uma lista que a busca única já
+      // respondeu — não vale gastar uma ida ao Giga pra ordenar chooser.
+      const rowsRef = isSoDigitos ? await this.catalog.searchByRefSemGiga(term).catch(() => []) : [];
       const rowsDesc = [...rowsRef.filter((r: any) => String(r.REF ?? '').trim() === term), ...rowsBU];
       if (rowsDesc.length) {
         const porRefBU = new Map<string, { ref: string; nome: string; codigos: Set<string> }>();
@@ -2735,10 +2737,18 @@ export class ProductsService {
       // blusa do REF 5604. NÃO depende do tamanho do número (ver `isSoDigitos`).
       // REF EXATA tem prioridade (igual à consulta da Giga); só cai pro código
       // se NÃO existir REF com esse número (aí é etiqueta bipada na aba errada).
-      rawRows = await this.catalog.searchByRef(term);
+      //
+      // ⚠️ AS DUAS PERGUNTAS SÃO SÓ POSTGRES (31/08). Desempatar a colisão
+      // custa perguntar "é REF?" e "é CÓDIGO?" — e as versões com fallback
+      // caem no Giga ao vivo a cada MISS. Numa busca que não acha nada isso
+      // eram DOIS timeouts de 12s num pool com `queueLimit: 0`, ou seja, duas
+      // chances de pendurar o app. O Giga fica pra UMA tentativa no fim, e só
+      // se o Postgres não soube responder nada (caso real: peça cadastrada há
+      // menos de 10min, que o espelho ainda não puxou).
+      rawRows = await this.catalog.searchByRefSemGiga(term);
       const temRefExata = rawRows.some((r) => String(r.REF ?? '').trim() === term);
       if (!temRefExata) {
-        const porCodigo = await this.catalog.searchByCodeAndExpandRef(term);
+        const porCodigo = await this.catalog.searchByCodeAndExpandRefSemGiga(term);
         if (porCodigo.length) {
           if (isLikelyEan) detectedAs = 'ean';
           matchedSkuForResult = term;
@@ -2746,6 +2756,8 @@ export class ProductsService {
         }
         // porCodigo vazio → mantém o searchByRef (pode ter match por prefixo)
       }
+      // Postgres não soube: AGORA sim, uma única ida ao Giga.
+      if (!rawRows.length) rawRows = await this.catalog.searchByRef(term);
     } else {
       // Ramo residual (não deve ocorrer: os três acima cobrem sku/ref) —
       // mantém o legado por segurança.

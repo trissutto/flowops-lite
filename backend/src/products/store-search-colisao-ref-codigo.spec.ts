@@ -30,8 +30,14 @@ function montar(over: {
   resolveRows?: any[];
 }) {
   const catalog = {
-    searchByRef: jest.fn().mockResolvedValue(over.searchByRef ?? []),
-    searchByCodeAndExpandRef: jest.fn().mockResolvedValue(over.searchByCodeAndExpandRef ?? []),
+    // Versões SEM GIGA — respondem pelo Postgres (espelho + tabela nativa).
+    searchByRefSemGiga: jest.fn().mockResolvedValue(over.searchByRef ?? []),
+    searchByCodeAndExpandRefSemGiga: jest.fn().mockResolvedValue(over.searchByCodeAndExpandRef ?? []),
+    // Estas DUAS são o Giga MySQL ao vivo. Nenhum teste aqui pode encostar
+    // nelas quando o Postgres já sabia a resposta — é essa ida que pendura o
+    // app quando o firewall da KingHost derruba o IP do Railway.
+    searchByRef: jest.fn().mockResolvedValue([]),
+    searchByCodeAndExpandRef: jest.fn().mockResolvedValue([]),
     searchByDescriptionGrouped: jest.fn().mockResolvedValue([]),
     getStockBySkusDetailed: jest.fn().mockResolvedValue({}),
   };
@@ -74,7 +80,10 @@ describe('store-search — colisão REF × CÓDIGO', () => {
 
     expect(refsDe(r)).toContain('7023');
     expect(refsDe(r)).not.toContain('5604');
-    expect(catalog.searchByRef).toHaveBeenCalledWith('7023');
+    expect(catalog.searchByRefSemGiga).toHaveBeenCalledWith('7023');
+    // ...e resolveu INTEIRO no Postgres, sem uma única ida ao Giga ao vivo.
+    expect(catalog.searchByRef).not.toHaveBeenCalled();
+    expect(catalog.searchByCodeAndExpandRef).not.toHaveBeenCalled();
     // A busca única não pode ser a fonte de um termo numérico na aba REF —
     // é ela que resolve código antes de REF.
     expect(buscaUnica.resolveRows).not.toHaveBeenCalled();
@@ -102,6 +111,21 @@ describe('store-search — colisão REF × CÓDIGO', () => {
 
     expect(refsDe(r)).toContain('5604');
     expect(r.results[0].matchedSku).toBe('7023');
+  });
+
+  it('número que o Postgres não conhece gasta UMA ida ao Giga, nunca duas', async () => {
+    // O Giga pendura em vez de dar erro (pool com queueLimit: 0). Desempatar
+    // "é REF ou é CÓDIGO?" com as versões que caem no MySQL custava 2 timeouts
+    // por busca vazia — 2 chances de congelar o app numa digitação errada.
+    const { service, catalog } = montar({ searchByRef: [], searchByCodeAndExpandRef: [] });
+
+    await service.storeProductSearch('999999', 'loja-limeira', 'ref');
+
+    expect(catalog.searchByRefSemGiga).toHaveBeenCalledTimes(1);
+    expect(catalog.searchByCodeAndExpandRefSemGiga).toHaveBeenCalledTimes(1);
+    const idasAoGiga =
+      catalog.searchByRef.mock.calls.length + catalog.searchByCodeAndExpandRef.mock.calls.length;
+    expect(idasAoGiga).toBe(1);
   });
 
   it('REF textual (BMM-100) continua indo pela busca única', async () => {
