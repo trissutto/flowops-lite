@@ -228,28 +228,98 @@ export function reportSearchClicked(term: string): void {
  * `relaxed` com sugestões — a UI segue de pé com o índice navegacional
  * (`search()`), que resolve local e não depende de rede.
  */
+/**
+ * AS TENTATIVAS DE BUSCA NO CATÁLOGO, DA MAIS ESPECÍFICA PRA MAIS ABERTA.
+ *
+ * ── O BUG QUE ISTO CONSERTA (medido em 31/08/2026) ──
+ *
+ * **Um terço das buscas do site voltava VAZIA** — 25 de 75 no primeiro dia em
+ * que passamos a gravar a contagem. E "vestido longo" era a campeã, num
+ * catálogo com 33 referências de vestido longo publicadas.
+ *
+ * A causa não estava no motor de ranking, estava ANTES dele. Para "vestido
+ * longo" o intérprete consumia as DUAS palavras em faceta (`category:
+ * vestidos` + `fit: longo`), deixando o texto residual VAZIO, e mandava
+ * `categoria=vestidos&modelagem=longo` pro servidor. Só que `modelagem` está
+ * em branco em 73% das peças (543 de 739): a API devolvia **zero itens**, e o
+ * motor recebia uma lista vazia pra ranquear.
+ *
+ * Aí a promessa "zero results NUNCA" do `rankSearch` não valia nada: a escada
+ * de relaxamento afrouxa FACETAS sobre os documentos que tem — e não havia
+ * documento nenhum. O filtro destrutivo tinha acontecido um andar acima, no
+ * servidor.
+ *
+ * ── O QUE MUDOU ──
+ *
+ * 1. `modelagem` NÃO vai mais pro servidor. Lá ela é um E lógico contra um
+ *    campo quase sempre vazio; aqui dentro o motor já pontua `fit` por fora e
+ *    sabe soltá-la na escada. Medido: `categoria=vestidos&modelagem=longo`
+ *    devolve 0, `categoria=vestidos` devolve 153.
+ *
+ * 2. Quando o residual fica vazio (todas as palavras viraram faceta), o TERMO
+ *    INTEIRO vai como texto. O servidor acha muito bem o que a faceta não
+ *    achava: `busca=vestido longo` devolve 27 itens com "Vestido Longo" nos
+ *    três primeiros — o nome da peça tem a palavra.
+ *
+ * 3. Lista vazia vira nova tentativa, mais aberta, até sobrar o catálogo cru.
+ *    É o que devolve ao motor o direito de relaxar. Ganha de brinde o que o
+ *    texto do servidor não sabe fazer e o daqui sabe: plural ("regatas" volta
+ *    0 no servidor, "regata" volta 37) e acento ("sutia" volta 0 lá, mas o
+ *    índice daqui normaliza e casa com "Sutiã Sem Bojo").
+ *
+ * Na busca que já funciona nada muda: a primeira tentativa responde e as
+ * outras nem saem — uma viagem só, como antes.
+ */
+export function tentativasDeBusca(
+  term: string,
+  intent: ReturnType<typeof heuristicInterpreter.interpret>,
+  perPage: string,
+): URLSearchParams[] {
+  /** Só as facetas que o catálogo responde de verdade (`modelagem` não é uma). */
+  const comFacetas = () => {
+    const p = new URLSearchParams({ ordenar: 'relevancia', page: '1', perPage });
+    if (intent.facets.category) p.set('categoria', intent.facets.category);
+    if (intent.facets.color) p.set('cor', intent.facets.color);
+    if (intent.facets.priceMax !== undefined) p.set('precoMax', String(intent.facets.priceMax));
+    return p;
+  };
+  const temFaceta = () => comFacetas().toString() !== new URLSearchParams({ ordenar: 'relevancia', page: '1', perPage }).toString();
+
+  const residual = intent.residual.trim();
+  // Residual vazio = o intérprete consumiu tudo em faceta. O termo inteiro é o
+  // que sobra de texto — e é justamente ele que o servidor sabe achar.
+  const texto = residual.length >= 2 ? residual : term.trim();
+
+  const tentativas: URLSearchParams[] = [];
+  if (texto.length >= 2) {
+    const comTexto = comFacetas();
+    comTexto.set('busca', texto);
+    tentativas.push(comTexto);
+  }
+  // Solta o texto, mantém as facetas.
+  if (texto.length >= 2 && temFaceta()) tentativas.push(comFacetas());
+  // Solta tudo: o catálogo cru, pro motor relaxar em cima de alguma coisa.
+  if (tentativas.length === 0 || temFaceta() || texto.length >= 2) {
+    tentativas.push(new URLSearchParams({ ordenar: 'relevancia', page: '1', perPage }));
+  }
+  return tentativas;
+}
+
 export async function searchProducts(term: string, limit = 24): Promise<SearchOutcome> {
   const intent = heuristicInterpreter.interpret(term);
-
-  const params = new URLSearchParams({
-    ordenar: 'relevancia',
-    page: '1',
-    perPage: String(Math.min(limit * 2, 60)),
-  });
-  // Facetas que o BFF entende viram filtro no SERVIDOR (menos tráfego);
-  // o que ele não entende (ocasião, tecido, atributos) o motor pontua aqui.
-  const residual = intent.residual.trim();
-  if (residual.length >= 2) params.set('busca', residual);
-  if (intent.facets.category) params.set('categoria', intent.facets.category);
-  if (intent.facets.color) params.set('cor', intent.facets.color);
-  if (intent.facets.fit) params.set('modelagem', intent.facets.fit);
-  if (intent.facets.priceMax !== undefined) params.set('precoMax', String(intent.facets.priceMax));
+  const perPage = String(Math.min(limit * 2, 60));
 
   try {
-    const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);
-    if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
-    const dados = await resposta.json();
-    const produtos: Product[] = mapPecasDaVitrine(dados.itens ?? []);
+    let produtos: Product[] = [];
+    for (const params of tentativasDeBusca(term, intent, perPage)) {
+      const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);
+      if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+      const dados = await resposta.json();
+      produtos = mapPecasDaVitrine(dados.itens ?? []);
+      // Achou alguma coisa: para aqui. Tentativa seguinte só existe pra lista
+      // vazia — que é o estado que quebrava a busca inteira.
+      if (produtos.length) break;
+    }
 
     const outcome = rankSearch(createSearchIndex(produtos), { term, limit });
     reportSearch(term, outcome.results.length);
