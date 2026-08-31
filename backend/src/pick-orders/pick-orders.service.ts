@@ -19,7 +19,7 @@ import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { caixaDoSite } from '../common/caixa-site';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
-import { pacotesAguardandoLiberacao } from '../common/politica-frete';
+import { pacotesAguardandoLiberacao, dentroDeSaoPaulo } from '../common/politica-frete';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
@@ -2235,7 +2235,10 @@ export class PickOrdersService {
             // abaixo. Sem o checkoutInfo, "Frete grátis" não diz se é SEDEX
             // ou PAC e a loja lia "TRANSPORTADORA".
             checkoutInfo: true,
-          },
+            // Gate de pacotes dentro de SP (31/08): o card mostra a faixa
+            // "aguardando a matriz" em vez de deixar clicar e levar erro.
+            pacotesLiberadosEm: true,
+          } as any,
         },
       },
     });
@@ -2252,6 +2255,34 @@ export class PickOrdersService {
       arr.push(it);
       itemsByOrder.set(it.orderId, arr);
     }
+
+    // GATE DE PACOTES DENTRO DE SP (31/08): quantos cards NÃO-transfer o
+    // pedido tem — 2+ dentro de SP sem carimbo = envio esperando a matriz.
+    // O card mostra a faixa e esconde os botões de envio (caso LP-001015:
+    // a loja clicava "Gerar envio Correios" e levava um erro solto que
+    // desenhava em cima de OUTRO card).
+    const orderIdsDosRows = [...new Set(rows.map((r) => r.orderId))];
+    const pacotesPorPedido: any[] = orderIdsDosRows.length
+      ? await (this.prisma as any).pickOrder.groupBy({
+          by: ['orderId'],
+          where: {
+            orderId: { in: orderIdsDosRows },
+            isTransfer: false,
+            status: { in: ['new', 'separating', 'separated', 'ready', 'shipped'] },
+          },
+          _count: { _all: true },
+        })
+      : [];
+    const nPacotes = new Map(pacotesPorPedido.map((g) => [g.orderId, Number(g._count?._all) || 0]));
+    const gateLigado = String(process.env.PACOTES_GATE_DENTRO_SP ?? '').trim() !== '0';
+    const aguardaDecisaoDe = (r: any): boolean => {
+      if (!gateLigado) return false;
+      const o: any = r.order;
+      if (!o || o.isPickup || (o as any).pacotesLiberadosEm) return false;
+      if (r.isTransfer) return false; // feeder segue o trilho da caixa
+      if (dentroDeSaoPaulo(o.shippingCep) !== true) return false;
+      return (nPacotes.get(r.orderId) ?? 0) > 1;
+    };
 
     // PEÇA SEM BIPE (29/08): quantas peças do card ainda não têm bipe ativo.
     // Alimenta o botão "Bipar peça faltante" — inclusive em card já enviado
@@ -2561,6 +2592,8 @@ export class PickOrdersService {
         // PEÇA SEM BIPE (29/08): >0 pinta o botão "Bipar peça faltante" —
         // inclusive em card enviado (o bipe tardio acerta o estoque).
         faltamBipar: faltamBiparDe(r),
+        // Envio esperando decisão da matriz (2+ pacotes em SP) — pinta a faixa.
+        aguardaDecisaoPacotes: aguardaDecisaoDe(r),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,
         /**

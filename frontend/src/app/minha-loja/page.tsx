@@ -100,6 +100,9 @@ interface PickOrderRow {
   /** Peças do card SEM bipe ativo (29/08) — >0 mostra "Bipar peça faltante",
    *  inclusive em card já enviado (bipe tardio acerta o estoque). */
   faltamBipar?: number;
+  /** Envio esperando a MATRIZ decidir (2+ pacotes dentro de SP, 31/08) —
+   *  faixa âmbar no lugar dos botões de envio. Separação/bipe seguem. */
+  aguardaDecisaoPacotes?: boolean;
   /**
    * O card ainda pode gerar a CAIXA (etiqueta + NF de transferência)?
    * Resposta do backend, régua `common/etiqueta-retirada` — a tela não
@@ -3247,7 +3250,7 @@ function PickOrderCard({
           </div>
         )}
         {/* Pronto, SEM pré-postagem (live OU site) → gera (não marca enviado; fica na lista) */}
-        {(status === 'separated' || status === 'ready') && podeGerarEnvio && !row.trackingCode && (
+        {(status === 'separated' || status === 'ready') && podeGerarEnvio && !row.trackingCode && !row.aguardaDecisaoPacotes && (
           <button
             onClick={async (e) => { e.stopPropagation(); if (corrBusy) return; setCorrBusy(true); try { await onCorreios(); } finally { setCorrBusy(false); } }}
             disabled={corrBusy}
@@ -3299,6 +3302,16 @@ function PickOrderCard({
               : '🏬 Cliente retirou'}
           </button>
         )}
+        {/* GATE DE PACOTES (31/08): pedido em 2+ pacotes dentro de SP — o
+            ENVIO espera a matriz decidir (liberar os fretes ou juntar).
+            Separação e bipe seguem normais; só a porta do envio fecha. Sem
+            esta faixa a loja clicava "Gerar envio" e levava um erro solto
+            que desenhava em cima de OUTRO card (caso LP-001015). */}
+        {(status === 'separated' || status === 'ready') && row.aguardaDecisaoPacotes && (
+          <div className="flex-1 rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-3 text-center text-sm font-bold text-amber-800">
+            🕒 Pedido em 2+ pacotes — o envio libera quando a MATRIZ decidir (liberar os fretes ou juntar numa loja)
+          </div>
+        )}
         {/* Âncora com o próprio bipe pronto, aguardando as caixas das feeders */}
         {(status === 'separated' || status === 'ready') && aguardandoCaixas && (
           <div className="flex-1 rounded-lg border-2 border-violet-300 bg-violet-50 px-3 py-3 text-center text-sm font-bold text-violet-800">
@@ -3306,7 +3319,7 @@ function PickOrderCard({
           </div>
         )}
         {/* Fallback manual → envio com rastreio digitado (só quem posta) */}
-        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !ehFeederJuntada && !aguardandoCaixas && !row.trackingCode && (
+        {(status === 'separated' || status === 'ready') && !ehMotoboy && !order.isPickup && !ehFeederJuntada && !aguardandoCaixas && !row.trackingCode && !row.aguardaDecisaoPacotes && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
             title="Digitar o rastreio manualmente (fallback se o Gerar envio falhar)"
