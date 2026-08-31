@@ -1254,47 +1254,100 @@ export class PurchaseOrdersService {
   }
 
   /**
-   * Busca produtos no Wincred por EAN/REF/SKU pra imprimir etiquetas avulsas.
+   * Etiquetas avulsas por REF, SKU ou EAN — resolvidas NO POSTGRES.
+   *
+   * ⚠ Até 31/08 isto chamava `erp.buscarProdutoPorCodigo` (MySQL do Giga).
+   * Com o Giga desligado, TODO código voltava "não encontrado" — o mesmo
+   * defeito da busca da Reposição em 27/08: erro de fonte com cara de
+   * "produto não existe". Agora consulta `product` + `wincred_produtos`
+   * (nativa vence), em UM lote pra lista inteira:
+   *   - SKU: dígitos sem zeros à esquerda = codigo
+   *   - EAN: bate na coluna ean das duas tabelas
+   *   - REF: exata (case-insensitive, com/sem hífen) → expande a FAMÍLIA
    */
   async buscarEtiquetasAvulsas(codigos: string[]) {
-    const limpos = (codigos || [])
-      .map((c) => (c || '').trim().toUpperCase())
-      .filter(Boolean);
-    if (limpos.length === 0) {
-      return { labels: [], notFound: [] };
-    }
-    const labels: Array<{
-      ref: string;
-      cor: string;
-      tamanho: string;
-      codigo: string;
-      preco: number;
-      marca: string | null;
-      descricao: string;
-    }> = [];
-    const notFound: string[] = [];
-    for (const cod of limpos) {
-      try {
-        const found = await (this.erp as any).buscarProdutoPorCodigo?.(cod);
-        if (found && Array.isArray(found) && found.length > 0) {
-          for (const p of found) {
-            labels.push({
-              ref: String(p.referencia || '').trim(),
-              cor: String(p.cor || '').trim(),
-              tamanho: String(p.tamanho || '').trim(),
-              codigo: String(p.codigo || '').trim(),
-              preco: Number(p.preco || 0),
-              marca: p.marca || null,
-              descricao: String(p.descricao || '').trim(),
-            });
-          }
-        } else {
-          notFound.push(cod);
-        }
-      } catch {
-        notFound.push(cod);
-      }
-    }
+    const limpos = (codigos || []).map((c) => (c || '').trim()).filter(Boolean);
+    if (limpos.length === 0) return { labels: [], notFound: [] };
+
+    const idx: number[] = [];
+    const up: string[] = [];
+    const norm: string[] = [];
+    const digits: string[] = [];
+    limpos.forEach((raw, i) => {
+      const u = raw.toUpperCase();
+      idx.push(i);
+      up.push(u);
+      norm.push(u.replace(/[\s-]/g, ''));
+      const d = u.replace(/\D/g, '').replace(/^0+/, '');
+      digits.push(/^\d+$/.test(u.replace(/[\s-]/g, '')) ? d : '');
+    });
+
+    const sql = `
+      WITH entrada AS (
+        SELECT * FROM unnest($1::int[], $2::text[], $3::text[], $4::text[])
+             AS t(idx, up, norm, digits)
+      ), base AS (
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn" AS preco, x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv") AS descricao, 0 AS prio
+          FROM entrada e JOIN product x ON e.digits <> '' AND x.codigo = e.digits AND x.ativo = true
+        UNION ALL
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv"), 0
+          FROM entrada e JOIN product x ON x.ean IS NOT NULL AND btrim(x.ean) = e.up AND x.ativo = true
+        UNION ALL
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv"), 0
+          FROM entrada e JOIN product x ON upper(btrim(x.ref)) = e.up AND x.ativo = true
+        UNION ALL
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv"), 0
+          FROM entrada e JOIN product x ON replace(replace(upper(btrim(x.ref)), '-', ''), ' ', '') = e.norm AND x.ativo = true
+        UNION ALL
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
+          FROM entrada e JOIN wincred_produtos x ON e.digits <> '' AND x.codigo = e.digits
+        UNION ALL
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
+          FROM entrada e JOIN wincred_produtos x ON x.ean IS NOT NULL AND btrim(x.ean) = e.up
+        UNION ALL
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
+          FROM entrada e JOIN wincred_produtos x ON upper(btrim(x.ref)) = e.up
+        UNION ALL
+        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+               COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
+          FROM entrada e JOIN wincred_produtos x ON replace(replace(upper(btrim(x.ref)), '-', ''), ' ', '') = e.norm
+      ), dedup AS (
+        SELECT DISTINCT ON (idx, codigo)
+               idx, codigo, ref, cor, tamanho, preco, marca, descricao
+          FROM base ORDER BY idx, codigo, prio
+      )
+      SELECT * FROM dedup`;
+
+    const rows: any[] = await (this.prisma as any).$queryRawUnsafe(sql, idx, up, norm, digits);
+
+    const encontrouIdx = new Set<number>();
+    const labels = rows.map((r) => {
+      encontrouIdx.add(Number(r.idx));
+      return {
+        ref: String(r.ref || '').trim(),
+        cor: String(r.cor || '').trim(),
+        tamanho: String(r.tamanho || '').trim(),
+        codigo: String(r.codigo || '').trim(),
+        preco: Number(r.preco || 0),
+        marca: r.marca ? String(r.marca).trim() : null,
+        descricao: String(r.descricao || '').trim(),
+      };
+    });
+    // Ordena como a etiqueta sai da impressora: REF, cor, tamanho da casa.
+    labels.sort(
+      (a, b) =>
+        a.ref.localeCompare(b.ref) ||
+        a.cor.localeCompare(b.cor) ||
+        this.ordemTamanho(a.tamanho) - this.ordemTamanho(b.tamanho),
+    );
+    const notFound = limpos.filter((_, i) => !encontrouIdx.has(i));
     return { labels, notFound };
   }
 
