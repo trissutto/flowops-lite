@@ -10,7 +10,7 @@ import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { casaBusca } from '../common/busca-texto';
-import { ordenarPorSubcategoria } from '../common/ordem-por-subcategoria';
+import { ordenarGradeDaCategoria } from '../common/ordem-por-subcategoria';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -2318,18 +2318,13 @@ export class LojaCatalogService {
     this.ordenarPecas(pecas, params.ordenar);
 
     /**
-     * 4b) ORDEM MANUAL DA CATEGORIA (dono, 20/08) — a tela
-     * `/retaguarda/ordem-vitrine` grava uma `SiteColecao` de slug
-     * `ordem-categoria-<categoria>`; quando ela existe, as REFs posicionadas
-     * ABREM a vitrine na ordem gravada e o resto segue atrás na ordenação
-     * normal (sort estável — não embaralha o que o dono não posicionou).
-     *
-     * Só vale na listagem de UMA categoria, sem busca e nas ordenações
-     * EDITORIAIS — 'relevancia' E 'novidades', porque a página de categoria
-     * ABRE em 'novidades' (a primeira versão, só com 'relevancia', fez a
-     * curadoria "não mudar nada" na tela do dono). Se a cliente pediu
-     * "menor preço" ou "nome", a escolha DELA manda — curadoria não
-     * atropela filtro funcional.
+     * A CURADORIA DA CATEGORIA (blocos por subcategoria + ordem manual das
+     * REFs, logo abaixo) só vale na listagem de UMA categoria, sem busca e nas
+     * ordenações EDITORIAIS — 'relevancia' E 'novidades', porque a página de
+     * categoria ABRE em 'novidades' (a primeira versão, só com 'relevancia',
+     * fez a curadoria "não mudar nada" na tela do dono). Se a cliente pediu
+     * "menor preço" ou "nome", a escolha DELA manda — curadoria não atropela
+     * filtro funcional.
      */
     const ordensEditoriais: Array<ListarParams['ordenar']> = ['relevancia', 'novidades'];
     const catsDaOrdem =
@@ -2346,39 +2341,47 @@ export class LojaCatalogService {
        * chips no topo da página. Régua e porquês em
        * `common/ordem-por-subcategoria.ts`.
        *
-       * Roda ANTES da ordem manual de propósito: REF posicionada à mão é
-       * escolha explícita do dono e continua abrindo a vitrine, por cima dos
-       * blocos. Heurística não atropela curadoria — a mesma regra que já vale
-       * pro filtro da cliente.
-       *
        * Fica de fora quando a cliente já escolheu um chip (a grade é de UMA
        * subcategoria, agrupar não teria o que separar) e no caminho do feed
        * (`incluirEsgotado`), onde a peça esgotada tem de continuar por último.
        */
+      let subs: string[] = [];
       if (!params.subcategoria && !params.incluirEsgotado) {
         const taxonomia = await this.taxonomia();
         const pai = taxonomia.find((t: any) => this.slugTaxonomia(t.slug) === catsDaOrdem[0]);
         if (pai?.agruparPorSub) {
-          const subs = taxonomia
+          subs = taxonomia
             .filter((t: any) => this.slugTaxonomia(t.paiSlug) === catsDaOrdem[0] && t.ativo !== false)
             .sort((a: any, b: any) => (a.ordem ?? 0) - (b.ordem ?? 0))
             .map((t: any) => this.slugTaxonomia(t.slug));
-          ordenarPorSubcategoria(pecas, subs);
         }
       }
 
       const manual = await this.colecaoRefs(`ordem-categoria-${catsDaOrdem[0]}`);
-      if (manual.length) {
-        const pos = new Map(manual.map((r, i) => [r, i] as const));
-        pecas.sort((a, b) => {
-          const pa = pos.get(this.refKey(a.ref));
-          const pb = pos.get(this.refKey(b.ref));
-          if (pa != null && pb != null) return pa - pb;
-          if (pa != null) return -1;
-          if (pb != null) return 1;
-          return 0;
-        });
-      }
+
+      /**
+       * 4b) ORDEM MANUAL DA CATEGORIA (dono, 20/08) — a tela
+       * `/retaguarda/ordem-vitrine` grava uma `SiteColecao` de slug
+       * `ordem-categoria-<categoria>`; as REFs posicionadas ABREM a vitrine na
+       * ordem gravada e o resto segue atrás na ordenação normal (sort estável
+       * — não embaralha o que o dono não posicionou).
+       *
+       * ⚠️ O BLOCO GANHA DA POSIÇÃO, e as duas convivem (31/08). A Linha
+       * Conforto tinha ordem manual gravada começando por VMS-223 e VLM-222 —
+       * os dois vestidos. Com a posição valendo por cima dos blocos, ligar
+       * "blusas antes de vestidos" não mudava NADA na página: a curadoria
+       * antiga vencia calada, e o dono veria o botão novo sem efeito nenhum —
+       * a armadilha do "não mudou nada" que este repositório já pagou caro.
+       *
+       * Com o bloco como chave primária, a curadoria não se perde: ela passa a
+       * ordenar as peças DENTRO da família dela. As blusas posicionadas à mão
+       * abrem as blusas, os vestidos posicionados abrem os vestidos.
+       */
+      const pos = manual.length ? new Map(manual.map((r, i) => [r, i] as const)) : null;
+      ordenarGradeDaCategoria(pecas, {
+        subs,
+        posicaoManual: pos ? (peca: any) => pos.get(this.refKey(peca.ref)) : undefined,
+      });
     }
 
     const total = pecas.length;
