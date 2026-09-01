@@ -1823,16 +1823,38 @@ export default function MinhaLojaPage() {
           pickOrderId={showBipModal.id}
           wcOrderNumber={showBipModal.order.wcOrderNumber ?? String(showBipModal.order.wcOrderId ?? '')}
           customerName={showBipModal.order.customerName}
-          onClose={() => setShowBipModal(null)}
+          onClose={() => {
+            setShowBipModal(null);
+            // Bipes já entraram no servidor um a um — um "Pausar" no meio
+            // deixa o `faltamBipar` do card velho. Recarrega as listas.
+            void loadRows();
+            if (filterTab === 'shipped') void loadEnviados();
+          }}
           onFinished={() => {
-            // Atualiza status local pra 'separated' imediatamente (UX ágil)
-            setRows((prev) =>
-              prev.map((r) =>
-                r.id === showBipModal.id ? { ...r, status: 'separated' as PickStatus } : r,
-              ),
-            );
+            // O finish/bipe-tardio só dispara com 100% bipado — o "Bipar peça
+            // faltante" morre AGORA nas duas listas. Antes o card trocava pra
+            // 'separated' mantendo o `faltamBipar` carregado ANTES da bipagem,
+            // e o botão âmbar APARECIA mentindo logo após bipar tudo
+            // (caso LP-001069, juntada 01→Praia Grande, 01/09).
+            const zeraBipe = (r: PickOrderRow) =>
+              r.id === showBipModal.id
+                ? {
+                    ...r,
+                    faltamBipar: 0,
+                    status:
+                      r.status === 'new' || r.status === 'separating'
+                        ? ('separated' as PickStatus)
+                        : r.status,
+                  }
+                : r;
+            setRows((prev) => prev.map(zeraBipe));
+            setEnviados((prev) => prev.map(zeraBipe));
             setShowBipModal(null);
             pushToast(`Pedido enviado pra matriz pra aprovação da baixa`);
+            // A verdade completa vem do servidor: no card FEEDER o finish faz
+            // nascer a caixa da juntada — sem refetch o código REM não aparece.
+            void loadRows();
+            if (filterTab === 'shipped') void loadEnviados();
           }}
         />
       )}
