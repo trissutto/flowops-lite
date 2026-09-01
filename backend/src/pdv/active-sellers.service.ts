@@ -85,8 +85,9 @@ export class ActiveSellersService {
   /**
    * Adiciona uma vendedora à whitelist da loja. Idempotente — se já existir
    * o par (storeCode, codigo), atualiza o nome (caso tenha mudado no Wincred).
+   * `contaNaMeta` só é tocado quando vem no input (não zera flag existente).
    */
-  async add(input: { storeCode: string; codigo: string; nome: string }) {
+  async add(input: { storeCode: string; codigo: string; nome: string; contaNaMeta?: boolean }) {
     const storeCode = String(input.storeCode || '').trim();
     const codigo = String(input.codigo || '').trim();
     const nome = String(input.nome || '').trim();
@@ -96,8 +97,8 @@ export class ActiveSellersService {
 
     return (this.prisma as any).pdvActiveSeller.upsert({
       where: { storeCode_codigo: { storeCode, codigo } },
-      update: { nome },
-      create: { storeCode, codigo, nome },
+      update: { nome, ...(input.contaNaMeta != null ? { contaNaMeta: !!input.contaNaMeta } : {}) },
+      create: { storeCode, codigo, nome, contaNaMeta: input.contaNaMeta ?? true },
     });
   }
 
@@ -114,15 +115,41 @@ export class ActiveSellersService {
   /**
    * Bulk replace — substitui TODA a lista da loja por uma nova lista.
    * Útil pro admin marcar várias e salvar de uma vez.
+   *
+   * ⚠️ PRESERVA `contaNaMeta` (01/09): o sync-from-wincred e o Salvar da tela
+   * passam por aqui apagando e recriando a lista — sem a preservação, todo
+   * sync devolvia o dono/caixa pro rateio da meta. Payload com o campo
+   * explícito ganha; sem ele, vale o que já estava gravado.
    */
   async replaceAll(input: {
     storeCode: string;
-    sellers: Array<{ codigo: string; nome: string }>;
+    sellers: Array<{ codigo: string; nome: string; contaNaMeta?: boolean }>;
   }) {
     const storeCode = String(input.storeCode || '').trim();
     if (!storeCode) throw new BadRequestException('storeCode obrigatório');
 
     return this.prisma.$transaction(async (tx) => {
+      // Flags atuais ANTES de apagar — o recreate não pode perder o rateio.
+      const atuais: any[] = await (tx as any).pdvActiveSeller.findMany({
+        where: { storeCode },
+        select: { codigo: true, nome: true, contaNaMeta: true },
+      });
+      const flagAtual = new Map(
+        atuais.map((a) => [String(a.codigo).trim(), a.contaNaMeta !== false]),
+      );
+      // Resgate por NOME (achado da revisão 01/09): o sync-from-wincred não
+      // traz linha de ficha do Flow (código uuid/F…) — ela era apagada e
+      // recriada depois com default true, devolvendo o dono pro rateio em
+      // silêncio. Mesmo nome na mesma loja = mesma pessoa: um false gravado
+      // sob QUALQUER código dela sobrevive à troca de código.
+      const normNome = (x: any) => String(x ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+      const flagPorNome = new Map<string, boolean>();
+      for (const a of atuais) {
+        const k = normNome(a.nome);
+        if (!k) continue;
+        if (a.contaNaMeta === false) flagPorNome.set(k, false);
+        else if (!flagPorNome.has(k)) flagPorNome.set(k, true);
+      }
       // Remove todas
       await (tx as any).pdvActiveSeller.deleteMany({ where: { storeCode } });
       // Cria todas (deduplicando por codigo)
@@ -135,11 +162,19 @@ export class ActiveSellersService {
       });
       if (dedup.length === 0) return { storeCode, count: 0 };
       await (tx as any).pdvActiveSeller.createMany({
-        data: dedup.map((s) => ({
-          storeCode,
-          codigo: String(s.codigo).trim(),
-          nome: String(s.nome || '').trim(),
-        })),
+        data: dedup.map((s) => {
+          const codigo = String(s.codigo).trim();
+          const nome = String(s.nome || '').trim();
+          return {
+            storeCode,
+            codigo,
+            nome,
+            contaNaMeta:
+              s.contaNaMeta != null
+                ? !!s.contaNaMeta
+                : (flagAtual.get(codigo) ?? flagPorNome.get(normNome(nome)) ?? true),
+          };
+        }),
       });
       return { storeCode, count: dedup.length };
     });

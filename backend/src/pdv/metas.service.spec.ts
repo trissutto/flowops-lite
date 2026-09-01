@@ -157,6 +157,124 @@ describe('metas — helpers puros', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0].realizadoMes).toBe(0);
     });
+
+    // ── Rateio só entre vendedoras OFICIAIS (dono, 01/09) ──────────────
+    // Caixa que vende esporádico e o dono aparecem no PDV (whitelist) mas
+    // não dividem a meta: contaNaMeta:false tira do divisor e da meta
+    // individual sem sumir com a venda que fizeram.
+
+    it('contaNaMeta:false sai do DIVISOR — meta divide só entre oficiais', () => {
+      const rows = montarVendedoras({
+        ...base,
+        ativas: [
+          { codigo: '25', nome: 'MARIA' },
+          { codigo: '30', nome: 'ANA' },
+          { codigo: '43', nome: 'ELISA', contaNaMeta: false }, // caixa
+        ],
+        vendas: [],
+        devolucoes: [],
+      });
+      // 30000 ÷ 2 oficiais (não ÷ 3)
+      expect(rows.filter((r) => r.contaNaMeta)).toHaveLength(2);
+      expect(rows[0].metaMes).toBe(15000);
+      expect(rows[0].metaDia).toBe(600);
+    });
+
+    it('fora do rateio SEM venda não aparece; COM venda aparece sem meta e no fim', () => {
+      const rows = montarVendedoras({
+        ...base,
+        ativas: [
+          { codigo: '25', nome: 'MARIA' },
+          { codigo: '43', nome: 'ELISA', contaNaMeta: false },
+          { codigo: '7', nome: 'THIAGO', contaNaMeta: false },
+        ],
+        vendas: [
+          { sellerId: '25', sellerName: 'MARIA', mes: 100, hoje: 0 },
+          // Elisa vendeu — tem que aparecer com o vendido, sem meta
+          { sellerId: '43', sellerName: 'ELISA', mes: 800, hoje: 50 },
+        ],
+        devolucoes: [],
+      });
+      // Thiago não vendeu → não polui o quadro
+      expect(rows.map((r) => r.nome)).toEqual(['MARIA', 'ELISA']);
+      const elisa = rows[1];
+      expect(elisa.contaNaMeta).toBe(false);
+      expect(elisa.realizadoMes).toBe(800);
+      expect(elisa.metaMes).toBe(0);
+      expect(elisa.pctMes).toBeNull();
+      // Mesmo vendendo MAIS, ela fica DEPOIS das oficiais (medalha é
+      // disputa entre quem tem meta)
+      expect(rows[0].nome).toBe('MARIA');
+    });
+
+    it('a venda da fora-do-rateio NÃO vaza pros extras nem muda a meta de ninguém', () => {
+      const rows = montarVendedoras({
+        ...base,
+        ativas: [
+          { codigo: '25', nome: 'MARIA' },
+          { codigo: '30', nome: 'ANA' },
+          { codigo: '43', nome: 'ELISA', contaNaMeta: false },
+        ],
+        vendas: [{ sellerId: '43', sellerName: 'ELISA', mes: 500, hoje: 0 }],
+        devolucoes: [],
+      });
+      // Elisa consumiu a própria linha: nada de linha duplicada "fora da lista"
+      expect(rows.filter((r) => !r.naWhitelist)).toHaveLength(0);
+      expect(rows.find((r) => r.nome === 'MARIA')!.metaMes).toBe(15000);
+    });
+
+    it('whitelist antiga (sem o campo) se comporta como antes — todo mundo conta', () => {
+      const rows = montarVendedoras({
+        ...base,
+        ativas: [
+          { codigo: '25', nome: 'MARIA' },
+          { codigo: '30', nome: 'ANA' },
+          { codigo: '31', nome: 'CLARA' },
+        ],
+        vendas: [],
+        devolucoes: [],
+      });
+      expect(rows).toHaveLength(3);
+      expect(rows[0].metaMes).toBe(10000);
+      expect(rows.every((r) => r.contaNaMeta)).toBe(true);
+    });
+
+    it('MESMA pessoa com 2 códigos na whitelist conta UMA vez (caso Brenda/Jundiaí)', () => {
+      const rows = montarVendedoras({
+        ...base,
+        ativas: [
+          { codigo: '77', nome: 'BRENDA' },
+          // readicionada pela busca com o código F… da ficha do Flow
+          { codigo: 'Fab1328adbc27453399', nome: 'BRENDA' },
+          { codigo: '18', nome: 'ELLEN' },
+        ],
+        vendas: [
+          { sellerId: '77', sellerName: 'BRENDA', mes: 300, hoje: 0 },
+          // venda gravada com o SEGUNDO código soma na mesma linha
+          { sellerId: 'Fab1328adbc27453399', sellerName: 'BRENDA', mes: 200, hoje: 0 },
+        ],
+        devolucoes: [],
+      });
+      // uma linha por pessoa; divisor 2 (não 3)
+      expect(rows.map((r) => r.nome)).toEqual(['BRENDA', 'ELLEN']);
+      expect(rows[0].metaMes).toBe(15000);
+      expect(rows[0].realizadoMes).toBe(500);
+    });
+
+    it('config quebrada (TODAS fora do rateio) cai no divisor antigo — nunca divide por zero', () => {
+      const rows = montarVendedoras({
+        ...base,
+        ativas: [
+          { codigo: '25', nome: 'MARIA', contaNaMeta: false },
+          { codigo: '30', nome: 'ANA', contaNaMeta: false },
+        ],
+        vendas: [{ sellerId: '25', sellerName: 'MARIA', mes: 10, hoje: 0 }],
+        devolucoes: [],
+      });
+      // divisor = whitelist inteira (2); só quem vendeu aparece
+      expect(rows).toHaveLength(1);
+      expect(Number.isFinite(rows[0].metaMes)).toBe(true);
+    });
   });
 
   describe('montarRanking', () => {
