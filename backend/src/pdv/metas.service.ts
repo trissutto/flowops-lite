@@ -53,6 +53,12 @@ export type MetaVendedoraRow = {
   pctHoje: number | null;
   /** false = vendeu no mês mas está fora da whitelist de vendedoras ativas. */
   naWhitelist: boolean;
+  /**
+   * false = está no PDV mas NÃO divide a meta da loja (dono, 01/09): caixa
+   * que vende esporádico e o dono não são vendedoras OFICIAIS. A linha só
+   * aparece se vendeu, sem meta individual (metaMes/metaDia = 0, pct null).
+   */
+  contaNaMeta: boolean;
 };
 
 export type MetasLojaResponse = {
@@ -136,9 +142,15 @@ type LinhaVendaVendedora = {
  * só é consumida uma vez. Quem vendeu sem estar na whitelist aparece no fim
  * (naWhitelist=false) — some da lista silenciosamente é pior, o total da loja
  * deixaria de fechar com a soma das meninas.
+ *
+ * RATEIO SÓ ENTRE OFICIAIS (dono, 01/09): a whitelist tem gente que aparece
+ * no PDV mas não é vendedora oficial (caixa que vende esporádico, o dono) —
+ * `contaNaMeta:false` na whitelist tira do DIVISOR e da meta individual. A
+ * linha dela só aparece se vendeu (com o vendido, sem meta nem medalha) —
+ * o total da loja continua fechando com a soma de todo mundo.
  */
 export function montarVendedoras(args: {
-  ativas: Array<{ codigo: string; nome: string; apelido?: string | null }>;
+  ativas: Array<{ codigo: string; nome: string; apelido?: string | null; contaNaMeta?: boolean }>;
   vendas: LinhaVendaVendedora[];
   devolucoes: LinhaVendaVendedora[];
   metaMesLoja: number;
@@ -149,7 +161,42 @@ export function montarVendedoras(args: {
   const nomesComVenda = new Set(
     vendas.filter((v) => normNome(v.sellerName)).map((v) => normNome(v.sellerName)),
   );
-  const n = ativas.length > 0 ? ativas.length : nomesComVenda.size;
+  // DEDUP POR NOME (01/09, caso Brenda/Jundiaí): a whitelist aceita a MESMA
+  // pessoa sob dois códigos (cód Wincred 77 + código F… gerado da ficha do
+  // Flow — readicionar pela busca cria o segundo). Cada linha virava uma
+  // vendedora no quadro E no DIVISOR da meta. Mesmo nome na mesma loja = uma
+  // pessoa: junta os códigos numa entrada só — a soma continua pegando as
+  // vendas gravadas com qualquer um dos códigos.
+  const porNomeUnico = new Map<
+    string,
+    { codigos: string[]; nome: string; apelido?: string | null; contaNaMeta?: boolean }
+  >();
+  for (const a of ativas) {
+    const k = normNome(a.nome) || `cod:${normCodigo(a.codigo) || String(a.codigo)}`;
+    const cur = porNomeUnico.get(k);
+    if (!cur) {
+      porNomeUnico.set(k, {
+        codigos: [a.codigo],
+        nome: a.nome,
+        apelido: a.apelido,
+        contaNaMeta: a.contaNaMeta,
+      });
+    } else {
+      cur.codigos.push(a.codigo);
+      if (!cur.apelido && a.apelido) cur.apelido = a.apelido;
+      // Qualquer linha fora do rateio tira a pessoa do rateio (conservador).
+      if (a.contaNaMeta === false) cur.contaNaMeta = false;
+    }
+  }
+  const unicas = Array.from(porNomeUnico.values());
+  // O DIVISOR é só quem conta na meta. Se por configuração ninguém contar,
+  // cai no comportamento antigo (whitelist inteira) — nunca divide por zero.
+  const oficiais = unicas.filter((a) => a.contaNaMeta !== false);
+  const n = oficiais.length > 0
+    ? oficiais.length
+    : unicas.length > 0
+      ? unicas.length
+      : nomesComVenda.size;
   if (n === 0) return [];
 
   const metaMes = metaMesLoja / n;
@@ -160,17 +207,19 @@ export function montarVendedoras(args: {
   const somaLinhas = (
     linhas: LinhaVendaVendedora[],
     consumidas: Set<number>,
-    codigo: string,
+    codigos: string[],
     nome: string,
     apelido?: string | null,
   ): { mes: number; hoje: number } => {
-    const alvoCodigo = normCodigo(codigo);
+    // Todos os códigos da pessoa (dedup acima) — venda gravada com qualquer
+    // um deles soma na mesma linha.
+    const alvoCodigos = new Set(codigos.map((c) => normCodigo(c)).filter(Boolean));
     const alvoNomes = new Set([normNome(nome), normNome(apelido)].filter(Boolean));
     let mes = 0;
     let hoje = 0;
     linhas.forEach((l, i) => {
       if (consumidas.has(i)) return;
-      const porCodigo = alvoCodigo && normCodigo(l.sellerId) === alvoCodigo;
+      const porCodigo = alvoCodigos.size > 0 && alvoCodigos.has(normCodigo(l.sellerId));
       const porNome = alvoNomes.has(normNome(l.sellerName));
       if (!porCodigo && !porNome) return;
       consumidas.add(i);
@@ -180,23 +229,30 @@ export function montarVendedoras(args: {
     return { mes, hoje };
   };
 
-  const rows: MetaVendedoraRow[] = ativas.map((a) => {
-    const v = somaLinhas(vendas, consumidasVenda, a.codigo, a.nome, a.apelido);
-    const d = somaLinhas(devolucoes, consumidasDev, a.codigo, a.nome, a.apelido);
+  const rows: MetaVendedoraRow[] = [];
+  for (const a of unicas) {
+    const conta = a.contaNaMeta !== false;
+    const v = somaLinhas(vendas, consumidasVenda, a.codigos, a.nome, a.apelido);
+    const d = somaLinhas(devolucoes, consumidasDev, a.codigos, a.nome, a.apelido);
     const realizadoMes = v.mes - d.mes;
     const realizadoHoje = v.hoje - d.hoje;
-    return {
+    // Fora do rateio SEM venda no mês = ruído: ela é do popup do PDV, não do
+    // quadro de metas. (As linhas dela já foram consumidas acima — se vender
+    // amanhã, aparece; nunca vaza pros "extras".)
+    if (!conta && realizadoMes === 0 && realizadoHoje === 0) continue;
+    rows.push({
       nome: a.nome,
       apelido: a.apelido || null,
-      metaMes,
-      metaDia,
+      metaMes: conta ? metaMes : 0,
+      metaDia: conta ? metaDia : 0,
       realizadoMes,
       realizadoHoje,
-      pctMes: pctDe(realizadoMes, metaMes),
-      pctHoje: pctDe(realizadoHoje, metaDia),
+      pctMes: conta ? pctDe(realizadoMes, metaMes) : null,
+      pctHoje: conta ? pctDe(realizadoHoje, metaDia) : null,
       naWhitelist: true,
-    };
-  });
+      contaNaMeta: conta,
+    });
+  }
 
   // Vendeu no mês mas não está na whitelist (ex.: gerente que cobriu um turno).
   const extrasPorNome = new Map<string, { nome: string; mes: number; hoje: number }>();
@@ -232,11 +288,15 @@ export function montarVendedoras(args: {
       pctMes: pctDe(extra.mes, metaMes),
       pctHoje: pctDe(extra.hoje, metaDia),
       naWhitelist: false,
+      contaNaMeta: true,
     });
   }
 
+  // Quem disputa a meta primeiro (medalha é entre oficiais); fora do rateio
+  // fecha a lista, também por realizado.
   rows.sort(
     (a, b) =>
+      Number(b.contaNaMeta) - Number(a.contaNaMeta) ||
       b.realizadoMes - a.realizadoMes ||
       b.realizadoHoje - a.realizadoHoje ||
       a.nome.localeCompare(b.nome, 'pt-BR'),
@@ -543,7 +603,7 @@ export class MetasService {
   /** Whitelist da loja — tenta o código como veio e sem zero à esquerda. */
   private async listarAtivas(
     ...codigos: string[]
-  ): Promise<Array<{ codigo: string; nome: string; apelido?: string | null }>> {
+  ): Promise<Array<{ codigo: string; nome: string; apelido?: string | null; contaNaMeta: boolean }>> {
     const tentativas = Array.from(
       new Set(
         codigos
@@ -560,6 +620,8 @@ export class MetasService {
             codigo: String(r.codigo || ''),
             nome: String(r.nome || ''),
             apelido: r.apelido || null,
+            // false só quando gravado false — linha antiga sem o campo conta.
+            contaNaMeta: r.contaNaMeta !== false,
           }));
         }
       } catch (e: any) {

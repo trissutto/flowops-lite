@@ -49,7 +49,7 @@ export class ActiveSellersController {
   @Post()
   async add(
     @Req() req: any,
-    @Body() body: { storeCode?: string; codigo: string; nome: string },
+    @Body() body: { storeCode?: string; codigo: string; nome: string; contaNaMeta?: boolean },
   ) {
     this.requireRole(req);
     const storeCode = body.storeCode || req?.user?.storeCode;
@@ -57,6 +57,7 @@ export class ActiveSellersController {
       storeCode,
       codigo: body.codigo,
       nome: body.nome,
+      contaNaMeta: body.contaNaMeta,
     });
   }
 
@@ -69,7 +70,7 @@ export class ActiveSellersController {
   @Put('bulk')
   async bulk(
     @Req() req: any,
-    @Body() body: { storeCode?: string; sellers: Array<{ codigo: string; nome: string }> },
+    @Body() body: { storeCode?: string; sellers: Array<{ codigo: string; nome: string; contaNaMeta?: boolean }> },
   ) {
     this.requireRole(req);
     const storeCode = body.storeCode || req?.user?.storeCode;

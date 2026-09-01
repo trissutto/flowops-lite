@@ -23,8 +23,16 @@ import { ArrowLeft, Search, Trash2, Plus, Save, Check, Loader2 } from 'lucide-re
 import { api } from '@/lib/api';
 
 type Store = { code: string; name: string };
-type ActiveSeller = { id: string; storeCode: string; codigo: string; nome: string };
-type FuncResult = { codigo: string; nome: string; loja?: string };
+type ActiveSeller = {
+  id: string;
+  storeCode: string;
+  codigo: string;
+  nome: string;
+  /** false = aparece no PDV mas NÃO divide a meta do mês (caixa que vende
+   *  esporádico, dono). O backend preserva o flag no sync do Wincred. */
+  contaNaMeta?: boolean;
+};
+type FuncResult = { codigo: string; nome: string; loja?: string; contaNaMeta?: boolean };
 
 export default function VendedorasAtivasPage() {
   const [stores, setStores] = useState<Store[]>([]);
@@ -98,13 +106,23 @@ export default function VendedorasAtivasPage() {
     setPending((p) => p.filter((x) => x.codigo !== codigo));
   };
 
+  // Liga/desliga o rateio da meta (só grava no Salvar, junto com a lista).
+  const toggleMeta = (codigo: string) => {
+    setActives((a) => a.map((x) => (
+      x.codigo === codigo ? { ...x, contaNaMeta: x.contaNaMeta === false } : x
+    )));
+    setPending((p) => p.map((x) => (
+      x.codigo === codigo ? { ...x, contaNaMeta: x.contaNaMeta === false } : x
+    )));
+  };
+
   const salvar = async () => {
     if (!storeCode) return;
     setSaving(true);
     try {
       const merged = [
-        ...actives.map((a) => ({ codigo: a.codigo, nome: a.nome })),
-        ...pending.map((p) => ({ codigo: p.codigo, nome: p.nome })),
+        ...actives.map((a) => ({ codigo: a.codigo, nome: a.nome, contaNaMeta: a.contaNaMeta !== false })),
+        ...pending.map((p) => ({ codigo: p.codigo, nome: p.nome, contaNaMeta: p.contaNaMeta !== false })),
       ];
       await api(`/pdv/vendedoras-ativas/bulk`, {
         method: 'PUT',
@@ -137,6 +155,8 @@ export default function VendedorasAtivasPage() {
         <p className="text-sm text-slate-600 mb-6">
           Marca quais vendedoras aparecem no modal "Quem está atendendo?" do PDV.
           Quem não estiver na lista não aparece no PDV — evita confusão e clique errado.
+          {' '}O selo <b>✓ meta</b> diz quem divide a meta do mês: caixa que vende
+          esporádico e o dono ficam <b>sem meta</b> — continuam no PDV, mas fora do rateio.
         </p>
 
         {/* Seletor de loja */}
@@ -183,26 +203,46 @@ export default function VendedorasAtivasPage() {
               <div className="space-y-1.5 max-h-[480px] overflow-y-auto">
                 {[...actives, ...pending].map((s) => {
                   const isPending = !!pending.find((p) => p.codigo === s.codigo);
+                  const contaNaMeta = s.contaNaMeta !== false;
                   return (
                     <div
                       key={s.codigo}
-                      className={`flex items-center justify-between p-2.5 rounded-lg border-2 ${
+                      className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border-2 ${
                         isPending
                           ? 'bg-amber-50 border-amber-300'
                           : 'bg-emerald-50 border-emerald-200'
                       }`}
                     >
-                      <div>
-                        <div className="font-bold text-slate-800 text-sm">{s.nome}</div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-800 text-sm truncate">{s.nome}</div>
                         <div className="text-[10px] text-slate-500 font-mono">cod {s.codigo}</div>
                       </div>
-                      <button
-                        onClick={() => remover(s.codigo)}
-                        className="p-1.5 text-rose-600 hover:bg-rose-100 rounded transition"
-                        title="Remover"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Rateio da meta: quem vende esporádico (caixa, dono)
+                            fica no PDV mas fora da divisão da meta do mês */}
+                        <button
+                          onClick={() => toggleMeta(s.codigo)}
+                          className={`text-[10px] font-black uppercase tracking-wide rounded-full px-2 py-1 border transition ${
+                            contaNaMeta
+                              ? 'bg-emerald-100 border-emerald-300 text-emerald-800 hover:bg-emerald-200'
+                              : 'bg-slate-100 border-slate-300 text-slate-500 hover:bg-slate-200'
+                          }`}
+                          title={
+                            contaNaMeta
+                              ? 'Entra no rateio da meta do mês. Clique pra tirar (continua no PDV).'
+                              : 'FORA do rateio da meta — aparece no PDV, mas não divide a meta da loja. Clique pra voltar.'
+                          }
+                        >
+                          {contaNaMeta ? '✓ meta' : 'sem meta'}
+                        </button>
+                        <button
+                          onClick={() => remover(s.codigo)}
+                          className="p-1.5 text-rose-600 hover:bg-rose-100 rounded transition"
+                          title="Remover"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}

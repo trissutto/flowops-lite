@@ -11313,6 +11313,9 @@ type MetaVendedoraRow = {
   pctMes: number | null;
   pctHoje: number | null;
   naWhitelist: boolean;
+  /** false = aparece no PDV mas não divide a meta (caixa/dono — config. em
+   *  /retaguarda/vendedoras-ativas). Vem no fim, sem meta nem medalha. */
+  contaNaMeta?: boolean;
 };
 
 type MetasData = {
@@ -11601,11 +11604,12 @@ function MetasModal({
                   <div>
                     <h3 className="text-sm font-black text-slate-900">Vendedoras — {data.mesLabel}</h3>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Meta individual = meta da loja ÷ vendedoras ativas · desconta devolução em dinheiro/PIX
+                      Meta individual = meta da loja ÷ vendedoras oficiais · desconta devolução em dinheiro/PIX
                     </p>
                   </div>
                   <span className="text-[10px] font-black uppercase tracking-wider text-[#8C7325] bg-[#FBF6E6] border border-[#E4C968] rounded-full px-2.5 py-1 shrink-0">
-                    meta {data.loja.semBase || data.vendedoras.length === 0 ? '—' : fmtMetaBRL(data.vendedoras[0].metaMes)}
+                    {/* A meta do chip é a das OFICIAIS — quem não conta na meta tem metaMes 0 */}
+                    meta {data.loja.semBase || data.vendedoras.length === 0 ? '—' : fmtMetaBRL((data.vendedoras.find((v) => v.contaNaMeta !== false) ?? data.vendedoras[0]).metaMes)}
                   </span>
                 </div>
 
@@ -11615,14 +11619,22 @@ function MetasModal({
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100">
-                    {data.vendedoras.map((v, index) => (
+                    {data.vendedoras.map((v, index) => {
+                      // Fora do rateio (caixa/dono): vem no FIM, sem medalha,
+                      // sem barra de meta — só o que vendeu.
+                      const foraRateio = v.contaNaMeta === false;
+                      return (
                       <div
                         key={`${v.nome}-${index}`}
-                        className={`px-4 py-3 flex items-center gap-3 ${index === 0 ? 'bg-[#FFFCF3]' : 'bg-white'}`}
+                        className={`px-4 py-3 flex items-center gap-3 ${index === 0 && !foraRateio ? 'bg-[#FFFCF3]' : 'bg-white'}`}
                       >
                         <div className="w-8 text-center text-lg shrink-0" aria-hidden>
-                          {MEDALHAS[index] || (
-                            <span className="text-xs font-black text-slate-400">{index + 1}º</span>
+                          {foraRateio ? (
+                            <span className="text-xs font-black text-slate-300">—</span>
+                          ) : (
+                            MEDALHAS[index] || (
+                              <span className="text-xs font-black text-slate-400">{index + 1}º</span>
+                            )
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -11635,11 +11647,16 @@ function MetasModal({
                                 fora da lista
                               </span>
                             )}
+                            {foraRateio && (
+                              <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5 shrink-0">
+                                vende sem meta
+                              </span>
+                            )}
                           </div>
-                          <div className="mt-1.5"><MetaBar pct={v.pctMes} /></div>
+                          {!foraRateio && <div className="mt-1.5"><MetaBar pct={v.pctMes} /></div>}
                           <div className="mt-1 text-[11px] text-slate-500 tabular-nums">
                             hoje <b className="text-[#2E7D46]">{fmtMetaBRL(v.realizadoHoje)}</b>
-                            {!data.loja.semBase && <> / {fmtMetaBRL(v.metaDia)} ({fmtPct(v.pctHoje)})</>}
+                            {!data.loja.semBase && !foraRateio && <> / {fmtMetaBRL(v.metaDia)} ({fmtPct(v.pctHoje)})</>}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
@@ -11647,11 +11664,12 @@ function MetasModal({
                             {fmtMetaBRL(v.realizadoMes)}
                           </div>
                           <div className="text-[11px] font-bold tabular-nums text-slate-500">
-                            {data.loja.semBase ? 'mês' : `${fmtPct(v.pctMes)} da meta`}
+                            {foraRateio ? 'sem meta' : data.loja.semBase ? 'mês' : `${fmtPct(v.pctMes)} da meta`}
                           </div>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </section>

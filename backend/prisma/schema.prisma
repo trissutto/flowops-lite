@@ -1028,6 +1028,11 @@ model PdvActiveSeller {
   storeCode String   @map("store_code")
   codigo    String
   nome      String
+  // Entra no RATEIO da meta do mês (dono, 01/09): a whitelist decide quem
+  // aparece no popup do PDV; ESTE flag decide quem divide a meta da loja.
+  // Caixa que vende esporádico e o dono aparecem no PDV mas não são
+  // vendedoras OFICIAIS — false tira do rateio sem sumir do PDV.
+  contaNaMeta Boolean @default(true) @map("conta_na_meta")
   createdAt DateTime @default(now()) @map("created_at")
 
   @@unique([storeCode, codigo])
