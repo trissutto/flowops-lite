@@ -224,9 +224,18 @@ export class CommissionEngineService {
     );
   }
 
-  /** Devoluções em dinheiro/pix atribuídas à VENDEDORA da venda original. */
+  /**
+   * Devoluções em dinheiro/pix atribuídas à VENDEDORA da venda original.
+   *
+   * ⚠️ O filtro de loja é pela loja DA VENDA (s.store_code), não da devolução
+   * (r.store_code) — cliente pode devolver em OUTRA loja, e o desconto segue
+   * quem vendeu. Filtrar pela loja da devolução jogava essas linhas fora e
+   * ninguém era descontado (bug da devolução entre lojas, corrigido 01/09).
+   * Caixa/faturamento continuam pela loja da devolução — lá é o dinheiro
+   * saindo daquele caixa físico (sangria), outra pergunta.
+   */
   async devolucoesPorVendedora(start: Date, end: Date, storeCode?: string | null): Promise<any[]> {
-    const extra = storeCode ? `AND r.store_code = $3` : '';
+    const extra = storeCode ? `AND s.store_code = $3` : '';
     const params: any[] = storeCode ? [start, end, storeCode] : [start, end];
     return this.prisma.$queryRawUnsafe(
       `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
@@ -244,18 +253,28 @@ export class CommissionEngineService {
     );
   }
 
-  /** Devoluções em dinheiro/pix por LOJA (inclui manual sem cupom). */
+  /**
+   * Devoluções em dinheiro/pix por LOJA (inclui manual sem cupom).
+   *
+   * A loja é a DA VENDA ORIGINAL quando existe — MESMA atribuição do recorte
+   * por vendedora, senão a base da líder (loja toda) debita numa loja e a
+   * soma das vendedoras noutra (era o caso da devolução entre lojas).
+   * Devolução sem cupom (manual/pedido online, sem PdvSale) não tem venda
+   * pra seguir: fica na loja onde foi feita, como sempre.
+   */
   async devolucoesPorLoja(start: Date, end: Date, storeCode?: string | null): Promise<any[]> {
-    const extra = storeCode ? `AND store_code = $3` : '';
+    const extra = storeCode ? `AND COALESCE(s.store_code, r.store_code) = $3` : '';
     const params: any[] = storeCode ? [start, end, storeCode] : [start, end];
     return this.prisma.$queryRawUnsafe(
-      `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
-         FROM pdv_returns
-        WHERE created_at >= $1 AND created_at <= $2
-          AND is_training = false
-          ${CommissionEngineService.DEVOLUCAO_ABATE_SQL}
+      `SELECT COALESCE(s.store_code, r.store_code) AS "storeCode",
+              SUM(r.valor_total)::float AS total
+         FROM pdv_returns r
+         LEFT JOIN pdv_sales s ON s.id = r.original_sale_id
+        WHERE r.created_at >= $1 AND r.created_at <= $2
+          AND r.is_training = false
+          ${CommissionEngineService.DEVOLUCAO_ABATE_R_SQL}
           ${extra}
-        GROUP BY store_code`,
+        GROUP BY COALESCE(s.store_code, r.store_code)`,
       ...params,
     );
   }
@@ -283,9 +302,10 @@ export class CommissionEngineService {
     );
   }
 
-  /** Detalhe das devoluções que abatem (pra cascata). */
+  /** Detalhe das devoluções que abatem (pra cascata). Filtro de loja pela
+   *  loja DA VENDA — mesma regra do devolucoesPorVendedora. */
   async devolucoesDetalhe(start: Date, end: Date, storeCode?: string | null, limit = 20000): Promise<any[]> {
-    const extra = storeCode ? `AND r.store_code = $3` : '';
+    const extra = storeCode ? `AND s.store_code = $3` : '';
     const params: any[] = storeCode ? [start, end, storeCode] : [start, end];
     return this.prisma.$queryRawUnsafe(
       `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
