@@ -3,7 +3,8 @@
     "build": {
           "builder": "DOCKERFILE",
           "dockerfilePath": "Dockerfile",
-          "metalBuildEnvironment": false
+          "metalBuildEnvironment": false,
+          "watchPatterns": ["backend/**", "railway.json"]
     },
     "deploy": {
           "restartPolicyType": "ON_FAILURE",
