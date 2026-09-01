@@ -16,7 +16,7 @@ import { getRecommendations } from '@/lib/recommendations/engine';
 import { useCartStore } from '@/store/cart';
 import { useCepGuardado, useCepStore } from '@/store/cep';
 import { useMounted } from '@/hooks';
-import { applyCoupon } from '@/lib/commerce/cupom';
+import { applyCoupon, conheceCupom, validarCupomRemoto } from '@/lib/commerce/cupom';
 import { fetchQuotes, isValidCep, onlyDigits } from '@/lib/commerce/frete';
 import {
   avisoDaLinha as calcularAvisoDaLinha,
@@ -87,21 +87,55 @@ export default function CarrinhoPage() {
   /* ----------------------------------------------------------------- cupom */
   const [codigoDigitado, setCodigoDigitado] = useState('');
   const [avisoCupom, setAvisoCupom] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [aplicandoCupom, setAplicandoCupom] = useState(false);
+  // Bump quando uma regra REMOTA chega (o cache em memória do lib/commerce/
+  // cupom foi semeado) — sem isto o memo abaixo não reprocessa.
+  const [regrasRev, setRegrasRev] = useState(0);
 
   // Revalidado a cada render: subtotal caiu abaixo do mínimo → desconto some.
   const cupomAplicado = useMemo(
     () => (couponCode ? applyCoupon(couponCode, subtotal) : null),
-    [couponCode, subtotal],
+    // regrasRev é dependência de propósito (regra remota chegou → recalcula).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [couponCode, subtotal, regrasRev],
   );
   const desconto = cupomAplicado?.ok ? cupomAplicado.discount : 0;
 
-  function aplicarCupom() {
-    const resultado = applyCoupon(codigoDigitado, subtotal);
-    setAvisoCupom({ ok: resultado.ok, texto: resultado.message });
-    if (resultado.ok) {
-      setCoupon(resultado.code);
-      trackCouponApplied(resultado.code, resultado.discount);
-      setCodigoDigitado('');
+  // Cupom salvo que o site não sabe calcular localmente (regra mora no
+  // backend e o cache em memória morreu no reload) — revalida e resseia.
+  useEffect(() => {
+    if (!couponCode || conheceCupom(couponCode)) return;
+    let vivo = true;
+    validarCupomRemoto(couponCode, subtotal).then((r) => {
+      if (!vivo) return;
+      if (r.ok || r.reason === 'nominal_sem_cpf') setRegrasRev((v) => v + 1);
+      else {
+        setCoupon(null);
+        setAvisoCupom({ ok: false, texto: r.message });
+      }
+    });
+    return () => {
+      vivo = false;
+    };
+    // subtotal fora de propósito: o efeito só semeia a regra uma vez.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [couponCode, setCoupon]);
+
+  async function aplicarCupom() {
+    if (aplicandoCupom) return;
+    setAplicandoCupom(true);
+    try {
+      // Backend primeiro (site_cupons: retaguarda + vale-troca); rede fora
+      // cai na tabela local de campanhas dentro do próprio helper.
+      const resultado = await validarCupomRemoto(codigoDigitado, subtotal);
+      setAvisoCupom({ ok: resultado.ok, texto: resultado.message });
+      if (resultado.ok) {
+        setCoupon(resultado.code);
+        trackCouponApplied(resultado.code, resultado.discount);
+        setCodigoDigitado('');
+      }
+    } finally {
+      setAplicandoCupom(false);
     }
   }
 
@@ -471,8 +505,8 @@ export default function CarrinhoPage() {
                           autoComplete="off"
                           className="flex-1"
                         />
-                        <Button type="submit" variant="secondary" className="shrink-0">
-                          Aplicar
+                        <Button type="submit" variant="secondary" className="shrink-0" disabled={aplicandoCupom}>
+                          {aplicandoCupom ? 'Conferindo…' : 'Aplicar'}
                         </Button>
                       </div>
                       {avisoCupom && (

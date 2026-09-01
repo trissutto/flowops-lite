@@ -79,6 +79,12 @@ export interface CouponResult {
   /** Mensagem pra UI — elegante, nunca técnica. */
   message: string;
   kind?: 'percent' | 'fixed' | 'shipping';
+  /**
+   * Recusa do backend que NÃO é "cupom errado": vale-troca nominal validado
+   * sem CPF no contexto (a cliente ainda não chegou na etapa dos dados). O
+   * checkout guarda o código e reaplica sozinho quando o CPF entrar.
+   */
+  reason?: 'nominal_sem_cpf' | 'nominal_cpf_diferente';
 }
 
 /* ---------------------------------------------------------------- PAGAMENTO */
