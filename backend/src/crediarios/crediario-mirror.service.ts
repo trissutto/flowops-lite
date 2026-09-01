@@ -6,6 +6,68 @@ import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from './crediarios.service';
 import { sqlParcelaAberta } from '../common/crediario-pago';
 
+/** A linha do espelho, já na forma em que é gravada. */
+export interface EspelhoAberta {
+  registro: string;
+  controle: string | null;
+  numeroCompra: string | null;
+  loja: string | null;
+  codCliente: string | null;
+  nome: string | null;
+  parcela: number | null;
+  totalParcelas: number | null;
+  vencimento: Date | null;
+  /** Prisma Decimal | number | string — comparado por valor numérico. */
+  valorParcela: unknown;
+  obs: string | null;
+}
+
+/**
+ * DIFF nativa → espelho: o que inserir, atualizar e apagar pra deixar o
+ * espelho igual à fonte SEM reescrever a tabela inteira.
+ *
+ * Por que existe: o full-replace de 10 em 10 minutos somava ~87 mil escritas
+ * por ciclo (delete + insert de ~43 mil linhas) — ~12,6 MILHÕES de escritas
+ * por dia no Postgres pra, na maioria dos ciclos, não mudar linha nenhuma
+ * (baixa e estorno já têm write-through). Medido em 01/09:
+ * `wincred_movimento_aberto` acumulava 32 milhões de escritas nas estatísticas
+ * do banco. O diff escreve só a diferença real — tipicamente zero a dezenas.
+ *
+ * Comparações toleram representação: Decimal/number/string pelo valor
+ * numérico, datas por dia (getTime), strings por igualdade estrita com null.
+ */
+export function diffEspelhoAbertas(
+  nativas: EspelhoAberta[],
+  espelho: EspelhoAberta[],
+): { inserir: EspelhoAberta[]; atualizar: EspelhoAberta[]; apagar: string[] } {
+  const num = (v: unknown) => (v == null ? null : Number(v));
+  const dia = (v: Date | null) => (v == null ? null : v.getTime());
+  const mesma = (a: EspelhoAberta, b: EspelhoAberta) =>
+    a.controle === b.controle &&
+    a.numeroCompra === b.numeroCompra &&
+    a.loja === b.loja &&
+    a.codCliente === b.codCliente &&
+    a.nome === b.nome &&
+    a.parcela === b.parcela &&
+    a.totalParcelas === b.totalParcelas &&
+    dia(a.vencimento) === dia(b.vencimento) &&
+    num(a.valorParcela) === num(b.valorParcela) &&
+    a.obs === b.obs;
+
+  const atuais = new Map(espelho.map((e) => [e.registro, e]));
+  const inserir: EspelhoAberta[] = [];
+  const atualizar: EspelhoAberta[] = [];
+  const vistos = new Set<string>();
+  for (const n of nativas) {
+    vistos.add(n.registro);
+    const atual = atuais.get(n.registro);
+    if (!atual) inserir.push(n);
+    else if (!mesma(n, atual)) atualizar.push(n);
+  }
+  const apagar = espelho.filter((e) => !vistos.has(e.registro)).map((e) => e.registro);
+  return { inserir, atualizar, apagar };
+}
+
 /**
  * CrediarioMirrorService — espelha no Postgres o que a COBRANÇA precisa do
  * Giga: parcelas de crediário EM ABERTO (`wincred_movimento_aberto`) e o
@@ -307,21 +369,82 @@ export class CrediarioMirrorService {
       return { processed: 0, durationMs: Date.now() - t0 };
     }
 
-    // Replace atômico — a tela nunca vê o espelho pela metade.
-    await this.prisma.$transaction(async (tx: any) => {
-      await tx.wincredMovimentoAberto.deleteMany({});
-      for (let i = 0; i < data.length; i += 1000) {
-        await tx.wincredMovimentoAberto.createMany({
-          data: data.slice(i, i + 1000),
-          skipDuplicates: true,
-        });
-      }
-    }, { timeout: 60_000 });
+    /* ── DIFF, NÃO FULL-REPLACE (01/09) ──────────────────────────────────
+     * O replace integral custava ~87 mil escritas por ciclo × 144 ciclos/dia
+     * com o resultado quase sempre idêntico (baixa/estorno chegam por
+     * write-through). Agora o espelho é lido e só a DIFERENÇA é gravada —
+     * e sem o instante em que a tabela ficava vazia no meio da transação.
+     */
+    const espelho: EspelhoAberta[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+      select: {
+        registro: true, controle: true, numeroCompra: true, loja: true,
+        codCliente: true, nome: true, parcela: true, totalParcelas: true,
+        vencimento: true, valorParcela: true, obs: true,
+      },
+    });
+    const { inserir, atualizar, apagar } = diffEspelhoAbertas(data, espelho);
+    const mudancas = inserir.length + atualizar.length + apagar.length;
+
+    /* Rede de segurança: diff acima de 30% da tabela é anomalia (primeira
+     * carga, comparação quebrada, fonte trocada) — cai no replace atômico
+     * antigo, que é o caminho provado. Nunca fica PIOR que o comportamento
+     * anterior; só loga pra ninguém achar que o diff está valendo. */
+    const limiarFullReplace = Math.max(2000, Math.floor(data.length * 0.3));
+    if (mudancas > limiarFullReplace) {
+      this.logger.warn(
+        `[abertas] diff de ${mudancas} mudança(s) passou do limiar (${limiarFullReplace}) — full replace de segurança`,
+      );
+      await this.prisma.$transaction(async (tx: any) => {
+        await tx.wincredMovimentoAberto.deleteMany({});
+        for (let i = 0; i < data.length; i += 1000) {
+          await tx.wincredMovimentoAberto.createMany({
+            data: data.slice(i, i + 1000),
+            skipDuplicates: true,
+          });
+        }
+      }, { timeout: 60_000 });
+    } else if (mudancas > 0) {
+      await this.prisma.$transaction(async (tx: any) => {
+        if (apagar.length) {
+          await tx.wincredMovimentoAberto.deleteMany({ where: { registro: { in: apagar } } });
+        }
+        for (let i = 0; i < inserir.length; i += 1000) {
+          await tx.wincredMovimentoAberto.createMany({
+            data: inserir.slice(i, i + 1000),
+            skipDuplicates: true,
+          });
+        }
+        for (const a of atualizar) {
+          const { registro, ...campos } = a;
+          await tx.wincredMovimentoAberto.update({
+            where: { registro },
+            data: { ...campos, syncedAt: new Date() },
+          });
+        }
+      }, { timeout: 60_000 });
+    }
+
+    // Carimbo de frescor SEM reescrever linha: a tela de status lê daqui
+    // (antes, o MAX(synced_at) só andava porque o replace reescrevia tudo).
+    await this.carimbarSyncAbertas(data.length);
 
     this.logger.log(
-      `[abertas] OK — ${data.length} parcelas da tabela nativa (sem Giga) em ${Date.now() - t0}ms`,
+      `[abertas] OK — ${data.length} parcelas da nativa, diff +${inserir.length} ~${atualizar.length} -${apagar.length} em ${Date.now() - t0}ms`,
     );
     return { processed: data.length, durationMs: Date.now() - t0 };
+  }
+
+  /** Uma linha em `wincred_sync_state` por ciclo — o "sincronizou às" da tela. */
+  private async carimbarSyncAbertas(rowCount: number): Promise<void> {
+    try {
+      await (this.prisma as any).wincredSyncState.upsert({
+        where: { tabela: 'movimento_aberto' },
+        create: { tabela: 'movimento_aberto', lastRunAt: new Date(), lastRowCount: rowCount, lastStatus: 'ok' },
+        update: { lastRunAt: new Date(), lastRowCount: rowCount, lastStatus: 'ok', lastError: null },
+      });
+    } catch (e: any) {
+      this.logger.warn(`[abertas] carimbo do sync_state falhou: ${e?.message || e}`);
+    }
   }
 
   // ── WRITE-THROUGH ────────────────────────────────────────────────────────
@@ -399,8 +522,21 @@ export class CrediarioMirrorService {
         return { count: 0, lastSyncedAt: null };
       }
     };
+    const abertas = await q('wincred_movimento_aberto');
+    // Com o sync diferencial, MAX(synced_at) só anda quando alguma linha muda.
+    // O frescor de verdade é o carimbo do ciclo em wincred_sync_state.
+    try {
+      const st = await (this.prisma as any).wincredSyncState.findUnique({
+        where: { tabela: 'movimento_aberto' },
+      });
+      if (st?.lastRunAt && (!abertas.lastSyncedAt || st.lastRunAt > abertas.lastSyncedAt)) {
+        abertas.lastSyncedAt = st.lastRunAt;
+      }
+    } catch {
+      /* sem carimbo, vale o MAX(synced_at) — comportamento antigo */
+    }
     return {
-      abertas: await q('wincred_movimento_aberto'),
+      abertas,
       clientes: await q('wincred_clientes'),
     };
   }
