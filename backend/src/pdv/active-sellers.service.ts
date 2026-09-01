@@ -132,11 +132,24 @@ export class ActiveSellersService {
       // Flags atuais ANTES de apagar — o recreate não pode perder o rateio.
       const atuais: any[] = await (tx as any).pdvActiveSeller.findMany({
         where: { storeCode },
-        select: { codigo: true, contaNaMeta: true },
+        select: { codigo: true, nome: true, contaNaMeta: true },
       });
       const flagAtual = new Map(
         atuais.map((a) => [String(a.codigo).trim(), a.contaNaMeta !== false]),
       );
+      // Resgate por NOME (achado da revisão 01/09): o sync-from-wincred não
+      // traz linha de ficha do Flow (código uuid/F…) — ela era apagada e
+      // recriada depois com default true, devolvendo o dono pro rateio em
+      // silêncio. Mesmo nome na mesma loja = mesma pessoa: um false gravado
+      // sob QUALQUER código dela sobrevive à troca de código.
+      const normNome = (x: any) => String(x ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+      const flagPorNome = new Map<string, boolean>();
+      for (const a of atuais) {
+        const k = normNome(a.nome);
+        if (!k) continue;
+        if (a.contaNaMeta === false) flagPorNome.set(k, false);
+        else if (!flagPorNome.has(k)) flagPorNome.set(k, true);
+      }
       // Remove todas
       await (tx as any).pdvActiveSeller.deleteMany({ where: { storeCode } });
       // Cria todas (deduplicando por codigo)
@@ -151,11 +164,15 @@ export class ActiveSellersService {
       await (tx as any).pdvActiveSeller.createMany({
         data: dedup.map((s) => {
           const codigo = String(s.codigo).trim();
+          const nome = String(s.nome || '').trim();
           return {
             storeCode,
             codigo,
-            nome: String(s.nome || '').trim(),
-            contaNaMeta: s.contaNaMeta != null ? !!s.contaNaMeta : (flagAtual.get(codigo) ?? true),
+            nome,
+            contaNaMeta:
+              s.contaNaMeta != null
+                ? !!s.contaNaMeta
+                : (flagAtual.get(codigo) ?? flagPorNome.get(normNome(nome)) ?? true),
           };
         }),
       });

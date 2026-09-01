@@ -426,17 +426,30 @@ export class SellersService {
         where: { OR: [{ codigo: realCodigo }, { codigo: codigoGuest }] },
       });
       const delas = todas.filter((r) => nomesDela.has(normNome(r.nome)) || lojas.has(r.storeCode));
+      // Selo "sem meta" POR LOJA antes de mexer nas linhas (achado da revisão
+      // 01/09): trocar código/loja recriava a linha com contaNaMeta default e
+      // a pessoa voltava pro rateio da meta em silêncio. Também olha as linhas
+      // com o NOME dela (código antigo órfão conta). Resíduo aceito: inativar
+      // e reativar a ficha perde o selo — a linha deixa de existir no meio.
+      const linhasComNomeDela: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
+        where: { storeCode: { in: [...lojas] } },
+      }).then((rs: any[]) => rs.filter((r) => nomesDela.has(normNome(r.nome)))).catch(() => []);
+      const semMetaNaLoja = new Set<string>();
+      for (const r of [...delas, ...linhasComNomeDela]) {
+        if (r.contaNaMeta === false) semMetaNaLoja.add(r.storeCode);
+      }
       // Remove as linhas dela que NÃO estão mais nas lojas-alvo (ou todas, se inativa).
       const remover = delas.filter((r) => !lojas.has(r.storeCode)).map((r) => r.id);
       if (remover.length) {
         await (this.prisma as any).pdvActiveSeller.deleteMany({ where: { id: { in: remover } } });
       }
-      // Garante uma linha por loja-alvo.
+      // Garante uma linha por loja-alvo (linha existente mantém o próprio selo
+      // — o update não toca contaNaMeta; linha nova herda o selo da loja).
       for (const loja of lojas) {
         const codigo = codigoPara(loja);
         await (this.prisma as any).pdvActiveSeller.upsert({
           where: { storeCode_codigo: { storeCode: loja, codigo } },
-          create: { storeCode: loja, codigo, nome },
+          create: { storeCode: loja, codigo, nome, contaNaMeta: !semMetaNaLoja.has(loja) },
           update: { nome },
         });
       }
@@ -984,6 +997,15 @@ export class SellersService {
           todasCanonicas[0];
         const removeIds = todasCanonicas.filter((r: any) => r.id !== keepRow.id).map((r: any) => r.id);
         if (removeIds.length) {
+          // "Sem meta" em QUALQUER grafia vale pra pessoa unificada — senão
+          // apagar a linha marcada devolvia ela pro rateio (revisão 01/09).
+          const algumaSemMeta = todasCanonicas.some((r: any) => r.contaNaMeta === false);
+          if (algumaSemMeta && keepRow.contaNaMeta !== false) {
+            await tx.pdvActiveSeller.update({
+              where: { id: keepRow.id },
+              data: { contaNaMeta: false },
+            });
+          }
           await tx.pdvActiveSeller.deleteMany({ where: { id: { in: removeIds } } });
         }
       }
