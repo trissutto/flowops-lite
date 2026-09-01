@@ -8,14 +8,15 @@
  * ver `src/lib/orders/store.ts` pro porquê.
  *
  * Por que manter o recálculo se o backend reconfere: barreira dupla é barata e
- * pega coisa diferente. Aqui o cupom é o da vitrine (mesma função da sacola, o
- * que garante que a conta mostrada é a conta cobrada) e o frete sai da tabela
- * do site. Se um dos dois divergir do backend, o do BACKEND vence no total
- * final — ele é o dono do pedido — e a divergência sai no log pra alguém olhar.
+ * pega coisa diferente. Aqui o cupom é validado NO backend (`site_cupons`,
+ * via `validarCupomServer` — com fallback na tabela local de campanhas) e o
+ * frete sai da tabela do site. Se um dos dois divergir do backend na hora de
+ * cobrar, o do BACKEND vence no total final — ele é o dono do pedido — e a
+ * divergência sai no log pra alguém olhar.
  *
  * NADA que veio do cliente é confiável: subtotal, desconto, frete e total são
- * RECALCULADOS aqui com as mesmas funções que a UI usa (`applyCoupon`,
- * `findQuote`). O client manda os fatos (itens, CEP, cupom, escolha de frete).
+ * RECALCULADOS aqui (`validarCupomServer`, `findQuote`). O client manda os
+ * fatos (itens, CEP, cupom, escolha de frete).
  *
  * PREÇO UNITÁRIO: aqui vale só o teto de sanidade (> R$ 0 e < R$ 10.000 por
  * peça). Quem reconfere peça por peça contra o catálogo é o BACKEND, no
@@ -29,7 +30,7 @@
 import { NextResponse } from 'next/server';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { applyCoupon } from '@/lib/commerce/cupom';
+import { validarCupomServer } from '@/lib/commerce/cupom-server';
 import { pixDiscount } from '@/lib/commerce/pix';
 import { resolverFrete, type FreteResolvido } from '@/lib/commerce/frete-server';
 import { campoDoZod } from '@/lib/orders/campo-reprovado';
@@ -288,9 +289,17 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     promotionPreview.applied;
   const promotionDiscount = promotionApplied ? promotionPreview.discountValue : 0;
 
-  // Cupom: mesma função da sacola, rodando AQUI (env CUPONS_JSON tem
-  // precedência no server). Cupom inválido derruba o pedido com a mensagem
-  // elegante da própria regra — nunca aplica em silêncio um desconto errado.
+  // O IP da cliente sai daqui pra TODAS as chamadas ao backend deste
+  // handler (cupom, cotação e POST /pedido) gastarem o balde de rate-limit
+  // DELA — sem o header, o backend vê o IP de saída da Vercel e a loja
+  // inteira divide um balde só. '0.0.0.0' é "não sei" — aí não vai.
+  const ipCliente = ip !== '0.0.0.0' ? ip : undefined;
+
+  // Cupom: validado NO BACKEND (site_cupons — a fonte que a retaguarda edita
+  // e onde o vale-troca nominal vive), com o CPF do pedido pro vale nominal
+  // passar. Backend fora → o helper cai na tabela local de campanhas. Cupom
+  // inválido derruba o pedido com a mensagem elegante da própria regra —
+  // nunca aplica em silêncio um desconto errado.
   let discount = 0;
   let couponKind: 'percent' | 'fixed' | 'shipping' | undefined;
   let couponCode: string | undefined;
@@ -305,7 +314,12 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
         { status: 400 },
       );
     }
-    const cupom = applyCoupon(input.couponCode, subtotal);
+    const cupom = await validarCupomServer({
+      code: input.couponCode,
+      subtotal,
+      cpf: input.customer.cpf,
+      clientIp: ipCliente,
+    });
     if (!cupom.ok) {
       return NextResponse.json({ ok: false, error: cupom.message, code: 'coupon_invalid' }, { status: 400 });
     }
@@ -317,15 +331,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   // Frete: recotado pelo CEP + subtotal + nº de peças, na MESMA fonte que a
   // tela usou (tabela promocional cadastrada + cotação do contrato). O id
   // escolhido no client precisa existir lá — senão alguém inventou frete.
-  //
-  // O IP vai junto (`x-cliente-ip`) pra esta cotação E pro POST /pedido logo
-  // abaixo gastarem o balde do rate-limit do backend DESTA cliente — sem o
-  // header, o backend via o IP de saída da Vercel e a loja inteira dividia
-  // 20 hits/min (a 21ª cotação do minuto caía na tabela local, e o pedido
-  // seguinte tomava 429 na hora de pagar). O backend já lê o header desde
-  // 10/08; faltava alguém mandar. '0.0.0.0' é "não sei" — aí não vai, e o
-  // backend cai no fallback dele.
-  const ipCliente = ip !== '0.0.0.0' ? ip : undefined;
+  // O `ipCliente` (definido antes do cupom) vai em `x-cliente-ip`.
   const pecas = input.items.reduce((soma, l) => soma + l.quantity, 0);
   const quote = await resolverFrete({
     cep: input.cep,

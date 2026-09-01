@@ -12,6 +12,7 @@ import {
 import * as crypto from 'crypto';
 import { CriarPedidoInput, LojaOrdersService } from './loja-orders.service';
 import { FreteService } from './frete.service';
+import { CupomService } from './cupom.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO — porta SERVER-TO-SERVER (sprint 011).
@@ -67,7 +68,14 @@ const JANELA_MS = 60_000;
  * pra tabela local) e `pedido:<ip>` com 20/min (é onde a força bruta dói).
  * O site passou a mandar `x-cliente-ip`, então o IP é o da cliente.
  */
-const LIMITE_POR_ROTA: Record<'frete' | 'pedido', number> = { frete: 60, pedido: 20 };
+const LIMITE_POR_ROTA: Record<'frete' | 'pedido' | 'cupom', number> = {
+  frete: 60,
+  pedido: 20,
+  // Validação de cupom: a sacola só bate no APLICAR e num reload com cupom
+  // salvo — bem menos frequente que a cotação, mas é onde alguém chutaria
+  // códigos por força bruta. 30/min por cliente sobra pra uso real.
+  cupom: 30,
+};
 
 function balde(): Map<string, number[]> {
   const g = globalThis as any;
@@ -75,7 +83,7 @@ function balde(): Map<string, number[]> {
   return g[BALDE_KEY];
 }
 
-function excedeuLimite(rota: 'frete' | 'pedido', ip: string): boolean {
+function excedeuLimite(rota: 'frete' | 'pedido' | 'cupom', ip: string): boolean {
   const agora = Date.now();
   const m = balde();
   const chave = `${rota}:${ip}`;
@@ -94,6 +102,7 @@ export class LojaOrdersController {
   constructor(
     private readonly svc: LojaOrdersService,
     private readonly freteSvc: FreteService,
+    private readonly cupons: CupomService,
   ) {}
 
   /** Comparação em tempo constante sobre os hashes (iguala o tamanho dos dois
@@ -229,6 +238,42 @@ export class LojaOrdersController {
     } catch (e: any) {
       return { ok: false, error: 'Não consegui cotar agora', detalhe: String(e?.message || e).slice(0, 200) };
     }
+  }
+
+  /**
+   * POST /api/public/loja/cupom — valida um cupom ANTES do pedido existir.
+   *
+   * Até 01/09/2026 o site validava cupom numa lista fixa do próprio front
+   * (`ecommerce/src/lib/commerce/cupom.ts`) — cupom criado na retaguarda e,
+   * pior, VALE-TROCA nominal (`site_cupons`, origem='troca') morriam com
+   * "não encontramos" sem nunca perguntar pra cá. Caso real: os vales do
+   * site velho (WooCommerce, desligado 27/08) foram trazidos pra
+   * `site_cupons` e a cliente continuava barrada na sacola.
+   *
+   * Mesma conta do fechamento (`CupomService.aplicar`) — aqui NÃO registra
+   * uso: `registrarUso` só roda quando o pedido nasce. `cpf` é opcional: sem
+   * ele o vale nominal volta `motivo='nominal_sem_cpf'` e o site reaplica
+   * quando a cliente preencher os dados.
+   */
+  @Post('cupom')
+  async cupom(
+    @Body() body: { code?: string; subtotal?: number; cpf?: string },
+    @Headers('x-loja-token') token: string,
+    @Req() req: any,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    this.exigirToken(token);
+    if (excedeuLimite('cupom', this.ipDe(req))) {
+      res.status(429);
+      return { ok: false, error: 'Muitas tentativas seguidas. Tente de novo em instantes.' };
+    }
+
+    const subtotal = Number(body?.subtotal) || 0;
+    const cpf = String(body?.cpf || '').replace(/\D/g, '');
+    const r = await this.cupons.aplicar(String(body?.code || ''), subtotal, {
+      cpf: cpf.length === 11 ? cpf : undefined,
+    });
+    return { ok: true, resultado: r };
   }
 
   /**

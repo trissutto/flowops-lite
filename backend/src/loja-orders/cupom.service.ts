@@ -48,6 +48,25 @@ export interface ResultadoCupom {
   tipo?: TipoCupom;
   /** Frase pronta pra tela. */
   mensagem: string;
+  /**
+   * Recusa que o SITE trata diferente de "cupom errado": vale nominal sem CPF
+   * no contexto não é inválido — falta a cliente chegar na etapa dos dados.
+   * O checkout guarda o código e reaplica sozinho quando o CPF entra.
+   */
+  motivo?: 'nominal_sem_cpf' | 'nominal_cpf_diferente';
+  /**
+   * A regra por trás do desconto, só no SUCESSO — é o que permite ao site
+   * recalcular o desconto quando o subtotal muda (+/− peça na sacola) sem
+   * bater aqui de novo a cada render. Vale nominal nunca sai daqui sem o CPF
+   * ter batido (o `aplicar` já barrou antes).
+   */
+  regra?: {
+    tipo: TipoCupom;
+    valor: number;
+    minSubtotal: number | null;
+    fimEm: string | null;
+    label: string;
+  };
 }
 
 /** Fallback embutido — espelho exato do que o site anunciava até 04/08/2026. */
@@ -253,11 +272,27 @@ export class CupomService {
      */
     if (regra.cpf) {
       const doPedido = String(contexto?.cpf || '').replace(/\D/g, '');
-      if (!doPedido || doPedido !== regra.cpf) {
+      /**
+       * SEM CPF ≠ CPF ERRADO. Sem CPF é a sacola/começo do checkout — a
+       * cliente ainda nem chegou no campo. A frase manda ela seguir (e o
+       * `motivo` deixa o site reaplicar sozinho quando o CPF entrar) em vez
+       * de soar como "esse código não é seu".
+       */
+      if (!doPedido) {
         return {
           ok: false,
           code,
           desconto: 0,
+          motivo: 'nominal_sem_cpf',
+          mensagem: 'Esse vale é nominal. Continue a compra e informe o CPF de quem fez a troca — o desconto entra na hora. 💜',
+        };
+      }
+      if (doPedido !== regra.cpf) {
+        return {
+          ok: false,
+          code,
+          desconto: 0,
+          motivo: 'nominal_cpf_diferente',
           mensagem: 'Esse vale-troca é nominal e está no CPF de quem fez a troca. Faça o pedido com esse CPF pra usar. 💜',
         };
       }
@@ -290,6 +325,13 @@ export class CupomService {
         regra.tipo === 'shipping'
           ? 'Cupom aplicado: seu frete sai grátis.'
           : `Cupom aplicado: ${regra.label.toLowerCase()} (−${this.reais(desconto)}).`,
+      regra: {
+        tipo: regra.tipo,
+        valor: regra.valor,
+        minSubtotal: regra.minSubtotal ?? null,
+        fimEm: regra.fimEm ? new Date(regra.fimEm).toISOString() : null,
+        label: regra.label,
+      },
     };
   }
 

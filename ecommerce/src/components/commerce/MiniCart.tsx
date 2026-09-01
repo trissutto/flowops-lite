@@ -16,7 +16,7 @@ import { useLookOfferStore } from '@/store/look-offer';
 import { useQuickAddStore } from '@/store/quick-add';
 import { useIsCartOpen, useUiStore } from '@/store/ui';
 import { useMounted } from '@/hooks';
-import { applyCoupon } from '@/lib/commerce/cupom';
+import { applyCoupon, conheceCupom, validarCupomRemoto } from '@/lib/commerce/cupom';
 import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
 import {
   toTrackedItem,
@@ -255,12 +255,18 @@ export function MiniCart() {
   /* ----------------------------------------------------------------- cupom */
   const [codigoDigitado, setCodigoDigitado] = useState('');
   const [avisoCupom, setAvisoCupom] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [aplicandoCupom, setAplicandoCupom] = useState(false);
+  // Bump quando uma regra REMOTA chega (validarCupomRemoto semeia o cache em
+  // memória do lib/commerce/cupom) — sem isto o memo abaixo não reprocessa.
+  const [regrasRev, setRegrasRev] = useState(0);
 
   // O cupom persistido é REVALIDADO a cada render: se o subtotal caiu abaixo
   // do mínimo, o desconto some na hora — nunca mostramos um desconto morto.
   const cupomAplicado = useMemo(
     () => (couponCode ? applyCoupon(couponCode, subtotal) : null),
-    [couponCode, subtotal],
+    // regrasRev é dependência de propósito (regra remota chegou → recalcula).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [couponCode, subtotal, regrasRev],
   );
   const descontoCupom = promotionApplied ? 0 : cupomAplicado?.ok ? cupomAplicado.discount : 0;
   const descontoPromocao = promotionApplied ? promotionPreview.discountValue : 0;
@@ -272,13 +278,47 @@ export function MiniCart() {
     setAvisoCupom({ ok: true, texto: 'Cupom removido: esta promoção não acumula com outros descontos.' });
   }, [promotionApplied, couponCode, setCoupon]);
 
-  function aplicarCupom() {
-    const resultado = applyCoupon(codigoDigitado, subtotal);
-    setAvisoCupom({ ok: resultado.ok, texto: resultado.message });
-    if (resultado.ok) {
-      setCoupon(resultado.code);
-      trackCouponApplied(resultado.code, resultado.discount);
-      setCodigoDigitado('');
+  /**
+   * CUPOM SALVO QUE O SITE NÃO SABE CALCULAR — revalida no backend (01/09).
+   *
+   * O cart store persiste só o CÓDIGO; a regra remota (cupom da retaguarda,
+   * vale-troca) vive em memória e morre no reload. Sem isto, um F5 fazia o
+   * desconto sumir calado. Regra volta → bump; código morreu no backend →
+   * sai do store com a mensagem na tela.
+   */
+  useEffect(() => {
+    if (!couponCode || conheceCupom(couponCode)) return;
+    let vivo = true;
+    validarCupomRemoto(couponCode, subtotal).then((r) => {
+      if (!vivo) return;
+      if (r.ok || r.reason === 'nominal_sem_cpf') setRegrasRev((v) => v + 1);
+      else {
+        setCoupon(null);
+        setAvisoCupom({ ok: false, texto: r.message });
+      }
+    });
+    return () => {
+      vivo = false;
+    };
+    // subtotal fora de propósito: o efeito só semeia a regra uma vez.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [couponCode, setCoupon]);
+
+  async function aplicarCupom() {
+    if (aplicandoCupom) return;
+    setAplicandoCupom(true);
+    try {
+      // Backend primeiro (site_cupons: retaguarda + vale-troca); rede fora
+      // cai na tabela local de campanhas dentro do próprio helper.
+      const resultado = await validarCupomRemoto(codigoDigitado, subtotal);
+      setAvisoCupom({ ok: resultado.ok, texto: resultado.message });
+      if (resultado.ok) {
+        setCoupon(resultado.code);
+        trackCouponApplied(resultado.code, resultado.discount);
+        setCodigoDigitado('');
+      }
+    } finally {
+      setAplicandoCupom(false);
     }
   }
 
@@ -516,8 +556,8 @@ export function MiniCart() {
                     autoComplete="off"
                     className="w-full rounded-md border border-border bg-surface px-4 py-2.5 text-small text-ink uppercase transition-shadow duration-[180ms] placeholder:normal-case placeholder:text-ink-muted/70 focus:border-primary focus:shadow-[0_0_0_3px_rgba(184,145,43,0.12)] focus:outline-none"
                   />
-                  <Button type="submit" variant="secondary" size="sm">
-                    Aplicar
+                  <Button type="submit" variant="secondary" size="sm" disabled={aplicandoCupom}>
+                    {aplicandoCupom ? 'Conferindo…' : 'Aplicar'}
                   </Button>
                 </form>
                 {avisoCupom && (

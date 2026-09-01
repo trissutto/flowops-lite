@@ -15,7 +15,7 @@ import { PaymentStep, type PaymentSelection } from '@/components/checkout/Paymen
 import { ReviewCard } from '@/components/checkout/ReviewCard';
 import { OrderSummary } from '@/components/checkout/OrderSummary';
 import { maskPhone } from '@/components/checkout/masks';
-import { applyCoupon } from '@/lib/commerce/cupom';
+import { validarCupomRemoto } from '@/lib/commerce/cupom';
 import { PIX_DESCONTO_PCT, pixDiscount, pixTotal } from '@/lib/commerce/pix';
 import { clearCheckoutDraft, readCheckoutDraft, writeCheckoutDraft } from '@/lib/commerce/checkout-draft';
 import { useClienteLogada } from '@/hooks/useClienteLogada';
@@ -397,8 +397,12 @@ export default function CheckoutPage() {
   const total = subtotal - discount - descontoPix + (shippingPrice ?? 0);
   const totalPix = pixTotal(subtotal - discount, shippingPrice ?? 0);
 
-  function handleApplyCoupon(code: string) {
-    const result = applyCoupon(code, subtotal);
+  async function handleApplyCoupon(code: string) {
+    // Backend valida (site_cupons: campanha da retaguarda + vale-troca).
+    // O CPF ainda não existe nesta altura do checkout (só entra junto do
+    // pagamento) — vale nominal volta `reason='nominal_sem_cpf'` com a frase
+    // "continue a compra", e o `finalizar` reaplica com o CPF na mão.
+    const result = await validarCupomRemoto(code, subtotal, customer?.cpf);
     setCoupon(result);
     if (result.ok) trackCouponApplied(result.code, result.discount);
   }
@@ -434,6 +438,28 @@ export default function CheckoutPage() {
     trackCheckoutSubmission(pagamento.method);
 
     /**
+     * VALE NOMINAL, AGORA COM O CPF NA MÃO (01/09). O vale-troca preso por
+     * CPF não tinha como aplicar antes: o CPF só entra junto do clique de
+     * pagar. Se o cupom pendente é um `nominal_sem_cpf`, revalida AQUI —
+     * bateu, o desconto entra neste pedido; não bateu (CPF de outra pessoa),
+     * o pedido NÃO nasce e a frase explica, em vez de cobrar cheio calado.
+     */
+    let cupomFinal = coupon;
+    if (coupon && !coupon.ok && coupon.reason === 'nominal_sem_cpf') {
+      const valido = await validarCupomRemoto(coupon.code, subtotal, cliente.cpf);
+      setCoupon(valido);
+      cupomFinal = valido;
+      if (!valido.ok) {
+        setSubmitError(valido.message);
+        enviandoRef.current = false;
+        setSubmitting(false);
+        return;
+      }
+      trackCouponApplied(valido.code, valido.discount);
+    }
+    const descontoFinal = cupomFinal?.ok ? cupomFinal.discount : 0;
+
+    /**
      * O QUE ELA LEU NA TELA (17/08). Calculado AQUI, do argumento `pagamento`
      * — o `total` de render usa `payment?.method` do estado, que no clique
      * ainda é o velho. O BFF compara o frete recotado com `shippingPriceSeen`
@@ -441,11 +467,13 @@ export default function CheckoutPage() {
      * `min(totalSeen, total dele)` como teto pro backend — o teto passa a
      * proteger o número que ela leu, não a conta do próprio BFF. Aba antiga
      * do BFF ignora os dois campos (zod `.optional().catch(undefined)`).
+     * (O vale nominal recém-validado entra na conta: cobrar MENOS do que a
+     * tela mostrou é o único desvio permitido.)
      */
     const arredonda = (v: number) => Math.round(v * 100) / 100;
     const freteVisto = arredonda(freteZerado(shipping.quote) ? 0 : shipping.quote.price);
     const totalVisto = arredonda(
-      subtotal - discount - pixDiscount(subtotal - discount, pagamento.method) + freteVisto,
+      subtotal - descontoFinal - pixDiscount(subtotal - descontoFinal, pagamento.method) + freteVisto,
     );
 
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
@@ -459,7 +487,7 @@ export default function CheckoutPage() {
       shippingQuoteId: shipping.quote.id,
       cep: shipping.cep,
       items: lines,
-      couponCode: coupon?.ok ? coupon.code : undefined,
+      couponCode: cupomFinal?.ok ? cupomFinal.code : undefined,
       paymentMethod: pagamento.method,
       installments: pagamento.installments,
       // Token do cartão (quando houver): o número ficou no navegador, isto é
