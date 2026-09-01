@@ -517,6 +517,78 @@ export class LojaCatalogService {
     };
   }
 
+  // ── VARIAÇÃO DUPLICADA E FICHA SEM MARCA — mesmos moldes das recicladas ──
+  // Eram os dois últimos avisos POR REF da montagem: ~250 linhas a cada 10min
+  // estouravam o teto de 500 logs/s do Railway e derrubavam log de incidente.
+
+  private duplicadasDaRodada: Array<{
+    ref: string;
+    variacoes: Array<{ cor: string | null; tamanho: string | null; codigos: string[] }>;
+  }> = [];
+  private assinaturaDuplicadas = '';
+  private ultimasDuplicadas: typeof this.duplicadasDaRodada = [];
+
+  private fichasSemMarcaDaRodada: Array<{
+    ref: string;
+    fichas: number;
+    marcaDaPeca: string;
+    marcaUsada: string;
+  }> = [];
+  private assinaturaFichasSemMarca = '';
+  private ultimasFichasSemMarca: typeof this.fichasSemMarcaDaRodada = [];
+
+  private reportarDuplicadas() {
+    const achadas = this.duplicadasDaRodada;
+    this.duplicadasDaRodada = [];
+    this.ultimasDuplicadas = achadas;
+
+    const assinatura = achadas.map((d) => d.ref).sort().join(',');
+    if (assinatura === this.assinaturaDuplicadas) return; // nada mudou: silêncio
+    this.assinaturaDuplicadas = assinatura;
+    if (!achadas.length) return;
+
+    const variacoes = achadas.reduce((s, d) => s + d.variacoes.length, 0);
+    const amostra = achadas.slice(0, 10).map((d) => d.ref).join(', ');
+    const resto = achadas.length > 10 ? ` (+${achadas.length - 10})` : '';
+    this.logger.warn(
+      `[catalogo] ${achadas.length} REF(s) com variação cor+tamanho duplicada (${variacoes} variação(ões)) — ` +
+        `vale a de maior estoque. REFs: ${amostra}${resto}. Lista completa em GET /api/loja-catalog/duplicadas.`,
+    );
+  }
+
+  private reportarFichasSemMarca() {
+    const achadas = this.fichasSemMarcaDaRodada;
+    this.fichasSemMarcaDaRodada = [];
+    this.ultimasFichasSemMarca = achadas;
+
+    const assinatura = achadas.map((f) => f.ref).sort().join(',');
+    if (assinatura === this.assinaturaFichasSemMarca) return;
+    this.assinaturaFichasSemMarca = assinatura;
+    if (!achadas.length) return;
+
+    const amostra = achadas.slice(0, 10).map((f) => f.ref).join(', ');
+    const resto = achadas.length > 10 ? ` (+${achadas.length - 10})` : '';
+    this.logger.warn(
+      `[catalogo] ${achadas.length} REF(s) com mais de uma ficha e marca que não casa — ` +
+        `usada a mais preenchida. Cadastro precisa de limpeza. REFs: ${amostra}${resto}. ` +
+        `Lista completa em GET /api/loja-catalog/duplicadas.`,
+    );
+  }
+
+  /** Variações duplicadas + fichas sem marca da última montagem, pro conserto. */
+  duplicadas() {
+    return {
+      variacoesDuplicadas: {
+        total: this.ultimasDuplicadas.length,
+        refs: this.ultimasDuplicadas,
+      },
+      fichasSemMarca: {
+        total: this.ultimasFichasSemMarca.length,
+        refs: this.ultimasFichasSemMarca,
+      },
+    };
+  }
+
   /**
    * A REF-BASE em SQL — a MESMA regra de `common/ref-base.ts`, no banco.
    *
@@ -688,12 +760,11 @@ export class LojaCatalogService {
       }
     }
     if (duplicadas.length) {
-      this.logger.warn(
-        `[catalogo] REF ${ref} tem ${duplicadas.length} variação(ões) duplicada(s) — ` +
-          `vale a de maior estoque: ${duplicadas
-            .map((d) => `${d.cor ?? '?'}/${d.tamanho ?? '?'} [${d.codigos.join(', ')}]`)
-            .join(' · ')}`,
-      );
+      // Era um WARN por REF — ~250 linhas POR MONTAGEM (a cada 10min), o que
+      // estourava o teto de 500 logs/s do Railway e DERRUBAVA log de verdade
+      // (1.055 mensagens descartadas no boot de 01/09). Vira acumulador; o
+      // resumo sai em reportarDuplicadas(), e a lista completa no endpoint.
+      this.duplicadasDaRodada.push({ ref, variacoes: duplicadas });
     }
     let unicas = Array.from(melhorPorVariacao.values());
 
@@ -1527,11 +1598,14 @@ export class LojaCatalogService {
         String(a.marca || '').localeCompare(String(b.marca || '')),
     )[0];
 
-    this.logger.warn(
-      `[catalogo] REF ${fichas[0]?.ref} tem ${fichas.length} fichas e a marca da peça ` +
-        `("${m || '—'}") não casou com nenhuma; usando a de marca "${melhor?.marca ?? '?'}" ` +
-        `(a mais preenchida). Cadastro precisa de limpeza.`,
-    );
+    // Mesmo remédio do aviso de variação duplicada: acumula e o resumo sai
+    // UMA vez por montagem (reportarFichasSemMarca), não uma linha por REF.
+    this.fichasSemMarcaDaRodada.push({
+      ref: String(fichas[0]?.ref ?? '?'),
+      fichas: fichas.length,
+      marcaDaPeca: m || '—',
+      marcaUsada: String(melhor?.marca ?? '?'),
+    });
     return melhor;
   }
 
@@ -2194,6 +2268,8 @@ export class LojaCatalogService {
       }
     }
     this.reportarRecicladas();
+    this.reportarDuplicadas();
+    this.reportarFichasSemMarca();
     return pecas.filter((p) => p.imagens.length > 0);
   }
 

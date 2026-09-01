@@ -281,6 +281,18 @@ export class LojaCatalogAdminController {
     return this.svc.recicladas();
   }
 
+  /**
+   * VARIAÇÃO COR+TAMANHO DUPLICADA e FICHA SEM MARCA — os dois últimos avisos
+   * que ainda saíam POR REF na montagem (~250 linhas a cada 10min, estourando
+   * o teto de 500 logs/s do Railway em 01/09). Mesmo remédio das recicladas:
+   * o log resume, a lista completa pro conserto do cadastro mora aqui.
+   */
+  @Get('duplicadas')
+  duplicadas(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.duplicadas();
+  }
+
   @Post('importar')
   importar(@Req() req: any) {
     this.requireAdmin(req);
