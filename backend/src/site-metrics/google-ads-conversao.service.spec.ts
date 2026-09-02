@@ -247,8 +247,18 @@ describe('GoogleAdsConversaoService', () => {
       );
 
       await expect(svc.enviarPendentes()).rejects.toThrow('CUSTOMER_NOT_ALLOWLISTED');
-      expect(updateMany).not.toHaveBeenCalled();
+
+      // Nenhum pedido vira "enviado" — esta é a garantia que importa.
+      expect(
+        updateMany.mock.calls.some((c: any[]) => 'adsConversaoEnviadaEm' in (c[0]?.data ?? {})),
+      ).toBe(false);
       expect(update).not.toHaveBeenCalled();
+
+      // Desde 02/09 a falha DEIXA RASTRO (antes escrevia nada e o teto de
+      // tentativas era código morto): conta a tentativa e grava o motivo.
+      const rastro = updateMany.mock.calls.find((c: any[]) => c[0]?.data?.adsConversaoTentativas);
+      expect(rastro[0].where.id.in).toEqual(['a', 'b']);
+      expect(rastro[0].data.adsConversaoErro).toMatch(/CUSTOMER_NOT_ALLOWLISTED/);
     });
 
     /**
@@ -338,6 +348,111 @@ describe('GoogleAdsConversaoService', () => {
     it('uma venda solta sem gclid não vira alarme — é ruído, não sintoma', async () => {
       const problemas = await svcCom(prismaDiag([1, 0, 0, 2])).diagnosticarSilencio();
       expect(problemas).toEqual([]);
+    });
+  });
+
+  /**
+   * ENHANCED CONVERSIONS (02/09/2026) — o gclid deixou de ser obrigatório.
+   *
+   * Contrato confirmado contra a API real com validateOnly:
+   *  · `userData` só é aceito com `encoding: 'HEX'` no topo (sem isso, 400 seco);
+   *  · e-mail em texto puro é recusado — tem que ir hasheado;
+   *  · evento sem identificador nenhum é recusado, e o ingest é tudo-ou-nada,
+   *    então um pedido sem chave levaria o lote inteiro junto.
+   */
+  describe('identificador de pessoa (enhanced conversions)', () => {
+    const comPessoa = (extra: any) => ({
+      ...pedido('a', 'LP-1'),
+      customerEmail: 'maria@exemplo.com.br',
+      customerPhone: '13991234567',
+      ...extra,
+    });
+    // Hash fixo de propósito: mudar a canonicalização tem que QUEBRAR o teste.
+    const HASH_EMAIL = '61e98e9932860e1e01dfc3c537de3158c0181ffea92011c1793b3c2db4e3e42d';
+    const HASH_FONE = '28a24514a7e5939ff757c069c74978818c4db53b2b3a706809c3c4c630aca148';
+
+    const monta = (pedidos: any[]) => {
+      const { prisma, updateMany } = prismaFake(pedidos);
+      const ads = adsFake({ requestId: 'req-1' });
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any, whatsFake() as any);
+      return { svc, ads, updateMany, prisma };
+    };
+
+    it('manda e-mail e telefone hasheados junto com o gclid, e liga o encoding', async () => {
+      const { svc, ads } = monta([comPessoa({})]);
+      await svc.enviarPendentes();
+      const corpo = ads.requisitarDataManager.mock.calls[0][1];
+      expect(corpo.encoding).toBe('HEX');
+      expect(corpo.events[0].adIdentifiers).toEqual({ gclid: 'gclid-a' });
+      expect(corpo.events[0].userData).toEqual({
+        userIdentifiers: [{ emailAddress: HASH_EMAIL }, { phoneNumber: HASH_FONE }],
+      });
+    });
+
+    it('pedido SEM gclid entra no lote pela pessoa — era isso que faltava', async () => {
+      const { svc, ads } = monta([comPessoa({ gclid: null })]);
+      const r = await svc.enviarPendentes();
+      expect(r.enviadas).toBe(1);
+      const evento = ads.requisitarDataManager.mock.calls[0][1].events[0];
+      expect(evento.adIdentifiers).toBeUndefined();
+      expect(evento.userData.userIdentifiers).toHaveLength(2);
+    });
+
+    it('telefone sem DDI ganha +55; com 55 não duplica', async () => {
+      const { svc, ads } = monta([
+        comPessoa({ gclid: null, customerEmail: null, customerPhone: '(13) 99123-4567' }),
+        { ...comPessoa({}), id: 'b', wcOrderNumber: 'LP-2', gclid: null, customerEmail: null, customerPhone: '5513991234567' },
+      ]);
+      await svc.enviarPendentes();
+      const eventos = ads.requisitarDataManager.mock.calls[0][1].events;
+      expect(eventos[0].userData.userIdentifiers).toEqual([{ phoneNumber: HASH_FONE }]);
+      expect(eventos[1].userData.userIdentifiers).toEqual([{ phoneNumber: HASH_FONE }]);
+    });
+
+    it('e-mail inválido e telefone curto são ignorados', async () => {
+      const { svc, ads } = monta([comPessoa({ customerEmail: 'nao-e-email', customerPhone: '1234' })]);
+      await svc.enviarPendentes();
+      expect(ads.requisitarDataManager.mock.calls[0][1].events[0].userData).toBeUndefined();
+      // Sem userData no lote inteiro, o encoding não vai — caminho antigo intacto.
+      expect(ads.requisitarDataManager.mock.calls[0][1].encoding).toBeUndefined();
+    });
+
+    it('pedido sem chave nenhuma fica FORA do lote e deixa rastro', async () => {
+      const semNada = { ...pedido('z', 'LP-9'), gclid: null, customerEmail: null, customerPhone: null };
+      const { svc, ads, updateMany } = monta([comPessoa({}), semNada]);
+      const r = await svc.enviarPendentes();
+      expect(r.enviadas).toBe(1);
+      expect(r.recusadas).toBe(1);
+      expect(ads.requisitarDataManager.mock.calls[0][1].events).toHaveLength(1);
+      const rastro = updateMany.mock.calls.find((c: any[]) => c[0].data?.adsConversaoTentativas);
+      expect(rastro[0].where.id.in).toEqual(['z']);
+      expect(rastro[0].data.adsConversaoErro).toMatch(/sem gclid/);
+    });
+
+    it('lote que o Google recusa conta tentativa e grava o motivo no pedido', async () => {
+      const { prisma, updateMany } = prismaFake([comPessoa({})]);
+      const ads = adsFake(new Error('DataManager 400 em events:ingest: encoding ausente'));
+      const svc = new GoogleAdsConversaoService(prisma, env(CREDENCIAIS), ads as any, whatsFake() as any);
+
+      await expect(svc.enviarPendentes()).rejects.toThrow(/400/);
+
+      const rastro = updateMany.mock.calls.find((c: any[]) => c[0].data?.adsConversaoTentativas);
+      expect(rastro[0].where.id.in).toEqual(['a']);
+      expect(rastro[0].data.adsConversaoErro).toMatch(/encoding ausente/);
+      // Nada foi carimbado como enviado.
+      expect(updateMany.mock.calls.some((c: any[]) => c[0].data?.adsConversaoEnviadaEm)).toBe(false);
+    });
+
+    it('a fila não exige mais gclid — aceita pedido com e-mail OU telefone', async () => {
+      const { svc, prisma } = monta([]);
+      await svc.enviarPendentes();
+      const where = (prisma.order.findMany as jest.Mock).mock.calls[0][0].where;
+      expect(where.gclid).toBeUndefined();
+      expect(where.OR).toEqual([
+        { gclid: { not: null } },
+        { customerEmail: { not: null } },
+        { customerPhone: { not: null } },
+      ]);
     });
   });
 });

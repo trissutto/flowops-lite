@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
@@ -356,7 +357,16 @@ export class GoogleAdsConversaoService {
           gte: new Date(agora - 60 * 24 * 60 * 60 * 1000),
         },
         status: { notIn: ['cancelled', 'failed'] },
-        gclid: { not: null },
+        // ANTES exigia `gclid: { not: null }` — e era esse AND que fazia 9 de
+        // cada 10 compras nunca chegarem ao Google. Agora basta ter ALGUMA
+        // chave: o clique, ou a pessoa (e-mail/telefone hasheado). Pedido sem
+        // nenhuma das duas continua de fora — a API recusa evento sem
+        // identificador, e mandar assim derrubaria o lote inteiro.
+        OR: [
+          { gclid: { not: null } },
+          { customerEmail: { not: null } },
+          { customerPhone: { not: null } },
+        ],
         adsConversaoEnviadaEm: null,
         adsConversaoTentativas: { lt: this.MAX_TENTATIVAS },
       },
@@ -364,6 +374,8 @@ export class GoogleAdsConversaoService {
         id: true,
         wcOrderNumber: true,
         gclid: true,
+        customerEmail: true,
+        customerPhone: true,
         totalAmount: true,
         paidAt: true,
         adsConversaoTentativas: true,
@@ -385,8 +397,28 @@ export class GoogleAdsConversaoService {
     // erro de permissão, não campo ignorado.
     if (mcc) destino.loginAccount = { accountType: 'GOOGLE_ADS', accountId: mcc };
 
-    const eventos = pedidos.map((p: any) => ({
-      adIdentifiers: { gclid: p.gclid },
+    // Pedido que não rende identificador nenhum sai FORA do lote: a Data
+    // Manager recusa o evento e, como o ingest é tudo-ou-nada, um pedido sem
+    // chave levaria junto todos os outros do lote.
+    const enviaveis: any[] = [];
+    const semChave: any[] = [];
+    for (const p of pedidos) {
+      const userData = this.identificadoresDe(p);
+      if (!p.gclid && !userData) semChave.push(p);
+      else enviaveis.push({ pedido: p, userData });
+    }
+    if (semChave.length) {
+      this.logger.warn(
+        `${semChave.length} pedido(s) fora do lote: sem gclid e sem e-mail/telefone válidos`,
+      );
+    }
+    if (!enviaveis.length) return { enviadas: 0, recusadas: 0 };
+
+    const eventos = enviaveis.map(({ pedido: p, userData }: any) => ({
+      // O clique quando existe; a pessoa sempre que der. Os dois juntos é o
+      // caso de melhor casamento — confirmado aceito pela API.
+      ...(p.gclid ? { adIdentifiers: { gclid: p.gclid } } : {}),
+      ...(userData ? { userData } : {}),
       // A hora da CONVERSÃO é a do pagamento — o PIX pago no dia seguinte
       // pertence ao dia seguinte. Aqui o formato é RFC 3339, com 'T'; o
       // caminho antigo exigia espaço. Trocar um pelo outro é 400.
@@ -398,11 +430,35 @@ export class GoogleAdsConversaoService {
       transactionId: String(p.wcOrderNumber ?? p.id),
     }));
 
-    const resposta = await this.ads.requisitarDataManager('events:ingest', {
-      destinations: [destino],
-      events: eventos,
-      ...(validar ? { validateOnly: true } : {}),
-    });
+    const temUserData = eventos.some((e: any) => e.userData);
+
+    let resposta: any;
+    try {
+      resposta = await this.ads.requisitarDataManager('events:ingest', {
+        destinations: [destino],
+        events: eventos,
+        // 🚨 OBRIGATÓRIO quando vai `userData`: sem `encoding` a API devolve 400
+        // seco mesmo com o hash correto. Medido com validateOnly em 02/09.
+        ...(temUserData ? { encoding: 'HEX' } : {}),
+        ...(validar ? { validateOnly: true } : {}),
+      });
+    } catch (err) {
+      // O ingest é TUDO-OU-NADA: se caiu, nenhum pedido do lote subiu. Marcar
+      // a tentativa e o motivo em cada um é o que faz o `MAX_TENTATIVAS` deixar
+      // de ser código morto — sem isso um pedido que o Google recusa em
+      // definitivo volta de hora em hora pra sempre, levando junto todo pedido
+      // novo do lote, e ninguém fica sabendo.
+      if (!validar) {
+        const motivo = String((err as Error)?.message ?? err).slice(0, 500);
+        await (this.prisma as any).order
+          .updateMany({
+            where: { id: { in: enviaveis.map((e: any) => e.pedido.id) } },
+            data: { adsConversaoTentativas: { increment: 1 }, adsConversaoErro: motivo },
+          })
+          .catch(() => undefined); // registrar a falha não pode virar outra falha
+      }
+      throw err;
+    }
 
     const avisos: any[] = Array.isArray(resposta?.fieldWarnings) ? resposta.fieldWarnings : [];
 
@@ -411,7 +467,7 @@ export class GoogleAdsConversaoService {
       return {
         enviadas: 0,
         recusadas: 0,
-        validado: pedidos.length,
+        validado: enviaveis.length,
         erro: avisos.length ? JSON.stringify(avisos).slice(0, 800) : undefined,
       };
     }
@@ -433,15 +489,31 @@ export class GoogleAdsConversaoService {
     }
 
     await (this.prisma as any).order.updateMany({
-      where: { id: { in: pedidos.map((p: any) => p.id) } },
+      where: { id: { in: enviaveis.map((e: any) => e.pedido.id) } },
       data: { adsConversaoEnviadaEm: new Date(), adsConversaoErro: null },
     });
 
+    // O pedido sem chave nenhuma NÃO some em silêncio: conta tentativa e grava
+    // o motivo. Sem isso o `MAX_TENTATIVAS` era código morto (ele nunca subia)
+    // e o pedido voltava na fila de hora em hora, pra sempre, sem rastro.
+    if (semChave.length) {
+      await (this.prisma as any).order.updateMany({
+        where: { id: { in: semChave.map((p: any) => p.id) } },
+        data: {
+          adsConversaoTentativas: { increment: 1 },
+          adsConversaoErro: 'sem gclid e sem e-mail/telefone válidos pra casar no Google',
+        },
+      });
+    }
+
+    const comPessoa = eventos.filter((e: any) => e.userData).length;
+    const soPessoa = eventos.filter((e: any) => e.userData && !e.adIdentifiers).length;
     this.logger.log(
-      `${pedidos.length} conversão(ões) enviada(s) ao Google ` +
-        `(requestId ${resposta?.requestId ?? '-'})`,
+      `${enviaveis.length} conversão(ões) enviada(s) ao Google ` +
+        `(${comPessoa} com identificador de pessoa, ${soPessoa} SEM gclid — só existiam ` +
+        `por causa dele; requestId ${resposta?.requestId ?? '-'})`,
     );
-    return { enviadas: pedidos.length, recusadas: 0 };
+    return { enviadas: enviaveis.length, recusadas: semChave.length };
   }
 
   /**
@@ -458,6 +530,64 @@ export class GoogleAdsConversaoService {
    */
   private momentoRfc3339(d: Date): string {
     return this.momento(d).replace(' ', 'T');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  IDENTIFICADOR DA PESSOA (Enhanced Conversions) — 02/09/2026
+  //
+  //  O `gclid` some fácil: a cliente vê o anúncio no celular e compra no PC,
+  //  manda o link pra amiga, volta dois dias depois por fora do anúncio. Medido
+  //  em 30 dias: 363 pedidos pagos, só 38 (10,5%) com gclid — e mesmo entre os
+  //  57 que a UTM marcou como Google, 19 (R$ 4.846,79) não tinham.
+  //
+  //  O e-mail/telefone hasheado é a segunda chave: o Google casa com o clique
+  //  que ELE conhece. Não inventa conversão — pedido sem clique nenhum
+  //  simplesmente não é atribuído.
+  //
+  //  ⚠️ Contrato confirmado contra a API real com `validateOnly` (02/09):
+  //   · `userData.userIdentifiers` só é aceito com `encoding: 'HEX'` no TOPO da
+  //     requisição. Sem isso: HTTP 400 seco, mesmo com o hash certo.
+  //   · e-mail em texto puro é RECUSADO (o Google confere que é hash).
+  //   · lote MISTO (uns com gclid+userData, outros só userData) é aceito.
+  //   · evento sem identificador nenhum é recusado — por isso o filtro embaixo.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private sha256Hex(v: string): string {
+    return createHash('sha256').update(v).digest('hex');
+  }
+
+  /** Trim + minúscula, que é a canonicalização que o Google pede pra e-mail. */
+  private hashEmail(email?: string | null): string | null {
+    const limpo = String(email ?? '').trim().toLowerCase();
+    // Validação mínima: hash de lixo casa com nada e ainda gasta cota.
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(limpo)) return null;
+    return this.sha256Hex(limpo);
+  }
+
+  /**
+   * E.164. ⚠️ `Order.customerPhone` é gravado SEM DDI (o checkout já engoliu
+   * dígito por causa disso uma vez) — então o 55 entra aqui, e só quando não
+   * veio. Celular = DDD(2)+9 = 11 dígitos; fixo = DDD(2)+8 = 10.
+   */
+  private hashTelefone(fone?: string | null): string | null {
+    let d = String(fone ?? '').replace(/\D/g, '');
+    if (!d) return null;
+    if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+    if (d.length < 10 || d.length > 11) return null; // não é telefone BR válido
+    return this.sha256Hex(`+55${d}`);
+  }
+
+  /** `userData` do pedido, ou null quando não há e-mail nem telefone usável. */
+  private identificadoresDe(p: {
+    customerEmail?: string | null;
+    customerPhone?: string | null;
+  }): { userIdentifiers: Array<Record<string, string>> } | null {
+    const ids: Array<Record<string, string>> = [];
+    const email = this.hashEmail(p.customerEmail);
+    if (email) ids.push({ emailAddress: email });
+    const fone = this.hashTelefone(p.customerPhone);
+    if (fone) ids.push({ phoneNumber: fone });
+    return ids.length ? { userIdentifiers: ids } : null;
   }
 
   private momento(d: Date): string {
