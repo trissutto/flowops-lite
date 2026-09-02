@@ -389,6 +389,48 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     nota: 'CONSOME o banco: o dia entra negativo e o saldo do mês cai. Não é falta.',
   },
   {
+    // FERIADO — o calendário fechou a loja; o dia não é da funcionária.
+    //
+    // O `horarioTrabalho` do cadastro é uma semana fixa e não sabe de feriado:
+    // sem este tipo, o dia aparecia como FALTA (ou pedia uma FOLGA que não é
+    // folga). Abona as horas do dia inteiro, sem tocar em banco nem folha.
+    codigo: 'FERIADO',
+    label: 'Feriado',
+    grupo: 'programado',
+    justificaAusencia: true,
+    abonaJornada: true,
+    contaComoTrabalhado: false,
+    debitaBanco: false,
+    descontaSalario: false,
+    descontaDSR: false,
+    contaArt130: false,
+    exigeDocumento: false,
+    admiteParcial: false,
+    esocial: null,
+    nota: 'O calendário fechou a loja — abona as horas do dia. Não é falta nem folga.',
+  },
+  {
+    // DAY OFF — benefício que a EMPRESA dá (aniversário, premiação).
+    //
+    // Vizinho da FOLGA_COMPENSATORIA na tela e oposto na conta: o day off é
+    // presente, não troca — abona a jornada inteira e NÃO consome banco de
+    // horas. Se debitasse, o presente sairia do bolso da funcionária.
+    codigo: 'DAY_OFF',
+    label: 'Day off',
+    grupo: 'programado',
+    justificaAusencia: true,
+    abonaJornada: true,
+    contaComoTrabalhado: false,
+    debitaBanco: false,
+    descontaSalario: false,
+    descontaDSR: false,
+    contaArt130: false,
+    exigeDocumento: false,
+    admiteParcial: false,
+    esocial: null,
+    nota: 'Benefício concedido pela empresa — abona a jornada inteira SEM consumir o banco de horas.',
+  },
+  {
     codigo: 'LICENCA_MATERNIDADE',
     label: 'Licença-maternidade',
     grupo: 'programado',

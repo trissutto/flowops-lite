@@ -435,3 +435,54 @@ describe('FOLGA COMPENSATÓRIA — consome o banco (dono 29/08)', () => {
     expect(r.minDebitadoBanco).toBe(0);
   });
 });
+
+describe('FERIADO e DAY OFF — abonam o dia inteiro', () => {
+  it('FERIADO abona as horas do dia sem descontar nada', () => {
+    const t = tipoEvento('FERIADO')!;
+    expect(t.abonaJornada).toBe(true);
+    expect(t.descontaSalario).toBe(false);
+    expect(t.descontaDSR).toBe(false);
+    expect(t.contaArt130).toBe(false);
+    expect(t.exigeDocumento).toBe(false);
+    expect(minutosAbatidos({ tipo: 'FERIADO', diaInteiro: true }, JORNADA)).toBe(480);
+  });
+
+  it('DAY OFF abona a jornada diária inteira', () => {
+    const t = tipoEvento('DAY_OFF')!;
+    expect(t.abonaJornada).toBe(true);
+    expect(minutosAbatidos({ tipo: 'DAY_OFF', diaInteiro: true }, JORNADA)).toBe(480);
+  });
+
+  // Sempre dia inteiro: hora preenchida não encolhe o abono.
+  it('os dois ignoram horas — são sempre dia inteiro', () => {
+    expect(tipoEvento('FERIADO')!.admiteParcial).toBe(false);
+    expect(tipoEvento('DAY_OFF')!.admiteParcial).toBe(false);
+    const ev = { tipo: 'FERIADO', diaInteiro: false, horaInicio: '09:00', horaFim: '10:00' };
+    expect(minutosAbatidos(ev, JORNADA)).toBe(480);
+  });
+
+  it('saem como abonados, não como falta', () => {
+    for (const tipo of ['FERIADO', 'DAY_OFF']) {
+      const r = efeitosDoDia([{ tipo, diaInteiro: true }], JORNADA);
+      expect(r.abonado).toBe(true);
+      expect(r.faltaInjustificada).toBe(false);
+      expect(r.minAbatidos).toBe(480);
+    }
+  });
+
+  // A diferença que importa pro banco: day off é PRESENTE da empresa, não
+  // troca — o dia fecha em zero e o saldo do banco não mexe.
+  it('DAY OFF não consome banco de horas (diferente da folga compensatória)', () => {
+    const r = efeitosDoDia([{ tipo: 'DAY_OFF', diaInteiro: true }], JORNADA);
+    expect(r.minDebitadoBanco).toBe(0);
+    expect(tipoEvento('DAY_OFF')!.debitaBanco).toBe(false);
+  });
+
+  it('nenhum dos dois pesa na folha', () => {
+    const r = descontoFolha([
+      { data: '2026-09-07', tipo: 'FERIADO' },
+      { data: '2026-09-08', tipo: 'DAY_OFF' },
+    ]);
+    expect(r.diasTotais).toBe(0);
+  });
+});
