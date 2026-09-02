@@ -1,9 +1,10 @@
 /**
  * CUPONS — validação compartilhada entre sacola e checkout.
  *
- * A tabela vive aqui (e pode ser sobrescrita por env no server) até o backend
- * ganhar o módulo de cupons. A UI NUNCA calcula desconto por conta própria:
- * chama `applyCoupon` e exibe o `message` — assim a regra muda num lugar só.
+ * A fonte de verdade é `site_cupons` no FlowOps (painel /retaguarda/cupons);
+ * a regra chega aqui via `validarCupomRemoto` e fica em memória. A UI NUNCA
+ * calcula desconto por conta própria: chama `applyCoupon` e exibe o
+ * `message` — assim a regra muda num lugar só.
  *
  * ⚠️ Validação client-side é cortesia de UX; a validação que VALE é a do
  * server no POST /api/checkout (mesma função, rodando lá). Cliente esperto
@@ -24,33 +25,18 @@ export interface CouponRule {
   label: string;
 }
 
-/** Tabela padrão. No server, `CUPONS_JSON` (env) substitui por completo. */
-const DEFAULT_RULES: CouponRule[] = [
-  /**
-   * PRIMEIRA10 — o cupom do popup de boas-vindas (12/08/2026).
-   *
-   * SEM VALOR MÍNIMO, por decisão do dono. O BEMVINDA10 logo abaixo exige
-   * R$ 149,90; prometer "10% na primeira compra" e a cliente levar um "não"
-   * no carrinho de R$ 89 é quebrar a promessa na primeira conversa que a
-   * marca teve com ela — pior do que não ter oferecido.
-   *
-   * Código próprio (e não o BEMVINDA10) pra dar pra medir quanto o popup
-   * vendeu. Trocar de campanha: este código + `CUPOM_LEAD_SITE` no backend.
-   */
-  { code: 'PRIMEIRA10', kind: 'percent', value: 10, label: 'Primeira compra: 10% off' },
-  { code: 'BEMVINDA10', kind: 'percent', value: 10, minSubtotal: 149.9, label: 'Boas-vindas: 10% off' },
-  { code: 'LURDS15', kind: 'percent', value: 15, minSubtotal: 349.9, label: '15% off acima de R$ 349,90' },
-  { code: 'FRETEGRATIS', kind: 'shipping', value: 0, minSubtotal: 199.9, label: 'Frete grátis' },
-  /**
-   * VESTIDO139 — campanha do Vestido Viscolycra Premium (dono, 14/08/2026):
-   * R$ 50 off leva a peça de R$ 189,90 pra R$ 139,90. Espelha a linha da
-   * tabela `site_cupons` do backend (que é quem VALE) — sem ela aqui, a tela
-   * recusava um cupom que o backend aceita. Dívida conhecida: o front devia
-   * LER do backend em vez de manter esta cópia; enquanto não lê, campanha
-   * nova entra nos dois lugares. `expiresAt` casa com o `fim_em` do banco.
-   */
-  { code: 'VESTIDO139', kind: 'fixed', value: 50, minSubtotal: 179.9, expiresAt: '2026-08-21T20:35:13.860Z', label: 'R$ 50 off — o vestido por R$ 139,90' },
-];
+/**
+ * Tabela padrão VAZIA desde 01/09 — ordem do dono ("matar"): as campanhas
+ * herdadas do site velho (PRIMEIRA10/BEMVINDA10/LURDS15/FRETEGRATIS) e a
+ * VESTIDO139 acabaram. Cupom agora nasce SÓ na retaguarda (/retaguarda/cupons
+ * → `site_cupons`) e chega aqui pelo `validarCupomRemoto`, que semeia a regra
+ * em `REGRAS_REMOTAS`. Manter código aqui era exatamente o vazamento que
+ * ressuscitava campanha morta quando o backend piscava.
+ *
+ * No server, `CUPONS_JSON` (env) continua substituindo por completo —
+ * escape hatch pra campanha relâmpago sem deploy.
+ */
+const DEFAULT_RULES: CouponRule[] = [];
 
 function rules(): CouponRule[] {
   // Server-side: env tem precedência (mesma filosofia das flags do FlowOps).
@@ -59,7 +45,7 @@ function rules(): CouponRule[] {
       const parsed = JSON.parse(process.env.CUPONS_JSON) as CouponRule[];
       if (Array.isArray(parsed) && parsed.length) return parsed;
     } catch {
-      console.warn('[cupom] CUPONS_JSON inválido — usando tabela padrão');
+      console.warn('[cupom] CUPONS_JSON inválido — ignorando');
     }
   }
   return DEFAULT_RULES;
@@ -148,10 +134,9 @@ export function applyCoupon(rawCode: string, subtotal: number): CouponResult {
  *
  * Bate em `/api/loja/cupom` (BFF, que carrega o token) e SEMEIA a regra
  * devolvida em `REGRAS_REMOTAS` — a partir daí o `applyCoupon` local sabe
- * recalcular esse código a cada mudança de subtotal. Backend fora do ar cai
- * na tabela local: campanha continua aplicando; código que só existe lá
- * responde "não encontramos" até a rede voltar — e quem cobra reconfere de
- * qualquer jeito.
+ * recalcular esse código a cada mudança de subtotal. Backend fora do ar:
+ * código já semeado continua recalculando; código novo responde "não
+ * encontramos" até a rede voltar — e quem cobra reconfere de qualquer jeito.
  *
  * `cpf` é opcional e só importa pro vale nominal: sem ele o backend devolve
  * `reason='nominal_sem_cpf'` e o checkout reaplica quando o CPF entrar.

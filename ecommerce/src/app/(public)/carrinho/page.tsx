@@ -501,7 +501,7 @@ export default function CarrinhoPage() {
                             setCodigoDigitado(e.target.value);
                             setAvisoCupom(null);
                           }}
-                          placeholder="Ex.: BEMVINDA10"
+                          placeholder="Digite o código"
                           autoComplete="off"
                           className="flex-1"
                         />
