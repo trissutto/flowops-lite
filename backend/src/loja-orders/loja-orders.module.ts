@@ -9,6 +9,8 @@ import { CarrinhoGuardService } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.service';
 import { LojaAdminController } from './loja-admin.controller';
+// Painel /retaguarda/cupons: vale de troca manual + campanha (dono, 01/09).
+import { CuponsAdminController } from './cupons-admin.controller';
 import { FreteService } from './frete.service';
 import { PersonIdentityModule } from '../person-identity/person-identity.module';
 // A promoção de 50% do caixa: a trava do carrinho tem que cobrar o MESMO
@@ -47,7 +49,7 @@ import { RiscoModule } from '../risco/risco.module';
     RiscoModule,
     forwardRef(() => PagarmeModule),
   ],
-  controllers: [LojaOrdersController, LojaAdminController],
+  controllers: [LojaOrdersController, LojaAdminController, CuponsAdminController],
   providers: [
     LojaOrdersService,
     CarrinhoGuardService,

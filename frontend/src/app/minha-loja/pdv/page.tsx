@@ -7777,6 +7777,19 @@ function PaymentModal({
                   </button>
                 ))}
               </div>
+              {/* Antes do frete existir, a venda ainda pode mudar — depois,
+                  mexer no pedido quebra a cobrança (o painel volta ao modo
+                  cru com todas as bandeiras). Por isso este é o ÚNICO passo
+                  cujo "voltar" devolve pra VENDA; vindo do "alterar" (entrega
+                  já escolhida), volta só pro painel de pagamento. */}
+              <button
+                type="button"
+                onClick={() => { if (entregaTipo) setEtapaOnline(null); else onClose(); }}
+                title={entregaTipo ? undefined : 'Antes do frete dá pra mudar o pedido; depois, não.'}
+                className="mt-3 w-full rounded-xl border-2 border-slate-300 bg-white py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                {entregaTipo ? 'Voltar' : 'Voltar pra venda'}
+              </button>
             </div>
           )}
 
