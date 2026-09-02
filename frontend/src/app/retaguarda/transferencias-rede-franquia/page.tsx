@@ -76,6 +76,29 @@ interface Summary {
   meta?: { ordersWithoutPrice: number; ordersTotal: number };
 }
 
+interface EstoqueLoja {
+  code: string;
+  name: string;
+  tipo: string; // 'REDE' | 'FILIAL'
+  pecas: number;
+  valorVenda: number;
+  valorCusto: number;
+  pecasSemPreco: number;
+}
+interface EstoqueTotais {
+  pecas: number;
+  valorVenda: number;
+  valorCusto: number;
+  pecasSemPreco: number;
+  lojas: number;
+}
+interface EstoqueResumo {
+  divisor: number;
+  lojas: EstoqueLoja[];
+  porTipo: { rede: EstoqueTotais; franquia: EstoqueTotais };
+  totais: EstoqueTotais;
+}
+
 type FlowKey = 'redeToFilial' | 'filialToRede' | 'redeToRede' | 'filialToFilial';
 
 const FLOW_DEFS: Array<{
@@ -121,6 +144,23 @@ export default function TransferenciasRedeFranquiaPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<'analise' | 'conta'>('analise');
+  const [estoque, setEstoque] = useState<EstoqueResumo | null>(null);
+  const [estoqueErr, setEstoqueErr] = useState<string | null>(null);
+
+  // Estoque ATUAL — foto de agora, independe do De/Até (carrega uma vez).
+  useEffect(() => {
+    let alive = true;
+    api<EstoqueResumo>('/transferencias/estoque-lojas')
+      .then((d) => {
+        if (alive) setEstoque(d);
+      })
+      .catch((e) => {
+        if (alive) setEstoqueErr(String(e?.message || e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!customFrom || !customTo) {
@@ -176,6 +216,19 @@ export default function TransferenciasRedeFranquiaPage() {
     for (const p of data.pairs) {
       lines.push(
         `${p.direction};${p.from} ${p.fromName};${p.to} ${p.toName};${p.pecas};${p.valorTotal.toFixed(2)};${p.valorCusto.toFixed(2)}`,
+      );
+    }
+    if (estoque) {
+      lines.push('');
+      lines.push('Estoque por loja (foto de agora)');
+      lines.push('Loja;Tipo;Pecas;Valor Venda (R$);Custo /2,5 (R$)');
+      for (const l of estoque.lojas) {
+        lines.push(
+          `${l.code} ${l.name};${l.tipo === 'FILIAL' ? 'FRANQUIA' : 'REDE'};${l.pecas};${l.valorVenda.toFixed(2)};${l.valorCusto.toFixed(2)}`,
+        );
+      }
+      lines.push(
+        `TOTAL;;${estoque.totais.pecas};${estoque.totais.valorVenda.toFixed(2)};${estoque.totais.valorCusto.toFixed(2)}`,
       );
     }
     const blob = new Blob([`﻿${lines.join('\n')}`], { type: 'text/csv;charset=utf-8;' });
@@ -366,6 +419,94 @@ export default function TransferenciasRedeFranquiaPage() {
               Clique numa linha pra ver o detalhe loja-a-loja daquele fluxo.
             </p>
           </>
+        )}
+
+        {/* Estoque atual por loja — foto de agora, independe do De/Até */}
+        {tab === 'analise' && !loading && (
+          <div className="mt-8">
+            <h2 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+              <Package className="h-5 w-5 text-blue-600" /> Estoque por loja
+            </h2>
+            <p className="mb-3 text-xs text-slate-500">
+              Foto de agora (não segue o filtro de datas) · valor a preço de venda ·
+              custo = venda ÷ {String(estoque?.divisor ?? 2.5).replace('.', ',')}
+            </p>
+            {estoqueErr && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                Falha ao carregar o estoque: {estoqueErr}
+              </div>
+            )}
+            {!estoque && !estoqueErr && (
+              <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" /> Carregando estoque…
+              </div>
+            )}
+            {estoque && (
+              <>
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-4 py-3">Loja</th>
+                          <th className="px-4 py-3 text-right">Peças</th>
+                          <th className="px-4 py-3 text-right">Valor venda</th>
+                          <th className="px-4 py-3 text-right">Custo ÷2,5</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {estoque.lojas.map((l) => (
+                          <tr key={l.code}>
+                            <td className="px-4 py-2.5">
+                              <span className="inline-flex items-center gap-2">
+                                <TipoBadge tipo={l.tipo === 'FILIAL' ? 'FRANQUIA' : 'REDE'} />
+                                <span className="font-medium text-slate-800">
+                                  {l.code} {l.name}
+                                </span>
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right tabular-nums">{num(l.pecas)}</td>
+                            <td className="px-4 py-2.5 text-right tabular-nums">{brl(l.valorVenda)}</td>
+                            <td className="px-4 py-2.5 text-right font-semibold tabular-nums">{brl(l.valorCusto)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t border-slate-200 bg-blue-50/50 text-sm font-semibold text-slate-700">
+                          <td className="px-4 py-2.5">
+                            REDE <span className="font-normal text-slate-400">({num(estoque.porTipo.rede.lojas)} lojas)</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{num(estoque.porTipo.rede.pecas)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{brl(estoque.porTipo.rede.valorVenda)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{brl(estoque.porTipo.rede.valorCusto)}</td>
+                        </tr>
+                        <tr className="bg-amber-50/50 text-sm font-semibold text-slate-700">
+                          <td className="px-4 py-2.5">
+                            FRANQUIA <span className="font-normal text-slate-400">({num(estoque.porTipo.franquia.lojas)} lojas)</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{num(estoque.porTipo.franquia.pecas)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{brl(estoque.porTipo.franquia.valorVenda)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{brl(estoque.porTipo.franquia.valorCusto)}</td>
+                        </tr>
+                        <tr className="border-t-2 border-slate-200 bg-slate-50 font-bold text-slate-800">
+                          <td className="px-4 py-3">TOTAL</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{num(estoque.totais.pecas)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{brl(estoque.totais.valorVenda)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{brl(estoque.totais.valorCusto)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+                {estoque.totais.pecasSemPreco > 0 && (
+                  <p className="mt-2 text-xs text-slate-400">
+                    {num(estoque.totais.pecasSemPreco)} peças sem preço no espelho — contam na coluna de peças,
+                    não no valor.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
     </div>

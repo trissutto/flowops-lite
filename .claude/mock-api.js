@@ -135,6 +135,51 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  // ── Transferências REDE × FRANQUIA (02/09) ────────────────────────────────
+  if (url.pathname === '/api/transferencias/rede-franquia') {
+    const f = (pecas, valorTotal, shipments) => ({ pecas, valorTotal, valorCusto: Math.round((valorTotal / 2.5) * 100) / 100, shipments });
+    return json({
+      period: { from: url.searchParams.get('from') || '2026-06-04', to: url.searchParams.get('to') || '2026-09-02' },
+      divisor: 2.5,
+      flows: {
+        redeToFilial: f(6500, 1024956.1, 193),
+        filialToRede: f(367, 69946.18, 133),
+        redeToRede: f(15324, 2384922.86, 946),
+        filialToFilial: f(259, 53196.29, 155),
+      },
+      totals: f(22450, 3533021.43, 1427),
+      pairs: [],
+      meta: { ordersWithoutPrice: 28, ordersTotal: 22466 },
+    });
+  }
+  if (url.pathname === '/api/transferencias/estoque-lojas') {
+    // Números reais da validação em produção (02/09)
+    const L = (code, name, tipo, pecas, valorVenda, pecasSemPreco = 0) => ({
+      code, name, tipo, pecas, valorVenda, valorCusto: Math.round((valorVenda / 2.5) * 100) / 100, pecasSemPreco,
+    });
+    const lojas = [
+      L('01', 'SANTOS', 'REDE', 89379, 6584156.59, 7462),
+      L('06', 'SOROCABA', 'REDE', 14457, 2669793.14, 13),
+      L('07', 'PRAIA GRANDE', 'REDE', 12837, 2242613.69, 3),
+      L('11', 'ITANHAEM', 'REDE', 11026, 2013216.32, 6),
+      L('15', 'CAMPINAS', 'FILIAL', 9912, 1752025.1, 3),
+      L('05', 'INDAIATUBA', 'FILIAL', 9699, 1719945.0, 1),
+      L('14', 'PIRACICABA', 'REDE', 9779, 1712104.9, 7),
+      L('13', 'SITE', 'REDE', 52, 6844.8, 0),
+    ];
+    const soma = (list) => {
+      const pecas = list.reduce((s, l) => s + l.pecas, 0);
+      const valorVenda = Math.round(list.reduce((s, l) => s + l.valorVenda, 0) * 100) / 100;
+      return { pecas, valorVenda, valorCusto: Math.round((valorVenda / 2.5) * 100) / 100, pecasSemPreco: list.reduce((s, l) => s + l.pecasSemPreco, 0), lojas: list.length };
+    };
+    return json({
+      divisor: 2.5,
+      lojas,
+      porTipo: { rede: soma(lojas.filter((l) => l.tipo === 'REDE')), franquia: soma(lojas.filter((l) => l.tipo === 'FILIAL')) },
+      totais: soma(lojas),
+    });
+  }
+
   json({ error: 'mock: rota nao coberta ' + url.pathname }, 404);
 });
 
