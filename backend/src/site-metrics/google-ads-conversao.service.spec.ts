@@ -308,13 +308,19 @@ describe('GoogleAdsConversaoService', () => {
    * CALADO: alarme que grita à toa treina todo mundo a ignorá-lo.
    */
   describe('alarme de silêncio', () => {
-    const prismaDiag = (contagens: number[], gastoOntem = 0) => {
+    /**
+     * `apagadas` = linhas do cheque 5 (campanha que CONVERTIA e parou). Desde
+     * 02/09/2026 são DUAS consultas cruas, nesta ordem: gasto de ontem, depois
+     * apagão — por isso o fake responde por posição, e não um valor só pra tudo.
+     */
+    const prismaDiag = (contagens: number[], gastoOntem = 0, apagadas: any[] = []) => {
       const count = jest.fn();
       contagens.forEach((n) => count.mockResolvedValueOnce(n));
-      return {
-        order: { count },
-        $queryRawUnsafe: jest.fn().mockResolvedValue([{ gasto: gastoOntem }]),
-      } as any;
+      const $queryRawUnsafe = jest
+        .fn()
+        .mockResolvedValueOnce([{ gasto: gastoOntem }])
+        .mockResolvedValueOnce(apagadas);
+      return { order: { count }, $queryRawUnsafe } as any;
     };
     // A ordem das contagens é a das chamadas: aceitas, naFila, googleComGclid, googleTotal.
     const svcCom = (prisma: any) =>
@@ -348,6 +354,47 @@ describe('GoogleAdsConversaoService', () => {
     it('uma venda solta sem gclid não vira alarme — é ruído, não sintoma', async () => {
       const problemas = await svcCom(prismaDiag([1, 0, 0, 2])).diagnosticarSilencio();
       expect(problemas).toEqual([]);
+    });
+
+    /**
+     * APAGÃO POR CAMPANHA (02/09/2026). O caso real: a PMax "Raio Lojas ecomm"
+     * passou 34 dias gastando R$ 40/dia com ZERO conversão — mas vive numa
+     * conta onde 28 campanhas irmãs convertem normalmente, então o silêncio
+     * dela sumia no total. Os cheques 1-4 nunca a veriam.
+     */
+    it('grita quando uma campanha que convertia PAROU de converter', async () => {
+      const linha = {
+        conta_id: '9564998046',
+        campanha_id: '23311858516',
+        nome: 'PMax Raio Lojas ecomm',
+        gasto: 274.28,
+        antes: 19.2,
+      };
+      const problemas = await svcCom(prismaDiag([4, 2, 3, 3], 0, [linha])).diagnosticarSilencio();
+      const texto = problemas.join(' ');
+      expect(texto).toMatch(/PMax Raio Lojas ecomm/);
+      expect(texto).toMatch(/ZERO conversão/);
+      // A conta tem que aparecer: a campanha vive FORA da conta de e-commerce.
+      expect(texto).toMatch(/9564998046/);
+    });
+
+    /** Campanha que NUNCA converteu não é apagão — é o normal dela. */
+    it('não grita por campanha local que nunca converteu', async () => {
+      const problemas = await svcCom(prismaDiag([4, 2, 3, 3], 0, [])).diagnosticarSilencio();
+      expect(problemas).toEqual([]);
+    });
+
+    /**
+     * A conta de loja gasta ~R$ 890/dia e, por natureza, não vende no site.
+     * Sem este filtro o cheque 3 gritaria em todo dia fraco — e alarme que
+     * grita à toa treina todo mundo a ignorar o alarme.
+     */
+    it('o cheque de gasto exclui as contas de loja física', async () => {
+      const prisma = prismaDiag([4, 2, 3, 3], 0, []);
+      await svcCom(prisma).diagnosticarSilencio();
+      const [sql, lista] = prisma.$queryRawUnsafe.mock.calls[0];
+      expect(sql).toMatch(/conta_id <> ALL/);
+      expect(Array.isArray(lista)).toBe(true);
     });
   });
 

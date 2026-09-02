@@ -5,6 +5,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { GoogleAdsService } from './google-ads.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { contasDeLojaTodas } from '../common/contas-de-anuncio';
 
 /**
  * A VENDA VOLTA PRO GOOGLE PELO SERVIDOR — sem GA4 no meio.
@@ -196,9 +197,16 @@ export class GoogleAdsConversaoService {
     }
 
     // 3. Gastou e ninguém chegou.
+    //
+    // ⚠️ SÓ CONTA DE E-COMMERCE (02/09/2026). A conta de loja física gasta ~R$
+    // 890/dia e, por natureza, não gera venda no site — somá-la aqui faria o
+    // alarme gritar todo dia fraco, e alarme que grita à toa treina todo mundo
+    // a ignorar. Ver common/contas-de-anuncio.ts.
     const gasto = await this.prisma.$queryRawUnsafe<Array<{ gasto: number }>>(
       `SELECT COALESCE(SUM(gasto), 0)::float AS gasto FROM google_ads_gasto_dia
-        WHERE dia = (CURRENT_DATE - INTERVAL '1 day')::date`,
+        WHERE dia = (CURRENT_DATE - INTERVAL '1 day')::date
+          AND conta_id <> ALL ($1::text[])`,
+      contasDeLojaTodas(),
     );
     const gastoOntem = Number(gasto?.[0]?.gasto || 0);
     if (gastoOntem > 100 && googleTotal === 0) {
@@ -211,6 +219,51 @@ export class GoogleAdsConversaoService {
     if (this.acaoValida === false) {
       problemas.push('a ação de conversão configurada não é UPLOAD_CLICKS (nenhum upload é aceito)');
     }
+
+    // 5. APAGÃO POR CAMPANHA — a pergunta que faltava (02/09/2026).
+    //
+    // Os cheques 1-4 olham a NOSSA fila e o TOTAL da conta de e-commerce. Foi
+    // por isso que a `[Petter][PMax Raio Lojas] ecomm` ficou 34 dias gastando
+    // R$ 40/dia com ZERO conversão sem ninguém saber: ela vive em OUTRA conta,
+    // e no total da conta dela o silêncio some no meio de 28 campanhas que
+    // convertem normalmente.
+    //
+    // A assinatura do apagão não é "não converte" — é "converteu e PAROU".
+    // Campanha que nunca converteu (as locais, que medem visita de loja) não
+    // entra, porque a janela de comparação exige conversão no passado. Sem
+    // essa distinção o alarme acusaria as 29 campanhas de cidade todo dia.
+    const apagadas = await this.prisma.$queryRawUnsafe<
+      Array<{ conta_id: string; campanha_id: string; nome: string | null; gasto: number; antes: number }>
+    >(
+      `WITH recente AS (
+         SELECT conta_id, campanha_id, MAX(campanha_nome) AS nome,
+                SUM(gasto)::float AS gasto, SUM(conversoes)::float AS conv
+           FROM google_ads_gasto_dia
+          WHERE dia >= (CURRENT_DATE - INTERVAL '7 days')::date
+          GROUP BY conta_id, campanha_id
+       ),
+       passado AS (
+         SELECT conta_id, campanha_id, SUM(conversoes)::float AS conv
+           FROM google_ads_gasto_dia
+          WHERE dia >= (CURRENT_DATE - INTERVAL '37 days')::date
+            AND dia <  (CURRENT_DATE - INTERVAL '7 days')::date
+          GROUP BY conta_id, campanha_id
+       )
+       SELECT r.conta_id, r.campanha_id, r.nome, r.gasto, p.conv AS antes
+         FROM recente r
+         JOIN passado p ON p.conta_id = r.conta_id AND p.campanha_id = r.campanha_id
+        WHERE r.gasto >= 100 AND r.conv = 0 AND p.conv >= 5
+        ORDER BY r.gasto DESC
+        LIMIT 5`,
+    );
+    for (const c of apagadas) {
+      problemas.push(
+        `campanha "${c.nome ?? c.campanha_id}" (conta ${c.conta_id}) gastou ` +
+          `R$ ${Number(c.gasto).toFixed(2)} em 7 dias com ZERO conversão — ` +
+          `vinha de ${Number(c.antes).toFixed(0)} nos 30 dias anteriores`,
+      );
+    }
+
     return problemas;
   }
 
