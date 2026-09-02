@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { diaBrasiliaSql } from '../common/tz';
+import { contasDeLojaTodas } from '../common/contas-de-anuncio';
 
 /** Só estes entram. Evento fora da lista é descartado em silêncio — a rota é
  *  pública (token compartilhado) e não vira depósito de qualquer coisa. */
@@ -1387,15 +1388,32 @@ export class SiteMetricsService {
               -- certa = ROAS menor do que é, justamente na tela que decide
               -- onde pôr dinheiro. A coluna dia do espelho já está no fuso
               -- da conta; quem precisava converter era o parâmetro.
+              -- ⚠️ CONTA DE LOJA FÍSICA FICA DE FORA (02/09/2026).
+              --
+              -- Esta cascata divide GASTO por RECEITA DO SITE. Anúncio de loja
+              -- não existe pra vender no site: as 29 campanhas de cidade da
+              -- conta Google 9564998046 fizeram ZERO sessão no site em 30 dias
+              -- e gastaram R$ 26.648 — entrariam aqui como custo puro, sem
+              -- receita nenhuma pra dividir, afundando o ROAS do e-commerce
+              -- com dinheiro que não é dele.
+              --
+              -- E tem coisa pior que o custo: essa conta reporta R$ 184.865 de
+              -- valor_conversoes que é 100% VISITA DE LOJA ESTIMADA e "como
+              -- chegar" — nenhum real de receita. Sem este filtro, a coluna "a
+              -- plataforma diz" mostraria R$ 180 mil de faturamento que não
+              -- existe. O retorno delas aparece em trafegoDeLojas, como
+              -- custo por contato — ver common/contas-de-anuncio.ts.
               SELECT campanha_id, campanha_nome, gasto, 'meta'::text AS fonte,
                      NULL::numeric AS conversoes, NULL::numeric AS valor_conv
                 FROM meta_ads_gasto_dia
                WHERE dia >= ${diaBrasiliaSql('$1')} AND dia <= ${diaBrasiliaSql('$2')}
+                 AND conta_id <> ALL ($3::text[])
                UNION ALL
               SELECT campanha_id, campanha_nome, gasto, 'google'::text AS fonte,
                      conversoes, valor_conversoes
                 FROM google_ads_gasto_dia
                WHERE dia >= ${diaBrasiliaSql('$1')} AND dia <= ${diaBrasiliaSql('$2')}
+                 AND conta_id <> ALL ($3::text[])
             ),
             gasto AS (
               SELECT campanha_id,
@@ -1447,6 +1465,9 @@ export class SiteMetricsService {
         LIMIT 200`,
       de,
       ate,
+      // Lista vazia = `<> ALL ('{}')` é TRUE pra toda linha, então nada é
+      // excluído. Ausência da env desliga o recurso, nunca quebra a tela.
+      contasDeLojaTodas(),
     );
     return linhas.map((l) => ({
       trafego: l.trafego,

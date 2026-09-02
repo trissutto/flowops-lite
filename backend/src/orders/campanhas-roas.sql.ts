@@ -46,8 +46,15 @@ gasto AS (
    WHERE dia >= $1::date AND dia <= $2::date AND conta_id <> ALL ($3::text[])
    GROUP BY campanha_id
   UNION ALL
+  -- ⚠️ O MESMO FILTRO NO GOOGLE (02/09/2026). Ele existia só no ramo do Meta:
+  -- quando o espelho do Google passou a coletar, a linha foi copiada sem o
+  -- \`conta_id\`, e a auditoria pegou isso ANTES de a conta de loja entrar na
+  -- env — R$ 26.648/30d que teriam caído direto no denominador do site.
+  -- Filtro em um ramo só é a mesma coisa que filtro nenhum.
   SELECT campanha_id, 'google', SUM(gasto)::numeric, SUM(impressoes)::bigint, SUM(cliques)::bigint
-    FROM google_ads_gasto_dia WHERE dia >= $1::date AND dia <= $2::date GROUP BY campanha_id
+    FROM google_ads_gasto_dia
+   WHERE dia >= $1::date AND dia <= $2::date AND conta_id <> ALL ($3::text[])
+   GROUP BY campanha_id
 ),
 -- Telefones que FECHARAM uma venda paga, com a hora. Sai numa CTE só porque
 -- rodar isso por pedido seria uma subconsulta correlacionada em 23 mil linhas.

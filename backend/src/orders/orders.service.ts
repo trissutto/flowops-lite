@@ -8,7 +8,7 @@ import { pedidoPago, pedidoCancelado } from '../common/pedido-pago';
 import { cpfValido, emailOk } from '../common/dados-cliente-online';
 import { localBrPhone, localBrPhoneValido } from '../lib/phone-br';
 import { SQL_CAMPANHAS_ROAS } from './campanhas-roas.sql';
-import { contasDeLoja } from '../common/contas-de-anuncio';
+import { contasDeLojaTodas } from '../common/contas-de-anuncio';
 
 /**
  * Uma linha como o Postgres devolve. Tudo que é dinheiro sai da query já em
@@ -303,7 +303,8 @@ export class OrdersService {
       to,
       // Contas de LOJA FÍSICA fora do denominador desta tela — ver
       // `common/contas-de-anuncio.ts`. Lista vazia não exclui nada.
-      contasDeLoja(),
+      // DAS DUAS REDES desde 02/09/2026 — o filtro agora vale nos dois espelhos.
+      contasDeLojaTodas(),
     );
 
     const SEM = 'Sem campanha / Direto';

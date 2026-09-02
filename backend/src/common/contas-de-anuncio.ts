@@ -49,3 +49,46 @@ export function contasEcommerce(valor = process.env.META_ADS_CONTAS): string[] {
 export function contasDeLoja(valor = process.env.META_ADS_CONTAS_LOJA): string[] {
   return lista(valor);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GOOGLE — a mesma régua, a mesma armadilha (02/09/2026)
+//
+//  A auditoria mediu o gêmeo exato do caso do Meta de 26/08: a conta
+//  **Lojas Físicas (9564998046)** gastou **R$ 26.648,65 em 30 dias** em 29
+//  campanhas de cidade e não estava em `GOOGLE_ADS_CONTAS` — R$ 324 mil/ano
+//  fora de qualquer relatório. E aqui o estrago de ligar sem filtrar é PIOR
+//  que no Meta: essa conta reporta **R$ 184.865 de "valor de conversão" que é
+//  100% visita de loja estimada e "como chegar"** — nenhum real de receita.
+//  Coletar antes de excluir jogaria R$ 180 mil na tela como faturamento.
+//
+//  Por isso a régua vem ANTES da env: o código aprende a separar, e só então
+//  a chave é ligada.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Contas de E-COMMERCE no Google (`GOOGLE_ADS_CONTAS`). */
+export function contasEcommerceGoogle(valor = process.env.GOOGLE_ADS_CONTAS): string[] {
+  return lista(valor);
+}
+
+/**
+ * Contas de LOJA FÍSICA no Google (`GOOGLE_ADS_CONTAS_LOJA`).
+ *
+ * Vazia = comportamento de antes de 02/09/2026. Ausência desliga, nunca quebra.
+ */
+export function contasDeLojaGoogle(valor = process.env.GOOGLE_ADS_CONTAS_LOJA): string[] {
+  return lista(valor);
+}
+
+/**
+ * TODAS as contas de loja física, das duas redes — é esta que o SQL usa.
+ *
+ * As tabelas de espelho (`meta_ads_gasto_dia`, `google_ads_gasto_dia`) têm a
+ * MESMA coluna `conta_id`, e a pergunta que a tela de ROAS faz é uma só:
+ * "este gasto é de loja física?". Uma lista por rede obrigaria cada consulta a
+ * saber de qual rede está falando — e é assim que uma das duas fica de fora
+ * numa refatoração. Os ids não colidem entre redes (Meta são numéricos longos
+ * de `act_`, Google são `customer_id`), então a lista única é segura.
+ */
+export function contasDeLojaTodas(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [...contasDeLoja(env.META_ADS_CONTAS_LOJA), ...contasDeLojaGoogle(env.GOOGLE_ADS_CONTAS_LOJA)];
+}
