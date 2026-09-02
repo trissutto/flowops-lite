@@ -9,12 +9,15 @@ import { PrismaService } from '../prisma/prisma.service';
  * pronto. Como o backend é quem cria o pedido e chama a Pagar.me, ele estava
  * cobrando um desconto que não conferiu — e o BFF não é o dono do dinheiro.
  *
- * Agora a regra tem TRÊS fontes, nesta ordem:
+ * Agora a regra tem DUAS fontes, nesta ordem:
  *   1. tabela `site_cupons`  → é onde a retaguarda cria/edita (item 55)
  *   2. env `SITE_CUPONS_JSON` → escape hatch pra campanha relâmpago sem banco
- *   3. tabela embutida        → os mesmos 3 códigos que o site já anunciava,
- *                               pra nenhum cupom impresso parar de funcionar
- *                               no dia do deploy
+ *
+ * Havia uma terceira — tabela embutida com os códigos que o site velho
+ * anunciava (BEMVINDA10/LURDS15/FRETEGRATIS), pra cupom impresso não morrer
+ * no dia do deploy. Removida em 01/09 por ordem do dono ("matar"): as
+ * campanhas herdadas acabaram, e o fallback as ressuscitaria em silêncio
+ * sempre que a tabela ficasse vazia ou o banco piscasse.
  *
  * As mensagens são as MESMAS do site, palavra por palavra: a cliente não pode
  * ver um texto na sacola e outro no checkout.
@@ -69,13 +72,6 @@ export interface ResultadoCupom {
   };
 }
 
-/** Fallback embutido — espelho exato do que o site anunciava até 04/08/2026. */
-const REGRAS_PADRAO: RegraCupom[] = [
-  { code: 'BEMVINDA10', tipo: 'percent', valor: 10, minSubtotal: 149.9, label: 'Boas-vindas: 10% off' },
-  { code: 'LURDS15', tipo: 'percent', valor: 15, minSubtotal: 349.9, label: '15% off acima de R$ 349,90' },
-  { code: 'FRETEGRATIS', tipo: 'shipping', valor: 0, minSubtotal: 199.9, label: 'Frete grátis' },
-];
-
 @Injectable()
 export class CupomService {
   private readonly logger = new Logger(CupomService.name);
@@ -98,7 +94,7 @@ export class CupomService {
     return v === 'fixed' || v === 'shipping' ? v : 'percent';
   }
 
-  /** Lê a tabela; vazia ou indisponível cai pro env e depois pro padrão. */
+  /** Lê a tabela; vazia ou indisponível cai pro env (e só pra ele). */
   private async regras(): Promise<RegraCupom[]> {
     if (this.cache && Date.now() - this.cache.at < CupomService.TTL) return this.cache.regras;
 
@@ -125,7 +121,7 @@ export class CupomService {
       }));
     } catch (e: any) {
       // Tabela ainda não existe (deploy anterior ao db push) — não é erro fatal.
-      this.logger.warn(`[cupom] tabela indisponível, usando env/padrão: ${e?.message || e}`);
+      this.logger.warn(`[cupom] tabela indisponível, usando env (se houver): ${e?.message || e}`);
     }
 
     if (!regras.length && process.env.SITE_CUPONS_JSON) {
@@ -143,11 +139,9 @@ export class CupomService {
           }));
         }
       } catch {
-        this.logger.warn('[cupom] SITE_CUPONS_JSON inválido — usando tabela padrão');
+        this.logger.warn('[cupom] SITE_CUPONS_JSON inválido — ignorando');
       }
     }
-
-    if (!regras.length) regras = REGRAS_PADRAO;
 
     this.cache = { at: Date.now(), regras };
     return regras;

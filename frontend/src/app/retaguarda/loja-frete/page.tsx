@@ -496,8 +496,9 @@ function AbaCupons() {
 
       {lista.length === 0 && !novo && (
         <p className="text-sm text-slate-400 border border-dashed border-slate-300 rounded-lg p-6 text-center">
-          Nenhum cupom cadastrado. O site continua aceitando os três antigos
-          (BEMVINDA10, LURDS15, FRETEGRATIS) até o primeiro cadastro aqui.
+          Nenhum cupom cadastrado. As campanhas antigas do site (BEMVINDA10,
+          LURDS15, FRETEGRATIS) morreram em 01/09 — cupom novo nasce aqui ou
+          no painel Cupons.
         </p>
       )}
 
