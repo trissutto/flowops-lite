@@ -541,6 +541,82 @@ export class RealignmentReportService {
   }
 
   /**
+   * Estoque ATUAL por loja — resumo pro rodapé da tela REDE × FRANQUIA.
+   *
+   * Fonte: espelho `wincred_estoque` (a MESMA que site/PDV leem — o Flow é a
+   * fonte do estoque) × preço `wincred_produtos.vendaUn` (já em REAIS).
+   * Custo = venda ÷ 2,5, o mesmo divisor das obrigações intercompany.
+   * Só estoque POSITIVO conta: saldo negativo é peça prometida, não peça
+   * na prateleira. Não depende do período selecionado na tela.
+   */
+  async getEstoquePorLoja() {
+    const DIVISOR = 2.5;
+    const stores = await this.prisma.store.findMany({
+      select: { code: true, name: true, tipo: true } as any,
+    });
+    const nameMap = new Map<string, string>();
+    const tipoMap = new Map<string, string>();
+    for (const s of stores as any[]) {
+      nameMap.set(s.code, s.name);
+      tipoMap.set(s.code, s.tipo === 'FILIAL' ? 'FILIAL' : 'REDE');
+    }
+
+    // Validada em produção (02/09): 18 lojas, ~2s.
+    const rows = await this.prisma.$queryRaw<
+      Array<{ loja: string; pecas: bigint; valor: number; sem_preco: bigint }>
+    >`
+      SELECT e.loja,
+             SUM(e.estoque)::bigint                                                        AS pecas,
+             SUM(e.estoque * COALESCE(p."vendaUn", 0))::float8                             AS valor,
+             SUM(CASE WHEN COALESCE(p."vendaUn", 0) = 0 THEN e.estoque ELSE 0 END)::bigint AS sem_preco
+        FROM wincred_estoque e
+        LEFT JOIN wincred_produtos p ON p.codigo = e.codigo
+       WHERE e.estoque > 0
+       GROUP BY e.loja
+    `;
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    // ⚠️ BigInt do ::bigint vira Number aqui — BigInt no JSON dá 500 mudo.
+    const lojas = rows
+      .map((r) => {
+        const code = String(r.loja).trim();
+        const valorVenda = round2(Number(r.valor));
+        return {
+          code,
+          name: nameMap.get(code) || code,
+          tipo: tipoMap.get(code) || 'REDE',
+          pecas: Number(r.pecas),
+          valorVenda,
+          valorCusto: round2(valorVenda / DIVISOR),
+          pecasSemPreco: Number(r.sem_preco),
+        };
+      })
+      .sort((a, b) => b.valorVenda - a.valorVenda);
+
+    const soma = (list: typeof lojas) => {
+      const pecas = list.reduce((s, l) => s + l.pecas, 0);
+      const valorVenda = round2(list.reduce((s, l) => s + l.valorVenda, 0));
+      return {
+        pecas,
+        valorVenda,
+        valorCusto: round2(valorVenda / DIVISOR),
+        pecasSemPreco: list.reduce((s, l) => s + l.pecasSemPreco, 0),
+        lojas: list.length,
+      };
+    };
+
+    return {
+      divisor: DIVISOR,
+      lojas,
+      porTipo: {
+        rede: soma(lojas.filter((l) => l.tipo === 'REDE')),
+        franquia: soma(lojas.filter((l) => l.tipo === 'FILIAL')),
+      },
+      totais: soma(lojas),
+    };
+  }
+
+  /**
    * Detalhe completo de uma transferência específica (modal Nível 3).
    */
   async getShipmentDetail(shipmentId: string) {

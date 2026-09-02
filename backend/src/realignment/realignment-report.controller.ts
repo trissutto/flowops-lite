@@ -8,6 +8,7 @@ import { RealignmentReportService } from './realignment-report.service';
  * Endpoints:
  *  GET /                  → relatório completo (cards, tabela, matriz, evolução)
  *  GET /rede-franquia     → síntese por tipo de loja (REDE × FILIAL)
+ *  GET /estoque-lojas     → estoque atual por loja (peças + venda + custo ÷2,5)
  *  GET /shipment/:id      → detalhe de uma transferência (itens + timeline)
  *
  * Query params:
@@ -32,6 +33,13 @@ export class RealignmentReportController {
     @Query('to') to?: string,
   ) {
     return this.report.getRedeFranquiaSummary(period, from, to);
+  }
+
+  /** Estoque atual por loja (peças + valor de venda + custo ÷2,5). */
+  @Get('estoque-lojas')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate')
+  async getEstoqueLojas() {
+    return this.report.getEstoquePorLoja();
   }
 
   @Get('shipment/:id')
