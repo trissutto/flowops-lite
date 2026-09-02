@@ -16,7 +16,7 @@ import {
   Shuffle, CreditCard, Boxes, CheckCircle2, Package2, Store,
   FileSearch, Truck, BarChart3, Percent, ArrowLeft,
   LayoutDashboard, Globe2, Settings, ShoppingCart, Tags, KeyRound, Map, Zap,
-  Shirt, GalleryHorizontal, ClipboardList, ListOrdered,
+  Shirt, GalleryHorizontal, ClipboardList, ListOrdered, Ticket,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -60,6 +60,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/modulo-produtos', label: 'Módulo Produtos (triagem)', subtitle: 'Reorganização', description: 'As 43 telas de produto numeradas, com uso real — teste e responda pelo número', tone: 'purple', icon: Tags },
   { href: '/retaguarda/categorias-mapa',      label: 'Vincular Categorias', subtitle: 'Catálogo', description: 'De-para WooCommerce → categoria do site', tone: 'purple', icon: Tags },
   { href: '/retaguarda/produtos-agrupados',   label: 'Produtos agrupados', subtitle: 'Catálogo', description: 'Mesma peça em REFs diferentes (cor)', tone: 'purple', icon: Package2 },
+  { href: '/retaguarda/cupons',               label: 'Cupons',         subtitle: 'Site + PDV',  description: 'Vale de troca da cliente · campanhas', tone: 'rose',  icon: Ticket       },
   { href: '/retaguarda/loja-frete',           label: 'Frete & Cupons', subtitle: 'Site',        description: 'Frete grátis · promocional · cupons', tone: 'sky',    icon: Truck        },
   { href: '/retaguarda/promocoes-config',     label: 'Promoções PDV',  subtitle: 'Config',      description: '50% · básico fora · 4 leva 3',  tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/descontos-senhas',     label: 'Descontos & Senhas', subtitle: 'Config',  description: 'Faixas de desconto + senhas',   tone: 'amber',  icon: KeyRound     },
