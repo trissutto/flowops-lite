@@ -404,10 +404,36 @@ function OrderDetail({
         }),
       });
       setSuccess(r);
+      // AUTO-IMPRIME o vale na térmica (mesma rota da devolução do PDV:
+      // routePrint 'vale' → Electron imprime direto; browser → popup com
+      // autoprint). A página do cupom carrega pelo endpoint PÚBLICO
+      // /public/vale/:code, que resolve o vale do site em site_cupons —
+      // por isso o gate em valeNoCaixaOk: sem registro no caixa não há o
+      // que imprimir (e o código nem deve ir pra mão da cliente).
+      if (r?.creditoCode && r?.valeNoCaixaOk) {
+        try {
+          const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
+          const { routePrint } = await import('@/lib/printer-router');
+          await routePrint({ kind: 'vale', url }).catch(() => {
+            window.open(url, `lurds_vale_${Date.now()}`, 'width=420,height=720,resizable=yes,scrollbars=yes');
+          });
+        } catch { /* segue — o botão IMPRIMIR do card fica disponível */ }
+      }
     } catch (e: any) {
       setErr(e?.message || 'Falha ao aceitar troca');
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** Imprime o cupom do vale (botão manual do card de sucesso). */
+  async function imprimirVale(code: string) {
+    const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(code)}?autoprint=1`;
+    try {
+      const { routePrint } = await import('@/lib/printer-router');
+      await routePrint({ kind: 'vale', url });
+    } catch {
+      window.open(url, `lurds_vale_${Date.now()}`, 'width=420,height=720,resizable=yes,scrollbars=yes');
     }
   }
 
@@ -449,9 +475,20 @@ function OrderDetail({
                 : '—'}
             </div>
             {success.valeNoCaixaOk ? (
-              <div className="text-xs mt-2 font-bold text-emerald-700">
-                ✓ Já vale no caixa da loja e no site
-              </div>
+              <>
+                <div className="text-xs mt-2 font-bold text-emerald-700">
+                  ✓ Já vale no caixa da loja e no site
+                </div>
+                <button
+                  onClick={() => imprimirVale(success.creditoCode)}
+                  className="w-full mt-3 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-lg flex items-center justify-center gap-2"
+                >
+                  🖨 IMPRIMIR VALE
+                </button>
+                <div className="text-[11px] text-rose-700/70 mt-1">
+                  Sai na impressora de cupom — entregue pra cliente.
+                </div>
+              </>
             ) : (
               <div className="text-xs mt-2 font-bold text-red-700 bg-red-50 border border-red-200 rounded p-2">
                 ⚠️ Esse código NÃO foi registrado no caixa — não passe a cliente pro caixa com ele.
