@@ -32,7 +32,10 @@ type CreditInfo = {
   validade: string | null;
   vencido: boolean;
   usado: boolean;
-  origem: { saleId: string; store: string };
+  origem: { saleId: string | null; store: string };
+  /** Vale do SITE nominal: a venda precisa estar no CPF da cliente. */
+  nominal?: boolean;
+  customerCpf?: string | null;
 };
 
 export default function ValeTrocaModal({
@@ -221,6 +224,13 @@ export default function ValeTrocaModal({
               {info.validade && (
                 <div className="text-[11px] text-slate-600 mt-1">
                   Validade: {new Date(info.validade).toLocaleDateString('pt-BR')}
+                </div>
+              )}
+              {info.nominal && (
+                <div className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 mt-2">
+                  Vale nominal (troca do site) — a venda precisa estar no CPF da
+                  cliente{info.customerCpf ? ` (final ${info.customerCpf.slice(-4)})` : ''}.
+                  Identifica ela na venda antes de aplicar.
                 </div>
               )}
             </div>
