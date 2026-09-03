@@ -77,6 +77,68 @@ export class PurchaseOrdersService {
     return data;
   }
 
+  /**
+   * Fornecedores pro autocomplete do pedido de compra — INCLUINDO as marcas
+   * que só existem nos PRODUTOS.
+   *
+   * Caso RERY (03/09): 26 peças cadastradas com marca RERY, mas o CNPJ delas
+   * (08997274000109) está no cadastro de fornecedores como JULIA PLUS e JOIN
+   * CURVES — a mesma confecção vende mais de uma marca. A vendedora procura
+   * pela MARCA que está na etiqueta da peça e o autocomplete respondia vazio,
+   * porque só olhava `wincred_fornecedores`. Medido em produção: **272 marcas**
+   * de produto (HERING, BRANDILI, ARIMATH…) não têm fornecedor com o mesmo
+   * nome — a loja pensa em marca, a lista só conhecia razão social.
+   *
+   * Toda marca vista em produto vira uma entrada `{ nome: MARCA, cnpj: do
+   * fornecedor que MAIS cadastrou essa marca }` — escolher "RERY" preenche o
+   * CNPJ certo e a marca do pedido já nasce RERY (o campo marca da tela copia
+   * o nome escolhido).
+   */
+  async listarFornecedoresComMarcas(limit = 5000) {
+    const fornecedores = await this.erp.listarFornecedores(limit);
+    try {
+      const grupos: any[] = await (this.prisma as any).wincredProduto.groupBy({
+        by: ['marca', 'fornecedor'],
+        where: { marca: { not: null } },
+        _count: { _all: true },
+      });
+      const nomesExistentes = new Set(
+        fornecedores.flatMap((f: any) =>
+          [f.nome, f.fantasia].filter(Boolean).map((s: any) => String(s).trim().toUpperCase()),
+        ),
+      );
+      // marca → CNPJ com mais produtos daquela marca
+      const porMarca = new Map<string, { marca: string; cnpj: string; n: number }>();
+      for (const g of grupos) {
+        const marca = String(g.marca || '').trim();
+        if (!marca) continue;
+        const key = marca.toUpperCase();
+        if (nomesExistentes.has(key)) continue;
+        const cnpj = String(g.fornecedor || '').replace(/\D/g, '');
+        const n = Number(g._count?._all) || 0;
+        const cur = porMarca.get(key);
+        if (!cur || n > cur.n) porMarca.set(key, { marca, cnpj, n });
+      }
+      const extras = Array.from(porMarca.values()).map((v) => ({
+        cnpj: v.cnpj,
+        nome: v.marca,
+        fantasia: v.marca,
+        // Flag informativa: a entrada nasceu dos produtos, não do cadastro.
+        marcaDeProduto: true,
+      }));
+      if (extras.length) {
+        return [...fornecedores, ...extras].sort((a: any, b: any) =>
+          String(a.nome).localeCompare(String(b.nome), 'pt-BR'),
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `listarFornecedoresComMarcas: marcas de produto indisponíveis (${(e as Error).message}) — segue só fornecedores`,
+      );
+    }
+    return fornecedores;
+  }
+
   // ── Categorias (mapeamento descrição → grupo/subgrupo) ──
 
   async listarCategorias() {

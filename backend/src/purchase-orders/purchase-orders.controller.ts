@@ -39,9 +39,10 @@ export class PurchaseOrdersController {
   }
 
   // ── Lookups auxiliares ──
+  /** Fornecedores + MARCAS de produto (caso RERY — a loja busca pela marca). */
   @Get('lookups/fornecedores')
   async fornecedores(@Query('limit') limit?: string) {
-    return this.erp.listarFornecedores(limit ? Number(limit) : 5000);
+    return this.svc.listarFornecedoresComMarcas(limit ? Number(limit) : 5000);
   }
 
   @Get('lookups/grupos')
