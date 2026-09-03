@@ -1160,7 +1160,16 @@ export class ReturnsService {
       where: { creditoCode },
       include: { items: true },
     });
-    if (!ret) throw new NotFoundException('Vale-troca não encontrado');
+    if (!ret) {
+      // VALE DO SITE: o "TROCAR AGORA NA LOJA" (wc-returns) e o portal de
+      // trocas gravam o vale em `site_cupons` (origem 'troca'), não em
+      // `pdv_returns`. O addPayment já resolve os dois; a VALIDAÇÃO do modal
+      // parava aqui com 404 e a vendedora nunca chegava no Aplicar (02/09,
+      // relato das lojas). Mesma resposta, outra fonte.
+      const valeSite = await this.checkCreditValeDoSite(creditoCode);
+      if (valeSite) return valeSite;
+      throw new NotFoundException('Vale-troca não encontrado');
+    }
     if (ret.source === 'vale_presente' && ret.status === 'pending') {
       throw new BadRequestException(
         'Vale presente ainda não ativado — a venda em que ele foi comprado não foi finalizada.',
@@ -1241,6 +1250,60 @@ export class ReturnsService {
         valorLevado: saleAssociadaTotal,
         saleAssociadaId,
         saleAssociadaData,
+      },
+    };
+  }
+
+  /**
+   * Vale de troca do SITE (`site_cupons`, origem 'troca') no formato do
+   * `checkCredit` — o modal do PDV valida os dois sem saber a diferença.
+   *
+   * Só CONSULTA: quem aplica é o `addPayment` (via `resolverValeDoSite`, que
+   * faz a checagem nominal de CPF contra a venda — aqui não há venda ainda).
+   * `nominal: true` avisa o modal que a venda precisa estar no CPF da cliente.
+   * Devolve null quando o código não é vale do site (cupom de campanha NÃO
+   * passa — cupom público não é dinheiro de cliente).
+   */
+  private async checkCreditValeDoSite(code: string) {
+    let cupom: any = null;
+    try {
+      cupom = await (this.prisma as any).siteCupom.findUnique({ where: { code } });
+    } catch (e: any) {
+      this.logger.warn(`[returns] site_cupons indisponível ao validar ${code}: ${e?.message || e}`);
+      return null;
+    }
+    if (!cupom || cupom.origem !== 'troca') return null;
+
+    // Mesmo critério do resolverValeDoSite: `usos >= usoMaximo` é o "já gastou".
+    const usos = Number(cupom.usos) || 0;
+    const maximo = cupom.usoMaximo == null ? null : Number(cupom.usoMaximo);
+    const usado = maximo != null && usos >= maximo;
+    const cpf = String(cupom.cpf || '').replace(/\D/g, '');
+    const valor = Number(cupom.valor) || 0;
+
+    return {
+      code: cupom.code,
+      valor,
+      status: !cupom.ativo ? 'cancelled' : usado ? 'used' : 'completed',
+      modo: 'credito',
+      source: 'site_troca',
+      motivo: cupom.label || 'Vale-troca do site',
+      validade: cupom.fimEm,
+      vencido: cupom.fimEm ? new Date(cupom.fimEm).getTime() < Date.now() : false,
+      usado,
+      usadoEm: cupom.usadoAt || null,
+      origem: { saleId: null, store: 'SITE', storeName: 'Troca do site' },
+      customerName: null,
+      customerCpf: cpf || null,
+      nominal: !!cpf,
+      createdAt: cupom.createdAt || null,
+      historico: {
+        pecasDevolvidas: [],
+        valorDevolvido: valor,
+        pecasLevadas: [],
+        valorLevado: 0,
+        saleAssociadaId: null,
+        saleAssociadaData: null,
       },
     };
   }
