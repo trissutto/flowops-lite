@@ -263,8 +263,12 @@ export default function NovoPedidoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
-  useEffect(() => {
+  /** Recarrega a lista — usado no "já cadastrei" do dropdown do fornecedor. */
+  const carregarFornecedores = () =>
     api<Fornecedor[]>('/purchase-orders/lookups/fornecedores').then(setFornecedores).catch(() => {});
+
+  useEffect(() => {
+    carregarFornecedores();
     api<Grupo[]>('/purchase-orders/lookups/grupos').then(setGrupos).catch(() => {});
     api<Categoria[]>('/purchase-orders/categorias').then(setCategorias).catch(() => {});
     // Classificação da peça. Se o cadastro estiver vazio os selects aparecem
@@ -1258,9 +1262,31 @@ export default function NovoPedidoPage() {
                       </button>
                     ))
                   ) : (
-                    <div className="px-3 py-3 text-xs text-slate-500">
-                      <div className="font-bold text-slate-700 mb-1">Nao achou na lista?</div>
-                      Digite o nome livremente no campo acima — vai ser salvo como o nome do fornecedor.
+                    <div className="px-3 py-3 text-xs text-slate-500 space-y-2">
+                      <div className="font-bold text-slate-700">Não achou na lista?</div>
+                      {/* Caso RERY (03/09): marca nova chegou e não havia CAMINHO
+                          de criar o fornecedor — a vendedora digitava o nome
+                          livre, ficava sem CNPJ e o cadastro de produto trava.
+                          O cadastro correto é a tela de fornecedores (Flow). */}
+                      <a
+                        href="/retaguarda/fornecedores"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block w-full text-center rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2"
+                      >
+                        ➕ Cadastrar fornecedor novo
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => carregarFornecedores()}
+                        className="block w-full text-center rounded-lg border border-slate-300 text-slate-700 font-semibold py-1.5 hover:bg-slate-50"
+                      >
+                        ↻ Já cadastrei — recarregar lista
+                      </button>
+                      <div className="text-[11px] text-slate-400">
+                        Preencha razão social, <b>fantasia (= a MARCA da etiqueta)</b> e o CNPJ da
+                        nota fiscal. Sem CNPJ o cadastro de produtos não sobe.
+                      </div>
                     </div>
                   )}
                 </div>
