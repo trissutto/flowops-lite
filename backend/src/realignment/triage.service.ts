@@ -104,7 +104,7 @@ export class TriagemService {
     //    via colunas de barcode e devolve o CODIGO real do Giga).
     const info = await this.erp.resolveSkuInfo(sku);
     if (!info) {
-      throw new NotFoundException(`SKU/EAN ${sku} não encontrado no Giga`);
+      throw new NotFoundException(`SKU/EAN ${sku} não encontrado no catálogo`);
     }
     if (!info.ref) {
       throw new BadRequestException(`SKU ${sku} sem REF cadastrada`);
@@ -118,13 +118,13 @@ export class TriagemService {
 
     // 2. Busca em paralelo:
     //    - estoque do SKU exato em cada candidato (Giga) — usa CODIGO resolvido
-    //    - venda da REF últimos 30d em cada candidato (Giga)
+    //    - venda da REF últimos 30d em cada candidato (giga_caixa_mov, Postgres)
     //    - itens já bipados nas caixas OPEN do par origem→candidato (Postgres)
     const [stockMap, salesMap, openShipments] = await Promise.all([
       // Origem entra no MESMO lote de estoque — o "manter 1" precisa dela e
       // uma consulta a mais tornaria o bipe mais lento (a tela e bipe-a-bipe).
       this.erp.getStockBySkuAndStores(codigoGiga, [...candidates, input.fromStoreCode]),
-      this.erp.getRecentSalesByRefAndStores(info.ref, candidates, 30),
+      this.vendaRefPorLoja(info.ref, candidates, 30),
       (this.prisma as any).realignmentShipment.findMany({
         where: {
           fromStoreCode: input.fromStoreCode,
@@ -336,6 +336,51 @@ export class TriagemService {
       if (r <= 0) return items[i];
     }
     return items[items.length - 1];
+  }
+
+  /**
+   * Venda da REF (qualquer cor/tamanho) por loja nos últimos N dias, lida da
+   * `giga_caixa_mov` (Postgres, alimentada pelo Flow). O caminho antigo
+   * (erp.getRecentSalesByRefAndStores) batia no MySQL do Giga — morto, o
+   * método devolvia mapa VAZIO calado e o critério "quem mais vende" da
+   * sugestão sumia sem ninguém perceber.
+   *
+   * Mesmo padrão de filtro do relatório de vendas por produto
+   * (intelligence/vendas-produto.service.ts): marcado fora, JOIN pelo cadastro
+   * do espelho (o codigo da giga_caixa_mov já chega normalizado — sem LTRIM).
+   * Aqui NÃO se exclui `obs_pedido LIKE 'flowops%'`: aquela exclusão existe lá
+   * só porque o relatório soma `pdv_sale_items` em separado; nesta consulta
+   * cada venda aparece UMA vez na própria giga_caixa_mov.
+   */
+  private async vendaRefPorLoja(
+    refCode: string,
+    storeCodes: string[],
+    days = 30,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!refCode || !storeCodes.length) return out;
+    const n = Math.max(1, Math.min(365, days || 30));
+    // ::float no SUM — $queryRaw devolveria Decimal (e BigInt em COUNT), que
+    // não sobrevive a JSON.stringify. Number simples resolve.
+    const rows: Array<{ loja: string; qty: number }> = await this.prisma.$queryRawUnsafe(
+      `SELECT TRIM(m.loja) AS loja,
+              SUM(COALESCE(m.quantidade, 0))::float AS qty
+         FROM giga_caixa_mov m
+         JOIN wincred_produtos w ON w.codigo = TRIM(m.codigo)
+        WHERE UPPER(TRIM(w.ref)) = UPPER(TRIM($1::text))
+          AND TRIM(m.loja) = ANY($2::text[])
+          AND m.data >= CURRENT_DATE - $3::int
+          AND (m.marcado IS NULL OR TRIM(m.marcado) = '')
+        GROUP BY 1`,
+      refCode,
+      storeCodes,
+      n,
+    );
+    for (const r of rows) {
+      const qty = Number(r.qty) || 0;
+      if (qty > 0) out.set(String(r.loja).trim(), qty);
+    }
+    return out;
   }
 
   /**

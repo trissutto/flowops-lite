@@ -3236,13 +3236,13 @@ export class OrdersController {
 
   /**
    * DIAGNÓSTICO: pra investigar pedido roteado pra loja "errada".
-   * Compara o que a engine VIU no momento (routingResult salvo) vs ERP AO VIVO agora.
+   * Compara o que a engine VIU no momento (routingResult salvo) vs espelho AGORA.
    * Mostra por SKU e por loja:
    *  - Assignment persistido (qual loja pegou)
    *  - scoreBreakdown salvo (por que cada loja ficou de fora)
-   *  - ERP AO VIVO agora (filtro ESTOQUE>0)
-   *  - Cache atual
-   * Com isso dá pra afirmar: foi bug da engine? ERP mudou depois? Dados duplicados?
+   *  - wincred_estoque cru AGORA (sem filtro >0 — mostra zero e negativo)
+   *  - O que o stock service entregaria pra engine agora
+   * Com isso dá pra afirmar: foi bug da engine? Estoque mudou depois? Dados duplicados?
    */
   @Get('wc/:wcId/routing-debug')
   async routingDebug(@Param('wcId') wcId: string) {
@@ -3320,15 +3320,29 @@ export class OrdersController {
           ];
         }
 
-        // RAW do ERP pra esse SKU — todas as linhas (inclusive negativas/zero)
-        const rawRows = await this.erp.getStockRawBySku(sku);
+        // RAW pra esse SKU — todas as linhas (inclusive negativas/zero).
+        // O Giga MySQL morreu (getStockRawBySku devolvia [] e a red flag
+        // "suspicious" disparava falso pra TODO SKU). A leitura crua agora sai
+        // da `wincred_estoque` (Postgres) — a MESMA fonte que site/PDV leem
+        // (STOCK_WINCRED_FIRST). Sem filtro >0: o debug precisa ver zero e
+        // negativo. skuVariants cobre os paddings de zero à esquerda.
+        const variants = this.erp.skuVariants(sku);
+        const rawRows = variants.length
+          ? await this.prisma.wincredEstoque.findMany({
+              where: { codigo: { in: variants } },
+              select: { codigo: true, loja: true, estoque: true },
+              orderBy: [{ loja: 'asc' }, { codigo: 'asc' }],
+            })
+          : [];
         const rawByStore = new Map<string, { sum: number; rows: number; positive: number }>();
         for (const r of rawRows) {
-          const cur = rawByStore.get(r.storeCode) ?? { sum: 0, rows: 0, positive: 0 };
-          cur.sum += r.qty;
+          const storeCode = String(r.loja).trim();
+          const qty = Number(r.estoque) || 0;
+          const cur = rawByStore.get(storeCode) ?? { sum: 0, rows: 0, positive: 0 };
+          cur.sum += qty;
           cur.rows += 1;
-          if (r.qty > 0) cur.positive += r.qty;
-          rawByStore.set(r.storeCode, cur);
+          if (qty > 0) cur.positive += qty;
+          rawByStore.set(storeCode, cur);
         }
 
         const perStore = stores.map((s) => {
@@ -3346,7 +3360,7 @@ export class OrdersController {
             // 🚨 red flag: engine acha que tem, mas soma real é zero/negativa
             suspicious:
               live > 0 && raw.sum <= 0
-                ? `engine vê ${live} mas soma real no ERP é ${raw.sum}`
+                ? `engine vê ${live} mas soma real no espelho é ${raw.sum}`
                 : null,
           };
         });

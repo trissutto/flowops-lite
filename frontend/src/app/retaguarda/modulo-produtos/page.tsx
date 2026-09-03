@@ -67,7 +67,7 @@ const ITENS: Item[] = [
   { n: 10, area: 'Estoque', href: '/retaguarda/baixa-estoque', titulo: 'Baixa de Estoque', desc: 'Baixa manual de peças (perda, defeito, uso interno).' },
   { n: 11, area: 'Estoque', href: '/retaguarda/baixa-origem', titulo: 'Baixa na Origem', desc: 'Baixa de estoque na loja de origem (fluxo site/live).' },
   { n: 12, area: 'Estoque', href: '/retaguarda/baixas-log', titulo: 'Log de Baixas', desc: 'Auditoria de todas as baixas feitas.' },
-  { n: 13, area: 'Estoque', href: '/retaguarda/conferidor-estoque', titulo: 'Conferidor Flow × Giga', desc: 'Compara o estoque do Flow com o espelho do Giga peça a peça (só admin).' },
+  // n:13 (Conferidor Flow × Giga) saiu da lista em 09/26: o MySQL do Giga foi desligado.
   { n: 14, area: 'Estoque', href: '/retaguarda/reconciliar-estoque', titulo: 'Reconciliar Estoque', desc: 'Acerta divergências encontradas na conferência.' },
   { n: 15, area: 'Estoque', href: '/retaguarda/reprocessar-estoque', titulo: 'Reprocessar Estoque', desc: 'Reprocessa movimentos de estoque (ferramenta de correção).' },
   { n: 16, area: 'Estoque', href: '/retaguarda/inteligencia-estoque', titulo: 'Inteligência de Estoque', desc: 'Sugestões de compra/redistribuição a partir do giro.' },
@@ -94,7 +94,7 @@ const ITENS: Item[] = [
 
   // ── Auditoria & Diagnóstico ──
   { n: 31, area: 'Auditoria', href: '/auditoria-sku', titulo: 'Auditoria de SKU', desc: 'Confere SKUs divergentes entre sistemas.' },
-  { n: 32, area: 'Auditoria', href: '/retaguarda/auditoria-ncm', titulo: 'Auditoria de NCM', desc: 'NCMs faltando/errados (herdada do ERP antigo).' },
+  // n:32 (Auditoria de NCM) saiu da lista em 09/26: a tela lia o MySQL do Giga, que foi desligado.
 
   // ── Relatórios de venda de peça ──
   { n: 33, area: 'Vendidos', href: '/retaguarda/produtos-vendidos', titulo: 'Produtos Vendidos (matriz)', desc: 'O que vendeu, por peça, na rede.' },

@@ -33,17 +33,8 @@ export class MarcadosController {
       throw new ForbiddenException('Acesso negado');
   }
 
-  /**
-   * GET /pdv/marcados/restos-giga — "Restos dos marcados do Giga" (07/08,
-   * regra do dono). Leitura PURA, sob demanda: mostra o que ainda está
-   * MARCADO='SIM' na caixa do Giga, só pra referência/dúvida. NUNCA grava
-   * nada no Flow, nunca marca, nunca puxa — é olhar, não sincronizar.
-   */
-  @Get('restos-giga')
-  restosGiga(@Req() req: any, @Query('limite') limite?: string) {
-    this.requireAdmin(req);
-    return this.mirror.varrerRestosDoGiga(limite ? Number(limite) : 500);
-  }
+  // (GET /pdv/marcados/restos-giga saiu na Onda 1: era a última leitura ao
+  // vivo da `caixa` do MySQL, que morreu em 27/08.)
 
   /**
    * GET /pdv/marcados/diagnostico-identidade?cpf=XXX — "de quem é de

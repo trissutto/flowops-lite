@@ -2,7 +2,6 @@
 
 import {
   Building2,
-  FileCheck2,
   GalleryHorizontalEnd,
   PackagePlus,
   ScanLine,
@@ -69,14 +68,7 @@ const items: ModuleHubItem[] = [
     tone: 'slate',
     icon: ScanLine,
   },
-  {
-    href: '/retaguarda/auditoria-ncm',
-    label: 'Auditoria de NCM',
-    subtitle: 'Fiscal',
-    description: 'Revise a classificação fiscal associada aos produtos.',
-    tone: 'slate',
-    icon: FileCheck2,
-  },
+  // Auditoria de NCM saiu do hub (09/26): a tela lia o MySQL do Giga, que foi desligado.
 ];
 
 export default function CadastrosAuxiliaresPage() {

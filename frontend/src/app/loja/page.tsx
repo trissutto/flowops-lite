@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   Shuffle, CreditCard, Boxes, CheckCircle2, Package2, Store,
-  FileSearch, Truck, BarChart3, Percent, ArrowLeft,
+  Truck, BarChart3, Percent, ArrowLeft,
   LayoutDashboard, Globe2, Settings, ShoppingCart, Tags, KeyRound, Map, Zap,
   Shirt, GalleryHorizontal, ClipboardList, ListOrdered, Ticket,
 } from 'lucide-react';
@@ -71,7 +71,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/almoxarifado',         label: 'Almoxarifado',   subtitle: 'Estoque',     description: 'Materiais internos',            tone: 'purple', icon: Boxes        },
   { href: '/retaguarda/venda-certa',          label: 'Venda Certa',    subtitle: 'Auditoria',   description: 'Anti-malandragem',              tone: 'green',  icon: CheckCircle2 },
   { href: '/retaguarda/materiais',            label: 'Materiais',      subtitle: 'Inbox',       description: 'Pedidos das filiais',           tone: 'orange', icon: Package2     },
-  { href: '/relatorios/giga',                 label: 'Giga Explorer',  subtitle: 'SQL',         description: 'ERP em tempo real',             tone: 'slate',  icon: FileSearch   },
+  // Giga Explorer saiu do hub (09/26): o MySQL do Giga foi desligado — a tela só devolvia erro.
 ];
 
 export default function LojaHub() {

@@ -85,11 +85,13 @@ export class ProductsEditorService {
    * e REPLICA pro Giga na sequência (dual-write: o Wincred continua enxergando
    * tudo). Se a replicação falhar, a edição VALE (fonte é o Flow) e a falha
    * fica auditada (field=REPLICA_GIGA_ERRO) pra retry manual.
-   * Rollback: tirar a env → volta ao modo atual (Giga primeiro, e o Giga está
-   * em dia porque toda escrita nativa replicou).
+   * DEFAULT LIGADO desde o enterro do Wincred (09/2026): env ausente = nativo.
+   * O default antigo (ausente = Giga primeiro) faria TODA edição virar 500 num
+   * ambiente sem a env — o "modo atual" de rollback era gravar num MySQL que
+   * não existe mais. `PRODUCT_NATIVE_WRITES=0` ainda desliga (não use).
    */
   private get nativeWrites(): boolean {
-    return String(process.env.PRODUCT_NATIVE_WRITES ?? '').trim() === '1';
+    return String(process.env.PRODUCT_NATIVE_WRITES ?? '1').trim() !== '0';
   }
 
   /** Mesma normalização do espelho Wincred: só dígitos perdem zeros à esquerda. */
@@ -116,7 +118,8 @@ export class ProductsEditorService {
     // DELA (1 query no Postgres) — nada de enriquecer via Giga ao vivo em
     // lotes sequenciais (17 idas à KingHost deixavam a busca em dezenas de
     // segundos pra marcas grandes).
-    const nativeReads = String(process.env.PRODUCT_NATIVE_READS ?? '').trim() === '1';
+    // Default LIGADO (09/2026): env ausente = lê a nativa; só '0' desliga.
+    const nativeReads = String(process.env.PRODUCT_NATIVE_READS ?? '1').trim() !== '0';
 
     const base = await this.search.resolveRows(term, { fallbackTake: 5000 });
     if (!base.length) return { rows: [], fonte: 'espelho', warnings: { legendaAtiva: [], classificacao: [] } };

@@ -87,7 +87,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/notificacoes',         label: 'Notificações',      subtitle: 'Push Central',  description: 'Avisar lojas: promoção, reunião…', tone: 'purple', icon: Bell           },
   { href: '/retaguarda/cadastro-produtos',    label: 'Cadastro Produtos', subtitle: 'Novo SKU',      description: 'Gerar SKUs no Wincred',         tone: 'purple', icon: Package         },
   { href: '/retaguarda/editor-produtos',      label: 'Editor Produtos',   subtitle: 'Padronizar',    description: 'REF, preço e descrição em bloco', tone: 'amber', icon: Package         },
-  { href: '/retaguarda/conferidor-estoque',   label: 'Conferir Estoque',  subtitle: 'Flow × Giga',  description: 'Lista só o que diverge entre os dois', tone: 'amber', icon: Package         },
+  // Conferidor Flow × Giga saiu do hub (09/26): o MySQL do Giga foi desligado — não há mais o que conferir.
   { href: '/retaguarda/pecas-extraviadas',    label: 'Peças extraviadas', subtitle: 'a loja não achou', description: 'Saldo fica, mas a loja sai do roteamento — e o caminho de volta', tone: 'amber', icon: PackageX      },
   { href: '/retaguarda/remessas',             label: 'Remessas',          subtitle: 'Em trânsito',   description: 'Caixas + comprovantes PDF',     tone: 'sky',    icon: Truck           },
   { href: '/retaguarda/correios',             label: 'Correios',          subtitle: 'Envios',        description: 'Frete + pré-postagem (diagnóstico)', tone: 'sky', icon: Truck           },
@@ -95,7 +95,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',     subtitle: 'Criar',         description: 'Rebalancear estoque',           tone: 'amber',  icon: Shuffle         },
   { href: '/retaguarda/realinhamento/nao-encontrados', label: 'Não Encontradas', subtitle: 'Revisar', description: 'Filiais reportaram',           tone: 'rose',   icon: AlertTriangle  },
   { href: '/retaguarda/enviados-hoje',        label: 'Enviados Hoje',     subtitle: 'Pedidos WC',    description: 'Por filial',                    tone: 'green',  icon: ClipboardList   },
-  { href: '/relatorios/giga',                 label: 'Giga Explorer',     subtitle: 'SQL',           description: 'ERP em tempo real',             tone: 'slate',  icon: FileSearch      },
+  // Giga Explorer saiu do hub (09/26): o MySQL do Giga foi desligado — a tela só devolvia erro.
   { href: '/retaguarda/baixas-log',           label: 'Auditoria',         subtitle: 'Baixas ERP',    description: 'Histórico ERP → WC',            tone: 'amber',  icon: FileSearch      },
   { href: '/retaguarda/reconciliar-estoque',  label: 'Reconciliar',       subtitle: 'Estoque PDV',   description: 'Baixar estoque retroativo Wincred', tone: 'rose', icon: Package       },
   { href: '/retaguarda/reprocessar-estoque',  label: 'Reprocessar',       subtitle: 'Remessas',      description: 'Ajustar baixa Giga de remessas com bug', tone: 'rose', icon: Truck         },

@@ -1,16 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ErpService } from '../erp/erp.service';
 
 /**
  * MARCADOS — hoje 100% Flow (07/08, regra do dono: "nunca marque ou puxe
  * nada do Giga"). Este service NAO grava mais nada aqui vindo do Giga — nem
  * em cron, nem sob pedido. O que resta e:
  *
- * - `varrerRestosDoGiga()`: leitura PURA e sob demanda de `caixa
- *   WHERE MARCADO='SIM'` — so pra referencia/duvida ("essa peca antiga ainda
- *   esta marcada la?"), nunca grava nada no Flow. Botao "Restos dos marcados
- *   do Giga" na retaguarda.
  * - `lookupNomes()`: casa nome/CPF olhando o ESPELHO `giga_clientes` (ja
  *   sincronizado no nosso Postgres) — nao e leitura do Giga ao vivo.
  * - `diagnosticarIdentidade()`: mesma ideia, pra investigar atribuicao
@@ -19,15 +14,14 @@ import { ErpService } from '../erp/erp.service';
  * ATE 07/08 existia aqui um sync horario que IMPORTAVA `caixa` pro Flow
  * (`syncFromGiga`, cron `40 * * * *`) — removido. Cada peca marcada hoje
  * nasce e morre 100% no Postgres; nao sobra Giga nenhum pra "puxar".
+ * O `varrerRestosDoGiga()` ("Restos dos marcados do Giga") saiu na Onda 1:
+ * era a ultima leitura ao vivo da `caixa` do MySQL, que morreu em 27/08.
  */
 @Injectable()
 export class MarcadosMirrorService {
   private readonly logger = new Logger(MarcadosMirrorService.name);
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly erp: ErpService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async status() {
     const [total, ativos, fechados, devolvidos, fechadosGiga, porLojaRaw] = await Promise.all([
@@ -52,63 +46,6 @@ export class MarcadosMirrorService {
   async hasMirror(): Promise<boolean> {
     const n = await (this.prisma as any).marcado.count();
     return n > 0;
-  }
-
-  /**
-   * "RESTOS DOS MARCADOS DO GIGA" — sob demanda, NUNCA grava nada. Mostra o
-   * que ainda esta com `MARCADO='SIM'` na `caixa` — sobras de antes de
-   * 07/08 (ou peca que alguem fechou direto no Wincred, que ninguem mais
-   * usa, e nunca vai sumir sozinha de la). Cada linha diz se JA existe um
-   * `Marcado` nativo pro mesmo REGISTRO, pra distinguir "so existe no Giga,
-   * morto" de "tambem esta rastreado no Flow".
-   */
-  async varrerRestosDoGiga(limite = 500): Promise<{
-    total: number;
-    truncado: boolean;
-    itens: Array<{
-      registro: number; numero: number | null; sku: string; descricao: string | null;
-      qty: number; valor: number; valorTotal: number; loja: string; codCliente: string;
-      data: string | null; jaNoFlow: boolean; statusNoFlow: string | null;
-    }>;
-  }> {
-    const teto = Math.min(Math.max(limite, 1), 2000);
-    const r = await this.erp.runReadOnly(
-      `SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, CLIENTE, LOJA
-         FROM caixa
-        WHERE UPPER(MARCADO) = 'SIM'
-        ORDER BY DATA DESC, REGISTRO DESC
-        LIMIT ${teto}`,
-      { maxRows: teto, timeoutMs: 20000 },
-    );
-    const rows: any[] = r.rows || [];
-    const regs = rows.map((row) => Number(row.REGISTRO)).filter((n) => Number.isFinite(n) && n > 0);
-    const nativos: any[] = regs.length
-      ? await (this.prisma as any).marcado.findMany({
-          where: { registroGiga: { in: regs.map((n) => BigInt(n)) } },
-          select: { registroGiga: true, status: true },
-        })
-      : [];
-    const statusPorReg = new Map(nativos.map((n) => [String(n.registroGiga), n.status]));
-
-    const itens = rows.map((row) => {
-      const registro = Number(row.REGISTRO) || 0;
-      const st = statusPorReg.get(String(registro)) ?? null;
-      return {
-        registro,
-        numero: row.NUMERO != null ? Number(row.NUMERO) : null,
-        sku: String(row.CODIGO || ''),
-        descricao: row.DESCRICAO ? String(row.DESCRICAO) : null,
-        qty: Number(row.QUANTIDADE) || 1,
-        valor: Number(row.VALOR) || 0,
-        valorTotal: Number(row.VALORTOTAL) || 0,
-        loja: String(row.LOJA || ''),
-        codCliente: String(row.CLIENTE ?? '').trim(),
-        data: row.DATA ? new Date(row.DATA).toISOString() : null,
-        jaNoFlow: st != null,
-        statusNoFlow: st,
-      };
-    });
-    return { total: itens.length, truncado: itens.length >= teto, itens };
   }
 
   /**

@@ -3,14 +3,17 @@
 /**
  * /marketing — Hub unificado de marketing/vendas.
  *
- * Juntou as 3 telas que antes viviam separadas no TopNav:
+ * Juntou as telas que antes viviam separadas no TopNav:
  *   - CRM (segmentação RFM)
- *   - Carrinhos abandonados
  *   - Recuperação manual WhatsApp
  *
  * Cada aba renderiza o componente default da tela original, sem refatoração.
- * As URLs antigas (/crm/segmentos, /carrinhos-abandonados, /marketing/recuperacao)
- * continuam funcionando, mas o TopNav agora aponta só pra /marketing.
+ * As URLs antigas (/crm/segmentos, /marketing/recuperacao) continuam
+ * funcionando, mas o TopNav agora aponta só pra /marketing.
+ *
+ * A aba "Carrinhos Abandonados" saiu em 09/26: ela lia o plugin do WordPress,
+ * que foi desligado. Os carrinhos vivem na aba Carrinhos da /separacao, que lê
+ * o e-commerce novo direto do banco do Flow.
  *
  * Aba ativa persiste via query param ?tab= pra funcionar com back/forward do browser
  * e compartilhar link direto pra uma aba específica.
@@ -18,21 +21,19 @@
 
 import { Suspense, useMemo } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { Users, ShoppingCart, MessageCircle, Filter } from 'lucide-react';
+import { Users, MessageCircle, Filter } from 'lucide-react';
 
 // Reaproveita os componentes default das telas existentes.
 // Todos são 'use client' e cuidam da própria busca de dados.
 import SegmentosPage from '../crm/segmentos/page';
 import ListaPersonalizadaPage from '../crm/lista-personalizada/page';
-import CarrinhosAbandonadosPage from '../carrinhos-abandonados/page';
 import RecuperacaoPage from './recuperacao/page';
 
-type TabKey = 'segmentos' | 'personalizada' | 'carrinhos' | 'recuperacao';
+type TabKey = 'segmentos' | 'personalizada' | 'recuperacao';
 
 const TABS: { key: TabKey; label: string; icon: typeof Users }[] = [
   { key: 'segmentos',     label: 'Segmentos (CRM)',       icon: Users },
   { key: 'personalizada', label: 'Lista Personalizada',   icon: Filter },
-  { key: 'carrinhos',     label: 'Carrinhos Abandonados', icon: ShoppingCart },
   { key: 'recuperacao',   label: 'Recuperação WhatsApp',  icon: MessageCircle },
 ];
 
@@ -88,7 +89,6 @@ function MarketingHubInner() {
       <div>
         {active === 'segmentos'     && <SegmentosPage />}
         {active === 'personalizada' && <ListaPersonalizadaPage />}
-        {active === 'carrinhos'     && <CarrinhosAbandonadosPage />}
         {active === 'recuperacao'   && <RecuperacaoPage />}
       </div>
     </div>

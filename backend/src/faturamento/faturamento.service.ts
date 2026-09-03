@@ -510,43 +510,56 @@ export class FaturamentoService {
       };
     }
 
-    // FALLBACK: Loja não usa PDV flowops → busca direto no Wincred (tabela caixa)
-    // Estorno NÃO disponível pra essas vendas — precisa ser feito no PDV Wincred legado.
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const caixaVendas = await this.erp.getVendasCaixa(
+    // SEM VENDA NO PDV FLOW → completa com o ESPELHO da caixa do Wincred
+    // (giga_caixa_mov — as MESMAS linhas que o card SITE já lista). Até 03/09
+    // isto chamava erp.getVendasCaixa (MySQL do Giga, morto desde 27/08): a
+    // lista voltava vazia SEM AVISO e o gestor lia "loja sem venda" num
+    // período que tinha venda no card de cima. Estorno segue indisponível
+    // (lançamento do ERP).
+    const caixaLinhas = await this.linhasCaixaDaLoja(
       storeCodeUpper,
-      fmt(dInicio),
-      fmt(dFimExclusive),
+      dInicio,
+      dFimExclusive,
     );
+    if (caixaLinhas.length > 0) {
+      return {
+        storeCode: storeCodeUpper,
+        source: 'wincred_caixa',
+        appliedPeriod: { from, to },
+        sourceWarning:
+          'Vendas do caixa Wincred (espelho) — período anterior ao PDV do sistema. Estorno não disponível por aqui.',
+        vendas: caixaLinhas,
+      };
+    }
+
+    // Nada no PDV Flow NEM no espelho: diferencia "sem venda" de "período sem
+    // cobertura". O espelho da caixa tem data de estreia — antes dela a
+    // resposta honesta é avisar, nunca lista vazia calada (regra da casa:
+    // covers() só olha o INÍCIO da cobertura).
+    // ⚠️ A estreia sai de `data`, NUNCA de `data_fec`: medido em 03/09/2026,
+    // MIN(data_fec) = 1910-01-01 (lixo de fechamento antigo) contra
+    // MIN(data) = 2025-01-02 (a cobertura real). Com data_fec o aviso abaixo
+    // NUNCA dispararia — nasceria com o mesmo silêncio que veio consertar.
+    let semCobertura = false;
+    try {
+      const cov: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT MIN(data) AS min FROM giga_caixa_mov`,
+      );
+      const min = cov?.[0]?.min ? new Date(cov[0].min) : null;
+      semCobertura = !min || dInicio.getTime() < min.getTime();
+    } catch {
+      /* o aviso é cortesia — não pode derrubar a resposta */
+    }
 
     return {
       storeCode: storeCodeUpper,
-      source: 'wincred_caixa',
-      sourceWarning:
-        'Esta loja ainda usa o PDV Wincred legado. Estorno não disponível por aqui — faça direto no Wincred.',
-      vendas: caixaVendas.map((v: any) => ({
-        id: `wincred:${storeCodeUpper}:${v.numero}`,
-        number: `#${v.numero}`,
-        status: 'finalized',
-        createdAt: v.data,
-        total: v.total,
-        subtotal: v.total,
-        desconto: 0,
-        sellerName: v.vendedora || (v.codFuncionario ? `cod ${v.codFuncionario}` : null),
-        customerCpf: v.cpf,
-        customerName: v.cliente,
-        paymentMethod: v.fpag,
-        nfceStatus: null,
-        nfceNumber: String(v.numero),
-        nfceSerie: null,
-        nfceChave: null,
-        nfceAutorizadaEm: null,
-        stockDecreased: true,
-        items: [{ sku: '—', descricao: `${v.qtdItens} item(ns)`, qty: v.qtdItens, precoUnit: 0, total: v.total }],
-        payments: [{ method: v.fpag || '—', valor: v.total }],
-        canEstornar: false, // estorno Wincred deve ser feito no PDV legado
-      })),
+      source: 'pdv_sale',
+      appliedPeriod: { from, to },
+      zumbisOcultas: zumbis.length,
+      sourceWarning: semCobertura
+        ? 'Período sem cobertura: começa antes do histórico espelhado do caixa Wincred. Vendas dessa época não estão no sistema.'
+        : undefined,
+      vendas: [],
     };
   }
 

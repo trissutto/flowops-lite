@@ -3,7 +3,7 @@
 import { FormEvent, Fragment, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Loader2, MessageCircle, Plus, RefreshCw,
+  ChevronDown, ChevronLeft, ChevronRight, Loader2, MessageCircle, Plus,
   Search, SlidersHorizontal, Store, Trash2, Users, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -177,7 +177,7 @@ function BetaClientesContent() {
           <p className="mt-1 text-sm text-[#6D6B64]">Uma única base para lojas, site, PDV e vendas ao vivo.</p>
         </div>
         <div className="flex items-center gap-2">
-          {isMatrix && <a href="/clientes-crm/sincronizacao" className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#CFCFC9] bg-white px-3.5 text-sm font-medium text-[#34332F] shadow-sm hover:bg-[#F5F5F2]"><RefreshCw className="h-4 w-4" /> Sincronizações</a>}
+          {/* "Sincronizações" (/clientes-crm/sincronizacao) saiu em 09/26: WooCommerce e Giga MySQL foram desligados. */}
           <a href="/clientes-crm?create=1" className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#30302E] px-4 text-sm font-semibold text-white shadow-sm hover:bg-[#1F1F1D]"><Plus className="h-4 w-4" /> Cadastrar cliente</a>
         </div>
       </div>

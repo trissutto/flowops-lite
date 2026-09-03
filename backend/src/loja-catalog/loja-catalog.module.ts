@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { LiveModule } from '../live/live.module';
-import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PromoSiteModule } from '../promo-site/promo-site.module';
 import { LojaCatalogService } from './loja-catalog.service';
@@ -31,7 +30,10 @@ import { LojaCatalogPublicController, LojaCatalogAdminController } from './loja-
    * real: `LiveModule` não importa `LojaCatalogModule` nem nada que leve a
    * ele. Se um dia importar, o boot quebra — e o teste pega antes do deploy.
    */
-  imports: [PrismaModule, HttpModule, LiveModule, PromoSiteModule],
+  // HttpModule saiu (09/2026): nenhum provider daqui injeta HttpService — quem
+  // fala com a Graph API é o MetaService, que vem pelo LiveModule com o
+  // limitador de requisição dele.
+  imports: [PrismaModule, LiveModule, PromoSiteModule],
   controllers: [LojaCatalogPublicController, LojaCatalogAdminController],
   providers: [LojaCatalogService, SiteSyncService, InstagramFeedService, GrupoRefService, ClassificacaoService],
   exports: [LojaCatalogService],

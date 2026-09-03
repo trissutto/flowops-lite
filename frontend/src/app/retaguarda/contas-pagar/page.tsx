@@ -6,15 +6,16 @@ import { overlayClose } from '@/lib/overlayClose';
  *
  * 4 visões: PAINEL (cards + busca por qualquer parte + tabela) · NOVA CONTA
  * (modal com prévia de parcelas) · FUNCIONÁRIAS (restrita — total por pessoa/mês)
- * · DIVERGÊNCIAS (migração GIGA×FLOW: espelho, migrar, validação).
- * Módulo admin/master (matriz). GIGA congelado — lançamento novo só aqui.
+ * · ASSOCIAÇÃO (fornecedor-pessoa → funcionária).
+ * Módulo admin/master (matriz). A aba DIVERGÊNCIAS saiu em 09/26 (migração
+ * concluída, MySQL do Giga desligado) — lançamento novo só aqui.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Plus, Search, Loader2, Check, X, Wallet, AlertTriangle,
-  CalendarDays, Users, Scale, RefreshCw, Trash2, Pencil, History,
+  CalendarDays, Users, Trash2, Pencil, History,
   ListChecks, Printer, Paperclip,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -49,7 +50,9 @@ function OpcoesLojas({ lojas }: { lojas: any[] }) {
   );
 }
 
-type Aba = 'painel' | 'hoje' | 'funcionarias' | 'associacao' | 'divergencias';
+// A aba 'divergencias' (migração GIGA × FLOW) saiu em 09/26: migração concluída
+// e o MySQL do Giga desligado — sobrou só o Flow.
+type Aba = 'painel' | 'hoje' | 'funcionarias' | 'associacao';
 
 export default function ContasPagarPage() {
   const [aba, setAba] = useState<Aba>('painel');
@@ -83,7 +86,6 @@ export default function ContasPagarPage() {
             ['hoje', 'A fazer hoje', ListChecks],
             ['funcionarias', 'Funcionárias', Users],
             ['associacao', 'Associação', Users],
-            ['divergencias', 'Divergências GIGA × FLOW', Scale],
           ] as any[]).map(([k, label, Icon]) => (
             <button
               key={k}
@@ -103,7 +105,6 @@ export default function ContasPagarPage() {
         {aba === 'hoje' && <AFazerHoje avisar={avisar} />}
         {aba === 'funcionarias' && <Funcionarias />}
         {aba === 'associacao' && <Associacao avisar={avisar} />}
-        {aba === 'divergencias' && <Divergencias avisar={avisar} />}
       </main>
 
       {showNova && <NovaContaModal onClose={() => setShowNova(false)} avisar={avisar} />}
@@ -1398,21 +1399,15 @@ function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
         FUNCIONÁRIA em todas as contas e somem do autocomplete de fornecedores. Tudo reversível e auditado.
       </div>
       <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => acao(() => api('/admin/contas-pagar/associacao/importar-giga', { method: 'POST' }), 'Funcionárias do GIGA importadas', 'import')}
-          disabled={!!rodando}
-          className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60"
-        >
-          {rodando === 'import' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          1 · Importar funcionárias do GIGA (CPF/loja)
-        </button>
+        {/* O botão "Importar funcionárias do GIGA" saiu em 09/26: a migração acabou
+            e o MySQL do Giga foi desligado — a base de funcionárias já vive no Flow. */}
         <button
           onClick={() => acao(() => api('/admin/contas-pagar/associacao/confirmar-exatos', { method: 'POST' }), 'Nomes exatos associados em lote', 'exatos')}
           disabled={!!rodando || !data?.exatos}
           className="px-4 py-2 rounded-lg bg-[#2E7D46] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60"
         >
           {rodando === 'exatos' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-          2 · Confirmar todos os EXATOS ({data?.exatos ?? 0})
+          Confirmar todos os EXATOS ({data?.exatos ?? 0})
         </button>
         <button onClick={carregar} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Atualizar</button>
       </div>
@@ -1663,131 +1658,8 @@ function EscolherFuncionariaModal({ candidato, onClose, onOk, avisar }: any) {
   );
 }
 
-/* ═══════════════════ DIVERGÊNCIAS (migração GIGA × FLOW) ═══════════════════ */
-function Divergencias({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
-  const [val, setVal] = useState<any>(null);
-  const [prog, setProg] = useState<any>(null);
-  const pollRef = useRef<any>(null);
-  const carregar = useCallback(() => {
-    api<any>('/admin/contas-pagar/validacao').then(setVal).catch(() => setVal(null));
-  }, []);
-
-  // Acompanha o job em background (espelho/migração) a cada 2s.
-  const acompanhar = useCallback(() => {
-    clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const p = await api<any>('/admin/contas-pagar/progresso');
-        setProg(p);
-        if (!p?.running) {
-          clearInterval(pollRef.current);
-          if (p?.finishedAt) {
-            if (p.error) avisar('erro', `${p.step === 'espelho' ? 'Espelho' : 'Migração'}: ${p.error}`);
-            else avisar('ok', `${p.step === 'espelho' ? 'Espelho' : 'Migração'} concluído`);
-          }
-          carregar();
-        }
-      } catch { /* mantém polling */ }
-    }, 2000);
-  }, [avisar, carregar]);
-
-  useEffect(() => {
-    carregar();
-    // Se já tem job rodando (ex.: voltou pra tela), retoma o acompanhamento.
-    api<any>('/admin/contas-pagar/progresso').then((p) => { setProg(p); if (p?.running) acompanhar(); }).catch(() => {});
-    return () => clearInterval(pollRef.current);
-  }, [carregar, acompanhar]);
-
-  const rodando = !!prog?.running;
-  const rodar = async (rota: string, label: string) => {
-    try {
-      const r = await api<any>(`/admin/contas-pagar/${rota}`, { method: 'POST' });
-      if (r?.alreadyRunning) { avisar('erro', 'Já tem um processo rodando — aguarde terminar'); return; }
-      avisar('ok', `${label} iniciado — acompanhe a barra`);
-      acompanhar();
-    } catch (e: any) {
-      avisar('erro', `${label}: ${e?.message || 'falhou'}`);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-white border-l-4 border-[#B8912B] rounded-lg p-3 text-sm text-slate-500">
-        ⚖️ <b>Regra da migração:</b> divergência NUNCA se corrige sozinha — aparece aqui e você decide.
-        Lançamento novo é só no Flow; o GIGA fica congelado pra consulta.
-      </div>
-      <div className="flex gap-2">
-        <button onClick={() => rodar('espelho/sync', 'Espelho do GIGA')} disabled={rodando} className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60">
-          {rodando && prog?.step === 'espelho' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 1 · Sincronizar espelho
-        </button>
-        <button onClick={() => rodar('migrar', 'Migração')} disabled={rodando} className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60">
-          {rodando && prog?.step === 'migracao' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 2 · Migrar (idempotente)
-        </button>
-        <button onClick={carregar} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Atualizar validação</button>
-      </div>
-      {rodando && (
-        <div className="bg-white border border-[#E7E2D8] rounded-xl p-4">
-          <div className="flex justify-between text-sm font-bold text-slate-600 mb-2">
-            <span>⏳ {prog?.step === 'espelho' ? 'Copiando o GIGA pro espelho…' : 'Migrando pro modelo novo…'}</span>
-            <span>{(prog?.processed || 0).toLocaleString('pt-BR')} / {(prog?.total || 0).toLocaleString('pt-BR')}</span>
-          </div>
-          <div className="h-2.5 bg-[#F1EDE3] rounded-full overflow-hidden">
-            <div
-              className="h-full bg-[#B8912B] rounded-full transition-all"
-              style={{ width: `${prog?.total ? Math.min(100, Math.round((prog.processed / prog.total) * 100)) : 5}%` }}
-            />
-          </div>
-          <p className="text-[11px] text-slate-400 mt-2">Roda no servidor — pode sair da tela. Rodar de novo NÃO duplica (continua de onde parou).</p>
-        </div>
-      )}
-      {!rodando && prog?.finishedAt && prog?.resumo && (
-        <p className="text-xs text-slate-500">
-          Último processo ({prog.step === 'espelho' ? 'espelho' : 'migração'}): {prog.error ? `❌ ${prog.error}` : '✓ concluído'}
-          {prog.resumo?.linhas != null && ` · ${Number(prog.resumo.linhas).toLocaleString('pt-BR')} linhas`}
-          {prog.resumo?.criadas != null && ` · ${Number(prog.resumo.criadas).toLocaleString('pt-BR')} novas, ${Number(prog.resumo.puladas || 0).toLocaleString('pt-BR')} já migradas`}
-          {prog.resumo?.durationMs != null && ` · ${Math.round(prog.resumo.durationMs / 1000)}s`}
-        </p>
-      )}
-      {val && (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <CardStat titulo="GIGA (espelho)" cents={Math.round(Number(val.espelho?.soma || 0) * 100)} qtd={val.espelho?.total || 0} cor="text-slate-800" />
-            <CardStat titulo="FLOW (migradas)" cents={Math.round(Number(val.flow?.soma || 0) * 100)} qtd={val.flow?.total || 0} cor="text-slate-800" />
-            <div className={`border rounded-xl px-4 py-3 ${val.ok ? 'bg-emerald-50 border-[#2E7D46]' : 'bg-rose-50 border-rose-300'}`}>
-              <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Equivalência</div>
-              <div className={`text-lg font-extrabold ${val.ok ? 'text-[#2E7D46]' : 'text-rose-600'}`}>{val.ok ? '✓ 100% batendo' : 'DIVERGENTE'}</div>
-              <div className="text-[11px] text-slate-400">abertas: GIGA {val.espelho?.abertas} × FLOW {val.flow?.abertas}</div>
-            </div>
-            <div className="bg-white border border-[#E7E2D8] rounded-xl px-4 py-3">
-              <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Conferido em</div>
-              <div className="text-sm font-bold">{val.geradoEm ? new Date(val.geradoEm).toLocaleString('pt-BR') : '—'}</div>
-            </div>
-          </div>
-          {val.lojasDivergentes?.length > 0 && (
-            <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="bg-[#FAFAF7] text-[11px] uppercase text-slate-500 border-b border-[#E7E2D8]">
-                  <th className="text-left px-3 py-2">Loja</th><th className="text-right px-3 py-2">GIGA</th><th className="text-right px-3 py-2">FLOW</th><th className="text-right px-3 py-2">Diferença</th>
-                </tr></thead>
-                <tbody>
-                  {val.lojasDivergentes.map((l: any) => (
-                    <tr key={l.loja} className="border-b border-[#F1EDE3]">
-                      <td className="px-3 py-2 font-bold">{l.loja}</td>
-                      <td className="px-3 py-2 text-right">{l.giga_total}</td>
-                      <td className="px-3 py-2 text-right">{l.flow_total}</td>
-                      <td className="px-3 py-2 text-right font-bold text-rose-600">{Number(l.giga_total) - Number(l.flow_total)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-      {!val && <p className="text-sm text-slate-400">Validação indisponível — rode o espelho e a migração primeiro.</p>}
-    </div>
-  );
-}
+/* A aba DIVERGÊNCIAS (migração GIGA × FLOW) foi removida em 09/26: a migração
+   terminou e o MySQL do Giga foi desligado — espelho/migração não rodam mais. */
 
 /* ═══════════════════ componentes base ═══════════════════ */
 function Modal({ titulo, children, onClose, largo }: any) {

@@ -238,8 +238,7 @@ export class LojaCatalogPublicController {
 /**
  * ADMINISTRAÇÃO DO CATÁLOGO DO SITE (matriz).
  *   GET   /loja-catalog/validacao        → conferência ERP × site, com números
- *   POST  /loja-catalog/importar         → puxa conteúdo do site antigo
- *   GET   /loja-catalog/sync/historico   → log das rodadas
+ *   GET   /loja-catalog/sync/historico   → log das rodadas do importador (aposentado 09/2026)
  *   PATCH /loja-catalog/produto/:ref     → edita o cadastro comercial
  *                                          (e o Flow toma posse da peça)
  */
@@ -293,12 +292,10 @@ export class LojaCatalogAdminController {
     return this.svc.duplicadas();
   }
 
-  @Post('importar')
-  importar(@Req() req: any) {
-    this.requireAdmin(req);
-    const quem = req?.user?.email || req?.user?.name || 'admin';
-    return this.sync.sincronizarConteudo(quem);
-  }
+  // POST /loja-catalog/importar foi REMOVIDA no enterro do Wincred (09/2026):
+  // puxava o catálogo do WordPress antigo, e o host do WP foi apagado
+  // (KingHost, 27/08) — não existe mais de onde importar. O histórico das
+  // rodadas continua abaixo.
 
   @Get('sync/historico')
   historico(@Req() req: any, @Query('limite') limite?: string) {

@@ -5,8 +5,8 @@ import { api } from '@/lib/api';
 import {
   Search, Plus, Users, Filter, X, ChevronRight, Award, Wallet,
   Calendar, Phone, Mail, MapPin, Tag as TagIcon, ShieldCheck, ShieldOff,
-  CheckCircle2, AlertCircle, Loader2, MessageCircle, Store as StoreIcon,
-  RefreshCw, Download,
+  AlertCircle, Loader2, MessageCircle, Store as StoreIcon,
+  Download,
 } from 'lucide-react';
 
 /**
@@ -148,33 +148,8 @@ interface StoreOption {
   name: string;
 }
 
-interface EtlState {
-  running: boolean;
-  source: 'woo' | 'giga' | null;
-  totalEmails: number;
-  processed: number;
-  inserted: number;
-  updated: number;
-  errors: number;
-  startedAt: string | null;
-  finishedAt: string | null;
-  lastError: string | null;
-}
-
-interface GigaEtlState {
-  running: boolean;
-  fase: 'idle' | 'clientes' | 'historico' | 'tier' | 'done';
-  faseProgresso: { current: number; total: number };
-  totalGiga: number;
-  processados: number;
-  criados: number;
-  atualizados: number;
-  pulados: number;
-  erros: number;
-  lastError: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-}
+// Os tipos EtlState/GigaEtlState morreram junto com a tela /clientes-crm/sincronizacao
+// (09/26): as fontes (WooCommerce e Giga MySQL) foram desligadas — não há mais o que puxar.
 
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -295,11 +270,6 @@ export default function ClientesCrmPage() {
     }
   }, []);
 
-  // ETL state — só lemos pra mostrar badge "rodando" no botão Sincronizações.
-  // As funções de disparar sync ficam em /clientes-crm/sincronizacao
-  const [etlState, setEtlState] = useState<EtlState | null>(null);
-  const [gigaEtl, setGigaEtl] = useState<GigaEtlState | null>(null);
-
   const isMatrix = me?.role === 'admin' || me?.role === 'operator';
   const listaReturnTo = (() => {
     const qs = new URLSearchParams();
@@ -352,48 +322,8 @@ export default function ClientesCrmPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ETL polling
-  useEffect(() => {
-    if (!isMatrix) return;
-    api<EtlState>('/customers-crm/etl/status').then(setEtlState).catch(() => {});
-  }, [isMatrix]);
-
-  useEffect(() => {
-    if (!etlState?.running) return;
-    const t = setInterval(async () => {
-      try {
-        const s = await api<EtlState>('/customers-crm/etl/status');
-        const wasRunning = etlState?.running;
-        setEtlState(s);
-        if (wasRunning && !s.running) load(); // terminou → recarrega lista
-      } catch {}
-    }, 2500);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [etlState?.running]);
-
-  // NOTA: as funções de sync (startWooSync, startGigaSync, atualizarLojaPrincipal)
-  // foram movidas pra /clientes-crm/sincronizacao. Aqui só mantemos o polling
-  // dos states pra mostrar o badge "rodando" no botão de Sincronizações.
-
-  // Polling Giga
-  useEffect(() => {
-    if (!isMatrix) return;
-    api<GigaEtlState>('/customers-crm/etl/giga/status').then(setGigaEtl).catch(() => {});
-  }, [isMatrix]);
-  useEffect(() => {
-    if (!gigaEtl?.running) return;
-    const t = setInterval(async () => {
-      try {
-        const s = await api<GigaEtlState>('/customers-crm/etl/giga/status');
-        const wasRunning = gigaEtl?.running;
-        setGigaEtl(s);
-        if (wasRunning && !s.running) load();
-      } catch {}
-    }, 2500);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gigaEtl?.running]);
+  // NOTA (09/26): o polling dos ETLs (woo/giga) foi removido junto com a
+  // entrada pra /clientes-crm/sincronizacao — as duas fontes foram desligadas.
 
   function onSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -427,21 +357,8 @@ export default function ClientesCrmPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Sincronizações agrupadas em página dedicada — tira poluição do header
-              da listagem. Botão indica se algum sync está rodando (badge animado). */}
-          {isMatrix && (
-            <a
-              href="/clientes-crm/sincronizacao"
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border border-slate-300"
-              title="Importar clientes do site e Giga; atualizar lojas"
-            >
-              <RefreshCw className={`w-4 h-4 ${(etlState?.running || gigaEtl?.running) ? 'animate-spin text-blue-600' : ''}`} />
-              Sincronizações
-              {(etlState?.running || gigaEtl?.running) && (
-                <span className="ml-1 inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-              )}
-            </a>
-          )}
+          {/* O botão "Sincronizações" (/clientes-crm/sincronizacao) saiu em 09/26:
+              as fontes (WooCommerce e Giga MySQL) foram desligadas. */}
           <button
             onClick={() => setShowCreate(true)}
             className="bg-purple-700 hover:bg-purple-800 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm"
@@ -450,19 +367,6 @@ export default function ClientesCrmPage() {
           </button>
         </div>
       </div>
-
-      {/* Sync em andamento? Mostra banner discreto com link pra página de progresso */}
-      {(gigaEtl?.running || etlState?.running) && (
-        <a
-          href="/clientes-crm/sincronizacao"
-          className="mb-4 flex items-center gap-2 rounded-lg px-3 py-2 bg-blue-50 border border-blue-200 text-sm text-blue-900 hover:bg-blue-100"
-        >
-          <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-          <span>
-            Sincronização em andamento — clique pra ver o progresso ao vivo
-          </span>
-        </a>
-      )}
 
       {/* ── Banner informativo (só vendedora e sem-loja; admin filtra inline na busca) ── */}
       {me && !isMatrix && (
@@ -482,32 +386,6 @@ export default function ClientesCrmPage() {
             </span>
           </div>
         )
-      )}
-
-      {/* ── ETL info bar (quando rodando ou recém-terminado) ───────── */}
-      {isMatrix && etlState && (etlState.running || etlState.finishedAt) && (
-        <div className={`mb-4 px-4 py-3 rounded-lg border text-sm flex items-center gap-3 ${
-          etlState.running
-            ? 'bg-blue-50 border-blue-200 text-blue-900'
-            : etlState.errors > 0
-              ? 'bg-yellow-50 border-yellow-200 text-yellow-900'
-              : 'bg-green-50 border-green-200 text-green-900'
-        }`}>
-          {etlState.running
-            ? <Loader2 className="w-4 h-4 animate-spin" />
-            : <CheckCircle2 className="w-4 h-4" />}
-          <span>
-            <strong>ETL {etlState.source}:</strong>{' '}
-            {etlState.running
-              ? `processando ${etlState.processed}/${etlState.totalEmails}...`
-              : `concluído — ${etlState.inserted} inseridos, ${etlState.updated} atualizados, ${etlState.errors} erros.`}
-          </span>
-          {!etlState.running && (
-            <button onClick={() => setEtlState({ ...etlState, finishedAt: null })} className="ml-auto">
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
       )}
 
       {/* ── Barra de busca + filtros ──────────────────────────────────── */}

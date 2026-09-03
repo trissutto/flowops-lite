@@ -18,7 +18,6 @@ interface AuthUser {
  * /crediarios — Cobrança de parcelas vencidas (matriz/operator only).
  *
  *   GET  /crediarios/schema
- *   GET  /crediarios/diagnose
  *   GET  /crediarios/vencidos?loja=01&dataInicio=2026-01-01&dataFim=2026-04-20
  *   GET  /crediarios/vencidos-clientes?loja=01&dataInicio=...
  *   GET  /crediarios/cobranca/templates       — preview dos 6 templates
@@ -46,12 +45,6 @@ export class CrediariosController {
     this.ensureMatriz(req);
     const map = await this.svc.detectColumns(true);
     return { columnMap: map };
-  }
-
-  @Get('diagnose')
-  async diagnose(@Req() req: any) {
-    this.ensureMatriz(req);
-    return this.svc.diagnoseRawColumns();
   }
 
   /**

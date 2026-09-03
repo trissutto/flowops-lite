@@ -47,6 +47,79 @@ export class IntelligenceService {
     return { inicio, fim: fimExclusive };
   }
 
+  /**
+   * Início da cobertura do espelho detalhado da caixa (giga_caixa_mov).
+   * ⚠️ A cobertura só olha o INÍCIO: dia >= MIN(data) = coberto. Mês/período
+   * que COMEÇA antes disso fica de fora mesmo que termine dentro — parcial
+   * viraria número menor com cara de número certo.
+   */
+  private async caixaMovCobreDesde(): Promise<Date | null> {
+    const rows: any[] = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT MIN(data) AS min FROM giga_caixa_mov`,
+    );
+    return rows?.[0]?.min ? new Date(rows[0].min) : null;
+  }
+
+  /**
+   * Vendas por loja no período FILTRADAS POR ANO DE CADASTRO da peça — 100%
+   * espelho (giga_caixa_mov × wincred_produtos.dataAlt). Réplica da régua do
+   * stockByYearByStoreFromMirror do ErpService: match de código por
+   * ltrim(...,'0') (padding de zeros inconsistente do Giga) e bucket
+   * pre2020/ano. Ano fora do padrão NÃO filtra (mesmo comportamento do ramo
+   * de estoque — as duas colunas da tela precisam concordar).
+   *
+   * Período antes da cobertura do espelho = erro honesto que SOBE — devolver
+   * zero calado foi exatamente o bug que motivou este método.
+   */
+  private async salesByStoresComAnoFromMirror(
+    inicio: Date,
+    fim: Date,
+    plusSize: boolean,
+    year: string,
+  ): Promise<Map<string, { pecas: number; valor: number }>> {
+    const min = await this.caixaMovCobreDesde();
+    if (!min || inicio.getTime() < min.getTime()) {
+      throw new BadRequestException(
+        min
+          ? `Espelho da caixa cobre a partir de ${min.toISOString().slice(0, 10)} — o período pedido começa antes disso. Ajuste o De/Até.`
+          : 'Espelho da caixa (giga_caixa_mov) está vazio — sem como calcular vendas por ano de cadastro.',
+      );
+    }
+    const conds: string[] = [
+      'm.data >= $1',
+      'm.data < $2',
+      `(m.marcado IS NULL OR m.marcado <> 'SIM')`,
+    ];
+    if (plusSize) {
+      conds.push(`(COALESCE(p."plusSize", 0) > 0 OR UPPER(COALESCE(p."descricaoCompleta", '')) LIKE '%PLUS SIZE%')`);
+    }
+    if (year === 'pre2020') {
+      conds.push(`p."dataAlt" < '2021-01-01'`);
+    } else {
+      const y = parseInt(year, 10);
+      if (!isNaN(y) && y >= 2000 && y <= 2100) {
+        conds.push(`p."dataAlt" >= '${y}-01-01' AND p."dataAlt" < '${y + 1}-01-01'`);
+      }
+    }
+    const rows: any[] = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT m.loja AS "storeCode",
+              COALESCE(SUM(m.quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(m.valor_total), 0)::float8 AS valor
+         FROM giga_caixa_mov m
+         JOIN wincred_produtos p ON ltrim(p.codigo, '0') = ltrim(m.codigo, '0')
+        WHERE ${conds.join(' AND ')}
+        GROUP BY m.loja`,
+      inicio, fim,
+    );
+    const out = new Map<string, { pecas: number; valor: number }>();
+    for (const r of rows) {
+      const code = String(r.storeCode || '').trim();
+      if (!code) continue;
+      out.set(code, { pecas: Number(r.pecas) || 0, valor: Number(r.valor) || 0 });
+    }
+    return out;
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // OVERVIEW — tabela principal (1 linha por loja)
   // ═══════════════════════════════════════════════════════════════════════
@@ -75,13 +148,21 @@ export class IntelligenceService {
     });
     const codes = (stores as any[]).map((s) => s.code);
 
-    // Em paralelo: estoque + vendas (Giga) + remessas in/out (Postgres)
+    // Em paralelo: estoque + vendas (espelho) + remessas in/out (Postgres)
     // Estoque e vendas filtram por ANO DE CADASTRO da peça (year). As remessas
     // ficam sem esse filtro porque o histórico de envios não conhece a data
     // de cadastro do SKU — manteve o comportamento atual.
+    //
+    // ⚠️ VENDAS COM FILTRO DE ANO (03/09): o ErpService só implementava o
+    // `year` no ramo Giga ao vivo — com o Giga morto, escolher um ano na tela
+    // ZERAVA a coluna de vendas calado (o estoque filtrava certinho do lado).
+    // O join giga_caixa_mov × wincred_produtos (mesma régua do
+    // stockByYearByStoreFromMirror) resolve aqui pelo espelho.
     const [stockMap, salesMap, recebido, enviado] = await Promise.all([
       this.erp.getStockTotalByStores(plusSize, year),
-      this.erp.getSalesByStoresInRange(inicio, fim, plusSize, year),
+      year
+        ? this.salesByStoresComAnoFromMirror(inicio, fim, plusSize, year)
+        : this.erp.getSalesByStoresInRange(inicio, fim, plusSize),
       this.getRecebidoByStore(inicio, fim, codes),
       this.getEnviadoByStore(inicio, fim, codes),
     ]);
@@ -200,7 +281,7 @@ export class IntelligenceService {
 
   /**
    * Pra um SKU específico, retorna:
-   *   - Estoque REAL no Giga por loja (o que aparece em /produtos)
+   *   - Estoque REAL por loja (wincred_estoque — o que aparece em /produtos)
    *   - Pick-orders ATIVOS consumindo esse SKU (quem reservou e em qual pedido WC)
    *   - Estoque LÍQUIDO (real − committed) — o que o routing usa pra decidir
    *
@@ -225,12 +306,23 @@ export class IntelligenceService {
     const tipoByCode = new Map(stores.map((s: any) => [s.code, (s as any).tipo || 'REDE']));
     const activeByCode = new Map(stores.map((s: any) => [s.code, !!s.active]));
 
-    // 2) Estoque REAL no Giga por loja (1 query)
-    const realStockMap = await this.erp.getStockRawBySku(cleanSku);
+    // 2) Estoque REAL por loja — `wincred_estoque`, a MESMA tabela que site e
+    // PDV leem (STOCK_WINCRED_FIRST). Até 03/09 isto era erp.getStockRawBySku
+    // (tabela `estoque` do Giga): com o pool morto voltava [] SEM erro e o
+    // diagnóstico dizia "estoque 0" pra peça que a vitrine mostrava.
+    // Codigo do espelho é normalizado SEM zeros à esquerda (normalizeCodigo).
+    // Sem clamp em zero: linha negativa é justamente o que o diagnóstico
+    // precisa enxergar.
+    const codigoNorm =
+      cleanSku.replace(/\D/g, '').replace(/^0+/, '') || cleanSku;
+    const estoqueRows: any[] = await (this.prisma as any).wincredEstoque.findMany({
+      where: { codigo: codigoNorm },
+      select: { loja: true, estoque: true },
+    });
     const realByStore = new Map<string, number>();
-    for (const r of realStockMap) {
-      const code = String(r.storeCode || '').trim();
-      if (code) realByStore.set(code, (realByStore.get(code) || 0) + (r.qty || 0));
+    for (const r of estoqueRows) {
+      const code = String(r.loja || '').trim();
+      if (code) realByStore.set(code, (realByStore.get(code) || 0) + (Number(r.estoque) || 0));
     }
 
     // 3) Pick-orders ATIVOS (não enviados / não baixados) que tocam esse SKU
@@ -624,10 +716,81 @@ export class IntelligenceService {
   // ═══════════════════════════════════════════════════════════════════════
 
   async getHeatmap(input: { plusSize?: boolean; limit?: number }) {
-    return this.erp.getHeatmap({
+    return this.heatmapFromMirror({
       plusSize: !!input.plusSize,
       limitRefs: input.limit || 20,
     });
+  }
+
+  /**
+   * ESPELHO (03/09): o heatmap era o ÚNICO endpoint da tela sem ramo espelho
+   * — erp.getHeatmap dependia do pool MySQL e, com o Giga morto, devolvia
+   * `{refs:[],lojas:[],matrix:{}}` SEM erro (heatmap eternamente vazio).
+   * Mesmo join do stockByYearByStoreFromMirror: giga_estoque ×
+   * wincred_produtos por ltrim(...,'0'), loja normalizada pra 2 dígitos.
+   * Shape idêntica à do ErpService. Erro aqui SOBE — sem catch de fachada.
+   */
+  private async heatmapFromMirror(input: { plusSize: boolean; limitRefs: number }): Promise<{
+    refs: Array<{ refCode: string; descricao: string | null; totalRede: number }>;
+    lojas: string[];
+    matrix: Record<string, Record<string, number>>;
+  }> {
+    const limit = Math.max(1, Math.min(50, input.limitRefs || 20));
+    const plusCond = input.plusSize
+      ? `AND (COALESCE(p."plusSize", 0) > 0 OR UPPER(COALESCE(p."descricaoCompleta", '')) LIKE '%PLUS SIZE%')`
+      : '';
+
+    // 1. Top REFs por estoque total da rede (btrim: REF do espelho pode vir
+    //    com espaço na ponta e viraria linha duplicada no agrupamento)
+    const topRows: any[] = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT btrim(p.ref) AS "refCode",
+              MAX(p."descricaoCompleta") AS descricao,
+              SUM(e.estoque)::float8 AS "totalRede"
+         FROM giga_estoque e
+         JOIN wincred_produtos p ON ltrim(p.codigo, '0') = ltrim(e.codigo, '0')
+        WHERE e.estoque > 0
+          AND p.ref IS NOT NULL AND btrim(p.ref) <> ''
+          ${plusCond}
+        GROUP BY btrim(p.ref)
+        ORDER BY 3 DESC
+        LIMIT $1`,
+      limit,
+    );
+    const refs = topRows.map((r) => ({
+      refCode: String(r.refCode).trim(),
+      descricao: r.descricao ? String(r.descricao).trim() : null,
+      totalRede: Number(r.totalRede) || 0,
+    }));
+    if (!refs.length) return { refs: [], lojas: [], matrix: {} };
+
+    // 2. Distribuição por loja dessas REFs
+    const refCodes = refs.map((r) => r.refCode);
+    const distRows: any[] = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT btrim(p.ref) AS "refCode",
+              CASE WHEN e.loja ~ '^[0-9]$' THEN '0' || e.loja ELSE e.loja END AS "storeCode",
+              SUM(e.estoque)::float8 AS qtd
+         FROM giga_estoque e
+         JOIN wincred_produtos p ON ltrim(p.codigo, '0') = ltrim(e.codigo, '0')
+        WHERE btrim(p.ref) = ANY($1)
+          AND e.estoque > 0
+        GROUP BY 1, 2`,
+      refCodes,
+    );
+
+    const matrix: Record<string, Record<string, number>> = {};
+    const lojasSet = new Set<string>();
+    for (const ref of refs) matrix[ref.refCode] = {};
+    for (const r of distRows) {
+      const ref = String(r.refCode).trim();
+      const code = String(r.storeCode || '').trim();
+      const qtd = Number(r.qtd) || 0;
+      if (!ref || !code) continue;
+      if (!matrix[ref]) matrix[ref] = {};
+      matrix[ref][code] = qtd;
+      lojasSet.add(code);
+    }
+    const lojas = Array.from(lojasSet).sort();
+    return { refs, lojas, matrix };
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -765,6 +928,64 @@ export class IntelligenceService {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
+   * Mês de referência nos últimos 5 anos — comparativo do dashboard.
+   *
+   * ⚠️ SEM DADO ≠ ZERO (03/09): o erp.getMonthSalesByYear devolvia {0,0} pra
+   * qualquer ano fora da cobertura do espelho (o fallback Giga está morto) e
+   * o gráfico mostrava "R$ 0" como se a rede não tivesse vendido naqueles
+   * anos. Aqui a data de estreia REAL do espelho (MIN(data) da
+   * giga_caixa_mov) decide: mês que começa antes dela sai como
+   * `valor/pecas = null` + `semDado = true`. A cobertura só olha o INÍCIO —
+   * mês parcialmente coberto também é "sem dado" (número parcial mentiria).
+   */
+  private async historicoDoMesPorAno(
+    refYear: number,
+    refMonth: number,
+  ): Promise<Array<{ year: number; valor: number | null; pecas: number | null; semDado: boolean }>> {
+    const min = await this.caixaMovCobreDesde().catch(() => null);
+    const mesCoberto = (y: number): boolean => {
+      if (!min) return false;
+      const inicioMes = Date.UTC(y, refMonth - 1, 1);
+      const estreia = Date.UTC(min.getUTCFullYear(), min.getUTCMonth(), min.getUTCDate());
+      return inicioMes >= estreia;
+    };
+    return Promise.all(
+      [refYear - 4, refYear - 3, refYear - 2, refYear - 1, refYear].map(async (y) => {
+        if (!mesCoberto(y)) {
+          return { year: y, valor: null, pecas: null, semDado: true };
+        }
+        try {
+          const v = await this.monthSalesFromMirror(y, refMonth);
+          return { year: y, valor: v.valor, pecas: v.pecas, semDado: false };
+        } catch (e: any) {
+          // Falha na consulta também NÃO é zero — vira "sem dado".
+          this.logger.error(`[strategic/historico ${y}/${refMonth}] ${e?.message || e}`);
+          return { year: y, valor: null, pecas: null, semDado: true };
+        }
+      }),
+    );
+  }
+
+  /** Total do mês direto do espelho (mesma régua do salesSummaryFromMirror). */
+  private async monthSalesFromMirror(
+    year: number,
+    month: number,
+  ): Promise<{ pecas: number; valor: number }> {
+    const inicio = new Date(Date.UTC(year, month - 1, 1));
+    const fim = new Date(Date.UTC(year, month, 1));
+    const rows: any[] = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(valor_total), 0)::float8 AS valor
+         FROM giga_caixa_mov
+        WHERE data >= $1 AND data < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')`,
+      inicio, fim,
+    );
+    const r: any = rows[0] || {};
+    return { pecas: Number(r.pecas) || 0, valor: Number(r.valor) || 0 };
+  }
+
+  /**
    * Dashboard estratégico — orquestra TODAS as queries em paralelo. Pensado
    * pra abrir uma view rica de uma vez (1 fetch). Inclui:
    *  - 5 KPIs com YoY (faturamento, pedidos, peças, ticket, clientes únicos)
@@ -808,7 +1029,7 @@ export class IntelligenceService {
       topVendedoras, topMarcas, topProdutos,
       byMonth,
       uniqueClientes, uniqueClientesYoY,
-      yearMinus4, yearMinus3, yearMinus2, yearMinus1, yearAtual,
+      historicoAnos,
     ] = await Promise.all([
       safe(this.erp.getSalesSummary({ inicio, fim }), { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 }, 'summary'),
       safe(this.erp.getSalesSummary({ inicio: inicioYoY, fim: fimYoY }), { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 }, 'summaryYoY'),
@@ -820,12 +1041,9 @@ export class IntelligenceService {
       safe(this.erp.getSalesByMonth({ months: 12 }), [] as any[], 'byMonth'),
       safe(this.erp.getUniqueClientesCount({ inicio, fim }), 0, 'clientes'),
       safe(this.erp.getUniqueClientesCount({ inicio: inicioYoY, fim: fimYoY }), 0, 'clientesYoY'),
-      // Faturamento mesmo mês 5 anos atrás
-      safe(this.erp.getMonthSalesByYear({ year: refYear - 4, month: refMonth }), { pecas: 0, valor: 0 }, 'y-4'),
-      safe(this.erp.getMonthSalesByYear({ year: refYear - 3, month: refMonth }), { pecas: 0, valor: 0 }, 'y-3'),
-      safe(this.erp.getMonthSalesByYear({ year: refYear - 2, month: refMonth }), { pecas: 0, valor: 0 }, 'y-2'),
-      safe(this.erp.getMonthSalesByYear({ year: refYear - 1, month: refMonth }), { pecas: 0, valor: 0 }, 'y-1'),
-      safe(this.erp.getMonthSalesByYear({ year: refYear, month: refMonth }), { pecas: 0, valor: 0 }, 'y0'),
+      // Faturamento mesmo mês 5 anos atrás — ano fora da cobertura = null,
+      // NUNCA zero (ver historicoDoMesPorAno)
+      this.historicoDoMesPorAno(refYear, refMonth),
     ]);
 
     const pct = (atual: number, prev: number): number | null => {
@@ -944,14 +1162,9 @@ export class IntelligenceService {
         ticketMedio: { atual: summary.ticketMedio, anterior: summaryYoY.ticketMedio, variacao: pct(summary.ticketMedio, summaryYoY.ticketMedio) },
         clientes: { atual: uniqueClientes, anterior: uniqueClientesYoY, variacao: pct(uniqueClientes, uniqueClientesYoY) },
       },
-      // Histórico do mês ref nos últimos 5 anos (pra gráfico de barras)
-      historicoAnos: [
-        { year: refYear - 4, valor: yearMinus4.valor, pecas: yearMinus4.pecas },
-        { year: refYear - 3, valor: yearMinus3.valor, pecas: yearMinus3.pecas },
-        { year: refYear - 2, valor: yearMinus2.valor, pecas: yearMinus2.pecas },
-        { year: refYear - 1, valor: yearMinus1.valor, pecas: yearMinus1.pecas },
-        { year: refYear,     valor: yearAtual.valor,  pecas: yearAtual.pecas  },
-      ],
+      // Histórico do mês ref nos últimos 5 anos (pra gráfico de barras).
+      // Ano sem cobertura do espelho: valor/pecas = null + semDado = true.
+      historicoAnos,
       // Evolução 12 meses (linha)
       evolucao12m: byMonth,
       // Ranking de lojas

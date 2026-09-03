@@ -2,7 +2,6 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { comPedidoPago } from '../common/pedido-pago';
-import { ErpService } from '../erp/erp.service';
 
 /**
  * CustomersCrmService — operações DIRETAS sobre a tabela `customers`.
@@ -183,10 +182,9 @@ export interface RedeemCashbackDto {
 export class CustomersCrmService {
   private readonly logger = new Logger(CustomersCrmService.name);
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly erp: ErpService,
-  ) {}
+  // ErpService saiu daqui no enterro do Wincred (09/2026): o último uso era o
+  // runReadOnly da caixa do Giga pros marcados, hoje lido da tabela nativa.
+  constructor(private readonly prisma: PrismaService) {}
 
   // ─────────────────────────────────────────────────────────────────────────
   // HELPERS — normalização
@@ -1182,7 +1180,7 @@ export class CustomersCrmService {
    *  - Compras: PdvSale (loja física) + Order (site e live) — ver abaixo
    *  - Devoluções (PdvReturn com customerCpf)
    *  - Vales-troca emitidos (PdvReturn com creditoCode)
-   *  - Marcados ativos no Giga (caixa com MARCADO='SIM' no nome do cliente)
+   *  - Marcados ativos (tabela nativa `marcados` — por CPF ou ficha Giga da pessoa)
    *
    * ── POR QUE A COMPRA ONLINE ENTRA AQUI (10/08/2026) ──
    *
@@ -1210,7 +1208,7 @@ export class CustomersCrmService {
         devolucoes: [],
         // estrutura completa pra frontend não quebrar em .toFixed/access
         vales: { ativos: [], usados: [], saldoAtivo: 0, saldoUsado: 0 },
-        marcadosGiga: { items: [], total: 0, qtd: 0 },
+        marcadosGiga: { items: [], total: 0, qtd: 0, parcial: false },
         warning: 'Cliente sem CPF cadastrado — busca limitada',
       };
     }
@@ -1313,42 +1311,68 @@ export class CustomersCrmService {
       else if (!isVencido) valesAtivos.push(info);
     }
 
-    // 4. Marcados ATIVOS no Giga (consulta direta caixa por nome ou CPF)
-    let marcadosGiga = { items: [] as any[], total: 0, qtd: 0 };
+    // 4. Marcados ATIVOS — tabela NATIVA `marcados` (Flow). Até 03/09 isto
+    // era runReadOnly na caixa do Giga (MARCADO='SIM'): com o pool morto a
+    // ficha mostrava 0 marcado pra todo mundo, sem erro nenhum. Mesmo
+    // critério do resumo do clientes-giga: CPF (dígitos) OU ficha Giga da
+    // pessoa (codCliente com variantes de zero à esquerda + loja 2 dígitos).
+    // `parcial` = a seção NÃO pôde ser calculada (não é "cliente sem marcado").
+    // Sem esse sinal, falha na consulta vira 0 marcado na ficha — a mesma
+    // mentira silenciosa que o Giga morto contava.
+    let marcadosGiga = { items: [] as any[], total: 0, qtd: 0, parcial: false };
     try {
-      const cpfFormat = cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
-      const safeCpf = cpf.replace(/'/g, "''");
-      const safeCpfFormat = cpfFormat.replace(/'/g, "''");
-      // Tenta buscar pela TABELA clientes do Giga via codCliente JOIN caixa
-      const sql = `
-        SELECT cx.REGISTRO, cx.CODIGO, cx.DESCRICAO, cx.QUANTIDADE,
-               cx.VALOR, cx.VALORTOTAL, cx.DATA, cx.LOJA, cx.CLIENTE
-        FROM caixa cx
-        INNER JOIN clientes c ON cx.CLIENTE = c.CODIGO
-        WHERE UPPER(cx.MARCADO) = 'SIM'
-          AND (
-            REPLACE(REPLACE(REPLACE(c.CPF,'.',''),'-',''),'/','') = '${safeCpf}'
-            OR c.CPF = '${safeCpfFormat}'
-          )
-        ORDER BY cx.DATA DESC
-        LIMIT 100
-      `;
-      const r = await (this as any).erp?.runReadOnly?.(sql, { maxRows: 100, timeoutMs: 10000 });
-      const rows = r?.rows || [];
+      // ⚠️ SEM `.catch(() => [])` aqui: sem as fichas do Giga o ramo por
+      // `codCliente` some e o marcado da cliente pode não aparecer — o vazio
+      // seria indistinguível de "não tem marcado". A falha sobe pro catch
+      // abaixo, que loga E marca a seção como incompleta.
+      const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+        where: { personKey: `cpf:${cpf}`, arquivadoEm: null },
+        select: { loja: true, codigo: true },
+      });
+      // Código do Giga tem padding de zero inconsistente: '01234' e '1234'
+      // são a mesma pessoa. Sem as variantes a consulta responde vazio.
+      const codVariants = (cod: any): string[] => {
+        const c = String(cod ?? '').trim();
+        const set = new Set<string>();
+        if (c) set.add(c);
+        const noZeros = c.replace(/^0+/, '');
+        if (noZeros) set.add(noZeros);
+        if (/^\d+$/.test(c)) set.add(String(Number(c)));
+        return [...set];
+      };
+      const rows: any[] = await (this.prisma as any).marcado.findMany({
+        where: {
+          status: 'ativo',
+          isTraining: false,
+          OR: [
+            { cpf }, // marcados guarda CPF só em dígitos
+            ...fichas.map((f: any) => ({
+              codCliente: { in: codVariants(f.codigo) },
+              storeCode: String(f.loja).replace(/\D/g, '').padStart(2, '0'),
+            })),
+          ],
+        },
+        orderBy: [{ dataMarcacao: 'desc' }],
+        take: 100,
+      });
       marcadosGiga.items = rows.map((row: any) => ({
-        registro: Number(row.REGISTRO),
-        sku: String(row.CODIGO || '').trim(),
-        descricao: String(row.DESCRICAO || '').trim(),
-        qtd: Number(row.QUANTIDADE) || 1,
-        valor: Number(row.VALOR) || 0,
-        total: Number(row.VALORTOTAL) || 0,
-        data: row.DATA,
-        loja: String(row.LOJA || '').trim(),
+        // registroGiga é BigInt — sem Number() o JSON.stringify estoura (500 mudo)
+        registro: row.registroGiga != null ? Number(row.registroGiga) : null,
+        sku: String(row.sku || '').trim(),
+        descricao: String(row.descricao || '').trim(),
+        qtd: Number(row.qty) || 1,
+        valor: Number(row.valorUnit) || 0,
+        total: Number(row.valorTotal) || 0,
+        data: row.dataMarcacao,
+        loja: String(row.storeCode || '').trim(),
       }));
       marcadosGiga.qtd = marcadosGiga.items.reduce((s: number, m: any) => s + m.qtd, 0);
       marcadosGiga.total = marcadosGiga.items.reduce((s: number, m: any) => s + m.total, 0);
     } catch (e: any) {
-      this.logger.warn(`[historico] marcados Giga falhou: ${e?.message}`);
+      // A ficha inteira não cai por causa dos marcados, mas a seção assume que
+      // está INCOMPLETA em vez de mostrar zero como se fosse a verdade.
+      this.logger.warn(`[historico] marcados nativos falharam: ${e?.message}`);
+      marcadosGiga = { items: [], total: 0, qtd: 0, parcial: true };
     }
 
     /**

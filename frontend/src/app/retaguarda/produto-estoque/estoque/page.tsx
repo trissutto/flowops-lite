@@ -3,7 +3,6 @@
 import {
   ArrowLeftRight,
   Boxes,
-  ClipboardCheck,
   PackageCheck,
   RefreshCcw,
   Route,
@@ -29,14 +28,7 @@ const items: ModuleHubItem[] = [
     tone: 'teal',
     icon: Boxes,
   },
-  {
-    href: '/retaguarda/conferidor-estoque',
-    label: 'Conferir Estoque',
-    subtitle: 'Flow × Giga',
-    description: 'Veja somente as divergências entre o sistema e o ERP.',
-    tone: 'amber',
-    icon: ClipboardCheck,
-  },
+  // Conferir Estoque (Flow × Giga) saiu do hub (09/26): o MySQL do Giga foi desligado.
   {
     href: '/retaguarda/distribuicao-estoque',
     label: 'Distribuição',

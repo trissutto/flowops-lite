@@ -1663,17 +1663,10 @@ export class ProductsService {
     return null;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // DIAGNÓSTICO ERP — descobrir schema da tabela produtos
-  // ═══════════════════════════════════════════════════════════════
-
-  describeErpProductsTable() {
-    return this.erp.describeProductsTable();
-  }
-
-  describeErpSalesTable() {
-    return this.erp.describeSalesTable();
-  }
+  // Aposentados (enterro do Wincred, 09/2026): describeErpProductsTable /
+  // describeErpSalesTable rodavam SHOW COLUMNS no MySQL do Giga — morto, só
+  // devolviam { columns: [], sample: [] }. Removidos junto com as rotas
+  // GET /products/erp-schema/* (o próprio comentário delas já mandava).
 
   searchErpProductsLike(q: string, storeCode?: string) {
     // Busca do PDV (dropdown) — ESPELHO Postgres primeiro, fallback Giga.

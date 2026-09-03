@@ -509,7 +509,7 @@ export default function ProdutoMasterPage() {
         </p>
       )}
 
-      <ImportarTudo />
+      <MutiroesDoAcervo />
 
       <div className="space-y-2">
         {porRef.map((grupo) => {
@@ -540,10 +540,6 @@ export default function ProdutoMasterPage() {
                     {grupo.marca} · {grupo.produtos.length} cor(es)
                   </p>
                 </div>
-                <ImportarFotosDoSite
-                  ref_={grupo.ref}
-                  onImportou={() => void carregarFicha(grupo.ref, grupo.marca)}
-                />
               </div>
 
               {/* NÍVEL 1 — as vitrines do site: é o que o dono abre primeiro */}
@@ -737,106 +733,14 @@ export default function ProdutoMasterPage() {
 
 
 
-/* ─────────────── Importar fotos do site antigo (WooCommerce) ─────────────── */
+/* ─────────────── Mutirões do acervo de fotos e fichas ─────────────── */
 
-type ResultadoImport = {
-  ref: string;
-  coresComFoto: string[];
-  coresSemFoto: string[];
-  jaTinham: string[];
-  produtosWcSemCor: string[];
-  produtosEncontrados?: number;
-  fotos: number;
-  /** Frase pronta do backend explicando por que não veio nada. */
-  motivo?: string;
-};
-
-/**
- * O acervo de fotos JÁ EXISTE no site antigo: lá cada cor é um produto com o
- * mesmo SKU (a REF). Este botão puxa aquelas fotos pra cá, casando cada
- * produto do WooCommerce com a COR do catálogo pelo nome.
- *
- * Mostra o que NÃO casou em vez de esconder: cor que ficou sem foto e produto
- * do site antigo que não bateu com cor nenhuma são exatamente a lista de
- * trabalho manual que sobra.
+/*
+ * A importação de fotos do site antigo (WooCommerce) saiu em 09/26 — o botão
+ * por REF e o "Importar tudo" em lote. O host do WordPress foi apagado em
+ * 27/08/2026: não existe mais acervo pra puxar. Foto nova entra pelo upload da
+ * própria peça.
  */
-function ImportarFotosDoSite({ ref_, onImportou }: { ref_: string; onImportou: () => void }) {
-  const [rodando, setRodando] = useState(false);
-  const [r, setR] = useState<ResultadoImport | null>(null);
-  const [erro, setErro] = useState<string | null>(null);
-
-  async function importar() {
-    setRodando(true);
-    setErro(null);
-    try {
-      const res = await api<ResultadoImport>('/product-photos/importar-wc', {
-        method: 'POST',
-        body: JSON.stringify({ ref: ref_ }),
-      });
-      setR(res);
-      if (res.fotos > 0) onImportou();
-    } catch (e: any) {
-      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui importar');
-    } finally {
-      setRodando(false);
-    }
-  }
-
-  return (
-    <div className="text-right">
-      <button
-        type="button"
-        onClick={() => void importar()}
-        disabled={rodando}
-        title="Puxa as fotos que já existem no site antigo (WooCommerce) pra cada cor desta REF"
-        className="inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-lg border border-violet-200 text-violet-700 hover:bg-violet-50 disabled:opacity-40"
-      >
-        {rodando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
-        Importar fotos do site
-      </button>
-      {erro && <p className="text-[11px] text-rose-700 mt-1">{erro}</p>}
-      {r && (
-        <p className="text-[11px] text-slate-500 mt-1 max-w-xs">
-          {/* O motivo vem do backend quando existe: "nao tem esta peca" era a
-              mesma frase pra peca ausente, site fora do ar e fonte nao
-              configurada — tres problemas com tres consertos diferentes. */}
-          {r.fotos > 0
-            ? `${r.fotos} foto(s) em ${r.coresComFoto.length} cor(es).`
-            : r.motivo
-              ? r.motivo
-              : r.produtosEncontrados === 0
-                ? 'O site antigo nao tem esta peca.'
-                : 'Nada novo pra trazer.'}
-          {r.jaTinham.length > 0 && ` ${r.jaTinham.length} cor(es) já tinham.`}
-          {r.produtosWcSemCor.length > 0 && (
-            <span className='text-slate-500'> {r.produtosWcSemCor.length} produto(s) do site antigo nao bateram com cor nenhuma.</span>
-          )}
-          {r.coresSemFoto.length > 0 && (
-            <span className="text-amber-700"> Sem foto no site antigo: {r.coresSemFoto.join(', ')}.</span>
-          )}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────── Importar TUDO (lote em segundo plano) ─────────────── */
-
-type StatusLote = {
-  existe: boolean;
-  status?: 'rodando' | 'concluido' | 'cancelado';
-  total?: number;
-  processadas?: number;
-  restantes?: number;
-  fotos?: number;
-  bolinhas?: number;
-  refsComFoto?: number;
-  /** Foto no banco ≠ peça no site — foi a diferença entre os dois que passou. */
-  publicadas?: number;
-  semEstoque?: number;
-  refAtual?: string | null;
-  problemas?: { ref: string; motivo: string }[];
-};
 
 type Reparo = {
   simulado: boolean;
@@ -858,17 +762,12 @@ type LoteIa = {
 };
 
 /**
- * Puxa o acervo INTEIRO do site antigo — foto, gravação e bolinha — sem
- * ninguém ficar clicando REF por REF.
- *
- * O trabalho roda no servidor, aos poucos: esta tela só ABRE o lote e depois
- * acompanha. Pode fechar o navegador, cair a internet, sair o deploy — o lote
- * continua de onde parou, porque o cursor está no banco e não nesta página.
+ * Os mutirões do acervo: publicar quem já tem foto, pintar bolinha, converter
+ * formato e adiantar ficha com IA. Cada um roda no servidor e volta com o
+ * número do que fez — nada aqui depende do navegador ficar aberto.
  */
-function ImportarTudo() {
-  const [status, setStatus] = useState<StatusLote | null>(null);
+function MutiroesDoAcervo() {
   const [erro, setErro] = useState<string | null>(null);
-  const [abrindo, setAbrindo] = useState(false);
   const [publicando, setPublicando] = useState(false);
   const [reparo, setReparo] = useState<Reparo | null>(null);
   const [pintando, setPintando] = useState(false);
@@ -877,46 +776,6 @@ function ImportarTudo() {
   const [formatos, setFormatos] = useState<Formatos | null>(null);
   const [extraindo, setExtraindo] = useState(false);
   const [loteIa, setLoteIa] = useState<LoteIa | null>(null);
-
-  const consultar = useCallback(async () => {
-    try {
-      setStatus(await api<StatusLote>('/product-photos/importar-tudo/status'));
-    } catch {
-      /* silencioso: é um poll, não vale poluir a tela */
-    }
-  }, []);
-
-  useEffect(() => {
-    void consultar();
-    // Enquanto roda, acompanha de perto; parado, quase não incomoda o servidor.
-    const t = setInterval(() => void consultar(), status?.status === 'rodando' ? 5000 : 20000);
-    return () => clearInterval(t);
-  }, [consultar, status?.status]);
-
-  async function comecar() {
-    if (!confirm('Importar as fotos do site antigo para TODAS as REFs com estoque que ainda não têm foto?\n\nRoda em segundo plano, aos poucos, e pode ser cancelado.')) return;
-    setAbrindo(true);
-    setErro(null);
-    try {
-      setStatus(await api<StatusLote>('/product-photos/importar-tudo', {
-        method: 'POST',
-        body: JSON.stringify({ apenasSemFoto: true }),
-      }));
-    } catch (e: any) {
-      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui iniciar');
-    } finally {
-      setAbrindo(false);
-    }
-  }
-
-  async function cancelar() {
-    if (!confirm('Cancelar a importação? O que já entrou continua salvo.')) return;
-    try {
-      setStatus(await api<StatusLote>('/product-photos/importar-tudo/cancelar', { method: 'POST' }));
-    } catch (e: any) {
-      setErro(e?.message || 'Não consegui cancelar');
-    }
-  }
 
   /**
    * O CONSERTO DO PASSIVO (07/08). A importação trouxe milhares de fotos e não
@@ -1028,32 +887,16 @@ function ImportarTudo() {
     }
   }
 
-  const rodando = status?.status === 'rodando';
-  const pct = status?.total ? Math.round(((status.processadas ?? 0) / status.total) * 100) : 0;
-
   return (
     <div className="border border-violet-200 bg-violet-50/40 rounded-xl p-3 mb-4">
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-slate-800">Importar fotos do site antigo — tudo de uma vez</p>
+          <p className="text-sm font-bold text-slate-800">Mutirões do acervo</p>
           <p className="text-[11px] text-slate-500">
-            Lista o que o site antigo TEM e importa só isso (não varre o catálogo inteiro).
-            Traz as fotos de cada cor, grava aqui e já pinta a bolinha. Roda em segundo plano;
-            pode fechar a tela.
+            Trabalho em massa sobre o que já está aqui: põe no ar quem tem foto, pinta as
+            bolinhas que faltam, acerta o formato das imagens e adianta as fichas.
           </p>
         </div>
-        {rodando ? (
-          <button type="button" onClick={() => void cancelar()}
-            className="text-xs font-bold px-3 py-2 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50">
-            Cancelar
-          </button>
-        ) : (
-          <button type="button" onClick={() => void comecar()} disabled={abrindo}
-            className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
-            {abrindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
-            Importar tudo
-          </button>
-        )}
         <button type="button" onClick={() => void publicarPendentes()} disabled={publicando}
           title="Peça com foto que ficou fora do site entra na vitrine (só quem tem estoque)"
           className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border border-emerald-300 text-emerald-800 bg-white hover:bg-emerald-50 disabled:opacity-50">
@@ -1137,39 +980,6 @@ function ImportarTudo() {
               </summary>
               <ul className="mt-1 max-h-32 overflow-auto">
                 {loteIa.foraDoCadastro.map((f, i) => <li key={i}>{f}</li>)}
-              </ul>
-            </details>
-          )}
-        </div>
-      )}
-
-      {status?.existe && (
-        <div className="mt-3">
-          <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
-            <div className="h-full bg-violet-600 transition-all" style={{ width: `${pct}%` }} />
-          </div>
-          <p className="text-[11px] text-slate-600 mt-1.5">
-            {rodando ? 'Rodando' : status.status === 'concluido' ? 'Concluído' : 'Cancelado'} ·{' '}
-            {status.processadas}/{status.total} REFs ({pct}%) · {status.fotos} foto(s) em{' '}
-            {status.refsComFoto} peça(s) · {status.bolinhas} bolinha(s)
-            {status.publicadas !== undefined && (
-              <>
-                {' · '}
-                <strong className="text-emerald-800">{status.publicadas} no site</strong>
-                {status.semEstoque ? ` · ${status.semEstoque} inativas no site antigo` : ''}
-              </>
-            )}
-            {rodando && status.refAtual ? ` · agora: ${status.refAtual}` : ''}
-          </p>
-          {!!status.problemas?.length && (
-            <details className="mt-1">
-              <summary className="text-[11px] text-amber-700 cursor-pointer">
-                {status.problemas.length} peça(s) sem foto no site antigo — ver
-              </summary>
-              <ul className="text-[11px] text-slate-500 mt-1 max-h-32 overflow-auto">
-                {status.problemas.map((p, i) => (
-                  <li key={i}>{p.ref} — {p.motivo}</li>
-                ))}
               </ul>
             </details>
           )}

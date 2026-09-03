@@ -68,16 +68,8 @@ export class SellersController {
     return this.svc.importFromPdvActive();
   }
 
-  /**
-   * Importa TODAS as funcionarias diretamente da tabela funcionarios
-   * do MySQL Wincred. Cobre as 15 lojas — diferente do PdvActiveSeller
-   * que e whitelist manual por loja.
-   */
-  @Post('import-from-wincred')
-  @AdminOnly()
-  importFromWincred() {
-    return this.svc.importFromWincred();
-  }
+  // POST /sellers/import-from-wincred foi REMOVIDA no enterro do Wincred
+  // (09/2026) — lia o MySQL do Giga, morto. Vendedora nova nasce no Flow.
 
   /**
    * UNIFICA GRAFIAS de uma vendedora numa loja (dono 29/07). Body:

@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Database, RefreshCw, Play, Loader2, CheckCircle2,
-  AlertTriangle, Clock, Search,
+  AlertTriangle, Clock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -166,14 +166,8 @@ export default function WincredMirrorPage() {
             Espelho das 6 tabelas Wincred no Postgres. <b>Somente leitura</b> no Wincred.
           </p>
         </div>
-        <Link
-          href="/retaguarda/divergencias"
-          className="px-3 py-2 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-sm font-bold flex items-center gap-1"
-          title="Comparar Wincred vs Mirror"
-        >
-          <AlertTriangle className="w-4 h-4" />
-          Divergencias
-        </Link>
+        {/* O link "Divergencias" saiu em 09/26: comparar Wincred × Mirror exigia o
+            MySQL do Giga, que foi desligado. */}
         <button
           onClick={loadStatus}
           disabled={loading}
@@ -581,32 +575,14 @@ function MarcadosNativoBox() {
     total: number; ativos: number; fechados: number; devolvidos: number; fechadosGiga: number;
     porLoja: Array<{ loja: string; ativos: number }>;
   } | null>(null);
-  const [err, setErr] = useState<string | null>(null);
 
-  // Restos do Giga — leitura sob demanda, NUNCA grava nada (07/08, regra do
-  // dono: "nunca marque ou puxe nada do Giga"). Ver comentário completo em
-  // MarcadosMirrorService.varrerRestosDoGiga.
-  const [restos, setRestos] = useState<{ total: number; truncado: boolean; itens: any[] } | null>(null);
-  const [restosBusy, setRestosBusy] = useState(false);
-  const [restosErr, setRestosErr] = useState<string | null>(null);
-  const [restosAberto, setRestosAberto] = useState(false);
+  // "Restos dos marcados do Giga" saiu em 09/26: o endpoint foi removido junto
+  // com o MySQL do Giga — não existe mais o que consultar lá.
 
   const load = async () => {
     try { setSt(await api('/pdv/marcados/sync/status')); } catch { /* mantém */ }
   };
   useEffect(() => { load(); }, []);
-
-  const verRestos = async () => {
-    setRestosAberto(true);
-    setRestosBusy(true); setRestosErr(null);
-    try {
-      setRestos(await api('/pdv/marcados/restos-giga?limite=500'));
-    } catch (e: any) {
-      setRestosErr(e?.message || 'Falha ao consultar o Giga');
-    } finally {
-      setRestosBusy(false);
-    }
-  };
 
   return (
     <div className="bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 rounded-xl p-5">
@@ -615,8 +591,7 @@ function MarcadosNativoBox() {
           <h2 className="font-bold text-amber-900 mb-1">Marcados — 100% Flow</h2>
           <p className="text-xs text-amber-700">
             Marcar, puxar pra venda, devolver e fechar são só no Flow (07/08) — sem escrever nem
-            ler o Giga ao vivo em nenhum desses passos. &quot;Restos dos marcados do Giga&quot; é
-            uma consulta pontual, só pra referência: nunca importa nada de lá pro Flow.
+            ler o Giga ao vivo em nenhum desses passos.
           </p>
           {st && (
             <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-amber-800">
@@ -636,72 +611,7 @@ function MarcadosNativoBox() {
             </div>
           )}
         </div>
-        <button
-          onClick={verRestos}
-          disabled={restosBusy}
-          title="Só olha o que ainda está MARCADO='SIM' na caixa do Giga — não grava nada no Flow"
-          className="shrink-0 px-5 py-3 rounded-lg bg-slate-700 hover:bg-slate-800 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
-        >
-          {restosBusy ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Consultando…</>
-          ) : (
-            <><Search className="w-4 h-4" /> Restos dos marcados do Giga</>
-          )}
-        </button>
       </div>
-      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
-
-      {restosAberto && (
-        <div className="mt-4 pt-4 border-t border-amber-200">
-          {restosErr && <div className="text-xs font-bold text-red-700 mb-2">{restosErr}</div>}
-          {restos && (
-            <>
-              <p className="text-xs text-amber-800 mb-2">
-                <b>{restos.total}</b> linha(s) ainda marcada(s) no Giga{restos.truncado ? ' (mostrando as 500 mais recentes)' : ''}.
-                {' '}<span className="text-slate-500">&quot;Já no Flow&quot; = existe um marcado nativo pro mesmo registro (pode já estar fechado por aqui, só não foi tocado lá).</span>
-              </p>
-              {restos.itens.length === 0 ? (
-                <p className="text-xs text-emerald-700 font-bold">Nada sobrando no Giga.</p>
-              ) : (
-                <div className="overflow-x-auto max-h-80 overflow-y-auto rounded-lg border border-amber-200">
-                  <table className="w-full text-[11px]">
-                    <thead className="bg-amber-100 sticky top-0">
-                      <tr className="text-left text-amber-900">
-                        <th className="px-2 py-1.5">Data</th>
-                        <th className="px-2 py-1.5">SKU</th>
-                        <th className="px-2 py-1.5">Descrição</th>
-                        <th className="px-2 py-1.5 text-right">Valor</th>
-                        <th className="px-2 py-1.5">Loja</th>
-                        <th className="px-2 py-1.5">Cód. cliente</th>
-                        <th className="px-2 py-1.5">Já no Flow?</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {restos.itens.map((it) => (
-                        <tr key={it.registro} className="border-t border-amber-100">
-                          <td className="px-2 py-1 whitespace-nowrap">{it.data ? new Date(it.data).toLocaleDateString('pt-BR') : '—'}</td>
-                          <td className="px-2 py-1 font-mono">{it.sku}</td>
-                          <td className="px-2 py-1">{it.descricao || '—'}</td>
-                          <td className="px-2 py-1 text-right tabular-nums">{Number(it.valorTotal || it.valor || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
-                          <td className="px-2 py-1">{it.loja}</td>
-                          <td className="px-2 py-1">{it.codCliente}</td>
-                          <td className="px-2 py-1">
-                            {it.jaNoFlow ? (
-                              <span className="text-emerald-700 font-bold">sim ({it.statusNoFlow})</span>
-                            ) : (
-                              <span className="text-slate-400">não</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -758,20 +668,19 @@ function PeekRefBox() {
 }
 
 /**
- * CREDIÁRIO — ESPELHO DAS ABERTAS + "POSSO ATIVAR?"
+ * CREDIÁRIO — ESPELHO DAS ABERTAS
  *
- * A CREDIARIO_NATIVE_READS já foi ligada às cegas uma vez e crediário SUMIU
- * da tela (o sync cortava em 50.000 de 72.831 parcelas — R$ 2,3 mi
- * invisíveis). Este box existe pra NUNCA mais ligar no escuro:
- *   1. Sincronizar agora → recarrega o espelho (sem esperar o cron de 10min)
- *   2. Posso ativar? → diff registro a registro espelho × Giga, com veredito
- * Verde de verdade = pode ir no Railway ligar a flag.
+ * Recarrega o espelho das parcelas em aberto na hora, sem esperar o cron, e
+ * mostra quantas estão lá e de quando é a última carga.
+ *
+ * O botão "Posso ativar?" saiu em 09/26: ele comparava registro a registro
+ * espelho × Giga pra dar o aval antes de ligar a CREDIARIO_NATIVE_READS. O
+ * MySQL do Giga foi desligado em 27/08/2026 — não existe mais o outro lado da
+ * comparação, e a leitura nativa é o único caminho.
  */
 function CrediarioVereditoBox() {
   const [st, setSt] = useState<any>(null);
   const [syncBusy, setSyncBusy] = useState(false);
-  const [verBusy, setVerBusy] = useState(false);
-  const [ver, setVer] = useState<any>(null);
   const [erro, setErro] = useState('');
 
   const carregarStatus = () => {
@@ -781,23 +690,13 @@ function CrediarioVereditoBox() {
 
   const sincronizar = async () => {
     if (syncBusy) return;
-    setSyncBusy(true); setErro(''); setVer(null);
+    setSyncBusy(true); setErro('');
     try {
       await api<any>('/crediarios/baixa/espelho/sync', { method: 'POST' });
       carregarStatus();
     } catch (e: any) {
       setErro(e?.message || 'Falha no sync');
     } finally { setSyncBusy(false); }
-  };
-
-  const conferir = async () => {
-    if (verBusy) return;
-    setVerBusy(true); setErro(''); setVer(null);
-    try {
-      setVer(await api<any>('/crediarios/baixa/diff/abertas'));
-    } catch (e: any) {
-      setErro(e?.message || 'Falha na conferência');
-    } finally { setVerBusy(false); }
   };
 
   // status() devolve { abertas: { count, lastSyncedAt }, clientes: {...} }
@@ -807,11 +706,10 @@ function CrediarioVereditoBox() {
     <div className="bg-gradient-to-br from-teal-50 to-emerald-50 border border-teal-200 rounded-xl p-5">
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex-1 min-w-[280px]">
-          <h2 className="font-bold text-teal-900 mb-1">Crediário — posso ativar a leitura nativa?</h2>
+          <h2 className="font-bold text-teal-900 mb-1">Crediário — espelho das parcelas em aberto</h2>
           <p className="text-xs text-teal-700">
-            Espelho das parcelas EM ABERTO (o que a tela de recebimentos usa com{' '}
-            <b>CREDIARIO_NATIVE_READS=1</b>). O Giga tem ~72,8 mil abertas — se o espelho
-            mostrar menos, NÃO ligue. Conferir compara registro a registro.
+            É o que a tela de recebimentos lê. O cron horário mantém sozinho; o botão
+            recarrega na hora quando você não quer esperar.
           </p>
           {st && (
             <div className="mt-2 text-[11px] font-bold text-teal-800">
@@ -824,55 +722,14 @@ function CrediarioVereditoBox() {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={sincronizar} disabled={syncBusy || verBusy}
+            onClick={sincronizar} disabled={syncBusy}
             className="px-4 py-2 rounded-lg border-2 border-teal-500 text-teal-800 text-sm font-bold hover:bg-teal-100 disabled:opacity-50"
           >
-            {syncBusy ? 'Sincronizando… (~1min)' : '1 · Sincronizar agora'}
-          </button>
-          <button
-            onClick={conferir} disabled={syncBusy || verBusy}
-            className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold disabled:opacity-50"
-          >
-            {verBusy ? 'Conferindo… (~1min)' : '2 · Posso ativar?'}
+            {syncBusy ? 'Sincronizando… (~1min)' : 'Sincronizar agora'}
           </button>
         </div>
       </div>
       {erro && <div className="mt-2 text-sm text-red-700">{erro}</div>}
-      {ver && (
-        <div className={`mt-3 rounded-lg border-2 p-4 ${ver.podeAtivar ? 'bg-emerald-50 border-emerald-400' : 'bg-rose-50 border-rose-300'}`}>
-          <div className={`font-bold text-lg ${ver.podeAtivar ? 'text-emerald-800' : 'text-rose-800'}`}>
-            {ver.podeAtivar ? '✅ PODE ATIVAR' : '⛔ NÃO ATIVE AINDA'}
-          </div>
-          <p className="text-sm mt-1 text-slate-700">{ver.veredito}</p>
-          <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            <div className="bg-white rounded p-2 border">
-              <div className="text-slate-500">Registros no Giga</div>
-              <div className="font-bold tabular-nums">{(ver.totais?.gigaRegistros ?? 0).toLocaleString('pt-BR')}</div>
-            </div>
-            <div className="bg-white rounded p-2 border">
-              <div className="text-slate-500">No espelho</div>
-              <div className="font-bold tabular-nums">{(ver.totais?.espelhoRegistros ?? 0).toLocaleString('pt-BR')}</div>
-            </div>
-            <div className="bg-white rounded p-2 border">
-              <div className="text-slate-500">Faltando no espelho</div>
-              <div className={`font-bold tabular-nums ${ver.bloqueios?.registrosFaltando?.qtd ? 'text-rose-700' : 'text-emerald-700'}`}>
-                {(ver.bloqueios?.registrosFaltando?.qtd ?? 0).toLocaleString('pt-BR')}
-              </div>
-            </div>
-            <div className="bg-white rounded p-2 border">
-              <div className="text-slate-500">Valor em risco</div>
-              <div className={`font-bold tabular-nums ${ver.bloqueios?.valorPerdidoTotal ? 'text-rose-700' : 'text-emerald-700'}`}>
-                R$ {(ver.bloqueios?.valorPerdidoTotal ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-              </div>
-            </div>
-          </div>
-          {ver.podeAtivar && (
-            <p className="mt-2 text-xs text-emerald-800">
-              Railway → flowops-lite → Variables → <b>CREDIARIO_NATIVE_READS=1</b> (o deploy reinicia em ~30s — evite horário de pico).
-            </p>
-          )}
-        </div>
-      )}
     </div>
   );
 }

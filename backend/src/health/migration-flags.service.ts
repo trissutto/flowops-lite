@@ -28,7 +28,9 @@ const FLAGS: Flag[] = [
   // ── Leituras migradas: são as que fazem dado SUMIR quando o espelho falha ──
   {
     nome: 'CREDIARIO_NATIVE_READS',
-    ligada: (v) => String(v ?? '0') === '1',
+    // default ON desde 03/09/2026 — tem que casar com o getter nativeReads do
+    // CrediarioBaixaService, senão este painel relata o contrário do que roda.
+    ligada: (v) => String(v ?? '1') === '1',
     efeito: 'crediário lê do espelho Postgres (incidente 25/07)',
     sensivel: true,
   },
@@ -40,13 +42,16 @@ const FLAGS: Flag[] = [
   },
   {
     nome: 'PRODUCT_NATIVE_READS',
-    ligada: (v) => String(v ?? '').trim() === '1',
+    // default ON desde 03/09/2026 — casa com os getters do ProductSearch,
+    // do WincredCatalog e do ProductNative.
+    ligada: (v) => String(v ?? '1').trim() !== '0',
     efeito: 'busca de produto lê da tabela Product nativa',
     sensivel: true,
   },
   {
     nome: 'GIGA_MIRROR_READS',
-    ligada: (v) => String(v ?? '').trim() === '1',
+    // default ON desde 03/09/2026 — casa com mirrorReadsEnabled do ErpService.
+    ligada: (v) => String(v ?? '1').trim() !== '0',
     efeito: 'estoque + faturamento bruto leem dos espelhos',
     sensivel: true,
   },
@@ -59,8 +64,10 @@ const FLAGS: Flag[] = [
   // ── Escritas: não fazem sumir da tela, mudam POR ONDE grava ──
   {
     nome: 'PRODUCT_NATIVE_WRITES',
-    ligada: (v) => String(v ?? '').trim() === '1',
-    efeito: 'edição de produto grava na tabela nativa (dual-write pro Giga)',
+    // default ON — casa com o products-editor (que já era default-ON antes
+    // desta onda; o painel dizia o contrário desde então).
+    ligada: (v) => String(v ?? '1').trim() !== '0',
+    efeito: 'edição de produto grava na tabela nativa (a réplica pro Giga é descartada)',
   },
   {
     nome: 'PDV_ERP_OUTBOX',
@@ -69,7 +76,8 @@ const FLAGS: Flag[] = [
   },
   {
     nome: 'CREDIARIO_ERP_OUTBOX',
-    ligada: (v) => String(v ?? '0') === '1',
+    // default ON desde 03/09/2026 — casa com crediarioOutboxEnabled.
+    ligada: (v) => String(v ?? '1') === '1',
     efeito: 'baixa/estorno do crediário replicam no Giga por fila',
   },
   {

@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ErpService } from '../erp/erp.service';
-import { CrediariosService } from '../crediarios/crediarios.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { escritaGigaBloqueada } from '../common/replica-giga';
 import { MarcadosMirrorService } from './marcados-mirror.service';
@@ -29,7 +28,6 @@ export class MarcadosService {
 
   constructor(
     private readonly erp: ErpService,
-    private readonly crediarios: CrediariosService,
     private readonly prisma: PrismaService,
     private readonly mirror: MarcadosMirrorService,
     private readonly catalog: WincredCatalogService,
@@ -494,82 +492,50 @@ export class MarcadosService {
       ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
       : safeCpf;
 
-    // 2. Busca cliente — ESPELHO Postgres primeiro (giga_clientes, importado).
-    // O caminho antigo batia no Giga ao vivo e pendurava a tela quando o pool
-    // travava. Giga só entra como fallback (recém-cadastrado que o sync ainda
-    // não trouxe). Se a pessoa tem ficha em várias lojas, vale a com
-    // classificação 'A' e maior limite (o antigo LIMIT 1 pegava uma qualquer).
+    // 2. Busca cliente — SÓ o ESPELHO Postgres (giga_clientes). O fallback
+    // "cai pro Giga ao vivo" saiu na Onda 1: o MySQL morreu em 27/08 e ficha
+    // nova nasce direto no espelho (flowIsSource) — não existe mais
+    // "recém-cadastrado que o sync ainda não trouxe". Miss = não encontrado;
+    // erro do espelho SOBE (500 honesto), nunca vira "cliente não existe".
+    // Se a pessoa tem ficha em várias lojas, vale a com classificação 'A' e
+    // maior limite (o antigo LIMIT 1 pegava uma qualquer).
     let row: any = null;
     /** Todas as fichas da MESMA pessoa (o cadastro é POR LOJA) — usadas pra
      *  somar os marcados dela sem pegar os de um xará de outra loja. */
     let fichasPessoa: any[] = [];
-    try {
-      // Sem CPF, a chave é a do próprio Giga: loja + código (com as variantes
-      // de zero à esquerda, que lá são inconsistentes).
-      const whereFicha: any = safeCpf
-        ? { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] }
-        : { codigo: { in: this.codVariants(codArg) }, ...(temLoja ? { loja: lojaArg } : {}) };
-      const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
-        // Ficha arquivada (painel de Limpeza) não conta pra marcado.
-        where: { ...whereFicha, arquivadoEm: null },
-      });
-      fichasPessoa = fichas;
-      if (fichas.length) {
-        const f = fichas.slice().sort((a, b) => {
-          const aA = String(a.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
-          const bA = String(b.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
-          if (aA !== bA) return bA - aA;
-          return Number(b.limiteCompras || 0) - Number(a.limiteCompras || 0);
-        })[0];
-        row = {
-          CODIGO: f.codigo,
-          NOME: f.nome,
-          CPF: f.cpf || safeCpf,
-          AVALIACAO: f.avaliacao || '',
-          LIMITECOMPRAS: Number(f.limiteCompras || 0),
-          ULTCOMPRA: (f.rawJson as any)?.ULTCOMPRA ?? null,
-        };
-      }
-    } catch (e: any) {
-      this.logger.warn(`[marcados] espelho giga_clientes falhou, caindo pro Giga: ${e?.message}`);
-    }
-
-    if (!row) {
-      const cm = await this.crediarios.detectClientesTable();
-      if (!cm) {
-        throw new BadRequestException('Tabela de clientes não detectada no Giga');
-      }
-      const codNum = Number(String(codArg).replace(/\D/g, '')) || 0;
-      const sql = safeCpf
-        ? `
-        SELECT * FROM \`${cm.table}\`
-        WHERE \`CPF\` = '${safeCpf}'
-           OR \`CPF\` = '${formattedCpf}'
-           OR REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}'
-        LIMIT 1
-      `
-        : `
-        SELECT * FROM \`${cm.table}\`
-        WHERE CAST(\`${cm.codCliente || 'CODIGO'}\` AS UNSIGNED) = ${codNum}
-        ${temLoja ? `AND \`LOJA\` = '${lojaArg}'` : ''}
-        LIMIT 1
-      `;
-      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-      const giga: any = r.rows[0] || null;
-      if (giga) {
-        row = {
-          ...giga,
-          CODIGO: cm.codCliente ? giga[cm.codCliente] : (giga.CODCLIENTE ?? giga.CODIGO ?? ''),
-        };
-      }
+    // Sem CPF, a chave é a do próprio Giga: loja + código (com as variantes
+    // de zero à esquerda, que lá são inconsistentes).
+    const whereFicha: any = safeCpf
+      ? { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] }
+      : { codigo: { in: this.codVariants(codArg) }, ...(temLoja ? { loja: lojaArg } : {}) };
+    const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+      // Ficha arquivada (painel de Limpeza) não conta pra marcado.
+      where: { ...whereFicha, arquivadoEm: null },
+    });
+    fichasPessoa = fichas;
+    if (fichas.length) {
+      const f = fichas.slice().sort((a, b) => {
+        const aA = String(a.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
+        const bA = String(b.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
+        if (aA !== bA) return bA - aA;
+        return Number(b.limiteCompras || 0) - Number(a.limiteCompras || 0);
+      })[0];
+      row = {
+        CODIGO: f.codigo,
+        NOME: f.nome,
+        CPF: f.cpf || safeCpf,
+        AVALIACAO: f.avaliacao || '',
+        LIMITECOMPRAS: Number(f.limiteCompras || 0),
+        ULTCOMPRA: (f.rawJson as any)?.ULTCOMPRA ?? null,
+      };
     }
 
     if (!row) {
       return {
         permitido: false,
         motivo: safeCpf
-          ? 'Cliente não encontrado (nem no espelho, nem no Giga — precisa cadastrar antes)'
-          : `Ficha ${codArg}${temLoja ? `/loja ${lojaArg}` : ''} não encontrada (nem no espelho, nem no Giga)`,
+          ? 'Cliente não encontrado no espelho — precisa cadastrar antes'
+          : `Ficha ${codArg}${temLoja ? `/loja ${lojaArg}` : ''} não encontrada no espelho`,
         cliente: null,
         marcadosAtivos: [],
         totalMarcadosAtivos: 0,

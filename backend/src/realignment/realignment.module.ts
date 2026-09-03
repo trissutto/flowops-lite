@@ -3,7 +3,6 @@ import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
 import { WebsocketModule } from '../websocket/websocket.module';
-import { WpDbModule } from '../wp-db/wp-db.module';
 import { RealignmentController } from './realignment.controller';
 import { RealignmentService } from './realignment.service';
 import { RealignmentShipmentService } from './shipment.service';
@@ -30,7 +29,10 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 @Module({
   // CorreiosModule/MaisEnviosModule/NfeModule → envio físico da remessa
   // (etiqueta SEDEX + chave da NF-e 5152 + DANFE no PDF único)
-  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule, CorreiosModule, MaisEnviosModule, NfeModule, WincredMirrorModule],
+  // WpDbModule saiu daqui (09/2026): a foto da peça vem do `product_photos`
+  // (R2) desde que o host do WordPress morreu — nenhum provider deste módulo
+  // injeta o WpDbService.
+  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, CorreiosModule, MaisEnviosModule, NfeModule, WincredMirrorModule],
   controllers: [RealignmentController, RealignmentReportController],
   providers: [
     RealignmentService,

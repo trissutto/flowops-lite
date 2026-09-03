@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ErpService } from '../erp/erp.service';
+import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service';
 
 /**
  * SiteSaidasReportService — Relatório de peças que cada LOJA cedeu pro SITE.
@@ -14,7 +14,7 @@ import { ErpService } from '../erp/erp.service';
  *
  * Cruza:
  *   • OrderItem.assignedStoreId  ↔  Store.code
- *   • OrderItem.sku              ↔  Produto no Giga (pra pegar ref/cor/tamanho)
+ *   • OrderItem.sku              ↔  Catálogo no Postgres (ref/cor/tamanho)
  *   • Order.wcDateCreated        →  período
  *   • Order.status               →  filtro de "efetivamente saiu" (shipped/delivered)
  */
@@ -51,7 +51,7 @@ export class SiteSaidasReportService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly erp: ErpService,
+    private readonly purchaseOrders: PurchaseOrdersService,
   ) {}
 
   async getReport(filters: SiteSaidasFilters = {}): Promise<{
@@ -155,29 +155,39 @@ export class SiteSaidasReportService {
       if (ts > agg._lastTs)  agg._lastTs = ts;
     }
 
-    // 4) Enriquece com dados do Giga (ref/cor/tamanho)
-    //    Pega lista única de SKUs e busca em paralelo (Promise.all)
+    // 4) Enriquece com dados do CATÁLOGO (ref/cor/tamanho/descrição).
+    //    Até 03/09 isto batia no Giga (erp.buscarProdutoPorCodigo, pool morto
+    //    desde 27/08): o catch engolia o erro, NENHUM sku enriquecia e os
+    //    filtros de ref/cor/tamanho do passo 5 descartavam TODAS as linhas
+    //    calados. Agora resolve em UM lote no Postgres, no MESMO buscador das
+    //    etiquetas avulsas (product + wincred_produtos, nativa vence —
+    //    commit 919585f). Erro aqui SOBE — fonte quebrada não pode virar
+    //    "relatório vazio".
     const skus = Array.from(new Set(Array.from(map.values()).map((a) => a.sku)));
     const skuToProd: Record<string, { ref: string; cor: string; tamanho: string; descricao: string }> = {};
 
-    await Promise.all(
-      skus.map(async (sku) => {
-        try {
-          const found = await (this.erp as any).buscarProdutoPorCodigo?.(sku);
-          if (found && found.length > 0) {
-            const p = found[0];
-            skuToProd[sku] = {
-              ref: String(p.referencia || '').trim(),
-              cor: String(p.cor || '').trim(),
-              tamanho: String(p.tamanho || '').trim(),
-              descricao: String(p.descricao || '').trim(),
-            };
-          }
-        } catch (e: any) {
-          this.logger.warn(`enriquecer sku ${sku} falhou: ${e?.message}`);
+    if (skus.length) {
+      const { labels } = await this.purchaseOrders.buscarEtiquetasAvulsas(skus);
+      // `codigo` das labels vem normalizado SEM zeros à esquerda — casa com o
+      // SKU do pedido pela MESMA normalização (padding inconsistente do Giga).
+      const porCodigo = new Map<string, (typeof labels)[number]>();
+      for (const l of labels) {
+        const cod = String(l.codigo || '').trim();
+        if (cod && !porCodigo.has(cod)) porCodigo.set(cod, l);
+      }
+      for (const sku of skus) {
+        const norm = sku.replace(/\D/g, '').replace(/^0+/, '') || sku;
+        const p = porCodigo.get(norm);
+        if (p) {
+          skuToProd[sku] = {
+            ref: String(p.ref || '').trim(),
+            cor: String(p.cor || '').trim(),
+            tamanho: String(p.tamanho || '').trim(),
+            descricao: String(p.descricao || '').trim(),
+          };
         }
-      }),
-    );
+      }
+    }
 
     // 5) Aplica filtros de ref / cor / tamanho (post-query, em memória)
     const refQ = filters.ref?.trim().toUpperCase();
