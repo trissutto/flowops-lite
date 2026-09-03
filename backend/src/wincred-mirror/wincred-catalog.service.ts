@@ -13,12 +13,11 @@ import { ehLojaCanal } from '../common/loja-canal';
  * Railway — e cada bipe/busca fazia round-trip WAN ao MySQL. O espelho é
  * local (Postgres, mesmo datacenter), responde em ms e não morre junto.
  *
- * Regras de fallback (Giga ao vivo continua como plano B):
- *   - espelho MISS (SKU não achado — ex.: produto cadastrado há minutos, ou
- *     EAN13 que só resolve nas colunas do Giga) → consulta o Giga
- *   - espelho com preço zerado → Giga (lá existe fallback de preço via caixa)
- *   - erro de query no espelho → Giga
- *   - kill-switch: PDV_MIRROR_READS=0 desliga tudo e volta 100% pro Giga
+ * Fallback (Onda 1): o BIPE (getPdvProductInfo) é 100% Postgres — o MySQL
+ * morreu em 27/08. EAN legado resolve pela coluna `ean` das próprias tabelas
+ * Postgres, preço zerado volta como ENCONTRADO (a ponta avisa) e erro do
+ * espelho SOBE. Os demais métodos (busca/consulta) ainda carregam o desvio
+ * legado pro ErpService como último recurso — pendente das próximas ondas.
  *
  * Frescor: produtos sincronizam a cada 10min (incremental por DATAALT) +
  * full às 3h; estoque ganhou full sync de hora em hora (cron). Pro bipe,
@@ -40,15 +39,24 @@ export class WincredCatalogService {
   }
 
   /**
-   * P2 da migração de produtos: PRODUCT_NATIVE_READS=1 → catálogo lido da
-   * tabela NATIVA `product` (curada no Flow) em vez do espelho
-   * wincred_produtos. Os campos têm os MESMOS nomes nos dois models, então
-   * só o model troca. Kill-switch: remover a env volta pro espelho na hora.
-   * (Estoque/EAN continuam nos espelhos — só o CADASTRO migra aqui.)
+   * P2 da migração de produtos: catálogo lido da tabela NATIVA `product`
+   * (curada no Flow) em vez do espelho wincred_produtos.
+   * DEFAULT LIGADO (09/2026, mesmo idioma do products-editor): produção roda
+   * PRODUCT_NATIVE_READS=1 e a EDIÇÃO já grava nativo por default — leitura
+   * default-OFF criava estado incoerente se a env sumisse do Railway (grava
+   * nativo, lê legado). `PRODUCT_NATIVE_READS=0` ainda desliga.
+   */
+  private get nativeReads(): boolean {
+    return String(process.env.PRODUCT_NATIVE_READS ?? '1').trim() !== '0';
+  }
+
+  /**
+   * A tabela do CADASTRO. Os campos têm os MESMOS nomes nos dois models, então
+   * só o model troca. (Estoque/EAN continuam nos espelhos — só o CADASTRO
+   * migra aqui.)
    */
   private get produtoTable(): any {
-    const nativo = String(process.env.PRODUCT_NATIVE_READS ?? '').trim() === '1';
-    return nativo ? (this.prisma as any).product : (this.prisma as any).wincredProduto;
+    return this.nativeReads ? (this.prisma as any).product : (this.prisma as any).wincredProduto;
   }
 
   /**
@@ -105,21 +113,20 @@ export class WincredCatalogService {
     dataCadastro: string | null;
   } | null> {
     const t0 = Date.now();
-    let info: any = null;
-    if (this.enabled) {
-      try {
-        const hit = await this.getPdvProductInfoFromMirror(skuOrEan);
-        if (hit) {
-          this.logger.log(`[bipe] ${skuOrEan}: espelho HIT (${Date.now() - t0}ms)`);
-          info = hit;
-        } else {
-          this.logger.log(`[bipe] ${skuOrEan}: espelho MISS → Giga ao vivo`);
-        }
-      } catch (e: any) {
-        this.logger.warn(`[bipe] ${skuOrEan}: espelho ERRO (${e?.message || e}) → Giga ao vivo`);
-      }
+    // O bipe lê SÓ o Postgres (Onda 1): o fallback `erp.getPdvProductInfo`
+    // caía no MySQL do Giga, morto em 27/08 — devolvia null e o preço-zero /
+    // EAN legado viravam "não encontrado" no caixa. Agora o próprio espelho
+    // resolve EAN (coluna `ean`) e preço zerado volta como ENCONTRADO (a
+    // ponta avisa). Miss do espelho É a resposta; erro do espelho SOBE (500
+    // honesto) em vez de virar "produto não existe" com a cliente na frente.
+    // PDV_MIRROR_READS perdeu o sentido aqui: não existe mais "voltar 100%
+    // pro Giga" — o espelho é o único caminho do bipe.
+    const info = await this.getPdvProductInfoFromMirror(skuOrEan);
+    if (!info) {
+      this.logger.log(`[bipe] ${skuOrEan}: não encontrado no espelho (${Date.now() - t0}ms)`);
+      return null;
     }
-    if (!info) info = await this.erp.getPdvProductInfo(skuOrEan);
+    this.logger.log(`[bipe] ${skuOrEan}: espelho HIT (${Date.now() - t0}ms)`);
     return this.anexarPrecoDe(info);
   }
 
@@ -147,26 +154,49 @@ export class WincredCatalogService {
   }
 
   private async getPdvProductInfoFromMirror(skuOrEan: string) {
+    // 1) CODIGO normalizado (o caminho de sempre — a etiqueta da Lurd's
+    //    carrega o próprio CODIGO, e produto novo já nasce com CODIGO=EAN-13
+    //    da EanSequence).
     const codigo = this.normalizeCodigo(skuOrEan);
-    if (!codigo) return null; // termo com letras (EAN alfanum etc) → Giga resolve
+    let p: any = codigo
+      ? await this.produtoTable.findUnique({ where: { codigo } })
+      : null;
 
-    const p: any = await this.produtoTable.findUnique({
-      where: { codigo },
-    });
+    // 2) EAN legado / código de barras de fornecedor: o termo não é o CODIGO.
+    //    As duas tabelas Postgres têm a coluna `ean` (o sync sondava
+    //    EAN13/EAN/CODBARRAS do Giga e copiava) — antes isso só resolvia na
+    //    varredura ao vivo do MySQL, que morreu em 27/08. Nativa e espelho
+    //    podem divergir na janela do sync, então confere as DUAS antes de
+    //    dizer "não existe" (mesma ideia do searchByRefFromMirror).
+    if (!p) {
+      const eanRaw = String(skuOrEan || '').trim();
+      const eanDigits = eanRaw.replace(/\D/g, '');
+      const eans = Array.from(new Set([eanRaw, eanDigits])).filter((e) => e.length >= 8);
+      if (eans.length) {
+        p = await this.produtoTable.findFirst({ where: { ean: { in: eans } } });
+        if (!p) {
+          // A OUTRA tabela — tem que ler a MESMA flag do `produtoTable`, senão
+          // as duas apontam pro mesmo model e o cruzamento nativa×espelho vira
+          // a mesma consulta duas vezes.
+          const outraTabela = this.nativeReads
+            ? (this.prisma as any).wincredProduto
+            : (this.prisma as any).product;
+          p = await outraTabela.findFirst({ where: { ean: { in: eans } } });
+        }
+      }
+    }
     if (!p) return null;
 
+    // Preço zerado RETORNA como encontrado (preço 0). O caminho antigo jogava
+    // pro Giga completar pelo último unitário praticado na `caixa` — o Giga
+    // morreu, e esconder a peça viraria "não encontrado" mentiroso pra uma
+    // peça que existe. A ponta (addItem) avisa o preço zerado.
     const preco = this.precoFromVendaUn(p.vendaUn);
-    // Sem preço no espelho → deixa o Giga responder (lá tem fallback via
-    // último unitário praticado na `caixa`).
-    if (preco <= 0) return null;
 
     const custo = p.custo != null ? Number(p.custo) : null;
     return {
-      sku: codigo,
-      // O espelho não tem coluna de EAN (o `produtos` da Lurd's também não —
-      // as etiquetas carregam o próprio CODIGO). NFC-e cai pra 'SEM GTIN',
-      // igual ao comportamento atual.
-      ean: null,
+      sku: String(p.codigo),
+      ean: p.ean ? String(p.ean).trim() : null,
       ref: p.ref ? String(p.ref).trim() : null,
       cor: p.cor ? String(p.cor).trim() : null,
       tamanho: p.tamanho ? String(p.tamanho).trim() : null,

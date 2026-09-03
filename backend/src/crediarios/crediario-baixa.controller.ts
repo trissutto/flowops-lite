@@ -46,30 +46,9 @@ export class CrediarioBaixaController {
     return this.mirror.status();
   }
 
-  // ── UNIFICAÇÃO de cadastros duplicados no Giga (admin) ──────────────
-  // Caso Livia (03/07): 2 cadastros na mesma loja (um sem CPF, crediário
-  // pendurado nele). Lista os grupos duplicados e move parcelas/histórico
-  // pro cadastro certo. Tela: /retaguarda/clientes-duplicados.
-
-  @Get('clientes-duplicados')
-  async listClientesDuplicados(@Req() req: any, @Query('storeCode') storeCode: string) {
-    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
-    return this.svc.listClientesDuplicados(storeCode);
-  }
-
-  @Post('unificar-clientes')
-  async unificarClientes(
-    @Req() req: any,
-    @Body() body: { storeCode: string; codOrigem: string; codDestino: string; dryRun?: boolean },
-  ) {
-    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
-    return this.svc.unificarClientesGiga({
-      storeCode: body?.storeCode,
-      codOrigem: body?.codOrigem,
-      codDestino: body?.codDestino,
-      dryRun: !!body?.dryRun,
-    });
-  }
+  // A unificação de cadastros duplicados saiu daqui em 03/09/2026: ela lia e
+  // escrevia direto no Giga, que não existe mais. A fusão de clientes do Flow
+  // (telas de limpeza/fusão do CRM) é a única régua agora.
 
   private requireRole(req: any) {
     const role = req?.user?.role;
@@ -200,16 +179,9 @@ export class CrediarioBaixaController {
     return this.svc.listAllOpenInstallments({ storeCode });
   }
 
-  // ── Admin: DIFF de validação espelho vs Giga (read-only) ──────────
-  // Cruza wincred_movimento_aberto (espelho) com movimento (Giga ao vivo) e
-  // devolve um veredito de se dá pra ligar CREDIARIO_NATIVE_READS=1 sem
-  // crediário sumir. Não escreve nada. `?storeCode=NN` limita a uma loja
-  // (recomendado — a query da rede inteira é pesada no Giga).
-  @Get('diff/abertas')
-  async diffAbertas(@Req() req: any, @Query('storeCode') storeCode?: string) {
-    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
-    return this.svc.diffAbertasEspelhoVsGiga({ storeCode });
-  }
+  // O diff espelho×Giga saiu em 03/09/2026: ele existia pra decidir se dava
+  // pra ligar CREDIARIO_NATIVE_READS=1. A leitura nativa é o único caminho
+  // desde então, e o outro lado da comparação não existe mais.
 
   // ── Autocomplete cliente (rápido) ─────────────────────────────────
   // Mesmo kill-switch que /todas — protege contra saturação do pool MySQL

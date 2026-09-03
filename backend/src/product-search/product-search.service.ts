@@ -93,12 +93,15 @@ export class ProductSearchService implements OnModuleInit {
   }
 
   /**
-   * P2 da migração de produtos: PRODUCT_NATIVE_READS=1 → a busca única lê a
-   * tabela NATIVA `product` (curada, com ativo/genero) em vez do espelho
-   * giga_produto. Kill-switch instantâneo: remover a env volta pro espelho.
+   * P2 da migração de produtos: a busca única lê a tabela NATIVA `product`
+   * (curada, com ativo/genero) em vez do espelho giga_produto.
+   * DEFAULT LIGADO (09/2026, mesmo idioma do products-editor): produção roda
+   * PRODUCT_NATIVE_READS=1 e a EDIÇÃO já grava nativo por default — deixar a
+   * leitura default-OFF criava estado incoerente se a env sumisse do Railway
+   * (grava nativo, lê legado). `PRODUCT_NATIVE_READS=0` ainda desliga.
    */
   private get nativeReads(): boolean {
-    return String(process.env.PRODUCT_NATIVE_READS ?? '').trim() === '1';
+    return String(process.env.PRODUCT_NATIVE_READS ?? '1').trim() !== '0';
   }
 
   /** Mesma normalização do espelho Wincred (codigo sem zeros à esquerda). */

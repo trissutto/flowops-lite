@@ -76,13 +76,8 @@ interface GroupResp {
   rawSql: string;
 }
 
-interface DiagnoseResp {
-  columns: { field: string; type: string; null: string; default: any }[];
-  sample: any[];
-  pagoCandidates: string[];
-  detected: Record<string, string | null>;
-  clientesTable?: { table: string; codCliente: string; nome: string | null; telefone: string | null; telefone2: string | null } | null;
-}
+// O DiagnoseResp saiu em 09/26 junto com GET /crediarios/diagnose: ele lia o
+// schema da tabela `movimento` do Giga, e o MySQL foi desligado em 27/08/2026.
 
 interface CampanhaItem {
   codCliente: string;
@@ -148,8 +143,6 @@ export default function CrediarioPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [diagnose, setDiagnose] = useState<DiagnoseResp | null>(null);
-  const [showDiag, setShowDiag] = useState(false);
 
   // Campanha WhatsApp
   const [minDiasAtraso, setMinDiasAtraso] = useState(3);
@@ -168,16 +161,6 @@ export default function CrediarioPage() {
     summary: { total: number; ativos: number; inativos: number; erros: number };
     connected: boolean;
   } | null>(null);
-
-  async function loadDiagnose() {
-    try {
-      const r = await api<DiagnoseResp>('/crediarios/diagnose');
-      setDiagnose(r);
-      setShowDiag(true);
-    } catch (e: any) {
-      alert('Erro: ' + (e.message || 'falha ao diagnosticar'));
-    }
-  }
 
   function buildQs() {
     const qs: string[] = [`loja=${loja}`, `daysBack=${daysBack}`];
@@ -661,12 +644,8 @@ export default function CrediarioPage() {
             <div>
               <div className="font-semibold text-rose-700">Erro ao carregar</div>
               <div className="text-rose-600 text-xs mt-1 font-mono whitespace-pre-wrap break-words">{error}</div>
-              {error.includes('Colunas essenciais') && (
-                <div className="text-rose-700 text-xs mt-2">
-                  As colunas da tabela `movimento` desta instalação não bateram com os padrões esperados.
-                  Use o <a href="/relatorios/giga" className="underline">Giga Explorer</a> pra ver `DESCRIBE movimento` e me manda os nomes reais.
-                </div>
-              )}
+              {/* O atalho pro Giga Explorer morreu junto com o MySQL do Giga (09/26) —
+                  hoje o crediário lê a tabela nativa crediario_parcelas. */}
             </div>
           </div>
         </div>
@@ -680,15 +659,8 @@ export default function CrediarioPage() {
             <div className="flex-1">
               <div className="font-semibold text-amber-800">Coluna PAGO não foi detectada</div>
               <div className="text-amber-700 text-xs mt-1">
-                Pode estar trazendo parcelas já pagas. Clique em <b>Diagnosticar</b> pra ver os nomes reais
-                das colunas da tabela <code>movimento</code> e me passar o resultado.
+                Pode estar trazendo parcelas já pagas. Confira o mapeamento logo abaixo.
               </div>
-              <button
-                onClick={loadDiagnose}
-                className="mt-2 px-3 py-1.5 text-xs rounded-lg bg-amber-600 text-white shadow-sm hover:bg-amber-700"
-              >
-                Diagnosticar colunas
-              </button>
             </div>
           </div>
         </div>
@@ -720,75 +692,7 @@ export default function CrediarioPage() {
               </pre>
             </div>
           )}
-          <button
-            onClick={loadDiagnose}
-            className="mt-2 px-2.5 py-1 text-[11px] rounded bg-slate-700 text-white hover:bg-slate-800"
-          >
-            Ver TODAS as colunas brutas + amostra
-          </button>
         </details>
-      )}
-
-      {/* Modal diagnóstico */}
-      {showDiag && diagnose && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" {...overlayClose(() => setShowDiag(false))}>
-          <div
-            className="bg-white rounded-2xl max-w-5xl w-full max-h-[85vh] overflow-y-auto p-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-semibold" style={{ color: '#6e3a40' }}>Diagnóstico — tabela `movimento`</h2>
-              <button onClick={() => setShowDiag(false)} className="text-slate-500 hover:text-slate-800 text-2xl">×</button>
-            </div>
-
-            {diagnose.pagoCandidates.length > 0 && (
-              <div className="mb-3 p-3 bg-emerald-50 border-l-4 border-emerald-500 rounded">
-                <div className="text-xs font-bold text-emerald-800 uppercase mb-1">Candidatos a coluna "pago"</div>
-                <ul className="text-sm text-emerald-900">
-                  {diagnose.pagoCandidates.map((c) => <li key={c} className="font-mono">• {c}</li>)}
-                </ul>
-                <div className="text-[11px] text-emerald-700 mt-2">
-                  Se algum desses for o filtro de pago real, me passa o nome exato e eu adiciono no regex.
-                </div>
-              </div>
-            )}
-
-            <div className="mb-4">
-              <h3 className="text-sm font-semibold mb-2" style={{ color: '#6e3a40' }}>Todas as colunas ({diagnose.columns.length})</h3>
-              <div className="overflow-x-auto">
-                <table className="text-xs w-full border border-slate-200">
-                  <thead className="bg-slate-100">
-                    <tr>
-                      <th className="px-2 py-1 text-left">Campo</th>
-                      <th className="px-2 py-1 text-left">Tipo</th>
-                      <th className="px-2 py-1 text-left">Null</th>
-                      <th className="px-2 py-1 text-left">Default</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {diagnose.columns.map((c) => (
-                      <tr key={c.field} className="border-t border-slate-100 hover:bg-slate-50">
-                        <td className="px-2 py-1 font-mono font-semibold">{c.field}</td>
-                        <td className="px-2 py-1 text-slate-600">{c.type}</td>
-                        <td className="px-2 py-1">{c.null}</td>
-                        <td className="px-2 py-1 text-slate-500">{c.default ?? '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold mb-2" style={{ color: '#6e3a40' }}>Amostra (5 linhas)</h3>
-              <div className="overflow-x-auto">
-                <pre className="bg-slate-900 text-emerald-200 text-[10px] p-2 rounded whitespace-pre-wrap break-all">
-{JSON.stringify(diagnose.sample, null, 2)}
-                </pre>
-              </div>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Loading */}

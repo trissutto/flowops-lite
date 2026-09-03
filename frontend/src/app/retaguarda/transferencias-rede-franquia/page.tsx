@@ -121,16 +121,6 @@ const num = (n: number) => n.toLocaleString('pt-BR');
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
-/** Formata o horário do último sync do espelho do Giga. */
-const fmtSync = (iso: string) => {
-  const d = new Date(iso);
-  const hoje = new Date();
-  const mesmoDia = d.toDateString() === hoje.toDateString();
-  return mesmoDia
-    ? `às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-    : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-};
-
 export default function TransferenciasRedeFranquiaPage() {
   // Filtro SÓ por seletor de datas (de/até). Default: últimos 90 dias.
   const [customFrom, setCustomFrom] = useState(() => {
@@ -897,7 +887,7 @@ function TransferItens({ controle, data, isDeb }: { controle: string; data: stri
 
   if (err) return msg(`Falha ao carregar itens: ${err}`, 'text-rose-500');
   if (!items) return msg('Carregando itens…', 'text-slate-400');
-  if (!items.length) return msg('Sem itens no espelho — clique em Sincronizar Giga.', 'text-slate-400');
+  if (!items.length) return msg('Sem itens no espelho pra esta transferência (espelho congelado — Giga desligado).', 'text-slate-400');
 
   return (
     <>
@@ -928,7 +918,6 @@ function ContaCorrente() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [expandido, setExpandido] = useState<Record<string, boolean>>({});
-  const [syncing, setSyncing] = useState(false);
   const reqIdRef = useRef(0);
 
   // Resumo do topo: quebra os débitos por categoria (mercadoria = giga+flow,
@@ -991,17 +980,8 @@ function ContaCorrente() {
     }
   }
 
-  async function syncGiga() {
-    setSyncing(true);
-    try {
-      await api(`/financeiro/conta-corrente/sync-giga`, { method: 'POST' });
-      await load();
-    } catch (e: any) {
-      alert('Falha ao sincronizar o Giga: ' + (e?.message || e));
-    } finally {
-      setSyncing(false);
-    }
-  }
+  // O botão "Sincronizar Giga" virou aviso estático em 09/26: o MySQL do Giga
+  // foi desligado e o espelho ficou congelado em 25/08 — não há mais o que puxar.
 
   return (
     <div>
@@ -1027,23 +1007,13 @@ function ContaCorrente() {
               <RefreshCw className="h-4 w-4" />
             </button>
           </div>
-          <button
-            onClick={syncGiga}
-            disabled={syncing}
-            title="Puxa os dados do Giga para a base local (espelho). A tela lê do espelho."
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          <span
+            title="O MySQL do Giga foi desligado — a tela lê o espelho local, que não muda mais."
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-500"
           >
-            <Database className={`h-4 w-4 ${syncing ? 'animate-pulse' : ''}`} />
-            {syncing ? 'Sincronizando…' : 'Sincronizar Giga'}
-          </button>
-          {ext?.gigaSync?.lastOkAt && !ext.gigaSync.pendente && !syncing && (
-            <span className="text-xs text-slate-400">
-              sincronizado {fmtSync(ext.gigaSync.lastOkAt)}
-              {ext.gigaSync.estoqueRows != null && (
-                <> · espelho de estoque: <b>{ext.gigaSync.estoqueRows.toLocaleString('pt-BR')}</b> linhas</>
-              )}
-            </span>
-          )}
+            <Database className="h-4 w-4" />
+            Espelho congelado em 25/08 — o Giga foi desligado. Transferências novas nascem no Flow.
+          </span>
         </div>
         <button
           onClick={() => setShowForm(true)}
@@ -1059,11 +1029,10 @@ function ContaCorrente() {
           <div className="flex-1 text-sm text-amber-900">
             {ext?.gigaSync?.pendente ? (
               <>
-                <div className="font-bold">Espelho do Giga ainda não sincronizado</div>
+                <div className="font-bold">Espelho do Giga sem dados</div>
                 <div className="text-amber-800">
-                  A mercadoria e os royalties leem da base local, que ainda não foi populada
-                  {ext.gigaSync?.erro ? ' (o último sync falhou)' : ''}. Clique em <b>Sincronizar Giga</b> pra
-                  puxar os dados agora.
+                  A mercadoria e os royalties leem da base local. O Giga foi desligado — não dá mais
+                  pra puxar dados de lá; o que estiver faltando aqui é histórico congelado.
                 </div>
               </>
             ) : (
@@ -1076,12 +1045,11 @@ function ContaCorrente() {
             )}
           </div>
           <button
-            onClick={ext?.gigaSync?.pendente ? syncGiga : load}
-            disabled={syncing}
+            onClick={load}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
           >
-            {ext?.gigaSync?.pendente ? <Database className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
-            {ext?.gigaSync?.pendente ? (syncing ? 'Sincronizando…' : 'Sincronizar Giga') : 'Atualizar'}
+            <RefreshCw className="h-4 w-4" />
+            Atualizar
           </button>
         </div>
       )}

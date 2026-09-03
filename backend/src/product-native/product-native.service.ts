@@ -187,8 +187,11 @@ export class ProductNativeService {
       editadosNoFlow: flowSource,
       curadosManualmente: curados,
       flags: {
-        PRODUCT_NATIVE_READS: String(process.env.PRODUCT_NATIVE_READS ?? '') === '1',
-        PRODUCT_NATIVE_WRITES: String(process.env.PRODUCT_NATIVE_WRITES ?? '') === '1',
+        // Default LIGADO nas duas (09/2026) — a expressão TEM que ser a mesma
+        // dos getters que mandam de verdade (product-search / wincred-catalog /
+        // products-editor), senão este painel relata o contrário do que roda.
+        PRODUCT_NATIVE_READS: String(process.env.PRODUCT_NATIVE_READS ?? '1').trim() !== '0',
+        PRODUCT_NATIVE_WRITES: String(process.env.PRODUCT_NATIVE_WRITES ?? '1').trim() !== '0',
         cronEnabled: this.cronEnabled,
       },
     };

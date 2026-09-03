@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Save, Loader2, Search, Download } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Search } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type Cargo = 'VENDEDORA' | 'CAIXA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
@@ -44,30 +44,11 @@ export default function CargosPage() {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [importing, setImporting] = useState(false);
   const [filterStore, setFilterStore] = useState<string>('');  // '' = todas
 
-  async function importFromPdv() {
-    if (!confirm('Importar TODAS funcionárias do Wincred (15 lojas)?\n\n• Cria as que ainda não existem como VENDEDORA\n• Vincula código do Wincred\n• Pula as já importadas\n\nDepois você ajusta cargo e loja responsável.')) return;
-    setImporting(true);
-    try {
-      const r = await api<{ created: number; skipped: number; total: number }>(
-        '/sellers/import-from-wincred',
-        { method: 'POST' },
-      );
-      alert(
-        `Importação concluída!\n\n` +
-          `✅ Criadas: ${r.created}\n` +
-          `⏭️ Já existentes: ${r.skipped}\n` +
-          `📊 Total processadas: ${r.total}`,
-      );
-      load();
-    } catch (e: any) {
-      alert('Erro: ' + (e?.message || e));
-    } finally {
-      setImporting(false);
-    }
-  }
+  // "Importar das lojas" saiu em 09/26: puxava as funcionárias da tabela de
+  // vendedores do Wincred, e o MySQL do Giga foi desligado em 27/08/2026.
+  // Vendedora nova entra por /retaguarda/vendedoras.
 
   async function load() {
     setLoading(true);
@@ -161,15 +142,6 @@ export default function CargosPage() {
             Define cargo + loja que cada uma responde. Líder/Gerente ganham % sobre a loja toda.
           </p>
         </div>
-        <button
-          onClick={importFromPdv}
-          disabled={importing}
-          className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2"
-          title="Importa funcionárias cadastradas no PDV das lojas pra cá"
-        >
-          {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          Importar das lojas
-        </button>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-2">

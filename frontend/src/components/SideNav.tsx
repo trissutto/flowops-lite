@@ -22,7 +22,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
-  LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
+  LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
   Smartphone, FileSearch, MessageSquare, Radio, Instagram,
   Bot, TrendingUp, Network, Plug,
@@ -71,8 +71,9 @@ const GROUPS: NavGroup[] = [
       { href: '/retaguarda/almoxarifado',    label: 'Almoxarifado',     icon: Boxes },
       { href: '/retaguarda/publicar-site',   label: 'Publicar no Site', icon: Globe },
       { href: '/retaguarda/whatsapp',        label: 'WhatsApp',         icon: Smartphone },
-      { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',  icon: Database },
-      { href: '/retaguarda/auditoria-ncm',         label: 'Auditoria NCM',          icon: FileSearch },
+      // "Diagnóstico ERP" saiu do menu (09/26): a tela inspecionava o schema do
+      // Giga (MySQL desligado). Era a última tela morta alcançável por clique.
+      // Auditoria NCM saiu do menu (09/26): a tela lia o MySQL do Giga, que foi desligado.
       { href: '/retaguarda/transferencias-report', label: 'Transferências (relatório)', icon: TrendingUp },
       { href: '/retaguarda/transferencias-rede-franquia', label: 'Transferências REDE × Franquia', icon: Network },
     ],

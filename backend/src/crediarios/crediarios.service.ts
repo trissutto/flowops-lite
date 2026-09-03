@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ErpService } from '../erp/erp.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { sqlParcelaAberta } from '../common/crediario-pago';
 import { ehFichaNaoPessoa } from '../common/fichas-operadora';
 import {
   CobrancaContext, ParcelaCobranca, renderCobranca, TEMPLATES,
@@ -441,7 +440,12 @@ export class CrediariosService {
   }
 
   /**
-   * Pra cada codCliente recebido, busca telefone na tabela detectada.
+   * Pra cada codCliente recebido, busca telefone no ESPELHO Postgres
+   * (`wincred_clientes`) com complemento da ficha nativa (`giga_clientes` —
+   * cliente criado/atualizado NO FLOW depois que o espelho congelou, 27/08).
+   * O Giga morreu (03/09): telefone que não está em nenhuma das duas tabelas
+   * é dado ausente legítimo — o campo volta vazio, sem erro calado e sem
+   * tocar no pool morto.
    * Retorna Map<codCliente, { telefone, nome }>.
    */
   async fetchPhonesByClienteIds(
@@ -451,43 +455,73 @@ export class CrediariosService {
     const out = new Map<string, { telefone: string | null; nome: string | null }>();
     if (codClientes.length === 0) return out;
 
-    const cm = await this.detectClientesTable();
-    if (!cm || !cm.telefone) return out;
-
-    // Sanitiza ids
-    const ids = Array.from(new Set(codClientes.map((c) => String(c).replace(/['"\\]/g, '')))).filter(Boolean);
+    // Sanitiza ids + variantes de padding (zeros à esquerda variam entre as
+    // tabelas do Giga — movimento vs clientes — e o espelho herdou isso).
+    const ids = Array.from(new Set(codClientes.map((c) => String(c).trim()).filter(Boolean)));
     if (ids.length === 0) return out;
+    const variantes = (cod: string): string[] => {
+      const set = new Set<string>([cod]);
+      const semZeros = cod.replace(/^0+/, '');
+      if (semZeros) set.add(semZeros);
+      return Array.from(set);
+    };
+    const todasVariantes = Array.from(new Set(ids.flatMap(variantes)));
 
     // Escopo por loja (opcional) — o mesmo cod em outra loja é OUTRA pessoa;
     // sem o filtro, nome/telefone podem vir do cadastro errado.
     const safeStore = storeCode
       ? String(storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
       : null;
-    const lojaAnd = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
 
-    const inList = ids.map((i) => `'${i}'`).join(',');
-    const cols: string[] = [`\`${cm.codCliente}\` AS codCliente`];
-    if (cm.nome) cols.push(`\`${cm.nome}\` AS nome`);
-    if (cm.telefone) cols.push(`\`${cm.telefone}\` AS telefone`);
-    if (cm.telefone2) cols.push(`\`${cm.telefone2}\` AS telefone2`);
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList})${lojaAnd} LIMIT ${ids.length + 100}`;
-
-    try {
-      const { normalizeBrPhone } = await import('../lib/phone-br');
-      const result = await this.erp.runReadOnly(sql, { maxRows: ids.length + 100, timeoutMs: 20000 });
-      for (const r of result.rows) {
-        const id = String(r.codCliente);
-        // Prefere telefone1 (FONECEL); se vazio, telefone2 (FONERES).
-        // Normaliza pra formato BR — adiciona DDD 13 (Lurd's default) se faltar.
-        const raw1 = String(r.telefone || '').trim();
-        const raw2 = String(r.telefone2 || '').trim();
-        const norm1 = normalizeBrPhone(raw1);
-        const norm2 = normalizeBrPhone(raw2);
-        const tel = norm1 || norm2 || null;
-        out.set(id, { telefone: tel, nome: r.nome ? String(r.nome) : null });
+    const { normalizeBrPhone } = await import('../lib/phone-br');
+    // Registra o cliente sob TODAS as variantes do código — quem consulta o
+    // Map pode chegar com ou sem zeros à esquerda.
+    const registrar = (cod: string, info: { telefone: string | null; nome: string | null }) => {
+      for (const k of variantes(cod)) {
+        const atual = out.get(k);
+        out.set(k, {
+          telefone: atual?.telefone || info.telefone,
+          nome: atual?.nome || info.nome,
+        });
       }
-    } catch (e: any) {
-      this.logger.error(`fetchPhonesByClienteIds falhou: ${e?.message}`);
+    };
+
+    // 1) Espelho slim de clientes (wincred_clientes) — o mesmo que a tela de
+    // Recebimentos usa. Prefere telefone1 (FONECEL); se vazio, telefone2
+    // (FONERES). Normaliza pra formato BR — DDD 13 (Lurd's default) se faltar.
+    const doEspelho: any[] = await (this.prisma as any).wincredCliente.findMany({
+      where: {
+        codCliente: { in: todasVariantes },
+        ...(safeStore ? { loja: safeStore } : {}),
+      },
+    });
+    for (const c of doEspelho) {
+      const norm1 = normalizeBrPhone(String(c.telefone || '').trim());
+      const norm2 = normalizeBrPhone(String(c.telefone2 || '').trim());
+      registrar(String(c.codCliente), {
+        telefone: norm1 || norm2 || null,
+        nome: c.nome ? String(c.nome) : null,
+      });
+    }
+
+    // 2) Complemento pela ficha nativa (giga_clientes) — cobre cliente novo
+    // do Flow e telefone atualizado depois do congelamento do espelho.
+    const faltando = ids.filter((id) => !out.get(id)?.telefone);
+    if (faltando.length) {
+      const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+        where: {
+          codigo: { in: Array.from(new Set(faltando.flatMap(variantes))) },
+          ...(safeStore ? { loja: safeStore } : {}),
+        },
+      });
+      for (const f of fichas) {
+        const tel =
+          normalizeBrPhone(String(f.foneCel || '').trim()) ||
+          normalizeBrPhone(String(f.foneRes || '').trim()) ||
+          normalizeBrPhone(String(f.foneRec || '').trim()) ||
+          null;
+        registrar(String(f.codigo), { telefone: tel, nome: f.nome ? String(f.nome) : null });
+      }
     }
     return out;
   }
@@ -496,9 +530,12 @@ export class CrediariosService {
    * Lista parcelas VENCIDAS e NÃO PAGAS de uma loja, ordenadas por
    * VENCIMENTO ASC (mais antigo primeiro — fila de cobrança real).
    *
-   * Vencida: VENCIMENTO < hoje
-   * Não paga: PAGO = 'N' (preferencial — confirmado pelo Thiago)
-   *           Fallback: DATA_PAGAMENTO IS NULL OR = '0000-00-00'
+   * FONTE (03/09 — Giga morto): `crediario_parcelas`, o ledger NATIVO do
+   * crediário — a MESMA tabela de onde o espelho de abertas
+   * (`wincred_movimento_aberto`) é copiado a cada 10min e que recebe baixa e
+   * estorno por write-through na hora. Vencida: vencimento < hoje (Brasília).
+   * Não paga: pago=false e cancelado=false. Miss = lista vazia; ledger
+   * inteiro vazio = erro honesto que SOBE (importação pendente).
    *
    * Filtros opcionais:
    *   - daysBack:    janela máxima no passado (default 365)
@@ -519,16 +556,6 @@ export class CrediariosService {
     summary: { totalParcelas: number; totalDevido: number; clientes: number };
     rawSql: string;
   }> {
-    const map = await this.detectColumns();
-    if (!map.vencimento || !map.codCliente || !map.loja) {
-      throw new Error(
-        `Colunas essenciais não detectadas em "movimento". Faltando: ${
-          [!map.vencimento && 'vencimento', !map.codCliente && 'codCliente', !map.loja && 'loja']
-            .filter(Boolean).join(', ')
-        }`,
-      );
-    }
-
     const daysBack = Math.max(1, Math.min(3650, opts.daysBack ?? 365));
     const limit = Math.max(1, Math.min(50000, opts.limit ?? 5000));
     const safeStore = String(opts.storeCode || '').replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2);
@@ -536,58 +563,77 @@ export class CrediariosService {
     const dataInicio = safeDate(opts.dataInicio);
     const dataFim = safeDate(opts.dataFim);
 
-    // Monta SELECT só com as colunas detectadas
-    const select: string[] = [];
-    const aliasMap: Record<string, string> = {};
-    const addCol = (logical: keyof ColumnMap, alias: string) => {
-      const col = map[logical];
-      if (!col) return;
-      select.push(`\`${col}\` AS ${alias}`);
-      aliasMap[alias] = col;
-    };
-    addCol('registro', 'registro');
-    addCol('controle', 'controle');
-    addCol('numeroCompra', 'numeroCompra');
-    addCol('codCliente', 'codCliente');
-    addCol('nome', 'nome');
-    addCol('telefone', 'telefone');
-    addCol('dataCompra', 'dataCompra');
-    addCol('valorCompra', 'valorCompra');
-    addCol('parcela', 'parcela');
-    addCol('totalParcelas', 'totalParcelas');
-    addCol('vencimento', 'vencimento');
-    addCol('valorParcela', 'valorParcela');
-    addCol('dataPagamento', 'dataPagamento');
-    addCol('valorPago', 'valorPago');
-    addCol('pago', 'pago');
-    addCol('status', 'status');
+    // "Hoje" no dia de BRASÍLIA (mesma convenção do calcJuros da baixa) — o
+    // Railway roda em UTC e o CURDATE() antigo era do MySQL. `vencimento` é
+    // coluna DATE (meia-noite UTC), então a comparação fica dia contra dia.
+    const agoraBrasilia = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const hoje = new Date(Date.UTC(
+      agoraBrasilia.getUTCFullYear(), agoraBrasilia.getUTCMonth(), agoraBrasilia.getUTCDate(),
+    ));
 
-    // WHERE
-    const where: string[] = [];
-    where.push(`\`${map.loja}\` = '${safeStore}'`);
-    where.push(`\`${map.vencimento}\` < CURDATE()`);
+    const vencimento: any = { lt: hoje };
     // Janela máxima (daysBack) — só aplica se NÃO tiver dataInicio explícito
-    if (!dataInicio) {
-      where.push(`\`${map.vencimento}\` >= DATE_SUB(CURDATE(), INTERVAL ${daysBack} DAY)`);
+    if (dataInicio) vencimento.gte = new Date(`${dataInicio}T00:00:00Z`);
+    else vencimento.gte = new Date(hoje.getTime() - daysBack * 86400000);
+    if (dataFim) vencimento.lte = new Date(`${dataFim}T00:00:00Z`);
+
+    const where = {
+      pago: false,
+      cancelado: false,
+      loja: safeStore,
+      vencimento,
+      // Excluir cliente 0 (cartão / avulso / VISANET / CREDICARD / REDESHOP)
+      codCliente: { notIn: ['', '0', '00'] },
+    };
+    const abertas: any[] = await (this.prisma as any).crediarioParcela.findMany({
+      where,
+      orderBy: opts.orderBy === 'cliente'
+        ? [{ codCliente: 'asc' }, { vencimento: 'asc' }]
+        : [{ vencimento: 'asc' }, { codCliente: 'asc' }],
+      take: limit,
+    });
+
+    // REGRA DE OURO: vazio POR FILTRO é legítimo; ledger inteiro vazio é a
+    // 1ª carga que nunca rodou — erro honesto em vez de "ninguém deve".
+    if (!abertas.length) {
+      const totalAbertas = await (this.prisma as any).crediarioParcela.count({
+        where: { pago: false, cancelado: false },
+      });
+      if (totalAbertas === 0) {
+        throw new Error(
+          'Ledger nativo do crediário vazio (crediario_parcelas sem nenhuma parcela aberta) — importação/1ª carga pendente.',
+        );
+      }
     }
-    if (dataInicio) where.push(`\`${map.vencimento}\` >= '${dataInicio}'`);
-    if (dataFim)    where.push(`\`${map.vencimento}\` <= '${dataFim}'`);
-    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
-    // Excluir cliente 0 (cartão / avulso / VISANET / CREDICARD / REDESHOP)
-    where.push(`\`${map.codCliente}\` IS NOT NULL`);
-    where.push(`\`${map.codCliente}\` <> 0`);
-    where.push(`\`${map.codCliente}\` <> '0'`);
-    where.push(`\`${map.codCliente}\` <> ''`);
 
-    const orderBy = opts.orderBy === 'cliente'
-      ? `\`${map.codCliente}\` ASC, \`${map.vencimento}\` ASC`
-      : `\`${map.vencimento}\` ASC, \`${map.codCliente}\` ASC`;
-    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY ${orderBy} LIMIT ${limit}`;
+    // Mesmos aliases da resposta antiga (a tela de Cobrança e o cron leem por
+    // esses nomes). Datas viram 'YYYY-MM-DD' (ordenável e comparável como
+    // string) e Decimal vira Number.
+    const dataIso = (d: any) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+    const rawSql =
+      `-- espelho nativo: crediario_parcelas (pago=false, cancelado=false, loja='${safeStore}', ` +
+      `vencimento < '${dataIso(hoje)}'${dataInicio ? `, >= '${dataInicio}'` : ` , janela ${daysBack}d`}` +
+      `${dataFim ? `, <= '${dataFim}'` : ''}) LIMIT ${limit}`;
 
-    const result = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 30000 });
-
-    // Enriquecimento de telefone via tabela `clientes` (se detectada)
-    let rows: any[] = result.rows;
+    // Enriquecimento de telefone via espelho de clientes
+    let rows: any[] = abertas.map((r) => ({
+      registro: String(r.registro),
+      controle: r.controle != null ? String(r.controle) : null,
+      numeroCompra: r.numeroCompra != null ? String(r.numeroCompra) : null,
+      codCliente: r.codCliente != null ? String(r.codCliente) : null,
+      nome: r.nomeCliente != null ? String(r.nomeCliente) : null,
+      telefone: null, // preenchido abaixo pelo cadastro
+      dataCompra: dataIso(r.dataCompra),
+      valorCompra: r.valorCompra != null ? Number(r.valorCompra) : null,
+      parcela: r.parcela != null ? Number(r.parcela) : null,
+      totalParcelas: r.totalParcelas != null ? Number(r.totalParcelas) : null,
+      vencimento: dataIso(r.vencimento),
+      valorParcela: r.valorParcela != null ? Number(r.valorParcela) : 0,
+      dataPagamento: null,
+      valorPago: r.valorPago != null ? Number(r.valorPago) : null,
+      pago: 'N',
+      status: null,
+    }));
     try {
       const ids = Array.from(new Set(rows.map((r) => String(r.codCliente)).filter(Boolean)));
       if (ids.length > 0) {
@@ -630,15 +676,19 @@ export class CrediariosService {
     }, 0);
     const clientes = new Set(rows.map((r: any) => String(r.codCliente))).size;
 
+    // columnMap é informativo (debug da tela). Sem tocar no Giga: usa o último
+    // mapa detectado (memória → SystemSetting); sem nenhum, devolve vazio.
+    const columnMap = this.columnMapCache ?? (await this.readStoredColumnMap()) ?? EMPTY_MAP;
+
     return {
-      columnMap: map,
+      columnMap,
       rows,
       summary: {
         totalParcelas: rows.length,
         totalDevido,
         clientes,
       },
-      rawSql: sql,
+      rawSql,
     };
   }
 
@@ -890,34 +940,6 @@ export class CrediariosService {
       testMode: built.testMode,
       durationMs: Date.now() - t0,
     };
-  }
-
-  /**
-   * Diagnóstico: retorna SCHEMA bruto + 2 linhas reais (mascarando nomes)
-   * pra Thiago identificar visualmente qual coluna é PAGO/baixa e me passar.
-   */
-  async diagnoseRawColumns(): Promise<{
-    columns: { field: string; type: string; null: string; default: any }[];
-    sample: any[];
-    pagoCandidates: string[];
-    detected: ColumnMap;
-    clientesTable: ClientesMap | null;
-  }> {
-    const schema = await this.erp.getTableSchema('movimento', 1);
-    if (!schema) throw new Error('Tabela `movimento` não encontrada');
-    const columns = schema.columns.map((c: any) => ({
-      field: c.field, type: c.type, null: c.null, default: c.default ?? null,
-    }));
-    const sampleSql = 'SELECT * FROM `movimento` LIMIT 5';
-    const sampleResult = await this.erp.runReadOnly(sampleSql, { maxRows: 5, timeoutMs: 10000 });
-
-    const pagoCandidates = columns
-      .filter((c) => /pag|pg|baix|liq|quit|status|sit/i.test(c.field))
-      .map((c) => `${c.field} (${c.type})`);
-
-    const detected = await this.detectColumns(true);
-    const clientesTable = await this.detectClientesTable(true);
-    return { columns, sample: sampleResult.rows, pagoCandidates, detected, clientesTable };
   }
 
   /**

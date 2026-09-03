@@ -500,177 +500,6 @@ export class CrediarioBaixaService {
   }
 
   /**
-   * DIFF DE VALIDAÇÃO (read-only) — espelho (wincred_movimento_aberto) vs
-   * Giga ao vivo (movimento), pras parcelas EM ABERTO. Serve pra decidir com
-   * segurança se dá pra ligar CREDIARIO_NATIVE_READS=1 sem crediário sumir.
-   *
-   * Não escreve nada. Faz 2 varreduras completas (1 no Giga ~5-15k linhas,
-   * 1 no Postgres) e cruza em memória por chave `registro|controle`.
-   *
-   * Veredito `podeAtivar` = true SÓ quando nenhuma parcela aberta do Giga
-   * falta no espelho E nenhum valor diverge. Divergência de LOJA e parcelas
-   * "só no espelho" (paga no Wincred, ainda não ressincronizou) entram como
-   * AVISO, não como bloqueio — mas a loja órfã ('00') é o risco conhecido de
-   * a busca por cliente+loja não casar.
-   */
-  async diffAbertasEspelhoVsGiga(input: { storeCode?: string }): Promise<any> {
-    const t0 = Date.now();
-    const safeStore = input.storeCode
-      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
-      : null;
-
-    // O espelho tem `registro` como @id e o sync DEDUPLICA por registro (só a
-    // 1ª parcela sobrevive). Logo a unidade de comparação certa é o REGISTRO:
-    // pra cada registro medimos QUANTAS parcelas abertas o Giga tem e quanto o
-    // espelho guarda. É assim que se enxerga o dedup comendo parcela.
-    const norm = (v: any) => {
-      const s = String(v ?? '').trim();
-      return /^\d+$/.test(s) ? String(Number(s)) : s; // tira zero à esquerda p/ casar padding
-    };
-    const isCard = (cod: any) => {
-      const n = parseInt(String(cod || '').replace(/\D/g, ''), 10);
-      return isNaN(n) || n <= 3; // 0-3 = cartões clássicos, não são crediário
-    };
-    const normLoja = (l: any) => String(l ?? '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
-    const money = (n: number) => Math.round(n * 100) / 100;
-
-    // ── 1. ESPELHO (1 linha por registro, por construção) ─────────────────────
-    // Paginado (31/07): `take: 50000` fazia o diff comparar 50k com 50k e dizer
-    // que estava tudo certo justamente quando faltava gente dos dois lados.
-    const espRows: any[] = [];
-    for (let cursor: string | null = null; ; ) {
-      const pagina: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
-        where: safeStore ? { loja: safeStore } : undefined,
-        select: { registro: true, loja: true, codCliente: true, valorParcela: true },
-        orderBy: { registro: 'asc' },
-        take: 10_000,
-        ...(cursor ? { skip: 1, cursor: { registro: cursor } } : {}),
-      });
-      espRows.push(...pagina);
-      if (pagina.length < 10_000) break;
-      cursor = String(pagina[pagina.length - 1].registro);
-    }
-    const espMap = new Map<string, any>();
-    let lojaOrfaEspelho = 0;
-    for (const r of espRows) {
-      if (isCard(r.codCliente)) continue;
-      if (['', '0', '00'].includes(normLoja(r.loja))) lojaOrfaEspelho++;
-      espMap.set(norm(r.registro), r);
-    }
-
-    // ── 2. GIGA AO VIVO ───────────────────────────────────────────────────────
-    let map = await this.crediarios.detectColumns(true);
-    if (!map.registro || !map.codCliente || !map.vencimento || !map.valorParcela) {
-      return {
-        ok: false,
-        erro: 'Falha ao ler estrutura do Giga (detectColumns). Tente de novo.',
-        espelho: { registros: espMap.size, lojaOrfaEspelho },
-      };
-    }
-    const select: string[] = [];
-    const addCol = (logical: keyof typeof map, alias: string) => {
-      const col = map[logical];
-      if (col) select.push(`\`${col}\` AS ${alias}`);
-    };
-    addCol('registro', 'registro');
-    addCol('controle', 'controle');
-    addCol('loja', 'loja');
-    addCol('codCliente', 'codCliente');
-    addCol('vencimento', 'vencimento');
-    addCol('valorParcela', 'valorParcela');
-    const where: string[] = [];
-    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
-    if (safeStore && map.loja) where.push(`\`${map.loja}\` = '${safeStore}'`);
-    where.push(`\`${map.registro}\` IS NOT NULL`, `\`${map.codCliente}\` IS NOT NULL`, `\`${map.codCliente}\` <> ''`, `\`${map.codCliente}\` <> '0'`);
-    const leituraGiga = await this.erp.readAllPages(
-      `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')}`,
-      { orderBy: `\`${map.registro}\``, batch: 10_000, timeoutMs: 60_000 },
-    );
-    const result = { rows: leituraGiga.rows, truncated: leituraGiga.truncado };
-
-    // agrupa parcelas do Giga por registro
-    const gigaByReg = new Map<string, { parcelas: number; valor: number; codCliente: string; loja: string }>();
-    let gigaParcelas = 0;
-    for (const r of result.rows as any[]) {
-      if (isCard(r.codCliente)) continue;
-      const valor = Number(r.valorParcela || 0);
-      if (!r.vencimento || !valor) continue; // mesma regra de "aberta válida" das telas
-      gigaParcelas++;
-      const k = norm(r.registro);
-      const g = gigaByReg.get(k) || { parcelas: 0, valor: 0, codCliente: String(r.codCliente), loja: normLoja(r.loja) };
-      g.parcelas++; g.valor += valor;
-      gigaByReg.set(k, g);
-    }
-
-    // ── 3. CRUZAMENTO POR REGISTRO ────────────────────────────────────────────
-    const registrosFaltando: any[] = [];     // registro inteiro sumido do espelho — BLOQUEIA
-    const parcelasPerdidasDedup: any[] = [];  // registro presente mas espelho só tem 1 de N — BLOQUEIA
-    const valorDivergente: any[] = [];        // registro 1-parcela com valor diferente — BLOQUEIA
-    const lojaDivergente: any[] = [];         // aviso (morde a busca por cliente+loja)
-    let parcelasPerdidasTotal = 0;
-    let valorPerdidoTotal = 0;
-
-    for (const [k, g] of gigaByReg) {
-      const e = espMap.get(k);
-      if (!e) {
-        registrosFaltando.push({ registro: k, codCliente: g.codCliente, loja: g.loja, parcelas: g.parcelas, valor: money(g.valor) });
-        parcelasPerdidasTotal += g.parcelas;
-        valorPerdidoTotal += g.valor;
-        continue;
-      }
-      if (g.parcelas > 1) {
-        // espelho guarda 1, Giga tem g.parcelas → faltam (g.parcelas - 1)
-        const perdidas = g.parcelas - 1;
-        const valorPerdido = g.valor - Number(e.valorParcela || 0);
-        parcelasPerdidasDedup.push({ registro: k, codCliente: g.codCliente, parcelasGiga: g.parcelas, parcelasEspelho: 1, valorGiga: money(g.valor), valorEspelho: money(Number(e.valorParcela || 0)) });
-        parcelasPerdidasTotal += perdidas;
-        valorPerdidoTotal += Math.max(0, valorPerdido);
-      } else if (Math.abs(g.valor - Number(e.valorParcela || 0)) > 0.01) {
-        valorDivergente.push({ registro: k, codCliente: g.codCliente, valorGiga: money(g.valor), valorEspelho: money(Number(e.valorParcela || 0)) });
-      }
-      if (normLoja(g.loja) !== normLoja(e.loja)) {
-        lojaDivergente.push({ registro: k, codCliente: g.codCliente, lojaGiga: normLoja(g.loja), lojaEspelho: normLoja(e.loja) });
-      }
-    }
-    // registros que estão no espelho e não no Giga (pagos no Wincred / sync atrasado)
-    let registrosSoNoEspelho = 0;
-    for (const k of espMap.keys()) if (!gigaByReg.has(k)) registrosSoNoEspelho++;
-
-    const podeAtivar = registrosFaltando.length === 0 && parcelasPerdidasDedup.length === 0 && valorDivergente.length === 0;
-
-    return {
-      ok: true,
-      escopo: safeStore ? `loja ${safeStore}` : 'rede inteira',
-      duracaoMs: Date.now() - t0,
-      totais: {
-        gigaRegistros: gigaByReg.size,
-        gigaParcelas,
-        espelhoRegistros: espMap.size,
-        gigaTruncado: leituraGiga.truncado,
-        espelhoTruncado: false,
-      },
-      // BLOQUEIOS — enquanto houver qualquer um > 0, NÃO ligar CREDIARIO_NATIVE_READS
-      bloqueios: {
-        registrosFaltando: { qtd: registrosFaltando.length, amostra: registrosFaltando.slice(0, 25) },
-        parcelasPerdidasDedup: { qtd: parcelasPerdidasDedup.length, amostra: parcelasPerdidasDedup.slice(0, 25) },
-        valorDivergente: { qtd: valorDivergente.length, amostra: valorDivergente.slice(0, 25) },
-        parcelasPerdidasTotal,
-        valorPerdidoTotal: money(valorPerdidoTotal),
-      },
-      // AVISOS — não bloqueiam por si só
-      avisos: {
-        registrosSoNoEspelho,   // pagos no Wincred desktop ou sync atrasado
-        lojaDivergente: { qtd: lojaDivergente.length, amostra: lojaDivergente.slice(0, 25) },
-        lojaOrfaEspelho,        // linhas '00' que não casam a busca por cliente+loja
-      },
-      podeAtivar,
-      veredito: podeAtivar
-        ? 'Espelho cobre 100% dos registros abertos do Giga, com valores batendo. Seguro ligar CREDIARIO_NATIVE_READS=1.'
-        : `NÃO ligar ainda: ${parcelasPerdidasTotal} parcela(s) sumiriam (R$ ${money(valorPerdidoTotal)}) — ${registrosFaltando.length} registro(s) faltando + ${parcelasPerdidasDedup.length} com parcela comida pelo dedup + ${valorDivergente.length} com valor divergente.`,
-    };
-  }
-
-  /**
    * Cauda COMPARTILHADA entre o caminho Giga e o caminho espelho:
    * calcula juros/multa por parcela e agrupa o resumo por cliente.
    */
@@ -1124,276 +953,6 @@ export class CrediarioBaixaService {
     this.clientesCache.clear();
   }
 
-  /* ═════════════════════════════════════════════════════════════════════════
-     UNIFICAÇÃO DE CADASTROS DUPLICADOS (Giga, por loja) — admin
-
-     Caso Livia (03/07, Piracicaba): 2 cadastros da MESMA cliente na loja —
-     um com CPF e um sem (cadastro rápido de balcão), com o crediário
-     pendurado no sem-CPF. A busca por CPF acha um cadastro, as parcelas
-     estão no outro.
-
-     Unificar = mover `movimento` (parcelas) + `caixa` (histórico de compras)
-     do cadastro ORIGEM pro DESTINO na MESMA loja, completar campos vazios do
-     destino (CPF, fones, endereço) e marcar o origem como '#UNIF>cod' — a
-     linha NÃO é deletada (integridade do Wincred). Dry-run de prévia antes.
-     Gated por ERP_WRITE_ENABLED.
-     ═════════════════════════════════════════════════════════════════════════ */
-
-  async listClientesDuplicados(storeCode: string): Promise<{
-    loja: string;
-    grupos: Array<{
-      motivo: 'nome' | 'cpf';
-      chave: string;
-      clientes: Array<{ codCliente: string; nome: string; cpf: string | null; telefone: string | null; parcelasAbertas: number }>;
-    }>;
-  }> {
-    const loja = String(storeCode || '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
-    if (!loja || loja === '00') throw new BadRequestException('storeCode obrigatório');
-    const cm = await this.crediarios.detectClientesTable();
-    if (!cm?.nome || !cm.loja) {
-      throw new BadRequestException('Tabela clientes do Giga sem colunas NOME/LOJA detectadas');
-    }
-
-    const cols = [`\`${cm.codCliente}\` AS cod`, `\`${cm.nome}\` AS nome`];
-    if (cm.cpf) cols.push(`\`${cm.cpf}\` AS cpf`);
-    if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
-    // Paginado (31/07) — mesmo teto silencioso de 15.000 dos outros.
-    const leituraLoja = await this.erp.readAllPages(
-      `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''`,
-      { orderBy: `\`${cm.codCliente}\``, batch: 10_000, timeoutMs: 30_000 },
-    );
-    const r = { rows: leituraLoja.rows };
-    if (leituraLoja.truncado) this.logger.error(`[crediario-baixa] clientes da loja ${loja} TRUNCADO no teto`);
-
-    type Cli = { codCliente: string; nome: string; cpf: string | null; telefone: string | null; parcelasAbertas: number };
-    const clientes: Cli[] = [];
-    for (const row of r.rows as any[]) {
-      const cod = String(row.cod || '').trim();
-      const codNum = parseInt(cod.replace(/\D/g, ''), 10);
-      if (!cod || isNaN(codNum)) continue;
-      const nome = String(row.nome || '').trim();
-      if (!nome || nome.startsWith('#UNIF>') || CARD_NAME_REGEX.test(nome)) continue;
-      // Código baixo só cai se o nome for genérico (caso OZELINA cod 2)
-      if (isPseudoClienteCodigoBaixo(codNum, nome)) continue;
-      const cpfDig = String(row.cpf || '').replace(/\D/g, '');
-      clientes.push({
-        codCliente: cod,
-        nome,
-        cpf: cpfDig.length === 11 ? cpfDig : null,
-        telefone: row.tel ? String(row.tel).trim() || null : null,
-        parcelasAbertas: 0,
-      });
-    }
-
-    // Grupos: mesmo CPF OU mesmo nome (normalizado). Dedup por conjunto de códigos.
-    const byCpf = new Map<string, Cli[]>();
-    const byNome = new Map<string, Cli[]>();
-    for (const c of clientes) {
-      if (c.cpf) { const a = byCpf.get(c.cpf) || []; a.push(c); byCpf.set(c.cpf, a); }
-      const n = c.nome.toUpperCase().replace(/\s+/g, ' ');
-      const b = byNome.get(n) || []; b.push(c); byNome.set(n, b);
-    }
-    const seenSets = new Set<string>();
-    const grupos: Array<{ motivo: 'nome' | 'cpf'; chave: string; clientes: Cli[] }> = [];
-    const push = (motivo: 'nome' | 'cpf', chave: string, list: Cli[]) => {
-      if (list.length < 2) return;
-      const key = list.map((c) => c.codCliente).sort().join('|');
-      if (seenSets.has(key)) return;
-      seenSets.add(key);
-      grupos.push({ motivo, chave, clientes: list });
-    };
-    for (const [cpf, list] of byCpf) push('cpf', cpf, list);
-    for (const [nome, list] of byNome) push('nome', nome, list);
-
-    // Parcelas em aberto por código (mostra onde o crediário está pendurado)
-    const map = await this.crediarios.detectColumns();
-    const cods = Array.from(new Set(grupos.flatMap((g) => g.clientes.map((c) => c.codCliente))));
-    if (map.codCliente && cods.length > 0) {
-      try {
-        const inList = cods.map((c) => `'${c.replace(/'/g, '')}'`).join(',');
-        const conds = [`\`${map.codCliente}\` IN (${inList})`];
-        if (map.loja) conds.push(`\`${map.loja}\` = '${loja}'`);
-        conds.push(sqlParcelaAberta(map.pago, map.dataPagamento));
-        const sqlCnt = `SELECT \`${map.codCliente}\` AS cod, COUNT(*) AS n FROM \`movimento\` WHERE ${conds.join(' AND ')} GROUP BY \`${map.codCliente}\``;
-        const rc = await this.erp.runReadOnly(sqlCnt, { maxRows: cods.length + 10, timeoutMs: 20000 });
-        const cnt = new Map((rc.rows as any[]).map((x) => [String(x.cod), Number(x.n) || 0]));
-        for (const g of grupos) for (const c of g.clientes) c.parcelasAbertas = cnt.get(c.codCliente) || 0;
-      } catch (e: any) {
-        this.logger.warn(`[duplicados] contagem de parcelas falhou: ${e?.message}`);
-      }
-    }
-
-    // Grupos com crediário em aberto primeiro (são os que dão problema no PDV)
-    grupos.sort((a, b) =>
-      b.clientes.reduce((s, c) => s + c.parcelasAbertas, 0) -
-      a.clientes.reduce((s, c) => s + c.parcelasAbertas, 0),
-    );
-    return { loja, grupos: grupos.slice(0, 100) };
-  }
-
-  async unificarClientesGiga(input: {
-    storeCode: string;
-    codOrigem: string;
-    codDestino: string;
-    dryRun?: boolean;
-  }): Promise<any> {
-    const loja = String(input.storeCode || '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
-    const codOrigem = String(input.codOrigem || '').replace(/\D/g, '');
-    const codDestino = String(input.codDestino || '').replace(/\D/g, '');
-    if (!loja || loja === '00') throw new BadRequestException('storeCode obrigatório');
-    if (!codOrigem || !codDestino) throw new BadRequestException('codOrigem e codDestino obrigatórios');
-    if (codOrigem === codDestino) throw new BadRequestException('Origem e destino são o mesmo código');
-
-    const cm = await this.crediarios.detectClientesTable();
-    if (!cm?.nome || !cm.loja) {
-      throw new BadRequestException('Tabela clientes do Giga sem colunas NOME/LOJA detectadas');
-    }
-    const map = await this.crediarios.detectColumns();
-    if (!map.codCliente) throw new BadRequestException('Coluna codCliente do movimento não detectada');
-
-    const fetchCli = async (cod: string) => {
-      const r = await this.erp.runReadOnly(
-        `SELECT * FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND CONCAT('', \`${cm.codCliente}\`) = '${cod}' LIMIT 1`,
-        { maxRows: 1, timeoutMs: 10000 },
-      );
-      return (r.rows[0] as any) || null;
-    };
-    const origem = await fetchCli(codOrigem);
-    const destino = await fetchCli(codDestino);
-    if (!origem) throw new NotFoundException(`Cadastro origem ${codOrigem} não existe na loja ${loja}`);
-    if (!destino) throw new NotFoundException(`Cadastro destino ${codDestino} não existe na loja ${loja}`);
-
-    const condLojaMov = map.loja ? ` AND \`${map.loja}\` = '${loja}'` : '';
-    const count = async (sql: string) => {
-      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 15000 });
-      return Number((r.rows[0] as any)?.n) || 0;
-    };
-    const movimentoLinhas = await count(
-      `SELECT COUNT(*) AS n FROM \`movimento\` WHERE \`${map.codCliente}\` = '${codOrigem}'${condLojaMov}`,
-    );
-    const abertasCond = ` AND ${sqlParcelaAberta(map.pago, map.dataPagamento)}`;
-    const parcelasAbertas = await count(
-      `SELECT COUNT(*) AS n FROM \`movimento\` WHERE \`${map.codCliente}\` = '${codOrigem}'${condLojaMov}${abertasCond}`,
-    );
-    const caixaLinhas = await count(
-      `SELECT COUNT(*) AS n FROM \`caixa\` WHERE LOJA = '${loja}' AND CODCLIENTE = '${codOrigem}'`,
-    );
-
-    // Campos vazios no destino que o origem tem — serão copiados
-    const copiar: Array<{ col: string; valor: string }> = [];
-    const check = (col?: string | null) => {
-      if (!col) return;
-      const vD = String(destino[col] ?? '').trim();
-      const vO = String(origem[col] ?? '').trim();
-      if (!vD && vO) copiar.push({ col, valor: vO });
-    };
-    check(cm.cpf); check(cm.telefone); check(cm.telefone2);
-    check(cm.endereco); check(cm.bairro); check(cm.cidade); check(cm.cep);
-
-    const resumo = {
-      loja,
-      origem: {
-        codCliente: codOrigem,
-        nome: cm.nome ? String(origem[cm.nome] || '').trim() : null,
-        cpf: cm.cpf ? String(origem[cm.cpf] || '').trim() || null : null,
-      },
-      destino: {
-        codCliente: codDestino,
-        nome: cm.nome ? String(destino[cm.nome] || '').trim() : null,
-        cpf: cm.cpf ? String(destino[cm.cpf] || '').trim() || null : null,
-      },
-      movimentoLinhas,
-      parcelasAbertas,
-      caixaLinhas,
-      camposACopiar: copiar.map((c) => c.col),
-    };
-    if (input.dryRun) return { dryRun: true, ...resumo };
-
-    if (!(this.erp as any).isWriteEnabled) {
-      throw new BadRequestException('ERP_WRITE_ENABLED desligado — a unificação escreve no Giga');
-    }
-
-    const pool: any = (this.erp as any).pool;
-    if (!pool) throw new BadRequestException('MySQL Giga não conectado');
-    const conn = await pool.getConnection();
-    let movidosMovimento = 0;
-    let movidosCaixa = 0;
-    try {
-      await conn.beginTransaction();
-      const [r1]: any = await conn.query(
-        `UPDATE \`movimento\` SET \`${map.codCliente}\` = ? WHERE \`${map.codCliente}\` = ?${condLojaMov}`,
-        [codDestino, codOrigem],
-      );
-      movidosMovimento = r1?.affectedRows || 0;
-      const [r2]: any = await conn.query(
-        `UPDATE \`caixa\` SET CODCLIENTE = ? WHERE LOJA = ? AND CODCLIENTE = ?`,
-        [codDestino, loja, codOrigem],
-      );
-      movidosCaixa = r2?.affectedRows || 0;
-      if (copiar.length > 0) {
-        await conn.query(
-          `UPDATE \`${cm.table}\` SET ${copiar.map((c) => `\`${c.col}\` = ?`).join(', ')} WHERE \`${cm.loja}\` = ? AND CONCAT('', \`${cm.codCliente}\`) = ?`,
-          [...copiar.map((c) => c.valor), loja, codDestino],
-        );
-      }
-      // Marca o origem (linha mantida — Wincred não gosta de DELETE): nome
-      // prefixado com '#UNIF>' + CPF esvaziado pra não colidir nas buscas.
-      const sets = [`\`${cm.nome}\` = CONCAT('#UNIF>', ?, ' ', LEFT(\`${cm.nome}\`, 40))`];
-      if (cm.cpf) sets.push(`\`${cm.cpf}\` = ''`);
-      await conn.query(
-        `UPDATE \`${cm.table}\` SET ${sets.join(', ')} WHERE \`${cm.loja}\` = ? AND CONCAT('', \`${cm.codCliente}\`) = ?`,
-        [codDestino, loja, codOrigem],
-      );
-      await conn.commit();
-    } catch (e) {
-      await conn.rollback();
-      throw e;
-    } finally {
-      conn.release();
-    }
-
-    // Espelhos + caches (best-effort — o cron corrige se falhar)
-    try {
-      await (this.prisma as any).wincredMovimentoAberto.updateMany({
-        where: { loja, codCliente: codOrigem },
-        data: { codCliente: codDestino },
-      });
-      await (this.prisma as any).wincredCliente.updateMany({
-        where: { loja, codCliente: codOrigem },
-        data: { nome: `#UNIF>${codDestino}` },
-      });
-    } catch (e: any) {
-      this.logger.warn(`[unificar] espelho não atualizado (cron corrige): ${e?.message}`);
-    }
-    this.clearListCache();
-    this.clearClientesCache();
-
-    // CRM (best-effort): desativa o Customer do cadastro origem se ele só
-    // tinha esse vínculo — evita a pessoa aparecer 2x nas listas do Flow.
-    try {
-      const link = await (this.prisma as any).customerGigaLink.findUnique({
-        where: { giga_loja_codigo_unique: { gigaLoja: loja, gigaCodigo: Number(codOrigem) } },
-        include: { customer: { include: { gigaLinks: true } } },
-      });
-      if (link) {
-        if (link.customer && (link.customer.gigaLinks?.length || 0) <= 1) {
-          await (this.prisma as any).customer.update({
-            where: { id: link.customerId },
-            data: { active: false, inactiveReason: `unificado no Giga cod ${codDestino} (loja ${loja})` },
-          });
-        }
-        await (this.prisma as any).customerGigaLink.delete({ where: { id: link.id } });
-      }
-    } catch (e: any) {
-      this.logger.warn(`[unificar] CRM não ajustado (ETL corrige): ${e?.message}`);
-    }
-
-    this.logger.log(
-      `[unificar] loja ${loja}: cod ${codOrigem} → ${codDestino} · movimento=${movidosMovimento} caixa=${movidosCaixa} campos=[${copiar.map((c) => c.col).join(',')}]`,
-    );
-    return { ok: true, ...resumo, movidosMovimento, movidosCaixa };
-  }
-
   // ── Autocomplete: busca rápida de clientes ────────────────────────
 
   /**
@@ -1511,95 +1070,64 @@ export class CrediarioBaixaService {
       ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
       : null;
 
-    // ── ESPELHO DE ABERTAS PRIMEIRO (wincred_movimento_aberto). Só quando populado. ──
-    if (this.nativeReads && (await (this.prisma as any).wincredMovimentoAberto.count()) > 0) {
-      const rows: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
-        where: { codCliente: { in: this.codVariants(cod) }, ...(safeStoreN ? { loja: safeStoreN } : {}) },
-        orderBy: { vencimento: 'asc' },
-        take: 500,
-      });
-      // REDE DE SEGURANÇA: espelho SEM linhas pra este cliente → NÃO retorna
-      // vazio; cai pro Giga (a fonte). Evita o "crediário sumiu" por mismatch.
-      if (rows.length > 0) {
-        const phonesN = await this.crediarios.fetchPhonesByClienteIds([cod], safeStoreN || undefined);
-        const phoneInfoN = phonesN.get(cod) || null;
-        const cfgN = await this.getConfig();
-        const outN: OpenInstallment[] = [];
-        for (const row of rows) {
-          const valor = Number(row.valorParcela || 0);
-          if (!row.vencimento || !valor) continue;
-          const venc = new Date(row.vencimento);
-          const { diasAtraso, juros } = this.calcJuros(venc, valor, cfgN);
-          outN.push({
-            registro: String(row.registro),
-            controle: String(row.controle),
-            numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
-            parcela: row.parcela != null ? Number(row.parcela) : null,
-            totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
-            vencimento: venc.toISOString().slice(0, 10),
-            valorParcela: valor,
-            diasAtraso,
-            jurosCalculado: juros,
-            valorComJuros: Math.round((valor + juros) * 100) / 100,
-            codCliente: String(row.codCliente),
-            nome: row.nome ? String(row.nome) : phoneInfoN?.nome || null,
-            telefone: phoneInfoN?.telefone || null,
-            obs: row.obs ? String(row.obs).trim() : null,
-          });
-        }
-        if (outN.length > 0) return outN;
+    // ── SÓ ESPELHO (03/09 — Giga morto). `wincred_movimento_aberto` é cópia
+    // da tabela nativa (ciclo de 10min + write-through da baixa): presente =
+    // em aberto AGORA. Miss = cliente sem parcela aberta ([]). O antigo
+    // "cai pro Giga por segurança" caía num pool morto e travava a tela.
+    const rows: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+      where: { codCliente: { in: this.codVariants(cod) }, ...(safeStoreN ? { loja: safeStoreN } : {}) },
+      orderBy: { vencimento: 'asc' },
+      take: 500,
+    });
+
+    // União aditiva (mesma régua do listAbertasDoEspelho): parcela criada NO
+    // FLOW há menos de 10min ainda não caiu no espelho — soma aqui, dedup por
+    // registro, pra dívida recém-vendida aparecer na hora.
+    const nativas: any[] = await (this.prisma as any).crediarioParcela.findMany({
+      where: {
+        flowIsSource: true,
+        pago: false,
+        cancelado: false,
+        codCliente: { in: this.codVariants(cod) },
+        ...(safeStoreN ? { loja: safeStoreN } : {}),
+      },
+      orderBy: { vencimento: 'asc' },
+    });
+    if (nativas.length) {
+      const jaTem = new Set(rows.map((r: any) => String(r.registro)));
+      for (const p of nativas) {
+        if (jaTem.has(String(p.registro))) continue;
+        rows.push({
+          registro: String(p.registro),
+          controle: String(p.controle ?? ''),
+          numeroCompra: p.numeroCompra ?? null,
+          parcela: p.parcela,
+          totalParcelas: p.totalParcelas,
+          vencimento: p.vencimento,
+          valorParcela: p.valorParcela,
+          codCliente: p.codCliente,
+          nome: p.nomeCliente,
+          obs: p.obs ?? null,
+        });
       }
-      // else: segue pro Giga abaixo (rede de segurança).
+      rows.sort((a: any, b: any) => {
+        const va = a.vencimento ? new Date(a.vencimento).getTime() : 0;
+        const vb = b.vencimento ? new Date(b.vencimento).getTime() : 0;
+        return va - vb;
+      });
     }
+    if (!rows.length) return [];
 
-    let map = await this.crediarios.detectColumns();
-    if (!map.codCliente || !map.vencimento || !map.valorParcela) {
-      map = await this.crediarios.detectColumns(true);
-    }
-    if (!map.codCliente) throw new BadRequestException('Coluna codCliente não detectada');
-
-    const safeCod = cod.replace(/['"\\;]/g, '').slice(0, 50);
-    const safeStore = input.storeCode
-      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
-      : null;
-
-    const select: string[] = [];
-    const addCol = (logical: keyof typeof map, alias: string) => {
-      const col = map[logical];
-      if (col) select.push(`\`${col}\` AS ${alias}`);
-    };
-    addCol('registro', 'registro');
-    addCol('controle', 'controle');
-    addCol('numeroCompra', 'numeroCompra');
-    addCol('loja', 'loja');
-    addCol('codCliente', 'codCliente');
-    addCol('nome', 'nome');
-    addCol('parcela', 'parcela');
-    addCol('totalParcelas', 'totalParcelas');
-    addCol('vencimento', 'vencimento');
-    addCol('valorParcela', 'valorParcela');
-    addCol('obs', 'obs');
-
-    const where: string[] = [`\`${map.codCliente}\` = '${safeCod}'`];
-    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
-    if (safeStore && map.loja) {
-      where.push(`\`${map.loja}\` = '${safeStore}'`);
-    }
-
-    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 500`;
-    const result = await this.erp.runReadOnly(sql, { maxRows: 500, timeoutMs: 30000 });
-
-    const phones = await this.crediarios.fetchPhonesByClienteIds([safeCod], safeStore || undefined);
-    const phoneInfo = phones.get(safeCod) || null;
-
-    const cfg = await this.getConfig();
-    const out: OpenInstallment[] = [];
-    for (const row of result.rows) {
+    const phonesN = await this.crediarios.fetchPhonesByClienteIds([cod], safeStoreN || undefined);
+    const phoneInfoN = phonesN.get(cod) || null;
+    const cfgN = await this.getConfig();
+    const outN: OpenInstallment[] = [];
+    for (const row of rows) {
       const valor = Number(row.valorParcela || 0);
       if (!row.vencimento || !valor) continue;
       const venc = new Date(row.vencimento);
-      const { diasAtraso, juros } = this.calcJuros(venc, valor, cfg);
-      out.push({
+      const { diasAtraso, juros } = this.calcJuros(venc, valor, cfgN);
+      outN.push({
         registro: String(row.registro),
         controle: String(row.controle),
         numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
@@ -1611,14 +1139,13 @@ export class CrediarioBaixaService {
         jurosCalculado: juros,
         valorComJuros: Math.round((valor + juros) * 100) / 100,
         codCliente: String(row.codCliente),
-        nome: row.nome ? String(row.nome) : phoneInfo?.nome || null,
-        telefone: phoneInfo?.telefone || null,
+        nome: row.nome ? String(row.nome) : phoneInfoN?.nome || null,
+        telefone: phoneInfoN?.telefone || null,
         obs: row.obs ? String(row.obs).trim() : null,
       });
     }
-    return out;
+    return outN;
   }
-
   // ── Busca parcelas em aberto de UM cliente ────────────────────────
 
   /**
@@ -1638,257 +1165,70 @@ export class CrediarioBaixaService {
       throw new BadRequestException('Informe pelo menos 2 caracteres pra buscar');
     }
 
-    // ── ESPELHO PRIMEIRO (29/08) ────────────────────────────────────────────
-    // Este método era 100% Giga vivo (detectColumns + SELECTs na movimento) e,
-    // com o pool trancado (atestado 28/08), morria em "Pool ERP não
-    // inicializado" — o `catch` do customer-info engolia e a aba crediário do
-    // PDV mostrava o cliente SEM as pendências: parecia sem dívida quem devia.
-    //
-    // Agora: resolve o cliente no espelho de fichas (`giga_clientes`) e filtra
-    // a MESMA lista de abertas do espelho que a tela Recebimentos usa
+    // ── SÓ ESPELHO (03/09 — o Giga morreu; o caminho ao vivo foi deletado) ──
+    // Resolve o cliente no espelho de fichas (`giga_clientes`) e filtra a
+    // MESMA lista de abertas do espelho que a tela Recebimentos usa
     // (`listAbertasDoEspelho` = wincred_movimento_aberto + parcelas nativas do
-    // Flow, com todas as réguas de pseudo-cliente/cartão). Espelho vazio ou
-    // erro → cai pro caminho Giga antigo (que hoje devolve o erro honesto).
-    if (String(process.env.PDV_MIRROR_READS ?? '').trim() !== '0') {
-      try {
-        const onlyDigitsM = /^\d+$/.test(busca);
-        const safeBuscaM = busca.replace(/['"\\]/g, '').slice(0, 100);
-        const safeStoreM = input.storeCode
-          ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
-          : null;
-        const strip = (s: any) => String(s ?? '').trim().replace(/^0+/, '') || String(s ?? '').trim();
-
-        const cods = new Set<string>();
-        if (onlyDigitsM) {
-          cods.add(strip(safeBuscaM));
-          const cpfDigits = safeBuscaM.replace(/\D/g, '');
-          const cpfFmt = cpfDigits.length === 11
-            ? `${cpfDigits.slice(0, 3)}.${cpfDigits.slice(3, 6)}.${cpfDigits.slice(6, 9)}-${cpfDigits.slice(9)}`
-            : null;
-          const fichas: any[] = await (this.prisma as any).gigaCliente
-            .findMany({
-              where: {
-                ...(safeStoreM ? { loja: safeStoreM } : {}),
-                OR: [
-                  { codigo: safeBuscaM },
-                  { codigo: strip(safeBuscaM) },
-                  ...(cpfFmt ? [{ cpf: { in: [cpfDigits, cpfFmt] } }] : []),
-                ],
-              },
-              select: { codigo: true },
-              take: 50,
-            })
-            .catch(() => []);
-          for (const f of fichas) cods.add(strip(f.codigo));
-        } else {
-          const fichas: any[] = await (this.prisma as any).gigaCliente
-            .findMany({
-              where: {
-                ...(safeStoreM ? { loja: safeStoreM } : {}),
-                nome: { contains: safeBuscaM, mode: 'insensitive' },
-              },
-              select: { codigo: true },
-              take: 50,
-            })
-            .catch(() => []);
-          for (const f of fichas) cods.add(strip(f.codigo));
-        }
-
-        if (cods.size) {
-          const lista = await this.listAbertasDoEspelho(input.storeCode);
-          if (lista) {
-            return lista.parcelas.filter((p: any) => cods.has(strip(p.codCliente)));
-          }
-        }
-        // sem código resolvido ou espelho vazio → caminho Giga antigo abaixo
-      } catch (e: any) {
-        this.logger.warn(
-          `[crediario-baixa] pendências via espelho falharam (${e?.message || e}) → Giga ao vivo`,
-        );
-      }
-    }
-
-    // Força refresh do cache pra garantir detecção atualizada
-    let map = await this.crediarios.detectColumns();
-    if (!map.codCliente || !map.vencimento || !map.valorParcela) {
-      map = await this.crediarios.detectColumns(true);
-    }
-    if (!map.codCliente) {
-      throw new BadRequestException(
-        'Coluna codCliente não detectada no Giga. Detectadas: ' +
-          Object.entries(map).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', '),
-      );
-    }
-    if (!map.vencimento || !map.valorParcela) {
-      const faltam = [!map.vencimento && 'vencimento', !map.valorParcela && 'valorParcela']
-        .filter(Boolean).join(', ');
-      throw new BadRequestException(
-        `Colunas faltando: ${faltam}. Detectadas: ` +
-          Object.entries(map).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', '),
-      );
-    }
-
-    // Heurística: se busca é só números → tenta codCliente + telefone.
-    // Senão → busca LIKE pelo nome.
-    const onlyDigits = /^\d+$/.test(busca);
-    const safeBusca = busca.replace(/['"\\]/g, '').slice(0, 100);
-    const safeStore = input.storeCode
+    // Flow, com todas as réguas de pseudo-cliente/cartão). Cliente sem ficha
+    // ou espelho sem parcela = lista vazia; erro de banco SOBE — nada de catch
+    // calado mostrando "sem dívida" pra quem deve.
+    const onlyDigitsM = /^\d+$/.test(busca);
+    const safeBuscaM = busca.replace(/['"\\]/g, '').slice(0, 100);
+    const safeStoreM = input.storeCode
       ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
       : null;
+    const strip = (s: any) => String(s ?? '').trim().replace(/^0+/, '') || String(s ?? '').trim();
 
-    // Resolve codClientes que batem
-    let codClientes: string[] = [];
-
-    if (onlyDigits) {
-      // Tenta como codCliente direto
-      codClientes = [safeBusca];
-      // Se tem tabela de clientes, também tenta como CPF/telefone
-      try {
-        const cm = await this.crediarios.detectClientesTable();
-        if (cm) {
-          const orParts: string[] = [`\`${cm.codCliente}\` = ?`];
-          // Procura por colunas tipo cpf/cnpj/telefone
-          // Heurística simples: tenta nome de coluna comum
-          // Escopo por loja — o mesmo cod em outra loja é OUTRA pessoa
-          const lojaAnd = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
-          const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE (${orParts.join(' OR ')})${lojaAnd} LIMIT 50`;
-          const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 }, [safeBusca]);
-          for (const row of r.rows) codClientes.push(String(row.cod));
-        }
-      } catch {/* ignora — usa só o codCliente direto */}
-    } else {
-      // Busca por nome NA TABELA DE CLIENTES (nunca em movimento.NOME pra
-      // evitar pegar registros onde o nome é o cliente real mas o CODCLIENTE
-      // é cartão/avulso — ex: cliente "ELISA" pagou com VISA, fica como
-      // CODCLIENTE=26 VISANET, NOME=ELISA. Não queremos VISANET aqui.)
-      const cm = await this.crediarios.detectClientesTable();
-      if (cm && cm.nome) {
-        const lojaAnd = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
-        const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE \`${cm.nome}\` LIKE ?${lojaAnd} LIMIT 50`;
-        const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 }, [`%${safeBusca}%`]);
-        codClientes = r.rows.map((row) => String(row.cod));
-      } else {
-        throw new BadRequestException(
-          'Tabela de clientes do Giga não detectada. Use código do cliente em vez de nome.',
-        );
-      }
-    }
-
-    // Filtra códigos "lixo" — duas camadas:
-    //   1. Códigos 0-3: cartões clássicos (CREDICARD, REDESHOP, AMEX...).
-    //   2. Nomes que parecem cartão (VISANET, MASTERCARD, ELO, HIPER...) — esses
-    //      podem ter cód > 3 (ex: VISANET=26). Verifica na tabela clientes.
-    codClientes = Array.from(new Set(
-      codClientes.filter((c) => {
-        if (!c) return false;
-        const n = parseInt(String(c).replace(/\D/g, ''), 10);
-        // Código baixo NÃO cai pelo número (caso OZELINA cod 2) — o filtro
-        // por NOME logo abaixo é quem separa cartão/genérico de gente.
-        return !isNaN(n);
-      }),
-    ));
-
-    // Filtra clientes-cartão pelo nome (VISANET, MASTERCARD, etc.)
-    if (codClientes.length > 0) {
-      const cm = await this.crediarios.detectClientesTable();
-      if (cm && cm.nome) {
-        const inList = codClientes.map((c) => `'${c}'`).join(',');
-        const sql = `SELECT \`${cm.codCliente}\` AS cod, \`${cm.nome}\` AS nome FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList}) LIMIT ${codClientes.length + 100}`;
-        try {
-          const r = await this.erp.runReadOnly(sql, { maxRows: codClientes.length + 100, timeoutMs: 10000 });
-          const cardRegex = CARD_NAME_REGEX;
-          const cardCodes = new Set(
-            r.rows
-              .filter((row: any) => {
-                const nomeCli = String(row.nome || '').trim();
-                const nCli = parseInt(String(row.cod || '').replace(/\D/g, ''), 10);
-                return cardRegex.test(nomeCli) || isPseudoClienteCodigoBaixo(nCli, nomeCli);
-              })
-              .map((row: any) => String(row.cod)),
-          );
-          if (cardCodes.size > 0) {
-            this.logger.log(`[crediario-baixa] excluindo ${cardCodes.size} clientes-cartão: ${Array.from(cardCodes).join(',')}`);
-            codClientes = codClientes.filter((c) => !cardCodes.has(c));
-          }
-        } catch (e: any) {
-          this.logger.warn(`Filtro cartões falhou: ${e?.message}`);
-        }
-      }
-    }
-
-    if (codClientes.length === 0) {
-      throw new BadRequestException(
-        'Nenhum cliente real encontrado pra essa busca. Códigos 0-3 e nomes de cartões (VISANET, MASTERCARD, etc.) são ignorados.',
-      );
-    }
-
-    // Lista parcelas em aberto desses codClientes
-    const select: string[] = [];
-    const addCol = (logical: keyof typeof map, alias: string) => {
-      const col = map[logical];
-      if (col) select.push(`\`${col}\` AS ${alias}`);
-    };
-    addCol('registro', 'registro');
-    addCol('controle', 'controle');
-    addCol('numeroCompra', 'numeroCompra');
-    addCol('loja', 'loja');
-    addCol('codCliente', 'codCliente');
-    addCol('nome', 'nome');
-    addCol('parcela', 'parcela');
-    addCol('totalParcelas', 'totalParcelas');
-    addCol('vencimento', 'vencimento');
-    addCol('valorParcela', 'valorParcela');
-    addCol('obs', 'obs');
-
-    const inList = codClientes.map((c) => `'${c}'`).join(',');
-    const where: string[] = [`\`${map.codCliente}\` IN (${inList})`];
-    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
-    if (safeStore && map.loja) {
-      where.push(`\`${map.loja}\` = '${safeStore}'`);
-    }
-
-    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC, \`${map.codCliente}\` ASC LIMIT 500`;
-    const result = await this.erp.runReadOnly(sql, { maxRows: 500, timeoutMs: 30000 });
-
-    // Enriquece com telefone (escopado pela loja quando há filtro)
-    const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes, safeStore || undefined);
-
-    const cfg = await this.getConfig();
-    const out: OpenInstallment[] = [];
-    for (const row of result.rows) {
-      const valor = Number(row.valorParcela || 0);
-      if (!row.vencimento || !valor) continue;
-      const venc = new Date(row.vencimento);
-      const { diasAtraso, juros } = this.calcJuros(venc, valor, cfg);
-      const codCliente = String(row.codCliente);
-      const phoneInfo = phones.get(codCliente) || null;
-      out.push({
-        registro: String(row.registro),
-        controle: String(row.controle),
-        numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
-        parcela: row.parcela != null ? Number(row.parcela) : null,
-        totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
-        vencimento: venc.toISOString().slice(0, 10),
-        valorParcela: valor,
-        diasAtraso,
-        jurosCalculado: juros,
-        valorComJuros: Math.round((valor + juros) * 100) / 100,
-        codCliente,
-        nome: row.nome ? String(row.nome) : phoneInfo?.nome || null,
-        telefone: phoneInfo?.telefone || null,
-        obs: row.obs ? String(row.obs).trim() : null,
+    const cods = new Set<string>();
+    if (onlyDigitsM) {
+      cods.add(strip(safeBuscaM));
+      const cpfDigits = safeBuscaM.replace(/\D/g, '');
+      const cpfFmt = cpfDigits.length === 11
+        ? `${cpfDigits.slice(0, 3)}.${cpfDigits.slice(3, 6)}.${cpfDigits.slice(6, 9)}-${cpfDigits.slice(9)}`
+        : null;
+      const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+        where: {
+          ...(safeStoreM ? { loja: safeStoreM } : {}),
+          OR: [
+            { codigo: safeBuscaM },
+            { codigo: strip(safeBuscaM) },
+            ...(cpfFmt ? [{ cpf: { in: [cpfDigits, cpfFmt] } }] : []),
+          ],
+        },
+        select: { codigo: true },
+        take: 50,
       });
+      for (const f of fichas) cods.add(strip(f.codigo));
+    } else {
+      const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+        where: {
+          ...(safeStoreM ? { loja: safeStoreM } : {}),
+          nome: { contains: safeBuscaM, mode: 'insensitive' },
+        },
+        select: { codigo: true },
+        take: 50,
+      });
+      for (const f of fichas) cods.add(strip(f.codigo));
     }
-    return out;
-  }
 
+    // Sem ficha que case a busca = dado ausente legítimo, lista vazia.
+    if (!cods.size) return [];
+    const lista = await this.listAbertasDoEspelho(input.storeCode);
+    // Espelho vazio (1ª carga pendente) — sem parcela aberta pra mostrar.
+    if (!lista) return [];
+    return lista.parcelas.filter((p: any) => cods.has(strip(p.codCliente)));
+  }
   // ── Preview ────────────────────────────────────────────────────────
 
   /** Leituras do crediário pelo Postgres (nativo/espelho) em vez do Giga ao vivo.
-   *  DEFAULT OFF (revertido 25/07 após incidente "crediários sumiram do PDV" —
-   *  a validar contra dados reais antes de reativar). CREDIARIO_NATIVE_READS=1 liga. */
+   *  DEFAULT LIGADO desde 03/09/2026. Era off desde o incidente de 25/07
+   *  ("crediários sumiram do PDV") — fazia sentido enquanto existia um Giga
+   *  pra onde voltar. Ele morreu em 27/08: com a env ausente o código caía no
+   *  ramo legado e a parcela paga continuava aberta SEM ERRO, que é o mesmo
+   *  sumiço de 25/07 pela porta oposta. Produção roda =1; o default agora
+   *  concorda com ela. `CREDIARIO_NATIVE_READS=0` ainda força o ramo antigo. */
   private get nativeReads(): boolean {
-    return String(process.env.CREDIARIO_NATIVE_READS ?? '0') === '1';
+    return String(process.env.CREDIARIO_NATIVE_READS ?? '1') === '1';
   }
 
   /** Variantes do codCliente pra casar o espelho (padding de zeros varia entre
@@ -1904,11 +1244,14 @@ export class CrediarioBaixaService {
   }
 
   /** Escrita da baixa/estorno no Giga via erp_outbox (assíncrona) em vez de
-   *  inline. DEFAULT OFF (write-path financeiro) — CREDIARIO_ERP_OUTBOX=1 liga.
-   *  O recibo (crediarioBaixa) já é a fonte; o espelho de abertas já tem
-   *  write-through — o outbox só replica o UPDATE no Giga com retry. */
+   *  inline. DEFAULT LIGADO desde 03/09/2026: o recibo (crediarioBaixa) é a
+   *  fonte e o espelho de abertas tem write-through, então o outbox só teria
+   *  a réplica pro Giga — que hoje o cron descarta com motivo. Com a env
+   *  ausente o caminho voltava a ser INLINE no MySQL morto, ou seja, a
+   *  vendedora esperando um servidor que não responde pra dar baixa que já
+   *  estava gravada. `CREDIARIO_ERP_OUTBOX=0` ainda força o inline. */
   private get crediarioOutboxEnabled(): boolean {
-    return String(process.env.CREDIARIO_ERP_OUTBOX ?? '0') === '1';
+    return String(process.env.CREDIARIO_ERP_OUTBOX ?? '1') === '1';
   }
 
   /** Lê 1 parcela ABERTA do espelho (wincred_movimento_aberto) por REGISTRO+
@@ -1959,76 +1302,46 @@ export class CrediarioBaixaService {
 
     const cfg = await this.getConfig();
 
-    // ── ESPELHO DE ABERTAS PRIMEIRO: parcela presente = em aberto agora
-    // (write-through remove na baixa). Ausente → confere no Giga (autoridade). ──
-    const espelhoOk = this.nativeReads
-      ? (await (this.prisma as any).wincredMovimentoAberto.count()) > 0
-      : false;
-
-    const map = await this.crediarios.detectColumns();
-    if (!espelhoOk && (!map.registro || !map.controle)) {
-      throw new BadRequestException('Coluna REGISTRO/CONTROLE não detectada');
-    }
-
-    // Busca cada parcela (espelho → fallback Giga)
+    // ── SÓ ESPELHO (03/09 — Giga morto). Presente em wincred_movimento_aberto
+    // = em aberto AGORA (o write-through da baixa remove na hora — sem risco de
+    // baixa dupla). Fora do espelho, confere a tabela nativa (parcela criada no
+    // Flow há <10min ainda não caiu no ciclo) e só então nega, com erro honesto
+    // — a conferência no Giga foi deletada junto com o pool.
     const result: OpenInstallment[] = [];
     for (const p of input.parcelas) {
-      if (espelhoOk) {
-        const nat = await this.previewParcelaEspelho(p.registro, p.controle, cfg);
-        if (nat) { result.push(nat); continue; }
-        // não achou no espelho de abertas → confere no Giga (pode estar paga lá)
-        if (!map.registro || !map.controle) {
-          throw new BadRequestException(`Parcela não encontrada: ${p.registro}/${p.controle}`);
-        }
+      const nat = await this.previewParcelaEspelho(p.registro, p.controle, cfg);
+      if (nat) { result.push(nat); continue; }
+      const nativa: any = await (this.prisma as any).crediarioParcela.findFirst({
+        where: {
+          registro: String(p.registro),
+          controle: String(p.controle),
+          pago: false,
+          cancelado: false,
+        },
+      });
+      if (!nativa) {
+        throw new BadRequestException(
+          'Parcela não encontrada — já foi paga ou não existe. Atualize a lista.',
+        );
       }
-      const safeReg = String(p.registro).replace(/['"\\]/g, '');
-      const safeCtl = String(p.controle).replace(/['"\\]/g, '');
-
-      const select: string[] = [];
-      const addCol = (logical: keyof typeof map, alias: string) => {
-        const col = map[logical];
-        if (col) select.push(`\`${col}\` AS ${alias}`);
-      };
-      addCol('registro', 'registro');
-      addCol('controle', 'controle');
-      addCol('numeroCompra', 'numeroCompra');
-      addCol('codCliente', 'codCliente');
-      addCol('nome', 'nome');
-      addCol('parcela', 'parcela');
-      addCol('totalParcelas', 'totalParcelas');
-      addCol('vencimento', 'vencimento');
-      addCol('valorParcela', 'valorParcela');
-      addCol('pago', 'pago');
-      addCol('obs', 'obs');
-
-      const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE \`${map.registro}\` = '${safeReg}' AND \`${map.controle}\` = '${safeCtl}' LIMIT 1`;
-      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-      if (!r.rows.length) {
-        throw new BadRequestException(`Parcela não encontrada: ${safeReg}/${safeCtl}`);
-      }
-      const row = r.rows[0];
-      const isPaid = String(row.pago || '').toUpperCase() === 'S';
-      if (isPaid) {
-        throw new BadRequestException(`Parcela ${safeReg}/${safeCtl} já está paga no Giga`);
-      }
-      const valor = Number(row.valorParcela || 0);
-      const venc = new Date(row.vencimento);
+      const valor = Number(nativa.valorParcela || 0);
+      const venc = new Date(nativa.vencimento);
       const { diasAtraso, juros } = this.calcJuros(venc, valor, cfg);
       result.push({
-        registro: String(row.registro),
-        controle: String(row.controle),
-        numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
-        parcela: row.parcela != null ? Number(row.parcela) : null,
-        totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+        registro: String(nativa.registro),
+        controle: String(nativa.controle ?? ''),
+        numeroCompra: nativa.numeroCompra ? String(nativa.numeroCompra) : null,
+        parcela: nativa.parcela != null ? Number(nativa.parcela) : null,
+        totalParcelas: nativa.totalParcelas != null ? Number(nativa.totalParcelas) : null,
         vencimento: venc.toISOString().slice(0, 10),
         valorParcela: valor,
         diasAtraso,
         jurosCalculado: juros,
         valorComJuros: Math.round((valor + juros) * 100) / 100,
-        codCliente: String(row.codCliente),
-        nome: row.nome ? String(row.nome) : null,
+        codCliente: String(nativa.codCliente ?? ''),
+        nome: nativa.nomeCliente ? String(nativa.nomeCliente) : null,
         telefone: null,
-        obs: row.obs ? String(row.obs).trim() : null,
+        obs: nativa.obs ? String(nativa.obs).trim() : null,
       });
     }
 

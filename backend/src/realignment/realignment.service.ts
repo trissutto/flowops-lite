@@ -3,7 +3,7 @@ import { startOfDayBR } from '../lib/date-br';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
-import { WpDbService } from '../wp-db/wp-db.service';
+import { refBaseOf, refsDeBusca } from '../common/ref-base';
 import { PromessaEstoqueService } from './promessa-estoque.service';
 
 /**
@@ -41,7 +41,6 @@ export class RealignmentService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly gateway: RealtimeGateway,
-    private readonly wpDb: WpDbService,
     private readonly promessa: PromessaEstoqueService,
   ) {}
 
@@ -981,6 +980,91 @@ export class RealignmentService {
   }
 
   /**
+   * Chave do mapa de fotos — "REF|COR", a MESMA do ProductPhotosService.getBatch
+   * (`${p.ref}|${p.cor || ''}`), com a normalização do getPhoto de lá
+   * (trim + MAIÚSCULA; sem cor = string vazia). Existe como método pra que o
+   * mapa e quem lê o mapa não possam divergir na montagem da chave.
+   */
+  private chaveFoto(ref: any, cor: any): string {
+    return `${String(ref ?? '').trim().toUpperCase()}|${String(cor ?? '').trim().toUpperCase()}`;
+  }
+
+  /**
+   * Foto oficial por REF+COR — `product_photos` (R2), a MESMA fonte da Consulta,
+   * do PDV e do site. Substitui o cache de imagens do WordPress (WpDbService):
+   * o host do WP morreu e o método antigo devolvia mapa vazio calado — as
+   * listas de realinhamento ficaram sem foto pra sempre achando que era
+   * "primeira chamada".
+   *
+   * ⚠️ INDEXA POR REF|COR, não só por REF (régua oficial do
+   * ProductPhotosService.getBatch). A galeria é POR COR: indexar só pela REF
+   * fazia a peça VINHO aparecer com a foto da PRETA na pilha de separação —
+   * a vendedora separa pela imagem, foto errada = peça errada na caixa.
+   *
+   * Mesma régua de família do getBatch: a foto pode estar gravada na REF-BASE
+   * ("VMS-223") mesmo que a ordem carregue a REF do cadastro ("VMS-223 MA") —
+   * procura nas duas. Capa = menor `ordem`.
+   *
+   * Cascata por item: (REF|COR) → (BASE|COR) → genérica sem cor (REF|) →
+   * (BASE|). Com a COR conhecida NUNCA cai na foto de outra cor — sem foto é
+   * melhor que foto errada. Só o item SEM cor usa o fallback por REF pura.
+   * Sem foto = sem chave no mapa (o front aguenta foto ausente).
+   * Best-effort: falha aqui não derruba a lista.
+   */
+  private async fotosOficiaisPorRefCor(
+    itens: Array<{ ref?: string | null; cor?: string | null }>,
+  ): Promise<Record<string, string>> {
+    const pedidas = new Map<string, { refUp: string; corUp: string }>();
+    for (const it of itens) {
+      const refUp = String(it?.ref ?? '').trim().toUpperCase();
+      if (!refUp) continue;
+      const corUp = String(it?.cor ?? '').trim().toUpperCase();
+      pedidas.set(this.chaveFoto(refUp, corUp), { refUp, corUp });
+    }
+    if (!pedidas.size) return {};
+    try {
+      const buscar = Array.from(
+        new Set(Array.from(pedidas.values()).flatMap((p) => refsDeBusca(p.refUp))),
+      );
+      const fotos: Array<{ ref: string; cor: string | null; ordem: number; url: string }> = await (
+        this.prisma as any
+      ).productPhoto.findMany({
+        where: { ref: { in: buscar } },
+        orderBy: { ordem: 'asc' },
+        select: { ref: true, cor: true, ordem: true, url: true },
+      });
+      // Primeira na ordem (0 = capa) por REF|COR e, à parte, por REF pura —
+      // esta última só serve ao item que não tem cor pra perguntar.
+      const capaRefCor: Record<string, string> = {};
+      const capaSoRef: Record<string, string> = {};
+      for (const f of fotos) {
+        const refUp = String(f.ref ?? '').trim().toUpperCase();
+        const k = this.chaveFoto(refUp, f.cor);
+        if (!capaRefCor[k]) capaRefCor[k] = f.url;
+        if (!capaSoRef[refUp]) capaSoRef[refUp] = f.url;
+      }
+      const out: Record<string, string> = {};
+      for (const [chave, { refUp, corUp }] of pedidas) {
+        const baseUp = refBaseOf(refUp);
+        const url =
+          capaRefCor[this.chaveFoto(refUp, corUp)] ??
+          capaRefCor[this.chaveFoto(baseUp, corUp)] ??
+          // Genérica da REF (linha gravada com cor nula) — vale pra qualquer cor.
+          capaRefCor[this.chaveFoto(refUp, '')] ??
+          capaRefCor[this.chaveFoto(baseUp, '')] ??
+          // FALLBACK só pra ordem SEM cor: aí qualquer foto da família é o
+          // melhor que dá pra fazer. Com cor conhecida a busca para acima.
+          (corUp ? undefined : (capaSoRef[refUp] ?? capaSoRef[baseUp]));
+        if (url) out[chave] = url;
+      }
+      return out;
+    } catch (e: any) {
+      this.logger.warn(`[realignment] fotosOficiaisPorRefCor falhou: ${e?.message}`);
+      return {};
+    }
+  }
+
+  /**
    * Lista ordens pendentes de REALINHAMENTO pra LOJA ORIGEM dela.
    * Recebe storeId do JWT → resolve storeCode via Store (JWT atual não carrega
    * o code, só o id). Retorna [] se a loja não existir.
@@ -1030,19 +1114,12 @@ export class RealignmentService {
       } as any,
     });
     await this.preencherDescricoes(orders as any[]);
-    // ESTRATÉGIA NÃO-BLOQUEANTE pra latência sempre baixa (<500ms):
-    //  - Imagens já em cache → vão no payload
-    //  - Refs sem cache → dispara fetch BG (sem await), próxima chamada já tem
-    //  - 1ª vez vê sem foto (fallback ícone), 2ª vez já vem completo
-    const uniqueRefs = Array.from(new Set(orders.map((o) => o.refCode).filter(Boolean)));
-    const imagesByRef = this.wpDb.getCachedImages(uniqueRefs);
-    const semCache = uniqueRefs.filter((r) => imagesByRef[r] === undefined);
-    if (semCache.length > 0) {
-      // fire-and-forget — popula cache pra próxima chamada
-      this.wpDb.getImagesByRefs(semCache).catch((e: any) => {
-        this.logger.warn(`[realignment] pre-fetch BG imagens: ${e.message}`);
-      });
-    }
+    // Foto oficial do Flow (product_photos) — uma findMany indexada, sem o
+    // cache/fetch-BG que o WordPress exigia. Chave REF|COR: a pilha é separada
+    // pela imagem, então a cor da peça tem que ser a cor da foto.
+    const fotos = await this.fotosOficiaisPorRefCor(
+      orders.map((o) => ({ ref: o.refCode, cor: (o as any).cor })),
+    );
 
     return orders.map((o: any) => ({
       ...o,
@@ -1050,7 +1127,7 @@ export class RealignmentService {
       realignmentNotFoundAt: o.realignmentNotFoundAt
         ? new Date(o.realignmentNotFoundAt).toISOString()
         : null,
-      imageUrl: imagesByRef[o.refCode] ?? null,
+      imageUrl: fotos[this.chaveFoto(o.refCode, o.cor)] ?? null,
     }));
   }
 
@@ -1270,21 +1347,17 @@ export class RealignmentService {
       (caixas as any[]).map((c) => [c.id, c.status]),
     );
 
-    // Mesma estratégia não-bloqueante (ver comentário no listPendingForStore)
-    const uniqueRefs = Array.from(new Set(orders.map((o) => o.refCode).filter(Boolean)));
-    const imagesByRef = this.wpDb.getCachedImages(uniqueRefs);
-    const semCache = uniqueRefs.filter((r) => imagesByRef[r] === undefined);
-    if (semCache.length > 0) {
-      this.wpDb.getImagesByRefs(semCache).catch((e: any) => {
-        this.logger.warn(`[realignment] pre-fetch BG imagens (sent): ${e.message}`);
-      });
-    }
+    // Foto oficial do Flow (product_photos) — mesma fonte (e mesma chave
+    // REF|COR) da lista de pendentes.
+    const fotos = await this.fotosOficiaisPorRefCor(
+      orders.map((o) => ({ ref: o.refCode, cor: (o as any).cor })),
+    );
 
     return orders.map((o) => ({
       ...o,
       createdAt: o.createdAt.toISOString(),
       sentAt: o.realignmentSentAt ? o.realignmentSentAt.toISOString() : null,
-      imageUrl: imagesByRef[o.refCode] ?? null,
+      imageUrl: fotos[this.chaveFoto(o.refCode, (o as any).cor)] ?? null,
       // Sem shipmentId = peça antiga, de antes das caixas. Trata como pilha
       // (é o que ela era) em vez de sumir com ela.
       caixaFechada: (o as any).shipmentId

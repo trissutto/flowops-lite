@@ -56,11 +56,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   // trocam de fonte de uma vez, sem tocar em tela nenhuma.
   //
   // Segurança: qualquer erro OU espelho vazio (nunca sincronizado) → cai pro
-  // Giga ao vivo, query original intocada. Kill-switch: remover a env.
+  // Giga ao vivo, query original intocada. Kill-switch: `GIGA_MIRROR_READS=0`.
+  //
+  // ⚠️ DEFAULT LIGADO desde 03/09/2026. Nasceu default-off porque havia um Giga
+  // atrás pra segurar a queda; ele morreu em 27/08 e a rede de segurança virou
+  // alçapão: sem a env, `getStockTotalByStores` pula o espelho, encontra o pool
+  // nulo e devolve MAPA VAZIO sem erro nenhum — a tela da Inteligência mostrava
+  // a coluna de vendas com erro honesto e a de estoque zerada calada, as duas
+  // no mesmo período. Produção roda =1; o default agora concorda com ela.
   // ═══════════════════════════════════════════════════════════════════════
 
   private get mirrorReadsEnabled(): boolean {
-    return String(process.env.GIGA_MIRROR_READS ?? '').trim() === '1' && !!this.prismaFlow;
+    return String(process.env.GIGA_MIRROR_READS ?? '1').trim() !== '0' && !!this.prismaFlow;
   }
 
   /** Cache 60s: espelho de estoque tem dados? (vazio = nunca sincronizou → Giga) */

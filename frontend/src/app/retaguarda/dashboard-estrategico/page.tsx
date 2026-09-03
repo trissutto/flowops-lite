@@ -38,7 +38,12 @@ type Dashboard = {
   kpis: {
     faturamento: Kpi; pedidos: Kpi; unidades: Kpi; ticketMedio: Kpi; clientes: Kpi;
   };
-  historicoAnos: Array<{ year: number; valor: number; pecas: number }>;
+  /**
+   * SEM DADO ≠ ZERO (03/09): ano fora da cobertura do espelho volta com
+   * valor/pecas = null e semDado = true. A barra fica VAZIA — mostrar "R$ 0"
+   * ali fazia parecer que a rede não vendeu naquele ano.
+   */
+  historicoAnos: Array<{ year: number; valor: number | null; pecas: number | null; semDado?: boolean }>;
   evolucao12m: Array<{ year: number; month: number; valor: number; pecas: number }>;
   ranking: Array<{
     posicao: number; code: string; name: string; tipo: string;
@@ -54,12 +59,21 @@ type Dashboard = {
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────────────
-const brl = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const brlCompact = (n: number) => {
+/**
+ * SEM DADO. O backend manda `null` no ano que o espelho não cobre — formatar
+ * isso como "R$ 0,00" é mentira, e mentira num gráfico ninguém percebe.
+ */
+const SEM_DADO = 'sem dado';
+const brl = (n: number | null | undefined) =>
+  n == null ? SEM_DADO : n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const brlCompact = (n: number | null | undefined) => {
+  if (n == null) return SEM_DADO;
   if (n >= 1_000_000) return `R$ ${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `R$ ${(n / 1_000).toFixed(1)}K`;
   return `R$ ${brl(n)}`;
 };
+/** Valor de dinheiro pra tooltip/linha: com "R$" na frente, ou "sem dado". */
+const brlRotulo = (n: number | null | undefined) => (n == null ? SEM_DADO : `R$ ${brl(n)}`);
 const num = (n: number) => n.toLocaleString('pt-BR');
 
 const isoToday = () => new Date().toISOString().slice(0, 10);
@@ -152,6 +166,12 @@ export default function DashboardEstrategicoPage() {
     const comVenda = data.ranking.filter((r) => r.valor > 0);
     return comVenda.slice(-3).reverse();
   }, [data]);
+
+  // Anos que o espelho não cobre — a barra some e o rodapé do gráfico avisa.
+  const anosSemDado = useMemo(
+    () => (data?.historicoAnos || []).filter((d) => d.semDado || d.valor == null).map((d) => d.year),
+    [data],
+  );
 
   // Meta: assume meta = mediaRede × 1.1 (10% acima da média)
   const meta = (data?.mediaRede || 0) * 1.1;
@@ -376,13 +396,21 @@ export default function DashboardEstrategicoPage() {
                   icon={Calendar}
                 >
                   <ResponsiveContainer width="100%" height={260}>
-                    <BarChart data={data.historicoAnos.map((d) => ({ ...d, label: String(d.year) }))}>
+                    {/* Ano sem cobertura do espelho entra com valor null: a barra
+                        NÃO é desenhada e o ano ganha um * no eixo. Antes vinha 0
+                        do backend e o gráfico dizia que a rede não vendeu nada.
+                        O * é curto de propósito — rótulo comprido faz o recharts
+                        esconder ticks, e aí o ano some do eixo. */}
+                    <BarChart data={data.historicoAnos.map((d) => ({
+                      ...d,
+                      label: d.semDado || d.valor == null ? `${d.year}*` : String(d.year),
+                    }))}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
+                      <XAxis dataKey="label" stroke="#64748b" fontSize={11} interval={0} />
                       <YAxis stroke="#64748b" fontSize={10} tickFormatter={(v) => brlCompact(v)} />
                       <Tooltip
                         contentStyle={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12 }}
-                        formatter={(v: any) => `R$ ${brl(v)}`}
+                        formatter={(v: any) => brlRotulo(v)}
                       />
                       <Bar dataKey="valor" radius={[8, 8, 0, 0]}>
                         {data.historicoAnos.map((d, i) => (
@@ -391,6 +419,12 @@ export default function DashboardEstrategicoPage() {
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
+                  {anosSemDado.length > 0 && (
+                    <p className="text-[10px] text-slate-500 mt-2">
+                      <b>* {anosSemDado.join(', ')} sem dado</b> — o espelho de vendas não cobre esse
+                      período. A barra fica vazia de propósito: não é venda zero.
+                    </p>
+                  )}
                 </ChartCard>
 
                 <ChartCard title="Evolução mensal — últimos 12 meses" icon={TrendingUp}>
@@ -404,7 +438,7 @@ export default function DashboardEstrategicoPage() {
                       <YAxis stroke="#64748b" fontSize={10} tickFormatter={(v) => brlCompact(v)} />
                       <Tooltip
                         contentStyle={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12 }}
-                        formatter={(v: any) => `R$ ${brl(v)}`}
+                        formatter={(v: any) => brlRotulo(v)}
                       />
                       <Line type="monotone" dataKey="valor" stroke="#10b981" strokeWidth={3} dot={{ fill: '#10b981', r: 4 }} activeDot={{ r: 6 }} />
                     </LineChart>
@@ -489,7 +523,7 @@ export default function DashboardEstrategicoPage() {
                       <YAxis type="category" dataKey="name" stroke="#64748b" fontSize={10} width={80} />
                       <Tooltip
                         contentStyle={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12 }}
-                        formatter={(v: any) => `R$ ${brl(v)}`}
+                        formatter={(v: any) => brlRotulo(v)}
                       />
                       <Bar dataKey="ticket" fill="#7c3aed" radius={[0, 4, 4, 0]} />
                     </BarChart>

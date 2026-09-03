@@ -1488,7 +1488,34 @@ export class PurchaseOrdersService {
       this.logger.log(`reposicao em modo SO REIMPRIME (sem mexer estoque)`);
     }
 
-    // Gera labels — usa dados do request; so faz fallback query se faltar
+    // Gera labels — usa dados do request; so faz fallback query se faltar.
+    // O fallback resolve NO POSTGRES, em UM lote, pelo mesmo buscador das
+    // etiquetas avulsas (product + wincred_produtos, nativa vence). O caminho
+    // antigo (erp.buscarProdutoPorCodigo, MySQL do Giga) devolvia [] com o
+    // Giga morto e a etiqueta saia sem REF/preco.
+    const semInfo = validos.filter(
+      (i) => !i.ref?.trim() || !i.cor?.trim() || !i.tamanho?.trim() || !Number(i.preco || 0),
+    );
+    const infoPorCodigo = new Map<string, any>();
+    if (semInfo.length > 0) {
+      try {
+        const { labels: achados } = await this.buscarEtiquetasAvulsas(
+          Array.from(new Set(semInfo.map((i) => String(i.codigo).trim()))),
+        );
+        for (const a of achados) {
+          // codigo normalizado SEM zeros a esquerda — mesma chave do catalogo
+          const chave = a.codigo.replace(/^0+/, '') || a.codigo;
+          if (!infoPorCodigo.has(chave)) infoPorCodigo.set(chave, a);
+        }
+      } catch (e: any) {
+        // LOG (antes era silencioso — gerava labels:[] sem aviso)
+        this.logger.warn(
+          `reposicao: resolver codigos no Postgres falhou: ${e?.message}. ` +
+          `Usando dados do request como fallback.`,
+        );
+      }
+    }
+
     const labels: any[] = [];
     for (const i of validos) {
       // Quantas etiquetas? Se qty>0 = uma por unidade. Se qty=0 = 1 etiqueta avulsa
@@ -1501,25 +1528,17 @@ export class PurchaseOrdersService {
       let descricao = i.descricao?.trim() || '';
       let marca = i.marca || null;
 
-      // Se falta info essencial, tenta buscar no ERP (best-effort)
+      // Completa o que faltou com o que o Postgres achou (best-effort)
       if (!ref || !cor || !tamanho || preco === 0) {
-        try {
-          const found = await (this.erp as any).buscarProdutoPorCodigo?.(i.codigo);
-          if (found && found.length > 0) {
-            const p = found[0];
-            ref = ref || String(p.referencia || '').trim();
-            cor = cor || String(p.cor || '').trim();
-            tamanho = tamanho || String(p.tamanho || '').trim();
-            preco = preco || Number(p.preco || 0);
-            descricao = descricao || String(p.descricao || '').trim();
-            marca = marca || p.marca || null;
-          }
-        } catch (e: any) {
-          // LOG (antes era silencioso — gerava labels:[] sem aviso)
-          this.logger.warn(
-            `reposicao: buscarProdutoPorCodigo(${i.codigo}) falhou: ${e?.message}. ` +
-            `Usando dados do request como fallback.`,
-          );
+        const chave = String(i.codigo).trim().replace(/^0+/, '') || String(i.codigo).trim();
+        const p = infoPorCodigo.get(chave);
+        if (p) {
+          ref = ref || p.ref;
+          cor = cor || p.cor;
+          tamanho = tamanho || p.tamanho;
+          preco = preco || Number(p.preco || 0);
+          descricao = descricao || p.descricao;
+          marca = marca || p.marca || null;
         }
       }
 

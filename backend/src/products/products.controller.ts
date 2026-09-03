@@ -119,25 +119,9 @@ export class ProductsController {
     return this.products.getSkuAuditResult();
   }
 
-  /**
-   * DIAGNÓSTICO (temporário): lista colunas da tabela `produtos` do Gigasistemas.
-   * Serve pra identificar qual coluna guarda o EAN13. Depois que sabemos o nome
-   * da coluna, esse endpoint pode ser removido.
-   */
-  @Get('erp-schema/produtos')
-  erpSchemaProdutos() {
-    return this.products.describeErpProductsTable();
-  }
-
-  /**
-   * DIAGNÓSTICO: descreve a tabela PRODVENDIDOS do Gigasistemas.
-   * Usado pra descobrir quais colunas guardam SKU/loja/data de venda,
-   * antes de ligar o auto-match de VENDA CERTA.
-   */
-  @Get('erp-schema/produtos-vendidos')
-  erpSchemaProdutosVendidos() {
-    return this.products.describeErpSalesTable();
-  }
+  // As rotas GET /products/erp-schema/* (SHOW COLUMNS no MySQL do Giga) foram
+  // removidas no enterro do Wincred (09/2026) — eram temporárias por definição
+  // e com o Giga morto só devolviam catálogo vazio.
 
   /**
    * DIAGNÓSTICO: busca produtos no ERP por termo (LIKE em CODIGO/REF/DESCRICAOCOMPLETA).

@@ -1202,7 +1202,8 @@ export class PdvService {
    *
    * Diferente do masterCancelDuplicada: este AQUI tenta REVERTER tudo:
    *   1. Cancela NFC-e na SEFAZ se autorizada (chama nfce.cancel)
-   *   2. Reverte estoque no Wincred (gravarVendaPdv com qty negativa)
+   *   2. Devolve o estoque no FLOW (increaseStockAsync — mesmo caminho da
+   *      devolução normal; o Wincred morreu em 27/08)
    *   3. Marca cashback ganho como REVOGADO (cliente perde o cashback gerado)
    *   4. Marca a sale como cancelled
    *   5. Logger detalhado pra auditoria
@@ -1287,76 +1288,64 @@ export class PdvService {
       passos.push({ passo: 'NFC-e SEFAZ', status: 'pulado', detalhe: 'NFC-e não foi autorizada (skip)' });
     }
 
-    /* ─── PASSO 2: Cancelar venda no Wincred (some do faturamento) ─── */
-    if (!sale.isTraining) {
-      try {
-        const r = await (this.erp as any).marcarVendaWincredCancelada({
-          saleId,
-          storeCode: sale.storeCode,
-        });
-        if (r?.ok) {
-          passos.push({
-            passo: 'Venda Wincred',
-            status: 'ok',
-            detalhe: `Marcada como cancelada (${r.affected ?? 0} linhas). Some do faturamento.`,
-          });
-        } else {
-          passos.push({
-            passo: 'Venda Wincred',
-            status: 'falhou',
-            detalhe: `Não removeu do Wincred: ${r?.error || 'erro desconhecido'}. Marque manual!`,
-          });
-        }
-      } catch (e: any) {
-        passos.push({
-          passo: 'Venda Wincred',
-          status: 'falhou',
-          detalhe: `Erro: ${e?.message || String(e)}`,
-        });
-      }
-    } else {
-      passos.push({
-        passo: 'Venda Wincred',
-        status: 'pulado',
-        detalhe: 'Modo treinamento',
-      });
-    }
+    /* ─── PASSO 2: Réplica Wincred — aposentada ─── */
+    // O UPDATE na `caixa` do MySQL falhava SEMPRE (Wincred morreu em 27/08) e
+    // o passo gritava "Marque manual no Wincred!" — falso alarme em cima de um
+    // sistema que ninguém mais abre. Os relatórios de faturamento saem do Flow
+    // (giga_caixa_mov é alimentada pelo próprio Flow), e o cancelamento aqui
+    // já tira a venda deles. Nada a fazer, nada a gritar.
+    passos.push({
+      passo: 'Venda Wincred',
+      status: 'pulado',
+      detalhe: 'Réplica Wincred aposentada — relatórios saem do Flow',
+    });
 
-    /* ─── PASSO 2b: Devolver estoque Wincred (qty negativa) ─── */
+    /* ─── PASSO 2b: Devolver estoque no FLOW ─── */
+    // O caminho antigo chamava `gravarVendaPdv` com qty NEGATIVA — escrita no
+    // MySQL do Wincred (morto em 27/08) — e nem conferia o retorno {ok:false}:
+    // carimbava "devolvido(s) ao estoque" com o estoque parado. Agora o
+    // estorno usa o MESMO caminho da devolução normal (returns.service →
+    // erp.increaseStockAsync, que aplica o delta em wincred_estoque/
+    // giga_estoque — o Flow é a fonte desde 14/07), item a item, conferindo o
+    // retorno DE VERDADE: item sem `applied` é falha, não sucesso.
     if (sale.stockDecreasedAt && !sale.isTraining) {
-      try {
-        await this.erp.gravarVendaPdv({
-          storeCode: sale.storeCode,
-          items: sale.items.map((it: any) => ({
-            sku: String(it.sku || it.ean || ''),
-            qty: -Math.abs(Number(it.qty) || 1),
-            valorUnit: Number(it.precoUnit) || 0,
-            desconto: 0,
-            descricao: String(it.descricao || ''),
-          })),
-          pagamentos: [{ metodo: 'estorno', valor: -Math.abs(Number(sale.total) || 0) }],
-          // MESMA vendedora da venda original (22/07): sem isso o negativo caía
-          // em VENDEDOR=0 e o ranking do Wincred deixava o valor CHEIO da venda
-          // cancelada no nome da vendedora (bucket "sem vendedora" negativo na
-          // conferência da Folha RH).
-          vendedorName: sale.vendedorName || undefined,
-          obsPedido: `estorno-${saleId.slice(0, 8)}`,
-        } as any);
+      const falhas: string[] = [];
+      let devolvidas = 0;
+      for (const it of sale.items) {
+        const sku = String(it.sku || it.ean || '').trim();
+        const qty = Math.abs(Number(it.qty) || 1);
+        if (!sku) {
+          falhas.push(`item sem SKU (${String(it.descricao || '?')})`);
+          continue;
+        }
+        try {
+          const r = await this.erp.increaseStockAsync([
+            { sku, qty, storeCode: sale.storeCode },
+          ]);
+          const aplicado = r?.success && Array.isArray(r.applied) && r.applied.length > 0;
+          if (aplicado) devolvidas += qty;
+          else falhas.push(`${sku}: ${r?.error || 'delta não aplicado no espelho de estoque'}`);
+        } catch (e: any) {
+          falhas.push(`${sku}: ${e?.message || String(e)}`);
+        }
+      }
+      if (falhas.length === 0) {
         passos.push({
-          passo: 'Estoque Wincred',
+          passo: 'Estoque (Flow)',
           status: 'ok',
-          detalhe: `${sale.items.length} item(ns) devolvido(s) ao estoque`,
+          detalhe: `${devolvidas} peça(s) devolvida(s) ao estoque`,
         });
-      } catch (e: any) {
+      } else {
         passos.push({
-          passo: 'Estoque Wincred',
+          passo: 'Estoque (Flow)',
           status: 'falhou',
-          detalhe: `Erro ao reverter: ${e?.message || String(e)}. Faça manual!`,
+          detalhe:
+            `${devolvidas} peça(s) devolvida(s), falhou em: ${falhas.join('; ')}`.slice(0, 500),
         });
       }
     } else {
       passos.push({
-        passo: 'Estoque Wincred',
+        passo: 'Estoque (Flow)',
         status: 'pulado',
         detalhe: sale.isTraining ? 'Modo treinamento' : 'Estoque não foi baixado',
       });
@@ -2345,8 +2334,8 @@ export class PdvService {
     };
 
     // PERF: lookup da venda e do produto em PARALELO. O produto vem do
-    // ESPELHO Postgres (WincredCatalogService) com fallback automático pro
-    // Giga ao vivo — o bipe não depende mais do MySQL remoto no caso comum.
+    // catálogo Postgres (WincredCatalogService) — caminho ÚNICO desde o
+    // enterro do Wincred (27/08): não existe mais fallback pro MySQL.
     // (activePromotion já vem aqui pra applyAutoDiscounts não re-buscar.)
     const [sale, info] = await Promise.all([
       (this.prisma as any).pdvSale.findUnique({
@@ -2360,9 +2349,11 @@ export class PdvService {
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
 
-    if (!info) throw new NotFoundException(`Produto "${input.skuOrEan}" não encontrado no Giga`);
+    // A mensagem não cita mais o Giga: o MySQL morreu em 27/08 e mandar a
+    // vendedora procurar lá só gera chamado. O catálogo é o Postgres do Flow.
+    if (!info) throw new NotFoundException(`Produto "${input.skuOrEan}" não encontrado no catálogo`);
     if (info.preco <= 0)
-      throw new BadRequestException(`Produto ${info.sku} sem preço cadastrado no Giga`);
+      throw new BadRequestException(`Produto ${info.sku} sem preço cadastrado no catálogo`);
 
     const qty = Math.max(1, Math.min(99, input.qty || 1));
 

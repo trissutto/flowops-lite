@@ -21,6 +21,10 @@
  * cada. As SEM DESTINO aparecem primeiro: são as que estão fazendo peça
  * sumir da vitrine agora. Sem esta lista, categoria nova no WooCommerce faria
  * a peça desaparecer sem ninguém saber por quê.
+ *
+ * 09/26 — o botão "Atualizar catálogo" (POST /loja-catalog/importar) saiu: o
+ * host do WordPress foi apagado em 27/08/2026. O de-para continua valendo, e
+ * agora vale na hora: não há mais reimportação pra esperar.
  */
 
 import { useEffect, useState } from 'react';
@@ -56,8 +60,6 @@ export default function CategoriasMapaPage() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState<string | null>(null);
-  const [sincronizando, setSincronizando] = useState(false);
-  const [aviso, setAviso] = useState<string | null>(null);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -77,31 +79,9 @@ export default function CategoriasMapaPage() {
   }
   useEffect(() => { carregar(); }, []);
 
-  /**
-   * Roda o sync de catálogo agora. É o que APLICA os vínculos: eles ficam
-   * guardados na hora, mas a classificação das peças só muda quando o
-   * catálogo é reimportado.
-   */
-  async function sincronizar() {
-    setSincronizando(true);
-    setErro(null);
-    setAviso(null);
-    try {
-      const r = await api<{ ok: boolean; lidos?: number; atualizados?: number; erro?: string }>(
-        '/loja-catalog/importar',
-        { method: 'POST' },
-      );
-      if (r?.ok === false) throw new Error(r.erro || 'Sync não concluiu');
-      setAviso(
-        `Catálogo atualizado — ${r.lidos ?? 0} peças lidas, ${r.atualizados ?? 0} atualizadas.`,
-      );
-      await carregar();
-    } catch (e: any) {
-      setErro(e?.message ?? 'Falha ao atualizar o catálogo');
-    } finally {
-      setSincronizando(false);
-    }
-  }
+  // O botão "Atualizar catálogo" saiu em 09/26: importava do site antigo
+  // (WooCommerce) e o host do WordPress foi apagado em 27/08/2026. O vínculo
+  // escolhido aqui vale na hora — não depende mais de reimportar nada.
 
   async function salvar(origem: string, destino: string | null) {
     setSalvando(origem);
@@ -150,21 +130,6 @@ export default function CategoriasMapaPage() {
           >
             <RefreshCw className="w-4 h-4" /> Recarregar
           </button>
-          {/* O sync só rodava às 4h35 e NÃO havia botão em lugar nenhum: você
-              vinculava a categoria e não tinha como ver o efeito antes do dia
-              seguinte. Este botão fecha o ciclo — vincula, aplica, confere. */}
-          <button
-            onClick={sincronizar}
-            disabled={sincronizando}
-            className="px-4 py-2 bg-brand text-white rounded text-sm font-semibold hover:bg-brand-dark disabled:opacity-50 flex items-center gap-2"
-          >
-            {sincronizando ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <RefreshCw className="w-4 h-4" />
-            )}
-            Atualizar catálogo
-          </button>
         </div>
       </div>
 
@@ -179,19 +144,14 @@ export default function CategoriasMapaPage() {
       )}
 
       <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-        A mudança vale <b>no próximo sync</b> (todo dia às 4h35, ou no botão “Importar” da tela de
-        catálogo). Escolher <b>Ignorar</b> serve pra categoria do WooCommerce que não é tipo de peça —
-        “Promoções”, “Novidades” — e faz o site procurar a classificação nas outras categorias da peça.
+        A escolha vale <b>na hora</b>. Escolher <b>Ignorar</b> serve pra categoria que não é tipo de
+        peça — “Promoções”, “Novidades” — e faz o site procurar a classificação nas outras categorias
+        da peça.
       </div>
 
       {erro && (
         <div className="mb-4 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 flex items-center gap-2">
           <AlertCircle className="w-4 h-4" /> {erro}
-        </div>
-      )}
-      {aviso && (
-        <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800 flex items-center gap-2">
-          <Check className="w-4 h-4" /> {aviso}
         </div>
       )}
 
@@ -201,7 +161,7 @@ export default function CategoriasMapaPage() {
         </div>
       ) : ordenadas.length === 0 ? (
         <div className="p-8 text-center text-slate-400 border border-dashed rounded">
-          Nenhuma categoria vista ainda. Rode o sync de catálogo primeiro.
+          Nenhuma categoria registrada ainda.
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow border overflow-hidden">
