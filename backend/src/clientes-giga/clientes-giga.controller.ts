@@ -5,9 +5,16 @@ import { ClientesGigaService } from './clientes-giga.service';
 import { ClientesLimpezaService } from './clientes-limpeza.service';
 
 /**
- * /admin/clientes-giga — importação completa da tabela `clientes` do Giga.
- * Matriz-only. Primeira carga: POST /sync (pode levar alguns minutos).
- * GET /sample mostra TODAS as colunas originais — insumo pra tela de consulta.
+ * /admin/clientes-giga — consulta, ficha e limpeza de clientes sobre a tabela
+ * nativa `giga_clientes` (Postgres). Matriz-only.
+ *
+ * MUSEU (04/09/2026): `POST /sync` saiu. Era a importação da `clientes` do
+ * MySQL da KingHost, desligada em 27/08/2026 — sem pool, ela só sabia
+ * responder "tabela de clientes não detectada no Giga". `GET /status` fica
+ * (conta o que já está no Postgres) e `POST /vincular` também (liga ficha ao
+ * Customer mestre por CPF, 100% Postgres).
+ * O painel da tela /retaguarda/wincred-mirror perdeu o botão "Importar
+ * clientes do Giga" no MESMO commit e virou só placar (lê o `GET /status`).
  */
 @Controller('admin/clientes-giga')
 @UseGuards(JwtAuthGuard)
@@ -22,13 +29,6 @@ export class ClientesGigaController {
     if (role !== 'admin' && role !== 'operator') {
       throw new ForbiddenException('Apenas matriz (admin/operator)');
     }
-  }
-
-  /** Dispara em background — responde na hora; acompanhar em GET /status. */
-  @Post('sync')
-  sync(@Req() req: any) {
-    this.requireAdmin(req);
-    return this.svc.startBackground();
   }
 
   @Get('status')

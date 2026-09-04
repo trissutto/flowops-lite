@@ -8,14 +8,13 @@ import { PixelController } from './pixel.controller';
 import { ProductPhotosService } from './product-photos.service';
 import { CorIaService } from './cor-ia.service';
 import { WcFotosImportService } from './wc-fotos-import.service';
-import { FotoImportJobService } from './foto-import-job.service';
 import { BolinhaAutoService } from './bolinha-auto.service';
 import { AutoPublicarService } from './auto-publicar.service';
 
 @Module({
   imports: [PrismaModule, HttpModule, ConfigModule, WpDbModule],
   controllers: [ProductPhotosController, PixelController],
-  providers: [ProductPhotosService, CorIaService, WcFotosImportService, FotoImportJobService, BolinhaAutoService, AutoPublicarService],
-  exports: [ProductPhotosService, CorIaService, WcFotosImportService, FotoImportJobService, BolinhaAutoService, AutoPublicarService],
+  providers: [ProductPhotosService, CorIaService, WcFotosImportService, BolinhaAutoService, AutoPublicarService],
+  exports: [ProductPhotosService, CorIaService, WcFotosImportService, BolinhaAutoService, AutoPublicarService],
 })
 export class ProductPhotosModule {}

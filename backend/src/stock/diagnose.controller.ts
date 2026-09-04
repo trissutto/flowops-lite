@@ -1,23 +1,23 @@
 import { Controller, Get, Query, UnauthorizedException } from '@nestjs/common';
-import { ErpService } from '../erp/erp.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * DiagnoseController — endpoints PÚBLICOS de diagnóstico (sem JWT guard).
  *
- * ATENÇÃO: protegidos só por um "secret" na query string. Usados pra investigar
- * o schema do Gigasistemas sem precisar lidar com CORS/JWT do frontend.
- * Depois que o diagnóstico é feito, esses endpoints podem ser removidos.
+ * ATENÇÃO: protegidos só por um "secret" na query string. Servem pra investigar
+ * sem precisar lidar com CORS/JWT do frontend.
  *
  * O secret vale via env var DIAGNOSE_SECRET. Se NÃO configurada, os endpoints
  * ficam DESATIVADOS (fail-closed) — sem default hardcoded.
+ *
+ * 09/26: `giga-tables` e `giga-crediario` saíram. Os dois faziam SHOW COLUMNS
+ * no MySQL do Giga (morto desde 27/08) pra mapear schema legado — com o pool
+ * trancado eles não têm o que ler, e o mapeamento que justificava a existência
+ * deles já virou tabela nativa no Postgres. O que sobrou aqui lê só o Flow.
  */
 @Controller('diagnose')
 export class DiagnoseController {
-  constructor(
-    private readonly erp: ErpService,
-    private readonly prisma: PrismaService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   private checkSecret(secret: string | undefined) {
     // Fail-closed: sem DIAGNOSE_SECRET configurado, nega tudo (sem default).
@@ -25,42 +25,6 @@ export class DiagnoseController {
     if (!expected || !secret || secret !== expected) {
       throw new UnauthorizedException('secret inválido');
     }
-  }
-
-  /**
-   * GET /diagnose/giga-tables?secret=XXX&search=credi
-   *
-   * Retorna tabelas do Gigasistemas21 que batem com o LIKE, com schema + amostra.
-   * Sem autenticação JWT — protegido só pelo secret.
-   */
-  @Get('giga-tables')
-  async gigaTables(@Query('secret') secret: string, @Query('search') search: string) {
-    this.checkSecret(secret);
-    const pattern = (search || '').trim() || 'credi';
-    return this.erp.listTablesLike(pattern);
-  }
-
-  /**
-   * GET /diagnose/giga-crediario?secret=XXX
-   *
-   * Faz 3 buscas de uma vez (credi, parcel, cobr) pra diagnóstico completo
-   * de tabelas relacionadas a crediário/cobrança. Retorna 1 payload só.
-   */
-  @Get('giga-crediario')
-  async gigaCrediario(@Query('secret') secret: string) {
-    this.checkSecret(secret);
-    const [credi, parcel, cobr, receb] = await Promise.all([
-      this.erp.listTablesLike('credi'),
-      this.erp.listTablesLike('parcel'),
-      this.erp.listTablesLike('cobr'),
-      this.erp.listTablesLike('receb'),
-    ]);
-    return {
-      credi,
-      parcel,
-      cobr,
-      receb,
-    };
   }
 
   /**

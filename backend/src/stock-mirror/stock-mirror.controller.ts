@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { StockMirrorService } from './stock-mirror.service';
 
@@ -50,16 +50,11 @@ export class StockMirrorController {
     });
   }
 
-  /**
-   * POST /admin/stock-mirror/sync
-   * Body: { storeCodes?: string[] }
-   * Sync full do Giga pras lojas dadas (ou todas as gerenciadas).
-   */
-  @Post('sync')
-  async sync(@Req() req: any, @Body() body: { storeCodes?: string[] }) {
-    this.requireAdmin(req);
-    return this.svc.fullSyncFromGiga({ storeCodes: body?.storeCodes });
-  }
+  // POST /admin/stock-mirror/sync saiu em 09/26, com o fullSyncFromGiga que
+  // ele chamava. Era o sync full Giga→tabela `stock` de 2026-06; a tela
+  // /retaguarda/estoque já tinha largado o botão, ele vivia atrás de
+  // ERP_STOCK_WRITEBACK_GIGA=1 (desligada) e o MySQL do Giga está morto desde
+  // 27/08. O que sobrou aqui — summary, list e movements — lê só o Postgres.
 
   /**
    * GET /admin/stock-mirror/movements?storeCode=X&sku=Y&skus=a,b,c

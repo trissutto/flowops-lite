@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ErpService } from '../erp/erp.service';
 
 /**
  * StockMirrorService — espelho PERSISTENTE do estoque Wincred no PostgreSQL.
@@ -21,10 +20,7 @@ export class StockMirrorService {
   private readonly logger = new Logger(StockMirrorService.name);
   private readonly MANAGED_STORES: string[];
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly erp: ErpService,
-  ) {
+  constructor(private readonly prisma: PrismaService) {
     const env = process.env.STOCK_MANAGED_STORES;
     this.MANAGED_STORES = env
       ? env.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
@@ -35,141 +31,13 @@ export class StockMirrorService {
     return [...this.MANAGED_STORES];
   }
 
-  /**
-   * Sync full do estoque Giga → Postgres pra uma loja (ou todas as gerenciadas).
-   * Pode demorar alguns segundos por loja. Cria StockMovement com reason='sync_giga'
-   * pra cada SKU que mudou.
-   */
-  async fullSyncFromGiga(input?: { storeCodes?: string[] }) {
-    // ⚠️ BLOQUEADO EM 22/08. Este sync é de 2026-06, de quando o Giga ainda
-    // sabia o saldo; hoje ele copiaria o número do Giga por cima da tabela
-    // `stock` — a mesma família do que devolveu ao estoque de São José uma
-    // peça já vendida (BMM-100 VINHO 52, 19/08). Some o agravante: nenhuma
-    // tela lê a tabela `stock` desde então, então isso só cria dado errado
-    // sem servir a ninguém. `ERP_STOCK_WRITEBACK_GIGA=1` destrava.
-    if (String(process.env.ERP_STOCK_WRITEBACK_GIGA ?? '0').trim() !== '1') {
-      throw new BadRequestException(
-        'Sync de estoque Giga→Flow desativado: o Flow é a fonte do estoque desde 14/07 e nenhuma ' +
-        'tela lê mais esta tabela. Se precisa conferir divergência, use o Conferidor de Estoque.',
-      );
-    }
-    const lojas = (input?.storeCodes || this.MANAGED_STORES)
-      .map((s) => String(s).trim().toUpperCase())
-      .filter(Boolean);
-
-    const resultados: Array<{
-      storeCode: string;
-      totalSkus: number;
-      inserted: number;
-      updated: number;
-      sameQty: number;
-      durationMs: number;
-      error?: string;
-    }> = [];
-
-    for (const storeCode of lojas) {
-      const t0 = Date.now();
-      try {
-        // Aceita "06" E "6" — Wincred flexível
-        const codesToTry = Array.from(
-          new Set([storeCode, storeCode.padStart(2, '0').slice(-2)]),
-        );
-        const gigaRows = await this.erp.getEstoqueFullByLoja(codesToTry);
-
-        // Agrega SKU → qty (caso múltiplas linhas pro mesmo CODIGO)
-        const skuQty = new Map<string, number>();
-        for (const r of gigaRows) {
-          const sku = r.sku;
-          const qty = Number(r.qty || 0);
-          if (!sku || qty <= 0) continue;
-          skuQty.set(sku, (skuQty.get(sku) || 0) + qty);
-        }
-
-        // Lê estado atual da loja em uma query só
-        const existing = await (this.prisma as any).stock.findMany({
-          where: { storeCode },
-          select: { sku: true, qty: true },
-        });
-        const existingMap = new Map<string, number>();
-        for (const e of existing) existingMap.set(e.sku, e.qty);
-
-        let inserted = 0;
-        let updated = 0;
-        let sameQty = 0;
-        const movements: any[] = [];
-        const now = new Date();
-        const unchangedSkus: string[] = [];
-
-        for (const [sku, newQty] of skuQty.entries()) {
-          const oldQty = existingMap.get(sku) ?? 0;
-          if (oldQty === newQty) {
-            sameQty++;
-            // SKU não mudou: só precisa bumpar syncedAt. Acumula pra um
-            // único updateMany no fim (em vez de 1 UPDATE por SKU).
-            unchangedSkus.push(sku);
-            continue;
-          }
-
-          await (this.prisma as any).stock.upsert({
-            where: { storeCode_sku: { storeCode, sku } },
-            update: { qty: newQty, syncedAt: now },
-            create: { storeCode, sku, qty: newQty, syncedAt: now },
-          });
-
-          if (existingMap.has(sku)) updated++;
-          else inserted++;
-
-          movements.push({
-            storeCode,
-            sku,
-            delta: newQty - oldQty,
-            qtyBefore: oldQty,
-            qtyAfter: newQty,
-            reason: 'sync_giga',
-            note: 'Sync full do Giga',
-          });
-        }
-
-        // Bump de syncedAt dos SKUs inalterados em lote (chunks pra não estourar o IN).
-        for (let i = 0; i < unchangedSkus.length; i += 1000) {
-          const chunk = unchangedSkus.slice(i, i + 1000);
-          await (this.prisma as any).stock.updateMany({
-            where: { storeCode, sku: { in: chunk } },
-            data: { syncedAt: now },
-          });
-        }
-
-        if (movements.length > 0) {
-          await (this.prisma as any).stockMovement.createMany({
-            data: movements,
-          });
-        }
-
-        resultados.push({
-          storeCode,
-          totalSkus: skuQty.size,
-          inserted,
-          updated,
-          sameQty,
-          durationMs: Date.now() - t0,
-        });
-        this.logger.log(
-          `[stock-mirror sync] ${storeCode}: ${skuQty.size} SKUs ` +
-          `(${inserted} new, ${updated} upd, ${sameQty} same) em ${Date.now() - t0}ms`,
-        );
-      } catch (e: any) {
-        this.logger.error(`[stock-mirror sync] ${storeCode} falhou: ${e?.message || e}`);
-        resultados.push({
-          storeCode,
-          totalSkus: 0, inserted: 0, updated: 0, sameQty: 0,
-          durationMs: Date.now() - t0,
-          error: e?.message || String(e),
-        });
-      }
-    }
-
-    return { lojas: resultados, when: new Date().toISOString() };
-  }
+  // O fullSyncFromGiga saiu em 09/26. Era o sync full Giga→tabela `stock` de
+  // 2026-06, de quando o Giga ainda sabia o saldo. Já vivia bloqueado desde
+  // 22/08 atrás de ERP_STOCK_WRITEBACK_GIGA=1 (copiar o número do Giga por
+  // cima do Flow foi o que devolveu ao estoque de São José uma peça vendida —
+  // BMM-100 VINHO 52), a tela /retaguarda/estoque tinha largado o botão, e o
+  // MySQL do Giga morreu em 27/08. O que sobra aqui é tudo Postgres: leitura
+  // da tabela `stock`, sumário, decremento e histórico de movimentação.
 
   /** Lê estoque com filtro opcional por SKU (substring). */
   async listStock(input: {

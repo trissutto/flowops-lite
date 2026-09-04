@@ -144,83 +144,6 @@ export class ProductsEditorController {
     });
   }
 
-  /** INCIDENTE 14/07 — diagnóstico do estrago da DATAALT. */
-  @Get('dataalt-diagnostico')
-  async dataAltDiag(@Req() req: any) {
-    this.requireAdmin(req);
-    return this.svc.dataAltDiagnostico();
-  }
-
-  /**
-   * POST /products-editor/restaurar-dataalt
-   * Body: { source: 'native' } OU { pairs: [{codigo, dataAlt:'YYYY-MM-DD'}] }
-   * Restaura a data de cadastro original (promo Liquida Antigos).
-   */
-  @Post('restaurar-dataalt')
-  async restaurarDataAlt(
-    @Req() req: any,
-    @Body() body: { source?: 'native' | 'ref'; pairs?: Array<{ codigo: string; dataAlt: string }> },
-  ) {
-    this.requireAdmin(req);
-    return this.svc.restaurarDataAlt({
-      source: body?.source,
-      pairs: body?.pairs,
-      userName: req?.user?.name || req?.user?.email || null,
-    });
-  }
-
-  /**
-   * POST /products-editor/restaurar-dataalt-backup — Body: { url }
-   * Lê codigo→dataAlt do Postgres TEMPORÁRIO (restaurado do backup) e
-   * restaura os códigos ainda sujos. Roda em background.
-   */
-  @Post('restaurar-dataalt-backup')
-  async restaurarDataAltBackup(@Req() req: any, @Body() body: { url?: string }) {
-    this.requireAdmin(req);
-    return this.svc.restaurarDataAltDeBackup({
-      url: String(body?.url || ''),
-      userName: req?.user?.name || req?.user?.email || null,
-    });
-  }
-
-  /**
-   * POST /products-editor/restaurar-dataalt-caixa — Leva 4: prova de idade
-   * pela primeira venda no caixa (espelho + Giga read-only em chunks).
-   */
-  @Post('restaurar-dataalt-caixa')
-  async restaurarDataAltCaixa(@Req() req: any) {
-    this.requireAdmin(req);
-    return this.svc.restaurarDataAltPorCaixa({
-      userName: req?.user?.name || req?.user?.email || null,
-    });
-  }
-
-  /**
-   * POST /products-editor/restaurar-dataalt-arquivo
-   * Body: { pairs: [{codigo, dataAlt}], zerar?: boolean }
-   * PASSO 1 da auditoria por arquivo (backup 12/07): só carrega em memória,
-   * NÃO escreve nada. Pode ser chamado em partes (zerar=true na primeira).
-   */
-  @Post('restaurar-dataalt-arquivo')
-  async restaurarDataAltArquivo(
-    @Req() req: any,
-    @Body() body: { pairs?: Array<{ codigo: string; dataAlt: string }>; zerar?: boolean },
-  ) {
-    this.requireAdmin(req);
-    return this.svc.carregarArquivoDataAlt(body?.pairs || [], { zerar: !!body?.zerar });
-  }
-
-  /**
-   * POST /products-editor/restaurar-dataalt-arquivo/executar
-   * PASSO 2: compara o catálogo inteiro do Giga com o arquivo carregado e
-   * corrige toda divergência (background).
-   */
-  @Post('restaurar-dataalt-arquivo/executar')
-  async restaurarDataAltArquivoExecutar(@Req() req: any) {
-    this.requireAdmin(req);
-    return this.svc.executarAuditoriaArquivo(req?.user?.name || req?.user?.email || null);
-  }
-
   /**
    * POST /products-editor/restaurar-dataalt-nativo-espelho
    * Passo final do incidente DATAALT (14/07): corrige a data na tabela NATIVA
@@ -231,13 +154,6 @@ export class ProductsEditorController {
   async restaurarDataAltNativoEspelho(@Req() req: any, @Body() body: { executar?: boolean }) {
     this.requireAdmin(req);
     return this.svc.restaurarDataAltNativoDoEspelho(!!body?.executar);
-  }
-
-  /** Progresso da restauração em background. */
-  @Get('restaurar-dataalt/progresso')
-  async restaurarProgresso(@Req() req: any) {
-    this.requireAdmin(req);
-    return this.svc.restauracaoProgresso();
   }
 
   /** GET /products-editor/audit — histórico recente (ANTES→DEPOIS). */

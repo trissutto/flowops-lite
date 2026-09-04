@@ -28,7 +28,7 @@ imagem não terminar, o site novo também depende daquele disco.
 
 ### A1. Inventário (roda ANTES de tudo, do seu PC)
 
-O seu PC tem acesso liberado por IP ao Giga. Rode `scripts/kinghost/01-inventario.ps1`.
+O seu PC tem acesso liberado por IP ao Giga. Rode `backend/scripts/_arquivo-giga/01-inventario.ps1`.
 
 Ele responde as três coisas que mudam o plano:
 - **tamanho total** (decide quanto tempo o dump leva)
@@ -60,12 +60,12 @@ Por isso, na janela de corte (lojas fechadas):
 
 ### A4. Dump e restore
 
-`scripts/kinghost/02-dump.ps1` e `03-restore.ps1`. O dump sai comprimido; o
+`backend/scripts/_arquivo-giga/02-dump.ps1` e `03-restore.ps1`. O dump sai comprimido; o
 restore aponta pro MySQL novo.
 
 ### A5. Verificar ANTES de virar
 
-`scripts/kinghost/04-verificar.ps1` compara contagem de linhas tabela a tabela
+`backend/scripts/_arquivo-giga/04-verificar.ps1` compara contagem de linhas tabela a tabela
 entre origem e destino. **Qualquer divergência = não vira.** Investigue antes.
 
 ### A6. Virar

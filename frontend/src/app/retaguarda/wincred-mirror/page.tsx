@@ -404,60 +404,36 @@ function FixDataAltNativoBox() {
   );
 }
 
-/* ─── Importação COMPLETA da tabela `clientes` do Giga ───────────────────────
-   Base da Consulta de Clientes nativa + crediário nativo (sair da Giga).
-   POST dispara em background; a caixa faz poll do status a cada 4s. */
+/* ─── Base nativa de clientes (`giga_clientes` no Postgres) ──────────────────
+   Base da Consulta de Clientes nativa + crediário nativo.
+
+   MUSEU (04/09/2026): o botão "Importar clientes do Giga" saiu junto com o
+   `POST /admin/clientes-giga/sync`. A importação lia a tabela `clientes` do
+   MySQL da KingHost, desligado em 27/08/2026 — sem pool, ela só sabia
+   responder "tabela de clientes não detectada no Giga". O que ficou aqui é o
+   PLACAR: `GET /admin/clientes-giga/status` é 100% Postgres e continua
+   contando o que já foi importado (fichas, pessoas por CPF, vínculo com o CRM
+   e a quebra por loja). Sem botão não há 404 na tela. */
 function ClientesGigaBox() {
   const [st, setSt] = useState<{
     total: number; comCpf: number; pessoasUnicas: number; vinculadosAoCrm: number;
     porLoja?: Array<{ loja: string; fichas: number }>;
-    ultimoSync: string | null; rodando: boolean;
-    ultimoResultado?: { erro?: string } | null;
+    ultimoSync: string | null;
   } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
   const load = async () => {
     try { setSt(await api('/admin/clientes-giga/status')); } catch { /* mantém último */ }
   };
   useEffect(() => { load(); }, []);
 
-  const rodar = async () => {
-    if (busy) return;
-    setBusy(true); setErr(null);
-    try {
-      const r = await api<{ started: boolean; alreadyRunning: boolean }>(
-        '/admin/clientes-giga/sync', { method: 'POST' },
-      );
-      if (!r.started && r.alreadyRunning) setErr('Já tem uma importação rodando — acompanhando.');
-      // Poll até terminar (guarda de 15min)
-      const t0 = Date.now();
-      while (Date.now() - t0 < 15 * 60 * 1000) {
-        await new Promise((res) => setTimeout(res, 4000));
-        await load();
-        const cur = await api<any>('/admin/clientes-giga/status').catch(() => null);
-        if (cur && !cur.rodando) {
-          setSt(cur);
-          if (cur.ultimoResultado?.erro) setErr(`Importação falhou: ${cur.ultimoResultado.erro}`);
-          break;
-        }
-      }
-    } catch (e: any) {
-      setErr(e?.message || 'Erro ao iniciar a importação');
-    } finally {
-      setBusy(false);
-      load();
-    }
-  };
-
   return (
     <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-5">
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex-1 min-w-[260px]">
-          <h2 className="font-bold text-emerald-900 mb-1">Clientes do Giga — importação completa</h2>
+          <h2 className="font-bold text-emerald-900 mb-1">Clientes — base nativa</h2>
           <p className="text-xs text-emerald-700">
-            Traz a tabela <b>clientes</b> inteira (todos os campos e lojas) pro Flow e vincula ao CRM por CPF.
-            Base da Consulta de Clientes nativa. Demora alguns minutos na primeira carga.
+            Fichas de cliente já no Flow (todos os campos e lojas), vinculadas ao CRM por CPF.
+            Base da Consulta de Clientes nativa. Só leitura: a importação do Wincred foi encerrada.
           </p>
           {st && (
             <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-emerald-800">
@@ -479,19 +455,7 @@ function ClientesGigaBox() {
             </div>
           )}
         </div>
-        <button
-          onClick={rodar}
-          disabled={busy || !!st?.rodando}
-          className="shrink-0 px-5 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
-        >
-          {busy || st?.rodando ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Importando clientes...</>
-          ) : (
-            <><Play className="w-4 h-4" /> Importar clientes do Giga</>
-          )}
-        </button>
       </div>
-      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
     </div>
   );
 }

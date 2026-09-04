@@ -12,8 +12,8 @@ import { AdminOnlyGuard } from '../auth/admin-only.guard';
  *
  * O NCM vive na tabela nativa `product` (editor de produtos / NF-e leem de
  * lá). Se um dia precisar de auditoria de NCM de novo, ela nasce sobre a
- * `product` — o NcmAuditService antigo fica no museu como referência das
- * regras de mapeamento por categoria.
+ * `product`. O NcmAuditService (regras de NCM por categoria + UPDATE na
+ * `produtos` do Giga) foi DELETADO na Onda 2 — está no histórico do git.
  */
 @UseGuards(JwtAuthGuard, AdminOnlyGuard)
 @Controller('admin/ncm-audit')
