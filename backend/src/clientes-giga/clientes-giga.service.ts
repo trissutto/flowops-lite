@@ -1,54 +1,43 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { findAllCustomersByCpf, aggregatePerson } from '../customers/customer-aggregation.helper';
 
 /**
- * IMPORTAÇÃO COMPLETA da tabela `clientes` do Giga pro Flow (giga_clientes).
+ * CONSULTA E FICHA DE CLIENTES sobre a tabela nativa `giga_clientes`.
  *
- * Decisão do dono (21/07): trazer TODOS os campos e TODOS os dados — base da
- * tela de Consulta de Clientes nativa e do crediário nativo (sair da Giga).
+ * A tabela nasceu (21/07) como zona de pouso da `clientes` do Giga — "nenhum
+ * campo se perde": colunas conhecidas viraram campos indexados e a linha
+ * original inteira ficou em `rawJson` (RG/exp, cônjuge, pai/mãe, autorizados,
+ * referências). Hoje ela é a FONTE: busca, ficha, edição, cadastro, cópia
+ * entre lojas, resumo e limpeza leem e escrevem aqui, no Postgres.
  *
- * Estratégia "nenhum campo se perde":
- *   - SELECT * (não uma lista fixa de colunas) em lotes paginados;
- *   - colunas conhecidas → campos estruturados/indexados (nome, cpf, fones...);
- *   - a LINHA ORIGINAL INTEIRA → rawJson (inclui RG/exp, cônjuge, pai/mãe,
- *     autorizados, referências e qualquer coluna que o mapeamento não conheça).
+ * ── MUSEU (04/09/2026): a IMPORTAÇÃO foi deletada ──
+ * `syncAll`/`startBackground`/`detectTable` e o cron diário das 04:40 liam a
+ * `clientes` do MySQL da KingHost, desligada em 27/08/2026. O cron já era
+ * no-op (`pullGigaLigado()` falso) e o sync manual morria em `detectTable`,
+ * porque `ErpService.onModuleInit` não cria mais o pool — o erro fixo era
+ * "tabela de clientes não detectada no Giga". Não há mais de onde importar.
  *
- * Full-replace (mesmo padrão do espelho de clientes slim): a tabela é zona de
- * pouso — ainda não é fonte de escrita, então o replace é seguro.
+ * `mapRow` e seus helpers FICARAM: `editarFicha` e `cadastrar` usam o mesmo
+ * mapeamento pra montar a ficha no Flow.
  *
- * Sync: manual (POST /admin/clientes-giga/sync — primeira carga) + cron diário
- * 04:40 gated por WINCRED_MIRROR_CRON_ENABLED=1.
+ * ⚠️ O painel "Clientes do Giga — importação completa" da tela
+ * `/retaguarda/wincred-mirror` chamava `POST /admin/clientes-giga/sync`, que
+ * não existe mais. `GET /status` (Postgres puro) continua e segue alimentando
+ * os contadores do painel.
  */
 @Injectable()
 export class ClientesGigaService {
   private readonly logger = new Logger(ClientesGigaService.name);
+  /** Sobrevivem porque `status()` os expõe; sem importação, ficam em repouso. */
   private running = false;
   private lastResult: { at: Date; total: number; erro?: string } | null = null;
-
-  private static readonly PAGE = 10_000;
-  private static readonly CHUNK = 1_000;
-  private static readonly MAX_ROWS = 500_000;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
   ) {}
-
-  @Cron('40 4 * * *', { name: 'clientes-giga-sync' })
-  async cronDiario(): Promise<void> {
-    if (process.env.WINCRED_MIRROR_CRON_ENABLED !== '1') return;
-    // Giga desligado (28/08): sem fonte, o sync só falharia — no-op limpo.
-    if (!require('../common/replica-giga').pullGigaLigado()) return;
-    try {
-      const r = await this.syncAll();
-      this.logger.log(`[clientes-giga] sync diário: ${JSON.stringify(r)}`);
-    } catch (e) {
-      this.logger.error(`[clientes-giga] sync diário falhou: ${(e as Error).message}`);
-    }
-  }
 
   // ── helpers de mapeamento ────────────────────────────────────────────────
 
@@ -100,98 +89,9 @@ export class ClientesGigaService {
     return out;
   }
 
-  /** Detecta a tabela de clientes e a coluna de código (pra ordenar os lotes). */
-  private async detectTable(): Promise<{ table: string; codCol: string; lojaCol: string | null } | null> {
-    const candidates = ['clientes', 'cliente', 'cadcli', 'cadcliente', 'cadclientes'];
-    for (const tbl of candidates) {
-      try {
-        const schema = await this.erp.getTableSchema(tbl, 1);
-        if (!schema) continue;
-        const cols = schema.columns.map((c: any) => String(c.field));
-        const find = (...res: RegExp[]) => cols.find((c) => res.some((re) => re.test(c))) || null;
-        const codCol = find(/^codigo$/i, /^cod_?cliente$/i, /^codcli$/i, /^id$/i);
-        if (!codCol) continue;
-        const lojaCol = find(/^loja$/i, /^cod_?loja$/i, /^filial$/i);
-        return { table: tbl, codCol, lojaCol };
-      } catch { /* tenta a próxima */ }
-    }
-    return null;
-  }
-
-  // ── sync ─────────────────────────────────────────────────────────────────
-
-  /** Dispara o sync em BACKGROUND (mesmo padrão do wincred-mirror: o POST
-   *  responde na hora e a tela faz poll do status — importação de 100k+ linhas
-   *  estouraria o timeout do proxy se fosse síncrona). */
-  startBackground(): { started: boolean; alreadyRunning: boolean } {
-    if (this.running) return { started: false, alreadyRunning: true };
-    void this.syncAll();
-    return { started: true, alreadyRunning: false };
-  }
-
-  async syncAll(): Promise<{ ok: boolean; total: number; paginas: number; erro?: string }> {
-    if (this.running) return { ok: false, total: 0, paginas: 0, erro: 'sync já em andamento' };
-    this.running = true;
-    const t0 = Date.now();
-    try {
-      const det = await this.detectTable();
-      if (!det) throw new Error('tabela de clientes não detectada no Giga');
-      const pool: any = (this.erp as any).pool;
-      if (!pool) throw new Error('pool Giga não inicializado');
-
-      // Full-replace SÓ do que veio do Giga. Ficha editada/criada NO FLOW
-      // (flowIsSource=true) fica intacta — o Flow é a fonte da verdade dela
-      // (skipDuplicates abaixo garante que o Giga não re-insere por cima).
-      await (this.prisma as any).gigaCliente.deleteMany({ where: { flowIsSource: false } });
-
-      let total = 0;
-      let paginas = 0;
-      for (let offset = 0; offset < ClientesGigaService.MAX_ROWS; offset += ClientesGigaService.PAGE) {
-        const [rows] = await pool.query(
-          `SELECT * FROM \`${det.table}\` ORDER BY \`${det.codCol}\` LIMIT ${ClientesGigaService.PAGE} OFFSET ${offset}`,
-        );
-        const batch = rows as any[];
-        if (!batch.length) break;
-        paginas++;
-
-        const data = batch
-          .map((row) => this.mapRow(row, det))
-          .filter((r): r is NonNullable<ReturnType<ClientesGigaService['mapRow']>> => !!r);
-
-        for (let i = 0; i < data.length; i += ClientesGigaService.CHUNK) {
-          await (this.prisma as any).gigaCliente.createMany({
-            data: data.slice(i, i + ClientesGigaService.CHUNK),
-            skipDuplicates: true,
-          });
-        }
-        total += data.length;
-        this.logger.log(`[clientes-giga] página ${paginas}: +${data.length} (total ${total})`);
-        if (batch.length < ClientesGigaService.PAGE) break;
-      }
-
-      // INTEGRAÇÃO: liga os registros ao Customer mestre do CRM (por CPF).
-      const vinc = await this.vincular().catch((e) => {
-        this.logger.warn(`[clientes-giga] vinculação falhou (segue sem): ${(e as Error).message}`);
-        return { vinculados: 0, semMatch: 0 };
-      });
-
-      this.lastResult = { at: new Date(), total };
-      this.logger.log(
-        `[clientes-giga] sync completo: ${total} clientes em ${Math.round((Date.now() - t0) / 1000)}s · ` +
-        `${vinc.vinculados} vinculados ao CRM`,
-      );
-      return { ok: true, total, paginas };
-    } catch (e: any) {
-      const erro = String(e?.message || e);
-      this.lastResult = { at: new Date(), total: 0, erro };
-      this.logger.error(`[clientes-giga] sync falhou: ${erro}`);
-      return { ok: false, total: 0, paginas: 0, erro };
-    } finally {
-      this.running = false;
-    }
-  }
-
-  /** Uma linha do Giga → registro giga_clientes (estruturado + rawJson). */
+  /** Uma linha do Giga → registro giga_clientes (estruturado + rawJson).
+   *  A importação morreu, mas o MAPEAMENTO ficou: `editarFicha` e `cadastrar`
+   *  montam a ficha do Flow por aqui, com codCol/lojaCol fixos. */
   private mapRow(
     row: Record<string, any>,
     det: { codCol: string; lojaCol: string | null },

@@ -16,8 +16,6 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ProductPhotosService } from './product-photos.service';
 import { CorIaService } from './cor-ia.service';
-import { WcFotosImportService } from './wc-fotos-import.service';
-import { FotoImportJobService } from './foto-import-job.service';
 import { BolinhaAutoService } from './bolinha-auto.service';
 import { AutoPublicarService } from './auto-publicar.service';
 
@@ -27,8 +25,6 @@ export class ProductPhotosController {
   constructor(
     private readonly svc: ProductPhotosService,
     private readonly corIa: CorIaService,
-    private readonly wcImport: WcFotosImportService,
-    private readonly lote: FotoImportJobService,
     private readonly bolinhaAuto: BolinhaAutoService,
     private readonly autoPublicar: AutoPublicarService,
   ) {}
@@ -128,55 +124,23 @@ export class ProductPhotosController {
    * site. O conta-gotas manual continua valendo — isto é o palpite inicial.
    * POST /product-photos/detectar-cor  body: { url }
    */
-  /**
-   * Puxa do site antigo (WooCommerce) as fotos que JÁ EXISTEM daquela REF,
-   * casando cada produto do WC com a COR do catálogo pelo nome.
-   * POST /product-photos/importar-wc   body: { ref } ou { refs: [...] }
+  /*
+   * MUSEU (04/09/2026) — a IMPORTAÇÃO DE FOTOS DO SITE ANTIGO saiu daqui.
+   *
+   * Rotas removidas: `importar-wc`, `wc-debug`, `importar-tudo`,
+   * `importar-tudo/status`, `importar-tudo/cancelar`. Todas puxavam foto do
+   * WooCommerce da KingHost, desligada em 27/08/2026 — o MySQL do WP nem abre
+   * pool (`wordpressLegadoLigado()`) e a REST não responde, então a fila do
+   * "importar tudo" nascia com `refsDoSiteAntigo()` lançando erro. Nenhuma
+   * tela do Flow chamava as cinco.
+   *
+   * Com elas saiu o `FotoImportJobService` (arquivo inteiro), que mantinha um
+   * `@Interval` de 15s remoendo jobs `rodando` que nunca mais teriam de onde
+   * baixar. A tabela `foto_import_jobs` continua no banco — ninguém mais lê.
+   *
+   * O `WcFotosImportService` FICA: `pintarBolinha` (mutirão de bolinha) e
+   * `marcaDaFamilia` (auto-publicar) são Postgres puro e estão vivos.
    */
-  @Post('importar-wc')
-  async importarWc(@Req() req: any, @Body() body: { ref?: string; refs?: string[] }) {
-    this.requireWrite(req);
-    const quem = req?.user?.id || req?.user?.sub || undefined;
-    if (body?.refs?.length) return this.wcImport.importarLote(body.refs, quem);
-    return this.wcImport.importarRef(String(body?.ref || ''), quem);
-  }
-
-  /**
-   * RAIO-X: o que o site antigo devolve pra esta REF e por que cada produto
-   * casou (ou não) com uma cor. GET /product-photos/wc-debug?ref=VOGUE
-   */
-  @Get('wc-debug')
-  async wcDebug(@Req() req: any, @Query('ref') ref: string) {
-    this.requireWrite(req);
-    return this.wcImport.diagnosticar(ref);
-  }
-
-  /**
-   * IMPORTAR TUDO — abre o lote (o cron processa em segundo plano).
-   * POST /product-photos/importar-tudo  body: { apenasSemFoto?, limite? }
-   */
-  @Post('importar-tudo')
-  async importarTudo(@Req() req: any, @Body() body: { apenasSemFoto?: boolean; limite?: number }) {
-    this.requireWrite(req);
-    return this.lote.iniciar({
-      apenasSemFoto: body?.apenasSemFoto,
-      limite: body?.limite,
-      usuario: req?.user?.id || req?.user?.sub || undefined,
-    });
-  }
-
-  /** Progresso do lote — a tela consulta de tempos em tempos. */
-  @Get('importar-tudo/status')
-  async statusLote(@Req() req: any) {
-    this.requireWrite(req);
-    return this.lote.status();
-  }
-
-  @Post('importar-tudo/cancelar')
-  async cancelarLote(@Req() req: any) {
-    this.requireWrite(req);
-    return this.lote.cancelar();
-  }
 
   /**
    * PUBLICAR O QUE JÁ TEM FOTO e ficou fora do site (07/08).

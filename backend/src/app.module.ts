@@ -19,7 +19,6 @@ import { StockMirrorModule } from './stock-mirror/stock-mirror.module';
 import { WincredMirrorModule } from './wincred-mirror/wincred-mirror.module';
 import { ProductsModule } from './products/products.module';
 import { ProductsEditorModule } from './products-editor/products-editor.module';
-import { StockConferidorModule } from './stock-conferidor/stock-conferidor.module';
 import { DemandasModule } from './demandas/demandas.module';
 import { ConciliacaoModule } from './conciliacao/conciliacao.module';
 import { ProductNativeModule } from './product-native/product-native.module';
@@ -41,7 +40,6 @@ import { QueueModule } from './queue/queue.module';
 import { WebsocketModule } from './websocket/websocket.module';
 import { WpDbModule } from './wp-db/wp-db.module';
 import { AbandonedCartsModule } from './abandoned-carts/abandoned-carts.module';
-import { CarrinhosAbandonadosModule } from './carrinhos-abandonados/carrinhos-abandonados.module';
 import { EtiquetaConfigModule } from './etiqueta-config/etiqueta-config.module';
 import { EventLoopModule } from './health/event-loop.module';
 import { HealthModule } from './health/health.module';
@@ -78,7 +76,6 @@ import { SiteVitrinesModule } from './site-vitrines/site-vitrines.module';
 import { SiteLeadsModule } from './site-leads/site-leads.module';
 import { ChatModule } from './chat/chat.module';
 import { LojaOrdersModule } from './loja-orders/loja-orders.module';
-import { CutoverModule } from './cutover/cutover.module';
 import { FinanceiroModule } from './financeiro/financeiro.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
 import { PdvModule } from './pdv/pdv.module';
@@ -133,7 +130,6 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     WincredMirrorModule,
     ProductsModule,
     ProductsEditorModule,
-    StockConferidorModule,
     DemandasModule,
     ConciliacaoModule,
     ProductNativeModule,
@@ -155,7 +151,6 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     WebsocketModule,
     WpDbModule,
     AbandonedCartsModule,
-    CarrinhosAbandonadosModule,
     EtiquetaConfigModule,
     HealthModule,
     UsersModule,
@@ -190,7 +185,6 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     SiteLeadsModule,
     ChatModule,
     LojaOrdersModule,
-    CutoverModule,
     FinanceiroModule,
     IntelligenceModule,
     PdvModule,

@@ -1,461 +1,71 @@
 'use client';
 
 /**
- * /retaguarda/conferidor-estoque — CONFERIDOR FLOW × GIGA (só admin).
+ * /retaguarda/conferidor-estoque — APOSENTADA (09/26).
  *
- * O Flow é a fonte do estoque desde 14/07 e o Giga não sobrescreve mais nada.
- * Isso protege a verdade do Flow, mas faz a divergência ficar INVISÍVEL quando
- * alguém mexe no Wincred desktop ou uma réplica falha. Esta tela mostra, SKU a
- * SKU e loja a loja, só o que discorda — com o histórico do movimento ao lado.
+ * A tela comparava o estoque SKU a SKU, loja a loja, entre o Flow e o Giga, e
+ * listava só o que discordava. Ela existia porque o Flow virou a fonte do
+ * estoque em 14/07 e o pull Giga→Flow foi desligado: os dois lados podiam se
+ * afastar em silêncio, e este relatório era quem enxergava.
  *
- * ⚠️ 22/08: saíram os botões "puxar Giga" e "importar negativos". Eles
- * copiavam o saldo do Giga pro Flow, e o caso BMM-100 VINHO 52 (São José)
- * mostrou que a premissa estava invertida — quando os dois discordam, quem
- * está errado é o Giga. A tela virou o que ela é de melhor: um relatório.
- * Divergência se resolve contando a peça e corrigindo no Flow.
+ * Não há mais dois lados. O MySQL do Giga foi desligado em 27/08/2026 e
+ * `getEstoqueGigaCompleto()` devolve lista vazia com o pool trancado — o que
+ * fazia `GET /stock-conferidor/conferir` abortar em 100% das chamadas com
+ * "Giga não respondeu", justamente pra não acusar divergência falsa. A tela
+ * nunca mais carregou um resultado.
+ *
+ * Os links do menu saíram na Onda 1; a URL fica de pé só pra bookmark antigo
+ * (era item de menu em três lugares até 03/09). Divergência de estoque hoje se
+ * resolve contando a arara e corrigindo no Flow, que é a fonte — nunca
+ * copiando de outro banco. Peça que sumiu vira registro em
+ * /retaguarda/pecas-extraviadas.
  */
 
-import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import {
-  ArrowLeft, RefreshCw, Loader2, AlertTriangle, Download, History,
-  X, Search, Check,
-} from 'lucide-react';
-import { api } from '@/lib/api';
+import { ArrowLeft, Scale } from 'lucide-react';
 
-type Linha = {
-  codigo: string;
-  loja: string;
-  flow: number;
-  giga: number;
-  diferenca: number;
-  tipo: 'DIFERENTE' | 'SO_NO_FLOW' | 'SO_NO_GIGA';
-  descricao: string | null;
-  ref: string | null;
-};
-
-type Resultado = {
-  geradoEm: string;
-  resumo: {
-    linhasFlow: number; linhasGiga: number; conferidas: number; iguais: number;
-    divergentes: number; diferentes: number; soNoFlow: number; soNoGiga: number;
-    pecasAMais: number; pecasAMenos: number; negativosFlow: number; negativosGiga: number;
-  };
-  porLoja: Array<{ loja: string; divergentes: number; pecasAMais: number; pecasAMenos: number; negativosFlow: number; negativosGiga: number }>;
-  linhas: Linha[];
-  truncado: boolean;
-};
-
-const FILTROS = [
-  { id: 'todas', label: 'Todas as divergências' },
-  { id: 'diferente', label: 'Saldo diferente' },
-  { id: 'so_flow', label: 'Só existe no Flow' },
-  { id: 'so_giga', label: 'Só existe no Giga' },
-  { id: 'negativo', label: 'Negativo em algum lado' },
-];
-
-export default function ConferidorEstoquePage() {
-  const router = useRouter();
-  const [allowed, setAllowed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const [res, setRes] = useState<Resultado | null>(null);
-
-  const [loja, setLoja] = useState('');
-  const [filtro, setFiltro] = useState('todas');
-  const [minDif, setMinDif] = useState('1');
-  const [q, setQ] = useState('');
-
-  const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
-
-  const [hist, setHist] = useState<{ codigo: string; loja: string } | null>(null);
-  const [histData, setHistData] = useState<any>(null);
-
-  useEffect(() => {
-    api<{ role: string }>('/auth/me')
-      .then((me) => {
-        if (me.role !== 'admin') { router.push('/'); return; }
-        setAllowed(true);
-      })
-      .catch(() => router.push('/login'));
-    api<Array<{ code: string; name: string }>>('/stores').then(setLojas).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const conferir = async () => {
-    setBusy(true); setErr(''); setRes(null);
-    try {
-      const p = new URLSearchParams();
-      if (loja) p.set('loja', loja);
-      p.set('filtro', filtro);
-      p.set('minDiferenca', minDif || '1');
-      p.set('limite', '2000');
-      const r = await api<Resultado>(`/stock-conferidor/conferir?${p.toString()}`);
-      setRes(r);
-      // PEÇAS EXTRAVIADAS (27/08): esta é a tela onde a loja DESCOBRE que a
-      // peça existe — está contando a arara. Se o SKU divergente está marcado
-      // como "não achei", o botão de desmarcar tem que estar aqui, e não numa
-      // tela que ninguém abre no meio da contagem.
-      void carregarExtraviadas(r.linhas.map((l) => l.codigo));
-    } catch (e: any) {
-      setErr(e?.message || 'Falha na conferência');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Chave `loja|sku` das peças marcadas como extraviadas — pinta a linha. */
-  const [extraviadas, setExtraviadas] = useState<Set<string>>(new Set());
-  const [achando, setAchando] = useState<string | null>(null);
-
-  const carregarExtraviadas = async (skus: string[]) => {
-    const unicos = Array.from(new Set(skus.filter(Boolean))).slice(0, 300);
-    if (!unicos.length) { setExtraviadas(new Set()); return; }
-    try {
-      const r = await api<Array<{ storeCode: string; sku: string }>>(
-        `/pecas-extraviadas?skus=${encodeURIComponent(unicos.join(','))}`,
-      );
-      setExtraviadas(new Set(r.map((e) => `${e.storeCode}|${e.sku}`)));
-    } catch {
-      setExtraviadas(new Set()); // sem marca é melhor que marca errada
-    }
-  };
-
-  const acheiAqui = async (l: Linha) => {
-    if (!window.confirm(
-      `Confirmar que a peça FOI ENCONTRADA na loja ${l.loja}?\n\n` +
-      `${[l.ref, l.descricao].filter(Boolean).join(' · ') || l.codigo}\n\n` +
-      'Ela volta a ser escolhida pelo sistema nos próximos pedidos.',
-    )) return;
-    const k = `${l.loja}|${l.codigo}`;
-    setAchando(k);
-    try {
-      await api('/pecas-extraviadas/achei', {
-        method: 'POST',
-        body: JSON.stringify({ storeCode: l.loja, sku: l.codigo }),
-      });
-      setExtraviadas((s) => { const n = new Set(s); n.delete(k); return n; });
-    } catch (e: any) {
-      alert(`Não consegui desmarcar: ${e?.message || e}`);
-    } finally {
-      setAchando(null);
-    }
-  };
-
-
-
-  const abrirHist = async (l: Linha) => {
-    setHist({ codigo: l.codigo, loja: l.loja });
-    setHistData(null);
-    try {
-      const d = await api<any>(`/stock-conferidor/historico?codigo=${l.codigo}&loja=${l.loja}`);
-      setHistData(d);
-    } catch (e: any) {
-      setHistData({ erro: e?.message || 'Falha', movimentos: [], vendasGiga: [] });
-    }
-  };
-
-  const nomeLoja = (code: string) =>
-    lojas.find((s) => String(s.code).padStart(2, '0') === code)?.name || `Loja ${code}`;
-
-  const visiveis = useMemo(() => {
-    if (!res) return [];
-    const t = q.trim().toLowerCase();
-    if (!t) return res.linhas;
-    return res.linhas.filter(
-      (l) =>
-        l.codigo.includes(t) ||
-        (l.ref || '').toLowerCase().includes(t) ||
-        (l.descricao || '').toLowerCase().includes(t),
-    );
-  }, [res, q]);
-
-  const baixarCsv = () => {
-    if (!res) return;
-    const head = 'codigo;ref;descricao;loja;flow;giga;diferenca;tipo';
-    const body = res.linhas
-      .map((l) => [l.codigo, l.ref || '', (l.descricao || '').replace(/;/g, ','), l.loja, l.flow, l.giga, l.diferenca, l.tipo].join(';'))
-      .join('\n');
-    const blob = new Blob([`﻿${head}\n${body}`], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `conferencia-estoque-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-  };
-
-  if (!allowed) return null;
-
-  const r = res?.resumo;
-
+export default function ConferidorEstoqueAposentadoPage() {
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex items-center gap-3">
-          <Link href="/retaguarda" className="rounded-lg border bg-white p-2 hover:bg-slate-100">
-            <ArrowLeft className="h-4 w-4" />
+    <div className="min-h-screen pastel-page">
+      <header className="bg-brand text-white shadow">
+        <div className="px-4 py-3 flex items-center gap-3 max-w-3xl mx-auto">
+          <Link href="/retaguarda" className="p-2 hover:bg-white/10 rounded" title="Voltar">
+            <ArrowLeft className="w-5 h-5" />
           </Link>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Conferidor de estoque · Flow × Giga</h1>
-            <p className="text-sm text-slate-500">
-              Lista só o que diverge. O Flow é a fonte — quando os dois discordam, confira a peça na
-              arara e corrija no Flow. Copiar o saldo do Giga saiu da tela.
-            </p>
+          <div className="flex items-center gap-2 font-bold">
+            <Scale className="w-5 h-5" />
+            Conferidor de Estoque
           </div>
         </div>
+      </header>
 
-        {/* Filtros */}
-        <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border bg-white p-4">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Loja</label>
-            <select value={loja} onChange={(e) => setLoja(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
-              <option value="">Todas</option>
-              {lojas.map((s) => (
-                <option key={s.code} value={String(s.code).padStart(2, '0')}>
-                  {String(s.code).padStart(2, '0')} · {s.name}
-                </option>
-              ))}
-            </select>
+      <main className="max-w-3xl mx-auto p-4">
+        <div className="bg-white rounded-xl border border-slate-200 p-6">
+          <div className="font-bold text-slate-800 mb-1">
+            Conferidor Flow × Giga aposentado — o Giga foi desligado em 27/08/2026
           </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Mostrar</label>
-            <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
-              {FILTROS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Diferença mínima</label>
-            <input
-              type="number" min={1} value={minDif} onChange={(e) => setMinDif(e.target.value)}
-              className="w-28 rounded-lg border px-3 py-2 text-sm"
-            />
-          </div>
-          <button
-            onClick={conferir} disabled={busy}
-            className="flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {busy ? 'Conferindo…' : 'Conferir agora'}
-          </button>
-          {res && (
-            <button onClick={baixarCsv} className="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm hover:bg-slate-100">
-              <Download className="h-4 w-4" /> CSV
-            </button>
-          )}
-          {busy && (
-            <span className="text-xs text-slate-500">
-              Lê a tabela `estoque` inteira do Giga — pode levar ~1 min.
-            </span>
-          )}
-        </div>
-
-        {err && (
-          <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {err}
-          </div>
-        )}
-
-        {r && (
-          <>
-            {/* Placar */}
-            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-6">
-              {[
-                { l: 'SKUs conferidos', v: r.conferidas.toLocaleString('pt-BR'), c: 'text-slate-900' },
-                { l: 'Batem', v: r.iguais.toLocaleString('pt-BR'), c: 'text-emerald-600' },
-                { l: 'Divergentes', v: r.divergentes.toLocaleString('pt-BR'), c: r.divergentes ? 'text-red-600' : 'text-emerald-600' },
-                { l: 'Peças a MAIS no Flow', v: r.pecasAMais.toLocaleString('pt-BR'), c: 'text-amber-600' },
-                { l: 'Peças a MENOS no Flow', v: r.pecasAMenos.toLocaleString('pt-BR'), c: 'text-amber-600' },
-                { l: 'Negativos (Flow / Giga)', v: `${r.negativosFlow} / ${r.negativosGiga}`, c: 'text-slate-700' },
-              ].map((k) => (
-                <div key={k.l} className="rounded-xl border bg-white p-3">
-                  <div className="text-xs text-slate-500">{k.l}</div>
-                  <div className={`text-xl font-bold tabular-nums ${k.c}`}>{k.v}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Por loja */}
-            {res!.porLoja.length > 0 && (
-              <div className="mb-4 overflow-x-auto rounded-xl border bg-white">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Loja</th>
-                      <th className="px-3 py-2 text-right">Divergentes</th>
-                      <th className="px-3 py-2 text-right">A mais no Flow</th>
-                      <th className="px-3 py-2 text-right">A menos no Flow</th>
-                      <th className="px-3 py-2 text-right">Neg. Flow</th>
-                      <th className="px-3 py-2 text-right">Neg. Giga</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {res!.porLoja.map((l) => (
-                      <tr key={l.loja} className="border-t">
-                        <td className="px-3 py-2 font-medium">{l.loja} · {nomeLoja(l.loja)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums font-semibold">{l.divergentes}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-amber-700">{l.pecasAMais || '—'}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-amber-700">{l.pecasAMenos || '—'}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{l.negativosFlow || '—'}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{l.negativosGiga || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Lista */}
-            <div className="mb-3 flex items-center gap-2">
-              <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  value={q} onChange={(e) => setQ(e.target.value)}
-                  placeholder="Filtrar por SKU, REF ou descrição…"
-                  className="w-full rounded-lg border py-2 pl-9 pr-3 text-sm"
-                />
-              </div>
-              <span className="text-xs text-slate-500">
-                {visiveis.length.toLocaleString('pt-BR')} linha(s)
-                {res!.truncado && ' · lista cortada no limite — use os filtros'}
-              </span>
-            </div>
-
-            <div className="overflow-x-auto rounded-xl border bg-white">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-                  <tr>
-                    <th className="px-3 py-2 text-left">SKU</th>
-                    <th className="px-3 py-2 text-left">REF</th>
-                    <th className="px-3 py-2 text-left">Descrição</th>
-                    <th className="px-3 py-2 text-left">Loja</th>
-                    <th className="px-3 py-2 text-right">Flow</th>
-                    <th className="px-3 py-2 text-right">Giga</th>
-                    <th className="px-3 py-2 text-right">Dif.</th>
-                    <th className="px-3 py-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visiveis.map((l) => {
-                    const k = `${l.codigo}|${l.loja}`;
-                    const extraviada = extraviadas.has(`${l.loja}|${l.codigo}`);
-                    return (
-                      <tr key={k} className={`border-t ${extraviada ? 'bg-red-50' : ''}`}>
-                        <td className="px-3 py-2 font-mono text-xs">{l.codigo}</td>
-                        <td className="px-3 py-2 font-mono text-xs text-slate-500">{l.ref || '—'}</td>
-                        <td className="max-w-xs truncate px-3 py-2">
-                          {l.descricao || '—'}
-                          {/* A loja está com a arara na mão AGORA — é o momento
-                              certo de dizer "essa foi dada como sumida". */}
-                          {extraviada && (
-                            <span className="ml-1.5 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
-                              extraviada
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs">{l.loja} · {nomeLoja(l.loja)}</td>
-                        <td className={`px-3 py-2 text-right tabular-nums font-semibold ${l.flow < 0 ? 'text-red-600' : ''}`}>{l.flow}</td>
-                        <td className={`px-3 py-2 text-right tabular-nums ${l.giga < 0 ? 'text-red-600' : ''}`}>{l.giga}</td>
-                        <td className={`px-3 py-2 text-right tabular-nums font-bold ${l.diferenca > 0 ? 'text-amber-600' : 'text-blue-600'}`}>
-                          {l.diferenca > 0 ? `+${l.diferenca}` : l.diferenca}
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex items-center justify-end gap-1">
-                            {extraviada && (
-                              <button
-                                onClick={() => acheiAqui(l)}
-                                disabled={achando === `${l.loja}|${l.codigo}`}
-                                title="A peça apareceu: volta a ser escolhida pelo sistema"
-                                className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
-                              >
-                                {achando === `${l.loja}|${l.codigo}`
-                                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                                  : <Check className="h-3 w-3" />}
-                                Achei
-                              </button>
-                            )}
-                            <button onClick={() => abrirHist(l)} title="Histórico" className="rounded p-1.5 hover:bg-slate-100">
-                              <History className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {!visiveis.length && (
-                    <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-500">Nenhuma divergência com esses filtros.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        {!res && !busy && !err && (
-          <div className="rounded-xl border bg-white p-10 text-center text-slate-500">
-            Clique em <b>Conferir agora</b> pra comparar os dois estoques.
-          </div>
-        )}
-      </div>
-
-      {/* Histórico */}
-      {hist && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 md:items-center md:p-6" onClick={() => setHist(null)}>
-          <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-t-2xl bg-white p-5 md:rounded-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-start justify-between">
-              <div>
-                <h2 className="font-bold text-slate-900">Histórico · SKU {hist.codigo}</h2>
-                <p className="text-xs text-slate-500">Loja {hist.loja} · {nomeLoja(hist.loja)}</p>
-              </div>
-              <button onClick={() => setHist(null)} className="rounded p-1 hover:bg-slate-100"><X className="h-4 w-4" /></button>
-            </div>
-            {!histData ? (
-              <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
-            ) : (
-              <div className="space-y-5">
-                <div>
-                  <h3 className="mb-2 text-xs font-semibold uppercase text-slate-500">Movimentos registrados no Flow</h3>
-                  {histData.movimentos?.length ? (
-                    <ul className="space-y-1 text-sm">
-                      {histData.movimentos.map((m: any, i: number) => (
-                        <li key={i} className="flex items-baseline gap-2 border-b py-1.5">
-                          <span className="w-32 shrink-0 text-xs text-slate-500">
-                            {new Date(m.createdAt).toLocaleString('pt-BR')}
-                          </span>
-                          <span className={`w-12 shrink-0 text-right font-semibold tabular-nums ${m.delta > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                            {m.delta > 0 ? `+${m.delta}` : m.delta}
-                          </span>
-                          <span className="w-20 shrink-0 text-xs tabular-nums text-slate-400">{m.qtyBefore}→{m.qtyAfter}</span>
-                          <span className="text-xs">{m.reason}{m.note ? ` · ${m.note}` : ''}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-slate-500">Nenhum movimento registrado no Flow.</p>
-                  )}
-                </div>
-                <div>
-                  <h3 className="mb-2 text-xs font-semibold uppercase text-slate-500">Vendas no Giga (caixa)</h3>
-                  {histData.vendasGiga?.length ? (
-                    <ul className="space-y-1 text-sm">
-                      {histData.vendasGiga.map((v: any, i: number) => (
-                        <li key={i} className="flex items-baseline gap-3 border-b py-1.5">
-                          <span className="w-24 shrink-0 text-xs text-slate-500">
-                            {String(v.data).slice(0, 10).split('-').reverse().join('/')}
-                          </span>
-                          <span className="tabular-nums">{v.qtd} un</span>
-                          <span className="text-xs text-slate-400">vend. {v.vendedor}{v.obs ? ` · ${v.obs}` : ''}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-slate-500">Nenhuma venda desse SKU nessa loja.</p>
-                  )}
-                </div>
-              </div>
-            )}
+          <p className="text-sm text-slate-600">
+            A tela só fazia sentido enquanto existiam dois estoques pra comparar. Agora o Flow é o
+            único, e a conferência é contar a arara e corrigir o saldo no Flow. Peça que sumiu de
+            verdade vira registro em Peças extraviadas.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href="/retaguarda"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white font-bold hover:opacity-90"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Voltar pra Retaguarda
+            </Link>
+            <Link
+              href="/retaguarda/pecas-extraviadas"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 font-bold text-slate-700 hover:bg-slate-50"
+            >
+              Peças extraviadas
+            </Link>
           </div>
         </div>
-      )}
+      </main>
     </div>
   );
 }

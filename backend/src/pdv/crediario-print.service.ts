@@ -507,20 +507,15 @@ export class CrediarioPrintService {
 
   /**
    * DIAGNÓSTICO — pega UMA venda existente e retorna EXATAMENTE o que
-   * loadSaleForPrint montou: cliente (com endereço/CEP/etc), parcelas, e
-   * o que veio cru do Giga. Pra debug "por que endereço não aparece no PDF".
+   * loadSaleForPrint montou: cliente (com endereço/CEP/etc) e parcelas.
+   * Pra debug "por que endereço não aparece no PDF".
+   *
+   * 09/26: a linha CRUA do cliente no Giga saiu daqui junto com o diagCliente
+   * (ver acima) — o que sobra é o que o Flow monta, que é o que vai no PDF.
    */
   async diagSale(saleId: string): Promise<any> {
     try {
       const data = await this.loadSaleForPrint(saleId);
-      // Re-busca cliente no Giga pra incluir a linha CRUA também
-      let clienteRaw: any = null;
-      let colunas: string[] = [];
-      if (data.sale.customerCpf) {
-        const r = await this.diagCliente(data.sale.customerCpf);
-        clienteRaw = r.cliente;
-        colunas = r.colunas;
-      }
       return {
         saleId,
         sale_db: {
@@ -531,18 +526,13 @@ export class CrediarioPrintService {
           total: data.sale.total,
         },
         cliente_montado_pra_pdf: data.cliente,
-        cliente_cru_do_giga: clienteRaw,
-        colunas_disponiveis_no_giga: colunas,
         cidadeLoja: data.cidadeLoja,
         diagnostico: {
-          tem_cliente_no_giga: !!clienteRaw,
           endereco_pdf: data.cliente.endereco || '(VAZIO)',
           cep_pdf: data.cliente.cep || '(VAZIO)',
-          motivo: !clienteRaw
-            ? 'Cliente NÃO encontrado no Giga (CPF não cadastrado lá ou não bate). Endereço fica vazio.'
-            : !data.cliente.endereco
-            ? `Cliente encontrado mas nenhuma das colunas [ENDERECO,ENDERE,END,LOGRADOURO,RUA] tem valor. Colunas disponíveis: ${colunas.join(', ')}`
-            : 'OK',
+          motivo: data.cliente.endereco
+            ? 'OK'
+            : 'Cliente sem endereço no cadastro do Flow — o PDF sai com a linha vazia.',
         },
       };
     } catch (e: any) {
@@ -550,51 +540,12 @@ export class CrediarioPrintService {
     }
   }
 
-  /**
-   * DIAGNÓSTICO — busca um cliente no Giga pelo CPF e retorna a linha CRUA
-   * (todas as colunas que existem na tabela). Usado pra entender por que
-   * endereço/CEP não estão sendo lidos: vê os nomes EXATOS das colunas e
-   * ajusta o `pick(...)` no loadSaleForPrint se necessário.
-   *
-   * Endpoint: GET /pdv/diag-cliente?cpf=XXXXXXXXXXX
-   */
-  async diagCliente(cpf: string): Promise<any> {
-    const cmTable = await this.crediarios.detectClientesTable();
-    if (!cmTable) {
-      return { error: 'Tabela de clientes não detectada no Giga', cpf };
-    }
-    const safeCpf = String(cpf || '').replace(/\D/g, '').slice(0, 14);
-    if (!safeCpf) return { error: 'CPF inválido', cpf };
-    const formattedCpf = safeCpf.length === 11
-      ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
-      : safeCpf;
-
-    const tries = [
-      { label: 'CPF dígitos', sql: `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${safeCpf}' LIMIT 1` },
-      { label: 'CPF formatado', sql: `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${formattedCpf}' LIMIT 1` },
-      { label: 'CPF REPLACE', sql: `SELECT * FROM \`${cmTable.table}\` WHERE REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}' LIMIT 1` },
-    ];
-
-    const log: any[] = [];
-    let row: any = null;
-    for (const t of tries) {
-      try {
-        const r = await this.erp.runReadOnly(t.sql, { maxRows: 1, timeoutMs: 10000 });
-        log.push({ tentativa: t.label, encontrou: !!r.rows[0] });
-        if (r.rows[0]) { row = r.rows[0]; break; }
-      } catch (e: any) {
-        log.push({ tentativa: t.label, erro: e?.message });
-      }
-    }
-
-    return {
-      tabela: cmTable.table,
-      cpf_buscado: safeCpf,
-      tentativas: log,
-      colunas: row ? Object.keys(row) : [],
-      cliente: row,
-    };
-  }
+  // O diagCliente saiu em 09/26. Ele varria a tabela de clientes do MySQL do
+  // Giga com três SELECT * (CPF cru, formatado e com REPLACE) só pra imprimir
+  // os nomes das colunas e achar de onde sai o endereço da promissória. O Giga
+  // morreu em 27/08 e o cliente da promissória vem do Postgres — a sonda ficou
+  // sem tabela pra ler. As duas rotas que a expunham (GET /pdv/diag-cliente e
+  // GET /pdv-diag/cliente) saíram junto; nenhuma tela chamava nenhuma delas.
 
   /**
    * Carrega dados básicos da venda + parcelas geradas (a partir do payment crediario)

@@ -266,14 +266,10 @@ export class PurchaseOrdersController {
     return this.svc.reposicaoBuscar(q || '');
   }
 
-  /**
-   * Diagnostico: mostra estrutura da tabela produtos + amostras de busca.
-   * GET /purchase-orders/reposicao/diagnose?q=VLM
-   */
-  @Get('reposicao/diagnose')
-  async reposicaoDiagnose(@Query('q') q: string) {
-    return this.svc.reposicaoDiagnose(q || '');
-  }
+  // GET /purchase-orders/reposicao/diagnose saiu em 09/26: fazia SHOW COLUMNS
+  // e um SELECT de amostra direto no pool MySQL do Giga pra explicar por que a
+  // busca de reposição não achava a peça. O pool nem é mais criado (o método só
+  // sabia responder "Pool ERP nao inicializado") e nenhuma tela chamava.
 
   /**
    * Confirma reposicao: adiciona estoque no Wincred + retorna labels pra impressao.

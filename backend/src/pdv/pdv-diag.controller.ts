@@ -4,15 +4,9 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CrediarioPrintService } from './crediario-print.service';
 import { CoordsDbService } from './coords-db.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
-import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
-import { ErpService } from '../erp/erp.service';
-import { PrismaService } from '../prisma/prisma.service';
 import * as fs from 'fs';
 
-const MULTA_PERCENT_DEFAULT = 2.0; // 2% sobre o valor da parcela (Lurd's padrão)
-
 const OVERRIDE_PATH = '/tmp/promissoria-coords.json';
-const APP_CONFIG_KEY = 'promissoria-coords';
 
 /**
  * /pdv-diag — endpoints de DIAGNÓSTICO/CALIBRAÇÃO da promissória.
@@ -20,6 +14,13 @@ const APP_CONFIG_KEY = 'promissoria-coords';
  *
  * SEGURO: só lida com geometria de impressão (coordenadas, paths, override
  * temporário em /tmp). Zero dado de cliente/venda.
+ *
+ * 09/26 — saíram daqui `baixa-retroativa` (POST e GET), `find`, `parcela` e
+ * `cliente`. Os quatro eram sondas de mão na tabela `movimento` e na de
+ * clientes do MySQL do Giga, morto desde 27/08: SELECT * cru pra descobrir
+ * nome de coluna e um UPDATE forçado de parcela paga. Nenhuma tela chamava
+ * nenhum deles — eram digitados na barra do navegador durante o mapeamento do
+ * crediário legado, que já virou tabela nativa no Postgres.
  */
 @Controller('pdv-diag')
 export class PdvDiagController {
@@ -27,8 +28,6 @@ export class PdvDiagController {
     private readonly crediarioPrint: CrediarioPrintService,
     private readonly coordsDb: CoordsDbService,
     private readonly crediarios: CrediariosService,
-    private readonly crediarioBaixa: CrediarioBaixaService,
-    private readonly erp: ErpService,
   ) {}
 
   /**
@@ -46,230 +45,6 @@ export class PdvDiagController {
       res.status(200).json({
         colunas_detectadas: map,
         _help: 'Se "pago" ou "dataPagamento" estiverem null, o UPDATE da baixa NÃO atualiza esses campos. WinCred mostra como pendente.',
-      });
-    } catch (e: any) {
-      res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message });
-    }
-  }
-
-  /**
-   * POST /pdv-diag/baixa-retroativa — força UPDATE em uma parcela específica
-   * pra preencher PAGO=SIM + PAGAMENTO=data. Uso pra corrigir parcelas que
-   * já foram pagas no físico mas o sistema não atualizou os campos certos.
-   *
-   * Body: { controle: number, parcela: number, data: 'YYYY-MM-DD' }
-   * Ou via query string pro browser: ?controle=X&parcela=Y&data=YYYY-MM-DD
-   *
-   * IMPORTANTE: requer ERP_WRITE_ENABLED=true no Railway (já deve estar).
-   */
-  @UseGuards(JwtAuthGuard)
-  @Post('baixa-retroativa')
-  async postBaixaRetroativa(@Body() body: any, @Res() res: Response) {
-    return this.executarBaixaRetroativa(body || {}, res);
-  }
-  // GET pra facilitar pelo navegador (sem precisar de tool de POST)
-  @UseGuards(JwtAuthGuard)
-  @Get('baixa-retroativa')
-  async getBaixaRetroativa(@Query() q: any, @Res() res: Response) {
-    return this.executarBaixaRetroativa(q, res);
-  }
-
-  private async executarBaixaRetroativa(input: any, res: Response) {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    try {
-      // O "Controle" da tela WinCred = coluna NUMEROCOMPRA do banco.
-      // Aceita tanto ?controle= quanto ?numeroCompra=
-      const numCompra = String(input.controle || input.numeroCompra || '').replace(/\D/g, '');
-      const parcela = String(input.parcela || '').replace(/\D/g, '');
-      const data = String(input.data || '').trim(); // YYYY-MM-DD
-      if (!numCompra || !parcela || !data) {
-        return res.status(400).json({
-          error: 'Parâmetros obrigatórios: controle (= NUMEROCOMPRA da tela), parcela, data (YYYY-MM-DD)',
-          exemplo: '/api/pdv-diag/baixa-retroativa?controle=946758&parcela=4&data=2026-05-02',
-        });
-      }
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
-        return res.status(400).json({ error: 'Data deve ser YYYY-MM-DD (ex: 2026-05-02)' });
-      }
-
-      const map = await this.crediarios.detectColumns(true); // FORCE refresh
-      if (!map.numeroCompra || !map.parcela || !map.dataPagamento || !map.pago) {
-        return res.status(500).json({
-          error: 'Colunas críticas não detectadas (precisa: numeroCompra, parcela, dataPagamento, pago)',
-          map,
-        });
-      }
-
-      // Busca a linha pra pegar REGISTRO/CONTROLE real (chave composta da tabela)
-      const sqlSelect = `SELECT * FROM \`movimento\` WHERE \`${map.numeroCompra}\` = ${numCompra} AND \`${map.parcela}\` = ${parcela} LIMIT 1`;
-      const r = await this.erp.runReadOnly(sqlSelect, { maxRows: 1, timeoutMs: 10000 });
-      if (!r.rows.length) {
-        return res.status(404).json({ error: `Parcela não encontrada: NUMEROCOMPRA=${numCompra} PARCELA=${parcela}` });
-      }
-      const row = r.rows[0] as any;
-      const valorAntes = {
-        pago: row[map.pago],
-        pagamento: row[map.dataPagamento],
-        valor_pago: map.valorPago ? row[map.valorPago] : null,
-      };
-
-      // Pega REGISTRO e CONTROLE reais da linha (chave composta da tabela)
-      const registroVal = map.registro ? row[map.registro] : null;
-      const controleVal = map.controle ? row[map.controle] : null;
-      if (!registroVal || !controleVal) {
-        return res.status(500).json({
-          error: `REGISTRO ou CONTROLE não preenchido na linha`,
-          map,
-          row,
-        });
-      }
-
-      const valorParcela = map.valorParcela ? Number(row[map.valorParcela]) || 0 : 0;
-
-      // Calcula JUROS + MULTA proporcional ao atraso (vencimento → data pagamento)
-      const vencimentoStr = map.vencimento ? row[map.vencimento] : null;
-      const vencimento = vencimentoStr ? new Date(vencimentoStr) : null;
-      const dataPgto = new Date(data + 'T12:00:00');
-      const cfg = await this.crediarioBaixa.getConfig();
-      const calc = vencimento
-        ? this.crediarioBaixa.calcJuros(vencimento, valorParcela, cfg, dataPgto)
-        : { diasAtraso: 0, juros: 0 };
-      const multa = (vencimento && calc.diasAtraso > 0)
-        ? Math.round(valorParcela * (MULTA_PERCENT_DEFAULT / 100) * 100) / 100
-        : 0;
-
-      const result = await this.erp.markCrediarioParcelaPaid({
-        registro: registroVal,
-        controle: controleVal,
-        valorPago: valorParcela,
-        dataPagamento: dataPgto,
-        juros: calc.juros,
-        multa: multa,
-        columns: {
-          registro: map.registro,
-          controle: map.controle,
-          pago: map.pago,
-          dataPagamento: map.dataPagamento,
-          valorPago: map.valorPago,
-          juros: map.juros,
-          multa: map.multa,
-        },
-      });
-
-      return res.status(200).json({
-        ok: result.success,
-        numeroCompra: numCompra,
-        parcela,
-        data_aplicada: data,
-        valor_parcela: valorParcela,
-        dias_atraso: calc.diasAtraso,
-        juros_calculado: calc.juros,
-        multa_calculada: multa,
-        config_juros: cfg,
-        multa_percent_usado: MULTA_PERCENT_DEFAULT,
-        registro_giga: registroVal,
-        controle_giga: controleVal,
-        valores_antes: valorAntes,
-        update_result: result,
-      });
-    } catch (e: any) {
-      res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message, stack: e?.stack });
-    }
-  }
-
-  /**
-   * GET /pdv-diag/find?valor=946758 — procura um valor numérico em TODAS as
-   * colunas numéricas da tabela `movimento` e retorna as linhas + nome da
-   * coluna onde achou. Pra identificar qual coluna do banco corresponde ao
-   * "Controle" mostrado na tela do WinCred.
-   */
-  @UseGuards(JwtAuthGuard)
-  @Get('find')
-  async getFind(@Query('valor') valor: string, @Res() res: Response) {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    try {
-      const v = String(valor || '').replace(/\D/g, '');
-      if (!v) return res.status(400).json({ error: 'Query param "valor" obrigatório (numérico)' });
-
-      // Pega lista de colunas da tabela movimento
-      const colsR = await this.erp.runReadOnly(
-        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'movimento' AND TABLE_SCHEMA = DATABASE() ORDER BY ORDINAL_POSITION`,
-        { maxRows: 200, timeoutMs: 10000 },
-      );
-      const cols = colsR.rows.map((r: any) => r.COLUMN_NAME);
-
-      // Pra cada coluna, tenta um SELECT COUNT(*) WHERE col = v. Se achou >0, registra.
-      const achados: Array<{ coluna: string; quantas: number; amostra: any[] }> = [];
-      for (const col of cols) {
-        try {
-          const c = await this.erp.runReadOnly(
-            `SELECT COUNT(*) AS qtd FROM \`movimento\` WHERE \`${col}\` = ${v}`,
-            { maxRows: 1, timeoutMs: 5000 },
-          );
-          const qtd = Number((c.rows[0] as any)?.qtd) || 0;
-          if (qtd > 0) {
-            const amostra = await this.erp.runReadOnly(
-              `SELECT * FROM \`movimento\` WHERE \`${col}\` = ${v} LIMIT 3`,
-              { maxRows: 3, timeoutMs: 5000 },
-            );
-            achados.push({ coluna: col, quantas: qtd, amostra: amostra.rows });
-          }
-        } catch { /* coluna não-numérica, ignora */ }
-      }
-
-      res.status(200).json({
-        valor_buscado: v,
-        total_colunas_testadas: cols.length,
-        achados,
-        _help: 'A coluna "Controle" da tela do WinCred provavelmente é a que retornou MAIS resultados (uma linha por parcela do mesmo crediário).',
-      });
-    } catch (e: any) {
-      res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message });
-    }
-  }
-
-  /**
-   * GET /pdv-diag/parcela?registro=X&controle=Y — retorna a linha COMPLETA
-   * de movimento do Giga pra essa parcela. Pra ver o que tem realmente
-   * gravado nas colunas: PAGO, DATA_PAGAMENTO, VALOR_PAGO, etc.
-   *
-   * Use pra investigar parcelas que aparecem como "pendentes" no WinCred
-   * mesmo após baixa pelo nosso sistema.
-   */
-  @UseGuards(JwtAuthGuard)
-  @Get('parcela')
-  async getParcela(@Query('registro') registro: string, @Query('controle') controle: string, @Res() res: Response) {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    try {
-      const map = await this.crediarios.detectColumns();
-      if (!map.registro || !map.controle) {
-        return res.status(500).json({ error: 'Colunas REGISTRO/CONTROLE não detectadas' });
-      }
-      const safeReg = String(registro || '').replace(/[^0-9]/g, '');
-      const safeCtl = String(controle || '').replace(/[^0-9]/g, '');
-      if (!safeReg || !safeCtl) {
-        return res.status(400).json({ error: 'registro e controle são obrigatórios e numéricos' });
-      }
-      const sql = `SELECT * FROM \`movimento\` WHERE \`${map.registro}\` = ${safeReg} AND \`${map.controle}\` = ${safeCtl} LIMIT 1`;
-      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-      const row = r.rows[0];
-      if (!row) return res.status(404).json({ error: `Parcela não encontrada: REGISTRO=${safeReg} CONTROLE=${safeCtl}` });
-
-      // Destaque dos campos críticos pra debug
-      const pagoCol = map.pago || 'PAGO';
-      const dataCol = map.dataPagamento || '?';
-      const valorCol = map.valorPago || '?';
-      res.status(200).json({
-        registro: safeReg,
-        controle: safeCtl,
-        colunas_detectadas: map,
-        valores_criticos: {
-          [`PAGO (${pagoCol})`]: (row as any)[pagoCol] ?? null,
-          [`DATA_PAGAMENTO (${dataCol})`]: (row as any)[dataCol] ?? null,
-          [`VALOR_PAGO (${valorCol})`]: (row as any)[valorCol] ?? null,
-        },
-        linha_completa: row,
-        _help: 'Se PAGO=SIM mas o WinCred mostra como pendente, é provável que a coluna que ele consulta na tela é OUTRA. Compara os campos da linha_completa com a tela do WinCred.',
       });
     } catch (e: any) {
       res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message });
@@ -329,22 +104,6 @@ export class PdvDiagController {
   async getCalibrar(@Res() res: Response) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(CALIBRAR_HTML);
-  }
-
-  /**
-   * GET /pdv-diag/cliente?cpf=XXX — busca cliente no Giga, retorna a linha
-   * CRUA + lista de colunas. Pra entender por que endereço/CEP não estão vindo.
-   * Sem auth pra acesso direto pelo navegador (debug).
-   */
-  @UseGuards(JwtAuthGuard)
-  @Get('cliente')
-  async getCliente(@Query('cpf') cpf: string, @Res() res: Response) {
-    try {
-      const result = await this.crediarioPrint.diagCliente(cpf);
-      res.status(200).json(result);
-    } catch (e: any) {
-      res.status(500).json({ statusCode: 500, message: 'Erro no diag-cliente', detail: e?.message });
-    }
   }
 
   /**

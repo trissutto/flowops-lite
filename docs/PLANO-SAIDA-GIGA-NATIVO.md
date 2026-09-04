@@ -155,6 +155,6 @@ mensalidade e mantém o ponto frágil vivo, mas evita a migração de servidor.
 
 ## O que trava agora
 
-O **inventário** (`scripts/kinghost/01-inventario.ps1` ou as queries no
+O **inventário** (`backend/scripts/_arquivo-giga/01-inventario.ps1` ou as queries no
 HeidiSQL). Sem tamanho e engine não dá pra dimensionar a Fase 0 nem planejar
 a janela de nada.

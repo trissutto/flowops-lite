@@ -1625,57 +1625,9 @@ export class PurchaseOrdersService {
     };
   }
 
-  /**
-   * Diagnostico: mostra colunas da tabela produtos + amostras de busca pra termo.
-   */
-  async reposicaoDiagnose(q: string) {
-    const out: any = {
-      timestamp: new Date().toISOString(),
-      termo: q || '',
-      colunas: null,
-      colunasError: null,
-      amostraVLM: null,
-      amostraVLMError: null,
-      buscaResultado: 0,
-      buscaError: null,
-    };
-    const pool = (this.erp as any).pool;
-    if (!pool) {
-      out.colunasError = 'Pool ERP nao inicializado';
-      return out;
-    }
-    try {
-      const [cols] = await pool.query(`SHOW COLUMNS FROM produtos`);
-      out.colunas = (cols as any[]).map((c) => c.Field);
-    } catch (e: any) {
-      out.colunasError = e?.message;
-    }
-    if (q) {
-      const termoUp = q.toUpperCase();
-      const norm = termoUp.replace(/[\s\-]/g, '');
-      try {
-        const [rows] = await pool.query(
-          `SELECT CODIGO, REF, COR, TAMANHO, VENDAUN, DESCRICAOCOMPLETA, DESCRICAOPDV, MARCA
-             FROM produtos
-            WHERE REF LIKE ?
-               OR REPLACE(REPLACE(REF, '-', ''), ' ', '') LIKE ?
-               OR DESCRICAOCOMPLETA LIKE ?
-               OR DESCRICAOPDV LIKE ?
-               OR CODIGO LIKE ?
-            LIMIT 5`,
-          [`%${termoUp}%`, `%${norm}%`, `%${termoUp}%`, `%${termoUp}%`, `%${termoUp}%`],
-        );
-        out.amostraVLM = rows;
-      } catch (e: any) {
-        out.amostraVLMError = e?.message;
-      }
-      try {
-        const r = await this.reposicaoBuscar(q);
-        out.buscaResultado = r.length;
-      } catch (e: any) {
-        out.buscaError = e?.message;
-      }
-    }
-    return out;
-  }
+  // O reposicaoDiagnose saiu em 09/26. Ele pegava `(this.erp as any).pool` e
+  // rodava SHOW COLUMNS + um SELECT de amostra na tabela `produtos` do MySQL
+  // do Giga pra explicar por que a busca de reposição não achava a peça. O
+  // pool não é mais criado desde 27/08, então a única resposta possível virou
+  // "Pool ERP nao inicializado" — e nenhuma tela chamava a rota.
 }

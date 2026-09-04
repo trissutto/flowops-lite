@@ -2476,22 +2476,10 @@ export class PdvController {
     }
   }
 
-  /**
-   * GET /pdv/diag-cliente?cpf=XXX — diagnóstico do cliente no Giga.
-   * Retorna a linha crua + lista de colunas pra identificar por que
-   * endereço/CEP/etc não estão vindo.
-   */
-  @Get('diag-cliente')
-  async getDiagCliente(@Req() req: any, @Query('cpf') cpf: string, @Res() res: Response) {
-    this.requireRole(req);
-    try {
-      const result = await this.crediarioPrint.diagCliente(cpf);
-      res.status(200).json(result);
-    } catch (e: any) {
-      console.error('[pdv/diag-cliente] FALHA', e?.stack || e);
-      res.status(500).json({ statusCode: 500, message: 'Erro no diag', detail: e?.message });
-    }
-  }
+  // GET /pdv/diag-cliente saiu em 09/26 junto com o `diagCliente`: ele fazia
+  // SELECT * na tabela de clientes do MySQL do Giga (morto desde 27/08) só pra
+  // listar os nomes das colunas e descobrir de onde vinha o endereço da
+  // promissória. Nenhuma tela chamava — era uma sonda de barra de navegador.
 
   /**
    * GET /pdv/promissorias-teste-debug-pdf — promissória de teste COM RÉGUA
