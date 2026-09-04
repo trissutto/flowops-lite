@@ -1702,6 +1702,51 @@ export class RoutingService {
       reason: 'movimentação manual de peça',
     });
 
+    /**
+     * "ACHAMOS AGORA" — A MÃO DA MATRIZ APAGA O "NÃO ACHEI" DA LOJA DE DESTINO
+     * (04/09 — ordem do dono, pedido 1083: "quero que Itanhaém mande a BMM-100
+     * MILITAR, achamos agora").
+     *
+     * Mandar a peça PRA loja que a tinha dado como extraviada é a matriz
+     * contradizendo o reporte na cara: alguém foi na arara e achou. Se a marca
+     * ficasse de pé, ela seguiria valendo pro que importa — o roteamento
+     * continuaria pulando essa loja PRA ESSE SKU, e a tela continuaria
+     * pintando de vermelho a peça que está na mão da vendedora. A decisão
+     * manual virava meia decisão, e só se completava se alguém lembrasse de
+     * passar depois na /retaguarda/pecas-extraviadas pra clicar "Achei".
+     *
+     * Recorte de propósito: só o(s) SKU(s) que MOVERAM, e só na loja de
+     * DESTINO. O "não achei" das outras lojas e das outras peças continua de
+     * pé — quem não foi contradito por ninguém não volta pro jogo sozinho.
+     *
+     * A linha não some: `marcarAchada*` carimba `achadaEm`/`achadaPor`, então
+     * o histórico de "extraviada que vive reaparecendo" (sintoma de arara
+     * bagunçada) continua inteiro.
+     */
+    const skusMovidos = Array.from(new Set(mover.map((i) => String(i.sku))));
+    let extraviadasAchadas = 0;
+    for (const sku of skusMovidos) {
+      try {
+        const r: any = await this.extraviadas.marcarAchadaPorSku(
+          alvo.code,
+          sku,
+          opts?.userId ?? null,
+        );
+        extraviadasAchadas += Number(r?.count) || 0;
+      } catch (e: any) {
+        // Falhar aqui NÃO desfaz a movimentação: a peça já tem dono novo, e
+        // isto é o carimbo que sobra. Loga pra tela de extraviadas continuar
+        // sendo o plano B manual.
+        this.logger.warn(`[mover-item] "achei" ${alvo.code}/${sku}: ${e?.message || e}`);
+      }
+    }
+    if (extraviadasAchadas > 0) {
+      this.logger.log(
+        `[mover-item] ${alvo.code}: ${extraviadasAchadas} marca(s) de EXTRAVIADA desfeita(s) ` +
+          `por movimentação manual (${skusMovidos.join(', ')}) — a loja volta ao roteamento deste SKU.`,
+      );
+    }
+
     const nomeDaPeca = (i: any) =>
       [i.ref || i.sku, [i.cor, i.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' ');
     const deLojas = Array.from(
@@ -1755,6 +1800,10 @@ export class RoutingService {
             : '') +
           (voltouPraRua
             ? ' Pedido estava ENTREGUE com esta peça pendente: voltou pra "enviado" e só fecha de novo quando ela chegar.'
+            : '') +
+          (extraviadasAchadas
+            ? ` A ${alvo.code} tinha dado ${mover.length === 1 ? 'esta peça' : 'estas peças'} como EXTRAVIADA ` +
+              `("não achei"): a marca foi desfeita aqui — ela volta a ser escolhida pelo roteamento pra este código.`
             : '') +
           (opts?.nome ? ` · por ${opts.nome}` : ''),
       },
@@ -1861,6 +1910,8 @@ export class RoutingService {
       deStoreCodes: deLojas,
       paraStoreCode: alvo.code,
       paraStoreName: alvo.name,
+      /** Marcas de "não achei" desfeitas no destino — a tela avisa em texto. */
+      extraviadasAchadas,
       cardCriado: cardCriado
         ? {
             id: cardCriado.id,

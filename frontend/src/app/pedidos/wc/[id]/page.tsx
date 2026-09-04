@@ -875,7 +875,11 @@ export default function PedidoDetailPage() {
     setMoverBusy(storeCode);
     setMoverErro(null);
     try {
-      const res = await api<{ ok: boolean; avisoJuntada?: string | null; cardsRemovidos?: string[] }>(
+      const res = await api<{
+        ok: boolean; avisoJuntada?: string | null; cardsRemovidos?: string[];
+        /** Marcas de "não achei" que a escolha manual desfez nesta loja. */
+        extraviadasAchadas?: number;
+      }>(
         `/orders/wc/${wcId}/mover-itens`,
         { method: 'POST', body: JSON.stringify({ orderItemIds: [moverPeca.item.id], toStoreCode: storeCode }) },
       );
@@ -885,12 +889,15 @@ export default function PedidoDetailPage() {
       setMoverPeca(null);
       setFlash(
         `✓ ${peca} → ${storeCode}` +
-          (res.cardsRemovidos?.length ? ` · card ${res.cardsRemovidos.join('/')} ficou vazio e saiu` : ''),
+          (res.cardsRemovidos?.length ? ` · card ${res.cardsRemovidos.join('/')} ficou vazio e saiu` : '') +
+          // A escolha manual VALE MAIS que o "não achei" da loja: dizer isso na
+          // tela é o que evita a viagem à /retaguarda/pecas-extraviadas depois.
+          (res.extraviadasAchadas ? ` · "extraviada" desfeita na ${storeCode} — ela volta ao roteamento desta peça` : ''),
       );
       setTimeout(() => setFlash(null), 8000);
       const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
       setLiveStatus(Array.isArray(fresh) ? fresh : []);
-      loadJuntada(); loadRaiox();
+      loadJuntada(); loadRaiox(); loadItemReports();
       if (res.avisoJuntada) setSepError(`🧲 ${res.avisoJuntada}`);
     } catch (e: any) {
       setMoverErro(e?.body?.message || e?.message || 'Não deu pra mover a peça.');
@@ -4862,7 +4869,8 @@ export default function PedidoDetailPage() {
               <p className="text-[11px] text-slate-500 mt-1.5">
                 <b className="text-red-700">EXTRAVIADA AQUI</b> = essa loja já procurou esta peça e
                 não achou. O saldo dela continua no sistema (ninguém apagou estoque), mas ela deixou
-                de ser escolhida sozinha. Se a peça aparecer, marque como encontrada.
+                de ser escolhida sozinha. <b>Escolher a loja aqui já desfaz essa marca</b> — é a
+                matriz dizendo "achamos agora", e a loja volta a ser escolhida pra esta peça.
               </p>
             </div>
             <div className="p-3 border-t flex justify-end">
