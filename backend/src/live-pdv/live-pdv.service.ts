@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+﻿import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { PrismaService } from '../prisma/prisma.service';
@@ -41,9 +41,6 @@ export class LivePdvService {
   private readonly COMMITTED = ['reserved', 'paid', 'separating'];
   /** Throttle da checagem AO VIVO no gateway por carrinho (anti-flood de polling). */
   private readonly lastLiveCheck = new Map<string, number>();
-  /** Throttle do refresh PONTUAL do espelho de estoque (por conjunto de códigos). */
-  private readonly lastStockRefresh = new Map<string, number>();
-  private static readonly STOCK_REFRESH_TTL_MS = 45_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -256,79 +253,14 @@ export class LivePdvService {
     };
   }
 
-  /**
-   * Refresh PONTUAL do espelho giga_estoque só pros CODIGOs de UMA peça — query
-   * indexada e minúscula no Giga (nada do full de 283k linhas do cron horário).
-   * Timeout de 8s + catch total: se o Giga pendurar, o espelho fica como está e
-   * a grade segue sendo servida por ele. Retorna true se atualizou.
-   *
-   * Formato: reescreve o codigo NO FORMATO QUE A GRADE CONSULTA (o codigo do
-   * giga_produto), casando pelo valor numérico — padding de zeros é
-   * inconsistente entre produtos e estoque no Giga (convenção do projeto:
-   * JOIN sempre via CAST AS UNSIGNED).
-   *
-   * ⚠️ DESLIGADO EM 22/08, mesma flag do write-through: `giga_estoque` deixou
-   * de ser espelho em 14/07 — é a tabela de estoque do Flow. Apagar e regravar
-   * essas linhas com o saldo do Giga tira a verdade da grade em vez de deixá-la
-   * fresca (a venda da live já aplica o delta no Flow na hora) e reimporia o
-   * fantasma do BMM-100 VINHO 52 em cima da correção, dentro dos 45s do TTL.
+  /*
+   * O refresh PONTUAL do estoque a partir de um ERP externo foi REMOVIDO
+   * (desligado em 22/08, codigo apagado em 09/2026). A tabela `giga_estoque`
+   * deixou de ser espelho em 14/07: e a tabela de estoque do FLOW. Apagar e
+   * regravar aquelas linhas com o saldo de fora tirava a verdade da grade em
+   * vez de deixa-la fresca (a venda da live ja aplica o delta no Flow na
+   * hora) e reimpunha o fantasma do BMM-100 VINHO 52 por cima da correcao.
    */
-  private async refreshMirrorStock(codigos: string[], opts?: { force?: boolean }): Promise<boolean> {
-    if (String(process.env.ERP_STOCK_WRITEBACK_GIGA ?? '0').trim() !== '1') return false;
-    const uniq = Array.from(
-      new Set(codigos.map((c) => String(c).trim()).filter((c) => /^\d+$/.test(c))),
-    ).slice(0, 80);
-    if (!uniq.length) return false;
-    const key = uniq.slice().sort().join(',');
-    const now = Date.now();
-    if (!opts?.force && now - (this.lastStockRefresh.get(key) || 0) < LivePdvService.STOCK_REFRESH_TTL_MS) {
-      return false;
-    }
-    this.lastStockRefresh.set(key, now);
-    if (this.lastStockRefresh.size > 1000) {
-      for (const [k, t] of this.lastStockRefresh) {
-        if (now - t > LivePdvService.STOCK_REFRESH_TTL_MS) this.lastStockRefresh.delete(k);
-      }
-    }
-    const pool: any = (this.erp as any).pool;
-    if (!pool) return false;
-    try {
-      const nums = uniq.map((c) => Number(c));
-      const placeholders = nums.map(() => '?').join(',');
-      const [rows] = await pool.query(
-        {
-          sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
-                  FROM estoque
-                 WHERE CAST(CODIGO AS UNSIGNED) IN (${placeholders})
-                 GROUP BY CODIGO, LOJA`,
-          timeout: 8_000,
-        },
-        nums,
-      );
-      const byNum = new Map<number, string>(uniq.map((c) => [Number(c), c]));
-      const data = (rows as any[])
-        .map((r) => ({
-          codigo: byNum.get(Number(r.codigo)) || String(r.codigo ?? '').trim(),
-          loja: String(r.loja ?? '').trim(),
-          estoque: Number(r.estoque) || 0,
-        }))
-        .filter((r) => r.codigo && r.loja && r.estoque > 0);
-      // Apaga nos DOIS formatos (pedido e cru do Giga) e regrava — código que
-      // zerou o estoque sai do espelho (a grade passa a mostrar esgotado).
-      const apagar = Array.from(
-        new Set([...uniq, ...(rows as any[]).map((r) => String(r.codigo ?? '').trim())]),
-      ).filter(Boolean);
-      await this.prisma.$transaction([
-        (this.prisma as any).gigaEstoque.deleteMany({ where: { codigo: { in: apagar } } }),
-        ...(data.length ? [(this.prisma as any).gigaEstoque.createMany({ data })] : []),
-      ]);
-      this.logger.log(`[live] estoque pontual: ${uniq.length} código(s) → ${data.length} linha(s) frescas`);
-      return true;
-    } catch (e) {
-      this.logger.warn(`[live] refresh pontual de estoque falhou (espelho preservado): ${(e as Error).message}`);
-      return false;
-    }
-  }
 
   // Estoque por loja — ESPELHO PRIMEIRO (giga_estoque no Postgres). Só encosta no
   // Giga ao vivo se o espelho não trouxer NADA pra nenhum código (produto novo
@@ -862,15 +794,8 @@ export class LivePdvService {
     const codigos = Array.from(
       new Set(productRows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
     );
-    // Peça no ar SEMPRE fresca: refresh pontual do espelho direto do Giga
-    // (query minúscula indexada, throttle 45s). Espera no MÁXIMO 2,5s — caso
-    // normal responde em ms e a grade já sai fresca; se o Giga estiver lento,
-    // a grade sai do espelho e o refresh termina em background (a próxima
-    // busca da mesma peça pega o estoque novo).
-    await Promise.race([
-      this.refreshMirrorStock(codigos).catch(() => false),
-      new Promise((r) => setTimeout(r, 2_500)),
-    ]);
+    // A grade já sai fresca sem refresh nenhum: `giga_estoque` é a tabela de
+    // estoque do FLOW e a venda da live aplica o delta nela na hora.
     const stockRes = await this.stockWithMirror(codigos);
     const detailed = stockRes.detailed;
     const fromMirror = resolved.fromMirror || stockRes.fromMirror;
@@ -1028,18 +953,14 @@ export class LivePdvService {
    * Retorna a grade da validação pro front exibir a prévia idêntica à live.
    */
   /**
-   * Botão "Atualizar estoque" da grade: FORÇA o refresh pontual (ignora o
-   * throttle de 45s) e devolve a grade recalculada. Se o Giga não responder
-   * em 8s, devolve a grade do espelho mesmo — nunca trava a live.
+   * Botão "Atualizar estoque" da grade: recalcula a grade lendo o estoque do
+   * Flow de novo. Não existe mais um "refresh" a buscar de fora — a tabela
+   * lida JÁ é a fonte, e a venda da live aplica o delta nela na hora; o botão
+   * serve pra quem quer conferir depois de um movimento em outra tela.
    */
   async searchGradeFresh(term: string, sessionId?: string) {
     const q = String(term || '').trim();
     if (!q) throw new BadRequestException('Informe a referência');
-    const resolved = await this.resolveRowsWithMirror(q);
-    const codigos = Array.from(
-      new Set(resolved.rows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
-    );
-    if (codigos.length) await this.refreshMirrorStock(codigos, { force: true });
     return this.searchGrade(q, sessionId);
   }
 
@@ -3938,8 +3859,12 @@ export class LivePdvService {
       select: { id: true, code: true, name: true },
     });
     const storeByCode = new Map<string, any>(storesAll.map((s: any) => [s.code, s]));
+    // ⚠️ `ERP_WRITE_ENABLED` não significa mais o que o nome diz: hoje ela
+    // governa a BAIXA DE ESTOQUE NO FLOW (ver common/replica-giga.ts). O
+    // fallback pra `PDV_ERP_WRITE_ENABLED` saiu em 09/2026 — aquela env só
+    // escolhia entre shadow e real na gravação num ERP que não existe mais.
     const erpWriteOn = ['1', 'true'].includes(
-      String(process.env.ERP_WRITE_ENABLED ?? process.env.PDV_ERP_WRITE_ENABLED ?? '').toLowerCase(),
+      String(process.env.ERP_WRITE_ENABLED ?? '').toLowerCase(),
     );
 
     const resultado: any[] = [];

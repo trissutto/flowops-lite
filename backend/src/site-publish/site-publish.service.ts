@@ -78,7 +78,7 @@ export class SitePublishService {
 
     const snapshot = await this.erp.getRefColorForQueue(refCode, cor);
     if (!snapshot) {
-      throw new NotFoundException(`REF ${refCode} cor ${cor} não encontrada no Gigasistemas.`);
+      throw new NotFoundException(`REF ${refCode} cor ${cor} não encontrada no catálogo.`);
     }
 
     const tamanhosPayload = snapshot.tamanhos.map((t) => ({

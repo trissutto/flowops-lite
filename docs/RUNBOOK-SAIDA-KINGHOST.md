@@ -1,5 +1,7 @@
 # Runbook — desligar a KingHost
 
+> **REGISTRO HISTORICO (31/07/2026) — nao execute estes passos.** O plano mudou de rumo (ver `PLANO-SAIDA-GIGA-NATIVO.md`): o banco nao foi movido, os dados vieram pro Postgres. O servidor da KingHost foi DESLIGADO em 27/08/2026. Estado atual: `CLAUDE.md` na raiz.
+
 Objetivo: apagar o servidor dedicado da KingHost **sem parar a operação**,
 movendo o que vive nele em vez de reescrever o sistema.
 

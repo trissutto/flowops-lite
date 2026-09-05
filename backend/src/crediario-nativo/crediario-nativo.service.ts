@@ -228,7 +228,7 @@ export class CrediarioNativoService {
     const t0 = Date.now();
     try {
       const pool: any = (this.erp as any).pool;
-      if (!pool) throw new Error('pool Giga não inicializado');
+      if (!pool) throw new Error('importacao encerrada: o sistema antigo foi desligado em 27/08/2026 — nao ha nada pra importar');
 
       // LÊ ANTES DE APAGAR (31/07). O DELETE vinha primeiro: com o Giga fora na
       // hora do cron (04:10), ele passava, o SELECT estourava e a tabela ficava

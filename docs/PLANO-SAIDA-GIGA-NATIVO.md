@@ -1,5 +1,7 @@
 # Plano — sair do Giga de verdade (dados no Postgres, sistema nativo)
 
+> **REGISTRO HISTORICO (31/07/2026) — plano CONCLUIDO, nao e instrucao vigente.** A saida terminou: ERP DESLIGADO em 27/08/2026, ultimos caminhos migrados em 09/2026. Estado atual: `CLAUDE.md` na raiz.
+
 Decisão do dono (31/07/2026): não é mover o MySQL de servidor — é **trazer
 todos os dados pro Postgres e o sistema rodar nativo**, sem MySQL nenhum no
 fim.

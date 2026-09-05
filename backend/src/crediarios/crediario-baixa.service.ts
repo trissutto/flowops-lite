@@ -391,8 +391,10 @@ export class CrediarioBaixaService {
         `[crediario-baixa] detectColumns FALHOU. Faltam: ${faltam}. Detectadas: ${detectadas || '(nenhuma)'}`,
       );
       throw new BadRequestException(
-        `Falha ao ler estrutura do Giga (faltam: ${faltam}). ` +
-          `Detectadas: ${detectadas || '(nenhuma — problema de conexão MySQL)'}. Tente novamente.`,
+        `Não consegui montar a lista de parcelas (faltam: ${faltam}). ` +
+          `Detectadas: ${detectadas || '(nenhuma)'}. ` +
+          `Isso quer dizer que a leitura pelo espelho do Flow não respondeu — ` +
+          `avise a matriz em vez de tentar de novo.`,
       );
     }
 
@@ -851,7 +853,7 @@ export class CrediarioBaixaService {
     // Circuit breaker aberto?
     if (Date.now() < this.breakerOpenUntil) {
       throw new BadRequestException(
-        `Giga temporariamente indisponível. Tente em ${Math.ceil((this.breakerOpenUntil - Date.now()) / 1000)}s.`,
+        `Lista de clientes indisponível no momento. Tente em ${Math.ceil((this.breakerOpenUntil - Date.now()) / 1000)}s.`,
       );
     }
 
@@ -887,7 +889,7 @@ export class CrediarioBaixaService {
     const cm = await this.crediarios.detectClientesTable();
     if (!cm || !cm.nome) {
       throw new BadRequestException(
-        'Tabela de clientes do Giga não detectada',
+        'Não consegui abrir a base de clientes desta loja.',
       );
     }
 
@@ -1004,7 +1006,7 @@ export class CrediarioBaixaService {
     const cm = await this.crediarios.detectClientesTable();
     if (!cm || !cm.nome) {
       throw new BadRequestException(
-        'Tabela de clientes do Giga não detectada — não dá pra buscar por nome.',
+        'Não consegui abrir a base de clientes pra buscar por nome. Tente pelo código do cliente.',
       );
     }
 
@@ -1257,8 +1259,10 @@ export class CrediarioBaixaService {
   /** Lê 1 parcela ABERTA do espelho (wincred_movimento_aberto) por REGISTRO+
    *  CONTROLE. Esse espelho tem write-through na baixa (marcarPagasNoEspelho):
    *  parcela paga SOME dele na hora — logo "presente = em aberto AGORA", sem
-   *  risco de baixa dupla. Ausente (paga ou não-sincronizada) → undefined, e o
-   *  caller confere no Giga (autoridade sobre PAGO). */
+   *  risco de baixa dupla. Ausente (paga ou nascida no Flow há menos de um
+   *  ciclo do cron) → undefined, e o caller confere a tabela NATIVA
+   *  `crediario_parcelas` antes de negar — não há mais nenhum outro banco a
+   *  consultar. */
   private async previewParcelaEspelho(
     registro: string,
     controle: string,

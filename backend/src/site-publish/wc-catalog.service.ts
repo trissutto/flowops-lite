@@ -34,13 +34,13 @@ export class WcCatalogService {
 
   private get wcBase(): string {
     const url = this.config.get<string>('WC_URL');
-    if (!url) throw new BadRequestException('WC_URL não configurada no .env.');
+    if (!url) throw new BadRequestException('Este caminho publicava no site antigo (WordPress), apagado em 27/08/2026. A vitrine hoje é o e-commerce próprio.');
     return `${url.replace(/\/+$/, '')}/wp-json/wc/v3`;
   }
 
   private get wpBase(): string {
     const url = this.config.get<string>('WC_URL');
-    if (!url) throw new BadRequestException('WC_URL não configurada no .env.');
+    if (!url) throw new BadRequestException('Este caminho publicava no site antigo (WordPress), apagado em 27/08/2026. A vitrine hoje é o e-commerce próprio.');
     return `${url.replace(/\/+$/, '')}/wp-json/wp/v2`;
   }
 
@@ -171,7 +171,7 @@ export class WcCatalogService {
   ): Promise<{ id: number; source_url: string }> {
     if (!this.wpAuth) {
       throw new BadRequestException(
-        'Upload de mídia desabilitado. Configure WP_APP_USER e WP_APP_PASSWORD (Application Password do WP) no .env, ou use URLs de imagens que já estejam no mesmo domínio do WP.',
+        'Upload de mídia pro site antigo (WordPress) — ele foi apagado em 27/08/2026 e este caminho não tem mais destino. A foto do produto entra pelo cadastro/editor de produtos.',
       );
     }
 

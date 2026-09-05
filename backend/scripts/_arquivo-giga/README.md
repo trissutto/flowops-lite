@@ -1,10 +1,20 @@
-# Acervo do ERP desligado — Giga/Wincred (KingHost)
+# Acervo do ERP encerrado — Giga/Wincred
 
-**Nada aqui roda mais.** O MySQL do Giga/Wincred e o WordPress que dividiam a
-hospedagem da KingHost (`162.215.213.154`) foram **desligados em 27/08/2026**,
-por ordem do dono. O Flow é a fonte da verdade de estoque, venda, crediário e
-financeiro desde julho/2026, e as trancas em `backend/src/common/replica-giga.ts`
-impedem até a criação do pool MySQL. Não religar.
+**Nada aqui roda mais.** Em **27/08/2026**, por ordem do dono, a KingHost apagou o
+**WordPress/WooCommerce** (`162.215.213.154`) e o caminho até o **MySQL do ERP
+Giga/Wincred** foi trancado no código.
+
+⚠️ **Eram duas máquinas diferentes** — a doc antiga dizia que dividiam a
+hospedagem, e essa suposição já custou um commit errado. O MySQL do ERP ficava no
+host do **fornecedor** (`mysql.gigasistemas.com.br`, Gigasistemas); o
+`162.215.213.154` era o servidor da KingHost, onde vivia o WordPress. O ERP não
+"sumiu": ficou **inalcançável pelo sistema** — o firewall recusa o IP do Railway
+desde 25/08, e as trancas em `backend/src/common/replica-giga.ts` impedem até a
+criação do pool. Foi por isso que o dump final (37/37 tabelas, 28/08) teve que
+sair pelo IP residencial do dono.
+
+O Flow é a fonte da verdade de estoque, venda, crediário e financeiro desde
+julho/2026. Não religar.
 
 Esta pasta guarda a **ferramenta e o runbook do backup final** — o que permitiu
 tirar a última foto do banco antes de o servidor apagar. Fica como acervo

@@ -385,7 +385,7 @@ function calcularParcelas(total: number, n: number): {
   return { iguais, ultima, qtdIguais: n - 1 };
 }
 
-// Cria as parcelas de crediário no Giga. Se o backend bloquear por LIMITE DE
+// Cria as parcelas do crediário da cliente. Se o backend bloquear por LIMITE DE
 // CRÉDITO (403 com "limite"), pede a senha de SUPERVISOR e tenta de novo com
 // overridePassword. Cancelar o prompt propaga o erro original (venda não passa).
 async function postCrediarioComOverride(saleId: string, payload: any): Promise<any> {
@@ -519,7 +519,7 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
     const sku = scanInput.trim();
     if (!sku) return;
     // Atalho item manual: vendedora digita "0" → abre modal pra lançar
-    // produto livre (descrição + valor) sem precisar achar no Giga.
+    // produto livre (descrição + valor) sem precisar achar no catálogo.
     if (sku === '0') {
       setScanInput('');
       onRequestManualItem();
@@ -538,7 +538,7 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         setSearchResults(arr);
         setShowResults(arr.length > 0);
         setHighlightedIdx(arr.length > 0 ? 0 : -1);
-        if (!arr.length) onError(`REF ${sku} não encontrada no Giga`);
+        if (!arr.length) onError(`REF ${sku} não encontrada no catálogo`);
       } catch (e2: any) {
         onError(e2?.message || 'Erro ao buscar REF');
       } finally {
@@ -596,7 +596,7 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         onPromoDePorRef.current?.(r?.promoDePor ?? null);
       } catch (e: any) {
         const msg = String(e?.message || '');
-        // FALLBACK REF: código numérico não existe no Giga? Pode ser uma REF
+        // FALLBACK REF: código numérico não existe no catálogo? Pode ser uma REF
         // (digitada à mão) — busca a grade automaticamente antes de dar erro.
         // Cobre qualquer numérico 3+ (não só 7+), já que agora o ENTER bipa
         // código primeiro pra QUALQUER tamanho de número.
@@ -626,7 +626,7 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
   }, [enfileirarBipe]);
 
   // ── Effect: busca inline com debounce ──
-  // Se digitar texto (com letra), busca por descricao no Giga.
+  // Se digitar texto (com letra), busca por descricao no catalogo.
   // Numeros (REF/codigo) NAO acionam dropdown automatico — sao explicitos
   // (Enter pra bipe/REF curta, ESPAÇO pra grade). Determinístico, independe
   // da velocidade de digitação.
@@ -3489,7 +3489,7 @@ function PdvPageInner() {
                   `MARCAR ${sale.items.length} peça(s) pra ${sale.customerName || 'cliente'}?\n\n` +
                   `Total: ${brl(sale.total)}\n\n` +
                   `As peças vão como "provar em casa" — baixa estoque + fica em aberto pra cliente devolver depois.\n\n` +
-                  `Cliente precisa ser classe A com limite disponivel no Giga.`,
+                  `Cliente precisa ser classe A e ter limite disponivel na ficha desta loja.`,
                 )) return;
                 const doMarcar = async (force: boolean) => {
                   const r = await api<any>('/pdv/marcados/criar', {
@@ -3522,8 +3522,9 @@ function PdvPageInner() {
                   if (isLimite) {
                     const ok = window.confirm(
                       `⚠ LIMITE DE MARCAÇÃO ESTOURADO\n\n${msg}\n\n` +
-                      `Isso costuma acontecer quando a cliente tem marcações antigas no Giga ` +
-                      `que nunca foram baixadas (peças que voltaram mas o flag MARCADO=SIM ficou).\n\n` +
+                      `Isso costuma acontecer quando a cliente tem marcações antigas ainda EM ABERTO ` +
+                      `(peças que já voltaram, mas ninguém deu baixa no marcado). Dá pra conferir e ` +
+                      `fechar essas marcações na tela Marcados.\n\n` +
                       `Quer MARCAR MESMO ASSIM?\n` +
                       `(Vai ficar registrado quem forçou — só faça se tiver certeza)`,
                     );
@@ -3750,7 +3751,7 @@ function PdvPageInner() {
           cancel_reason e vira relatório: dá pra separar desistência da
           cliente (normal no provador) de erro nosso (que a gente conserta). */}
       {/* ── AGUARDE, ESTAMOS FINALIZANDO (dono, 24/08) ──
-          Fechar a venda baixa estoque, grava caixa, enfileira o ERP e monta o
+          Fechar a venda baixa estoque, grava a caixa do dia e monta o
           pedido — segundos em que a tela ficava parada com um spinner
           minúsculo dentro do botão. Vendedora achava que travou e clicava de
           novo. Agora a tela inteira diz o que está acontecendo.
@@ -4072,7 +4073,7 @@ function PdvPageInner() {
                                     },
                                   }),
                                 });
-                                // 2) Finaliza a venda (baixa estoque, grava Wincred, etc)
+                                // 2) Finaliza a venda (baixa estoque, grava a caixa do dia, etc)
                                 await api(`/pdv/sales/${p.saleId}/finalize`, {
                                   method: 'POST',
                                   body: JSON.stringify({}),
@@ -4080,7 +4081,7 @@ function PdvPageInner() {
                                 toast(
                                   'success',
                                   `✅ Venda #${p.saleCode} finalizada!`,
-                                  `${brl(p.total)} · estoque baixado · Wincred OK`,
+                                  `${brl(p.total)} · estoque baixado · lançada no caixa`,
                                 );
                                 loadOnlinePending();
                                 loadOpenCount();
@@ -4442,7 +4443,7 @@ function PdvPageInner() {
 // ─── Modals ────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────
-// VendedoraModal — busca funcionária na tabela `funcionarios` do Giga.
+// VendedoraModal — busca funcionária no cadastro de funcionários da loja.
 // Aparece ao clicar no botão "Vendedora" do header (e idealmente automático
 // ao abrir venda nova). Necessário pra atribuir comissão.
 // ─────────────────────────────────────────────────────────────────────────
@@ -4490,8 +4491,8 @@ function ConfirmSaleModal({
   const lojaParam = storeCode ? `&loja=${encodeURIComponent(storeCode)}` : '';
 
   // PRIORIDADE 1: carrega WHITELIST de vendedoras ativas configuradas em
-  // /retaguarda/vendedoras-ativas. Se tem config, usa SÓ ela (filtra local
-  // sem hit no Wincred). Senão, fallback pra busca em funcionarios do Wincred.
+  // /retaguarda/vendedoras-ativas. Se tem config, usa SÓ ela (filtra local,
+  // sem consultar o servidor). Senão, cai na busca no cadastro de funcionários.
   // Whitelist fica em estado separado pra evitar loop com `results` (busca live).
   const [whitelist, setWhitelist] = useState<typeof results | null>(null);
   const usingActiveList = (whitelist?.length ?? 0) > 0;
@@ -4519,7 +4520,7 @@ function ConfirmSaleModal({
         if (!cancelled) setWhitelist([]);
       }
 
-      // Fallback: busca direto em funcionarios do Wincred
+      // Fallback: busca direto no cadastro de funcionários
       try {
         const r = await api<{ results: typeof results; table?: string; lojaFiltered?: boolean }>(
           `/pdv/funcionarios-search?q=&limit=20${lojaParam}`,
@@ -4934,7 +4935,7 @@ function CustomerModal({
     }
   };
 
-  // ─── Typeahead: busca por CPF OR nome no Giga ───────────────────────────
+  // ─── Typeahead: busca por CPF OU nome no cadastro de clientes ───────────
   // Aceita: dígitos parciais (CPF) ou texto (nome). Debounce de 300ms.
   const [searchTerm, setSearchTerm] = useState('');
   const [results, setResults] = useState<Array<{
@@ -4998,13 +4999,15 @@ function CustomerModal({
       return;
     }
     // CLICK NO RESULTADO = JÁ IDENTIFICA. Não precisa clicar em "Salvar" depois.
-    // Se o cliente não tem CPF no Giga, ainda salva nome+telefone — mas avisa.
+    // Se a ficha da cliente está sem CPF, ainda salva nome+telefone — mas avisa.
     if (!c.cpf || c.cpf.length < 11) {
-      // Sem CPF: salva mesmo assim (vendedora pode preencher manualmente depois),
-      // mas avisa que o crediário não vai funcionar até cadastrar CPF no Giga.
+      // Sem CPF: salva mesmo assim (a vendedora pode digitar o CPF no campo
+      // logo abaixo), mas avisa. A trava do crediário é `!customerCpf` — o
+      // CPF que falta é o DA VENDA, não o da ficha: com ele digitado aqui o
+      // crediário libera mesmo com a ficha antiga sem CPF.
       const ok = window.confirm(
-        `${c.nome} não tem CPF cadastrado no Giga.\n\n` +
-        `Posso identificar com nome só, mas pra crediário você precisa cadastrar o CPF no Giga primeiro.\n\nIdentificar mesmo assim?`,
+        `${c.nome} está sem CPF na ficha.\n\n` +
+        `Pra venda normal dá pra identificar só com o nome. Se for crediário, cancele aqui e digite o CPF dela no campo CPF logo abaixo — com o CPF na venda o crediário libera.\n\nIdentificar só com o nome?`,
       );
       if (!ok) return;
     }
@@ -5064,7 +5067,7 @@ function CustomerModal({
           </div>
         )}
 
-        {/* TYPEAHEAD — busca rápida por CPF ou nome (puxa do Giga) */}
+        {/* TYPEAHEAD — busca rápida por CPF ou nome no cadastro de clientes */}
         <div className="relative">
           <div className="flex items-center gap-2 border-2 border-violet-300 bg-violet-50 rounded px-2 py-2 focus-within:border-violet-500">
             <Search className="w-4 h-4 text-violet-600 shrink-0" />
@@ -5092,7 +5095,7 @@ function CustomerModal({
                     className={`w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0 transition ${
                       semCpf ? 'opacity-60' : ''
                     }`}
-                    title={semCpf ? 'Cliente sem CPF cadastrado — não consegue fazer crediário' : ''}
+                    title={semCpf ? 'Ficha sem CPF — pra crediário, digite o CPF dela no campo CPF abaixo' : ''}
                   >
                     <div className="font-bold text-sm text-slate-800 truncate flex items-center gap-1.5">
                       {c.nome || '— sem nome —'}
@@ -5148,7 +5151,7 @@ function CustomerModal({
           if (c.vipTier === 'diamante') sugestoes.push('💎 DIAMANTE — máxima prioridade');
           else if (c.vipTier === 'ouro') sugestoes.push('🥇 OURO — VIP');
           if (podeUsarCashback) sugestoes.push(`💰 Pode usar R$ ${cashbackBrl} de cashback (até ${cfg.usoMaxPct ?? 30}% da compra)`);
-          if (c.bloqueado) sugestoes.push('🚫 CLIENTE BLOQUEADO no Giga — CUIDADO');
+          if (c.bloqueado) sugestoes.push('🚫 CLIENTE BLOQUEADO na ficha — CUIDADO');
           if (c.negativado) sugestoes.push('⚠️ NEGATIVADO no SPC — sem crediário');
 
           return (
@@ -6121,7 +6124,7 @@ function PaymentModal({
   /**
    * Carrega as vendedoras quando o passo abre. Mesma fonte do popup de
    * encerramento: a whitelist de /retaguarda/vendedoras-ativas primeiro, e o
-   * cadastro do Wincred como reserva pra loja que não configurou a lista.
+   * cadastro de funcionários como reserva pra loja que não configurou a lista.
    */
   useEffect(() => {
     if (etapaOnline !== 'vendedora' || !storeCode || vendedorasFluxo.length) return;
@@ -6262,7 +6265,7 @@ function PaymentModal({
     () => faltandoDadosBasicosClienteOnline(clienteOnline || {}).length === 0,
     [clienteOnline],
   );
-  // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
+  // Ficha da cliente + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
     cliente?: { codCliente: string; nome: string | null; cpf: string; viaFallback?: 'telefone' | 'nome' | null };
@@ -6272,13 +6275,24 @@ function PaymentModal({
     qtdPendencias?: number;
     qtdAtrasadas?: number;
     message?: string;
-    /** true = falha de CONEXÃO com o Giga (não significa que o cliente não existe) */
+    /**
+     * true = a consulta da ficha FALHOU (não significa que a cliente não
+     * existe).
+     *
+     * ⚠️ CAMPO MORTO: desde a Onda 1 o backend NÃO devolve mais esta flag —
+     * o erro do espelho sobe como HTTP e cai no `catch` do useEffect abaixo,
+     * que grava só `{ found: false, message }`. Ou seja: o banner âmbar e os
+     * toasts que dependem dela nunca aparecem, e uma FALHA DE CONSULTA hoje
+     * cai no mesmo ramo de "não achei a ficha". Por isso esses textos NÃO
+     * podem afirmar que a cliente não tem cadastro — quem obedecesse
+     * cadastraria de novo alguém que já tem crediário aberto.
+     */
     gigaError?: boolean;
     /** Cliente tem cadastro em OUTRA(S) loja(s), mas não na loja da venda */
     outraLoja?: { lojas: string[]; codCliente: string; nome: string | null };
   } | null>(null);
   const [credLoading, setCredLoading] = useState(false);
-  // Contador pra forçar re-busca (botão "Tentar de novo" quando Giga falhou)
+  // Contador pra forçar re-busca (botão "Tentar de novo" quando a busca falhou)
   const [credRefresh, setCredRefresh] = useState(0);
 
   // Busca info do cliente quando seleciona crediário OU quando troca o cliente.
@@ -6291,10 +6305,10 @@ function PaymentModal({
     setCredLoading(true);
     (async () => {
       try {
-        // storeCode: escopo por loja — código de cliente do Wincred se repete
-        // entre lojas (crediário é separado por loja). Admin/impersonate usa
-        // a loja da venda; vendedora o backend já resolve pelo JWT.
-        // nome/telefone: fallback quando o cadastro do Wincred está sem CPF.
+        // storeCode: escopo por loja — o código de cliente se repete entre
+        // lojas (crediário é separado por loja). Admin/impersonate usa a loja
+        // da venda; pra vendedora o backend já resolve pelo JWT.
+        // nome/telefone: fallback quando a ficha da cliente está sem CPF.
         const qs = [
           `cpf=${encodeURIComponent(customerCpf)}`,
           storeCode ? `storeCode=${encodeURIComponent(storeCode)}` : '',
@@ -6693,9 +6707,9 @@ function PaymentModal({
     }
     if (selected === 'crediario' && credCustomerInfo && !credCustomerInfo.found) {
       if (credCustomerInfo.gigaError) {
-        toast('error', 'Giga fora do ar', 'Clique em "Tentar de novo" no banner antes de fechar no crediário');
+        toast('error', 'Não deu pra consultar a ficha', 'Clique em "Tentar de novo" no banner antes de fechar no crediário');
       } else {
-        toast('error', 'Cliente não cadastrado NESTA loja', credCustomerInfo.message || 'Cadastre no Wincred desta loja antes de fechar no crediário');
+        toast('error', 'Não confirmei a ficha desta cliente', credCustomerInfo.message || 'Veja o aviso abaixo: se ela tem ficha em outra loja, use "Copiar cadastro pra ESTA loja". Se não tem, peça pra matriz abrir a ficha desta loja e toque em "Já abriram a ficha".');
       }
       return;
     }
@@ -6918,8 +6932,8 @@ function PaymentModal({
       details.qtdIguais = calc.qtdIguais;
       details.valorUltima = calc.ultima;
       // BUG FIX: crediário precisa salvar a data escolhida pra impressão de
-      // promissórias/carnê. Antes ficava só no endpoint /crediario (que grava
-      // no Giga) — payment.details ficava sem, e o PDF caía no fallback D+30.
+      // promissórias/carnê. Antes ficava só no endpoint /crediario (que cria
+      // as parcelas) — payment.details ficava sem, e o PDF caía no fallback D+30.
       if (selected === 'crediario') {
         details.primeiroVencimento = credVencto;
         details.entrada = Math.max(
@@ -6983,7 +6997,7 @@ function PaymentModal({
     try {
       // CREDIÁRIO com ENTRADA: divide em 2 pagamentos paralelos.
       //   1. Entrada como "dinheiro" (vai pro caixa do dia)
-      //   2. Restante como "crediario" (parcelas vão pro Giga)
+      //   2. Restante como "crediario" (vira o carnê de parcelas da cliente)
       // Sem entrada: só payment crediário do valor total.
       const entradaNum = selected === 'crediario'
         ? Math.max(0, Math.round((Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100)
@@ -7030,7 +7044,7 @@ function PaymentModal({
         setPayments((prev) => [...prev, newPayment]);
       }
 
-      // CRIA PARCELAS NO GIGA (só se for crediário) — escreve N linhas em movimento
+      // CRIA AS PARCELAS DO CREDIÁRIO (só se for crediário)
       if (selected === 'crediario' && valorFinanciado > 0) {
         try {
           const r = await postCrediarioComOverride(saleId, {
@@ -7042,18 +7056,18 @@ function PaymentModal({
           toast(
             'success',
             r.idempotent
-              ? `Parcelas já existiam no Giga (controle ${r.controle})`
-              : `${parcelas}× parcela(s) criada(s) no Giga`,
+              ? `Parcelas já estavam criadas (controle ${r.controle})`
+              : `${parcelas}× parcela(s) criada(s)`,
             r.idempotent
               ? 'Crediário não foi duplicado.'
               : `Controle ${r.controle} · ${brl(valorFinanciado)} dividido em ${parcelas}×`,
           );
         } catch (e: any) {
-          // Se falhar a criação no Giga, ainda mantém os pagamentos no PDV mas avisa
+          // Se as parcelas não nascerem, mantém os pagamentos no PDV mas avisa
           const h = humanizeError(e);
           toast(
             'error',
-            'Pagamento registrado, mas FALHOU criar parcelas no Giga',
+            'Pagamento registrado, mas as PARCELAS não foram criadas',
             h.hint || h.title,
           );
         }
@@ -7635,9 +7649,9 @@ function PaymentModal({
       }
       if (credCustomerInfo && !credCustomerInfo.found) {
         if (credCustomerInfo.gigaError) {
-          toast('error', 'Giga fora do ar', 'Clique em "Tentar de novo" no banner antes de fechar no crediário');
+          toast('error', 'Não deu pra consultar a ficha', 'Clique em "Tentar de novo" no banner antes de fechar no crediário');
         } else {
-          toast('error', 'Cliente não cadastrado NESTA loja', credCustomerInfo.message || 'Cadastre no Wincred desta loja antes de fechar no crediário');
+          toast('error', 'Não confirmei a ficha desta cliente', credCustomerInfo.message || 'Veja o aviso abaixo: se ela tem ficha em outra loja, use "Copiar cadastro pra ESTA loja". Se não tem, peça pra matriz abrir a ficha desta loja e toque em "Já abriram a ficha".');
         }
         return;
       }
@@ -7694,10 +7708,10 @@ function PaymentModal({
     }
     if (needsBandeira) details.bandeira = bandeira;
 
-    // ── CREDIÁRIO: gera parcelas no Giga ANTES de finalizar a venda ──
-    // Mantém comportamento idempotente: se Giga falhar, NÃO finaliza a venda
-    // (vendedora vê erro e pode tentar de novo). Diferente do split path que
-    // tolera falha — aqui é fluxo direto.
+    // ── CREDIÁRIO: gera as parcelas ANTES de finalizar a venda ──
+    // Mantém comportamento idempotente: se as parcelas falharem, NÃO finaliza a
+    // venda (vendedora vê erro e pode tentar de novo). Diferente do split path
+    // que tolera falha — aqui é fluxo direto.
     if (selected === 'crediario') {
       const entradaNum = details.entrada || 0;
       // BUG FIX: financia sobre `restante`, NÃO `total`. Vale-troca/parciais
@@ -7714,15 +7728,15 @@ function PaymentModal({
           toast(
             'success',
             r.idempotent
-              ? `Parcelas já existiam no Giga (controle ${r.controle})`
-              : `${parcelas}× parcelas criadas no Giga`,
+              ? `Parcelas já estavam criadas (controle ${r.controle})`
+              : `${parcelas}× parcelas criadas`,
             r.idempotent
               ? 'Crediário não foi duplicado.'
               : `Controle ${r.controle} · ${brl(valorFinanciado)} dividido`,
           );
         } catch (e: any) {
           const h = humanizeError(e);
-          toast('error', `Erro ao criar parcelas no Giga: ${h.title}`, h.hint || 'Tente novamente');
+          toast('error', `Erro ao criar as parcelas: ${h.title}`, h.hint || 'Tente novamente');
           return; // ABORTA finalização — vendedora pode tentar de novo
         }
       }
@@ -9195,13 +9209,13 @@ function PaymentModal({
           <div className="space-y-2 pt-2 border-t">
             {credLoading && (
               <div className="text-xs text-slate-500 flex items-center gap-2">
-                <Loader2 className="w-3 h-3 animate-spin" /> Buscando cliente no Giga…
+                <Loader2 className="w-3 h-3 animate-spin" /> Buscando a ficha da cliente…
               </div>
             )}
             {credCustomerInfo && !credCustomerInfo.found && credCustomerInfo.gigaError && (
               <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-2.5 text-xs text-amber-900 space-y-2">
                 <div>
-                  <b>⚠️ Giga fora do ar agora.</b> {credCustomerInfo.message}
+                  <b>⚠️ Não deu pra consultar a ficha agora.</b> {credCustomerInfo.message}
                 </div>
                 <button
                   type="button"
@@ -9215,7 +9229,7 @@ function PaymentModal({
             {credCustomerInfo && !credCustomerInfo.found && !credCustomerInfo.gigaError && (
               <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-2.5 text-xs text-rose-900 space-y-2">
                 <div>
-                  <b>⚠️ {credCustomerInfo.outraLoja ? 'Cliente é de outra loja.' : 'Cliente não encontrado no Giga.'}</b>{' '}
+                  <b>⚠️ {credCustomerInfo.outraLoja ? 'Cliente é de outra loja.' : 'Não achei a ficha desta cliente aqui.'}</b>{' '}
                   {credCustomerInfo.message}
                 </div>
                 {credCustomerInfo.outraLoja && (
@@ -9224,9 +9238,22 @@ function PaymentModal({
                     {credCustomerInfo.outraLoja.codCliente} · loja {credCustomerInfo.outraLoja.lojas.join(', ')}
                   </div>
                 )}
+                {/* Sem ficha em outra loja: a vendedora precisa saber QUAL
+                    cadastro conta (a ficha de crediário DESTA loja) e que
+                    preencher a cliente na tela da venda não abre essa ficha.
+                    Sem isto ela preenche o modal Cliente, clica em "buscar de
+                    novo" e cai no mesmo aviso — o loop que este texto mata. */}
+                {!credCustomerInfo.outraLoja && (
+                  <div className="text-[11px] text-rose-800 leading-snug">
+                    O crediário usa a <b>ficha desta loja</b> — preencher a cliente na tela
+                    da venda não abre essa ficha. Tente de novo; se continuar, peça pra{' '}
+                    <b>matriz abrir a ficha desta loja</b> (tela Clientes) antes de
+                    cadastrar de novo.
+                  </div>
+                )}
                 {/* CÓPIA 1-CLIQUE (caso Jéssica 23/07): cria a ficha NESTA loja
                     copiando a da outra (sem limite/avaliação — crédito é por
-                    loja). Réplica pro Wincred leva ~30s; re-busca automática. */}
+                    loja). A tela re-busca a ficha sozinha depois de criar. */}
                 {credCustomerInfo.outraLoja && (
                   <button
                     type="button"
@@ -9245,26 +9272,29 @@ function PaymentModal({
                           }),
                         });
                         if (r?.ok && r.replicado) {
-                          // Gravou no Wincred na hora — re-busca rapidinho
+                          // Ficha pronta na hora — re-busca rapidinho
                           toast(
                             'success',
                             r.jaExistia ? 'Ficha já existia nesta loja' : `Ficha criada nesta loja (cód ${r.codigo})`,
-                            'Gravada no Wincred ✓ — buscando de novo…',
+                            'Buscando de novo…',
                           );
                           setTimeout(() => setCredRefresh((n) => n + 1), 3000);
                         } else if (r?.ok) {
-                          // Criou no Flow mas a gravação no Wincred falhou agora —
-                          // o outbox segue tentando; mostra o motivo real
+                          // ⚠️ ESTE é o ramo que roda hoje: `replicado` vem
+                          // do carimbo no ERP legado, desligado em 27/08/2026,
+                          // então é SEMPRE false. A ficha já está gravada e
+                          // pronta quando esta resposta chega — nada fica
+                          // pendente, e o texto não pode mandar esperar.
                           toast(
                             'warning',
-                            `Ficha criada (cód ${r.codigo}) — Wincred pendente`,
-                            r.replicaErro
-                              ? `Erro na gravação: ${String(r.replicaErro).slice(0, 120)} — re-tento automático; busque de novo em ~1 min`
-                              : 'Gravando no Wincred — busco de novo em ~35s',
+                            r.jaExistia
+                              ? `Ficha já existia nesta loja (cód ${r.codigo})`
+                              : `Ficha pronta nesta loja (cód ${r.codigo})`,
+                            'A tela confere sozinha em ~35s — ou toque em "Já abriram a ficha" logo abaixo pra ver agora.',
                           );
                           setTimeout(() => setCredRefresh((n) => n + 1), 35000);
                         } else {
-                          toast('error', 'Não deu pra copiar a ficha', r?.erro || 'Tente cadastrar no Wincred');
+                          toast('error', 'Não deu pra copiar a ficha', r?.erro || 'Peça pra matriz abrir a ficha desta loja e tente de novo');
                         }
                       } catch (e: any) {
                         const h = humanizeError(e);
@@ -9282,9 +9312,9 @@ function PaymentModal({
                   type="button"
                   onClick={() => setCredRefresh((n) => n + 1)}
                   className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs"
-                  title="Buscar de novo depois de cadastrar no Wincred"
+                  title="Buscar de novo depois que a ficha desta loja existir"
                 >
-                  🔄 Já cadastrei no Wincred — buscar de novo
+                  🔄 Já abriram a ficha nesta loja — buscar de novo
                 </button>
               </div>
             )}
@@ -9297,7 +9327,7 @@ function PaymentModal({
             {credCustomerInfo?.found && credCustomerInfo.cliente?.viaFallback && (
               <div className="bg-amber-50 border border-amber-300 rounded px-2.5 py-1.5 text-[11px] text-amber-800">
                 ⚠️ Achada pelo <b>{credCustomerInfo.cliente.viaFallback}</b> (cód{' '}
-                {credCustomerInfo.cliente.codCliente}) — o cadastro no Wincred está sem o CPF.
+                {credCustomerInfo.cliente.codCliente}) — a ficha da cliente está sem o CPF.
                 Complete depois pra busca ficar exata.
               </div>
             )}
@@ -10035,7 +10065,7 @@ function MarcarComponent({
   async function marcar() {
     if (!confirm(
       `MARCAR ${brl(total)} pra ${info?.cliente?.nome}?\n\n` +
-      `As peças vão ser registradas como "marcado" no Giga.\n` +
+      `As peças ficam registradas como "marcado" na ficha da cliente.\n` +
       `Estoque é baixado igual venda.\n` +
       `Cliente leva pra provar em casa.\n\n` +
       `Confirma?`,
@@ -13199,7 +13229,7 @@ function ManualItemModal({
         </div>
 
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[11px] text-amber-800 leading-snug">
-          ⚠️ Use só quando o produto não passa pelo bipe. Não atualiza estoque no Gigasistemas.
+          ⚠️ Use só quando o produto não passa pelo bipe. Como não tem peça bipada, <b>não baixa estoque</b>.
           <br />
           💡 Valor pode ser <b>negativo</b> pra abater (ex: <b>TROCA DEFEITO -39,90</b>).
         </div>
@@ -13465,7 +13495,7 @@ function PromoCheckModal({ open, onClose }: { open: boolean; onClose: () => void
 
               {res.avisoData && (
                 <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-[11px] text-slate-500">
-                  A data do ERP muda quando alguém edita o cadastro (preço, descrição).
+                  A data de cadastro muda quando alguém edita a peça (preço, descrição).
                   Peça antiga reeditada aparece nova aqui — confirme com a matriz antes de dar o desconto na mão.
                 </div>
               )}

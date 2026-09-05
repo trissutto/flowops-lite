@@ -321,10 +321,14 @@ export default function RelatorioVendedorasPage() {
               </div>
             </div>
 
-            {/* CONFERIDOR Flow × Giga por loja (dono 29/07) */}
+            {/* CONFERIDOR faturamento × caixa por loja (dono 29/07).
+                Os dois lados são do Postgres do Flow hoje: à esquerda o relatório
+                montado das vendas do PDV, à direita a CAIXA (giga_caixa_mov,
+                tabela nativa alimentada pelo próprio Flow). Serve pra pegar
+                venda que ficou fora de um dos dois. */}
             <div className="bg-white rounded-xl border border-amber-200 p-3 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-bold text-amber-800">🔍 Conferidor Flow × Giga</span>
+                <span className="text-sm font-bold text-amber-800">🔍 Conferidor faturamento × caixa</span>
                 <input
                   value={confLoja}
                   onChange={(e) => setConfLoja(e.target.value)}
@@ -339,7 +343,7 @@ export default function RelatorioVendedorasPage() {
                   {confLoading ? 'Conferindo…' : 'Conferir período'}
                 </button>
                 <span className="text-[11px] text-slate-500">
-                  Abre os componentes do Flow por vendedora e traz o CAIXA do Giga ao lado — a diferença aparece com nome.
+                  Abre os componentes do faturamento por vendedora e traz a CAIXA da loja ao lado — a diferença aparece com nome.
                 </span>
               </div>
               {confData?.erro && <div className="text-sm text-rose-600">{confData.erro}</div>}
@@ -355,8 +359,8 @@ export default function RelatorioVendedorasPage() {
                         <th className="text-right px-2 py-1.5">Vale-troca (só comissão)</th>
                         <th className="text-right px-2 py-1.5">Recebido</th>
                         <th className="text-right px-2 py-1.5">Marcados (fora)</th>
-                        <th className="text-right px-2 py-1.5">Caixa Giga</th>
-                        <th className="text-right px-2 py-1.5">Diferença (fat − Giga)</th>
+                        <th className="text-right px-2 py-1.5">Caixa da loja</th>
+                        <th className="text-right px-2 py-1.5">Diferença (fat − caixa)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -364,7 +368,7 @@ export default function RelatorioVendedorasPage() {
                         const normN = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
                         const g = (confData.giga || []).find((x: any) => normN(x.nome) === normN(c.vendedora));
                         const gigaVal = g ? Number(g.valor) : null;
-                        // Régua oficial (29/07): o caixa do Giga é CHEIO — compara
+                        // Régua oficial (29/07): a caixa é CHEIA — compara
                         // com o FATURAMENTO (bruto − desc). Vale-troca NÃO entra
                         // aqui; ele só abate na BASE DE COMISSÃO.
                         const fat = Math.round((c.bruto - c.descontoAvulso) * 100) / 100;
@@ -390,7 +394,7 @@ export default function RelatorioVendedorasPage() {
                           String(c.vendedora || '').trim().toUpperCase().replace(/\s+/g, ' ') === String(g2.nome || '').trim().toUpperCase().replace(/\s+/g, ' ')))
                         .map((g2: any) => (
                           <tr key={`giga-${g2.codigo}`} className="border-t border-slate-100 bg-indigo-50/40">
-                            <td className="px-2 py-1 font-semibold text-indigo-800">{g2.nome || g2.codigo} <span className="text-[10px] font-normal">(só no Giga)</span></td>
+                            <td className="px-2 py-1 font-semibold text-indigo-800">{g2.nome || g2.codigo} <span className="text-[10px] font-normal">(só na caixa)</span></td>
                             <td className="text-right px-2 py-1 font-mono text-slate-400" colSpan={6}>sem venda no PDV Flow</td>
                             <td className="text-right px-2 py-1 font-mono text-indigo-700">{formatBRL(Number(g2.valor) || 0)}</td>
                             <td className="text-right px-2 py-1 font-mono font-bold text-rose-600">{formatBRL(-(Number(g2.valor) || 0))}</td>
@@ -398,7 +402,7 @@ export default function RelatorioVendedorasPage() {
                         ))}
                     </tbody>
                   </table>
-                  {confData.gigaErro && <p className="text-[11px] text-rose-600 mt-1">Caixa Giga indisponível: {confData.gigaErro}</p>}
+                  {confData.gigaErro && <p className="text-[11px] text-rose-600 mt-1">Não deu pra ler a caixa da loja: {confData.gigaErro}</p>}
                 </div>
               )}
             </div>

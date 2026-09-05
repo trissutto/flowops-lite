@@ -957,7 +957,7 @@ export default function ProdutosPage() {
                                     <tr>
                                       <th className="p-2 text-left">Variação</th>
                                       <th className="p-2 text-left">SKU Site</th>
-                                      <th className="p-2 text-left bg-violet-50 text-violet-900">SKU Gigasistemas</th>
+                                      <th className="p-2 text-left bg-violet-50 text-violet-900">SKU do catálogo</th>
                                       <th className="p-2 text-right">Preço</th>
                                       <th className="p-2 text-center bg-blue-50 text-blue-900">Estoque WC</th>
                                       <th className="p-2 text-center bg-violet-50 text-violet-900">Estoque ERP</th>
@@ -979,14 +979,14 @@ export default function ProdutosPage() {
                                           <td className="p-2 font-mono bg-violet-50/40">
                                             {v.erpSku ? (
                                               v.sku && v.erpSku === v.sku ? (
-                                                <span className="text-violet-800" title="SKU confere com o Gigasistemas">{v.erpSku}</span>
+                                                <span className="text-violet-800" title="SKU confere com o catálogo">{v.erpSku}</span>
                                               ) : (
                                                 <span className="text-amber-700" title="SKU divergente do Site">{v.erpSku}</span>
                                               )
                                             ) : !v.sku ? (
                                               <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-600" title="Variação sem SKU no site">sem SKU site</span>
                                             ) : (
-                                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title="SKU do site não encontrado no Gigasistemas">não encontrado</span>
+                                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title="SKU do site não encontrado no catálogo">não encontrado</span>
                                             )}
                                           </td>
                                           <td className="p-2 text-right font-mono">

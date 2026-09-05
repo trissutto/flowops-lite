@@ -105,7 +105,7 @@ export default function PedidoDetalhePage() {
     if (!data) return;
     if (!confirm(
       `Confirmar recebimento de TODAS as ${data.totalPecas} peças do pedido #${data.numero}?\n\n` +
-      `O sistema vai cadastrar automaticamente cada SKU no Wincred (com EAN-13) e atualizar estoque.`,
+      `O sistema vai cadastrar automaticamente cada SKU no catálogo (com EAN-13) e atualizar estoque.`,
     )) return;
 
     setReceiving(true);
@@ -236,13 +236,13 @@ export default function PedidoDetalhePage() {
   };
 
   /**
-   * Pra pedido com status='recebido_com_erro': cadastra no Wincred os produtos
+   * Pra pedido com status='recebido_com_erro': cadastra no catálogo os produtos
    * que falharam na 1a tentativa. Idempotente — produtos ja existentes sao
    * ignorados. NAO mexe em estoque (evita duplicidade).
    */
   const cadastrarFaltantes = async () => {
     if (!confirm(
-      'Cadastrar no Wincred os produtos faltantes deste pedido?\n\n' +
+      'Cadastrar no catálogo os produtos faltantes deste pedido?\n\n' +
       '✓ Produtos JÁ cadastrados serão IGNORADOS (não duplica)\n' +
       '✓ NÃO mexe em estoque (não da entrada nova)\n' +
       '✓ Depois você poderá imprimir as etiquetas'
@@ -371,7 +371,7 @@ export default function PedidoDetalhePage() {
               onClick={cadastrarFaltantes}
               disabled={receiving}
               className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
-              title="Cadastra no Wincred os produtos faltantes — sem mexer em estoque"
+              title="Cadastra no catálogo os produtos faltantes — sem mexer em estoque"
             >
               {receiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>🔄</span>}
               Cadastrar faltantes
@@ -440,7 +440,7 @@ export default function PedidoDetalhePage() {
           )}
           <button
             onClick={async () => {
-              if (!confirm(`Excluir pedido #${data.numero} (${data.fornecedorNome})?\n\nEsta acao nao pode ser desfeita.${isRecebido ? '\n\nATENCAO: este pedido ja foi RECEBIDO. Os SKUs cadastrados no Wincred NAO serao removidos.' : ''}`)) return;
+              if (!confirm(`Excluir pedido #${data.numero} (${data.fornecedorNome})?\n\nEsta acao nao pode ser desfeita.${isRecebido ? '\n\nATENCAO: este pedido ja foi RECEBIDO. Os SKUs cadastrados no catalogo NAO serao removidos.' : ''}`)) return;
               try {
                 await api(`/purchase-orders/${id}?force=true`, { method: 'DELETE' });
                 router.push('/loja/pedidos-compra');
@@ -470,7 +470,7 @@ export default function PedidoDetalhePage() {
             </div>
             <div className="text-sm space-y-1">
               <div><b>{receiveResult.totalPecas}</b> peças recebidas</div>
-              <div><b>{receiveResult.totalSkusInseridos}</b> SKUs novos cadastrados no Wincred</div>
+              <div><b>{receiveResult.totalSkusInseridos}</b> SKUs novos cadastrados no catálogo</div>
               <div><b>{receiveResult.totalSkusJaExistiam}</b> SKUs já existiam</div>
               {receiveResult.errors?.length > 0 && (
                 <details className="mt-2">
@@ -697,7 +697,7 @@ export default function PedidoDetalhePage() {
                   </button>
                 )}
 
-                {/* Botão ETIQUETAS — só faz sentido se a REF já foi cadastrada no Wincred (refTemSkus) */}
+                {/* Botão ETIQUETAS — só faz sentido se a REF já foi cadastrada no catálogo (refTemSkus) */}
                 {refTemSkus && (
                   <button
                     onClick={() => imprimirEtiquetasDaRef(ref)}
@@ -1219,7 +1219,7 @@ function AddItemModal({
 
 // ═══════════════════════════════════════════════════════════════════════
 // EditHeaderModal — edita Fornecedor / CNPJ / Marca / NF
-// CNPJ eh OBRIGATORIO pro autocadastro Wincred funcionar.
+// CNPJ eh OBRIGATORIO pro autocadastro de produto funcionar.
 // ═══════════════════════════════════════════════════════════════════════
 function EditHeaderModal({
   orderId, initial, onClose, onSaved,
@@ -1286,7 +1286,7 @@ function EditHeaderModal({
           className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 uppercase font-medium"
         />
 
-        <label className="block text-xs font-bold text-slate-700 mb-1">CNPJ * <span className="text-rose-600">(obrigatório pra cadastrar no Wincred)</span></label>
+        <label className="block text-xs font-bold text-slate-700 mb-1">CNPJ * <span className="text-rose-600">(obrigatório pra cadastrar os produtos)</span></label>
         <input
           type="text"
           value={fmtCnpj(fornecedorCnpj)}

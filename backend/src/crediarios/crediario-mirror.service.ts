@@ -156,7 +156,7 @@ export class CrediarioMirrorService {
     if (!pullGigaLigado()) return this.espelharDaNativa();
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
-    if (!pool) throw new Error('MySQL pool nao inicializado');
+    if (!pool) throw new Error('importacao encerrada: o sistema antigo foi desligado em 27/08/2026 — nao ha nada pra importar');
 
     const map = await this.crediarios.detectColumns(true);
     if (!map.registro || !map.codCliente || !map.vencimento || !map.valorParcela) {
@@ -265,7 +265,7 @@ export class CrediarioMirrorService {
     }
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
-    if (!pool) throw new Error('MySQL pool nao inicializado');
+    if (!pool) throw new Error('importacao encerrada: o sistema antigo foi desligado em 27/08/2026 — nao ha nada pra importar');
 
     const cm = await this.crediarios.detectClientesTable(true);
     if (!cm?.table || !cm.codCliente) throw new Error('detectClientesTable falhou');

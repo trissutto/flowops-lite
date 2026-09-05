@@ -19,19 +19,20 @@ import { replicaGigaLigada, gigaDesligado } from '../common/replica-giga';
 const CREDIARIO_FAIXA_FLOW = 900_000_000;
 
 /**
- * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
+ * DONO DA BAIXA DE ESTOQUE — e toco do antigo cliente do ERP legado.
  *
- * LEITURA: sempre habilitada.
- * ESCRITA (baixa de estoque): controlada pelo env var ERP_WRITE_ENABLED='true'.
- *   Quando OFF (default), qualquer chamada a `decreaseStock` retorna erro
- *   sem tocar no MySQL â€” sistema fica em SHADOW MODE.
- *   Quando ON, o UPDATE acontece em transaÃ§Ã£o ACID com rollback em falha.
+ * O nome e o histórico enganam: este serviço NÃO fala mais com banco externo
+ * nenhum. O pool MySQL nem é criado (guard `gigaDesligado()` no
+ * `onModuleInit`, ver `common/replica-giga.ts`) e todo método que dependia
+ * dele sai na hora. O que ele hospeda e a rede inteira chama são as ESCRITAS
+ * DE ESTOQUE NO POSTGRES DO FLOW: `decreaseStock`, `increaseStock`,
+ * `applyStockDeltaInTx` e o `mirrorStockApplyDelta` que os três usam.
  *
- * Schema real (confirmado via inspect-erp):
- *   tabela `estoque`  (266k registros â€” estoque consolidado)
- *     CODIGO   varchar(14)   SKU do produto
- *     ESTOQUE  int(11)       quantidade disponÃ­vel
- *     LOJA     char(2)       cÃ³digo da loja (01..20)
+ * Onde o estoque mora hoje: `giga_estoque` e `wincred_estoque` — tabelas
+ * NATIVAS do Postgres do Flow. O prefixo é herança de nome, não endereço.
+ *
+ * 🚨 `ERP_WRITE_ENABLED` não é mais "escrita no ERP": é a porta do bipe da
+ * separação, do `approveDebit` e da baixa da live. Ver o bloco dela abaixo.
  */
 @Injectable()
 export class ErpService implements OnModuleInit, OnModuleDestroy {
@@ -41,9 +42,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly config: ConfigService,
     private readonly prismaFlow: PrismaService,
-    // Modo sombra da migração pro Postgres (GIGA_SOMBRA=1). Opcional de
-    // propósito: se não estiver disponível, o ErpService funciona igual —
-    // a comparação simplesmente não acontece.
+    // Consultas de catálogo/estoque no Postgres (o nome "sombra" é herança da
+    // migração). É QUEM RESPONDE, com `GIGA_LEITURA_FLOW=1` — obrigatória em
+    // produção: o caminho legado abaixo não tem banco atrás e devolve vazio
+    // sem lançar. Opcional de propósito: sem ele o ErpService compila e sobe.
     @Optional() private readonly sombra?: SombraService,
   ) {}
 
@@ -199,75 +201,40 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return out;
   }
 
-  /**
-   * WRITE-THROUGH do saldo do GIGA por cima dos espelhos — DESLIGADO (22/08).
+  /*
+   * O WRITE-THROUGH do saldo do ERP legado por cima do ESTOQUE DO FLOW foi
+   * REMOVIDO (desligado em 22/08, código apagado em 09/2026 — a env
+   * `ERP_STOCK_WRITEBACK_GIGA` não tem mais leitor nenhum).
    *
-   * Nasceu pro mundo de antes de 14/07, em que o Giga era quem sabia o saldo e
-   * o Flow ia atrás (incidente VOGUE VINHO: entrada de 1un pela tela de pedidos
-   * gravava no Giga e a grade da live só veria na virada da hora). A
-   * constituição de 14/07 inverteu o sentido — o Flow aplica o delta e o Giga
-   * é réplica —, mas este método continuou carimbando o número ABSOLUTO que o
-   * Giga calculou em cima de `giga_estoque`/`wincred_estoque`, que são as
-   * tabelas do FLOW, não cópias. Resultado: em toda baixa e toda entrada o
-   * Giga dava a última palavra, alguns segundos DEPOIS do movimento.
+   * Ele nasceu pro mundo de antes de 14/07, em que o ERP externo era quem
+   * sabia o saldo e o Flow ia atrás. A constituição de 14/07 inverteu o
+   * sentido — o Flow aplica o DELTA e é a fonte —, mas o método continuava
+   * carimbando o número ABSOLUTO do outro banco em cima de
+   * `giga_estoque`/`wincred_estoque`, que são tabelas do FLOW e não cópias.
    *
-   * ⚠️ O ESTRAGO (BMM-100 VINHO 52, São José, 19/08 — pedido ON-000006): a
-   * loja bipou a peça no pedido da Bruna às 17:35:50 (Flow: 1 → 0) e às
-   * 17:36:01 o cron do outbox replicou a baixa no Giga e trouxe o saldo DELE
-   * de volta. Às 19:48 a entrada da REM-2026-001250 repetiu a dose. A peça
-   * saiu na sacola da cliente e o estoque de São José continua dizendo que ela
-   * está na arara. A digital está no par `erp_outbox.done_at` ==
-   * `giga_estoque.synced_at` — mesmo milissegundo, linha por linha. Cada uma
-   * das 855 divergências medidas em 31/07 era uma correção silenciosa
-   * esperando um movimento pra ser aplicada a favor do banco errado.
-   *
-   * `ERP_STOCK_WRITEBACK_GIGA=1` religa. Só faria sentido se o Giga voltasse a
-   * ser fonte de estoque, o que a diretriz do dono (02/08) descarta.
+   * O ESTRAGO (BMM-100 VINHO 52, São José, 19/08 — pedido ON-000006): a loja
+   * bipou a peça às 17:35:50 (Flow: 1 → 0) e às 17:36:01 o saldo velho voltou
+   * por cima. A peça saiu na sacola da cliente e o estoque continuava dizendo
+   * que ela estava na arara. Cada uma das 855 divergências medidas em 31/07
+   * era uma dessas correções silenciosas esperando um movimento pra ser
+   * aplicada a favor do banco errado.
    */
-  private async mirrorStockWriteThrough(
-    applied: Array<{ sku: string; storeCode: string; newStock: number }>,
-  ): Promise<void> {
-    if (String(process.env.ERP_STOCK_WRITEBACK_GIGA ?? '0').trim() !== '1') return;
-    for (const a of applied) {
-      try {
-        const lojaRaw = String(a.storeCode || '').trim();
-        const loja2 = /^\d{1}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
-        const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
-        // NAO clampa em 0 (31/07): quando a venda levava o Giga a -1, o Flow
-        // recebia 0 e o negativo ficava INVISIVEL na tela — ninguem sabia que a
-        // loja devia peca. Espelho tem que espelhar, inclusive o que incomoda.
-        const novo = Number(a.newStock) || 0;
-        const variants = this.skuVariants(String(a.sku || '').trim());
-        if (!variants.length || !lojas.length) continue;
-
-        const upd = await (this.prismaFlow as any).gigaEstoque.updateMany({
-          where: { codigo: { in: variants }, loja: { in: lojas } },
-          data: { estoque: novo, syncedAt: new Date() },
-        });
-        if (!upd.count) {
-          await (this.prismaFlow as any).gigaEstoque.create({
-            data: { codigo: String(a.sku).trim(), loja: loja2, estoque: novo },
-          });
-        }
-
-        const codNorm = this.wincredCodigo(String(a.sku).trim());
-        await (this.prismaFlow as any).wincredEstoque.upsert({
-          where: { codigo_loja: { codigo: codNorm, loja: loja2 } },
-          create: { codigo: codNorm, loja: loja2, estoque: novo },
-          update: { estoque: novo, syncedAt: new Date() },
-        });
-      } catch (e) {
-        this.logger.warn(
-          `[mirror-writethrough] estoque ${a.sku}/${a.storeCode}: ${(e as Error).message}`,
-        );
-      }
-    }
-  }
 
   /**
-   * CONSTITUIÇÃO 14/07 (Flow = fonte): aplica o DELTA de estoque direto nos
-   * espelhos (giga_estoque + wincred_estoque) ANTES do Giga. Retorna o
-   * "applied" no mesmo formato do caminho Giga.
+   * CONSTITUIÇÃO 14/07 (Flow = fonte): aplica o DELTA de estoque em
+   * `giga_estoque` + `wincred_estoque` — as tabelas de estoque do Postgres do
+   * Flow. Não há segunda perna: acaba aqui.
+   *
+   * ⚠️ FORA DE TRANSAÇÃO O ERRO POR ITEM É ENGOLIDO (vira log
+   * `[flow-estoque]`) e o item simplesmente NÃO entra no `applied`. Quem
+   * chama tem que conferir o `applied` contra o que pediu — o `success:true`
+   * dos métodos públicos não prova que todos os itens saíram. Dentro de
+   * transação (`applyStockDeltaInTx`, `inTx`) o erro SOBE de propósito e
+   * derruba o commit do caller.
+   *
+   * Linha que não existe na loja destino é CRIADA (peça que nunca passou por
+   * ali — comum em realinhamento). Sem `allowNegative`, saldo que ficaria
+   * negativo é CLAMPADO em 0 e o item ainda assim conta como aplicado.
    */
   private async mirrorStockApplyDelta(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
@@ -1524,65 +1491,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     throw lastErr;
   }
 
-  /**
-   * Catálogo de produtos do Giga (tabela `produtos`) — alimenta o espelho
-   * `giga_produto`. Confere as colunas com SHOW COLUMNS e seleciona NULL pras
-   * que não existirem (robusto a nomes diferentes). PROPAGA o erro (com retry).
-   */
-  /** Espelho de estoque do Giga: CODIGO x LOJA x ESTOQUE (só > 0) pro mirror. */
-  /**
-   * ESTOQUE COMPLETO DO GIGA — inclui ZERO e NEGATIVO.
-   *
-   * O `getGigaEstoque()` agrega por SKU/loja e descarta só a linha ZERADA
-   * (ausência já significa zero). Pra CONFERIR Flow × Giga a gente quer a
-   * tabela crua, linha a linha, inclusive os zeros.
-   */
-  async getEstoqueGigaCompleto(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
-    if (!this.pool) return [];
-    try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
-        sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
-                FROM estoque
-               GROUP BY CODIGO, LOJA`,
-        timeout: 300_000,
-      } as any);
-      return (rows as any[])
-        .map((r) => ({
-          codigo: String(r.codigo ?? '').trim(),
-          loja: String(r.loja ?? '').trim(),
-          estoque: Number(r.estoque) || 0,
-        }))
-        .filter((r) => r.codigo && r.loja);
-    } catch (e) {
-      this.logger.error(`getEstoqueGigaCompleto falhou: ${(e as Error).message}`);
-      return [];
-    }
-  }
+  // `getGigaEstoque` e `getEstoqueGigaCompleto` saíram em 09/2026: eram as
+  // duas leituras de estoque do ERP legado — uma alimentava o full que
+  // reimportava saldo por cima do Flow, a outra a conferência Flow × ERP. O
+  // Flow é a fonte do estoque desde 14/07 e não há mais com o que conferir.
 
-  async getGigaEstoque(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
-    if (!this.pool) return [];
-    try {
-      // Sync pesado (tabela inteira) — timeout estendido no pool-guard.
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
-        sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
-           FROM estoque
-          WHERE ESTOQUE <> 0
-          GROUP BY CODIGO, LOJA`,
-        timeout: 300_000,
-      } as any);
-      return (rows as any[])
-        .map((r) => ({
-          codigo: String(r.codigo ?? '').trim(),
-          loja: String(r.loja ?? '').trim(),
-          estoque: Number(r.estoque) || 0,
-        }))
-        .filter((r) => r.codigo && r.loja && r.estoque !== 0);
-    } catch (e) {
-      this.logger.error(`getGigaEstoque falhou: ${(e as Error).message}`);
-      return [];
-    }
-  }
-
+  /**
+   * ⚰️ Catálogo de produtos do ERP legado (tabela `produtos`) — alimentava o
+   * espelho `giga_produto`. Sem pool devolve [] e o chamador (`syncProdutos`
+   * do giga-mirror) nem chega aqui, porque está atrás de `pullGigaLigado()`.
+   * Conferia as colunas com SHOW COLUMNS e selecionava NULL pras que não
+   * existissem. PROPAGAVA o erro (com retry) de propósito.
+   */
   async getGigaProdutos(): Promise<
     Array<{ codigo: string; ref: string; descricao: string; cor: string; tamanho: string; grupo: string; ncm: string; vendaUn: number }>
   > {
@@ -1627,10 +1547,26 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // BAIXA DE ESTOQUE (WRITE) â€” controlado por env var ERP_WRITE_ENABLED.
+  // BAIXA DE ESTOQUE (WRITE)
   //
-  // Kill-switch rÃ¡pido: setar ERP_WRITE_ENABLED=false no Railway e dar
-  // redeploy (ou restart) volta o sistema pro shadow mode sem mudar cÃ³digo.
+  // 🚨 `ERP_WRITE_ENABLED` NÃO SIGNIFICA MAIS O QUE O NOME DIZ. Ela nasceu
+  // como kill-switch da escrita num ERP externo; hoje é a porta da SAÍDA DA
+  // PEÇA no Postgres, e quem passa por ela (crua, sem `escritaGigaBloqueada`)
+  // é:
+  //   • o BIPE da separação — pick-scan.service.ts, `skipReason()` devolve
+  //     'shadow' e nada sai do estoque;
+  //   • o estorno de card inteiro (mesmo arquivo);
+  //   • approveDebit / auto-debit / baixa em lote do pick-order;
+  //   • a baixa da peça da LIVE (live-pdv.service.ts).
+  //
+  // A venda da loja física NÃO depende dela: `erpStepBaixarEstoque` passa por
+  // `escritaGigaBloqueada()`, que com a réplica desligada é sempre false.
+  // Então desligar a env não para a loja — para a peça de SAIR: ela vai na
+  // sacola da cliente e o estoque continua dizendo que está na arara, calado
+  // (a pista é `debitSkippedReason='shadow'` na linha do tempo do pedido).
+  //
+  // FICA LIGADA. Quem quiser desligar só a baixa no bipe usa PICK_SCAN_DEBIT=0.
+  // Ver common/replica-giga.ts.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /** Retorna true se o env var ERP_WRITE_ENABLED='true' (case-insensitive). */
@@ -1639,38 +1575,36 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return v === 'true' || v === '1' || v === 'yes';
   }
 
-  /**
-   * Retorna true se o env var PDV_ERP_WRITE_ENABLED='true'. Controla a
-   * gravaÃ§Ã£o de vendas do PDV flowops na tabela `caixa` do Wincred.
-   * Independente de ERP_WRITE_ENABLED (decreaseStock) â€” pode-se baixar
-   * estoque sem gravar venda, ou vice-versa.
-   */
-  get isPdvWriteEnabled(): boolean {
-    const v = String(this.config.get('PDV_ERP_WRITE_ENABLED') ?? '').trim().toLowerCase();
-    return v === 'true' || v === '1' || v === 'yes';
-  }
+  // `isPdvWriteEnabled` (env PDV_ERP_WRITE_ENABLED) saiu em 09/2026: ela só
+  // escolhia entre "shadow" e "real" na gravação da venda na `caixa` do ERP
+  // legado, cujo servidor foi desligado em 27/08/2026. A venda do PDV vale no
+  // Postgres do Flow — não há mais um "real" pra ligar.
 
   /**
-   * Baixa estoque no Gigasistemas â€” executa UPDATE em `estoque` dentro de
-   * uma transaÃ§Ã£o MySQL. Todos os itens caem ou nada cai (ACID).
+   * BAIXA de estoque — CONSTITUIÇÃO 14/07: A VERDADE É O FLOW.
    *
-   * Regras:
-   *  - ERP_WRITE_ENABLED precisa ser 'true'. SenÃ£o retorna erro sem tocar no DB.
-   *  - Cada item: SELECT FOR UPDATE (pra travar linha durante a transaÃ§Ã£o)
-   *    â†’ checa se existe â†’ checa se nÃ£o fica negativo â†’ UPDATE.
-   *  - Se qualquer item falhar, rollback da transaÃ§Ã£o inteira.
-   *  - Sempre retorna { success, applied, error? } â€” nunca lanÃ§a exception
-   *    (pra quem chama poder logar e decidir sem try/catch).
+   * O delta aplica no Postgres NA HORA (`giga_estoque`/`wincred_estoque` são
+   * as tabelas de estoque do Flow, não cópias de ninguém) e a grade, a
+   * separação e o PDV veem em segundos.
    *
-   * O `storeCode` deve estar padronizado no formato Giga: 2 dÃ­gitos (01..20).
-   * A funÃ§Ã£o normaliza strings tipo "LJ01" â†’ "01" automaticamente.
-   */
-  /**
-   * BAIXA de estoque — CONSTITUIÇÃO 14/07: TUDO NO FLOW, GIGA SÓ ESPELHO.
-   * O Flow (espelhos giga_estoque/wincred_estoque) é a FONTE: o delta aplica
-   * aqui NA HORA (grade/separação/PDV veem em segundos). O Giga recebe a
-   * réplica em seguida; se estiver pendurado/fora, vai pra fila do outbox
-   * (kind estoque_delta) e a operação NÃO trava nem falha.
+   * A réplica pro ERP externo que existia depois disso está DESLIGADA desde
+   * 27/08/2026 e o servidor dele foi desligado: com `ERP_REPLICA_GIGA` off
+   * (o normal) o método termina na primeira linha, sem MySQL e sem fila.
+   *
+   * Nunca lança: sempre devolve { success, applied, error? } pra quem chama
+   * poder logar e decidir sem try/catch.
+   *
+   * ⚠️ `success: true` NÃO É PROVA DE QUE TODOS OS ITENS BAIXARAM. Erro por
+   * item fora de transação vira log e o item fica de fora do `applied` (ver
+   * `mirrorStockApplyDelta`). Confira `applied.length` contra os itens que
+   * você pediu antes de carimbar "baixado".
+   *
+   * SKU que não existe na loja tem a linha CRIADA com o saldo resultante;
+   * sem `allowNegative` o saldo é clampado em 0 (`skipNotFound` não tem
+   * efeito neste caminho).
+   *
+   * `storeCode` entra padronizado em 2 dígitos (01..20); a função normaliza
+   * strings tipo "LJ01" → "01" automaticamente.
    */
   async decreaseStock(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
@@ -1911,9 +1845,6 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
-      // No-op desde 22/08 (só volta com ERP_STOCK_WRITEBACK_GIGA=1): o saldo
-      // do Giga não carimba mais por cima do estoque do Flow.
-      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
@@ -1926,24 +1857,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * INCREASE estoque no Gigasistemas â€” usado pela loja DESTINO ao "Dar Entrada"
-   * em uma remessa de realinhamento recebida.
+   * ENTRADA de estoque — usada pela loja DESTINO ao "Dar Entrada" numa remessa
+   * de realinhamento recebida.
    *
-   * Espelho exato de `decreaseStock`:
-   *  - Mesmo kill-switch ERP_WRITE_ENABLED
-   *  - Mesma transaÃ§Ã£o ACID com rollback
-   *  - Mesmo retry/backoff em erro transiente
-   *  - SELECT FOR UPDATE â†’ soma â†’ UPDATE
+   * Simétrico à baixa: o delta soma no Postgres do Flow NA HORA, que é a
+   * verdade. A réplica pro ERP externo está desligada desde 27/08/2026 (o
+   * servidor dele também), então com `ERP_REPLICA_GIGA` off o método termina
+   * na primeira linha.
    *
-   * DiferenÃ§as do decrease:
-   *  - SOMA em vez de subtrair
-   *  - NÃ£o tem checagem de "estoque negativo" (sempre Ã© seguro aumentar)
-   *  - Se SKU nÃ£o existir na tabela `estoque` da loja destino, o registro Ã©
-   *    INSERIDO (peÃ§a que nunca passou por essa loja antes â€” comum em
-   *    realinhamento. SÃ³ o INSERT, sem mexer em produtos.)
+   * Diferenças do decrease: soma em vez de subtrair, e não checa negativo —
+   * aumentar é sempre seguro. Linha inexistente na loja é CRIADA (peça que
+   * nunca passou por ali).
+   *
+   * ⚠️ Mesma ressalva da baixa: `success: true` não prova que todos os itens
+   * entraram — erro por item vira log e o item fica de fora do `applied`.
    */
-  /** ENTRADA de estoque — mesmo modelo da baixa: Flow primeiro (fonte),
-   *  Giga réplica inline com fallback pro outbox. */
   async increaseStock(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
   ): Promise<{
@@ -2251,9 +2179,6 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
-      // No-op desde 22/08 (só volta com ERP_STOCK_WRITEBACK_GIGA=1): o saldo
-      // do Giga não carimba mais por cima do estoque do Flow.
-      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
@@ -3399,18 +3324,6 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const doGiga = await this.getProductPricesBySkusGiga(skus);
 
-    // Map não serializa em JSON — compara como par ordenado, igual ao batch de
-    // códigos. ⚠️ Divergência de ESCALA aqui (100×) é esperada se o Giga estiver
-    // usando a coluna VENDAUN: o caminho do Giga divide por 100, o espelho não
-    // (o Decimal de `vendaUn` já vem em reais). Ver a nota no sombra.service.
-    if (this.sombra?.ligado) {
-      void this.sombra.comparar(
-        'getProductPricesBySkus',
-        { skus: skus?.length ?? 0 },
-        [...doGiga.entries()].sort(),
-        async () => [...(await this.sombra!.getProductPricesBySkus(skus)).entries()].sort(),
-      );
-    }
     return doGiga;
   }
 
@@ -3418,23 +3331,26 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const out = new Map<string, number>();
     if (!skus.length || !this.pool) return out;
 
-    // Descobre qual coluna tem o preÃ§o (cache no mÃ©todo pickCol).
-    // ORDEM CORRIGIDA: campos de preÃ§o de venda EXPLICITO vem primeiro.
-    // VENDAUN ficava em primeiro mas em alguns Gigas eh custo/medio, nao venda
-    // â€” gerava obrigacoes intercompany com R$ 0,80 por peca (errado).
-    // Override por env GIGA_PRECO_COL pra forcar coluna especifica.
-    const envCol = (process.env.GIGA_PRECO_COL || '').trim().toUpperCase();
-    const candidatas = envCol
-      ? [envCol]
-      : ['PRECOVENDA', 'PRECO_VENDA', 'PRECO', 'VENDA', 'VENDAUN'];
-    const precoCol = await this.pickCol(candidatas);
+    // ⚰️ CAMINHO MORTO — mantido só como registro. Este método já saiu no
+    // `if (!this.pool)` acima, sempre: o pool nunca é criado. Quem responde
+    // preço hoje é o Postgres, pelo SombraService (`GIGA_LEITURA_FLOW=1`), no
+    // início de `getProductPricesBySkus`. Nada daqui pra baixo executa — a
+    // detecção de coluna, o warn e o log de "usando coluna" nunca aparecem.
+    //
+    // Registro do que era: a ORDEM abaixo tinha campos de preço de venda
+    // EXPLÍCITO primeiro. VENDAUN ficava em primeiro mas na instalação daqui
+    // era custo/médio, não venda — gerava obrigação intercompany com R$ 0,80
+    // por peça. O override por env (GIGA_PRECO_COL) saiu em 09/2026 junto.
+    const precoCol = await this.pickCol([
+      'PRECOVENDA', 'PRECO_VENDA', 'PRECO', 'VENDA', 'VENDAUN',
+    ]);
     if (!precoCol) {
       this.logger.warn(
         '[erp] getProductPricesBySkus: nenhuma coluna de preÃ§o detectada na tabela produtos',
       );
       return out;
     }
-    this.logger.log(`[erp] getProductPricesBySkus: usando coluna "${precoCol}" (envOverride=${envCol || 'none'})`);
+    this.logger.log(`[erp] getProductPricesBySkus: usando coluna "${precoCol}"`);
 
     // Dedup + limpa SKUs + EXPANDE variantes (zeros Ã  esquerda)
     const unique = Array.from(new Set(skus.map((s) => String(s).trim()).filter(Boolean)));
@@ -4760,75 +4676,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * DIAGNÃ“STICO: lista tabelas do Gigasistemas que batem com um LIKE.
-   * Uso: `listTablesLike('%credi%')` â†’ retorna nomes de tabelas com "credi".
-   * Se a tabela existir, tambÃ©m devolve schema (colunas) e 3 linhas de amostra.
-   *
-   * Endpoint pensado pra eu (Claude) descobrir estrutura de tabelas sem precisar
-   * subir dump â€” Ãºtil pra investigar integraÃ§Ãµes (ex: crediarios do WinCred).
-   */
-  async listTablesLike(
-    pattern: string,
-  ): Promise<{
-    pattern: string;
-    tables: string[];
-    details: Array<{ table: string; columns: Array<{ field: string; type: string }>; sample: any[]; rowCount?: number }>;
-  }> {
-    if (!this.pool) return { pattern, tables: [], details: [] };
-
-    const p = String(pattern || '').trim() || '%';
-    const safe = p.includes('%') ? p : `%${p}%`;
-
-    try {
-      const [tRows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SHOW TABLES LIKE ?`,
-        [safe],
-      );
-      // SHOW TABLES retorna colunas tipo "Tables_in_gigasistemas21"
-      const tables: string[] = (tRows as any[]).map((r) => {
-        const keys = Object.keys(r);
-        return String(r[keys[0]]);
-      });
-
-      const details: Array<{
-        table: string;
-        columns: Array<{ field: string; type: string }>;
-        sample: any[];
-        rowCount?: number;
-      }> = [];
-
-      for (const t of tables.slice(0, 10)) {
-        // SÃ³ inspeciona as 10 primeiras â€” evitar payload gigante
-        try {
-          const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
-            // Nome de tabela nÃ£o pode ser parametrizado â€” usamos regex pra sanitizar
-            `SHOW COLUMNS FROM \`${t.replace(/[^a-zA-Z0-9_]/g, '')}\``,
-          );
-          const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-            `SELECT * FROM \`${t.replace(/[^a-zA-Z0-9_]/g, '')}\` LIMIT 3`,
-          );
-          const [countRows] = await this.pool.query<mysql.RowDataPacket[]>(
-            `SELECT COUNT(*) AS c FROM \`${t.replace(/[^a-zA-Z0-9_]/g, '')}\``,
-          );
-          details.push({
-            table: t,
-            columns: (cols as any[]).map((c) => ({ field: c.Field, type: c.Type })),
-            sample: rows as any[],
-            rowCount: Number((countRows as any[])[0]?.c ?? 0),
-          });
-        } catch (e: any) {
-          details.push({ table: t, columns: [], sample: [], rowCount: undefined });
-          this.logger.warn(`listTablesLike(describe ${t}) falhou: ${e.message}`);
-        }
-      }
-
-      return { pattern: safe, tables, details };
-    } catch (e: any) {
-      this.logger.error(`listTablesLike falhou: ${e.message}`);
-      return { pattern: safe, tables: [], details: [] };
-    }
-  }
+  // `listTablesLike` (diagnóstico de schema do ERP legado por LIKE) saiu em
+  // 09/2026: os endpoints que a chamavam já tinham sido removidos e o banco
+  // que ela inspecionava foi desligado em 27/08/2026.
 
   /** Retorna metadados de um produto (nome, preÃ§o) direto da tabela produtos. */
   async getProduct(sku: string): Promise<{ name: string; price: number } | null> {
@@ -4849,14 +4699,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // PUBLICAÃ‡ÃƒO NO SITE â€” busca de referÃªncias pra enfileirar no LURDS ORDER ONE
+  // ⚰️ BUSCA DE REFERÊNCIAS NO ERP LEGADO — CAMINHO MORTO (registro histórico)
   //
-  // Este bloco existe pra alimentar a tela /retaguarda/publicar-site (Fase 1
-  // da integraÃ§Ã£o Wincredâ†’WooCommerce). A estratÃ©gia Ã© DEFENSIVA: nem todo
-  // Gigasistemas tem as mesmas colunas (GRUPO, SUBGRUPO, FORNECEDOR, NCM,
-  // CFOP, DATACADASTRO variam por versÃ£o/customizaÃ§Ã£o). EntÃ£o detectamos o
-  // schema em tempo de execuÃ§Ã£o via `SHOW COLUMNS` e montamos as queries
-  // sÃ³ com as colunas que existem.
+  // Alimentava a tela /retaguarda/publicar-site na época em que o catálogo
+  // vivia no ERP externo. Sem pool, TODO este bloco devolve VAZIO SEM ERRO —
+  // a busca da tela não acha nada. A estratégia era DEFENSIVA: o schema
+  // variava por versão/customização (GRUPO, SUBGRUPO, FORNECEDOR, NCM, CFOP,
+  // DATACADASTRO), então as colunas eram detectadas em runtime via
+  // `SHOW COLUMNS`.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   // Cache do schema da tabela `produtos` (conjunto de colunas em UPPER).
@@ -4881,9 +4731,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Resolve o nome REAL da coluna no schema, dado um conjunto de candidatos
-   * comuns. Retorna o primeiro que existe, ou null. Ãštil pra campos que
-   * variam entre versÃµes do Gigasistemas (ex: CUSTOUN / CUSTO / CUSTOMEDIO).
+   * ⚰️ Resolvia o nome REAL da coluna no schema do ERP legado. Hoje devolve
+   * SEMPRE null: `getProductsColumns` sai no `if (!this.pool)` e volta um Set
+   * vazio. Fica como registro — o schema daquele ERP variava por versão
+   * (ex: CUSTOUN / CUSTO / CUSTOMEDIO), por isso era detectado em runtime.
    */
   private async pickCol(candidates: string[]): Promise<string | null> {
     const cols = await this.getProductsColumns();
@@ -5377,107 +5228,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   //  5. Timeout de 30s na query
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  /**
-   * Health check do pool MySQL â€” devolve diagnÃ³stico em formato amigÃ¡vel.
-   *
-   * NÃ£o engole erro: retorna o `error.message` real pra UI mostrar o motivo
-   * (timeout, ECONNREFUSED, access denied, etc.). TambÃ©m expÃµe se as envs
-   * obrigatÃ³rias estÃ£o setadas (sem vazar senha).
-   */
-  async pingHealth(): Promise<{
-    ok: boolean;
-    error?: string;
-    host?: string;
-    port?: number;
-    database?: string;
-    hasUser: boolean;
-    hasPassword: boolean;
-    pingMs?: number;
-  }> {
-    const host = this.config.get<string>('ERP_HOST');
-    const port = Number(this.config.get<string>('ERP_PORT') ?? 3306);
-    const database = this.config.get<string>('ERP_DATABASE');
-    const hasUser = !!this.config.get<string>('ERP_USER');
-    const hasPassword = !!this.config.get<string>('ERP_PASSWORD');
-
-    if (!this.pool) {
-      return { ok: false, error: 'Pool ERP nÃ£o inicializado', host, port, database, hasUser, hasPassword };
-    }
-    const t0 = Date.now();
-    try {
-      const conn = await this.pool.getConnection();
-      try {
-        await conn.ping();
-      } finally {
-        conn.release();
-      }
-      return { ok: true, host, port, database, hasUser, hasPassword, pingMs: Date.now() - t0 };
-    } catch (e: any) {
-      return {
-        ok: false,
-        error: e?.message ?? 'ping falhou',
-        host, port, database, hasUser, hasPassword,
-      };
-    }
-  }
-
-  /**
-   * Lista TODAS as tabelas do banco. EstratÃ©gia robusta:
-   *   1. Tenta information_schema.TABLES (com TABLE_SCHEMA = ?). Traz rows+size.
-   *   2. Se vier vazio, fallback pra SHOW TABLES (nÃ£o tem metadados, mas
-   *      funciona em user MySQL com GRANT mÃ­nimo). Tenta enriquecer com
-   *      information_schema.STATISTICS.TABLE_ROWS por tabela.
-   *
-   * Por que dois caminhos? O Gigasistemas usa MySQL antigo onde nem todo user
-   * tem permissÃ£o pra ler information_schema completa. SHOW TABLES funciona
-   * com qualquer SELECT, mesmo restrito.
-   */
-  async listAllTables(): Promise<Array<{ name: string; rows: number; sizeMb: number; engine: string | null }>> {
-    if (!this.pool) return [];
-
-    const dbName = this.config.get<string>('ERP_DATABASE') ?? '';
-
-    // Tentativa 1: information_schema (com schema explÃ­cito + DATABASE() como fallback)
-    try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT
-            TABLE_NAME    AS name,
-            TABLE_ROWS    AS rows,
-            ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS sizeMb,
-            ENGINE        AS engine
-           FROM information_schema.TABLES
-          WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())
-            AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-          ORDER BY TABLE_NAME ASC`,
-        [dbName || null],
-      );
-      const arr = (rows as any[]).map((r) => ({
-        name: String(r.name),
-        rows: Number(r.rows ?? 0),
-        sizeMb: Number(r.sizeMb ?? 0),
-        engine: r.engine ? String(r.engine) : null,
-      }));
-      if (arr.length > 0) return arr;
-      this.logger.warn('listAllTables: information_schema retornou 0 â€” caindo pro SHOW TABLES');
-    } catch (e: any) {
-      this.logger.warn(`listAllTables information_schema falhou: ${e.message} â€” caindo pro SHOW TABLES`);
-    }
-
-    // Tentativa 2: SHOW TABLES (mais robusto, mas sem metadados de tamanho)
-    try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(`SHOW TABLES`);
-      // SHOW TABLES retorna 1 coluna chamada Tables_in_<dbname>
-      const arr = (rows as any[]).map((r) => {
-        const name = String(Object.values(r)[0] ?? '');
-        return { name, rows: 0, sizeMb: 0, engine: null as string | null };
-      }).filter((x) => x.name);
-      this.logger.log(`listAllTables: SHOW TABLES retornou ${arr.length} tabelas`);
-      return arr;
-    } catch (e: any) {
-      this.logger.error(`listAllTables SHOW TABLES tambÃ©m falhou: ${e.message}`);
-      return [];
-    }
-  }
+  // `pingHealth` e `listAllTables` saíram em 09/2026. Eram o health e o
+  // inventário de tabelas do explorer de banco do ERP legado; o explorer foi
+  // deletado na Onda 2 e o servidor desligado em 27/08/2026, então os dois só
+  // tinham como responder "Pool ERP não inicializado" e [].
 
   /** Retorna schema (colunas + tipos + key) e amostra de N rows pra uma tabela. */
   async getTableSchema(
@@ -5713,9 +5467,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Detecta a coluna de DATA CADASTRO da tabela `produtos` (varia por versÃ£o
-   * Giga: DATACADASTRO, DATA_INC, DT_CADASTRO, CREATED_AT, etc). CachÃª em
-   * memÃ³ria pra evitar repetir DESCRIBE em cada query.
+   * ⚰️ Detectava a coluna de DATA CADASTRO da tabela `produtos` do ERP
+   * legado, cujo schema variava por versão (DATACADASTRO, DATA_INC,
+   * DT_CADASTRO, CREATED_AT...). Sem pool a detecção não roda e o resultado
+   * é sempre o fallback DATAALT. Cachê em memória, mantido como registro.
    */
   private _cadCol: string | null | undefined = undefined;
   async getCadastroDateCol(): Promise<string | null> {
@@ -5730,14 +5485,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // coluna de cadastro dedicada).
       'DATAALT',
     ];
-    // Auto-detecção; se nada casar, CAI no DATAALT (única data em `produtos` do
-    // Giga Lurd's — confirmado no schema). Override via env GIGA_PRODUTO_DATA_COL.
+    // Auto-detecção; se nada casar, CAI no DATAALT (única data em `produtos`
+    // do ERP legado — confirmado no schema). O override por env
+    // (GIGA_PRODUTO_DATA_COL) saiu em 09/2026: só havia uma instalação, e ela
+    // foi desligada.
     // Não depender só da detecção: ela voltava null e o filtro de ano virava no-op.
     const detected = await this.pickCol(candidatas);
-    const fallback = (process.env.GIGA_PRODUTO_DATA_COL || 'DATAALT').trim();
-    this._cadCol = detected || fallback || null;
+    this._cadCol = detected || 'DATAALT';
     this.logger.log(
-      `[erp] coluna de data cadastro = ${this._cadCol} (detectada: ${detected || 'nenhuma'}, fallback: ${fallback})`,
+      `[erp] coluna de data cadastro = ${this._cadCol} (detectada: ${detected || 'nenhuma'}, fallback: DATAALT)`,
     );
     return this._cadCol;
   }
@@ -6856,17 +6612,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return this.resolveSkuInfoGiga(sku);
     }
 
-    const doGiga = await this.resolveSkuInfoGiga(sku);
-
-    if (this.sombra?.ligado) {
-      void this.sombra.comparar(
-        'resolveSkuInfo',
-        { sku },
-        doGiga,
-        () => this.sombra!.resolveSkuInfo(sku),
-      );
-    }
-    return doGiga;
+    return this.resolveSkuInfoGiga(sku);
   }
 
   private async resolveSkuInfoGiga(sku: string): Promise<{
@@ -7086,31 +6832,22 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Busca direta no Giga pelo CODIGO de uma combinaÃ§Ã£o REF + cor + tamanho.
-   * Tolerante a TRIM, case e variaÃ§Ãµes de espaÃ§o.
+   * REF + cor + tamanho → CODIGO da peça. Tolerante a TRIM, case e variações
+   * de espaço; tenta exato, depois LIKE, depois só REF+tamanho (ignora cor).
    *
-   * Uso: na hora de fechar uma remessa de realinhamento, pegamos
-   * REF/COR/TAM do TransferOrder e precisamos do CODIGO pra dar baixa
-   * em estoque. Esse mÃ©todo resolve isso direto sem depender de searchByRef.
+   * Uso: ao fechar uma remessa de realinhamento pegamos REF/COR/TAM do
+   * TransferOrder e precisamos do CODIGO pra dar baixa em estoque.
    *
-   * Tenta em ordem:
-   *   1. Match exato (case-insensitive + trim)
-   *   2. Match com LIKE (cobre variaÃ§Ãµes tipo "BEGE" vs "XADREZ BEGE")
-   *   3. Match sÃ³ por REF + tamanho (ignora cor â€” fallback)
-   */
-  /**
-   * PILOTO DA FASE 1 DA SAÍDA DO GIGA (31/07) — MODO SOMBRA.
+   * 🚨 QUEM RESPONDE É O POSTGRES, e só ele. Com `GIGA_LEITURA_FLOW=1`
+   * (obrigatória em produção) a consulta do Flow responde de primeira. O
+   * caminho legado abaixo NÃO é recuo: `findCodigoByRefCorTamGiga` começa com
+   * `if (!this.pool || !refCode) return null` — devolve NULL SEM LANÇAR, então
+   * o `catch` nunca dispara. Sem a env, o Postgres nem é consultado.
    *
-   * Quem responde continua sendo o GIGA, sempre. Com `GIGA_SOMBRA=1`, a versão
-   * Postgres roda em paralelo e as duas respostas são comparadas; divergência
-   * vira log e placar em `GET /erp/sombra`.
-   *
-   * Escolhido como piloto por ser leitura pura, de alto volume (12 pontos só
-   * no realinhamento) e com o dado já nos espelhos curados. Se a consulta nova
-   * errar, ninguém percebe — ela não responde nada ainda.
-   *
-   * Vira de vez só depois de dias com 100% de igualdade. Ver
-   * docs/PLANO-SAIDA-GIGA-NATIVO.md.
+   * ⚠️ Nos dois ramos o fim da linha é um `null` silencioso, e quem chama
+   * (shipment.service, 5 pontos) lê isso como "peça não existe" — foi o que
+   * travava a entrada de remessa. Se a REF não traduzir no espelho, o
+   * problema é o espelho, não a peça.
    */
   async findCodigoByRefCorTam(
     refCode: string,
@@ -7146,16 +6883,6 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return this.sombra.findCodigoByRefCorTam(refCode, cor, tamanho);
     }
 
-    // `void`: não espera pela comparação. O usuário já tem a resposta, e a
-    // validação não pode custar latência nem derrubar a tela se falhar.
-    if (this.sombra?.ligado) {
-      void this.sombra.comparar(
-        'findCodigoByRefCorTam',
-        { refCode, cor, tamanho },
-        doGiga,
-        () => this.sombra!.findCodigoByRefCorTam(refCode, cor, tamanho),
-      );
-    }
     return doGiga;
   }
 
@@ -7338,19 +7065,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const doGiga = await this.batchFindCodigosByRefCorTamGiga(items);
-
-    // Sombra: Map não serializa em JSON, então compara como par ordenado —
-    // senão toda comparação daria "{}" dos dois lados e passaria batido.
-    if (this.sombra?.ligado) {
-      void this.sombra.comparar(
-        'batchFindCodigosByRefCorTam',
-        { itens: items.length },
-        [...doGiga.entries()].sort(),
-        async () => [...(await this.sombra!.batchFindCodigosByRefCorTam(items)).entries()].sort(),
-      );
-    }
-    return doGiga;
+    return this.batchFindCodigosByRefCorTamGiga(items);
   }
 
   private async batchFindCodigosByRefCorTamGiga(
@@ -7886,26 +7601,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return this.getStockByRefCorTamInStoreGiga(refCode, cor, tamanho, storeCode);
     }
 
-    const doGiga = await this.getStockByRefCorTamInStoreGiga(refCode, cor, tamanho, storeCode);
-
-    if (this.sombra?.ligado) {
-      // Ordena os códigos pelo núcleo (sem zero à esquerda) antes de comparar:
-      // os dois lados devolvem em ordem de query e com padding diferente, e sem
-      // isso toda comparação viraria divergência de mentira.
-      const ordena = (r: { totalQty: number; codigos: string[] }) => ({
-        totalQty: r.totalQty,
-        codigos: [...r.codigos].sort((a, b) =>
-          (a.replace(/^0+/, '') || '0').localeCompare(b.replace(/^0+/, '') || '0'),
-        ),
-      });
-      void this.sombra.comparar(
-        'getStockByRefCorTamInStore',
-        { refCode, cor, tamanho, storeCode },
-        ordena(doGiga),
-        async () => ordena(await this.sombra!.getStockByRefCorTamInStore(refCode, cor, tamanho, storeCode)),
-      );
-    }
-    return doGiga;
+    return this.getStockByRefCorTamInStoreGiga(refCode, cor, tamanho, storeCode);
   }
 
   private async getStockByRefCorTamInStoreGiga(
@@ -9333,87 +9029,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return { excluidos };
   }
 
-  /**
-   * RESTAURAÇÃO DO INCIDENTE 14/07: devolve a DATA DE CADASTRO (DATAALT)
-   * original de produtos que o editor carimbou com a data da edição —
-   * o que tirou peças antigas da promoção Liquida Antigos.
-   * Agrupa por data (poucos UPDATEs) e cobre variantes de zero-padding.
-   */
-  async restoreDataAlt(pairs: Array<{ codigo: string; dataAlt: string }>): Promise<{ atualizados: number }> {
-    if (!this.isWriteEnabled) {
-      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar restauração.');
-    }
-    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
-    const clean = pairs.filter((p) => p.codigo && /^\d{4}-\d{2}-\d{2}$/.test(String(p.dataAlt || '')));
-    if (!clean.length) return { atualizados: 0 };
-
-    // Agrupa por DATA → 1 UPDATE por data (com IN de todas as variantes).
-    const porData = new Map<string, string[]>();
-    for (const p of clean) {
-      const list = porData.get(p.dataAlt) || [];
-      for (const v of this.skuVariants(String(p.codigo).trim())) list.push(v);
-      porData.set(p.dataAlt, list);
-    }
-
-    // AUTOCOMMIT por statement (SEM transação gigante): incidente 14/07 mostrou
-    // que 88k updates numa transação única = commit invisível + timeout de
-    // gateway + lock gigante. Cada UPDATE commita sozinho — progresso visível
-    // e re-execução é idempotente (regrava o mesmo valor).
-    let atualizados = 0;
-    for (const [dataAlt, codigos] of porData.entries()) {
-      for (let i = 0; i < codigos.length; i += 500) {
-        const chunk = codigos.slice(i, i + 500);
-        const placeholders = chunk.map(() => '?').join(',');
-        const [result]: any = await this.pool.query(
-          `UPDATE produtos SET DATAALT = ? WHERE CODIGO IN (${placeholders})`,
-          [dataAlt, ...chunk],
-        );
-        atualizados += Number(result.affectedRows) || 0;
-      }
-    }
-    this.logger.log(`restoreDataAlt: ${atualizados} produtos restaurados no Giga (${porData.size} data(s))`);
-    return { atualizados };
-  }
-
-  /** Leva 4 (incidente DATAALT): a caixa tem índice em CODIGO? Sem índice a
-   *  varredura por chunks viraria full-scan repetido — aí só usamos o espelho. */
-  async caixaCodigoIndexed(): Promise<boolean> {
-    if (!this.pool) return false;
-    try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({ sql: 'SHOW INDEX FROM caixa', timeout: 15_000 });
-      return (rows as any[]).some((r) => String(r.Column_name || '').toUpperCase() === 'CODIGO');
-    } catch {
-      return false;
-    }
-  }
-
-  /** Leva 4: primeira venda (MIN(DATA)) por código na caixa do Giga, em um
-   *  chunk pequeno. Read-only, IN-list com variantes de zero-padding. */
-  async getFirstSaleDatesChunk(codigos: string[]): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    if (!this.pool || !codigos.length) return out;
-    const { allVariants, variantToOriginal } = this.expandSkus(codigos);
-    if (!allVariants.length) return out;
-    const placeholders = allVariants.map(() => '?').join(',');
-    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-      {
-        sql: `SELECT CODIGO, DATE_FORMAT(MIN(DATA), '%Y-%m-%d') AS d
-                FROM caixa
-               WHERE CODIGO IN (${placeholders})
-               GROUP BY CODIGO`,
-        timeout: 30_000,
-      },
-      allVariants,
-    );
-    for (const r of rows as any[]) {
-      const orig = variantToOriginal.get(String(r.CODIGO || '').trim());
-      const d = String(r.d || '');
-      if (!orig || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-      const prev = out.get(orig);
-      if (!prev || d < prev) out.set(orig, d);
-    }
-    return out;
-  }
+  // `restoreDataAlt`, `caixaCodigoIndexed` e `getFirstSaleDatesChunk` saíram
+  // em 09/2026. As três nasceram do incidente DATAALT de 14/07 (o editor
+  // carimbava a data de EDIÇÃO por cima da data de CADASTRO e tirava peça
+  // antiga da promoção): uma devolvia a data original no ERP legado, as outras
+  // duas provavam a idade da peça pela primeira venda na `caixa` dele. O
+  // incidente está encerrado e o servidor daquele ERP foi desligado em
+  // 27/08/2026.
+  //
+  // A CAPACIDADE não morreu, mudou de casa: hoje quem devolve a data de
+  // cadastro é `restaurarDataAltNativoDoEspelho`, 100% Postgres, no
+  // `products-editor.service.ts`.
 
   async inserirProdutosBatch(produtos: Array<{
     codigo: string;
@@ -9500,18 +9126,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // PDV â€” GravaÃ§Ã£o de venda na tabela `caixa` do Wincred (gigasistemas21)
+  // PDV — a gravação da venda na `caixa` do ERP legado.
   //
-  // Replica o que o PDV antigo do Wincred faz: 1 linha por ITEM da venda.
-  // O nÃºmero da venda (NUMERO) Ã© compartilhado com o PDV antigo â€” usamos
-  // MAX(NUMERO)+1 com FOR UPDATE pra evitar colisÃ£o.
+  // ⚠️ NÃO RODA MAIS. A venda vale em `pdv_sale`, no Postgres do Flow. Isto
+  // aqui era a RÉPLICA, e ela está desligada desde 27/08/2026 junto com o
+  // servidor do ERP: o outbox só chega neste caminho com ERP_REPLICA_GIGA=1
+  // (ver common/replica-giga.ts) e o pool MySQL nem é criado.
   //
-  // Modo SHADOW (PDV_ERP_WRITE_ENABLED=false, default): sÃ³ LOGA os SQLs
-  // que SERIAM executados, sem tocar no banco. Permite validar geraÃ§Ã£o
-  // de SQL antes de ligar real.
-  //
-  // Modo REAL (PDV_ERP_WRITE_ENABLED=true): executa em transaÃ§Ã£o ACID.
-  // Se qualquer item falhar â†’ rollback total â†’ retorna erro.
+  // O código fica como registro do formato: 1 linha por ITEM na `caixa` +
+  // 1 linha por PAGAMENTO na `fechamento`, com NUMERO por MAX(NUMERO)+1.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
@@ -9725,12 +9348,22 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Admin corrige bandeira de um pagamento jÃ¡ gravado no Wincred (operadora errou).
-   * Usa OBS_PEDIDO da tabela `caixa` (formato 'flowops-XXXXXXXX') pra achar o NUMERO
-   * da venda, e entÃ£o faz UPDATE em `fechamento`:
-   *   - SET FORMA = newBandeira
-   *   - SET coluna_antiga = 0/NULL
-   *   - SET coluna_nova = valor
+   * Troca de bandeira do pagamento — NÃO EXISTE MAIS SEGUNDA GRAVAÇÃO.
+   *
+   * A correção que o admin faz na tela vale em `pdv_sale_payments`, no
+   * Postgres do Flow — é de lá que o FECHAMENTO e o RELATÓRIO POR BANDEIRA
+   * são recalculados na leitura, inclusive de caixa já fechado. (A
+   * conciliação de cartão é outra coisa: casa pelo total da venda e pega a
+   * bandeira do gateway.) Esta função existia pra repetir o UPDATE na
+   * `fechamento` de um ERP externo, cujo servidor foi desligado em
+   * 27/08/2026.
+   *
+   * Responde `ok: true` de propósito: enquanto respondia `ok: false` com
+   * "Pool ERP não inicializado", TODA troca de bandeira abria na cara do admin
+   * um aviso mandando "ajustar manualmente no Giga" — uma ordem impossível de
+   * cumprir, sobre uma correção que já estava salva e completa. O `mode`
+   * continua no retorno só por compatibilidade de assinatura; não há nada
+   * represado pra "ligar".
    */
   async atualizarBandeiraFechamento(input: {
     saleId: string;
@@ -9739,104 +9372,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     newBandeira: string;
     valor: number;
   }): Promise<{ ok: boolean; mode: 'shadow' | 'real'; numero?: number; error?: string; sqlExecuted: string[]; enfileirado?: boolean }> {
-    const sqlExecuted: string[] = [];
-    const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
-
-    if (!this.pool) {
-      return { ok: false, mode, sqlExecuted, error: 'Pool ERP nÃ£o inicializado' };
-    }
-    if (!input.saleId) return { ok: false, mode, sqlExecuted, error: 'saleId obrigatÃ³rio' };
-    if (!input.storeCode) return { ok: false, mode, sqlExecuted, error: 'storeCode obrigatÃ³rio' };
-    if (!input.newBandeira) return { ok: false, mode, sqlExecuted, error: 'newBandeira obrigatÃ³ria' };
-
-    const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
-    const saleIdShort = input.saleId.slice(0, 8);
-    const obsPedido = `flowops-${saleIdShort}`;
-    const oldMap = this.mapPagamentoFechamento(input.oldBandeira || '');
-    const newMap = this.mapPagamentoFechamento(input.newBandeira);
-    const valor = Number(input.valor) || 0;
-
-    // Acha o NUMERO da venda no Wincred via OBS_PEDIDO + LOJA
-    const sqlBusca = `SELECT NUMERO FROM caixa WHERE OBS_PEDIDO = '${obsPedido}' AND LOJA = '${lojaCode}' LIMIT 1`;
-    sqlExecuted.push(sqlBusca);
-
-    if (mode === 'shadow') {
-      this.logger.warn(`[atualizarBandeiraFechamento SHADOW] obsPedido=${obsPedido} loja=${lojaCode} ${input.oldBandeira}â†’${input.newBandeira} valor=${valor}`);
-      return { ok: true, mode, sqlExecuted };
-    }
-
-    try {
-      const [rows] = await this.pool.query<any[]>(sqlBusca);
-      const r = (rows as any[])[0];
-      if (!r?.NUMERO) {
-        this.logger.warn(`atualizarBandeiraFechamento: venda nÃ£o achada no Wincred (${obsPedido}/${lojaCode})`);
-        return { ok: false, mode, sqlExecuted, error: `Venda nÃ£o localizada no Wincred (${obsPedido})` };
-      }
-      const numero = Number(r.NUMERO);
-
-      // Monta UPDATE: zera coluna antiga (se tinha) + popula coluna nova (se tem)
-      const sets: string[] = [`FORMA = '${newMap.forma.replace(/'/g, "''")}'`];
-      if (oldMap.coluna && oldMap.coluna !== newMap.coluna) {
-        sets.push(`\`${oldMap.coluna}\` = 0`);
-      }
-      if (newMap.coluna) {
-        sets.push(`\`${newMap.coluna}\` = ${valor}`);
-      }
-      // WHERE: match estrito por VENDA + LOJA + VALOR + FORMA antiga (nÃ£o pega linha errada)
-      const whereForma = oldMap.forma ? `AND FORMA = '${oldMap.forma.replace(/'/g, "''")}'` : '';
-      const sqlUpdate =
-        `UPDATE fechamento SET ${sets.join(', ')} ` +
-        `WHERE VENDA = ${numero} AND LOJA = '${lojaCode}' ` +
-        `AND ABS(VALOR - ${valor}) < 0.01 ${whereForma} LIMIT 1`;
-      sqlExecuted.push(sqlUpdate);
-
-      const [updRes] = await this.pool.query<any>(sqlUpdate);
-      const affected = (updRes as any)?.affectedRows ?? 0;
-      if (affected === 0) {
-        this.logger.warn(`UPDATE fechamento nÃ£o afetou linhas (NUMERO=${numero} LOJA=${lojaCode} FORMA=${oldMap.forma})`);
-        return { ok: false, mode, numero, sqlExecuted, error: 'Linha de fechamento nÃ£o encontrada (FORMA antiga nÃ£o bate)' };
-      }
-      this.logger.log(`atualizarBandeiraFechamento OK: NUMERO=${numero} LOJA=${lojaCode} ${oldMap.forma}â†’${newMap.forma} valor=${valor} (${affected} linha)`);
-      return { ok: true, mode, numero, sqlExecuted };
-    } catch (e: any) {
-      // ENFILEIRA (31/07): os dois chamadores em cash.service.ts são
-      // best-effort e devolvem ok mesmo com o Giga fora — então a troca de
-      // bandeira valia no Flow e SUMIA da réplica, deixando só um log. A
-      // conciliação de cartão do mês fechava errada e ninguém sabia por quê.
-      // A tabela `fechamento` não tem espelho, mas não precisa: o pagamento já
-      // é do Flow; o que faltava era a fila garantir que a correção chegue lá.
-      this.logger.error(`atualizarBandeiraFechamento ERRO: ${e?.message}`);
-      await this.enfileirarBandeiraFechamento(input, e?.message || String(e));
-      return { ok: false, mode, sqlExecuted, error: e?.message, enfileirado: true };
-    }
+    if (!input.saleId) return { ok: false, mode: 'shadow', sqlExecuted: [], error: 'saleId obrigatório' };
+    if (!input.newBandeira) return { ok: false, mode: 'shadow', sqlExecuted: [], error: 'newBandeira obrigatória' };
+    return { ok: true, mode: 'shadow', sqlExecuted: [] };
   }
 
-  /** Fila da troca de bandeira. Idempotente: o UPDATE busca a linha pela
-   *  FORMA antiga, então repetir depois de aplicado não afeta nada. */
-  private async enfileirarBandeiraFechamento(
-    input: { saleId: string; storeCode: string; oldBandeira: string; newBandeira: string; valor: number },
-    erro: string,
-  ): Promise<void> {
-    try {
-      await (this.prismaFlow as any).erpOutbox.create({
-        data: {
-          kind: 'bandeira_fechamento',
-          saleId: `bandeira-${input.saleId}-${input.newBandeira}`.slice(0, 190),
-          payload: { ...input },
-          status: 'pending',
-        },
-      });
-      this.logger.warn(`[bandeira] réplica da venda ${input.saleId} enfileirada (${erro})`);
-    } catch (e: any) {
-      if (String(e?.code) === 'P2002') return; // já enfileirado
-      this.logger.error(`[bandeira] não consegui enfileirar a venda ${input.saleId}: ${e?.message}`);
-    }
-  }
+  // `enfileirarBandeiraFechamento` saiu em 09/2026 junto com a segunda
+  // gravação que ela reagendava: sem ERP externo, não há réplica a garantir —
+  // a troca de bandeira já vale por inteiro em `pdv_sale_payment`.
 
   /**
-   * Grava uma venda do PDV flowops na tabela `caixa` do Wincred.
-   * TambÃ©m grava 1 linha em `fechamento` por pagamento (com FORMA+VALOR).
-   * Idempotente por venda? NÃƒO â€” cada chamada gera novo NUMERO.
+   * NÃO GRAVA MAIS NADA — só monta o SQL e loga (modo sombra fixo desde
+   * 09/2026). O destino que ela tinha era um ERP externo, desligado em
+   * 27/08/2026; a venda do PDV vale em `pdv_sale`, no Postgres do Flow,
+   * desde o Finalizar.
+   *
+   * Só se chega aqui com `ERP_REPLICA_GIGA=1` (ver common/replica-giga.ts);
+   * com o pool nulo devolve `ok:false` e o outbox segue pro passo que
+   * importa — a baixa de estoque, que é do Flow.
+   *
+   * O bloco "MODO REAL" mais abaixo é inalcançável e fica só como registro
+   * do que a gravação fazia (caixa + 1 linha de `fechamento` por pagamento).
    */
   async gravarVendaPdv(input: {
     storeCode: string;          // ex: '01' (ITANHAEM, char(2))
@@ -9872,10 +9428,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     error?: string;
   }> {
     const sqlExecuted: string[] = [];
-    const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
+    // Só existe "shadow" desde 09/2026: a env que escolhia entre shadow e real
+    // (PDV_ERP_WRITE_ENABLED) saiu junto com o ERP externo que ela ligava. A
+    // venda vale em `pdv_sale` no Postgres do Flow — este caminho não grava
+    // mais em lugar nenhum. Ninguém o alcança em produção: o outbox só chega
+    // aqui com `ERP_REPLICA_GIGA=1` (ver common/replica-giga.ts).
+    const mode: 'shadow' | 'real' = 'shadow';
 
     if (!this.pool) {
-      return { ok: false, mode, sqlExecuted, error: 'Pool ERP nÃ£o inicializado' };
+      return { ok: false, mode, sqlExecuted, error: 'não há ERP externo pra gravar a venda — ela já vale no Flow' };
     }
     if (!input.items?.length) {
       return { ok: false, mode, sqlExecuted, error: 'Sem itens pra gravar' };

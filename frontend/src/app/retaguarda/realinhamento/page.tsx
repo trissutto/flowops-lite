@@ -5,7 +5,7 @@
  *
  * Fluxo (3 etapas · pós-pivot #168..#172):
  *   1) CONFIG: usuário cola REFERÊNCIAS (1 por linha, ex: VMS-223), marca lojas origem
- *      (TODAS CEDEM) e destino (TODAS RECEBEM). Backend consulta Giga e expande cada REF
+ *      (TODAS CEDEM) e destino (TODAS RECEBEM). Backend consulta o catálogo e expande cada REF
  *      em todas as suas variações (cor × tamanho).
  *   2) PREVIEW: POST /realignment/preview → plano completo em tabela com REF · COR · TAM
  *      + antes/depois por loja. Usuário pode editar qty ou remover linhas.
@@ -467,7 +467,7 @@ export default function RealinhamentoPage() {
   function clearDests() { setDestCodes(new Set()); }
 
   /**
-   * Busca REFs no Gigasistemas por termos da descrição.
+   * Busca REFs no catálogo por termos da descrição.
    * Backend faz AND LIKE em DESCRICAOCOMPLETA pra cada palavra, agrupa por REF.
    */
   async function handleSearchRefs() {
@@ -541,7 +541,7 @@ export default function RealinhamentoPage() {
       const temFamilia = rowsOfRef.some((r) => r.FAMILIA);
 
       // BUSCA POR DESCRIÇÃO (texto livre, SEM FAMILIA): a REF crua pode ter
-      // OUTROS produtos no catálogo do Giga (ex: 13050 = vestido ESTAMPA, mas
+      // OUTROS produtos no catálogo (ex: 13050 = vestido ESTAMPA, mas
       // também 13050-INV FORMA RARA, CAMISA, SOUTIEN). Sem filtro, o preview
       // re-expande a REF inteira e cai em ambiguidade com produtos "nada a ver".
       // Correção: amarra o filtro com as palavras DISTINTIVAS do termo buscado
@@ -734,7 +734,7 @@ export default function RealinhamentoPage() {
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-slate-900">Realinhamento de Estoque</h1>
           <p className="text-sm text-slate-500">
-            Informe as referências, o sistema busca todas as variações no Gigasistemas e gera as ordens de transferência.
+            Informe as referências, o sistema busca todas as variações no catálogo e gera as ordens de transferência.
           </p>
         </div>
         {/* Atalhos admin */}
@@ -806,7 +806,7 @@ export default function RealinhamentoPage() {
           <div className="flex items-center gap-2 mb-2">
             <Search className="w-4 h-4 text-emerald-700" />
             <div className="text-sm font-semibold text-emerald-900">
-              Buscar REFs por data de cadastro no Giga
+              Buscar REFs por data de cadastro
             </div>
           </div>
           <div className="text-xs text-emerald-900/80 mb-2">
@@ -1276,7 +1276,7 @@ export default function RealinhamentoPage() {
         {/* Refs */}
         <div>
           <label className="block text-sm font-semibold text-slate-700 mb-1">
-            Referências do Gigasistemas (1 por linha)
+            Referências (1 por linha)
           </label>
           <textarea
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px]"
@@ -1596,7 +1596,7 @@ export default function RealinhamentoPage() {
                 ⚠️ {preview.ambiguousRefs.length} REF(s) ambíguas — escolhe qual produto entra no plano
               </div>
               <div className="text-xs mb-3">
-                Essa(s) REF(s) têm mais de 1 produto cadastrado no Giga (ex: mesma REF
+                Essa(s) REF(s) têm mais de 1 produto no catálogo (ex: mesma REF
                 pra PIJAMA e VESTIDO). Clica no botão da família que você quer mover.
               </div>
               <div className="space-y-2">
@@ -1665,7 +1665,7 @@ export default function RealinhamentoPage() {
 
           {preview.notFoundRefs.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2 text-xs">
-              <b>Não encontradas no Giga:</b> {preview.notFoundRefs.join(', ')}
+              <b>Não encontradas no catálogo:</b> {preview.notFoundRefs.join(', ')}
             </div>
           )}
 

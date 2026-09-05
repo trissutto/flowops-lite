@@ -38,7 +38,7 @@ type Movimento = {
 const MOTIVO: Record<string, string> = {
   sale: 'Venda',
   ajuste_manual: 'Ajuste manual',
-  sync_giga: 'Sincronização do Giga',
+  sync_giga: 'Sincronização do sistema antigo (histórico)',
   conferencia: 'Conferência',
 };
 

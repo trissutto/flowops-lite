@@ -61,7 +61,7 @@ export default function BetaHomePage() {
     </div>
 
     <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Metric label="Clientes na base única" value={customers === null ? '—' : customers.toLocaleString('pt-BR')} hint="PDV + site + live + Giga" icon={Users} />
+      <Metric label="Clientes na base única" value={customers === null ? '—' : customers.toLocaleString('pt-BR')} hint="PDV + site + live + base antiga" icon={Users} />
       <Metric label="Pedidos exigindo ação" value={alerts.pedidos} hint="Site e separação" icon={ShoppingBag} />
       <Metric label="Pendências operacionais" value={alerts.naoEncontrados + alerts.materiais} hint="Produtos e materiais" icon={AlertTriangle} />
       <Metric label="Faturamento" value="Ver painel" hint="Abre os dados consolidados atuais" icon={CircleDollarSign} money />

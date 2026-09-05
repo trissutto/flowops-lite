@@ -101,7 +101,7 @@ export default function DefeitosPage() {
   // Peça volta sem etiqueta e a vendedora não tem código pra bipar. Aqui ela
   // digita REF, cor ou parte da descrição e escolhe da lista — é o MESMO
   // endpoint do dropdown do PDV, então o comportamento é o que ela já
-  // conhece (espelho primeiro, Giga como fallback).
+  // conhece (catálogo do Flow).
   const [hits, setHits] = useState<Hit[]>([]);
   const [buscando, setBuscando] = useState(false);
   const [mostrarHits, setMostrarHits] = useState(false);

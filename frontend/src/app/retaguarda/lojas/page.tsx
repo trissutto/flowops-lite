@@ -201,7 +201,7 @@ export default function LojasPage() {
           <h1 className="text-2xl font-bold text-slate-900">Lojas (REDE / FRANQUIA)</h1>
           <p className="text-sm text-slate-500">
             Classifica cada loja. Transferências entre <b>REDE↔FRANQUIA</b> geram obrigação
-            financeira automática (preço Giga ÷ 2,5). REDE↔REDE não cobra.
+            financeira automática (preço de venda ÷ 2,5). REDE↔REDE não cobra.
           </p>
         </div>
         <button

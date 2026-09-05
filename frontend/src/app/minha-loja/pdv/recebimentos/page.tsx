@@ -4,8 +4,8 @@
  * /minha-loja/pdv/recebimentos — RECEBIMENTOS de crediário no PDV.
  *
  * Estratégia:
- *  1. Mount → carrega TODOS os clientes do Giga (query LEVE na tabela
- *     `clientes`, não toca em `movimento`). Cache 30min no backend.
+ *  1. Mount → carrega TODOS os clientes da loja (query LEVE só no cadastro,
+ *     sem tocar nas parcelas). Cache 30min no backend.
  *  2. Frontend filtra local em JS por nome/código (busca instantânea).
  *  3. Click no cliente → expande em CASCATA suas parcelas (carrega
  *     sob demanda — query rápida `WHERE codcliente=X`).
@@ -167,7 +167,7 @@ export default function RecebimentosPage() {
   const [showPagamento, setShowPagamento] = useState(false);
   const [forma, setForma] = useState<'pix' | 'dinheiro' | 'pix-link' | 'split' | null>(null);
   const [aplicando, setAplicando] = useState(false);
-  // Dinheiro: confirmação com cálculo de troco (igual Wincred)
+  // Dinheiro: confirmação com cálculo de troco
   const [dinheiroRecebido, setDinheiroRecebido] = useState('');
   const [pixCharge, setPixCharge] = useState<PixCharge | null>(null);
   const [pixPaid, setPixPaid] = useState(false);
@@ -351,7 +351,7 @@ export default function RecebimentosPage() {
 
   // Split — parte em dinheiro (já entra no caixa) + parte em PIX (gera QR).
   // Backend cria 1 baixa única com formaPagamento='misto'. Parcelas só são
-  // marcadas como pagas no Wincred quando o PIX confirma.
+  // marcadas como pagas quando o PIX confirma.
   async function gerarSplit() {
     if (!exigirLoja()) return;
     const valorDinheiro = Math.round((Number((splitDinheiro || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
@@ -428,7 +428,7 @@ export default function RecebimentosPage() {
      * a mensagem pronta — quem está no balcão escolhe a cliente.
      *
      * 🚨 44% das baixas de crediário têm telefone que não passa na régua do
-     * WhatsApp (celular sem DDD, herança do cadastro do Giga). Até 25/08 isso
+     * WhatsApp (celular sem DDD, herança dos cadastros antigos). Até 25/08 isso
      * fazia o botão não fazer NADA. `falarComCliente` abre do mesmo jeito e
      * ainda explica por que caiu na lista.
      */
@@ -617,7 +617,7 @@ export default function RecebimentosPage() {
                   const isExpanded = expandedCod === c.codCliente;
                   const parcelas = parcelasCache[c.codCliente] || [];
                   const isLoadingThis = parcelasLoading === c.codCliente;
-                  // Key UNICA: codCliente sozinho não basta (Wincred tem múltiplos
+                  // Key UNICA: codCliente sozinho não basta (existem múltiplos
                   // registros com mesmo cod). Combinar cod+nome+idx evita o bug
                   // do React reusar elementos antigos do DOM com keys duplicadas.
                   const uniqueKey = `${c.codCliente}|${c.nome}|${idx}`;
@@ -730,7 +730,7 @@ export default function RecebimentosPage() {
                                             </div>
                                           </div>
                                         </div>
-                                        {/* OBS — observação da promissória vinda do Giga (movimento.OBS) */}
+                                        {/* OBS — observação gravada na promissória */}
                                         {p.obs && (
                                           <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[11px] text-amber-900 leading-snug">
                                             <span className="font-bold uppercase tracking-wider text-[9px] text-amber-700 mr-1.5">OBS:</span>
@@ -939,7 +939,7 @@ export default function RecebimentosPage() {
                       </div>
                     ) : (
                       <>
-                        {/* Painel estilo Wincred — total grande, valor pago, troco */}
+                        {/* Painel de conferência — total grande, valor pago, troco */}
                         <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 space-y-3">
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-bold text-amber-900 uppercase tracking-wide">Valor total</span>

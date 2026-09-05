@@ -135,8 +135,8 @@ export default function DevolucaoPage() {
   // botão Trocar). O crédito da troca será ANEXADO nessa venda, sem
   // reiniciar o carrinho. Mostra banner pra confirmar visualmente.
   const [attachInfo, setAttachInfo] = useState<{ id: string; items: number } | null>(null);
-  // DEVOLUÇÃO MANUAL (Giga) — quando não achou venda flowops mas peça
-  // foi vendida na loja em algum momento (caixa antigo).
+  // DEVOLUÇÃO MANUAL (sem cupom) — quando não achou a venda no sistema mas a
+  // peça foi vendida nesta loja em algum momento (histórico da caixa da loja).
   const [manualEligible, setManualEligible] = useState<{
     produto: { codigo: string; descricao: string; cor: string | null; tamanho: string | null; preco: number };
     vendas: Array<{ data: string; numero: string; valor: number; quantidade: number }>;
@@ -259,8 +259,8 @@ export default function DevolucaoPage() {
     try {
       // ESTRATÉGIA (04/07 — busca por NFC-e REMOVIDA a pedido do dono: as
       // lojas não usam e o número longo atrapalhava a triagem do bipe):
-      //   1. peça nas vendas do FlowOps (lookup-by-sku, tolera zeros)
-      //   2. peça no histórico do Giga (lookup-manual, tolera zeros)
+      //   1. peça nas vendas do sistema (lookup-by-sku, tolera zeros)
+      //   2. peça no histórico da caixa da loja (lookup-manual, tolera zeros)
       // O leitor de código de barras manda o código COM padding de zeros
       // ("0000011051893" = peça 11051893) — os DOIS lookups tratam isso
       // no backend via skuVariants.
@@ -281,11 +281,11 @@ export default function DevolucaoPage() {
           foundBySku = true;
         }
       } catch {
-        // ignora — vai tentar pelo Giga abaixo
+        // ignora — vai tentar pelo histórico da caixa abaixo
       }
 
-      // 2a tentativa: DEVOLUÇÃO MANUAL GIGA — peça antiga, sem cupom flowops.
-      // Verifica se foi vendida na loja atual nos últimos 60d (caixa Giga).
+      // 2a tentativa: DEVOLUÇÃO MANUAL — peça antiga, sem cupom no sistema.
+      // Verifica se foi vendida na loja atual nos últimos 60d (caixa da loja).
       if (!foundBySku) {
         try {
           const r = await api<{
@@ -323,7 +323,7 @@ export default function DevolucaoPage() {
     }
   }
 
-  // Cria devolução manual (sem cupom — peça do Giga)
+  // Cria devolução manual (peça sem cupom no sistema)
   // MD-4: devolução em dinheiro/pix (sai dinheiro do caixa) exige senha de
   // GERENTE + justificativa. Retorna null se cancelar.
   async function exigirSenhaGerente(): Promise<{ password: string; motivoFinal: string } | null> {
@@ -368,7 +368,7 @@ export default function DevolucaoPage() {
         body: JSON.stringify({
           sku: manualEligible.produto.codigo,
           modo: modoEscolhido,
-          motivo: motivoManual || 'Sem cupom (Giga)',
+          motivo: motivoManual || 'Sem cupom',
           creditoValidadeDias: modoEscolhido === 'credito' ? validade : undefined,
           attachToSaleId: modoEscolhido === 'troca' ? attachToSaleId : null,
           password: gerentePassword,
@@ -844,7 +844,7 @@ export default function DevolucaoPage() {
           );
         })()}
 
-        {/* ─── DEVOLUÇÃO MANUAL GIGA ─── */}
+        {/* ─── DEVOLUÇÃO MANUAL (SEM CUPOM) ─── */}
         {/* Bloqueada: peça não tem histórico de venda nesta loja */}
         {manualBlocked && !manualEligible && !success && (
           <div className="bg-rose-50 border-2 border-rose-300 rounded-xl p-4 mb-3">
@@ -883,12 +883,12 @@ export default function DevolucaoPage() {
           </div>
         )}
 
-        {/* Elegível: peça do Giga, foi vendida na loja → libera devolução manual */}
+        {/* Elegível: peça já vendida nesta loja → libera devolução manual */}
         {manualEligible && !success && (
           <div className="space-y-3 mb-3">
             <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-4">
               <div className="flex items-center gap-2 text-amber-900 font-bold text-sm uppercase tracking-wide mb-2">
-                ⚠ Devolução manual · sem cupom flowops
+                ⚠ Devolução manual · sem cupom no sistema
               </div>
               <div className="bg-white rounded-lg p-3 border border-amber-200">
                 <div className="font-bold text-slate-900 text-base leading-tight">
@@ -953,8 +953,8 @@ export default function DevolucaoPage() {
               )}
 
               <div className="mt-3 text-xs text-amber-900 bg-amber-100 rounded px-2 py-1.5 leading-snug">
-                ℹ Devolução interna · estoque volta pro Giga · sem NFC-e ·
-                motivo: <b>Sem cupom (Giga)</b>
+                ℹ Devolução interna · a peça volta pro estoque da loja · sem NFC-e ·
+                motivo: <b>Sem cupom</b>
               </div>
             </div>
 
@@ -1831,9 +1831,11 @@ export default function DevolucaoPage() {
 
             {success.items?.some((it: any) => it.stockError) && (
               <div className="bg-red-50 rounded-lg p-3 mb-4 text-red-800 text-sm">
-                ⚠️ Atenção: estoque Giga não foi estornado em uma ou mais peças.
+                ⚠️ Atenção: uma ou mais peças NÃO voltaram pro estoque da loja.
                 <br />
-                Faça a entrada manual no Gigasistemas.
+                A devolução já está registrada e o acerto com a cliente valeu —
+                o que faltou foi só o saldo da peça voltar. Confira no
+                Consultar e avise a matriz pra refazer a entrada.
               </div>
             )}
 

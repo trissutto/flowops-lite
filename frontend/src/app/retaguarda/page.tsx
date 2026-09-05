@@ -75,7 +75,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/contas-pagar',         label: 'Contas a Pagar',    subtitle: 'Financeiro',    description: 'Vencimentos, fornecedores e funcionárias', tone: 'green', icon: DollarSign },
   // A tela existe desde 01/08 mas ficou fora do hub — só chegava por URL
   // digitada, e o dono pediu a "tela de cadastro" sem saber que já existia.
-  { href: '/retaguarda/fornecedores',         label: 'Fornecedores',      subtitle: 'Cadastro',      description: 'Criar e editar · réplica pro Giga na fila', tone: 'green', icon: Building2 },
+  { href: '/retaguarda/fornecedores',         label: 'Fornecedores',      subtitle: 'Cadastro',      description: 'Criar e editar fornecedor', tone: 'green', icon: Building2 },
   { href: '/retaguarda/financeiro/transferencias', label: 'Transferências', subtitle: 'Inter-lojas',  description: 'Royalties + fechamento',        tone: 'green',  icon: DollarSign      },
   { href: '/retaguarda/transferencias-rede-franquia', label: 'REDE × Franquia', subtitle: 'Conta corrente', description: 'Acerto da franqueada + extrato analítico', tone: 'teal', icon: Network },
   { href: '/relatorios/vendedoras',           label: 'Vendedoras',        subtitle: 'Ranking',       description: 'Vendas por mês',                tone: 'rose',   icon: Users           },
@@ -85,7 +85,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/clientes',                        label: 'Clientes',          subtitle: 'CRM',           description: 'Histórico + segmentos',         tone: 'sky',    icon: Users           },
   { href: '/marketing',                       label: 'Marketing',         subtitle: 'Campanhas',     description: 'Recuperação + WhatsApp',        tone: 'rose',   icon: Megaphone       },
   { href: '/retaguarda/notificacoes',         label: 'Notificações',      subtitle: 'Push Central',  description: 'Avisar lojas: promoção, reunião…', tone: 'purple', icon: Bell           },
-  { href: '/retaguarda/cadastro-produtos',    label: 'Cadastro Produtos', subtitle: 'Novo SKU',      description: 'Gerar SKUs no Wincred',         tone: 'purple', icon: Package         },
+  { href: '/retaguarda/cadastro-produtos',    label: 'Cadastro Produtos', subtitle: 'Novo SKU',      description: 'Gerar SKUs no catálogo',        tone: 'purple', icon: Package         },
   { href: '/retaguarda/editor-produtos',      label: 'Editor Produtos',   subtitle: 'Padronizar',    description: 'REF, preço e descrição em bloco', tone: 'amber', icon: Package         },
   // Conferidor Flow × Giga saiu do hub (09/26): o MySQL do Giga foi desligado — não há mais o que conferir.
   { href: '/retaguarda/pecas-extraviadas',    label: 'Peças extraviadas', subtitle: 'a loja não achou', description: 'Saldo fica, mas a loja sai do roteamento — e o caminho de volta', tone: 'amber', icon: PackageX      },
@@ -96,10 +96,10 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/realinhamento/nao-encontrados', label: 'Não Encontradas', subtitle: 'Revisar', description: 'Filiais reportaram',           tone: 'rose',   icon: AlertTriangle  },
   { href: '/retaguarda/enviados-hoje',        label: 'Enviados Hoje',     subtitle: 'Pedidos WC',    description: 'Por filial',                    tone: 'green',  icon: ClipboardList   },
   // Giga Explorer saiu do hub (09/26): o MySQL do Giga foi desligado — a tela só devolvia erro.
-  { href: '/retaguarda/baixas-log',           label: 'Auditoria',         subtitle: 'Baixas ERP',    description: 'Histórico ERP → WC',            tone: 'amber',  icon: FileSearch      },
-  { href: '/retaguarda/reconciliar-estoque',  label: 'Reconciliar',       subtitle: 'Estoque PDV',   description: 'Baixar estoque retroativo Wincred', tone: 'rose', icon: Package       },
-  { href: '/retaguarda/reprocessar-estoque',  label: 'Reprocessar',       subtitle: 'Remessas',      description: 'Ajustar baixa Giga de remessas com bug', tone: 'rose', icon: Truck         },
-  { href: '/retaguarda/baixa-origem',         label: 'Baixa Origem',      subtitle: 'Por rota',      description: 'Ver TUDO que saiu de uma loja e baixar Giga', tone: 'rose', icon: Truck         },
+  { href: '/retaguarda/baixas-log',           label: 'Auditoria',         subtitle: 'Baixas de estoque', description: 'Histórico das baixas por pedido', tone: 'amber',  icon: FileSearch      },
+  { href: '/retaguarda/reconciliar-estoque',  label: 'Reconciliar',       subtitle: 'Estoque PDV',   description: 'Baixar estoque retroativo das vendas', tone: 'rose', icon: Package       },
+  { href: '/retaguarda/reprocessar-estoque',  label: 'Reprocessar',       subtitle: 'Remessas',      description: 'Ajustar a baixa de remessas com bug', tone: 'rose', icon: Truck         },
+  { href: '/retaguarda/baixa-origem',         label: 'Baixa Origem',      subtitle: 'Por rota',      description: 'Ver TUDO que saiu de uma loja e baixar o estoque', tone: 'rose', icon: Truck         },
   { href: '/logs',                            label: 'Logs',              subtitle: 'Sistema',       description: 'Eventos do servidor',           tone: 'slate',  icon: Activity        },
   { href: '/retaguarda/telemetria',           label: 'Uso das telas',     subtitle: 'Sistema',       description: 'Quais telas são usadas de verdade', tone: 'slate', icon: Activity      },
 ];

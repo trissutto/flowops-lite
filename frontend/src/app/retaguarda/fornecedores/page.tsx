@@ -4,12 +4,11 @@
  * /retaguarda/fornecedores — cadastro de fornecedor.
  *
  * Até 01/08/2026 não existia: a lista do Contas a Pagar e dos pedidos de compra
- * vinha do Giga e não havia como criar um novo — só pelo Wincred desktop, que
- * ninguém usa mais.
+ * vinha do ERP antigo e não havia como criar um novo — só pelo desktop dele,
+ * que ninguém usa mais.
  *
- * O fornecedor é gravado no Flow e o Giga recebe réplica pela fila. Código na
- * faixa 90.000+ (o Giga usa até 10.526), o que também deixa óbvio na tela quem
- * nasceu aqui.
+ * O fornecedor é gravado no Flow. Código na faixa 90.000+ (a base herdada vai
+ * até 10.526), o que também deixa óbvio na tela quem nasceu aqui.
  *
  * CNPJ é OPCIONAL e NÃO precisa ser único de propósito: o cadastro legado tem
  * 694 fornecedores sem CNPJ e 76 CNPJs repetidos. Exigir qualquer das duas
@@ -105,7 +104,7 @@ export default function FornecedoresPage() {
     setArmadoExcluir(null);
     try {
       await api(`/fornecedores/${f.codigo}`, { method: 'DELETE' });
-      setOk(`Fornecedor ${f.codigo} — ${f.razaoSocial || 's/ nome'} excluído (Giga recebe a exclusão automaticamente)`);
+      setOk(`Fornecedor ${f.codigo} — ${f.razaoSocial || 's/ nome'} excluído`);
       await carregar();
     } catch (e: any) {
       // Trava do backend (ex.: contas a pagar vinculadas) chega aqui com o motivo.
@@ -153,7 +152,7 @@ export default function FornecedoresPage() {
           <h1 className="flex items-center gap-2 text-xl font-bold text-neutral-800">
             <Building2 size={20} className="text-[#B8912B]" /> Fornecedores
           </h1>
-          <p className="text-xs text-neutral-500">Cadastro no Flow · o Giga recebe cópia automaticamente</p>
+          <p className="text-xs text-neutral-500">Cadastro no Flow · vale na hora em toda a rede</p>
         </div>
         <button onClick={abrirNovo} className="flex items-center gap-2 rounded-lg bg-[#B8912B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#8C7325]">
           <Plus size={16} /> Novo fornecedor
@@ -203,7 +202,7 @@ export default function FornecedoresPage() {
                     <span className="ml-2 rounded bg-[#FBF6E6] px-1.5 py-0.5 text-[10px] font-semibold text-[#8C7325]">FLOW</span>
                   )}
                   {f.flowIsSource && f.gigaOk === false && (
-                    <span title="réplica pro Giga ainda na fila" className="ml-1 inline-flex items-center text-amber-600"><Clock size={11} /></span>
+                    <span title="cópia pro sistema antigo não confirmada (ele foi desligado — não há o que fazer)" className="ml-1 inline-flex items-center text-amber-600"><Clock size={11} /></span>
                   )}
                 </td>
                 <td className="px-4 py-3">

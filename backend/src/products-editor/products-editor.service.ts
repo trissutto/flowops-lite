@@ -491,7 +491,7 @@ export class ProductsEditorService {
         const v = (c as any)[field];
         if (v !== undefined && String(v).trim().length > max) {
           throw new BadRequestException(
-            `${field.toUpperCase()} "${String(v).trim().slice(0, 30)}…" passa do limite do Giga (${max} caracteres)`,
+            `${field.toUpperCase()} "${String(v).trim().slice(0, 30)}…" passa do limite do cadastro (${max} caracteres)`,
           );
         }
       }
@@ -716,7 +716,7 @@ export class ProductsEditorService {
     if (!q) throw new BadRequestException('Informe o termo de busca');
     if (!marca) throw new BadRequestException('Informe a marca');
     if (marca.length > LIMITS.marca) {
-      throw new BadRequestException(`MARCA passa do limite do Giga (${LIMITS.marca} caracteres)`);
+      throw new BadRequestException(`MARCA passa do limite do cadastro (${LIMITS.marca} caracteres)`);
     }
 
     const rows = await this.search.resolveRows(q, { fallbackTake: 200000 });

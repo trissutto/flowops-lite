@@ -11,7 +11,7 @@ import { overlayClose } from '@/lib/overlayClose';
  *   4. Sistema marca cada item como "received" à medida que casa.
  *   5. Se alguma peça não chegou, marca como "missing" (cancela cobrança).
  *   6. Quando 100% conferido (received OU missing), botão "Dar Entrada"
- *      libera. Click → +1 estoque Giga loja destino.
+ *      libera. Click → +1 no estoque da loja de destino.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -280,7 +280,7 @@ export default function RecebimentoPage() {
       if (!selected) return;
       const note = prompt(
         `Marcar ${item.refCode} ${item.cor || ''}/${item.tamanho || ''} como FALTANTE?\n\n` +
-          `Não vai dar entrada Giga e a cobrança financeira dela será cancelada.\n\n` +
+          `Ela não entra no estoque da sua loja e a cobrança financeira dela será cancelada.\n\n` +
           `Motivo (opcional):`,
       );
       if (note === null) return; // cancelou
@@ -325,7 +325,7 @@ export default function RecebimentoPage() {
     }
     if (!confirm(
       `Confirmar recebimento de ${selected.code}?\n\n` +
-      `Vai dar entrada (+estoque Giga) nos itens conferidos. Não pode desfazer.`
+      `Vai dar entrada (+estoque na sua loja) nos itens conferidos. Não pode desfazer.`
     )) return;
     setConfirming(true);
     try {
@@ -348,7 +348,7 @@ export default function RecebimentoPage() {
   }, [selected, loadShipments]);
 
   // "Dar entrada SEM bipar" — pra quando a loja JÁ guardou e esqueceu de bipar.
-  // Marca TODAS as pendentes como recebidas e dá entrada no Giga, sem conferir
+  // Marca TODAS as pendentes como recebidas e dá entrada no estoque, sem conferir
   // peça a peça. Pede confirmação explícita (não tem como desfazer).
   const handleReceberTudoSemBipar = useCallback(async () => {
     if (!selected) return;
@@ -362,7 +362,7 @@ export default function RecebimentoPage() {
     if (!confirm(
       `DAR ENTRADA SEM BIPAR em ${selected.code}?\n\n` +
       `Vai marcar as ${pendingCount} peça(s) pendentes como RECEBIDAS e dar entrada ` +
-      `no estoque do Giga — SEM conferir peça a peça.\n\n` +
+      `no estoque da sua loja — SEM conferir peça a peça.\n\n` +
       `Use só se você JÁ guardou a mercadoria e tem certeza que chegou tudo. NÃO pode desfazer.`
     )) return;
     setConfirming(true);

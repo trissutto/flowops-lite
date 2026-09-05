@@ -12,7 +12,6 @@ import { CustomerPushService } from './customer-push.service';
 import { CustomerCashbackService } from './customer-cashback.service';
 import { AppInviteService } from './app-invite.service';
 import { CustomerPasswordResetService } from './customer-password-reset.service';
-import { OrderAppHooksService } from './order-app-hooks.service';
 
 /**
  * Módulo do app cliente final (PWA app.lurds.com.br).
@@ -46,7 +45,6 @@ import { OrderAppHooksService } from './order-app-hooks.service';
     CustomerCashbackService,
     AppInviteService,
     CustomerPasswordResetService,
-    OrderAppHooksService,
   ],
   controllers: [CustomersAppController],
   exports: [
@@ -57,7 +55,10 @@ import { OrderAppHooksService } from './order-app-hooks.service';
     CustomerCashbackService,
     AppInviteService,
     CustomerPasswordResetService,
-    OrderAppHooksService,
+    // O OrderAppHooksService foi DELETADO em 09/2026: ele era chamado depois
+    // de cada `upsertFromWooCommerce` (cashback + push do app cliente a partir
+    // do pedido WC), e ficou sem chamador quando o WooCommerce saiu do ar. O
+    // cashback e o push do app continuam existindo nos seus próprios services.
     // Exporta JwtModule pra módulos externos (SizeFeedbackModule etc) que
     // usem o CustomerJwtGuard — sem isso o Nest não resolve JwtService.
     JwtModule,

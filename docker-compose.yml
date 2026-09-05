@@ -54,7 +54,10 @@ services:
     volumes:
       - ./backend:/app
       - /app/node_modules
-    command: sh -c "npx prisma migrate deploy && npm run start:dev"
+    # `db push`, não `migrate deploy`: este repo não tem histórico de migrations
+    # (o start:prod do backend também usa push). Com `migrate deploy` o container
+    # subia imprimindo "No migration found" e sem criar UMA tabela.
+    command: sh -c "npx prisma db push && npm run start:dev"
 
   frontend:
     build:

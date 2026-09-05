@@ -1,5 +1,7 @@
 # Contas a Pagar — Fase 0: DESCOBERTA da estrutura real no GIGA
 
+> **REGISTRO HISTORICO (11/07/2026) — a migracao ja aconteceu.** Contas a Pagar vive so no Flow; o ERP foi DESLIGADO em 27/08/2026 e nao ha mais como consultar aquele MySQL. Estado atual: `CLAUDE.md` na raiz.
+
 > Gerado em 11/07/2026 por inspeção **read-only** direta no MySQL do Giga
 > (`SHOW TABLES` / `DESCRIBE` / contagens / amostras — zero escrita).
 > **Este documento é o CONTRATO da migração.** Nada aqui foi assumido; tudo foi

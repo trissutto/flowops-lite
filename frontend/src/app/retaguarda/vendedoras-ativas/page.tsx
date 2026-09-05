@@ -3,7 +3,7 @@
 /**
  * /retaguarda/vendedoras-ativas
  *
- * Admin marca quais vendedoras (do Wincred) ficam ATIVAS no PDV de cada loja.
+ * Admin marca quais vendedoras ficam ATIVAS no PDV de cada loja.
  *
  * Sem essa whitelist, o PDV abre o modal Vendedora puxando todos os 80+
  * funcionários da tabela `funcionarios`. Aqui o admin selecionaa só as 3-5
@@ -12,7 +12,7 @@
  * Fluxo:
  *  1. Escolhe a loja
  *  2. Vê lista atual de vendedoras ativas (esquerda)
- *  3. Busca em funcionarios do Wincred (direita)
+ *  3. Busca no cadastro de funcionários (direita)
  *  4. Click pra adicionar/remover
  *  5. Click "Salvar lista" → PUT /pdv/vendedoras-ativas/bulk
  */
@@ -29,7 +29,7 @@ type ActiveSeller = {
   codigo: string;
   nome: string;
   /** false = aparece no PDV mas NÃO divide a meta do mês (caixa que vende
-   *  esporádico, dono). O backend preserva o flag no sync do Wincred. */
+   *  esporádico, dono). O backend preserva o flag entre sincronizações. */
   contaNaMeta?: boolean;
 };
 type FuncResult = { codigo: string; nome: string; loja?: string; contaNaMeta?: boolean };
@@ -73,7 +73,7 @@ export default function VendedorasAtivasPage() {
   }, [storeCode]);
   useEffect(() => { reload(); }, [reload]);
 
-  // Busca funcionários no Wincred
+  // Busca no cadastro de funcionários
   useEffect(() => {
     if (!storeCode) return;
     const t = setTimeout(async () => {

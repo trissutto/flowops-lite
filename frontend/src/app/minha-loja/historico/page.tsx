@@ -9,8 +9,8 @@
  * `direction` ('out' | 'in'), baseado no storeCode do JWT.
  *
  * VENDA CERTA: NÃO tem mais botão manual "Vendi / Não vendeu". A baixa
- * acontece SÓ automaticamente, via cron que lê a tabela caixa do PDV
- * Gigasistemas da loja solicitante — se o produto apareceu em venda
+ * acontece SÓ automaticamente, via cron que lê as vendas do PDV
+ * (pdv_sales) da loja solicitante — se o produto apareceu em venda
  * lá, o status vira 'confirmed' com nota "AUTO:cupom_XXX". Se passar
  * do prazo de 7 dias sem venda, a matriz decide manualmente.
  *
@@ -408,7 +408,7 @@ function HistoricoCard({
         <div className="mt-2 text-xs bg-amber-100 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5">
           <Clock className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
           <div>
-            <b>Aguardando PDV Gigasistemas.</b> A baixa é automática — assim que o produto passar no caixa da loja, esse pedido vira &quot;Vendida auto&quot;. Nada pra fazer aqui.
+            <b>Aguardando a venda aqui na sua loja.</b> A baixa é automática — quando a cliente levar a peça e ela passar no <b>seu caixa</b> (mesma REF, cor e tamanho do pedido), em até 30 min esse pedido vira &quot;Vendida auto&quot;. Não tem botão pra clicar.
           </div>
         </div>
       )}
@@ -469,7 +469,7 @@ function SaleStatusBadge({
           ? 'bg-amber-200 text-amber-900 border-amber-400'
           : 'bg-amber-50 text-amber-800 border-amber-200'
       }`}
-      title="Aguardando baixa automática via PDV Gigasistemas"
+      title="Aguardando a peça passar no caixa da sua loja"
     >
       <Clock className="w-3 h-3" />
       {isOverdue

@@ -10,9 +10,10 @@ import { overlayClose } from '@/lib/overlayClose';
  *  - Card TOTAL REDE com comparação % vs mesmo período ano anterior
  *  - Gráfico de linhas (Recharts) — atual vs ano anterior
  *  - Cards por loja (faturamento, cupons, ticket médio, peças, variação %)
- *  - SITE composta: Giga + Flowops (breakdown visível)
+ *  - SITE composta: histórico + Flowops (breakdown visível)
  *
- * Fonte: tabela `caixa` do Giga (MySQL) + Order do flowops (status=completed)
+ * Fonte: espelho `giga_caixa_mov` no Postgres do Flow (alimentado pelo próprio
+ * PDV) + Order do flowops (status=completed)
  */
 
 import * as React from 'react';
@@ -273,9 +274,9 @@ export default function FaturamentoPage() {
           <div className="flex-1">
             <h1 className="text-lg font-black text-slate-800">Faturamento por Loja</h1>
             <p className="text-xs text-slate-500">
-              Vendas Giga + Site Flowops · líquido de vale-troca e devolução em dinheiro · frete incluso
+              Vendas de loja + site · líquido de vale-troca e devolução em dinheiro · frete incluso
               {' · '}
-              <span title="O critério mudou em 01/08: o vale-troca deixou de contar como venda nova, porque a peça já foi faturada na venda original. O histórico de 2025 vem do Giga, que não separa o vale do mesmo jeito — então a queda no comparativo é de régua, não de venda.">
+              <span title="O critério mudou em 01/08: o vale-troca deixou de contar como venda nova, porque a peça já foi faturada na venda original. O histórico de 2025 veio do sistema antigo, que não separa o vale do mesmo jeito — então a queda no comparativo é de régua, não de venda.">
                 comparação com ano anterior usa régua antiga ⓘ
               </span>
             </p>
@@ -1088,7 +1089,7 @@ function EstornoModal({
               <div className="bg-amber-50 border border-amber-200 rounded p-2.5 text-[11px] text-amber-900 space-y-0.5">
                 <div><strong>O que vai acontecer:</strong></div>
                 <div>• Cancela NFC-e na SEFAZ (se autorizada e dentro da janela 30min)</div>
-                <div>• Devolve estoque ao Wincred automaticamente</div>
+                <div>• Devolve as peças ao estoque da loja automaticamente</div>
                 <div>• Revoga cashback do cliente</div>
                 {(['credito', 'debito', 'cartao'].includes(String(venda.paymentMethod || '').toLowerCase())) && (
                   <div className="font-bold pt-1 border-t border-amber-300">

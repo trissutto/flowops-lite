@@ -60,8 +60,9 @@ export class WincredMirrorController {
   @Post('sync/estoque')
   syncEstoque(@Req() req: any) {
     this.requireAdmin(req);
-    // Botão manual = recuperação consciente: força mesmo com o cron desligado
-    // (constituição 14/07: Flow é a fonte; usar só pra reconciliar após incidente).
+    // Responde explicando que não existe importação de estoque: o Flow é a
+    // fonte (constituição 14/07) e quem mantém a tabela em dia são os
+    // movimentos do próprio sistema. A rota fica pra tela não quebrar.
     return this.mirror.syncEstoque(true);
   }
 

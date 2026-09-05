@@ -485,7 +485,7 @@ export default function ClassificacaoProdutosPage() {
                           <div>
                             <div className="font-mono font-semibold text-slate-800 tabular-nums">{brl(r.preco)}</div>
                             {r.dataCadastro && (
-                              <div className="text-[10px] text-slate-400" title="Data de cadastro no Giga (DATAALT)">
+                              <div className="text-[10px] text-slate-400" title="Data de cadastro da peça">
                                 cad. {fmtDataCad(r.dataCadastro)}
                               </div>
                             )}

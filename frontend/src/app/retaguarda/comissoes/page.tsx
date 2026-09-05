@@ -8,7 +8,7 @@
  *   - Fechamentos  — periodos mensais (open/closed/paid)
  *   - Relatorio    — visao agregada por loja do periodo selecionado
  *
- * F4 da migracao 30/06: substitui o calculo que vinha do Wincred/Giga.
+ * F4 da migracao 30/06: substitui o calculo que vinha do sistema antigo.
  */
 
 import { useEffect, useState } from 'react';
@@ -106,7 +106,7 @@ export default function ComissoesPage() {
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-slate-900">Comissões</h1>
           <p className="text-sm text-slate-500">
-            Engine de cálculo Flowops (substitui Wincred a partir de 30/06).
+            Engine de cálculo do FlowOps (desde 30/06).
           </p>
         </div>
         <Link
@@ -149,7 +149,7 @@ export default function ComissoesPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  SALES TAB — trocar vendedora de uma venda (estilo tela "Vendas" do Giga)
+//  SALES TAB — trocar vendedora de uma venda
 // ═══════════════════════════════════════════════════════════════════
 
 type SaleRow = {
@@ -571,7 +571,7 @@ function SalesTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">
-        Troque a vendedora de uma venda finalizada (igual à tela <b>Vendas</b> do Giga). A
+        Troque a vendedora de uma venda finalizada. A
         comissão do mês da venda é <b>recalculada na hora</b>. Admin pode trocar em qualquer
         período — inclusive fechado ou pago.
       </p>

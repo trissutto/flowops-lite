@@ -33,9 +33,11 @@ import { PrismaService } from '../prisma/prisma.service';
  *   - Pode ser que a cliente ainda esteja pensando. Sem upper time limit
  *     (a cliente pode voltar em dias). Só baixa manualmente quando loja marca.
  *
- * Por que a cada 15min:
- *   - Balanço entre latência do feedback (cliente confirma rapidinho) e
- *     carga no ERP (a cada query faz JOIN caixa×produtos que não é leve).
+ * Por que a cada 30min:
+ *   - Balanço entre latência do feedback (a cliente confirma rapidinho) e
+ *     carga no banco. Hoje é UMA consulta no Postgres com `unnest`, casando
+ *     `pdv_sales`/`pdv_sale_items` da loja DESTINO contra os pedidos
+ *     pendentes — nada de JOIN em banco externo.
  *
  * Segurança:
  *   - Só altera VENDA_CERTA pending. Nunca toca REPOSICAO.

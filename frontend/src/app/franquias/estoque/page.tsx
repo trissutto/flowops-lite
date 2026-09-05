@@ -72,7 +72,7 @@ export default function FranquiasEstoquePage() {
           <Package2 className="w-5 h-5 text-violet-700" />
           <div>
             <h1 className="font-extrabold text-slate-800 leading-tight">Estoque das Franquias</h1>
-            <p className="text-[11px] text-slate-500">peças e valor a preço de venda · espelho (sem tocar o Giga)</p>
+            <p className="text-[11px] text-slate-500">peças e valor a preço de venda · leitura do estoque do Flow</p>
           </div>
         </div>
       </header>

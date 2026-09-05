@@ -529,25 +529,25 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
                       {syncingEans ? 'Sincronizando...' : 'Sincronizar EANs no WC'}
                     </button>
                     <span className="text-xs text-emerald-700 ml-2">
-                      (preenche o campo GTIN/UPC/EAN das variações com o código Giga)
+                      (preenche o campo GTIN/UPC/EAN das variações com o código da peça)
                     </span>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Dados Wincred (readonly) */}
+            {/* Dados do catálogo (readonly) */}
             <div className="bg-slate-50 rounded-lg p-4 text-sm">
               <h3 className="font-semibold text-slate-700 mb-2 flex items-center gap-2">
                 <FileText className="w-4 h-4" />
-                Snapshot Wincred
+                Dados do catálogo
               </h3>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3">
                 <dt className="text-slate-500">REF:</dt><dd className="font-mono">{item.refCode}</dd>
                 <dt className="text-slate-500">Cor:</dt><dd>{item.cor}</dd>
                 <dt className="text-slate-500">Estoque total:</dt><dd>{item.estoqueTotal}</dd>
                 {item.custoMedio && <><dt className="text-slate-500">Custo médio:</dt><dd>R$ {item.custoMedio}</dd></>}
-                {item.precoSugerido && <><dt className="text-slate-500">Preço Wincred:</dt><dd>R$ {item.precoSugerido}</dd></>}
+                {item.precoSugerido && <><dt className="text-slate-500">Preço da loja:</dt><dd>R$ {item.precoSugerido}</dd></>}
               </dl>
 
               {/* Tabela de variações (Tamanho × SKU × EAN × Estoque) — usado pelo
@@ -562,7 +562,7 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
                       <thead>
                         <tr className="bg-slate-100 text-slate-600 text-[10px] uppercase tracking-wide">
                           <th className="text-left px-2 py-1.5">Tamanho</th>
-                          <th className="text-left px-2 py-1.5">SKU (Giga)</th>
+                          <th className="text-left px-2 py-1.5">SKU</th>
                           <th className="text-left px-2 py-1.5">EAN / Cód. barras</th>
                           <th className="text-right px-2 py-1.5">Estoque</th>
                         </tr>
@@ -587,8 +587,9 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
                   </div>
                   {item.tamanhos.some((t) => !t.ean) && (
                     <div className="text-[10px] text-amber-700 mt-1">
-                      ⚠️ Tamanhos sem EAN não vão sincronizar GTIN no WooCommerce.
-                      Cadastre o EAN no Wincred (campo CODBARRAS) e rebusque a REF.
+                      ⚠️ Estes tamanhos entraram na fila sem código de barras. O código da
+                      grade nasce no cadastro da peça — não dá pra digitar aqui. Fale com a
+                      matriz antes de publicar.
                     </div>
                   )}
                 </div>

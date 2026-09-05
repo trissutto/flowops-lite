@@ -706,7 +706,8 @@ export class CashController {
   /**
    * PATCH /pdv/caixa/payments/:paymentId/bandeira
    * Admin troca bandeira de um pagamento (ex: operadora errou MASTERCARD em vez de VISANET).
-   * Atualiza Postgres + audit + Wincred (fechamento).
+   * Grava no Postgres + audit. O fechamento e o relatório por bandeira são
+   * recalculados na leitura — não há segunda gravação em lugar nenhum.
    * Body: { bandeira: 'VISANET', reason?: 'operadora errou' }
    */
   @Patch('payments/:paymentId/bandeira')

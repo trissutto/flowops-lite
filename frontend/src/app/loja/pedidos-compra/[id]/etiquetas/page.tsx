@@ -126,7 +126,7 @@ export default function EtiquetasPage() {
               Nenhuma etiqueta pra imprimir
             </div>
             <div className="text-sm text-amber-800 mb-4">
-              Esse pedido teve <b>erros no cadastro do Wincred</b> e os códigos das peças não foram salvos aqui.
+              Esse pedido teve <b>erros no cadastro dos produtos</b> e os códigos das peças não foram salvos aqui.
               <br />
               Volte na tela do pedido e resolva os erros antes de imprimir.
             </div>

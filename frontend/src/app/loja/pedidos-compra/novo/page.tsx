@@ -4,10 +4,10 @@
  * /loja/pedidos-compra/novo — Criar novo pedido de compra.
  *
  * Estrutura:
- *  - Header: fornecedor (autocomplete Wincred), data prevista, NF, observações
+ *  - Header: fornecedor (autocomplete do cadastro), data prevista, NF, observações
  *  - Items: adiciona REF + descricao + categoria + grade cor×tamanho com qty
  *
- * Quando recebe a mercadoria depois, dispara auto-cadastro Wincred.
+ * Quando recebe a mercadoria depois, dispara o auto-cadastro dos produtos.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -566,7 +566,7 @@ export default function NovoPedidoPage() {
     // FIX #3: bloqueia sem CNPJ (usuario digitou nome sem clicar no autocomplete).
     if (!cnpjFinal) {
       setError(
-        `CNPJ do fornecedor "${fornecedorNome}" não encontrado. Selecione o fornecedor da lista (autocomplete dropdown abaixo do campo) pra pegar o CNPJ. Sem CNPJ o sistema não consegue cadastrar produtos no Wincred.`,
+        `CNPJ do fornecedor "${fornecedorNome}" não encontrado. Selecione o fornecedor da lista (autocomplete dropdown abaixo do campo) pra pegar o CNPJ. Sem CNPJ o sistema não consegue cadastrar os produtos.`,
       );
       return null;
     }
@@ -973,7 +973,7 @@ export default function NovoPedidoPage() {
 
   /**
    * CORRIGIR REF CONFERIDA (11/08, dono): estorna a conferência no servidor
-   * (as peças saem do estoque — Flow + Giga via outbox) e o card volta a ser
+   * (as peças saem do estoque do Flow) e o card volta a ser
    * editável como pendente. Pra consertar conferência acidental (o Enter
    * antigo conferia) ou dado errado numa REF já recebida.
    */
@@ -1199,7 +1199,7 @@ export default function NovoPedidoPage() {
               <label className="po-label">
                 Fornecedor
                 <span className="text-[10px] text-slate-400 font-normal ml-2">
-                  ({fornecedores.length} no Wincred, {fornecedoresFiltered.length} mostrados)
+                  ({fornecedores.length} cadastrados, {fornecedoresFiltered.length} mostrados)
                 </span>
                 {fornecedorNome.trim() && !fornecedorCnpj.trim() && (
                   <span className="ml-2 text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded uppercase">
@@ -1746,7 +1746,7 @@ function ItemEditor({
           <div className="flex items-center justify-between">
             <label className="po-label">Grupo *</label>
             <button type="button" onClick={handleCriarGrupo} disabled={criandoGrupo}
-              title="Criar novo grupo no Wincred"
+              title="Criar novo grupo"
               className="po-new-link">
               {criandoGrupo ? '...' : '+ novo'}
             </button>

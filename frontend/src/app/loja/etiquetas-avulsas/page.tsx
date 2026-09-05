@@ -6,7 +6,7 @@ import { overlayClose } from '@/lib/overlayClose';
  *
  * Como funciona:
  *  1. Vendedora cola/digita lista de códigos (1 por linha) — pode ser EAN, REF ou SKU
- *  2. Sistema busca no Wincred (tabela produtos)
+ *  2. Sistema busca no catálogo de produtos
  *  3. Mostra preview das etiquetas que serão impressas
  *  4. Botão imprimir reusa o mesmo layout 50x30mm rolo 108mm
  *

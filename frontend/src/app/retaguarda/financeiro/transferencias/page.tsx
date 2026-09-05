@@ -7,7 +7,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * Painel financeiro mensal de transferências REDE↔FILIAL + royalties + marketing.
  *
  * 3 abas:
- *   - Obrigações: lista cobranças geradas por transferências (preço Giga ÷ 2.5),
+ *   - Obrigações: lista cobranças geradas por transferências (preço de venda ÷ 2.5),
  *     agrupadas por par de lojas. Botão "Marcar pago" individual ou em lote.
  *   - Royalties + Marketing: 8% + 4% sobre venda bruta de cada filial no mês.
  *   - Fechamento: histórico de meses fechados + botão pra fechar o mês atual.
@@ -406,10 +406,10 @@ export default function FinanceiroTransferenciasPage() {
               </button>
               <button
                 onClick={async () => {
-                  if (!confirm(`Recalcular preços das obrigações PENDENTES de ${mes}?\n\nIsso vai rebuscar o preço de venda no Giga e atualizar todas as obrigações pendentes.`)) return;
+                  if (!confirm(`Recalcular preços das obrigações PENDENTES de ${mes}?\n\nIsso vai rebuscar o preço de venda no catálogo e atualizar todas as obrigações pendentes.`)) return;
                   try {
                     const r: any = await api(`/financeiro/obligations/recalc?mes=${encodeURIComponent(mes)}`, { method: 'POST' });
-                    alert(`Recalculo concluído!\n\nTotal: ${r.total}\nAtualizadas: ${r.atualizadas}\nSem SKU: ${r.semSku}\nSem preço no Giga: ${r.semPreco}`);
+                    alert(`Recalculo concluído!\n\nTotal: ${r.total}\nAtualizadas: ${r.atualizadas}\nSem SKU: ${r.semSku}\nSem preço no catálogo: ${r.semPreco}`);
                     await loadObligations();
                   } catch (e: any) {
                     alert(`Erro: ${e?.message || e}`);
@@ -417,7 +417,7 @@ export default function FinanceiroTransferenciasPage() {
                 }}
                 disabled={obligationsLoading}
                 className="text-sm px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-lg flex items-center gap-1.5 disabled:opacity-50 font-bold"
-                title="Rebusca preço de venda atual no Giga pra todas as obrigações pendentes"
+                title="Rebusca o preço de venda atual do catálogo pra todas as obrigações pendentes"
               >
                 🔄 Recalcular preços
               </button>

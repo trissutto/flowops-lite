@@ -3,7 +3,6 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ErpService } from './erp.service';
 import { NcmAuditController } from './ncm-audit.controller';
 import { SombraService } from './sombra.service';
-import { SombraController } from './sombra.controller';
 
 @Module({
   imports: [PrismaModule],
@@ -12,7 +11,11 @@ import { SombraController } from './sombra.controller';
   // (`gigaDesligado()` em onModuleInit), então `listAllTables` devolvia [],
   // `getTableSchema` devolvia 404 e o health respondia "Pool ERP não
   // inicializado" em 100% dos cliques. Explorer de banco desligado é museu.
-  controllers: [NcmAuditController, SombraController],
+  // O SombraController (GET/POST /erp/sombra) foi DELETADO em 09/2026: servia
+  // o placar da comparação Postgres × ERP legado durante a migração, e não há
+  // mais segundo banco pra comparar. O SombraService fica — nele moram as
+  // consultas de catálogo/estoque no Postgres.
+  controllers: [NcmAuditController],
   // NcmAuditService saiu do módulo (Onda 1) e o ARQUIVO foi DELETADO na Onda 2:
   // as rotas viram GoneException, ninguém injetava o service, e ele abria um
   // pool MySQL próprio pro servidor desligado. Auditoria de NCM, quando voltar,

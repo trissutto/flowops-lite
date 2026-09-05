@@ -333,7 +333,7 @@ export default function TransferenciasRedeFranquiaPage() {
                 Período: {data.period.from} a {data.period.to} · valor de custo = valor de
                 venda ÷ {String(data.divisor).replace('.', ',')}
                 {data.meta && data.meta.ordersWithoutPrice > 0 && (
-                  <> · {data.meta.ordersWithoutPrice}/{data.meta.ordersTotal} itens sem preço no Giga (contam só em peças)</>
+                  <> · {data.meta.ordersWithoutPrice}/{data.meta.ordersTotal} itens sem preço no catálogo (contam só em peças)</>
                 )}
               </p>
             )}
@@ -887,7 +887,7 @@ function TransferItens({ controle, data, isDeb }: { controle: string; data: stri
 
   if (err) return msg(`Falha ao carregar itens: ${err}`, 'text-rose-500');
   if (!items) return msg('Carregando itens…', 'text-slate-400');
-  if (!items.length) return msg('Sem itens no espelho pra esta transferência (espelho congelado — Giga desligado).', 'text-slate-400');
+  if (!items.length) return msg('Sem itens no espelho pra esta transferência (histórico congelado desde 25/08).', 'text-slate-400');
 
   return (
     <>
@@ -1008,11 +1008,11 @@ function ContaCorrente() {
             </button>
           </div>
           <span
-            title="O MySQL do Giga foi desligado — a tela lê o espelho local, que não muda mais."
+            title="O ERP antigo foi desligado — a tela lê o espelho local, que não muda mais."
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-500"
           >
             <Database className="h-4 w-4" />
-            Espelho congelado em 25/08 — o Giga foi desligado. Transferências novas nascem no Flow.
+            Espelho congelado em 25/08 — o ERP antigo foi desligado. Transferências novas nascem no Flow.
           </span>
         </div>
         <button
@@ -1029,15 +1029,15 @@ function ContaCorrente() {
           <div className="flex-1 text-sm text-amber-900">
             {ext?.gigaSync?.pendente ? (
               <>
-                <div className="font-bold">Espelho do Giga sem dados</div>
+                <div className="font-bold">Espelho histórico sem dados</div>
                 <div className="text-amber-800">
-                  A mercadoria e os royalties leem da base local. O Giga foi desligado — não dá mais
-                  pra puxar dados de lá; o que estiver faltando aqui é histórico congelado.
+                  A mercadoria e os royalties leem da base local. O ERP antigo foi desligado em
+                  27/08/2026 — o que estiver faltando aqui é histórico congelado.
                 </div>
               </>
             ) : (
               <>
-                <div className="font-bold">Não foi possível ler o espelho do Giga</div>
+                <div className="font-bold">Não foi possível ler o espelho histórico</div>
                 <div className="text-amber-800">
                   Os valores podem estar <b>incompletos</b> — <b>não</b> significa R$ 0 real. Clique em atualizar.
                 </div>
@@ -1103,7 +1103,7 @@ function ContaCorrente() {
               icon={<Building2 className="h-4 w-4 text-blue-600" />}
               label="Mercadoria"
               valor={resumo.cats.mercadoria}
-              hint="Giga + Flow · custo ÷2,5"
+              hint="histórico + Flow · custo ÷2,5"
             />
             <CatCard
               icon={<Percent className="h-4 w-4 text-purple-600" />}

@@ -15,8 +15,8 @@ cd /d "%~dp0"
 color 0B
 echo.
 echo  =============================================================
-echo    FlowOps  - Setup automatizado
-echo    Loja: www.lurds.com.br
+echo    FlowOps  - Setup automatizado ^(ambiente LOCAL^)
+echo    Rede Lurd's Plus Size
 echo  =============================================================
 echo.
 
@@ -51,6 +51,8 @@ REM ---------- 2. Gerar .env ----------
 echo [2/6] Gerando arquivo .env...
 if exist ".env" (
   echo       Arquivo .env ja existe. Fazendo backup em .env.bak
+  echo       ATENCAO: se este .env.bak veio de um setup antigo, apague depois -
+  echo                ele guarda credencial de servidor que foi desligado.
   copy /Y ".env" ".env.bak" >nul
 )
 
@@ -72,27 +74,13 @@ if exist ".env" (
   echo JWT_ACCESS_TTL=15m
   echo JWT_REFRESH_TTL=7d
   echo.
-  echo # ---- WordPress / WooCommerce - MySQL direto ----
-  echo # ^(usado para reconciliacao e backfill de pedidos existentes^)
-  echo WP_DB_HOST=162.215.213.154
-  echo WP_DB_PORT=3306
-  echo WP_DB_USER=lurds_apps
-  echo WP_DB_PASSWORD=Z+6rxNPi]Cd0
-  echo WP_DB_DATABASE=lurds_site
-  echo.
-  echo # ---- WooCommerce REST API ----
-  echo # Chaves geradas em 18/04/2026 no WP Admin (chave "FlowOps", perm Leitura/Escrita)
-  echo WC_URL=https://www.lurds.com.br
-  echo WC_CONSUMER_KEY=ck_61711ebaf05ca4af7795f90b833d2c6f7e01531a
-  echo WC_CONSUMER_SECRET=cs_543d16070b4ef7d8f8d7989eb4dadb8da3659baf
-  echo WC_WEBHOOK_SECRET=lurds-flowops-webhook-hmac-secret-2026
-  echo.
-  echo # ---- ERP gigasistemas21 ^(MySQL, somente leitura^) ----
-  echo ERP_HOST=mysql.gigasistemas.com.br
-  echo ERP_PORT=3306
-  echo ERP_USER=gigasistemas21
-  echo ERP_PASSWORD=lurds152634
-  echo ERP_DATABASE=gigasistemas21
+  echo # ---- ERP legado e site antigo: NAO CONFIGURE ----
+  echo # Encerrados em 27/08/2026: o WordPress/WooCommerce da KingHost foi
+  echo # apagado e o MySQL do ERP Giga/Wincred ^(no host do fornecedor^) parou de
+  echo # aceitar o IP do Railway. Nenhum dos dois responde. Nao ha ERP_HOST /
+  echo # ERP_USER / ERP_PASSWORD nem WP_DB_* / WC_* / FLOWOPS_WP_* pra preencher.
+  echo # A fonte da verdade e o Postgres deste DATABASE_URL. As travas vivem em
+  echo # backend/src/common/replica-giga.ts. Nao religar.
   echo.
   echo # ---- Aplicacao ----
   echo PORT=3001
@@ -101,7 +89,7 @@ if exist ".env" (
   echo FRONTEND_URL=http://localhost:3000
 ) > .env
 
-echo       .env criado com as credenciais Lurds + gigasistemas21.
+echo       .env criado. Ajuste JWT_SECRET antes de qualquer uso serio.
 echo.
 
 REM ---------- 3. Subir containers ----------
@@ -143,13 +131,17 @@ echo       Postgres OK.
 echo.
 
 REM ---------- 5. Migrations + Seed ----------
-echo [5/6] Rodando migrations do Prisma...
-docker compose exec -T backend npx prisma migrate deploy
+REM  Este repo NAO tem historico de migrations: o schema e aplicado por
+REM  `prisma db push` ^(o proprio start:prod do backend faz isso^). Rodar
+REM  `migrate deploy` aqui saia com sucesso sem criar UMA tabela, e o seed
+REM  logo abaixo estourava.
+echo [5/6] Aplicando o schema do Prisma ^(db push^)...
+docker compose exec -T backend npx prisma db push
 if errorlevel 1 (
   echo.
-  echo [AVISO] Migrations podem ter falhado. Tentando novamente em 5s...
+  echo [AVISO] O db push pode ter falhado. Tentando novamente em 5s...
   timeout /t 5 /nobreak >nul
-  docker compose exec -T backend npx prisma migrate deploy
+  docker compose exec -T backend npx prisma db push
 )
 echo.
 
@@ -174,13 +166,16 @@ echo    Login:      admin@flowops.local
 echo    Senha:      admin123   ^(TROQUE IMEDIATAMENTE^)
 echo.
 echo    Proximos passos:
-echo     1. Baixe o ngrok: https://ngrok.com/download
-echo     2. Em outro terminal rode: ngrok http 3001
-echo     3. Copie a URL HTTPS ^(ex: https://xxxx.ngrok-free.app^)
-echo     4. Cadastre o webhook em:
-echo        https://www.lurds.com.br/wp-admin/admin.php?page=wc-settings^&tab=advanced^&section=webhooks
-echo        URL: ^<url-ngrok^>/api/webhooks/woocommerce
-echo        Segredo: lurds-flowops-webhook-hmac-secret-2026
+echo     - Trocar JWT_SECRET no .env
+echo     - Local NAO precisa de webhook de pagamento: um cron de reconciliacao
+echo       pergunta pro gateway ^(pagbank-pix-reconcile.service.ts^).
+echo       Se quiser testar o webhook: ngrok http 3001 e ponha no .env
+echo       BACKEND_PUBLIC_URL=^<url-https-do-ngrok^> - o backend monta sozinho
+echo       ^<url^>/api/pagbank/webhook em cada cobranca. O segredo do Pagar.me
+echo       e cadastrado na tela /pagarme/config, nao em env.
+echo       NAO cadastre a URL do ngrok no painel do gateway: a conta la e a
+echo       mesma da producao e voce desviaria aviso de pagamento real.
+echo     - Briefing do projeto: CLAUDE.md na raiz.
 echo.
 echo    Comandos uteis:
 echo     docker compose logs -f backend   ^(ver logs do backend^)

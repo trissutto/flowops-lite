@@ -8,10 +8,8 @@
  * MARCA · COR · TAMANHO · PREÇO).
  *
  * Tudo grava no FLOW e reflete no sistema inteiro na hora (PDV, consulta,
- * site). O Wincred recebe réplica quando `PRODUCT_NATIVE_WRITES` está ligada
- * — que é o padrão desde 13/07. O texto da tela dizia "grava no GIGA (fonte
- * da verdade)" e ficou pra trás da migração: quem lia entendia que a edição
- * dependia de um ERP que já não manda em nada.
+ * site). O Flow é a ÚNICA fonte do catálogo: o ERP antigo foi desligado em
+ * 27/08/2026 e não recebe mais réplica de nada.
  * Toda ação em bloco passa por PREVIEW ANTES→DEPOIS antes de confirmar.
  * SKU (código) nunca é editável — é a chave do bipe/etiqueta/estoque.
  */
@@ -118,7 +116,7 @@ export default function EditorProdutosPage() {
   const [preview, setPreview] = useState<Array<{ codigo: string; ref: string; field: string; antes: string; depois: string }> | null>(null);
   const [applying, setApplying] = useState(false);
 
-  // Estoque em MATRIZ (padrão Wincred, pedido do dono 15/07): coluna por loja,
+  // Estoque em MATRIZ (pedido do dono 15/07): coluna por loja,
   // clicou na célula → stepper −/+ que grava NA HORA (motivo AJUSTE, auditado).
   const [cellSel, setCellSel] = useState<{ codigo: string; loja: string } | null>(null);
   const [cellBusy, setCellBusy] = useState(false);
@@ -336,13 +334,13 @@ export default function EditorProdutosPage() {
   };
 
   // EXCLUSÃO em bloco: dupla confirmação; estoque > 0 exige "forçar" (3ª
-  // confirmação). Apaga do Flow na hora e replica pro Giga (inline/outbox).
+  // confirmação). Apaga do Flow na hora.
   const excluirSelecionadas = async () => {
     const codigos = Array.from(sel);
     if (!codigos.length) return;
     const ok = window.confirm(
       `EXCLUIR ${codigos.length} variação(ões) selecionada(s)?\n\n` +
-        `Isso apaga o produto do Flow E do Giga (cadastro e estoque). ` +
+        `Isso apaga o produto do sistema (cadastro e estoque). ` +
         `Não tem desfazer — fica só o registro na auditoria.`,
     );
     if (!ok) return;
@@ -365,8 +363,7 @@ export default function EditorProdutosPage() {
       }
       if (r.ok) {
         setOkMsg(
-          `✓ ${r.excluidos} variação(ões) excluída(s)` +
-            (r.gigaEnfileirado ? ' — Giga fora do ar, réplica na fila do outbox.' : '.'),
+          `✓ ${r.excluidos} variação(ões) excluída(s).`,
         );
         setSel(new Set());
         await buscar();
@@ -448,7 +445,7 @@ export default function EditorProdutosPage() {
     }
   };
 
-  // Clique no stepper da célula: grava NA HORA (Flow fonte, Giga réplica)
+  // Clique no stepper da célula: grava NA HORA no Flow
   const aplicarMovCelula = async (row: Row, loja: string, delta: 1 | -1) => {
     if (cellBusy) return;
     const atual = row.estoqueLojas?.[loja] ?? 0;
@@ -535,7 +532,7 @@ export default function EditorProdutosPage() {
       setOkMsg(
         r.shadow
           ? `SHADOW MODE: ${r.planejados} alterações registradas na auditoria SEM gravar (EDITOR_PRODUTOS_WRITE=0).`
-          : `✓ ${r.atualizados} variações gravadas — Flow na hora, Giga em réplica.`,
+          : `✓ ${r.atualizados} variações gravadas — vale na hora em toda a rede.`,
       );
       await buscar(); // recarrega fresco
     } catch (e: any) {
@@ -670,7 +667,7 @@ export default function EditorProdutosPage() {
             </button>
             <div className="flex-1" />
             {meta?.fonte === 'espelho' && (
-              <span className="text-[10px] text-amber-600 font-semibold">Giga fora do ar — dados do espelho (marca pode faltar)</span>
+              <span className="text-[10px] text-amber-600 font-semibold">Dados do espelho do catálogo (marca pode faltar)</span>
             )}
           </div>
         )}
@@ -748,7 +745,7 @@ export default function EditorProdutosPage() {
                         <td className="px-1 py-1">{cell('tamanho', 'w-12', false, LIMITS.tamanho)}</td>
                         <td className="px-1 py-1">{cell('preco', 'w-20', true)}</td>
                         <td className="px-1 py-1">{cell('precoDe', 'w-20', true)}</td>
-                        {/* MATRIZ por loja (padrão Wincred): clicou → stepper −/+ grava na hora */}
+                        {/* MATRIZ por loja: clicou → stepper −/+ grava na hora */}
                         {lojasDisponiveis.map((loja) => {
                           const qtd = r.estoqueLojas?.[loja] ?? 0;
                           const ativa = cellSel?.codigo === r.codigo && cellSel?.loja === loja;
@@ -807,7 +804,7 @@ export default function EditorProdutosPage() {
                                 >
                                   {/* NEGATIVO PRECISA APARECER (31/07): a célula só imprimia
                                       número > 0 e qualquer coisa ≤ 0 virava "·". Resultado: o
-                                      Giga mostrava −1 e o Flow mostrava ponto — o número mais
+                                      saldo era −1 e a tela mostrava ponto — o número mais
                                       importante da tela era o único invisível. */}
                                   {qtd !== 0 ? qtd : '·'}
                                 </button>
@@ -1127,7 +1124,7 @@ export default function EditorProdutosPage() {
         </Modal>
       )}
 
-      {/* HISTÓRICO DA VARIAÇÃO — vendas (Giga) + trocas/devoluções (Flow) */}
+      {/* HISTÓRICO DA VARIAÇÃO — vendas + trocas/devoluções */}
       {histCodigo && (
         <Modal
           title={`Histórico — ${histCodigo}${histData?.descricao ? ' · ' + histData.descricao : ''}`}
@@ -1197,7 +1194,7 @@ export default function EditorProdutosPage() {
                 )}
               </div>
               <p className="mt-2 text-[10px] text-slate-400">
-                Vendas do Giga (todas as lojas, histórico completo). Trocas/devoluções da era FlowOps (as antigas, só no Giga legado, não aparecem).
+                Vendas de todas as lojas (histórico completo, inclusive o que veio do sistema antigo). Trocas/devoluções só da era FlowOps — as anteriores não aparecem.
               </p>
             </div>
           )}

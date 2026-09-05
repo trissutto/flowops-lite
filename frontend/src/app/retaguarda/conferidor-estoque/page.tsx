@@ -8,11 +8,12 @@
  * estoque em 14/07 e o pull Giga→Flow foi desligado: os dois lados podiam se
  * afastar em silêncio, e este relatório era quem enxergava.
  *
- * Não há mais dois lados. O MySQL do Giga foi desligado em 27/08/2026 e
- * `getEstoqueGigaCompleto()` devolve lista vazia com o pool trancado — o que
- * fazia `GET /stock-conferidor/conferir` abortar em 100% das chamadas com
- * "Giga não respondeu", justamente pra não acusar divergência falsa. A tela
- * nunca mais carregou um resultado.
+ * Não há mais dois lados. O MySQL do Giga foi desligado em 27/08/2026 e a
+ * leitura do outro banco voltava vazia com o pool trancado — o que fazia
+ * `GET /stock-conferidor/conferir` abortar em 100% das chamadas, justamente
+ * pra não acusar divergência falsa. A tela nunca mais carregou um resultado, e
+ * a função que lia o outro lado (`getEstoqueGigaCompleto`) saiu do código em
+ * 09/2026: grepar por ela não acha nada, e é isso mesmo.
  *
  * Os links do menu saíram na Onda 1; a URL fica de pé só pra bookmark antigo
  * (era item de menu em três lugares até 03/09). Divergência de estoque hoje se

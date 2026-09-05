@@ -553,50 +553,29 @@ export class ErpOutboxService {
   }
 
   /**
-   * Réplica da TROCA DE BANDEIRA de cartão na tabela `fechamento` do Giga.
+   * ENCERRA job legado de troca de bandeira — não há mais o que replicar.
    *
-   * Idempotente pela própria consulta: o UPDATE localiza a linha pela FORMA
-   * ANTIGA. Depois de aplicado, a FORMA já é a nova e o retry não acha nada
-   * pra mexer — não há como aplicar duas vezes.
+   * Ele existia pra repetir o UPDATE numa tabela `fechamento` de um ERP
+   * externo, desligado em 27/08/2026. A troca de bandeira já vale por inteiro
+   * em `pdv_sale_payments` (o fechamento e o relatório por bandeira são
+   * recalculados na leitura, inclusive de caixa já fechado). Ninguém enfileira
+   * mais este kind; o handler fica só pra fechar job antigo que ainda esteja
+   * na fila — marcando `done` com o motivo, nunca DELETE.
    */
   private async processBandeiraFechamento(job: any): Promise<boolean> {
     const p = job.payload || {};
-    if (!p.saleId || !p.storeCode || !p.newBandeira) {
-      await this.markFailed(job, 'bandeira_fechamento sem payload completo');
-      return false;
-    }
-    try {
-      const r = await (this.erp as any).atualizarBandeiraFechamento({
-        saleId: p.saleId,
-        storeCode: p.storeCode,
-        oldBandeira: p.oldBandeira || '',
-        newBandeira: p.newBandeira,
-        valor: Number(p.valor) || 0,
-      });
-
-      // "Linha não encontrada" aqui quase sempre significa JÁ APLICADO (a FORMA
-      // antiga não existe mais) — insistir só gastaria o Giga até as 100
-      // tentativas. Encerra registrando o motivo em vez de fingir sucesso.
-      if (!r.ok && /não (localizada|encontrada)/i.test(String(r.error || ''))) {
-        await this.prisma.erpOutbox.update({
-          where: { id: job.id },
-          data: { status: 'done', doneAt: new Date(), lastError: `encerrado sem aplicar: ${r.error}` },
-        });
-        this.logger.warn(`[outbox] bandeira_fechamento ${p.saleId}: ${r.error} — provavelmente já aplicado`);
-        return true;
-      }
-      if (!r.ok) throw new Error(r.error || 'falha no UPDATE');
-
-      await this.prisma.erpOutbox.update({
-        where: { id: job.id },
-        data: { status: 'done', doneAt: new Date(), lastError: null },
-      });
-      this.logger.log(`[outbox] bandeira_fechamento ${p.saleId}: ${p.oldBandeira}→${p.newBandeira} no Giga`);
-      return true;
-    } catch (e: any) {
-      this.logger.warn(`[outbox] bandeira_fechamento ${p.saleId} re-agendado: ${e?.message}`);
-      return this.requeueOrFail(job, e);
-    }
+    await this.prisma.erpOutbox.update({
+      where: { id: job.id },
+      data: {
+        status: 'done',
+        doneAt: new Date(),
+        lastError: 'encerrado: ERP externo desligado em 27/08/2026 — a bandeira já vale no Flow',
+      },
+    });
+    this.logger.log(
+      `[outbox] bandeira_fechamento ${p.saleId || job.id}: encerrado — nada a replicar`,
+    );
+    return true;
   }
 
   /**

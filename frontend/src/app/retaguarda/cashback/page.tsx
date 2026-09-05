@@ -205,7 +205,7 @@ export default function CashbackPage() {
 
             <p className="text-xs text-slate-500 mt-3">
               {previa.totais.primeirasCompras.toLocaleString('pt-BR')} primeiras compras de verdade
-              (CPF sem nenhuma compra no Flow nem ficha no Giga) entre{' '}
+              (CPF sem nenhuma compra e sem ficha antiga na base) entre{' '}
               {previa.totais.vendasComCpf.toLocaleString('pt-BR')} vendas com CPF de{' '}
               {previa.totais.pessoas.toLocaleString('pt-BR')} pessoas.
             </p>

@@ -3099,15 +3099,18 @@ export class PickOrdersService {
    *
    * Modos (controlado por env `ERP_WRITE_ENABLED`):
    *
-   *  REAL (ERP_WRITE_ENABLED=true):
-   *    - Chama `erp.decreaseStock(items)` que executa UPDATE estoque em transação.
-   *    - Se falhar (ex: estoque insuficiente, SKU não existe, timeout), bloqueia
-   *      a aprovação e lança BadRequestException — operadora vê o erro e decide.
+   *  REAL (ERP_WRITE_ENABLED=true — é como produção roda):
+   *    - Chama `erp.decreaseStock(items)`, que aplica o delta no ESTOQUE DO FLOW
+   *      (Postgres). O nome da env é herança: ela não governa mais um ERP
+   *      externo, governa a baixa aqui dentro. Ver common/replica-giga.ts.
+   *    - Se falhar (ex: estoque insuficiente, SKU não existe), bloqueia a
+   *      aprovação e lança BadRequestException — operadora vê o erro e decide.
    *    - Sucesso → grava log `debit.real.applied` em integration_logs.
    *
-   *  SHADOW (default):
+   *  SHADOW (ERP_WRITE_ENABLED off):
    *    - Apenas grava `debit.approved.shadow` em integration_logs.
-   *    - Não toca no Gigasistemas. Operadora ainda precisa passar no PDV manualmente.
+   *    - ⚠️ NÃO BAIXA ESTOQUE EM LUGAR NENHUM. Desligar a env não "cala um
+   *      sistema velho": faz a rede vender sem dar baixa.
    *
    * Em ambos os casos, marca `debitApprovedAt` no pick-order. O status logístico
    * (separated/shipped) fica intacto — baixa é independente do fluxo de envio.
@@ -3147,10 +3150,12 @@ export class PickOrdersService {
     let realApplied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> | null = null;
 
     if (writeEnabled) {
-      // Validação: sem código de loja (LJ01/01) não dá pra baixar no Giga
+      // Validação: sem código de loja (LJ01/01) o estoque não sabe de qual
+      // loja tirar a peça.
       if (!storeCode) {
         throw new BadRequestException(
-          'Loja sem código configurado (store.code vazio) — não é possível baixar no Gigasistemas',
+          'Loja sem código configurado (store.code vazio) — não é possível baixar o estoque. ' +
+          'Preencha o código da loja no cadastro de lojas.',
         );
       }
 
@@ -3192,7 +3197,7 @@ export class PickOrdersService {
           },
         });
         throw new BadRequestException(
-          `Falha ao baixar estoque no Gigasistemas: ${result.error ?? 'erro desconhecido'}`,
+          `Falha ao baixar o estoque: ${result.error ?? 'erro desconhecido'}`,
         );
       }
 
@@ -3334,7 +3339,8 @@ export class PickOrdersService {
     // Só rejeita se loja ainda não postou (não faz sentido rejeitar algo que já foi).
     if (po.status === 'shipped') {
       throw new BadRequestException(
-        'Pedido já foi enviado — não dá pra rejeitar. Use ajuste manual no ERP.',
+        'Pedido já foi enviado — não dá pra rejeitar a baixa. Se o saldo ficou errado, ' +
+        'corrija pela tela de estoque (o ajuste fica registrado em stock_movements).',
       );
     }
     if (po.status !== 'separated' && po.status !== 'ready') {
@@ -3410,8 +3416,9 @@ export class PickOrdersService {
     });
     if (liveLog) {
       throw new BadRequestException(
-        `Este pick-order já foi baixado no Gigasistemas em modo LIVE (log #${liveLog.id}). ` +
-        'Reabrir causaria baixa dupla. Se precisar ajustar, faça direto no ERP.',
+        `Este pick-order já teve a baixa de estoque aplicada (log #${liveLog.id}). ` +
+        'Reabrir baixaria a peça de novo. Se o saldo estiver errado, corrija pela ' +
+        'tela de estoque — o ajuste fica registrado em stock_movements.',
       );
     }
 
@@ -3572,8 +3579,9 @@ export class PickOrdersService {
     });
     if (priorApplied) {
       throw new BadRequestException(
-        `Já existe log debit.real.applied #${priorApplied.id} — ERP foi baixado. ` +
-        'Retry causaria baixa dupla. Veja o log ou corrija direto no Giga.',
+        `Já existe log debit.real.applied #${priorApplied.id} — o estoque já foi baixado. ` +
+        'Repetir baixaria a peça de novo. Confira o log; se o saldo estiver errado, ' +
+        'corrija pela tela de estoque.',
       );
     }
 

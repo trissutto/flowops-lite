@@ -9,7 +9,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * - Lista baixas dos últimos N dias (default 30) da loja atual
  * - Mostra cliente, total, forma, vendedora, data
  * - Botão "Estornar" com confirmação dupla + razão obrigatória
- * - Estorno reverte UPDATE no Wincred (PAGO='N', etc) + marca canceled no Postgres
+ * - Estorno devolve as parcelas pra "em aberto" + marca a baixa como canceled
  */
 
 import { useEffect, useState, useMemo } from 'react';
@@ -374,7 +374,7 @@ export default function HistoricoBaixasPage() {
                   </div>
 
                   <div className="bg-rose-50 border border-rose-300 rounded-lg p-3 text-xs text-rose-800">
-                    <strong>Atenção:</strong> o estorno reverte as parcelas no Wincred (volta pra "em aberto"). Essa ação ficará registrada na auditoria. Não há volta — pra refazer a baixa terá que iniciar de novo.
+                    <strong>Atenção:</strong> o estorno devolve as parcelas pra "em aberto" no crediário da cliente. Essa ação ficará registrada na auditoria. Não há volta — pra refazer a baixa terá que iniciar de novo.
                   </div>
 
                   <div>
@@ -417,7 +417,7 @@ export default function HistoricoBaixasPage() {
                   <CheckCircle2 size={32} className="mx-auto mb-2" />
                   <div className="font-bold">Estorno realizado!</div>
                   <div className="text-xs mt-1">
-                    {estornoResult.revertidos}/{estornoResult.revertidos + estornoResult.falhas} parcelas revertidas no Wincred
+                    {estornoResult.revertidos}/{estornoResult.revertidos + estornoResult.falhas} parcelas voltaram pra "em aberto"
                   </div>
                 </div>
               )}

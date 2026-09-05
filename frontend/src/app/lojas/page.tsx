@@ -226,7 +226,7 @@ export default function LojasPage() {
                   </button>
                 </div>
                 <p className="text-xs text-slate-500 mt-1">
-                  Transferências REDE↔FRANQUIA geram obrigação financeira automática (preço Giga ÷ 2,5).
+                  Transferências REDE↔FRANQUIA geram obrigação financeira automática (preço de venda ÷ 2,5).
                   REDE↔REDE e FRANQUIA↔FRANQUIA não cobram.
                 </p>
               </div>

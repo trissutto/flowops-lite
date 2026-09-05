@@ -9,7 +9,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * Caso de uso real (Lurd's): peças paradas em algumas lojas (8 unidades de
  * VLM-222 MARINHO 48 em Santos) enquanto outras estão zeradas. Essa tela
  * mostra TODAS as variações REF+COR+TAM com qty por loja em formato igual ao
- * Wincred (consulta de produtos) — MAS com filtros + indicador de criticidade
+ * do sistema antigo (consulta de produtos) — MAS com filtros + indicador de criticidade
  * + botão "Realinhar" pra resolver direto.
  *
  * Critério de criticidade (regra do user):
@@ -101,7 +101,7 @@ export default function DistribuicaoEstoque() {
   const [minTotal, setMinTotal] = useState(2);
   const [showSettings, setShowSettings] = useState(false);
 
-  // ── Fonte de dados: 'giga' (MySQL Wincred) | 'mirror' (Postgres espelho) ──
+  // ── Fonte de dados (legado): as duas opções leem o Postgres do Flow ──
   // Persiste em sessionStorage pra manter durante a sessao. Default = giga (seguro).
   const [dataSource, setDataSourceState] = useState<'giga' | 'mirror'>(() => {
     if (typeof window === 'undefined') return 'giga';
@@ -192,7 +192,7 @@ export default function DistribuicaoEstoque() {
   }, [grupoSelected, subgrupoSelected, searchDebounce, tamanhos, mode, minTotal, currentQueryKey]);
 
   // ── Carregamento manual: NÃO carrega automaticamente em cada mudança ──
-  // Query SQL no Giga é pesada — só dispara quando user clica "Atualizar"
+  // A consulta é pesada — só dispara quando user clica "Atualizar"
   // OU dá Enter na busca. Estado inicial vazio até primeira ação.
   // (Removido o useEffect que disparava automaticamente)
 
@@ -352,7 +352,10 @@ export default function DistribuicaoEstoque() {
         </div>
       </header>
 
-      {/* Toggle de fonte de dados — pra teste comparativo Giga vs Mirror */}
+      {/* Toggle de fonte — herança da época em que havia dois bancos. Hoje as
+          DUAS opções leem o MESMO estoque do Flow: o front só manda
+          ?source=mirror numa delas, e o backend usa o espelho de qualquer
+          jeito (o ERP antigo foi desligado em 27/08/2026). */}
       <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-3 text-xs">
         <span className="font-semibold text-slate-600">Fonte:</span>
         <div className="inline-flex items-center bg-slate-100 rounded-lg p-1 gap-1">
@@ -363,9 +366,9 @@ export default function DistribuicaoEstoque() {
                 ? 'bg-amber-500 text-white shadow'
                 : 'text-slate-600 hover:bg-white'
             }`}
-            title="MySQL Wincred (Giga). Tradicional, mais lento."
+            title="Rota antiga — hoje cai no mesmo estoque do Flow."
           >
-            🐢 Giga (MySQL)
+            🐢 Rota antiga
           </button>
           <button
             onClick={() => setDataSource('mirror')}
@@ -374,9 +377,9 @@ export default function DistribuicaoEstoque() {
                 ? 'bg-emerald-600 text-white shadow'
                 : 'text-slate-600 hover:bg-white'
             }`}
-            title="Postgres espelho (sync 10min). Rapido."
+            title="Estoque do Flow (Postgres) — a mesma fonte do PDV e do site."
           >
-            ⚡ Mirror (Postgres)
+            ⚡ Estoque do Flow
           </button>
         </div>
         {lastFetchMs !== null && (
@@ -390,8 +393,8 @@ export default function DistribuicaoEstoque() {
         )}
         <span className="ml-auto text-slate-500 text-[11px]">
           {dataSource === 'mirror'
-            ? 'Espelho atualizado a cada 10min. Use pra navegacao rapida.'
-            : 'Dados em tempo real direto do Giga. Pode demorar 15-25s.'}
+            ? 'Estoque do Flow — a mesma fonte que o PDV e o site leem.'
+            : 'As duas opcoes leem o mesmo estoque do Flow desde 29/08.'}
         </span>
       </div>
 
@@ -655,7 +658,7 @@ export default function DistribuicaoEstoque() {
                 Aplique os filtros desejados e clique em <span className="text-violet-700">Atualizar</span>
               </div>
               <div className="text-xs text-slate-500 mt-1">
-                A consulta é pesada no Giga — só carrega quando você manda.
+                A consulta é pesada — só carrega quando você manda.
                 Pode escolher categoria, tamanhos ou buscar uma REF antes.
               </div>
             </div>
@@ -753,7 +756,7 @@ export type GroupDrawer = {
   criticidadeAlta: number;
 };
 
-/* VariationMapView — TABELA PLANILHÃO estilo Giga.
+/* VariationMapView — TABELA PLANILHÃO.
    1 linha = 1 variação (código de barras). Colunas = lojas + total + ações.
    Bolinhas coloridas por célula. Botão "Realinhar" passa o GROUP (REF+COR)
    inteiro pro drawer (que mostra a matriz tamanho × loja). */

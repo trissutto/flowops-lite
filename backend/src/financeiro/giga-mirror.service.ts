@@ -7,18 +7,28 @@ import { ErpService } from '../erp/erp.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 
 /**
- * GigaMirrorService — o "ghost" do Giga.
+ * GigaMirrorService — nome herdado; hoje ele ESPELHA O PRÓPRIO FLOW.
  *
- * É a ÚNICA coisa que fala com o Giga ao vivo. De hora em hora (e no boot, se o
- * espelho estiver vazio) ele copia para o Postgres as duas tabelas que a conta
- * corrente usa, AGREGADAS no grão que a tela consome:
- *   - transferencias  → giga_transferencia (por origem/destino/documento/dia)
- *   - caixa           → giga_caixa_diario  (venda bruta por loja/dia)
+ * Não fala com banco externo nenhum: as leituras do ERP legado estão todas
+ * atrás de `pullGigaLigado()` (desligado desde 27/08/2026, servidor fora) e
+ * são no-op, de propósito — preservam o último retrato em vez de apagar a
+ * tabela com um SELECT vazio.
  *
- * A conta corrente lê SÓ do Postgres → instantâneo, sem circuit-breaker, sem
- * blip. Se um sync tropeça, ele NÃO toca no espelho (busca o Giga ANTES de
- * escrever, e a escrita é transacional) — o dado antigo fica intacto e a tela
- * nem percebe; tenta de novo no próximo ciclo.
+ * O que ele MONTA, de hora em hora, a partir dos dados do próprio sistema:
+ *   - giga_caixa_mov     ← vendas e devoluções de pdv_sales/pdv_returns
+ *                          (`espelharCaixaMovDoFlow`, janela de 35 dias)
+ *   - giga_caixa_diario  ← venda bruta por loja/dia (`vendaDiariaDoFlow`)
+ * `giga_transferencia`, `giga_transferencia_item` e `giga_produto` ficam
+ * CONGELADOS no último retrato — nada os reescreve.
+ *
+ * A conta corrente lê SÓ dessas tabelas do Postgres → instantâneo.
+ *
+ * 🚨 `syncCaixa` faz `deleteMany({})` da `giga_caixa_diario` INTEIRA e recria
+ * com o que a fonte devolver. Essa tabela é A BASE DO ROYALTY, e uma troca de
+ * fonte mal feita já apagou de jan/2025 a abr/2026 (7.678 → 921 linhas). Hoje
+ * só não repete porque `vendaDiariaDoFlow` é uma UNIÃO: venda do Flow onde
+ * existe + histórico remontado do próprio `giga_caixa_mov`. Quem mexer nela
+ * sem saber apaga histórico de royalty de novo, calado.
  */
 @Injectable()
 export class GigaMirrorService implements OnModuleInit {
@@ -168,14 +178,18 @@ export class GigaMirrorService implements OnModuleInit {
       } else {
         this.logger.log('sync produtos pulado (sincronizado há < 6h)');
       }
-      // Estoque muda rápido → re-sincroniza TODA hora (full replace).
-      try {
-        const n = await this.syncEstoque();
-        this.logger.log(`espelho giga_estoque: ${n} linhas`);
-      } catch (e: any) {
-        this.logger.error(`sync estoque falhou (espelho preservado): ${e?.message || e}`);
-        await this.setState('estoque', null, String(e?.message || e));
-      }
+      // ESTOQUE: não tem sync. A tabela `giga_estoque` é do FLOW desde 14/07 e
+      // quem a mantém em dia são os movimentos do próprio sistema (bipe da
+      // separação, venda do PDV, entrada de remessa, realinhamento).
+      //
+      // O full que reimportava o saldo INTEIRO de um banco externo por cima
+      // dela saiu em 09/2026. Ele vivia desligado por env desde 14/07 e, com o
+      // servidor apagado em 27/08, não havia de onde puxar. (Quem carimbava
+      // saldo por cima do movimento recém-feito — caso BMM-100 VINHO 52 — era
+      // o WRITE-THROUGH, outro caminho, removido à parte no ErpService.)
+      //
+      // `estoqueRows`/`estoqueAt` do getState() continuam no contrato mas
+      // ninguém mais os escreve: são resíduo histórico, não sinal de quebra.
       // CAIXA DETALHADA DO FLOW (28/08) — roda SEMPRE, com ou sem Giga:
       // as vendas do PDV entram no espelho e todos os leitores (BI,
       // faturamento, DRE, vendedoras) seguem funcionando sem porte.
@@ -767,32 +781,6 @@ export class GigaMirrorService implements OnModuleInit {
       { timeout: 180_000, maxWait: 20_000 },
     );
     await this.setState('produto', data.length, null);
-    return data.length;
-  }
-
-  private async syncEstoque(): Promise<number> {
-    // CONSTITUIÇÃO 14/07: Flow é a fonte do estoque — o full Giga→Flow fica
-    // desligado por padrão (ESTOQUE_SYNC_GIGA=1 reativa). Quem mantém
-    // giga_estoque em dia são os deltas do próprio Flow (bipe, venda, remessa):
-    // desde 22/08 o Giga não carimba mais saldo nenhum de volta.
-    if (String(process.env.ESTOQUE_SYNC_GIGA ?? '').trim() !== '1') {
-      this.logger.log('[estoque] sync Giga→Flow desligado — Flow é a fonte');
-      return 0;
-    }
-    const rows = await this.erp.getGigaEstoque();
-    // Vazio = Giga indisponível (sempre há estoque na rede) → NÃO zera o espelho.
-    if (!rows.length) throw new Error('getGigaEstoque vazio — espelho preservado');
-    const data = rows.map((r) => ({ codigo: r.codigo, loja: r.loja, estoque: r.estoque }));
-    await this.prisma.$transaction(
-      async (tx) => {
-        await (tx as any).gigaEstoque.deleteMany({});
-        for (let i = 0; i < data.length; i += 2000) {
-          await (tx as any).gigaEstoque.createMany({ data: data.slice(i, i + 2000) });
-        }
-      },
-      { timeout: 180_000, maxWait: 20_000 },
-    );
-    await this.setState('estoque', data.length, null);
     return data.length;
   }
 

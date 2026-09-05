@@ -3,8 +3,8 @@
 /**
  * /retaguarda/reprocessar-estoque
  *
- * Tela admin pra consertar remessas que fecharam mas o estoque Giga
- * não baixou (decreaseStock silenciado por mismatch de storeCode).
+ * Tela admin pra consertar remessas que fecharam mas o estoque da loja
+ * de origem não baixou (decreaseStock silenciado por mismatch de storeCode).
  *
  * Fluxo:
  *  1. Carrega lista via GET /api/realignment/shipments/admin/needs-stock-reprocess
@@ -80,7 +80,7 @@ export default function ReprocessarEstoquePage() {
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [daysAgo, forceAll]);
 
   async function reprocessar(id: string, code: string, force = false) {
-    if (!confirm(`Reprocessar baixa de estoque da remessa ${code}?\n\nIsso vai chamar decreaseStock no Giga pra cada item da remessa. Idempotente — só baixa se ainda não tinha baixado.`)) return;
+    if (!confirm(`Reprocessar baixa de estoque da remessa ${code}?\n\nIsso vai tirar do saldo da loja de origem cada item da remessa. Idempotente — só baixa se ainda não tinha baixado.`)) return;
     setProcessing((p) => new Set(p).add(id));
     setResults((r) => { const n = { ...r }; delete n[id]; return n; });
     try {
@@ -128,7 +128,7 @@ export default function ReprocessarEstoquePage() {
             <div>
               <h1 className="text-2xl font-black text-slate-900">Reprocessar Estoque · Remessas</h1>
               <p className="text-xs text-slate-500">
-                Remessas fechadas/recebidas que não tiveram baixa Giga aplicada (mismatch de storeCode, etc).
+                Remessas fechadas/recebidas que não tiveram a baixa de estoque aplicada (mismatch de storeCode, etc).
               </p>
             </div>
           </div>
@@ -194,7 +194,7 @@ export default function ReprocessarEstoquePage() {
         {!loading && rows.length > 0 && (
           <div className="space-y-2">
             <div className="text-sm font-bold text-slate-700 mb-2">
-              {rows.length} remessa(s) {forceAll ? 'no período (todas)' : 'com problema de estoque Giga'}
+              {rows.length} remessa(s) {forceAll ? 'no período (todas)' : 'com problema de baixa de estoque'}
             </div>
             {rows.map((r) => {
               const isProc = processing.has(r.id);
@@ -253,7 +253,7 @@ export default function ReprocessarEstoquePage() {
                           onClick={() => reprocessar(r.id, r.code)}
                           disabled={isProc}
                           className="px-3 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg flex items-center gap-1.5"
-                          title={`Baixa estoque Giga em ${r.fromStoreCode}`}
+                          title={`Baixa o estoque da loja ${r.fromStoreCode}`}
                         >
                           {isProc ? <Loader2 size={14} className="animate-spin" /> : <ArrowDown size={14} />}
                           Baixar estoque {r.fromStoreCode}
@@ -262,7 +262,7 @@ export default function ReprocessarEstoquePage() {
                       {!r.needsDecrease && forceAll && (
                         <button
                           onClick={() => {
-                            if (!confirm(`⚠ ATENÇÃO: ${r.code} JÁ teve baixa Giga em ${fmtDT(r.stockDecreasedAt)}.\n\nFORÇAR uma nova baixa vai DUPLICAR o desconto de estoque na origem. Tem CERTEZA?`)) return;
+                            if (!confirm(`⚠ ATENÇÃO: ${r.code} JÁ teve baixa de estoque em ${fmtDT(r.stockDecreasedAt)}.\n\nFORÇAR uma nova baixa vai DUPLICAR o desconto de estoque na origem. Tem CERTEZA?`)) return;
                             reprocessar(r.id, r.code, true);
                           }}
                           disabled={isProc}
@@ -278,7 +278,7 @@ export default function ReprocessarEstoquePage() {
                           onClick={() => reprocessarAumento(r.id, r.code)}
                           disabled={isProc}
                           className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg flex items-center gap-1.5"
-                          title={`Aumenta estoque Giga em ${r.toStoreCode}`}
+                          title={`Aumenta o estoque da loja ${r.toStoreCode}`}
                         >
                           {isProc ? <Loader2 size={14} className="animate-spin" /> : <ArrowDown size={14} className="rotate-180" />}
                           Aumentar estoque {r.toStoreCode}

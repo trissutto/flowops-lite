@@ -3,9 +3,10 @@
 /**
  * /retaguarda/marcados — visão geral dos MARCADOS (provar em casa) da rede.
  *
- * Lista TUDO que está em marca (caixa do Giga, MARCADO='SIM') agrupado POR
- * CLIENTE, em cascata: clica na cliente → abre as peças dela (data, SKU,
- * descrição, valor, loja). Filtro De/Até + atalhos + loja (convenção da casa).
+ * Lista TUDO que está em marca (tabela nativa `marcado`, no Postgres do Flow)
+ * agrupado POR CLIENTE, em cascata: clica na cliente → abre as peças dela
+ * (data, SKU, descrição, valor, loja). Filtro De/Até + atalhos + loja
+ * (convenção da casa).
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -54,7 +55,7 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   fechado: { label: 'VIROU VENDA', cls: 'bg-emerald-50 border-emerald-300 text-emerald-700' },
   devolvido: { label: 'DEVOLVIDO', cls: 'bg-sky-50 border-sky-300 text-sky-700' },
   baixado: { label: 'BAIXADO', cls: 'bg-rose-50 border-rose-300 text-rose-700' },
-  fechado_giga: { label: 'FECHADO NO GIGA', cls: 'bg-slate-100 border-slate-300 text-slate-600' },
+  fechado_giga: { label: 'FECHADO NO SISTEMA ANTIGO', cls: 'bg-slate-100 border-slate-300 text-slate-600' },
 };
 
 type Grupo = {
@@ -73,8 +74,9 @@ export default function RetaguardaMarcadosPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // 'flow' = tabela nativa (instantâneo) · 'giga' = ao vivo no ERP (lento)
-  const [fonte, setFonte] = useState<string | null>(null);
+  // O estado `fonte` saiu em 09/26: o backend responde SEMPRE 'flow' (o campo
+  // continua no payload só por compatibilidade) e o único lugar que o lia era
+  // uma condição impossível — `fonte === 'giga'`.
   const [truncado, setTruncado] = useState(false);
   const [de, setDe] = useState('');
   const [ate, setAte] = useState('');
@@ -151,11 +153,10 @@ export default function RetaguardaMarcadosPage() {
       if (pStatus && pStatus !== 'ativo') qs.set('status', pStatus);
       const r = await api<{ rows: Row[]; total: number; truncado?: boolean; fonte?: string; error?: string }>(`/pdv/marcados?${qs.toString()}`);
       setRows(Array.isArray(r?.rows) ? r.rows : []);
-      setFonte(r?.fonte || null);
       setTruncado(!!r?.truncado);
       if (r?.error) setErr(r.error);
     } catch (e: any) {
-      setErr(e?.message || 'Falha ao carregar (Giga pode estar lento) — tenta de novo');
+      setErr(e?.message || 'Falha ao carregar — tenta de novo');
     } finally {
       setLoading(false);
     }
@@ -332,14 +333,11 @@ export default function RetaguardaMarcadosPage() {
             ⚠️ {err}
           </div>
         )}
-        {fonte === 'giga' && !err && (
-          <div className="rounded-lg bg-amber-50 border border-amber-300 px-3 py-2 text-xs text-amber-800">
-            ⚠️ Lendo do <b>Giga ao vivo</b> (lento e sujeito a queda). Rode{' '}
-            <Link href="/retaguarda/wincred-mirror" className="underline font-bold">Importar marcados do Giga</Link>{' '}
-            uma vez — a tela passa a ler o Flow e responde na hora.
-          </div>
-        )}
-        {(truncado || (fonte === 'giga' && rows.length >= 500)) && (
+        {/* O aviso "lendo do ERP antigo ao vivo" saiu em 09/26: o marcado é
+            100% Flow desde 07/08 e a lista sempre responde `fonte: 'flow'`.
+            O texto mandava rodar uma importação que não existe mais — e a
+            condição que o mostrava (`fonte === 'giga'`) era impossível. */}
+        {truncado && (
           <div className="rounded-lg bg-sky-50 border border-sky-200 px-3 py-2 text-xs text-sky-800">
             Mostrando as {rows.length.toLocaleString('pt-BR')} marcações mais recentes (tem mais além dessas) — use o filtro de data/loja pra fechar o recorte.
           </div>
@@ -386,7 +384,7 @@ export default function RetaguardaMarcadosPage() {
                       <button
                         onClick={() => verDiagnostico(g)}
                         className="text-xs font-bold text-slate-600 border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-50 flex items-center gap-1.5"
-                        title="Estado cru de cada peça: status, venda vinculada, se tem registro no Giga"
+                        title="Estado cru de cada peça: status, venda vinculada, registro de origem"
                       >
                         <Search className="w-3.5 h-3.5" /> Diagnóstico técnico
                       </button>
@@ -423,7 +421,7 @@ export default function RetaguardaMarcadosPage() {
                               <div key={m.id} className="whitespace-nowrap">
                                 {m.sku.padEnd(14)} status=<b className={m.status === 'ativo' ? 'text-amber-400' : 'text-emerald-400'}>{m.status.padEnd(8)}</b>
                                 {' '}saleId={m.saleId ? m.saleId.slice(0, 8) : <span className="text-rose-400">null    </span>}
-                                {' '}registroGiga={m.registroGiga ?? <span className="text-rose-400">null</span>}
+                                {' '}registroAntigo={m.registroGiga ?? <span className="text-rose-400">null</span>}
                                 {' '}numero={m.numero ?? <span className="text-rose-400">null</span>}
                                 {' '}origem={m.origem}
                               </div>
@@ -500,7 +498,7 @@ export default function RetaguardaMarcadosPage() {
 }
 
 /**
- * Baixa SEM financeiro: remove a marcação do Giga sem venda, sem caixa e sem
+ * Baixa SEM financeiro: tira a peça da marca sem venda, sem caixa e sem
  * devolver estoque — pros "clientes"-bin (DEFEITOS, FURTO, reservas…).
  * Senha GERENTE + motivo obrigatório (fica auditado quem baixou e por quê).
  */
@@ -553,7 +551,7 @@ function BaixaModal({ grupo, onClose, onDone }: { grupo: Grupo; onClose: () => v
             </div>
           </div>
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-800">
-            Isso <b>remove a marcação do Giga</b> sem gerar venda, sem mexer no caixa e{' '}
+            Isso <b>tira a peça da marca</b> sem gerar venda, sem mexer no caixa e{' '}
             <b>sem devolver as peças ao estoque</b> (defeito/furto/perda não volta). Não tem desfazer.
           </div>
           <div>

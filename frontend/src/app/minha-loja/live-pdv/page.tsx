@@ -64,7 +64,7 @@ interface GradeResult {
   photoUrl?: string | null;
   totalRede?: number;
   cells?: GradeCell[];
-  fromMirror?: boolean; // produto/estoque vieram do espelho (Giga fora do ar)
+  fromMirror?: boolean; // produto/estoque vieram do espelho do catálogo
   viaAtalho?: { atalho: string; refCode: string; cor?: string | null } | null; // busca veio da legenda (01, 02…)
 }
 interface CartItem {
@@ -1075,7 +1075,7 @@ export default function LivePdvPage() {
     setHistoryOpen(false);
     try {
       const sid = sessionId ? `&sessionId=${sessionId}` : '';
-      // Timeout de 12s: se o Giga estiver lento, NÃO deixa o spinner girando pra
+      // Timeout de 12s: se a busca travar, NÃO deixa o spinner girando pra
       // sempre — avisa e libera a tela pra tentar de novo.
       const res = await Promise.race([
         api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(q)}${sid}`),
@@ -1092,7 +1092,7 @@ export default function LivePdvPage() {
       }
     } catch (err: any) {
       if (err?.message === '__timeout__') {
-        alert('A busca demorou demais (o Giga pode estar lento). Tente de novo.');
+        alert('A busca demorou demais. Tente de novo.');
       } else {
         setSearchMiss(q);
       }
@@ -1106,9 +1106,8 @@ export default function LivePdvPage() {
     await runSearch(term.trim());
   }
 
-  // Botão "Atualizar estoque" (por grade): força o refresh pontual no Giga (só
-  // os códigos da peça) e re-renderiza a grade fresca. Nunca trava: o backend
-  // devolve a grade do espelho se o Giga não responder em 8s.
+  // Botão "Atualizar estoque" (por grade): relê o saldo dos códigos da peça e
+  // re-renderiza a grade fresca. Nunca trava.
   const [refreshingRef, setRefreshingRef] = useState<string | null>(null);
   async function refreshStock(p: GradeResult) {
     // Busca pelo ATALHO quando o cartão veio da legenda — mantém o filtro de
@@ -1123,7 +1122,7 @@ export default function LivePdvPage() {
       });
       if (res?.found) upsertProduct(res);
     } catch {
-      alert('Não consegui atualizar agora (Giga lento?). A grade continua a do espelho.');
+      alert('Não consegui atualizar agora. A grade continua com o último saldo lido.');
     } finally {
       setRefreshingRef(null);
     }
@@ -2312,7 +2311,7 @@ export default function LivePdvPage() {
                           type="button"
                           onClick={() => refreshStock(p)}
                           disabled={!!refreshingRef}
-                          title="Busca o estoque desta peça direto no Giga agora"
+                          title="Relê o estoque desta peça agora"
                           className="shrink-0 rounded-md border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100 disabled:opacity-50"
                         >
                           <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />

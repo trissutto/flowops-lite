@@ -1,5 +1,7 @@
 # GIGA — relatório de descomissionamento
 
+> **REGISTRO HISTORICO (31/07/2026) — descomissionamento CONCLUIDO.** As ~292 dependencias medidas aqui nao existem mais: ERP DESLIGADO em 27/08/2026 e codigo migrado/removido em 09/2026. Estado atual: `CLAUDE.md` na raiz.
+
 Etapa 1 a 3 da Sprint Especial, consolidadas. Levantamento feito no código em
 31/07/2026 por quatro varreduras paralelas, com `arquivo:linha` verificado.
 

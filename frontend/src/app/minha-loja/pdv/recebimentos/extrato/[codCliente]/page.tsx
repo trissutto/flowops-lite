@@ -47,7 +47,7 @@ const fmtDate = (iso: string) => {
   }
 };
 
-// Telefone vem cru do Giga ("5513997016072", "13997016072", "1334221234").
+// Telefone vem cru do cadastro ("5513997016072", "13997016072", "1334221234").
 // Tira o 55 do país e formata (DD) NNNNN-NNNN.
 const fmtPhone = (raw: string | null | undefined): string | null => {
   if (!raw) return null;

@@ -465,7 +465,7 @@ export default function TransferenciasReportPage() {
               <div className="flex-1 text-xs text-amber-900">
                 <strong>{data.meta.ordersWithoutPrice}</strong> de {data.meta.ordersTotal} itens (
                 {Math.round((data.meta.ordersWithoutPrice / data.meta.ordersTotal) * 100)}%) estão
-                <strong> sem preço de venda</strong> cadastrado no Giga (campo VENDAUN zerado). Esses
+                <strong> sem preço de venda</strong> cadastrado no catálogo (preço zerado). Esses
                 itens aparecem com R$ 0,00 no relatório.
               </div>
             </div>

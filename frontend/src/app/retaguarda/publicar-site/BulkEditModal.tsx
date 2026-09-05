@@ -10,7 +10,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * cada item abrindo o modal individual.
  *
  * Só mexe em campos que o CEO marcar — campos em branco ficam intocados.
- * NÃO edita imagens nem snapshot Wincred (esses são específicos por cor).
+ * NÃO edita imagens nem os dados do catálogo (esses são específicos por cor).
  *
  * Placeholders suportados no título:
  *   {cor}   → substitui pela cor do item

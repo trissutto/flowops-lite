@@ -7,7 +7,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * Auditoria de baixas de estoque (integration_logs).
  *
  * Motivação: quando matriz aprova baixa na tela /baixa-estoque, o pick-order
- * sai da fila e a informação "some". Se a baixa não refletir no Gigasistemas,
+ * sai da fila e a informação "some". Se a baixa não refletir no estoque,
  * operadora fica cega. Essa tela devolve a visibilidade — mostra exatamente o
  * que foi tentado, o modo (REAL vs SHADOW), o resultado e o antes/depois do
  * estoque por SKU.
@@ -15,7 +15,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * Eventos observados:
  *   debit.real.applied   → LIVE deu certo (mostra applied[])
  *   debit.real.failed    → LIVE falhou (mostra error)
- *   debit.approved.shadow→ SHADOW (não tocou ERP — precisa PDV manual)
+ *   debit.approved.shadow→ SHADOW (não tocou o estoque — precisa PDV manual)
  *   debit.bulk-approved.*→ batch agregado (soma dos individuais)
  *
  * Permissão: só admin/operator (matriz). Rota protegida no backend também.
@@ -289,9 +289,9 @@ export default function BaixasLogPage() {
 
   const retryOne = async (pickOrderId: string) => {
     if (!confirm(
-      'Tentar de novo essa baixa no Gigasistemas?\n\n' +
+      'Tentar de novo essa baixa de estoque?\n\n' +
       'O pedido segue como "shipped" e vamos re-executar o auto-debit. ' +
-      'Se o ERP responder dessa vez, o estoque é baixado e o log vira LIVE OK.',
+      'Se der certo dessa vez, o estoque é baixado e o log vira LIVE OK.',
     )) return;
     setReopening(true);
     try {
@@ -306,9 +306,9 @@ export default function BaixasLogPage() {
         method: 'POST',
       });
       if (resp.applied) {
-        alert('✅ Baixa aplicada com sucesso no Gigasistemas.');
+        alert('✅ Baixa de estoque aplicada com sucesso.');
       } else if (resp.shadow) {
-        alert('⚠️ Sistema está em modo SHADOW (ERP_WRITE_ENABLED=false). Só gravou intenção — nada foi tocado no ERP.');
+        alert('⚠️ Sistema está em modo SHADOW (ERP_WRITE_ENABLED=false). Só gravou intenção — o estoque não foi tocado.');
       } else {
         alert(`❌ Retry falhou de novo: ${resp.reason ?? 'erro desconhecido'}`);
       }
@@ -407,7 +407,7 @@ export default function BaixasLogPage() {
             Log de Baixas
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Auditoria de todas as baixas de estoque tentadas no Gigasistemas. Clique numa linha pra ver o antes/depois de cada SKU.
+            Auditoria de todas as baixas de estoque tentadas. Clique numa linha pra ver o antes/depois de cada SKU.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -416,10 +416,10 @@ export default function BaixasLogPage() {
               onClick={retryBulk}
               disabled={reopening}
               className="px-3 py-2 text-sm font-bold rounded bg-red-600 text-white hover:bg-red-700 flex items-center gap-2 disabled:opacity-60"
-              title="Re-executa autoDebit nos pick-orders LIVE FALHOU desta página (re-bate no Giga agora)"
+              title="Re-executa autoDebit nos pick-orders LIVE FALHOU desta página (tenta a baixa de novo agora)"
             >
               <RotateCcw className="w-4 h-4" />
-              Retry {retryCandidates.length} falha(s) no ERP
+              Retry {retryCandidates.length} falha(s) de baixa
             </button>
           )}
           {reopenCandidates.length > 0 && (
@@ -800,7 +800,7 @@ function DetailModal({
                   <CheckCircle2 className="w-5 h-5 text-emerald-700 flex-shrink-0 mt-0.5" />
                   <div className="flex-1 text-sm">
                     <div className="font-bold text-emerald-900">
-                      ✅ JÁ BAIXADO NO GIGASISTEMAS
+                      ✅ ESTOQUE JÁ BAIXADO
                     </div>
                     <div className="text-emerald-800 mt-1">
                       Este pick-order foi baixado posteriormente em modo <b>LIVE</b> no log{' '}
@@ -867,7 +867,7 @@ function DetailModal({
               {applied.length > 0 && (
                 <div>
                   <div className="text-xs uppercase font-semibold text-gray-600 mb-2 flex items-center gap-1">
-                    <Zap className="w-3 h-3" /> Estoque aplicado no Gigasistemas
+                    <Zap className="w-3 h-3" /> Estoque aplicado
                   </div>
                   <div className="overflow-x-auto">
                   <table className="w-full text-xs border">
@@ -965,9 +965,9 @@ function DetailModal({
         {canRetry && detail?.pickOrderId && (
           <div className="border-t bg-red-50 p-3 flex items-center justify-between gap-3">
             <div className="text-xs text-red-900">
-              Baixa LIVE falhou no ERP (provavelmente ETIMEDOUT). O pedido segue como <b>shipped</b>{' '}
-              mas o estoque no Giga NÃO foi debitado. Clique pra tentar de novo agora — já com retry
-              automático no ERP (3 tentativas com backoff).
+              Baixa LIVE falhou. O pedido segue como <b>shipped</b>{' '}
+              mas o estoque NÃO foi debitado. Clique pra tentar de novo agora — já com retry
+              automático (3 tentativas com backoff).
             </div>
             <button
               onClick={() => onRetry(detail.pickOrderId!)}
