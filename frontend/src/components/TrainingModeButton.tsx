@@ -54,7 +54,7 @@ export default function TrainingModeButton({ className }: { className?: string }
       <button
         onClick={() => { setPassword(''); setErr(''); setShowModal(true); }}
         className={className || 'px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded font-bold text-xs shadow flex items-center gap-1.5'}
-        title="Entrar em modo treinamento — vendas não afetam estoque/caixa/Giga"
+        title="Entrar em modo treinamento — vendas não afetam estoque, caixa nem relatórios"
       >
         🎓 Treinamento
       </button>
@@ -69,7 +69,7 @@ export default function TrainingModeButton({ className }: { className?: string }
               <div className="text-4xl mb-2">🎓</div>
               <h2 className="text-xl font-bold text-gray-900">Modo Treinamento</h2>
               <p className="text-sm text-gray-600 mt-1">
-                Ative pra praticar no PDV sem mexer em estoque, caixa, Giga ou relatórios.
+                Ative pra praticar no PDV sem mexer em estoque, caixa ou relatórios.
               </p>
             </div>
 
@@ -77,7 +77,7 @@ export default function TrainingModeButton({ className }: { className?: string }
               <div className="font-bold mb-1">⚠️ O que NÃO acontece em modo treino:</div>
               <ul className="list-disc pl-4 space-y-0.5">
                 <li>Estoque das peças não muda</li>
-                <li>Nada é gravado no Giga (caixa, marcados)</li>
+                <li>Não entra na caixa do dia nem vira marcado</li>
                 <li>Não emite NFC-e</li>
                 <li>Não conta em conciliação financeira</li>
                 <li>Não credita cashback</li>

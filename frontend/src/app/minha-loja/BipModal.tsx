@@ -1028,9 +1028,9 @@ export default function BipModal({
                 </div>
                 <div className="text-xs text-slate-600 mt-1">
                   {debug.erpHit ? (
-                    <>Esse EAN existe no Gigasistemas (SKU <strong>{debug.erpHit}</strong>) mas esse SKU NÃO está nesse pedido.</>
+                    <>Esse EAN existe no cadastro (SKU <strong>{debug.erpHit}</strong>) mas esse SKU NÃO está nesse pedido.</>
                   ) : (
-                    <>Esse EAN não foi encontrado em nenhuma coluna da tabela produtos do Gigasistemas.</>
+                    <>Esse EAN não foi encontrado em nenhuma peça do cadastro.</>
                   )}
                 </div>
               </div>
@@ -1043,7 +1043,7 @@ export default function BipModal({
             </header>
             <div className="flex-1 overflow-y-auto p-4 text-sm">
               <div className="text-xs font-medium uppercase text-slate-500 mb-2">
-                Cadastro dos SKUs desse pedido no ERP
+                Peças desse pedido
               </div>
               <div className="space-y-3">
                 {(debug.debug ?? []).map((d, idx) => (
@@ -1061,19 +1061,25 @@ export default function BipModal({
                         </tbody>
                       </table>
                     ) : (
-                      <div className="text-xs text-red-600">SKU não encontrado na tabela produtos do Gigasistemas</div>
+                      <div className="text-xs text-red-600">SKU não encontrado no cadastro de produtos</div>
                     )}
                   </div>
                 ))}
                 {(!debug.debug || debug.debug.length === 0) && (
-                  <div className="text-slate-500 text-xs">Sem SKUs pra comparar.</div>
+                  <div className="text-slate-500 text-xs">
+                    Sem detalhe das peças pra mostrar aqui.
+                  </div>
                 )}
               </div>
               <div className="mt-4 text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded p-2">
-                <strong>O que fazer:</strong> conferir se o EAN impresso na etiqueta é o mesmo
-                que o Gigasistemas tem cadastrado pro SKU dessa peça. Se o cadastro estiver
-                errado, corrigir no ERP. Se a etiqueta está com EAN de outro produto, separar
-                a peça certa.
+                <strong>O que fazer:</strong> confira o código impresso na etiqueta. Se ele
+                for de outra peça, separe a peça certa. Se a peça é a certa e mesmo assim não
+                bipa, use <b>Reportar peça</b> → <b>Divergência (cor/tamanho)</b>: ela sai
+                deste pedido, o Finalizar destrava e a matriz decide o que fazer.
+                <br />
+                O código de barras da peça não se troca no Editor de Produtos (lá se muda REF,
+                descrição, marca, cor, tamanho e preço) — a etiqueta é que precisa ser
+                acertada com a matriz.
               </div>
             </div>
             <footer className="p-3 border-t bg-slate-50">

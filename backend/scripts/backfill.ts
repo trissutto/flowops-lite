@@ -1,9 +1,13 @@
 /**
- * Baixa os últimos N pedidos do WooCommerce e importa no SQLite local.
+ * ⚰️ APOSENTADO — não há mais WooCommerce de onde baixar.
  *
- * Uso:
- *   npm run backfill          (100 pedidos - padrão)
- *   npm run backfill -- 50    (50 pedidos)
+ * Ele importava os últimos N pedidos do WordPress/WooCommerce legado. Aquele
+ * site foi APAGADO em 27/08/2026. Hoje o pedido do site já nasce no Postgres
+ * do Flow, pelo e-commerce próprio (pasta `ecommerce/`) — não existe nada pra
+ * importar, e o `npm run backfill` só avisa isso e sai.
+ *
+ * (O texto antigo dizia "importa no SQLite local" — isso já era falso antes:
+ * o script usa o PrismaClient, que aponta pro Postgres.)
  */
 
 import axios from 'axios';
@@ -73,8 +77,14 @@ async function main() {
   const qtd = Number(process.argv[2] ?? 100);
 
   if (!WC_URL || !WC_KEY || !WC_SECRET) {
-    console.error('❌ Faltam variáveis WC_URL / WC_CONSUMER_KEY / WC_CONSUMER_SECRET no .env');
-    process.exit(1);
+    console.error(
+      '\n⚰️ Este backfill foi aposentado.\n' +
+      '   O WooCommerce legado saiu do ar em 27/08/2026 — não há de onde baixar,\n' +
+      '   e NÃO adianta procurar chave de WooCommerce pra preencher.\n' +
+      '   O pedido do site já nasce no banco do Flow, pelo e-commerce próprio\n' +
+      '   (pasta ecommerce/). Não há nada pra importar.\n',
+    );
+    process.exit(0);
   }
 
   console.log(`\n📥 Baixando últimos ${qtd} pedidos de ${WC_URL}...`);

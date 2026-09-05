@@ -9,9 +9,9 @@
  *                PRETO 50, UVA 50, UVA 52, VINHO 50, VINHO 52) → baixa em 01.
  *   19/08 17:35  São José bipa 10 peças no card — INCLUSIVE as 5 que ainda
  *                estavam dentro da caixa em trânsito. Flow aplica -1 em cada.
- *   19/08 17:36  O cron do outbox replica as baixas no Giga e o write-through
- *                (`mirrorStockWriteThrough`) grava o saldo do GIGA por cima do
- *                estoque do Flow. Prova: `erp_outbox.done_at` ==
+ *   19/08 17:36  O cron do outbox replica as baixas no ERP legado e o
+ *                write-through grava o saldo DELE por cima do estoque do
+ *                Flow. Prova: `erp_outbox.done_at` ==
  *                `giga_estoque.synced_at`, no mesmo milissegundo, linha a linha
  *                (ex.: VINHO 52 bipada 17:35:50.614, regravada 17:36:01.926).
  *   19/08 19:48  São José dá entrada na caixa → +1 no Flow, +1 no Giga, e o
@@ -22,8 +22,9 @@
  * As outras 3 peças da mesma caixa (PRETO 50, UVA 50, UVA 52) ficaram em 0
  * porque ali os dois bancos concordavam.
  *
- * A CAUSA está corrigida no código (o write-through virou no-op atrás de
- * `ERP_STOCK_WRITEBACK_GIGA`). Este script só limpa o que já ficou errado.
+ * A CAUSA está corrigida no código: o write-through foi REMOVIDO em 09/2026 —
+ * não existe mais função nem env (grepar por `mirrorStockWriteThrough` não
+ * acha nada, e é isso mesmo). Este script só limpa o que já ficou errado.
  *
  * CORREÇÃO
  *   Loja 08 · 8000000004499 (BMM-100 VINHO 50): 1 → 0

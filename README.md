@@ -1,15 +1,26 @@
 # FlowOps
 
-Sistema inteligente de gestão operacional de pedidos — integra WooCommerce, ERP gigasistemas21 e rede de lojas físicas.
+Sistema de gestão operacional da rede **Lurd's Plus Size**: PDV de loja, Live Commerce,
+CRM, crediário, roteamento de pedidos entre as lojas físicas e o e-commerce próprio.
+
+> **Briefing completo**: `CLAUDE.md` na raiz (arquitetura, flags de ambiente, convenções).
+> Este README cobre só como subir o projeto.
 
 ## Stack
 
 - **Backend**: NestJS 10 + TypeScript + Prisma + BullMQ + Socket.IO
-- **Frontend**: Next.js 14 + React 18 + Tailwind + shadcn/ui
-- **Banco**: PostgreSQL 16 (estado do sistema)
+- **Frontend**: Next.js 14 + React 18 + Tailwind (`frontend/`) — retaguarda e PDV
+- **E-commerce**: Next.js (`ecommerce/`) — site público
+- **Banco**: PostgreSQL 16 — **fonte da verdade de tudo** (estoque, venda, catálogo,
+  crediário, clientes, financeiro)
 - **Cache / filas**: Redis 7
-- **ERP**: MySQL gigasistemas21 (somente leitura)
-- **Deploy**: Docker Compose (local) → VPS/Cloud (produção)
+- **Deploy**: Railway (backend + Postgres) + Vercel (frontends). Docker Compose só local.
+
+> ⚰️ **Não existe mais ERP externo.** O MySQL Giga/Wincred e o WordPress/WooCommerce
+> legado dividiam um servidor dedicado que foi **desligado em 27/08/2026**. As travas em
+> `backend/src/common/replica-giga.ts` impedem até a criação do pool. As tabelas com
+> prefixo `wincred_*` / `giga_*` são **espelhos nativos no Postgres, alimentados pelo
+> próprio Flow** — o nome é herança, elas não falam com ERP nenhum.
 
 ## Setup local (5 minutos)
 
@@ -19,13 +30,18 @@ cd flowops
 
 # 2. Configure variáveis
 cp .env.example .env
-# Edite .env e preencha WC_*, ERP_*, JWT_SECRET
+# Edite .env e preencha ao menos DATABASE_URL e JWT_SECRET
+# (o docker-compose lê o .env da RAIZ; se for rodar o backend fora do
+#  docker, copie o mesmo arquivo pra backend/.env)
 
 # 3. Suba tudo
 docker compose up -d --build
 
-# 4. Rode migrations + seed
-docker compose exec backend npx prisma migrate deploy
+# 4. Aplique o schema + seed
+#    Este repo NÃO tem histórico de migrations: o schema é aplicado por
+#    `db push` — inclusive em produção (start:prod faz isso).
+#    `prisma migrate deploy` aqui sai com sucesso SEM criar uma tabela.
+docker compose exec backend npx prisma db push
 docker compose exec backend npm run seed
 
 # 5. Acesse
@@ -48,10 +64,10 @@ flowops/
 │   │   ├── auth/         # JWT, guards, RBAC
 │   │   ├── orders/       # CRUD de pedidos + histórico
 │   │   ├── stores/       # Lojas e performance
-│   │   ├── stock/        # Cache e query do ERP
+│   │   ├── stock/        # Estoque (Postgres)
 │   │   ├── routing/      # ⭐ Engine de distribuição inteligente
-│   │   ├── woocommerce/  # Webhook + cliente REST
-│   │   ├── erp/          # MySQL gigasistemas21 client
+│   │   ├── pdv/          # PDV de loja: venda, devolução, crediário, NFC-e
+│   │   ├── live-pdv/     # Live Commerce
 │   │   ├── queue/        # BullMQ workers
 │   │   ├── websocket/    # Socket.IO gateway
 │   │   └── prisma/       # Prisma service
@@ -61,9 +77,8 @@ flowops/
 │       ├── app/          # App Router
 │       ├── components/
 │       └── lib/
-├── docs/                 # Documentação
-│   ├── FlowOps-Arquitetura.docx
-│   └── integracao-woocommerce.md
+├── ecommerce/            # Site público (Next.js)
+├── docs/                 # Documentação (boa parte é registro histórico — ver CLAUDE.md)
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -82,8 +97,9 @@ docker compose exec backend sh
 # Rodar testes
 docker compose exec backend npm test
 
-# Nova migration (após mudar prisma/schema.prisma)
-docker compose exec backend npx prisma migrate dev --name minha_mudanca
+# Aplicar mudança de schema (após mudar prisma/schema.prisma)
+# NÃO use `migrate dev`: sem histórico de migrations ele oferece RESETAR o banco.
+docker compose exec backend npx prisma db push
 
 # Prisma Studio (UI para o DB)
 docker compose exec backend npx prisma studio
@@ -97,31 +113,30 @@ docker compose down -v
 
 ## Expor webhook localmente (desenvolvimento)
 
-O WooCommerce precisa de URL HTTPS pública para disparar webhooks. Use ngrok:
+**Local não precisa de webhook de pagamento**: um cron de reconciliação pergunta o status
+direto ao gateway (`backend/src/pagbank/pagbank-pix-reconcile.service.ts`).
+
+Se quiser testar o webhook mesmo assim:
 
 ```bash
 ngrok http 3001
-# copie a URL https://xxxx.ngrok-free.app
-# cadastre em WP Admin → WooCommerce → Ajustes → Avançado → Webhooks
+# ponha a URL no .env: BACKEND_PUBLIC_URL=https://xxxx.ngrok-free.app
+# o backend monta sozinho <url>/api/pagbank/webhook em cada cobrança
 ```
 
-Veja `docs/integracao-woocommerce.md` para o passo a passo completo.
+- O segredo do Pagar.me é cadastrado na tela `/pagarme/config` (Basic auth), não em env —
+  a rota é `POST /pagarme/webhook`.
+- ⚠️ **Não cadastre a URL do ngrok no painel do gateway**: a conta lá é a mesma da
+  produção, e você desviaria aviso de pagamento real pro seu notebook.
 
-## Roadmap
+## Atualizar o schema com segurança
 
-Veja `docs/FlowOps-Arquitetura.docx`, seção 10, para o plano faseado de ~19 dias até produção.
+O deploy roda `prisma db push --accept-data-loss` no boot (`start:prod`). Antes de subir
+schema novo, rode `prisma migrate diff` contra a produção pra ver o que o push vai
+derrubar — índices `trgm` já caíram assim.
 
-## Status dos módulos nesta entrega
+## Estado do sistema
 
-| Módulo | Status |
-|---|---|
-| Scaffold + Docker | ✅ Pronto |
-| Prisma schema | ✅ Pronto |
-| Routing Engine (core) | ✅ Pronto + testes |
-| Auth (JWT) | 🟡 Estrutura base |
-| WooCommerce webhook | 🟡 Estrutura base |
-| ERP client | 🟡 Estrutura base |
-| Frontend | 🟡 Login + dashboard skeleton |
-| Queue workers | 🟡 Estrutura base |
-
-Marcados 🟡 têm estrutura funcional mas precisam ser finalizados nas próximas iterações (ver TODOs no código).
+O sistema está **em produção** na rede inteira desde 2026. Arquitetura, flags de
+ambiente, convenções de trabalho e histórico de incidentes: **`CLAUDE.md`** na raiz.
+Como subir na nuvem do zero: `DEPLOY.md`.

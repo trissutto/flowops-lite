@@ -2296,8 +2296,8 @@ export class PdvController {
 
   /**
    * GET /pdv/sales/crediario-orfaos?dias=10
-   * Lista vendas que TEM pagamento method='crediario' no PdvSalePayment mas
-   * NAO tem parcelas correspondentes no Giga (movimento).
+   * Lista as vendas que TÊM pagamento method='crediario' no PdvSalePayment,
+   * pra conferir se cada uma gerou as parcelas em `crediario_parcelas`.
    * Usado pra identificar vendas perdidas pelo bug do sumPaidValue.
    */
   @Get('sales/crediario-orfaos')
@@ -2326,7 +2326,7 @@ export class PdvController {
       ok: true,
       dias,
       total: vendas.length,
-      atencao: 'cruze cada venda manualmente com o Giga (modulo movimento) — esta lista mostra vendas com crediario REGISTRADO no PDV, voce precisa conferir caso a caso se as parcelas existem no Giga.',
+      atencao: 'esta lista mostra as vendas com crediario REGISTRADO no PDV — confira caso a caso, na ficha do cliente, se as parcelas foram criadas.',
       vendas: vendas.map((v: any) => ({
         id: v.id,
         numero: v.id.slice(-6).toUpperCase(),

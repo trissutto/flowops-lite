@@ -3,18 +3,18 @@
 /**
  * /retaguarda/cadastro-produtos — CADASTRO DINÂMICO DE PRODUTOS.
  *
- * Replica a tela legada do Wincred (Cadastro Dinâmico) com gravação direta
- * na tabela `produtos` do gigasistemas21 (Wincred).
+ * Herdeira da tela "Cadastro Dinâmico" do ERP antigo, mas grava no catálogo
+ * de produtos do Flow (Postgres).
  *
  * Fluxo:
  *   1. Usuário preenche o form principal (Grupo, SubGrupo, Ref, Fornecedor,
  *      Custo, Tributo, Preço, Margem, CFOP, Plus Size, NCM).
- *   2. Abre modais pra escolher Cores e Tamanhos (lista do Wincred + criar
+ *   2. Abre modais pra escolher Cores e Tamanhos (lista do catálogo + criar
  *      novos manualmente).
  *   3. Clica "Gerar" → backend devolve a matriz cor×tamanho com EAN-13
  *      gerado (prefixo 8) e descrição automática. Mostra na grid.
- *   4. Confere e clica "Processar Cadastro" → backend grava tudo no Wincred
- *      em transação MySQL (todos caem ou nada cai).
+ *   4. Confere e clica "Processar Cadastro" → backend grava tudo no catálogo
+ *      em transação (todos caem ou nada cai).
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -183,7 +183,7 @@ export default function CadastroProdutosPage() {
       setErro('Clique em "Gerar" antes de processar.');
       return;
     }
-    if (!confirm(`Confirma o cadastro de ${itensGerados.length} produto(s) no Wincred? Não dá pra desfazer pelo flowops.`)) return;
+    if (!confirm(`Confirma o cadastro de ${itensGerados.length} produto(s)? Não dá pra desfazer por aqui.`)) return;
     setProcessando(true);
     try {
       const resp = await api<ProcessarResp>('/product-registration/processar', {
@@ -191,7 +191,7 @@ export default function CadastroProdutosPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildPayload()),
       });
-      setSucessoMsg(`✓ ${resp.inseridos} produto(s) cadastrado(s) no Wincred (${resp.ignorados} já existiam). EANs ${resp.seqInicial} → ${resp.seqFinal}.`);
+      setSucessoMsg(`✓ ${resp.inseridos} produto(s) cadastrado(s) (${resp.ignorados} já existiam). EANs ${resp.seqInicial} → ${resp.seqFinal}.`);
       setItensGerados([]);
       setCoresSelecionadas([]);
       setTamanhosSelecionados([]);
@@ -252,7 +252,7 @@ export default function CadastroProdutosPage() {
   if (carregandoCatalogo) {
     return (
       <div className="min-h-screen flex items-center justify-center text-slate-400">
-        Carregando catálogo Wincred…
+        Carregando catálogo…
       </div>
     );
   }
@@ -268,7 +268,7 @@ export default function CadastroProdutosPage() {
           <Package className="text-purple-600" size={22} />
           <div>
             <h1 className="text-lg font-semibold text-slate-900">Cadastro Dinâmico de Produtos</h1>
-            <p className="text-xs text-slate-500">Gera SKUs no Wincred (gigasistemas21) · EAN-13 prefixo 8</p>
+            <p className="text-xs text-slate-500">Gera SKUs no catálogo · EAN-13 prefixo 8</p>
           </div>
         </div>
       </header>

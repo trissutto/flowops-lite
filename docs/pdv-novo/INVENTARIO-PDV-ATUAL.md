@@ -2,6 +2,15 @@
 
 **Levantado em 29/08/2026** (varredura de `frontend/src/app/minha-loja/pdv/` + `backend/src/pdv/`) para a reforma visual. Nada aqui pode ser esquecido no redesenho; cada ⚠️ marca regra de negócio não-óbvia, geralmente nascida de prejuízo real e datado.
 
+> ⚠️ **Leia junto: as linhas que citam Giga/Wincred estão desatualizadas.** Este censo é
+> anterior ao enterro do ERP (Ondas 1 e 2, 09/2026). O servidor Giga/Wincred foi
+> desligado em 27/08/2026 e **todos** esses caminhos passaram a ler e gravar no Postgres
+> do Flow. Regra de leitura: **a funcionalidade continua valendo, a fonte do dado
+> mudou** — "busca do cliente no Giga" é busca do cliente no Postgres, "falha no Giga"
+> é falha do Flow, e não existe mais estado "Giga fora". **Não redesenhe nada em volta
+> de um ERP que não existe**, e nenhum texto novo de tela pode mandar a vendedora
+> conferir/lançar no Giga ou no Wincred. Estado atual: `CLAUDE.md` na raiz.
+
 **Arquivo central:** `frontend/src/app/minha-loja/pdv/page.tsx` — **12.493 linhas**, 32 componentes num arquivo só.
 **Backend:** `backend/src/pdv/` — 12 controllers, ~25 services, `pdv.service.ts` com 236 KB.
 
@@ -209,7 +218,7 @@
 | 145 | Busca do cliente no Giga | `GET /pdv/customer-info` com escopo de loja + fallback por nome/telefone | `page.tsx:6094-6114`, `pdv.controller.ts:1306` |
 | 146 | ⚠️ Escopo por loja | Código de cliente do Wincred se repete entre lojas — crediário é separado por loja | `page.tsx:6101-6104` |
 | 147 | Banner de inadimplência | Pendências, total devido, total em atraso, qtd atrasadas | `page.tsx:6073-6086` |
-| 148 | ⚠️ Giga fora ≠ cliente inexistente | `gigaError` mostra banner âmbar com "Tentar de novo" em vez de acusar cadastro faltando | `page.tsx:~8956` |
+| 148 | ⚠️ Falha de consulta ≠ cliente inexistente | O campo `gigaError` MORREU (o backend não devolve mais desde a Onda 1): o banner âmbar com "Tentar de novo" existe mas NUNCA aparece, e falha de consulta cai no mesmo ramo de "não achei a ficha". Por isso o texto não pode afirmar que a cliente não tem cadastro | `page.tsx` (bloco do crediário) |
 | 149 | Cliente de outra loja | Banner com botão de copiar a ficha pra loja da venda | `page.tsx:6084-6085` |
 | 150 | Entrada do crediário | ⚠️ Vira 2 payments: entrada como `dinheiro` (caixa físico) + restante como `crediario` | `page.tsx:6791-6838` |
 | 151 | Primeiro vencimento | Default D+30, editável | `page.tsx:5534-5538` |

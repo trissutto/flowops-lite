@@ -3,8 +3,9 @@
 /**
  * /retaguarda/inteligencia-vendas — Dashboard de relatório de vendas.
  *
- * Fonte de dados: tabela `caixa` do Giga (rede toda — Wincred até 26/04
- * + nosso PDV depois). Loja 13 (Site) entra natural na agregação.
+ * Fonte de dados: espelho da caixa no Postgres do Flow (rede toda — histórico
+ * do sistema antigo até 26/04 + nosso PDV depois, alimentado pelo próprio
+ * Flow). Loja 13 (Site) entra natural na agregação.
  *
  * Componentes:
  *  - Filtros: período (presets + custom), loja, comissão %, plus size

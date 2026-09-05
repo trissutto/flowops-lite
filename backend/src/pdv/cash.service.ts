@@ -2243,7 +2243,8 @@ export class CashService {
       }
     }
 
-    // Best-effort Wincred update se bandeira mudou
+    // Resquício: `atualizarBandeiraFechamento` virou no-op em 09/2026 (o ERP
+    // externo que ela atualizava foi desligado). A troca já vale no Postgres.
     let wincredResult: any = null;
     if (novaBandeira != null && oldBandeira !== finalBandeira) {
       try {
@@ -2255,7 +2256,7 @@ export class CashService {
           valor: finalValor,
         });
       } catch (e: any) {
-        this.logger.error(`Wincred update falhou: ${e?.message}`);
+        this.logger.warn(`carimbo de bandeira no ERP legado (no-op) falhou: ${e?.message}`);
         wincredResult = { ok: false, error: e?.message };
       }
     }
@@ -2831,7 +2832,13 @@ export class CashService {
 
   /**
    * Admin troca bandeira de um pagamento (ex: operadora errou MASTERCARD em vez de VISANET).
-   * Atualiza Postgres + audit + Wincred (fechamento) — Wincred é best effort.
+   *
+   * Grava no Postgres + audit, e ACABOU: o fechamento e o relatório por
+   * bandeira são recalculados na LEITURA a partir de `details.bandeira`,
+   * inclusive de caixa já fechado. A chamada a `atualizarBandeiraFechamento`
+   * abaixo é resquício — o ERP externo que ela atualizava foi desligado em
+   * 27/08/2026 e hoje ela é no-op que responde ok. O campo `wincred` fica no
+   * retorno só por compatibilidade com a tela.
    */
   async updatePaymentBandeira(
     paymentId: string,
@@ -2898,7 +2905,7 @@ export class CashService {
         valor: Number(payment.valor) || 0,
       });
     } catch (e: any) {
-      this.logger.error(`Wincred update falhou: ${e?.message}`);
+      this.logger.warn(`carimbo de bandeira no ERP legado (no-op) falhou: ${e?.message}`);
       wincredResult = { ok: false, error: e?.message };
     }
 

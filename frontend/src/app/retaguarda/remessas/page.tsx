@@ -1537,7 +1537,7 @@ export default function RemessasAdminPage() {
             </div>
             <div className="px-4 py-2 text-xs text-slate-600 bg-amber-50 border-b border-amber-200">
               <b>"Próximo nº"</b> é o número que o Flow vai usar na próxima emissão de cada loja. Se a filial já
-              emitia notas no GigaNFe, coloque aqui o <b>último número real + 1</b> (do GigaNFe / contador / portal SEFAZ).
+              emitia notas por outro emissor, coloque aqui o <b>último número real + 1</b> (do contador / portal SEFAZ).
               Se errar pra baixo, a SEFAZ recusa o número já usado e o Flow <b>avança sozinho</b> até achar o livre.
             </div>
             <div className="flex-1 overflow-auto p-4">

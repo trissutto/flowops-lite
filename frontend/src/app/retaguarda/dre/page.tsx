@@ -857,7 +857,7 @@ function Waterfall({ total }: { total: Coluna }) {
 
 /**
  * Fecha a conta contra a tela "Faturamento por Loja". As duas telas leem a
- * MESMA fonte (caixa do Giga); a DRE só mostra as lojas próprias, então o
+ * MESMA fonte (a caixa no Postgres do Flow); a DRE só mostra as lojas próprias, então o
  * total dela é menor de propósito. Esta faixa mostra a soma completa pra
  * ninguém precisar desconfiar de qual número está certo.
  */

@@ -1101,15 +1101,15 @@ export default function MinhaLojaPage() {
       if (updated?.wcSyncWarning) {
         pushToast(`⚠️ ${updated.wcSyncWarning}`);
       }
-      // Auto-baixa no ERP Gigasistemas (dispara no shipped quando ERP_WRITE_ENABLED=true).
+      // Auto-baixa do estoque (dispara no shipped).
       // Mostra só se houve ação real — sucesso, shadow ou falha.
       const ad = updated?.autoDebit;
       if (ad?.applied) {
-        pushToast(`📦 Estoque baixado no ERP Gigasistemas`);
+        pushToast(`📦 Estoque baixado`);
       } else if (ad?.shadow) {
         pushToast(`⏳ Baixa em shadow — matriz vai liberar`);
       } else if (ad?.attempted && ad?.reason) {
-        pushToast(`⚠️ Baixa ERP falhou: ${ad.reason}. Matriz reabre em /baixas-log.`);
+        pushToast(`⚠️ Baixa de estoque falhou: ${ad.reason}. Matriz reabre em /baixas-log.`);
       }
     } catch (err: any) {
       // RETIRADA INCOMPLETA (29/08): peça de outra loja ainda na estrada.
@@ -1234,7 +1234,7 @@ export default function MinhaLojaPage() {
       pushToast('Envio reaberto — gere de novo. (Cancele a pré-postagem antiga no portal dos Correios.)');
     } catch (err: any) { pushToast(`Erro ao reabrir: ${err?.message ?? 'falha'}`); }
   }
-  // Override manual: força "enviado" agora com o rastreio já gerado (Giga +
+  // Override manual: força "enviado" agora com o rastreio já gerado (baixa +
   // WhatsApp) — pra quando o cron ainda não pegou a postagem ou está desligado.
   async function marcarEnviadoManual(row: PickOrderRow) {
     if (!row.trackingCode) { pushToast('Gere o envio primeiro.'); return; }
@@ -3297,7 +3297,7 @@ function PickOrderCard({
                   outros botões continuam: a etiqueta está viva e precisa poder
                   ser reimpressa/cancelada. */}
               {!aguardandoCaixas && (
-                <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa Giga + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
+                <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa o estoque + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
               )}
               <button onClick={(e) => { e.stopPropagation(); if (confirm('Refazer o envio? A etiqueta atual é CANCELADA nos Correios e uma nova é gerada com o endereço que estiver no pedido agora.')) onReabrir(); }} className="flex-1 bg-white border-2 border-amber-300 text-amber-700 font-semibold py-2 rounded-lg text-sm hover:bg-amber-50">↩︎ Reabrir</button>
             </div>

@@ -1,5 +1,7 @@
 # MAPA de dependências do GIGA — RELATÓRIOS + FINANCEIRO
 
+> **REGISTRO HISTORICO (censo de 31/07/2026) — nao descreve o codigo de hoje.** As dependencias listadas foram migradas pro Postgres ou removidas; o ERP foi DESLIGADO em 27/08/2026. Estado atual: `CLAUDE.md` na raiz.
+
 Levantamento puro (nada foi alterado). Escopo: `backend/src/intelligence/`,
 `backend/src/faturamento/`, `backend/src/financeiro/`, `backend/src/dre/`,
 `backend/src/contas-pagar/`, `backend/src/commissions/` (a pasta se chama

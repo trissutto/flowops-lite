@@ -164,7 +164,7 @@ function ConsultarInner() {
     if (!c || c.includes(' ')) return false;
     if (c.length < 3) return false;
     // Dígitos puros 3-14: cobre REF curta (3-6 dig) E CODIGO/EAN bipado
-    // (7-8 dig CODIGO Wincred, 8-13 dig EAN). O backend faz lookup duplo:
+    // (7-8 dig código da peça, 8-13 dig EAN). O backend faz lookup duplo:
     // primeiro como código/EAN, depois como REF, e expande a REF resultante.
     if (/^\d{3,14}$/.test(c)) return true;
     if (/^[a-z]{1,5}-?\d{2,6}[a-z0-9]*$/.test(c)) return true;
@@ -1101,7 +1101,7 @@ function GradePorLoja({ item, cor, tamanho }: {
       // Toda loja que tem a REF aparece — as sem esta variação ficam com o
       // "—" cinza. ORDEM DE SEMPRE (dono, 05/08): pelo código da loja
       // (02 SAN, 03 VIN, 04 IND, 05 PIR...), não por quantidade — é a ordem
-      // que a operação decorou do Wincred. Código não-numérico vai pro fim.
+      // que a operação decorou do sistema antigo. Código não-numérico vai pro fim.
       .sort((a, b) => {
         const na = Number(a.code);
         const nb = Number(b.code);
@@ -1186,7 +1186,7 @@ function GradePorLoja({ item, cor, tamanho }: {
 /**
  * ESTOQUE POR LOJA — matriz variação × loja, SEMPRE visível (sem clique).
  *
- * Pedido das vendedoras: o Wincred mostrava direto em quais lojas tinha cada
+ * Pedido das vendedoras: o sistema antigo mostrava direto em quais lojas tinha cada
  * variação. Aqui derivamos tudo do resultado já carregado (zero chamadas novas):
  *  - LINHAS  = variações (cor · tamanho) com estoque > 0 em alguma loja,
  *              agrupadas por cor e ordenadas por tamanho.
@@ -1231,7 +1231,7 @@ function StockByStoreMatrix({ item, myStore }: {
     }
 
     // Colunas: outras lojas com estoque dessa REF, em ORDEM NUMÉRICA do
-    // código (02, 03, 04...) — mesmo padrão do Wincred que as vendedoras
+    // código (02, 03, 04...) — mesmo padrão do sistema antigo que as vendedoras
     // já conhecem. Código não-numérico (ex. SITE) vai pro final, alfabético.
     const stores = item.otherStores
       .filter((s) => s.qty > 0)

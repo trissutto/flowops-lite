@@ -4,10 +4,11 @@
  * /admin/routing-debug/[wcId]
  *
  * Página de DIAGNÓSTICO do roteamento de um pedido WC.
- * Compara o que a engine viu (routingResult salvo) com o ERP AO VIVO agora.
+ * Compara o que a engine viu (routingResult salvo) com o estoque de AGORA
+ * (Postgres do Flow — o mesmo que site e PDV leem).
  * Revela:
  *  - Se engine tomou decisão errada (via scoreBreakdown)
- *  - Se ERP tem linhas duplicadas ou negativas (via raw query)
+ *  - Se o estoque tem linhas duplicadas ou negativas (via raw query)
  *  - Se cache tá stale
  *
  * Estilo feio de propósito — é ferramenta de debug, não UI de usuário final.
@@ -96,7 +97,7 @@ export default function RoutingDebugPage() {
       {data.liveMode && (
         <div className="bg-amber-50 border border-amber-300 rounded p-3 text-sm text-amber-900">
           <b>⚠ Modo LIVE</b> — esse pedido ainda NÃO foi persistido via "Confirmar separação".
-          Mostrando consulta AO VIVO do WC + ERP (sem routingResult salvo nem pick-orders).
+          Mostrando consulta AO VIVO do pedido + estoque de agora (sem routingResult salvo nem pick-orders).
           Mesmo assim dá pra ver o que a engine VERIA agora se rodar pra esse pedido.
         </div>
       )}
@@ -128,7 +129,7 @@ export default function RoutingDebugPage() {
           </table>
           </div>
           <div className="text-xs text-slate-500 mt-2">
-            👀 Confere se o SKU acima bate com o CODIGO no Gigasistemas. Se não bater, o routing vai consultar estoque errado.
+            👀 Confere se o SKU acima bate com o código da peça no catálogo. Se não bater, o routing vai consultar estoque errado.
           </div>
         </section>
       )}
@@ -169,9 +170,9 @@ export default function RoutingDebugPage() {
               <tr>
                 <th className="px-2 py-1 border border-slate-200">Loja</th>
                 <th className="px-2 py-1 border border-slate-200">Atribuída?</th>
-                <th className="px-2 py-1 border border-slate-200">ERP soma (todas linhas)</th>
-                <th className="px-2 py-1 border border-slate-200">ERP # linhas</th>
-                <th className="px-2 py-1 border border-slate-200">ERP só positivas</th>
+                <th className="px-2 py-1 border border-slate-200">Estoque soma (todas linhas)</th>
+                <th className="px-2 py-1 border border-slate-200">Estoque # linhas</th>
+                <th className="px-2 py-1 border border-slate-200">Estoque só positivas</th>
                 <th className="px-2 py-1 border border-slate-200">Engine vê</th>
                 <th className="px-2 py-1 border border-slate-200">Flag</th>
               </tr>
@@ -221,10 +222,10 @@ export default function RoutingDebugPage() {
           </div>
 
           <div className="text-xs text-slate-500 border-t pt-2">
-            <b>Legenda:</b> ERP soma = SUM(ESTOQUE) de todas as linhas (inclusive negativas).
-            ERP só positivas = o que a query <code>ESTOQUE&gt;0</code> retornaria.
+            <b>Legenda:</b> Estoque soma = SUM(ESTOQUE) de todas as linhas (inclusive negativas).
+            Estoque só positivas = o que a query <code>ESTOQUE&gt;0</code> retornaria.
             Engine vê = o que a query ao vivo ({'<'}sem cache{'>'}) retornou AGORA.
-            Se "Engine vê" &gt; 0 mas "ERP soma" &lt;= 0 → suspeita de linha duplicada positiva mascarando devolução pendente.
+            Se "Engine vê" &gt; 0 mas "Estoque soma" &lt;= 0 → suspeita de linha duplicada positiva mascarando devolução pendente.
           </div>
         </section>
       ))}

@@ -1,16 +1,16 @@
 'use client';
 
 /**
- * /retaguarda/clientes — CONSULTA DE CLIENTES nativa (substitui a do Giga).
+ * /retaguarda/clientes — CONSULTA DE CLIENTES nativa do Flow.
  *
  * Integração (regra do dono): site + lojas + live = UMA pessoa. A busca agrupa
  * por CPF (personKey) e a ficha mostra TODAS as fichas da pessoa (uma por
  * loja), o vínculo com o CRM e o crediário em aberto (espelho).
  *
  * "Puxe tudo": além dos campos estruturados, cada ficha carrega o rawJson com
- * TODOS os campos originais do Giga — a seção "Todos os campos" renderiza
+ * TODOS os campos originais da ficha — a seção "Todos os campos" renderiza
  * dinamicamente qualquer coluna (cônjuge, pai/mãe, autorizados, referências…),
- * então nada do Giga fica invisível aqui, mesmo sem mapeamento.
+ * então nada da ficha fica invisível aqui, mesmo sem mapeamento.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -114,7 +114,7 @@ export default function ConsultaClientesPage() {
           {busy && <Loader2 className="w-5 h-5 absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-[#B8912B]" />}
         </div>
 
-        {/* Nova cliente — nasce NO FLOW (código 500001+), replica pro Giga */}
+        {/* Nova cliente — nasce NO FLOW (código 500001+) */}
         {!ficha && (
           <div className="flex justify-end gap-2">
             <Link
@@ -208,7 +208,7 @@ export default function ConsultaClientesPage() {
 
 /* ─── Ficha unificada ─────────────────────────────────────────────────────── */
 
-/** Data do Giga: ISO 'YYYY-MM-DD'; 1899-11-30 é o "nulo" do Wincred. */
+/** Data da ficha: ISO 'YYYY-MM-DD'; 1899-11-30 é o "nulo" herdado do sistema antigo. */
 const gigaData = (v: any): string | null => {
   const s = String(v || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || s.startsWith('1899')) return null;
@@ -223,7 +223,7 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
   const [verPagas, setVerPagas] = useState(false);
 
   // CONSOLIDA entre as fichas: primeiro valor não-vazio do campo (nomes REAIS
-  // do Giga, ex. ENDERECORES). Ficha duplicada/incompleta não deixa "—" na tela.
+  // da ficha, ex. ENDERECORES). Ficha duplicada/incompleta não deixa "—" na tela.
   const cons = (key: string): string | null => {
     for (const f of fichas) {
       const v = f?.rawJson?.[key];
@@ -274,7 +274,7 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
             <h2 className="text-2xl font-black text-slate-900">{pessoa.nome || '(sem nome)'}</h2>
             <div className="text-sm text-slate-500 font-mono mt-0.5">
               CPF {fmtCpf(pessoa.cpf)}
-              {/* Ficha do Wincred sem CPF, mas o CRM tem: mostra e diz de onde
+              {/* Ficha da loja sem CPF, mas o CRM tem: mostra e diz de onde
                   veio (a ficha continua sem — não gravamos por conta própria). */}
               {pessoa.cpfOrigem === 'crm' && (
                 <span
@@ -318,7 +318,7 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
       {/* RESUMO DA CLIENTE — crediário, marcados AO VIVO, limite, cashback */}
       <ResumoCard resumo={ficha._resumo} base={ficha._base} onReload={() => onReload(ficha._base.loja, ficha._base.codigo)} />
 
-      {/* Seções com os campos REAIS do Giga (só aparecem se têm conteúdo) */}
+      {/* Seções com os campos REAIS da ficha (só aparecem se têm conteúdo) */}
       <Secao
         titulo="Família"
         icone={<Users className="w-4 h-4 text-[#B8912B]" />}
@@ -449,7 +449,7 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
           devolvido/baixado com motivo+quem). Tabela nativa do Flow. */}
       <MarcadosHistoricoCard base={ficha._base} />
 
-      {/* Fichas por loja (limite/avaliação/pontos são POR LOJA no Giga) */}
+      {/* Fichas por loja (limite/avaliação/pontos são POR LOJA) */}
       {fichas.map((f: any) => (
         <FichaLoja key={`${f.loja}-${f.codigo}`} f={f} onEditar={() => setEditando(f)} />
       ))}
@@ -467,8 +467,8 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
 }
 
 /* ─── Formulário compartilhado (editar ficha / nova cliente) ─────────────────
-   Grava NO FLOW (fonte da verdade; flowIsSource) e replica pro Giga via
-   outbox. Campos com os NOMES REAIS do Giga. */
+   Grava NO FLOW (fonte da verdade; flowIsSource). Campos com os NOMES REAIS
+   herdados da ficha do sistema antigo. */
 type FormMask = 'cpf' | 'fone' | 'cep' | 'rg';
 const FORM_CAMPOS: Array<{ key: string; label: string; tipo?: 'date' | 'select-sn'; largo?: boolean; mask?: FormMask; lower?: boolean }> = [
   { key: 'NOME', label: 'Nome completo', largo: true },
@@ -697,7 +697,7 @@ function ClienteForm({
             </button>
           </div>
           <p className="text-[10px] text-slate-400">
-            Grava no Flow (fonte da verdade) e replica pro Giga automaticamente em segundos.
+            Grava no Flow — a ficha vale pra rede toda na hora.
           </p>
         </div>
       </div>
@@ -706,7 +706,7 @@ function ClienteForm({
 }
 
 /* ─── RESUMO DA CLIENTE (painel do topo — pedido do dono 21/07) ────────────
-   Crediário em aberto · MARCADOS pra fechar (AO VIVO no Giga: fechou → sai
+   Crediário em aberto · MARCADOS pra fechar (AO VIVO: fechou → sai
    da lista) · limite disponível (edição com SENHA gerente) · cashback ·
    pode marcar pra experimentar. */
 function ResumoCard({ resumo, base, onReload }: { resumo: any; base: { loja: string; codigo: string }; onReload: () => void }) {
@@ -746,7 +746,7 @@ function ResumoCard({ resumo, base, onReload }: { resumo: any; base: { loja: str
         <Tile
           label="Marcados pra fechar"
           valor={resumo.marcados ? brl(resumo.marcados.totalReais) : '—'}
-          sub={resumo.marcados ? `${resumo.marcados.itens.length} peça(s) · clique pra ver` : '⚠ Giga fora — sem conferência'}
+          sub={resumo.marcados ? `${resumo.marcados.itens.length} peça(s) · clique pra ver` : 'sem peça em marca'}
           tom={resumo.marcados && resumo.marcados.totalReais > 0 ? 'bg-violet-50 border-violet-300 text-violet-800' : 'bg-white border-[#E7E2D8] text-slate-600'}
           onClick={resumo.marcados?.itens?.length ? () => setVerMarcados(!verMarcados) : undefined}
         />
@@ -776,7 +776,7 @@ function ResumoCard({ resumo, base, onReload }: { resumo: any; base: { loja: str
       {verMarcados && resumo.marcados?.itens?.length > 0 && (
         <div className="bg-white rounded-2xl border border-violet-200 shadow-sm overflow-hidden">
           <div className="px-5 py-2.5 border-b border-violet-100 bg-violet-50/50 text-sm font-bold text-violet-800">
-            🏷️ Peças marcadas em aberto (ao vivo no Giga — se fechou, não aparece aqui)
+            🏷️ Peças marcadas em aberto (ao vivo — se fechou, não aparece aqui)
           </div>
           <table className="w-full text-sm">
             <tbody>
@@ -893,7 +893,7 @@ function RestritoModal({
             {busy && <Loader2 className="w-4 h-4 animate-spin" />} Autorizar e salvar
           </button>
         </div>
-        <p className="text-[10px] text-slate-400">Fica registrado quem autorizou. Replica pro Giga automaticamente.</p>
+        <p className="text-[10px] text-slate-400">Fica registrado quem autorizou. Vale na hora em todas as lojas.</p>
       </div>
     </div>
   );
@@ -921,7 +921,7 @@ function MarcadosHistoricoCard({ base }: { base: { loja: string; codigo: string 
     fechado: { label: 'VIROU VENDA', cls: 'bg-emerald-50 border-emerald-300 text-emerald-700' },
     devolvido: { label: 'DEVOLVIDO', cls: 'bg-sky-50 border-sky-300 text-sky-700' },
     baixado: { label: 'BAIXADO', cls: 'bg-rose-50 border-rose-300 text-rose-700' },
-    fechado_giga: { label: 'FECHADO NO GIGA', cls: 'bg-slate-100 border-slate-300 text-slate-600' },
+    fechado_giga: { label: 'FECHADO NO SISTEMA ANTIGO', cls: 'bg-slate-100 border-slate-300 text-slate-600' },
   };
 
   const abrir = async () => {
@@ -1076,7 +1076,7 @@ function HistoricoCard({ hist }: { hist: any }) {
   );
 }
 
-/* Ficha de UMA loja + todos os campos originais do Giga (rawJson dinâmico) */
+/* Ficha de UMA loja + todos os campos originais dela (rawJson dinâmico) */
 function FichaLoja({ f, onEditar }: { f: any; onEditar: () => void }) {
   const [aberto, setAberto] = useState(false);
   const raw = f.rawJson || {};
@@ -1107,7 +1107,7 @@ function FichaLoja({ f, onEditar }: { f: any; onEditar: () => void }) {
         className="w-full px-5 py-2.5 text-left text-xs font-bold text-slate-500 hover:bg-slate-50 flex items-center gap-1"
       >
         {aberto ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        Todos os campos do Giga ({Object.keys(raw).length})
+        Todos os campos da ficha ({Object.keys(raw).length})
       </button>
       {aberto && (
         <div className="px-5 pb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-2">

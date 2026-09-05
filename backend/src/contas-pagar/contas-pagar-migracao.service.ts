@@ -89,7 +89,7 @@ export class ContasPagarMigracaoService {
   async syncEspelho(): Promise<{ ok: boolean; linhas: number; durationMs: number; error?: string }> {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
-    if (!pool) return { ok: false, linhas: 0, durationMs: 0, error: 'MySQL pool não inicializado' };
+    if (!pool) return { ok: false, linhas: 0, durationMs: 0, error: 'importacao encerrada: o sistema antigo foi desligado em 27/08/2026 — nao ha nada pra importar' };
     try {
       const [cnt] = await pool.query({ sql: 'SELECT COUNT(*) AS c FROM pagar', timeout: 60_000 });
       const total = Number((cnt as any[])[0]?.c ?? 0);

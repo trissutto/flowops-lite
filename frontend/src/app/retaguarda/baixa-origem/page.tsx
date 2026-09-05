@@ -4,7 +4,7 @@
  * /retaguarda/baixa-origem
  *
  * Rotina DIRETA: ver tudo que saiu de uma loja origem (essa semana, mês, etc)
- * e baixar estoque Giga na origem com um clique.
+ * e baixar o estoque da loja de origem com um clique.
  *
  * Não depende de filtros de status complexos nem de marcador stockDecreasedAt
  * — lista TUDO e deixa o admin decidir. Mostra marcador "já baixada" pra evitar
@@ -102,8 +102,8 @@ export default function BaixaOrigemPage() {
 
   async function baixar(row: ShipmentRow) {
     const msg = row.alreadyDecreased
-      ? `⚠ A remessa ${row.code} JÁ teve baixa Giga em ${fmtDT(row.stockDecreasedAt)}.\n\nFORÇAR uma nova baixa vai DUPLICAR o desconto de estoque em ${row.fromStoreCode}.\n\nTem CERTEZA que quer baixar de novo?`
-      : `Baixar estoque Giga em ${row.fromStoreCode} pra remessa ${row.code} (${row.totalItemsLive} itens, ${row.totalQty} peças)?\n\nVai chamar decreaseStock no Giga.`;
+      ? `⚠ A remessa ${row.code} JÁ teve baixa de estoque em ${fmtDT(row.stockDecreasedAt)}.\n\nFORÇAR uma nova baixa vai DUPLICAR o desconto de estoque em ${row.fromStoreCode}.\n\nTem CERTEZA que quer baixar de novo?`
+      : `Baixar o estoque da loja ${row.fromStoreCode} pra remessa ${row.code} (${row.totalItemsLive} itens, ${row.totalQty} peças)?\n\nAs peças saem do saldo dessa loja na hora.`;
     if (!confirm(msg)) return;
 
     setProcessing((p) => new Set(p).add(row.id));
@@ -137,7 +137,7 @@ export default function BaixaOrigemPage() {
             <div>
               <h1 className="text-2xl font-black text-slate-900">Baixa Origem · Remessas</h1>
               <p className="text-xs text-slate-500">
-                Lista TUDO que saiu de uma loja na semana — baixa estoque Giga em 1 clique.
+                Lista TUDO que saiu de uma loja na semana — baixa o estoque em 1 clique.
               </p>
             </div>
           </div>
@@ -277,7 +277,7 @@ export default function BaixaOrigemPage() {
                               ? 'bg-rose-800 hover:bg-rose-900 border-2 border-rose-300'
                               : 'bg-rose-600 hover:bg-rose-700'
                           }`}
-                          title={r.alreadyDecreased ? 'Já baixada — clique pra FORÇAR baixa duplicada' : `Baixa estoque Giga em ${r.fromStoreCode}`}
+                          title={r.alreadyDecreased ? 'Já baixada — clique pra FORÇAR baixa duplicada' : `Baixa o estoque da loja ${r.fromStoreCode}`}
                         >
                           {isProc ? <Loader2 size={14} className="animate-spin" /> : <ArrowDown size={14} />}
                           {r.alreadyDecreased ? `FORÇAR baixar ${r.fromStoreCode}` : `Baixar em ${r.fromStoreCode}`}

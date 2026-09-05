@@ -1467,11 +1467,11 @@ export class RealignmentShipmentService {
     );
     // ALERTA: se decreaseStock retornou success mas NENHUM SKU foi aplicado,
     // significa que o estoque não baixou (skipNotFound silenciou). Causa
-    // comum: storeCode não bate com formato LOJA do Giga, ou todos SKUs
-    // estavam zerados/inexistentes na tabela estoque.
+    // comum: storeCode não bate com o formato de LOJA gravado no estoque, ou
+    // todos os SKUs estavam zerados/inexistentes.
     if (!result.success) {
       throw new BadRequestException(
-        `Falha ao baixar estoque Giga origem: ${result.error}. Remessa NÃO foi fechada.`,
+        `Falha ao baixar o estoque da loja de origem: ${result.error}. Remessa NÃO foi fechada.`,
       );
     }
     if (stockItems.length > 0 && appliedCount === 0) {
@@ -2557,7 +2557,7 @@ export class RealignmentShipmentService {
     }
     if (shipment.stockIncreasedAt && !input.force) {
       throw new BadRequestException(
-        `Remessa ${shipment.code} ja teve aumento Giga destino em ${new Date(shipment.stockIncreasedAt).toLocaleString('pt-BR')}. ` +
+        `Remessa ${shipment.code} ja deu entrada no estoque do destino em ${new Date(shipment.stockIncreasedAt).toLocaleString('pt-BR')}. ` +
         `Use force=true se TEM CERTEZA que precisa reaplicar (cuidado: vai duplicar entrada).`,
       );
     }
@@ -2621,7 +2621,7 @@ export class RealignmentShipmentService {
     }
     if (appliedCount === 0) {
       throw new BadRequestException(
-        `increaseStock retornou success mas 0 SKUs aplicados. Possivel mismatch de storeCode "${shipment.toStoreCode}" com formato LOJA do Giga.`,
+        `increaseStock retornou success mas 0 SKUs aplicados. Possivel mismatch de storeCode "${shipment.toStoreCode}" com o formato de LOJA gravado no estoque.`,
       );
     }
 
@@ -2733,7 +2733,7 @@ export class RealignmentShipmentService {
     }
     if (shipment.stockDecreasedAt && !input.force) {
       throw new BadRequestException(
-        `Remessa ${shipment.code} já teve baixa Giga em ${new Date(shipment.stockDecreasedAt).toLocaleString('pt-BR')}. ` +
+        `Remessa ${shipment.code} já teve a baixa de estoque em ${new Date(shipment.stockDecreasedAt).toLocaleString('pt-BR')}. ` +
         `Use force=true se TEM CERTEZA que precisa reaplicar (cuidado: vai duplicar baixa).`,
       );
     }
@@ -2805,7 +2805,7 @@ export class RealignmentShipmentService {
 
     if (appliedCount === 0) {
       throw new BadRequestException(
-        `decreaseStock retornou success mas 0 SKUs aplicados. Possível mismatch de storeCode "${shipment.fromStoreCode}" com formato LOJA do Giga (pode ser "01", "02", etc). Verifique no Giga e ajuste o mapping.`,
+        `decreaseStock retornou success mas 0 SKUs aplicados. Possível mismatch de storeCode "${shipment.fromStoreCode}" com o formato de LOJA gravado no estoque (costuma ser "01", "02"...). Confira o código da loja no cadastro.`,
       );
     }
 

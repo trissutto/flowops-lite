@@ -1,5 +1,7 @@
 # MAPA DE DEPENDÊNCIAS DO GIGA — PRODUTOS · CADASTROS · INTEGRAÇÕES
 
+> **REGISTRO HISTORICO (censo de 31/07/2026) — nao descreve o codigo de hoje.** As dependencias listadas foram migradas pro Postgres ou removidas; o ERP foi DESLIGADO em 27/08/2026. Estado atual: `CLAUDE.md` na raiz.
+
 > Levantamento puro (31/07/2026). Nada foi alterado em `src/`.
 > Escopo: `products/`, `products-editor/`, `product-registration/`,
 > `product-classification/`, `site-publish/`, `purchase-orders/`, `catalog/`,

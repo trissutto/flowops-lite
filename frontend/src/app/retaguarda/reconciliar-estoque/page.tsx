@@ -3,7 +3,7 @@
 /**
  * /retaguarda/reconciliar-estoque
  *
- * Tela admin pra rodar reconciliacao retroativa de estoque PDV → Wincred.
+ * Tela admin pra rodar reconciliacao retroativa do estoque das vendas do PDV.
  * Vendas finalizadas antes do fix gravaram caixa mas nao baixaram estoque.
  * Aqui dispara o script de baixa retroativa em lotes pequenos.
  */
@@ -154,7 +154,7 @@ export default function ReconciliarEstoquePage() {
           <div>
             <h1 className="text-2xl font-black text-slate-900">RECONCILIAR ESTOQUE</h1>
             <p className="text-xs text-slate-500">
-              Baixa retroativa de estoque Wincred pra vendas finalizadas que nao baixaram (bug historico)
+              Baixa retroativa de estoque pra vendas finalizadas que nao baixaram (bug historico)
             </p>
           </div>
         </div>
@@ -164,11 +164,11 @@ export default function ReconciliarEstoquePage() {
           <AlertTriangle className="text-amber-700 flex-shrink-0 mt-0.5" size={20} />
           <div className="text-sm text-amber-900 leading-relaxed">
             <div className="font-bold mb-1">Por que essa tela existe?</div>
-            Vendas finalizadas no PDV ANTES do ultimo fix gravavam a venda na tabela <code className="bg-amber-100 px-1 rounded text-xs">caixa</code> do Wincred mas NAO chamavam <code className="bg-amber-100 px-1 rounded text-xs">decreaseStock</code> — entao o estoque ficou inflado. Esse script processa as vendas pendentes (flag <code className="bg-amber-100 px-1 rounded text-xs">stockDecreasedAt=null</code>) e baixa o estoque. <b>Idempotente</b>: nao baixa duas vezes a mesma venda.
+            Vendas finalizadas no PDV ANTES do ultimo fix gravavam a venda na <code className="bg-amber-100 px-1 rounded text-xs">caixa</code> mas NAO chamavam <code className="bg-amber-100 px-1 rounded text-xs">decreaseStock</code> — entao o estoque ficou inflado. Esse script processa as vendas pendentes (flag <code className="bg-amber-100 px-1 rounded text-xs">stockDecreasedAt=null</code>) e baixa o estoque. <b>Idempotente</b>: nao baixa duas vezes a mesma venda.
           </div>
         </div>
 
-        {/* Diagnostico de indices Wincred */}
+        {/* Diagnostico de indices do ERP antigo (museu — o MySQL foi desligado) */}
         <IndexDiagnosticCard />
 
         {/* Diagnostico de estorno de estoque em devolucoes */}
@@ -471,7 +471,7 @@ function IndexDiagnosticCard() {
   async function createIndex(table: string, indexName: string, columns: string[]) {
     if (!confirm(
       `Criar INDICE ${indexName} em ${table} (${columns.join(', ')})?\n\n` +
-      `Operacao ONLINE (nao bloqueia Giga PDV).\n` +
+      `Operacao ONLINE (nao bloqueia o PDV).\n` +
       `Pode demorar alguns minutos em tabela grande.\n` +
       `Idempotente — se ja existir, nao faz nada.`
     )) return;
@@ -498,7 +498,7 @@ function IndexDiagnosticCard() {
     <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h2 className="font-bold text-slate-800 flex items-center gap-2">
-          <Database size={18} /> Diagnostico de indices Wincred
+          <Database size={18} /> Diagnostico de indices do ERP antigo (desligado em 27/08/2026)
         </h2>
         <button
           onClick={load}

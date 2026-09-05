@@ -71,7 +71,7 @@ export default function ContasPagarPage() {
           <Wallet className="w-6 h-6 text-[#B8912B]" />
           <div className="flex-1">
             <h1 className="text-lg font-extrabold">Contas a Pagar</h1>
-            <p className="text-xs text-slate-500">100% Flow · GIGA congelado pra consulta</p>
+            <p className="text-xs text-slate-500">100% Flow · histórico do sistema antigo congelado pra consulta</p>
           </div>
           <button
             onClick={() => setShowNova(true)}
@@ -423,7 +423,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     ) : (
                       <span className="text-slate-600">{fmtData(r.vencimento)}</span>
                     )}
-                    {r.dataSuspeita && <span title="Data suspeita vinda do GIGA" className="ml-1">⚠️</span>}
+                    {r.dataSuspeita && <span title="Data suspeita, herdada da migração do sistema antigo" className="ml-1">⚠️</span>}
                   </td>
                   <td className="px-3 py-2">
                     <div className="font-bold flex items-center gap-1.5">
@@ -431,7 +431,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                       {r.beneficiarioTipo === 'funcionaria' && (
                         <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-[#FBF6E6] border border-[#B8912B] text-[#8C7325]">👤</span>
                       )}
-                      {r.favorecidoOrfao && <span title="Favorecido órfão no GIGA">⚠️</span>}
+                      {r.favorecidoOrfao && <span title="Favorecido órfão herdado da migração">⚠️</span>}
                     </div>
                     {r.observacao && <div className="text-[11px] text-slate-400">{r.observacao}</div>}
                   </td>
@@ -1395,7 +1395,7 @@ function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
   return (
     <div className="space-y-4">
       <div className="bg-white border-l-4 border-[#B8912B] rounded-lg p-3 text-sm text-slate-500">
-        👤 <b>Fornecedores que são PESSOAS</b> (folha RH/VALE de 20 anos no GIGA) viram beneficiária
+        👤 <b>Fornecedores que são PESSOAS</b> (folha RH/VALE de 20 anos herdada do sistema antigo) viram beneficiária
         FUNCIONÁRIA em todas as contas e somem do autocomplete de fornecedores. Tudo reversível e auditado.
       </div>
       <div className="flex flex-wrap gap-2">
@@ -1538,7 +1538,7 @@ function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
                 {decididos.map((d: any) => (
                   <div key={d.id} className="py-1.5 text-sm flex items-center justify-between gap-2">
                     <span>
-                      <b>{d.fornecedorNome || `GIGA #${d.fornecedorGigaCodigo}`}</b>
+                      <b>{d.fornecedorNome || `cód. antigo #${d.fornecedorGigaCodigo}`}</b>
                       {d.naoEhPessoa
                         ? <span className="text-slate-400"> — não é pessoa</span>
                         : <span> → 👤 <b>{d.sellerNome}</b> <span className="text-[11px] text-slate-400">({d.contasConvertidas} conta(s))</span></span>}
@@ -1607,7 +1607,7 @@ function BuscarFornecedorModal({ funcionaria, onClose, onOk, avisar }: any) {
         {opts.map((o) => (
           <button key={o.codigo} disabled={saving} onClick={() => escolher(o.codigo, o.nome)} className="block w-full text-left px-2 py-2 text-sm hover:bg-[#FBF6E6]">
             <b>{o.nome}</b>
-            <span className="text-[11px] text-slate-400 ml-2">GIGA #{o.codigo} · {o.totalContas} lançamento(s) · {brl(o.somaCents)}</span>
+            <span className="text-[11px] text-slate-400 ml-2">cód. antigo #{o.codigo} · {o.totalContas} lançamento(s) · {brl(o.somaCents)}</span>
           </button>
         ))}
         {!opts.length && <p className="text-sm text-slate-400 py-3 px-2">Nenhum fornecedor pendente com esse texto.</p>}

@@ -3,13 +3,20 @@
 /**
  * /retaguarda/publicar-site — FASE 1: filtro e fila de publicação no site.
  *
- * Funcionalidades:
- *   - Busca multi-filtro na tabela `produtos` do Gigasistemas (REF, descrição,
- *     grupo, subgrupo, fornecedor, dias de cadastro).
+ * ⚠️ A BUSCA DESTA TELA ESTÁ FORA DO AR (09/2026). `/site-publish/giga-search`
+ * cai em `ErpService.searchRefsForPublish`, que lia o MySQL do ERP legado e
+ * hoje devolve LISTA VAZIA sem erro (o pool nunca é criado). Quem publicar
+ * pela busca daqui não vai achar nada, e o texto da tela diz isso em vez de
+ * deixar a pessoa achar que errou o filtro. Migrar a busca pro Postgres é
+ * pendência do backend.
+ *
+ * Funcionalidades (como foram desenhadas):
+ *   - Busca multi-filtro por REF, descrição, grupo, subgrupo, fornecedor,
+ *     dias de cadastro.
  *   - Resultados agrupados por REF → cada REF mostra suas cores, e cada cor
  *     mostra os tamanhos com estoque.
  *   - Usuário marca UMA OU MAIS cores de cada REF pra colocar na fila de
- *     publicação (cada cor vira UM produto no WooCommerce).
+ *     publicação.
  *   - Fila lateral com os itens já marcados (status = queued).
  *   - Próximo passo (Fase 2): botão "Enriquecer" em cada item, que leva pra
  *     tela de legenda/categorias/imagens.
@@ -451,7 +458,10 @@ export default function PublicarSitePage() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-900">Publicar no Site</h1>
-              <p className="text-xs text-gray-500">Wincred → WooCommerce · Fase 1: selecionar referências</p>
+              <p className="text-xs text-amber-700 font-semibold">
+                ⚠️ A busca desta tela está fora do ar — ela lia o sistema antigo,
+                desligado em 27/08/2026, e agora não devolve nenhuma peça.
+              </p>
             </div>
           </div>
           <button

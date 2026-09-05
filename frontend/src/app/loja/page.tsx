@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * /loja — Hub LOJA (operação física + ERP Gigasistemas).
+ * /loja — Hub LOJA (operação física).
  *
  * Reúne os módulos que tratam estoque físico, transferências entre filiais,
  * crediário, almoxarifado e materiais (suprimentos das lojas).

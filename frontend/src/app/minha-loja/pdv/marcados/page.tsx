@@ -22,9 +22,9 @@ import { ArrowLeft, Search, Loader2, Check, AlertCircle, Tag, RefreshCw, Shoppin
 import { api } from '@/lib/api';
 
 type Marcado = {
-  /** Identidade real (07/08) — sempre existe, Giga ou não. */
+  /** Identidade real (07/08) — sempre existe. */
   id: string;
-  /** Histórico: existe só em marcado de origem Giga antiga. */
+  /** Histórico: existe só nos marcados antigos, herdados do sistema anterior. */
   REGISTRO: number | null;
   NUMERO: number;
   CODIGO: string;
@@ -66,7 +66,7 @@ type ClienteMatch = {
   cpf: string;
   classificacao: string;
   limiteTotal: number;
-  // null = Giga não respondeu a tempo (a busca vem do espelho e não trava);
+  // null = a contagem não veio na busca (a lista não trava por causa disso);
   // abre o cliente pra ver os marcados
   qtdMarcados: number | null;
   totalMarcados: number | null;
@@ -131,9 +131,9 @@ export default function MarcadosPage() {
 
   /**
    * Abre a ficha por CPF **ou** por loja+código (05/08). Um quarto das fichas
-   * do Wincred não tem CPF — a tela recusava abrir e a loja ficava sem fechar
+   * antigas não tem CPF — a tela recusava abrir e a loja ficava sem fechar
    * peça que já aparecia na lista de busca (caso DAIANA RUFINO: 48 peças,
-   * R$ 3.323,80). Código do cliente é a chave real do Giga.
+   * R$ 3.323,80). O código do cliente é a chave que sempre existe.
    */
   async function abrirFicha(qs: string) {
     setErr(null);
@@ -210,7 +210,7 @@ export default function MarcadosPage() {
       await buscarPorCpf(cpfNum);
       return;
     }
-    // Ficha sem CPF (1 em cada 4 no Wincred): abre pela chave do Giga.
+    // Ficha sem CPF (1 em cada 4 das antigas): abre pelo código do cliente.
     if (m.codCliente) {
       const qs = new URLSearchParams({ codCliente: String(m.codCliente) });
       if (m.loja) qs.set('loja', String(m.loja));
@@ -236,8 +236,8 @@ export default function MarcadosPage() {
    * clicar no checkbox é lento e erra. Agora a vendedora passa o leitor na
    * etiqueta e a peça se marca sozinha.
    *
-   * O código da etiqueta é o CODIGO do Giga (mesma régua do PDV). A comparação
-   * é tolerante porque o padding de zero do Giga é inconsistente ('05342853' e
+   * O código da etiqueta é o CODIGO da peça (mesma régua do PDV). A comparação
+   * é tolerante porque o padding de zero é inconsistente ('05342853' e
    * '5342853' são a MESMA peça) — comparar string crua devolvia "não achei"
    * numa peça que está ali na lista.
    */
@@ -295,7 +295,7 @@ export default function MarcadosPage() {
     if (!info || voltadas.size === 0) return;
     if (!confirm(
       `Confirmar devolução de ${voltadas.size} peça(s)?\n\n` +
-      `As peças voltam pro estoque Giga da loja de origem.\n` +
+      `As peças voltam pro estoque da loja de origem.\n` +
       `As que NÃO foram marcadas continuam como marcadas pra o cliente.`,
     )) return;
 

@@ -3,11 +3,21 @@
 /**
  * /retaguarda/wincred-mirror
  *
- * Tela admin pra disparar e monitorar o sync das 6 tabelas espelho do
- * Wincred no Postgres. Mostra contagens (PG vs MySQL), ultimo sync e
- * botoes pra rodar sync por tabela ou full.
+ * Tela admin das 6 tabelas espelho do catalogo no Postgres do Flow
+ * (wincred_produtos, wincred_estoque e cia — o nome e heranca; hoje quem
+ * alimenta essas tabelas e o proprio Flow).
  *
- * Onda 1.3 da migracao Wincred -> Flowops.
+ * ⚠️ MUSEU PARCIAL (09/26): as 6 linhas de IMPORTACAO do catalogo puxavam do
+ * MySQL do ERP antigo, desligado em 27/08/2026 — elas voltam FALHOU e a coluna
+ * "ERP antigo" fica sempre vazia.
+ *
+ * MAS a tela NAO e toda morta — nao apague estes dois botoes achando que sao
+ * museu:
+ *   - "Sync Completo" tem um ULTIMO passo VIVO (`produtoNativo.syncIncremental`,
+ *     INSERT..SELECT dentro do proprio Postgres) que atualiza a tabela nativa
+ *     `product` que o BIPE DO PDV le. Roda em segundos.
+ *   - "Sincronizar agora" do box do crediario cai em `espelharDaNativa()` —
+ *     100% Postgres, e o caminho normal desde 27/08.
  */
 
 import { useEffect, useState } from 'react';
@@ -161,13 +171,18 @@ export default function WincredMirrorPage() {
           <Database className="w-5 h-5" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-slate-900">Wincred Mirror</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Espelho do catálogo</h1>
           <p className="text-sm text-slate-500">
-            Espelho das 6 tabelas Wincred no Postgres. <b>Somente leitura</b> no Wincred.
+            Cópia do catálogo (produtos, estoque, grupos, subgrupos, fornecedores e códigos)
+            dentro do Flow, alimentada pelo próprio Flow. As importações do sistema antigo
+            acabaram em 27/08/2026 — a coluna &quot;ERP antigo&quot; fica sempre vazia e as 6
+            linhas do catálogo voltam FALHOU. <b>Ainda servem</b>: o &quot;Sync Completo&quot;
+            (o último passo dele atualiza a tabela que o bipe do PDV lê) e o
+            &quot;Sincronizar agora&quot; do crediário.
           </p>
         </div>
-        {/* O link "Divergencias" saiu em 09/26: comparar Wincred × Mirror exigia o
-            MySQL do Giga, que foi desligado. */}
+        {/* O link "Divergencias" saiu em 09/26: comparar o espelho com o ERP
+            antigo exigia o MySQL dele, que foi desligado. */}
         <button
           onClick={loadStatus}
           disabled={loading}
@@ -190,7 +205,9 @@ export default function WincredMirrorPage() {
         <div>
           <h2 className="font-bold text-violet-900 mb-1">Sync Completo</h2>
           <p className="text-xs text-violet-700">
-            Roda sync das 6 tabelas na ordem ideal (pequenas primeiro, produtos+estoque por ultimo). Demora 1-3 minutos.
+            As 6 linhas do catálogo vão voltar <b>FALHOU</b> — a fonte antiga não existe
+            mais. O passo que vale é o <b>último</b>: ele copia o catálogo do espelho pra
+            tabela que o <b>bipe do PDV</b> lê, dentro do próprio Postgres. Leva segundos.
           </p>
         </div>
         <button
@@ -206,12 +223,12 @@ export default function WincredMirrorPage() {
         </button>
       </div>
 
-      {/* Importação COMPLETA da tabela clientes do Giga (base da consulta
-          nativa de clientes + crediário nativo). Botão pedido do dono 21/07. */}
+      {/* Base de clientes do Flow (base da consulta nativa de clientes +
+          crediário nativo). A importação que a alimentava foi encerrada. */}
       <ClientesGigaBox />
 
-      {/* CREDIÁRIO NATIVO fase 1: importa o `movimento` INTEIRO (abertas e
-          pagas) — a ficha da cliente passa a mostrar o crediário completo. */}
+      {/* CREDIÁRIO NATIVO: estado das parcelas no Flow. A importação do
+          histórico do ERP antigo ficou sem fonte em 27/08/2026. */}
       <CrediarioNativoBox />
 
       {/* Espelho das ABERTAS + veredito de ativação da CREDIARIO_NATIVE_READS */}
@@ -244,7 +261,7 @@ export default function WincredMirrorPage() {
               <tr>
                 <th className="px-4 py-2 text-left text-[10px] uppercase font-bold text-slate-600">Tabela</th>
                 <th className="px-4 py-2 text-right text-[10px] uppercase font-bold text-slate-600">Postgres</th>
-                <th className="px-4 py-2 text-right text-[10px] uppercase font-bold text-slate-600">Wincred</th>
+                <th className="px-4 py-2 text-right text-[10px] uppercase font-bold text-slate-600">ERP antigo</th>
                 <th className="px-4 py-2 text-right text-[10px] uppercase font-bold text-slate-600">Diff</th>
                 <th className="px-4 py-2 text-left text-[10px] uppercase font-bold text-slate-600">Ultima Sync</th>
                 <th className="px-4 py-2 text-center text-[10px] uppercase font-bold text-slate-600">Acao</th>
@@ -275,7 +292,8 @@ export default function WincredMirrorPage() {
                         onClick={() => sync(t.name, `/admin/wincred-mirror/sync/${t.name}`)}
                         disabled={!!syncing}
                         className="px-2 py-1 rounded bg-violet-100 hover:bg-violet-200 text-violet-700 text-xs font-bold disabled:opacity-50"
-                        title={`Re-sync so ${t.name}`}
+                        title={`Importar so ${t.name} — fonte desligada em 27/08/2026, vai responder erro`}
+                        aria-label={`Importar ${t.name} (fonte desligada)`}
                       >
                         {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                       </button>
@@ -370,8 +388,8 @@ function FixDataAltNativoBox() {
       <h2 className="font-bold text-rose-900 mb-1">Incidente DATAALT — corrigir tabela nativa (bipe do PDV)</h2>
       <p className="text-xs text-rose-700 mb-3">
         Copia a data de cadastro do ESPELHO (restaurado do backup 12/07) pra tabela nativa
-        `product`, só nas linhas com data ≥ 13/07 cujo espelho tem data anterior. Não toca no
-        Giga nem em datas já corretas. Rode o dry-run primeiro.
+        `product`, só nas linhas com data ≥ 13/07 cujo espelho tem data anterior. Não mexe em
+        datas já corretas. Rode o dry-run primeiro.
       </p>
       <div className="flex items-center gap-2">
         <button
@@ -433,7 +451,7 @@ function ClientesGigaBox() {
           <h2 className="font-bold text-emerald-900 mb-1">Clientes — base nativa</h2>
           <p className="text-xs text-emerald-700">
             Fichas de cliente já no Flow (todos os campos e lojas), vinculadas ao CRM por CPF.
-            Base da Consulta de Clientes nativa. Só leitura: a importação do Wincred foi encerrada.
+            Base da Consulta de Clientes nativa. Só leitura: a importação do ERP antigo foi encerrada.
           </p>
           {st && (
             <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-emerald-800">
@@ -443,8 +461,8 @@ function ClientesGigaBox() {
               {st.ultimoSync && <span className="text-emerald-600 font-normal">· último: {new Date(st.ultimoSync).toLocaleString('pt-BR')}</span>}
             </div>
           )}
-          {/* POR LOJA — confere que TODAS as lojas vieram (a tabela do Giga é
-              uma só pra rede; aqui dá pra ver se alguma loja veio zerada) */}
+          {/* POR LOJA — confere que TODAS as lojas vieram (a base é uma só pra
+              rede; aqui dá pra ver se alguma loja veio zerada) */}
           {st?.porLoja && st.porLoja.length > 0 && (
             <div className="mt-2 flex gap-1.5 flex-wrap">
               {st.porLoja.map((l) => (
@@ -502,10 +520,11 @@ function CrediarioNativoBox() {
     <div className="bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-200 rounded-xl p-5">
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex-1 min-w-[260px]">
-          <h2 className="font-bold text-sky-900 mb-1">Crediário nativo — importação do movimento</h2>
+          <h2 className="font-bold text-sky-900 mb-1">Crediário nativo — estado das parcelas</h2>
           <p className="text-xs text-sky-700">
-            Traz o <b>movimento</b> inteiro (parcelas abertas E pagas — todo o histórico) pro Flow.
-            A ficha da cliente passa a mostrar o crediário completo. Fase 2: venda/baixa gravam no Flow.
+            O crediário vive 100% no Flow: a venda cria as parcelas e a baixa é gravada aqui.
+            ⚠️ A <b>importação</b> abaixo puxava o histórico do ERP antigo e não roda mais desde
+            27/08/2026 — clicar só devolve erro.
           </p>
           {st && (
             <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-sky-800">
@@ -525,7 +544,7 @@ function CrediarioNativoBox() {
           {busy || st?.rodando ? (
             <><Loader2 className="w-4 h-4 animate-spin" /> Importando crediário...</>
           ) : (
-            <><Play className="w-4 h-4" /> Importar crediário do Giga</>
+            <><Play className="w-4 h-4" /> Importar crediário (fonte desligada)</>
           )}
         </button>
       </div>
@@ -555,14 +574,14 @@ function MarcadosNativoBox() {
           <h2 className="font-bold text-amber-900 mb-1">Marcados — 100% Flow</h2>
           <p className="text-xs text-amber-700">
             Marcar, puxar pra venda, devolver e fechar são só no Flow (07/08) — sem escrever nem
-            ler o Giga ao vivo em nenhum desses passos.
+            ler nenhum sistema externo em nenhum desses passos.
           </p>
           {st && (
             <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-amber-800">
               <span>{st.ativos.toLocaleString('pt-BR')} em marca</span>
               <span className="text-emerald-700">· {st.fechados.toLocaleString('pt-BR')} fechados</span>
               <span>· {st.devolvidos.toLocaleString('pt-BR')} devolvidos</span>
-              {st.fechadosGiga > 0 && <span className="text-slate-500">· {st.fechadosGiga} fechados no Giga (histórico)</span>}
+              {st.fechadosGiga > 0 && <span className="text-slate-500">· {st.fechadosGiga} fechados no sistema antigo (histórico)</span>}
             </div>
           )}
           {st && st.porLoja?.length > 0 && (
@@ -672,8 +691,9 @@ function CrediarioVereditoBox() {
         <div className="flex-1 min-w-[280px]">
           <h2 className="font-bold text-teal-900 mb-1">Crediário — espelho das parcelas em aberto</h2>
           <p className="text-xs text-teal-700">
-            É o que a tela de recebimentos lê. O cron horário mantém sozinho; o botão
-            recarrega na hora quando você não quer esperar.
+            É o que a tela de recebimentos lê, montado a partir das parcelas do próprio
+            Flow. O cron de 10 minutos mantém sozinho, e a baixa já tira a parcela daqui
+            na hora; o botão só recarrega quando você não quer esperar. <b>Este funciona.</b>
           </p>
           {st && (
             <div className="mt-2 text-[11px] font-bold text-teal-800">

@@ -60,5 +60,7 @@ Verifique no browser o que dá para verificar: `preview_start`, navegue até a t
 `read_console_messages`. Mobile se mede em **390×734** — não no DevTools em 1218, que
 esconde a dobra.
 
-Entrega em branch + push + PR para `main`. `gh` CLI não está instalado: dê o link
-`https://github.com/trissutto/flowops-lite/pull/new/<branch>`.
+Entrega em branch + push + PR para `main`. O `gh` CLI **está** instalado e autenticado:
+`gh pr create` + `gh pr merge --squash --delete-branch`. Commit, merge e deploy são
+automáticos — não pergunte permissão. Se o push for bloqueado, entregue na branch com o
+link `https://github.com/trissutto/flowops-lite/pull/new/<branch>`.

@@ -6,7 +6,7 @@
  * A loja ORIGEM escolhe a loja DESTINO e bipa o código de cada peça.
  * Cada bipe cria uma peça numa remessa REM-xxx (tipo TRANSFERENCIA) e usa o
  * MESMO trilho da triagem (status Montando → Em trânsito → Recebida, baixa/
- * entrada Giga, financeiro ÷2,5, conferência por bip no destino).
+ * entrada no estoque do destino, financeiro ÷2,5, conferência por bip).
  */
 
 import { useEffect, useRef, useState } from 'react';

@@ -205,7 +205,7 @@ Por favor confirmar separação no sistema assim que finalizar.
           <div>
             <h3 className="font-bold text-lg">Pronto para separar?</h3>
             <p className="text-sm opacity-90">
-              O sistema vai analisar o estoque do gigasistemas21 e sugerir qual(is) loja(s) atendem.
+              O sistema vai analisar o estoque da rede e sugerir qual(is) loja(s) atendem.
             </p>
           </div>
           <button

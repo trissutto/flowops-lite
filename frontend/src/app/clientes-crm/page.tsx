@@ -149,7 +149,7 @@ interface StoreOption {
 }
 
 // Os tipos EtlState/GigaEtlState morreram junto com a tela /clientes-crm/sincronizacao
-// (09/26): as fontes (WooCommerce e Giga MySQL) foram desligadas — não há mais o que puxar.
+// (09/26): as fontes externas foram desligadas — não há mais o que puxar.
 
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -353,12 +353,12 @@ export default function ClientesCrmPage() {
             Clientes CRM
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Base mestra de clientes (Giga + WooCommerce + Instagram + cadastros PDV)
+            Base mestra de clientes (loja física + site + Instagram + histórico importado)
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* O botão "Sincronizações" (/clientes-crm/sincronizacao) saiu em 09/26:
-              as fontes (WooCommerce e Giga MySQL) foram desligadas. */}
+              as fontes externas (site antigo e ERP antigo) foram desligadas. */}
           <button
             onClick={() => setShowCreate(true)}
             className="bg-purple-700 hover:bg-purple-800 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm"
@@ -794,7 +794,7 @@ function CustomerDetailDrawer({
 /**
  * Aba Perfil — leitura e EDIÇÃO.
  *
- * A atendente completa a ficha aqui: muita cliente veio do Giga só com nome e
+ * A atendente completa a ficha aqui: muita cliente veio do sistema antigo só com nome e
  * telefone, e o que falta (manequim, estilo, aniversário) é justamente o que
  * alimenta mailing, cashback e recomendação.
  *
@@ -803,7 +803,7 @@ function CustomerDetailDrawer({
  *    editável aqui viraria número inventado convivendo com número real.
  *  · Atribuição (loja de origem, fonte, quem captou) — é histórico de como a
  *    cliente entrou. Reescrever apaga a origem da comissão e do LTV por loja.
- *  · Registro Giga — chave da ficha do ERP, não é dado de cadastro.
+ *  · Registro antigo — chave da ficha herdada do ERP, não é dado de cadastro.
  */
 /**
  * Campo da ficha — MORA NO ESCOPO DO MÓDULO, e isso não é preferência de
@@ -997,7 +997,7 @@ function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void })
         <Field label="Como prefere ser chamada" value={d.nameSocial} />
         <Field label="CPF" value={d.cpf} />
         <Field label="RG" value={d.rg} />
-        <Field label="Registro Giga" value={d.registroGiga?.toString() ?? null} />
+        <Field label="Registro antigo" value={d.registroGiga?.toString() ?? null} />
         <Field label="Data nascimento" value={d.birthDate ? new Date(d.birthDate).toLocaleDateString('pt-BR') : null} />
         <Field label="Gênero" value={d.gender} />
         <Field label="Estado civil" value={d.maritalStatus} />
@@ -1043,7 +1043,7 @@ function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void })
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ABA Histórico — compras + devoluções + vales + marcados Giga
+// ABA Histórico — compras + devoluções + vales + peças em marca
 // ══════════════════════════════════════════════════════════════════════════
 interface HistoricoData {
   customer: { id: string; name: string | null; cpf: string | null };
@@ -1339,12 +1339,12 @@ function HistoricoTab({ customerId }: { customerId: string }) {
         </section>
       )}
 
-      {/* Marcados Giga */}
+      {/* Peças em marca */}
       {data.marcadosGiga.items.length > 0 && (
         <section>
           <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-purple-500" />
-            Marcados ativos no Giga ({data.marcadosGiga.qtd}) — R$ {data.marcadosGiga.total.toFixed(2).replace('.', ',')}
+            Marcados ativos ({data.marcadosGiga.qtd}) — R$ {data.marcadosGiga.total.toFixed(2).replace('.', ',')}
           </h3>
           <div className="border rounded overflow-hidden">
             <table className="w-full text-xs">
@@ -1860,7 +1860,7 @@ function CreateCustomerModal({
             <option value="physical">Loja física</option>
             <option value="woo">E-commerce (WooCommerce)</option>
             <option value="instagram">Instagram</option>
-            <option value="giga">Importado do Giga</option>
+            <option value="giga">Importado do sistema antigo</option>
             <option value="manual">Manual</option>
           </select>
         </div>

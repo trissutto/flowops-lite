@@ -4193,9 +4193,13 @@ export class PdvService {
   }
 
   /**
-   * PASSO 1 do sync ERP: grava a venda na tabela `caixa` do Wincred.
-   * Retorna status estruturado (o outbox usa pra decidir retry).
-   * mode='shadow' (PDV_ERP_WRITE_ENABLED=false) conta como ok — nada mais a fazer.
+   * PASSO 1 do sync ERP: réplica da venda num ERP externo.
+   *
+   * ⚠️ Não roda em produção desde 27/08/2026: o outbox só chega neste passo com
+   * `ERP_REPLICA_GIGA=1` (ver common/replica-giga.ts), e o servidor do ERP foi
+   * desligado. A venda vale em `pdv_sale`, no Postgres do Flow. Fica no código
+   * porque o passo 2 do mesmo job — a BAIXA DE ESTOQUE — é do Flow e continua
+   * rodando sempre.
    */
   async erpStepGravarCaixa(
     sale: any,
@@ -4263,7 +4267,7 @@ export class PdvService {
       }
       if (result.mode === 'shadow') {
         this.logger.warn(
-          `[pdv→wincred SHADOW] Venda ${sale.id}: ${result.sqlExecuted.length} SQLs gerados (não executados). Set PDV_ERP_WRITE_ENABLED=true pra ativar.`,
+          `[pdv→erp] Venda ${sale.id}: nada replicado — não existe mais ERP externo. A venda vale no Flow.`,
         );
         return { ok: true, mode: 'shadow' };
       }
@@ -4307,11 +4311,18 @@ export class PdvService {
   }
 
   /**
-   * PASSO 2 do sync ERP: baixa de estoque no Wincred.
+   * BAIXA DE ESTOQUE DA VENDA — no Postgres do Flow (`decreaseStock`).
+   *
    * PULA items MANUAL/MARCADO. allowNegative + skipNotFound (divergências não
    * bloqueiam). Marca sale.stockDecreasedAt no sucesso — mesma flag usada pelo
    * reconcileStockBacklog, então o backlog continua funcionando como rede de
    * segurança. Idempotente: se stockDecreasedAt já está marcado, não repete.
+   *
+   * ⚠️ PENDÊNCIA CONHECIDA: só confere `r.success`, e `decreaseStock` devolve
+   * true mesmo quando um item falhou (o erro por item vira log e o item fica
+   * de fora do `applied`). O certo é comparar `applied` com os itens pedidos
+   * antes de carimbar `stockDecreasedAt` — hoje o guard de idempotência faz o
+   * retry do outbox virar no-op depois do carimbo.
    */
   async erpStepBaixarEstoque(
     sale: any,
@@ -4330,7 +4341,7 @@ export class PdvService {
       // nenhum. Ver common/replica-giga.ts.
       if (escritaGigaBloqueada(this.erp.isWriteEnabled)) {
         this.logger.warn(
-          `[pdv→estoque] Venda ${sale.id}: ERP_WRITE_ENABLED=false — estoque NAO baixado no Wincred.`,
+          `[pdv→estoque] Venda ${sale.id}: ERP_WRITE_ENABLED=false — estoque NAO baixado no Flow.`,
         );
         // Sem permissão de escrita não adianta re-tentar — o reconcile pega
         // depois (stockDecreasedAt continua null).
@@ -4371,7 +4382,7 @@ export class PdvService {
         };
       }
       this.logger.log(
-        `[pdv→estoque] Venda ${sale.id}: ${r.applied.length} item(s) baixado(s) no Wincred ` +
+        `[pdv→estoque] Venda ${sale.id}: ${r.applied.length} item(s) baixado(s) no Flow ` +
         `(loja ${sale.storeCode}) em ${r.attempts || 1} tentativa(s).`,
       );
       try {

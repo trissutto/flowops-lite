@@ -59,17 +59,21 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
          * ⚠️ FILA FINITA. Era `0` — que no mysql2 quer dizer ILIMITADA, não
          * "sem fila".
          *
-         * O host aqui (`ERP_HOST`) está VIVO — não confundir com o
-         * `WP_DB_HOST`, que é outro servidor e esse sim está fora do ar. O
-         * problema não é o host estar morto: é o modo como ele MORRE.
+         * ⚰️ NADA DISTO RODA HOJE — o `gigaDesligado()` acima sai antes de
+         * criar o pool. Fica como registro do modo de falha que motivou a
+         * fila finita.
          *
-         * O CLAUDE.md registra que o Giga **PENDURA** em vez de dar erro
-         * quando o firewall por IP da KingHost derruba o IP dinâmico do
-         * Railway — `.catch` não pega, porque não há erro; a conexão só não
-         * volta. Foi assim que a live de 01/07 caiu. Com fila ILIMITADA, um
-         * pendurado desses não fica contido: cada chamada nova entra na fila
-         * pra esperar uma das 2 conexões que nunca vão vagar, e a fila cresce
-         * sem teto até levar o processo junto.
+         * O `ERP_HOST` era o MySQL do ERP legado, no host do FORNECEDOR —
+         * outro servidor que o `WP_DB_HOST` (o WordPress da KingHost). O
+         * problema nunca foi o host estar morto: era o modo como ele MORRIA.
+         *
+         * Aquele MySQL **PENDURAVA** em vez de dar erro quando o firewall por
+         * IP derrubava o IP dinâmico do Railway — `.catch` não pegava, porque
+         * não havia erro; a conexão só não voltava. Foi assim que a live de
+         * 01/07 caiu. Com fila ILIMITADA, um pendurado desses não ficava
+         * contido: cada chamada nova entrava na fila pra esperar uma das 2
+         * conexões que nunca vagariam, e a fila crescia sem teto até levar o
+         * processo junto.
          *
          * Fila finita transforma "app congela" em "esta chamada falhou" — que
          * é um resultado que o chamador já sabe tratar: os dois métodos

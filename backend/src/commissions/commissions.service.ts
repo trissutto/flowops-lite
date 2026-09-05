@@ -1051,14 +1051,17 @@ export class CommissionsService {
   }
 
   /**
-   * CONFERÊNCIA Flow × Wincred (22/07): o ranking do Wincred lê a CAIXA do
-   * Giga, que tem as vendas do Flow (replicadas via outbox) E vendas que só
-   * existem lá — principalmente MARCADO fechado na tela do Wincred (a linha
-   * vira venda sem nunca passar pelo PDV do Flow) e lançamento manual.
-   * Compara vendedora a vendedora pro RH ver EXATAMENTE onde está a diferença.
+   * ⚰️ CONFERÊNCIA Flow × ERP legado (22/07) — NÃO HÁ MAIS SEGUNDO LADO.
    *
-   * Exige LOJA (query na caixa filtrada por LOJA+DATA — sem full scan).
-   * Marcados ativos (MARCADO='SIM') ficam FORA dos dois lados (reserva ≠ venda).
+   * Ela existia porque o ranking do ERP lia a caixa DELE, que trazia as vendas
+   * do Flow (replicadas pela fila) E vendas que só existiam lá: marcado
+   * fechado na tela do desktop e lançamento manual. Comparava vendedora a
+   * vendedora pro RH achar a diferença.
+   *
+   * O servidor daquele ERP foi desligado em 27/08/2026 e ninguém mais digita
+   * lá. Sem o outro lado, a conferência perdeu o objeto: a venda do Flow é a
+   * fonte da comissão. A função responde `ok:false` explicando isso, em vez de
+   * fingir uma indisponibilidade que alguém tentaria de novo amanhã.
    */
   async relatorioRhConferencia(input: { de: string; ate: string; storeCode: string }): Promise<any> {
     const de = String(input.de || '').slice(0, 10);
@@ -1068,13 +1071,13 @@ export class CommissionsService {
     }
     const loja = String(input.storeCode || '').replace(/\D/g, '').padStart(2, '0');
     if (!loja || loja === '00') {
-      throw new BadRequestException('Escolha UMA loja pra conferir com o Wincred');
+      throw new BadRequestException('Escolha UMA loja pra rodar a conferência');
     }
 
-    // Lado GIGA: caixa por VENDEDOR (mesma base do ranking do Wincred).
-    // Teto duro de 20s no app — se o Giga pendurar, responde com erro claro.
-    // DATAFEC (data de FECHAMENTO do cupom) — é o que as telas do Wincred
-    // usam; filtrar por DATA deixava cupom fechado no dia seguinte de fora.
+    // Lado do ERP legado: caixa por VENDEDOR. Sem pool isto não responde nada
+    // — o `__erro` abaixo é o caminho ÚNICO desde 27/08/2026.
+    // DATAFEC (data de FECHAMENTO do cupom) era o que as telas do desktop
+    // usavam; filtrar por DATA deixava cupom fechado no dia seguinte de fora.
     const p = this.erp.runReadOnly(
       `SELECT VENDEDOR, COUNT(*) AS qtd, COALESCE(SUM(VALORTOTAL), 0) AS total
          FROM caixa
@@ -1086,10 +1089,15 @@ export class CommissionsService {
     );
     const giga: any = await Promise.race([
       p.catch((e: any) => ({ __erro: e?.message || 'falha' })),
-      new Promise((res) => setTimeout(res, 20000, { __erro: 'Giga não respondeu em 20s' })),
+      new Promise((res) => setTimeout(res, 20000, { __erro: 'sem resposta em 20s' })),
     ]);
     if ((giga as any).__erro) {
-      return { ok: false, error: `Wincred indisponível pra conferência: ${(giga as any).__erro}` };
+      return {
+        ok: false,
+        error:
+          'A conferência com o sistema antigo acabou: ele foi desligado em 27/08/2026 e não existe segundo lado pra comparar. ' +
+          'A venda registrada no Flow é a fonte da comissão — confira pelo relatório da Folha.',
+      };
     }
 
     // Lado FLOW: pdv_sales por vendedora na mesma janela/loja (dia em BRT,

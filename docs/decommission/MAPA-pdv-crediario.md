@@ -1,5 +1,7 @@
 # MAPA DE DEPENDÊNCIAS DO GIGA — domínio PDV + CREDIÁRIO
 
+> **REGISTRO HISTORICO (censo de 31/07/2026) — nao descreve o codigo de hoje.** As dependencias listadas foram migradas pro Postgres ou removidas; o ERP foi DESLIGADO em 27/08/2026. Estado atual: `CLAUDE.md` na raiz.
+
 Escopo: `backend/src/pdv/`, `backend/src/crediarios/`, `backend/src/clientes-giga/` (+ crons desses módulos).
 Levantamento em 31/07/2026, branch `fix/faturamento-ano-anterior-espelho`. Nenhum arquivo de `src/` foi alterado.
 Base: 103 ocorrências de `this.erp` nos 3 módulos (98 tocam o Giga de fato; 5 são guards de env / helper puro).

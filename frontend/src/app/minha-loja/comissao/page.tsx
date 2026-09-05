@@ -6,7 +6,7 @@
  * Vendedora ve a comissao DELA — mes atual + historico ultimos 6 meses.
  * Auto-calcula no backend ao abrir.
  *
- * F4 da migracao 30/06: substitui o relatorio que antes era so no Wincred.
+ * F4 da migracao 30/06: substitui o relatorio que antes so existia no sistema antigo.
  */
 
 import { useEffect, useState } from 'react';

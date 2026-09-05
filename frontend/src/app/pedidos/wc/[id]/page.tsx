@@ -479,8 +479,8 @@ export default function PedidoDetailPage() {
     issueReasonLabel?: string | null;
     issueNote?: string | null;
     issueReportedAt?: string | null;
-    // Baixa no Gigasistemas — backend retorna debitApprovedAt + debitStatus derivado.
-    // 'applied' = baixa já dada no Giga (autoDebitOnShipped rodou OK)
+    // Baixa de estoque — backend retorna debitApprovedAt + debitStatus derivado.
+    // 'applied' = baixa já dada (autoDebitOnShipped rodou OK)
     // 'missing' = status=shipped mas sem baixa (falhou, cair em /retaguarda/baixas-log)
     // 'pending' = ainda não deveria ter baixa (status=new/separating/ready)
     debitApprovedAt?: string | null;
@@ -3646,7 +3646,7 @@ export default function PedidoDetailPage() {
                   </ul>
                 )}
 
-                {/* Caixa da juntada / rastreio / baixa no ERP — o que a linha
+                {/* Caixa da juntada / rastreio / baixa de estoque — o que a linha
                     roxa e o rodapé dos cards diziam, agora no mesmo lugar. */}
                 {r.caixaJuntada && (
                   <div className="mt-2 text-[11.5px] text-ink-soft">
@@ -3671,7 +3671,7 @@ export default function PedidoDetailPage() {
                 )}
                 {r.debitStatus === 'missing' && (
                   <div className="mt-1 text-[11.5px] font-semibold text-crit">
-                    Baixa no Giga falhou —{' '}
+                    Baixa de estoque falhou —{' '}
                     <Link href="/retaguarda/baixas-log" className="underline">
                       resolver no log
                     </Link>
@@ -4430,7 +4430,7 @@ export default function PedidoDetailPage() {
                     rel="noreferrer"
                     className="text-xs text-emerald-800 underline hover:text-emerald-900"
                   >
-                    🔍 Diagnosticar routing (ERP vs decisão salva)
+                    🔍 Diagnosticar routing (estoque de agora vs decisão salva)
                   </a>
                 </div>
               </div>
@@ -4918,7 +4918,7 @@ export default function PedidoDetailPage() {
                       Os items dessa loja serão movidos pra a loja que você escolher abaixo.
                       Outras lojas do pedido NÃO são afetadas. Status atual: <b>{swapTarget.fromStatus}</b>.
                       {['shipped', 'delivered'].includes(swapTarget.fromStatus) &&
-                        ' ⚠️ Loja já enviou — estoque Giga será estornado automaticamente.'}
+                        ' ⚠️ Loja já enviou — o estoque dela será estornado automaticamente.'}
                     </p>
                   </>
                 ) : (
@@ -5250,7 +5250,7 @@ export default function PedidoDetailPage() {
 
 // ── SKU DIAGNOSE MODAL ────────────────────────────────────────────────
 // Mostra pra um SKU específico:
-//   - Total real no Giga
+//   - Total real em estoque
 //   - Total comprometido em pick-orders ativos
 //   - Total líquido (real − committed)
 //   - Detalhamento por loja
@@ -5321,7 +5321,7 @@ function SkuDiagnoseModal({
           {loading && (
             <div className="text-center py-10">
               <Loader2 className="w-6 h-6 animate-spin inline-block text-violet-600" />
-              <div className="text-xs text-slate-500 mt-2">Consultando Giga + pick-orders ativos…</div>
+              <div className="text-xs text-slate-500 mt-2">Consultando estoque + pick-orders ativos…</div>
             </div>
           )}
 
@@ -5336,9 +5336,9 @@ function SkuDiagnoseModal({
               {/* KPIs no topo: real vs committed vs liquid */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-3 text-center">
-                  <div className="text-[10px] text-blue-700 uppercase tracking-widest font-bold">Real (Giga)</div>
+                  <div className="text-[10px] text-blue-700 uppercase tracking-widest font-bold">Saldo no sistema</div>
                   <div className="text-3xl font-black text-blue-700 tabular-nums mt-1">{data.totals.real}</div>
-                  <div className="text-[10px] text-blue-600 mt-0.5">peças físicas</div>
+                  <div className="text-[10px] text-blue-600 mt-0.5">peças no saldo</div>
                 </div>
                 <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-3 text-center">
                   <div className="text-[10px] text-amber-700 uppercase tracking-widest font-bold">Comprometido</div>
@@ -5369,7 +5369,7 @@ function SkuDiagnoseModal({
                 <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
                   <b>📌 Por que o sistema fala ruptura mesmo tendo {data.totals.real} un fisicamente:</b>
                   <br />
-                  As {data.totals.committed} un que existem no Giga já estão {' '}
+                  As {data.totals.committed} un que existem em estoque já estão {' '}
                   <b>reservadas em outros pick-orders ativos</b> (lista abaixo). A engine não pode prometer
                   a mesma peça pra 2 pedidos diferentes.
                 </div>
@@ -5507,7 +5507,7 @@ function SkuDiagnoseModal({
                   <ul className="list-disc ml-5 mt-1 space-y-0.5">
                     <li>Se um dos pick-orders acima é de pedido <b>cancelado</b> → cancelar o pick-order libera o estoque.</li>
                     <li>Se o pedido conflitante <b>já foi enviado fisicamente</b> mas o status no sistema ainda é separated → atualizar o status (shipped) libera.</li>
-                    <li>Se o estoque ERP está <b>divergente do físico real</b> → ajustar no Giga (zerar a peça que sumiu).</li>
+                    <li>Se o saldo do sistema está <b>divergente do físico real</b> → acertar em <b>Retaguarda › Editor de Produtos</b> (zerar a peça que sumiu).</li>
                     <li>Senão, este pedido vai aguardar. Aceitar a ruptura ou comprar peça nova.</li>
                   </ul>
                 </div>

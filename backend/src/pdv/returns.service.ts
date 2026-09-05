@@ -14,7 +14,7 @@ import { CashbackService } from '../cashback/cashback.service';
  *   - 'credito'  → estorna estoque + gera vale-troca com prazo (90d default)
  *                  cliente pode usar em outra venda futura
  *
- * Estoque sempre volta pro Giga via ErpService.increaseStock (mesma loja).
+ * Estoque sempre volta pro Flow via ErpService.increaseStock (mesma loja).
  *
  * Vale-troca tem código único (TROCA-XXXXX) que pode ser bipado no PDV em
  * qualquer venda futura — o ReturnsService.useCredit valida e marca como usado.
@@ -190,7 +190,7 @@ export class ReturnsService {
     // ── Vendas de TODA a rede, loja local em DESTAQUE (regra do dono) ──
     // O bipe traz as vendas da LOJA ATUAL em cima e as das OUTRAS lojas
     // embaixo (cada bloco da mais nova pra mais velha). homeStoreCode marca
-    // qual é a "casa" (sameStore=true). Sem Giga — só FlowOps.
+    // qual é a "casa" (sameStore=true). Tudo do Postgres do Flow.
 
     // VARIANTES: gera todas variacoes do SKU com/sem zeros a esquerda
     // (ex: '5210367', '0005210367', '00000005210367', ...). Sem isso, peca
@@ -429,7 +429,7 @@ export class ReturnsService {
   //
   // A cliente do site chegava na loja com a peça e o bipe não achava NADA:
   // venda online mora em Order/OrderItem, e o lookup só olhava PdvSale (e o
-  // fallback manual, o Giga). A loja mandava a cliente pro portal de trocas —
+  // fallback manual, o histórico da caixa). A loja mandava a cliente pro portal de trocas —
   // dias de reversa pra quem estava com a peça NA MÃO, no balcão.
   //
   // Agora o pedido online entra no MESMO fluxo do botão verde: o bipe acha,
@@ -595,7 +595,7 @@ export class ReturnsService {
    * Steps:
    *  1. Valida quantidade disponível por item
    *  2. Calcula valor total (proporcional ao item original)
-   *  3. Estorna estoque Giga (increaseStock) — se falhar, salva error e continua
+   *  3. Estorna estoque no Flow (increaseStock) — se falhar, salva error e continua
    *  4. Cria PdvReturn + PdvReturnItem
    *  5. Se modo=dinheiro → cria sangria automática no caixa atual
    *  6. Se modo=credito ou troca → gera código TROCA-XXXXX
@@ -714,7 +714,7 @@ export class ReturnsService {
       );
     }
 
-    // Tenta estornar estoque Giga (não bloqueia se falhar — registra erro)
+    // Tenta devolver a peça ao estoque (não bloqueia se falhar — registra erro)
     // PULA se for treinamento — não mexer em estoque real.
     const stockAttempts: Array<{ sku: string; ok: boolean; error?: string }> = [];
     if (isTraining) {
@@ -1471,7 +1471,7 @@ export class ReturnsService {
   // ADMIN — Diagnostico + retry de estorno de estoque em devolucoes
   //
   // Pra cada PdvReturnItem, stockReturnedAt indica se a peca voltou pro
-  // estoque Giga (increaseStock chamado com sucesso). stockError indica
+  // estoque da loja (increaseStock chamado com sucesso). stockError indica
   // erro caso tenha falhado. Estes endpoints listam o status e permitem
   // retry idempotente (so processa os com stockReturnedAt=null).
   // ═══════════════════════════════════════════════════════════════════════
@@ -1613,7 +1613,7 @@ export class ReturnsService {
     const where: any = {
       createdAt: { gte: since, lte: until },
       stockReturnedAt: null,
-      // TREINO: devolução de treinamento NUNCA empurra estoque pro Giga,
+      // TREINO: devolução de treinamento NUNCA mexe em estoque real,
       // nem via retry admin (regra ouro do training.util).
       return: { isTraining: false },
     };
@@ -1714,26 +1714,28 @@ export class ReturnsService {
   }
 
   /* ═════════════════════════════════════════════════════════════════════════
-     DEVOLUÇÃO MANUAL (Opção C — peça antiga vendida no Giga, sem cupom flowops)
+     DEVOLUÇÃO MANUAL (Opção C — peça sem cupom localizado no sistema)
 
      Fluxo:
        1. Vendedora bipa SKU em loja X
-       2. lookupManualReturnSku verifica histórico no Giga (loja X, 60 dias)
+       2. lookupManualReturnSku procura a peça no histórico da CAIXA daquela
+          loja (`giga_caixa_mov`, tabela nativa do Postgres, janela de 60 dias)
        3. Se peça foi vendida → frontend chama createManualReturn
-       4. Repõe estoque no Giga + gera vale-troca / dinheiro
+       4. Repõe estoque no Flow + gera vale-troca / dinheiro
 
      Diferenças do createReturn padrão:
        - SEM originalSaleId (NULL) — devolução órfã
-       - source = 'giga_manual'
+       - source = 'giga_manual' (valor GRAVADO — nome herdado, não mexer:
+         relatório e ficha filtram por ele)
        - manualSku = SKU bipado
-       - Preço vem do Giga (VENDAUN), não do item original
+       - Preço vem do histórico da caixa / cadastro, não do item original
        - Não emite NFC-e (registro interno)
      ═════════════════════════════════════════════════════════════════════════ */
 
   /**
    * Verifica se peça pode ser devolvida na loja atual:
    *   1. Busca SKU em pdvSale (flowops) — se achar, fluxo normal (não chega aqui)
-   *   2. Busca histórico no Giga (caixa) — loja específica, janela 60d
+   *   2. Busca no histórico da caixa daquela loja (Postgres), janela 60d
    *   3. Retorna produto + histórico OU mensagem de bloqueio
    */
   async lookupManualReturnSku(sku: string, storeCode: string, diasJanela = 60) {
@@ -1750,7 +1752,7 @@ export class ReturnsService {
       return {
         eligible: false,
         reason: 'sku_nao_cadastrado',
-        message: `SKU "${sku}" não cadastrado no Giga.`,
+        message: `Peça "${sku}" não está no cadastro de produtos.`,
       };
     }
     if (!result.found) {
@@ -1787,8 +1789,9 @@ export class ReturnsService {
   }
 
   /**
-   * Cria devolução manual SEM cupom flowops (peça vendida no Giga antigo).
-   * Estoque volta pro Giga da loja atual. Sem NFC-e (registro interno).
+   * Cria devolução manual SEM cupom localizado no sistema.
+   * A peça volta pro estoque da loja atual (Postgres do Flow).
+   * Sem NFC-e (registro interno).
    */
   async createManualReturn(input: {
     sku: string;
@@ -1824,11 +1827,12 @@ export class ReturnsService {
     const valorTotal = (elig as any).valorDevolucao || produto.preco || 0;
     if (valorTotal <= 0) {
       throw new BadRequestException(
-        `Peça ${produto.codigo} sem preço VENDAUN no Giga — admin precisa ajustar.`,
+        `Peça ${produto.codigo} está sem preço no cadastro — peça pra matriz ` +
+        `ajustar o preço no editor de produtos e refaça a devolução.`,
       );
     }
 
-    // 2) Repõe estoque no Giga (loja atual) — uma unidade
+    // 2) Repõe estoque na loja atual (Postgres do Flow) — uma unidade
     // PULA se treinamento — não mexer em estoque real.
     let estoqueOk = false;
     let estoqueErr: string | null = null;
@@ -1891,7 +1895,7 @@ export class ReturnsService {
         creditoValidade,
         userId: userId || null,
         userName: userName || null,
-        motivo: motivo || 'Sem cupom (Giga)',
+        motivo: motivo || 'Sem cupom',
         isTraining,
         items: {
           create: [

@@ -1,6 +1,11 @@
 # 📋 BRIEFING — Site Novo Lurd's Plus Size
 
-> **Próxima sessão**: Cola este arquivo (ou pede pra Claude ler `BRIEFING-LURDSPLUSSIZE.md`) e a construção continua do ponto certo.
+> ⚠️ **REGISTRO HISTÓRICO — escrito em 25/04/2026, NÃO é o plano vigente.** O site foi
+> construído e está no ar: mora em `ecommerce/` (Next.js 15, **sem Medusa.js**), com
+> catálogo, pedidos e clientes no mesmo Postgres do FlowOps. O WordPress/WooCommerce
+> antigo e o ERP Giga/Wincred citados aqui foram **desligados em 27/08/2026** — o
+> servidor não existe mais. Para o estado atual, leia o `CLAUDE.md` da raiz. O texto
+> abaixo fica como registro de como a decisão foi tomada; **não o siga como instrução.**
 
 ---
 

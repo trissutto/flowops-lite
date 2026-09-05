@@ -7,7 +7,7 @@
  * referência no ERP gigasistemas21 ou por não ter SKU cadastrado no WC.
  * Scan é read-only (nenhum PUT). Resulta em:
  *   - "sem SKU site"         → variação sem SKU cadastrado no WooCommerce
- *   - "não encontrado no ERP" → variação com SKU mas que não existe no Gigasistemas
+ *   - "não encontrado no catálogo" → variação com SKU que não existe no catálogo do Flow
  *
  * Dá pra filtrar por motivo, por busca textual (nome/SKU) e por categoria.
  * Exporta XLSX pra atacar em lote fora da aplicação.
@@ -328,7 +328,7 @@ export default function AuditoriaSkuPage() {
             Auditoria de SKU
           </h1>
           <p className="text-slate-600 text-sm mt-1">
-            Variações que foram <b>puladas</b> na sincronização com o Gigasistemas.
+            Variações que foram <b>puladas</b> na sincronização com o catálogo.
             Scan read-only (nenhuma alteração é feita no site).
           </p>
         </div>
@@ -449,7 +449,7 @@ export default function AuditoriaSkuPage() {
                 </h2>
                 <p className="text-xs text-amber-800 mt-1">
                   Identifica variações com SKU no formato <code className="bg-white px-1 rounded">12345678-1</code> (artefato do WooCommerce em importações)
-                  e remove o sufixo, batendo com o Gigasistemas.
+                  e remove o sufixo, batendo com o catálogo.
                 </p>
               </div>
               {!skuFix && !applyResult && (

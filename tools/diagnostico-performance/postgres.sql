@@ -49,7 +49,8 @@ FROM pg_statio_user_tables;
 -- ----------------------------------------------------------------------------
 -- [3] MAIORES TABELAS  →  onde está o peso / o que cresce sem controle.
 --     Olhar as append-only (master_audits, dm_messages, comments,
---     stock_movements) e as do espelho (giga_*, wincred_*).
+--     stock_movements) e as de prefixo herdado (giga_*, wincred_*) — que são
+--     tabelas NATIVAS do Flow, escritas pelo próprio sistema.
 -- ----------------------------------------------------------------------------
 \echo '=== [3] 25 maiores tabelas (dados + índices) ==='
 SELECT
@@ -63,9 +64,12 @@ ORDER BY pg_total_relation_size(relid) DESC
 LIMIT 25;
 
 -- ----------------------------------------------------------------------------
--- [4] BLOAT / DEAD TUPLES  →  o custo do espelho horário (delete-all + insert).
---     dead_pct alto em giga_*/wincred_* confirma que o rewrite de hora em hora
---     está inchando o banco e mantendo o autovacuum ocupado.
+-- [4] BLOAT / DEAD TUPLES  →  o custo da recarga horária que o PRÓPRIO Flow faz
+--     (delete-all + insert de giga_caixa_diario e de 35 dias de giga_caixa_mov,
+--     montadas a partir das vendas do sistema).
+--     dead_pct alto NESSAS DUAS confirma que o rewrite de hora em hora está
+--     inchando o banco e mantendo o autovacuum ocupado. Nas outras giga_*/
+--     wincred_* (congeladas, ninguém recarrega) dead_pct alto é outra coisa.
 -- ----------------------------------------------------------------------------
 \echo '=== [4] Dead tuples / autovacuum (top 20 por dead tuples) ==='
 SELECT
@@ -115,8 +119,10 @@ LIMIT 25;
 
 -- ----------------------------------------------------------------------------
 -- [7] QUERIES / TRANSAÇÕES LONGAS AGORA  →  algo preso?
---     Rodar de novo DURANTE o minuto do sync horário do Giga pra flagrar as
---     transações de 120-180s (giga-mirror) segurando conexão.
+--     Rodar de novo DURANTE o minuto da recarga horária do espelho de caixa
+--     (minuto 0): o serviço reescreve giga_caixa_diario inteira e 35 dias de
+--     giga_caixa_mov A PARTIR DAS VENDAS DO PRÓPRIO FLOW, numa transação só
+--     (timeout de até 120s). É ela que segura conexão.
 -- ----------------------------------------------------------------------------
 \echo '=== [7] Queries em andamento há mais de 2s ==='
 SELECT

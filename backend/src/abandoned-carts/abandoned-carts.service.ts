@@ -199,7 +199,7 @@ export class AbandonedCartsService {
       return {
         ok: false,
         error:
-          'FLOWOPS_WP_BASE/FLOWOPS_WP_KEY ausentes no .env do backend. Adicione as 2 variáveis e reinicie o backend.',
+          'Esta lista vinha do site antigo (WordPress), apagado em 27/08/2026 — não há mais de onde buscar. Use a aba de carrinhos do site novo.',
       };
     }
     const params = new URLSearchParams();

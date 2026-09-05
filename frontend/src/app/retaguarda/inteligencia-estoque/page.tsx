@@ -7,8 +7,7 @@ import { overlayClose } from '@/lib/overlayClose';
  * Dashboard de inteligência de estoque por loja em tempo real.
  *
  * Fontes:
- *   - Giga (estoque atual + venda do `caixa`)
- *   - Postgres (movimentação de remessas)
+ *   - Postgres do Flow: estoque atual, vendas da caixa e movimentação de remessas
  *
  * Camadas:
  *   1. Filtros: data inicio/fim + PLUS SIZE
@@ -153,7 +152,7 @@ function isoToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Botões de filtro por ano de cadastro da peça (data de entrada no Giga).
+// Botões de filtro por ano de cadastro da peça (data de entrada no sistema).
 // Cores hardcoded como classes literais — Tailwind purge não suporta `bg-${x}-600`.
 const YEAR_FILTER_OPTIONS = [
   { v: '',        label: 'Todas',  activeCls: 'bg-slate-700 text-white border border-slate-800',     idleCls: 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200' },
@@ -480,7 +479,7 @@ export default function InteligenciaEstoquePage() {
           )}
         </div>
 
-        {/* Filtro por ANO DE CADASTRO da peça (data de entrada no Giga) */}
+        {/* Filtro por ANO DE CADASTRO da peça (data de entrada no sistema) */}
         <div className="bg-white rounded-lg border p-3 flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mr-1">
             <Calendar className="w-3.5 h-3.5 text-violet-500" />
@@ -962,7 +961,7 @@ function DrilldownContent({ detail }: { detail: StoreDetail }) {
                 ))}
               </div>
             ) : (
-              <div className="text-xs text-slate-400 text-center py-4">Sem dados de vendedora<br /><span className="text-[10px]">(coluna não detectada na caixa do Giga)</span></div>
+              <div className="text-xs text-slate-400 text-center py-4">Sem dados de vendedora<br /><span className="text-[10px]">(a venda não trouxe o nome de quem atendeu)</span></div>
             )}
           </DrillCard>
 

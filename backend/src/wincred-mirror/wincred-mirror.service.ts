@@ -4,28 +4,31 @@ import { ErpService } from '../erp/erp.service';
 import { ProductNativeService } from '../product-native/product-native.service';
 
 /**
- * WincredMirrorService — espelha as 6 tabelas criticas do MySQL Wincred
- * no Postgres do Flowops. Estrategia:
- *   - FULL SYNC: TRUNCATE + INSERT em batches (usado na 1a carga ou recovery)
- *   - INCREMENTAL: por DATAALT > ultimoSync (so produtos tem DATAALT util)
+ * WincredMirrorService — MUSEU PARCIAL desde 09/2026.
  *
- * Tabelas espelhadas:
- *   produtos, estoque, grupos, subgrupos, fornecedores, codigos
+ * A classe nasceu pra IMPORTAR 6 tabelas de catálogo (produtos, estoque,
+ * grupos, subgrupos, fornecedores, codigos) do MySQL de um ERP externo pro
+ * Postgres do Flow. Esse ERP foi desligado em 27/08/2026: os métodos de
+ * importação continuam existindo, mas o pool nunca é criado, então eles
+ * respondem erro em vez de sumir da tela. Os crons de 10min/3h estão atrás de
+ * `pullGigaLigado()` e são no-op.
  *
- * Performance esperada (full sync):
- *   - produtos:     30-90s (50k+ linhas)
- *   - estoque:      60-180s (centenas de milhares de linhas)
- *   - grupos:       <100ms
- *   - subgrupos:    <100ms
- *   - fornecedores: <500ms
- *   - codigos:      <100ms
+ * QUEM ALIMENTA OS ESPELHOS HOJE: o próprio Flow. `wincred_produtos` é escrito
+ * pelo cadastro (`product-registration`) e pelo editor (`products-editor`);
+ * `wincred_estoque` é mantido pelo delta de cada movimento
+ * (`ErpService.mirrorStockApplyDelta`). Ninguém "repuxa" nada de lugar nenhum.
  *
- * SOMENTE LEITURA no Wincred. Toda escrita acontece no Postgres.
+ * O QUE AINDA VALE AQUI:
+ *   - `status()` — contagem e idade de cada tabela no Postgres (a coluna do
+ *     ERP antigo vem sempre vazia);
+ *   - o ÚLTIMO passo do `startSyncAllBackground` — `produtoNativo.syncIncremental()`,
+ *     que é INSERT..SELECT dentro do próprio Postgres e atualiza a tabela
+ *     nativa `product` que o bipe do PDV lê. É o único passo do "Sync
+ *     Completo" que faz alguma coisa, e roda em segundos.
  */
 @Injectable()
 export class WincredMirrorService {
   private readonly logger = new Logger(WincredMirrorService.name);
-  private readonly BATCH = 200;
   private readonly RETRY_MAX = 5;
 
   constructor(
@@ -144,7 +147,7 @@ export class WincredMirrorService {
 
   private async countMysql(table: string): Promise<number> {
     const pool: any = (this.erp as any).pool;
-    if (!pool) throw new Error('MySQL pool nao inicializado');
+    if (!pool) throw new Error('importacao encerrada: o sistema antigo foi desligado em 27/08/2026 — nao ha nada pra importar');
     // (02/07) Filtro PLUS_SIZE REMOVIDO — o espelho agora cobre o catálogo
     // INTEIRO. Motivo: bipe/busca/consulta leem do espelho e produtos
     // não-plus (gravatas, acessórios) caíam no fallback Giga em todo acesso.
@@ -284,7 +287,7 @@ export class WincredMirrorService {
   async syncProdutos(): Promise<SyncResult> {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
-    if (!pool) return { table: 'produtos', success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
+    if (!pool) return { table: 'produtos', success: false, processed: 0, durationMs: 0, error: 'importacao encerrada: o sistema antigo foi desligado em 27/08/2026 — nao ha nada pra importar' };
     if (!this.acquireLock('produtos')) {
       this.logger.warn('[produtos] sync já em andamento — pulando (trava anti-overlap)');
       return { table: 'produtos', success: false, processed: 0, durationMs: 0, error: 'sync de produtos já em andamento' };
@@ -398,101 +401,33 @@ export class WincredMirrorService {
   // ─────────────────────────────────────────────────────────────────────
 
   /**
-   * FULL do estoque com REPLACE ATÔMICO (14/07): lê o Wincred INTEIRO primeiro
-   * (sem tocar no Postgres) e troca tudo numa transação única — quem lê o
-   * espelho continua vendo o estoque antigo até o commit; deploy/crash no meio
-   * dá rollback e o espelho antigo fica INTACTO. Antes era TRUNCATE + inserts
-   * em lote: janela vazia de 1-3min toda hora, e rebuild morto pela metade.
-   * Mesmo padrão do GigaMirrorService.syncEstoque (mesma tabela, meses sem
-   * incidente). DELETE (não TRUNCATE) de propósito: TRUNCATE trava leitores
-   * até o commit; DELETE deixa lerem o snapshot antigo (MVCC).
+   * NÃO EXISTE MAIS IMPORTAÇÃO DE ESTOQUE DE FORA — a tabela `wincred_estoque`
+   * é do FLOW.
+   *
+   * Constituição 14/07 (dono): o Flow é a FONTE do estoque. Quem mantém a
+   * tabela em dia são os movimentos do próprio sistema — bipe da separação,
+   * venda do PDV, entrada de remessa, realinhamento, devolução. O nome
+   * `wincred_` é herança: a tabela nasceu como cópia de um ERP externo e
+   * continuou com o nome depois que virou a verdade.
+   *
+   * O que ficava aqui era um FULL que lia o ERP legado e carimbava o saldo
+   * DELE por cima. Vivia desligado por env desde 14/07 (quando o Flow virou a
+   * fonte); em 22/08 o botão manual deixou de furar a trava, e em 27/08/2026
+   * o servidor daquele ERP saiu do ar. Não há de onde puxar.
+   *
+   * O método continua existindo (o `syncAll` e o botão da tela listam
+   * "estoque" entre as tabelas) e responde a verdade em vez de sumir da lista.
+   * A mensagem começa com "Não se aplica" de propósito: a tela pinta a linha
+   * de verde pelo `success`, e um texto sem essa ressalva pareceria sync feito.
    */
-  async syncEstoque(force = false): Promise<SyncResult> {
-    // CONSTITUIÇÃO 14/07 (dono): FLOW é a FONTE do estoque e ninguém mais mexe
-    // em estoque no Wincred desktop. O full Giga→Flow fica DESLIGADO por
-    // padrão — só sobrescreveria a verdade do Flow na janela da fila do outbox.
-    //
-    // ⚠️ 22/08: o `force` do botão da tela NÃO fura mais a trava. Ele existia
-    // como "recuperação", mas puxar 283 mil linhas do Giga por cima do estoque
-    // do Flow não recupera nada — é a versão em massa do que devolveu uma peça
-    // vendida ao estoque de São José (BMM-100 VINHO 52, 19/08). Quem quiser
-    // mesmo precisa ligar a env, conscientemente, e desligar depois.
-    const gigaSyncOn = String(process.env.ESTOQUE_SYNC_GIGA ?? '').trim() === '1';
-    if (!gigaSyncOn) {
-      return {
-        table: 'estoque',
-        success: true,
-        processed: 0,
-        durationMs: 0,
-        error: force
-          ? 'desligado — o Flow é a fonte do estoque; o botão não fura mais a trava (só ESTOQUE_SYNC_GIGA=1 reativa)'
-          : 'desligado — Flow é a fonte (ESTOQUE_SYNC_GIGA=1 reativa)',
-      };
-    }
-    const t0 = Date.now();
-    const pool: any = (this.erp as any).pool;
-    if (!pool) return { table: 'estoque', success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
-    if (!this.acquireLock('estoque')) {
-      this.logger.warn('[estoque] sync já em andamento — pulando (trava anti-overlap)');
-      return { table: 'estoque', success: false, processed: 0, durationMs: 0, error: 'sync de estoque já em andamento' };
-    }
-
-    try {
-      const total = await this.countMysql('estoque');
-      this.logger.log(`[estoque] iniciando sync — ${total} linhas no Wincred (replace atômico)`);
-
-      // 1) LÊ TUDO do Wincred antes de tocar no Postgres.
-      const seen = new Set<string>();
-      const all: Array<{ codigo: string; loja: string; estoque: number | null }> = [];
-      let offset = 0;
-      while (offset < total + this.BATCH) {
-        const [rows] = await pool.query(
-          { sql: `SELECT CODIGO, ESTOQUE, LOJA FROM estoque ORDER BY CODIGO, LOJA LIMIT ? OFFSET ?`, timeout: 120_000 },
-          [this.BATCH, offset],
-        );
-        if (!(rows as any[]).length) break;
-        for (const r of rows as any[]) {
-          const c = this.normalizeCodigo(r.CODIGO);
-          const l = String(r.LOJA || '').trim();
-          if (!c || !l) continue;
-          const k = `${c}|${l}`;
-          if (seen.has(k)) continue;
-          seen.add(k);
-          all.push({ codigo: c, loja: l, estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null });
-        }
-        offset += this.BATCH;
-        if (offset % (this.BATCH * 20) === 0) {
-          this.logger.log(`[estoque] lendo Wincred ${all.length}/${total}`);
-          await this.sleep(50);
-        }
-      }
-      // Vazio = Wincred indisponível (sempre há estoque na rede) → NÃO zera o espelho.
-      if (!all.length) throw new Error('SELECT estoque veio vazio — espelho preservado');
-
-      // 2) REPLACE ATÔMICO no Postgres.
-      await this.prisma.$transaction(
-        async (tx) => {
-          await (tx as any).wincredEstoque.deleteMany({});
-          for (let i = 0; i < all.length; i += 5000) {
-            await (tx as any).wincredEstoque.createMany({
-              data: all.slice(i, i + 5000),
-              skipDuplicates: true,
-            });
-          }
-        },
-        { timeout: 300_000, maxWait: 30_000 },
-      );
-
-      const durationMs = Date.now() - t0;
-      this.logger.log(`[estoque] OK — ${all.length} linhas em ${durationMs}ms (replace atômico)`);
-      return { table: 'estoque', success: true, processed: all.length, durationMs };
-    } catch (e) {
-      const msg = (e as Error).message;
-      this.logger.error(`[estoque] FALHOU (espelho antigo preservado): ${msg}`);
-      return { table: 'estoque', success: false, processed: 0, durationMs: Date.now() - t0, error: msg };
-    } finally {
-      this.releaseLock('estoque');
-    }
+  async syncEstoque(_force = false): Promise<SyncResult> {
+    return {
+      table: 'estoque',
+      success: true,
+      processed: 0,
+      durationMs: 0,
+      error: 'Não se aplica — o estoque não é importado: o Flow é a fonte, e os movimentos do próprio sistema mantêm a tabela em dia. Se um saldo estiver errado, conte a peça e corrija no Flow; peça que sumiu vira registro em Peças extraviadas.',
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -561,7 +496,7 @@ export class WincredMirrorService {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
     if (!pool) {
-      this.logger.warn('[incremental] MySQL pool nao inicializado');
+      this.logger.warn('[incremental] pulado — importacao encerrada (sistema antigo desligado em 27/08/2026)');
       return { produtosAtualizados: 0, estoqueAtualizado: 0, durationMs: 0, janelaInicio: new Date() };
     }
 
@@ -598,11 +533,9 @@ export class WincredMirrorService {
       const list = rows as any[];
       this.logger.log(`[incremental] ${list.length} produtos modificados`);
 
-      const codigosModificados: string[] = [];
       for (const r of list) {
         const codigo = this.normalizeCodigo(r.CODIGO);
         if (!codigo) continue;
-        codigosModificados.push(codigo);
 
         const data = {
           grupo: r.GRUPO != null ? Number(r.GRUPO) : null,
@@ -657,106 +590,27 @@ export class WincredMirrorService {
         }
       }
 
-      // ── 2. Estoque dos produtos modificados (somente eles) ──
-      // TRAVA (14/07): se o FULL de estoque está rodando agora, pula esta parte
-      // — mexer nas mesmas linhas durante o replace atômico só cria conflito;
-      // o próprio full já traz o estoque fresco de tudo.
-      //
-      // TRAVA 2 (31/07): mesma constituição do syncEstoque acima — o FLOW é a
-      // fonte do estoque. Ninguém mais digita no Wincred desktop (confirmado
-      // pelo dono em 31/07), então o estoque do Giga só muda porque o outbox
-      // do Flow escreveu lá. Puxar de volta não traz informação nova: na
-      // janela da fila, troca o valor fresco do Flow pelo valor velho do Giga.
-      // É o mesmo estrago que o full foi desligado pra evitar — o incremental
-      // tinha ficado de fora da trava.
-      let estoqueAtualizado = 0;
-      const gigaSyncOn = String(process.env.ESTOQUE_SYNC_GIGA ?? '').trim() === '1';
-      const estoqueLivre = gigaSyncOn && this.acquireLock('estoque');
-      if (!gigaSyncOn) {
-        this.logger.log('[incremental] estoque Giga→Flow desligado — Flow é a fonte (ESTOQUE_SYNC_GIGA=1 reativa)');
-      } else if (!estoqueLivre) {
-        this.logger.warn('[incremental] full de estoque em andamento — parte de estoque pulada');
-      }
-      try {
-      if (estoqueLivre && codigosModificados.length > 0) {
-        // Wincred guarda CODIGO em estoque com formato variavel (padding zeros, etc).
-        // Vamos buscar pelos codigos normalizados — convertemos cada para varias formas.
-        // Mais simples: SELECT estoque WHERE codigo numerico IN (lista numerica).
-        // Como nao da pra fazer cast em WHERE com MySQL eficiente, fazemos batch IN
-        // com varias representacoes (sem padding + raw).
-        // Estrategia pragmatica: SELECT WHERE CODIGO IN (?,?,?...) tentando varias formas.
-
-        // Forma 1: codigo puro
-        const codigosLote = [...new Set(codigosModificados)];
-        // Chunks de 500 (placeholder limit MySQL)
-        for (let i = 0; i < codigosLote.length; i += 500) {
-          const chunk = codigosLote.slice(i, i + 500);
-          // Inclui ambas as formas: '5387373' e '0005387373' (padding 10)
-          const variants: string[] = [];
-          for (const c of chunk) {
-            variants.push(c);                       // forma normalizada
-            variants.push(c.padStart(10, '0'));     // padding 10 (formato wincred comum)
-            variants.push(c.padStart(14, '0'));     // padding 14 (varchar max)
-          }
-          const placeholders = variants.map(() => '?').join(',');
-          const [estRows] = await pool.query(
-            `SELECT CODIGO, ESTOQUE, LOJA FROM estoque WHERE CODIGO IN (${placeholders})`,
-            variants,
-          );
-
-          const seen = new Set<string>();
-          const dataEst = (estRows as any[])
-            .filter((r) => {
-              const c = this.normalizeCodigo(r.CODIGO);
-              const l = String(r.LOJA || '').trim();
-              if (!c || !l) return false;
-              const k = `${c}|${l}`;
-              if (seen.has(k)) return false;
-              seen.add(k);
-              return true;
-            })
-            .map((r) => ({
-              codigo: this.normalizeCodigo(r.CODIGO)!,
-              loja: String(r.LOJA).trim(),
-              estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null,
-            }));
-
-          // Delete + re-insert do lote numa TRANSAÇÃO (14/07): sem ela, um
-          // crash entre o DELETE e o createMany sumia com o estoque desses
-          // códigos até o próximo full.
-          await this.prisma.$transaction(async (tx) => {
-            await tx.$executeRawUnsafe(
-              `DELETE FROM wincred_estoque WHERE codigo = ANY($1::text[])`,
-              chunk,
-            );
-            if (dataEst.length) {
-              await (tx as any).wincredEstoque.createMany({
-                data: dataEst,
-                skipDuplicates: true,
-              });
-            }
-          });
-          estoqueAtualizado += dataEst.length;
-        }
-      }
-      } finally {
-        if (estoqueLivre) this.releaseLock('estoque');
-      }
+      // ── 2. Estoque: NÃO entra aqui ──
+      // O incremental cuida só do CADASTRO do produto. O estoque é do Flow
+      // (constituição 14/07) e quem o mantém em dia são os movimentos do
+      // próprio sistema; o trecho que relia o saldo de um ERP externo saiu
+      // junto com o `syncEstoque` acima.
+      const estoqueAtualizado = 0;
 
       await this.setSyncState('produtos', {
         lastDataAlt: maxDataAlt,
         rowCount: produtosAtualizados,
         status: 'OK',
       });
-      // Status honesto: com o pull do Giga desligado, gravar 'OK' faria a tela
-      // de status jurar que o estoque sincronizou — o mesmo "espelho congelado
-      // que não avisa" que já mordeu o financeiro. Quem lê tem que saber que
-      // aqui não vem nada do Giga por decisão, e que a fonte é o Flow.
+      // Status honesto: gravar 'OK' aqui faria a tela de status jurar que o
+      // estoque sincronizou — o mesmo "espelho congelado que não avisa" que já
+      // mordeu o financeiro. Quem lê tem que saber que este sync não mexe em
+      // estoque por decisão, e que a fonte é o Flow.
       await this.setSyncState('estoque', {
         lastDataAlt: maxDataAlt,
         rowCount: estoqueAtualizado,
-        status: gigaSyncOn ? 'OK' : 'OFF',
-        error: gigaSyncOn ? null : 'Giga→Flow desligado — o Flow é a fonte do estoque (ESTOQUE_SYNC_GIGA=1 reativa)',
+        status: 'OFF',
+        error: 'Não se aplica — o estoque não é importado: o Flow é a fonte, e os movimentos do próprio sistema mantêm a tabela em dia. Se um saldo estiver errado, conte a peça e corrija no Flow; peça que sumiu vira registro em Peças extraviadas.',
       });
 
       const durationMs = Date.now() - t0;
@@ -1455,7 +1309,7 @@ export class WincredMirrorService {
   ): Promise<SyncResult> {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
-    if (!pool) return { table: tableName, success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
+    if (!pool) return { table: tableName, success: false, processed: 0, durationMs: 0, error: 'importacao encerrada: o sistema antigo foi desligado em 27/08/2026 — nao ha nada pra importar' };
     try {
       // LÊ ANTES DE APAGAR (31/07). A ordem era inversa: apagava e só então
       // buscava no Giga. Com o Giga fora na hora do cron, o DELETE passava, o

@@ -6,13 +6,14 @@ import { startOfDayBRFromYmd } from '../lib/date-br';
 /**
  * FaturamentoService — agrega faturamento da rede toda.
  *
- * Fonte de verdade:
- *   - Lojas físicas: tabela `caixa` do Giga (MySQL)
- *   - Loja SITE: caixa Giga (parte legacy) + Order do flowops (status=completed)
+ * Fonte de verdade — TUDO no Postgres do Flow:
+ *   - Lojas físicas: `giga_caixa_mov` (tabela NATIVA, remontada de hora em
+ *     hora a partir das vendas do PRÓPRIO Flow; o prefixo é herança de nome)
+ *   - Loja SITE: a mesma caixa (parte histórica) + `Order` do Flow
  *
  * Comparação automática com mesmo período do ano anterior.
  *
- * Cache simples em memória (5 min) — evita bater 12x no Giga se vários
+ * Cache simples em memória (5 min) — evita repetir 12 consultas quando vários
  * admins abrirem a tela ao mesmo tempo.
  */
 @Injectable()
@@ -36,17 +37,17 @@ export class FaturamentoService {
    * FATURAMENTO EM TEMPO REAL (30/07) — a venda nasce no Flow, a tela tem que
    * ler do Flow.
    *
-   * Antes: 100% do espelho `giga_caixa_mov`, que sincroniza de HORA EM HORA.
+   * Antes: 100% da `giga_caixa_mov`, que é remontada de HORA EM HORA.
    * A caixa fechava a venda e o dono só via no faturamento até 1h depois.
    *
    * Agora é híbrido, e o total NÃO muda:
    *   PdvSale (Postgres)            → a venda do PDV, no instante em que fecha
-   *   caixa do Giga SEM 'flowops-'  → o que só existe lá (lançamento manual,
+   *   caixa SEM 'flowops-'          → o que só existe lá (lançamento manual,
    *                                   recebimento de crediário, loja fora do
    *                                   PDV). Esse pedaço mantém o atraso do
    *                                   espelho, mas é a minoria.
    *
-   * Sem risco de contar duas vezes: a réplica da venda do Flow no caixa é
+   * Sem risco de contar duas vezes: a linha da venda do Flow no caixa é
    * identificada por `obs_pedido = 'flowops-<id>'` e fica de fora.
    * Vale pra QUALQUER período: em 2025 não existia venda do Flow, então o
    * primeiro pedaço vem zero e o resultado é idêntico ao de antes.
@@ -79,7 +80,7 @@ export class FaturamentoService {
       // conferência que a operação usa.
       //
       // Consequência aceita pelo dono: a comparação com 2025 confronta réguas
-      // diferentes (o histórico do Giga não separa o vale do mesmo jeito).
+      // diferentes (o histórico antigo da caixa não separa o vale igual).
       this.prisma.$queryRawUnsafe<Array<any>>(
         `SELECT store_code AS "storeCode",
                 COUNT(*)::int                              AS cupons,
@@ -105,7 +106,7 @@ export class FaturamentoService {
         // finalized_at é TIMESTAMP → limites no fuso BR (ver brInstant).
         this.brInstant(dInicio), this.brInstant(dFimExclusive),
       ),
-      // Caixa do Giga SEM a réplica do Flow
+      // Histórico da caixa (giga_caixa_mov) SEM a réplica da venda do Flow
       this.prisma.$queryRawUnsafe<Array<any>>(
         `SELECT loja AS "storeCode",
                 COUNT(DISTINCT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero))::int AS cupons,
@@ -185,7 +186,9 @@ export class FaturamentoService {
   }
 
   /**
-   * Auditoria de paridade Wincred vs Flowops por loja+dia.
+   * Auditoria de paridade CAIXA vs PDV do Flow por loja+dia. Os dois lados
+   * são do Postgres hoje; as chaves `wincred*` do retorno são nome herdado
+   * (contrato com a tela) e não indicam banco externo.
    * Suporta migração 30/06 — detecta divergência > tolerância.
    * Foca nas 5 lojas migradas (INDAIATUBA, ITANHAEM, MOEMA, SOROCABA, SANTOS)
    * mas retorna TODAS pra dashboard completo.
@@ -194,7 +197,7 @@ export class FaturamentoService {
     const dInicio = this.parseDate(from, false);
     const dFimExclusive = this.parseDate(to, true);
 
-    // 1) Faturamento Wincred por loja
+    // 1) Faturamento pela CAIXA (giga_caixa_mov) por loja
     const wincred = await this.erp.getFaturamentoPorLoja(dInicio, dFimExclusive);
     const wincredMap = new Map<string, { qtd: number; valor: number }>();
     for (const w of wincred as any[]) {
@@ -246,7 +249,7 @@ export class FaturamentoService {
       const flowQtd = flowAgg._count?._all || 0;
       const flowValor = Number(flowAgg._sum?.total || 0);
 
-      // Procura no Wincred por code OR name
+      // Procura na caixa por code OR name
       const wKey = wincredMap.has(code) ? code : (wincredMap.has(name) ? name : code);
       const w = wincredMap.get(wKey) || { qtd: 0, valor: 0 };
 
@@ -259,7 +262,7 @@ export class FaturamentoService {
       // Status: ok se < 1%, alerta se < 5%, crítico se >= 5%
       let status: 'ok' | 'alerta' | 'critico' | 'sem_dado';
       if (!isMigrada && flowQtd === 0) {
-        status = 'sem_dado'; // loja ainda no Wincred — esperado
+        status = 'sem_dado'; // loja sem venda no PDV do Flow no período — esperado
       } else if (Math.abs(divergenciaPct) < 1) {
         status = 'ok';
       } else if (Math.abs(divergenciaPct) < 5) {
@@ -329,7 +332,7 @@ export class FaturamentoService {
     const storeCodeUpper = storeCode.toUpperCase();
 
     // Busca Store pelo code pra obter o NAME e ID — match flexível:
-    // - tabela Store usa codes do Wincred (ex: "04", "13")
+    // - tabela Store usa os codes herdados do ERP (ex: "04", "13")
     // - mas pdv_sales.store_code pode estar gravado como "INDAIATUBA" (nome) ou "04" (code)
     // - vendedoras antigas mexem em ambos os formatos
     const storeRecord = await (this.prisma as any).store.findUnique({
@@ -470,7 +473,7 @@ export class FaturamentoService {
      * outras três entram na mesma lista:
      *   PDV da loja SITE  venda online que a vendedora fecha no caixa
      *   pedidos do site   Order (WooCommerce + site novo)
-     *   caixa do Wincred  venda de WhatsApp lançada no ERP (espelho, não Giga vivo)
+     *   caixa (histórico) venda de WhatsApp lançada antes do corte
      *   live              carrinho pago do Live Commerce
      * Cada origem em try/catch: uma falhando não pode apagar a lista inteira.
      */
@@ -492,7 +495,7 @@ export class FaturamentoService {
         zumbisOcultas: zumbis.length,
         sourceWarning:
           `SITE = ${vendasPdv.length} venda(s) no PDV da loja · ${pedidos.length} pedido(s) do site · ` +
-          `${caixa.length} venda(s) do caixa Wincred (WhatsApp) · ${live.length} da live. ` +
+          `${caixa.length} venda(s) do histórico da caixa (WhatsApp) · ${live.length} da live. ` +
           `O valor de cada linha é o que a cliente PAGOU (com frete); o card soma só produtos, ` +
           `então a soma daqui fica um pouco acima dele.`,
         vendas: todas,
@@ -510,7 +513,7 @@ export class FaturamentoService {
       };
     }
 
-    // SEM VENDA NO PDV FLOW → completa com o ESPELHO da caixa do Wincred
+    // SEM VENDA NO PDV FLOW → completa com o HISTÓRICO da caixa
     // (giga_caixa_mov — as MESMAS linhas que o card SITE já lista). Até 03/09
     // isto chamava erp.getVendasCaixa (MySQL do Giga, morto desde 27/08): a
     // lista voltava vazia SEM AVISO e o gestor lia "loja sem venda" num
@@ -527,7 +530,7 @@ export class FaturamentoService {
         source: 'wincred_caixa',
         appliedPeriod: { from, to },
         sourceWarning:
-          'Vendas do caixa Wincred (espelho) — período anterior ao PDV do sistema. Estorno não disponível por aqui.',
+          'Vendas do histórico da caixa — período anterior ao PDV do sistema. Estorno não disponível por aqui.',
         vendas: caixaLinhas,
       };
     }
@@ -557,7 +560,7 @@ export class FaturamentoService {
       appliedPeriod: { from, to },
       zumbisOcultas: zumbis.length,
       sourceWarning: semCobertura
-        ? 'Período sem cobertura: começa antes do histórico espelhado do caixa Wincred. Vendas dessa época não estão no sistema.'
+        ? 'Período sem cobertura: começa antes do histórico da caixa que existe no sistema. Vendas dessa época não estão aqui.'
         : undefined,
       vendas: [],
     };
@@ -646,10 +649,11 @@ export class FaturamentoService {
   }
 
   /**
-   * Linhas do drill-down vindas do CAIXA do Wincred (espelho `giga_caixa_mov`,
-   * nunca o Giga ao vivo). Na loja SITE isso é a venda de WhatsApp, que a
-   * matriz continua lançando no ERP. Mesmos filtros do card: sem marcado, sem
-   * a réplica do Flow ('flowops-%'), cupom = obs_pedido ou o número.
+   * Linhas do drill-down vindas do HISTÓRICO DA CAIXA (`giga_caixa_mov`,
+   * tabela nativa do Postgres). Na loja SITE isso é a venda de WhatsApp que a
+   * matriz lançava no ERP ANTES do corte — ninguém digita mais lá. Mesmos
+   * filtros do card: sem marcado, sem a linha da venda do Flow ('flowops-%'),
+   * cupom = obs_pedido ou o número.
    */
   private async linhasCaixaDaLoja(lojaCode: string, dInicio: Date, dFimExclusive: Date) {
     // data_fec é DATE (sem hora) → limites crus, NÃO brInstant: com meia-noite
@@ -696,14 +700,16 @@ export class FaturamentoService {
       items: [
         {
           sku: '—',
-          descricao: `${Math.round(Number(r.pecas) || 0)} peça(s) — lançamento no Wincred`,
+          descricao: `${Math.round(Number(r.pecas) || 0)} peça(s) — lançamento antigo da caixa (fora do PDV)`,
           qty: Math.round(Number(r.pecas) || 0),
           precoUnit: 0,
           total: Number(r.total) || 0,
         },
       ],
       payments: [{ method: r.fpag || '—', valor: Number(r.total) || 0 }],
-      canEstornar: false, // lançamento do ERP: estorno é no Wincred
+      // Lançamento HISTÓRICO da caixa (não nasceu no PDV): não há venda do
+      // Flow pra estornar, e o sistema onde ele foi digitado não existe mais.
+      canEstornar: false,
     }));
   }
 

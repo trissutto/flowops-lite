@@ -22,7 +22,7 @@
  * custando venda, então não disputa a fila.
  *
  * A árvore é a do SITE — Blusas → Manga curta —, com nome que a cliente
- * entende. Não é o grupo fiscal do Giga.
+ * entende. Não é o grupo fiscal herdado do sistema antigo.
  *
  * ── OS ATALHOS (10/08/2026) ──
  *

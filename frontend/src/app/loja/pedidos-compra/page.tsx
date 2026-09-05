@@ -5,7 +5,7 @@
  *
  * Cada pedido tem header (fornecedor, NF, status, totais) + N items
  * (REF + COR + grade tamanhos). Quando mercadoria chega, vendedora confere
- * e o sistema auto-cadastra os SKUs no Wincred com EAN-13 gerado.
+ * e o sistema auto-cadastra os SKUs no catálogo com EAN-13 gerado.
  */
 
 import { useCallback, useEffect, useState } from 'react';

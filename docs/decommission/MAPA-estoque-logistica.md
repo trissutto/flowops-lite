@@ -1,5 +1,7 @@
 # MAPA DE DEPENDÊNCIAS DO GIGA — domínio ESTOQUE + LOGÍSTICA
 
+> **REGISTRO HISTORICO (censo de 31/07/2026) — nao descreve o codigo de hoje.** As dependencias listadas foram migradas pro Postgres ou removidas; o ERP foi DESLIGADO em 27/08/2026. Estado atual: `CLAUDE.md` na raiz.
+
 Levantamento (31/07/2026). Escopo: `src/realignment/`, `src/stock/`, `src/stock-mirror/`,
 `src/stock-conferidor/`, `src/pick-orders/`, `src/routing/`, `src/trocas/`, `src/wc-returns/`.
 Nada foi alterado — só leitura. Todas as linhas foram conferidas no código.
@@ -141,7 +143,7 @@ Nada foi alterado — só leitura. Todas as linhas foram conferidas no código.
 
 **Sobre `Stock` (nativa) vs espelhos.** O `Stock` do schema tem `syncedAt` e é escrito **exclusivamente** pelo `StockMirrorService`. A verdade operacional do estoque (PDV, bipe, live, site, conferidor) mora em `wincred_estoque`/`giga_estoque`. Ou seja: a divergência por `syncedAt` não afeta o desempate de estoque de hoje — o `stock-mirror` está desconectado do fluxo.
 
-**Sobre o modo sombra.** `findCodigoByRefCorTam` (`erp.service.ts:6813`) e `batchFindCodigosByRefCorTam` (`:7002`) são as **únicas** duas plugadas no `SombraService`: com `GIGA_SOMBRA=1` comparam, com `GIGA_LEITURA_FLOW=1` o Postgres responde (com recuo pro Giga em vazio/erro). `resolveSkuInfo`, `getProductPricesBySkus` e `getStockByRefCorTamInStore` **existem** em `sombra.service.ts` (linhas 406, 455, 489) mas **não têm hook no `ErpService`** — hoje são código morto. Ligar esses três hooks é o passo de menor custo e maior alcance do domínio: cobre 5 call-sites, 3 deles no caminho crítico da triagem/recebimento.
+**Sobre o modo sombra.** ⚠️ **Corrigido em 09/2026.** O texto original dizia que `resolveSkuInfo`, `getProductPricesBySkus` e `getStockByRefCorTamInStore` "não têm hook no `ErpService`" e eram código morto — **falso hoje**: os cinco métodos do `SombraService` têm hook e são o caminho que RESPONDE. Também não existe mais modo comparação: `GIGA_SOMBRA` e o placar foram removidos. Sobrou só `GIGA_LEITURA_FLOW=1`, **obrigatória em produção** — e ela não tem recuo nenhum, porque o caminho legado devolve vazio SEM erro (não há banco atrás).
 
 **Sobre `getPdvProductInfo` em `shipment.service.ts:271`.** Os outros 10 call-sites do sistema (PDV, live-pdv, marcados, nfe-transfer, pick-orders) chamam `catalog.getPdvProductInfo` (espelho primeiro, Giga só no miss). O realinhamento chama `erp.getPdvProductInfo` direto. Trocar por `catalog.` é uma linha e tira a triagem do caminho crítico do Giga — mas muda o comportamento em produto recém-cadastrado (latência do espelho), então precisa do mesmo cuidado do checklist "3 causas de sumiu".
 

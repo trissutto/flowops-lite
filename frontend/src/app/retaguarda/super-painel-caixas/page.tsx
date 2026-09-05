@@ -649,9 +649,9 @@ export default function SuperPainelCaixas() {
               })()}
             </div>
 
-            {/* DINHEIRO EM CAIXA por loja — réplica da tela "Dinheiro em
-                Caixa (Todas as Lojas)" do Wincred que o dono pediu (02/07):
-                quanto cada loja tem NA GAVETA agora/naquele dia. */}
+            {/* DINHEIRO EM CAIXA por loja — a tela "Dinheiro em Caixa (Todas
+                as Lojas)" que o dono pediu (02/07): quanto cada loja tem NA
+                GAVETA agora/naquele dia. */}
             <DinheiroEmCaixaTable lojas={data.lojas} />
 
             {/* Seleção da loja — uma por vez, card em largura total */}
@@ -762,7 +762,7 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
 }
 
 /**
- * DINHEIRO EM CAIXA (todas as lojas) — réplica da tela homônima do Wincred.
+ * DINHEIRO EM CAIXA (todas as lojas).
  * Uma linha por loja: quanto tem NA GAVETA = fundo + vendas em dinheiro +
  * crediário recebido em dinheiro + suprimentos − sangrias. Tudo calculado
  * do payload que o painel já carrega — zero request extra.
@@ -1249,7 +1249,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
               <span className="font-bold">💵 Fundo do caixa (abertura)</span>
               <span className="font-mono tabular-nums font-bold">{brl(loja.fundoTroco)}</span>
             </div>
-            {/* Dinheiro esperado fim de dia — pra bater caixa físico contra Wincred.
+            {/* Dinheiro esperado fim de dia — pra bater o caixa físico contra o sistema.
                 Esse valor é o que deveria estar no caixa ao fechar (vira fundo do dia seguinte). */}
             {!loja.aberta && t.dinheiroEsperado !== undefined && (
               <div className="flex justify-between text-[11px] text-emerald-800 bg-emerald-50 rounded px-1.5 py-1">
@@ -1326,7 +1326,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                     }
                   }}
                   className="w-full flex justify-center items-center gap-1 text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded px-1.5 py-1.5 transition"
-                  title="Marca esse caixa como conferido (bate valores contra Wincred)"
+                  title="Marca esse caixa como conferido (bate os valores contra o dinheiro da gaveta)"
                 >
                   ✓ CONFERIR CAIXA
                 </button>
@@ -1868,9 +1868,12 @@ function EditBandeiraModal({
         body: JSON.stringify({ bandeira: nova, reason: reason || undefined }),
       });
       if (r?.ok) {
-        const wOk = r.wincred?.ok;
-        if (!wOk) {
-          alert(`Atualizado no flowops, mas Wincred falhou: ${r.wincred?.error || 'sem detalhes'}.\nA mudança aparece no painel mas pode precisar de ajuste manual no Giga.`);
+        // O campo `wincred` é resquício do carimbo num sistema antigo,
+        // desligado em 27/08/2026 — hoje ele nunca reporta falha real. O
+        // aviso ficou só pra confirmar que não há um segundo lugar pra
+        // ajustar; nunca deve mandar consertar nada em outro sistema.
+        if (!r.wincred?.ok) {
+          alert('Bandeira trocada. O caixa e os relatórios já mostram a bandeira nova — não precisa fazer mais nada.');
         }
         onSaved();
       } else {

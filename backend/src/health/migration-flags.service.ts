@@ -58,37 +58,59 @@ const FLAGS: Flag[] = [
   {
     nome: 'PDV_MIRROR_READS',
     ligada: (v) => String(v ?? '').trim() !== '0',
-    efeito: 'bipe e busca do PDV leem o espelho (fallback Giga no miss)',
+    // Não existe mais "fallback": com `0` a busca do crediário e a Consulta
+    // caem num caminho SEM banco atrás, que devolve vazio sem lançar.
+    efeito: 'busca do crediário e Consulta de loja leem o espelho Postgres (com 0 devolvem vazio calado)',
+    sensivel: true,
   },
 
   // ── Escritas: não fazem sumir da tela, mudam POR ONDE grava ──
   {
     nome: 'PRODUCT_NATIVE_WRITES',
-    // default ON — casa com o products-editor (que já era default-ON antes
-    // desta onda; o painel dizia o contrário desde então).
+    // default ON desde 03/09/2026 (Onda 1). ANTES dela o products-editor
+    // lia `?? ''` === '1' — era default OFF de verdade, e este painel
+    // estava certo em dizer isso.
     ligada: (v) => String(v ?? '1').trim() !== '0',
-    efeito: 'edição de produto grava na tabela nativa (a réplica pro Giga é descartada)',
+    efeito: 'edição de produto grava na tabela nativa (com 0 toda edição vira 500)',
   },
   {
     nome: 'PDV_ERP_OUTBOX',
     ligada: (v) => String(v ?? '').trim() !== '0',
-    efeito: 'venda finaliza no Postgres e replica no Giga por fila',
+    efeito: 'venda enfileira job no erp_outbox — é por ele que a BAIXA DE ESTOQUE roda, com retry',
   },
   {
     nome: 'CREDIARIO_ERP_OUTBOX',
     // default ON desde 03/09/2026 — casa com crediarioOutboxEnabled.
     ligada: (v) => String(v ?? '1') === '1',
-    efeito: 'baixa/estorno do crediário replicam no Giga por fila',
+    efeito: 'baixa/estorno do crediário passam pela fila (com 0 a baixa espera um servidor que não responde)',
   },
   {
     nome: 'ERP_STOCK_WRITES_ASYNC',
     ligada: (v) => String(v ?? '1') !== '0',
-    efeito: 'baixa de estoque no Giga vai por fila',
+    efeito: 'escritas secundárias de estoque vão por fila (a aplicação no Postgres é a mesma)',
   },
   {
     nome: 'PO_RECEIVE_ERP_OUTBOX',
     ligada: (v) => String(v ?? '1') !== '0',
-    efeito: 'recebimento de pedido de compra replica no Giga por fila',
+    efeito: 'recebimento de pedido de compra vai por fila (a aplicação no Postgres é a mesma)',
+  },
+
+  // ── Portas da BAIXA DE ESTOQUE ────────────────────────────────────────
+  // Estas duas não faziam parte do painel e são as que mais doem quando
+  // ficam off: o bipe da separação registra a peça e o estoque NÃO anda.
+  // A única pista sem isto aqui era `debitSkippedReason` na linha do tempo
+  // do pedido — pista que ninguém procura antes de saber que existe.
+  {
+    nome: 'ERP_WRITE_ENABLED',
+    // Mesma expressão do getter isWriteEnabled do ErpService.
+    ligada: (v) => ['true', '1', 'yes'].includes(String(v ?? '').trim().toLowerCase()),
+    efeito: 'bipe da separação, approveDebit e a baixa da live tiram a peça do estoque',
+    sensivel: true,
+  },
+  {
+    nome: 'PICK_SCAN_DEBIT',
+    ligada: (v) => String(v ?? '1').trim() !== '0',
+    efeito: 'o bipe da separação baixa estoque na hora (com 0 só no finish-separation)',
   },
 
   // ── Crons dos espelhos: sem eles o espelho envelhece calado ──
@@ -96,11 +118,6 @@ const FLAGS: Flag[] = [
     nome: 'WINCRED_MIRROR_CRON_ENABLED',
     ligada: (v) => String(v ?? '').trim() === '1',
     efeito: 'crons dos espelhos rodam (OBRIGATÓRIA em produção)',
-  },
-  {
-    nome: 'ESTOQUE_SYNC_GIGA',
-    ligada: (v) => String(v ?? '').trim() === '1',
-    efeito: 'sync de estoque com o Giga',
   },
 ];
 
@@ -117,8 +134,11 @@ export class MigrationFlagsService implements OnApplicationBootstrap {
         definida: bruto !== undefined,
         valor: bruto ?? null,
         ligada: f.ligada(bruto),
-        // Ligada SEM a variável existir = ninguém decidiu isso. Foi o que
-        // deixou MARCADOS_NATIVE_READS ativo em produção sem querer.
+        // Ligada SEM a variável existir. Nasceu como alarme (foi assim que
+        // MARCADOS_NATIVE_READS ficou ativo em produção sem ninguém decidir).
+        // Depois da inversão de defaults de 03/09 isto é ESPERADO nas cinco
+        // migradas — lá o default LIGADO é a decisão, e o alçapão seria o
+        // contrário. Continua valendo como aviso pras demais.
         ligadaPorOmissao: bruto === undefined && f.ligada(bruto),
         sensivel: !!f.sensivel,
         efeito: f.efeito,
@@ -144,21 +164,29 @@ export class MigrationFlagsService implements OnApplicationBootstrap {
     }
 
     if (omissao.length) {
-      this.logger.warn(
-        `${omissao.length} flag(s) LIGADAS sem a variável existir no ambiente: ` +
-        `${omissao.map((f) => f.nome).join(', ')}. Migração de leitura tem que ser decisão, não default.`,
+      this.logger.log(
+        `${omissao.length} flag(s) valendo pelo DEFAULT do código (variável não existe no ambiente): ` +
+        `${omissao.map((f) => f.nome).join(', ')}. Nas leituras migradas isso é o esperado desde 03/09 ` +
+        '— o default LIGADO é a decisão; o alçapão seria o contrário.',
       );
     }
     if (sensiveisOn.length) {
-      this.logger.warn(
-        `leitura migrada ATIVA em: ${sensiveisOn.map((f) => f.nome).join(', ')}. ` +
-        'Se algum dado "sumir" da tela, comece desligando estas.',
+      this.logger.log(
+        `leitura do Postgres ATIVA em: ${sensiveisOn.map((f) => f.nome).join(', ')}. ` +
+        'É o caminho certo — não desligue pra "testar": não há segunda fonte atrás.',
       );
     }
     if (!flags.find((f) => f.nome === 'WINCRED_MIRROR_CRON_ENABLED')?.ligada) {
       this.logger.warn(
         'WINCRED_MIRROR_CRON_ENABLED desligada — os espelhos NÃO estão atualizando. ' +
         'Qualquer leitura migrada está servindo dado velho.',
+      );
+    }
+    if (!flags.find((f) => f.nome === 'ERP_WRITE_ENABLED')?.ligada) {
+      this.logger.error(
+        'ERP_WRITE_ENABLED desligada — o bipe da separação REGISTRA a peça e NÃO baixa estoque ' +
+        '(fica gravado como debitSkippedReason="shadow" na linha do tempo do pedido). ' +
+        'Tem que ficar true.',
       );
     }
   }

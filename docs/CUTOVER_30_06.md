@@ -1,5 +1,7 @@
 # Cut-over Wincred → Flowops — 30/06/2026
 
+> **REGISTRO HISTORICO (plano de 30/06/2026) — nao e instrucao vigente.** O cut-over aconteceu: o ERP Giga/Wincred foi DESLIGADO em 27/08/2026 e o servidor nao existe mais. Estado atual: `CLAUDE.md` na raiz.
+
 Plano operacional pra desligar o Wincred/Giga e usar **Flowops como source-of-truth** das 15 lojas Lurd's.
 
 ---

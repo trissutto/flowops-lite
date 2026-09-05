@@ -4,9 +4,9 @@ import { overlayClose } from '@/lib/overlayClose';
 /**
  * /retaguarda/crediario — Cobrança de parcelas vencidas (loja 01 default).
  *
- * Conecta direto na tabela `movimento` do MySQL Gigasistemas.
+ * Lê a tabela nativa `crediario_parcelas` no Postgres do Flow.
  *
- *   Filtro PAGO=N — confirmado pelo schema do Giga local
+ *   Só parcelas em aberto — pago/baixado sai da fila
  *   ORDER BY VENCIMENTO ASC — fila de cobrança real
  *
  * 2 modos de visualização:
@@ -77,7 +77,7 @@ interface GroupResp {
 }
 
 // O DiagnoseResp saiu em 09/26 junto com GET /crediarios/diagnose: ele lia o
-// schema da tabela `movimento` do Giga, e o MySQL foi desligado em 27/08/2026.
+// schema da tabela do ERP antigo, desligado em 27/08/2026.
 
 interface CampanhaItem {
   codCliente: string;

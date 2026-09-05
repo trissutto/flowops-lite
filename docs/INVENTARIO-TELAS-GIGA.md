@@ -1,5 +1,7 @@
 # Inventário — telas que tocam o Giga
 
+> **REGISTRO HISTORICO (31/07/2026) — inventario ENCERRADO, nao ha o que decidir aqui.** Todas as telas ja leem do Postgres; o ERP foi DESLIGADO em 27/08/2026. Estado atual: `CLAUDE.md` na raiz.
+
 Levantado em 31/07/2026 a partir do código (não de suposição): todas as chamadas
 `this.erp.*` do backend, agrupadas por módulo, cruzadas com os 20 espelhos que
 já existem no Postgres do Flow.

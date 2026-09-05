@@ -12,8 +12,8 @@ import { overlayClose } from '@/lib/overlayClose';
  *   → pode revisar 1 por 1 OU selecionar vários e dar baixa em massa
  *
  * MODO dinâmico — controlado pelo backend (env var ERP_WRITE_ENABLED):
- *   SHADOW → só loga intenção em integration_logs (NÃO toca no Gigasistemas)
- *   LIVE   → UPDATE estoque -1 no Gigasistemas dentro de transação ACID
+ *   SHADOW → só loga intenção em integration_logs (NÃO mexe no estoque)
+ *   LIVE   → tira 1 do saldo da loja no Flow (Postgres), em transação
  *
  * Frontend pergunta `/pick-orders/erp-mode` no load e ajusta banner/botões/modal.
  */
@@ -266,8 +266,8 @@ export default function BaixaEstoquePage() {
           <div className="flex gap-3">
             <Zap className="text-emerald-600 flex-shrink-0 mt-0.5" size={22} />
             <div className="text-sm text-emerald-900">
-              <strong>Modo LIVE ativo.</strong> Ao aprovar, o sistema baixa o estoque
-              <strong> direto no Gigasistemas</strong> (UPDATE estoque -1 por SKU).
+              <strong>Modo LIVE ativo.</strong> Ao aprovar, o sistema
+              <strong> tira 1 peça do saldo da loja</strong> pra cada SKU.
               <strong> Não passe esses pedidos no PDV SITE</strong> — vai dar baixa duplicada.
               Cada baixa é gravada em log de auditoria com estoque antes/depois.
             </div>
@@ -279,7 +279,7 @@ export default function BaixaEstoquePage() {
             <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={22} />
             <div className="text-sm text-amber-900">
               <strong>Modo Shadow ativo.</strong> Ao aprovar, o sistema apenas registra a intenção
-              de baixa em log de auditoria — <strong>não</strong> baixa no Gigasistemas ainda.
+              de baixa em log de auditoria — <strong>não</strong> mexe no estoque ainda.
               Continue fazendo a venda no PDV SITE como de costume. Quando a comparação
               (log × PDV) estiver consistente, ativamos a baixa automática.
             </div>
@@ -581,16 +581,16 @@ export default function BaixaEstoquePage() {
 
               {action === 'approve' && writeEnabled === true && (
                 <div className="bg-emerald-50 border border-emerald-300 rounded p-3 text-sm text-emerald-900">
-                  <strong>Modo LIVE:</strong> ao confirmar, o sistema vai aplicar
-                  <strong> UPDATE estoque -1</strong> direto no Gigasistemas, dentro de
-                  uma transação ACID. Se algum SKU ficar com estoque negativo, a operação
+                  <strong>Modo LIVE:</strong> ao confirmar, o sistema vai
+                  <strong> tirar 1 peça do saldo da loja</strong> por SKU, dentro de
+                  uma transação. Se algum SKU ficar com estoque negativo, a operação
                   inteira é abortada (rollback). <strong>Não passe esse pedido no PDV SITE.</strong>
                 </div>
               )}
               {action === 'approve' && writeEnabled === false && (
                 <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
                   <strong>Shadow mode:</strong> clicar em confirmar só registra a intenção
-                  em log e libera a loja pra postar. Baixa no Gigasistemas continua manual
+                  em log e libera a loja pra postar. A baixa do estoque continua manual
                   pelo PDV SITE.
                 </div>
               )}
@@ -618,7 +618,7 @@ export default function BaixaEstoquePage() {
                   ? 'Processando…'
                   : action === 'approve'
                   ? writeEnabled
-                    ? 'Confirmar baixa REAL no Giga'
+                    ? 'Confirmar baixa REAL de estoque'
                     : 'Confirmar baixa (Shadow)'
                   : 'Confirmar rejeição'}
               </button>
@@ -659,8 +659,8 @@ export default function BaixaEstoquePage() {
                 <>
                   {writeEnabled === true ? (
                     <div className="bg-emerald-50 border border-emerald-300 rounded p-3 text-sm text-emerald-900">
-                      <strong>Modo LIVE:</strong> vai aplicar <strong>UPDATE estoque -1</strong>{' '}
-                      direto no Gigasistemas pra cada SKU dos{' '}
+                      <strong>Modo LIVE:</strong> vai <strong>tirar 1 peça do saldo da loja</strong>{' '}
+                      pra cada SKU dos{' '}
                       <strong>{selectedCount}</strong> pedidos. Cada pedido roda em transação
                       própria (se um falhar, os outros seguem). <strong>Não passe esses pedidos
                       no PDV SITE</strong> — vai dar baixa duplicada.
@@ -669,7 +669,7 @@ export default function BaixaEstoquePage() {
                     <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
                       <strong>Shadow mode:</strong> vai gravar a intenção de baixa dos{' '}
                       <strong>{selectedCount}</strong> pedidos em log e liberar as lojas pra postar.{' '}
-                      <strong>Nenhum estoque é baixado no Gigasistemas.</strong>
+                      <strong>Nenhum estoque é baixado.</strong>
                     </div>
                   )}
 
@@ -785,7 +785,7 @@ export default function BaixaEstoquePage() {
                     {bulkSubmitting
                       ? `Aprovando ${selectedCount}…`
                       : writeEnabled
-                      ? `Baixar REAL ${selectedCount} pedidos no Giga`
+                      ? `Baixar REAL o estoque de ${selectedCount} pedidos`
                       : `Confirmar baixa de ${selectedCount} pedidos (Shadow)`}
                   </button>
                 </>

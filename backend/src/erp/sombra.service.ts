@@ -1,196 +1,48 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
- * MODO SOMBRA — valida uma consulta nova (Postgres) contra a atual (Giga) SEM
- * trocar o que o sistema responde.
+ * CONSULTAS DO CATÁLOGO E DO ESTOQUE NO POSTGRES.
  *
- * É a Fase 1 do PLANO-SAIDA-GIGA-NATIVO.md feita do jeito seguro. O problema
- * de migrar leitura não é escrever a consulta nova — é ter CERTEZA de que ela
- * devolve a mesma coisa em todos os casos de canto que 20 anos de dado
- * produziram. Teste artificial não cobre isso; tráfego real cobre.
+ * O nome "sombra" é herança: a classe nasceu como a Fase 1 da saída do ERP
+ * legado — rodava a consulta nova em PARALELO com a antiga, sem trocar o que
+ * o sistema respondia, e comparava as duas pra provar a tradução em tráfego
+ * real antes de virar a chave.
  *
- * COMO FUNCIONA:
- *   1. A consulta do Giga roda normalmente e é ELA quem responde. Sempre.
- *   2. A consulta nova roda em paralelo, sem bloquear.
- *   3. As duas respostas são comparadas; divergência vira log e contador.
- *   4. Depois de dias sem divergência, aí sim a flag vira e o Postgres passa
- *      a responder.
+ * Essa parte (o placar, o `comparar`, o endpoint `/erp/sombra` e as envs
+ * GIGA_SOMBRA / GIGA_SOMBRA_VERBOSE) foi REMOVIDA em 09/2026: não há mais
+ * segundo banco com que comparar. O que ficou — e é o que importa hoje — são
+ * as CONSULTAS em si, sobre `wincred_produtos` / `wincred_estoque`, os
+ * espelhos curados no Postgres do Flow.
  *
- * GARANTIAS:
- *   - a consulta nova NUNCA muda a resposta enquanto estiver em sombra;
- *   - erro na consulta nova é engolido (só conta) — não pode derrubar a tela;
- *   - a comparação não espera pela consulta nova: se ela demorar, o usuário
- *     não sente. `void` de propósito.
- *
- * FLAGS:
- *   GIGA_SOMBRA=1            liga a comparação (default: desligada)
- *   GIGA_SOMBRA_VERBOSE=1    loga TODA comparação, não só divergência
- *
- * Ver também `ERP_WRITE_ENABLED`, que faz o mesmo pro lado da escrita — o
- * padrão de sombra já é conhecido nesta casa.
+ * Hoje elas são A FONTE, não um segundo parecer. O antigo caminho do ERP
+ * NÃO é mais recuo nenhum: sem banco atrás ele devolve vazio SEM lançar
+ * (`if (!this.pool) return null/[]`), então o `catch` de quem chama nunca
+ * dispara. Quem mantém o bipe, a entrada de remessa e a cobrança de pé é só
+ * o Postgres.
  */
-
-interface Contador {
-  iguais: number;
-  /**
-   * Mesma resposta, grafia diferente: o espelho guarda `codigo` SEM zeros à
-   * esquerda (`normalizeCodigo`, decisão do projeto) e o Giga devolve com o
-   * padding — '0000269439917' e '269439917' são o MESMO produto.
-   *
-   * Conta separado de propósito. Se entrasse como divergência, o ruído de
-   * formatação afogaria a divergência de verdade; se entrasse como igual,
-   * esconderia que o formato muda — e quem consome o retorno precisa saber
-   * disso ANTES da virada.
-   */
-  formato: number;
-  diferentes: number;
-  erros: number;
-  ultimaDivergencia?: string;
-  ultimaEm?: string;
-}
 
 @Injectable()
 export class SombraService {
-  private readonly logger = new Logger('GigaSombra');
-
-  /** Placar por método comparado — lido pelo endpoint de acompanhamento. */
-  private readonly placar = new Map<string, Contador>();
-
   constructor(private readonly prisma: PrismaService) {}
 
-  get ligado(): boolean {
-    return String(process.env.GIGA_SOMBRA ?? '') === '1';
-  }
-
   /**
-   * `GIGA_LEITURA_FLOW=1` — o Postgres passa a RESPONDER, não só comparar.
+   * `GIGA_LEITURA_FLOW=1` — o Postgres responde de PRIMEIRA.
    *
-   * ⚠️ ISTO MUDA O QUE O SISTEMA DEVOLVE. Só ligue depois de olhar o placar
-   * da sombra em /retaguarda/giga-sombra.
+   * 🚨 OBRIGATÓRIA EM PRODUÇÃO. Não é mais "modo novo em avaliação": é o
+   * único caminho com banco atrás. Apagar a env NÃO "volta na hora" —
+   * manda o bipe do PDV, a entrada de remessa (batch), o preço do
+   * realinhamento e o pré-check de saldo pro caminho legado, que responde
+   * vazio SEM erro. A loja lê "peça não existe", R$ 0,00 e estoque zero, e
+   * ninguém é avisado. Deixe `=1`.
    *
-   * O recuo pro Giga continua valendo (resposta vazia ou erro), então
-   * tradução incompleta não deixa a loja sem resposta. O que o recuo NÃO
-   * cobre é o Postgres achar OUTRO cadastro do mesmo produto — acontece em
-   * produto duplicado quando o estoque do espelho está defasado (sincroniza
-   * de hora em hora). Nesse caso a peça sai do cadastro errado.
-   *
-   * Desligar: apagar a env. Volta na hora, sem deploy de código.
+   * A ressalva que continua valendo: em produto DUPLICADO com estoque do
+   * espelho defasado, o Postgres pode achar OUTRO cadastro do mesmo produto
+   * e a peça sair do cadastro errado. A conferência hoje é ver se o espelho
+   * responde (`/retaguarda/wincred-mirror`), não um placar de comparação.
    */
   get respondeDoFlow(): boolean {
     return String(process.env.GIGA_LEITURA_FLOW ?? '') === '1';
-  }
-
-  private get verboso(): boolean {
-    return String(process.env.GIGA_SOMBRA_VERBOSE ?? '') === '1';
-  }
-
-  /**
-   * Compara, em segundo plano, o resultado do Giga com o da consulta nova.
-   *
-   * NÃO retorna nada de propósito: quem chama já tem a resposta do Giga e não
-   * deve esperar por isto. Chame com `void this.sombra.comparar(...)`.
-   *
-   * @param metodo   nome pro placar, ex.: 'findCodigoByRefCorTam'
-   * @param entrada  os argumentos, pra reproduzir a divergência depois
-   * @param doGiga   o que o Giga respondeu (a verdade de hoje)
-   * @param nova     função que produz a resposta do Postgres
-   */
-  async comparar<T>(
-    metodo: string,
-    entrada: unknown,
-    doGiga: T,
-    nova: () => Promise<T>,
-  ): Promise<void> {
-    if (!this.ligado) return;
-
-    const c = this.placar.get(metodo) ?? { iguais: 0, formato: 0, diferentes: 0, erros: 0 };
-    this.placar.set(metodo, c);
-
-    try {
-      const doFlow = await nova();
-
-      // JSON estável: a comparação precisa ignorar ordem de chave de objeto,
-      // senão duas respostas idênticas apareceriam como divergentes.
-      const a = this.estavel(doGiga);
-      const b = this.estavel(doFlow);
-
-      if (a === b) {
-        c.iguais++;
-        if (this.verboso) {
-          this.logger.log(`[${metodo}] igual · entrada=${this.curto(entrada)} · valor=${this.curto(doGiga)}`);
-        }
-        return;
-      }
-
-      // Só o zero à esquerda difere? Mesmo produto, outra grafia.
-      if (this.soZeroAEsquerda(a, b)) {
-        c.formato++;
-        if (this.verboso) {
-          this.logger.log(`[${metodo}] formato · giga=${this.curto(doGiga)} flow=${this.curto(doFlow)}`);
-        }
-        return;
-      }
-
-      c.diferentes++;
-      c.ultimaDivergencia = `entrada=${this.curto(entrada)} giga=${this.curto(doGiga)} flow=${this.curto(doFlow)}`;
-      c.ultimaEm = new Date().toISOString();
-
-      // WARN, não ERROR: em sombra, divergência é INFORMAÇÃO, não incidente.
-      // O sistema respondeu certo (com o Giga); isto aqui é o aprendizado que
-      // impede a virada de dar errado depois.
-      this.logger.warn(`[${metodo}] DIVERGENCIA · ${c.ultimaDivergencia}`);
-    } catch (e) {
-      c.erros++;
-      // Erro na consulta NOVA não pode aparecer pro usuário nem virar alarme:
-      // o sistema já respondeu, com o Giga, antes disto rodar.
-      this.logger.warn(`[${metodo}] erro na consulta nova: ${(e as Error).message}`);
-    }
-  }
-
-  /** Placar acumulado — alimenta o endpoint de acompanhamento da migração. */
-  relatorio(): Array<{
-    metodo: string;
-    iguais: number;
-    formato: number;
-    diferentes: number;
-    erros: number;
-    taxa: string;
-    ultimaDivergencia?: string;
-    ultimaEm?: string;
-  }> {
-    return [...this.placar.entries()]
-      .map(([metodo, c]) => {
-        const total = c.iguais + c.formato + c.diferentes;
-        // `formato` conta como acerto na taxa: é o mesmo produto. Fica na
-        // coluna própria pra ninguém esquecer que a grafia muda.
-        const acertos = c.iguais + c.formato;
-        return {
-          metodo,
-          iguais: c.iguais,
-          formato: c.formato,
-          diferentes: c.diferentes,
-          erros: c.erros,
-          taxa: total ? `${((acertos / total) * 100).toFixed(2)}%` : '—',
-          ultimaDivergencia: c.ultimaDivergencia,
-          ultimaEm: c.ultimaEm,
-        };
-      })
-      .sort((a, b) => b.diferentes - a.diferentes);
-  }
-
-  /**
-   * True quando os dois valores só diferem por zero à esquerda.
-   * Compara token a token pra funcionar tanto em resposta única ('000123' vs
-   * '123') quanto em lista serializada do batch.
-   */
-  private soZeroAEsquerda(a: string, b: string): boolean {
-    const limpa = (s: string) => s.replace(/(^|[^0-9])0+(\d)/g, '$1$2');
-    return limpa(a) === limpa(b);
-  }
-
-  zerar(): void {
-    this.placar.clear();
   }
 
   /* ────────────────────── consultas novas (Postgres) ────────────────────── */
@@ -216,9 +68,9 @@ export class SombraService {
     const corClean = (cor || '').trim();
     const tamClean = (tamanho || '').trim();
 
-    // Os QUATRO níveis, na MESMA ordem do Giga. Ordem diferente devolveria
-    // resposta diferente em produto ambíguo — e a sombra acusaria divergência
-    // que seria culpa da tradução, não do dado.
+    // Os QUATRO níveis, na MESMA ordem da consulta original. Mudar a ordem
+    // devolveria produto DIFERENTE em cadastro ambíguo — erro de tradução com
+    // cara de erro de dado.
 
     // 1. Exato.
     const exato = await this.umaLinha(
@@ -292,8 +144,8 @@ export class SombraService {
    * Versão Postgres de `batchFindCodigosByRefCorTam`.
    *
    * Resolve N itens (REF+cor+tamanho) numa consulta só. Duas sutilezas do
-   * original que PRECISAM ser reproduzidas, ou a sombra acusa divergência que
-   * é culpa da tradução:
+   * original que PRECISAM ser reproduzidas, senão a consulta devolve peça
+   * diferente por culpa da tradução:
    *
    *  1. TOLERÂNCIA DE ZERO À ESQUERDA na REF. O Giga tem '012467' e o
    *     TransferOrder tem '12467' (ou o contrário). O original gera variantes
@@ -441,16 +293,10 @@ export class SombraService {
   /**
    * Versão Postgres de `getProductPricesBySkus`.
    *
-   * ⚠️ `vendaUn` está em REAIS — NUNCA dividir por 100. O caminho do Giga
-   * PARECE centavos porque o `parsePrice` de lá tira o ponto de "80.00" e
-   * divide de volta; o Decimal do espelho já vem certo. Dividir aqui derrubaria
+   * ⚠️ `vendaUn` está em REAIS — NUNCA dividir por 100. O caminho legado
+   * PARECIA centavos porque o `parsePrice` de lá tirava o ponto de "80.00" e
+   * dividia de volta; o Decimal do espelho já vem certo. Dividir aqui derrubaria
    * preço 100× — foi o bug de 01/07 que fez blusa de R$ 80 virar R$ 0,80.
-   *
-   * O original escolhe a coluna de preço dinamicamente (PRECOVENDA, PRECO,
-   * VENDAUN…, com override por GIGA_PRECO_COL). O espelho só tem `venda_un`,
-   * então divergência de preço aqui significa que o Giga está usando OUTRA
-   * coluna — e é exatamente o tipo de coisa que a sombra existe pra revelar
-   * antes da virada.
    */
   async getProductPricesBySkus(skus: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
@@ -600,11 +446,12 @@ export class SombraService {
   /**
    * Versão Postgres da busca de cliente do `GET /pdv/customer-info`.
    *
-   * PORQUÊ: o caminho do Giga dispara ATÉ 9 CONSULTAS EM CASCATA no MySQL,
-   * cada uma com timeout de 10s. Quando o firewall por IP da KingHost derruba
-   * o IP dinâmico do Railway, o MySQL PENDURA (não dá erro — `.catch` não
-   * pega) e o PDV da loja fica parado até ~90s no meio do fechamento de um
-   * crediário. É o pior ponto de latência do sistema.
+   * POR QUE NASCEU: o caminho antigo disparava ATÉ 9 CONSULTAS EM CASCATA no
+   * MySQL do ERP, cada uma com timeout de 10s. Quando o firewall por IP
+   * derrubava o IP dinâmico do Railway, aquele MySQL PENDURAVA (não dava erro
+   * — `.catch` não pegava) e o PDV da loja ficava parado até ~90s no meio do
+   * fechamento de um crediário. Era o pior ponto de latência do sistema. Hoje
+   * essa cascata não existe mais: esta consulta é a única.
    *
    * O dado já está todo aqui: `giga_clientes` é a importação COMPLETA da
    * tabela `clientes` do Giga — colunas conhecidas viram campos estruturados e
@@ -622,9 +469,11 @@ export class SombraService {
    * CPF LIKE → telefone → nome), e as regras de ambiguidade também: telefone
    * e nome só valem quando a correspondência é ÚNICA (2+ = não arrisca).
    *
-   * Devolve `null` quando não acha — e quem chama TEM que cair pro Giga.
-   * Vazio não é resposta: pode ser ficha nova que o espelho (sync diário
-   * 04:40) ainda não viu, e dizer "cliente não existe" errado faz a vendedora
+   * Devolve `null` = "o espelho respondeu e NÃO achou" — é resposta final,
+   * não convite pra cascata: não há mais segundo banco pra consultar. Quem
+   * chama trata como não encontrado e deixa o ERRO DE VERDADE SUBIR (é o que
+   * o `pdv.controller` já faz: 500 honesto em vez de "cliente não existe").
+   * A distinção importa porque dizer "não existe" errado faz a vendedora
    * recadastrar alguém que já tem crediário aberto.
    */
   async buscarClienteCustomerInfo(input: {
@@ -796,21 +645,4 @@ export class SombraService {
     };
   }
 
-  /* ──────────────────────────── utilitários ─────────────────────────────── */
-
-  /** JSON com chaves ordenadas — comparação não pode depender da ordem. */
-  private estavel(v: unknown): string {
-    if (v === null || v === undefined) return 'null';
-    if (typeof v !== 'object') return String(v);
-    return JSON.stringify(v, (_k, val) =>
-      val && typeof val === 'object' && !Array.isArray(val)
-        ? Object.keys(val).sort().reduce((o: any, k) => ((o[k] = val[k]), o), {})
-        : val,
-    );
-  }
-
-  private curto(v: unknown): string {
-    const s = typeof v === 'string' ? v : JSON.stringify(v);
-    return (s ?? 'null').slice(0, 200);
-  }
 }

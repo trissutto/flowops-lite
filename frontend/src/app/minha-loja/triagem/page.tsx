@@ -504,7 +504,7 @@ export default function TriagemPage() {
       alert('Nenhuma caixa pra finalizar');
       return;
     }
-    if (!confirm(`Fechar e enviar ${openShipments.length} caixa(s)? Vai baixar estoque do Giga origem.`)) return;
+    if (!confirm(`Fechar e enviar ${openShipments.length} caixa(s)? Vai baixar o estoque da loja de origem.`)) return;
     setFinalizing(true);
     setError(null);
     try {
@@ -529,7 +529,7 @@ export default function TriagemPage() {
   // ── Finalizar UMA remessa específica ──
   const finalizarUma = async (shipmentId: string, code: string, toStoreName: string) => {
     if (!fromStoreCode) return;
-    if (!confirm(`Fechar e enviar a caixa ${code} (${toStoreName})?\nVai baixar o estoque do Giga origem.`)) return;
+    if (!confirm(`Fechar e enviar a caixa ${code} (${toStoreName})?\nVai baixar o estoque da loja de origem.`)) return;
     setFinalizingOne(shipmentId);
     setError(null);
     try {
@@ -746,7 +746,7 @@ export default function TriagemPage() {
                       !diagResult.matchesByRef?.length &&
                       !diagResult.matchesByDescricao?.length && (
                         <div className="text-rose-700 font-bold">
-                          Nada encontrado em nenhum lugar — esse SKU não existe no Giga.
+                          Nada encontrado em nenhum lugar — esse SKU não existe no cadastro.
                         </div>
                       )}
                   </div>
@@ -1063,7 +1063,7 @@ export default function TriagemPage() {
                       )}
                     </button>
                     <p className="text-[10px] text-slate-400 mt-1.5 text-center">
-                      Vai baixar estoque do Giga origem e gerar {openShipments.length} remessa(s) em trânsito.
+                      Vai baixar o estoque da loja de origem e gerar {openShipments.length} remessa(s) em trânsito.
                     </p>
 
                     {/* Botão Limpar tudo (separado, vermelho discreto) */}

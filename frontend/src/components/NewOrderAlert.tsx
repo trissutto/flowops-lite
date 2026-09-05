@@ -183,8 +183,8 @@ export default function NewOrderAlert() {
     if (!token) return;
 
     let stopped = false;
-    // Guard de in-flight: o endpoint bate no WooCommerce (servidor do Giga/WP,
-    // que pode ficar lento). Sem isto, um check demorado empilha com o proximo.
+    // Guard de in-flight: o endpoint pode ficar lento. Sem isto, um check
+    // demorado empilha com o proximo.
     let running = false;
 
     async function check() {

@@ -50,10 +50,19 @@ export class ContasPagarAssociacaoService {
     return s.cidade ? String(s.cidade).trim() : null;
   }
 
-  // ── 1. IMPORTA as funcionárias ATIVAS do GIGA (CPF, cargo, salário, loja) ─
+  // ── 1. IMPORTAVA as funcionárias ATIVAS do ERP legado ────────────────────
+  // ⚠️ Não funciona mais: a lista vinha do MySQL do ERP, desligado em
+  // 27/08/2026. A ligação Fornecedor → Funcionária continua pelos outros
+  // caminhos desta classe, que leem a tabela `seller` do Flow.
   async importarFuncionariasGiga(usuario?: string) {
     const pool: any = (this.erp as any).pool;
-    if (!pool) throw new BadRequestException('Conexão com o GIGA indisponível');
+    if (!pool) {
+      throw new BadRequestException(
+        'Esta importação foi aposentada: as funcionárias vivem no cadastro de ' +
+        'vendedoras do Flow. Use "Candidatos" pra ligar fornecedor e pessoa, ou ' +
+        'cadastre a funcionária em /retaguarda/vendedoras.',
+      );
+    }
     const [rows] = await pool.query({
       sql: 'SELECT CODIGO, NOME, CPF, CARGO, LOJA FROM funcionarios',
       timeout: 60_000,

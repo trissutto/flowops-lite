@@ -468,10 +468,14 @@ export class ClientesGigaService {
   /**
    * COPIA a ficha de OUTRA loja pra loja destino (caso Jéssica 23/07:
    * cliente mudou de cidade e o crediário exige ficha NA loja da venda).
-   * A ficha nasce no FLOW (código próprio da loja destino via alocarCodigo)
-   * e é replicada pro Wincred pelo outbox (~30s). Idempotente por CPF.
+   * A ficha nasce no FLOW (código próprio da loja destino via alocarCodigo) e
+   * JÁ VALE quando esta função responde — nada fica pendente.
    * LIMITE/AVALIAÇÃO/BLOQUEADO NÃO são copiados — crédito é decisão POR
-   * LOJA (gerente ajusta com senha na tela de Clientes).
+   * LOJA (gerente ajusta com senha na tela de Clientes). Idempotente por CPF.
+   *
+   * ⚠️ O campo `replicado` do retorno é resquício: ele vinha do `upsert` no
+   * ERP externo, desligado em 27/08/2026, e hoje é SEMPRE false. Não é sinal
+   * de falha, e a tela não deve mandar ninguém esperar por ele.
    */
   async copiarParaLoja(input: {
     lojaOrigem: string;
@@ -495,8 +499,8 @@ export class ClientesGigaService {
     });
 
     // Idempotência: já existe ficha da MESMA pessoa (CPF) na loja destino?
-    // (caso Pamela: 1ª tentativa criou no Flow mas a réplica falhou — aqui
-    // RE-GRAVA no Wincred em vez de só devolver "já existia")
+    // (caso Pamela: 1ª tentativa criou no Flow mas a réplica falhou — o
+    // re-upsert abaixo é resquício do ERP externo e hoje não faz nada)
     const cpfDigits = String(input.cpf || origem?.cpf || '').replace(/\D/g, '');
     if (cpfDigits.length === 11) {
       const jaTem: any = await (this.prisma as any).gigaCliente.findFirst({
@@ -563,9 +567,9 @@ export class ClientesGigaService {
     const r: any = await this.cadastrar(lojaD, raw, quem);
     if (!r.ok) return r;
 
-    // RÉPLICA IMEDIATA no Wincred (além do outbox, que segue como garantia):
-    // o caixa está COM A CLIENTE NA FRENTE — 3s em vez de 35s. E se der erro
-    // de SQL, ele aparece na tela em vez de morrer no retry silencioso.
+    // Resquício da réplica no ERP externo (desligado em 27/08/2026): com o
+    // pool nulo isto devolve success:false SEMPRE — é por isso que `replicado`
+    // nunca é true. A ficha já está gravada e utilizável neste ponto.
     let replicado = false;
     let replicaErro: string | null = null;
     try {

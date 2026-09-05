@@ -1,5 +1,7 @@
 # Guia de Integração — WooCommerce + ERP gigasistemas21
 
+> **REGISTRO HISTORICO — NAO SIGA ESTE GUIA.** O WordPress/WooCommerce legado e o MySQL gigasistemas21 dividiam um servidor que foi DESLIGADO em 27/08/2026: nao ha WP Admin pra abrir nem chave pra gerar. O site proprio (`ecommerce/`) substituiu o WooCommerce e grava direto no Postgres do Flow. Estado atual: `CLAUDE.md` na raiz.
+
 Este guia descreve o passo a passo para plugar o FlowOps no seu WordPress/WooCommerce e no MySQL da gigasistemas21. Todas as credenciais ficam no arquivo `.env`.
 
 ---

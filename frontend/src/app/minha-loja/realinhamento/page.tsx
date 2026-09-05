@@ -74,7 +74,7 @@ function formatTime(iso: string | null | undefined): string {
   }
 }
 
-/** Title-case pra descrição — o Giga devolve tudo maiúsculo, fica elegante
+/** Title-case pra descrição — o cadastro guarda tudo maiúsculo, fica elegante
  *  em "Vestido Midi Estampa Preto" ao invés de gritando. */
 function toTitleCase(s: string): string {
   const SMALL = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'com', 'em', 'para', 'pra']);
@@ -147,7 +147,7 @@ export default function MinhaLojaRealinhamentoPage() {
   // ── REMESSAS ABERTAS ──
   // Cada vez que vendedora clica "Enviei" numa peça, ela vai pra remessa
   // OPEN do par origem→destino. Aqui listamos essas remessas pra ela poder
-  // FECHAR e ENVIAR (baixa Giga em batch + manda alerta pra loja destino).
+  // FECHAR e ENVIAR (baixa o estoque em batch + manda alerta pra loja destino).
   const [openShipments, setOpenShipments] = useState<any[]>([]);
   // Fechadas e ainda sem etiqueta — some da lista sozinha quando a etiqueta sai.
   const [pendingLabel, setPendingLabel] = useState<any[]>([]);
@@ -349,7 +349,7 @@ export default function MinhaLojaRealinhamentoPage() {
 
   /**
    * Antes de fechar, faz PRE-CHECK pra detectar items sem estoque suficiente
-   * no Giga (vendido entre criação e fechamento, divergência ERP×físico, etc).
+   * na loja (vendido entre criação e fechamento, saldo × arara divergente, etc).
    * Se tem problema, abre modal com lista — vendedora pode remover/diagnosticar
    * antes de tentar de novo. Se OK, fecha direto.
    */
@@ -491,7 +491,7 @@ export default function MinhaLojaRealinhamentoPage() {
 
   /**
    * Remove TODOS os itens problemáticos da remessa de uma vez.
-   * Não mexe no estoque Giga — apenas volta os transferOrders pra "pending".
+   * Não mexe no estoque — apenas volta os transferOrders pra "pending".
    * Os outros itens da remessa continuam intactos.
    */
   const handleRemoveAllProblematic = useCallback(async () => {
@@ -514,7 +514,7 @@ export default function MinhaLojaRealinhamentoPage() {
     if (!confirm(
       `Remover TODOS os ${total} item(s) problemáticos da remessa?\n\n` +
       `✓ Os outros itens da remessa ficam intactos\n` +
-      `✓ NÃO mexe no estoque Giga\n` +
+      `✓ NÃO mexe no estoque\n` +
       `✓ Os itens removidos voltam pra fila "pendente" e somem dessa remessa\n\n` +
       `Confirma?`,
     )) return;
@@ -1190,7 +1190,7 @@ export default function MinhaLojaRealinhamentoPage() {
         {/* ── REMESSAS ABERTAS ──
             Cada remessa = 1 caixa física que vendedora está montando pra
             mandar pra outra loja. Quando termina de empacotar, fecha aqui →
-            sistema baixa Giga + emite alerta pra loja destino receber. */}
+            sistema baixa o estoque + emite alerta pra loja destino receber. */}
         {recemEnviada && (
           <EnvioDaRemessa
             shipmentId={recemEnviada.id}
@@ -1784,16 +1784,16 @@ export default function MinhaLojaRealinhamentoPage() {
 
             <div className="p-5 space-y-4">
               <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
-                <b>O que aconteceu:</b> uma ou mais peças desta remessa <b>não estão no estoque Giga da sua loja</b>.
+                <b>O que aconteceu:</b> uma ou mais peças desta remessa <b>não estão no estoque da sua loja</b>.
                 Causas possíveis: o plano de realinhamento sugeriu origem errada (peça nunca esteve aqui),
-                a peça foi vendida fisicamente entre o pedido e a separação, ou tem divergência ERP × físico.
+                a peça foi vendida fisicamente entre o pedido e a separação, ou o saldo do sistema não bate com a arara.
                 <br />
                 <br />
                 <b>Como resolver:</b>
                 <br />
-                • Se a peça <b>está fisicamente em mãos</b>, clique <b>FORÇAR FECHAMENTO</b> abaixo (Giga fica negativo, conserta no inventário).
+                • Se a peça <b>está fisicamente em mãos</b>, clique <b>FORÇAR FECHAMENTO</b> abaixo (o saldo fica negativo, conserta no inventário).
                 <br />
-                • Se a peça <b>não existe</b>, clique <b>Remover TODOS</b> pra tirar da remessa (não mexe no Giga).
+                • Se a peça <b>não existe</b>, clique <b>Remover TODOS</b> pra tirar da remessa (não mexe no estoque).
               </div>
 
               {/* Botão geral: Remover TODOS (problemas + unresolved) */}
@@ -1804,7 +1804,7 @@ export default function MinhaLojaRealinhamentoPage() {
                     onClick={handleRemoveAllProblematic}
                     disabled={!!batchRemoving}
                     className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 disabled:opacity-60 text-white rounded-lg text-xs font-bold flex items-center gap-1.5"
-                    title="Remove TUDO problemático (estoque insuficiente + SKU não identificado). Não mexe no Giga."
+                    title="Remove TUDO problemático (estoque insuficiente + SKU não identificado). Não mexe no estoque."
                   >
                     {batchRemoving ? (
                       <>⏳ Removendo {batchRemoving.done}/{batchRemoving.total}…</>
@@ -1838,7 +1838,7 @@ export default function MinhaLojaRealinhamentoPage() {
                                 SKU <span className="font-mono">{p.sku}</span> ·
                                 Loja {p.storeCode} ·
                                 <span className="text-rose-700 font-bold ml-1">
-                                  Giga tem {p.estoqueGiga}, remessa pediu {p.qtyRequerida}
+                                  Estoque da loja tem {p.estoqueGiga}, remessa pediu {p.qtyRequerida}
                                 </span>
                               </div>
                             </div>
@@ -1877,7 +1877,10 @@ export default function MinhaLojaRealinhamentoPage() {
                                 {u.cor || '—'} / {u.tamanho || '—'}
                               </span>
                               <div className="text-[10px] text-amber-700 mt-1">
-                                Cadastro Giga divergente. Remove daqui ou conserte no Wincred.
+                                Não consegui identificar a peça pelo REF + cor + tamanho.
+                                Se ela está em mãos, use FORÇAR FECHAMENTO; se ela não
+                                existe, remova daqui. Nos dois casos, avise a matriz pra
+                                acertar o cadastro da peça.
                               </div>
                             </div>
                             {u.transferOrderId && (
@@ -1900,8 +1903,8 @@ export default function MinhaLojaRealinhamentoPage() {
 
             <div className="px-5 py-3 bg-slate-50 border-t flex flex-wrap justify-between items-center gap-2">
               <div className="text-[11px] text-slate-600 max-w-[400px]">
-                <b>Pecas em maos?</b> Use o botao laranja. O Giga ficara
-                negativo nessas pecas (corrige no proximo inventario).
+                <b>Pecas em maos?</b> Use o botao laranja. O saldo dessas pecas
+                ficara negativo na sua loja (corrige no proximo inventario).
               </div>
               <div className="flex gap-2">
                 <button
@@ -1921,8 +1924,9 @@ export default function MinhaLojaRealinhamentoPage() {
                     const msg = 'FORCAR fechamento da remessa ' + problemasShipment.code + '?\n\n' +
                       partes.join(' + ') + '.\n\n' +
                       'Use SO se as pecas estao fisicamente em maos. ' +
-                      'Os itens com estoque divergente ficam Giga negativo (corrige no inventario). ' +
-                      'Os com SKU nao identificado vao pra remessa SEM baixar Giga (admin revisa).';
+                      'Os itens com estoque divergente ficam com saldo negativo (corrige no inventario). ' +
+                      'Os com SKU nao identificado vao pra remessa SEM baixar estoque — ' +
+                      'avise a matriz pra acertar o cadastro dessas pecas.';
                     if (!confirm(msg)) return;
                     const shipmentId = problemasShipment.shipmentId;
                     setClosingShipmentId(shipmentId);

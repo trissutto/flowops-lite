@@ -59,7 +59,7 @@ const GROUPS: NavGroup[] = [
     color: 'amber',
     items: [
       // "Enviados por Loja" virou aba dentro de /separacao — não aparece mais aqui.
-      // "Baixa Estoque" foi REMOVIDA do menu — a baixa no Giga hoje acontece
+      // "Baixa Estoque" foi REMOVIDA do menu — a baixa de estoque hoje acontece
       // automaticamente quando a loja bate 'shipped' + rastreio (autoDebitOnShipped).
       // Quando dá errado, a operadora cai direto em "Log de Baixas" (fallback).
       // A tela /retaguarda/baixa-estoque segue existindo pra casos extremos

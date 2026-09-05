@@ -3,6 +3,11 @@
 **Data:** 11/06/2026
 **Escopo:** `frontend/src/app/minha-loja/pdv/` + `backend/src/pdv/`
 
+> **REGISTRO HISTÓRICO — não é backlog vigente.** O item nº 1 ("finalizar espera a
+> gravação no Wincred/Giga") foi resolvido pelo outbox e depois perdeu o sentido: o ERP
+> Giga/Wincred foi **desligado em 27/08/2026** e a venda nasce e morre no Postgres do
+> Flow. Não há mais réplica pra esperar. Estado atual: `CLAUDE.md` na raiz.
+
 ---
 
 ## Resumo executivo

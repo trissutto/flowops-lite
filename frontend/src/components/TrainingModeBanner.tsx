@@ -3,7 +3,7 @@
 /**
  * Banner laranja gigante exibido no topo de qualquer tela do PDV quando o
  * modo treinamento está ativo. Vendedora vê constantemente que está em
- * simulação — nada do que ela fizer vai mexer em estoque, caixa, Giga ou
+ * simulação — nada do que ela fizer vai mexer em estoque, caixa ou
  * relatórios.
  *
  * Ativação:
@@ -56,7 +56,7 @@ export default function TrainingModeBanner() {
               MODO TREINAMENTO ATIVO
             </div>
             <div className="text-[10px] md:text-xs leading-tight opacity-95">
-              Nada será gravado em estoque, caixa, Giga ou relatórios — você pode praticar à vontade.
+              Nada será gravado em estoque, caixa ou relatórios — você pode praticar à vontade.
             </div>
           </div>
         </div>

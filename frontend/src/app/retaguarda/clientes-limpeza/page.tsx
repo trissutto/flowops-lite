@@ -70,7 +70,7 @@ const fmtCpf = (cpf: string) => {
   const d = String(cpf || '').replace(/\D/g, '');
   return d.length === 11 ? `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}` : cpf;
 };
-/** ULTCOMPRA vem do rawJson do Giga — formata se parsear como data, senão mostra cru. */
+/** ULTCOMPRA vem do rawJson da ficha — formata se parsear como data, senão mostra cru. */
 const fmtData = (v: string | null) => {
   if (!v) return '—';
   const d = new Date(v);
@@ -200,7 +200,7 @@ export default function ClientesLimpezaPage() {
             <Sparkles className="w-5 h-5 text-[#B8912B]" /> Limpeza de Clientes
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Duas sujeiras herdadas do Wincred: a mesma pessoa com 2+ fichas na mesma loja, e
+            Duas sujeiras herdadas do sistema antigo: a mesma pessoa com 2+ fichas na mesma loja, e
             ficha sem CPF (que o marcado nega). Arquivar nunca apaga — o histórico continua legível.
           </p>
         </div>

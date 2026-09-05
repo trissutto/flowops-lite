@@ -3,9 +3,9 @@
 /**
  * /minha-loja/pdv/fechamento — TELA DE FECHAMENTO DIÁRIO
  *
- * Mostra os totais por forma de pagamento da sessão de caixa atual,
- * estilo "Movimento Diário de Caixa" do Wincred. Diferença: tudo vem
- * do flowops em tempo real, sem depender de "Processa Movimento".
+ * Mostra os totais por forma de pagamento da sessão de caixa atual, no
+ * formato do velho "Movimento Diário de Caixa". Diferença: tudo é somado
+ * em tempo real das vendas do dia, sem passo de fechamento manual.
  *
  * Layout cobre:
  * - Cards principais: Dinheiro, PIX, Crediário

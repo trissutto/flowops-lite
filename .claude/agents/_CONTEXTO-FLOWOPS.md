@@ -9,6 +9,19 @@ FlowOps Lite — sistema da rede **Lurd's Plus Size** (moda plus size, lojas fí
 e-commerce). O alvo desta equipe é `frontend/` (Next.js 14 App Router, deploy Vercel),
 NÃO o `ecommerce/` (site público, outro projeto, outras convenções).
 
+**De onde vem o dado da tela:** do **Postgres do Flow** — o ERP legado não é fonte de
+nada. O ERP (MySQL Giga/Wincred) e o WordPress/WooCommerce foram **encerrados em
+27/08/2026** e nenhum dos dois é alcançável. Nenhum texto de tela pode mandar a vendedora
+"conferir no Giga", "lançar no Wincred" ou abrir o WordPress — é ordem impossível, e ela
+trava tentando cumprir. Rótulos e nomes de tela que ainda dizem Giga/Wincred são herança
+de nome: as tabelas `wincred_*` / `giga_*` são espelhos **nativos** alimentados pelo
+próprio Flow.
+
+🚨 **Ao matar uma ordem impossível, ponha no lugar o que resolve HOJE** — o passo que
+existe na tela (dar entrada/baixa no próprio Flow, refazer o bipe, o botão que já está
+ali) ou quem avisar (matriz/retaguarda). Texto vazio no lugar da ordem impossível é a
+mesma vendedora travada, só que sem pista nenhuma.
+
 ## Quem usa (e em que condição)
 
 | Perfil | Onde | Condição real |
@@ -57,9 +70,11 @@ meninas não são o problema, os degraus invisíveis são.**
    `#8C7325`, hover `#FBF6E6`; **verde `#2E7D46` só para dinheiro** (total, Finalizar).
 7. **Vendedora** é escolhida no popup central CONFIRMAR VENDA, na finalização.
    O seletor do canto e o atalho F9 foram removidos em 27/06 — **não ressuscitar**.
-8. **Modo treinamento** (`isTraining`) nunca toca estoque, ERP ou NFC-e.
-9. Deploy exige **hard-refresh** nos PCs de loja. PDV é crítico: não deployar em
-   horário de loja aberta.
+8. **Modo treinamento** (`isTraining`) nunca toca estoque nem NFC-e.
+9. Deploy exige **hard-refresh** nos PCs de loja — avisar quando a mudança for no PDV.
+   Mudança só de `frontend/` **não reinicia o backend** (Vercel; o `railway.json` só
+   observa `backend/**`), então não precisa esperar janela. A janela de deploy do
+   `CLAUDE.md` (almoço ou depois das 19h30) vale pro **backend**.
 
 ## Pegadinhas técnicas já pagas (não repetir)
 
@@ -88,5 +103,10 @@ meninas não são o problema, os degraus invisíveis são.**
 
 Sem textão. Resposta curta (~5 linhas fora de emergência). Feature nova ou tela nova:
 **perguntar com 2-4 alternativas objetivas ANTES de construir**, uma rodada por vez.
-Entrega sempre em branch + push + PR para `main` — `gh` CLI não está instalado, dar o
-link `https://github.com/trissutto/flowops-lite/pull/new/<branch>`.
+
+Entrega em branch + push + PR para `main`. **Commit, merge e deploy são automáticos**
+(ordem do dono, 22/08/2026) — não perguntar "posso mergear?". O `gh` CLI **está**
+instalado e autenticado: `gh pr create` + `gh pr merge --squash --delete-branch`. Se o
+push for bloqueado, entregar na branch com o link
+`https://github.com/trissutto/flowops-lite/pull/new/<branch>`. Verificar antes
+(`npm run build`) continua obrigatório. Ver `CLAUDE.md` para a janela de deploy.
