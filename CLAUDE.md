@@ -152,7 +152,7 @@ O cron `crediario-nativo-sync` das 04:10 é **no-op** — ele apagaria as parcel
 | `GIGA_MIRROR_READS` | **on** | Estoque + faturamento bruto leem os espelhos do Postgres. Ver "defaults invertidos" |
 | `CREDIARIO_FLOW_FIRST` | on | Parcelas nascem em `crediario_parcelas`, faixa 900.000.000+. `0` é caminho legado morto — não use |
 | `CATEGORIA_FLOW_FIRST` | on | Grupo/subgrupo numeram na faixa **9000+** do Flow. `0` é caminho legado morto |
-| `MARCADOS_NATIVE_READS` | **off** | `1` faz os marcados lerem da tabela nativa — ela protege a DECISÃO DE VENDA (se a leitura falhar, o PDV libera acima do limite da cliente). Em 2026 já **ficou ligada em produção por omissão**, sem ninguém decidir — foi esse caso que motivou o carimbo `⚠ LIGADA POR OMISSÃO` do painel `migration-flags`. Com o default OFF de hoje o carimbo não sai mais pra ela (ele só marca flag LIGADA sem a env existir) |
+| `MARCADOS_NATIVE_READS` | **off** | **LETRA MORTA com história**: o único consumidor (`useNative()` do `marcados.service.ts`) não tem chamador nenhum — os marcados já leem a fonte certa por outro caminho, e ligar/desligar esta env não muda NADA. Ela fica registrada aqui por dois motivos: (1) o painel `migration-flags` ainda a exibe como flag sensível, o que sugere um risco que não existe (remoção pendente, chip aberto); (2) foi ela que, ao **ficar ligada em produção por omissão** sem ninguém decidir, motivou o carimbo `⚠ LIGADA POR OMISSÃO` do painel |
 | `STOCK_WINCRED_FIRST` | on | `wincred_estoque` é a fonte de leitura do routing/consulta — a MESMA que site e PDV leem |
 | `ERP_STOCK_WRITES_ASYNC` / `PO_RECEIVE_ERP_OUTBOX` | on | Escritas secundárias de estoque e recebimento de pedido de compra vão por fila. `0` só tira a fila — **não muda a fonte e não espera ninguém**: com a réplica desligada `decreaseStock`/`increaseStock` saem na primeira linha aplicando só o Postgres |
 | `PDV_FINALIZE_ASYNC` | false | Legado (só vale com o outbox desligado) |
@@ -191,7 +191,7 @@ O cron `crediario-nativo-sync` das 04:10 é **no-op** — ele apagaria as parcel
 
 Estas envs governavam caminhos que dependiam do MySQL desligado. Ligar qualquer uma delas não muda nada — deixá-las no Railway só confunde a próxima pessoa que for auditar. São **dois casos diferentes**, e a distinção importa pra quem for mexer no código:
 
-- **O código nem lê mais** (o leitor saiu nas Ondas 1-3, não há guard nenhum — sobrou nada): `ESTOQUE_SYNC_GIGA` · `ERP_STOCK_WRITEBACK_GIGA` · `PDV_ERP_WRITE_ENABLED` · `GIGA_SOMBRA` · `GIGA_VERBOSE` · `GIGA_PRECO_COL` · `GIGA_PRODUTO_DATA_COL`.
+- **O código nem lê mais** (o leitor saiu nas Ondas 1-3, não há guard nenhum — sobrou nada): `ESTOQUE_SYNC_GIGA` · `ERP_STOCK_WRITEBACK_GIGA` · `PDV_ERP_WRITE_ENABLED` · `GIGA_SOMBRA` · `GIGA_SOMBRA_VERBOSE` · `GIGA_PRECO_COL` · `GIGA_PRODUTO_DATA_COL`. (Se existir uma `GIGA_VERBOSE` no Railway: esse nome **nunca** foi lido pelo código — apagar sem dó.)
 - **O código lê, mas o guard trava antes** (aqui **o guard FICA** — é ele que garante o no-op): `ERP_HOST`/`ERP_PORT`/`ERP_USER`/`ERP_PASSWORD`/`ERP_DATABASE`, lidas só depois de `gigaDesligado()` no `onModuleInit` do `erp.service.ts` e no `realignment-pricing.service.ts`.
 
 `WC_URL`/`WC_CONSUMER_KEY`/`WC_CONSUMER_SECRET` e `FLOWOPS_WP_BASE`/`FLOWOPS_WP_KEY` também apontam pro host apagado, mas **ainda têm chamadores** (`WooCommerceService`, rotas legadas de `abandoned-carts`) — só saem junto com a limpeza desses caminhos, senão o que muda é só o texto do erro.
