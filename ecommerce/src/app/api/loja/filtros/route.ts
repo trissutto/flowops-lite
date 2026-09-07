@@ -16,7 +16,11 @@ const BASE_URL = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
 export async function GET() {
   if (!BASE_URL) return NextResponse.json({ erro: 'indisponivel' }, { status: 503 });
   try {
-    const upstream = await fetch(`${BASE_URL}/public/loja/filtros`, { next: { revalidate: 300 } });
+    // `tags` pra cair junto com o aviso da retaguarda (classificação e
+    // categorias disparam `filtros`/`categorias` — ver avisar-vitrine.ts).
+    const upstream = await fetch(`${BASE_URL}/public/loja/filtros`, {
+      next: { revalidate: 300, tags: ['filtros', 'categorias'] },
+    });
     if (!upstream.ok) return NextResponse.json({ erro: 'falha' }, { status: 502 });
     return NextResponse.json(await upstream.json());
   } catch (error) {

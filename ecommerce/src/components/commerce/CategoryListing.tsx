@@ -15,6 +15,7 @@ import { EditorialProductGrid, type GridInterruption } from './EditorialProductG
 import { useProductFilters } from '@/hooks/useProductFilters';
 import { useDebounced, useIntersection } from '@/hooks';
 import { fetchFacetas, fetchProducts, filterGroups } from '@/services/products';
+import { useSubcategoriaDaUrl } from '@/store/subcategoria';
 import type { FilterState, Product, SortOption } from '@/types';
 import { LINK_WHATSAPP_SITE } from '@/data/contato';
 
@@ -52,11 +53,18 @@ interface CategoryListingProps {
   /** Vazio = catálogo inteiro (é assim que /novidades reusa esta listagem). */
   category: string;
   /**
-   * Subcategoria vinda da URL (`?sub=manga-curta`). Entra na `queryKey` pra
-   * a troca de chip refazer a busca — sem isso o react-query devolveria o
-   * resultado da subcategoria anterior, em cache.
+   * Subcategoria fixa, quando a ROTA já nasce recortada. A página de
+   * categoria NÃO passa isto: desde o ISR de 06/09 o `?sub=` da URL é lido no
+   * navegador (store `subcategoria`) — o servidor entrega a categoria inteira
+   * pela CDN e o recorte do chip acontece aqui, via `queryKey`.
    */
   subcategoria?: string;
+  /**
+   * Liga a leitura do `?sub=` da URL. SÓ a página de categoria passa true —
+   * nas demais rotas (/novidades, /outlet, /tamanhos/N) uma URL suja com
+   * `?sub=` filtraria a grade em silêncio, sem chip pra desfazer.
+   */
+  usarSubDaUrl?: boolean;
   categoryName: string;
   interruptions?: GridInterruption[];
   mode?: 'infinite' | 'pages';
@@ -127,8 +135,12 @@ function CategoryListingInner({
   soPromocao,
   soNovidade,
   filtrosIniciais,
-  subcategoria,
+  subcategoria: subcategoriaFixa,
+  usarSubDaUrl = false,
 }: CategoryListingProps) {
+  // O chip da categoria (`?sub=`) chega pelo store — ver `store/subcategoria`.
+  const subDaUrl = useSubcategoriaDaUrl(usarSubDaUrl);
+  const subcategoria = subcategoriaFixa ?? subDaUrl;
   const state = useProductFilters(filtrosIniciais ?? {}, ordemPadrao);
   const [view, setView] = useState<'editorial' | 'grid'>('editorial');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -181,7 +193,10 @@ function CategoryListingInner({
     // desqualifica o que a CLIENTE mexeu depois.
     mesmoFiltro(state.filters, filtrosIniciais) &&
     !debouncedSearch &&
-    state.sort === ordemPadrao;
+    state.sort === ordemPadrao &&
+    // Desde o ISR (06/09) a página 1 do servidor é SEMPRE a categoria
+    // inteira — com `?sub=` ativo ela não responde ao que está na tela.
+    (subcategoriaFixa ? true : !subDaUrl);
 
   /**
    * O servidor traz 24 peças de uma vez (uma tela cheia), mas o scroll infinito
@@ -241,11 +256,16 @@ function CategoryListingInner({
   const total = limiteTotal ? Math.min(totalBruto, limiteTotal) : totalBruto;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
-  const carregados: Product[] =
-    mode === 'infinite'
-      ? pagesLoaded.flatMap((p) => p.items)
-      : (pagesLoaded.find((p) => p.page === page)?.items ?? []);
-  const products = limiteTotal ? carregados.slice(0, limiteTotal) : carregados;
+  // Memoizado: com 5+ páginas roladas são 120+ cards — recriar o array a cada
+  // `setState` (drawer, view, busca digitada) invalidava o `memo` de todos os
+  // `ProductCard` de uma vez, e é exatamente o toque que o INP mede.
+  const products = useMemo(() => {
+    const carregados: Product[] =
+      mode === 'infinite'
+        ? pagesLoaded.flatMap((p) => p.items)
+        : (pagesLoaded.find((p) => p.page === page)?.items ?? []);
+    return limiteTotal ? carregados.slice(0, limiteTotal) : carregados;
+  }, [pagesLoaded, mode, page, limiteTotal]);
 
   const sentinelRef = useIntersection(
     () => {

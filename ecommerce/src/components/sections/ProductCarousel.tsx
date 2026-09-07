@@ -4,7 +4,6 @@ import { chaveDoCard } from '@/services/products';
 import { LuxuryCarousel } from '@/components/ui/LuxuryCarousel';
 import { CAROUSEL_PRODUCT_SIZES, ProductCard } from '@/components/cards/ProductCard';
 import type { Product } from '@/types';
-import { trackSelectItem } from '@/lib/tracking';
 
 /**
  * Vitrine de produtos em carrossel — usada em Novidades, Best Sellers e
@@ -38,7 +37,7 @@ export function ProductCarousel({
           onQuickView={onQuickView}
           sizes={CAROUSEL_PRODUCT_SIZES}
           progressiveImage={progressiveImages}
-          onProductClick={() => trackSelectItem(product, ariaLabel, index)}
+          trackList={ariaLabel}
         />
       ))}
     </LuxuryCarousel>

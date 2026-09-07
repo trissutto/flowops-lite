@@ -33,6 +33,9 @@ const COLUMNS = [
   {
     title: 'Ajuda',
     links: [
+      // 06/09: "rastreio lurds" é a 2ª busca viva do domínio (CTR 33%) e a
+      // página não tinha NENHUM link interno — só se chegava pelo Google.
+      { label: 'Rastrear pedido', href: '/rastreio' },
       { label: 'Guia de medidas', href: '/tamanhos/guia' },
       { label: 'Trocas e devoluções', href: '/institucional/trocas' },
       { label: 'Formas de pagamento', href: '/institucional/pagamento' },

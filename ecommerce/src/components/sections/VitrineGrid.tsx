@@ -4,7 +4,6 @@ import { HOME_GRID_SIZES, ProductCard } from '@/components/cards/ProductCard';
 import { VITRINE_GRID_MAX, VITRINE_GRID_MAX_MOBILE } from '@/data/home';
 import { cn } from '@/lib/utils';
 import type { Product } from '@/types';
-import { trackSelectItem } from '@/lib/tracking';
 
 /**
  * VITRINE EM GRADE — as vitrines de produto da home.
@@ -93,7 +92,7 @@ export function VitrineGrid({
            * LCP da home é o hero, e `priority` num card roubaria banda dele.
            */
           progressiveImage
-          onProductClick={() => trackSelectItem(product, listName, index)}
+          trackList={listName}
         />
       ))}
     </div>

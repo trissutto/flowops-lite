@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CorreiosModule } from '../correios/correios.module';
 import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { TrackingController } from './tracking.controller';
+import { RastreioPublicController } from './rastreio-public.controller';
 import { TrackingService } from './tracking.service';
 import { RastreioSyncCron } from './rastreio-sync.cron';
 
@@ -13,7 +14,7 @@ import { RastreioSyncCron } from './rastreio-sync.cron';
  */
 @Module({
   imports: [AuthModule, CorreiosModule, MaisEnviosModule],
-  controllers: [TrackingController],
+  controllers: [TrackingController, RastreioPublicController],
   providers: [TrackingService, RastreioSyncCron],
   exports: [TrackingService],
 })

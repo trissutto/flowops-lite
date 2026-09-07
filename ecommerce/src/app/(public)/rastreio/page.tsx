@@ -18,18 +18,15 @@ import { RastreioForm } from './RastreioForm';
  * transformaria em 404 pra quem mais merece atenção: cliente com dinheiro já
  * pago esperando uma caixa.
  *
- * ── O QUE ESTA TELA FAZ, E O QUE AINDA NÃO FAZ ──
+ * ── O QUE ESTA TELA FAZ (desde 06/09: a resposta é AQUI DENTRO) ──
  *
- * Hoje ela leva o código direto pro rastreamento dos Correios e oferece o
- * caminho de quem não tem o código na mão (entrar com CPF e ver o pedido).
- *
- * O status DENTRO do site, com a cascata que o backend já tem
- * (`TrackingService`: SRO dos Correios → Mais Envios → LinkeTrack), depende de
- * um endpoint público — o `GET /tracking/:code` de hoje é autenticado de
- * propósito, pra não expor token de provedor em tráfego aberto. Abrir um proxy
- * sem trava de taxa na véspera da virada era troca ruim. Quando o endpoint
- * público existir, é só o formulário passar a chamar ele em vez de sair do
- * site: o resto da página não muda.
+ * O código consulta o cache `rastreio_objetos` via `GET /public/rastreio/:code`
+ * (rate-limited, lê SÓ o cache que o cron de 30min mantém — nunca provedor ao
+ * vivo, então nenhum token/cota vai pra tráfego aberto; era a objeção que
+ * segurava o proxy). A resposta mostra o estado atual — o cache guarda o
+ * último evento, não a timeline — e o link dos Correios virou complemento
+ * ("ver cada passo"), com fallback automático pra ele se o backend estiver
+ * fora. Quem não tem o código continua indo pelo CPF em /conta/pedidos.
  */
 
 export const metadata = buildMetadata({
