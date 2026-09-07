@@ -56,6 +56,10 @@ const GRUPOS = [
   { canonical: 'prata', variantes: ['prata', 'prateado', 'prateada'] },
 ];
 
+/** Abreviações de etiqueta do ERP (espelho do ABREV_COR do loja-catalog). */
+const ABREV = { VD:'verde', VM:'vermelho', AZ:'azul', AM:'amarelo', BR:'branco', PR:'preto', RS:'rosa', RX:'roxo', LR:'laranja', MR:'marrom', CZ:'cinza', BG:'bege' };
+const expandeAbrev = (s) => String(s||'').split(/\s+/).map((w)=>ABREV[w.toUpperCase()]||w).join(' ');
+
 const semAcento = (s) =>
   String(s || '')
     .normalize('NFD')
@@ -96,7 +100,7 @@ async function main() {
     const b = refBase(ref);
     if (!b) return;
     if (!paleta.has(b)) paleta.set(b, new Set());
-    for (const c of coresCitadas(corTexto)) paleta.get(b).add(c);
+    for (const c of coresCitadas(expandeAbrev(corTexto))) paleta.get(b).add(c);
   };
   const wc = await db.query(
     'SELECT DISTINCT ref, cor FROM wincred_produtos WHERE cor IS NOT NULL AND ref IS NOT NULL',
@@ -127,7 +131,9 @@ async function main() {
   console.log(`${alvos.length} textos pra examinar (${fichas.rows.length} fichas + ${sites.rows.length} site_produto)\n`);
 
   // ── Classificação ──
-  const porClasse = { CONTRADIZ: [], CITA_PROPRIA: [], SEM_PALETA: [] };
+  const RX_ANCORA = /\bcor(?:es)?\s*:?\s+([\wÀ-ÿ-]+)/i;
+const temAncoraDeCor = (texto) => { const m = String(texto||'').match(RX_ANCORA); return !!m && coresCitadas(m[1]).length > 0; };
+const porClasse = { CONTRADIZ_ANCORADA: [], CONTRADIZ_PROSA: [], CITA_PROPRIA: [], SEM_PALETA: [] };
   for (const a of alvos) {
     const citadas = coresCitadas(a.texto);
     if (!citadas.length) continue;
@@ -138,7 +144,8 @@ async function main() {
     }
     const fora = citadas.filter((c) => !proprias.has(c));
     if (fora.length) {
-      porClasse.CONTRADIZ.push({ ...a, citadas, fora, proprias: [...proprias] });
+      const destino = temAncoraDeCor(a.texto) ? 'CONTRADIZ_ANCORADA' : 'CONTRADIZ_PROSA';
+      porClasse[destino].push({ ...a, citadas, fora, proprias: [...proprias] });
     } else if (proprias.size > 1) {
       porClasse.CITA_PROPRIA.push({ ...a, citadas, proprias: [...proprias] });
     }
@@ -173,12 +180,12 @@ async function main() {
 
   // ── Aplicar: NULL só no CONTRADIZ, com backup antes ──
   const backupPath = path.join(__dirname, `fix-descricao-cita-cor-backup-antes-${Date.now()}.json`);
-  fs.writeFileSync(backupPath, JSON.stringify(porClasse.CONTRADIZ, null, 2));
+  fs.writeFileSync(backupPath, JSON.stringify(porClasse.CONTRADIZ_ANCORADA, null, 2));
   console.log(`Backup salvo em ${backupPath}`);
 
   await db.query('BEGIN');
   let n = 0;
-  for (const item of porClasse.CONTRADIZ) {
+  for (const item of porClasse.CONTRADIZ_ANCORADA) {
     if (item.tabela === 'produto_ficha') {
       await db.query(
         `UPDATE produto_ficha SET ${item.campo} = NULL WHERE ref = $1 AND marca = $2 AND ${item.campo} = $3`,
