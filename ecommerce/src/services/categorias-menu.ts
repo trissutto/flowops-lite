@@ -22,29 +22,25 @@ import type { NavItem } from '@/types';
 type FiltroValor = { valor: string; qtd: number };
 
 /**
- * SEM CACHE nas páginas de categoria (dono, 10/08/2026: "elimine este cache").
+ * HISTÓRICO DO CACHE DESTA CONSULTA — três eras:
  *
- * O mecanismo que derrubava o cache ao gravar (`/api/revalidar`) existe desde
- * 07/08 e **nunca funcionou em produção**: `REVALIDATE_SECRET` não está
- * configurada em nenhum dos dois lados, e sem ela o backend desiste em silêncio
- * e a rota do site responde 503. Resultado: TODA edição de retaguarda esperava
- * a hora inteira. O dono subiu as fotos das 12 categorias, abriu o site, viu as
- * antigas e concluiu que não tinha salvo — as fotos estavam gravadas.
+ * 1. Até 10/08/2026: ISR de 1h SEM invalidação. O aviso da retaguarda
+ *    (`/api/revalidar`) exigia `REVALIDATE_SECRET`, que nunca foi criada — o
+ *    backend desistia em silêncio e toda edição esperava a hora inteira. O
+ *    dono subiu as fotos das 12 categorias, viu as antigas e concluiu que não
+ *    tinha salvo. Daí o "elimine este cache".
+ * 2. 10/08 → 06/09: `fresco: true` (revalidate 0) nas páginas de categoria —
+ *    confiança de volta, pagando um SSR por visita.
+ * 3. Desde 06/09: o aviso FUNCIONA (cai no `LOJA_ORDER_TOKEN` desde 13/08 —
+ *    se o checkout vende, o aviso anda; conferido em produção) e a
+ *    classificação/edição dispara `revalidateTag('categorias')`. As páginas
+ *    de categoria voltaram pro ISR de 60s e esta consulta é lida com a tag
+ *    `categorias`: salvou na retaguarda → o evento derruba → a próxima visita
+ *    regenera. Os 60s são só rede de segurança.
  *
- * Enquanto o segredo não existe, o cache é uma promessa de velocidade paga com
- * a confiança de quem edita. Então:
- *
- *   · PÁGINAS DE CATEGORIA (`/categoria` e `/categoria/<slug>`) — a vitrine que
- *     ele edita e confere: FRESCO SEMPRE. É o que ele abre pra ver se pegou.
- *   · HOME: 60s. Ela é a página mais visitada e já carrega banner e vitrine
- *     junto; um minuto é invisível pra quem edita e não abre mão do estático
- *     justamente onde o tráfego está.
- *
- * A consulta é barata (16 linhas com contagem), não a grade de produtos — que
- * segue com o cache dela.
- *
- * Ligando o `REVALIDATE_SECRET` nos dois lados, dá pra voltar tudo pra 3600 —
- * aí o cache volta a ser velocidade de graça, que era a intenção original.
+ * ⚠️ `fresco: true` (revalidate 0) segue existindo pra quem chamar de rota já
+ * dinâmica — mas um único fetch `no-store` numa rota ISR derruba a rota
+ * inteira pro dinâmico. Não usar em página cacheada.
  */
 const REVALIDATE_PADRAO = 60;
 const SEMPRE_FRESCO = 0;

@@ -90,10 +90,17 @@ export class SiteCategoriasService {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : slug;
   }
 
-  /** Avisa a vitrine — ver `avisarVitrine` — e zera o cache daqui. */
+  /**
+   * Avisa a vitrine — ver `avisarVitrine` — e zera o cache daqui.
+   *
+   * `catalogo` entrou em 06/09: ordem/agrupamento da SiteCategoria mudam a
+   * GRADE da página da categoria (agruparPorSub reordena os blocos), e a
+   * grade é o fetch com tag `catalogo` — só `categorias`/`filtros` deixava a
+   * página ISR servindo a ordem velha pelo TTL inteiro.
+   */
   private avisarSite() {
     this.catalogo.invalidarCache();
-    avisarVitrine(['categorias', 'filtros'], this.logger, 'categorias');
+    avisarVitrine(['categorias', 'filtros', 'catalogo'], this.logger, 'categorias');
   }
 
   /** Slugs que EXISTEM de verdade, com quantas peças publicadas cada um tem. */

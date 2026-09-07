@@ -49,6 +49,10 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/institucional/pagamento',
   // Tela nativa desde 10/08/2026 (antes era redirect pro FlowOps).
   '/trocas',
+  // 06/09: a 2ª página mais buscada do domínio no Google (2.060 cliques/90d)
+  // existia desde 19/08 e NÃO estava aqui — logo era filtrada de todo menu e
+  // rodapé por `filtrarLinksVivos`: página órfã, só alcançável pelo Google.
+  '/rastreio',
   '/conta',
   // Registradas em 19/08: a de avaliações nasceu na sprint do centro de
   // avaliação e não foi anotada aqui — sem isso o prefetch dela fica desligado

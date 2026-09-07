@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Menu, Search } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -10,7 +12,6 @@ import { AnnouncementBar } from './AnnouncementBar';
 import { Logo } from './Logo';
 import { Navigation } from './Navigation';
 import { MobileDrawer } from './MobileDrawer';
-import { SearchOverlay } from './SearchOverlay';
 import {
   CartButton,
   SearchButton,
@@ -18,6 +19,22 @@ import {
   UserMenu,
   WishlistButton,
 } from './HeaderActions';
+
+/**
+ * A BUSCA SÓ ENTRA NO BUNDLE QUANDO A CLIENTE ABRE A BUSCA (06/09).
+ *
+ * O `SearchOverlay` arrasta o motor inteiro (`lib/search`: engine + intenção
+ * + sinônimos, ~38KB de fonte) e vinha estático no Header — ou seja, no
+ * carregamento inicial de TODAS as páginas, fechado. Mesmo racional do
+ * `DeferredCommerceOverlays` (MiniCart/QuickAdd): UI fechada não justifica
+ * bytes no caminho crítico. O chunk baixa no primeiro toque na lupa; depois
+ * disso o painel fica montado pra sempre (a regra "sempre montado com inert"
+ * do próprio SearchOverlay segue valendo do 2º uso em diante).
+ */
+const SearchOverlay = dynamic(
+  () => import('./SearchOverlay').then((m) => m.SearchOverlay),
+  { ssr: false },
+);
 
 /**
  * HEADER — presente em todas as páginas.
@@ -45,6 +62,12 @@ export function Header({
   const overlay = useUiStore((s) => s.overlay);
   const toggleOverlay = useUiStore((s) => s.toggleOverlay);
   const closeOverlay = useUiStore((s) => s.closeOverlay);
+  // Vira true no PRIMEIRO pedido de busca e nunca volta — é o gatilho do
+  // chunk adiado do SearchOverlay (ver o `dynamic` no topo do arquivo).
+  const [buscaAtivada, setBuscaAtivada] = useState(false);
+  useEffect(() => {
+    if (overlay === 'search') setBuscaAtivada(true);
+  }, [overlay]);
 
   /**
    * A BARRA DE BUSCA DO CELULAR — visível, não escondida atrás do ícone.
@@ -147,7 +170,10 @@ export function Header({
       </header>
 
       <MobileDrawer open={overlay === 'menu'} onClose={closeOverlay} itens={navegacao} />
-      <SearchOverlay open={overlay === 'search'} onClose={closeOverlay} />
+      {/* O estado do clique espera o chunk: `overlay` mora no store, então o
+          painel nasce já aberto quando o módulo chega (padrão do
+          DeferredCommerceOverlays). */}
+      {buscaAtivada && <SearchOverlay open={overlay === 'search'} onClose={closeOverlay} />}
     </>
   );
 }

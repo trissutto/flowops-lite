@@ -9,7 +9,6 @@ import { CAROUSEL_PRODUCT_SIZES, ProductCard } from '@/components/cards/ProductC
 import { chaveDoCard, mapPeca } from '@/services/products';
 import { freeShippingGap } from '@/lib/commerce/frete';
 import { useLojaConfig } from '@/hooks/useLojaConfig';
-import { trackSelectItem } from '@/lib/tracking';
 import { formatPrice } from '@/lib/utils';
 import type { Product } from '@/types';
 
@@ -135,7 +134,7 @@ export function CompletarFreteGratis({ subtotal }: { subtotal: number }) {
               product={product}
               index={index}
               sizes={CAROUSEL_PRODUCT_SIZES}
-              onProductClick={() => trackSelectItem(product, 'completar-frete-gratis', index)}
+              trackList="completar-frete-gratis"
             />
           ))}
         </LuxuryCarousel>

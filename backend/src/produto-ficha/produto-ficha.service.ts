@@ -4,6 +4,7 @@ import { AtributosPecaService } from '../atributos-peca/atributos-peca.service';
 import { LojaCatalogService } from '../loja-catalog/loja-catalog.service';
 import { avisarVitrine } from '../common/avisar-vitrine';
 import { refBaseOf, refsDeBusca } from '../common/ref-base';
+import { citaCorAncorada, coresCitadas } from './descricao-cor';
 
 /**
  * FICHA DO PRODUTO — a camada que o Flow ACRESCENTA ao catálogo.
@@ -265,8 +266,18 @@ export class ProdutoFichaService {
         exigir(listaCheia(f?.ocasioes), 'ocasioes', 'Ocasião', false);
         exigir(preenchido(f?.gradeMedidasId), 'medidas', 'Tabela de medidas', false);
         exigir(preenchido(f?.elasticidade), 'elasticidade', 'Elasticidade', false);
+        // Peça MULTI-COR com descrição citando cor: o texto contradiz a foto
+        // em pelo menos uma variante (caso 900890, 22/08). Aviso, não trava —
+        // quem apaga/reescreve é gente (ou o script fix-descricao-cita-cor).
+        exigir(
+          ((f?.cores ?? []) as any[]).length <= 1 ||
+            coresCitadas(String(f?.descricao ?? '')).length === 0,
+          'descricaoCitaCor',
+          'Descrição cita cor',
+          false,
+        );
 
-        const total = 8;
+        const total = 9;
         return {
           ref: v.ref,
           marca: v.marca,
@@ -498,6 +509,26 @@ export class ProdutoFichaService {
     if (dados.nomeCurto !== undefined) patch.nomeCurto = dados.nomeCurto?.trim() || null;
     if (dados.descricao !== undefined) patch.descricao = dados.descricao?.trim() || null;
     if (dados.resumo !== undefined) patch.resumo = dados.resumo?.trim().slice(0, 400) || null;
+
+    /**
+     * DESCRIÇÃO POR REF NÃO CITA COR (regra editorial, 06/09/2026). O texto
+     * vale pra TODAS as variantes — "Cor: Preto" na variante marrom foi o
+     * caso 900890, e contradição induz troca paga pela loja. Bloqueia SÓ a
+     * construção ancorada na palavra "cor" (segura — ver `descricao-cor.ts`);
+     * cor solta no texto corrido vira aviso na fila da ficha, não bloqueio.
+     */
+    for (const campo of ['descricao', 'resumo'] as const) {
+      const valor = patch[campo];
+      if (typeof valor === 'string') {
+        const trecho = citaCorAncorada(valor);
+        if (trecho) {
+          throw new BadRequestException(
+            `${campo === 'resumo' ? 'resumo' : 'descrição'} não pode citar cor ("${trecho}") — ` +
+              'o texto vale pra todas as cores da peça. Cor mora no título comercial da COR.',
+          );
+        }
+      }
+    }
 
     if (dados.tecidoId !== undefined) {
       const t = await this.atributos.resolveRef('tecido', dados.tecidoId);

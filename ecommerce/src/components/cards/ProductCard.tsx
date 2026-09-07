@@ -1,6 +1,6 @@
 'use client';
 
-
+import { memo, useState } from 'react';
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { Eye, Heart, ShoppingBag } from 'lucide-react';
@@ -9,6 +9,7 @@ import { ProductBadgeTag, seloDoCard } from '@/components/ui/Badge';
 import { useWishlistStore } from '@/store/wishlist';
 import { useQuickAddStore } from '@/store/quick-add';
 import { useMounted } from '@/hooks';
+import { trackSelectItem } from '@/lib/tracking';
 import type { Product } from '@/types';
 import { ProgressiveImage } from '@/components/media/ProgressiveImage';
 
@@ -50,6 +51,16 @@ interface ProductCardProps {
   /** Dispara somente quando a cliente abre a página da peça. */
   onProductClick?: () => void;
   /**
+   * Nome da lista pro `select_item` — o card monta o handler sozinho.
+   *
+   * Existe pro `memo` valer: `onProductClick={() => track...}` recriado no
+   * pai invalida a comparação de props de TODOS os cards a cada render, que
+   * era exatamente o custo que o memo veio cortar. String é estável de graça.
+   * `onProductClick` continua aceito pra quem rastreia outra coisa (páginas
+   * de loja) — só custa o memo daquele call-site.
+   */
+  trackList?: string;
+  /**
    * SLOT DA HOME — hoje 2 colunas no celular e 6 no desktop. O modo nasceu
    * quando a home ainda usava 3 colunas no celular e preserva a apresentação
    * mais enxuta: evita que etiqueta, sacola e textos secundários disputem
@@ -90,7 +101,16 @@ export const CAROUSEL_PRODUCT_SIZES =
  */
 export const HOME_GRID_SIZES = '(max-width: 639px) 47vw, (max-width: 1023px) 30vw, 300px';
 
-export function ProductCard({
+/**
+ * `memo` porque o card vive em listas que re-renderizam por estado alheio: a
+ * `CategoryListing` guarda drawer/view/busca no mesmo componente da grade, e
+ * com 5 páginas roladas um toque no "Filtrar" reconciliava 120+ cards (2
+ * `next/image` + SVGs cada). Com memo, o toque re-renderiza a casca e os
+ * cards ficam quietos — desde que as props sejam estáveis (ver `trackList`).
+ */
+export const ProductCard = memo(ProductCardBase);
+
+function ProductCardBase({
   product,
   index = 0,
   onQuickView,
@@ -101,12 +121,24 @@ export function ProductCard({
   progressiveImage = false,
   href: customHref,
   onProductClick,
+  trackList,
   compact = false,
 }: ProductCardProps) {
   const mounted = useMounted();
   const abrirQuickAdd = useQuickAddStore((s) => s.abrir);
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
+  /**
+   * A 2ª foto só entra no DOM no primeiro hover REAL. Antes ela nascia junto
+   * com o card (`hidden lg:block`) — no celular eram 24 <img> + blur por
+   * página de categoria que ninguém nunca via, e no desktop 40 imagens
+   * pagas antes de qualquer intenção. O blur placeholder cobre o carregamento
+   * durante o crossfade de 900ms do primeiro hover.
+   */
+  const [hoverPronto, setHoverPronto] = useState(false);
+  const aoAbrirPeca =
+    onProductClick ??
+    (trackList !== undefined ? () => trackSelectItem(product, trackList, index) : undefined);
 
   // Card de UMA COR (dono, 20/08): o link já leva a cor — a PDP abre com
   // ela como principal e as miniaturas de todas as cores presentes.
@@ -178,10 +210,11 @@ export function ProductCard({
         className,
       )}
       style={{ animationDelay: `${(index % colunasDoStagger) * 60}ms` }}
+      onMouseEnter={alternate && !hoverPronto ? () => setHoverPronto(true) : undefined}
     >
       {/* Mídia */}
       <div className={cn('relative overflow-hidden rounded-md bg-surface-alt', aspectClass)}>
-        <Link href={href} onClick={onProductClick} className="absolute inset-0" aria-label={product.name}>
+        <Link href={href} onClick={aoAbrirPeca} className="absolute inset-0" aria-label={product.name}>
           <ProductImage
             src={cover.src}
             alt={cover.alt}
@@ -193,12 +226,13 @@ export function ProductCard({
             className={cn(
               'object-cover transition-all duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
               'opacity-100 lg:group-hover:scale-[1.04]',
-              // A troca de foto no hover era `useState` — agora é `group-hover`.
-              // Ver o comentário no topo do componente.
-              alternate && 'lg:group-hover:opacity-0',
+              // A troca de foto no hover era `useState` — agora é `group-hover`,
+              // e a 2ª foto só monta no primeiro mouseenter (`hoverPronto`):
+              // a capa nunca esmaece sem a substituta presente.
+              alternate && hoverPronto && 'lg:group-hover:opacity-0',
             )}
           />
-          {alternate && (
+          {alternate && hoverPronto && (
             <ProductImage
               src={alternate.src}
               alt=""
@@ -356,7 +390,7 @@ export function ProductCard({
         <h3 className={cn(compact ? 'mt-1.5' : 'lg:mt-1.5')}>
           <Link
             href={href}
-            onClick={onProductClick}
+            onClick={aoAbrirPeca}
             className={cn(
               'font-normal text-ink transition-colors hover:text-primary-strong',
               // Nome real do catálogo ("Blusa Manga Curta — 700984") tem 26

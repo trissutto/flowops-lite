@@ -22,13 +22,15 @@ import { buildMetadata } from '@/lib/seo';
  */
 
 /**
- * SEM ISR (dono, 10/08/2026: "elimine este cache").
- *
- * Esta é a página que ele abre pra conferir se a foto da categoria pegou. Com
- * 1 hora de cache, ele subia as 12 fotos, via as antigas e concluía que não
- * tinha salvo — as fotos estavam gravadas. Ver `categorias-menu.ts`.
+ * ISR DE VOLTA (06/09/2026) — ver o comentário longo em
+ * `categoria/[slug]/page.tsx`. O caso desta página ("subi a foto da
+ * categoria e ela não trocou", 10/08) hoje é coberto por evento: salvar
+ * categoria, subir ou remover imagem na retaguarda dispara
+ * `revalidateTag('categorias')` (`site-categorias.service.ts` →
+ * `avisarVitrine`), que derruba exatamente o fetch abaixo. Os 60s são só a
+ * rede de segurança.
  */
-export const dynamic = 'force-dynamic';
+export const revalidate = 60;
 
 export const metadata: Metadata = buildMetadata({
   title: 'Categorias — todas as peças do 44 ao 60',
@@ -42,7 +44,9 @@ export default async function CategoriasPage() {
   // Categoria DESTACADA (estrela da retaguarda) vive como ABA própria no topo
   // do site — o card junto duplicava a entrada, e foi a queixa do dono em
   // 13/08 ("tire o Conforto daqui"). A estrela MOVE: dos cards pra barra.
-  const categorias = (await getCategorias({ fresco: true })).filter((c) => !c.destaque);
+  // Sem `fresco` (revalidate 0 derrubaria a rota pro dinâmico) — a foto nova
+  // chega por evento, ver o bloco de comentário do `revalidate` acima.
+  const categorias = (await getCategorias()).filter((c) => !c.destaque);
 
   return (
     <>

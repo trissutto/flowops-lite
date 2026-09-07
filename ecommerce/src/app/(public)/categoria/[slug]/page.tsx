@@ -7,7 +7,7 @@ import { CategoryListing } from '@/components/commerce/CategoryListing';
 import { ChipsSubcategoria } from '@/components/commerce/ChipsSubcategoria';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
-import { categoryMeta } from '@/services/products';
+import { CATEGORY_SLUGS, categoryMeta } from '@/services/products';
 import { fetchPrimeiraPagina } from '@/services/vitrine';
 import { getCategorias } from '@/services/categorias-menu';
 import { getInstagram } from '@/services/instagram';
@@ -27,25 +27,39 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
  * "entrou → viu produto → comprou". Cabeçalho agora é uma linha (breadcrumb +
  * título), e a grade não tem mais interrupção nenhuma.
  *
- * SEM ISR (dono, 10/08/2026: "elimine este cache"). Era 1h, e como o
- * `REVALIDATE_SECRET` nunca foi configurado em produção, nada derrubava esse
- * cache: classificar uma peça e conferir na vitrine eram coisas separadas por
- * uma hora. Ver `categorias-menu.ts`.
+ * ISR DE VOLTA (06/09/2026) — mas agora com a invalidação que faltava.
+ *
+ * O "elimine este cache" do dono (10/08) era o sintoma de outra coisa: o ISR
+ * de 1h NÃO CAÍA quando ele classificava uma peça, porque o aviso
+ * retaguarda→site dependia de uma env (`REVALIDATE_SECRET`) que nunca foi
+ * criada. Desde 13/08 o aviso cai no `LOJA_ORDER_TOKEN` (que o checkout já
+ * usa — se o site vende, o aviso funciona; conferido em produção em 06/09:
+ * `GET /api/revalidar` → `configurado: true`), e a classificação dispara
+ * `categoria:<slug>` — inclusive da categoria que a peça DEIXOU.
+ *
+ * Então o trato agora é: classificou → o backend derruba a tag → a página
+ * regenera na próxima visita. Os 60s são só a rede de segurança (o MESMO TTL
+ * do cache do catálogo no backend), e a cliente ganha a página da CDN em vez
+ * de pagar um SSR de ~550ms por visita — era isto que mantinha a categoria
+ * fora do ar a cada deploy do Railway e alimentava o INP ruim do celular.
+ *
+ * ⚠️ Pra rota ficar cacheável ela NÃO PODE ler `searchParams`: o `?sub=` do
+ * chip é lido no NAVEGADOR (store `subcategoria`) — o servidor entrega sempre
+ * a categoria inteira, e o recorte acontece no client. Ver `ChipsSubcategoria`
+ * e `store/subcategoria.ts`.
  */
 
-export const dynamic = 'force-dynamic';
+export const revalidate = 60;
 
 /**
- * `generateStaticParams` SAIU junto com o ISR.
- *
- * Ele prerenderizava as categorias conhecidas no build — com a página
- * dinâmica, isso vira contradição: o build congelaria uma versão que nunca
- * mais atualiza, que é o oposto exato do que foi pedido.
- *
- * O que NÃO se perde: a grade de produtos continua com o cache de dados dela
- * (`fetchPrimeiraPagina` → tags `catalogo`/`categoria:<slug>`). Muda o
- * render, não a consulta pesada — a categoria é lida fresca, a vitrine não.
+ * Prerenderiza as categorias conhecidas no build/deploy — a primeira visita
+ * depois do deploy já sai da CDN. Categoria nova (campanha, ex.:
+ * linha-conforto) não está na lista e funciona igual: o primeiro acesso gera
+ * e as seguintes reaproveitam (`dynamicParams` é o padrão).
  */
+export async function generateStaticParams() {
+  return CATEGORY_SLUGS.map((slug) => ({ slug }));
+}
 
 export async function generateMetadata({
   params,
@@ -71,23 +85,17 @@ export async function generateMetadata({
 
 export default async function CategoryPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ sub?: string }>;
 }) {
   const { slug } = await params;
   /**
-   * `?sub=manga-curta` — o chip que a cliente clicou.
-   *
-   * Lido AQUI e passado adiante em dois lugares: a página 1 feita no servidor
-   * e o `CategoryListing`. Sem isso o chip pinta de dourado, muda a URL e a
-   * grade continua com a categoria inteira — foi o que o dono viu em 10/08:
-   * "Regata não filtra nada". O componente sempre soube filtrar; ninguém
-   * entregava o valor pra ele.
+   * ⚠️ NADA de `searchParams` aqui — é o que mantém a rota no ISR. O
+   * `?sub=manga-curta` do chip é lido no navegador (store `subcategoria`) e o
+   * recorte acontece no `CategoryListing`, via react-query. O HTML do servidor
+   * é sempre a categoria inteira: é ele que o Google indexa e que pinta o LCP;
+   * quem chega por link com `?sub=` vê o recorte aplicar na hidratação.
    */
-  const { sub } = await searchParams;
-  const subcategoria = typeof sub === 'string' && sub.trim() ? sub.trim() : undefined;
   const meta = categoryMeta(slug);
   // NOVIDADES é a ordem padrão de toda categoria (dono 07/08): a cliente que
   // volta toda semana precisa ver o que ENTROU, não a mesma vitrine de sempre.
@@ -96,7 +104,6 @@ export default async function CategoryPage({
   // se fosse a ordem do cliente, e a cliente veria uma lista que não pediu.
   const primeiraPagina = await fetchPrimeiraPagina({
     categoria: slug,
-    subcategoria,
     perPage: 24,
     ordenar: 'novidades',
   });
@@ -104,12 +111,13 @@ export default async function CategoryPage({
   /**
    * SUBCATEGORIAS desta categoria — "Blusas" → "Manga curta".
    *
-   * Vem `fresco` porque é exatamente o que o dono acabou de classificar e vai
-   * abrir a página pra conferir. Vazio enquanto ninguém classificou: o
-   * `ChipsSubcategoria` não renderiza nada e a página fica como era.
+   * O `fresco: true` (revalidate 0) saiu em 06/09: um único fetch `no-store`
+   * derruba a rota inteira de volta pro dinâmico. O "classificou → o chip
+   * aparece" que ele garantia agora vem por evento: a classificação dispara
+   * `revalidateTag('categorias')`, que derruba exatamente este fetch.
    */
   const subcategorias =
-    (await getCategorias({ fresco: true })).find((c) => c.slug === slug)?.subcategorias ?? [];
+    (await getCategorias()).find((c) => c.slug === slug)?.subcategorias ?? [];
 
   /**
    * OS POSTS REAIS da @lurdsplussize ("insta saiu de novo", dono 13/08 —
@@ -151,8 +159,8 @@ export default async function CategoryPage({
         <CategoryListing
           category={slug}
           categoryName={meta.name}
-          /* O chip da URL — sem isto a grade ignora a subcategoria. */
-          subcategoria={subcategoria}
+          /* O `?sub=` vem do store no client — nada de searchParams (ISR). */
+          usarSubDaUrl
           /* Mesma ordem do `fetchPrimeiraPagina` acima — ver comentário lá. */
           ordemPadrao="novidades"
           /* Página 1 pronta no servidor: a peça vem no HTML em vez de esperar

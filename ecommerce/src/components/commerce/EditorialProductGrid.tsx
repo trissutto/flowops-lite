@@ -68,6 +68,12 @@ export function EditorialProductGrid({
               index={index}
               onQuickView={onQuickView}
               priority={index < 4}
+              /* `content-visibility` pula render/layout dos cards fora da
+                 tela — é ESTA grade que acumula 120+ cards no scroll
+                 infinito. O intrinsic-size é chute de altura (foto 3/4 +
+                 texto): só vale enquanto o card está pulado, e errar pra
+                 cima/baixo custa um ajuste de scrollbar, não layout. */
+              className="[content-visibility:auto] [contain-intrinsic-size:auto_540px]"
             />
           </Fragment>
         );

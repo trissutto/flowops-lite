@@ -24,9 +24,15 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const alvo = `${BASE_URL}/public/loja/produtos?${url.searchParams.toString()}`;
+  // Mesmas tags do fetch server da categoria (`services/vitrine.ts`): sem
+  // elas, o aviso da retaguarda (revalidateTag) derrubava a página 1 e o
+  // scroll infinito continuava servindo a lista velha por até 60s.
+  const categoria = url.searchParams.get('categoria');
 
   try {
-    const upstream = await fetch(alvo, { next: { revalidate: 60 } });
+    const upstream = await fetch(alvo, {
+      next: { revalidate: 60, tags: ['catalogo', categoria ? `categoria:${categoria}` : 'vitrine'] },
+    });
     if (!upstream.ok) {
       return NextResponse.json({ itens: [], total: 0, erro: 'falha' }, { status: 502 });
     }

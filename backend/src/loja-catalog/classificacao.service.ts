@@ -293,6 +293,19 @@ export class ClassificacaoService {
     };
     if (!input.manterCategoria) data.categoria = input.categoria;
 
+    /**
+     * As categorias que as peças JÁ ocupam, ANTES da gravação — elas entram
+     * nas tags também. Mover peça de Blusas → Vestidos tem que derrubar as
+     * DUAS páginas (a antiga ficava servindo o card fantasma pelo TTL
+     * inteiro), e o carimbo de subcategoria com `manterCategoria` muda a
+     * grade da categoria ATUAL, que até 06/09 não recebia tag nenhuma.
+     */
+    const linhasAntes: Array<{ categoria: string | null; categoriasExtras: unknown }> =
+      await (this.prisma as any).siteProduto.findMany({
+        where: { ref: { in: refs } },
+        select: { categoria: true, categoriasExtras: true },
+      });
+
     const r = await (this.prisma as any).siteProduto.updateMany({
       where: { ref: { in: refs } },
       data,
@@ -309,9 +322,17 @@ export class ClassificacaoService {
      * `categorias`/`filtros` derrubam o menu e a lista de subcategorias;
      * `catalogo` e `categoria:<slug>`, a grade da página da categoria.
      */
-    const tags = ['categorias', 'filtros', 'catalogo'];
-    if (input.categoria) tags.push(`categoria:${input.categoria}`);
-    avisarVitrine(tags, this.logger, 'classificacao');
+    const tags = new Set(['categorias', 'filtros', 'catalogo']);
+    if (input.categoria) tags.add(`categoria:${input.categoria}`);
+    for (const linha of linhasAntes) {
+      if (linha.categoria) tags.add(`categoria:${this.normSlug(linha.categoria)}`);
+      if (Array.isArray(linha.categoriasExtras)) {
+        for (const extra of linha.categoriasExtras) {
+          if (typeof extra === 'string' && extra) tags.add(`categoria:${this.normSlug(extra)}`);
+        }
+      }
+    }
+    avisarVitrine([...tags], this.logger, 'classificacao');
     // Derrubar o cache do site não adianta se o backend responder do dele: a
     // página revalidaria e receberia a MESMA classificação velha.
     this.catalogo.invalidarCache();
@@ -477,6 +498,14 @@ export class ClassificacaoService {
     const subcategoria = subcategorias.find((s) => paiDaSub.get(s) === categoria) ?? null;
     const subcategoriasExtras = subcategorias.filter((s) => s !== subcategoria);
 
+    // As vitrines que a peça está DEIXANDO também precisam de tag — ver o
+    // comentário homônimo em `classificar()`.
+    const linhasAntes: Array<{ categoria: string | null; categoriasExtras: unknown }> =
+      await (this.prisma as any).siteProduto.findMany({
+        where: { ref: { in: refs } },
+        select: { categoria: true, categoriasExtras: true },
+      });
+
     const r = await (this.prisma as any).siteProduto.updateMany({
       where: { ref: { in: refs } },
       data: {
@@ -494,10 +523,18 @@ export class ClassificacaoService {
         `principal=${categoria ?? '-'} por ${input.quem}`,
     );
 
-    // Muda a página de CADA vitrine marcada, não só a da principal.
-    const tags = ['categorias', 'filtros', 'catalogo'];
-    for (const slug of categorias) tags.push(`categoria:${slug}`);
-    avisarVitrine(tags, this.logger, 'classificacao');
+    // Muda a página de CADA vitrine marcada — e de cada uma que a peça deixou.
+    const tags = new Set(['categorias', 'filtros', 'catalogo']);
+    for (const slug of categorias) tags.add(`categoria:${slug}`);
+    for (const linha of linhasAntes) {
+      if (linha.categoria) tags.add(`categoria:${this.normSlug(linha.categoria)}`);
+      if (Array.isArray(linha.categoriasExtras)) {
+        for (const extra of linha.categoriasExtras) {
+          if (typeof extra === 'string' && extra) tags.add(`categoria:${this.normSlug(extra)}`);
+        }
+      }
+    }
+    avisarVitrine([...tags], this.logger, 'classificacao');
     this.catalogo.invalidarCache();
 
     return {
