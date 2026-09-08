@@ -30,6 +30,8 @@ import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 export class AwaitingStockRetryCron {
   private readonly logger = new Logger(AwaitingStockRetryCron.name);
   private rodando = false;
+  /** Pedidos com card removido na mão já avisados neste processo (não repete a cada 10 min). */
+  private readonly avisadosNaMao = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -113,8 +115,42 @@ export class AwaitingStockRetryCron {
       take: 20,
     });
     if (!pedidos.length) return;
+
+    /**
+     * CARD REMOVIDO NA MÃO NÃO VOLTA SOZINHO (08/09, ON-000004). A retaguarda
+     * tinha tirado o card da loja 06 em 17/08 e entregue o pedido por fora, sem
+     * fechar o status. A primeira rodada desta varredura leu "pago, separando,
+     * sem card" e criou card novo na loja 05 — pedido já entregue ressurgindo
+     * pra outra loja separar de novo. Remoção manual é DECISÃO de gente: aqui
+     * só se avisa; quem resolve é a retaguarda (fechar na loja vendedora,
+     * cancelar ou forçar loja). O que a varredura pega sozinha é o card que o
+     * SISTEMA perdeu (LP-000311).
+     */
+    const removidosNaMao = new Set<string>(
+      (
+        await (this.prisma as any).orderHistory.findMany({
+          where: {
+            orderId: { in: pedidos.map((p) => p.id) },
+            note: { contains: 'REMOVIDO manualmente' },
+          },
+          select: { orderId: true },
+        })
+      ).map((h: any) => String(h.orderId)),
+    );
+
     for (const p of pedidos) {
       const dias = Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 86_400_000);
+      if (removidosNaMao.has(p.id)) {
+        if (!this.avisadosNaMao.has(p.id)) {
+          this.avisadosNaMao.add(p.id);
+          this.logger.warn(
+            `[sem-card] pedido ${p.wcOrderNumber || p.id} está PAGO e "separando" sem card há ${dias} dia(s), ` +
+              `mas o card foi REMOVIDO NA MÃO pela retaguarda — não re-roteio. Decidir na retaguarda: ` +
+              `fechar na loja vendedora, cancelar ou forçar loja.`,
+          );
+        }
+        continue;
+      }
       const r = await this.tentar(p, 'sem-card');
       if (r === 'roteado') {
         this.logger.warn(
