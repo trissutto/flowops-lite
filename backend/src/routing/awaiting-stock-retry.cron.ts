@@ -180,8 +180,15 @@ export class AwaitingStockRetryCron {
         });
         return 'adiado';
       }
-      const r: any = await this.routing.routeOrder(p.id);
-      return r?.persisted ? 'roteado' : 'sem-estoque';
+      await this.routing.routeOrder(p.id);
+      // O que aconteceu de verdade está no pedido, não no retorno do preview:
+      // card criado = roteado; `awaiting_stock` = a rede não cobre.
+      const depois: any = await this.prisma.order.findUnique({
+        where: { id: p.id },
+        select: { status: true, pickOrders: { select: { id: true }, take: 1 } } as any,
+      });
+      if (depois?.pickOrders?.length) return 'roteado';
+      return depois?.status === 'awaiting_stock' ? 'sem-estoque' : 'adiado';
     } catch (e: any) {
       this.logger.debug(`[${tag}] ${p.wcOrderNumber || p.id} ainda não: ${e?.message || e}`);
       await this.prisma.order
