@@ -10154,9 +10154,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /** Espelho do getFaturamentoPorLoja via giga_caixa_mov — MESMA regra da query
    *  viva: filtra por DATAFEC, exclui MARCADO='SIM', cupons = DISTINCT numero.
    *  Bate exato com o Wincred (o espelho copia a `caixa` linha a linha). */
-  private async getFaturamentoPorLojaFromMirror(inicio: Date, fim: Date): Promise<
+  private async getFaturamentoPorLojaFromMirror(
+    inicio: Date,
+    fim: Date,
+    opts?: { semDevolucoesEspelhadas?: boolean },
+  ): Promise<
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
+    // Devoluções espelhadas do Flow = registros sintéticos 'r<md5>' (ponte
+    // espelharCaixaMovDoFlow desde 25/08 + retro-lançamento 08/09). Quem abate
+    // pdv_returns por conta própria (DRE, régua fina dinheiro × troca) pede o
+    // BRUTO sem elas — senão a mesma devolução é abatida DUAS vezes.
+    const filtroDevolucao = opts?.semDevolucoesEspelhadas ? `AND registro NOT LIKE 'r%'` : '';
     const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
       // CHAVE HÍBRIDA — necessária porque o espelho guarda o NUMERO JÁ
       // ACHATADO (string arredondada do FLOAT; ver getCaixaMovRaw). Enquanto
@@ -10176,6 +10185,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
          FROM giga_caixa_mov
         WHERE data_fec >= $1 AND data_fec < $2
           AND (marcado IS NULL OR marcado <> 'SIM')
+          ${filtroDevolucao}
         GROUP BY loja
         ORDER BY faturamento DESC`,
       inicio, fim,
@@ -10194,14 +10204,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async getFaturamentoPorLoja(inicio: Date, fim: Date): Promise<
+  async getFaturamentoPorLoja(
+    inicio: Date,
+    fim: Date,
+    opts?: { semDevolucoesEspelhadas?: boolean },
+  ): Promise<
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
     // Espelho primeiro (mesma regra DATAFEC); cai pro Giga ao vivo se o espelho
-    // não estiver pronto/cobrindo o período.
+    // não estiver pronto/cobrindo o período. (opts só faz sentido no espelho:
+    // a caixa do Giga nunca teve as linhas sintéticas 'r%'.)
     try {
       if (await this.caixaMovUsable(inicio)) {
-        const doEspelho = await this.getFaturamentoPorLojaFromMirror(inicio, fim);
+        const doEspelho = await this.getFaturamentoPorLojaFromMirror(inicio, fim, opts);
         // Rede de segurança: 14 lojas não faturam ZERO num período inteiro.
         // Espelho "cobrindo" mas vazio = cobertura enganada (data lixo) →
         // melhor UMA consulta ao vivo do que um zero errado na tela do dono.

@@ -601,7 +601,14 @@ export class DreService implements OnApplicationBootstrap {
     };
 
     // ── 1) FATURAMENTO: mesma chamada da tela /retaguarda/faturamento ──
-    const gigaPorLoja = await this.erp.getFaturamentoPorLoja(inicio, fimExclusive);
+    // `semDevolucoesEspelhadas`: desde 25/08 o espelho contém as devoluções do
+    // Flow como linhas negativas 'r%' (e desde 08/09 também as retroativas).
+    // A DRE precisa do BRUTO puro — ela abate pdv_returns logo abaixo com a
+    // régua fina (só devolução em DINHEIRO reduz receita; troca/vale não).
+    // Sem este flag a mesma devolução era abatida em DOBRO.
+    const gigaPorLoja = await this.erp.getFaturamentoPorLoja(inicio, fimExclusive, {
+      semDevolucoesEspelhadas: true,
+    });
 
     let faturamentoForaDaDre = 0;
     const lojasForaDaDre: string[] = [];

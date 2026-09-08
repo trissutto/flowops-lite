@@ -1670,7 +1670,14 @@ export class RealignmentShipmentService {
 
     for (const it of items as any[]) {
       const sku = refToSku.get(it.refCode);
-      const preco = (sku ? priceMap.get(sku) || 0 : 0) || refPriceMap.get(it.refCode) || 0;
+      // Cascata: espelho por SKU → espelho por REF → SNAPSHOT DO BIPE
+      // (precoUnitCents, carimbado quando a peça entrou na caixa). O snapshot
+      // cobre a peça recém-cadastrada que ainda não chegou ao espelho — era a
+      // maior fonte de obrigação nascendo R$ 0,00 (248 peças em ago/26).
+      const preco =
+        (sku ? priceMap.get(sku) || 0 : 0) ||
+        refPriceMap.get(it.refCode) ||
+        (Number(it.precoUnitCents) > 0 ? Number(it.precoUnitCents) / 100 : 0);
       // Preço não resolvido → a obrigação NASCE (a peça viajou, a dívida
       // existe) mas com R$ 0 — e isso não pode ser silencioso: some dinheiro
       // do acerto REDE↔FILIAL sem ninguém ver. Fica gritado no log.

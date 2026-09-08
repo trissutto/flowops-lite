@@ -121,13 +121,17 @@ export class RealignmentReportService {
     const priceMap = await this.pricing.getPricesByCodigos(codigos);
     const refPriceMap = await this.pricing.getPricesByRefs(refs);
 
-    // 6. Computa preço de cada ordem
+    // 6. Computa preço de cada ordem — SNAPSHOT DA ÉPOCA primeiro
+    // (precoUnitCents, carimbado no bipe): promoção de hoje não pode mudar
+    // retroativamente o valor de uma transferência de ontem. O espelho atual
+    // (por SKU e por REF) fica de fallback pros itens antigos sem snapshot.
     const orderPrices = new Map<string, number>();
     let withoutPriceCount = 0;
     for (const o of orders) {
       const codigo = (o.codigoBipado || '').trim();
       const ref = (o.refCode || '').trim();
-      let preco = codigo ? priceMap.get(codigo) || 0 : 0;
+      let preco = Number(o.precoUnitCents) > 0 ? Number(o.precoUnitCents) / 100 : 0;
+      if (preco === 0 && codigo) preco = priceMap.get(codigo) || 0;
       if (preco === 0 && ref) preco = refPriceMap.get(ref) || 0;
       if (preco === 0) withoutPriceCount++;
       orderPrices.set(o.id, preco);
@@ -413,9 +417,11 @@ export class RealignmentReportService {
     const priceMap = await this.pricing.getPricesByCodigos(codigos);
     const refPriceMap = await this.pricing.getPricesByRefs(refs);
     const priceOf = (o: any) => {
+      // Snapshot da época primeiro — mesma regra do getReport.
       const codigo = (o.codigoBipado || '').trim();
       const ref = (o.refCode || '').trim();
-      let preco = codigo ? priceMap.get(codigo) || 0 : 0;
+      let preco = Number(o.precoUnitCents) > 0 ? Number(o.precoUnitCents) / 100 : 0;
+      if (preco === 0 && codigo) preco = priceMap.get(codigo) || 0;
       if (preco === 0 && ref) preco = refPriceMap.get(ref) || 0;
       return preco;
     };
@@ -659,7 +665,9 @@ export class RealignmentReportService {
       items: orders.map((o) => {
         const codigo = (o.codigoBipado || '').trim();
         const ref = (o.refCode || '').trim();
-        let preco = codigo ? priceMap.get(codigo) || 0 : 0;
+        // Snapshot da época primeiro — mesma regra do getReport.
+        let preco = Number(o.precoUnitCents) > 0 ? Number(o.precoUnitCents) / 100 : 0;
+        if (preco === 0 && codigo) preco = priceMap.get(codigo) || 0;
         if (preco === 0 && ref) preco = refPriceMap.get(ref) || 0;
         return {
           sku: codigo || ref,
