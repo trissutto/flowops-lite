@@ -1446,6 +1446,79 @@ export class DreService implements OnApplicationBootstrap {
       return { tipo: 'faturamento', linhas: vendas };
     }
 
+    // ── Espécie SINTÉTICA: Taxa de cartão/PIX ────────────────────────────
+    // Não existe conta lançada com esse nome — o valor da DRE nasce do
+    // cruzamento pagamento real (bandeira + parcelas em PdvSalePayment) ×
+    // taxa cadastrada. O detalhe devolve essa conta ABERTA por bandeira e
+    // faixa de parcelas, com a MESMA régua do cálculo (taxaCartaoPorLoja) —
+    // inclusive a parte paga em bandeira SEM taxa cadastrada, que entra com
+    // R$ 0 e aqui aparece dizendo isso em vez de sumir.
+    if (this.semAcento(input.especie || '') === 'TAXA DE CARTAO/PIX') {
+      const { startDate, endDate } = this.brtRange(de, ate);
+      const tabela: any[] = await (this.prisma as any).taxaCartao.findMany({ where: { ativo: true } });
+      const porChave = new Map<string, number>();
+      for (const t of tabela) {
+        porChave.set(`${this.semAcento(t.bandeira)}|${t.faixaParcela}`, Number(t.taxaPct));
+      }
+
+      const pagamentos: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT p.method, p.details, SUM(p.valor)::float AS total, COUNT(*)::int AS qtd
+           FROM pdv_sale_payments p
+           JOIN pdv_sales s ON s.id = p.sale_id
+          WHERE s.finalized_at >= $1 AND s.finalized_at <= $2
+            AND s.status = 'finalized' AND s.is_training = false
+            AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+            AND lower(p.method) IN ('pix','debito','credito','cartao')
+            AND upper(trim(s.store_code)) = ANY($3::text[])
+          GROUP BY p.method, p.details`,
+        startDate, endDate, codes,
+      );
+
+      const grupos = new Map<string, {
+        rotulo: string; base: number; transacoes: number; pct: number | null; valor: number;
+      }>();
+      for (const row of pagamentos) {
+        const metodo = String(row.method || '').toLowerCase();
+        let bandeiraRaw = '';
+        let parcelas = 1;
+        try {
+          const det = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+          bandeiraRaw = String(det?.bandeira || '');
+          parcelas = Number(det?.parcelas) || 1;
+        } catch { /* details inválido → genérico, igual ao cálculo */ }
+
+        const bandeira = this.normalizaBandeira(bandeiraRaw, metodo);
+        const faixa = this.faixaDe(metodo, parcelas);
+        const pct = porChave.get(`${bandeira}|${faixa}`) ?? null;
+
+        let rotulo: string;
+        if (metodo === 'pix') rotulo = bandeira === 'PIX' ? 'PIX' : `${bandeira} · PIX`;
+        else if (metodo === 'debito') rotulo = bandeira === 'DEBITO' ? 'Débito (sem bandeira)' : `${bandeira} · débito`;
+        else {
+          const nome = bandeira === 'CREDITO' ? 'Crédito (sem bandeira)' : bandeira;
+          rotulo = faixa === 'UNICA' ? `${nome} · crédito` : `${nome} · crédito ${faixa}x`;
+        }
+
+        const g = grupos.get(rotulo)
+          || { rotulo, base: 0, transacoes: 0, pct, valor: 0 };
+        g.base += Number(row.total || 0);
+        g.transacoes += Number(row.qtd || 0);
+        if (pct != null) g.valor += Number(row.total || 0) * (pct / 100);
+        grupos.set(rotulo, g);
+      }
+
+      const linhasTaxa = [...grupos.values()].sort((a, b) => b.valor - a.valor || b.base - a.base);
+      return {
+        tipo: 'taxa-cartao',
+        linhas: linhasTaxa,
+        resumo: {
+          base: linhasTaxa.reduce((s, l) => s + l.base, 0),
+          taxa: linhasTaxa.reduce((s, l) => s + l.valor, 0),
+          semTaxaCadastrada: linhasTaxa.filter((l) => l.pct == null).reduce((s, l) => s + l.base, 0),
+        },
+      };
+    }
+
     if (['FIXA', 'VARIAVEL', 'FINANCEIRA', 'DESPESAS'].includes(linha)) {
       const especies: any[] = await (this.prisma as any).especieConta.findMany();
       const idsDoGrupo = new Set(

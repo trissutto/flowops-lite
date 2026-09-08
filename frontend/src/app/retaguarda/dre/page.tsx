@@ -458,6 +458,129 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   );
 }
 
+// ── 3º nível da cascata: o que COMPÕE uma espécie, aberto no lugar ─────────
+// RH abre por funcionária, VALE TRANSPORTE por beneficiária, Taxa de
+// cartão/PIX pela conta bandeira × parcelas que gerou o valor. É agregado de
+// propósito — o conta a conta continua no "ver lançamentos ›" (modal).
+
+type ComposicaoItem = { rotulo: string; valor: number; nota?: string; alerta?: boolean };
+type Composicao = { itens: ComposicaoItem[]; rodape?: string };
+
+function montarComposicao(resp: any): Composicao {
+  if (resp?.tipo === 'taxa-cartao') {
+    return {
+      itens: (resp.linhas || []).map((l: any) => ({
+        rotulo: l.rotulo,
+        valor: l.valor,
+        nota: l.pct == null
+          ? `${brl(l.base)} pagos assim — SEM taxa cadastrada, entrou R$ 0`
+          : `${brl(l.base)} pagos × ${String(l.pct).replace('.', ',')}%`,
+        alerta: l.pct == null,
+      })),
+      rodape: resp.resumo ? `${brl(resp.resumo.base)} passaram em cartão/PIX no período` : undefined,
+    };
+  }
+  if (resp?.tipo === 'despesas') {
+    const por = new Map<string, { valor: number; n: number; emAberto: number }>();
+    for (const l of resp.linhas || []) {
+      const g = por.get(l.beneficiario) || { valor: 0, n: 0, emAberto: 0 };
+      g.valor += Number(l.valor || 0);
+      g.n += 1;
+      if (!l.pago) g.emAberto += Number(l.valor || 0);
+      por.set(l.beneficiario, g);
+    }
+    return {
+      itens: [...por.entries()]
+        .map(([rotulo, g]) => ({
+          rotulo,
+          valor: g.valor,
+          // Em aberto NÃO é alerta: competência conta pago e provisão igual.
+          nota: [
+            g.n > 1 ? `${g.n} lançamentos` : null,
+            g.emAberto > 0 ? `${brl(g.emAberto)} em aberto` : null,
+          ].filter(Boolean).join(' · ') || undefined,
+        }))
+        .sort((a, b) => b.valor - a.valor),
+      rodape: resp.truncado ? 'Composição sobre as 500 primeiras contas do período.' : undefined,
+    };
+  }
+  return { itens: [] };
+}
+
+function useComposicaoEspecie(de: string, ate: string, coluna: string, linha: string, especie: string) {
+  const [comp, setComp] = useState<Composicao | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    // Trocou De/Até ou a loja com a composição aberta: limpa o estado velho —
+    // sem isso um erro de rede antigo escondia o dado bom até fechar/reabrir.
+    setComp(null);
+    setErro(null);
+    api<any>(`/dre/drill?de=${de}&ate=${ate}&coluna=${encodeURIComponent(coluna)}&linha=${linha}&especie=${encodeURIComponent(especie)}`)
+      .then((r) => { if (vivo) setComp(montarComposicao(r)); })
+      .catch((e) => { if (vivo) setErro(e?.message || 'Falha ao abrir a composição'); });
+    return () => { vivo = false; };
+  }, [de, ate, coluna, linha, especie]);
+  return { comp, erro };
+}
+
+/** Linhas <tr> do 3º nível — dentro da tabela "Do faturamento ao lucro". */
+function ComposicaoEspecieLinhas({ de, ate, coluna, linha, especie, receita }: {
+  de: string; ate: string; coluna: string; linha: string; especie: string; receita: number;
+}) {
+  const { comp, erro } = useComposicaoEspecie(de, ate, coluna, linha, especie);
+  const aviso = (texto: string, tom = 'text-slate-400') => (
+    <tr className="bg-[#FBFAF6] border-b border-[#F5F2EB]">
+      <td colSpan={3} className={`pl-20 pr-5 py-1.5 text-xs ${tom}`}>{texto}</td>
+    </tr>
+  );
+  if (erro) return aviso(erro, 'text-rose-600');
+  if (!comp) return aviso('carregando…');
+  if (!comp.itens.length) return aviso('Nenhuma conta lançada nesta espécie no período.');
+  return (
+    <>
+      {comp.itens.map((f) => (
+        <tr key={f.rotulo} className="bg-[#FBFAF6] border-b border-[#F5F2EB] text-xs">
+          <td className="pl-20 pr-5 py-1">
+            <span className={f.alerta ? 'text-amber-700 font-semibold' : 'text-slate-500'}>{f.rotulo}</span>
+            {f.nota && <span className={`ml-2 text-[10px] ${f.alerta ? 'text-amber-700' : 'text-slate-400'}`}>{f.nota}</span>}
+          </td>
+          <td className="px-3 py-1 text-right text-[10px] text-slate-300 tabular-nums">
+            {receita ? pct(f.valor / receita) : ''}
+          </td>
+          <td className="px-5 py-1 text-right tabular-nums text-slate-600">{brl(f.valor)}</td>
+        </tr>
+      ))}
+      {comp.rodape && aviso(comp.rodape)}
+    </>
+  );
+}
+
+/** Mesmo 3º nível em formato de bloco — usado nas barras "Onde vai a despesa". */
+function ComposicaoEspecieBloco({ de, ate, coluna, linha, especie }: {
+  de: string; ate: string; coluna: string; linha: string; especie: string;
+}) {
+  const { comp, erro } = useComposicaoEspecie(de, ate, coluna, linha, especie);
+  return (
+    <div className="ml-5 mt-1 mb-2 border-l-2 border-[#E7E2D8] pl-3 space-y-1">
+      {erro && <div className="text-xs text-rose-600">{erro}</div>}
+      {!comp && !erro && <div className="text-xs text-slate-400">carregando…</div>}
+      {comp && !comp.itens.length && (
+        <div className="text-xs text-slate-400">Nenhuma conta lançada nesta espécie no período.</div>
+      )}
+      {comp?.itens.map((f) => (
+        <div key={f.rotulo} className="flex items-baseline gap-2 text-xs">
+          <span className={`shrink-0 ${f.alerta ? 'text-amber-700 font-semibold' : 'text-slate-600'}`}>{f.rotulo}</span>
+          {f.nota && <span className={`shrink-0 text-[10px] ${f.alerta ? 'text-amber-700' : 'text-slate-400'}`}>{f.nota}</span>}
+          <span className="flex-1 border-b border-dotted border-[#E7E2D8]" />
+          <span className="shrink-0 tabular-nums font-semibold text-slate-700">{brl(f.valor)}</span>
+        </div>
+      ))}
+      {comp?.rodape && <div className="text-[10px] text-slate-400 pt-0.5">{comp.rodape}</div>}
+    </div>
+  );
+}
+
 /**
  * FICHA DA LOJA — a mesma DRE, mas de uma loja só e em tamanho de bater o
  * olho. A tabela larga serve pra COMPARAR a rede; esta serve pra ENTENDER uma
@@ -478,6 +601,25 @@ function FichaLoja({ coluna: c, data, onDrill }: {
     if (n.has(k)) n.delete(k); else n.add(k);
     return n;
   });
+  // 3º nível: a espécie aberta mostra o que a compõe (RH por funcionária,
+  // Taxa de cartão/PIX por bandeira, VALE TRANSPORTE por beneficiária…).
+  const [aberta3, setAberta3] = useState<Set<string>>(new Set());
+  const alterna3 = (k: string) => setAberta3((s) => {
+    const n = new Set(s);
+    if (n.has(k)) n.delete(k); else n.add(k);
+    return n;
+  });
+  // Espécies SINTÉTICAS sem conta por trás (ajustes gerenciais tipo META ADS
+  // simulado, encargo calculado, juros somados campo a campo): abrir a
+  // cascata nelas mostraria "nada no período" — melhor nem oferecer. A Taxa
+  // de cartão/PIX também é calculada, mas o drill sabe abrir a conta dela.
+  const sinteticasSemDetalhe = useMemo(
+    () => new Set((data.ajustes || []).map((a) => a.descricao)),
+    [data.ajustes],
+  );
+  const temNivel3 = (esp?: string) =>
+    !!esp && esp !== '__DIA__' && esp !== 'Juros por atraso'
+    && !/^Encargos sobre folha/.test(esp) && !sinteticasSemDetalhe.has(esp);
 
   /** O que compõe cada linha — o segundo nível da cascata. */
   const composicao = (l: typeof LINHAS[number]): Array<{ rotulo: string; valor: number; especie?: string; nota?: string }> | null => {
@@ -617,35 +759,62 @@ function FichaLoja({ coluna: c, data, onDrill }: {
                   </tr>
 
                   {/* NÍVEL 2 — a composição da linha, aberta no lugar. */}
-                  {estaAberta && filhos!.map((f) => (
-                    <tr key={`${String(l.campo)}-${f.rotulo}`} className="bg-[#FDFCF9] border-b border-[#F5F2EB] text-sm">
-                      <td className="pl-14 pr-5 py-1.5">
-                        {f.especie && l.drill ? (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDrill(
-                                f.especie === '__DIA__' ? 'FATURAMENTO' : l.drill!,
-                                f.especie === '__DIA__' ? l.label : `${l.label} · ${f.rotulo}`,
-                                f.especie === '__DIA__' ? undefined : f.especie,
-                              );
-                            }}
-                            className="text-slate-700 hover:text-[#B8912B] hover:underline decoration-dotted underline-offset-2 font-medium"
-                            title="Abrir conta a conta"
-                          >
-                            {f.rotulo} <span className="text-[10px] text-slate-400">ver lançamentos ›</span>
-                          </button>
-                        ) : (
-                          <span className="text-slate-600">{f.rotulo}</span>
+                  {estaAberta && filhos!.map((f) => {
+                    const chave3 = `${String(l.campo)}|${f.rotulo}`;
+                    const podeAbrir3 = !!l.drill && temNivel3(f.especie);
+                    const aberta3Aqui = podeAbrir3 && aberta3.has(chave3);
+                    // Taxa de cartão/PIX abre por bandeira na cascata, mas não
+                    // tem lançamento no Contas a Pagar — o modal ficaria vazio.
+                    const temContaAConta = podeAbrir3 && f.especie !== 'Taxa de cartão/PIX';
+                    return (
+                      <React.Fragment key={chave3}>
+                        <tr
+                          onClick={() => podeAbrir3 && alterna3(chave3)}
+                          className={`bg-[#FDFCF9] border-b border-[#F5F2EB] text-sm ${podeAbrir3 ? 'cursor-pointer hover:bg-[#FBF6E6]/50' : ''}`}
+                        >
+                          <td className="pl-14 pr-5 py-1.5">
+                            <span className="flex items-center gap-1.5">
+                              {podeAbrir3 && (
+                                <ChevronRight className={`w-3 h-3 shrink-0 text-[#B8912B] transition-transform ${aberta3Aqui ? 'rotate-90' : ''}`} />
+                              )}
+                              {f.especie === '__DIA__' && l.drill ? (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onDrill('FATURAMENTO', l.label, undefined); }}
+                                  className="ml-[18px] text-slate-700 hover:text-[#B8912B] hover:underline decoration-dotted underline-offset-2 font-medium"
+                                  title="Abrir venda a venda"
+                                >
+                                  {f.rotulo} <span className="text-[10px] text-slate-400">ver lançamentos ›</span>
+                                </button>
+                              ) : (
+                                <span className={podeAbrir3 ? 'text-slate-700 font-medium' : 'ml-[18px] text-slate-600'}>{f.rotulo}</span>
+                              )}
+                              {temContaAConta && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onDrill(l.drill!, `${l.label} · ${f.rotulo}`, f.especie); }}
+                                  className="text-[10px] text-slate-400 hover:text-[#B8912B] hover:underline decoration-dotted underline-offset-2"
+                                  title="Abrir conta a conta"
+                                >
+                                  ver lançamentos ›
+                                </button>
+                              )}
+                            </span>
+                            {f.nota && <span className="block text-[11px] text-slate-400 ml-[18px]">{f.nota}</span>}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-xs text-slate-400 tabular-nums">
+                            {c.receitaLiquida ? pct(f.valor / c.receitaLiquida) : ''}
+                          </td>
+                          <td className="px-5 py-1.5 text-right tabular-nums text-slate-700">{brl(f.valor)}</td>
+                        </tr>
+                        {/* NÍVEL 3 — o que compõe a espécie, também no lugar. */}
+                        {aberta3Aqui && f.especie && l.drill && (
+                          <ComposicaoEspecieLinhas
+                            de={data.de} ate={data.ate} coluna={c.key}
+                            linha={l.drill} especie={f.especie} receita={c.receitaLiquida}
+                          />
                         )}
-                        {f.nota && <span className="block text-[11px] text-slate-400">{f.nota}</span>}
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-xs text-slate-400 tabular-nums">
-                        {c.receitaLiquida ? pct(f.valor / c.receitaLiquida) : ''}
-                      </td>
-                      <td className="px-5 py-1.5 text-right tabular-nums text-slate-700">{brl(f.valor)}</td>
-                    </tr>
-                  ))}
+                      </React.Fragment>
+                    );
+                  })}
                 </React.Fragment>
               );
             })}
@@ -668,16 +837,38 @@ function FichaLoja({ coluna: c, data, onDrill }: {
           <div className="space-y-1.5">
             {c.despesasDetalhe.slice(0, 12).map((d) => {
               const share = c.receitaLiquida ? d.valor / c.receitaLiquida : 0;
+              const chave3 = `bar|${d.grupo}|${d.especie}`;
+              const podeAbrir = temNivel3(d.especie);
+              const abertaAqui = podeAbrir && aberta3.has(chave3);
               return (
-                <div key={`${d.grupo}-${d.especie}`} className="flex items-center gap-3">
-                  <div className="w-44 text-sm font-semibold truncate">{d.especie}</div>
-                  <div className="flex-1 h-4 bg-slate-100 rounded overflow-hidden">
-                    <div className={`h-full ${
-                      d.grupo === 'VARIAVEL' ? 'bg-[#D4AF37]' : d.grupo === 'FINANCEIRA' ? 'bg-rose-400' : 'bg-slate-400'
-                    }`} style={{ width: `${Math.min(100, share * 100 * 2.5)}%` }} />
+                <div key={`${d.grupo}-${d.especie}`}>
+                  <div
+                    onClick={() => podeAbrir && alterna3(chave3)}
+                    className={`flex items-center gap-3 rounded ${podeAbrir ? 'cursor-pointer hover:bg-[#FBF6E6]/50' : ''}`}
+                    title={podeAbrir ? 'Ver o que compõe' : undefined}
+                  >
+                    <div className="w-44 text-sm font-semibold flex items-center gap-1">
+                      {podeAbrir && (
+                        <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-[#B8912B] transition-transform ${abertaAqui ? 'rotate-90' : ''}`} />
+                      )}
+                      <span className="truncate">{d.especie}</span>
+                    </div>
+                    <div className="flex-1 h-4 bg-slate-100 rounded overflow-hidden">
+                      <div className={`h-full ${
+                        d.grupo === 'VARIAVEL' ? 'bg-[#D4AF37]' : d.grupo === 'FINANCEIRA' ? 'bg-rose-400' : 'bg-slate-400'
+                      }`} style={{ width: `${Math.min(100, share * 100 * 2.5)}%` }} />
+                    </div>
+                    <div className="w-28 text-right text-sm font-bold tabular-nums">{brl(d.valor)}</div>
+                    <div className="w-14 text-right text-xs text-slate-400 tabular-nums">{pct(share)}</div>
                   </div>
-                  <div className="w-28 text-right text-sm font-bold tabular-nums">{brl(d.valor)}</div>
-                  <div className="w-14 text-right text-xs text-slate-400 tabular-nums">{pct(share)}</div>
+                  {/* Cascata: o que compõe esta rubrica (RH por funcionária,
+                      taxa de cartão por bandeira, VT por beneficiária…) */}
+                  {abertaAqui && (
+                    <ComposicaoEspecieBloco
+                      de={data.de} ate={data.ate} coluna={c.key}
+                      linha={d.grupo} especie={d.especie}
+                    />
+                  )}
                 </div>
               );
             })}
