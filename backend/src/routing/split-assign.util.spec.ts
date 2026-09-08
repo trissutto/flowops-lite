@@ -1,4 +1,4 @@
-import { planSplitAssignment, temSkuDividido } from './split-assign.util';
+import { planSplitAssignment, temSkuDividido, demandasPorSku } from './split-assign.util';
 
 /** Soma tudo que o plano deixa no pedido — a invariante que não pode quebrar. */
 function totalDepois(rows: Array<{ id: string; quantity: number }>, plan: ReturnType<typeof planSplitAssignment>) {
@@ -152,5 +152,45 @@ describe('temSkuDividido', () => {
       ['sku-b', [{ storeId: 'y', quantity: 1 }]],
     ]);
     expect(temSkuDividido(m)).toBe(false);
+  });
+});
+
+describe('demandasPorSku — engine manda quantity, forçar loja/swap mandam qty', () => {
+  it('lê `quantity` (engine) e `qty` (forçar loja) do mesmo jeito', () => {
+    const { demandsBySku, ignorados } = demandasPorSku([
+      { storeId: 'sorocaba', items: [{ sku: '5334995', qty: 1 }] },
+      { storeId: 'itanhaem', items: [{ sku: '11344797', quantity: 2 }] },
+    ]);
+    expect(ignorados).toBe(0);
+    expect(demandsBySku.get('5334995')).toEqual([{ storeId: 'sorocaba', quantity: 1 }]);
+    expect(demandsBySku.get('11344797')).toEqual([{ storeId: 'itanhaem', quantity: 2 }]);
+  });
+
+  it('caso LP-000311: swap-force-manual com `qty` NÃO pode virar card vazio', () => {
+    const { demandsBySku, ignorados } = demandasPorSku([
+      { storeId: 'e7f744ba', items: [{ sku: '5334995', qty: 1 }] },
+    ]);
+    expect(ignorados).toBe(0);
+    expect(demandsBySku.size).toBe(1);
+  });
+
+  it('mesmo SKU em duas lojas acumula as duas demandas, na ordem', () => {
+    const { demandsBySku } = demandasPorSku([
+      { storeId: 'a', items: [{ sku: 'X', quantity: 1 }] },
+      { storeId: 'b', items: [{ sku: 'X', qty: 1 }] },
+    ]);
+    expect(demandsBySku.get('X')).toEqual([
+      { storeId: 'a', quantity: 1 },
+      { storeId: 'b', quantity: 1 },
+    ]);
+  });
+
+  it('conta como ignorado o que não dá pra atribuir: sem SKU, quantidade zero ou ausente', () => {
+    const { demandsBySku, ignorados } = demandasPorSku([
+      { storeId: 'a', items: [{ sku: '', quantity: 1 }, { sku: 'Y', quantity: 0 }, { sku: 'Z' }, { sku: 'W', qty: 'abc' }] },
+      { storeId: 'b', items: null },
+    ]);
+    expect(demandsBySku.size).toBe(0);
+    expect(ignorados).toBe(4);
   });
 });

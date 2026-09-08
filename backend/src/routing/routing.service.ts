@@ -11,7 +11,7 @@ import { lojasDaRotaPropria } from '../common/rota-propria';
 import { consolidacaoObrigatoria } from '../common/politica-frete';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { computeCommittedStock } from './committed-stock.util';
-import { planSplitAssignment, SplitDemand } from './split-assign.util';
+import { planSplitAssignment, demandasPorSku } from './split-assign.util';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { ErpService } from '../erp/erp.service';
@@ -409,15 +409,16 @@ export class RoutingService {
      * cada loja com 1): card da PIRACICABA vazio e card da VINHEDO pedindo 2
      * peças de uma loja que tem 1. Ver `split-assign.util.ts`.
      */
-    const demandsBySku = new Map<string, SplitDemand[]>();
-    for (const a of result.assignments) {
-      for (const item of a.items) {
-        const sku = String(item?.sku ?? '').trim();
-        const qty = Number(item?.quantity) || 0;
-        if (!sku || qty <= 0) continue;
-        if (!demandsBySku.has(sku)) demandsBySku.set(sku, []);
-        demandsBySku.get(sku)!.push({ storeId: a.storeId, quantity: qty });
-      }
+    // `demandasPorSku` lê `quantity` (engine) E `qty` (forçar loja/swap). Só
+    // `quantity` era lido de 27/08 a 08/09: card forçado nascia sem peça, a
+    // limpeza de cards vazios apagava no mesmo segundo e o pedido pago ficava
+    // "separando" sem loja nenhuma (LP-000311, 11 dias parado).
+    const { demandsBySku, ignorados } = demandasPorSku(result.assignments);
+    if (ignorados > 0) {
+      this.logger.warn(
+        `[routing] order ${orderId}: ${ignorados} item(ns) das atribuições sem SKU/quantidade utilizável ` +
+          `(estratégia ${result.strategy}) — não vão pra card nenhum`,
+      );
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -1087,7 +1088,7 @@ export class RoutingService {
           {
             storeId: forcedStore.id,
             isTransfer: false,
-            items: orphanItems.map((it) => ({ sku: it.sku, qty: it.quantity })),
+            items: orphanItems.map((it) => ({ sku: it.sku, quantity: it.quantity })),
           },
         ],
       };
@@ -1370,7 +1371,7 @@ export class RoutingService {
           {
             storeId: forcedStore.id,
             isTransfer: false,
-            items: itemsAssigned.map((it: any) => ({ sku: it.sku, qty: it.quantity })),
+            items: itemsAssigned.map((it: any) => ({ sku: it.sku, quantity: it.quantity })),
           },
         ],
       };

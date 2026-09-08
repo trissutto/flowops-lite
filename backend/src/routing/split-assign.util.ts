@@ -134,3 +134,35 @@ export function temSkuDividido(demandsBySku: Map<string, SplitDemand[]>): boolea
   }
   return false;
 }
+
+/**
+ * DEMANDA POR SKU a partir das atribuições do roteamento (quem separa o quê).
+ *
+ * Aceita `quantity` (engine) E `qty` (caminhos manuais "forçar loja" e swap,
+ * que nasceram em maio com essa chave). De 27/08 a 08/09 o confirmRoute só
+ * lia `quantity`: todo card forçado nascia SEM peça, a limpeza de cards vazios
+ * o apagava no mesmo segundo e o pedido pago ficava "separando" sem loja
+ * nenhuma (LP-000311, 11 dias parado até a cliente reclamar).
+ *
+ * `ignorados` = itens sem SKU ou sem quantidade > 0 — o chamador loga, porque
+ * item ignorado aqui é peça que não vai pra card nenhum.
+ */
+export function demandasPorSku(
+  assignments: Array<{ storeId: string; items?: Array<{ sku?: unknown; quantity?: unknown; qty?: unknown }> | null }> | null | undefined,
+): { demandsBySku: Map<string, SplitDemand[]>; ignorados: number } {
+  const demandsBySku = new Map<string, SplitDemand[]>();
+  let ignorados = 0;
+  for (const a of assignments || []) {
+    for (const item of a.items || []) {
+      const sku = String(item?.sku ?? '').trim();
+      const qty = Number(item?.quantity ?? item?.qty) || 0;
+      if (!sku || qty <= 0) {
+        ignorados++;
+        continue;
+      }
+      if (!demandsBySku.has(sku)) demandsBySku.set(sku, []);
+      demandsBySku.get(sku)!.push({ storeId: a.storeId, quantity: qty });
+    }
+  }
+  return { demandsBySku, ignorados };
+}

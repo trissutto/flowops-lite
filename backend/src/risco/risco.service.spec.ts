@@ -280,3 +280,56 @@ describe('motor de risco — o que NÃO pode virar alarme', () => {
     expect(comDois.score).toBeGreaterThan(comUm.score);
   });
 });
+
+/**
+ * A tela do pedido do site navega pelo `wcOrderId` (950000311, sintético no
+ * pedido nativo). De 27/08 a 08/09 a expressão que reconhece o número estava
+ * escrita como `^d+$` (sem a barra), então NENHUM número batia, a busca caía
+ * no número impresso ("LP-…") e todo pedido aberto pelo número do site
+ * mostrava "Análise de risco indisponível — Pedido "950000311" não encontrado".
+ */
+describe('resolverOrderId — de qualquer jeito que a tela tenha o pedido na mão', () => {
+  function prismaSo(order: { findUnique: jest.Mock; findFirst: jest.Mock }) {
+    return { order } as any;
+  }
+
+  it('wcOrderId numérico (950000311) resolve pelo findUnique, sem cair no número impresso', async () => {
+    const findUnique = jest.fn(async ({ where }: any) =>
+      where?.wcOrderId === 950000311 ? { id: 'uuid-311' } : null,
+    );
+    const findFirst = jest.fn(async () => null);
+    const svc = montarServico(prismaSo({ findUnique, findFirst }));
+
+    await expect(svc.resolverOrderId('950000311')).resolves.toBe('uuid-311');
+    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { wcOrderId: 950000311 } }));
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('número impresso (LP-000311) resolve pelo wcOrderNumber', async () => {
+    const findUnique = jest.fn(async () => null);
+    const findFirst = jest.fn(async ({ where }: any) =>
+      where?.wcOrderNumber === 'LP-000311' ? { id: 'uuid-311' } : null,
+    );
+    const svc = montarServico(prismaSo({ findUnique, findFirst }));
+
+    await expect(svc.resolverOrderId('LP-000311')).resolves.toBe('uuid-311');
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it('uuid passa direto, sem consultar o banco', async () => {
+    const findUnique = jest.fn();
+    const findFirst = jest.fn();
+    const svc = montarServico(prismaSo({ findUnique, findFirst }));
+
+    await expect(svc.resolverOrderId('259fd79e-c468-4a30-a530-fdea56752ff7')).resolves.toBe(
+      '259fd79e-c468-4a30-a530-fdea56752ff7',
+    );
+    expect(findUnique).not.toHaveBeenCalled();
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('número que não existe em lugar nenhum dá 404 com o número na mensagem', async () => {
+    const svc = montarServico(prismaSo({ findUnique: jest.fn(async () => null), findFirst: jest.fn(async () => null) }));
+    await expect(svc.resolverOrderId('999999999')).rejects.toThrow('Pedido "999999999" não encontrado');
+  });
+});

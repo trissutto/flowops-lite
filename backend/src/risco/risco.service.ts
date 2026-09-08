@@ -604,7 +604,11 @@ export class RiscoService {
 
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r)) return r;
 
-    if (/^d+$/.test(r)) {
+    // `\d`, não `d`: com a barra faltando (27/08 → 08/09) nenhum wcOrderId
+    // batia, a busca caía no número impresso ("LP-…") e a tela do pedido
+    // mostrava "Análise de risco indisponível — Pedido "950000311" não
+    // encontrado" pra TODO pedido aberto pelo número do site.
+    if (/^\d+$/.test(r)) {
       const porWc = await (this.prisma as any).order.findUnique({
         where: { wcOrderId: Number(r) },
         select: { id: true },
