@@ -20,7 +20,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, Loader2, AlertCircle, Banknote, QrCode, CreditCard,
   TrendingUp, Lock, Unlock, Trophy, ShieldCheck, ShieldAlert, ShieldX, HelpCircle,
-  ChevronDown, ChevronUp, Globe, Store,
+  ChevronDown, ChevronUp, Globe, Store, Undo2, CheckCircle2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -306,6 +306,8 @@ export default function SuperPainelCaixas() {
   const [error, setError] = useState<string | null>(null);
   const [secsToRefresh, setSecsToRefresh] = useState(POLL_INTERVAL_MS / 1000);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Só admin e loja podem estornar baixa de crediário (regra da rota no backend).
+  const [podeEstornar, setPodeEstornar] = useState(false);
   const [pixConc, setPixConc] = useState<Record<string, PixConcStatus>>({});
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   // UMA loja por vez (04/08): abrir 12 cards espremia o movimento de caixa em
@@ -319,6 +321,9 @@ export default function SuperPainelCaixas() {
       try {
         const me = await api<{ role: string }>('/auth/me');
         setIsAdmin(['admin', 'master_franquia', 'franquias'].includes(me?.role));
+        // Estorno de crediário: a rota do backend só aceita admin ou loja —
+        // supervisor e papéis de franquia veriam um botão que devolve 403.
+        setPodeEstornar(me?.role === 'admin' || me?.role === 'store');
       } catch { /* ignora */ }
     })();
   }, []);
@@ -665,7 +670,7 @@ export default function SuperPainelCaixas() {
               <LojaCard
                 key={lojaSelecionada.storeCode}
                 loja={lojaSelecionada}
-                isAdmin={isAdmin}
+                isAdmin={isAdmin} podeEstornar={podeEstornar}
                 pixStatus={pixConc[lojaSelecionada.storeCode]}
                 onReload={() => load(true)}
                 dateFrom={filterFrom}
@@ -938,7 +943,7 @@ function CardDateFilter({
   );
 }
 
-function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDateRange }: { loja: Loja; isAdmin?: boolean; pixStatus?: PixConcStatus; onReload?: () => void; dateFrom?: string; dateTo?: string; onDateRange?: (from: string, to: string) => void }) {
+function LojaCard({ loja, isAdmin, podeEstornar, pixStatus, onReload, dateFrom, dateTo, onDateRange }: { loja: Loja; isAdmin?: boolean; podeEstornar?: boolean; pixStatus?: PixConcStatus; onReload?: () => void; dateFrom?: string; dateTo?: string; onDateRange?: (from: string, to: string) => void }) {
   // Card ocupa a largura toda (uma loja por vez) — ranking já abre expandido.
   const [rankingOpen, setRankingOpen] = useState(true);
   const reload = () => { if (onReload) onReload(); };
@@ -947,6 +952,8 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
   const [showSangrias, setShowSangrias] = useState(false);
   const [showSuprimentos, setShowSuprimentos] = useState(false);
   const [showRecebimentos, setShowRecebimentos] = useState(false);
+  // Baixa de crediário escolhida pra ESTORNO (modal com motivo obrigatório).
+  const [estornoBaixa, setEstornoBaixa] = useState<BaixaCrediario | null>(null);
   const [editBandeira, setEditBandeira] = useState<{ paymentId: string; currentBandeira: string; currentMethod: string; valor: number; saleHint: string } | null>(null);
   const [masterModal, setMasterModal] = useState(false);
   // Lançamento (sangria/suprimento) em edição no modal master (editar/excluir).
@@ -1040,6 +1047,14 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
           mov={editMov}
           onClose={() => setEditMov(null)}
           onSaved={() => { setEditMov(null); reload(); }}
+        />
+      )}
+      {estornoBaixa && (
+        <EstornoBaixaModal
+          loja={loja}
+          baixa={estornoBaixa}
+          onClose={() => setEstornoBaixa(null)}
+          onDone={() => { setEstornoBaixa(null); reload(); }}
         />
       )}
 
@@ -1374,6 +1389,16 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                                 )}
                               </div>
                               <span className="font-mono font-bold tabular-nums text-amber-700 shrink-0">{brl(valor)}</span>
+                              {podeEstornar && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEstornoBaixa(b)}
+                                  className="shrink-0 px-1.5 py-0.5 rounded border border-rose-300 text-rose-700 hover:bg-rose-50 text-[9px] font-bold"
+                                  title="Estornar esta baixa: a parcela volta pra ficha da cliente como em aberto"
+                                >
+                                  ↩︎ Estornar
+                                </button>
+                              )}
                             </div>
                           );
                         })}
@@ -1403,6 +1428,16 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                                 )}
                               </div>
                               <span className="font-mono font-bold tabular-nums text-cyan-700 shrink-0">{brl(valor)}</span>
+                              {podeEstornar && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEstornoBaixa(b)}
+                                  className="shrink-0 px-1.5 py-0.5 rounded border border-rose-300 text-rose-700 hover:bg-rose-50 text-[9px] font-bold"
+                                  title="Estornar esta baixa: a parcela volta pra ficha da cliente como em aberto"
+                                >
+                                  ↩︎ Estornar
+                                </button>
+                              )}
                             </div>
                           );
                         })}
@@ -2444,6 +2479,151 @@ function MasterEditPaymentModal({
         <p className="mt-3 text-[10px] text-slate-400 leading-tight">
           ⚠️ Alteracao registrada em PdvPaymentAudit. Se sessao ja fechou, totais sao recalculados automaticamente.
         </p>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * ESTORNO de uma baixa de crediário, direto da cascata "Crediários recebidos"
+ * do super painel (dono 08/09/2026).
+ *
+ * Reusa a rota que Recebimentos › Histórico já usa
+ * (`POST /crediarios/baixa/:id/estornar`): a baixa vira `canceled`, cada
+ * parcela volta a "em aberto" no Wincred e no espelho que a ficha da cliente
+ * lê, e o painel recarrega — a linha some da cascata e o caixa do dia é
+ * recalculado sem esse recebimento. Motivo obrigatório: vai pra auditoria da
+ * baixa (canceledReason) junto com quem estornou.
+ */
+function EstornoBaixaModal({
+  loja,
+  baixa,
+  onClose,
+  onDone,
+}: {
+  loja: Loja;
+  baixa: BaixaCrediario;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; revertidos?: number; falhas?: number; error?: string } | null>(null);
+  const formaLabel =
+    baixa.forma === 'misto'
+      ? `MISTO (dinheiro ${brl(baixa.valorDinheiro || 0)} + PIX ${brl(baixa.valorPix || 0)})`
+      : `${baixa.forma.toUpperCase()}${baixa.origem === 'link' ? ' · link' : ''}`;
+
+  async function confirmar() {
+    if (!reason.trim() || busy) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await api<{ ok: boolean; revertidos: number; falhas: number }>(
+        `/crediarios/baixa/${baixa.id}/estornar`,
+        { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) },
+      );
+      setResult(r);
+      // Mostra o "feito" por um instante e recarrega o painel.
+      if (r.ok) setTimeout(onDone, 1500);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4"
+      {...overlayClose(() => !busy && onClose())}
+    >
+      <div
+        className="bg-white rounded-xl max-w-md w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-lg font-black text-rose-700 flex items-center gap-2">
+          <Undo2 size={20} /> Estornar baixa de crediário
+        </h2>
+
+        {!result?.ok && (
+          <>
+            <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm space-y-1">
+              <div><strong>Loja:</strong> {loja.storeName}</div>
+              <div><strong>Cliente:</strong> {baixa.customerName || 'Cliente'}</div>
+              <div><strong>Valor:</strong> <span className="font-mono font-bold">{brl(baixa.valor)}</span></div>
+              <div><strong>Forma:</strong> {formaLabel}</div>
+              <div><strong>Recebido às:</strong> {horaBr(baixa.paidAt)}</div>
+            </div>
+
+            <div className="bg-rose-50 border border-rose-300 rounded-lg p-3 text-xs text-rose-800">
+              <strong>O que acontece:</strong> a baixa é cancelada, as parcelas voltam pra ficha da cliente como{' '}
+              <b>em aberto</b> (no Flow e no Wincred) e o caixa do dia é recalculado sem esse recebimento.
+              Fica registrado na auditoria com o motivo. Pra receber de novo, a loja faz uma baixa nova.
+              {baixa.forma === 'misto' && (
+                <div className="mt-1">Baixa <b>mista</b>: o estorno desfaz as duas partes (dinheiro e PIX) juntas.</div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-xs uppercase font-bold text-gray-700 block mb-1">
+                Motivo do estorno (obrigatório)
+              </label>
+              <textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value.slice(0, 200))}
+                placeholder="Ex.: baixa na parcela errada, cliente não pagou, valor digitado errado"
+                rows={2}
+                className="w-full px-3 py-2 text-sm border-2 border-gray-200 rounded-lg focus:outline-none focus:border-rose-400"
+                autoFocus
+                disabled={busy}
+              />
+              <div className="text-[10px] text-gray-400 text-right">{reason.length}/200</div>
+            </div>
+
+            {result && !result.ok && (
+              <div className="bg-rose-100 border border-rose-300 rounded-lg p-3 text-xs text-rose-900">
+                <strong>Não estornou:</strong>{' '}
+                {result.error || `${result.falhas ?? 0} parcela(s) não voltaram no Wincred — confira em Recebimentos › Histórico.`}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              {/* Depois de uma resposta de erro a baixa pode já ter sido
+                  cancelada no Flow (falha parcial no Wincred, ou "já
+                  estornada"): fechar recarrega o painel em vez de deixar a
+                  linha velha com o botão vivo. */}
+              <button
+                type="button"
+                onClick={() => (result ? onDone() : onClose())}
+                disabled={busy}
+                className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg disabled:opacity-50"
+              >
+                {result ? 'Fechar e atualizar' : 'Cancelar'}
+              </button>
+              <button
+                type="button"
+                onClick={confirmar}
+                disabled={busy || !reason.trim()}
+                className="flex-[2] px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Undo2 size={16} />}
+                {busy ? 'Estornando…' : 'Confirmar estorno'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {result?.ok && (
+          <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg p-4 text-center text-emerald-900">
+            <CheckCircle2 size={32} className="mx-auto mb-2" />
+            <div className="font-bold">Estorno feito</div>
+            <div className="text-xs mt-1">
+              {result.revertidos ?? 0} parcela(s) de volta pra ficha da cliente como em aberto.
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body,
