@@ -1639,6 +1639,12 @@ export class RealignmentService {
       );
     }
 
+    // Snapshot do bipe como último recurso — peça sem preço no espelho não
+    // pode virar obrigação de R$ 0,00 (vinha acontecendo: 248 peças em ago/26).
+    if (!preco && Number((order as any).precoUnitCents) > 0) {
+      preco = Number((order as any).precoUnitCents) / 100;
+    }
+
     // Mesmo se preço = 0, cria a obrigação (admin vê e ajusta manualmente)
     const qty = order.qtyOrigem || 1;
     const precoTotal = preco * qty;
