@@ -1275,13 +1275,24 @@ export class PagarmeService {
       }),
     );
     const order = resp.data;
-    const charge = (order.charges || [])[0];
-    const chargeStatus = String(charge?.status || '').toLowerCase();
+    // A ORDER pode ter VÁRIAS charges: cada cartão recusado no checkout vira
+    // uma charge `failed` e a tentativa que passou vira `paid`. Olhar só a
+    // primeira (`charges[0]`) lia a recusa e carimbava `failed` num link que
+    // o Pagar.me mostrava como PAGO — foi o que sumiu com a Venda Online 11
+    // da Limeira (05/09: três recusas às 12:47/12:49, paga às 12:50). O que
+    // manda é o status da order, e qualquer charge paga conta como paga.
+    const charges: any[] = Array.isArray(order?.charges) ? order.charges : [];
+    const statuses = charges.map((c) => String(c?.status || '').toLowerCase());
+    const orderStatus = String(order?.status || '').toLowerCase();
+    const charge =
+      charges.find((c) => String(c?.status || '').toLowerCase() === 'paid') ||
+      charges[charges.length - 1];
 
     let newStatus: string = 'pending';
-    if (chargeStatus === 'paid') newStatus = 'paid';
-    else if (chargeStatus === 'canceled' || chargeStatus === 'failed') {
-      newStatus = chargeStatus === 'failed' ? 'failed' : 'canceled';
+    if (orderStatus === 'paid' || statuses.includes('paid')) newStatus = 'paid';
+    else if (orderStatus === 'canceled') newStatus = 'canceled';
+    else if (statuses.length && statuses.every((s) => s === 'failed' || s === 'canceled')) {
+      newStatus = statuses.includes('failed') ? 'failed' : 'canceled';
     }
 
     const local = await (this.prisma as any).pagarmePayment.findUnique({
@@ -1528,6 +1539,19 @@ export class PagarmeService {
     if (!local) {
       this.logger.warn(`[pagarme] webhook pra order desconhecida: ${orderId} (type=${eventType})`);
       return { ok: false };
+    }
+
+    // LINK PAGO NÃO VOLTA PRA RECUSADO. Uma order com várias tentativas de
+    // cartão dispara `charge.payment_failed` pra cada recusa, e o Pagar.me
+    // entrega webhook fora de ordem e com retry — a recusa da 1ª tentativa
+    // pode chegar DEPOIS do `charge.paid` da 4ª. Rebaixar pra `failed` tirava
+    // o link da lista "aguardando" do PDV, o cron de fechamento (que só olha
+    // `paid`) nunca mais via a venda e ela ficava aberta pra sempre.
+    if (local.status === 'paid' && (newStatus === 'failed' || newStatus === 'pending')) {
+      this.logger.warn(
+        `[pagarme] webhook ${eventType} chegou DEPOIS do pago em ${orderId} (sale=${local.saleId}) — ignorado`,
+      );
+      return { ok: true };
     }
 
     if (local.status !== newStatus) {

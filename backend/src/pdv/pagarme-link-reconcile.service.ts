@@ -112,8 +112,9 @@ export class PagarmeLinkReconcileService {
       where: { id: { in: pagos.map((p) => p.saleId).filter(Boolean) }, status: 'open' },
       select: { id: true, total: true, storeCode: true },
     });
-    if (!vendas.length) return;
     const abertas = new Map<string, any>(vendas.map((v) => [v.id, v]));
+    await this.alertarLinkPagoSemVendaAberta(pagos.filter((p) => p.saleId && !abertas.has(p.saleId)));
+    if (!vendas.length) return;
 
     let fechadas = 0;
     let tentadas = 0;
@@ -208,6 +209,97 @@ export class PagarmeLinkReconcileService {
        */
       this.avisar(p.saleId, String(e?.message || e));
       return false;
+    }
+  }
+
+  /** Última varredura de "link pago sem venda aberta" + links já alertados neste processo. */
+  private ultimoAlertaOrfaos = 0;
+  private readonly alertados = new Set<string>();
+
+  /**
+   * LINK PAGO, MAS A VENDA JÁ TINHA SIDO FECHADA POR OUTRO MEIO (08/09 —
+   * Limeira, R$ 1.059,15).
+   *
+   * A vendedora gerou o link às 12:29, pausou a venda ("Fechar depois") e, às
+   * 12:50:02, a MESMA venda foi finalizada no PDV como "crédito 6x R$ 209,70"
+   * com 3 peças. Às 12:50:59 a cliente pagou o link inteiro. Este cron só
+   * fecha venda ABERTA: a venda já estava finalizada, ele pulou em silêncio,
+   * o PDV não avisou ninguém e a loja descobriu pelo financeiro três dias
+   * depois. Dinheiro que entrou e ninguém registrou não pode ser silêncio:
+   * vira log de erro e uma linha em `integration_logs`
+   * (`link.pago.sem-venda-aberta`), uma vez por link.
+   *
+   * "Fechada COM este link" (o caminho normal deste cron) não alarma: o
+   * pagamento da venda já cita o `pagarmeOrderId`.
+   */
+  private async alertarLinkPagoSemVendaAberta(candidatos: any[]): Promise<void> {
+    if (!candidatos.length) return;
+    if (Date.now() - this.ultimoAlertaOrfaos < 10 * 60_000) return;
+    this.ultimoAlertaOrfaos = Date.now();
+    const novos = candidatos.filter((p) => p.pagarmeOrderId && !this.alertados.has(p.pagarmeOrderId));
+    if (!novos.length) return;
+
+    const saleIds = [...new Set(novos.map((p) => String(p.saleId)))];
+    const [vendas, pagamentos]: [any[], any[]] = await Promise.all([
+      (this.prisma as any).pdvSale.findMany({
+        where: { id: { in: saleIds } },
+        select: { id: true, status: true, total: true, storeCode: true, customerName: true, paymentMethod: true },
+      }),
+      (this.prisma as any).pdvSalePayment.findMany({
+        where: { saleId: { in: saleIds } },
+        select: { saleId: true, details: true },
+      }),
+    ]);
+    const vendaPorId = new Map<string, any>(vendas.map((v) => [v.id, v]));
+    const registrados = new Set<string>();
+    for (const x of pagamentos) {
+      try {
+        const d = JSON.parse(x.details || '{}');
+        if (d?.pagarmeOrderId) registrados.add(String(d.pagarmeOrderId));
+        if (d?.pixTxid) registrados.add(String(d.pixTxid));
+      } catch { /* detalhe cru — segue */ }
+    }
+
+    for (const p of novos) {
+      this.alertados.add(p.pagarmeOrderId);
+      if (registrados.has(p.pagarmeOrderId)) continue; // fechada COM este link: caminho normal
+      // Já alertado num processo anterior (deploy no meio)? Não repete a linha.
+      const jaLogado = await (this.prisma as any).integrationLog
+        .findFirst({
+          where: { event: 'link.pago.sem-venda-aberta', payload: { contains: p.pagarmeOrderId } },
+          select: { id: true },
+        })
+        .catch(() => null);
+      if (jaLogado) continue;
+
+      const v = vendaPorId.get(String(p.saleId));
+      const msg =
+        `[pagarme-link] LINK PAGO SEM VENDA ABERTA: link ${p.pagarmeOrderId} ` +
+        `(R$ ${Number(p.valor || 0).toFixed(2)}, loja ${p.storeCode}) está PAGO, mas a venda ${p.saleId} ` +
+        `está "${v?.status || 'inexistente'}" (total R$ ${Number(v?.total ?? 0).toFixed(2)}, ${v?.paymentMethod || '-'}) ` +
+        `e NÃO registra este pagamento — o dinheiro entrou e ninguém lançou`;
+      this.logger.error(msg);
+      await (this.prisma as any).integrationLog
+        .create({
+          data: {
+            source: 'pagarme',
+            direction: 'internal',
+            event: 'link.pago.sem-venda-aberta',
+            status: 500,
+            error: msg.slice(0, 500),
+            payload: JSON.stringify({
+              pagarmeOrderId: p.pagarmeOrderId,
+              saleId: p.saleId,
+              storeCode: p.storeCode,
+              valor: p.valor,
+              vendaStatus: v?.status ?? null,
+              vendaTotal: v?.total ?? null,
+              vendaPagamento: v?.paymentMethod ?? null,
+              cliente: v?.customerName ?? null,
+            }),
+          },
+        })
+        .catch(() => null);
     }
   }
 

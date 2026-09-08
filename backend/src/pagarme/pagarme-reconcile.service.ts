@@ -30,6 +30,9 @@ export class PagarmeReconcileService {
   private static readonly JANELA_H = 48;
   private static readonly MAX_POR_CICLO = 25;
   private static readonly THROTTLE_MS = 90_000;
+  /** Link `failed` com venda aberta: reconferido por 7 dias, a cada 30 min. */
+  private static readonly JANELA_FALHA_H = 7 * 24;
+  private static readonly THROTTLE_FALHA_MS = 30 * 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -51,6 +54,35 @@ export class PagarmeReconcileService {
         take: 200,
         select: { pagarmeOrderId: true, saleId: true, storeCode: true, method: true },
       });
+
+      /**
+       * LINK MARCADO COMO RECUSADO, MAS A VENDA AINDA ABERTA (08/09 — Venda
+       * Online 11 da Limeira, R$ 1.059,15). Cartão recusado três vezes e pago
+       * na quarta: a order do Pagar.me ficou PAGA, mas aqui o link ficou
+       * `failed` (webhook de recusa depois do pago, ou `charges[0]` lida como
+       * a recusa). `failed` não era reconferido por ninguém: a venda sumia da
+       * lista "aguardando" do PDV, o cron de fechamento só olha `paid`, e a
+       * loja descobria pelo financeiro. Aqui o link recusado volta a ser
+       * conferido na API enquanto a venda estiver aberta — janela da lista de
+       * cobranças (7 dias), no máximo a cada 30 min por link.
+       */
+      const desdeFalha = new Date(Date.now() - PagarmeReconcileService.JANELA_FALHA_H * 3600_000);
+      const falhados: any[] = await (this.prisma as any).pagarmePayment.findMany({
+        where: { status: 'failed', createdAt: { gte: desdeFalha } },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        select: { pagarmeOrderId: true, saleId: true, storeCode: true, method: true },
+      });
+      if (falhados.length) {
+        const abertas: any[] = await (this.prisma as any).pdvSale.findMany({
+          where: { id: { in: falhados.map((f) => f.saleId).filter(Boolean) }, status: 'open' },
+          select: { id: true },
+        });
+        const aberta = new Set(abertas.map((s) => s.id));
+        for (const f of falhados) {
+          if (aberta.has(f.saleId)) pendentes.push({ ...f, recheckFalha: true });
+        }
+      }
       if (!pendentes.length) return;
 
       const agora = Date.now();
@@ -61,7 +93,10 @@ export class PagarmeReconcileService {
         if (checados >= PagarmeReconcileService.MAX_POR_CICLO) break;
         if (!p.pagarmeOrderId) continue;
         const ultima = this.ultimaChecagem.get(p.pagarmeOrderId) || 0;
-        if (agora - ultima < PagarmeReconcileService.THROTTLE_MS) continue;
+        const throttle = p.recheckFalha
+          ? PagarmeReconcileService.THROTTLE_FALHA_MS
+          : PagarmeReconcileService.THROTTLE_MS;
+        if (agora - ultima < throttle) continue;
         this.ultimaChecagem.set(p.pagarmeOrderId, agora);
         checados++;
 
@@ -74,7 +109,8 @@ export class PagarmeReconcileService {
 
           confirmados++;
           this.logger.log(
-            `[pagarme-reconcile] PAGO fora do webhook: pedido=${p.pagarmeOrderId} venda=${p.saleId} loja=${p.storeCode}`,
+            `[pagarme-reconcile] PAGO fora do webhook: pedido=${p.pagarmeOrderId} venda=${p.saleId} loja=${p.storeCode}` +
+              (p.recheckFalha ? ' (estava marcado como RECUSADO — link pago depois de cartão recusado)' : ''),
           );
 
           // Mesmo efeito colateral do webhook: baixa de crediário paga por
