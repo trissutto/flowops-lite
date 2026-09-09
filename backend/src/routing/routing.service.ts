@@ -9,6 +9,7 @@ import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 import { diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import { lojasDaRotaPropria } from '../common/rota-propria';
 import { consolidacaoObrigatoria } from '../common/politica-frete';
+import { destinoObrigatorioDoPedido, transferenciaParaDestino } from '../common/destino-obrigatorio';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { computeCommittedStock } from './committed-stock.util';
 import { planSplitAssignment, demandasPorSku } from './split-assign.util';
@@ -74,10 +75,8 @@ export class RoutingService {
       if (item.assignedStoreId && !ehItemSemEstoque(item)) storesComPeca.add(item.assignedStoreId);
     }
 
-    const destinoCode = String(order.pickupStoreCode || '').trim();
-    const temDestinoObrigatorio =
-      !!destinoCode &&
-      (order.isPickup || /motoboy|moto\s*boy/i.test(String(order.shippingMethod || '')));
+    const destinoCode = destinoObrigatorioDoPedido(order) ?? '';
+    const temDestinoObrigatorio = !!destinoCode;
     const feederComPecaParaDestino = temDestinoObrigatorio && order.pickOrders.some(
       (p: any) =>
         p.isTransfer &&
@@ -1081,13 +1080,27 @@ export class RoutingService {
           message: 'Não há items disponíveis pra reatribuir — todos já estão em pick-orders avançados.',
         };
       }
+      /**
+       * RETIRADA/MOTOBOY: a loja forçada ALIMENTA o destino (LP-001224, 06/09).
+       *
+       * `isTransfer: false` era chumbado aqui, e num pedido de retirada isso
+       * deixa a peça sem trilho nenhum: sem `isTransfer` o `podeGerarCaixa` do
+       * card é falso, então não sai caixa, nem etiqueta pra loja, nem NF de
+       * transferência — e etiqueta de CLIENTE também não sai, porque retirada
+       * não gera envio. O pedido fica mudo, sem erro em lugar nenhum, e a
+       * cliente vai buscar numa loja que nunca recebeu a peça.
+       *
+       * Efeito colateral que ESTE fix depende: com o card nascendo
+       * `isTransfer`, o `confirmRoute` já grava o `customerSnapshot` (a loja
+       * fonte precisa saber quem vai retirar) — não há segundo lugar pra mexer.
+       */
       const fakeResult: any = {
         success: true,
         strategy: 'force-manual',
         assignments: [
           {
             storeId: forcedStore.id,
-            isTransfer: false,
+            ...transferenciaParaDestino(order as any, forcedStore.code),
             items: orphanItems.map((it) => ({ sku: it.sku, quantity: it.quantity })),
           },
         ],
@@ -1493,6 +1506,10 @@ export class RoutingService {
         id: true, status: true, wcOrderId: true, wcOrderNumber: true, source: true,
         customerName: true, customerCpf: true, customerEmail: true, customerPhone: true,
         shippingMethod: true,
+        // Destino obrigatório da retirada/motoboy — é ele que decide se o card
+        // criado aqui é alimentador. Faltavam no select, então `ancoraCode`
+        // não tinha como cair de volta neles (LP-001224).
+        isPickup: true, pickupStoreCode: true,
       },
     });
     if (!order) throw new BadRequestException('Pedido não encontrado.');
@@ -1617,7 +1634,23 @@ export class RoutingService {
     const feeders = cards.filter(
       (c) => ATIVOS.includes(c.status) && c.isTransfer && c.transferToStoreCode,
     );
-    const ancoraCode: string | null = feeders.length ? String(feeders[0].transferToStoreCode) : null;
+    /**
+     * A ÂNCORA NÃO NASCE SÓ DE FEEDER (LP-001224, 06/09).
+     *
+     * Ler só os feeders existentes é circular no pedido de RETIRADA/MOTOBOY: se
+     * nenhum card é transferência ainda — porque o "forçar loja" acabou de
+     * recriar a separação, ou porque esta é a primeira peça a se mover —, a
+     * âncora sai `null` e o card novo nasce comum. Aí nunca mais vira feeder,
+     * porque a próxima peça vai ler os mesmos zero feeders. Foi assim que as 7
+     * peças do LP-001224 acabaram em SOROCABA e SÃO JOSÉ sem nenhum caminho de
+     * volta pra Moema, onde a cliente ia buscar.
+     *
+     * O destino obrigatório da retirada/motoboy não depende de card nenhum:
+     * está no pedido desde o checkout. Ele é o fallback certo.
+     */
+    const ancoraCode: string | null =
+      (feeders.length ? String(feeders[0].transferToStoreCode) : null) ??
+      destinoObrigatorioDoPedido(order);
     const snapshotJuntada = ancoraCode
       ? JSON.stringify({
           name: order.customerName,
@@ -1625,6 +1658,9 @@ export class RoutingService {
           email: order.customerEmail,
           phone: order.customerPhone,
           shippingMethod: order.shippingMethod,
+          // Mesma forma do snapshot do `confirmRoute`: a loja fonte precisa
+          // saber ONDE a cliente vai retirar, não só quem ela é.
+          pickupStoreCode: order.pickupStoreCode ?? null,
           wcOrderId: order.wcOrderId,
           wcOrderNumber: order.wcOrderNumber,
           juntadaAncoraStoreCode: ancoraCode,
