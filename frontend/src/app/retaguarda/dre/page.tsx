@@ -69,6 +69,7 @@ type Resultado = {
   franquias: {
     lojas: Franquia[]; faturamentoBruto: number; royalties: number; marketing: number;
     royaltiesPct: number; marketingPct: number; despesaLancada: number;
+    midiaCidade?: { total: number; detalhe: Array<{ nome: string; valor: number }> };
   };
   consolidadoDono: { resultadoRede: number; royaltiesFranquia: number; total: number };
   conciliacao: {
@@ -96,6 +97,7 @@ type Resultado = {
       baseFaturamento: number; simulado: number; realizado: number | null;
       aplicado: number; fonte: 'simulado' | 'realizado' | 'espelho';
       espelho?: number | null;
+      foraDasLojas?: number;
     }>;
   };
   ajustes: Array<{
@@ -1151,6 +1153,16 @@ function BlocoFranquias({ data }: { data: Resultado }) {
           </tbody>
         </table>
       </div>
+      {(f.midiaCidade?.total || 0) > 0 && (
+        <div className="px-4 py-2.5 border-t border-[#F5F2EB] bg-[#FBF6E6]/40 text-sm flex flex-wrap items-baseline gap-x-2">
+          <span className="font-bold text-slate-700">Mídia que VOCÊ paga pra cidade delas:</span>
+          <span className="font-extrabold tabular-nums">{brl(f.midiaCidade!.total)}</span>
+          <span className="text-xs text-slate-500">
+            ({f.midiaCidade!.detalhe.map((d) => `${d.nome} ${brl(d.valor)}`).join(' · ')}) — campanhas com a
+            cidade da franquia no nome; fora do resultado das suas lojas, coberta em parte pelo repasse de marketing
+          </span>
+        </div>
+      )}
       <p className="px-4 py-2 text-[11px] text-slate-400 border-t border-[#F5F2EB]">
         O marketing de {f.marketingPct}% é repasse pra cobrir a verba da rede — entra como caixa, não como lucro.
         A mercadoria vendida pra franquia (preço ÷ 2,5) também não conta aqui.
@@ -1288,6 +1300,11 @@ function BlocoMidia({ data, onMudou, avisar }: {
                     }`}>
                       {l.fonte === 'realizado' ? 'REAL' : l.fonte === 'espelho' ? 'REAL (espelho)' : 'SIMULADO'}
                     </span>
+                    {(l.foraDasLojas || 0) > 0 && (
+                      <span className="block text-[10px] font-normal text-slate-400 mt-0.5">
+                        + {brl(l.foraDasLojas)} de cidade de franquia → bloco Franquias
+                      </span>
+                    )}
                   </td>
                 </tr>
               );
@@ -1297,9 +1314,10 @@ function BlocoMidia({ data, onMudou, avisar }: {
       </div>
       <p className="px-4 py-2 text-[11px] text-slate-400 border-t border-[#F5F2EB]">
         Ordem de precedência: valor LANÇADO aqui &gt; gasto REAL do espelho de anúncios (Meta/Google,
-        somado dia a dia no período) &gt; coeficiente simulado. Em todos os casos o total é distribuído
-        entre as lojas na proporção do faturamento — trocar a fonte não muda quem paga mais. O espelho
-        parado (sem linha no período) volta sozinho pro coeficiente, nunca pra um zero mentiroso.
+        somado dia a dia no período) &gt; coeficiente simulado. No espelho, campanha com a CIDADE no nome
+        vai direto pra loja da cidade ("SANTOS PMax" → Santos); cidade de franquia sai das suas lojas e
+        aparece no bloco Franquias; só o que não tem cidade rateia por faturamento. O espelho parado
+        (sem linha no período) volta sozinho pro coeficiente, nunca pra um zero mentiroso.
       </p>
     </div>
   );
