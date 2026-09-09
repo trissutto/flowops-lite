@@ -932,7 +932,12 @@ export class DreService implements OnApplicationBootstrap {
     // penalizava loja com mídia inventada. Os espelhos meta/google_ads_gasto_dia
     // já têm o gasto POR DIA, então a precedência vira:
     // realizado manual > espelho > % simulado.
-    const espelhoAds = await this.gastoAdsEspelho(de, ate);
+    const cidades = this.montaCidades(stores, colunas);
+    const espelhoAds = await this.gastoAdsEspelho(de, ate, cidades);
+    // Mídia paga pra CIDADE DE FRANQUIA — sai das lojas próprias e aparece
+    // no bloco Franquias (decisão do dono 08/09: R$ 1.053 de Suzano/Vinhedo/
+    // Jundiaí/Anália Franco/SJC estavam rateados nas lojas dele).
+    const midiaFranquiaCidade = { total: 0, detalhe: new Map<string, number>() };
 
     const simulacao: any[] = [];
     for (const aj of pctGerenciais) {
@@ -951,13 +956,34 @@ export class DreService implements OnApplicationBootstrap {
       const totalAplicado = real != null
         ? real * proporcao
         : doEspelho != null
-          ? doEspelho
+          ? doEspelho.aplicavel
           : baseAlvo * (Number(aj.percentual) / 100);
 
+      // A CIDADE MANDA (08/09): campanha com cidade no nome vai DIRETO pra
+      // loja da cidade ("SANTOS PMax" → coluna 02); só o que não tem cidade
+      // rateia por faturamento — que continua sendo a régua do realizado
+      // manual e do simulado, então trocar a fonte não muda quem paga mais.
+      const rateavel = doEspelho ? doEspelho.rateio : totalAplicado;
       for (const col of alvos) {
-        // Rateio pelo faturamento: mesma régua do percentual, então trocar
-        // simulado por realizado não muda a distribuição entre as lojas.
-        this.somaDespesa(col, aj.descricao, grupo, totalAplicado * (col.faturamentoBruto / baseAlvo));
+        const valor = (doEspelho?.direto?.get(col.key) || 0)
+          + rateavel * (col.faturamentoBruto / baseAlvo);
+        if (valor > 0.005) this.somaDespesa(col, aj.descricao, grupo, valor);
+      }
+      // Loja com campanha da cidade ativa mas SEM venda no período não está
+      // em `alvos` — o custo é dela mesmo assim (a coluna aparece pela despesa).
+      if (doEspelho?.direto) {
+        for (const [code, v] of doEspelho.direto) {
+          const col = colunas.get(code);
+          if (col && v > 0.005 && !alvos.includes(col)) {
+            this.somaDespesa(col, aj.descricao, grupo, v);
+          }
+        }
+      }
+      if (doEspelho && doEspelho.franquia > 0.005) {
+        midiaFranquiaCidade.total += doEspelho.franquia;
+        for (const [nome, v] of doEspelho.franquiaDetalhe) {
+          midiaFranquiaCidade.detalhe.set(nome, (midiaFranquiaCidade.detalhe.get(nome) || 0) + v);
+        }
       }
 
       simulacao.push({
@@ -968,7 +994,8 @@ export class DreService implements OnApplicationBootstrap {
         baseFaturamento: baseAlvo,
         simulado: baseAlvo * (Number(aj.percentual) / 100),
         realizado: real ?? null,
-        espelho: doEspelho,
+        espelho: doEspelho ? doEspelho.aplicavel : null,
+        foraDasLojas: doEspelho ? doEspelho.franquia : 0,
         aplicado: totalAplicado,
         fonte: real != null ? 'realizado' : doEspelho != null ? 'espelho' : 'simulado',
       });
@@ -1140,7 +1167,19 @@ export class DreService implements OnApplicationBootstrap {
       de, ate, mesRef,
       total,
       colunas: lista,
-      franquias: { lojas: franquias, ...franquiaTotal },
+      franquias: {
+        lojas: franquias,
+        ...franquiaTotal,
+        // Mídia de CIDADE DE FRANQUIA que o dono paga — fora do resultado
+        // das lojas próprias, visível aqui (o repasse de marketing ajuda a
+        // cobrir exatamente isso).
+        midiaCidade: {
+          total: midiaFranquiaCidade.total,
+          detalhe: [...midiaFranquiaCidade.detalhe.entries()]
+            .map(([nome, valor]) => ({ nome, valor }))
+            .sort((a, b) => b.valor - a.valor),
+        },
+      },
       // O que sobra pro dono: resultado das lojas próprias + royalties.
       consolidadoDono: {
         resultadoRede: total.resultadoLiquido,
@@ -1501,31 +1540,78 @@ export class DreService implements OnApplicationBootstrap {
   }
 
   /**
-   * Gasto REAL de anúncio no período, somado dos espelhos diários
-   * (`meta_ads_gasto_dia` / `google_ads_gasto_dia`) e separado LOJA × SITE
-   * pela régua única de `common/contas-de-anuncio.ts` — a mesma que a tela de
-   * ROAS usa. `linhas: 0` = espelho sem dado no período (cron parado, env
-   * ausente): nesse caso quem manda é o % simulado, nunca um zero mentiroso.
+   * Cidades casáveis com nome de campanha: uma entrada por loja cujo NOME é
+   * cidade (tira LURD'S/PLUS SIZE/LOJA/números; MATRIZ/SITE/LIVE/DEPÓSITO
+   * viram vazio e saem sozinhas). `coluna:false` = loja que NÃO é coluna da
+   * DRE (franquia, FORA) — campanha dessa cidade é dinheiro do dono gasto
+   * pra cidade DELA, não das lojas próprias.
    */
-  private async gastoAdsEspelho(de: string, ate: string) {
+  private montaCidades(stores: any[], colunas: Map<string, DreColuna>) {
+    const lista: Array<{ chave: string; code: string; nome: string; coluna: boolean }> = [];
+    for (const s of stores) {
+      const chave = this.semAcento(String(s.name || ''))
+        .replace(/LURD.?S|PLUS ?SIZE|LOJA|MATRIZ|DEPOSITO|ALMOXARIFADO|\bCD\b|\bSITE\b|\bLIVE\b|[0-9]/g, ' ')
+        .replace(/\s+/g, ' ').trim();
+      if (chave.length < 4) continue;
+      const col = colunas.get(String(s.code));
+      if (col && col.grupo !== 'LOJA') continue; // canal não é cidade
+      lista.push({ chave, code: String(s.code), nome: String(s.name || s.code), coluna: !!col });
+    }
+    // Chave mais longa primeiro: "PRAIA GRANDE" ganha de um hipotético "PRAIA".
+    lista.sort((a, b) => b.chave.length - a.chave.length);
+    return lista;
+  }
+
+  /** "SJC" e afins — apelido de campanha que o cadastro não usa. */
+  private normalizaCampanha(nome: string): string {
+    return this.semAcento(nome).replace(/\bSJC\b/g, 'SAO JOSE DOS CAMPOS');
+  }
+
+  /**
+   * Gasto REAL de anúncio no período, somado dos espelhos diários
+   * (`meta_ads_gasto_dia` / `google_ads_gasto_dia`).
+   *
+   * Conta separada LOJA × SITE pela régua única de `common/contas-de-anuncio`
+   * (a mesma da tela de ROAS). Dentro da conta de LOJAS a abertura é POR
+   * CAMPANHA: campanha com CIDADE no nome vai direto pra loja da cidade
+   * ("SANTOS PMax" → coluna 02); sem cidade, cai no rateio por faturamento
+   * (é o retrato das campanhas de rede inteira do Meta); cidade de FRANQUIA
+   * sai das lojas próprias e vai pro bloco Franquias (decisão do dono 08/09 —
+   * antes as lojas pagavam a mídia da cidade da franquia no rateio).
+   *
+   * `linhas: 0` = espelho sem dado no período (cron parado, env ausente):
+   * quem manda volta a ser o % simulado, nunca um zero mentiroso.
+   */
+  private async gastoAdsEspelho(de: string, ate: string, cidades: Array<{ chave: string; code: string; nome: string; coluna: boolean }>) {
     const deLoja = new Set(contasDeLojaTodas());
-    const out = {
-      meta: { lojas: 0, site: 0, linhas: 0 },
-      google: { lojas: 0, site: 0, linhas: 0 },
-    };
+    const ladoVazio = () => ({
+      site: 0, linhas: 0,
+      lojas: { porColuna: new Map<string, number>(), generico: 0, franquia: 0, franquiaDetalhe: new Map<string, number>() },
+    });
+    const out = { meta: ladoVazio(), google: ladoVazio() };
     for (const [rede, tabela] of [['meta', 'meta_ads_gasto_dia'], ['google', 'google_ads_gasto_dia']] as const) {
       try {
         const rows: any[] = await this.prisma.$queryRawUnsafe(
-          `SELECT conta_id::text AS conta, SUM(gasto)::float AS gasto, COUNT(*)::int AS n
+          `SELECT conta_id::text AS conta, campanha_nome AS campanha,
+                  SUM(gasto)::float AS gasto, COUNT(*)::int AS n
              FROM ${tabela}
             WHERE dia >= $1::date AND dia <= $2::date
-            GROUP BY 1`,
+            GROUP BY 1, 2`,
           de, ate,
         );
         for (const r of rows) {
+          const gasto = Number(r.gasto || 0);
           out[rede].linhas += Number(r.n || 0);
-          if (deLoja.has(String(r.conta))) out[rede].lojas += Number(r.gasto || 0);
-          else out[rede].site += Number(r.gasto || 0);
+          if (!deLoja.has(String(r.conta))) { out[rede].site += gasto; continue; }
+          const nome = this.normalizaCampanha(String(r.campanha || ''));
+          const hit = cidades.find((c) => nome.includes(c.chave));
+          const l = out[rede].lojas;
+          if (!hit) l.generico += gasto;
+          else if (hit.coluna) l.porColuna.set(hit.code, (l.porColuna.get(hit.code) || 0) + gasto);
+          else {
+            l.franquia += gasto;
+            l.franquiaDetalhe.set(hit.nome, (l.franquiaDetalhe.get(hit.nome) || 0) + gasto);
+          }
         }
       } catch (e: any) {
         // Espelho ausente/renomeado → segue o simulado; não derruba a DRE.
@@ -1539,17 +1625,33 @@ export class DreService implements OnApplicationBootstrap {
    * Casa um ajuste DESPESA_PCT com o lado certo do espelho pela DESCRIÇÃO
    * ("META ADS LOJAS" → meta.lojas). Descrição que não fala META/GOOGLE (um
    * "Marketing" genérico) fica no % — o espelho não sabe do que ela é.
+   * Devolve o que APLICAR nas colunas (direto por cidade + rateio) e o que
+   * vai pro bloco Franquias.
    */
   private espelhoDoAjuste(
     descricao: string,
-    g: { meta: { lojas: number; site: number; linhas: number }; google: { lojas: number; site: number; linhas: number } },
-  ): number | null {
+    g: Awaited<ReturnType<DreService['gastoAdsEspelho']>>,
+  ): {
+    aplicavel: number; direto: Map<string, number> | null; rateio: number;
+    franquia: number; franquiaDetalhe: Map<string, number>;
+  } | null {
     const d = this.semAcento(descricao);
     const rede = /META|FACEBOOK|INSTAGRAM/.test(d) ? 'meta' : /GOOGLE/.test(d) ? 'google' : null;
     if (!rede) return null;
     const dados = g[rede];
     if (!dados.linhas) return null;
-    return /SITE|E-?COMMERCE/.test(d) ? dados.site : dados.lojas;
+    if (/SITE|E-?COMMERCE/.test(d)) {
+      return { aplicavel: dados.site, direto: null, rateio: dados.site, franquia: 0, franquiaDetalhe: new Map() };
+    }
+    const l = dados.lojas;
+    const somaDireto = [...l.porColuna.values()].reduce((s, v) => s + v, 0);
+    return {
+      aplicavel: somaDireto + l.generico,
+      direto: l.porColuna,
+      rateio: l.generico,
+      franquia: l.franquia,
+      franquiaDetalhe: l.franquiaDetalhe,
+    };
   }
 
   /**
