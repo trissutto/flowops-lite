@@ -142,13 +142,30 @@ export class FinanceiroService {
     const priceMap = await this.pricing.getPricesByCodigos(skus);
     const refPriceMap = await this.pricing.getPricesByRefs(refs);
 
+    // RÉGUA DO DONO (08/09): preço de venda ORIGINAL ÷ 2,5 — o recálculo NÃO
+    // sobrescreve o preço da época: snapshot do bipe (precoUnitCents) primeiro;
+    // o espelho (preço atual) só entra pra obrigação sem snapshot.
+    const toIds = (obligations as any[]).map((o) => o.transferOrderId).filter(Boolean);
+    const snaps = toIds.length
+      ? await (this.prisma as any).transferOrder.findMany({
+          where: { id: { in: toIds } },
+          select: { id: true, precoUnitCents: true },
+        })
+      : [];
+    const snapById = new Map((snaps as any[]).map((t: any) => [t.id, Number(t.precoUnitCents) || 0]));
+
     let atualizadas = 0;
     let semSku = 0;
     let semPreco = 0;
     const divisorPadrao = 2.5;
 
     for (const o of obligations as any[]) {
-      const novoPreco = (o.sku ? priceMap.get(o.sku) || 0 : 0) || refPriceMap.get(o.refCode) || 0;
+      const snap = snapById.get(o.transferOrderId) || 0;
+      const novoPreco =
+        (snap > 0 ? snap / 100 : 0) ||
+        (o.sku ? priceMap.get(o.sku) || 0 : 0) ||
+        refPriceMap.get(o.refCode) ||
+        0;
       if (novoPreco <= 0) { if (!o.sku) semSku++; else semPreco++; continue; }
       // Mantem o mesmo se for igual (nao re-update sem necessidade)
       if (Math.abs(Number(o.precoUnitario || 0) - novoPreco) < 0.01) continue;

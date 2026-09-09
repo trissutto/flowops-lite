@@ -1670,14 +1670,16 @@ export class RealignmentShipmentService {
 
     for (const it of items as any[]) {
       const sku = refToSku.get(it.refCode);
-      // Cascata: espelho por SKU → espelho por REF → SNAPSHOT DO BIPE
-      // (precoUnitCents, carimbado quando a peça entrou na caixa). O snapshot
-      // cobre a peça recém-cadastrada que ainda não chegou ao espelho — era a
-      // maior fonte de obrigação nascendo R$ 0,00 (248 peças em ago/26).
+      // RÉGUA DO DONO (08/09): o acerto usa SEMPRE o preço de venda ORIGINAL
+      // ÷ 2,5 — o snapshot do bipe (precoUnitCents) vem PRIMEIRO; o espelho
+      // (por SKU, depois por REF) só cobre item sem snapshot. De quebra mata a
+      // obrigação nascendo R$ 0,00 (248 peças em ago/26): peça recém-cadastrada
+      // tem snapshot antes de chegar ao espelho.
       const preco =
+        (Number(it.precoUnitCents) > 0 ? Number(it.precoUnitCents) / 100 : 0) ||
         (sku ? priceMap.get(sku) || 0 : 0) ||
         refPriceMap.get(it.refCode) ||
-        (Number(it.precoUnitCents) > 0 ? Number(it.precoUnitCents) / 100 : 0);
+        0;
       // Preço não resolvido → a obrigação NASCE (a peça viajou, a dívida
       // existe) mas com R$ 0 — e isso não pode ser silencioso: some dinheiro
       // do acerto REDE↔FILIAL sem ninguém ver. Fica gritado no log.

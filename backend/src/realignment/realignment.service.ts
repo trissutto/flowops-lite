@@ -1625,11 +1625,16 @@ export class RealignmentService {
     // priorizando CODIGO com estoque) em vez de searchByRef + find — assim o
     // SKU gravado na obrigação reflete o produto VIVO no estoque, e o preço
     // puxado bate com a peça que realmente saiu.
-    let preco = 0;
+    // RÉGUA DO DONO (08/09): preço de venda ORIGINAL ÷ 2,5, sempre — o
+    // snapshot do bipe (precoUnitCents) vem PRIMEIRO; o espelho só cobre item
+    // sem snapshot. O SKU segue sendo resolvido pra gravar na obrigação.
+    let preco = Number((order as any).precoUnitCents) > 0
+      ? Number((order as any).precoUnitCents) / 100
+      : 0;
     let sku: string | null = null;
     try {
       sku = await this.erp.findCodigoByRefCorTam(order.refCode, order.cor || null, order.tamanho || null);
-      if (sku) {
+      if (!preco && sku) {
         const priceMap = await this.erp.getProductPricesBySkus([sku]);
         preco = priceMap.get(sku) || 0;
       }
@@ -1637,12 +1642,6 @@ export class RealignmentService {
       this.logger.warn(
         `[realignment] não conseguiu buscar preço pra ${order.refCode} ${order.cor}/${order.tamanho}: ${(e as Error).message}`,
       );
-    }
-
-    // Snapshot do bipe como último recurso — peça sem preço no espelho não
-    // pode virar obrigação de R$ 0,00 (vinha acontecendo: 248 peças em ago/26).
-    if (!preco && Number((order as any).precoUnitCents) > 0) {
-      preco = Number((order as any).precoUnitCents) / 100;
     }
 
     // Mesmo se preço = 0, cria a obrigação (admin vê e ajusta manualmente)
