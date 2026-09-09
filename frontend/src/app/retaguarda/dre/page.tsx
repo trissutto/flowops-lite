@@ -79,6 +79,7 @@ type Resultado = {
   despesaDescartada: {
     porEspecie: Array<{ especie: string; grupo: string; valor: number }>;
     semColuna: number; emFranquia: number; total: number;
+    semColunaDetalhe?: Array<{ lojaCode: string; valor: number }>;
     porAjuste: Array<{ descricao: string; valor: number }>;
   };
   planilha: {
@@ -93,7 +94,8 @@ type Resultado = {
     linhas: Array<{
       id: string; descricao: string; percentual: number; alvo: string[];
       baseFaturamento: number; simulado: number; realizado: number | null;
-      aplicado: number; fonte: 'simulado' | 'realizado';
+      aplicado: number; fonte: 'simulado' | 'realizado' | 'espelho';
+      espelho?: number | null;
     }>;
   };
   ajustes: Array<{
@@ -1242,7 +1244,7 @@ function BlocoMidia({ data, onMudou, avisar }: {
                     {l.alvo.length > 3 ? `${l.alvo.length} lojas` : l.alvo.join(', ')}
                   </td>
                   <td className={`text-right px-3 py-2 tabular-nums ${
-                    l.fonte === 'realizado' ? 'text-slate-300 line-through' : 'text-slate-600'
+                    l.fonte !== 'simulado' ? 'text-slate-300 line-through' : 'text-slate-600'
                   }`}>
                     {brl(l.simulado)}
                   </td>
@@ -1280,11 +1282,11 @@ function BlocoMidia({ data, onMudou, avisar }: {
                   <td className="text-right px-4 py-2 tabular-nums font-extrabold">
                     {brl(l.aplicado)}
                     <span className={`ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                      l.fonte === 'realizado'
+                      l.fonte !== 'simulado'
                         ? 'bg-[#F4F8F5] text-[#2E7D46]'
                         : 'bg-amber-50 text-amber-700'
                     }`}>
-                      {l.fonte === 'realizado' ? 'REAL' : 'SIMULADO'}
+                      {l.fonte === 'realizado' ? 'REAL' : l.fonte === 'espelho' ? 'REAL (espelho)' : 'SIMULADO'}
                     </span>
                   </td>
                 </tr>
@@ -1294,9 +1296,10 @@ function BlocoMidia({ data, onMudou, avisar }: {
         </table>
       </div>
       <p className="px-4 py-2 text-[11px] text-slate-400 border-t border-[#F5F2EB]">
-        Enquanto você não lança, vale o coeficiente. O valor lançado é o TOTAL do mês e é distribuído
-        entre as lojas na proporção do faturamento — a mesma régua do percentual, então trocar simulado
-        por real não muda quem paga mais. Filtro de período parcial cobra proporcional aos dias.
+        Ordem de precedência: valor LANÇADO aqui &gt; gasto REAL do espelho de anúncios (Meta/Google,
+        somado dia a dia no período) &gt; coeficiente simulado. Em todos os casos o total é distribuído
+        entre as lojas na proporção do faturamento — trocar a fonte não muda quem paga mais. O espelho
+        parado (sem linha no período) volta sozinho pro coeficiente, nunca pra um zero mentiroso.
       </p>
     </div>
   );
@@ -1446,8 +1449,13 @@ function Qualidade({ data }: { data: Resultado }) {
     );
   }
   if (d.semColuna > 0) {
+    const quais = (d.semColunaDetalhe || [])
+      .slice(0, 4)
+      .map((x) => `loja "${x.lojaCode}" ${brl(x.valor)}`)
+      .join(' · ');
     itens.push(
-      `${brl(d.semColuna)} em contas de loja que não é coluna da DRE (sem papel definido ou marcada FORA).`,
+      `${brl(d.semColuna)} em contas de loja que não é coluna da DRE (sem papel definido ou marcada FORA)`
+      + (quais ? ` — ${quais}.` : '.'),
     );
   }
   for (const a of d.porAjuste || []) {
@@ -1482,7 +1490,7 @@ function Qualidade({ data }: { data: Resultado }) {
       </ul>
       <div className="text-[11px] text-amber-700 mt-2">
         Fonte: {data.fonte}. CMV = venda ÷ markup da loja (padrão {data.config.markupPadrao}) · imposto de {data.config.aliquotaPadrao}% sobre a receita líquida
-        (dá pra sobrepor por CNPJ/mês em Configuração).
+        (dá pra sobrepor por loja/CNPJ no mês em Configuração).
       </div>
     </div>
   );
@@ -1615,7 +1623,7 @@ const AJUDA_ESPECIE: Record<string, string> = {
   FIXA: 'Fixa da loja (aluguel, folha, luz, contador)',
   FINANCEIRA: 'Juros, multa, IOF, encargo de empréstimo',
   CMV: 'Compra de mercadoria — NÃO entra (o CMV vem das peças vendidas)',
-  IMPOSTO: 'DAS/Simples — NÃO entra (o imposto vem da alíquota por CNPJ)',
+  IMPOSTO: 'DAS/Simples — NÃO entra (o imposto vem da alíquota padrão/por loja)',
   IGNORAR: 'Transferência, adiantamento, aporte',
 };
 
@@ -1742,13 +1750,13 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
 
       {/* Alíquotas */}
       <Bloco
-        titulo={`Imposto — padrão ${cfg.aliquotaPadrao}% da receita líquida`}
-        subtitulo="Só preencha abaixo se algum CNPJ estiver numa faixa diferente do Simples num mês específico"
+        titulo={`Imposto — padrão ${cfg.aliquotaPadrao}% da receita líquida (efetivo medido nas guias de ago/26)`}
+        subtitulo="Só preencha abaixo se alguma loja/CNPJ estiver numa faixa diferente num mês específico — pode usar o CÓDIGO da loja no lugar do CNPJ"
       >
         <div className="flex flex-wrap items-end gap-2 mb-3">
-          <Campo label="CNPJ">
+          <Campo label="CNPJ ou loja">
             <input value={novaAliq.cnpj} onChange={(e) => setNovaAliq({ ...novaAliq, cnpj: e.target.value })}
-              placeholder="00.000.000/0000-00" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-52" />
+              placeholder="00.000.000/0000-00 ou 06" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-52" />
           </Campo>
           <Campo label="Mês">
             <input type="month" value={novaAliq.mes} onChange={(e) => setNovaAliq({ ...novaAliq, mes: e.target.value })}
@@ -1774,7 +1782,7 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         ) : (
           <table className="w-full text-sm">
             <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8]">
-              <th className="text-left py-1.5">CNPJ</th><th className="text-left">Mês</th>
+              <th className="text-left py-1.5">CNPJ / loja</th><th className="text-left">Mês</th>
               <th className="text-right">Alíquota</th><th className="text-left pl-3">Obs.</th><th />
             </tr></thead>
             <tbody>
