@@ -319,6 +319,25 @@ export class DreService implements OnApplicationBootstrap {
         },
       },
       {
+        chave: 'dre_taxa_venda_online_0809',
+        rotulo: 'taxa do gateway da venda online (3,5% — ordem do dono 08/09)',
+        run: async () => {
+          // Pedido pago no gateway (link/PIX online) e finalizado no PDV como
+          // venda_online tem taxa própria e ficava FORA da linha Taxa de
+          // cartão/PIX — medido 08/09: R$ 16 mil no mês só em SOROCABA.
+          // Diferente da grade de 26/07 (que nasce zerada pra ninguém chutar),
+          // esta entra valendo 3,5% porque o número veio do dono — e continua
+          // editável na tela de Configuração como qualquer bandeira.
+          await (this.prisma as any).taxaCartao.createMany({
+            data: [{
+              forma: 'ONLINE', bandeira: 'VENDA ONLINE', faixaParcela: 'UNICA',
+              taxaPct: 3.5, criadoPor: 'seed 08/09',
+            }],
+            skipDuplicates: true,
+          });
+        },
+      },
+      {
         chave: 'dre_markup_itanhaem_2607',
         rotulo: 'markup de ITANHAEM em 2,35 (rede fica em 2,7)',
         run: async () => {
@@ -1200,7 +1219,7 @@ export class DreService implements OnApplicationBootstrap {
         WHERE s.finalized_at >= $1 AND s.finalized_at <= $2
           AND s.status = 'finalized' AND s.is_training = false
           AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
-          AND lower(p.method) IN ('pix','debito','credito','cartao')
+          AND lower(p.method) IN ('pix','debito','credito','cartao','venda_online')
         GROUP BY s.store_code, p.method, p.details`,
       startDate, endDate,
     );
@@ -1224,8 +1243,10 @@ export class DreService implements OnApplicationBootstrap {
         parcelas = Number(det?.parcelas) || 1;
       } catch { /* details inválido → cai no genérico */ }
 
-      const bandeira = this.normalizaBandeira(bandeiraRaw, metodo);
-      const faixa = this.faixaDe(metodo, parcelas);
+      // venda_online = pedido pago no GATEWAY (link/PIX do site): taxa única
+      // do gateway, não depende de bandeira/parcela — linha VENDA ONLINE.
+      const bandeira = metodo === 'venda_online' ? 'VENDA ONLINE' : this.normalizaBandeira(bandeiraRaw, metodo);
+      const faixa = metodo === 'venda_online' ? 'UNICA' : this.faixaDe(metodo, parcelas);
       const pct = porChave.get(`${bandeira}|${faixa}`);
 
       const acc = porLoja.get(hit)
@@ -1468,7 +1489,7 @@ export class DreService implements OnApplicationBootstrap {
           WHERE s.finalized_at >= $1 AND s.finalized_at <= $2
             AND s.status = 'finalized' AND s.is_training = false
             AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
-            AND lower(p.method) IN ('pix','debito','credito','cartao')
+            AND lower(p.method) IN ('pix','debito','credito','cartao','venda_online')
             AND upper(trim(s.store_code)) = ANY($3::text[])
           GROUP BY p.method, p.details`,
         startDate, endDate, codes,
@@ -1487,12 +1508,13 @@ export class DreService implements OnApplicationBootstrap {
           parcelas = Number(det?.parcelas) || 1;
         } catch { /* details inválido → genérico, igual ao cálculo */ }
 
-        const bandeira = this.normalizaBandeira(bandeiraRaw, metodo);
-        const faixa = this.faixaDe(metodo, parcelas);
+        const bandeira = metodo === 'venda_online' ? 'VENDA ONLINE' : this.normalizaBandeira(bandeiraRaw, metodo);
+        const faixa = metodo === 'venda_online' ? 'UNICA' : this.faixaDe(metodo, parcelas);
         const pct = porChave.get(`${bandeira}|${faixa}`) ?? null;
 
         let rotulo: string;
-        if (metodo === 'pix') rotulo = bandeira === 'PIX' ? 'PIX' : `${bandeira} · PIX`;
+        if (metodo === 'venda_online') rotulo = 'Venda online (gateway)';
+        else if (metodo === 'pix') rotulo = bandeira === 'PIX' ? 'PIX' : `${bandeira} · PIX`;
         else if (metodo === 'debito') rotulo = bandeira === 'DEBITO' ? 'Débito (sem bandeira)' : `${bandeira} · débito`;
         else {
           const nome = bandeira === 'CREDITO' ? 'Crédito (sem bandeira)' : bandeira;
@@ -2129,8 +2151,8 @@ export class DreService implements OnApplicationBootstrap {
     usuario?: string,
   ) {
     const forma = String(input.forma || '').toUpperCase().trim();
-    if (!['PIX', 'DEBITO', 'CREDITO'].includes(forma)) {
-      throw new BadRequestException('Forma inválida (PIX | DEBITO | CREDITO)');
+    if (!['PIX', 'DEBITO', 'CREDITO', 'ONLINE'].includes(forma)) {
+      throw new BadRequestException('Forma inválida (PIX | DEBITO | CREDITO | ONLINE)');
     }
     // slice(0,20): a coluna é VarChar(20) e estourar derruba tudo em 500.
     const bandeira = this.semAcento(input.bandeira).replace(/[_\-\s]+/g, ' ').trim().slice(0, 20);
@@ -2172,7 +2194,7 @@ export class DreService implements OnApplicationBootstrap {
          JOIN pdv_sales s ON s.id = p.sale_id
         WHERE s.finalized_at >= $1 AND s.finalized_at <= $2
           AND s.status = 'finalized' AND s.is_training = false
-          AND lower(p.method) IN ('pix','debito','credito','cartao')
+          AND lower(p.method) IN ('pix','debito','credito','cartao','venda_online')
         GROUP BY p.method, p.details`,
       startDate, endDate,
     );
@@ -2189,11 +2211,12 @@ export class DreService implements OnApplicationBootstrap {
         bandeiraRaw = String(det?.bandeira || '');
         parcelas = Number(det?.parcelas) || 1;
       } catch { /* ignora */ }
-      const bandeira = this.normalizaBandeira(bandeiraRaw, metodo);
-      const faixa = this.faixaDe(metodo, parcelas);
+      const bandeira = metodo === 'venda_online' ? 'VENDA ONLINE' : this.normalizaBandeira(bandeiraRaw, metodo);
+      const faixa = metodo === 'venda_online' ? 'UNICA' : this.faixaDe(metodo, parcelas);
       const chave = `${bandeira}|${faixa}`;
       const acc = agrupado.get(chave) || {
-        forma: metodo === 'pix' ? 'PIX' : metodo === 'debito' ? 'DEBITO' : 'CREDITO',
+        forma: metodo === 'venda_online' ? 'ONLINE'
+          : metodo === 'pix' ? 'PIX' : metodo === 'debito' ? 'DEBITO' : 'CREDITO',
         bandeira, faixaParcela: faixa, volume: 0, transacoes: 0,
         temTaxa: temTaxa.has(chave),
       };

@@ -477,7 +477,7 @@ function montarComposicao(resp: any): Composicao {
           : `${brl(l.base)} pagos × ${String(l.pct).replace('.', ',')}%`,
         alerta: l.pct == null,
       })),
-      rodape: resp.resumo ? `${brl(resp.resumo.base)} passaram em cartão/PIX no período` : undefined,
+      rodape: resp.resumo ? `${brl(resp.resumo.base)} passaram em cartão/PIX/online no período` : undefined,
     };
   }
   if (resp?.tipo === 'despesas') {
@@ -2242,7 +2242,7 @@ function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
   }, [bandeiras]);
 
   const semCadastro = bandeiras.filter((b) => !b.temTaxa && b.volume > 0);
-  const porForma = ['PIX', 'DEBITO', 'CREDITO'] as const;
+  const porForma = ['PIX', 'DEBITO', 'CREDITO', 'ONLINE'] as const;
   const rotuloFaixa = (f: string) =>
     f === 'UNICA' ? '—' : f === '1' ? 'à vista' : f === '2-6' ? '2 a 6x' : '7 a 12x';
 
@@ -2288,7 +2288,8 @@ function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
         return (
           <div key={forma} className="mb-4">
             <div className="text-[11px] font-bold text-slate-500 uppercase mb-1">
-              {forma === 'PIX' ? 'PIX' : forma === 'DEBITO' ? 'Débito' : 'Crédito'}
+              {forma === 'PIX' ? 'PIX' : forma === 'DEBITO' ? 'Débito'
+                : forma === 'ONLINE' ? 'Venda online (taxa do gateway — link/PIX do pedido)' : 'Crédito'}
             </div>
             <table className="w-full text-sm">
               <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8]">
