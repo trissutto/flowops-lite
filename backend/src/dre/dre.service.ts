@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from 
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { FaturamentoService } from '../faturamento/faturamento.service';
+import { contasDeLojaTodas } from '../common/contas-de-anuncio';
 
 /**
  * DRE por loja — painel /retaguarda/dre.
@@ -43,8 +44,13 @@ import { FaturamentoService } from '../faturamento/faturamento.service';
  */
 const MARKUP_PADRAO = 2.7;
 
-/** Alíquota efetiva padrão — decisão do dono 26/07 ("considere 10%"). */
-const ALIQUOTA_PADRAO = 10;
+/**
+ * Alíquota efetiva padrão. Era 10 ("considere 10%", 26/07); em 08/09 a
+ * auditoria mediu o EFETIVO das guias lançadas em agosto/26 — R$ 62,3k de
+ * IMPOSTO ÷ R$ 763,7k de faturamento das lojas = 8,16% — e o dono mandou
+ * usar o medido. Override por loja/CNPJ na Configuração continua mandando.
+ */
+const ALIQUOTA_PADRAO = 8.2;
 
 /** Royalties da franquia — é o que o dono ganha sobre a venda dela. */
 const ROYALTIES_PCT = 8;
@@ -780,6 +786,8 @@ export class DreService implements OnApplicationBootstrap {
     // descartado e por quê, senão "faltou aluguel" vira mistério.
     const descartadas = new Map<string, { grupo: DreGrupoEspecie; valor: number }>();
     let despesaSemColuna = 0;
+    // Por QUAL código órfão o dinheiro saiu ("99" descartava R$ 1,2k calado).
+    const semColunaPorLoja = new Map<string, number>();
 
     for (const c of contas) {
       const valor = Number(c.valorCents || 0) / 100;
@@ -825,7 +833,12 @@ export class DreService implements OnApplicationBootstrap {
       if (alvo?.startsWith('__REDE__')) { despesaRede += valor; continue; }
       // Despesa lançada numa FRANQUIA é dela, não do dono — fica de fora.
       if (alvo?.startsWith('__FRANQUIA__')) { despesaFranquia += valor; continue; }
-      if (!col) { despesaSemColuna += valor; continue; }
+      if (!col) {
+        despesaSemColuna += valor;
+        const k = String(c.lojaCode || '(vazio)').trim() || '(vazio)';
+        semColunaPorLoja.set(k, (semColunaPorLoja.get(k) || 0) + valor);
+        continue;
+      }
 
       this.somaDespesa(col, nome, g, valor);
       col.despesaEmAberto += aberto;
@@ -914,6 +927,13 @@ export class DreService implements OnApplicationBootstrap {
     const realizadoPorAjuste = new Map<string, number>();
     for (const r of realizados) realizadoPorAjuste.set(r.ajusteId, Number(r.valorCents) / 100);
 
+    // GASTO REAL DOS ESPELHOS DE ADS (08/09). A auditoria mediu: o simulado
+    // 3%+3% cobrava R$ 45,8k/mês das lojas com gasto real de R$ 15,0k — a DRE
+    // penalizava loja com mídia inventada. Os espelhos meta/google_ads_gasto_dia
+    // já têm o gasto POR DIA, então a precedência vira:
+    // realizado manual > espelho > % simulado.
+    const espelhoAds = await this.gastoAdsEspelho(de, ate);
+
     const simulacao: any[] = [];
     for (const aj of pctGerenciais) {
       const grupo = (String(aj.grupo || 'VARIAVEL').toUpperCase() as DreGrupoEspecie);
@@ -924,11 +944,15 @@ export class DreService implements OnApplicationBootstrap {
       if (!baseAlvo) continue;
 
       const real = realizadoPorAjuste.get(aj.id);
-      // Valor lançado é do MÊS: num filtro parcial entra proporcional aos dias,
+      // Espelho é somado DENTRO do período (dia a dia) — não precisa de
+      // proporção. Valor lançado manual é do MÊS: entra proporcional aos dias,
       // igual à despesa fixa — senão "últimos 7 dias" cobraria a mídia inteira.
+      const doEspelho = real == null ? this.espelhoDoAjuste(aj.descricao, espelhoAds) : null;
       const totalAplicado = real != null
         ? real * proporcao
-        : baseAlvo * (Number(aj.percentual) / 100);
+        : doEspelho != null
+          ? doEspelho
+          : baseAlvo * (Number(aj.percentual) / 100);
 
       for (const col of alvos) {
         // Rateio pelo faturamento: mesma régua do percentual, então trocar
@@ -944,14 +968,15 @@ export class DreService implements OnApplicationBootstrap {
         baseFaturamento: baseAlvo,
         simulado: baseAlvo * (Number(aj.percentual) / 100),
         realizado: real ?? null,
+        espelho: doEspelho,
         aplicado: totalAplicado,
-        fonte: real != null ? 'realizado' : 'simulado',
+        fonte: real != null ? 'realizado' : doEspelho != null ? 'espelho' : 'simulado',
       });
     }
 
     const fixasGerenciais = ajustesGerenciais.filter((a) => a.tipo === 'DESPESA_FIXA' && a.valorMensalCents);
     for (const aj of fixasGerenciais) {
-      const valor = (Number(aj.valorMensalCents) / 100) * proporcao;
+      const valorCheio = (Number(aj.valorMensalCents) / 100) * proporcao;
       const grupo = (String(aj.grupo || 'FIXA').toUpperCase() as DreGrupoEspecie);
       const temWhitelist = !!String(aj.lojasIncluidas || '').trim();
       for (const col of colunas.values()) {
@@ -959,7 +984,16 @@ export class DreService implements OnApplicationBootstrap {
         // o ajuste mira lojas específicas, a escolha é do dono e vale.
         if (!temWhitelist && col.grupo !== 'LOJA') continue;
         if (!this.ajusteValePra(aj, col)) continue;
-        this.somaDespesa(col, aj.descricao, grupo, valor);
+        // O gerencial cobre despesa que o dono SABE que existe e ninguém
+        // lança. Quando a conta REAL da mesma natureza aparece na loja, ela
+        // MANDA e o gerencial completa só a diferença — mesma régua do
+        // encargo sobre folha. Antes somava por cima: manutenção real de
+        // R$ 18,7k + R$ 400 simulados por loja = dupla contagem (08/09).
+        const lancado = (col.despesasDetalhe || [])
+          .filter((d) => this.mesmaNatureza(aj.descricao, d.especie))
+          .reduce((s, d) => s + d.valor, 0);
+        const valor = Math.max(0, valorCheio - lancado);
+        if (valor > 0.005) this.somaDespesa(col, aj.descricao, grupo, valor);
       }
     }
 
@@ -984,7 +1018,12 @@ export class DreService implements OnApplicationBootstrap {
       col.cmv = col.receitaLiquida / col.markup;
       col.margemBruta = col.receitaLiquida - col.cmv;
 
-      const aliq = (col.cnpj ? overrides.get(col.cnpj) : undefined) ?? ALIQUOTA_PADRAO;
+      // Override por CNPJ (normalizado — o cadastro pode vir pontuado) e,
+      // desde 08/09, também por CÓDIGO DE LOJA: 9 de 9 lojas estavam sem CNPJ
+      // no cadastro e o override era letra morta.
+      const aliq = (col.cnpj ? overrides.get(this.soDigitos(col.cnpj)) : undefined)
+        ?? overrides.get(String(col.key).trim().toUpperCase())
+        ?? ALIQUOTA_PADRAO;
       col.aliquotaPct = aliq;
       col.impostos = col.receitaLiquida * (aliq / 100);
 
@@ -1009,6 +1048,21 @@ export class DreService implements OnApplicationBootstrap {
 
       if (!col.despesasFixas && col.faturamentoBruto) {
         col.avisos.push('Nenhuma despesa fixa lançada no Contas a Pagar pro período');
+      }
+      // ESSENCIAL FALTANDO (08/09): Indaiatuba fechou agosto sem aluguel
+      // lançado e o resultado saiu inflado sem ninguém perceber. Só grita com
+      // o período cobrindo o mês — em "7 dias" o aluguel legitimamente não
+      // vence — e só pra loja física com despesa lançada (a loja 100% sem
+      // lançamento já tem o aviso acima).
+      if (col.grupo === 'LOJA' && col.faturamentoBruto > 0 && col.despesasFixas > 0 && diasPeriodo >= 25) {
+        const tem = (rx: RegExp) =>
+          (col.despesasDetalhe || []).some((d) => d.valor > 0 && rx.test(this.semAcento(d.especie)));
+        if (!tem(/ALUGUE/)) {
+          col.avisos.push('Sem ALUGUEL lançado no período — o resultado desta loja está melhor do que é.');
+        }
+        if (!tem(/^RH$|SALARIO|ORDENADO|FOLHA/)) {
+          col.avisos.push('Sem FOLHA (RH/salário) lançada no período.');
+        }
       }
       // ── SANIDADE DA CONTAGEM DE CUPOM (3 checagens) ────────────────────
       // A causa raiz já foi corrigida (o NUMERO é FLOAT e achatava na
@@ -1113,6 +1167,9 @@ export class DreService implements OnApplicationBootstrap {
           .map(([especie, d]) => ({ especie, grupo: d.grupo, valor: d.valor }))
           .sort((a, b) => b.valor - a.valor),
         semColuna: despesaSemColuna,
+        semColunaDetalhe: [...semColunaPorLoja.entries()]
+          .map(([lojaCode, valor]) => ({ lojaCode, valor }))
+          .sort((a, b) => b.valor - a.valor),
         emFranquia: despesaFranquia,
         porAjuste: [...excluidoPorAjuste.entries()].map(([descricao, valor]) => ({ descricao, valor })),
         total: [...descartadas.values()].reduce((s, d) => s + d.valor, 0)
@@ -1426,7 +1483,7 @@ export class DreService implements OnApplicationBootstrap {
     return null;
   }
 
-  /** Overrides de alíquota por CNPJ (o padrão é ALIQUOTA_PADRAO). */
+  /** Overrides de alíquota por CNPJ OU código de loja (padrão: ALIQUOTA_PADRAO). */
   private async aliquotasVigentes(mesRef: string): Promise<Map<string, number>> {
     const rows: any[] = await (this.prisma as any).dreAliquota.findMany({
       where: { mes: { lte: mesRef } },
@@ -1434,10 +1491,80 @@ export class DreService implements OnApplicationBootstrap {
     });
     const out = new Map<string, number>();
     for (const r of rows) {
-      const cnpj = this.soDigitos(r.cnpj);
-      if (!out.has(cnpj)) out.set(cnpj, Number(r.aliquotaPct));
+      // CNPJ vira só dígitos; código de loja fica como texto normalizado —
+      // as duas chaves convivem no mesmo campo (ver upsertAliquota).
+      const dig = this.soDigitos(r.cnpj);
+      const chave = dig.length === 14 ? dig : String(r.cnpj || '').trim().toUpperCase();
+      if (!out.has(chave)) out.set(chave, Number(r.aliquotaPct));
     }
     return out;
+  }
+
+  /**
+   * Gasto REAL de anúncio no período, somado dos espelhos diários
+   * (`meta_ads_gasto_dia` / `google_ads_gasto_dia`) e separado LOJA × SITE
+   * pela régua única de `common/contas-de-anuncio.ts` — a mesma que a tela de
+   * ROAS usa. `linhas: 0` = espelho sem dado no período (cron parado, env
+   * ausente): nesse caso quem manda é o % simulado, nunca um zero mentiroso.
+   */
+  private async gastoAdsEspelho(de: string, ate: string) {
+    const deLoja = new Set(contasDeLojaTodas());
+    const out = {
+      meta: { lojas: 0, site: 0, linhas: 0 },
+      google: { lojas: 0, site: 0, linhas: 0 },
+    };
+    for (const [rede, tabela] of [['meta', 'meta_ads_gasto_dia'], ['google', 'google_ads_gasto_dia']] as const) {
+      try {
+        const rows: any[] = await this.prisma.$queryRawUnsafe(
+          `SELECT conta_id::text AS conta, SUM(gasto)::float AS gasto, COUNT(*)::int AS n
+             FROM ${tabela}
+            WHERE dia >= $1::date AND dia <= $2::date
+            GROUP BY 1`,
+          de, ate,
+        );
+        for (const r of rows) {
+          out[rede].linhas += Number(r.n || 0);
+          if (deLoja.has(String(r.conta))) out[rede].lojas += Number(r.gasto || 0);
+          else out[rede].site += Number(r.gasto || 0);
+        }
+      } catch (e: any) {
+        // Espelho ausente/renomeado → segue o simulado; não derruba a DRE.
+        this.logger.warn(`[dre] espelho ${tabela} indisponível: ${e?.message || e}`);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Casa um ajuste DESPESA_PCT com o lado certo do espelho pela DESCRIÇÃO
+   * ("META ADS LOJAS" → meta.lojas). Descrição que não fala META/GOOGLE (um
+   * "Marketing" genérico) fica no % — o espelho não sabe do que ela é.
+   */
+  private espelhoDoAjuste(
+    descricao: string,
+    g: { meta: { lojas: number; site: number; linhas: number }; google: { lojas: number; site: number; linhas: number } },
+  ): number | null {
+    const d = this.semAcento(descricao);
+    const rede = /META|FACEBOOK|INSTAGRAM/.test(d) ? 'meta' : /GOOGLE/.test(d) ? 'google' : null;
+    if (!rede) return null;
+    const dados = g[rede];
+    if (!dados.linhas) return null;
+    return /SITE|E-?COMMERCE/.test(d) ? dados.site : dados.lojas;
+  }
+
+  /**
+   * "MATERIAL DE LIMPEZA" (ajuste) é a mesma natureza de "LIMPEZA" (espécie)?
+   * Tokens sem acento e sem palavra vazia: os do nome mais curto precisam
+   * estar todos no mais longo. É o casamento que liga o abate do gerencial.
+   */
+  private mesmaNatureza(a: string, b: string): boolean {
+    const tokens = (s: string) =>
+      this.semAcento(s).split(/[^A-Z0-9]+/).filter((t) => t.length > 1 && !['DE', 'DA', 'DO', 'DAS', 'DOS', 'EM', 'NA', 'NO'].includes(t));
+    const ta = tokens(a);
+    const tb = tokens(b);
+    if (!ta.length || !tb.length) return false;
+    const [curto, longo] = ta.length <= tb.length ? [ta, new Set(tb)] : [tb, new Set(ta)];
+    return curto.every((t) => longo.has(t));
   }
 
   // ── drill-down ───────────────────────────────────────────────────────────
@@ -1957,8 +2084,21 @@ export class DreService implements OnApplicationBootstrap {
     input: { cnpj: string; mes: string; aliquotaPct: number; observacao?: string },
     usuario?: string,
   ) {
-    const cnpj = this.soDigitos(input.cnpj);
-    if (cnpj.length !== 14) throw new BadRequestException('CNPJ inválido (14 dígitos)');
+    // Aceita CNPJ (14 dígitos) OU código de loja (08/09): as lojas estavam
+    // todas sem CNPJ no cadastro e o override por CNPJ era impossível de usar.
+    const dig = this.soDigitos(input.cnpj);
+    let cnpj: string;
+    if (dig.length === 14) {
+      cnpj = dig;
+    } else {
+      const code = String(input.cnpj || '').trim().toUpperCase();
+      const candidatos = [code, code.padStart(2, '0'), code.replace(/^0+/, '') || code];
+      const store = await (this.prisma as any).store.findFirst({ where: { code: { in: candidatos } } });
+      if (!store) {
+        throw new BadRequestException('Informe um CNPJ (14 dígitos) ou o código de uma loja existente');
+      }
+      cnpj = String(store.code).trim().toUpperCase();
+    }
     const mes = String(input.mes || '').slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(mes)) throw new BadRequestException('Mês inválido (YYYY-MM)');
     const pct = Number(input.aliquotaPct);
