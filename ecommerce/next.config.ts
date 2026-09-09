@@ -179,42 +179,26 @@ const nextConfig: NextConfig = {
   },
 
   /**
-   * ── AS FOTOS QUE AINDA MORAM NO WORDPRESS ──
+   * ── NÃO REPOR O REWRITE DE `/wp-content` ──
    *
-   * 49 produtos ainda servem imagem de `lurds.com.br/wp-content/uploads/...`
-   * (medido no feed do Meta em 19/08/2026: 673 no R2, 49 aqui). Enquanto o
-   * domínio servia o WordPress isso funcionava sozinho. No segundo em que o
-   * DNS apontar pra Vercel, essas URLs passariam a bater aqui — e a peça
-   * ficaria sem foto no site E no catálogo de anúncio ao mesmo tempo.
+   * Existiu aqui um rewrite de `/wp-content/*` pro `www.lurds.com.br`, que era
+   * o WordPress velho servindo a foto de 49 produtos (medido no feed do Meta em
+   * 19/08/2026: 673 no R2, 49 lá). Ele saiu em 08/09/2026 porque a ORIGEM
+   * deixou de existir: o servidor `172.234.18.137` (Linode) foi CANCELADO — não
+   * desligado, cancelado, com o disco apagado. Não há para onde reapontar, e
+   * `WP_LEGADO_URL` não salva: não existe cópia daqueles arquivos.
    *
-   * `rewrite` e não `redirect`: a URL continua sendo `lurds.com.br/wp-content/...`
-   * pra quem olha de fora, então o que o Google Imagens tem indexado segue
-   * valendo.
+   * Com o rewrite no lugar, essas URLs devolviam o 521 da Cloudflare (a origem
+   * morta, atrás do proxy). Sem ele, devolvem o 404 do site — que é a resposta
+   * honesta e a que faz o Google Imagens soltar a URL em vez de ficar tentando.
    *
-   * ⚠️ O DESTINO É `www.lurds.com.br`, E ISSO NÃO É DESCUIDO.
+   * ⚠️ Repor o rewrite QUEBRA O `www`: a regra de redirecionamento
+   * `www → apex` na Cloudflare, criada junto com esta remoção, entraria em loop
+   * infinito com ele (apex reescreve pro www, www redireciona pro apex).
    *
-   * O servidor do WordPress faz vhost POR NOME: provado na origem
-   * (172.234.18.137) em 19/08/2026 — com `Host: lurds.com.br` ou
-   * `Host: www.lurds.com.br` a foto vem em 200; com qualquer outro nome ele
-   * devolve o 404 do vhost padrão. Um subdomínio novo (`legado.`) só
-   * funcionaria com override de cabeçalho Host, que na Cloudflare é recurso
-   * de plano Enterprise, ou com alias no cPanel.
-   *
-   * Por isso a virada move SÓ O APEX pra Vercel e deixa o `www` apontando pro
-   * WordPress: ele continua fazendo o 301 de www pro apex que já fazia (ou
-   * seja, página nenhuma fica presa no site velho), e os arquivos estáticos de
-   * `/wp-content` continuam sendo servidos direto pelo Apache, sem passar por
-   * redirect.
-   *
-   * É rede de segurança com prazo: quando as 49 fotos estiverem no R2, o `www`
-   * vai pra Vercel junto e este bloco inteiro sai.
+   * O que falta de verdade é migrar as fotos dessas peças pro R2 — enquanto
+   * isso não acontece elas ficam sem imagem no site e no catálogo de anúncio.
    */
-  async rewrites() {
-    const LEGADO = process.env.WP_LEGADO_URL || 'https://www.lurds.com.br';
-    return [
-      { source: '/wp-content/:caminho*', destination: `${LEGADO}/wp-content/:caminho*` },
-    ];
-  },
 };
 
 export default nextConfig;
