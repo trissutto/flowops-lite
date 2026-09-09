@@ -589,6 +589,65 @@ export class LojaCatalogService {
     };
   }
 
+  /* ── VOCABULÁRIO DE COR DA REDE ──────────────────────────────────────────
+   *
+   * Os valores do campo COR do próprio cadastro. É o que permite ao
+   * `limparNomeVitrine` saber que "Mostarda" é COR — e tirá-la do título de
+   * uma peça que só vende BEGE (ver "COR QUE A PEÇA NÃO TEM" lá, e o pedido
+   * separado errado em Piracicaba, 09/09/2026).
+   *
+   * VALOR INTEIRO, nunca palavra solta: tem cor gravada com o nome da peça
+   * grudado ("BLUSA MANGA CURTA ESTAMPA MOSTARDA"), e tokenizar isso poria
+   * "blusa" no vocabulário de cor — aí o título de toda blusa sumia.
+   *
+   * `>= 2 REFs` corta o dedo escorregado: cor que só uma REF no cadastro
+   * inteiro usa não é vocabulário, é digitação.
+   */
+  private coresDaRede: string[] = [];
+  private coresDaRedeEm = 0;
+  private static readonly CORES_REDE_TTL_MS = 6 * 60 * 60 * 1000;
+
+  /**
+   * Enche o vocabulário (uma vez a cada 6h) antes de montar nome de peça.
+   *
+   * FALHA PRA FRENTE de propósito: sem a lista o `limparNomeVitrine` volta ao
+   * comportamento de antes — nome como está, nada é cortado. Aqui a leitura
+   * vazia NÃO inventa dado nenhum (é o contrário: deixa de apagar), então
+   * derrubar a montagem do catálogo inteiro por causa dela seria trocar um
+   * título feio por uma vitrine fora do ar.
+   */
+  private async garantirCoresDaRede(): Promise<void> {
+    const fresco = Date.now() - this.coresDaRedeEm < LojaCatalogService.CORES_REDE_TTL_MS;
+    if (fresco && this.coresDaRede.length) return;
+    try {
+      const linhas: Array<{ cor: string }> = await this.prisma.$queryRawUnsafe(`
+        SELECT UPPER(TRIM(cor)) AS cor
+          FROM wincred_produtos
+         WHERE cor IS NOT NULL AND TRIM(cor) <> ''
+         GROUP BY 1
+        HAVING COUNT(DISTINCT UPPER(TRIM(ref))) >= 2
+      `);
+      /**
+       * COR QUE NOMEIA UMA PEÇA É LIXO DE CADASTRO, NÃO VOCABULÁRIO.
+       *
+       * Tem cor gravada com o nome da roupa colado ("BLUSA MANGA CURTA
+       * ESTAMPA MOSTARDA" — ver o card duplicado da vitrine, 22/08). Deixar
+       * uma dessas no vocabulário é armar a tesoura contra o nome de todas as
+       * peças daquele tipo. `tipoDePeca` é a MESMA régua que separa produto de
+       * produto na REF reciclada.
+       */
+      this.coresDaRede = linhas
+        .map((l) => String(l.cor || ''))
+        .filter((c) => c && !this.tipoDePeca(c));
+      this.coresDaRedeEm = Date.now();
+      this.logger.log(`[nome-vitrine] vocabulário de cor: ${this.coresDaRede.length} valores`);
+    } catch (e: any) {
+      this.logger.warn(
+        `[nome-vitrine] não li as cores do cadastro (${e?.message ?? e}) — nome da peça fica como está`,
+      );
+    }
+  }
+
   /**
    * A REF-BASE em SQL — a MESMA regra de `common/ref-base.ts`, no banco.
    *
@@ -1243,6 +1302,7 @@ export class LojaCatalogService {
         ref,
         Array.from(cores.keys()),
         linhas.find((l) => l.marca)?.marca,
+        this.coresDaRede,
       ) || ref;
 
     /**
@@ -2079,6 +2139,9 @@ export class LojaCatalogService {
   }
 
   private async montarCatalogo(): Promise<any[]> {
+    // O vocabulário de cor tem que estar na mão ANTES do primeiro nome —
+    // `montarPeca` é síncrono e lê `this.coresDaRede` direto.
+    await this.garantirCoresDaRede();
     // 1) REFs publicadas (curadoria) — a lista de saída nunca é maior que isso
     const publicadas: any[] = await (this.prisma as any).siteProduto.findMany({
       where: { publicado: true }, select: { ref: true },
@@ -3264,6 +3327,9 @@ export class LojaCatalogService {
   async porSlug(slug: string) {
     const chave = String(slug || '').trim();
     if (!chave) return null;
+    // Mesma razão do `montarCatalogo`: a PDP também monta peça, e o nome dela
+    // precisa do vocabulário de cor pra não anunciar cor que a peça não tem.
+    await this.garantirCoresDaRede();
 
     /**
      * A PDP É O MESMO CARD DA VITRINE (12/08/2026).
@@ -3856,6 +3922,7 @@ export class LojaCatalogService {
     const coresDaRef = Array.from(
       new Set(linhas.map((l) => l.cor).filter(Boolean)),
     ) as string[];
+    await this.garantirCoresDaRede();
     return (this.prisma as any).siteProduto.create({
       data: {
         ref: chave,
@@ -3873,6 +3940,7 @@ export class LojaCatalogService {
             chave,
             coresDaRef,
             linhas.find((l) => l.marca)?.marca,
+            this.coresDaRede,
           ) ||
           chave,
       },

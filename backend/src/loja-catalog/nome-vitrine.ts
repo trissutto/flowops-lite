@@ -102,6 +102,71 @@ export function titularSeCaixaAlta(nome: string): string {
 }
 
 /**
+ * PALAVRA QUE ESTÁ NO CAMPO COR MAS NÃO PROMETE COR NENHUMA.
+ *
+ * Estampa, tecido e padronagem são gravados como "cor" no cadastro (JEANS em
+ * 36 REFs, ONCINHA em 5, LISTRA/XADREZ/POÁ às dezenas) — e as mesmas palavras
+ * descrevem a PEÇA num nome legítimo: "Calça Jeans", "Camisa Listrada",
+ * "Jaqueta Militar". Sem esta lista, a regra de cor-que-mente abaixo comeria
+ * o nome inteiro de uma calça jeans preta.
+ *
+ * É o oposto de um dicionário de cores: aqui só entra o que NÃO é cor.
+ */
+const NAO_PROMETE_COR = new Set([
+  'JEANS', 'MESCLA', 'MILITAR', 'LISO', 'LISA',
+  'ESTAMPA', 'ESTAMPADO', 'ESTAMPADA', 'EST', 'FLORAL',
+  'LISTRA', 'LISTRADO', 'LISTRADA', 'XADREZ', 'XAD', 'POA',
+  'ONCA', 'ONCINHA', 'TIGRE', 'RISCA', 'RETRO',
+]);
+
+/** Palavras de um valor de cor, sem acento e em caixa alta. */
+const palavrasDaCor = (v: string) =>
+  semAcento(String(v || ''))
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .filter((p) => p.length >= 3);
+
+/**
+ * A peça TEM essa cor?
+ *
+ * Compara por PREFIXO de palavra porque o cadastro corta a cor em 15
+ * caracteres: a peça gravada "ESTAMPA OFF WHI" é a mesma coisa que o
+ * "OFF WHITE" escrito no nome, e recortar o nome ali seria estragar um
+ * título que estava certo.
+ */
+function pecaTemACor(termo: string, cores: string[]): boolean {
+  const alvo = palavrasDaCor(termo);
+  if (!alvo.length) return true; // nada comparável: não mexe
+  const daPeca = cores.flatMap(palavrasDaCor);
+  return alvo.every((t) => daPeca.some((c) => t.startsWith(c) || c.startsWith(t)));
+}
+
+/**
+ * O vocabulário PRONTO PRA USAR — normalizado, peneirado e da cor mais longa
+ * pra mais curta ("ROSA QUEIMADO" tem que casar inteira antes de "ROSA"
+ * cortar no meio dela).
+ *
+ * Memorizado pelo ARRAY que chega: o serviço monta a lista uma vez a cada 6h
+ * e chama esta função uma vez por peça da vitrine. Sem o cache, cada uma das
+ * ~600 peças reordenava as ~mil cores do cadastro do zero.
+ */
+const vocabularioPronto = new WeakMap<readonly string[], string[]>();
+function coresParaComparar(lista: readonly string[]): string[] {
+  const pronto = vocabularioPronto.get(lista);
+  if (pronto) return pronto;
+  const preparado = [
+    ...new Set(
+      lista
+        .map((c) => semAcento(String(c || '')).trim().toUpperCase())
+        // "GG", "CRU", "P&B": curto demais pra cortar um nome com segurança.
+        .filter((c) => c.length >= 4 && !NAO_PROMETE_COR.has(c)),
+    ),
+  ].sort((a, b) => b.length - a.length);
+  vocabularioPronto.set(lista, preparado);
+  return preparado;
+}
+
+/**
  * O nome como a cliente lê no card — venha da ficha, do cadastro ou do ERP.
  *
  * Passa em TODOS os caminhos de propósito: o título sujo não vinha só da
@@ -111,12 +176,16 @@ export function titularSeCaixaAlta(nome: string): string {
  * Nunca devolve vazio: se a limpeza comer o nome inteiro (peça cujo título
  * era só "Blusa Feminina Plus Size Preto"), volta o original. Peça sem nome
  * na vitrine é pior que peça com nome redundante.
+ *
+ * `coresDaRede` é o vocabulário de cor do PRÓPRIO cadastro — ver o bloco
+ * "COR QUE A PEÇA NÃO TEM". Sem ele, a função se comporta como sempre.
  */
 export function limparNomeVitrine(
   nome: string | null | undefined,
   ref: string,
   cores: string[],
   marca?: string | null,
+  coresDaRede?: readonly string[],
 ): string {
   const original = String(nome || '').trim();
   if (!original) return '';
@@ -159,6 +228,54 @@ export function limparNomeVitrine(
       new RegExp(`${NAO_LETRA_ANTES}${padraoAcentoTolerante(alvo)}${NAO_LETRA_DEPOIS}.*$`, 'i'),
       ' ',
     );
+  }
+
+  /**
+   * COR QUE A PEÇA NÃO TEM — a regata BEGE anunciada como MOSTARDA.
+   *
+   * 🔴 Piracicaba separou o pedido errado (09/09/2026). A linha do item dizia
+   *
+   *     132908 · BEGE 46
+   *     Regata Estampa Mostarda — 132908
+   *
+   * e a loja separa pelo que dá pra LER: foi buscar a mostarda. A REF 132908
+   * vende UMA cor, BEGE — "Mostarda" é a variação que batizou o cadastro no
+   * site antigo e saiu de linha. O nome viaja congelado no item do pedido
+   * (`order_items.product_name`), então ele reaparece no card da loja, no
+   * romaneio e no bipe, sempre contradizendo a cor logo acima.
+   *
+   * Os dois laços vizinhos não alcançavam este caso: o de cima só sabe tirar
+   * cor que a peça TEM, e o de baixo só corta quando a palavra "cor" vem na
+   * frente. A varredura da vitrine no mesmo dia mediu o buraco: **53 das 596
+   * peças no ar** anunciavam uma cor que não vendem — "Calça Preto" com a cor
+   * VERDE, "Regata Fucsia" com a cor VERDE, "Biquini com Bojo Laranja" com a
+   * cor PRETO —, quase 1.900 peças em estoque atrás de um nome errado.
+   *
+   * O VOCABULÁRIO NÃO É CHUTE. `coresDaRede` são os valores do campo COR do
+   * próprio cadastro (`LojaCatalogService.garantirCoresDaRede`): "Mostarda" é
+   * cor porque outras REFs vendem mostarda, não porque alguém digitou a
+   * palavra aqui. É por isso que a decisão de 06/08 continua de pé — este
+   * módulo não sai adivinhando palavra por palavra, e sem a lista nada muda.
+   *
+   * Casa o VALOR INTEIRO da cor, nunca palavra solta: tem cor gravada com o
+   * nome da peça grudado ("BLUSA MANGA CURTA ESTAMPA MOSTARDA"), e quebrar
+   * isso em palavras poria "blusa" e "manga" no vocabulário de cor.
+   */
+  if (coresDaRede?.length) {
+    // Peneira barata antes de compilar regex: ~500 cores × todas as peças da
+    // vitrine a cada montagem. `includes` no texto já sem acento derruba
+    // 99% dos candidatos sem construir um RegExp.
+    let peneira = semAcento(txt).toUpperCase();
+    for (const alvo of coresParaComparar(coresDaRede)) {
+      if (!peneira.includes(alvo)) continue;
+      if (pecaTemACor(alvo, cores)) continue;
+      const antes = txt;
+      txt = txt.replace(
+        new RegExp(`${NAO_LETRA_ANTES}${padraoAcentoTolerante(alvo)}${NAO_LETRA_DEPOIS}.*$`, 'i'),
+        ' ',
+      );
+      if (txt !== antes) peneira = semAcento(txt).toUpperCase();
+    }
   }
 
   /**

@@ -133,6 +133,70 @@ describe('nome-vitrine', () => {
     });
   });
 
+  /**
+   * PIRACICABA SEPAROU ERRADO (09/09/2026) — o nome anunciava uma cor que a
+   * peça não vende, e a loja separa pelo que dá pra ler.
+   *
+   * O vocabulário destes testes é o do cadastro real (valores do campo COR),
+   * não uma lista inventada: é assim que a função é chamada em produção.
+   */
+  describe('cor que a peça NÃO tem (09/09/2026)', () => {
+    const CORES_DA_REDE = [
+      'PRETO', 'VERDE', 'MARROM', 'BEGE', 'JEANS', 'OFF WHITE', 'MARINHO',
+      'VERMELHO', 'ESTAMPA PRETO', 'AZUL', 'VINHO', 'AMARELO', 'LARANJA',
+      'MOSTARDA', 'ESTAMPA MOSTARD', 'FUCSIA', 'CINZA', 'TELHA', 'MUSGO',
+      'CREME', 'AREIA', 'ESTAMPA OFF WHI', 'LISTRA CINZA', 'ROSE', 'GELO',
+    ];
+    const limpar = (nome: string, ref: string, cores: string[]) =>
+      limparNomeVitrine(nome, ref, cores, null, CORES_DA_REDE);
+
+    it('132908: a regata que só vende BEGE perde o "Mostarda" do título', () => {
+      expect(limpar('Regata Estampa Mostarda', '132908', ['BEGE'])).toBe('Regata');
+    });
+
+    it('os outros casos que a varredura da vitrine achou no mesmo dia', () => {
+      expect(limpar('Calça Preto', 'CAL-061', ['VERDE'])).toBe('Calça');
+      expect(limpar('Regata Fucsia', 'REG-066', ['VERDE'])).toBe('Regata');
+      expect(limpar('Biquini com Bojo Laranja', '17431', ['PRETO'])).toBe('Biquini com Bojo');
+      expect(limpar('Calça Alfaiataria Areia', '800229', ['MARROM', 'PRETO', 'TELHA'])).toBe(
+        'Calça Alfaiataria',
+      );
+      // O rabo depois da cor sai junto, como no laço das cores da própria peça.
+      expect(limpar('Calça Pantalona Creme 46 Plus', '69010', ['PRETO', 'VINHO'])).toBe(
+        'Calça Pantalona',
+      );
+    });
+
+    it('cor que a peça TEM continua no nome — inclusive com o corte de 15 caracteres do cadastro', () => {
+      // 900910: a cor é gravada "ESTAMPA OFF WHI" e o nome diz "Off White".
+      // É a MESMA cor: cortar aqui estragaria um título que estava certo.
+      expect(
+        limpar('Vestido Mid sem Manga Estampa Off White', '900910', ['ESTAMPA OFF WHI']),
+      ).toBe('Vestido Mid sem Manga Estampa Off White');
+      expect(limpar('Blusa Manga Curta Vinho', 'B1', ['VINHO'])).toBe('Blusa Manga Curta');
+    });
+
+    it('estampa e tecido gravados como "cor" não derrubam nome legítimo', () => {
+      // JEANS é cor em 36 REFs do cadastro. "Calça Jeans" de uma peça preta
+      // continua sendo uma calça jeans.
+      expect(limpar('Calça Jeans', 'J9', ['PRETO'])).toBe('Calça Jeans');
+      expect(limpar('Camisa Listrada', 'L9', ['PRETO'])).toBe('Camisa Listrada');
+    });
+
+    it('sem vocabulário, nada muda (é o comportamento de antes)', () => {
+      expect(limparNomeVitrine('Regata Estampa Mostarda', '132908', ['BEGE'])).toBe(
+        'Regata Estampa Mostarda',
+      );
+      expect(limparNomeVitrine('Regata Estampa Mostarda', '132908', ['BEGE'], null, [])).toBe(
+        'Regata Estampa Mostarda',
+      );
+    });
+
+    it('limpeza que comeria o nome inteiro devolve o original', () => {
+      expect(limpar('Preto', 'X1', ['VERDE'])).toBe('Preto');
+    });
+  });
+
   describe('nomeDaDescricaoErp', () => {
     it('tira a cor da variação e o tamanho, sem cortar o resto', () => {
       expect(
