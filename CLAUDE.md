@@ -15,7 +15,7 @@ Sistema da rede de lojas **Lurd's Plus Size** (moda plus size, várias lojas fí
 | Banco Flow | **Postgres (Railway)** | **fonte única da verdade** — estoque, venda, catálogo, crediário, CRM, live, financeiro |
 | Realtime | socket.io (`backend/src/websocket`) | rooms por loja + admins |
 
-Deploy do backend reinicia com downtime (~40-60s) — **evitar horário de loja aberta** (ver janela de deploy nas convenções). `JWT_SECRET` é fixo (não desloga ninguém).
+Deploy do backend reinicia com downtime (~40-60s), **inclusive em horário de loja aberta** — a janela de deploy foi cancelada pelo dono em 09/09/2026 e a ordem é mergear na hora (ver convenções). `JWT_SECRET` é fixo (não desloga ninguém).
 
 ## 🚨 AVISOS VITAIS — leia antes de mexer/limpar env do ERP
 

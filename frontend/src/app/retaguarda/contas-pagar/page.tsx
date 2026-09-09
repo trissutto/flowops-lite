@@ -1378,9 +1378,17 @@ function Funcionarias() {
                   </span>
                 )}
               </div>
-              {p.nomeNaConta && (
+              {/* O nome exibido é o mais completo entre o cadastro e a folha
+                  antiga. Aqui vai o que ficou de fora: cadastro curto é
+                  pendência de RH (dá pra completar na ficha); folha antiga é
+                  só histórico. */}
+              {p.nomeCadastro ? (
+                <div className="text-[11px] text-amber-700 mt-0.5">
+                  cadastro do RH está curto: <b>{p.nomeCadastro}</b>
+                </div>
+              ) : p.nomeNaConta ? (
                 <div className="text-[11px] text-slate-400 mt-0.5">na folha antiga: {p.nomeNaConta}</div>
-              )}
+              ) : null}
               <div className="text-lg font-extrabold text-[#2E7D46] my-1">{brl(p.totalCents)}</div>
               {p.saldoAdiantamentoCents > 0 && (
                 <div className="mb-1 inline-block rounded-md bg-amber-50 border border-amber-300 px-2 py-0.5 text-[11px] font-bold text-amber-800">

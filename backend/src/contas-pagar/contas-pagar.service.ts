@@ -27,6 +27,39 @@ export interface ListFilters {
   perPage?: number;
 }
 
+/**
+ * NOME COMPLETO da funcionária no financeiro (ordem do dono 09/09/2026: "usar o
+ * nome completo e não o apelido").
+ *
+ * Nenhuma das duas fontes serve sozinha, e isso foi MEDIDO em setembro/2026
+ * (53 pessoas na aba Funcionárias):
+ *
+ *   - em 8 delas o CADASTRO do RH guarda o nome curto ou um rótulo de operação
+ *     — "DANI" (folha: DANIELI), "EDNA" (EDNA ROCHA GRANSO), "LIEGE" (MARIA
+ *     LIEGE SANTOS SILVA), "PAMELA NOVA" (PAMELA MARTINS MENDES);
+ *   - nas outras 45 é o contrário — a conta guarda "Angelica" e o cadastro tem
+ *     "Maria Angelica Sousa".
+ *
+ * Quem amarra a pessoa é o `sellerId`, não o texto: todos os candidatos são da
+ * MESMA funcionária por construção, então dá pra escolher o mais completo sem
+ * risco nenhum de trocar de gente. Mais PALAVRAS ganha; empate desempata no
+ * mais longo.
+ *
+ * ⚠️ A tentação errada aqui é "consertar o cadastro" gravando o nome cheio em
+ * `sellers.name`. NÃO FAZER: esse campo é o que a whitelist do PDV casa por
+ * nome (`ActiveSellersService.list` → `porNome`) e o que a comissão soma.
+ * Renomear ali é o caminho que já fez vendedora sumir do PDV. Aqui é só EXIBIÇÃO.
+ */
+function nomeMaisCompleto(...candidatos: (string | null | undefined)[]): string | null {
+  const limpos = candidatos.map((c) => String(c ?? '').trim()).filter(Boolean);
+  if (!limpos.length) return null;
+  const palavras = (s: string) => s.split(/\s+/).length;
+  return limpos.reduce((melhor, atual) => {
+    if (palavras(atual) !== palavras(melhor)) return palavras(atual) > palavras(melhor) ? atual : melhor;
+    return atual.length > melhor.length ? atual : melhor;
+  });
+}
+
 const CAMPOS_EDITAVEIS = new Set([
   'lojaCode', 'fornecedorNome', 'fornecedorGigaCodigo', 'sellerId', 'sellerNome', 'sellerCpf',
   'beneficiarioTipo', 'especieId', 'notaFiscal', 'banco', 'cheque', 'emissao', 'vencimento',
@@ -290,6 +323,22 @@ export class ContasPagarService {
       }),
     ]);
     const hoje = this.dia().getTime();
+    // Nome completo também na LISTA — mesma régua da aba Funcionárias, senão a
+    // mesma pessoa sai "EDNA" aqui e "EDNA ROCHA GRANSO" ali. Só os sellerIds
+    // desta página; erro SOBE (nada de catch devolvendo nome velho).
+    const idsPagina = Array.from(
+      new Set(rows.filter((r: any) => r.sellerId).map((r: any) => r.sellerId)),
+    ) as string[];
+    const nomeCadastroById = new Map<string, string>(
+      idsPagina.length
+        ? (
+            await (this.prisma as any).seller.findMany({
+              where: { id: { in: idsPagina } },
+              select: { id: true, name: true },
+            })
+          ).map((s: any) => [s.id, s.name])
+        : [],
+    );
     return {
       total,
       somaCents: Number(soma?._sum?.valorCents || 0),
@@ -301,7 +350,10 @@ export class ContasPagarService {
         gigaRegistro: r.gigaRegistro,
         lojaCode: r.lojaCode,
         beneficiarioTipo: r.beneficiarioTipo,
-        beneficiario: r.beneficiarioTipo === 'funcionaria' ? r.sellerNome : r.fornecedorNome,
+        beneficiario:
+          r.beneficiarioTipo === 'funcionaria'
+            ? nomeMaisCompleto(r.sellerId ? nomeCadastroById.get(r.sellerId) : null, r.sellerNome)
+            : r.fornecedorNome,
         // pra tela abrir a ficha do RH e travar a edição do nome no lugar certo
         sellerId: r.sellerId || null,
         especieId: r.especieId,
@@ -638,7 +690,9 @@ export class ContasPagarService {
 
     type Pessoa = {
       nome: string;
+      nomeCadastro: string | null;
       nomeNaConta: string | null;
+      nomesNaConta: string[];
       sellerId: string | null;
       cpf: string | null;
       lojaCadastro: string | null;
@@ -651,9 +705,10 @@ export class ContasPagarService {
     const novaPessoa = (sellerId: string | null, nomeCongelado: string | null): Pessoa => {
       const s = sellerId ? byId.get(sellerId) : null;
       return {
-        nome: s?.name || nomeCongelado || '?',
-        // só quando divergem — senão a tela repetiria o mesmo nome duas vezes
-        nomeNaConta: s?.name && nomeCongelado && nomeCongelado !== s.name ? nomeCongelado : null,
+        nome: '', // resolvido no fim, quando já se sabe TODOS os nomes dela
+        nomeCadastro: s?.name || null,
+        nomeNaConta: null,
+        nomesNaConta: nomeCongelado ? [nomeCongelado] : [],
         sellerId,
         cpf: s?.cpf || null,
         lojaCadastro: s?.storeCodeOrigin || null,
@@ -671,6 +726,7 @@ export class ContasPagarService {
       const key = r.sellerId || r.sellerNome || '?';
       let p = porPessoa.get(key);
       if (!p) porPessoa.set(key, (p = novaPessoa(r.sellerId, r.sellerNome)));
+      if (r.sellerNome && !p.nomesNaConta.includes(r.sellerNome)) p.nomesNaConta.push(r.sellerNome);
       p.totalCents += r.valorCents;
       p.itens.push({
         id: r.id,
@@ -692,13 +748,14 @@ export class ContasPagarService {
     }
     for (const p of porPessoa.values()) {
       // O casamento por NOME (fallback do adiantamento lançado sem sellerId)
-      // tenta os DOIS nomes: o do cadastro e o congelado da conta. Passar a
-      // exibir o nome do RH não pode fazer o adiantamento parar de casar.
-      p.saldoAdiantamentoCents =
-        (p.sellerId ? saldoById.get(p.sellerId) : 0) ||
-        (p.nomeNaConta ? saldoByNome.get(p.nomeNaConta) : 0) ||
-        saldoByNome.get(p.nome) ||
-        0;
+      // tenta TODOS os nomes conhecidos dela — o do cadastro e os gravados nas
+      // contas. Mudar o nome que a TELA exibe não pode fazer o adiantamento
+      // parar de casar.
+      let porNome = 0;
+      for (const n of [p.nomeCadastro, ...p.nomesNaConta]) {
+        if (n && saldoByNome.has(n)) { porNome = saldoByNome.get(n) || 0; break; }
+      }
+      p.saldoAdiantamentoCents = (p.sellerId ? saldoById.get(p.sellerId) : 0) || porNome || 0;
     }
     // Funcionária que SÓ tem adiantamento pendente (sem conta no mês) também aparece.
     for (const s of saldos) {
@@ -710,9 +767,26 @@ export class ContasPagarService {
       }
     }
 
+    // Nome resolvido só AGORA, quando já se conhece todos os nomes da pessoa.
+    const pessoas = Array.from(porPessoa.values())
+      .map(({ nomesNaConta, ...p }) => {
+        const nome = nomeMaisCompleto(p.nomeCadastro, ...nomesNaConta) || '?';
+        const daConta = nomeMaisCompleto(...nomesNaConta);
+        return {
+          ...p,
+          nome,
+          // Rodapé do card: o nome que NÃO está sendo exibido. Cadastro curto é
+          // pendência de RH (dá pra consertar na ficha); folha antiga é só
+          // histórico. Um dos dois, nunca os dois.
+          nomeCadastro: p.nomeCadastro && p.nomeCadastro !== nome ? p.nomeCadastro : null,
+          nomeNaConta: daConta && daConta !== nome ? daConta : null,
+        };
+      })
+      .sort((a, b) => b.totalCents - a.totalCents);
+
     return {
       mes: m,
-      pessoas: Array.from(porPessoa.values()).sort((a, b) => b.totalCents - a.totalCents),
+      pessoas,
       totalCents: rows.reduce((s, r) => s + r.valorCents, 0),
       saldoAdiantamentoTotalCents: saldos.reduce((s, x) => s + x.cents, 0),
       qtd: rows.length,
