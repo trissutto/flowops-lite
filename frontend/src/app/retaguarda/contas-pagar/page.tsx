@@ -606,7 +606,10 @@ function EditarModal({ conta, lojas, especies, onClose, onOk, avisar }: any) {
       await api(`/admin/contas-pagar/${conta.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          [isFunc ? 'sellerNome' : 'fornecedorNome']: beneficiario.trim() || null,
+          // Funcionária: o nome é do CADASTRO do RH — muda na ficha dela, não
+          // aqui. Digitar por cima só reescreveria a cópia congelada da conta
+          // e o card continuaria mostrando o nome do cadastro.
+          ...(isFunc ? {} : { fornecedorNome: beneficiario.trim() || null }),
           lojaCode,
           especieId: especieId || null,
           notaFiscal: notaFiscal || null,
@@ -629,8 +632,24 @@ function EditarModal({ conta, lojas, especies, onClose, onOk, avisar }: any) {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div className="col-span-2">
           <Campo label={isFunc ? 'Funcionária' : 'Fornecedor'}>
-            <input value={beneficiario} onChange={(e) => setBeneficiario(e.target.value)} className="inp" />
+            <input
+              value={beneficiario}
+              onChange={(e) => setBeneficiario(e.target.value)}
+              disabled={isFunc}
+              className={`inp ${isFunc ? 'bg-[#F7F5F0] text-slate-500 cursor-not-allowed' : ''}`}
+            />
           </Campo>
+          {isFunc && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              O nome vem do cadastro do RH.{' '}
+              {conta.sellerId ? (
+                <Link href={`/retaguarda/vendedoras/${conta.sellerId}`} className="font-bold text-[#B8912B] hover:underline">
+                  Abrir a ficha dela
+                </Link>
+              ) : 'Corrija na ficha da funcionária'}{' '}
+              pra mudar em todo lugar de uma vez.
+            </p>
+          )}
         </div>
         <Campo label="Loja">
           <select value={lojaCode} onChange={(e) => setLojaCode(e.target.value)} className="inp">
@@ -933,9 +952,9 @@ function NovaContaModal({ onClose, avisar }: any) {
           beneficiarioTipo: tipo,
           fornecedorNome: tipo === 'fornecedor' ? (benefSel?.razaoSocial || benefQ.trim()) : undefined,
           fornecedorGigaCodigo: tipo === 'fornecedor' ? benefSel?.codigo : undefined,
+          // Funcionária: só o id — nome e CPF o backend lê do cadastro do RH
+          // (nome digitado à mão criava conta solta, sem dono).
           sellerId: tipo === 'funcionaria' ? benefSel?.id : undefined,
-          sellerNome: tipo === 'funcionaria' ? (benefSel?.name || benefQ.trim()) : undefined,
-          sellerCpf: tipo === 'funcionaria' ? benefSel?.cpf : undefined,
           especieId: especieId || undefined,
           notaFiscal: notaFiscal || undefined,
           banco: banco || undefined,
@@ -998,8 +1017,13 @@ function NovaContaModal({ onClose, avisar }: any) {
             <div className="absolute z-10 bg-white border border-[#E7E2D8] rounded-lg shadow-lg w-full px-3 py-2.5 text-sm text-slate-400">
               {tipo === 'fornecedor'
                 ? <>Nenhum fornecedor com “{benefQ.trim()}”. Pode salvar assim mesmo — a conta fica com esse nome novo.</>
-                : <>Nenhuma funcionária com “{benefQ.trim()}”.</>}
+                : <>Nenhuma funcionária com “{benefQ.trim()}”. Ela precisa estar no cadastro do RH (<b>Retaguarda → Vendedoras</b>) pra receber conta.</>}
             </div>
+          )}
+          {tipo === 'funcionaria' && !benefSel && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Escolha na lista — a conta nasce ligada à ficha dela.
+            </p>
           )}
         </div>
 
@@ -1101,7 +1125,7 @@ function NovaContaModal({ onClose, avisar }: any) {
           <button onClick={onClose} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Cancelar</button>
           <button
             onClick={salvar}
-            disabled={saving || !lojaCode || !valorCents || !venc1}
+            disabled={saving || !lojaCode || !valorCents || !venc1 || (tipo === 'funcionaria' && !benefSel)}
             className="px-5 py-2 rounded-lg bg-[#2E7D46] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-50"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Processar
@@ -1331,7 +1355,32 @@ function Funcionarias() {
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
           {data.pessoas.map((p: any) => (
             <div key={p.sellerId || p.nome} className="bg-white border border-[#E7E2D8] rounded-xl p-4">
-              <div className="font-extrabold">{p.nome}</div>
+              {/* Nome vem do CADASTRO do RH, não da cópia congelada na conta —
+                  e clicar abre a ficha da funcionária. */}
+              {p.sellerId && !p.semCadastro ? (
+                <Link href={`/retaguarda/vendedoras/${p.sellerId}`} className="font-extrabold hover:text-[#B8912B] hover:underline">
+                  {p.nome}
+                </Link>
+              ) : (
+                /* vínculo quebrado não vira link — ficha que não existe daria 404 */
+                <div className="font-extrabold">{p.nome}</div>
+              )}
+              <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] font-bold uppercase">
+                {p.lojaCadastro && (
+                  <span className="rounded bg-[#FBF6E6] border border-[#E7E2D8] px-1.5 py-0.5 text-[#8C7325]">loja {p.lojaCadastro}</span>
+                )}
+                {p.ativa === false && (
+                  <span className="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 text-slate-500">inativa no RH</span>
+                )}
+                {(p.semCadastro || !p.sellerId) && (
+                  <span className="rounded bg-amber-50 border border-amber-300 px-1.5 py-0.5 text-amber-800">
+                    ⚠ sem vínculo com o cadastro
+                  </span>
+                )}
+              </div>
+              {p.nomeNaConta && (
+                <div className="text-[11px] text-slate-400 mt-0.5">na folha antiga: {p.nomeNaConta}</div>
+              )}
               <div className="text-lg font-extrabold text-[#2E7D46] my-1">{brl(p.totalCents)}</div>
               {p.saldoAdiantamentoCents > 0 && (
                 <div className="mb-1 inline-block rounded-md bg-amber-50 border border-amber-300 px-2 py-0.5 text-[11px] font-bold text-amber-800">

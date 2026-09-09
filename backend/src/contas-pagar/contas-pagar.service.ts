@@ -302,6 +302,8 @@ export class ContasPagarService {
         lojaCode: r.lojaCode,
         beneficiarioTipo: r.beneficiarioTipo,
         beneficiario: r.beneficiarioTipo === 'funcionaria' ? r.sellerNome : r.fornecedorNome,
+        // pra tela abrir a ficha do RH e travar a edição do nome no lugar certo
+        sellerId: r.sellerId || null,
         especieId: r.especieId,
         especie: r.especie?.nome || r.especieOriginal || '—',
         especieRestrita: !!r.especie?.restrita,
@@ -337,8 +339,23 @@ export class ContasPagarService {
     if (!venc1 || isNaN(venc1.getTime())) throw new BadRequestException('Informe o 1º vencimento');
 
     const tipo = body.beneficiarioTipo === 'funcionaria' ? 'funcionaria' : 'fornecedor';
-    if (tipo === 'funcionaria' && !body.sellerId && !String(body.sellerNome || '').trim()) {
-      throw new BadRequestException('Escolha a funcionária');
+    // A funcionária NASCE ligada ao cadastro do RH (05/09). Aceitar só o nome
+    // digitado criava conta SOLTA — texto sem dono, que a ficha da funcionária
+    // não alcança e que a aba Funcionárias agrupa por string. Nome e CPF saem
+    // do cadastro, não do que foi digitado na tela: é o cadastro que manda.
+    let seller: any = null;
+    if (tipo === 'funcionaria') {
+      const sid = String(body.sellerId || '').trim();
+      if (!sid) {
+        throw new BadRequestException(
+          'Escolha a funcionária NA LISTA — a conta precisa ficar ligada ao cadastro do RH',
+        );
+      }
+      seller = await (this.prisma as any).seller.findUnique({
+        where: { id: sid },
+        select: { id: true, name: true, cpf: true },
+      });
+      if (!seller) throw new BadRequestException('Funcionária não encontrada no cadastro do RH');
     }
     if (tipo === 'fornecedor' && !String(body.fornecedorNome || '').trim()) {
       throw new BadRequestException('Informe o fornecedor');
@@ -385,9 +402,9 @@ export class ContasPagarService {
           beneficiarioTipo: tipo,
           fornecedorGigaCodigo: tipo === 'fornecedor' ? (body.fornecedorGigaCodigo ?? null) : null,
           fornecedorNome: tipo === 'fornecedor' ? String(body.fornecedorNome).trim() : null,
-          sellerId: tipo === 'funcionaria' ? body.sellerId || null : null,
-          sellerNome: tipo === 'funcionaria' ? String(body.sellerNome || '').trim() || null : null,
-          sellerCpf: tipo === 'funcionaria' ? String(body.sellerCpf || '').replace(/\D/g, '') || null : null,
+          sellerId: seller?.id || null,
+          sellerNome: seller?.name || null,
+          sellerCpf: seller?.cpf ? String(seller.cpf).replace(/\D/g, '') || null : null,
           especieId: body.especieId || null,
           notaFiscal: p.notaFiscal || nfBase || null,
           banco: body.banco || null,
@@ -597,12 +614,63 @@ export class ContasPagarService {
       include: { especie: { select: { nome: true } } },
       orderBy: [{ sellerNome: 'asc' }, { vencimento: 'asc' }],
     });
-    type Pessoa = { nome: string; sellerId: string | null; totalCents: number; saldoAdiantamentoCents: number; itens: any[] };
+    // SALDO DE ADIANTAMENTO (extrato): quanto cada funcionária ainda deve de
+    // adiantamentos pendentes — abatido no próximo vale/salário.
+    const saldos = await this.adiantamentos.saldosPendentes();
+
+    // O NOME DE VERDADE É O DO CADASTRO (`sellers`). O `sellerNome` gravado na
+    // conta é cópia CONGELADA do fornecedor da folha antiga — "Angelica" pra
+    // Maria Angelica Sousa, "ANDREA DE PAULA MACHADO" pra Andrea De Paula
+    // Machado Diesner. Medido em 05/09: 5.991 das 8.803 contas divergiam do
+    // RH. A cópia vira HISTÓRICO (`nomeNaConta`), não rótulo da tela.
+    // NÃO envolver em try/catch: espelho que falha tem que subir 500 honesto,
+    // nunca virar tela com nome velho e cara de normal (regra de ouro).
+    const idsCadastro = Array.from(
+      new Set([...rows, ...saldos].map((r: any) => r.sellerId).filter(Boolean)),
+    ) as string[];
+    const cadastro: any[] = idsCadastro.length
+      ? await (this.prisma as any).seller.findMany({
+          where: { id: { in: idsCadastro } },
+          select: { id: true, name: true, cpf: true, active: true, storeCodeOrigin: true },
+        })
+      : [];
+    const byId = new Map<string, any>(cadastro.map((s) => [s.id, s]));
+
+    type Pessoa = {
+      nome: string;
+      nomeNaConta: string | null;
+      sellerId: string | null;
+      cpf: string | null;
+      lojaCadastro: string | null;
+      ativa: boolean | null;
+      semCadastro: boolean;
+      totalCents: number;
+      saldoAdiantamentoCents: number;
+      itens: any[];
+    };
+    const novaPessoa = (sellerId: string | null, nomeCongelado: string | null): Pessoa => {
+      const s = sellerId ? byId.get(sellerId) : null;
+      return {
+        nome: s?.name || nomeCongelado || '?',
+        // só quando divergem — senão a tela repetiria o mesmo nome duas vezes
+        nomeNaConta: s?.name && nomeCongelado && nomeCongelado !== s.name ? nomeCongelado : null,
+        sellerId,
+        cpf: s?.cpf || null,
+        lojaCadastro: s?.storeCodeOrigin || null,
+        ativa: s ? !!s.active : null,
+        // vínculo apontando pra cadastro que sumiu: APARECE na tela em vez de
+        // virar nome órfão silencioso (0 casos em 05/09 — a tela é o alarme).
+        semCadastro: !!sellerId && !s,
+        totalCents: 0,
+        saldoAdiantamentoCents: 0,
+        itens: [],
+      };
+    };
     const porPessoa = new Map<string, Pessoa>();
     for (const r of rows) {
       const key = r.sellerId || r.sellerNome || '?';
       let p = porPessoa.get(key);
-      if (!p) porPessoa.set(key, (p = { nome: r.sellerNome || '?', sellerId: r.sellerId, totalCents: 0, saldoAdiantamentoCents: 0, itens: [] }));
+      if (!p) porPessoa.set(key, (p = novaPessoa(r.sellerId, r.sellerNome)));
       p.totalCents += r.valorCents;
       p.itens.push({
         id: r.id,
@@ -616,9 +684,6 @@ export class ContasPagarService {
       });
     }
 
-    // SALDO DE ADIANTAMENTO (extrato): quanto cada funcionária ainda deve de
-    // adiantamentos pendentes — abatido no próximo vale/salário.
-    const saldos = await this.adiantamentos.saldosPendentes();
     const saldoById = new Map<string, number>();
     const saldoByNome = new Map<string, number>();
     for (const s of saldos) {
@@ -626,13 +691,22 @@ export class ContasPagarService {
       saldoByNome.set(s.sellerNome, (saldoByNome.get(s.sellerNome) || 0) + s.cents);
     }
     for (const p of porPessoa.values()) {
-      p.saldoAdiantamentoCents = (p.sellerId ? saldoById.get(p.sellerId) : 0) || saldoByNome.get(p.nome) || 0;
+      // O casamento por NOME (fallback do adiantamento lançado sem sellerId)
+      // tenta os DOIS nomes: o do cadastro e o congelado da conta. Passar a
+      // exibir o nome do RH não pode fazer o adiantamento parar de casar.
+      p.saldoAdiantamentoCents =
+        (p.sellerId ? saldoById.get(p.sellerId) : 0) ||
+        (p.nomeNaConta ? saldoByNome.get(p.nomeNaConta) : 0) ||
+        saldoByNome.get(p.nome) ||
+        0;
     }
     // Funcionária que SÓ tem adiantamento pendente (sem conta no mês) também aparece.
     for (const s of saldos) {
       const key = s.sellerId || s.sellerNome || '?';
       if (s.cents > 0 && !porPessoa.has(key)) {
-        porPessoa.set(key, { nome: s.sellerNome, sellerId: s.sellerId, totalCents: 0, saldoAdiantamentoCents: s.cents, itens: [] });
+        const p = novaPessoa(s.sellerId, s.sellerNome);
+        p.saldoAdiantamentoCents = s.cents;
+        porPessoa.set(key, p);
       }
     }
 
