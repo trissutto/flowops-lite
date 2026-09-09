@@ -116,6 +116,12 @@ export class FaturamentoService {
           WHERE data_fec >= $1 AND data_fec < $2
             AND (marcado IS NULL OR marcado <> 'SIM')
             AND COALESCE(obs_pedido, '') NOT LIKE 'flowops-%'
+            -- Devoluções espelhadas do Flow ('r<md5>', ponte 25/08 + retro
+            -- 08/09) ficam FORA: este método já abate pdv_returns (dinheiro/
+            -- pix) logo abaixo — somá-las aqui abatia a MESMA devolução 2×,
+            -- e abatia troca/vale, que a régua do dono (04/08) não abate.
+            -- Mesmo critério do fix da DRE (semDevolucoesEspelhadas).
+            AND registro NOT LIKE 'r%'
           GROUP BY loja`,
         // data_fec é DATE (sem hora) → segue no parseDate. Ver brInstant.
         dInicio, dFimExclusive,
@@ -674,6 +680,9 @@ export class FaturamentoService {
           AND data_fec < $3
           AND (marcado IS NULL OR marcado <> 'SIM')
           AND COALESCE(obs_pedido, '') NOT LIKE 'flowops-%'
+          -- Sem as devoluções espelhadas 'r%' — mesmos filtros do card
+          -- (faturamentoHibrido), senão a lista mostra linha que o card não conta.
+          AND registro NOT LIKE 'r%'
         GROUP BY 1
         ORDER BY 3 DESC
         LIMIT 500`,
