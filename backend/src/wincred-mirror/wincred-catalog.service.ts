@@ -463,6 +463,27 @@ export class WincredCatalogService {
     }
   }
 
+  /**
+   * REFs que pertencem à família da REF base: a própria e as variações de
+   * cor ("22 X", "22-X", "22X"/"22XY") — a MESMA régua do `isVariationOf`.
+   * O LIKE por prefixo aqui é barato porque só devolve REFs DISTINTAS (uma
+   * linha por REF, não por código); quem descarta "220"/"2201" (prefixo, mas
+   * não família) é o `isVariationOf`. Devolve a REF como está GRAVADA — o
+   * `IN` de quem chama precisa do valor cru, não do trim.
+   */
+  private async refsDaFamilia(base: string): Promise<string[]> {
+    const like = base.replace(/[\\%_]/g, (c) => `\\${c}`) + '%';
+    const rows: Array<{ ref: string | null }> = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT ref FROM product WHERE ref LIKE $1 ESCAPE '\\'
+       UNION
+       SELECT ref FROM wincred_produtos WHERE ref LIKE $1 ESCAPE '\\'`,
+      like,
+    );
+    return rows
+      .map((r) => String(r.ref ?? ''))
+      .filter((r) => r !== '' && this.isVariationOf(r.trim(), base));
+  }
+
   private async searchByRefFromMirror(
     ref: string,
     /** Código bipado — imune à dedup (ver o comentário da chave, abaixo). */
@@ -478,8 +499,18 @@ export class WincredCatalogService {
     // parcial NÃO-VAZIO suprime o fallback que conhecia o resto e a cor some
     // da Consultar. Aqui consultamos AS DUAS tabelas Postgres com o mesmo
     // WHERE e mesclamos por codigo (nativa vence no conflito).
-    const whereRef = { OR: [{ ref: clean }, { ref: { startsWith: clean } }] };
-    const args = { where: whereRef, orderBy: [{ cor: 'asc' }, { tamanho: 'asc' }] as any, take: 1000 };
+    //
+    // ⚠️ E NUNCA ler a família por PREFIXO com janela (10/09, REF 22 de
+    // Itanhaém): era `startsWith` + `take: 1000` ordenado por cor. Pra REF
+    // curta o prefixo casa o catálogo inteiro ("22" puxava 7.590 linhas: 220,
+    // 2201, 22999…), a janela de 1.000 acabava na cor BRANCO e a família
+    // perdia MESCLA, VERDE e tudo que vinha depois — a Consulta dizia "1 cor"
+    // com 8 no banco. Medido: 76 REFs curtas COM estoque estouravam a janela.
+    // Agora o prefixo só escolhe as REFs DISTINTAS da família (`refsDaFamilia`)
+    // e as linhas vêm por `IN`, que não tem janela pra estourar.
+    const refsFamilia = await this.refsDaFamilia(clean);
+    if (!refsFamilia.length) return [];
+    const args = { where: { ref: { in: refsFamilia } }, orderBy: [{ cor: 'asc' }, { tamanho: 'asc' }] as any, take: 5000 };
     const [nativos, espelho]: [any[], any[]] = await Promise.all([
       prisma.product.findMany(args).catch(() => []),
       prisma.wincredProduto.findMany(args).catch(() => []),
