@@ -92,8 +92,24 @@ export class PagarmeLinkReconcileService {
      * está pago no banco e fechar a venda. Duas responsabilidades separadas,
      * sem duas rotinas martelando a API do gateway.
      */
+    /**
+     * A JANELA CONTA DO PAGAMENTO, NÃO DA CRIAÇÃO (10/09).
+     *
+     * Com `createdAt` o relógio começava quando a loja GEROU o link: um link
+     * de 72h pago na última hora nascia com 71h de idade e saía da janela
+     * antes do caixa abrir de manhã — justamente a espera que esta janela
+     * existe pra cobrir. Agora são 72h **depois de o dinheiro entrar**, igual
+     * ao reconciliador do PIX. O `paidAt` nulo é registro antigo: continua
+     * valendo pela criação pra não sumir com ninguém.
+     */
     const pagos: any[] = await (this.prisma as any).pagarmePayment.findMany({
-      where: { status: 'paid', createdAt: { gte: desde } },
+      where: {
+        status: 'paid',
+        OR: [
+          { paidAt: { gte: desde } },
+          { paidAt: null, createdAt: { gte: desde } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
       take: 200,
       select: {
@@ -107,13 +123,26 @@ export class PagarmeLinkReconcileService {
     });
     if (!pagos.length) return;
 
-    // Só as vendas que AINDA estão abertas — 1 query em vez de N.
+    /**
+     * As vendas que AINDA estão abertas — 1 query em vez de N. Traz junto as
+     * CANCELADAS: link pago numa venda cancelada é dinheiro na conta sem venda
+     * nenhuma, e isso não pode passar em silêncio (mesma regra do PIX órfão de
+     * 11/08).
+     */
     const vendas: any[] = await (this.prisma as any).pdvSale.findMany({
-      where: { id: { in: pagos.map((p) => p.saleId).filter(Boolean) }, status: 'open' },
-      select: { id: true, total: true, storeCode: true },
+      where: {
+        id: { in: pagos.map((p) => p.saleId).filter(Boolean) },
+        status: { in: ['open', 'cancelled'] },
+      },
+      select: { id: true, total: true, storeCode: true, status: true },
     });
-    if (!vendas.length) return;
-    const abertas = new Map<string, any>(vendas.map((v) => [v.id, v]));
+    const abertas = new Map<string, any>(
+      vendas.filter((v) => v.status === 'open').map((v) => [v.id, v]),
+    );
+    this.avisarPagoSemVenda(pagos, new Set(
+      vendas.filter((v) => v.status === 'cancelled').map((v) => v.id),
+    ));
+    if (!abertas.size) return;
 
     let fechadas = 0;
     let tentadas = 0;
@@ -208,6 +237,34 @@ export class PagarmeLinkReconcileService {
        */
       this.avisar(p.saleId, String(e?.message || e));
       return false;
+    }
+  }
+
+  /**
+   * DINHEIRO SEM VENDA NÃO PODE SER SILÊNCIO (10/09).
+   *
+   * A venda cancelada saía do filtro `status:'open'` e o link pago dela
+   * simplesmente sumia: não fecha venda, não entra no caixa e não aparece na
+   * lista de cobranças (que só junta venda aberta/pausada). Acontece quando a
+   * loja desiste durante o dia — "a cliente não pagou" — e o pagamento cai
+   * depois, exatamente o caso do link feito de manhã e pago à noite.
+   *
+   * Um warn POR PAGAMENTO (o Map segura a repetição a cada 30s). Resolver é
+   * decisão humana: refazer a venda ou estornar na Pagar.me.
+   */
+  private avisarPagoSemVenda(pagos: any[], canceladas: Set<string>): void {
+    if (!canceladas.size) return;
+    for (const p of pagos) {
+      if (!canceladas.has(p.saleId)) continue;
+      const motivo = 'venda-cancelada';
+      if (this.ultimaFalha.get(p.saleId) === motivo) continue;
+      this.ultimaFalha.set(p.saleId, motivo);
+      this.logger.warn(
+        `[pagarme-link] ⚠️ LINK PAGO EM VENDA CANCELADA: ` +
+          `R$${Number(p.valor || 0).toFixed(2)} loja ${p.storeCode} ` +
+          `venda ${p.saleId} link ${p.pagarmeOrderId} — dinheiro na conta sem venda. ` +
+          `Refazer a venda ou estornar na Pagar.me.`,
+      );
     }
   }
 

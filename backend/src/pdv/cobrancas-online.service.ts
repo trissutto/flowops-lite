@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { restanteCentsDaVenda } from '../common/cobranca-venda-online';
+import { linkCheckoutAindaDePe } from '../common/cobranca-link-viva';
 
 /**
  * COBRANÇA ONLINE AGUARDANDO PAGAMENTO — a lista que faltava (25/08/2026).
@@ -260,6 +261,14 @@ export class CobrancasOnlineService {
    */
   private situacaoDe(c: LinhaCobranca, agora: number): SituacaoCobranca {
     if (c.status === 'paid') return 'pago';
+    /**
+     * ...MAS CARTÃO RECUSADO NÃO É LINK VENCIDO (10/09). O checkout da
+     * Pagar.me aceita nova tentativa até o prazo acabar, e chamar isso de
+     * "não pagou" faz a loja gerar link NOVO sem precisar — cada tentativa a
+     * mais ainda piora o score do antifraude (medição de 01/08). Só vale pro
+     * meio `link`: o PIX de 1h continua com a régua dura acima.
+     */
+    if (c.meio === 'link' && linkCheckoutAindaDePe(c, agora, 0)) return 'aguardando';
     if (c.status !== 'pending') return 'venceu';
     if (c.expiresAt && new Date(c.expiresAt).getTime() < agora) return 'venceu';
     return 'aguardando';

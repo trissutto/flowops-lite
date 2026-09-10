@@ -8,6 +8,10 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import * as crypto from 'crypto';
 import { SELECT_VENDA_COBRANCA } from '../common/cobranca-venda-online';
+import {
+  statusDoPedidoPagarme,
+  linkCheckoutAindaDePe,
+} from '../common/cobranca-link-viva';
 
 /**
  * Gera um CPF VALIDO (passa no algoritmo de digitos verificadores) usando
@@ -1195,7 +1199,9 @@ export class PagarmeService {
     let status = String(pg.status || 'pending');
     let paidAt: Date | null = pg.paidAt ?? null;
 
-    if (status === 'pending') {
+    // Confere ao vivo enquanto o link estiver de pé — inclusive depois de uma
+    // tentativa recusada, que é justamente quando a cliente volta pra pagar.
+    if (linkCheckoutAindaDePe({ status, expiresAt: pg.expiresAt }, Date.now(), 0)) {
       try {
         const live: any = await this.checkOrderStatus(pg.pagarmeOrderId);
         const s = String(live?.status || '').toLowerCase();
@@ -1214,11 +1220,19 @@ export class PagarmeService {
     };
 
     if (status === 'paid') return { estado: 'pago', ...base };
-    if (status === 'canceled' || status === 'failed') return { estado: 'cancelado', ...base };
-    if (pg.expiresAt && new Date(pg.expiresAt).getTime() < Date.now()) {
-      return { estado: 'vencido', ...base };
+    /**
+     * TENTATIVA RECUSADA NÃO É LINK MORTO (10/09). O checkout da Pagar.me
+     * aceita nova tentativa até vencer — cartão negado de manhã, PIX pago à
+     * noite, MESMO link. Dizer "cobrança cancelada" pra cliente que voltou é
+     * perder a venda na porta. Folga ZERO aqui de propósito: só mandamos pro
+     * checkout enquanto ele existe de verdade, senão volta o 404 sem saída
+     * que esta página nasceu pra evitar (caso Moema 15/08).
+     */
+    if (linkCheckoutAindaDePe({ status, expiresAt: pg.expiresAt }, Date.now(), 0)) {
+      return { estado: 'valido', paymentUrl: String(pg.qrCodeText || ''), ...base };
     }
-    return { estado: 'valido', paymentUrl: String(pg.qrCodeText || ''), ...base };
+    if (status === 'canceled' || status === 'failed') return { estado: 'cancelado', ...base };
+    return { estado: 'vencido', ...base };
   }
 
   /** Nome e WhatsApp da loja — a página de saída precisa dar pra quem falar. */
@@ -1275,14 +1289,18 @@ export class PagarmeService {
       }),
     );
     const order = resp.data;
-    const charge = (order.charges || [])[0];
-    const chargeStatus = String(charge?.status || '').toLowerCase();
-
-    let newStatus: string = 'pending';
-    if (chargeStatus === 'paid') newStatus = 'paid';
-    else if (chargeStatus === 'canceled' || chargeStatus === 'failed') {
-      newStatus = chargeStatus === 'failed' ? 'failed' : 'canceled';
-    }
+    /**
+     * O PEDIDO INTEIRO DECIDE (10/09). Ler só `charges[0]` gravava `failed`
+     * num pedido PAGO quando a cliente tentou de manhã e pagou à noite: a
+     * Pagar.me devolve as cobranças na ordem de CRIAÇÃO, e `[0]` é a recusada.
+     * Régua (com spec) em `common/cobranca-link-viva.ts`.
+     */
+    const newStatus: string = statusDoPedidoPagarme(order);
+    // Pro endereço do checkout, a cobrança que interessa é a que PAGOU.
+    const charge =
+      (order.charges || []).find((c: any) =>
+        ['paid', 'overpaid'].includes(String(c?.status || '').toLowerCase()),
+      ) || (order.charges || [])[0];
 
     const local = await (this.prisma as any).pagarmePayment.findUnique({
       where: { pagarmeOrderId },

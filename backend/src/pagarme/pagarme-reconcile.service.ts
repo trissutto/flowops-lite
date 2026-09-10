@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from './pagarme.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
+import { corteFailedRechecavel } from '../common/cobranca-link-viva';
 
 /**
  * RECONCILE DO LINK PAGAR.ME (31/07) — o webhook não pode ser a única
@@ -17,7 +18,8 @@ import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
  * Mesmo padrão que já resolveu a LIVE: o servidor pergunta de tempos em
  * tempos, em vez de esperar sentado. O navegador continua sem polling.
  *
- * Cuidados: janela curta (48h), teto por ciclo, guard de overlap e throttle
+ * Cuidados: janela do tamanho da validade do link, teto por ciclo, guard de
+ * overlap e throttle
  * por pedido — nunca martelar a API do Pagar.me.
  */
 @Injectable()
@@ -27,7 +29,18 @@ export class PagarmeReconcileService {
   /** Última consulta ao vivo por pedido — evita repetir a cada ciclo. */
   private ultimaChecagem = new Map<string, number>();
 
-  private static readonly JANELA_H = 48;
+  /**
+   * A JANELA TEM QUE COBRIR A VALIDADE DO LINK (10/09).
+   *
+   * 48h fixas eram menos que os 72h que o link vive (`PAGARME_LINK_HORAS`, até
+   * 7 dias) — link gerado na segunda de manhã e pago na quarta à tarde caía
+   * fora da janela e ninguém perguntava mais, com o checkout ainda de pé. O
+   * corte agora acompanha a validade, com a mesma folga de 6h do resto.
+   */
+  private static janelaH(): number {
+    const validade = Number(process.env.PAGARME_LINK_HORAS) || 72;
+    return Math.max(48, Math.min(168, validade) + 6);
+  }
   private static readonly MAX_POR_CICLO = 25;
   private static readonly THROTTLE_MS = 90_000;
 
@@ -44,16 +57,40 @@ export class PagarmeReconcileService {
     if (this.rodando) return;
     this.rodando = true;
     try {
-      const desde = new Date(Date.now() - PagarmeReconcileService.JANELA_H * 3600_000);
+      const agora = Date.now();
+      const desde = new Date(agora - PagarmeReconcileService.janelaH() * 3600_000);
+      /**
+       * TENTATIVA RECUSADA NÃO SAI DA FILA (10/09).
+       *
+       * Só `status='pending'` era um alçapão: a primeira recusa carimbava
+       * `failed` e a linha nunca mais era perguntada — mas o checkout da
+       * Pagar.me continua aceitando pagamento até vencer. "Fizemos o link de
+       * manhã e a cliente só pagou à noite. Está pago e o sistema não tem
+       * essa informação" (dono, 10/09): dinheiro na conta, venda aberta,
+       * ninguém avisado.
+       *
+       * Agora o `failed` de link ainda no prazo volta pra fila. `canceled`
+       * não: ali o pedido foi cancelado de propósito e o checkout morre
+       * junto. Volume segue no chão — só link vivo, e o throttle é o mesmo.
+       */
       const pendentes: any[] = await (this.prisma as any).pagarmePayment.findMany({
-        where: { status: 'pending', createdAt: { gte: desde } },
+        where: {
+          createdAt: { gte: desde },
+          OR: [
+            { status: 'pending' },
+            {
+              status: 'failed',
+              method: 'checkout',
+              expiresAt: { gte: corteFailedRechecavel(agora) },
+            },
+          ],
+        },
         orderBy: { createdAt: 'desc' },
         take: 200,
         select: { pagarmeOrderId: true, saleId: true, storeCode: true, method: true },
       });
       if (!pendentes.length) return;
 
-      const agora = Date.now();
       let checados = 0;
       let confirmados = 0;
 
