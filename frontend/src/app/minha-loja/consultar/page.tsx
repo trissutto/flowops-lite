@@ -30,6 +30,7 @@ import Link from 'next/link';
 import { api, apiRetry } from '@/lib/api';
 import { abrirWhatsApp, telefoneWhatsApp } from '@/lib/whatsapp';
 import { ConnectionProvider, ConnectionBadge, useConnection } from '@/lib/connection';
+import { montarGradeConsulta, type CelulaGrade } from '@/lib/grade-consulta';
 import Logo from '@/components/Logo';
 import {
   Search, ArrowLeft, RefreshCw, X, MessageCircle,
@@ -681,38 +682,26 @@ function ProductCard({ item, highlightSku, myStore }: {
 }) {
   const hasInMyStore = item.myStoreTotal > 0;
 
-  // Monta a matriz: lista de tamanhos únicos (colunas) × lista de cores (linhas)
+  // Monta a matriz: lista de tamanhos únicos (colunas) × lista de cores (linhas).
+  // A régua da CÉLULA (soma de todos os códigos da mesma cor×tamanho — nunca
+  // "o último sobrescreve") mora em `lib/grade-consulta.ts`, com teste.
   const { sizes, colors, cellsByColor, totalsBySize, totalsByColor, cellByColorSize } = useMemo(() => {
-    const sizeSet = new Set<string>();
-    const colorSet = new Set<string>();
-    const cellByColorSize = new Map<string, Map<string, Variant>>(); // cor → tamanho → variant
-    const totalsByColor = new Map<string, number>();
-    const totalsBySize = new Map<string, number>();
+    const grade = montarGradeConsulta(item.variants);
+    const { totalsByColor, totalsBySize, celulas: cellByColorSize } = grade;
 
-    for (const v of item.variants) {
-      const cor = (v.cor || '—').trim();
-      const tam = (v.tamanho || '—').trim();
-      sizeSet.add(tam);
-      colorSet.add(cor);
-      if (!cellByColorSize.has(cor)) cellByColorSize.set(cor, new Map());
-      cellByColorSize.get(cor)!.set(tam, v);
-      totalsByColor.set(cor, (totalsByColor.get(cor) || 0) + v.myStoreQty);
-      totalsBySize.set(tam, (totalsBySize.get(tam) || 0) + v.myStoreQty);
-    }
-
-    const sizes = Array.from(sizeSet).sort(sortSizes);
+    const sizes = grade.tamanhos.slice().sort(sortSizes);
     // cores: primeiro as que têm estoque (desc), depois as zeradas (alfa)
-    const colors = Array.from(colorSet).sort((a, b) => {
+    const colors = grade.cores.slice().sort((a, b) => {
       const ta = totalsByColor.get(a) || 0;
       const tb = totalsByColor.get(b) || 0;
       if (ta !== tb) return tb - ta;
       return a.localeCompare(b);
     });
 
-    const cellsByColor = new Map<string, Variant[]>();
+    const cellsByColor = new Map<string, CelulaGrade[]>();
     for (const c of colors) {
       cellsByColor.set(c, sizes.map((s) => cellByColorSize.get(c)?.get(s) || {
-        sku: '', cor: c, tamanho: s, myStoreQty: 0, preco: null,
+        sku: '', cor: c, tamanho: s, myStoreQty: 0, preco: null, skus: [],
       }));
     }
 
@@ -761,7 +750,7 @@ function ProductCard({ item, highlightSku, myStore }: {
   const [selectedSize, setSelectedSize] = useState<string | null>(highlightedSize);
   // Hover na célula da grade → mostra o CÓDIGO DE BARRAS da variante
   // (cor+tamanho) abaixo do preço da linha da cor (pedido do dono 23/07)
-  const [hoverCell, setHoverCell] = useState<{ cor: string; tamanho: string; sku: string } | null>(null);
+  const [hoverCell, setHoverCell] = useState<{ cor: string; tamanho: string; sku: string; codigos: number } | null>(null);
   useEffect(() => { setSelectedColor(highlightedColor); }, [highlightedColor]);
   useEffect(() => { setSelectedSize(highlightedSize); }, [highlightedSize]);
 
@@ -928,19 +917,22 @@ function ProductCard({ item, highlightSku, myStore }: {
                       {hoverCell?.cor === cor && (
                         <div className="text-[10px] font-mono text-slate-500 mt-0.5 whitespace-nowrap">
                           ||| {hoverCell.sku} · tam {hoverCell.tamanho}
+                          {hoverCell.codigos > 1 ? ` · +${hoverCell.codigos - 1} cód. somado(s)` : ''}
                         </div>
                       )}
                     </td>
                     {sizes.map((s) => {
                       const v = cellByColorSize.get(cor)?.get(s);
                       const qty = v?.myStoreQty ?? 0;
-                      const matched = !!v && highlightSku === v.sku;
+                      // A célula pode somar 2+ códigos — o bipado é "o dela"
+                      // se for QUALQUER um deles, não só o principal.
+                      const matched = !!v && !!highlightSku && v.skus.includes(highlightSku);
                       const isCellSel = isColorSel && selectedSize === s;
                       return (
                         <td
                           key={s}
                           className="p-0.5 text-center"
-                          onMouseEnter={() => v?.sku && setHoverCell({ cor, tamanho: s, sku: v.sku })}
+                          onMouseEnter={() => v?.sku && setHoverCell({ cor, tamanho: s, sku: v.sku, codigos: v.skus.length })}
                           onMouseLeave={() => setHoverCell((cur) => (cur?.cor === cor && cur?.tamanho === s ? null : cur))}
                         >
                           <MatrixCell
@@ -948,6 +940,7 @@ function ProductCard({ item, highlightSku, myStore }: {
                             matched={matched}
                             selected={isCellSel}
                             preco={v?.preco}
+                            codigos={v?.skus.length ?? 1}
                             onClick={() => handleCellClick(cor, s)}
                           />
                         </td>
@@ -1403,12 +1396,14 @@ function StockByStoreMatrix({ item, myStore }: {
  *  - ring vinho grosso quando selecionada (filtra outras lojas por essa combinação)
  */
 function MatrixCell({
-  qty, matched, selected, onClick, preco,
-}: { qty: number; matched: boolean; selected: boolean; onClick: () => void; preco?: number | null }) {
+  qty, matched, selected, onClick, preco, codigos = 1,
+}: { qty: number; matched: boolean; selected: boolean; onClick: () => void; preco?: number | null; codigos?: number }) {
   const base =
     'mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold relative cursor-pointer transition hover:scale-[1.04] active:scale-95 select-none';
-  // Tooltip: preço na frente (passar o mouse no número mostra o valor)
-  const precoTip = preco != null && preco > 0 ? `${fmtBRL(preco)} · ` : '';
+  // Tooltip: preço na frente (passar o mouse no número mostra o valor); se a
+  // célula soma 2+ códigos (REF compartilhada / cadastro duplicado), avisa.
+  const precoTip = (preco != null && preco > 0 ? `${fmtBRL(preco)} · ` : '')
+    + (codigos > 1 ? `${codigos} códigos somados nesta célula · ` : '');
 
   if (qty === 0) {
     // ZERO: sem estoque aqui. Mas clicável — abre o filtro pra ver quem tem.

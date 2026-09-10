@@ -2807,7 +2807,18 @@ export class ProductsService {
         // peça racha em dois cartões — foi o que aconteceu com o BMM-100
         // (8 cores + 6 cores). A marca é estável e é o que já aparece na
         // descrição, e é exatamente o que a tela master usa pra agrupar.
-        marca: String(r.MARCA ?? r.FORNECEDOR ?? '').trim().toUpperCase(),
+        //
+        // ⚠️ E SEM cair pro FORNECEDOR quando a marca está VAZIA (10/09, REF
+        // 22 de Itanhaém). 44% do catálogo não tem marca, e o antigo
+        // `?? r.FORNECEDOR` fazia o CNPJ virar o discriminador: camiseta
+        // manga curta, manga longa e regata do mesmo uniforme (mesma REF,
+        // mesmo fornecedor) caíam num cartão só, batizado "CAMISETA MANGA
+        // CURTA", e a célula do tamanho 14 mostrava as 23 REGATAS com a
+        // camiseta ZERADA na arara. Com a marca vazia o `discriminadorProduto`
+        // cai pra família da descrição — a MESMA chave da dedup do catálogo
+        // (`searchByRefFromMirror`), então cada cor×tamanho entra UMA vez por
+        // cartão e a célula não tem como divergir da linha Total.
+        marca: String(r.MARCA ?? '').trim().toUpperCase(),
       });
     }
 
