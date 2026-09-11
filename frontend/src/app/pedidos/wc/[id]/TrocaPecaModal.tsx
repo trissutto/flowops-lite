@@ -49,6 +49,10 @@ type TipoAcerto = 'cobranca' | 'vale' | 'neutro';
 type PreviewTroca = {
   ok: boolean;
   bloqueio: string | null;
+  /** Tem trava E quem está olhando é a matriz: a tela oferece a chave. */
+  podeForcar?: boolean;
+  /** O que acontece de fato se destravar — a matriz lê ANTES de clicar. */
+  consequenciaDoForcar?: string | null;
   /** Peça separada/bipada: pode trocar, mas a troca desfaz a separação. */
   aviso?: string | null;
   item: {
@@ -75,6 +79,12 @@ type ResultadoTroca = {
   cobranca?: { shortUrl?: string; expiresAt?: string; valor?: number; erro?: string } | null;
   vale?: { code?: string; valor?: number; validoAte?: string; erro?: string } | null;
   reroteado?: any;
+  /** A trava que a matriz abriu nesta troca (null = não teve trava). */
+  destravado?: string | null;
+  /** A peça nova ficou sem card? — o que falta fazer, em português. */
+  avisoDaSeparacao?: string | null;
+  /** O pedido estava fechado e voltou pro trilho pra esta troca acontecer. */
+  pedidoReaberto?: boolean;
 };
 
 /** Mesmo formato de dinheiro da página do pedido (fmtMoney vive lá dentro). */
@@ -273,6 +283,16 @@ export default function TrocaPecaModal({
   const [valorTxt, setValorTxt] = useState('0');
   const [motivo, setMotivo] = useState('');
 
+  /**
+   * A CHAVE DA MATRIZ (10/09 — LP-001312). Quando a peça já saiu no papel
+   * (card postado, caixa lacrada, NF-e), a trava continua aparecendo — mas
+   * agora com a saída: destravar escrevendo por quê. Dois campos separados
+   * de propósito: o `motivo` de cima é o da TROCA (some no histórico junto
+   * com o acerto), este é o do DESTRAVE (é ele que a auditoria procura).
+   */
+  const [destravar, setDestravar] = useState(false);
+  const [motivoDestrave, setMotivoDestrave] = useState('');
+
   const [resultado, setResultado] = useState<ResultadoTroca | null>(null);
   const [busy, setBusy] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -318,6 +338,10 @@ export default function TrocaPecaModal({
         body: JSON.stringify({ orderItemId, codigo: hit.CODIGO }),
       });
       setPreview(p);
+      // Peça nova = trava nova: a chave volta pro lugar. Sem isso, destravar
+      // uma vez deixaria o resto da sessão destravado sem ninguém decidir.
+      setDestravar(false);
+      setMotivoDestrave('');
       // Sugestão já preenchida — em pt-BR, do jeito que ela vai ser relida.
       setValorTxt(Number(p?.diferencaSugerida ?? 0).toFixed(2).replace('.', ','));
     } catch (e: any) {
@@ -340,6 +364,7 @@ export default function TrocaPecaModal({
           codigo: selected.CODIGO,
           diferenca: valorNum,
           ...(motivo.trim() ? { motivo: motivo.trim() } : {}),
+          ...(podeDestravarAgora ? { forcar: true, motivoDestrave: motivoDestrave.trim() } : {}),
         }),
       });
       setResultado(r);
@@ -352,6 +377,14 @@ export default function TrocaPecaModal({
   }
 
   const bloqueio = preview?.bloqueio ?? null;
+  /**
+   * A chave está de fato girada: existe trava, quem está aqui é a matriz,
+   * ela marcou a caixinha E escreveu o porquê. Menos que isso o botão
+   * continua desligado — chave sem motivo é botão anônimo, e era pra isso
+   * que a trava existia.
+   */
+  const podeDestravarAgora =
+    !!bloqueio && !!preview?.podeForcar && destravar && motivoDestrave.trim().length >= 5;
   const novaLabel = selected ? rotuloPeca(selected) : '';
   /**
    * Vale sem CPF o backend RECUSA — e a troca já teria sido aplicada, ficando
@@ -530,11 +563,46 @@ export default function TrocaPecaModal({
                     </label>
                   </div>
 
-                  {/* Bloqueio: a peça já SAIU (postada/caixa de juntada/NF-e). */}
+                  {/* Bloqueio: a peça já SAIU (postada/caixa de juntada/NF-e).
+                      Desde 10/09 (LP-001312) o vermelho não é mais o fim: pra
+                      matriz vem junto a chave — a consequência escrita e o
+                      campo do porquê. */}
                   {bloqueio && (
-                    <div className="flex items-start gap-2 rounded-lg border-2 border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800">
-                      <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-                      <div><b>Não dá pra trocar:</b> {bloqueio}</div>
+                    <div className="rounded-lg border-2 border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800">
+                      <div className="flex items-start gap-2">
+                        <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div><b>Não dá pra trocar:</b> {bloqueio}</div>
+                      </div>
+
+                      {preview?.podeForcar && (
+                        <div className="mt-2.5 border-t border-red-200 pt-2.5">
+                          {preview?.consequenciaDoForcar && (
+                            <div className="flex items-start gap-2 text-[13px] leading-snug text-red-900">
+                              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                              <div><b>Se destravar:</b> {preview.consequenciaDoForcar}</div>
+                            </div>
+                          )}
+                          <label className="mt-2 flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={destravar}
+                              onChange={(e) => setDestravar(e.target.checked)}
+                              className="mt-0.5 h-4 w-4 accent-[#B8912B]"
+                            />
+                            <span className="text-[13px] font-semibold text-red-900">
+                              Destravar assim mesmo (matriz) — troca a peça e registra quem abriu
+                            </span>
+                          </label>
+                          {destravar && (
+                            <input
+                              value={motivoDestrave}
+                              onChange={(e) => setMotivoDestrave(e.target.value)}
+                              placeholder="Por que está destravando? Ex: rastreio saiu por engano, peça ainda na loja"
+                              className="mt-2 w-full rounded-lg border-2 border-red-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-red-500"
+                            />
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -559,15 +627,27 @@ export default function TrocaPecaModal({
                     <button
                       type="button"
                       onClick={confirmar}
-                      disabled={busy || !!bloqueio || valeSemCpf}
-                      title={valeSemCpf ? 'Preencha o CPF da cliente no pedido antes — o vale é nominal.' : undefined}
-                      className="flex-1 rounded-lg bg-[#B8912B] px-3 py-2 text-sm font-bold text-white hover:bg-[#8C7325] disabled:opacity-50"
+                      disabled={busy || (!!bloqueio && !podeDestravarAgora) || valeSemCpf}
+                      title={
+                        valeSemCpf
+                          ? 'Preencha o CPF da cliente no pedido antes — o vale é nominal.'
+                          : bloqueio && !podeDestravarAgora
+                            ? 'Marque "Destravar assim mesmo" e escreva o motivo pra liberar a troca.'
+                            : undefined
+                      }
+                      className={
+                        podeDestravarAgora
+                          ? 'flex-1 rounded-lg bg-red-700 px-3 py-2 text-sm font-bold text-white hover:bg-red-800 disabled:opacity-50'
+                          : 'flex-1 rounded-lg bg-[#B8912B] px-3 py-2 text-sm font-bold text-white hover:bg-[#8C7325] disabled:opacity-50'
+                      }
                     >
                       {busy
                         ? 'Trocando…'
                         : valeSemCpf
                           ? 'Sem CPF não dá pra emitir o vale'
-                          : tipoAtual === 'cobranca'
+                          : podeDestravarAgora
+                            ? 'DESTRAVAR e trocar a peça'
+                            : tipoAtual === 'cobranca'
                             ? `Trocar e cobrar ${fmtMoney(Math.abs(valorNum))}`
                             : tipoAtual === 'vale'
                               ? `Trocar e dar vale de ${fmtMoney(Math.abs(valorNum))}`
@@ -599,6 +679,37 @@ export default function TrocaPecaModal({
                   agora vale {fmtMoney(resultado.novoItem?.precoUnit)}.
                 </span>
               </div>
+
+              {/* O QUE FOI ABERTO (10/09). A troca destravada muda coisa fora
+                  desta tela — o card da loja some, o estoque volta, o pedido
+                  pode ter voltado pro trilho. Quem clicou tem que ler isso
+                  agora, não descobrir na fila da loja depois. */}
+              {resultado.destravado && (
+                <div className="rounded-lg border-2 border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-900">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div>
+                      <b>Trava aberta pela matriz:</b> {resultado.destravado} O destrave ficou no
+                      histórico do pedido, com o motivo e quem abriu.
+                    </div>
+                  </div>
+                  {resultado.pedidoReaberto && (
+                    <div className="mt-1.5 pl-6">
+                      O pedido estava fechado e <b>voltou pra separação</b> — sem isso o card novo não
+                      nasceria e a peça ficaria invisível pra loja.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Falta separar (10/09): re-roteamento que não aconteceu era
+                  silêncio — a peça nova ficava sem card e sumia das filas. */}
+              {resultado.avisoDaSeparacao && (
+                <div className="flex items-start gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div><b>Falta separar:</b> {resultado.avisoDaSeparacao}</div>
+                </div>
+              )}
 
               {/* Cobrança */}
               {resultado.cobranca?.shortUrl && (

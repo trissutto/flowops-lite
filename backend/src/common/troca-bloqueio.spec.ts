@@ -1,4 +1,4 @@
-import { avisoDaTroca, cardDaPeca, motivoDeBloqueioDaTroca } from './troca-bloqueio';
+import { avisoDaTroca, bloqueioDaTroca, cardDaPeca, motivoDeBloqueioDaTroca } from './troca-bloqueio';
 
 /**
  * A TRAVA DA TROCA — testes da régua que decide se ESTA peça ainda pode ser
@@ -146,5 +146,84 @@ describe('pode trocar esta peça?', () => {
     test('loja atribuída sem card correspondente: de ninguém', () => {
       expect(cardDaPeca(cards, { assignedStoreId: 'store-z' })).toBeNull();
     });
+  });
+});
+
+/**
+ * A CHAVE DA MATRIZ (10/09/2026, LP-001312). A trava continua igual — o que
+ * a régua passou a devolver junto é o PREÇO de abrir ela. Sem isso a matriz
+ * clicaria "forçar" sem saber que o estoque de uma loja vai voltar sozinho.
+ */
+describe('bloqueioDaTroca — toda trava diz também o que custa destravar', () => {
+  const card = (status: string) => ({
+    id: 'card-1',
+    status,
+    storeId: 'store-1',
+    store: { code: '06', name: 'SOROCABA' },
+  });
+
+  test('peça postada: a consequência fala do estorno de estoque da loja', () => {
+    const b = bloqueioDaTroca({ orderStatus: 'separating', card: card('shipped'), bipesDaPeca: 0 });
+    expect(b?.motivo).toMatch(/postou/);
+    expect(b?.consequencia).toMatch(/estoque/i);
+    expect(b?.consequencia).toContain('SOROCABA');
+  });
+
+  test('NF-e autorizada: a consequência lembra que a nota continua com a peça velha', () => {
+    const b = bloqueioDaTroca({
+      orderStatus: 'separating',
+      card: card('separating'),
+      bipesDaPeca: 0,
+      notaAutorizada: { numero: 689 },
+    });
+    expect(b?.consequencia).toContain('689');
+    expect(b?.consequencia).toMatch(/nota/i);
+  });
+
+  test('caixa lacrada: a consequência conta que a peça velha chega na âncora sem pedido', () => {
+    const b = bloqueioDaTroca({
+      orderStatus: 'separating',
+      card: card('separated'),
+      bipesDaPeca: 0,
+      caixaDaJuntada: { status: 'in_transit' },
+    });
+    expect(b?.consequencia).toMatch(/âncora/);
+  });
+
+  test('sem trava, não há o que destravar', () => {
+    expect(bloqueioDaTroca({ orderStatus: 'separating', card: card('new'), bipesDaPeca: 0 })).toBeNull();
+  });
+
+  test('o texto antigo continua sendo o motivo — nenhuma tela quebrou', () => {
+    const ctx = { orderStatus: 'separating', card: card('shipped'), bipesDaPeca: 0 };
+    expect(motivoDeBloqueioDaTroca(ctx)).toBe(bloqueioDaTroca(ctx)!.motivo);
+  });
+
+  /**
+   * LP-001312 (11/09): card postado COM NF-e 113 autorizada. O "Cancelar nota"
+   * da ficha só aparece em card não postado, e o destrave apaga o card — quem
+   * não lê a ordem certa aqui fica com a nota da peça velha valendo.
+   */
+  test('card postado com NF-e: manda cancelar a nota ANTES, e diz como', () => {
+    const b = bloqueioDaTroca({
+      orderStatus: 'shipped',
+      card: card('shipped'),
+      bipesDaPeca: 0,
+      notaAutorizada: { numero: 113 },
+    });
+    expect(b?.consequencia).toContain('113');
+    expect(b?.consequencia).toMatch(/ANTES/);
+    expect(b?.consequencia).toContain('Cancelar nota');
+  });
+
+  test('card postado sem nota: a consequência não inventa nota', () => {
+    const b = bloqueioDaTroca({ orderStatus: 'shipped', card: card('shipped'), bipesDaPeca: 0 });
+    expect(b?.consequencia).not.toMatch(/NF-e/);
+  });
+
+  test('card ENTREGUE: a peça está com a cliente e NÃO volta pro estoque na troca', () => {
+    const b = bloqueioDaTroca({ orderStatus: 'separating', card: card('delivered'), bipesDaPeca: 0 });
+    expect(b?.consequencia).toMatch(/COM A CLIENTE/);
+    expect(b?.consequencia).toMatch(/NÃO volta pro estoque/);
   });
 });

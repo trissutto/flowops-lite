@@ -318,6 +318,31 @@ export class PickOrdersController {
     return this.svc.updateStatus(id, user.storeId, user.userId, body);
   }
 
+  /**
+   * 🔑 STATUS DO CARD FORÇADO PELA MATRIZ (10/09/2026 — LP-001312).
+   *
+   * A rota de cima é da LOJA e anda o trilho pra frente. Esta é da MATRIZ e
+   * anda pra onde precisar — inclusive tirar um card de `shipped`, que é
+   * ponto final pra todo mundo. Exige motivo escrito e não dispara efeito
+   * nenhum (etiqueta, nota, estoque, aviso pra cliente); a resposta traz os
+   * avisos do que continua como estava.
+   *
+   * Body: { status: 'new'|'separating'|'separated'|'ready'|'shipped', motivo }
+   */
+  @Patch(':id/status-matriz')
+  forcarStatus(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { status: PickStatus; motivo?: string },
+  ) {
+    const user = req.user as AuthUser;
+    return this.svc.forcarStatusDoCard(id, body ?? ({} as any), {
+      userId: user?.userId ?? null,
+      nome: (req?.user?.name ?? req?.user?.nome ?? req?.user?.email ?? null) || null,
+      role: user?.role ?? null,
+    });
+  }
+
   /** Gera a pré-postagem dos Correios pro pedido da live (NÃO marca enviado —
    *  o cron marca quando os Correios registram a postagem). */
   @Post(':id/correios-envio')

@@ -26,6 +26,7 @@ import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-com
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { JuntadaService } from './juntada.service';
+import { motivoDeRecusaDoDestrave, notaDoDestrave } from '../common/destrave-matriz';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -4084,6 +4085,139 @@ export class PickOrdersService {
       store: { id: store.id, code: store.code, name: store.name },
       order: { id: order.id, wcOrderNumber: order.wcOrderNumber },
     };
+  }
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   *  🔑 STATUS DO CARD NA MÃO DA MATRIZ (10/09/2026 — LP-001312)
+   *
+   *  ORDEM DO DONO: "preciso que a qualquer tempo possamos mudar o status, o
+   *  produto... etc". O caso: a loja carimbou o rastreio (card `shipped`) com
+   *  a peça ainda na arara, e o `shipped` é PONTO FINAL no trilho
+   *  (`NEXT_ALLOWED`) — nem a própria loja voltava, nem a matriz.
+   *
+   *  Esta porta não é a da loja. Ela:
+   *   - não confere dono do card (é a matriz);
+   *   - não anda o trilho (`NEXT_ALLOWED`) nem repete o guard de envio
+   *     duplicado — ela existe justamente pra desfazer o que eles protegem;
+   *   - NÃO dispara efeito nenhum: não compra etiqueta, não emite nota, não
+   *     mexe em estoque e não avisa a cliente. Só o status muda.
+   *
+   *  ⚠️ O que ela deliberadamente NÃO faz, e a resposta avisa: o BIPE
+   *  continua valendo (a peça segue fora do estoque — se ela voltou pra
+   *  arara, quem devolve é o desfazer do bipe ou a troca da peça), e o STATUS
+   *  DO PEDIDO não muda junto (tem porta própria: PATCH /orders/wc/:id com a
+   *  mesma chave). Fazer as três coisas de um clique só esconderia da matriz
+   *  o que ela está mexendo.
+   * ═══════════════════════════════════════════════════════════════════════
+   */
+  async forcarStatusDoCard(
+    id: string,
+    input: { status: PickStatus; motivo?: string },
+    ator: { userId: string | null; nome: string | null; role?: string | null },
+  ) {
+    if (!VALID_STATUSES.includes(input.status)) {
+      throw new BadRequestException(
+        `Status inválido: ${input.status}. Vale um destes: ${VALID_STATUSES.join(', ')}.`,
+      );
+    }
+    const recusa = motivoDeRecusaDoDestrave({ role: ator?.role, motivo: input.motivo });
+    if (recusa) throw new BadRequestException(recusa);
+
+    const current = await this.prisma.pickOrder.findUnique({
+      where: { id },
+      include: {
+        store: { select: { code: true, name: true } },
+        order: { select: { id: true, status: true, wcOrderNumber: true } },
+      },
+    });
+    if (!current) throw new NotFoundException('Pick-order não encontrado');
+
+    const de = String(current.status);
+    if (de === input.status) {
+      return { id, status: de, jaEstava: true, avisos: [] as string[] };
+    }
+
+    const updated = await this.prisma.pickOrder.update({
+      where: { id },
+      data: { status: input.status },
+    });
+
+    const loja = current.store ? `${current.store.name} (${current.store.code})` : 'a loja';
+    const trava = `card da ${loja} estava "${de}"`;
+
+    await this.prisma.orderHistory
+      .create({
+        data: {
+          orderId: current.orderId,
+          fromStatus: de,
+          toStatus: input.status,
+          note:
+            notaDoDestrave(trava, input.motivo!, ator?.nome) +
+            ` · card forçado pra "${input.status}" (nenhuma etiqueta, nota ou estoque foi tocado).`,
+        },
+      })
+      .catch(() => null);
+
+    await this.prisma.integrationLog
+      .create({
+        data: {
+          source: 'pick-order',
+          direction: 'internal',
+          event: 'status.forcado',
+          payload: JSON.stringify({
+            pickOrderId: id,
+            orderId: current.orderId,
+            wcOrderNumber: current.order?.wcOrderNumber ?? null,
+            storeId: current.storeId,
+            de,
+            para: input.status,
+            motivo: input.motivo,
+            porUserId: ator?.userId ?? null,
+            porNome: ator?.nome ?? null,
+            trackingCode: current.trackingCode ?? null,
+          }),
+          status: 200,
+        },
+      })
+      .catch(() => null);
+
+    // A loja precisa ver o card mudar no app — senão a vendedora continua com
+    // a tela antiga e reclama que "sumiu"/"voltou" sozinho.
+    try {
+      this.gateway.emitPickOrderStatus(current.storeId, {
+        id: updated.id,
+        status: updated.status,
+        trackingCode: updated.trackingCode,
+        carrier: updated.carrier,
+        storeId: current.storeId,
+        orderId: current.orderId,
+      });
+    } catch (e: any) {
+      this.logger.warn(`[card-forcado] socket falhou: ${e?.message || e}`);
+    }
+
+    this.logger.warn(
+      `[card-forcado] ${current.order?.wcOrderNumber ?? current.orderId}: card ${id} ` +
+        `${de} → ${input.status} pela matriz (${ator?.nome ?? '—'}) · motivo: ${input.motivo}`,
+    );
+
+    /** O que NÃO foi feito junto — a tela repete pra ninguém supor. */
+    const avisos: string[] = [];
+    if (['shipped', 'delivered'].includes(de) && !['shipped'].includes(input.status)) {
+      avisos.push(
+        'O rastreio do card continua salvo e o BIPE continua valendo — a peça segue fora do estoque. ' +
+          'Se ela voltou pra arara, desfaça o bipe na tela da loja ou troque a peça pela retaguarda.',
+      );
+    }
+    if (['shipped', 'delivered', 'cancelled'].includes(String(current.order?.status ?? ''))) {
+      avisos.push(
+        `O PEDIDO continua "${current.order?.status}" — o card voltou sozinho. Pra ele voltar pro fluxo, ` +
+          `mude o status do pedido na tela dele (a mesma chave, com motivo).`,
+      );
+    }
+
+    return { id: updated.id, status: updated.status, de, jaEstava: false, avisos };
   }
 
   /**

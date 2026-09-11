@@ -1198,6 +1198,15 @@ export class RoutingService {
       excludeStoreCodes?: string[];
       forceAdvanced?: boolean;
       forceStoreCode?: string;
+      /**
+       * NÃO tira a loja do card da disputa (11/09/2026 — LP-001312). O padrão
+       * continua sendo tirar: no "↔ Trocar loja" e no reporte de problema a
+       * loja é justamente quem não tinha a peça. Na troca DESTRAVADA pela
+       * matriz a premissa é a oposta — a peça está na arara da loja, junto
+       * com as outras do card — e tirar ela da disputa mandava a peça que
+       * ninguém trocou ser separada por OUTRA loja, com a original parada ali.
+       */
+      manterLojaDeOrigem?: boolean;
       /** QUEM mandou (26/08) — userId já conferido contra a FK pelo caller. */
       ator?: { userId: string | null; nome: string | null };
     },
@@ -1279,7 +1288,11 @@ export class RoutingService {
       .map((p) => p.storeId);
 
     const allExcludedStoreIds = Array.from(
-      new Set([oldStoreId, ...issueReporterStoreIds, ...otherActiveStoreIds]),
+      new Set([
+        ...(opts?.manterLojaDeOrigem ? [] : [oldStoreId]),
+        ...issueReporterStoreIds,
+        ...otherActiveStoreIds,
+      ]),
     );
     const excludedStores = await this.prisma.store.findMany({
       where: { id: { in: allExcludedStoreIds } },
@@ -1423,8 +1436,9 @@ export class RoutingService {
         ok: false as const,
         reason: 'sem-estoque-excluindo-loja',
         message:
-          `Cancelei o pick-order da ${oldStoreCode} mas nenhuma OUTRA loja tem ` +
-          `estoque pra ${itemsAssigned.length} item(ns). Items ficaram sem loja — ` +
+          `Cancelei o pick-order da ${oldStoreCode} mas nenhuma ` +
+          (opts?.manterLojaDeOrigem ? 'loja' : 'OUTRA loja') +
+          ` tem estoque pra ${itemsAssigned.length} item(ns). Items ficaram sem loja — ` +
           `verifique estoque ou divida manualmente.`,
         missing: preview.missing,
         oldStoreCode,
@@ -1439,7 +1453,9 @@ export class RoutingService {
     const newPickOrders = await this.prisma.pickOrder.findMany({
       where: {
         orderId,
-        storeId: { not: oldStoreId },
+        // Com a loja de origem na disputa, o card novo pode nascer NELA — o
+        // antigo já foi apagado lá em cima, então não há o que confundir.
+        ...(opts?.manterLojaDeOrigem ? {} : { storeId: { not: oldStoreId } }),
         // Pega só os pick-orders criados agora (created após início do método)
       },
       include: { store: { select: { code: true, name: true } } },
@@ -1458,6 +1474,109 @@ export class RoutingService {
         storeName: p.store.name,
       })),
     };
+  }
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   *  ESTORNO DO CARD ANTES DA TROCA DE PEÇA (11/09/2026 — LP-001312)
+   *
+   *  A troca de peça reescreve o `OrderItem` in-place, e os dois estornos de
+   *  card leem o SKU do item: o `revertPickOrderStock` de card finalizado
+   *  devolve "o esperado" pelos itens atribuídos, e o `swapSinglePickOrder`
+   *  de card postado devolve pelos mesmos itens. Rodando DEPOIS da reescrita
+   *  eles devolviam a peça NOVA pra loja de origem (fantasma na Consulta e no
+   *  site) e deixavam a velha, que está na arara, fora do estoque. Por isso a
+   *  troca chama ESTE método ANTES de reescrever — e o `swapSinglePickOrder`
+   *  depois encontra bipes estornados e baixa limpa: só apaga e re-roteia.
+   *
+   *  `desfazerEnvio` é a chave da matriz aplicada ao card POSTADO. O
+   *  `revertPickOrderStock` se recusa, com razão, a devolver peça de card que
+   *  está no correio — e a chave é exatamente a declaração de que ela não
+   *  está. O card sai do `shipped` pra `separated`, que é o que ele é: peça
+   *  separada, parada na loja.
+   *
+   *  Card `delivered` NUNCA estorna: a peça está com a cliente e só volta pro
+   *  estoque quando chegar pela devolução.
+   * ═══════════════════════════════════════════════════════════════════════
+   */
+  async estornarCardDaTroca(
+    pickOrderId: string,
+    opts: {
+      desfazerEnvio?: boolean;
+      motivo?: string | null;
+      userId?: string | null;
+      nome?: string | null;
+    },
+  ): Promise<{ pecas: number; escopo: string; statusAnterior: string | null; envioDesfeito: boolean }> {
+    const card = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: {
+        id: true,
+        status: true,
+        orderId: true,
+        trackingCode: true,
+        store: { select: { code: true, name: true } },
+      },
+    });
+    if (!card) return { pecas: 0, escopo: 'nada', statusAnterior: null, envioDesfeito: false };
+
+    const statusAnterior = String(card.status);
+    if (statusAnterior === 'delivered') {
+      return { pecas: 0, escopo: 'nada', statusAnterior, envioDesfeito: false };
+    }
+    const desfazer = statusAnterior === 'shipped';
+    if (desfazer && !opts.desfazerEnvio) {
+      // Sem a chave, card postado não se estorna — é a trava de sempre.
+      return { pecas: 0, escopo: 'nada', statusAnterior, envioDesfeito: false };
+    }
+
+    if (desfazer) {
+      await this.prisma.pickOrder.update({
+        where: { id: pickOrderId },
+        data: { status: 'separated' },
+      });
+    }
+
+    let estorno: { pecas: number; escopo: string };
+    try {
+      estorno = await this.pickScans.revertPickOrderStock(pickOrderId, {
+        reason: 'troca_peca',
+        userId: opts.userId ?? null,
+      });
+    } catch (e: any) {
+      // Sem estorno confirmado o card volta a ser o que era. Um card
+      // "separado" com os bipes ativos e sem ninguém saber por quê seria pior
+      // que a trava.
+      if (desfazer) {
+        await this.prisma.pickOrder
+          .update({ where: { id: pickOrderId }, data: { status: 'shipped' } })
+          .catch(() => null);
+      }
+      throw e;
+    }
+
+    if (desfazer) {
+      const loja = card.store ? `${card.store.name} (${card.store.code})` : 'a loja';
+      await this.prisma.orderHistory
+        .create({
+          data: {
+            orderId: card.orderId,
+            note:
+              `🔓 Card da ${loja} saiu do "enviado" pra trocar a peça — a matriz declarou que o pacote não viajou` +
+              (card.trackingCode ? ` (o rastreio ${card.trackingCode} fica sem uso)` : '') +
+              `. ${estorno.pecas} peça(s) devolvida(s) ao estoque da loja.` +
+              (opts.nome ? ` · por ${opts.nome}` : '') +
+              (opts.motivo ? ` · motivo: ${opts.motivo}` : ''),
+          },
+        })
+        .catch(() => null);
+      this.logger.warn(
+        `[troca-peca] card ${pickOrderId} (${card.store?.code ?? '—'}) saiu do shipped pela chave da matriz — ` +
+          `${estorno.pecas} peça(s) devolvida(s) (${estorno.escopo})`,
+      );
+    }
+
+    return { ...estorno, statusAnterior, envioDesfeito: desfazer };
   }
 
   /**

@@ -11,6 +11,7 @@ import { lojasDaRotaPropria } from '../common/rota-propria';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { VigilanciaSeparacaoCron } from '../routing/vigilancia-separacao.cron';
 import { voltariaProFluxo, motivoDaRecusa } from '../common/volta-pro-fluxo';
+import { motivoDeRecusaDoDestrave, notaDoDestrave, podeDestravar } from '../common/destrave-matriz';
 import {
   ehCancelamento,
   normalizarMotivo,
@@ -2272,6 +2273,10 @@ export class OrdersController {
       /** Por que está cancelando/reembolsando — OBRIGATÓRIO nesses dois status. */
       cancelReason?: string;
       addNote?: { text: string; notifyCustomer?: boolean };
+      /** A CHAVE DA MATRIZ (10/09): aplica o status mesmo com a trava fechada. */
+      forcar?: boolean;
+      /** Por que destravou — obrigatório junto do `forcar`. */
+      motivoDestrave?: string;
     },
     @Req() req: any,
   ) {
@@ -2319,7 +2324,22 @@ export class OrdersController {
      * antigos antes de reabrir. Aqui é status na mão, e status na mão não
      * desfaz postagem.
      */
-    if (voltariaProFluxo(localForSource?.status, body.status)) {
+    /**
+     * 🔑 E A CHAVE DA MATRIZ (10/09/2026, LP-001312 — ordem do dono: "preciso
+     * que a qualquer tempo possamos mudar o status, o produto... etc").
+     *
+     * A trava acima continua certa: status na mão não desfaz postagem, e
+     * quem clica sem querer não pode ressuscitar pedido na fila das lojas. Só
+     * que ela era ABSOLUTA — e a vida real produz o caso legítimo toda
+     * semana (rastreio carimbado por engano, peça ainda na arara, cliente
+     * pedindo outro tamanho). A matriz destrava escrevendo o motivo; o
+     * histórico do pedido guarda o que a trava dizia e por que foi aberta.
+     */
+    const chave = { role: req?.user?.role, motivo: body.motivoDestrave };
+    const recusaDaChave = body.forcar ? motivoDeRecusaDoDestrave(chave) : null;
+    const destravou = !!body.forcar && !recusaDaChave;
+
+    if (voltariaProFluxo(localForSource?.status, body.status) && !destravou) {
       // eslint-disable-next-line no-console
       console.warn(
         `[orders] PATCH recusado: pedido ${wcOrderId} está ${localForSource.status} e ` +
@@ -2331,8 +2351,20 @@ export class OrdersController {
         status: localForSource.status,
         requestedStatus: body.status,
         statusApplied: false,
-        warning: motivoDaRecusa(localForSource.status),
+        warning: recusaDaChave ?? motivoDaRecusa(localForSource.status),
+        /** A tela só oferece a chave pra quem tem ela — e diz que existe. */
+        forcavel: podeDestravar(req?.user?.role),
       };
+    }
+    if (voltariaProFluxo(localForSource?.status, body.status) && destravou) {
+      await this.registrarDestrave(
+        localForSource!.id,
+        localForSource!.status,
+        body.status ?? localForSource!.status,
+        `pedido ${localForSource!.status} não volta pra separação`,
+        body.motivoDestrave!,
+        ator,
+      );
     }
 
     /**
@@ -2384,15 +2416,26 @@ export class OrdersController {
       // das LIVE presas que o fix de 17/08 destravou). Kill-switch:
       // conferenciaTravaLigada().
       const travaConcluido = await this.bloquearConcluidoSemSeparacao(wcOrderId, body.status);
-      if (travaConcluido) {
+      if (travaConcluido && !destravou) {
         return {
           ok: false,
           id: wcOrderId,
           status: localForSource!.status,
           requestedStatus: body.status,
           statusApplied: false,
-          warning: travaConcluido,
+          warning: recusaDaChave ?? travaConcluido,
+          forcavel: podeDestravar(req?.user?.role),
         };
+      }
+      if (travaConcluido && destravou) {
+        await this.registrarDestrave(
+          localForSource!.id,
+          localForSource!.status,
+          body.status ?? localForSource!.status,
+          travaConcluido,
+          body.motivoDestrave!,
+          ator,
+        );
       }
       // Nota vira histórico local; status já foi aplicado pelo confirmRoute
       // (processing→separating). Nada de WooCommerce.
@@ -2570,6 +2613,59 @@ export class OrdersController {
    * apagado) derrubaria o create INTEIRO e a gente perderia também a nota e o
    * motivo. Confere antes; o nome continua na nota de qualquer jeito.
    */
+  /**
+   * O DESTRAVE VIRA HISTÓRIA (10/09/2026). Quem abriu, o que a trava dizia e
+   * por quê — nessa ordem, porque é nessa ordem que a pergunta chega seis
+   * meses depois ("por que esse pedido postado voltou pra separação?").
+   *
+   * Best-effort de propósito: falha de auditoria não desfaz a decisão que a
+   * matriz já tomou na tela.
+   */
+  private async registrarDestrave(
+    orderId: string,
+    fromStatus: string,
+    toStatus: string,
+    trava: string,
+    motivo: string,
+    ator: { userId: string | null; nome: string | null },
+  ) {
+    await (this.prisma as any).orderHistory
+      .create({
+        data: {
+          orderId,
+          fromStatus,
+          toStatus,
+          note: notaDoDestrave(trava, motivo, ator?.nome),
+          userId: await this.userIdGravavel(ator?.userId ?? null),
+        },
+      })
+      .catch(() => {});
+    await (this.prisma as any).integrationLog
+      .create({
+        data: {
+          source: 'orders',
+          direction: 'internal',
+          event: 'status.destravado',
+          payload: JSON.stringify({
+            orderId,
+            fromStatus,
+            toStatus,
+            trava,
+            motivo,
+            porUserId: ator?.userId ?? null,
+            porNome: ator?.nome ?? null,
+          }),
+          status: 200,
+        },
+      })
+      .catch(() => null);
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[orders] TRAVA DESTRAVADA pela matriz (${ator?.nome ?? '—'}) no pedido ${orderId}: ` +
+        `"${trava}" · motivo: ${motivo}`,
+    );
+  }
+
   private async userIdGravavel(userId: string | null): Promise<string | null> {
     if (!userId) return null;
     try {
@@ -3887,7 +3983,10 @@ export class OrdersController {
    *                  a cliente pagar;
    *   - mais BARATA → vale nominal no CPF (vale no site e no caixa da loja);
    *   - mesmo preço → troca seca.
-   * Só até a loja BIPAR — depois disso a peça já saiu do estoque.
+   *
+   * Até a peça SAIR não há trava (26/08). Depois que sai, a trava existe mas
+   * NÃO é o fim da linha: a matriz destrava com motivo escrito (10/09,
+   * LP-001312) e o histórico do pedido guarda o que foi aberto e por quê.
    *
    * Só pedido NATIVO (live 900M, site novo 950M, pdv_online 960M): o item
    * vive no Postgres. Pedido do WooCommerce legado se edita lá.
@@ -3896,12 +3995,17 @@ export class OrdersController {
   async swapItemPreview(
     @Param('wcId') wcId: string,
     @Body() body: { orderItemId: string; codigo: string },
+    @Req() req?: any,
   ) {
     await this.exigePedidoNativo(Number(wcId));
     if (!body?.orderItemId || !body?.codigo) {
       throw new BadRequestException('orderItemId e codigo são obrigatórios');
     }
-    return this.trocaPeca.preview(Number(wcId), body.orderItemId, body.codigo);
+    // O `role` decide se a tela mostra a CHAVE quando há trava — quem não
+    // tem a chave continua vendo só o motivo, sem botão que não funciona.
+    return this.trocaPeca.preview(Number(wcId), body.orderItemId, body.codigo, {
+      role: req?.user?.role ?? null,
+    });
   }
 
   @Post('wc/:wcId/swap-item')
@@ -3914,10 +4018,15 @@ export class OrdersController {
       /** Diferença CONFIRMADA pela matriz (+cobra · −devolve). Omitido = a sugerida. */
       diferenca?: number;
       motivo?: string;
+      /** A CHAVE DA MATRIZ: troca mesmo com a trava fechada (peça já postada etc). */
+      forcar?: boolean;
+      /** Por que destravou — obrigatório junto do `forcar`. */
+      motivoDestrave?: string;
     },
     @Req() req?: any,
   ) {
     await this.exigePedidoNativo(Number(wcId));
+    const ator = this.atorDoRequest(req);
     return this.trocaPeca.aplicar(
       Number(wcId),
       {
@@ -3925,8 +4034,11 @@ export class OrdersController {
         codigo: body?.codigo,
         diferenca: body?.diferenca,
         motivo: body?.motivo,
+        forcar: body?.forcar,
+        motivoDestrave: body?.motivoDestrave,
       },
       req?.user?.userId ?? null,
+      { role: req?.user?.role ?? null, nome: ator.nome },
     );
   }
 

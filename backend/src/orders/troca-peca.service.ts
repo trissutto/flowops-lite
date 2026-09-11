@@ -9,12 +9,14 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { conferirDiferencaNoGateway, diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import {
   CARD_ATIVO,
+  CARD_ENVIADO,
   CARD_SEPARADO,
   avisoDaTroca,
+  bloqueioDaTroca,
   cardDaPeca,
-  motivoDeBloqueioDaTroca,
   type TrocaCtx,
 } from '../common/troca-bloqueio';
+import { motivoDeRecusaDoDestrave, notaDoDestrave, podeDestravar } from '../common/destrave-matriz';
 import { LOJA_CANAL_CODES } from '../common/loja-canal';
 
 /**
@@ -32,9 +34,17 @@ import { LOJA_CANAL_CODES } from '../common/loja-canal';
  *                           caixa das lojas);
  *    mesmo preço          → troca seca.
  *
- *  QUANDO PODE (decisão do dono): até a loja BIPAR A PEÇA. Depois do bipe
- *  ela já saiu do estoque e está separada fisicamente na arara de alguém —
- *  trocar ali é confusão na loja. Daí em diante o caminho é devolução/troca.
+ *  QUANDO PODE: até a peça SAIR (26/08). Separada ou bipada não trava — o
+ *  fluxo cancela o card, estorna o bipe e re-roteia sozinho. O que trava é o
+ *  ponto sem volta: card postado, caixa da juntada lacrada, NF-e autorizada.
+ *
+ *  E DEPOIS DISSO? A MATRIZ DESTRAVA (10/09 — LP-001312). Nenhuma dessas
+ *  travas é mais o fim da linha: com motivo escrito, a matriz troca a peça
+ *  assim mesmo e a história do pedido guarda o que a trava dizia e por que
+ *  foi aberta (`common/destrave-matriz.ts`). Existe porque o "não" custava
+ *  caro na vida real: a loja carimbava o rastreio no card, a peça continuava
+ *  na arara, e o sistema mandava a matriz pro portal de devolução de uma
+ *  peça que nunca viajou.
  *
  *  ⚠️ A régua é POR PEÇA, não por pedido (`common/troca-bloqueio.ts`): pedido
  *  dividido é o normal da casa, e a loja que já postou a peça DELA não fala
@@ -71,10 +81,17 @@ export class TrocaPecaService {
   //  PREVIEW — o que vai acontecer se trocar por esta peça
   // ─────────────────────────────────────────────────────────────────────────
 
-  async preview(wcOrderId: number, orderItemId: string, codigo: string) {
+  async preview(
+    wcOrderId: number,
+    orderItemId: string,
+    codigo: string,
+    /** Quem está olhando — decide se a tela oferece a CHAVE da matriz. */
+    ator?: { role?: string | null },
+  ) {
     const { order, item } = await this.carregar(wcOrderId, orderItemId);
     const ctx = await this.contextoDaTroca(order, item);
-    const bloqueio = motivoDeBloqueioDaTroca(ctx);
+    const trava = bloqueioDaTroca(ctx);
+    const bloqueio = trava?.motivo ?? null;
     // Peça separada/bipada NÃO trava mais (ordem do dono 26/08) — mas a
     // matriz confirma sabendo que a troca desfaz a separação da loja.
     const aviso = bloqueio ? null : avisoDaTroca(ctx);
@@ -109,6 +126,14 @@ export class TrocaPecaService {
     return {
       ok: !bloqueio,
       bloqueio,
+      /**
+       * A CHAVE DA MATRIZ (10/09, LP-001312). Trava deixou de ser fim de
+       * linha: existindo uma, a tela mostra o que custa abrir
+       * (`consequenciaDoForcar`) e — só pra matriz — o campo de motivo que
+       * libera o `forcar`.
+       */
+      podeForcar: !!trava && podeDestravar(ator?.role),
+      consequenciaDoForcar: trava?.consequencia ?? null,
       aviso,
       item: {
         id: item.id,
@@ -151,12 +176,39 @@ export class TrocaPecaService {
       /** Valor CONFIRMADO pela matriz (positivo cobra, negativo devolve). */
       diferenca?: number;
       motivo?: string;
+      /** A CHAVE DA MATRIZ (10/09): troca mesmo com a trava fechada. */
+      forcar?: boolean;
+      /** Por que destravou — obrigatório junto do `forcar`. */
+      motivoDestrave?: string;
     },
     userId?: string | null,
+    /** Quem clicou. `role` é o que autoriza a chave; `nome` fica na história. */
+    ator?: { role?: string | null; nome?: string | null },
   ) {
     const { order, item } = await this.carregar(wcOrderId, input.orderItemId);
-    const bloqueio = await this.motivoDeBloqueio(order, item);
-    if (bloqueio) throw new BadRequestException(bloqueio);
+
+    /**
+     * A TRAVA E A CHAVE (10/09/2026 — LP-001312).
+     *
+     * A cliente pediu outro TAMANHO e a loja já tinha carimbado o rastreio no
+     * card: daqui pra baixo tudo respondia "a troca agora é pelo portal de
+     * trocas/devolução", que trata peça que VIAJOU. A peça não tinha viajado.
+     *
+     * A trava fica (cada uma tem incidente com nome). O que passou a existir
+     * é a chave da matriz: destrava com motivo escrito, e o histórico do
+     * pedido guarda o que a trava dizia e por que foi aberta.
+     */
+    const trava = bloqueioDaTroca(await this.contextoDaTroca(order, item));
+    const destravou = !!trava && !!input.forcar;
+    if (trava && !input.forcar) {
+      throw new BadRequestException(
+        `${trava.motivo} Se a peça ainda está na loja, a matriz destrava nesta mesma tela — com o motivo escrito.`,
+      );
+    }
+    if (destravou) {
+      const recusa = motivoDeRecusaDoDestrave({ role: ator?.role, motivo: input.motivoDestrave });
+      if (recusa) throw new BadRequestException(recusa);
+    }
 
     /**
      * Pedido dividido com irmão JÁ ENVIADO: o card desta peça é o único que
@@ -179,7 +231,57 @@ export class TrocaPecaService {
     const cirurgico =
       !!cardDoItem &&
       (CARD_SEPARADO.includes(String(cardDoItem.status)) ||
+        /**
+         * DESTRAVE DE CARD POSTADO (10/09): só o caminho cirúrgico serve — o
+         * `recalculateForWc` recusaria o pedido inteiro por causa do card
+         * avançado e a peça ficaria sem card nenhum (a família do "pedido pago
+         * sem card", invisível em toda tela). O estorno sai ANTES da reescrita
+         * do SKU (`estornarCardDaTroca`, mais abaixo).
+         *
+         * Só `shipped` (11/09). Card `delivered` fica FORA: a peça está com a
+         * cliente, não volta pro estoque agora, e apagar o card entregue
+         * apagaria a prova da entrega. A peça nova vira separação nova pelo
+         * `recalculateForWc`, que avisa se não conseguir.
+         */
+        (destravou && String(cardDoItem.status) === 'shipped') ||
         (temIrmaoAvancado && CARD_ATIVO.includes(String(cardDoItem.status))));
+
+    /**
+     * A loja do card continua na disputa quando a peça está FISICAMENTE com
+     * ela (11/09 — LP-001312): card separado, ou postado por engano e aberto
+     * pela chave. As outras peças do card estão na arara dela, e tirar a loja
+     * da disputa mandava OUTRA loja separar o que ela já tem na mão. Card
+     * ainda aberto com irmão avançado (26/08) segue a regra antiga. (Card
+     * `delivered` nunca chega aqui — ver `cirurgico`.)
+     */
+    const manterLojaDeOrigem =
+      cirurgico &&
+      (CARD_SEPARADO.includes(String(cardDoItem!.status)) ||
+        CARD_ENVIADO.includes(String(cardDoItem!.status)));
+
+    /**
+     * PEDIDO FECHADO QUE VOLTA PRO TRILHO. Com a chave usada num pedido
+     * `shipped`/`delivered`/`cancelled`, reabrir o STATUS não é opcional: o
+     * `confirmRoute` recusa gerar separação pra pedido concluído (trava dos 22
+     * relançados de 24/08), e sem card a peça nova não aparece pra ninguém
+     * separar. Reabre aqui, dentro da mesma transação da troca, e a história
+     * do pedido registra que foi de propósito.
+     *
+     * Sem chave também, quando o pedido está `shipped` e NENHUMA outra caixa
+     * está na rua (11/09 — LP-001312). É o caminho que a trava da NF-e
+     * recomenda: "⇄ Status" tira o card do `shipped`, a nota é cancelada e a
+     * troca nem trava — mas o PEDIDO continua `shipped`, e o `confirmRoute`
+     * recusaria a separação nova DEPOIS de o card velho ser apagado (peça sem
+     * card). Pedido dividido com outra caixa de verdade na rua fica como está:
+     * ali o `shipped` é verdade. E pedido sem card nenhum também: sem card da
+     * peça não há prova de que o `shipped` é que está velho.
+     */
+    const outraCaixaNaRua = ((order.pickOrders || []) as any[]).some(
+      (c: any) => c.id !== cardDoItem?.id && CARD_ENVIADO.includes(String(c.status)),
+    );
+    const reabrirPedido =
+      (destravou && ['shipped', 'delivered', 'cancelled'].includes(String(order.status))) ||
+      (!!cardDoItem && String(order.status) === 'shipped' && !outraCaixaNaRua);
 
     const novo = await this.resolverPeca(input.codigo);
     if (novo.sku === item.sku) throw new BadRequestException('É a mesma peça — nada pra trocar.');
@@ -195,6 +297,31 @@ export class TrocaPecaService {
     // o que ela já tinha pago mais a diferença acertada agora. Assim a nota
     // fiscal e o acerto entre lojas contam a mesma história do dinheiro.
     const novoUnit = Math.round((precoAntigo + diff / qty) * 100) / 100;
+
+    /**
+     * 🔴 O ESTORNO VEM ANTES DE REESCREVER O SKU (11/09/2026 — LP-001312).
+     *
+     * O `OrderItem` é reescrito in-place logo abaixo, e os estornos do card
+     * leem o SKU DELE: o `revertPickOrderStock` de card finalizado (o
+     * `debitApprovedAt` nasce no finish) devolve "o esperado" pelos itens
+     * atribuídos, e o `swapSinglePickOrder` de card postado devolve pelos
+     * mesmos itens. Rodando DEPOIS da transação — como rodava desde 26/08 —
+     * os dois devolviam a peça NOVA pra loja de origem: peça fantasma na
+     * Consulta e no site (uma SMILE 52 que Piracicaba nunca teve) e a peça
+     * velha, que está na arara, sumida do estoque.
+     *
+     * Aqui o item ainda é o velho, então quem volta pro estoque é a peça que
+     * de fato saiu. O `swapSinglePickOrder`, mais abaixo, encontra os bipes já
+     * estornados e o carimbo da baixa limpo — e não devolve nada de novo.
+     */
+    if (cirurgico) {
+      await this.routing.estornarCardDaTroca(cardDoItem!.id, {
+        desfazerEnvio: destravou,
+        motivo: input.motivoDestrave ?? null,
+        userId: userId ?? null,
+        nome: ator?.nome ?? null,
+      });
+    }
 
     const swap = await this.prisma.$transaction(async (tx) => {
       await tx.orderItem.update({
@@ -248,12 +375,28 @@ export class TrocaPecaService {
         data: { totalAmount: Math.round((somaPecas + frete - desconto) * 100) / 100 },
       });
 
+      if (reabrirPedido) {
+        await tx.order.update({ where: { id: order.id }, data: { status: 'separating' } });
+        await tx.orderHistory.create({
+          data: {
+            orderId: order.id,
+            fromStatus: order.status,
+            toStatus: 'separating',
+            note:
+              `Pedido REABERTO pela matriz pra trocar a peça (estava "${order.status}")` +
+              (ator?.nome ? ` · por ${ator.nome}` : '') +
+              `. Sem reabrir, o card novo não nasce e a peça fica invisível pra separação.`,
+          },
+        });
+      }
+
       await tx.orderHistory.create({
         data: {
           orderId: order.id,
           fromStatus: order.status,
-          toStatus: order.status,
+          toStatus: reabrirPedido ? 'separating' : order.status,
           note:
+            (destravou ? notaDoDestrave(trava!.motivo, input.motivoDestrave!, ator?.nome) + ' · ' : '') +
             `Peça trocada pela retaguarda: ${item.sku} (${item.productName ?? '—'}) → ` +
             `${novo.sku} (${novo.nome}). ` +
             (tipo === 'cobranca'
@@ -267,6 +410,42 @@ export class TrocaPecaService {
 
       return criado;
     });
+
+    /**
+     * O DESTRAVE TAMBÉM VIRA LINHA DE AUDITORIA. A história do pedido é o que
+     * a operação lê; o `integration_log` é o que a matriz consegue VARRER
+     * depois ("quantas travas a gente abriu esse mês, e por quê").
+     */
+    if (destravou) {
+      await this.prisma.integrationLog
+        .create({
+          data: {
+            source: 'troca-peca',
+            direction: 'internal',
+            event: 'troca.destravada',
+            payload: JSON.stringify({
+              wcOrderNumber: order.wcOrderNumber ?? null,
+              orderId: order.id,
+              orderItemId: item.id,
+              trava: trava!.motivo,
+              consequencia: trava!.consequencia,
+              motivo: input.motivoDestrave,
+              porUserId: userId ?? null,
+              porNome: ator?.nome ?? null,
+              oldSku: item.sku,
+              newSku: novo.sku,
+              pedidoReaberto: reabrirPedido,
+              statusAnterior: order.status,
+            }),
+            status: 200,
+          },
+        })
+        .catch(() => null);
+      this.logger.warn(
+        `[troca-peca] ${order.wcOrderNumber}: TRAVA DESTRAVADA pela matriz (${ator?.nome ?? userId ?? '—'}) — ` +
+          `"${trava!.motivo}" · motivo: ${input.motivoDestrave}`,
+      );
+    }
 
     // ── O acerto do dinheiro (fora da transação: fala com gateway) ──
     let cobranca: any = null;
@@ -325,23 +504,58 @@ export class TrocaPecaService {
          * VAZIO na fila da loja (alarme falso na fila que a casa promete não
          * dar).
          *
-         * O `swapSinglePickOrder` cancela SÓ o card desta peça, estorna o que
-         * ele tivesse bipado e roteia só os itens dele. Ele sempre tira a loja
-         * de origem da disputa: dela a matriz acabou de trocar a peça (em
-         * geral porque ela não tinha), então quase sempre é o que se quer.
+         * O `swapSinglePickOrder` cancela SÓ o card desta peça e roteia só os
+         * itens dele — o estorno já saiu ANTES da reescrita do SKU
+         * (`estornarCardDaTroca`). Tirar a loja de origem da disputa era o
+         * padrão de 26/08 ("dela a matriz acabou de trocar a peça, em geral
+         * porque ela não tinha"); desde 11/09 ela FICA quando a peça está
+         * fisicamente com ela — ver `manterLojaDeOrigem`.
          */
-        reroteado = await this.routing.swapSinglePickOrder(cardDoItem!.id);
+        reroteado = await this.routing.swapSinglePickOrder(cardDoItem!.id, {
+          manterLojaDeOrigem,
+          // Só o nome: o `userId` do token não passou pela conferência da FK,
+          // e a história do swap roda numa transação que um id inválido
+          // derrubaria inteira.
+          ator: { userId: null, nome: ator?.nome ?? null },
+        });
       } else {
         const tinhaCards = await this.prisma.pickOrder.count({
           where: { orderId: order.id, status: { in: ['new', 'separating'] } },
         });
-        if (tinhaCards > 0) reroteado = await this.routing.recalculateForWc(order.id);
+        /**
+         * Com a chave usada, TENTA mesmo sem card ativo (10/09). O caso é a
+         * peça sem `assignedStoreId` num pedido de várias lojas: ninguém
+         * responde por ela, o caminho cirúrgico não serve, e sem esta
+         * tentativa ela ficaria trocada e sem card — invisível em toda tela.
+         */
+        if (tinhaCards > 0 || destravou) reroteado = await this.routing.recalculateForWc(order.id);
       }
     } catch (e: any) {
       reroteado = { ok: false, motivo: String(e?.message || e).slice(0, 300) };
       this.logger.log(
         `[troca-peca] ${order.wcOrderNumber}: cards cancelados e separação NÃO recriada — ${reroteado.motivo}`,
       );
+    }
+
+    /**
+     * A PEÇA FICOU COM LOJA? (10/09). Re-roteamento que não aconteceu era
+     * silêncio: a troca dava certo, o card não nascia e a peça nova sumia de
+     * todas as filas. Com `cobranca` a recusa é ESPERADA (a separação fica
+     * travada até a cliente pagar, e a tela já diz isso) — fora daí, quem
+     * trocou precisa saber que falta um passo.
+     */
+    let avisoDaSeparacao: string | null = null;
+    if (tipo !== 'cobranca') {
+      if (reroteado && reroteado.ok === false) {
+        avisoDaSeparacao =
+          `A peça trocou, mas a separação NÃO foi refeita: ` +
+          `${reroteado.message ?? reroteado.motivo ?? 'motivo não informado'} ` +
+          `Use "Recalcular separação" ou escolha a loja na mão — sem card, a peça nova não aparece pra ninguém separar.`;
+      } else if (destravou && !reroteado) {
+        avisoDaSeparacao =
+          'A peça trocou e nenhum card foi refeito. Confira no pedido se a peça nova ficou com loja — ' +
+          'sem card ela não aparece pra separar.';
+      }
     }
 
     this.logger.log(
@@ -359,6 +573,11 @@ export class TrocaPecaService {
       cobranca,
       vale,
       reroteado,
+      /** A tela precisa dizer o que ela mesma acabou de abrir. */
+      destravado: destravou ? trava!.motivo : null,
+      pedidoReaberto: reabrirPedido,
+      /** Falta alguém separar a peça nova? — silêncio aqui vira peça sumida. */
+      avisoDaSeparacao,
     };
   }
 
@@ -543,18 +762,6 @@ export class TrocaPecaService {
       throw new BadRequestException('Frete não é peça — não dá pra trocar essa linha.');
     }
     return { order, item };
-  }
-
-  /**
-   * Por que ESTA PEÇA não pode ser trocada agora. Null = pode.
-   *
-   * A régua está em `common/troca-bloqueio.ts` (com teste); aqui ficam só as
-   * consultas — e todas são POR PEÇA. Até 26/08 elas eram por PEDIDO, e num
-   * pedido dividido a loja que já tinha postado a peça DELA travava a troca
-   * da peça que ninguém tinha separado ainda (LP-000239).
-   */
-  private async motivoDeBloqueio(order: any, item: any): Promise<string | null> {
-    return motivoDeBloqueioDaTroca(await this.contextoDaTroca(order, item));
   }
 
   /**

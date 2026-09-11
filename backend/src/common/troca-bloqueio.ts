@@ -92,22 +92,79 @@ export type TrocaCtx = {
 };
 
 /**
- * Por que ESTA peça não pode ser trocada agora. Null = pode.
- * A ordem é a da operação: o que já saiu fisicamente pesa mais.
+ * A trava E o preço de abrir ela. `motivo` é o "não" que a tela sempre
+ * mostrou; `consequencia` é o que a matriz precisa ler ANTES de usar a chave.
  */
-export function motivoDeBloqueioDaTroca(ctx: TrocaCtx): string | null {
+export type BloqueioDaTroca = {
+  /** Por que não pode — texto pronto pra tela. */
+  motivo: string;
+  /** O que acontece de fato se a matriz destravar assim mesmo. */
+  consequencia: string;
+};
+
+/**
+ * O bloqueio, com o que acontece SE A MATRIZ DESTRAVAR (10/09/2026).
+ *
+ * Cada trava daqui tem incidente com nome, e todas continuam valendo. O que
+ * mudou é que nenhuma delas é mais o fim da linha: a matriz tem a chave
+ * (`common/destrave-matriz.ts`) e, pra usar de olhos abertos, precisa ler o
+ * PREÇO do destrave. Por isso a régua devolve as duas coisas juntas — quem
+ * mostra só o "não" empurra a operação pro WhatsApp, e quem mostra só o
+ * botão faz a matriz descobrir a consequência depois.
+ *
+ * Null = pode trocar sem chave nenhuma.
+ */
+export function bloqueioDaTroca(ctx: TrocaCtx): BloqueioDaTroca | null {
   if (PEDIDO_FECHADO.includes(String(ctx.orderStatus))) {
-    return 'Pedido já entregue ou cancelado — a troca agora é pelo portal de trocas/devolução.';
+    const entregue = String(ctx.orderStatus) === 'delivered';
+    return {
+      motivo: 'Pedido já entregue ou cancelado — a troca agora é pelo portal de trocas/devolução.',
+      consequencia: entregue
+        ? 'A peça está COM A CLIENTE. Trocar aqui muda o item de um pedido fechado: a nota e o dinheiro você acerta por fora.'
+        : 'O pedido está CANCELADO. Trocar aqui mexe no item de um pedido morto — se ele vai voltar a viver, reabra o status antes.',
+    };
   }
 
   const card = ctx.card;
   const status = String(card?.status ?? '');
   if (card && CARD_ENVIADO.includes(status)) {
-    return `${nomeDaLoja(card)} já postou esta peça — a troca agora é pelo portal de trocas/devolução.`;
+    const loja = nomeDaLoja(card);
+    if (status === 'delivered') {
+      return {
+        motivo: `${loja} já postou esta peça — a troca agora é pelo portal de trocas/devolução.`,
+        consequencia:
+          'A peça está COM A CLIENTE (card entregue). Forçar troca o item e manda separar a peça nova, ' +
+          'mas a velha NÃO volta pro estoque agora — ela entra quando chegar pela devolução.',
+      };
+    }
+    /**
+     * Nota autorizada no card postado (LP-001312, 11/09): o "Cancelar nota"
+     * da ficha do pedido só aparece em card NÃO postado, e o destrave apaga o
+     * card. A ordem que não deixa nota órfã é a da frase: nota primeiro.
+     */
+    const nota = ctx.notaAutorizada
+      ? ` ⚠️ A NF-e nº ${ctx.notaAutorizada.numero} está autorizada com a peça VELHA: cancele ela ANTES — ` +
+        `"⇄ Status" no card (volta pra "separated") faz aparecer o "Cancelar nota" (prazo da SEFAZ: 24h da ` +
+        `autorização). Sem a nota, a troca nem precisa de chave. Depois do destrave, só pelo Relatório fiscal.`
+      : '';
+    return {
+      motivo: `${loja} já postou esta peça — a troca agora é pelo portal de trocas/devolução.`,
+      consequencia:
+        `Forçar tira o card da ${loja} do "enviado", DEVOLVE as peças dele ao estoque dessa loja e refaz a ` +
+        `separação — a ${loja} continua na disputa pelas peças que tem, e a etiqueta desse card não serve ` +
+        `pro pacote novo. Se o pacote saiu mesmo, o estoque vai sobrar: confirme com a loja que a peça ` +
+        `ainda está aí antes de destravar.` +
+        nota,
+    };
   }
 
   if ((ctx.bipesEnviados ?? 0) > 0) {
-    return 'Esta peça já saiu (bipe de envio ativo, sem estorno) — a troca agora é pelo portal de trocas/devolução.';
+    return {
+      motivo: 'Esta peça já saiu (bipe de envio ativo, sem estorno) — a troca agora é pelo portal de trocas/devolução.',
+      consequencia:
+        'O bipe diz que a peça saiu do estoque num card que já foi postado (ou apagado). Forçar troca o ' +
+        'item mesmo assim — o acerto do estoque dessa peça fica na sua mão.',
+    };
   }
 
   // Caixa de juntada fechada = peça lacrada a caminho da loja âncora. O card
@@ -115,14 +172,34 @@ export function motivoDeBloqueioDaTroca(ctx: TrocaCtx): string | null {
   // liberação do `separated` mandaria trocar uma peça que está na estrada.
   const caixa = String(ctx.caixaDaJuntada?.status ?? '');
   if (caixa && caixa !== 'open' && caixa !== 'cancelled') {
-    return `${nomeDaLoja(card)} já despachou esta peça na caixa da juntada — espere a caixa chegar na loja âncora e trate lá.`;
+    return {
+      motivo: `${nomeDaLoja(card)} já despachou esta peça na caixa da juntada — espere a caixa chegar na loja âncora e trate lá.`,
+      consequencia:
+        'A peça está LACRADA numa caixa a caminho da loja âncora. Forçar troca o item, mas ninguém abre ' +
+        'caixa na estrada: a peça velha vai chegar na âncora sem pedido, e alguém tem que dar entrada nela.',
+    };
   }
 
   if (ctx.notaAutorizada) {
-    return `Já existe NF-e autorizada (nº ${ctx.notaAutorizada.numero}) para esta peça — trocar agora deixaria a nota errada.`;
+    return {
+      motivo: `Já existe NF-e autorizada (nº ${ctx.notaAutorizada.numero}) para esta peça — trocar agora deixaria a nota errada.`,
+      consequencia:
+        `A NF-e nº ${ctx.notaAutorizada.numero} continua valendo com a peça VELHA, e forçar não mexe nela. ` +
+        `O caminho sem chave é cancelar ANTES pelo "Cancelar nota" do card (prazo da SEFAZ: 24h da autorização). ` +
+        `Forçando, o card some com o botão e a nota só se cancela pelo Relatório fiscal — sem cancelar, o que ` +
+        `viaja não bate com o que foi declarado.`,
+    };
   }
 
   return null;
+}
+
+/**
+ * Por que ESTA peça não pode ser trocada agora. Null = pode.
+ * A ordem é a da operação: o que já saiu fisicamente pesa mais.
+ */
+export function motivoDeBloqueioDaTroca(ctx: TrocaCtx): string | null {
+  return bloqueioDaTroca(ctx)?.motivo ?? null;
 }
 
 /**

@@ -267,6 +267,32 @@ export default function PedidoDetailPage() {
    */
   const [cancelReason, setCancelReason] = useState('');
 
+  /**
+   * A CHAVE DA MATRIZ (10/09/2026 — LP-001312, ordem do dono: "preciso que a
+   * qualquer tempo possamos mudar o status, o produto... etc").
+   *
+   * O backend continua recusando status que devolveria pedido postado pra
+   * fila das lojas — a trava é boa e tem incidente com nome (LP-000210). O
+   * que mudou é que a recusa vem com saída: quando ela diz `forcavel`, a tela
+   * guarda o texto do "não" aqui e pede o porquê. Com o motivo escrito, o
+   * mesmo botão salva com a chave, e o histórico do pedido registra quem
+   * abriu e o que a trava dizia.
+   */
+  const [travaStatus, setTravaStatus] = useState<string | null>(null);
+  const [motivoDestrave, setMotivoDestrave] = useState('');
+
+  /**
+   * A MESMA CHAVE, NO CARD DA LOJA (10/09). `shipped` é ponto final no trilho
+   * — nem a loja voltava, nem a matriz. Quando o rastreio foi carimbado com a
+   * peça ainda na arara, é aqui que se desfaz: muda SÓ o status do card, sem
+   * tocar em etiqueta, nota, estoque ou aviso pra cliente (a resposta lista o
+   * que continua como estava).
+   */
+  const [statusCard, setStatusCard] = useState<{ id: string; loja: string; de: string } | null>(null);
+  const [statusCardNovo, setStatusCardNovo] = useState('separating');
+  const [statusCardMotivo, setStatusCardMotivo] = useState('');
+  const [statusCardBusy, setStatusCardBusy] = useState(false);
+
   // Separação
   const [separation, setSeparation] = useState<SeparationPreview | null>(null);
   const [sepLoading, setSepLoading] = useState(false);
@@ -1056,13 +1082,24 @@ export default function PedidoDetailPage() {
     }
   }, [trackingCarrier, trackingNumber]); // eslint-disable-line
 
-  async function save() {
+  /**
+   * @param forcar A CHAVE DA MATRIZ (10/09 — LP-001312). O backend recusa
+   *   status que devolveria pedido postado pro fluxo; recusando, ele diz se
+   *   ESTE usuário pode destravar (`forcavel`). Aí a tela pede o porquê e
+   *   manda de novo com a chave — em vez de deixar a matriz sem saída depois
+   *   de já ter combinado a troca com a cliente.
+   */
+  async function save(forcar?: boolean) {
     if (!order) return;
     setSaving(true);
     setError(null);
     setFlash(null);
     try {
       const body: any = {};
+      if (forcar) {
+        body.forcar = true;
+        body.motivoDestrave = motivoDestrave.trim();
+      }
 
       if (status !== order.status) body.status = status;
 
@@ -1092,10 +1129,20 @@ export default function PedidoDetailPage() {
         requestedStatus?: string;
         statusApplied?: boolean;
         warning?: string;
+        /** A trava tem chave, e ESTE usuário tem a chave. */
+        forcavel?: boolean;
       }>(`/orders/wc/${wcId}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
       });
+
+      // Recusa COM saída: mostra a chave em vez de só o "não".
+      if (resp.warning && resp.forcavel && !forcar) {
+        setTravaStatus(resp.warning);
+        setSaving(false);
+        return;
+      }
+      if (!resp.warning) setTravaStatus(null);
 
       if (resp.warning) {
         // O backend já explica o que houve (motivo obrigatório, pedido já
@@ -1116,6 +1163,10 @@ export default function PedidoDetailPage() {
       }
       setNote('');
       setCancelReason('');
+      if (forcar) {
+        setTravaStatus(null);
+        setMotivoDestrave('');
+      }
       await load();
       setTimeout(() => setFlash(null), 3500);
     } catch (e: any) {
@@ -1588,6 +1639,38 @@ export default function PedidoDetailPage() {
       setJuntarErro(e?.body?.message || e?.message || 'Falha ao juntar o pedido.');
     } finally {
       setJuntarBusy(null);
+    }
+  }
+
+  /**
+   * Aplica o status escolhido no card, com a chave da matriz. Best-effort de
+   * tela: o backend é quem confere papel e motivo — aqui a gente só evita o
+   * clique inútil.
+   */
+  async function forcarStatusDoCard() {
+    if (!statusCard) return;
+    setStatusCardBusy(true);
+    setSepError(null);
+    try {
+      const r = await api<{ status: string; de?: string; jaEstava?: boolean; avisos?: string[] }>(
+        `/pick-orders/${statusCard.id}/status-matriz`,
+        { method: 'PATCH', body: JSON.stringify({ status: statusCardNovo, motivo: statusCardMotivo.trim() }) },
+      );
+      setFlash(
+        `✓ Card da ${statusCard.loja}: ${statusCard.de} → ${r.status}.` +
+          (r.avisos?.length ? ` ${r.avisos.join(' ')}` : ''),
+      );
+      setTimeout(() => setFlash(null), 12000);
+      setStatusCard(null);
+      setStatusCardMotivo('');
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+      loadRaiox();
+    } catch (e: any) {
+      setSepError(e?.body?.message || e?.message || 'Não deu pra mudar o status do card.');
+    } finally {
+      setStatusCardBusy(false);
     }
   }
 
@@ -3777,6 +3860,25 @@ export default function PedidoDetailPage() {
                       ↔ Trocar loja
                     </button>
                   )}
+                  {/* A CHAVE DA MATRIZ NO CARD (10/09 — LP-001312). Aparece
+                      sempre, inclusive no card `shipped`: é justamente o card
+                      postado por engano que ninguém conseguia destravar. */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStatusCard(
+                        statusCard?.id === r.id
+                          ? null
+                          : { id: r.id, loja: r.storeName || r.storeCode || 'loja', de: r.status },
+                      );
+                      setStatusCardNovo(r.status === 'shipped' ? 'separating' : 'separated');
+                      setStatusCardMotivo('');
+                    }}
+                    className="rounded-field border border-line bg-surface px-2 py-1 text-[11.5px] font-semibold text-ink hover:bg-surface-2"
+                    title="Mudar o status deste card na mão (matriz). Não mexe em etiqueta, nota nem estoque."
+                  >
+                    ⇄ Status
+                  </button>
                   {r.storeCode && !['shipped', 'delivered'].includes(r.status) && (
                     <button
                       type="button"
@@ -3797,6 +3899,54 @@ export default function PedidoDetailPage() {
                   )}
                 </div>
                 {st === 'error' && err && <div className="mt-1 text-[11.5px] text-crit">{err}</div>}
+
+                {statusCard?.id === r.id && (
+                  <div className="mt-2 rounded-card border-2 border-crit/40 bg-crit-soft p-2">
+                    <div className="text-[11.5px] font-bold text-crit">
+                      Mudar o status deste card na mão — de "{r.status}" pra:
+                    </div>
+                    <select
+                      value={statusCardNovo}
+                      onChange={(e) => setStatusCardNovo(e.target.value)}
+                      className="mt-1.5 w-full rounded-field border border-line bg-surface px-2 py-1.5 text-[12px]"
+                    >
+                      <option value="new">new — aguardando a loja iniciar</option>
+                      <option value="separating">separating — separando agora</option>
+                      <option value="separated">separated — separado (bipe completo)</option>
+                      <option value="ready">ready — pronto pra envio</option>
+                      <option value="shipped">shipped — enviado</option>
+                    </select>
+                    <input
+                      value={statusCardMotivo}
+                      onChange={(e) => setStatusCardMotivo(e.target.value)}
+                      placeholder="Por quê? Ex: rastreio carimbado por engano, peça ainda na loja"
+                      className="mt-1.5 w-full rounded-field border border-line bg-surface px-2 py-1.5 text-[12px]"
+                    />
+                    <div className="mt-1 text-[11px] leading-snug text-ink-soft">
+                      Não compra etiqueta, não emite nota, não mexe no estoque e não avisa a cliente.
+                      O bipe continua valendo e o status do PEDIDO não muda junto.
+                    </div>
+                    <div className="mt-1.5 flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={forcarStatusDoCard}
+                        disabled={statusCardBusy || statusCardMotivo.trim().length < 5}
+                        title={statusCardMotivo.trim().length < 5 ? 'Escreva o motivo' : undefined}
+                        className="rounded-field bg-crit px-2.5 py-1 text-[11.5px] font-bold text-white hover:opacity-90 disabled:opacity-50"
+                      >
+                        {statusCardBusy ? 'Aplicando…' : 'Aplicar'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setStatusCard(null); setStatusCardMotivo(''); }}
+                        disabled={statusCardBusy}
+                        className="rounded-field border border-line bg-surface px-2.5 py-1 text-[11.5px] font-semibold text-ink-soft hover:bg-surface-2 disabled:opacity-50"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           };
@@ -4738,6 +4888,49 @@ export default function PedidoDetailPage() {
           </div>
         </div>
 
+        {/* TRAVA COM CHAVE (10/09). O "não" do backend vira decisão: ele diz
+            o que impede, a matriz escreve o porquê e salva assim mesmo. */}
+        {travaStatus && (
+          <div className="mt-6 rounded-lg border-2 border-red-300 bg-red-50 p-3">
+            <div className="flex items-start gap-2 text-sm text-red-900">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div>
+                <b>Travado:</b> {travaStatus}
+              </div>
+            </div>
+            <div className="mt-2 text-[13px] font-semibold text-red-900">
+              A matriz pode aplicar assim mesmo — escreva por quê (fica no histórico do pedido):
+            </div>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+              <input
+                value={motivoDestrave}
+                onChange={(e) => setMotivoDestrave(e.target.value)}
+                placeholder="Ex: rastreio carimbado por engano, peça ainda na loja"
+                className="flex-1 rounded-lg border-2 border-red-300 bg-white px-3 py-2 text-sm outline-none focus:border-red-500"
+              />
+              <button
+                onClick={() => save(true)}
+                disabled={saving || motivoDestrave.trim().length < 5}
+                title={
+                  motivoDestrave.trim().length < 5
+                    ? 'Escreva o motivo do destrave'
+                    : undefined
+                }
+                className="rounded-lg bg-red-700 px-4 py-2 text-sm font-bold text-white hover:bg-red-800 disabled:opacity-50"
+              >
+                {saving ? 'Aplicando…' : 'Destravar e aplicar'}
+              </button>
+              <button
+                onClick={() => { setTravaStatus(null); setMotivoDestrave(''); }}
+                disabled={saving}
+                className="rounded-lg border-2 border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Deixa pra lá
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 mt-6 pt-4 border-t">
           <button
             onClick={() => {
@@ -4754,7 +4947,7 @@ export default function PedidoDetailPage() {
             Descartar alterações
           </button>
           <button
-            onClick={save}
+            onClick={() => save()}
             disabled={!hasChanges || saving || faltaMotivoCancelamento}
             title={faltaMotivoCancelamento ? 'Escreva o motivo do cancelamento' : undefined}
             className="px-5 py-2 bg-brand text-white rounded hover:bg-brand-dark text-sm disabled:opacity-50 flex items-center gap-2"
