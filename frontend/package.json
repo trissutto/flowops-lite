@@ -12,6 +12,7 @@
     "test:produto-estoque": "node scripts/check-produto-estoque.mjs",
     "test:tokens": "node --test tests/tokens-no-cn.test.mjs",
     "test:grade-consulta": "node --test tests/grade-consulta-celula-soma.test.mjs",
+    "test:ficha-cor": "node --test tests/ficha-cor-espelho.test.mjs",
     "rotas": "node scripts/gerar-rotas.mjs"
   },
   "dependencies": {

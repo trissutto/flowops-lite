@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Image as ImageIcon, Loader2, Package, Save, Search, Truck } from 'lucide-react';
 import { api } from '@/lib/api';
+import { assinaturaDaCor, espelharCor, statusNoSelect } from '@/lib/ficha-cor-espelho';
 import { SelectAtributoPeca, type Atributo, type AtributosPorTipo, type TipoAtributo } from '@/components/SelectAtributoPeca';
 import FotosDaCor, { type FotoCor, type SwatchCor } from '@/components/FotosDaCor';
 import {
@@ -578,9 +579,7 @@ export function FichaDaCor({
 }) {
   const [titulo, setTitulo] = useState(fichaCor?.tituloComercial ?? '');
   const [youtube, setYoutube] = useState(fichaCor?.youtubeUrl ?? '');
-  const [status, setStatus] = useState(
-    fichaCor?.statusPublicacao === 'sem_fotos' ? 'nao_publicar' : (fichaCor?.statusPublicacao ?? 'nao_publicar'),
-  );
+  const [status, setStatus] = useState(statusNoSelect(fichaCor?.statusPublicacao));
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   // A galeria vive aqui porque duas coisas dependem dela: o status
@@ -597,6 +596,44 @@ export function FichaDaCor({
   const [statusSalvo, setStatusSalvo] = useState<'salvando' | 'ok' | null>(null);
   const semFotos = fotos.length === 0;
 
+  /**
+   * A FICHA CHEGA DEPOIS DA TELA — e `useState(fichaCor?…)` lê só o PRIMEIRO render.
+   *
+   * Em `/retaguarda/produto-estoque/produtos` a cor abre e SÓ ENTÃO dispara o
+   * GET da ficha (`carregarFicha` no mesmo clique): quando a resposta chega,
+   * este painel já montou com `undefined`. A galeria se conserta sozinha (tem
+   * efeito próprio, pela lista de ids das fotos) e o resto ficava parado no
+   * vazio — era a tela do dia 11/09: "Fotos desta cor (1/6)" com a foto na
+   * frente, "Nenhuma foto" escrito ao lado e o select de PUBLICAÇÃO travado
+   * (`disabled={semFotos}`), sem caminho nenhum pra pôr a peça no ar. Fechar e
+   * reabrir a cor resolvia — o que escondia a causa e fazia parecer sorte.
+   *
+   * Pior que o travamento: "Salvar título e vídeo" nesse estado mandava título
+   * e vídeo NULOS, porque o vazio da tela era o que ia no PATCH. O vazio de
+   * quem não carregou não pode virar verdade no banco.
+   *
+   * Regra do espelho: sincroniza quando a ficha DESTA COR muda de verdade
+   * (chegou, ou outra aba/importação mexeu), nunca a cada re-render — e não
+   * pisa no que a pessoa está fazendo AGORA: texto digitado, publicação em voo
+   * e bolinha escolhida ganham do eco de um PATCH que ainda estava no ar.
+   */
+  const tocouTexto = useRef(false);
+  const tocouSwatch = useRef(false);
+  const assinaturaFicha = assinaturaDaCor(fichaCor);
+  useEffect(() => {
+    const espelho = espelharCor(fichaCor, {
+      tocouTexto: tocouTexto.current,
+      tocouSwatch: tocouSwatch.current,
+      publicacaoEmVoo: statusSalvo === 'salvando',
+    });
+    if (espelho.fotos) setFotos(espelho.fotos);
+    if (espelho.status !== undefined) setStatus(espelho.status);
+    if (espelho.titulo !== undefined) setTitulo(espelho.titulo);
+    if (espelho.youtube !== undefined) setYoutube(espelho.youtube);
+    if (espelho.swatch) setSwatch(espelho.swatch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assinaturaFicha]);
+
   const urlCor = `/produto-ficha/${encodeURIComponent(ref_)}/cor/${encodeURIComponent(cor)}?marca=${encodeURIComponent(marca)}`;
 
   /** Resposta de qualquer PATCH/GET → estado local + pai, numa passada só. */
@@ -604,7 +641,9 @@ export function FichaDaCor({
     const c = f.cores?.find((x) => x.cor === cor);
     if (c) {
       // 'sem_fotos' é calculado e não existe no select — cai no "Fora do site".
-      setStatus(c.statusPublicacao === 'sem_fotos' ? 'nao_publicar' : c.statusPublicacao);
+      setStatus(statusNoSelect(c.statusPublicacao));
+      // A resposta traz a galeria: é ela que solta o select de publicação.
+      setFotos(c.fotos ?? []);
     }
     onSalvo(f);
   }, [cor, onSalvo]);
@@ -694,6 +733,12 @@ export function FichaDaCor({
     } catch { /* informativo — a próxima interação sincroniza */ }
   }
 
+  /**
+   * Este botão é o que o rótulo dele diz: TÍTULO E VÍDEO (mais a bolinha, que
+   * pode ter save pendente no debounce). A publicação saiu daqui de propósito —
+   * ela já grava sozinha no `mudarStatus`, e mandá-la de novo só criava um
+   * caminho pra um estado velho de tela tirar do ar uma peça publicada.
+   */
   async function salvar() {
     setSalvando(true);
     setErro(null);
@@ -703,7 +748,6 @@ export function FichaDaCor({
         body: JSON.stringify({
           tituloComercial: titulo || null,
           youtubeUrl: youtube || null,
-          statusPublicacao: status,
           ...swatch,
         }),
       });
@@ -724,12 +768,12 @@ export function FichaDaCor({
           <label className="text-[10px] font-bold text-slate-600 uppercase">
             Título no site <span className="text-slate-400">(vazio = nome curto + cor)</span>
           </label>
-          <input value={titulo} onChange={(e) => setTitulo(e.target.value)}
+          <input value={titulo} onChange={(e) => { tocouTexto.current = true; setTitulo(e.target.value); }}
             className="w-full px-2 py-2 border rounded text-sm" />
         </div>
         <div>
           <label className="text-[10px] font-bold text-slate-600 uppercase">Vídeo (YouTube)</label>
-          <input value={youtube} onChange={(e) => setYoutube(e.target.value)} placeholder="https://youtu.be/..."
+          <input value={youtube} onChange={(e) => { tocouTexto.current = true; setYoutube(e.target.value); }} placeholder="https://youtu.be/..."
             className="w-full px-2 py-2 border rounded text-sm font-mono" />
         </div>
       </div>
@@ -776,8 +820,9 @@ export function FichaDaCor({
         refSku={ref_}
         cor={cor}
         fotosIniciais={fichaCor?.fotos ?? []}
+        fichaCarregada={!!fichaCor}
         swatch={swatch}
-        onSwatchChange={(s) => { setSwatch(s); agendarSwatch(s); }}
+        onSwatchChange={(s) => { tocouSwatch.current = true; setSwatch(s); agendarSwatch(s); }}
         onFotosChange={(novas) => { setFotos(novas); void sincronizarFicha(); }}
         swatchSave={swatchSave}
       />

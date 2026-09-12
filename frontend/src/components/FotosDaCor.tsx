@@ -44,6 +44,14 @@ type Props = {
   onFotosChange?: (fotos: FotoCor[]) => void;
   /** O pai grava a bolinha sozinho; isto é só o "salvando… / salva" na tela. */
   swatchSave?: 'salvando' | 'ok' | null;
+  /**
+   * A ficha DESTA COR já chegou? `false` segura a bolinha automática.
+   *
+   * Sem isso a IA lê a foto enquanto o `swatch` do pai ainda está vazio por
+   * falta de resposta do servidor — e pinta por cima de uma bolinha que já
+   * existia no banco (11/09). Ausente = comportamento de sempre.
+   */
+  fichaCarregada?: boolean;
 };
 
 /** Ferramenta ativa sobre a foto. `null` = só olhando. */
@@ -120,7 +128,7 @@ export function Bolinha({
 }
 
 export default function FotosDaCor({
-  refSku, cor, fotosIniciais, swatch, onSwatchChange, onFotosChange, swatchSave,
+  refSku, cor, fotosIniciais, swatch, onSwatchChange, onFotosChange, swatchSave, fichaCarregada,
 }: Props) {
   const [fotos, setFotos] = useState<FotoCor[]>(fotosIniciais);
   const [ocupado, setOcupado] = useState(false);
@@ -158,17 +166,23 @@ export default function FotosDaCor({
    * antigo abriam com a bolinha em branco pra sempre. Agora: abriu a cor, tem
    * foto e não tem bolinha → tenta a IA uma vez, em silêncio. O resultado
    * passa pelo onSwatchChange e cai no auto-save normal.
+   *
+   * "NÃO TEM BOLINHA" SÓ VALE DEPOIS QUE A FICHA CHEGOU (11/09): enquanto a
+   * resposta do servidor não veio, o `swatch` do pai está vazio por ignorância,
+   * não por escolha — e pintar aí é passar por cima da bolinha que já estava
+   * gravada. Com a ficha na mão, a peça que já tem cor nem chama a IA.
    */
   const autoPintou = useRef<string | null>(null);
   useEffect(() => {
     const chave = `${refSku}|${cor}`;
     if (autoPintou.current === chave) return;
+    if (fichaCarregada === false) return;
     const temBolinha = !!swatch.corHex || swatch.swatchTipo === 'foto';
     if (!capa || temBolinha || lendoIa) return;
     autoPintou.current = chave;
     void detectarCor(capa, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [capa, refSku, cor]);
+  }, [capa, refSku, cor, fichaCarregada]);
 
   const aplicar = useCallback((novas: FotoCor[]) => {
     setFotos(novas);
