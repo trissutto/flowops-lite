@@ -221,3 +221,84 @@ describe('descontosFolha — o que a folha tem que fazer no mês', () => {
     });
   });
 });
+
+/**
+ * O ANEXO NÃO TRANCA MAIS O LANÇAMENTO (ordem do dono, 11/09/2026).
+ *
+ * O teste existe porque a regra antiga era invisível pelo lado certo: sem
+ * arquivo o `criar` devolvia 400 e, na operação, o efeito não era "atestado
+ * sempre digitalizado" — era o dia ficar contado como FALTA até o papel chegar
+ * na matriz. O que não pode voltar em silêncio junto com a trava é a
+ * PENDÊNCIA: evento sem papel tem que continuar aparecendo como devendo.
+ */
+describe('atestado sem o papel — lança agora, cobra depois', () => {
+  function servicoQueGrava() {
+    const criados: any[] = [];
+    const prisma: any = {
+      sellerEvento: {
+        create: jest.fn(async ({ data }: any) => {
+          criados.push(data);
+          return { id: 'ev1', ...data };
+        }),
+        findMany: jest.fn(async () => []),
+      },
+      seller: {
+        findUnique: jest.fn(async () => ({
+          id: 's1', name: 'Maria', responsibleStoreId: 'loja13',
+        })),
+      },
+    };
+    const svc = new RhEventosService(prisma, { upload: jest.fn() } as any);
+    return { svc, criados };
+  }
+
+  const autor = { id: 'u1', nome: 'Supervisão' };
+
+  it('atestado de 15 dias entra SEM documento, num lançamento só', async () => {
+    const { svc, criados } = servicoQueGrava();
+    await expect(
+      svc.criar(
+        {
+          sellerId: 's1',
+          tipo: 'ATESTADO_MEDICO',
+          dataInicio: '2026-09-01',
+          dataFim: '2026-09-15',
+        },
+        autor,
+      ),
+    ).resolves.toBeTruthy();
+    expect(criados[0].documentoId).toBeNull();
+    expect(criados[0].dataInicio).toEqual(new Date('2026-09-01T00:00:00.000Z'));
+    expect(criados[0].dataFim).toEqual(new Date('2026-09-15T00:00:00.000Z'));
+  });
+
+  it('a pendência do papel aparece na listagem', async () => {
+    const prisma: any = {
+      sellerEvento: {
+        findMany: jest.fn(async () => [
+          { id: 'a', tipo: 'ATESTADO_MEDICO', documentoId: null },
+          { id: 'b', tipo: 'ATESTADO_MEDICO', documentoId: 'doc9' },
+          // Falta não pede papel nenhum: não pode entrar na fila de cobrança.
+          { id: 'c', tipo: 'FALTA_INJUSTIFICADA', documentoId: null },
+        ]),
+      },
+    };
+    const svc = new RhEventosService(prisma, { upload: jest.fn() } as any);
+    const linhas = await svc.listar({});
+    expect(linhas.map((l: any) => [l.id, l.documentoPendente])).toEqual([
+      ['a', true],
+      ['b', false],
+      ['c', false],
+    ]);
+  });
+
+  it('o teto do art. 473 continua de pé — a trava que caiu foi só a do papel', async () => {
+    const { svc } = servicoQueGrava();
+    await expect(
+      svc.criar(
+        { sellerId: 's1', tipo: 'GALA', dataInicio: '2026-09-01', dataFim: '2026-09-10' },
+        autor,
+      ),
+    ).rejects.toThrow(/máximo 3 dia/i);
+  });
+});

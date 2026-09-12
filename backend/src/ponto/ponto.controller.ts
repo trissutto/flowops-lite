@@ -35,6 +35,10 @@ import { PontoService } from './ponto.service';
  * Correcao manual (admin):
  *   POST /ponto/justificar/:registroId  { justificativa }
  *   POST /ponto/manual                  { sellerId, storeId, tipo, timestamp, justificativa }
+ *
+ * Jornada cadastrada (admin):
+ *   GET  /ponto/jornada/conferir?dia=SAB&storeId=&semanas=8
+ *   POST /ponto/jornada/dia             { storeId, dia, inicio, fim } | { folga: true }
  */
 @UseGuards(JwtAuthGuard)
 @Controller('ponto')
@@ -330,5 +334,56 @@ export class PontoController {
     @Body() body: { ativo?: boolean; lat?: number | null; lng?: number | null; raioM?: number },
   ) {
     return this.svc.setGeofence(storeId, body);
+  }
+
+  // ── JORNADA CADASTRADA (conferência e correção em lote — matriz) ──
+  /**
+   * GET /ponto/jornada/conferir?dia=SAB&storeId=&semanas=8
+   *
+   * O que o cadastro cobra naquele dia da semana × o que ela realmente bate.
+   * Read-only. É a resposta pro "o sábado está descontando 4h e não é": o
+   * espelho nunca inventa hora, ele só aplica `Seller.horarioTrabalho` — o
+   * erro mora no cadastro, e até aqui não havia tela que o mostrasse.
+   */
+  @Get('jornada/conferir')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  conferirJornada(
+    @Query('storeId') storeId?: string,
+    @Query('dia') dia?: string,
+    @Query('semanas') semanas?: string,
+  ) {
+    return this.svc.conferirJornada({
+      storeId: storeId || undefined,
+      dia,
+      semanas: Number(semanas) || undefined,
+    });
+  }
+
+  /**
+   * POST /ponto/jornada/dia — grava o mesmo dia da semana na loja inteira.
+   *   { storeId, dia: 'SAB', inicio: '09:00', fim: '13:00' }  ou  { folga: true }
+   *
+   * Em lote porque o horário é da LOJA: corrigir o sábado de 30 fichas uma a
+   * uma é tarefa que fica pela metade, e meia loja fechando o mês certo é pior
+   * que a loja inteira errada.
+   */
+  @Post('jornada/dia')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  aplicarJornadaDia(
+    @Body()
+    body: {
+      storeId: string;
+      dia: string;
+      folga?: boolean;
+      inicio?: string;
+      fim?: string;
+      almocoInicio?: string | null;
+      almocoFim?: string | null;
+      sellerIds?: string[];
+    },
+  ) {
+    return this.svc.aplicarDiaDaSemana(body);
   }
 }

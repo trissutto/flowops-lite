@@ -83,7 +83,10 @@ type TipoEvento = {
   codigo: string;
   label: string;
   grupo: string;
-  exigeDocumento: boolean;
+  /** Pede o anexo e cobra depois — não trava. Ausente na API velha. */
+  pedeDocumento?: boolean;
+  /** Chave velha da mesma coisa, mantida pela janela Vercel × Railway. */
+  exigeDocumento?: boolean;
   admiteParcial: boolean;
   abonaJornada: boolean;
   // Opcionais porque a API velha não manda durante a janela de deploy —
@@ -786,6 +789,9 @@ export default function EspelhoPontoPage() {
 
       {ajusteDia && espelho && (
         <ModalAjustarDia
+          // Remonta ao trocar de dia: os campos nascem de `useState(inicial)` e
+          // sem a key o "até" do dia anterior sobreviveria na caixa nova.
+          key={ajusteDia.data}
           dia={ajusteDia}
           seller={espelho.seller}
           tipos={tiposEvento}
@@ -847,6 +853,12 @@ function ModalAjustarDia({
   );
   const [justificativa, setJustificativa] = useState('');
   const [marcarTipo, setMarcarTipo] = useState('');
+  // ATÉ QUANDO o evento vale (ordem do dono, 11/09/2026). Nasce no próprio dia,
+  // então marcar UM dia continua sendo dois cliques. O que isto resolve é o
+  // atestado de 15 dias: era abrir 15 vezes esta caixa, escrever ATESTADO 15
+  // vezes e subir 15 vezes a MESMA foto — a tabela `seller_eventos` já guardava
+  // intervalo desde o começo, só a caixa é que mandava sempre dia = dia.
+  const [marcarAte, setMarcarAte] = useState(dia.data);
   const [anexo, setAnexo] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -863,13 +875,28 @@ function ModalAjustarDia({
   // sim a caixa passar a anexar. É o que o campo abaixo faz.
   const tiposRapidos = tipos;
   const tipoMarcado = tipos.find((t) => t.codigo === marcarTipo) ?? null;
-  const precisaAnexo = !!tipoMarcado?.exigeDocumento;
+  // `?? exigeDocumento`: o Vercel publica em segundos e o Railway leva minutos —
+  // sem o fallback o campo de anexo sumiria nesse intervalo.
+  const pedeAnexo = !!(tipoMarcado?.pedeDocumento ?? tipoMarcado?.exigeDocumento);
+  // Quantos dias o lançamento vai cobrir. Inclusivo nas duas pontas.
+  const diasMarcados = Math.max(
+    1,
+    Math.round(
+      (new Date(`${marcarAte}T00:00:00`).getTime() -
+        new Date(`${dia.data}T00:00:00`).getTime()) / 86_400_000,
+    ) + 1,
+  );
+  const periodoInvertido = marcarAte < dia.data;
 
   const iso = (hhmm: string) => new Date(`${dia.data}T${hhmm}:00-03:00`).toISOString();
 
   const salvar = async () => {
     if (justificativa.trim().length < 3) {
       setErro('Escreva o motivo do ajuste (mínimo 3 letras).');
+      return;
+    }
+    if (marcarTipo && periodoInvertido) {
+      setErro('O "até" do evento é anterior ao dia. Corrija a data final.');
       return;
     }
     setBusy(true);
@@ -923,7 +950,10 @@ function ModalAjustarDia({
             sellerId: seller.id,
             tipo: marcarTipo,
             dataInicio: dia.data,
-            dataFim: dia.data,
+            // Um lançamento cobre o período inteiro: o espelho expande o
+            // intervalo dia a dia (`mapaDoMes`), então 15 dias de atestado são
+            // UMA linha e não 15.
+            dataFim: marcarAte || dia.data,
             diaInteiro: true,
             observacoes: motivo,
             documentoId,
@@ -1109,12 +1139,61 @@ function ModalAjustarDia({
               </p>
             )}
 
-            {/* ANEXO — o atestado só aparece nesta lista porque a caixa passou
-                a anexar. Sem isto o backend recusaria e o clique voltaria 400. */}
-            {precisaAnexo && (
-              <div className={`mt-2 border rounded-lg p-3 ${anexo ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'}`}>
+            {/* PERÍODO — atestado de 15 dias é UM lançamento, não 15. */}
+            {tipoMarcado && (
+              <div className="mt-2 border rounded-lg p-3 bg-slate-50">
+                <div className="flex items-end gap-3 flex-wrap">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">De</label>
+                    <div className="px-3 py-2 border rounded-lg text-sm bg-white font-mono">
+                      {fmtData(dia.data)}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Até</label>
+                    <input
+                      type="date"
+                      value={marcarAte}
+                      min={dia.data}
+                      onChange={(e) => setMarcarAte(e.target.value || dia.data)}
+                      className={`px-3 py-2 border rounded-lg text-sm ${
+                        periodoInvertido ? 'border-rose-400 bg-rose-50' : ''
+                      }`}
+                    />
+                  </div>
+                  <div className="text-xs text-slate-600 pb-2">
+                    {periodoInvertido ? (
+                      <span className="text-rose-700 font-bold">
+                        A data final é anterior ao dia.
+                      </span>
+                    ) : diasMarcados > 1 ? (
+                      <>
+                        marca <b>{diasMarcados} dias</b> de uma vez — um
+                        lançamento só, sem repetir dia a dia
+                      </>
+                    ) : (
+                      <>só este dia — mude o &quot;até&quot; pra cobrir o período inteiro</>
+                    )}
+                  </div>
+                </div>
+                {diasMarcados > 1 && (
+                  <p className="text-[11px] text-slate-500 mt-2">
+                    Vale inclusive nos dias fora deste mês — o espelho de cada mês
+                    mostra a parte que cai nele.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ANEXO — OPCIONAL desde 11/09 (ordem do dono). Era obrigatório, e
+                o efeito prático não era atestado digitalizado: era o dia
+                continuar contado como FALTA até o papel chegar na matriz. Sem
+                arquivo o evento vale igual e entra na fila "sem documento" da
+                tela de eventos. */}
+            {pedeAnexo && (
+              <div className={`mt-2 border rounded-lg p-3 ${anexo ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
                 <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
-                  Documento (obrigatório)
+                  Documento <span className="text-slate-400 normal-case">(opcional)</span>
                 </label>
                 <input
                   type="file"
@@ -1123,8 +1202,15 @@ function ModalAjustarDia({
                   className="w-full text-sm"
                 />
                 <p className="text-[11px] text-slate-600 mt-1">
-                  Foto ou PDF, até 10MB. Vai pro prontuário da funcionária.
+                  Foto ou PDF, até 10MB. Vai pro prontuário da funcionária —
+                  {diasMarcados > 1 ? ' uma vez só pro período inteiro.' : ' uma vez só.'}
                 </p>
+                {!anexo && (
+                  <p className="text-[11px] text-amber-800 mt-1 font-semibold">
+                    Sem o arquivo o evento vale do mesmo jeito e fica marcado
+                    como <b>sem documento</b> em Eventos de RH.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -1159,9 +1245,9 @@ function ModalAjustarDia({
           </button>
           <button
             onClick={() => void salvar()}
-            // Botão morto enquanto falta o anexo obrigatório — melhor apagado
-            // do que um clique que volta 400.
-            disabled={busy || apiVelha || (precisaAnexo && !anexo) || (!mudou && !marcarTipo)}
+            // O anexo saiu daqui em 11/09: o que trava é só o que impediria o
+            // registro de existir (API velha, nada mudado, período invertido).
+            disabled={busy || apiVelha || periodoInvertido || (!mudou && !marcarTipo)}
             className="px-4 py-2 rounded-lg bg-brand text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {busy && <Loader2 className="w-4 h-4 animate-spin" />}

@@ -4,6 +4,7 @@ import {
   EVENTOS_RH,
   EventoDoDia,
   descontoFolha,
+  documentoPendente,
   tipoEvento,
   tipoEventoValido,
 } from '../common/eventos-rh';
@@ -76,7 +77,12 @@ export class RhEventosService {
       codigo: t.codigo,
       label: t.label,
       grupo: t.grupo,
-      exigeDocumento: t.exigeDocumento,
+      pedeDocumento: t.pedeDocumento,
+      // Chave VELHA, mesmo valor, de propósito: o Vercel publica a tela em
+      // segundos e o Railway leva minutos. Nesse intervalo o front ANTIGO
+      // conversa com esta API — sem `exigeDocumento` ele deixaria de oferecer
+      // o campo de anexo justo no tipo mais usado do RH. Sai na próxima faxina.
+      exigeDocumento: t.pedeDocumento,
       admiteParcial: t.admiteParcial,
       abonaJornada: t.abonaJornada,
       // A tela mostra o efeito ANTES de a supervisão confirmar — e efeito que
@@ -159,11 +165,11 @@ export class RhEventosService {
       throw new BadRequestException('A hora de fim precisa ser maior que a de início');
     }
 
-    if (tipo.exigeDocumento && !input.documentoId) {
-      throw new BadRequestException(
-        `${tipo.label} exige o documento anexado no prontuário.`,
-      );
-    }
+    // O DOCUMENTO NÃO TRANCA MAIS (ordem do dono, 11/09/2026). O que era 400
+    // aqui virou pendência visível — `documentoPendente` na listagem. A trava
+    // não produzia atestado digitalizado: produzia dia contado como FALTA até
+    // o papel chegar na matriz, e 15 uploads da mesma foto num atestado de
+    // 15 dias. Ver `pedeDocumento` em `common/eventos-rh.ts`.
 
     return this.tabela.create({
       data: {
@@ -254,12 +260,21 @@ export class RhEventosService {
     de?: string;
     ate?: string;
     incluirCancelados?: boolean;
+    /** Só o que está devendo o papel — a fila de cobrança do anexo. */
+    semDocumento?: boolean;
   }) {
     const where: any = {};
     if (filtro.sellerId) where.sellerId = filtro.sellerId;
     if (filtro.storeId) where.storeId = filtro.storeId;
     if (filtro.tipo) where.tipo = String(filtro.tipo).toUpperCase();
     if (!filtro.incluirCancelados) where.canceladoAt = null;
+    if (filtro.semDocumento) {
+      // Só os tipos que PEDEM documento — sem isto a fila viria cheia de falta
+      // e folga, que não têm papel nenhum pra cobrar, e ninguém olharia mais.
+      where.documentoId = null;
+      where.tipo = { in: EVENTOS_RH.filter((t) => t.pedeDocumento).map((t) => t.codigo) };
+      if (filtro.tipo) where.tipo = String(filtro.tipo).toUpperCase();
+    }
 
     // Sobreposição de intervalo: o evento TOCA a janela pedida.
     if (filtro.de) where.dataFim = { gte: this.paraData(filtro.de, 'De') };
@@ -286,6 +301,9 @@ export class RhEventosService {
         descontaSalario: !!t?.descontaSalario,
         descontaDSR: !!t?.descontaDSR,
         contaArt130: !!t?.contaArt130,
+        // Falta o papel. Sai da régua e não de `!documentoId` na tela: tipo que
+        // nem pede documento (falta, folga, feriado) não pode aparecer devendo.
+        documentoPendente: documentoPendente(e.tipo, e.documentoId),
       };
     });
   }

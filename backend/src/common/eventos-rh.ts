@@ -32,6 +32,8 @@
  *     Quando cair o legado, esta régua já é a fonte.
  *  4. eSocial: o código da Tabela 18 (evento S-2230) fica GRAVADO desde já,
  *     custo zero. Exportação de verdade fica pra depois.
+ *  5. (11/09/2026) O DOCUMENTO NÃO TRANCA MAIS O LANÇAMENTO. Ver
+ *     `pedeDocumento`: o anexo virou pendência cobrada, não porta fechada.
  *
  * ── CORREÇÃO DO DONO (29/08/2026): FOLGA COMPENSATÓRIA DEBITA ──
  *
@@ -125,8 +127,22 @@ export interface TipoEventoRh {
    */
   contaArt130: boolean;
 
-  /** A tela obriga anexar o documento (atestado, certidão). */
-  exigeDocumento: boolean;
+  /**
+   * A tela PEDE o documento (atestado, certidão) e cobra depois — **não trava
+   * o lançamento**.
+   *
+   * ORDEM DO DONO (11/09/2026). Antes disto o anexo era barreira: sem o arquivo
+   * o backend devolvia 400 e o botão nascia apagado. O efeito real não era
+   * "atestado sempre digitalizado" — era o dia continuar contado como FALTA
+   * até o papel chegar na matriz, semanas depois. Um atestado de 15 dias
+   * obrigava 15 uploads da MESMA foto.
+   *
+   * Agora o evento nasce na hora e o documento fica como PENDÊNCIA visível
+   * (`documentoPendente`), que é a mesma escolha do resto da casa: pendência
+   * que aparece na tela vale mais que porta trancada. O papel continua sendo
+   * cobrado — só parou de segurar a justificativa da funcionária como refém.
+   */
+  pedeDocumento: boolean;
 
   /** Aceita hora de início/fim. Quando false, o evento é sempre dia inteiro. */
   admiteParcial: boolean;
@@ -153,7 +169,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: true,
     descontaDSR: true,
     contaArt130: true,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     nota: 'Desconta o dia E o DSR da semana. Conta pro art. 130.',
@@ -171,7 +187,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: true,       // ordem do dono: abate SÓ as horas do atestado
     esocial: null,             // até 15 dias não vira S-2230
     nota: 'Até 15 dias, pago pela empresa. Passou disso, use AFASTAMENTO_INSS.',
@@ -187,7 +203,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: false,
     esocial: '03',
     nota: 'Doença não ocupacional acima de 15 dias. Acima de 6 meses zera o aquisitivo (art. 133 IV).',
@@ -203,7 +219,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: false,
     esocial: '01',
   },
@@ -220,7 +236,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     limiteDias: 2,
@@ -237,7 +253,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     limiteDias: 3,
@@ -254,7 +270,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: false,
     esocial: null,
     limiteDias: 1,
@@ -271,7 +287,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     limiteDias: 2,
@@ -288,7 +304,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: true,
     esocial: null,
     nota: 'Art. 473 VII — nos dias de prova, com comprovante.',
@@ -304,7 +320,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: true,
     esocial: null,
     limiteDias: 1,
@@ -321,7 +337,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: true,
     esocial: null,
     nota: 'Art. 473 X — até 6 consultas/exames no período.',
@@ -339,7 +355,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: '15',
     nota: 'Convive com Seller.dataInicioFerias/Fim até o dono mandar aposentar o legado.',
@@ -363,7 +379,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     nota: 'O dia não era de trabalho. Use pra corrigir FALTA que na verdade era folga.',
@@ -383,7 +399,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: true,
     esocial: null,
     nota: 'CONSOME o banco: o dia entra negativo e o saldo do mês cai. Não é falta.',
@@ -404,7 +420,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     nota: 'O calendário fechou a loja — abona as horas do dia. Não é falta nem folga.',
@@ -425,7 +441,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     nota: 'Benefício concedido pela empresa — abona a jornada inteira SEM consumir o banco de horas.',
@@ -441,7 +457,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: true,
+    pedeDocumento: true,
     admiteParcial: false,
     esocial: '17',
   },
@@ -456,7 +472,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     limiteDias: 5,
@@ -475,7 +491,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: true,
     esocial: null,
     nota: 'Lançar com hora de início e fim — abate só a janela perdida.',
@@ -491,7 +507,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: true,
     esocial: null,
   },
@@ -508,7 +524,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     nota: 'NÃO é ausência — ela trabalhou. Fica no prontuário como registro.',
@@ -524,7 +540,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: true,     // mas também não recebe por elas
     descontaDSR: true,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: false,
     esocial: null,
     limiteDias: 30,
@@ -543,7 +559,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: true,
     esocial: null,
     nota: 'Sem isto, dia de treinamento aparecia como FALTA na tela da loja.',
@@ -559,7 +575,7 @@ export const EVENTOS_RH: TipoEventoRh[] = [
     descontaSalario: false,
     descontaDSR: false,
     contaArt130: false,
-    exigeDocumento: false,
+    pedeDocumento: false,
     admiteParcial: true,
     esocial: null,
     nota: 'Live, inventário, mutirão, feira — trabalhou fora da loja dela.',
@@ -578,6 +594,24 @@ export function tipoEvento(codigo: unknown): TipoEventoRh | null {
 
 export function rotuloEvento(codigo: unknown): string | null {
   return POR_CODIGO.get(String(codigo))?.label ?? null;
+}
+
+/**
+ * FALTA O PAPEL DESTE EVENTO?
+ *
+ * Substitui a trava que existia no lançamento (ordem do dono, 11/09/2026). O
+ * evento vale desde já — o que não pode é a pendência sumir: sem esta resposta
+ * o atestado sem foto viraria um dia abonado que ninguém mais cobra, e a única
+ * prova numa reclamação trabalhista é justamente o papel.
+ *
+ * Uma função, e não `!e.documentoId` espalhado pelas telas: tipo que nem pede
+ * documento (falta, folga, feriado) nunca pode aparecer como pendente.
+ */
+export function documentoPendente(
+  codigo: unknown,
+  documentoId?: string | null,
+): boolean {
+  return !!POR_CODIGO.get(String(codigo))?.pedeDocumento && !documentoId;
 }
 
 // ── JANELA DO DIA ────────────────────────────────────────────────

@@ -1367,7 +1367,317 @@ export class PontoService {
       lojas,
     };
   }
+
+  // ── CONFERÊNCIA DA JORNADA CADASTRADA ────────────────────────────
+
+  /**
+   * O CADASTRO DIZ UMA COISA E A LOJA FAZ OUTRA — quanto isso custa por semana.
+   *
+   * Nasceu do sábado (dono, 11/09/2026): "o sábado do interior está descontando
+   * 4h e não é". Não era o ponto errando. `minPrevisto` sai INTEIRO de
+   * `Seller.horarioTrabalho`, e o cadastro dizia sábado de 8h em loja que fecha
+   * 13:00 — o padrão que a própria ficha oferecia era 09:00–18:00 de SEG a SÁB,
+   * 48h, acima do teto legal. Cada sábado nascia com 4h de dívida.
+   *
+   * Erro de cadastro é MUDO: não dá erro, não dá alerta, só faz o saldo do mês
+   * cair. Por isso a conferência mostra os dois lados lado a lado — o previsto
+   * do papel e a MEDIANA do que ela realmente bate naquele dia da semana.
+   *
+   * Read-only de propósito. Corrigir é outro passo, com a hora digitada por
+   * quem sabe o horário da loja.
+   */
+  async conferirJornada(params: {
+    storeId?: string;
+    /** Dia da semana conferido. Sábado é o caso que motivou, não o único. */
+    dia?: string;
+    semanas?: number;
+  }) {
+    const DIAS_KEY = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'];
+    const diaAlvo = DIAS_KEY.includes(String(params.dia || '').toUpperCase())
+      ? String(params.dia).toUpperCase()
+      : 'SAB';
+    const semanas = Math.min(26, Math.max(2, Number(params.semanas) || 8));
+
+    const sellers = await (this.prisma as any).seller.findMany({
+      where: {
+        active: true,
+        ...(params.storeId ? { responsibleStoreId: params.storeId } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        horarioTrabalho: true,
+        responsibleStoreId: true,
+        responsibleStore: { select: { code: true, name: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+    if (sellers.length === 0) {
+      return { dia: diaAlvo, semanas, itens: [], totais: null };
+    }
+
+    const desde = new Date(Date.now() - semanas * 7 * 86_400_000);
+    const regs = await (this.prisma as any).pontoRegistro.findMany({
+      where: {
+        sellerId: { in: sellers.map((s: any) => s.id) },
+        timestamp: { gte: desde },
+      },
+      select: { sellerId: true, tipo: true, timestamp: true },
+      orderBy: { timestamp: 'asc' },
+    });
+
+    // Batidas do dia-alvo, agrupadas por funcionária e por data BR.
+    const porSeller: Record<string, Record<string, Record<string, Date>>> = {};
+    for (const r of regs) {
+      const chave = dateKeyBrasil(r.timestamp);
+      const [a, m, d] = chave.split('-').map(Number);
+      if (DIAS_KEY[new Date(Date.UTC(a, m - 1, d)).getUTCDay()] !== diaAlvo) continue;
+      ((porSeller[r.sellerId] ||= {})[chave] ||= {})[r.tipo] = r.timestamp;
+    }
+
+    const mediana = (v: number[]): number | null => {
+      if (v.length === 0) return null;
+      const o = [...v].sort((x, y) => x - y);
+      const meio = Math.floor(o.length / 2);
+      return o.length % 2 ? o[meio] : Math.round((o[meio - 1] + o[meio]) / 2);
+    };
+    const toMin = (v: unknown) => {
+      const [h, m] = String(v ?? '0:0').split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+
+    const itens = sellers.map((s: any) => {
+      let turnos: any[] = [];
+      try {
+        turnos = s.horarioTrabalho ? JSON.parse(s.horarioTrabalho) : [];
+      } catch {
+        turnos = [];
+      }
+      const turno = Array.isArray(turnos)
+        ? (turnos.find((t: any) => t.dia === diaAlvo) ?? null)
+        : null;
+
+      let minPrevisto = 0;
+      if (turno && !turno.folga) {
+        minPrevisto = Math.max(0, toMin(turno.fim) - toMin(turno.inicio));
+        const almoco = toMin(turno.almocoFim) - toMin(turno.almocoInicio);
+        if (turno.almocoInicio && turno.almocoFim && almoco > 0) minPrevisto -= almoco;
+        minPrevisto = Math.max(0, minPrevisto);
+      }
+
+      const dias = porSeller[s.id] ?? {};
+      const trabalhados: number[] = [];
+      const saidas: number[] = [];
+      for (const chave of Object.keys(dias)) {
+        const b = dias[chave];
+        if (!b.entrada || !b.saida) continue;
+        let min = (new Date(b.saida).getTime() - new Date(b.entrada).getTime()) / 60000;
+        if (b.saida_almoco && b.volta_almoco) {
+          min -= (new Date(b.volta_almoco).getTime() - new Date(b.saida_almoco).getTime()) / 60000;
+        }
+        trabalhados.push(Math.max(0, Math.round(min)));
+        saidas.push(
+          toMin(
+            new Date(b.saida).toLocaleTimeString('pt-BR', {
+              hour: '2-digit',
+              minute: '2-digit',
+              timeZone: 'America/Sao_Paulo',
+            }),
+          ),
+        );
+      }
+
+      const minReal = mediana(trabalhados);
+      const saidaTipica = mediana(saidas);
+      // Diferença por OCORRÊNCIA do dia: é o que o espelho tira do saldo toda
+      // semana enquanto o cadastro não for corrigido. Só existe quando há
+      // batida pra comparar — sem batida, dizer "está descontando" seria chute.
+      const difMin = minReal === null ? null : minReal - minPrevisto;
+
+      return {
+        sellerId: s.id,
+        nome: s.name,
+        storeId: s.responsibleStoreId,
+        lojaCodigo: s.responsibleStore?.code ?? null,
+        lojaNome: s.responsibleStore?.name ?? null,
+        cadastrado: turno
+          ? turno.folga
+            ? { folga: true }
+            : {
+                folga: false,
+                inicio: turno.inicio ?? null,
+                fim: turno.fim ?? null,
+                almocoInicio: turno.almocoInicio ?? null,
+                almocoFim: turno.almocoFim ?? null,
+              }
+          : null,
+        minPrevisto,
+        /** Quantos desses dias tiveram par entrada+saída no período olhado. */
+        diasComBatida: trabalhados.length,
+        minRealMediana: minReal,
+        saidaTipica:
+          saidaTipica === null
+            ? null
+            : `${String(Math.floor(saidaTipica / 60)).padStart(2, '0')}:${String(saidaTipica % 60).padStart(2, '0')}`,
+        difMin,
+        // O nome do problema, pra tela não ter que reinterpretar o número.
+        veredito:
+          turno === null
+            ? 'sem_cadastro'
+            : minReal === null
+              ? 'sem_batida'
+              : (difMin as number) <= -60
+                ? 'cadastro_maior' // o papel cobra mais horas do que a loja abre
+                : (difMin as number) >= 60
+                  ? 'cadastro_menor' // ela trabalha mais do que o papel prevê
+                  : 'ok',
+      };
+    });
+
+    return {
+      dia: diaAlvo,
+      semanas,
+      itens,
+      // Resumo pro topo da tela: quanto some do saldo por semana só neste dia.
+      totais: {
+        funcionarias: itens.length,
+        cadastroMaior: itens.filter((i: any) => i.veredito === 'cadastro_maior').length,
+        cadastroMenor: itens.filter((i: any) => i.veredito === 'cadastro_menor').length,
+        semCadastro: itens.filter((i: any) => i.veredito === 'sem_cadastro').length,
+        minDescontadosPorSemana: itens
+          .filter((i: any) => i.veredito === 'cadastro_maior')
+          .reduce((acc: number, i: any) => acc + Math.abs(i.difMin || 0), 0),
+      },
+    };
+  }
+
+  /**
+   * CORRIGE UM DIA DA SEMANA PRA LOJA INTEIRA, de uma vez.
+   *
+   * Existe pelo mesmo motivo do período do atestado: consertar o sábado de 30
+   * funcionárias abrindo 30 fichas é o tipo de tarefa que ninguém termina — e
+   * meio-consertada é pior que errada, porque metade da loja fecha o mês certo
+   * e a outra metade não.
+   *
+   * Mexe SÓ no dia pedido. Os outros dias, o almoço e a folga de cada uma ficam
+   * como estavam: o HORÁRIO é da loja, mas a ESCALA é de cada funcionária.
+   */
+  async aplicarDiaDaSemana(input: {
+    storeId: string;
+    dia: string;
+    folga?: boolean;
+    inicio?: string;
+    fim?: string;
+    almocoInicio?: string | null;
+    almocoFim?: string | null;
+    sellerIds?: string[];
+  }) {
+    const DIAS_KEY = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'];
+    const dia = String(input?.dia || '').toUpperCase();
+    if (!DIAS_KEY.includes(dia)) {
+      throw new BadRequestException('Dia da semana inválido (use SEG, TER… SAB, DOM)');
+    }
+    if (!input?.storeId) throw new BadRequestException('Escolha a loja');
+
+    const hora = (v: unknown, campo: string): string => {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? '').trim());
+      if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
+        throw new BadRequestException(`${campo} inválida (use HH:MM)`);
+      }
+      return `${m[1].padStart(2, '0')}:${m[2]}`;
+    };
+
+    const folga = input.folga === true;
+    const novo: any = folga
+      ? { dia, folga: true }
+      : {
+          dia,
+          inicio: hora(input.inicio, 'Entrada'),
+          fim: hora(input.fim, 'Saída'),
+          // Sem almoço = início igual ao fim, que é como a grade da ficha
+          // representa "não tem intervalo". Sábado de 4h não tem intervalo
+          // obrigatório (só acima de 6h), e um almoço fantasma de 1h aqui
+          // derrubaria o previsto de 4h pra 3h.
+          almocoInicio: input.almocoInicio ? hora(input.almocoInicio, 'Saída almoço') : null,
+          almocoFim: input.almocoFim ? hora(input.almocoFim, 'Volta almoço') : null,
+          folga: false,
+        };
+    if (!folga && novo.inicio >= novo.fim) {
+      throw new BadRequestException('A saída precisa ser depois da entrada');
+    }
+
+    const sellers = await (this.prisma as any).seller.findMany({
+      where: {
+        active: true,
+        responsibleStoreId: input.storeId,
+        ...(input.sellerIds?.length ? { id: { in: input.sellerIds } } : {}),
+      },
+      select: { id: true, name: true, horarioTrabalho: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const alterados: Array<{ sellerId: string; nome: string; de: any; para: any }> = [];
+    const puladas: Array<{ sellerId: string; nome: string; motivo: string }> = [];
+
+    for (const s of sellers) {
+      let turnos: any[] = [];
+      try {
+        turnos = s.horarioTrabalho ? JSON.parse(s.horarioTrabalho) : [];
+      } catch {
+        // Cadastro corrompido não vira cadastro novo em silêncio: pular é o
+        // erro honesto — reescrever aqui apagaria a semana inteira dela.
+        puladas.push({ sellerId: s.id, nome: s.name, motivo: 'horário ilegível' });
+        continue;
+      }
+      if (!Array.isArray(turnos) || turnos.length === 0) {
+        // Sem semana cadastrada, escrever só o sábado criaria uma funcionária
+        // que "só trabalha sábado". A ficha dela precisa ser preenchida antes.
+        puladas.push({ sellerId: s.id, nome: s.name, motivo: 'sem horário cadastrado' });
+        continue;
+      }
+
+      const antes = turnos.find((t: any) => t.dia === dia) ?? null;
+      const igual =
+        !!antes &&
+        !!antes.folga === folga &&
+        (folga ||
+          (antes.inicio === novo.inicio &&
+            antes.fim === novo.fim &&
+            (antes.almocoInicio ?? null) === novo.almocoInicio &&
+            (antes.almocoFim ?? null) === novo.almocoFim));
+      if (igual) continue;
+
+      const proximos = turnos.filter((t: any) => t.dia !== dia).concat([novo]);
+      // Ordem da SEMANA DE TRABALHO (segunda → domingo), não a do `getDay()`,
+      // que começa no domingo. A grade da ficha renderiza por chave e não se
+      // importa; quem lê este JSON cru — SQL de conferência, export, a próxima
+      // pessoa depurando — lê na ordem em que a semana acontece.
+      const ORDEM_FICHA = ['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB', 'DOM'];
+      proximos.sort(
+        (a: any, b: any) => ORDEM_FICHA.indexOf(a.dia) - ORDEM_FICHA.indexOf(b.dia),
+      );
+
+      await (this.prisma as any).seller.update({
+        where: { id: s.id },
+        data: { horarioTrabalho: JSON.stringify(proximos) },
+      });
+      alterados.push({ sellerId: s.id, nome: s.name, de: antes, para: novo });
+    }
+
+    this.logger.log(
+      `[ponto-jornada] ${dia} da loja ${input.storeId}: ${alterados.length}/${sellers.length} cadastro(s) atualizado(s)`,
+    );
+    return {
+      dia,
+      storeId: input.storeId,
+      avaliadas: sellers.length,
+      alteradas: alterados.length,
+      alterados,
+      puladas,
+    };
+  }
 }
+
 
 /**
  * Distância em METROS entre dois pontos (lat/lng) — fórmula de Haversine.

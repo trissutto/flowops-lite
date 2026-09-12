@@ -28,7 +28,10 @@ type Tipo = {
   codigo: string;
   label: string;
   grupo: string;
-  exigeDocumento: boolean;
+  /** A tela PEDE o anexo e cobra depois — não trava o lançamento. */
+  pedeDocumento?: boolean;
+  /** Chave velha da mesma coisa. Só existe pela janela Vercel × Railway. */
+  exigeDocumento?: boolean;
   admiteParcial: boolean;
   abonaJornada: boolean;
   descontaSalario: boolean;
@@ -61,6 +64,8 @@ type Evento = {
   seller?: { id: string; name: string; apelido: string | null };
   store?: { id: string; code: string; name: string } | null;
   documento?: { id: string; titulo: string; fileUrl: string } | null;
+  /** Tipo que pede papel e ainda está sem ele. Opcional: API velha não manda. */
+  documentoPendente?: boolean;
 };
 
 type Seller = { id: string; name: string; active: boolean };
@@ -131,6 +136,9 @@ export default function EventosRhPage() {
   const [ate, setAte] = useState(ymd(hoje));
   const [sellerId, setSellerId] = useState('');
   const [tipoFiltro, setTipoFiltro] = useState('');
+  // Fila de cobrança do papel: o anexo deixou de travar o lançamento, então a
+  // pendência precisa de um lugar onde alguém a veja.
+  const [soSemDoc, setSoSemDoc] = useState(false);
 
   const [tipos, setTipos] = useState<Tipo[]>([]);
   const [sellers, setSellers] = useState<Seller[]>([]);
@@ -171,6 +179,7 @@ export default function EventosRhPage() {
       const qs = new URLSearchParams({ de, ate });
       if (sellerId) qs.set('sellerId', sellerId);
       if (tipoFiltro) qs.set('tipo', tipoFiltro);
+      if (soSemDoc) qs.set('semDocumento', '1');
       setEventos(await api<Evento[]>(`/rh/eventos?${qs}`));
     } catch (e: any) {
       // Erro SOBE: tela de RH que devolve lista vazia em silêncio vira "não
@@ -180,7 +189,7 @@ export default function EventosRhPage() {
     } finally {
       setCarregando(false);
     }
-  }, [de, ate, sellerId, tipoFiltro]);
+  }, [de, ate, sellerId, tipoFiltro, soSemDoc]);
 
   useEffect(() => { void carregar(); }, [carregar]);
 
@@ -361,6 +370,16 @@ export default function EventosRhPage() {
               {tipos.map((t) => <option key={t.codigo} value={t.codigo}>{t.label}</option>)}
             </select>
           </div>
+          <label
+            className={`flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-lg border cursor-pointer ${
+              soSemDoc ? 'bg-amber-50 border-amber-300 text-amber-800' : 'hover:bg-slate-50'
+            }`}
+            title="Atestado lançado que ainda não tem o papel anexado"
+          >
+            <input type="checkbox" checked={soSemDoc}
+              onChange={(e) => setSoSemDoc(e.target.checked)} />
+            Sem documento
+          </label>
           <button onClick={() => void carregar()}
             className="p-2 border rounded-lg hover:bg-slate-50" title="Recarregar">
             <RefreshCw className={`w-4 h-4 ${carregando ? 'animate-spin' : ''}`} />
@@ -414,6 +433,14 @@ export default function EventosRhPage() {
                             className="ml-2 inline-flex items-center gap-1 text-[11px] text-sky-700 underline">
                             <FileText className="w-3 h-3" /> doc
                           </a>
+                        )}
+                        {/* O anexo não trava mais o lançamento — então a falta
+                            dele tem que APARECER, senão vira dia abonado que
+                            ninguém cobra. */}
+                        {ev.documentoPendente && !ev.canceladoAt && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                            <FileText className="w-3 h-3" /> sem documento
+                          </span>
                         )}
                         {ev.observacoes && (
                           <div className="text-[11px] text-slate-500 mt-0.5">{ev.observacoes}</div>
@@ -498,7 +525,13 @@ function FormEvento({
   const [erro, setErro] = useState<string | null>(null);
 
   const t = tipos.find((x) => x.codigo === tipo) ?? null;
-  const precisaDoc = !!t?.exigeDocumento && !documentoId;
+  // `?? exigeDocumento`: durante o deploy o Vercel já publicou esta tela e o
+  // Railway ainda responde a chave velha. Sem o fallback o campo de anexo
+  // sumiria por alguns minutos justo no atestado.
+  const pedeDoc = !!(t?.pedeDocumento ?? t?.exigeDocumento);
+  // Não é mais barreira (ordem do dono, 11/09): serve só pra pintar o quadro de
+  // amarelo e lembrar que o papel vai ser cobrado.
+  const faltaDoc = pedeDoc && !documentoId;
 
   // Tipo que não admite parcial volta pro dia inteiro sozinho — senão a tela
   // mostraria campos de hora que o backend ignora, que é porta falsa.
@@ -589,9 +622,10 @@ function FormEvento({
                   </div>
                   {t.nota && <div className="mt-1">{t.nota}</div>}
                   {t.limiteDias && <div className="mt-1">Máximo de {t.limiteDias} dia(s).</div>}
-                  {t.exigeDocumento && (
+                  {pedeDoc && (
                     <div className="mt-1 text-amber-700 font-semibold">
-                      Exige documento anexado no prontuário da funcionária.
+                      Pede o documento no prontuário — dá pra lançar agora e
+                      anexar quando o papel chegar.
                     </div>
                   )}
                 </div>
@@ -649,10 +683,10 @@ function FormEvento({
           {/* ANEXO — o tipo que exige documento não fecha sem ele. Antes deste
               campo o "Atestado médico" era impossível de lançar: o backend
               recusava e a tela não tinha por onde anexar. */}
-          {t?.exigeDocumento && (
-            <div className={`border rounded-lg p-3 ${precisaDoc ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'}`}>
+          {pedeDoc && (
+            <div className={`border rounded-lg p-3 ${faltaDoc && !arquivo ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'}`}>
               <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
-                Documento
+                Documento <span className="text-slate-400 normal-case">(opcional)</span>
               </label>
               {documentoId && !arquivo ? (
                 <div className="text-sm text-emerald-800 font-semibold flex items-center gap-2">
@@ -669,6 +703,10 @@ function FormEvento({
                   />
                   <p className="text-[11px] text-slate-600 mt-1">
                     Foto ou PDF, até 10MB. Vai pro prontuário da funcionária.
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-1 font-semibold">
+                    Sem o arquivo o evento vale do mesmo jeito — fica marcado
+                    como <b>sem documento</b> na lista até alguém anexar.
                   </p>
                 </>
               )}
@@ -695,9 +733,10 @@ function FormEvento({
           </button>
           <button
             onClick={() => void salvar()}
-            // O botão morre enquanto falta o anexo obrigatório — melhor um
-            // botão apagado do que um clique que volta 400.
-            disabled={!sellerId || !tipo || salvando || (precisaDoc && !arquivo)}
+            // Só o essencial trava: funcionária e tipo. O anexo saiu daqui em
+            // 11/09 — botão apagado por causa do papel era o que fazia o dia
+            // continuar contado como falta enquanto o atestado não chegava.
+            disabled={!sellerId || !tipo || salvando}
             className="px-4 py-2 rounded-lg bg-slate-800 text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {salvando && <Loader2 className="w-4 h-4 animate-spin" />}

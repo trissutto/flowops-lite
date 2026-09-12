@@ -12,6 +12,18 @@
  * Sem almoço: deixe Saída almoço = Volta almoço (mesmo horário) que o
  * intervalo é zerado no cálculo.
  *
+ * ── O SÁBADO NÃO É UM DIA DE SEMANA (11/09/2026) ──
+ * O padrão do comércio é 44h: 8h de segunda a sexta + 4h no sábado. É a mesma
+ * régua que o backend já usava pra apontar cadastro irregular
+ * (`LIMITE_SEMANAL_LEGAL_MIN`, ponto.service) — só que aqui a tela oferecia o
+ * contrário: "aplicar padrão" carimbava 09:00–18:00 de SEG a SÁB, ou seja 48h,
+ * e todo dia que a loja fecha ao meio-dia o espelho cobrava as 4h que sobraram
+ * no papel. O sábado descontando 4h saía DAQUI, não do ponto.
+ *
+ * Dia que não está no JSON também parou de virar jornada cheia: pro backend
+ * ele vale ZERO (`minPrevisto = 0`), então mostrá-lo como 09:00–18:00 era a
+ * tela mentindo — e bastava salvar pra mentira virar dado.
+ *
  * Estrutura JSON salva em sellers.horarioTrabalho:
  *   [
  *     { dia: 'SEG', inicio: '09:00', fim: '18:00',
@@ -31,6 +43,23 @@ const DIAS = [
   { key: 'SAB', label: 'Sábado' },
   { key: 'DOM', label: 'Domingo' },
 ];
+
+/**
+ * PADRÃO DO COMÉRCIO — 44h/semana (CLT art. 7º XIII).
+ *   SEG–SEX 09:00–18:00 com 1h de almoço = 8h × 5 = 40h
+ *   SÁB     09:00–13:00 sem intervalo    = 4h        (loja fecha ao meio-dia)
+ *   DOM     folga
+ * Sábado com o mesmo horário dos outros dias dá 48h — acima do teto legal, e é
+ * o que fazia o espelho descontar 4h todo sábado nas lojas que fecham 13:00.
+ */
+function padraoComercio(dia: string): Turno {
+  if (dia === 'DOM') return { dia, folga: true };
+  if (dia === 'SAB') {
+    // Almoço com início = fim é como esta tela diz "sem intervalo".
+    return { dia, inicio: '09:00', fim: '13:00', almocoInicio: '13:00', almocoFim: '13:00', folga: false };
+  }
+  return { dia, inicio: '09:00', fim: '18:00', almocoInicio: '12:00', almocoFim: '13:00', folga: false };
+}
 
 type Turno = {
   dia: string;
@@ -57,7 +86,16 @@ function parseValue(v: any): Turno[] {
   return [];
 }
 
+/**
+ * O que já está gravado MANDA. O que falta é preenchido conforme o caso:
+ *  · cadastro vazio (funcionária nova) → padrão do comércio, 44h;
+ *  · cadastro que existe mas não tem aquele dia → FOLGA, porque é isso que o
+ *    backend faz com ele (dia ausente = previsto ZERO). Inventar 09:00–18:00
+ *    aqui fazia o simples ato de abrir e salvar a ficha criar um sábado de 8h
+ *    — e um domingo de 8h junto.
+ */
 function normalize(turnos: Turno[]): Turno[] {
+  const vazio = turnos.length === 0;
   return DIAS.map((d) => {
     const existing = turnos.find((t) => t.dia === d.key);
     if (existing) {
@@ -67,14 +105,7 @@ function normalize(turnos: Turno[]): Turno[] {
         ...existing,
       };
     }
-    return {
-      dia: d.key,
-      inicio: '09:00',
-      fim: '18:00',
-      almocoInicio: '12:00',
-      almocoFim: '13:00',
-      folga: false,
-    };
+    return vazio ? padraoComercio(d.key) : { dia: d.key, folga: true };
   });
 }
 
@@ -147,19 +178,13 @@ export default function HorarioGrid({
   }
 
   function aplicarPadrao() {
-    const padrao = DIAS.map((d) => ({
-      dia: d.key,
-      inicio: '09:00',
-      fim: '18:00',
-      almocoInicio: '12:00',
-      almocoFim: '13:00',
-      folga: d.key === 'DOM',
-    }));
+    const padrao = DIAS.map((d) => padraoComercio(d.key));
     setTurnos(padrao);
     onChange(padrao);
   }
 
   const totalSemanaMin = turnos.reduce((acc, t) => acc + calcMinutos(t), 0);
+  const acima44h = totalSemanaMin > 44 * 60;
 
   return (
     <div>
@@ -173,7 +198,7 @@ export default function HorarioGrid({
           onClick={aplicarPadrao}
           className="text-xs text-emerald-700 font-bold hover:underline"
         >
-          Aplicar padrão (9-18, almoço 12-13, dom folga)
+          Aplicar padrão do comércio (44h: seg-sex 9-18, sáb 9-13)
         </button>
       </div>
 
@@ -275,12 +300,29 @@ export default function HorarioGrid({
         })}
       </div>
 
-      {/* Total semanal */}
-      <div className="mt-3 flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-        <span className="text-sm font-bold text-emerald-800">
-          Carga horária semanal
-        </span>
-        <span className="text-lg font-bold text-emerald-700">
+      {/* Total semanal — com o teto legal na cara, porque é o número que o
+          espelho vai cobrar dela todo mês. Acima de 44h o backend já marca o
+          cadastro como irregular; a tela avisava nada e deixava salvar. */}
+      <div
+        className={`mt-3 flex items-center justify-between border rounded-lg p-3 ${
+          acima44h
+            ? 'bg-amber-50 border-amber-300'
+            : 'bg-emerald-50 border-emerald-200'
+        }`}
+      >
+        <div>
+          <span className={`text-sm font-bold ${acima44h ? 'text-amber-900' : 'text-emerald-800'}`}>
+            Carga horária semanal
+          </span>
+          {acima44h && (
+            <p className="text-[11px] text-amber-800 mt-0.5">
+              Acima das 44h da CLT. No comércio o sábado costuma ser meio
+              período — sábado de 8h numa loja que fecha 13:00 faz o espelho
+              descontar 4h todo sábado.
+            </p>
+          )}
+        </div>
+        <span className={`text-lg font-bold ${acima44h ? 'text-amber-800' : 'text-emerald-700'}`}>
           {fmtHoras(totalSemanaMin)}
         </span>
       </div>

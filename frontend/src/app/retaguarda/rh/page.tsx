@@ -16,7 +16,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Users, Clock, DollarSign, GraduationCap, BarChart3,
   UserPlus, UserCheck, Fingerprint, ClipboardList, TrendingUp, Calendar,
-  Cake, BadgeAlert, FileText, Award, KeyRound, MapPin, CalendarDays,
+  Cake, BadgeAlert, FileText, Award, KeyRound, MapPin, CalendarDays, CalendarClock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -128,6 +128,10 @@ export default function RhHubPage() {
           <Botao href="/retaguarda/rh/banco-horas"         icon={TrendingUp}    label="Banco de horas"     sub="Saldo + hora extra" />
           <Botao href="/retaguarda/rh/face-enroll"         icon={Fingerprint}   label="Face Enroll"        sub="Reconhecimento facial" />
           <Botao href="/retaguarda/rh/ponto-geofence"      icon={MapPin}        label="Travar por local"   sub="Só bate ponto na loja" />
+          {/* O previsto do espelho sai INTEIRO daqui: horário errado no
+              cadastro desconta calado todo mês (o sábado de 8h em loja que
+              fecha 13:00). */}
+          <Botao href="/retaguarda/rh/jornada"             icon={CalendarClock} label="Jornada cadastrada" sub="Horário do papel × da loja" />
         </Grupo>
 
         <Grupo titulo="COMISSÃO" icon={DollarSign}>

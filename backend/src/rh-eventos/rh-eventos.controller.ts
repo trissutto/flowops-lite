@@ -72,6 +72,7 @@ export class RhEventosController {
     @Query('de') de?: string,
     @Query('ate') ate?: string,
     @Query('incluirCancelados') incluirCancelados?: string,
+    @Query('semDocumento') semDocumento?: string,
   ) {
     const u = this.user(req);
     // A loja não escolhe a loja: vem do JWT. Sem isso uma gerente leria o
@@ -87,6 +88,7 @@ export class RhEventosController {
       de,
       ate,
       incluirCancelados: incluirCancelados === '1',
+      semDocumento: semDocumento === '1',
     });
   }
 

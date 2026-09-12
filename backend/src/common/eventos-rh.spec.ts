@@ -355,7 +355,7 @@ describe('FOLGA de escala — o "FALTA que na verdade era folga"', () => {
     expect(t.descontaSalario).toBe(false);
     expect(t.descontaDSR).toBe(false);
     expect(t.contaArt130).toBe(false);
-    expect(t.exigeDocumento).toBe(false);
+    expect(t.pedeDocumento).toBe(false);
     expect(minutosAbatidos({ tipo: 'FOLGA', diaInteiro: true }, JORNADA)).toBe(480);
   });
 
@@ -443,7 +443,7 @@ describe('FERIADO e DAY OFF — abonam o dia inteiro', () => {
     expect(t.descontaSalario).toBe(false);
     expect(t.descontaDSR).toBe(false);
     expect(t.contaArt130).toBe(false);
-    expect(t.exigeDocumento).toBe(false);
+    expect(t.pedeDocumento).toBe(false);
     expect(minutosAbatidos({ tipo: 'FERIADO', diaInteiro: true }, JORNADA)).toBe(480);
   });
 
