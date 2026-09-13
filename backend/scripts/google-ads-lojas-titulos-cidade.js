@@ -51,6 +51,8 @@ const APLICAR = process.env.APLICAR === '1';
 
 /** Teto do Google para título de PMax. Texto maior é recusado. */
 const LIMITE_CARACTERES = 30;
+/** Teto REAL de títulos por grupo, provado pela recusa de 13/09 nos grupos com 17-18. */
+const TETO_TITULOS = 15;
 
 /**
  * Campanha → cidade, escrito à mão e conferido. Não deduzo do nome: "SÃO JOSÉ
@@ -246,11 +248,24 @@ async function main() {
     /* Só sai o que está na lista de vagos E existe neste grupo, na ordem da lista. */
     const podeSair = REMOVIVEIS.map((t) => atuais.find((x) => x.texto === t)).filter(Boolean);
 
-    /* TROCA 1 POR 1: o número de títulos do grupo não muda, então o teto não é
-     * tocado. Se faltar candidato a sair, entra menos — nunca estoura. */
-    const n = Math.min(querEntrar.length, podeSair.length);
+    /**
+     * 🚨 GRUPO ACIMA DO TETO PRECISA DESCER, e não só trocar.
+     *
+     * A troca 1 por 1 mantinha o total — e mesmo assim o Google recusou nos 3
+     * grupos que estavam com 17 e 18 títulos (Santos/Recursos Santos e as duas
+     * de São José dos Campos), com RESOURCE_COUNT_LIMIT_EXCEEDED. Ou seja: com
+     * o grupo já estourado, QUALQUER criação é barrada, mesmo compensada por
+     * uma remoção na mesma requisição. Diferente do que acontece com imagem,
+     * onde o teto é avaliado no estado final.
+     *
+     * Então aqui a conta remove o EXCESSO junto: sai (excesso + quantos entram),
+     * entra o da cidade, e o grupo aterrissa exatamente em 15. Grupo que já
+     * está em 15 ou menos continua na troca 1 por 1, sem perder título.
+     */
+    const excesso = Math.max(0, atuais.length - TETO_TITULOS);
+    const n = Math.max(0, Math.min(querEntrar.length, podeSair.length - excesso));
     const entram = querEntrar.slice(0, n);
-    const saem = podeSair.slice(0, n);
+    const saem = podeSair.slice(0, n + excesso);
 
     for (const t of entram) if (!textoExistente.has(t)) precisaCriar.add(t);
     plano.push({ gRes, campanha, grupo: g.assetGroup.name, forca: g.assetGroup.adStrength, tem: atuais.length, entram, saem });
