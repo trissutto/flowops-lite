@@ -30,11 +30,23 @@ import { chaveDeCor, variantes, type PecaFeed } from '@/lib/feed/variantes';
  * seu: id divergente falha do pior jeito possível — **sem erro em lugar
  * nenhum**, a vitrine local simplesmente não aparece e ninguém descobre.
  *
- * ── A REGRA DE OURO ──
+ * ── 🚨 A REGRA MUDOU EM 13/09/2026: ESTOQUE DA REDE, NÃO DA LOJA ──
  *
- * Só sai linha pra loja que TEM a peça. Anunciar na ficha de Piracicaba uma
- * blusa que só existe em Santos manda a cliente atravessar a cidade atrás de
- * peça que não tem — o estrago é maior que o ganho da vitrine inteira.
+ * Até aqui valia "só sai linha pra loja que TEM a peça", pelo medo de mandar a
+ * cliente atravessar a cidade atrás de peça que não está lá.
+ *
+ * O dono derrubou essa regra, e com um motivo de operação que a supera:
+ * **"LIGAR COM ESTOQUE TOTAL POIS AS LOJAS PODEM PEGAR DE OUTRA LOJA PARA
+ * ATENDER"**. A rede transfere peça entre unidades todo dia — é o mesmo
+ * mecanismo que o roteamento do site já usa. Então "esta loja te atende" é
+ * verdade mesmo quando a peça está na unidade vizinha, e esconder a peça da
+ * ficha de Piracicaba só porque ela dormiu em Santos custa a venda inteira.
+ *
+ * Consequência assumida: **toda peça que a REDE tem aparece nas 14 fichas**, e
+ * a quantidade publicada é a da rede, não a da prateleira daquela loja.
+ * A cobertura sai de 78% (10.577 linhas) para 100% (13.482).
+ *
+ * O que continua valendo: peça que a rede NÃO tem não entra em ficha nenhuma.
  */
 
 /** O catálogo muda pouco durante o dia e o Google lê 1× — 1h é de sobra. */
@@ -183,14 +195,27 @@ export async function GET() {
       const preco = p.precoPromocional && p.precoPromocional > 0 ? p.precoPromocional : p.preco;
       const porLoja = corUnica ? todasAsCores(ref) : (porRef.get(ref)?.get(chaveDeCor(v.cor)) ?? new Map());
 
-      for (const [loja, quantidade] of porLoja) {
-        if (!(quantidade > 0)) continue;
-        // Depósito, matriz, estoque do site e loja fechada não têm ficha.
-        if (!LOJAS_COM_FICHA.has(numeroDaLoja(loja))) continue;
+      /**
+       * O ESTOQUE DA REDE, somado só das lojas que têm ficha.
+       *
+       * ⚠️ Depósito, matriz e sobretudo a 13/SITE ficam DE FORA da soma. A do
+       * site não é prateleira: é o estoque separado pro e-commerce, e a regra
+       * da casa é que ela não cede peça pra loja. Contá-la aqui prometeria na
+       * ficha uma peça que a loja não consegue buscar em lugar nenhum.
+       */
+      let totalRede = 0;
+      for (const [loja, qtd] of porLoja) {
+        if (qtd > 0 && LOJAS_COM_FICHA.has(numeroDaLoja(loja))) totalRede += qtd;
+      }
+      if (!(totalRede > 0)) continue;
+
+      /* Uma linha por FICHA, não por loja com saldo — ver a regra de 13/09. */
+      for (const numero of LOJAS_COM_FICHA) {
+        const quantidade = totalRede;
 
         linhas.push(
           '<item>' +
-          `<g:store_code>${escapar(codigoDaFicha(loja))}</g:store_code>` +
+          `<g:store_code>${escapar(codigoDaFicha(numero))}</g:store_code>` +
           `<g:id>${escapar(v.id)}</g:id>` +
           `<g:quantity>${quantidade}</g:quantity>` +
           `<g:availability>in_stock</g:availability>` +
