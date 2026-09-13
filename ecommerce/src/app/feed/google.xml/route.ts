@@ -162,8 +162,16 @@ function item(p: PecaFeed, v: Variante): string {
     const proprio = p.subcategoria ? `${p.categoria} > ${p.subcategoria}` : p.categoria;
     campos.push(`<g:product_type>${escapar(proprio)}</g:product_type>`);
   }
-  // A grade inteira num campo só: o Google usa `size` pra filtrar, e mandar a
-  // lista é melhor que omitir — quem procura 54 precisa saber que existe 54.
+  /**
+   * A grade num campo só: o Google usa `size` pra filtrar, e mandar a lista é
+   * melhor que omitir — quem procura 54 precisa saber que existe 54.
+   *
+   * O que entra são os tamanhos COMPRÁVEIS; quando a peça inteira zera, entra
+   * a grade toda, porque quem diz "agora não" é o `availability` e item sem
+   * atributo volta da reposição incompleto. A régua (com o incidente de
+   * 13/09) é `common/atributos-do-feed.ts`, no backend, e vale pros dois
+   * feeds — aqui só se escreve o XML.
+   */
   if (v.tamanhos.length) campos.push(`<g:size>${escapar(v.tamanhos.join(", "))}</g:size>`);
 
   return `<item>${campos.join('')}</item>`;
