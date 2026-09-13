@@ -284,9 +284,11 @@ export class LojaOrdersController {
    *  200 { ok: false, error, code, item? } — recusa de negócio (cartão negado,
    *      valores divergentes...). É 200 de propósito: o BFF trata como resposta
    *      esperada e mostra a mensagem, não como falha de integração.
-   *      `item` só vem em `catalog_unavailable` por PREÇO: { indice, productId,
-   *      size, color, precoAtual, precoInformado } — o site corrige a linha da
-   *      sacola em vez de mandar "atualize a página". Campo novo e opcional:
+   *      `item` vem em toda `catalog_unavailable` que fala de uma peça:
+   *      { indice, productId, size, color, precoAtual, precoInformado } — o
+   *      site corrige a linha (recusa por preço) ou oferece "Tirar da sacola e
+   *      continuar" (as demais), em vez de mandar "atualize a página" ou jogar
+   *      a cliente pra fora do checkout. Campo novo e opcional:
    *      site antigo ignora. O `return r` abaixo repassa o objeto inteiro.
    */
   @Post('pedido')
