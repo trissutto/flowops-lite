@@ -28,6 +28,13 @@
  * caso — publica a grade inteira, porque a alternativa não é "menos", é NADA.
  * Peça à venda segue anunciando só o que ela entrega: quem procura 54 e acha
  * um anúncio sem 54 em estoque volta pro Google, e isso custa mais caro.
+ *
+ * ⚠️ "Esgotada" aqui não quer dizer estoque zero. A vitrine também esconde a
+ * cor abaixo do piso (`ESTOQUE_MINIMO_COR`, 10 peças) e a marcada "não
+ * publicar", e quando não sobra cor visível a peça sai com `disponivel:false`
+ * COM peça na arara. Por isso os dois lados desta régua caem na GRADE CRUA —
+ * `coresDaGrade` e `tamanhosDaGrade` do `montarPeca` —, que ignora estoque e
+ * curadoria: ali está o que a peça é, que é o que o feed precisa.
  */
 
 export interface TamanhoDaGrade {
@@ -37,15 +44,26 @@ export interface TamanhoDaGrade {
 }
 
 /**
- * Os tamanhos que o feed publica.
+ * Os tamanhos que o feed publica, em três degraus.
  *
- * Peça com grade viva → só os compráveis. Peça inteira zerada → a grade
- * inteira, que é o que ela É.
+ *  1. Os COMPRÁVEIS da grade exibida — peça à venda anuncia o que entrega.
+ *  2. A grade exibida inteira — peça zerada de verdade.
+ *  3. A grade CRUA — o degrau que faltava (13/09, medido depois do primeiro
+ *     conserto): a peça escondida pelo piso de estoque por cor chega aqui com
+ *     a grade exibida JÁ vazia, porque a vitrine a monta a partir das cores
+ *     visíveis e não sobrou nenhuma. A ref 13374 tem 9 peças em PRETO e caía
+ *     nesse buraco — 135 das 145 "esgotadas" do feed eram assim.
  */
-export function tamanhosDoFeed(grade: readonly TamanhoDaGrade[] | null | undefined): string[] {
-  const todos = (grade ?? []).filter((t) => t && String(t.label ?? '').trim());
-  const compraveis = todos.filter((t) => t.disponivel);
-  return (compraveis.length ? compraveis : todos).map((t) => String(t.label).trim());
+export function tamanhosDoFeed(
+  exibidos: readonly TamanhoDaGrade[] | null | undefined,
+  daGrade?: readonly TamanhoDaGrade[] | null | undefined,
+): string[] {
+  const limpar = (g: readonly TamanhoDaGrade[] | null | undefined) =>
+    (g ?? []).filter((t) => t && String(t.label ?? '').trim());
+  const naVitrine = limpar(exibidos);
+  const compraveis = naVitrine.filter((t) => t.disponivel);
+  const fonte = compraveis.length ? compraveis : naVitrine.length ? naVitrine : limpar(daGrade);
+  return fonte.map((t) => String(t.label).trim());
 }
 
 /**
