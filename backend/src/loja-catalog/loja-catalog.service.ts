@@ -9,6 +9,7 @@ import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.ser
 import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
+import { coresDoFeed, tamanhosDoFeed } from '../common/atributos-do-feed';
 import { casaBusca } from '../common/busca-texto';
 import { ordenarGradeDaCategoria } from '../common/ordem-por-subcategoria';
 
@@ -1400,6 +1401,19 @@ export class LojaCatalogService {
       /** Cores escondidas (ficha ou estoque mínimo) — a tela de cores lista. */
       coresOcultas,
       /**
+       * OS NOMES DE COR DA GRADE, com estoque ou sem (13/09/2026).
+       *
+       * `cores` acima é o que dá pra COMPRAR — e some inteiro quando a peça
+       * zera, porque cor zerada é cortada antes de virar bolinha. A vitrine
+       * quer exatamente isso; o FEED não: cor é atributo da peça, e quem diz
+       * "agora não" lá é o `availability`. Sem esta lista as 145 esgotadas
+       * saíam pro Google sem `<g:color>` (ver `common/atributos-do-feed.ts`).
+       *
+       * Cru de propósito: quem decide o que fazer com ele é quem consome.
+       * Ninguém na vitrine lê este campo.
+       */
+      coresDaGrade: Array.from(cores.keys()).sort((a, b) => a.localeCompare(b, 'pt-BR')),
+      /**
        * Peça tirada do ar pela retaguarda (nenhuma cor sobrou e alguém marcou
        * "fora do site"). Fica NO catálogo montado de propósito — a tela de
        * cores precisa listá-la pra dar como republicar, e a PDP abre por link
@@ -2719,8 +2733,20 @@ export class LojaCatalogService {
        */
       estoqueTotal: Number(p.estoqueTotal) || 0,
       imagens: (p.imagens ?? []).map((i: any) => i.src).filter(Boolean),
-      tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
-      cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),
+      /**
+       * COR E TAMANHO SÃO ATRIBUTO, NÃO ESTOQUE (13/09/2026).
+       *
+       * Filtrar por `disponivel` aqui deixava a peça zerada sair pros dois
+       * feeds SEM cor e SEM tamanho — 145 ofertas assim, e o diagnóstico do
+       * Google acusando "Cor ausente" e "Tamanho ausente" no mesmo conjunto
+       * das esgotadas. A régua (com o incidente inteiro) mora em
+       * `common/atributos-do-feed.ts` porque vale igual pro Google e pro Meta.
+       */
+      tamanhos: tamanhosDoFeed(p.tamanhos),
+      cores: coresDoFeed(
+        (p.cores ?? []).map((c: any) => c.nome),
+        p.coresDaGrade,
+      ),
       // Cru, por cor — quem decide o que vira item é o feed (ver `meta.xml`).
       coresDetalhe: (p.cores ?? []).map((c: any) => ({
         nome: String(c.nome ?? ""),
