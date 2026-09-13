@@ -217,7 +217,7 @@ export class CarrinhoGuardService {
         -- loja inativa e sem a peça que a loja já disse que não achou. É esta
         -- soma que deixa (ou não) a cliente comprar, e ela tem que contar o
         -- que o ROTEAMENTO conta — senão o site vende e o card nasce em
-        -- ruptura (pedido 950001354, 12/09).
+        -- ruptura (pedido LP-001354, 12/09).
         ${sqlEstoqueEntregavelPorCodigo()}
       ) e ON e.codigo = p.codigo
       WHERE UPPER(TRIM(p.ref)) = ANY($1) OR p.codigo = ANY($2)

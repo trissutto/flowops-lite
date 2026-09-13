@@ -6,11 +6,11 @@ import { condSemLojaCanal } from './loja-canal';
  *
  *  ── O BUG QUE ISTO CONSERTA (medido em 12/09/2026) ──
  *
- *  Pedido 950001354: *VOGUE · MARROM DOURADO · 50* pago e caído em
+ *  Pedido **LP-001354** (12/09): *VOGUE · MARROM DOURADO · 50* pago e caído em
  *  **"Ruptura: 1 SKU sem estoque em nenhuma loja ativa"** com a peça de pé no
  *  espelho — `wincred_estoque` = 1 na loja 01. O roteamento sabia por quê: essa
  *  peça foi marcada **EXTRAVIADA em 29/08** na própria 01 (a loja disse "não
- *  achei" no pedido 960000224). Pela regra de 27/08 o SALDO FICA e o
+ *  achei" no pedido ON-000224). Pela regra de 27/08 o SALDO FICA e o
  *  ROTEAMENTO passa longe — mas ninguém tinha contado isso pra vitrine.
  *
  *  Eram duas contas do mesmo número:
@@ -33,9 +33,13 @@ import { condSemLojaCanal } from './loja-canal';
  *     delas não estão no ar — é sorte, não trava.
  *   · 7 pedidos pagos em 30 dias bateram nessa parede, TODOS por extraviada;
  *     5 ficaram presos em `separating`.
- *   · O `8000000003614` vendeu DUAS vezes assim: 960000127 (24/08) e 950001354
- *     (12/09), com o "não achei" de 29/08 entre uma e outra. A peça nunca saiu
- *     da vitrine.
+ *   · O `8000000003614` vendeu DUAS vezes assim: ON-000127 (24/08) e LP-001354
+ *     (12/09), com o "não achei" do ON-000224 (29/08) entre uma e outra. A peça
+ *     nunca saiu da vitrine.
+ *
+ *  ⚠️ Os números acima são os que a TELA mostra (`wc_order_number`). No banco
+ *  esses mesmos pedidos são 950001354 / 960000224 / 960000127 — o `wc_order_id`
+ *  sintético (site 950M, pedido online 960M, live 900M). Falar pela tela.
  *
  *  ── O QUE ESTE ARQUIVO NÃO FAZ ──
  *
