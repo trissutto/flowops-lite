@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { reservaLigada, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { PromoSiteService } from '../promo-site/promo-site.service';
-import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
+import { sqlEstoqueEntregavelPorCodigo } from '../common/estoque-entregavel';
 
 /**
  * GUARD DO CARRINHO — reconfere no CATÁLOGO tudo que o checkout mandou.
@@ -19,7 +19,10 @@ import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
  *            SEMPRE", ordem do dono 26/08; o `precoPromo` digitado morreu)
  *   promo  → só os 50% do caixa (`PromoSiteService`) — o mesmo serviço que a
  *            vitrine consulta
- *   estoque→ soma de `wincred_estoque` (todas as lojas), no momento de fechar
+ *   estoque→ o saldo ENTREGÁVEL no momento de fechar (`common/estoque-entregavel.ts`):
+ *            `wincred_estoque` menos a loja-canal, menos loja inativa e menos a
+ *            peça que a loja já disse que não achou — as MESMAS exclusões do
+ *            roteamento, e a mesma subquery que a vitrine mostra
  *   gate   → `site_produto.publicado` — despublicou no meio da sessão, não vende
  *
  * REGRA DA CASA que este arquivo respeita à risca:
@@ -209,11 +212,13 @@ export class CarrinhoGuardService {
         COALESCE(e.total, 0)::int     AS estoque
       FROM wincred_produtos p
       LEFT JOIN (
-        -- SEM A LOJA-CANAL (dono, 24/08). É esta soma que a trava do carrinho
-        -- usa pra deixar (ou não) a cliente comprar: contar o saldo de quem não
-        -- tem arara é aceitar pedido que ninguém consegue separar.
-        SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
-          FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
+        -- O SALDO QUE A REDE CONSEGUE ENTREGAR — a MESMA subquery da vitrine
+        -- (common/estoque-entregavel.ts): sem a loja-canal (dono, 24/08), sem
+        -- loja inativa e sem a peça que a loja já disse que não achou. É esta
+        -- soma que deixa (ou não) a cliente comprar, e ela tem que contar o
+        -- que o ROTEAMENTO conta — senão o site vende e o card nasce em
+        -- ruptura (pedido 950001354, 12/09).
+        ${sqlEstoqueEntregavelPorCodigo()}
       ) e ON e.codigo = p.codigo
       WHERE UPPER(TRIM(p.ref)) = ANY($1) OR p.codigo = ANY($2)
     `;
