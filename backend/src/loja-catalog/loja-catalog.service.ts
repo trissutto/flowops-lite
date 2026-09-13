@@ -7,7 +7,7 @@ import { classificarPorNome } from './classificacao-por-nome';
 import { aplicarDescontoPromo } from '../common/promo-julho';
 import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.service';
 import { EventLoopService } from '../health/event-loop.service';
-import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
+import { sqlEstoqueEntregavelPorCodigo } from '../common/estoque-entregavel';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { coresDoFeed, tamanhosDoFeed } from '../common/atributos-do-feed';
 import { casaBusca } from '../common/busca-texto';
@@ -681,11 +681,14 @@ export class LojaCatalogService {
       p."dataAlt"                                 AS "dataAlt"
     FROM wincred_produtos p
     LEFT JOIN (
-      -- SEM A LOJA-CANAL (dono, 24/08): o saldo dela não é peça na arara, e o
-      -- site não pode prometer o que ninguém tem. Ver common/loja-canal.ts —
-      -- eram 5 SKUs cujo único estoque positivo da rede estava lá.
-      SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
-        FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
+      -- ── SÓ O QUE A REDE CONSEGUE ENTREGAR (common/estoque-entregavel.ts) ──
+      -- Sem a loja-canal (dono, 24/08: o saldo dela não é peça na arara — eram
+      -- 5 SKUs cujo único estoque positivo da rede estava lá), sem loja
+      -- INATIVA e sem a peça marcada como EXTRAVIADA naquela loja. São as
+      -- MESMAS exclusões do roteamento: enquanto a vitrine somava o bruto, o
+      -- site prometia 184 SKUs / 332 peças que nenhuma loja podia separar
+      -- (medido em produção, 13/09).
+      ${sqlEstoqueEntregavelPorCodigo()}
     ) e ON e.codigo = p.codigo
     -- ── MENOS O QUE JÁ ESTÁ PROMETIDO A OUTRA CLIENTE (31/08) ──
     -- A vitrine passa a contar o MESMO número que o guarda do carrinho cobra
@@ -4004,7 +4007,7 @@ export class LojaCatalogService {
         SELECT COUNT(*)::int AS n FROM (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
+            LEFT JOIN (${sqlEstoqueEntregavelPorCodigo()}) e
               ON e.codigo = p.codigo
            WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
            GROUP BY 1 HAVING SUM(COALESCE(e.total,0)) <= 0
@@ -4030,7 +4033,7 @@ export class LojaCatalogService {
         LEFT JOIN (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
+            LEFT JOIN (${sqlEstoqueEntregavelPorCodigo()}) e
               ON e.codigo = p.codigo
            GROUP BY 1
         ) k ON k.ref = s.ref

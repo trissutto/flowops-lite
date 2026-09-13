@@ -59,9 +59,22 @@ export function semLojaCanal<T>(itens: T[], code: (item: T) => unknown): T[] {
 }
 
 /**
+ * A CONDIÇÃO sozinha, sem o `WHERE` — pra compor com outros filtros na mesma
+ * consulta. É o que `common/estoque-entregavel.ts` faz pra somar o saldo que o
+ * site pode prometer (sem a loja-canal E sem a loja inativa, na mesma volta).
+ *
+ * `SQL_SEM_LOJA_CANAL` passou a ser ela com o `WHERE` na frente: duas versões
+ * da mesma régua é justamente o erro que este arquivo existe pra evitar.
+ *
+ * @param col nome (ou `alias.coluna`) da coluna de loja na consulta de quem chama.
+ */
+export function condSemLojaCanal(col = 'loja'): string {
+  const lista = LOJA_CANAL_CODES.map((c) => `'${c.replace(/'/g, "''")}'`).join(', ');
+  return `TRIM(UPPER(${col})) NOT IN (${lista})`;
+}
+
+/**
  * Trecho de SQL cru pra somar estoque IGNORANDO a loja-canal.
  * Ex.: `SELECT codigo, SUM(estoque) FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo`.
  */
-export const SQL_SEM_LOJA_CANAL = `WHERE TRIM(UPPER(loja)) NOT IN (${LOJA_CANAL_CODES.map(
-  (c) => `'${c.replace(/'/g, "''")}'`,
-).join(', ')})`;
+export const SQL_SEM_LOJA_CANAL = `WHERE ${condSemLojaCanal()}`;
