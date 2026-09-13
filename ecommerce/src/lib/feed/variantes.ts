@@ -33,6 +33,10 @@ export interface PecaFeed {
     fotos: string[];
     tamanhos: string[];
   }>;
+  /** Curadoria do site: coleção fixa "Mais Top da Semana". Vira `custom_label_1`. */
+  topSemana?: boolean;
+  /** Slug da coleção PONTUAL que contém a REF ('resort') — o outro `custom_label_1`. */
+  colecaoSlug?: string | null;
 }
 
 export interface Variante {
