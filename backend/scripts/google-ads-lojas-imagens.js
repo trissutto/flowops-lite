@@ -358,8 +358,32 @@ async function main() {
       ok += (r.results || []).length;
       console.log(`  ✔ ${p.campanha} / ${p.grupo} — ${ops.length} operações`);
     } catch (e) {
+      /* 🚨 PARAR no primeiro 429, não insistir.
+       *
+       * Em 13/09 a aplicação real bateu RESOURCE_EXHAUSTED no 5º grupo e o
+       * laço seguiu tentando os 22 restantes — cada recusa CONSOME COTA
+       * igual, então insistir só afunda mais e atrasa o retorno. O Google
+       * ainda diz de quanto é a espera; é ela que interessa imprimir.
+       *
+       * Parar é seguro porque cada grupo é um lote ATÔMICO: o que passou está
+       * completo, o que não passou está intocado. E rodar de novo é idempotente
+       * — o plano é recalculado do estado VIVO, e grupo já no alvo sai com
+       * `ops` vazio. */
+      const segundos = /Retry in (\d+) seconds/.exec(e.message)?.[1];
       falhou++;
-      console.log(`  ❌ ${p.campanha} / ${p.grupo} — ${e.message.slice(0, 260)}`);
+      console.log(`  ❌ ${p.campanha} / ${p.grupo} — ${e.message.slice(0, 200)}`);
+      if (/RESOURCE_EXHAUSTED|429/.test(e.message)) {
+        const faltam = plano.length - plano.indexOf(p);
+        console.log(
+          `\n🛑 COTA DE ESCRITA ESGOTADA — parando aqui de propósito.` +
+            `\n   ${faltam} grupos ficaram INTOCADOS (nenhum pela metade: cada grupo é um lote atômico).` +
+            (segundos
+              ? `\n   O Google pede ${segundos}s ≈ ${(segundos / 3600).toFixed(1)}h. Rode o MESMO comando depois disso.`
+              : '\n   Rode o MESMO comando mais tarde.') +
+            `\n   É idempotente: os ${ok ? 'grupos já trocados' : 'que passaram'} são pulados.`,
+        );
+        break;
+      }
     }
   }
   console.log(
