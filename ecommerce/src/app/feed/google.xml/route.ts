@@ -92,6 +92,9 @@ const CATEGORIA_GOOGLE: Record<string, string> = {
   'moda-praia': 'Vestuário e acessórios > Roupas > Roupas de banho',
   lingerie: 'Vestuário e acessórios > Roupas > Roupas íntimas',
   'linha-conforto': 'Vestuário e acessórios > Roupas > Roupas de dormir e loungewear',
+  // Faltava, e o efeito era silencioso: as t-shirts caíam no galho genérico
+  // (13/09). Mesmo ramo das blusas na taxonomia do Google.
+  't-shirts-premium': 'Vestuário e acessórios > Roupas > Blusas e camisetas',
 };
 
 
@@ -162,6 +165,32 @@ function item(p: PecaFeed, v: Variante): string {
     const proprio = p.subcategoria ? `${p.categoria} > ${p.subcategoria}` : p.categoria;
     campos.push(`<g:product_type>${escapar(proprio)}</g:product_type>`);
   }
+
+  /**
+   * OS RÓTULOS QUE DEIXAM A CAMPANHA SEPARAR GANHADORA DE PERDEDORA (13/09).
+   *
+   * O feed do Meta carimba cinco `custom_label` desde agosto; o do Google não
+   * mandava NENHUM — e sem eles o grupo de listagem do Shopping/PMax só sabe
+   * dividir por categoria do Google, que é grossa demais pra decidir verba.
+   * Foi medido no dia: 57% do gasto em campanhas com ROAS abaixo de 1,2 e sem
+   * como isolar dentro delas o que vende do que não vende.
+   *
+   * Os DOIS que saem daqui são os que vêm prontos no payload — mesma chave e
+   * mesmo vocabulário do Meta, de propósito: campanha que fala idiomas
+   * diferentes nos dois canais não dá pra comparar.
+   *   · 0 = slug da subcategoria (`blusas-confort`)
+   *   · 1 = curadoria da tela: `top-semana` (fixa) ou `colecao-<slug>` (pontual)
+   *
+   * Os slots 2, 3 e 4 do Meta (novidades e as duas vitrines de estoque) ficam
+   * de fora por enquanto: eles são CALCULADOS sobre o catálogo inteiro dentro
+   * da rota do Meta, e copiar a conta pra cá criaria a segunda cópia que o
+   * `variantes.ts` existe pra evitar. Quando fizerem falta, o caminho é
+   * extrair a conta pra `lib/feed/` e os dois lerem dela.
+   */
+  if (p.subcategoria) campos.push(`<g:custom_label_0>${escapar(p.subcategoria)}</g:custom_label_0>`);
+  // Um valor só por peça: a coleção fixa vence quando a REF está nas duas.
+  if (p.topSemana) campos.push(`<g:custom_label_1>top-semana</g:custom_label_1>`);
+  else if (p.colecaoSlug) campos.push(`<g:custom_label_1>colecao-${escapar(p.colecaoSlug)}</g:custom_label_1>`);
   /**
    * A grade num campo só: o Google usa `size` pra filtrar, e mandar a lista é
    * melhor que omitir — quem procura 54 precisa saber que existe 54.
