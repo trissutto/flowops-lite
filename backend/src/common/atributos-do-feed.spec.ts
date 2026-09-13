@@ -23,9 +23,19 @@ describe('atributos do feed — o que a peça É x o que dá pra comprar', () =>
     expect(tamanhosDoFeed(zerada)).toEqual(['46', '48', '50']);
   });
 
+  it('grade EXIBIDA vazia cai na grade crua — a peça escondida pelo piso por cor', () => {
+    // ref 13374: 9 peças em PRETO, cor abaixo do piso, grade exibida zerada.
+    expect(tamanhosDoFeed([], grade)).toEqual(['46', '48', '50']);
+  });
+
+  it('a exibida manda quando existe — a crua é só o último degrau', () => {
+    expect(tamanhosDoFeed(grade, [{ label: '99', disponivel: true }])).toEqual(['46', '50']);
+  });
+
   it('grade vazia continua vazia — não inventa tamanho', () => {
     expect(tamanhosDoFeed([])).toEqual([]);
-    expect(tamanhosDoFeed(null)).toEqual([]);
+    expect(tamanhosDoFeed(null, null)).toEqual([]);
+    expect(tamanhosDoFeed([], [])).toEqual([]);
     expect(tamanhosDoFeed([{ label: '  ' }])).toEqual([]);
   });
 

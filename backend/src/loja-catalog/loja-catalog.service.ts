@@ -1414,6 +1414,17 @@ export class LojaCatalogService {
        */
       coresDaGrade: Array.from(cores.keys()).sort((a, b) => a.localeCompare(b, 'pt-BR')),
       /**
+       * A GRADE CRUA — o par do `coresDaGrade`, e pelo mesmo motivo.
+       *
+       * `tamanhos` acima é a grade EXIBIDA: quando a peça tem cor, ela é
+       * montada a partir das cores VISÍVEIS, então some inteira se a única cor
+       * caiu abaixo do piso (`ESTOQUE_MINIMO_COR`) ou foi marcada "não
+       * publicar" — e aí a peça sai `disponivel:false` com peça na arara. A
+       * ref 13374 (9 em PRETO) é o caso: 135 das 145 ofertas sem `<g:size>`
+       * eram isto, não estoque zero.
+       */
+      tamanhosDaGrade: tamanhos,
+      /**
        * Peça tirada do ar pela retaguarda (nenhuma cor sobrou e alguém marcou
        * "fora do site"). Fica NO catálogo montado de propósito — a tela de
        * cores precisa listá-la pra dar como republicar, e a PDP abre por link
@@ -2742,7 +2753,7 @@ export class LojaCatalogService {
        * das esgotadas. A régua (com o incidente inteiro) mora em
        * `common/atributos-do-feed.ts` porque vale igual pro Google e pro Meta.
        */
-      tamanhos: tamanhosDoFeed(p.tamanhos),
+      tamanhos: tamanhosDoFeed(p.tamanhos, p.tamanhosDaGrade),
       cores: coresDoFeed(
         (p.cores ?? []).map((c: any) => c.nome),
         p.coresDaGrade,
