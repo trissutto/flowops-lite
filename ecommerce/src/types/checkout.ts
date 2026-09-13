@@ -241,7 +241,12 @@ export interface CreateOrderResult {
    * causa (a query de diagnóstico já lê `dados->>'field'`).
    */
   field?: string;
-  /** Só em `catalog_unavailable` por preço: qual peça subiu e o preço atual (17/08). */
+  /**
+   * Em `catalog_unavailable`: QUAL peça caiu. Na recusa por preço vem o preço
+   * novo e a sacola se corrige (17/08); nas outras vem o preço da própria
+   * sacola — igual = a tela só mostra o botão "Tirar da sacola e continuar"
+   * (12/09). Recusa que não manda `item` cai no link pra fora do checkout.
+   */
   item?: { productId: string; size: string; color?: string; precoAtual: number };
   /** Só em `shipping_changed`: a cotação que vale agora (17/08). */
   quote?: { id: string; label: string; price: number; etaDays: { min: number; max: number } | null };

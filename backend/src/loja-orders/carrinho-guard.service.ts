@@ -124,8 +124,10 @@ export type MotivoRecusa =
   | 'total_acima';
 
 export type ResultadoGuard =
-  /** `item` só vem na recusa por PREÇO — as outras recusas (esgotou, saiu do
-   *  site, cor/tamanho sumiu) já dizem o que fazer e não têm valor a corrigir.
+  /** `item` vem em TODA recusa que fala de uma peça (12/09) — é o que deixa o
+   *  site oferecer "Tirar da sacola e continuar" dentro do checkout em vez de
+   *  mandar a cliente pra fora, pro /carrinho. Só as duas recusas que não têm
+   *  peça (`sacola_vazia`, `catalogo_fora`) e o `total_acima` vêm sem ele.
    *  `motivo`/`ref` vêm SEMPRE: são o que a tela de Alertas lê. */
   | {
       ok: false;
@@ -360,6 +362,35 @@ export class CarrinhoGuardService {
       const nomePeca = String(it.name || '').trim() || 'uma peça da sua sacola';
       const qtd = Math.max(1, Number(it.quantity) || 1);
 
+      /**
+       * QUAL PEÇA TIRAR — montado ANTES da primeira recusa (12/09).
+       *
+       * O `esgotou` devolve `item` desde 31/08 e o site troca a parede por um
+       * botão: "Tirar da sacola e continuar", ali dentro do checkout. As cinco
+       * recusas abaixo (sku inexistente, despublicada, sem cor, sem tamanho,
+       * preço zerado) não devolviam nada — e o site, que JÁ trata as cinco,
+       * caía no último recurso: um link "Ajustar sacola" pra FORA do checkout.
+       *
+       * Medido na semana de 05 a 11/09: a REF 170359 levou 9 tentativas de
+       * pagar da MESMA pessoa, nenhuma recuperada. Ela não estava insistindo à
+       * toa — não tinha como sair dali. Recusa que não diz o que fazer é a
+       * mesma família do "fonte morta com cara de não existe".
+       *
+       * 🚨 `precoAtual` = o preço que a SACOLA mandou, de propósito. O site
+       * reescreve a linha quando `precoAtual` difere do informado (é assim que
+       * o `preco_subiu` se conserta sozinho); mandar o preço do catálogo aqui
+       * carimbaria R$ 0,00 na sacola no caso `preco_zerado`. Igual = no-op:
+       * sobra só o botão, que é o que estas cinco recusas precisam.
+       */
+      const itemParaTirar: ItemRecusado = {
+        indice: i,
+        productId: String(it.productId || it.sku),
+        size: it.size ? String(it.size) : null,
+        color: it.color ? String(it.color) : null,
+        precoAtual: this.dinheiro(it.unitPrice),
+        precoInformado: this.dinheiro(it.unitPrice),
+      };
+
       // 1) A peça existe no catálogo?
       let candidatas = porRef.get(chave) ?? [];
       const porCod = porCodigo.get(chave);
@@ -368,8 +399,8 @@ export class CarrinhoGuardService {
       if (!candidatas.length) {
         this.logger.warn(`[guard] SKU "${it.sku}" não existe no catálogo — pedido recusado`);
         return {
-          ok: false, motivo: 'sku_inexistente', ref: chave,
-          erro: `Não encontramos mais "${nomePeca}" no nosso catálogo. Atualize a página e monte a sacola de novo. 💜`,
+          ok: false, motivo: 'sku_inexistente', ref: chave, item: itemParaTirar,
+          erro: `Não encontramos mais "${nomePeca}" no nosso catálogo. Toque em "Tirar da sacola e continuar" aqui embaixo — o resto do pedido segue normal. 💜`,
         };
       }
 
@@ -379,8 +410,8 @@ export class CarrinhoGuardService {
       if (bloqueadas.has(ref)) {
         this.logger.warn(`[guard] REF ${ref} despublicada — pedido recusado`);
         return {
-          ok: false, motivo: 'despublicada', ref,
-          erro: `"${nomePeca}" saiu do site enquanto você comprava. Remova da sacola pra continuar — e desculpa por isso. 💜`,
+          ok: false, motivo: 'despublicada', ref, item: itemParaTirar,
+          erro: `"${nomePeca}" saiu do site enquanto você comprava. Toque em "Tirar da sacola e continuar" aqui embaixo — o resto do pedido segue normal, e desculpa por isso. 💜`,
         };
       }
 
@@ -393,8 +424,8 @@ export class CarrinhoGuardService {
         if (!daCor.length) {
           this.logger.warn(`[guard] REF ${ref} sem a cor "${it.color}" no catálogo`);
           return {
-            ok: false, motivo: 'sem_cor', ref,
-            erro: `A cor escolhida de "${nomePeca}" não está mais disponível. Escolha outra cor pra continuar. 💜`,
+            ok: false, motivo: 'sem_cor', ref, item: itemParaTirar,
+            erro: `A cor escolhida de "${nomePeca}" não está mais disponível. Toque em "Tirar da sacola e continuar" aqui embaixo — o resto do pedido segue normal, e você escolhe outra cor depois. 💜`,
           };
         }
         variacoes = daCor;
@@ -406,8 +437,8 @@ export class CarrinhoGuardService {
         if (!doTam.length) {
           this.logger.warn(`[guard] REF ${ref} sem o tamanho "${it.size}"`);
           return {
-            ok: false, motivo: 'sem_tamanho', ref,
-            erro: `O tamanho ${it.size} de "${nomePeca}" não está mais disponível. Escolha outro tamanho pra continuar. 💜`,
+            ok: false, motivo: 'sem_tamanho', ref, item: itemParaTirar,
+            erro: `O tamanho ${it.size} de "${nomePeca}" não está mais disponível. Toque em "Tirar da sacola e continuar" aqui embaixo — o resto do pedido segue normal, e você escolhe outro tamanho depois. 💜`,
           };
         }
         variacoes = doTam;
@@ -425,8 +456,8 @@ export class CarrinhoGuardService {
       if (!precos.length) {
         this.logger.error(`[guard] REF ${ref} com preço zerado no catálogo — pedido recusado`);
         return {
-          ok: false, motivo: 'preco_zerado', ref,
-          erro: `"${nomePeca}" está com o preço em atualização. Tente de novo em instantes ou fale com a gente pelo WhatsApp. 💜`,
+          ok: false, motivo: 'preco_zerado', ref, item: itemParaTirar,
+          erro: `"${nomePeca}" está com o preço em atualização e não dá pra fechar com ela agora. Toque em "Tirar da sacola e continuar" aqui embaixo — o resto do pedido segue normal. 💜`,
         };
       }
       /**

@@ -141,9 +141,13 @@ export interface CreateOrderOptions {
 }
 
 /**
- * A peça que o guard do backend recusou por PREÇO, com o preço de agora.
+ * A peça que o guard do backend recusou, com o preço que vale pra ela.
  * Vem em `body.item` da recusa `catalog_unavailable` (backend novo); com o
  * backend antigo simplesmente não vem — quem lê tem que tolerar `undefined`.
+ *
+ * `precoAtual` diferente do da sacola = recusa por PREÇO, e a linha se corrige
+ * sozinha. IGUAL ao da sacola = as outras recusas (sumiu do catálogo, saiu do
+ * site, cor/tamanho/preço fora), e o que a tela oferece é tirar a peça.
  */
 export interface CatalogItemHint {
   productId: string;

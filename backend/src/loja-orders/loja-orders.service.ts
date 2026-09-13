@@ -233,10 +233,12 @@ export interface CriarPedidoResult {
   code?: CheckoutErrorCode;
   order?: any;
   /**
-   * Só em `catalog_unavailable` por PREÇO: a linha da sacola que subiu e o
-   * preço que vale agora, pra o site corrigir a linha e a cliente não cair no
-   * loop "atualize a página" (que não atualizava o preço congelado no
-   * localStorage). Opcional — site antigo ignora, site novo tolera ausência.
+   * Em `catalog_unavailable`: QUAL linha da sacola caiu. Na recusa por preço
+   * leva o preço que vale agora (o site corrige a linha e a cliente não cai no
+   * loop "atualize a página", que não atualizava o preço congelado no
+   * localStorage); nas outras leva o preço da própria sacola, e o que o site
+   * faz com ele é oferecer "Tirar da sacola e continuar" sem sair do checkout.
+   * Opcional — site antigo ignora, site novo tolera ausência.
    */
   item?: ItemRecusado;
   /**
@@ -517,8 +519,9 @@ export class LojaOrdersService {
     // 1) Preço, estoque e publicação, peça a peça.
     const conferencia = await this.guard.conferir(input.items as any);
     if (!conferencia.ok) {
-      // `item` só existe na recusa por preço — vai junto pro site corrigir a
-      // linha da sacola (ver `ItemRecusado` no guard).
+      // `item` diz QUAL linha da sacola caiu — vai junto pro site corrigir o
+      // preço (recusa por preço) ou oferecer o botão "Tirar da sacola e
+      // continuar" (as outras). Ver `ItemRecusado` no guard.
       return {
         ok: false,
         erro: conferencia.erro,
