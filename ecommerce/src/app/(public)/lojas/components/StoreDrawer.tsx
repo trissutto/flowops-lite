@@ -213,7 +213,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
               <a
                 href={`tel:+55${s.whatsapp.slice(2)}`}
                 className="hover:underline"
-                onClick={() => trackPhoneClick(s.unit, 'store_drawer')}
+                onClick={() => trackPhoneClick(s, 'store_drawer')}
               >
                 {s.phone}
               </a>
@@ -224,7 +224,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:underline"
-                onClick={() => trackInstagramClick('store_drawer_arroba', s.unit)}
+                onClick={() => trackInstagramClick('store_drawer_arroba', s)}
               >
                 @{s.instagram}
               </a>
@@ -285,7 +285,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
             href={directionsUrl(s)}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() => trackStoreLocator(s.city, s.unit, 'store_drawer_map')}
+            onClick={() => trackStoreLocator(s.city, s, 'store_drawer_map')}
             className="mt-3 inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--lj-gold-strong)] hover:underline"
           >
             <Navigation className="h-3.5 w-3.5" strokeWidth={1.75} /> Traçar rota no Google Maps
@@ -299,7 +299,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
               href={directionsUrl(s)}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => trackStoreLocator(s.city, s.unit, 'store_drawer')}
+              onClick={() => trackStoreLocator(s.city, s, 'store_drawer')}
               className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[var(--lj-ink)] px-3 py-3 text-xs font-medium text-white transition-colors hover:bg-[var(--lj-gold-strong)]"
             >
               <MapPin className="h-3.5 w-3.5" strokeWidth={1.75} /> Como chegar
@@ -308,7 +308,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
               href={whatsappUrl(s)}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => trackWhatsAppClick('store_drawer', s.unit)}
+              onClick={() => trackWhatsAppClick('store_drawer', s)}
               className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#2E7D46] px-3 py-3 text-xs font-medium text-white transition-colors hover:bg-[#256538]"
             >
               <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} /> Falar no WhatsApp
@@ -317,7 +317,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
               href={instagramUrl(s)}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => trackInstagramClick('store_drawer', s.unit)}
+              onClick={() => trackInstagramClick('store_drawer', s)}
               className="inline-flex items-center justify-center gap-1.5 rounded-full border border-[var(--lj-gold)] px-3 py-3 text-xs font-medium text-[var(--lj-gold-strong)] transition-colors hover:bg-[#FBF6E6]"
             >
               <Instagram className="h-3.5 w-3.5" strokeWidth={1.75} /> Ver Instagram

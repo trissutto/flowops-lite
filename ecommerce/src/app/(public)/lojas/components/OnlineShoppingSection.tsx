@@ -15,7 +15,8 @@ export default function OnlineShoppingSection({
 }: {
   products: Product[];
   campaignParams: URLSearchParams;
-  storeUnit?: string;
+  /** A loja selecionada (objeto) — leva `store_id`/`city` no evento; o nome solto ainda vale. */
+  storeUnit?: string | { unit: string; city?: string; codigoFlow?: string };
 }) {
   const novidadesHref = withCampaignParams('/novidades', campaignParams);
 

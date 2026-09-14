@@ -113,7 +113,7 @@ export function StoreCard({ store, index = 0, nearest, distance, className }: St
           external
           variant="whatsapp"
           size="sm"
-          onClick={() => trackWhatsAppClick('store_card', store.unit)}
+          onClick={() => trackWhatsAppClick('store_card', store)}
         >
           <MessageCircle /> WhatsApp
         </Button>
@@ -124,7 +124,7 @@ export function StoreCard({ store, index = 0, nearest, distance, className }: St
           size="sm"
           // A unidade vai no campo `store`, não embutida no source — era
           // `store:${unit}` e caía como "Sem loja definida" na tela de cliques.
-          onClick={() => trackInstagramClick('store_card', store.unit)}
+          onClick={() => trackInstagramClick('store_card', store)}
         >
           <InstagramIcon /> Instagram
         </Button>

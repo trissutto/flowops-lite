@@ -206,17 +206,40 @@ export const trackGenerateLead = (origem: string, valor?: number) => track('gene
  * clicados fora de uma unidade (o Instagram da marca no rodapé, por exemplo).
  * Nesses casos a linha entra agrupada em "—" na tela, em vez de sumir.
  */
-export const trackWhatsAppClick = (origem: string, loja?: string) => track('whatsapp_click', { source: origem, store: loja });
-export const trackInstagramClick = (origem: string, loja?: string) => track('instagram_click', { source: origem, store: loja });
-export const trackPhoneClick = (loja: string, origem?: string) => track('phone_click', { store: loja, source: origem });
-export const trackStoreLocator = (cidade?: string, loja?: string, origem?: string) =>
-  track('store_locator', { city: cidade, store: loja, source: origem });
-export const trackStoresOnlineCta = (sourcePosition: string, loja?: string) =>
-  track('stores_online_cta_click', { source_position: sourcePosition, store: loja });
-export const trackStoresProductClick = (product: TrackableProduct, index: number, loja?: string) =>
+/**
+ * A unidade pode vir como o NOME (`store.unit`, compatível com todo chamador
+ * antigo) ou como o objeto da loja. Com o objeto, o evento leva também
+ * `store_id` (código da loja no Flow, `LURDS-nn` no Meu Negócio) e `city` —
+ * é o que permite medir performance POR LOJA no GA4 e no Ads sem depender de
+ * casar nome de unidade na mão (auditoria de 14/09/2026). Os nomes dos
+ * eventos não mudam: `store` já é dimensão registrada no GA4 e coluna da
+ * tela de cliques; `store_id`/`city` entram como parâmetros a mais.
+ */
+export interface UnidadeRef {
+  unit: string;
+  city?: string;
+  codigoFlow?: string;
+}
+function paramsDaUnidade(loja?: string | UnidadeRef): Record<string, string | undefined> {
+  if (!loja) return {};
+  if (typeof loja === 'string') return { store: loja };
+  return { store: loja.unit, store_id: loja.codigoFlow, city: loja.city };
+}
+
+export const trackWhatsAppClick = (origem: string, loja?: string | UnidadeRef) =>
+  track('whatsapp_click', { source: origem, ...paramsDaUnidade(loja) });
+export const trackInstagramClick = (origem: string, loja?: string | UnidadeRef) =>
+  track('instagram_click', { source: origem, ...paramsDaUnidade(loja) });
+export const trackPhoneClick = (loja: string | UnidadeRef, origem?: string) =>
+  track('phone_click', { ...paramsDaUnidade(loja), source: origem });
+export const trackStoreLocator = (cidade?: string, loja?: string | UnidadeRef, origem?: string) =>
+  track('store_locator', { city: cidade, ...paramsDaUnidade(loja), source: origem });
+export const trackStoresOnlineCta = (sourcePosition: string, loja?: string | UnidadeRef) =>
+  track('stores_online_cta_click', { source_position: sourcePosition, ...paramsDaUnidade(loja) });
+export const trackStoresProductClick = (product: TrackableProduct, index: number, loja?: string | UnidadeRef) =>
   track(
     'stores_product_click',
-    { source_position: 'products_section', store: loja, product_ref: product.sku ?? product.id, item_index: index },
+    { source_position: 'products_section', ...paramsDaUnidade(loja), product_ref: product.sku ?? product.id, item_index: index },
     { items: [toTrackedItem(product, { index, list_name: 'Lojas — novidades' })] },
   );
 export const trackStoreAvailability = (product: TrackableProduct, loja: string, disponivel: boolean) =>

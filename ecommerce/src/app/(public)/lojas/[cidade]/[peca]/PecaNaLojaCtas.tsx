@@ -32,7 +32,7 @@ export default function PecaNaLojaCtas({
         href={whatsappUrlPeca(store, peca, tamanho)}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={() => trackWhatsAppClick('store_product', store.unit)}
+        onClick={() => trackWhatsAppClick('store_product', store)}
         className="inline-flex items-center justify-center gap-2 rounded-full bg-[#2E7D46] px-5 py-3.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition hover:brightness-110"
       >
         <MessageCircle className="h-4 w-4" strokeWidth={1.75} aria-hidden />
@@ -42,7 +42,7 @@ export default function PecaNaLojaCtas({
         href={directionsUrl(store)}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={() => trackStoreLocator(store.city, store.unit, 'store_product')}
+        onClick={() => trackStoreLocator(store.city, store, 'store_product')}
         className="inline-flex items-center justify-center gap-2 rounded-full border border-[var(--lj-ink)] px-5 py-3.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--lj-ink)] transition hover:bg-[var(--lj-ink)] hover:text-white"
       >
         <Navigation className="h-4 w-4" strokeWidth={1.75} aria-hidden /> Como chegar
