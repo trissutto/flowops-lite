@@ -97,7 +97,20 @@ const GROUPS: NavGroup[] = [
     color: 'emerald',
     items: [
       { href: '/financeiro', label: 'Financeiro', icon: DollarSign },
-      { href: '/produtos',   label: 'Produtos',   icon: ShoppingBag },
+      /**
+       * "Produtos" aponta para a RETAGUARDA, não para a tela velha `/produtos`.
+       *
+       * A `/produtos` era proxy do WooCommerce: listava peça chamando
+       * `GET /products`, que batia em `${WC_URL}/wp-json/wc/v3/products` — o
+       * WordPress apagado em 27/08/2026. Neste mesmo PR essa rota passou a
+       * responder 410 honesto em vez de fingir sucesso com lista vazia, e o
+       * menu não pode continuar levando a operação para uma tela que só sabe
+       * mostrar erro.
+       *
+       * A ficha viva da peça é `/retaguarda/produtos` (tabela nativa `product`):
+       * estoque, vendas, fotos, site e histórico. É onde a edição já acontece.
+       */
+      { href: '/retaguarda/produtos', label: 'Produtos', icon: ShoppingBag },
       { href: '/clientes',   label: 'Clientes',   icon: Users },
       { href: '/marketing',  label: 'Marketing',  icon: Megaphone },
     ],
