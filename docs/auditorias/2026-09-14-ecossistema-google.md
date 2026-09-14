@@ -116,3 +116,15 @@ O próprio Google credita ~1,5 ao Shopping nos mesmos dias (janela ainda em matu
 **Aplicado 14/09 12:50**: orçamento R$ 700 → **R$ 500/dia** (−29%, um passo só, tROAS intocado), pelo `backend/scripts/google-ads-shopping-orcamento.js` (validateOnly antes; rollback `ORCAMENTO=700`). Regra: **nenhuma outra mexida no Shopping por 7 dias** — cada alteração reinicia parte do aprendizado, e foi isso que quebrou a semana.
 
 Também nesta rodada: schema `Product.brand` passou a levar a marca do cadastro (igual ao `g:brand` do feed; `/produto/ref-207372` responde `MARRIE`), e o "Como chegar" da home identifica a loja (PR #1209).
+
+## 10. Vitrine das lojas locais — o que os feeds mostram (14/09, 13h)
+
+Régua combinada com o dono: **Linha Conforto + as últimas 30 cadastradas no Flow**.
+
+| Onde | Antes | Depois |
+|---|---|---|
+| Feed nacional `google.xml` | `custom_label_2=novidades` = últimas 25 REFs fora da Conforto (35 itens / 24 REFs); `custom_label_3=conforto` 38 itens / 22 REFs | cota 25 → **30** (`NOVIDADES_FEED_QTD`, default no código): **45 itens / 29 REFs** de novidade (1 das 30 é Conforto) + 38 / 22 de Conforto |
+| 14 PMax de loja | filtro de listagem já era `novidades` + `conforto` (conferido pelo `diag-google-ads-lojas-filtros.js`; o único nó morto `product_type=novidades` está num grupo PAUSADO de Itanhaém) | igual — passam a servir as 29 + 22 assim que o Merchant reler |
+| Feed de inventário local `google-local.xml` (vitrine da ficha no Google) | **estoque INTEIRO**: 12.530 linhas, ~950 REFs | só `novidade \|\| linhaConforto`: **1.162 linhas, 83 ids, 14 lojas** (PR #1211). `FEED_LOCAL_SO_VITRINE=0` volta ao estoque inteiro; catálogo sem rótulo cai pro inteiro e grita no log |
+
+⚠️ A URL "limpa" dos dois feeds fica no cache da CDN por até 1 h (`s-maxage=3600`, `X-Vercel-Cache: HIT`); `POST /api/revalidar` só limpa o Data Cache, não a borda. A leitura fresca foi feita com `?v=2`. O Merchant busca às 00:00 — pega a versão nova.
