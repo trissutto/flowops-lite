@@ -2664,6 +2664,9 @@ export class LojaOrdersService {
         purchase: {
           number: order.wcOrderNumber,
           total: this.dinheiro(order.totalAmount),
+          // Frete separado: o GA4 espera `shipping` no purchase (receita de
+          // produto = value − shipping). Sem ele o frete entrava como receita.
+          shipping: this.dinheiro(ck.shippingPrice ?? 0),
           ...(ck.couponCode ? { coupon: ck.couponCode } : {}),
           payment_method: pi.method === 'card' ? 'credit_card' : 'pix',
           items,
