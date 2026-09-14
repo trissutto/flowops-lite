@@ -36,25 +36,65 @@
  * O QUE MUDAR — a tabela é a decisão do dono, escrita à mão, conferida na tela
  * ────────────────────────────────────────────────────────────────────────── */
 
-/** Orçamento diário novo, em REAIS. A chave é o nome da campanha. */
+/**
+ * Orçamento diário novo, em REAIS — REPARTIDO PELA RECEITA REAL DA LOJA (14/09).
+ *
+ * Gerado por `google-ads-lojas-orcamento-por-receita.js` com `TOTAL=542.25`, que
+ * é a soma real do orçamento das 14 PMax. **Não é palpite:** cada valor é a
+ * fatia daquela praça na receita da rede nos últimos 30 dias, e o total não
+ * muda — só é redistribuído.
+ *
+ * 🚨 A régua é a RECEITA DO PDV, não a "visita à loja" do Google. Essa métrica
+ * mente nesta rede (Anália Franco era a pior loja e ele a ranqueava em 2º) e
+ * desde 05/09 ela nem publica mais.
+ *
+ * Itanhaém entra com METADE da receita, por ordem do dono: vende infantil,
+ * masculino e tamanho menor, que o anúncio plus size não traz.
+ *
+ * ⚠️ QUATRO AUMENTOS PASSAM DE 100% — Limeira 20→55 (+175%), Praia Grande
+ * 20→35, Jundiaí 20→30, Indaiatuba 20→30. Mudança grande de orçamento REABRE o
+ * aprendizado da PMax: a campanha volta a explorar e o custo por ação sobe por
+ * alguns dias antes de assentar. É o preço de corrigir uma alocação que estava
+ * torta — Limeira vendia R$ 89 mil com o orçamento mínimo da conta. Se preferir
+ * suavizar, o caminho é aplicar metade agora e o resto em duas semanas.
+ */
 const ORCAMENTO_NOVO = {
-  'SOROCABA PMax 27.08.25 [Petter]': 120.0,
-  'CAMPINAS PMax 27.08.25 [Petter]': 100.0,
-  'ITANHAEM PMax 27.08.25 [Petter]': 45.0,
-  '[Petter][Search][SOROCABA Pesquisa]': 20.0,
+  'ANÁLIA FRANCO PMax 01.06.26 [Petter]': 20.0,
+  'CAMPINAS PMax 27.08.25 [Petter]': 55.0,
+  'INDAIATUBA PMax 27.08.25 [Petter]': 30.0,
+  'ITANHAÉM PMax 27.08.25 [Petter]': 45.0,
+  'JUNDIAÍ PMax 27.08.25 [Petter]': 30.0,
+  'LIMEIRA PMax 27.08.25 [Petter]': 55.0,
+  'MOEMA PMax 27.08.25 [Petter]': 40.0,
+  'PIRACICABA PMax 27.08.25 [Petter]': 30.0,
+  'PRAIA GRANDE PMax 27.08.25 [Petter]': 35.0,
+  'SANTOS PMax 27.08.25 [Petter]': 35.0,
+  'SÃO JOSÉ DOS CAMPOS PMax 27.08.25 [Petter]': 35.0,
+  'SOROCABA PMax 27.08.25 [Petter]': 70.0,
+  'SUZANO PMax 27.08.25 [Petter]': 30.0,
+  'VINHEDO PMax 27.08.25 [Petter]': 25.0,
 };
 
 /**
- * Campanhas de PESQUISA a pausar — a PMax da MESMA cidade cobre a busca e
- * custa de 2,7× a 6,7× menos por ação (medido 1-10/set):
- *   Vinhedo    R$ 48,61 x R$ 7,27
- *   Indaiatuba R$ 12,47 x R$ 2,64
- *   Itanhaém   R$ 19,91 x R$ 7,28
+ * Campanhas a PAUSAR.
+ *
+ * ⚠️ As 3 de Pesquisa que estavam aqui antes (ITANHAEM, VINHEDO, INDAIATUBA) já
+ * foram pausadas em 13/09 e SAÍRAM da lista: `acharUma` só procura entre as
+ * ENABLED e ABORTA o script inteiro se não achar o nome. Lista velha = script
+ * que não roda mais.
+ *
+ * As duas que ficam são as únicas campanhas ativas SEM conjunto de ativos de
+ * local. Sem local vinculado elas não podem, por construção, gerar visita nem
+ * pedido de rota — que é o objetivo desta conta. A de vídeo ainda está com
+ * orçamento R$ 0,00: existe sem fazer nada.
+ *
+ * 🚨 PAUSA, não remoção. O dono disse "pode excluir", mas campanha REMOVED no
+ * Google Ads não volta, e pausar tem o mesmo efeito prático — para de gastar,
+ * para de aparecer — sem queimar o histórico.
  */
 const PAUSAR = [
-  '[Petter][Search][ITANHAEM Pesquisa]',
-  '[Petter][Search][VINHEDO Pesquisa]',
-  '[Petter][Search][INDAIATUBA Pesquisa]',
+  'MOEMA Vídeo visualizações – 2025-11-12',
+  '[Petter][Search][Piracicaba Pesquisa] Base',
 ];
 
 /* ──────────────────────────────────────────────────────────────────────────── */

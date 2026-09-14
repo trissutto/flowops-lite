@@ -1,37 +1,43 @@
 /**
  * TÍTULO COM A CIDADE nos grupos de recursos — conta LOJAS FÍSICAS (956-499-8046).
+ * SAI um genérico, ENTRA o da praça. Troca 1 por 1, nunca soma.
  *
- * ── O QUE ISTO CONSERTA, E O QUE NÃO ──
+ * ── POR QUE TROCA, E NÃO ACRESCENTA (erro de 13/09, corrigido) ──
  *
- * 🚨 Primeiro o que NÃO é: **não é falta de título.** Medido em 13/09, os 27
- * grupos ativos têm 15 a 18 títulos, e a régua da própria conta é:
+ * A 1ª versão ACRESCENTAVA 3 títulos por grupo e levou
+ * `RESOURCE_COUNT_LIMIT_EXCEEDED` em todos: os 24 textos foram criados, nenhum
+ * vínculo entrou.
+ *
+ * 🚨 **O teto de títulos por grupo de recursos é 15.** Os grupos desta conta
+ * têm 15 a 18 porque nasceram antes da regra — o Google mantém o que já existe,
+ * mas não deixa criar mais. É a MESMA armadilha do tema de pesquisa, onde
+ * grupos antigos tinham 50 e criar além de 25 era recusado.
+ *
+ * E o pior é que eu tinha escrito o aviso no cabeçalho da versão anterior
+ * ("máximo observado maior que a recomendação são grupos antigos — não prova
+ * que dá pra criar mais hoje") e mesmo assim configurei o teto pelo máximo
+ * observado. Regra que vale pra próxima: **teto observado nunca é teto de
+ * criação; só o validateOnly decide.**
+ *
+ * ── POR QUE A TROCA É MELHOR QUE A SOMA ──
+ *
+ * O problema nunca foi FALTA de título. Régua da própria conta, medida:
  *
  *     EXCELLENT   17 grupos   5 - 15,8 - 20 títulos
  *     GOOD        21 grupos   5 - 10,5 - 17
  *     AVERAGE    123 grupos   5 -  8,9 - 19
- *     POOR        25 grupos   1 -  5,0 - 13
  *
- * Ou seja: os nossos JÁ ESTÃO na faixa dos EXCELLENT, acima da média deles — e
- * ainda assim marcam AVERAGE. E existe grupo EXCELLENT com 5 títulos. Encher de
- * texto não move a nota; o que separa os nossos continua sendo a mistura de
- * imagens (ver `google-ads-lojas-imagens.js`).
+ * Os 27 ativos têm 15-18 — já na faixa dos EXCELLENT — e mesmo assim marcam
+ * AVERAGE. Há EXCELLENT com 5 títulos. Quantidade não move a nota.
  *
- * ── O DEFEITO REAL: nenhum título diz a cidade ──
+ * O defeito é que **nenhum título diz a cidade**. Os mais usados são genéricos
+ * e idênticos em toda praça: "Prove Antes de Levar" (18 grupos), "Plus Size do
+ * 44 ao 60" (18), "Plus Size Perto de Você" (17). Numa campanha LOCAL isso
+ * desperdiça relevância — "Plus Size em Sorocaba" casa com a busca de quem está
+ * em Sorocaba; "Perto de Você" não casa com nada.
  *
- * Os mais usados hoje são todos genéricos, iguais em Sorocaba e em Moema:
- *
- *     "Prove Antes de Levar" ..... 18 grupos
- *     "Plus Size do 44 ao 60" .... 18
- *     "Plus Size Perto de Você" .. 17
- *     "Encontre sua loja" ......... 5
- *
- * Numa campanha LOCAL isso é desperdício de relevância: "Plus Size em Sorocaba"
- * casa com a busca de quem está em Sorocaba; "Perto de Você" não casa com nada.
- * É o mesmo defeito que os temas de pesquisa tinham — o grupo de Sorocaba
- * carregava "moda plus size Moema", clonado de outra praça e nunca trocado.
- *
- * Então aqui entram **3 títulos por grupo, cada um nomeando a cidade daquela
- * campanha**. Relevância, não enchimento.
+ * Então trocar é o conserto certo, não o contorno: substitui o vago pelo
+ * específico sem inchar o grupo.
  *
  * ── COMO RODAR (PowerShell) ──
  *   railway run --service flowops-lite node backend/scripts/google-ads-lojas-titulos-cidade.js
@@ -45,8 +51,8 @@ const APLICAR = process.env.APLICAR === '1';
 
 /** Teto do Google para título de PMax. Texto maior é recusado. */
 const LIMITE_CARACTERES = 30;
-/** Maior contagem observada na conta. Não passar disso sem o Google confirmar. */
-const TETO_TITULOS = 20;
+/** Teto REAL de títulos por grupo, provado pela recusa de 13/09 nos grupos com 17-18. */
+const TETO_TITULOS = 15;
 
 /**
  * Campanha → cidade, escrito à mão e conferido. Não deduzo do nome: "SÃO JOSÉ
@@ -61,8 +67,8 @@ const CIDADE_DA_CAMPANHA = {
   'ITANHAÉM PMax 27.08.25 [Petter]': 'Itanhaém',
   'VINHEDO PMax 27.08.25 [Petter]': 'Vinhedo',
   'SUZANO PMax 27.08.25 [Petter]': 'Suzano',
-  /* Nome CURTO de propósito: "São José dos Campos" tem 19 caracteres e estoura
-   * o teto de 30 em qualquer molde ("Loja Plus Size São José dos Campos" = 34). */
+  /* Nome CURTO de propósito: "São José dos Campos" tem 19 caracteres e
+   * "Loja Plus Size São José dos Campos" daria 34, acima do teto de 30. */
   'SÃO JOSÉ DOS CAMPOS PMax 27.08.25 [Petter]': 'São José',
   'PRAIA GRANDE PMax 27.08.25 [Petter]': 'Praia Grande',
   'PIRACICABA PMax 27.08.25 [Petter]': 'Piracicaba',
@@ -75,16 +81,43 @@ const CIDADE_DA_CAMPANHA = {
 
 /**
  * Os três moldes. Cada um ataca uma busca diferente:
- *   1. a busca por categoria + lugar ("moda plus size sorocaba")
- *   2. a busca por LOJA ("loja plus size sorocaba") — quem já quer ir
- *   3. a busca por TAMANHO, que é a dor real da cliente plus size
- * O terceiro carrega a grade porque "do 44 ao 60" é o que já tem 18 usos na
- * conta — funciona; o que faltava era amarrar à praça.
+ *   1. categoria + lugar ...... "moda plus size sorocaba"
+ *   2. LOJA + lugar ........... "loja plus size sorocaba" — quem já quer ir
+ *   3. TAMANHO + lugar ........ a dor real da cliente plus size
+ * O terceiro carrega "do 44 ao 60" porque esse texto já tem 18 usos na conta e
+ * funciona; o que faltava era amarrar à praça.
  */
 const MOLDES = [
   (c) => `Plus Size em ${c}`,
   (c) => `Loja Plus Size ${c}`,
   (c) => `${c}: do 44 ao 60`,
+];
+
+/**
+ * QUEM SAI, em ordem de preferência. Só o vago — o que não diz nem lugar nem
+ * proposta. O primeiro é o substituído direto: "Perto de Você" vira o nome da
+ * cidade, que é a mesma promessa dita de um jeito que casa com a busca.
+ *
+ * ⚠️ O que NÃO entra nesta lista, e por quê:
+ *   "Prove Antes de Levar" — é o diferencial da loja física contra o site.
+ *   "Plus Size do 44 ao 60" / "do 46 ao 60" — a grade é informação concreta.
+ *   "Lurds Plus Size" — é a marca.
+ */
+const REMOVIVEIS = [
+  'Plus Size Perto de Você',
+  'Encontre sua loja',
+  'Sua Moda Plus Size',
+  'Roupas Lindas Plus Size',
+  'Moda que Valoriza Você',
+  'Looks Exclusivos Plus Size',
+  'Peças Elegantes Plus Size',
+  'Moda Plus Size Elegante',
+  /* Estes dois vão POR ÚLTIMO e só se faltar candidato: a grade é informação
+   * concreta e boa. Mas "Sorocaba: do 44 ao 60" diz a MESMA coisa mais o lugar,
+   * então trocar um pelo outro é upgrade, não perda. Nunca saem se houver um
+   * genérico de verdade disponível antes. */
+  'Plus Size do 44 ao 60',
+  'Plus Size do 46 ao 60',
 ];
 
 async function token() {
@@ -155,7 +188,7 @@ async function main() {
   const modo = APLICAR && !VALIDAR ? '🔴 APLICANDO' : VALIDAR ? '🟡 validateOnly' : '🟢 DRY-RUN';
   console.log(`conta ${CONTA} · API ${V} · ${modo}\n`);
 
-  /* ── Conferir os textos ANTES de falar com o Google ───────────────────── */
+  /* Conferir tamanho ANTES de falar com o Google. */
   const longos = [];
   for (const cidade of new Set(Object.values(CIDADE_DA_CAMPANHA))) {
     for (const molde of MOLDES) {
@@ -163,10 +196,7 @@ async function main() {
       if (t.length > LIMITE_CARACTERES) longos.push(`${t} (${t.length})`);
     }
   }
-  if (longos.length) {
-    throw new Error(`títulos acima de ${LIMITE_CARACTERES} caracteres:\n  ${longos.join('\n  ')}`);
-  }
-  console.log(`✔ os ${new Set(Object.values(CIDADE_DA_CAMPANHA)).size * MOLDES.length} textos cabem em ${LIMITE_CARACTERES} caracteres\n`);
+  if (longos.length) throw new Error(`acima de ${LIMITE_CARACTERES} caracteres:\n  ${longos.join('\n  ')}`);
 
   const a = await token();
 
@@ -177,23 +207,24 @@ async function main() {
       WHERE campaign.status = 'ENABLED' AND asset_group.status = 'ENABLED'`,
   );
 
-  const jaTem = new Map(); // grupo -> Set(texto)
+  /* Os títulos de cada grupo COM o resource_name do vínculo — é ele que remove. */
+  const porGrupo = new Map();
   for (const x of await consultar(
     a,
-    `SELECT asset_group_asset.asset_group, asset.text_asset.text
+    `SELECT asset_group_asset.asset_group, asset_group_asset.resource_name, asset.text_asset.text
        FROM asset_group_asset
       WHERE campaign.status = 'ENABLED' AND asset_group.status = 'ENABLED'
         AND asset_group_asset.status != 'REMOVED'
         AND asset_group_asset.field_type = 'HEADLINE'`,
   )) {
     const g = x.assetGroupAsset.assetGroup;
-    const s = jaTem.get(g) || new Set();
-    if (x.asset?.textAsset?.text) s.add(x.asset.textAsset.text);
-    jaTem.set(g, s);
+    const l = porGrupo.get(g) || [];
+    if (x.asset?.textAsset?.text) l.push({ texto: x.asset.textAsset.text, vinculo: x.assetGroupAsset.resourceName });
+    porGrupo.set(g, l);
   }
 
-  /* Texto que já existe como ATIVO na conta é reaproveitado — criar um segundo
-   * com o mesmo texto é recusado com DUPLICATE_ASSET. */
+  /* Texto que já existe na conta é reaproveitado — criar duplicata é recusado.
+   * A rodada de 13/09 já criou os 24 textos de cidade; eles estão aqui. */
   const textoExistente = new Map();
   for (const x of await consultar(
     a,
@@ -202,33 +233,59 @@ async function main() {
     if (x.asset?.textAsset?.text) textoExistente.set(x.asset.textAsset.text, x.asset.resourceName);
   }
 
-  /* ── O PLANO ─────────────────────────────────────────────────────────── */
   const plano = [];
   const precisaCriar = new Set();
   for (const g of grupos) {
     const campanha = g.campaign.name;
     const cidade = CIDADE_DA_CAMPANHA[campanha];
-    if (!cidade) throw new Error(`campanha sem cidade mapeada: "${campanha}" — acrescente em CIDADE_DA_CAMPANHA`);
+    if (!cidade) throw new Error(`campanha sem cidade mapeada: "${campanha}"`);
 
     const gRes = `customers/${CONTA}/assetGroups/${g.assetGroup.id}`;
-    const atuais = jaTem.get(gRes) || new Set();
-    const vagas = Math.max(0, TETO_TITULOS - atuais.size);
-    const novos = MOLDES.map((m) => m(cidade)).filter((t) => !atuais.has(t)).slice(0, vagas);
+    const atuais = porGrupo.get(gRes) || [];
+    const textos = new Set(atuais.map((x) => x.texto));
 
-    for (const t of novos) if (!textoExistente.has(t)) precisaCriar.add(t);
-    plano.push({ gRes, campanha, grupo: g.assetGroup.name, forca: g.assetGroup.adStrength, cidade, tem: atuais.size, novos });
+    const querEntrar = MOLDES.map((m) => m(cidade)).filter((t) => !textos.has(t));
+    /* Só sai o que está na lista de vagos E existe neste grupo, na ordem da lista. */
+    const podeSair = REMOVIVEIS.map((t) => atuais.find((x) => x.texto === t)).filter(Boolean);
+
+    /**
+     * 🚨 GRUPO ACIMA DO TETO PRECISA DESCER, e não só trocar.
+     *
+     * A troca 1 por 1 mantinha o total — e mesmo assim o Google recusou nos 3
+     * grupos que estavam com 17 e 18 títulos (Santos/Recursos Santos e as duas
+     * de São José dos Campos), com RESOURCE_COUNT_LIMIT_EXCEEDED. Ou seja: com
+     * o grupo já estourado, QUALQUER criação é barrada, mesmo compensada por
+     * uma remoção na mesma requisição. Diferente do que acontece com imagem,
+     * onde o teto é avaliado no estado final.
+     *
+     * Então aqui a conta remove o EXCESSO junto: sai (excesso + quantos entram),
+     * entra o da cidade, e o grupo aterrissa exatamente em 15. Grupo que já
+     * está em 15 ou menos continua na troca 1 por 1, sem perder título.
+     */
+    const excesso = Math.max(0, atuais.length - TETO_TITULOS);
+    const n = Math.max(0, Math.min(querEntrar.length, podeSair.length - excesso));
+    const entram = querEntrar.slice(0, n);
+    const saem = podeSair.slice(0, n + excesso);
+
+    for (const t of entram) if (!textoExistente.has(t)) precisaCriar.add(t);
+    plano.push({ gRes, campanha, grupo: g.assetGroup.name, forca: g.assetGroup.adStrength, tem: atuais.length, entram, saem });
   }
 
   plano.sort((x, y) => x.campanha.localeCompare(y.campanha));
-  console.log('PLANO POR GRUPO');
+  console.log('TROCA POR GRUPO  (1 por 1 — o total de títulos não muda)');
   for (const p of plano) {
-    console.log(
-      `\n${p.campanha} / ${p.grupo} (${p.forca}) — ${p.tem} títulos hoje` +
-        (p.novos.length ? `\n  + ${p.novos.map((t) => `"${t}"`).join('  ')}` : '\n  (nada a acrescentar)'),
-    );
+    console.log(`\n${p.campanha} / ${p.grupo} (${p.forca}) — ${p.tem} títulos`);
+    if (!p.entram.length) {
+      console.log('  (nada a trocar)');
+      continue;
+    }
+    for (let i = 0; i < p.entram.length; i++) {
+      console.log(`  − "${p.saem[i].texto}"\n  + "${p.entram[i]}"`);
+    }
   }
-  const total = plano.reduce((s, p) => s + p.novos.length, 0);
-  console.log(`\n${total} títulos a ligar · ${precisaCriar.size} textos novos a criar na conta`);
+
+  const total = plano.reduce((s, p) => s + p.entram.length, 0);
+  console.log(`\n${total} trocas em ${plano.filter((p) => p.entram.length).length} grupos · ${precisaCriar.size} textos novos a criar`);
 
   if (!APLICAR && !VALIDAR) {
     console.log('\n🟢 DRY-RUN — nada enviado. Para validar: $env:VALIDAR="1"');
@@ -236,7 +293,6 @@ async function main() {
   }
   if (!total) return console.log('nada a fazer');
 
-  /* ── 1) Criar os textos que ainda não existem ─────────────────────────── */
   const recurso = new Map(textoExistente);
   const aCriar = [...precisaCriar];
   for (let i = 0; i < aCriar.length; i += 100) {
@@ -246,27 +302,39 @@ async function main() {
       if (res.resourceName) recurso.set(lote[k], res.resourceName);
     });
   }
-  console.log(`\n✔ textos: ${aCriar.length} criados`);
+  if (aCriar.length) console.log(`\n✔ textos: ${aCriar.length} criados`);
 
-  /* ── 2) Ligar nos grupos ──────────────────────────────────────────────── */
-  const ops = [];
+  /* Um lote POR GRUPO, remove e cria JUNTOS: o Google avalia o teto sobre o
+   * ESTADO FINAL, então a troca cabe mesmo com o grupo no limite. Foi assim que
+   * a troca de imagens passou. Lote único faria o erro de um derrubar os outros. */
+  let ok = 0;
+  let falhou = 0;
   for (const p of plano) {
-    for (const t of p.novos) {
-      const res = recurso.get(t);
-      if (res && res.startsWith('customers/')) {
-        ops.push({ create: { assetGroup: p.gRes, asset: res, fieldType: 'HEADLINE' } });
+    if (!p.entram.length) continue;
+    const ops = [
+      ...p.saem.map((s) => ({ remove: s.vinculo })),
+      ...p.entram
+        .map((t) => recurso.get(t))
+        .filter((res) => res && res.startsWith('customers/'))
+        .map((res) => ({ create: { assetGroup: p.gRes, asset: res, fieldType: 'HEADLINE' } })),
+    ];
+    try {
+      const r = await mutate(a, 'assetGroupAssets', ops);
+      ok += (r.results || []).length;
+      console.log(`  ✔ ${p.campanha} / ${p.grupo} — ${ops.length} operações`);
+    } catch (e) {
+      falhou++;
+      console.log(`  ❌ ${p.campanha} / ${p.grupo} — ${e.message.slice(0, 200)}`);
+      if (/RESOURCE_EXHAUSTED|429/.test(e.message)) {
+        console.log('\n🛑 cota esgotada — parando. Rodar de novo depois é seguro: é idempotente.');
+        break;
       }
     }
   }
-  let feitos = 0;
-  for (let i = 0; i < ops.length; i += 100) {
-    const r = await mutate(a, 'assetGroupAssets', ops.slice(i, i + 100));
-    feitos += (r.results || []).length;
-  }
   console.log(
     VALIDAR
-      ? `\n🟡 validateOnly — o Google aceitou. Nada alterado.\n   (os vínculos só validam de verdade depois de o texto existir; eles vão junto no APLICAR)`
-      : `\n🔴 APLICADO — ${feitos} títulos ligados.`,
+      ? `\n🟡 validateOnly — ${ok} aceitas, ${falhou} com erro. Nada alterado.`
+      : `\n🔴 APLICADO — ${ok} operações, ${falhou} grupos com erro.`,
   );
 }
 
