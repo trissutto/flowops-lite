@@ -169,7 +169,9 @@ export function productSchema(product: Product): JsonLd {
     ...(description ? { description } : {}),
     image: product.images.map((i) => i.src),
     sku: product.sku ?? product.id,
-    brand: { '@type': 'Brand', name: SITE.shortName },
+    // A marca do cadastro quando existe (é o que o feed manda em `g:brand`);
+    // "Lurds" só quando a peça não tem marca — schema e Merchant precisam concordar.
+    brand: { '@type': 'Brand', name: product.brand || SITE.shortName },
     ...(product.fabric ? { material: product.fabric } : {}),
     ...(colors?.length ? { color: [...new Set(colors)].join(', ') } : {}),
     ...(product.rating
