@@ -143,7 +143,20 @@ async function main() {
     if (l.quadrada < 1) falta.push('imagem QUADRADA 1:1');
     if (l.paisagem < 1) falta.push('imagem PAISAGEM 1.91:1');
     if (l.videos < 1) falta.push('vídeo');
-    if (l.logos < 1) falta.push('logo');
+    /**
+     * 🚨 LOGO NÃO SE MEDE AQUI, e medir aqui MENTE.
+     *
+     * Esta linha já dizia "falta logo em 27 de 27" e eu levei o número ao dono
+     * como buraco. Era falso: as 14 campanhas PMax têm `brand_guidelines_enabled`
+     * e, nesse modo, o Google MOVE logo e nome da empresa pro nível de CAMPANHA
+     * e marca o vínculo do grupo como REMOVED. Zero no grupo é o estado CERTO.
+     *
+     * A prova: ligar logo no grupo devolve BRAND_ASSETS_NOT_LINKED_AT_CAMPAIGN_LEVEL,
+     * e o MESMO ativo é aceito por `campaignAssets:mutate` no mesmo minuto.
+     *
+     * Quem quiser conferir logo de verdade olha `campaign_asset` com
+     * field_type IN ('LOGO','LANDSCAPE_LOGO','BUSINESS_NAME').
+     */
     console.log(`${l.forca.padEnd(10)} ${l.campanha} / ${l.grupo}\n   ${falta.length ? falta.join(' · ') : '(nada — está completo)'}`);
   }
 }
