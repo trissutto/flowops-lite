@@ -288,7 +288,7 @@ export async function GET() {
   let pecas: PecaFeed[] = [];
   let falhou = false;
   try {
-    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=1', {
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=2', {
       revalidate,
       tags: ['catalogo'],
       timeoutMs: 25000,
