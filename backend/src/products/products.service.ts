@@ -10,18 +10,38 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { ProductSearchService } from '../product-search/product-search.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { discriminadorProduto } from '../common/produto-discriminador';
+import { exigirWordpressLegado } from '../woocommerce/wp-morto';
 
 /**
- * ProductsService
+ * ProductsService — DUAS METADES, e a de cima está MORTA (14/09/2026).
  *
- * Proxy REST do WooCommerce pra produtos.
- * Endpoints do WC usados:
- *   GET /wc/v3/products                    → lista paginada
- *   GET /wc/v3/products/:id                → detalhe do produto
- *   GET /wc/v3/products/:id/variations     → variações (quando type=variable)
+ * ── A METADE MORTA (daqui até `exportSkuAuditXlsx`) ──
  *
- * Retorno é "achatado" com só os campos que a tela usa,
- * pra não jogar payload gigante no frontend.
+ * Era o proxy REST do WooCommerce: lista/detalhe/variações, o sync de estoque
+ * "ERP → site", o backup/restore de estoque em XLSX, o auto-rascunho por
+ * estoque baixo e a auditoria de SKU. Tudo isso batia em
+ * `WC_URL/wp-json/wc/v3/*`, e o WordPress foi APAGADO em 27/08/2026.
+ *
+ * Nada aqui "caiu com erro": `WC_URL` de produção é `https://www.lurds.com.br`,
+ * que hoje é o site NOVO e devolve **HTTP 403 pela Vercel** em `/wp-json`.
+ * Medido em 14/09/2026 no apex e no www. O pior sintoma era o bulk sync, que
+ * engolia a falha da primeira página e terminava "ok" com catálogo vazio —
+ * todo dia às 3h da manhã, por um cron que ninguém lia (removido neste PR).
+ *
+ * Cada ponto de entrada dessa metade agora morre na primeira linha com 410
+ * Gone e o motivo escrito (`exigirWordpressLegado`), e `baseUrl` é a tranca de
+ * segurança pra que caminho novo não escape. As rotas continuam existindo de
+ * propósito: as telas `/produtos` e `/auditoria-sku` ainda estão no frontend, e
+ * rota apagada vira tela quebrada MUDA — pior que uma tela que diz a verdade.
+ * Apagar as duas telas junto com estas ~2,3 mil linhas é PR próprio.
+ *
+ * ── A METADE VIVA (de `searchErpProductsLike` em diante) ──
+ *
+ * 100% Postgres, e é ela que a loja usa todo dia: a busca do dropdown do PDV
+ * e da tela de Defeitos (`/products/erp-search`), a Consulta da filial
+ * (`/products/store-search`) e os pedidos de REPOSIÇÃO / VENDA CERTA
+ * (`/products/transfer-orders*`). Não passa por `baseUrl` — não confundir as
+ * duas metades ao mexer aqui.
  */
 /**
  * Estado do sync em massa — mantido em memória (singleton do provider).
@@ -203,7 +223,26 @@ export class ProductsService {
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * A BASE DA REST DO WOOCOMMERCE — e a TRANCA (14/09/2026).
+   *
+   * Este getter é o gargalo por onde passavam as 21 chamadas HTTP deste
+   * arquivo, e `WC_URL` em produção é `https://www.lurds.com.br` — o site
+   * NOVO. O WordPress foi apagado em 27/08/2026, e `/wp-json/wc/v3/*`
+   * responde **HTTP 403 pela Vercel**: erro que parece "chave vencida" e
+   * manda a próxima pessoa procurar `WC_CONSUMER_KEY` em vez de ler a data.
+   *
+   * Trancar AQUI (e não em cada chamada) é o que garante que nenhum caminho
+   * novo deste arquivo volte a sair calado pela porta dos fundos. Quem tem
+   * ponto de entrada próprio — botão, rota, fire-and-forget — chama
+   * `exigirWordpressLegado` LOGO NA PRIMEIRA LINHA, pra que a mensagem chegue
+   * em quem clicou em vez de morrer num `lastError` que ninguém lê.
+   */
   private get baseUrl() {
+    exigirWordpressLegado(
+      'Falar com o catálogo do site antigo',
+      'o catálogo, o preço e o estoque vivem no Postgres do Flow — a peça se edita em /retaguarda/produtos e a vitrine lê direto de lá',
+    );
     return `${this.config.get('WC_URL')}/wp-json/wc/v3`;
   }
   private get auth() {
@@ -481,6 +520,14 @@ export class ProductsService {
    * confirmação antes de chamar.
    */
   async syncStockFromErp(productId: number) {
+    // MORREU EM 27/08/2026 — e morria por dentro, item a item: cada PUT de
+    // variação tem `catch` próprio e virava uma linha "falhou" no relatório.
+    // O operador via "0 atualizadas, 14 falharam" e concluía que o problema
+    // era o produto. A porta fecha antes, com o motivo.
+    exigirWordpressLegado(
+      'Sincronizar o estoque desta peça com o site antigo',
+      'a contagem que vale é a do Postgres do Flow — corrigir saldo é contar a peça e ajustar no Flow, e a vitrine do site lê o mesmo número',
+    );
     const detail = await this.getById(productId);
 
     if (detail.type !== 'variable') {
@@ -717,8 +764,27 @@ export class ProductsService {
   /**
    * Inicia o sync em massa (fire-and-forget).
    * Se já estiver rodando, rejeita com BadRequest.
+   *
+   * ⚠️ O BOTÃO "SINCRONIZAR TUDO" DA TELA /produtos CAI AQUI — e é por isso
+   * que a porta fecha nesta linha, e não lá dentro.
+   *
+   * Fire-and-forget + falha engolida era a combinação que escondia a morte do
+   * WooCommerce: `runBulkSync` pega a exceção da primeira página, grava
+   * `lastError`, dá `break`, marca `finishedAt` e o estado volta pro polling
+   * como "terminou". A tela mostrava barra cheia e "0 variações atualizadas",
+   * o que se lê como "já estava tudo alinhado". Com o `throw` aqui, o clique
+   * recebe 410 com o motivo e a data — quem clicou fica sabendo.
+   *
+   * Até 14/09/2026 este mesmo método era disparado TODO DIA ÀS 3H por um cron
+   * interno (`StockSyncCronService`, removido neste PR): ninguém lia, nenhuma
+   * tela dependia, e o `STOCK_SYNC_CRON_DISABLED` que desligaria não existia
+   * no Railway.
    */
   startBulkSync(): BulkSyncState {
+    exigirWordpressLegado(
+      'Sincronizar o estoque da rede com o site antigo',
+      'não existe mais dois lugares pra alinhar: o estoque nasce e vive no Postgres do Flow, e a vitrine do site lê ele',
+    );
     if (this.bulkSync.running) {
       throw new BadRequestException('Sync em massa já está em execução.');
     }
@@ -1184,8 +1250,17 @@ export class ProductsService {
   /**
    * Inicia a geração do backup de forma assíncrona (fire-and-forget).
    * Frontend faz polling em /stock-backup/status.
+   *
+   * O backup LIA O ESTOQUE DO WOOCOMMERCE — era a rede de segurança do sync,
+   * pra dar pra voltar atrás depois de sobrescrever o site. Sem WordPress não
+   * há o que copiar nem pra onde restaurar, e um XLSX vazio salvo como
+   * "backup" é pior que backup nenhum: alguém confia nele.
    */
   startBackupAsync() {
+    exigirWordpressLegado(
+      'Baixar o backup do estoque do site antigo',
+      'o estoque da rede se consulta na Consulta da loja e nos relatórios do Flow, que leem o Postgres',
+    );
     if (this.backupState.running) {
       throw new BadRequestException('Backup já está em execução.');
     }
@@ -1459,6 +1534,14 @@ export class ProductsService {
       error?: string;
     }>;
   }> {
+    // A porta fecha ANTES de ler a planilha: cada linha do restore tem
+    // `catch` próprio, então com o site morto o resultado era
+    // "0 restauradas, 1.294 falharam" — uma tela inteira de vermelho pra dizer
+    // uma coisa só, que dá pra dizer em uma frase.
+    exigirWordpressLegado(
+      'Restaurar o estoque do site antigo a partir do XLSX',
+      'quem manda no saldo é o Postgres do Flow: peça contada errada se corrige no Flow (entrada/ajuste), e a vitrine acompanha',
+    );
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(xlsxBuffer as any);
     const ws = wb.worksheets[0];
@@ -1733,6 +1816,16 @@ export class ProductsService {
       error?: string;
     }>;
   }> {
+    // Este é o caminho MAIS perigoso de todos pra deixar respondendo vazio: a
+    // tela pergunta "quantas peças saem do ar?" e um catálogo de 0 produto
+    // responde "nenhuma" — leitura vazia com cara de "não tem nada pra fazer",
+    // exatamente a família de bug que a regra de ouro do projeto proíbe. Tirar
+    // peça do ar por grade furada hoje é régua do catálogo nativo
+    // (`grade-furada`/`esgotado-sai`), não PUT de status no WordPress.
+    exigirWordpressLegado(
+      'Mandar pra rascunho as peças de estoque baixo no site antigo',
+      'a peça sai e volta da vitrine sozinha pela régua do catálogo do Flow (esgotada sai, cor com números zerados sai e volta repondo)',
+    );
     if (!Number.isInteger(threshold) || threshold < 0) {
       throw new BadRequestException(
         `Threshold inválido: ${threshold} (esperado inteiro >= 0).`,
@@ -1967,6 +2060,14 @@ export class ProductsService {
       baseNaoExisteErp: number;
     };
   }> {
+    // Sem WordPress a auditoria nunca enche `skuAuditEntries`, e o erro que
+    // aparecia era "rode a auditoria primeiro" — um conselho que não funciona
+    // mais, e que faz a pessoa rodar a auditoria de novo pra ouvir a mesma
+    // coisa. Diz a verdade antes.
+    exigirWordpressLegado(
+      'Conferir os SKUs com sufixo -N do site antigo',
+      'o código da peça é o EAN-13 gerado pelo próprio Flow no cadastro (product-registration) — não há mais importação que anexe -1/-2 no SKU',
+    );
     if (this.skuAuditEntries.length === 0) {
       throw new BadRequestException(
         'Rode a auditoria de SKU primeiro (/sku-audit/start).',
@@ -2139,6 +2240,13 @@ export class ProductsService {
       error?: string;
     }>;
   }> {
+    // `catch` por item: com o site morto o retorno era
+    // "0 corrigidas, N falharam" — mudança que não aconteceu, apresentada
+    // como se o SKU fosse o problema.
+    exigirWordpressLegado(
+      'Corrigir os SKUs com sufixo -N no site antigo',
+      'o código da peça é o EAN-13 gerado pelo próprio Flow — o cadastro/edição vive em /retaguarda/produtos',
+    );
     if (!Array.isArray(items) || items.length === 0) {
       throw new BadRequestException('Lista de correções vazia.');
     }
@@ -2252,7 +2360,17 @@ export class ProductsService {
     };
   }
 
+  /**
+   * Varredura read-only das variações do WooCommerce sem SKU / com SKU que não
+   * existe no cadastro. Fire-and-forget: `runSkuAudit` engole a exceção da
+   * primeira página em `lastError` e termina — a tela de /auditoria-sku
+   * mostrava "0 achados", que se lê como "está tudo certo".
+   */
   startSkuAudit(): SkuAuditState {
+    exigirWordpressLegado(
+      'Auditar os SKUs do site antigo',
+      'o catálogo do site é a tabela nativa `product` do Postgres, onde o código da peça é o EAN-13 gerado no cadastro — SKU órfão de importação não existe mais',
+    );
     if (this.skuAuditState.running) {
       throw new BadRequestException('Auditoria de SKU já está em execução.');
     }
@@ -2445,6 +2563,13 @@ export class ProductsService {
    * Uma aba só, colunas principais pra auditoria em lote.
    */
   async exportSkuAuditXlsx(): Promise<{ filename: string; buffer: Buffer }> {
+    // A planilha tem uma coluna `admin_wc` com link pro wp-admin de cada
+    // variação. Todo link daquela coluna hoje é um 403 — planilha que promete
+    // "clica aqui pra consertar" e entrega erro é pior que planilha nenhuma.
+    exigirWordpressLegado(
+      'Exportar a auditoria de SKU do site antigo',
+      'a conferência de catálogo se faz em /retaguarda/produtos, sobre a tabela nativa do Postgres',
+    );
     if (this.skuAuditEntries.length === 0) {
       throw new BadRequestException(
         'Nenhuma auditoria gerada ainda. Rode a auditoria primeiro.',

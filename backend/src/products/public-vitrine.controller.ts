@@ -6,6 +6,26 @@ import { ProductsService } from './products.service';
  * vitrine /vitrine do frontend. É uma simulação da home pública do site,
  * pensada pra testar diagramação e conversão sem depender da infra do WP.
  *
+ * ⚠️ MORREU COM O WORDPRESS (27/08/2026) — as três rotas daqui são o
+ * `ProductsService` com outro nome (`list` / `getBySlug` / `getRelated`), e
+ * aquele caminho é o proxy REST do WooCommerce apagado. Desde 14/09/2026 elas
+ * respondem **410 Gone com o motivo escrito** em vez de 500 mudo
+ * (`exigirWordpressLegado`, em `woocommerce/wp-morto.ts`).
+ *
+ * Por que NÃO foram apagadas: ainda têm dois chamadores.
+ *   • `ecommerce/src/services/catalog.ts` → `getProduct()`, que a PDP usa como
+ *     REDE depois do catálogo novo (`fetchPeca`). O `try/catch` de lá trata
+ *     qualquer falha como "não achei" e segue pro resgate de URL antiga
+ *     (`/public/loja/slug-antigo`) e depois pro 404 — então o 410 entra no
+ *     MESMO desvio que o 500 entrava, sem mudar o que a cliente vê, só mais
+ *     rápido e com log legível. Apagar a rota daria 404 e o mesmo desvio, mas
+ *     sem deixar escrito na resposta POR QUE não existe mais.
+ *   • a tela `/vitrine` do frontend (o protótipo de diagramação), que não
+ *     está no escopo deste PR.
+ *
+ * A vitrine DE VERDADE não passa por aqui: o site novo lê `loja-catalog` /
+ * `site-vitrines` / `site-categorias`, tudo Postgres.
+ *
  * Por que separado do ProductsController:
  *   - ProductsController tem @UseGuards(JwtAuthGuard) no topo (todos os
  *     endpoints exigem login). Se eu puxar o guard, arrebenta rotas internas.

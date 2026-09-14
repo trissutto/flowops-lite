@@ -4,7 +4,6 @@ import { ErpModule } from '../erp/erp.module';
 import { CrediarioNativoModule } from '../crediario-nativo/crediario-nativo.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
 import { CrediariosModule } from '../crediarios/crediarios.module';
-import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { PromoConfigModule } from '../promo-config/promo-config.module';
 import { AccessPolicyModule } from '../access-policy/access-policy.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
@@ -27,6 +26,7 @@ import { ErpOutboxService } from './erp-outbox.service';
 import { ConferenciaVendasService } from './conferencia-vendas.service';
 import { ConferenciaExtratoService } from './conferencia-extrato.service';
 import { PdvController } from './pdv.controller';
+import { FotoProdutoService } from './foto-produto.service';
 import { PixService } from './pix.service';
 import { CashService } from './cash.service';
 import { CashController } from './cash.controller';
@@ -60,8 +60,23 @@ import { FaturamentoModule } from '../faturamento/faturamento.module';
 import { MetasService } from './metas.service';
 import { MetasController } from './metas.controller';
 
+/**
+ * ⚠️ O `WooCommerceModule` SAIU DAS IMPORTS EM 14/09/2026.
+ *
+ * O PDV injetava o `WooCommerceService` por UM motivo só: a miniatura do
+ * carrinho (`GET /pdv/product-image` e `/product-images`) pedia a foto por SKU
+ * pro WordPress. Ele foi apagado em 27/08/2026 e `WC_URL` hoje é o site novo,
+ * que responde 403 — e o método engolia o erro e cacheava "sem foto" por 1h,
+ * então a falha nunca apareceu em tela nenhuma.
+ *
+ * A foto agora vem de `product_photos` (Postgres + R2) pelo
+ * `FotoProdutoService` — a MESMA fonte da Consulta, da Separação e do site.
+ * Nenhum outro provider deste módulo falava com o WooCommerce (conferido por
+ * varredura antes de remover o import), então a frente de caixa deixou de ter
+ * qualquer caminho até o host morto.
+ */
 @Module({
-  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule, FaturamentoModule],
+  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule, FaturamentoModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController, MetasController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou
@@ -72,7 +87,7 @@ import { MetasController } from './metas.controller';
   // motivo: fecha a venda quando o link Pagar.me é pago (antes ninguém
   // fechava — venda ficava aberta pra sempre com o dinheiro na conta) e lê
   // `pagarme_payment` pelo Prisma, sem importar o PagarmeModule.
-  providers: [PdvService, PedidoOnlineService, LastroRedeService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService, CobrancasOnlineService, MetasService],
+  providers: [PdvService, FotoProdutoService, PedidoOnlineService, LastroRedeService, PedidoEmailService, ErpOutboxService, ConferenciaVendasService, ConferenciaExtratoService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PagarmeLinkReconcileService, PdvStoreSummaryService, CobrancasOnlineService, MetasService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}
