@@ -37,6 +37,15 @@ export interface PecaFeed {
   topSemana?: boolean;
   /** Slug da coleção PONTUAL que contém a REF ('resort') — o outro `custom_label_1`. */
   colecaoSlug?: string | null;
+  /**
+   * Uma das últimas 25 peças CADASTRADAS, tirando as da Linha Conforto — a
+   * régua do dono (14/09) para o que a campanha de loja anuncia como novidade.
+   * Vira `custom_label_2`. ⚠️ Não confundir com janela de tempo: contagem não
+   * esvazia quando o cadastro para, e em 14/09 já havia 18 dias sem peça nova.
+   */
+  novidade?: boolean;
+  /** A peça está na LINHA CONFORTO. Vira `custom_label_3`. Exclui `novidade`. */
+  linhaConforto?: boolean;
 }
 
 export interface Variante {

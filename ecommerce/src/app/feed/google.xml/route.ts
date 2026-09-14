@@ -224,6 +224,30 @@ function item(p: PecaFeed, v: Variante): string {
   // Um valor só por peça: a coleção fixa vence quando a REF está nas duas.
   if (p.topSemana) campos.push(`<g:custom_label_1>top-semana</g:custom_label_1>`);
   else if (p.colecaoSlug) campos.push(`<g:custom_label_1>colecao-${escapar(p.colecaoSlug)}</g:custom_label_1>`);
+
+  /**
+   * OS DOIS RÓTULOS QUE A CAMPANHA DE LOJA FILTRA (dono, 14/09):
+   * *"quero sempre mostrar as novidades que chegam na loja e a linha CONFORTO"*.
+   *
+   * 🚨 ISTO CONSERTA UMA FALHA SILENCIOSA QUE JÁ ESTAVA NO AR. Os filtros de
+   * listagem das 14 PMax apontam para `product_type = novidades` — valor que
+   * o feed do WordPress velho tinha e este NÃO tem (os tipos reais são
+   * `blusas > manga-curta`, `vestidos > vestido-manga-curta`, `calcas`…).
+   * Resultado medido em 14/09: as campanhas cuja árvore de filtro dependia
+   * desse valor serviram **ZERO produto em 30 dias** — Campinas, Santos,
+   * Sorocaba, Anália Franco, Limeira, Moema, Vinhedo. As três que serviam
+   * (Jundiaí 954 impressões, Itanhaém 1.170, Indaiatuba 878) só escapavam por
+   * terem um "inclui tudo" sobrando na árvore.
+   *
+   * Nada dava erro em lugar nenhum: o produto simplesmente não aparecia.
+   *
+   * Os dois são MUTUAMENTE EXCLUSIVOS por construção (o backend tira o
+   * conforto da contagem de novidades) — e isso é requisito, não estética: no
+   * filtro de listagem da PMax uma peça só pode pertencer a um grupo de
+   * recursos por campanha, e sobreposição faz o Google recusar a configuração.
+   */
+  if (p.novidade) campos.push(`<g:custom_label_2>novidades</g:custom_label_2>`);
+  if (p.linhaConforto) campos.push(`<g:custom_label_3>conforto</g:custom_label_3>`);
   /**
    * A grade num campo só: o Google usa `size` pra filtrar, e mandar a lista é
    * melhor que omitir — quem procura 54 precisa saber que existe 54.
