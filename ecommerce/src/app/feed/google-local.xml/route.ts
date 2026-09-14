@@ -50,7 +50,20 @@ import { chaveDeCor, variantes, type PecaFeed } from '@/lib/feed/variantes';
  */
 
 /** O catálogo muda pouco durante o dia e o Google lê 1× — 1h é de sobra. */
-export const revalidate = 3600;
+const revalidate = 3600;
+
+/**
+ * O FEED NÃO ENTRA NO CACHE DE PÁGINA — mesma proteção do feed nacional
+ * (14/09/2026, e lá está o incidente escrito por inteiro).
+ *
+ * Aqui o estrago tem uma cara a mais: se o catálogo responde e só o ESTOQUE
+ * POR LOJA falha, o arquivo sai bem formado, com as 14 lojas no lugar e ZERO
+ * linha de inventário — e o Google entende isso como "nenhuma loja tem nada".
+ * A vitrine local morre nas 14 fichas de uma vez, sem erro em lugar nenhum.
+ * Com o segmento dinâmico, quem manda no cache é o `Cache-Control` do GET, que
+ * sabe qual das duas fontes caiu.
+ */
+export const dynamic = 'force-dynamic';
 
 /**
  * Código da ficha no Google = `LURDS-<código da loja no Flow>`.
@@ -140,13 +153,20 @@ export async function GET() {
    * qual das duas caiu. Separado, a que responder responde, e o `console.error`
    * diz o nome da que faltou.
    */
+  let falhou = false;
   await Promise.all([
     api<PecaFeed[]>('/public/loja/feed?rev=1', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
       .then((r) => { pecas = r ?? []; })
-      .catch((e) => console.error('[feed-local] catálogo nacional falhou:', e?.message ?? e)),
+      .catch((e) => {
+        falhou = true;
+        console.error('[feed-local] catálogo nacional falhou:', e?.message ?? e);
+      }),
     api<EstoqueLoja[]>('/public/loja/feed-local', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
       .then((r) => { estoques = r ?? []; })
-      .catch((e) => console.error('[feed-local] estoque por loja falhou:', e?.message ?? e)),
+      .catch((e) => {
+        falhou = true;
+        console.error('[feed-local] estoque por loja falhou:', e?.message ?? e);
+      }),
   ]);
 
   /**
@@ -239,10 +259,24 @@ export async function GET() {
     linhas.join('') +
     '</channel></rss>';
 
+  /**
+   * Arquivo sem uma única linha de inventário é sempre anomalia: a rede tem
+   * 14 lojas com estoque todo dia. Não cacheia.
+   */
+  if (!linhas.length) {
+    falhou = true;
+    console.error(
+      `[feed-local] ZERO linhas — ${pecas.length} peça(s) e ${estoques.length} linha(s) de estoque`,
+    );
+  }
+
   return new Response(xml, {
     headers: {
       'Content-Type': 'application/xml; charset=utf-8',
-      'Cache-Control': 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
+      /** Ver o comentário do `dynamic` no topo: só o que deu certo é guardado. */
+      'Cache-Control': falhou
+        ? 'no-store'
+        : 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
     },
   });
 }

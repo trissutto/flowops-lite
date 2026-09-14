@@ -44,7 +44,16 @@ import { SITE } from '@/lib/seo';
  * em 60 peças mesmo depois do fix do backend (13/08). O backend cacheia o
  * catálogo internamente, então regenerar custa um request por hora.
  */
-export const revalidate = 3600;
+const revalidate = 3600;
+
+/**
+ * O FEED NÃO ENTRA NO CACHE DE PÁGINA — a proteção que nasceu no feed do
+ * Google em 14/09/2026 (o incidente está escrito lá por inteiro): resposta
+ * nascida de falha não pode ser GUARDADA por uma hora. Quem decide o que pode
+ * ser guardado é o `Cache-Control` do GET, por execução. O catálogo continua
+ * vindo do Data Cache, então isto não gera request a mais pro backend.
+ */
+export const dynamic = 'force-dynamic';
 
 interface PecaFeed {
   ref: string;
@@ -416,6 +425,7 @@ function item(p: PecaFeed, v: Variante, novidade?: string, top30?: string, top30
 
 export async function GET() {
   let pecas: PecaFeed[] = [];
+  let falhou = false;
   try {
     // A tag deixa a retaguarda derrubar este cache junto com o resto do
     // catálogo (POST /api/revalidar com tags:['catalogo']) — sem ela, o dado
@@ -428,15 +438,23 @@ export async function GET() {
     // entrada já gravada (config de cache não entra na chave). O backend
     // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
     pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=5', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
-  } catch {
+  } catch (e) {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o
-       agendamento; feed vazio ele só registra e tenta de novo amanhã. */
+       agendamento; feed vazio ele só registra e tenta de novo amanhã. O que
+       NÃO pode é o vazio ser GUARDADO — ver o `Cache-Control` no fim. */
+    falhou = true;
+    console.error('[feed-meta] catálogo falhou:', (e as Error)?.message ?? e);
   }
 
   // A ORDEM DA LISTA É O DADO. O backend devolve por `novidades` (mais nova
   // primeiro) e o carimbo das 20 depende disso — nunca reordenar aqui.
   const validas = pecas.filter((p) => p.ref && p.slug && p.preco > 0);
+  /* Zero peça válida é anomalia, não notícia — trata igual à falha. */
+  if (!validas.length) {
+    falhou = true;
+    console.error(`[feed-meta] catálogo respondeu ${pecas.length} peça(s) e NENHUMA válida`);
+  }
   const novidades = carimbarNovidades(validas);
   const top30 = carimbarTop30(validas);
 
@@ -458,8 +476,12 @@ export async function GET() {
   return new Response(xml, {
     headers: {
       'Content-Type': 'application/xml; charset=utf-8',
-      // CDN no mesmo ritmo do ISR (1h); SWR cobre a virada sem buraco.
-      'Cache-Control': 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
+      // CDN no ritmo de 1h; SWR cobre a virada sem buraco. Resposta nascida de
+      // falha sai `no-store` — o vazio guardado apaga o catálogo do canal
+      // inteiro, e foi o que aconteceu no feed do Google em 14/09/2026.
+      'Cache-Control': falhou
+        ? 'no-store'
+        : 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
     },
   });
 }
