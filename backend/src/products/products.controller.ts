@@ -18,6 +18,22 @@ import { ProductsService } from './products.service';
 import { VendaCertaAutoMatchService } from './venda-certa-auto-match.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 
+/**
+ * /products — DUAS FAMÍLIAS DE ROTA, e vale saber qual é qual (14/09/2026).
+ *
+ * 🪦 MUSEU (responde **410 Gone com o motivo**, não 500 mudo): tudo que falava
+ * com o WooCommerce apagado em 27/08/2026 — `GET /products`, `GET /products/:id`,
+ * `POST /:id/sync-stock-from-erp`, `sync-all-stock-from-erp`, `stock-backup/*`,
+ * `restore-stock`, `draft-low-stock/*`, `sku-audit/*` e `sku-fix/*`. As rotas
+ * ficam porque as telas `/produtos` e `/auditoria-sku` ainda existem no
+ * frontend: rota apagada é tela quebrada muda, rota com 410 é tela que conta a
+ * verdade. O texto do erro vem de `woocommerce/wp-morto.ts`.
+ *
+ * ✅ VIVAS (100% Postgres, a loja usa todo dia): `GET /products/erp-search`
+ * (dropdown do PDV, Defeitos, troca de peça), `GET /products/store-search`
+ * (Consulta da filial) e `/products/transfer-orders*` (REPOSIÇÃO / VENDA
+ * CERTA, incluindo o auto-match). Nenhuma delas passa pelo WooCommerce.
+ */
 @Controller('products')
 @UseGuards(JwtAuthGuard)
 export class ProductsController {
@@ -59,6 +75,12 @@ export class ProductsController {
   /**
    * Dispara sync em massa (fire-and-forget).
    * Retorna 202 Accepted com o estado inicial.
+   *
+   * ⚠️ É o botão "Sincronizar tudo" da tela /produtos, e desde 14/09/2026 ele
+   * responde **410 Gone** com o motivo: sincronizar estoque "pro site" deixou
+   * de existir quando o WooCommerce foi apagado (27/08/2026) — hoje há UM
+   * lugar só, o Postgres do Flow, e a vitrine lê dele. O 202 abaixo só volta a
+   * valer se `KINGHOST_WP=1` apontar pra um WordPress novo.
    */
   @Post('sync-all-stock-from-erp')
   @HttpCode(202)
@@ -401,10 +423,12 @@ export class ProductsController {
   }
 
   /**
-   * Sobrescreve o estoque das variações de UM produto no WooCommerce
-   * com os valores do ERP e atualiza o produto pai com a soma.
+   * Sobrescrevia o estoque das variações de UM produto no WooCommerce com os
+   * valores do espelho e atualizava o produto pai com a soma.
    *
-   * ATENÇÃO: IRREVERSÍVEL. Frontend deve confirmar duas vezes antes de chamar.
+   * 🪦 410 Gone desde 14/09/2026 — não há mais WooCommerce pra sobrescrever
+   * (27/08/2026). A dupla confirmação do frontend continua lá e não faz mal:
+   * a rota nega antes de tocar em qualquer coisa.
    */
   @Post(':id/sync-stock-from-erp')
   @HttpCode(200)

@@ -14,9 +14,16 @@ import { WooCommerceController } from './woocommerce.controller';
  * módulo injeta mais nada de lá, e a dependência circular
  * WooCommerce ⇄ Pilot morreu junto.
  *
- * O `WooCommerceService` FICA: oito módulos vivos ainda o injetam (orders,
- * pdv, pick-orders, pilot, trocas, wc-returns, customers) e desligar isso é
- * mudança de comportamento, não remoção de código morto.
+ * O `WooCommerceService` FICA, agora TRANCADO (14/09/2026): todo método
+ * público sai na primeira linha por `exigirWordpressLegado` (410 Gone com o
+ * motivo) enquanto `KINGHOST_WP` não estiver ligada. Até este PR não havia
+ * guard nenhum e as chamadas iam de verdade até a internet ouvir **403 da
+ * Vercel** — o domínio hoje serve o site novo.
+ *
+ * Quem ainda o injeta: `orders` (pedido LEGADO do site velho, só depois de
+ * esgotar o ramo local), `pick-orders`, `pilot`, `trocas`, `wc-returns` e
+ * `customers`. A `pdv` SAIU em 14/09/2026 — era só a miniatura do carrinho,
+ * que voltou a funcionar lendo `product_photos` do Postgres.
  */
 @Module({
   imports: [

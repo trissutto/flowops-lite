@@ -3,11 +3,42 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { exigirWordpressLegado, WP_LEGADO_APAGADO_EM } from './wp-morto';
+import { wordpressLegadoLigado } from '../common/replica-giga';
 
 /**
- * Cliente REST do WooCommerce.
+ * Cliente REST do WooCommerce — **do site que não existe mais**.
  * - Autenticação: Basic Auth (consumer_key / consumer_secret).
  * - Loga toda saída em integration_logs.
+ *
+ * ── A TRANCA (14/09/2026) ──
+ *
+ * Todo método público sai na PRIMEIRA LINHA por `exigirWordpressLegado`
+ * enquanto `KINGHOST_WP` não estiver ligada (410 Gone com o motivo e a data).
+ * Até aqui não havia guard nenhum: as chamadas saíam de verdade pela internet
+ * e voltavam **HTTP 403 da Vercel** (o domínio hoje é o site novo, medido em
+ * 14/09/2026), gastando até 15s de timeout cada.
+ *
+ * Por que o guard vai em CADA método e não só no `baseUrl`: vários deles
+ * embrulham a chamada em `try/catch` que traduz o erro do axios — o
+ * `updateOrder`, por exemplo, terminaria em
+ * "WooCommerce recusou a atualização (HTTP undefined)", que é mentira sobre a
+ * causa. Fechando a porta antes do `try`, o motivo chega inteiro em quem
+ * chamou.
+ *
+ * ── QUEM AINDA CHAMA (e por quê não some) ──
+ *
+ * O PEDIDO LEGADO DO SITE VELHO (`Order.source='site'`, `wcOrderId` real,
+ * abaixo da faixa 900M da live e 950M da loja) é o único assunto que sobrou
+ * aqui: `orders.controller` cai nestes métodos só depois de esgotar o ramo
+ * local, e `trocas`/`wc-returns` usam `getOrder` com `catch` que volta pro
+ * Postgres. Pedido da live, da loja e do e-commerce novo nunca passam por
+ * aqui. A `pdv.controller` saiu de vez (a miniatura do carrinho virou
+ * `product_photos`), e nenhum caminho novo deve entrar.
+ *
+ * Antes deste PR o comportamento desses chamadores era: esperar a rede, ouvir
+ * 403, e então (a) cair no fallback local, ou (b) devolver erro com texto
+ * errado. Agora é o mesmo desvio, na hora, com o texto certo.
  */
 @Injectable()
 export class WooCommerceService {
@@ -29,61 +60,38 @@ export class WooCommerceService {
     };
   }
 
+  // O `getProductImageBySku` (foto por SKU, com cache de 1h) saiu daqui em
+  // 14/09/2026. Era a miniatura do carrinho do PDV, o último consumidor deste
+  // serviço fora do pedido legado, e o mais silencioso: pegava a exceção,
+  // cacheava `null` e devolvia "sem foto" — com o WordPress apagado, TODA peça
+  // do carrinho virou a bolinha com a inicial da REF sem uma linha de erro em
+  // lugar nenhum. A foto agora sai de `product_photos` (Postgres + R2), a
+  // mesma fonte da Consulta, da Separação e do site:
+  // `pdv/foto-produto.service.ts`.
+
+  // TRÊS MÉTODOS ÓRFÃOS SAÍRAM EM 14/09/2026 — varredura por chamador em
+  // `backend/src`, `frontend/src` e `ecommerce/src` não achou NENHUM:
+  //   • `updateOrderStatus` — virou o `updateOrder` (status + meta + nota numa
+  //     chamada só) e nunca foi retirado;
+  //   • `setTracking` — o rastreio ia junto no `updateOrder` desde o suporte
+  //     aos metas dos plugins de Correios/Melhor Envio;
+  //   • `fetchRecentOrders` — era a reconciliação do `WcPollerService`, que
+  //     saiu na Onda 2 (04/09/2026) com o resto da entrada de pedidos do WC.
+  // Guardar código morto apontando pra host morto é o dobro de museu: quem lê
+  // o arquivo acha que existe um caminho vivo de escrita no site velho.
+
   /**
-   * Busca a URL da imagem principal do produto no WooCommerce por SKU.
-   * Retorna null se não encontrar. Cache em memória de 1h pra não martelar
-   * a API a cada bipe.
+   * Retorna um pedido específico do WC (detalhe completo).
+   *
+   * Quem chama com `catch` (trocas, wc-returns) volta pro Postgres e a cliente
+   * nem percebe — o ganho aqui é não gastar 15s de timeout por tentativa no
+   * portal de trocas, que faz até três.
    */
-  private imageCache = new Map<string, { url: string | null; expires: number }>();
-  async getProductImageBySku(sku: string): Promise<string | null> {
-    if (!sku) return null;
-    const key = String(sku).trim();
-    const cached = this.imageCache.get(key);
-    if (cached && cached.expires > Date.now()) return cached.url;
-
-    try {
-      // Tenta primeiro buscar produto com SKU exato
-      const res = await firstValueFrom(
-        this.http.get(`${this.baseUrl}/products`, {
-          params: { sku: key, per_page: 1, _fields: 'id,sku,images,parent_id,variations' },
-          auth: this.auth,
-          timeout: 8000,
-        }),
-      );
-      let url: string | null = null;
-      const list = Array.isArray(res.data) ? res.data : [];
-      if (list.length > 0) {
-        const p = list[0];
-        if (p.images && p.images.length > 0) {
-          url = p.images[0].src || null;
-        }
-      }
-      // Cache resultado (positivo OU negativo) por 1h
-      this.imageCache.set(key, { url, expires: Date.now() + 60 * 60 * 1000 });
-      return url;
-    } catch (e: any) {
-      this.logger.warn(`getProductImageBySku falhou sku=${key}: ${e?.message}`);
-      // Cache negativo curto (5min) pra não tentar de novo a cada render
-      this.imageCache.set(key, { url: null, expires: Date.now() + 5 * 60 * 1000 });
-      return null;
-    }
-  }
-
-  async updateOrderStatus(wcOrderId: number, status: string) {
-    try {
-      const res = await firstValueFrom(
-        this.http.put(`${this.baseUrl}/orders/${wcOrderId}`, { status }, { auth: this.auth }),
-      );
-      await this.log('out', 'order.update_status', { wcOrderId, status }, res.status);
-      return res.data;
-    } catch (e: any) {
-      await this.log('out', 'order.update_status', { wcOrderId, status }, e?.response?.status, e.message);
-      throw e;
-    }
-  }
-
-  /** Retorna um pedido específico do WC (detalhe completo). */
   async getOrder(wcOrderId: number) {
+    exigirWordpressLegado(
+      'Abrir o detalhe deste pedido no site antigo',
+      'o pedido mora no Postgres do Flow — a ficha da /separacao monta a partir dele',
+    );
     const res = await firstValueFrom(
       this.http.get(`${this.baseUrl}/orders/${wcOrderId}`, { auth: this.auth }),
     );
@@ -93,6 +101,12 @@ export class WooCommerceService {
   /**
    * Atualização genérica de pedido — permite mandar status + meta_data + nota ao cliente
    * na mesma chamada.
+   *
+   * ⚠️ O guard vem ANTES da estratégia resiliente lá embaixo de propósito: ela
+   * traduz erro do axios e, sem resposta HTTP pra ler, terminaria em
+   * "WooCommerce recusou a atualização (HTTP undefined)" — texto que manda a
+   * próxima pessoa investigar status de pedido em vez de ler a data do
+   * enterro.
    */
   async updateOrder(
     wcOrderId: number,
@@ -104,6 +118,10 @@ export class WooCommerceService {
       customerNote?: string;
     },
   ) {
+    exigirWordpressLegado(
+      'Gravar status/rastreio deste pedido no site antigo',
+      'status, código de rastreio e aviso à cliente saem do Flow (a /separacao grava no Postgres e o aviso vai pelo WhatsApp/e-mail do próprio sistema)',
+    );
     const meta: Array<{ key: string; value: string }> = [];
     if (payload.trackingNumber !== undefined) {
       // WooCommerce Shipment Tracking (Woo oficial)
@@ -247,6 +265,10 @@ export class WooCommerceService {
    * `customer_note: true` → envia por email pro cliente.
    */
   async addOrderNote(wcOrderId: number, note: string, customerNote = false) {
+    exigirWordpressLegado(
+      'Gravar esta nota no pedido do site antigo',
+      'a nota vira histórico do pedido no Postgres (`order_history`), que é o que a ficha da /separacao mostra',
+    );
     try {
       const res = await firstValueFrom(
         this.http.post(
@@ -263,41 +285,14 @@ export class WooCommerceService {
     }
   }
 
-  /** Compatível com WooCommerce Shipment Tracking (meta_data). */
-  async setTracking(wcOrderId: number, tracking: { code: string; carrier: string }) {
-    const payload = {
-      meta_data: [
-        { key: '_tracking_number', value: tracking.code },
-        { key: '_tracking_carrier', value: tracking.carrier },
-      ],
-    };
-    try {
-      const res = await firstValueFrom(
-        this.http.put(`${this.baseUrl}/orders/${wcOrderId}`, payload, { auth: this.auth }),
-      );
-      await this.log('out', 'order.set_tracking', { wcOrderId, tracking }, res.status);
-      return res.data;
-    } catch (e: any) {
-      await this.log('out', 'order.set_tracking', { wcOrderId, tracking }, e?.response?.status, e.message);
-      throw e;
-    }
-  }
-
-  /** Reconciliação: baixa pedidos recentes. */
-  async fetchRecentOrders(afterIso: string) {
-    const res = await firstValueFrom(
-      this.http.get(`${this.baseUrl}/orders`, {
-        auth: this.auth,
-        params: { after: afterIso, per_page: 100 },
-      }),
-    );
-    await this.log('out', 'order.fetch_recent', { afterIso }, res.status);
-    return res.data;
-  }
-
   /**
    * Lista pedidos direto do WC (paginação). Espelha o admin do WooCommerce.
    * Retorna itens + total pro paginador.
+   *
+   * A tela de /separacao já não usa mais isto por default desde 22/08/2026
+   * (`SEPARACAO_WOOCOMMERCE=0` — o arquivo do site velho enchia as abas com
+   * 22.538 "concluídos" que ninguém ia trabalhar). Sobraram a busca por número
+   * de pedido no portal de trocas e o sync de clientes, os dois com `catch`.
    */
   async listOrders(params: {
     status?: string;
@@ -311,6 +306,10 @@ export class WooCommerceService {
     /** Qual data filtrar — 'modified' (default WC) ou 'created'. Usado pra "concluidos hoje" via date_modified */
     modifiedAfter?: string;
   }): Promise<{ data: any[]; total: number; totalPages: number }> {
+    exigirWordpressLegado(
+      'Listar pedidos no site antigo',
+      'a lista de pedidos é a do Postgres do Flow — inclusive os do site velho, que foram espelhados pra cá e continuam achando pela busca da /separacao',
+    );
     const qs: any = {
       per_page: params.perPage ?? 50,
       page: params.page ?? 1,
@@ -338,6 +337,10 @@ export class WooCommerceService {
    * Inclui status CUSTOM (ex: em-separacao).
    */
   async countByStatus(): Promise<Array<{ slug: string; name: string; total: number }>> {
+    exigirWordpressLegado(
+      'Contar os pedidos por status no site antigo',
+      'os contadores das abas da /separacao vêm do Postgres (`orders.countByStatus`) e contam só a operação viva',
+    );
     const res = await firstValueFrom(
       this.http.get(`${this.baseUrl}/reports/orders/totals`, { auth: this.auth }),
     );
@@ -358,6 +361,19 @@ export class WooCommerceService {
    *  - date_expires data validade ISO
    *
    * Retorna { ok, couponId, code, error }. Erro NAO bloqueia — caller decide.
+   *
+   * ── O ÚNICO MÉTODO DAQUI QUE **NÃO** LANÇA (14/09/2026) ──
+   *
+   * Aqui o contrato de falha já existia e já era honesto: `{ ok: false, error }`,
+   * com os dois chamadores (`trocas`, `wc-returns`) lendo o `error` e gravando
+   * warning. Trocar isso por exceção não melhoraria nada — os dois embrulham a
+   * chamada em `try/catch` e a exceção cairia no MESMO lugar, só que sem o
+   * texto do motivo chegar ao log. Então a porta fecha devolvendo o motivo
+   * dentro do contrato, sem gastar os 10s de timeout.
+   *
+   * E o vale da cliente NÃO depende disto: o crédito vive em `site_cupons`
+   * (site novo) e em `pdv_returns` (caixa), e todo lookup de vale-troca olha as
+   * DUAS fontes. O cupom no WooCommerce era a terceira, do site velho.
    */
   async createDiscountCoupon(input: {
     code: string;
@@ -375,6 +391,15 @@ export class WooCommerceService {
     const amount = Number(input.amount) || 0;
     if (!code || amount <= 0) {
       return { ok: false, error: `code/amount invalidos (code='${code}' amount=${amount})` };
+    }
+    if (!wordpressLegadoLigado()) {
+      return {
+        ok: false,
+        error:
+          `cupom no WooCommerce não existe mais: o WordPress do site antigo foi apagado em ${WP_LEGADO_APAGADO_EM} ` +
+          `(o endereço responde HTTP 403 pela Vercel). O vale da cliente vale por 'site_cupons' no site novo e ` +
+          `por 'pdv_returns' no caixa — nada a criar manualmente em lugar nenhum.`,
+      };
     }
     try {
       const body: any = {

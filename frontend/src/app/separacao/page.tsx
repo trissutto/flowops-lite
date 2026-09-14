@@ -2213,11 +2213,21 @@ function SeparacaoPageInner() {
 
 // =================================================================================
 // CarrinhosTab — aba "Carrinhos" da tela de separacao.
-// Le do plugin Cart Abandonment Recovery for WooCommerce (CartFlows) via
-// REST autenticada (HTTPS, sem precisar de MySQL externo).
-// Endpoint: /abandoned-carts (que chama /wp-json/flowops/v1/abandoned-carts/list)
-// Requer plugin PHP flowops-abandoned-carts em wp-content/mu-plugins/ do WP +
-// vars FLOWOPS_WP_BASE e FLOWOPS_WP_KEY no Railway.
+//
+// A FONTE DE HOJE É O POSTGRES (nossa base), pelas rotas
+// `/abandoned-carts/ecommerce/list` e `/ecommerce/stats` — carrinho do site
+// novo, com a régua de "abandonado" em `common/carrinho-abandonado.ts`
+// (CARRINHO_ESPERA_MIN, 60min desde o INÍCIO do checkout).
+//
+// O que esta aba lia ANTES, e que morreu em 27/08/2026 com o WordPress:
+//   • o plugin Cart Abandonment Recovery (CartFlows), via
+//     /wp-json/flowops/v1/abandoned-carts/list (FLOWOPS_WP_BASE/_KEY);
+//   • o fallback pela REST do WooCommerce (/abandoned-carts/wc-pending/list).
+// As duas chamadas continuam no código deste arquivo e simplesmente não
+// trazem nada — quando falham, a lista segue com o e-commerce novo, que é
+// onde a cliente compra desde 19/08/2026. Não há plugin pra reativar nem env
+// pra conferir: o servidor não existe mais (o endereço hoje responde 403 pela
+// Vercel, que serve o site novo).
 // =================================================================================
 type CarrinhoAB = {
   id: number;
@@ -2671,7 +2681,8 @@ function CarrinhosTab() {
         }
         setEcomFill(ecomVisiveis.length);
         setItems(arr);
-        setWarning(usouFallback ? ((listResp as any)?.warning || 'Mostrando dados parciais via WooCommerce — o plugin de carrinhos do site está fora do ar.') : null);
+        // "fora do ar" dava esperança de que voltasse. Foi APAGADO (27/08/2026).
+        setWarning(usouFallback ? ((listResp as any)?.warning || 'Mostrando dados parciais: o registro de carrinhos do site antigo foi apagado junto com ele em 27/08/2026.') : null);
       }
       // Normaliza: o plugin/WC pode mandar PLANO (abandoned) ou ANINHADO
       // (by_status.abandoned.qty/total). A tela lê plano — então achatamos aqui.
@@ -2947,14 +2958,25 @@ function CarrinhosTab() {
         </select>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
-        <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
+        <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Mostra o que cada fonte de carrinho respondeu (o site antigo, apagado em 27/08/2026, responde erro)">Diag</button>
         <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{ecomFill > 0 ? ` · ${ecomFill} do ecommerce` : ''}{noForno > 0 ? ` · ${noForno} ainda no checkout (aparecem depois de 1h)` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
       </div>
 
       {warning && !erro && (
         <div className="mb-2 bg-amber-50 border-2 border-amber-300 rounded-lg p-3 text-sm text-amber-900 flex items-start gap-2">
           <span className="font-bold">⚠️ Modo parcial:</span>
-          <span>{warning} Pra cobertura total, reative o plugin <b>flowops-abandoned-carts</b> no WordPress (ou confira <b>FLOWOPS_WP_BASE</b>/<b>FLOWOPS_WP_KEY</b>) — clique em <b>Diag</b> pra ver o erro.</span>
+          {/**
+            * ATÉ 14/09/2026 ESTA FRASE MANDAVA FAZER O IMPOSSÍVEL: "reative o
+            * plugin flowops-abandoned-carts no WordPress (ou confira
+            * FLOWOPS_WP_BASE/FLOWOPS_WP_KEY)". O WordPress foi apagado em
+            * 27/08/2026 — não há plugin pra reativar nem env que resolva, e
+            * quem lesse isso ia caçar uma configuração que não existe.
+            *
+            * O que é verdade: o que falta aqui é carrinho do site VELHO, e
+            * aquele site não vende desde 19/08/2026. O carrinho de hoje vem do
+            * Postgres pelas rotas `ecommerce/*` e continua na lista.
+            */}
+          <span>{warning} O que falta é carrinho do site antigo, que foi apagado em 27/08/2026 e não vende desde 19/08 — o carrinho de hoje vem do nosso banco e está na lista.</span>
         </div>
       )}
 
@@ -2963,7 +2985,11 @@ function CarrinhosTab() {
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
           Nenhum carrinho com esses filtros.
-          {!erro && <div className="text-[11px] mt-2 text-slate-500">Se voce sabe que tem carrinhos no plugin do WP, clique em <strong>Diag</strong> pra ver schema da tabela.</div>}
+          {/* Era "Se voce sabe que tem carrinhos no plugin do WP, clique em Diag
+              pra ver schema da tabela" — conselho impossível desde 27/08/2026,
+              e que ainda apontava a operadora pro lugar errado. A régua do que
+              entra nesta lista é a espera do checkout, não um plugin. */}
+          {!erro && <div className="text-[11px] mt-2 text-slate-500">Carrinho só entra aqui 1h depois do início do checkout — quem está pagando agora aparece depois. Confira também o período e o filtro de status.</div>}
         </div>
       ) : (
         <div className="space-y-2">
@@ -3204,7 +3230,14 @@ function CarrinhosTab() {
 
               {selected.source === 'woocommerce' && (
                 <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900">
-                  <b>Origem: WooCommerce.</b> Este é um pedido iniciado no site sem pagamento, trazido pra preencher um período em que o plugin de carrinhos não registrou nada. Os itens do carrinho não ficam disponíveis por aqui — consulte o pedido #{selected.id} no WooCommerce/painel do site.
+                  {/**
+                    * Mandava "consulte o pedido #X no WooCommerce/painel do
+                    * site" — o painel foi apagado em 27/08/2026 junto com o
+                    * WordPress. A ficha do pedido no Flow (/pedidos/wc/:id) lê
+                    * o Postgres e é o que sobrou, então é pra lá que a linha
+                    * aponta agora.
+                    */}
+                  <b>Origem: site antigo.</b> Pedido iniciado sem pagamento no site que saiu do ar em 19/08/2026, trazido pra preencher um período sem registro de carrinho. Os itens não ficam disponíveis por aqui — abra a ficha do pedido #{selected.id} no Flow (/pedidos/wc/{selected.id}).
                 </div>
               )}
 

@@ -33,7 +33,7 @@ import { PagarmeService } from '../pagarme/pagarme.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { CrediarioPrintService } from './crediario-print.service';
-import { WooCommerceService } from '../woocommerce/woocommerce.service';
+import { FotoProdutoService } from './foto-produto.service';
 import { ReturnsService } from './returns.service';
 import { CobrancasOnlineService } from './cobrancas-online.service';
 import { LastroRedeService } from './lastro-rede.service';
@@ -60,7 +60,7 @@ export class PdvController {
     private readonly crediarios: CrediariosService,
     private readonly crediarioBaixa: CrediarioBaixaService,
     private readonly crediarioPrint: CrediarioPrintService,
-    private readonly woo: WooCommerceService,
+    private readonly fotoProduto: FotoProdutoService,
     private readonly returns: ReturnsService,
     private readonly prisma: PrismaService,
     private readonly sombra: SombraService,
@@ -144,14 +144,22 @@ export class PdvController {
 
   /**
    * GET /pdv/product-image?sku=XXX
-   * Retorna URL da foto do produto no WooCommerce (cache 1h em memória).
-   * Usado pela tabela do carrinho do PDV pra mostrar miniatura ao lado do item.
+   * Capa da peça pra miniatura do carrinho do PDV. `{ url: null }` = esta peça
+   * não tem foto cadastrada (resposta, não erro).
+   *
+   * ⚠️ A FONTE MUDOU EM 14/09/2026: era `WooCommerceService` batendo em
+   * `WC_URL/wp-json/wc/v3/products?sku=X`, e o WordPress foi APAGADO em
+   * 27/08/2026 — o endereço hoje é o site novo e devolve 403 pela Vercel. Como
+   * o método antigo engolia o erro e cacheava `null` por 1h, TODA miniatura do
+   * carrinho virou a bolinha com a inicial da REF, calada, em produção. Agora
+   * lê `product_photos` (Postgres + R2), a mesma fonte da Consulta, da
+   * Separação, do Realinhamento e do site. Ver `foto-produto.service.ts`.
    */
   @Get('product-image')
   async getProductImage(@Req() req: any, @Query('sku') sku: string) {
     this.requireRole(req);
     if (!sku) return { url: null };
-    const url = await this.woo.getProductImageBySku(String(sku).trim());
+    const url = await this.fotoProduto.capaDeUmSku(String(sku).trim());
     return { url };
   }
 
@@ -163,8 +171,12 @@ export class PdvController {
    * conexões, e em loja com internet ruim a miniatura entrava piscando uma a
    * uma. Aqui a tela pede tudo de uma vez.
    *
-   * Retorna { urls: { [sku]: string | null } }. SKU que falhar vira null —
-   * miniatura é enfeite, nunca pode derrubar o carrinho.
+   * Retorna { urls: { [sku]: string | null } } com TODOS os SKUs pedidos —
+   * `null` é "esta peça não tem foto". Não há mais `catch` por SKU virando
+   * null: erro de banco SOBE como 500 honesto (o carrinho já trata miniatura
+   * como enfeite e desenha a inicial da REF). O `catch` por item existia pra
+   * segurar falha de rede contra o WooCommerce, e foi ele que fez a morte do
+   * site antigo passar semanas sem ninguém ver.
    */
   @Get('product-images')
   async getProductImages(@Req() req: any, @Query('skus') skus: string) {
@@ -174,17 +186,7 @@ export class PdvController {
       .map((s) => s.trim())
       .filter(Boolean)
       .slice(0, 60); // teto de segurança — carrinho real não passa disso
-    const unicos = Array.from(new Set(lista));
-    const urls: Record<string, string | null> = {};
-    await Promise.all(
-      unicos.map(async (sku) => {
-        try {
-          urls[sku] = (await this.woo.getProductImageBySku(sku)) || null;
-        } catch {
-          urls[sku] = null;
-        }
-      }),
-    );
+    const urls = await this.fotoProduto.capaPorSku(Array.from(new Set(lista)));
     return { urls };
   }
 
