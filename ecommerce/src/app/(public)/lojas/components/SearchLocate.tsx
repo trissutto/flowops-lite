@@ -170,7 +170,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
                   href={directionsUrl(nearest.store)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={() => trackStoreLocator(nearest.store.city, nearest.store.unit, 'mais_perto')}
+                  onClick={() => trackStoreLocator(nearest.store.city, nearest.store, 'mais_perto')}
                   className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--lj-ink)] px-5 py-3.5 text-sm font-medium text-white transition-colors hover:bg-[var(--lj-gold-strong)]"
                 >
                   <MapPin className="h-4 w-4" /> Como chegar
@@ -179,7 +179,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
                   href={whatsappUrl(nearest.store)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={() => trackWhatsAppClick('mais_perto', nearest.store.unit)}
+                  onClick={() => trackWhatsAppClick('mais_perto', nearest.store)}
                   className="inline-flex items-center justify-center gap-2 rounded-full bg-[#2E7D46] px-5 py-3.5 text-sm font-medium text-white transition-colors hover:bg-[#256538]"
                 >
                   <MessageCircle className="h-4 w-4" /> Chamar no WhatsApp
@@ -188,7 +188,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
                   href={instagramUrl(nearest.store)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={() => trackInstagramClick('mais_perto', nearest.store.unit)}
+                  onClick={() => trackInstagramClick('mais_perto', nearest.store)}
                   className="inline-flex items-center justify-center gap-2 rounded-full border border-[var(--lj-gold)] px-5 py-3.5 text-sm font-medium text-[var(--lj-gold-strong)] transition-colors hover:bg-[#FBF6E6]"
                 >
                   <Instagram className="h-4 w-4" /> Ver Instagram

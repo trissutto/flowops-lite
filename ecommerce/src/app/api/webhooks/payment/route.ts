@@ -71,6 +71,9 @@ const purchaseItemSchema = z.object({
 const purchaseSchema = z.object({
   number: textoObrigatorio,
   total: z.coerce.number().nonnegative(),
+  // Frete do pedido — vira `shipping` no purchase do GA4 (zod poda o que não
+  // está declarado, então sem esta linha ele morreria aqui).
+  shipping: z.coerce.number().nonnegative().optional().catch(undefined),
   coupon: texto,
   payment_method: textoObrigatorio,
   items: z.array(purchaseItemSchema).nullish().transform((v) => v ?? []),

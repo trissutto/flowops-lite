@@ -83,7 +83,7 @@ export default function NossasLojasClient({
       <Hero
         onFindStore={() => scrollToId('buscar')}
         onlineHref={onlineHref}
-        onOnlineClick={() => trackStoresOnlineCta('hero', hasSelectedStore ? selected.unit : undefined)}
+        onOnlineClick={() => trackStoresOnlineCta('hero', hasSelectedStore ? selected : undefined)}
         imagem={heroImagem}
       />
       <SearchLocate
@@ -102,7 +102,7 @@ export default function NossasLojasClient({
       <OnlineShoppingSection
         products={products}
         campaignParams={campaignParams}
-        storeUnit={hasSelectedStore ? selected.unit : undefined}
+        storeUnit={hasSelectedStore ? selected : undefined}
       />
       <Manifesto />
       <InstagramCta store={selected} />

@@ -149,6 +149,34 @@ export function metaServidorPodeReceber(state: ConsentState): boolean {
 }
 
 /**
+ * CONSENT MODE AVANÇADO do Google — só para quem NÃO DECIDIU.
+ *
+ * O que o Google chama de modo "avançado" é: a tag carrega sempre, e é o
+ * próprio gtag que decide o que sai pela rede a partir dos sinais de
+ * consentimento. Com `analytics_storage`/`ad_storage` NEGADOS ele não grava
+ * cookie nenhum e manda só "pings" sem identificador — que é exatamente o
+ * que alimenta a modelagem de comportamento do GA4 e a modelagem de
+ * conversão do Ads. No modo "básico" (o que existia até 14/09/2026) a tag
+ * nem entrava na página sem aceite, e o Google não tinha NADA para modelar:
+ * com ~15% de aceite, 85% do funil era invisível para as duas plataformas —
+ * a mesma cegueira que a CAPI da Meta já tinha deixado de ter em 17/08.
+ *
+ * A regra é a MESMA que vale para a perna servidor da Meta, e por isso mora
+ * ao lado dela:
+ *   • aceitou      → tag carrega, sinais concedidos conforme as categorias;
+ *   • não decidiu  → tag carrega com TUDO NEGADO (pings sem cookie, sem id);
+ *   • recusou      → tag NÃO carrega e nenhum evento sai. O "não" explícito
+ *                    continua valendo por inteiro — essa linha não se cruza.
+ *
+ * `NEXT_PUBLIC_CONSENT_MODE_AVANCADO=0` volta ao modo básico (só carrega com
+ * aceite) sem deploy de código novo — é o rollback.
+ */
+export function googlePodeCarregar(state: ConsentState): boolean {
+  if (process.env.NEXT_PUBLIC_CONSENT_MODE_AVANCADO === '0') return state.analytics || state.marketing;
+  return posturaDe(state) !== 'recusou';
+}
+
+/**
  * Grava a decisão, avisa quem estiver ouvindo e atualiza o Google.
  * `partial` permite "aceitar só analytics" sem inventar as outras chaves.
  */

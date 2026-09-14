@@ -32,14 +32,14 @@ export default function CampaignMobileBar({
               href={directionsUrl(selectedStore)}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => trackStoreLocator(selectedStore.city, selectedStore.unit, 'selected_store_bar')}
+              onClick={() => trackStoreLocator(selectedStore.city, selectedStore, 'selected_store_bar')}
               className="inline-flex items-center justify-center gap-1 rounded-full border border-[var(--lj-line)] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide"
             >
               <MapPin className="h-3.5 w-3.5" /> Como chegar
             </a>
             <AppLink
               href={onlineHref}
-              onClick={() => trackStoresOnlineCta('selected_store_bar', selectedStore.unit)}
+              onClick={() => trackStoresOnlineCta('selected_store_bar', selectedStore)}
               className="inline-flex items-center justify-center gap-1 rounded-full bg-[var(--lj-ink)] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-white"
             >
               <ShoppingBag className="h-3.5 w-3.5" /> Comprar online

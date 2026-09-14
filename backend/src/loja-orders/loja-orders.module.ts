@@ -8,6 +8,7 @@ import { LojaOrdersController } from './loja-orders.controller';
 import { CarrinhoGuardService } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.service';
+import { LojaPurchaseRetryService } from './loja-purchase-retry.service';
 import { LojaAdminController } from './loja-admin.controller';
 // Painel /retaguarda/cupons: vale de troca manual + campanha (dono, 01/09).
 import { CuponsAdminController } from './cupons-admin.controller';
@@ -60,6 +61,7 @@ import { RiscoModule } from '../risco/risco.module';
     // Rede de segurança do pagamento: o webhook não pode ser a única
     // confirmação, e a conciliação diária é quem descobre o que ninguém viu.
     LojaPagamentoReconcileService,
+    LojaPurchaseRetryService,
     // Avisa a cliente: dispara o evento pro fluxo do n8n (que já manda
     // WhatsApp e e-mail no site antigo) e, se ligado, manda o e-mail próprio.
     PedidoEmailService,

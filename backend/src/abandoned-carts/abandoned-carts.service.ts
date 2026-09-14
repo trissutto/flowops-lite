@@ -97,6 +97,8 @@ export class AbandonedCartsService {
     // Estes três são o que LIGA o carrinho ao clique do anúncio — sem eles
       // não há como casar gasto com abandono.
     por('gclid', 'gclid');
+    por('gbraid', 'gbraid'); // clique do Google em app iOS (sem gclid)
+    por('wbraid', 'wbraid'); // clique do Google na web iOS/ITP (sem gclid)
     por('fbclid', 'fbclid');
     por('landing_page', 'landing_page');
 

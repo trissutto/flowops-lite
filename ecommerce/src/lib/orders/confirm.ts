@@ -38,6 +38,8 @@ export interface WebhookPurchaseItem {
 export interface WebhookPurchase {
   number: string;
   total: number;
+  /** Frete do pedido — vira `shipping` no purchase do GA4. */
+  shipping?: number;
   coupon?: string;
   payment_method: string;
   items: WebhookPurchaseItem[];
@@ -107,6 +109,7 @@ export async function emitirPurchaseConfirmado(
       // O UUID do pedido é a chave de idempotência — o mesmo dos dois lados.
       transaction_id: orderId,
       value: purchase.total,
+      shipping: purchase.shipping,
       items: toTrackedItems(purchase.items ?? []),
       cupom: purchase.coupon,
       context: {

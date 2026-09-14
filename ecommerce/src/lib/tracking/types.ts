@@ -180,6 +180,9 @@ export interface Attribution {
    */
   id?: string;
   gclid?: string;
+  /** Ids de clique do Google Ads em iOS/ITP, onde `gclid` não vem. */
+  gbraid?: string;
+  wbraid?: string;
   fbclid?: string;
   landing_page?: string;
 }

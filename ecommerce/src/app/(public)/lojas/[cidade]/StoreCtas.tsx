@@ -24,7 +24,7 @@ export default function StoreCtas({ store }: { store: Store }) {
         href={whatsappUrl(store)}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={() => trackWhatsAppClick('store_page', store.unit)}
+        onClick={() => trackWhatsAppClick('store_page', store)}
         className="inline-flex items-center justify-center gap-2 rounded-full bg-[#2E7D46] px-5 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition hover:brightness-110"
       >
         <MessageCircle className="h-4 w-4" strokeWidth={1.75} aria-hidden /> Falar no WhatsApp
@@ -33,14 +33,14 @@ export default function StoreCtas({ store }: { store: Store }) {
         href={directionsUrl(store)}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={() => trackStoreLocator(store.city, store.unit, 'store_page')}
+        onClick={() => trackStoreLocator(store.city, store, 'store_page')}
         className="inline-flex items-center justify-center gap-2 rounded-full border border-[var(--lj-ink)] px-5 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--lj-ink)] transition hover:bg-[var(--lj-ink)] hover:text-white"
       >
         <Navigation className="h-4 w-4" strokeWidth={1.75} aria-hidden /> Como chegar
       </a>
       <a
         href={`tel:+55${store.whatsapp.slice(2)}`}
-        onClick={() => trackPhoneClick(store.unit, 'store_page')}
+        onClick={() => trackPhoneClick(store, 'store_page')}
         className="inline-flex items-center justify-center gap-2 rounded-full border border-[var(--lj-line)] bg-white px-5 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--lj-ink)] transition hover:border-[var(--lj-ink)]"
       >
         <Phone className="h-4 w-4" strokeWidth={1.75} aria-hidden /> {store.phone}
@@ -62,7 +62,7 @@ export function StoreHeroActions({ store }: { store: Store }) {
         href={directionsUrl(store)}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={() => trackStoreLocator(store.city, store.unit, 'store_hero')}
+        onClick={() => trackStoreLocator(store.city, store, 'store_hero')}
         className="inline-flex items-center justify-center gap-2 rounded-full border border-white/50 px-6 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition hover:border-white hover:bg-white hover:text-[var(--lj-ink)]"
       >
         <Navigation className="h-4 w-4" strokeWidth={1.75} aria-hidden /> Como chegar
@@ -77,7 +77,7 @@ export function StoreLaunchWhatsApp({ store }: { store: Store }) {
       href={whatsappUrl(store)}
       target="_blank"
       rel="noopener noreferrer"
-      onClick={() => trackWhatsAppClick('store_launches', store.unit)}
+      onClick={() => trackWhatsAppClick('store_launches', store)}
       className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-[#2E7D46] px-6 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition hover:brightness-110"
     >
       <MessageCircle className="h-4 w-4" strokeWidth={1.75} aria-hidden /> Consultar pelo WhatsApp

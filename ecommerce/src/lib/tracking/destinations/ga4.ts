@@ -11,6 +11,7 @@
  */
 
 import type { TrackingEvent, TrackedItem } from '../types';
+import { googlePodeCarregar } from '../consent';
 import { loadScript, type Destination } from './types';
 
 function measurementId(): string {
@@ -51,6 +52,19 @@ export const ga4: Destination = {
   id: 'ga4',
   label: 'GA4 / Google Ads',
   consent: 'analytics',
+  /**
+   * Consent Mode AVANÇADO (14/09/2026): a tag carrega para quem aceitou E para
+   * quem ainda não decidiu — neste segundo caso com todos os sinais NEGADOS,
+   * então o gtag não grava cookie e só manda pings sem identificador, que é
+   * o que o GA4 e o Ads usam para MODELAR o que não conseguem medir. Quem
+   * clicou "Só o necessário" continua sem tag e sem evento.
+   *
+   * Isto também conserta um efeito colateral da categoria única: quem aceitava
+   * só "Publicidade" (marketing) tinha `ad_storage: granted` no Consent Mode
+   * e mesmo assim a tag do Ads nunca entrava na página, porque o destino
+   * inteiro era gateado por "Análise".
+   */
+  podeReceber: googlePodeCarregar,
 
   isEnabled: () => Boolean(measurementId()),
 

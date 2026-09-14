@@ -39,7 +39,7 @@ export default function StoreLaunches({ products, store }: { products: Product[]
                   compact
                   sizes={HOME_GRID_SIZES}
                   href={storeLaunchProductHref(product)}
-                  onProductClick={() => trackStoresProductClick(product, index, store.unit)}
+                  onProductClick={() => trackStoresProductClick(product, index, store)}
                 />
               </div>
             ))}

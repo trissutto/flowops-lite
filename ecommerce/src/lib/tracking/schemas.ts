@@ -59,6 +59,10 @@ export const attributionSchema = z.object({
   /** `utm_id` — ID da campanha no Meta. Vira `Order.utmId` no backend. */
   id: z.string().optional(),
   gclid: z.string().optional(),
+  // zod PODA chave desconhecida: sem declarar aqui, o `gbraid`/`wbraid` do
+  // iOS chegaria do navegador e sumiria antes de virar pedido.
+  gbraid: z.string().optional(),
+  wbraid: z.string().optional(),
   fbclid: z.string().optional(),
   landing_page: z.string().optional(),
 });

@@ -143,6 +143,9 @@ export interface LojaTrackingInput {
      * feature que depende dele nunca liga — sem erro nenhum.
      */
     gclid?: string;
+    /** Ids de clique do Google Ads em iOS/ITP (Safari/app), onde `gclid` não vem. */
+    gbraid?: string;
+    wbraid?: string;
   };
   /**
    * Opt-in de WhatsApp, vindo da etapa 1 do checkout.
@@ -1154,6 +1157,11 @@ export class LojaOrdersService {
       // venda ao Google pelo servidor (`GoogleAdsConversaoService`), sem
       // depender do import do GA4 — o caminho que secou sozinho em 19/08/2026.
       gclid: attr.gclid || null,
+      // iOS/ITP: o Google manda `gbraid` (app) ou `wbraid` (web) no lugar do
+      // `gclid`. O upload de conversão aceita os três — sem eles, todo clique
+      // pago de iPhone caía no casamento por e-mail/telefone (14/09/2026).
+      gbraid: attr.gbraid || null,
+      wbraid: attr.wbraid || null,
       checkoutInfo: JSON.stringify(checkoutInfo),
       trackingInfo: trackingInfo ? JSON.stringify(trackingInfo) : null,
       // Sinal de risco, não de métrica — ver `Order.clienteIp`.
@@ -2617,12 +2625,12 @@ export class LojaOrdersService {
    * configuradas, pula em silêncio (debug) — é o caso do ambiente que ainda
    * não subiu o site novo.
    */
-  private async notificarEcommerce(order: any): Promise<void> {
+  private async notificarEcommerce(order: any): Promise<boolean> {
     const url = (process.env.ECOMMERCE_URL || '').replace(/\/+$/, '');
     const secret = process.env.PAYMENT_WEBHOOK_SECRET || '';
     if (!url || !secret) {
       this.logger.debug(`[loja] purchase não notificado (ECOMMERCE_URL/PAYMENT_WEBHOOK_SECRET ausentes)`);
-      return;
+      return false;
     }
 
     try {
@@ -2656,6 +2664,9 @@ export class LojaOrdersService {
         purchase: {
           number: order.wcOrderNumber,
           total: this.dinheiro(order.totalAmount),
+          // Frete separado: o GA4 espera `shipping` no purchase (receita de
+          // produto = value − shipping). Sem ele o frete entrava como receita.
+          shipping: this.dinheiro(ck.shippingPrice ?? 0),
           ...(ck.couponCode ? { coupon: ck.couponCode } : {}),
           payment_method: pi.method === 'card' ? 'credit_card' : 'pix',
           items,
@@ -2690,11 +2701,36 @@ export class LojaOrdersService {
         }),
       );
       this.logger.log(`[loja] purchase notificado ao e-commerce (pedido ${order.wcOrderNumber})`);
+      // Carimbo persistente: é o que impede o retry de reenviar o que o site já
+      // emitiu, e o que denuncia (NULL) a venda que nunca virou purchase.
+      await (this.prisma as any).order
+        .update({ where: { id: order.id }, data: { purchaseNotificadoEm: new Date() } })
+        .catch(() => undefined);
+      return true;
     } catch (e: any) {
-      // Só loga: o pedido está pago, a Meta que espere o retry manual.
+      // O pedido está pago; o `LojaPurchaseRetryService` tenta de novo em minutos.
       this.logger.warn(
-        `[loja] purchase NÃO notificado (pedido ${order?.wcOrderNumber} segue pago): ${e?.response?.status || ''} ${e?.message || e}`,
+        `[loja] purchase NÃO notificado (pedido ${order?.wcOrderNumber} segue pago, entra no retry): ${e?.response?.status || ''} ${e?.message || e}`,
       );
+      await (this.prisma as any).order
+        .update({ where: { id: order.id }, data: { purchaseNotificadoTentativas: { increment: 1 } } })
+        .catch(() => undefined);
+      return false;
     }
+  }
+
+  /**
+   * Reenvio do `purchase` que o site não confirmou — chamado pelo
+   * `LojaPurchaseRetryService`. Público de propósito: o payload é montado pelo
+   * mesmo `notificarEcommerce`, então o retry manda EXATAMENTE o que o webhook
+   * teria mandado (mesmo `transaction_id`, mesmos sinais do navegador).
+   */
+  async reenviarPurchase(orderId: string): Promise<boolean> {
+    const order = await (this.prisma as any).order.findUnique({
+      where: { id: orderId },
+      include: { items: true },
+    });
+    if (!order || !order.paidAt || order.purchaseNotificadoEm) return false;
+    return this.notificarEcommerce(order);
   }
 }

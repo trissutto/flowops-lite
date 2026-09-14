@@ -22,6 +22,8 @@ import type { EventContext, TrackedItem, TrackingEvent } from '../types';
 export interface ServerPurchaseInput {
   transaction_id: string;
   value: number;
+  /** Frete pago pela cliente — vira `shipping` no purchase (GA4 separa receita de produto). */
+  shipping?: number;
   items: TrackedItem[];
   cupom?: string;
   /** Contexto capturado no checkout — sem ele a atribuição se perde. */
@@ -71,7 +73,10 @@ export async function trackPurchase(input: ServerPurchaseInput): Promise<{ ok: b
     event_id: `purchase-${input.transaction_id}`,
     timestamp: input.payment.confirmed_at || new Date().toISOString(),
     context: fullContext(input.context),
-    params: { payment_method: input.payment.method },
+    params: {
+      payment_method: input.payment.method,
+      ...(input.shipping !== undefined ? { shipping: input.shipping } : {}),
+    },
     items: input.items,
     value: input.value,
     cupom: input.cupom,

@@ -101,7 +101,7 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
             rel="noopener noreferrer"
             onClick={(e) => {
               e.stopPropagation();
-              trackStoreLocator(store.city, store.unit, 'store_card');
+              trackStoreLocator(store.city, store, 'store_card');
             }}
             className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[var(--lj-ink)] px-3 py-3 text-xs font-medium text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-[var(--lj-gold-strong)] sm:py-2.5"
           >
@@ -113,7 +113,7 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
             rel="noopener noreferrer"
             onClick={(e) => {
               e.stopPropagation();
-              trackWhatsAppClick('store_card', store.unit);
+              trackWhatsAppClick('store_card', store);
             }}
             className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#2E7D46] px-3 py-3 text-xs font-medium text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#256538] sm:py-2.5"
           >
