@@ -127,10 +127,17 @@ export class NfeTransferService {
     const endpoint = SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao;
 
     // Registra o doc ANTES de transmitir (rastreabilidade mesmo se a SEFAZ cair).
+    // `chave` nasce NULA, nunca string vazia: a coluna é @unique e no Postgres
+    // dois '' COLIDEM (dois NULL, não). Entre este create e o update que grava
+    // a chave real passam ~1,5s de assinatura + SEFAZ, e duas emissões de lojas
+    // diferentes dentro dessa janela batiam em "Unique constraint failed on the
+    // fields: (`chave`)": a SEGUNDA saía SEM NOTA, em silêncio (falha de NF-e
+    // não trava o envio). Foi o LP-001413 em 14/09/2026 12:54:45 UTC, 76ms
+    // depois do doc da loja 06.
     const doc = await this.prisma.nfeDoc.create({
       data: {
         shipmentId, fromStoreCode: origem.storeCode, toStoreCode: destino.storeCode,
-        modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop, valorTotalCents,
+        modelo: '55', serie, numero, cNF: '', chave: null, tpAmb, natOp, cfop, valorTotalCents,
         status: 'pending', emittedByUserId: opts.userId ?? null,
       },
     });
@@ -1524,10 +1531,12 @@ export class NfeTransferService {
     const natOp = natOpRegra;
     const dest = { cpfCnpj, nome, endereco, numero: custNumero, bairro, cidade, uf, cep, codMun };
 
+    // `chave` NULA (nunca ''): a coluna é @unique e dois '' colidem no Postgres,
+    // derrubando a segunda emissão simultânea. Comentário longo no emitTransfer.
     const doc = await this.prisma.nfeDoc.create({
       data: {
         shipmentId: linkId, fromStoreCode: sale.storeCode, toStoreCode: sale.storeCode,
-        modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop,
+        modelo: '55', serie, numero, cNF: '', chave: null, tpAmb, natOp, cfop,
         valorTotalCents: Math.round((valorTotal + vFrete) * 100), status: 'pending',
         emittedByUserId: opts.userId ?? null,
       },
@@ -1672,10 +1681,12 @@ export class NfeTransferService {
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
     const dest = { cpfCnpj, nome: d.nome, endereco: d.endereco, numero: d.numero || 'S/N', bairro: d.bairro || 'CENTRO', cidade: d.cidade, uf: d.uf, cep: this.digits(d.cep), codMun: this.digits(d.codMun) };
 
+    // `chave` NULA (nunca ''): a coluna é @unique e dois '' colidem no Postgres,
+    // derrubando a segunda emissão simultânea. Comentário longo no emitTransfer.
     const doc = await this.prisma.nfeDoc.create({
       data: {
         shipmentId: linkId, fromStoreCode: input.storeCode, toStoreCode: input.storeCode,
-        modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop,
+        modelo: '55', serie, numero, cNF: '', chave: null, tpAmb, natOp, cfop,
         valorTotalCents: Math.round((valorTotal - vDesc + vFrete) * 100), status: 'pending',
       },
     });
