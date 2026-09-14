@@ -57,6 +57,28 @@ export interface Variante {
   grupo: string | null;
 }
 
+/**
+ * FOTO DO WORDPRESS APAGADO NÃO SAI NO FEED — a rede, não a cura.
+ *
+ * A CURA é no backend (`common/foto-viva.ts` + `montarPeca`): peça cuja
+ * galeria inteira está no WordPress morto passa a sair do catálogo, e como os
+ * feeds leem o catálogo ela nem chega aqui. Esta função existe porque o
+ * backend e o site sobem em deploys separados e o feed fica cacheado até uma
+ * hora — enquanto uma das duas pontas estiver velha, o item continuaria
+ * saindo com `<g:image_link>` em `lurds.com.br/wp-content/...`, que responde
+ * 403 desde 27/08/2026 e faz o Google REPROVAR o item (medido em 14/09: 48
+ * dos 945 itens, mais 152 fotos extras).
+ *
+ * O corte é pelo CAMINHO e não pelo host: `lurds.com.br` é o site vivo.
+ */
+const CAMINHOS_DO_WP_MORTO = /\/wp-(content|includes)\//i;
+
+function fotosVivas(lista: readonly (string | null | undefined)[] | null | undefined): string[] {
+  return (lista ?? [])
+    .map((u) => String(u ?? '').trim())
+    .filter((u) => u && !CAMINHOS_DO_WP_MORTO.test(u));
+}
+
 export function slugCor(nome: string): string {
   return String(nome ?? '')
     .normalize('NFD')
@@ -78,23 +100,36 @@ export function slugCor(nome: string): string {
  * Só entra cor COM foto própria e COM estoque. Peça que ainda serve foto do
  * acervo antigo não tem foto por cor e sai como item único, exatamente como
  * antes: a virada não multiplica item reprovado.
+ *
+ * ⚠️ LISTA VAZIA = A PEÇA NÃO SAI (14/09/2026). Sem uma única foto que abra,
+ * o item é reprovado de qualquer jeito — e é melhor não mandar do que mandar
+ * quebrado. Devolver `[]` tira a peça dos DOIS feeds de uma vez, e isso é
+ * requisito e não efeito colateral: o Google casa o inventário local com o
+ * feed nacional **pelo `id`**, então item local sem par nacional falha calado
+ * (a vitrine da loja simplesmente não aparece na ficha). O `id` de quem
+ * sobrevive não muda — REF na cor principal, como sempre.
  */
 export function variantes(p: PecaFeed): Variante[] {
+  const fotosDaPeca = fotosVivas(p.imagens);
   const unica: Variante = {
     id: p.ref,
     cor: p.cores[0] ?? '',
-    fotos: p.imagens.filter(Boolean),
+    fotos: fotosDaPeca,
     tamanhos: p.tamanhos,
     grupo: null,
   };
+  /* Filtra a galeria de cada cor ANTES do teste "tem foto própria": cor cuja
+   * galeria inteira é do WP morto não tem foto nenhuma, e deixá-la virar item
+   * geraria um anúncio sem imagem com id novo — o pior dos dois mundos. */
   const vendaveis = (p.coresDetalhe ?? [])
-    .filter((c) => c.estoque > 0 && (c.fotos?.length ?? 0) > 0)
+    .map((c) => ({ ...c, fotos: fotosVivas(c.fotos) }))
+    .filter((c) => c.estoque > 0 && c.fotos.length > 0)
     .sort((a, b) => b.estoque - a.estoque);
-  if (vendaveis.length < 2) return [unica];
+  if (vendaveis.length < 2) return unica.fotos.length ? [unica] : [];
   return vendaveis.map((c, n) => ({
     id: n === 0 ? p.ref : `${p.ref}-${slugCor(c.nome)}`,
     cor: c.nome,
-    fotos: c.fotos.filter(Boolean),
+    fotos: c.fotos,
     tamanhos: c.tamanhos?.length ? c.tamanhos : p.tamanhos,
     grupo: p.ref,
   }));
