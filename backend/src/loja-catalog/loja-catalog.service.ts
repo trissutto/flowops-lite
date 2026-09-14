@@ -2730,8 +2730,13 @@ export class LojaCatalogService {
       linhaConforto: boolean;
     }>
   > {
-    /** Quantas peças contam como novidade. Env pra tunar sem deploy. */
-    const NOVIDADES_QTD = Math.max(1, Number(process.env.NOVIDADES_FEED_QTD ?? 25));
+    /**
+     * Quantas REFs contam como novidade — as ÚLTIMAS CADASTRADAS no Flow, fora
+     * da Linha Conforto. Combinado com o dono (14/09/2026): a vitrine das
+     * campanhas de loja é "Linha Conforto + as últimas 30 cadastradas". Env
+     * pra tunar sem deploy; o default é a régua combinada.
+     */
+    const NOVIDADES_QTD = Math.max(1, Number(process.env.NOVIDADES_FEED_QTD ?? 30));
     // REFs curadas da "Mais Top da Semana" — pra carimbar custom_label_1 no feed.
     const topSemanaRefs = new Set(await this.colecaoRefs('mais-top-da-semana'));
     /**
