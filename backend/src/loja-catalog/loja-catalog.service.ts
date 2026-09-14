@@ -7,7 +7,7 @@ import { classificarPorNome } from './classificacao-por-nome';
 import { aplicarDescontoPromo } from '../common/promo-julho';
 import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.service';
 import { EventLoopService } from '../health/event-loop.service';
-import { sqlEstoqueEntregavelPorCodigo } from '../common/estoque-entregavel';
+import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { coresDoFeed, tamanhosDoFeed } from '../common/atributos-do-feed';
 import { casaBusca } from '../common/busca-texto';
@@ -590,65 +590,6 @@ export class LojaCatalogService {
     };
   }
 
-  /* ── VOCABULÁRIO DE COR DA REDE ──────────────────────────────────────────
-   *
-   * Os valores do campo COR do próprio cadastro. É o que permite ao
-   * `limparNomeVitrine` saber que "Mostarda" é COR — e tirá-la do título de
-   * uma peça que só vende BEGE (ver "COR QUE A PEÇA NÃO TEM" lá, e o pedido
-   * separado errado em Piracicaba, 09/09/2026).
-   *
-   * VALOR INTEIRO, nunca palavra solta: tem cor gravada com o nome da peça
-   * grudado ("BLUSA MANGA CURTA ESTAMPA MOSTARDA"), e tokenizar isso poria
-   * "blusa" no vocabulário de cor — aí o título de toda blusa sumia.
-   *
-   * `>= 2 REFs` corta o dedo escorregado: cor que só uma REF no cadastro
-   * inteiro usa não é vocabulário, é digitação.
-   */
-  private coresDaRede: string[] = [];
-  private coresDaRedeEm = 0;
-  private static readonly CORES_REDE_TTL_MS = 6 * 60 * 60 * 1000;
-
-  /**
-   * Enche o vocabulário (uma vez a cada 6h) antes de montar nome de peça.
-   *
-   * FALHA PRA FRENTE de propósito: sem a lista o `limparNomeVitrine` volta ao
-   * comportamento de antes — nome como está, nada é cortado. Aqui a leitura
-   * vazia NÃO inventa dado nenhum (é o contrário: deixa de apagar), então
-   * derrubar a montagem do catálogo inteiro por causa dela seria trocar um
-   * título feio por uma vitrine fora do ar.
-   */
-  private async garantirCoresDaRede(): Promise<void> {
-    const fresco = Date.now() - this.coresDaRedeEm < LojaCatalogService.CORES_REDE_TTL_MS;
-    if (fresco && this.coresDaRede.length) return;
-    try {
-      const linhas: Array<{ cor: string }> = await this.prisma.$queryRawUnsafe(`
-        SELECT UPPER(TRIM(cor)) AS cor
-          FROM wincred_produtos
-         WHERE cor IS NOT NULL AND TRIM(cor) <> ''
-         GROUP BY 1
-        HAVING COUNT(DISTINCT UPPER(TRIM(ref))) >= 2
-      `);
-      /**
-       * COR QUE NOMEIA UMA PEÇA É LIXO DE CADASTRO, NÃO VOCABULÁRIO.
-       *
-       * Tem cor gravada com o nome da roupa colado ("BLUSA MANGA CURTA
-       * ESTAMPA MOSTARDA" — ver o card duplicado da vitrine, 22/08). Deixar
-       * uma dessas no vocabulário é armar a tesoura contra o nome de todas as
-       * peças daquele tipo. `tipoDePeca` é a MESMA régua que separa produto de
-       * produto na REF reciclada.
-       */
-      this.coresDaRede = linhas
-        .map((l) => String(l.cor || ''))
-        .filter((c) => c && !this.tipoDePeca(c));
-      this.coresDaRedeEm = Date.now();
-      this.logger.log(`[nome-vitrine] vocabulário de cor: ${this.coresDaRede.length} valores`);
-    } catch (e: any) {
-      this.logger.warn(
-        `[nome-vitrine] não li as cores do cadastro (${e?.message ?? e}) — nome da peça fica como está`,
-      );
-    }
-  }
-
   /**
    * A REF-BASE em SQL — a MESMA regra de `common/ref-base.ts`, no banco.
    *
@@ -681,14 +622,11 @@ export class LojaCatalogService {
       p."dataAlt"                                 AS "dataAlt"
     FROM wincred_produtos p
     LEFT JOIN (
-      -- ── SÓ O QUE A REDE CONSEGUE ENTREGAR (common/estoque-entregavel.ts) ──
-      -- Sem a loja-canal (dono, 24/08: o saldo dela não é peça na arara — eram
-      -- 5 SKUs cujo único estoque positivo da rede estava lá), sem loja
-      -- INATIVA e sem a peça marcada como EXTRAVIADA naquela loja. São as
-      -- MESMAS exclusões do roteamento: enquanto a vitrine somava o bruto, o
-      -- site prometia 184 SKUs / 332 peças que nenhuma loja podia separar
-      -- (medido em produção, 13/09).
-      ${sqlEstoqueEntregavelPorCodigo()}
+      -- SEM A LOJA-CANAL (dono, 24/08): o saldo dela não é peça na arara, e o
+      -- site não pode prometer o que ninguém tem. Ver common/loja-canal.ts —
+      -- eram 5 SKUs cujo único estoque positivo da rede estava lá.
+      SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
+        FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
     ) e ON e.codigo = p.codigo
     -- ── MENOS O QUE JÁ ESTÁ PROMETIDO A OUTRA CLIENTE (31/08) ──
     -- A vitrine passa a contar o MESMO número que o guarda do carrinho cobra
@@ -1306,7 +1244,6 @@ export class LojaCatalogService {
         ref,
         Array.from(cores.keys()),
         linhas.find((l) => l.marca)?.marca,
-        this.coresDaRede,
       ) || ref;
 
     /**
@@ -2167,9 +2104,6 @@ export class LojaCatalogService {
   }
 
   private async montarCatalogo(): Promise<any[]> {
-    // O vocabulário de cor tem que estar na mão ANTES do primeiro nome —
-    // `montarPeca` é síncrono e lê `this.coresDaRede` direto.
-    await this.garantirCoresDaRede();
     // 1) REFs publicadas (curadoria) — a lista de saída nunca é maior que isso
     const publicadas: any[] = await (this.prisma as any).siteProduto.findMany({
       where: { publicado: true }, select: { ref: true },
@@ -2670,8 +2604,34 @@ export class LojaCatalogService {
       /** Slug da coleção PONTUAL que contém a REF ('resort') — carimba o feed. */
       colecaoSlug: string | null;
       lancamento: boolean;
+      /**
+       * NOVIDADE POR CONTAGEM — os N mais recém-cadastrados (dono, 14/09):
+       * *"a regra das novidades é assim: últimos 25 produtos cadastrados"*.
+       *
+       * ⚠️ NÃO é o mesmo que `lancamento`, que é JANELA DE TEMPO
+       * (`NOVIDADE_DIAS`, 60 dias). Os dois coexistem de propósito e a
+       * diferença importa: em 14/09 a janela devolvia 25 peças e a contagem de
+       * 30 alcançava 100 dias atrás, porque **nada foi cadastrado desde
+       * 27/08**. Janela esvazia quando o cadastro para; contagem nunca — e é
+       * por isso que quem anuncia usa contagem. `lancamento` continua servindo
+       * o badge "novo" da vitrine, que deve sumir quando a peça envelhece.
+       */
+      novidade: boolean;
+      /**
+       * A peça está na LINHA CONFORTO — a campanha de loja anuncia só
+       * novidade + conforto (dono, 14/09).
+       *
+       * Olha as QUATRO pontas porque a peça entra na linha por caminhos
+       * diferentes: `categoria`/`subcategoria` quando é a classificação
+       * primária dela, e `categoriasExtras`/`subcategoriasExtras` quando a
+       * curadoria a acrescentou por cima (é o caso da maioria —
+       * `blusas-conforto` e `vestidos-conforto` vivem nos extras).
+       */
+      linhaConforto: boolean;
     }>
   > {
+    /** Quantas peças contam como novidade. Env pra tunar sem deploy. */
+    const NOVIDADES_QTD = Math.max(1, Number(process.env.NOVIDADES_FEED_QTD ?? 25));
     // REFs curadas da "Mais Top da Semana" — pra carimbar custom_label_1 no feed.
     const topSemanaRefs = new Set(await this.colecaoRefs('mais-top-da-semana'));
     /**
@@ -2712,7 +2672,23 @@ export class LojaCatalogService {
       if (!(r.itens as any[]).length) break;
       itens.push(...(r.itens as any[]));
     }
-    return itens.map((p) => ({
+    /**
+     * "conforto" em QUALQUER das quatro pontas de classificação. Casa por
+     * substring de propósito: a linha aparece como `linha-conforto` na
+     * categoria e como `blusas-conforto` / `vestidos-conforto` nas
+     * subcategorias, e amarrar a uma lista fixa de slugs quebraria no dia em
+     * que a curadoria criasse `calcas-conforto`.
+     */
+    const temConforto = (v: unknown) => /conforto/i.test(String(v ?? ''));
+    const ehConforto = (p: any) =>
+      temConforto(p.categoria) ||
+      temConforto(p.subcategoria) ||
+      (Array.isArray(p.categoriasExtras) ? p.categoriasExtras : []).some(temConforto) ||
+      (Array.isArray(p.subcategoriasExtras) ? p.subcategoriasExtras : []).some(temConforto);
+
+    /* `itens` vem de `listar({ ordenar: 'novidades' })`, já em ordem de
+     * cadastro — então o ÍNDICE é a régua da contagem, sem consulta extra. */
+    return itens.map((p, indice) => ({
       ref: p.ref,
       slug: p.slug,
       nome: p.nome,
@@ -2771,6 +2747,19 @@ export class LojaCatalogService {
       })).filter((c: any) => c.nome),
       topSemana: topSemanaRefs.has(this.refKey(p.ref)),
       colecaoSlug: colecaoPorRef.get(this.refKey(p.ref)) ?? null,
+      /**
+       * Últimas `NOVIDADES_QTD` cadastradas **menos as da Linha Conforto**
+       * (dono, 14/09): *"catálogo novidades são as últimas 25 peças cadastradas
+       * exceto as que pertencem à linha conforto"*.
+       *
+       * 🔑 A exclusão é o que torna os dois conjuntos MUTUAMENTE EXCLUSIVOS, e
+       * isso não é detalhe: no filtro de listagem da PMax uma peça só pode
+       * pertencer a UM grupo de recursos por campanha. Sem essa regra, peça
+       * nova de conforto cairia nos dois e o Google recusaria a configuração
+       * por sobreposição.
+       */
+      novidade: indice < NOVIDADES_QTD && !ehConforto(p),
+      linhaConforto: ehConforto(p),
       // ≤30 dias desde a PRIMEIRA VENDA (a mesma flag do badge "novo"). O feed usa
       // pra carimbar Novidade só em peça nova DE VERDADE (senão enche com peça de
       // 60-90 dias pra completar 20 — o "peça velha como nova" que o dono pegou).
@@ -3367,9 +3356,6 @@ export class LojaCatalogService {
   async porSlug(slug: string) {
     const chave = String(slug || '').trim();
     if (!chave) return null;
-    // Mesma razão do `montarCatalogo`: a PDP também monta peça, e o nome dela
-    // precisa do vocabulário de cor pra não anunciar cor que a peça não tem.
-    await this.garantirCoresDaRede();
 
     /**
      * A PDP É O MESMO CARD DA VITRINE (12/08/2026).
@@ -3962,7 +3948,6 @@ export class LojaCatalogService {
     const coresDaRef = Array.from(
       new Set(linhas.map((l) => l.cor).filter(Boolean)),
     ) as string[];
-    await this.garantirCoresDaRede();
     return (this.prisma as any).siteProduto.create({
       data: {
         ref: chave,
@@ -3980,7 +3965,6 @@ export class LojaCatalogService {
             chave,
             coresDaRef,
             linhas.find((l) => l.marca)?.marca,
-            this.coresDaRede,
           ) ||
           chave,
       },
@@ -4007,7 +3991,7 @@ export class LojaCatalogService {
         SELECT COUNT(*)::int AS n FROM (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (${sqlEstoqueEntregavelPorCodigo()}) e
+            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
               ON e.codigo = p.codigo
            WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
            GROUP BY 1 HAVING SUM(COALESCE(e.total,0)) <= 0
@@ -4033,7 +4017,7 @@ export class LojaCatalogService {
         LEFT JOIN (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (${sqlEstoqueEntregavelPorCodigo()}) e
+            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
               ON e.codigo = p.codigo
            GROUP BY 1
         ) k ON k.ref = s.ref
