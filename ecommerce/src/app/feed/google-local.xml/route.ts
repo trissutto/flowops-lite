@@ -155,13 +155,13 @@ export async function GET() {
    */
   let falhou = false;
   await Promise.all([
-    api<PecaFeed[]>('/public/loja/feed?rev=1', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
+    api<PecaFeed[]>('/public/loja/feed?rev=2', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
       .then((r) => { pecas = r ?? []; })
       .catch((e) => {
         falhou = true;
         console.error('[feed-local] catálogo nacional falhou:', e?.message ?? e);
       }),
-    api<EstoqueLoja[]>('/public/loja/feed-local', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
+    api<EstoqueLoja[]>('/public/loja/feed-local?rev=2', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
       .then((r) => { estoques = r ?? []; })
       .catch((e) => {
         falhou = true;
