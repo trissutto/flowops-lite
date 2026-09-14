@@ -10,6 +10,7 @@ import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { coresDoFeed, tamanhosDoFeed } from '../common/atributos-do-feed';
+import { fotosVivas } from '../common/foto-viva';
 import { veredictoDaGrade } from '../common/grade-furada';
 import { casaBusca } from '../common/busca-texto';
 import { ordenarGradeDaCategoria } from '../common/ordem-por-subcategoria';
@@ -706,6 +707,30 @@ export class LojaCatalogService {
      */
     precoDeRegistrado: Map<string, number> | null = null,
   ) {
+    /* ── FOTO DO WORDPRESS APAGADO SAI ANTES DE TUDO (14/09/2026) ──────────
+     *
+     * A galeria do R2 entra aqui como `fotos` (linhas de `product_photos`) e
+     * governa MUITO mais que a capa: é ela que decide quais cores são
+     * visíveis, qual cor abre a PDP e se a peça chega à vitrine. Por isso o
+     * corte é na ENTRADA — se a foto morta sobrevivesse até a montagem da
+     * galeria, ela continuaria mandando na bolinha e no card.
+     *
+     * Hoje `product_photos` não tem nenhuma linha de `/wp-content/` (medido:
+     * 5.657 fotos, todas no R2). Isto é guarda, não conserto: o que estava
+     * furado era o FALLBACK do acervo do WC, logo abaixo. Ver
+     * `common/foto-viva.ts` pro incidente inteiro.
+     *
+     * O acervo do WC (`site_produto.imagens`) é filtrado no mesmo movimento,
+     * e as duas contagens somam `fotosMortasDescartadas` — é esse número que
+     * impede "peça sem foto" de virar vazio calado na hora do relatório.
+     */
+    const fotosDoR2 = fotosVivas(fotos, (f: any) => f?.url ?? f?.src);
+    const acervoWc = fotosVivas((site?.imagens as any[]) ?? [], (i: any) => i?.src);
+    const fotosMortasDescartadas =
+      fotos.length - fotosDoR2.length +
+      (((site?.imagens as any[]) ?? []).length - acervoWc.length);
+    fotos = fotosDoR2;
+
     /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
      *
      * O Giga RECICLA referência. A REF 9099, por exemplo, é ao mesmo tempo:
@@ -1394,11 +1419,43 @@ export class LojaCatalogService {
       estoqueTotal: estoqueExibido,
       disponivel: estoqueExibido > 0,
 
-      // FOTO PRÓPRIA VENCE (decisão 30/07): o R2 é da Lurd's; o que veio do
-      // WC é só o resto do acervo até a migração de imagem terminar.
+      /**
+       * FOTO PRÓPRIA VENCE (decisão 30/07): o R2 é da Lurd's; o que veio do
+       * WC é só o resto do acervo até a migração de imagem terminar.
+       *
+       * 🚨 E O RESTO DO ACERVO MORREU EM 27/08/2026 (medido em 14/09).
+       *
+       * Este fallback lê `site_produto.imagens`, o que o import trouxe do
+       * WooCommerce. Enquanto a KingHost servia o WordPress, era acervo de
+       * verdade. Depois que ela APAGOU o site, virou link que responde 403 —
+       * e o fallback continuou entregando: **48 peças publicadas** saíam com
+       * a galeria inteira quebrada, nas DUAS pontas (o `<g:image_link>` de 48
+       * itens do feed do Google e do Meta, mais 152 fotos extras, E o HTML da
+       * PDP, que servia a mesma URL pra cliente).
+       *
+       * `fotosVivas` mata a foto morta e PROMOVE a próxima válida. Quando não
+       * sobra nenhuma, a peça fica sem `imagens` de propósito: o
+       * `montarCatalogo` já corta peça sem foto da vitrine (item 39) e o feed
+       * sai da mesma lista, então ela também não vira item reprovado no
+       * Merchant. Medido: das 48, **todas as 48** ficam sem nenhuma foto — não
+       * há uma única capa pra promover, porque nenhuma delas tem linha no R2.
+       * A saída pra elas é FOTO NOVA, não remendo de URL (ver
+       * `common/foto-viva.ts`).
+       */
       imagens: fotosVendaveis.length
         ? fotosVendaveis.map((f) => ({ src: f.url, alt: `${site?.nome || ref}${f.cor ? ` ${f.cor}` : ''}`, tipo: 'imagem', cor: f.cor ?? null, origem: 'flow' }))
-        : ((site?.imagens as any[]) ?? []).map((i) => ({ ...i, origem: 'wc' })),
+        : acervoWc.map((i: any) => ({ ...i, origem: 'wc' })),
+      /**
+       * Quantas fotos desta peça foram DESCARTADAS por serem do WordPress
+       * apagado — a soma das duas fontes (R2 e acervo do WC).
+       *
+       * Existe pra que "peça sem foto" não vire vazio calado: com este número
+       * o `montarCatalogo` distingue a peça que NUNCA foi fotografada da peça
+       * que TINHA galeria e perdeu o servidor. São duas pendências
+       * operacionais diferentes — a segunda é fila de fotografia com peça
+       * conhecida, não cadastro esquecido.
+       */
+      fotosMortasDescartadas,
       seo: site?.seo ?? null,
 
       // Ficha de caimento (Lurd's Fit AI) — alimenta filtro e recomendação
@@ -2308,6 +2365,30 @@ export class LojaCatalogService {
         this.logger.warn(
           `[catalogo] ${semFoto.length} REF(s) publicada(s) sem foto — fora da vitrine: ` +
             semFoto.slice(0, 15).map((p) => p.ref).join(', '),
+        );
+      }
+      /**
+       * A FILA DE FOTOGRAFIA, separada de quem nunca foi fotografado (14/09).
+       *
+       * Estas não são peça esquecida no cadastro: elas TINHAM galeria, e a
+       * galeria estava no WordPress que a KingHost apagou em 27/08 (403 na
+       * Vercel — ver `common/foto-viva.ts`). Saem da vitrine e do feed porque
+       * foto que não abre é buraco no card e item reprovado no Merchant, mas
+       * a pendência é outra: existe peça, falta foto nova no R2.
+       *
+       * Sem esta linha o conserto ficaria CALADO — as 48 desapareceriam da
+       * vitrine sem ninguém saber por quê, que é exatamente o vazio silencioso
+       * que a regra de ouro proíbe.
+       */
+      const acervoMorto = semFoto.filter((p) => (p.fotosMortasDescartadas || 0) > 0);
+      if (acervoMorto.length) {
+        const fotos = acervoMorto.reduce(
+          (s: number, p: any) => s + (p.fotosMortasDescartadas || 0), 0,
+        );
+        this.logger.warn(
+          `[catalogo] dessas, ${acervoMorto.length} REF(s) perderam ${fotos} foto(s) no ` +
+            `WordPress apagado (403) e precisam de FOTO NOVA no R2: ` +
+            acervoMorto.slice(0, 15).map((p) => p.ref).join(', '),
         );
       }
     }
