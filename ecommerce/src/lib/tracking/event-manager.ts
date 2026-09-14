@@ -102,9 +102,19 @@ export function initTracking(): void {
   window.addEventListener('pagehide', flushBeacon);
 }
 
+/**
+ * Um destino está liberado quando a sua categoria foi aceita — ou, se ele
+ * declara regra própria (`podeReceber`), quando essa regra diz sim. Hoje só o
+ * Google tem regra própria (Consent Mode avançado, ver `googlePodeCarregar`);
+ * Meta Pixel, TikTok e Clarity continuam presos à categoria, como sempre.
+ */
+export function destinoLiberado(dest: Destination): boolean {
+  return dest.podeReceber ? dest.podeReceber(getConsent()) : isAllowed(dest.consent);
+}
+
 function initAllowedDestinations(): void {
   for (const dest of BROWSER_DESTINATIONS) {
-    if (initialized.has(dest.id) || !dest.isEnabled() || !isAllowed(dest.consent)) continue;
+    if (initialized.has(dest.id) || !dest.isEnabled() || !destinoLiberado(dest)) continue;
     try {
       dest.init();
       initialized.add(dest.id);
@@ -281,7 +291,7 @@ function dispatchToBrowser(event: TrackingEvent): void {
   for (const dest of BROWSER_DESTINATIONS) {
     if (!dest.isEnabled()) continue;
 
-    if (!isAllowed(dest.consent)) {
+    if (!destinoLiberado(dest)) {
       log({ ...base(event, dest), status: 'skipped', reason: `sem consentimento de ${dest.consent}` });
       continue;
     }

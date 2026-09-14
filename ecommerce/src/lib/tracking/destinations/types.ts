@@ -7,7 +7,7 @@
  * na lista — sem tocar em componente, em página ou no Event Manager.
  */
 
-import type { ConsentCategory, EventName, TrackingEvent } from '../types';
+import type { ConsentCategory, ConsentState, EventName, TrackingEvent } from '../types';
 
 export interface Destination {
   /** Id curto usado no log e no painel de debug (`meta_pixel`, `ga4`, …). */
@@ -15,6 +15,13 @@ export interface Destination {
   label: string;
   /** Categoria da LGPD sem a qual este destino não recebe NADA. */
   consent: ConsentCategory;
+  /**
+   * Regra de liberação PRÓPRIA, quando a categoria sozinha não descreve o
+   * destino. Hoje só o Google usa (Consent Mode avançado: carrega para quem
+   * não decidiu, com tudo negado — ver `googlePodeCarregar` em consent.ts).
+   * Ausente = vale `isAllowed(consent)`, como sempre.
+   */
+  podeReceber?(state: ConsentState): boolean;
   /** False quando falta a variável de ambiente — some do fluxo sem erro. */
   isEnabled(): boolean;
   /** Carrega o script da plataforma. Chamado no máximo uma vez. */
