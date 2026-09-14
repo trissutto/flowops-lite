@@ -168,6 +168,7 @@ export function mapPeca(p: PecaApi): Product {
     description: p.descricaoCurta || p.descricaoCompleta || undefined,
     category: p.categoria ?? '',
     subcategory: p.subcategoria ?? undefined,
+    brand: p.marca?.trim() || undefined,
     price: p.preco,
     compareAtPrice: oferta.compareAtPrice,
     pixPrice: p.precoPix ?? undefined,

@@ -104,7 +104,7 @@ export function StoreCard({ store, index = 0, nearest, distance, className }: St
           size="sm"
           // Pedir rota é o sinal mais forte de "vou nessa loja" que o site
           // consegue captar — mais que abrir a página de lojas.
-          onClick={() => trackStoreLocator(store.city)}
+          onClick={() => trackStoreLocator(store.city, store, 'home_store_card')}
         >
           <MapPin /> Como chegar
         </Button>

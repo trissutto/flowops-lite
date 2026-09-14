@@ -64,6 +64,8 @@ export interface Product {
   /** Categoria principal (slug). */
   category: string;
   subcategory?: string;
+  /** Marca do cadastro (Marrie, Join…). Vai pro JSON-LD — o feed do Merchant já manda a mesma em `g:brand`. */
+  brand?: string;
   price: number;
   /** Preço anterior — presente só quando há desconto. */
   compareAtPrice?: number;
