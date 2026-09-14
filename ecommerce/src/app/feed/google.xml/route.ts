@@ -58,7 +58,28 @@ import { tituloShopping, variantes, type PecaFeed, type Variante } from '@/lib/f
  * produto morto e recomeçar do zero na volta.
  */
 
-export const revalidate = 3600;
+/**
+ * Quanto tempo o CATÁLOGO fica guardado (Data Cache do `fetch`, tag
+ * `catalogo`). Uma chamada ao backend por hora, e a retaguarda derruba na hora
+ * pelo `/api/revalidar`.
+ */
+const revalidate = 3600;
+
+/**
+ * O FEED NÃO ENTRA NO CACHE DE PÁGINA — e isso é proteção, não descuido.
+ *
+ * Medido em 14/09/2026: a revalidação do catálogo coincidiu com um restart do
+ * backend, o `catch` lá embaixo devolveu os 354 bytes de um RSS sem NENHUM
+ * item, e essa resposta foi guardada com `s-maxage=3600`. O feed ficou vazio no
+ * ar, servido como `X-Vercel-Cache: HIT`, e nada deu erro em lugar nenhum. Uma
+ * busca do Google naquela janela desativaria os 945 produtos de uma vez.
+ *
+ * Com o segmento dinâmico, quem decide o que pode ser guardado é o
+ * `Cache-Control` que o GET devolve — por execução, sabendo se a busca deu
+ * certo. O custo é remontar o XML quando a CDN expira (1×/hora no pior caso),
+ * enquanto o catálogo em si continua vindo do Data Cache.
+ */
+export const dynamic = 'force-dynamic';
 
 /** `&` vira `&amp;` etc. Um nome com "&" invalidaria o XML inteiro. */
 function escapar(v: string): string {
@@ -265,19 +286,32 @@ function item(p: PecaFeed, v: Variante): string {
 
 export async function GET() {
   let pecas: PecaFeed[] = [];
+  let falhou = false;
   try {
     pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=1', {
       revalidate,
       tags: ['catalogo'],
       timeoutMs: 25000,
     })) ?? [];
-  } catch {
+  } catch (e) {
     /* Catálogo fora do ar: feed VAZIO e válido, nunca erro. Resposta com erro
        o Google trata como falha de importação e pode desagendar a busca; feed
-       vazio ele registra e tenta de novo amanhã. */
+       vazio ele registra e tenta de novo amanhã. O que NÃO pode é esse vazio
+       ser guardado por uma hora — ver o `Cache-Control` no fim do arquivo. */
+    falhou = true;
+    console.error('[feed] catálogo falhou:', (e as Error)?.message ?? e);
   }
 
   const validas = pecas.filter((p) => p.ref && p.slug && p.preco > 0);
+  /**
+   * Catálogo que RESPONDE mas não traz nenhuma peça válida é anomalia, não
+   * notícia: a rede nunca está com zero peça à venda. Trata igual à falha —
+   * sai sem cache e a próxima visita tenta de novo.
+   */
+  if (!validas.length) {
+    falhou = true;
+    console.error(`[feed] catálogo respondeu ${pecas.length} peça(s) e NENHUMA válida`);
+  }
 
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -291,7 +325,15 @@ export async function GET() {
   return new Response(xml, {
     headers: {
       'Content-Type': 'application/xml; charset=utf-8',
-      'Cache-Control': 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
+      /**
+       * Resposta BOA cacheia como sempre. Resposta nascida de falha sai
+       * `no-store`: a janela de exposição a um feed vazio cai de uma hora pra
+       * o tempo da próxima visita. Nunca o contrário — o vazio é o estado que
+       * apaga a conta inteira no Merchant.
+       */
+      'Cache-Control': falhou
+        ? 'no-store'
+        : 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
     },
   });
 }
