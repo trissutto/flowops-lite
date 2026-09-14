@@ -100,3 +100,19 @@ O encanamento já existe: `Order.gclid/gbraid/wbraid` + `GoogleAdsConversaoServi
 3. ~~`/logo.svg` e `/og/default.jpg`~~ — PR #1207, 200 em produção · amostra dos "cópia sem canônica" na GSC.
 4. Desvincular `868-104-2744` do GA4 — só pela interface (o painel de detalhes do vínculo não responde à automação); cosmético, a conta está cancelada.
 5. Valor de `Store visits` (R$ 249) — decisão do dono.
+
+## 9. Complemento 14/09 (tarde) — Shopping gastando acima da meta
+
+Cruzamento gasto (`google_ads_gasto_dia`) × receita paga no Flow por último clique (`orders.utm_id`), 06–13/09:
+
+| Campanha | Gasto | Pedidos | Receita Flow | ROAS |
+|---|---|---|---|---|
+| Shopping Padrão NOVIDADES | R$ 6.485 | 25 | R$ 5.536 | **0,85** |
+| PMax Feeds | R$ 2.138 | 16 | R$ 3.338 | 1,56 |
+| Search Institucional | R$ 509 | 6 | R$ 2.901 | 5,70 |
+
+O próprio Google credita ~1,5 ao Shopping nos mesmos dias (janela ainda em maturação). `change_event`: o orçamento do Shopping foi alterado **8 vezes entre 02 e 08/09**, por duas mãos (300→450→600→800→500→600→1000→700); o gasto/dia dobrou (R$ 480 → R$ 900) e a campanha perde 32% de impressão por **ranking** (não por orçamento) — subir verba não compra retorno. Meta da conta ROAS ≥ 4; tROAS 3,2.
+
+**Aplicado 14/09 12:50**: orçamento R$ 700 → **R$ 500/dia** (−29%, um passo só, tROAS intocado), pelo `backend/scripts/google-ads-shopping-orcamento.js` (validateOnly antes; rollback `ORCAMENTO=700`). Regra: **nenhuma outra mexida no Shopping por 7 dias** — cada alteração reinicia parte do aprendizado, e foi isso que quebrou a semana.
+
+Também nesta rodada: schema `Product.brand` passou a levar a marca do cadastro (igual ao `g:brand` do feed; `/produto/ref-207372` responde `MARRIE`), e o "Como chegar" da home identifica a loja (PR #1209).
