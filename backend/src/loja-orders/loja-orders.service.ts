@@ -143,6 +143,9 @@ export interface LojaTrackingInput {
      * feature que depende dele nunca liga — sem erro nenhum.
      */
     gclid?: string;
+    /** Ids de clique do Google Ads em iOS/ITP (Safari/app), onde `gclid` não vem. */
+    gbraid?: string;
+    wbraid?: string;
   };
   /**
    * Opt-in de WhatsApp, vindo da etapa 1 do checkout.
@@ -1154,6 +1157,11 @@ export class LojaOrdersService {
       // venda ao Google pelo servidor (`GoogleAdsConversaoService`), sem
       // depender do import do GA4 — o caminho que secou sozinho em 19/08/2026.
       gclid: attr.gclid || null,
+      // iOS/ITP: o Google manda `gbraid` (app) ou `wbraid` (web) no lugar do
+      // `gclid`. O upload de conversão aceita os três — sem eles, todo clique
+      // pago de iPhone caía no casamento por e-mail/telefone (14/09/2026).
+      gbraid: attr.gbraid || null,
+      wbraid: attr.wbraid || null,
       checkoutInfo: JSON.stringify(checkoutInfo),
       trackingInfo: trackingInfo ? JSON.stringify(trackingInfo) : null,
       // Sinal de risco, não de métrica — ver `Order.clienteIp`.

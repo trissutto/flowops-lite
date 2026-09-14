@@ -147,7 +147,8 @@ export function montarCascataAtribuicao(e: EntradaAtribuicao): CascataAtribuicao
   const posicaoCrua = texto(attr.term);
   const paginaEntrada = texto(attr.landing_page);
   const fbclid = texto(attr.fbclid);
-  const gclid = texto(attr.gclid);
+  // `gbraid`/`wbraid` são o clique do Google em iOS/ITP — mesma plataforma, mesmo "pago".
+  const gclid = texto(attr.gclid) || texto(attr.gbraid) || texto(attr.wbraid);
   const tipo = texto(e.sourceType).toLowerCase();
   const canal = canalCru.toLowerCase();
 

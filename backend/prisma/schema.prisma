@@ -441,6 +441,13 @@ model Order {
   /// já moram nome, CPF, telefone e endereço da MESMA pessoa — guardar o clique
   /// dela ao lado não muda a natureza do dado, e é o que fecha o dinheiro.
   gclid                  String?   @map("gclid")
+  /// Os irmãos do `gclid` em iOS/ITP: `gbraid` (clique em app) e `wbraid`
+  /// (clique na web). Nesses aparelhos o Google NÃO manda `gclid`, e sem estes
+  /// dois o pedido chegava como "orgânico" e o upload de conversão só casava
+  /// por e-mail/telefone (auditoria de 14/09/2026). O Data Manager aceita os
+  /// três em `adIdentifiers`.
+  gbraid                 String?   @map("gbraid")
+  wbraid                 String?   @map("wbraid")
   /// Carimbo do upload pro Google Ads. NULL = ainda não subiu; é a idempotência
   /// do cron. O Google também deduplica por `orderId`, mas depender da garantia
   /// do outro é o mesmo erro do outbox do PDV confiar no Giga.

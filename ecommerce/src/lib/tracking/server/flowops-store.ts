@@ -263,7 +263,8 @@ export async function persistirEventosSite(
      * mesmo last-click do Meta e do GA4 — bate com o Gerenciador, mas não se
      * confunde com "esta visita veio do anúncio".
      */
-    const gclid = texto(attr?.gclid);
+    // `gbraid`/`wbraid` são o clique do Google em iOS/ITP — mesma plataforma.
+    const gclid = texto(attr?.gclid) || texto(attr?.gbraid) || texto(attr?.wbraid);
     const fbclid = texto(attr?.fbclid);
     const midiaPaga = /^(cpc|ppc|paid|paid_social|paidsocial|paid-social)$/i.test(midia ?? '');
     if (gclid || fbclid || midiaPaga) {

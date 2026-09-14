@@ -167,7 +167,7 @@ export class GoogleAdsConversaoService {
             gte: new Date(agora - 60 * 24 * 3600 * 1000),
           },
           status: { notIn: ['cancelled', 'failed'] },
-          gclid: { not: null },
+          OR: [{ gclid: { not: null } }, { gbraid: { not: null } }, { wbraid: { not: null } }],
           adsConversaoEnviadaEm: null,
           adsConversaoTentativas: { lt: this.MAX_TENTATIVAS },
         },
@@ -180,7 +180,11 @@ export class GoogleAdsConversaoService {
     // 2. `gclid` sumiu do checkout.
     const [googleComGclid, googleTotal] = await Promise.all([
       order.count({
-        where: { source: 'ecommerce', paidAt: { gte: desde24h }, gclid: { not: null } },
+        where: {
+          source: 'ecommerce',
+          paidAt: { gte: desde24h },
+          OR: [{ gclid: { not: null } }, { gbraid: { not: null } }, { wbraid: { not: null } }],
+        },
       }),
       order.count({
         where: {
@@ -417,6 +421,8 @@ export class GoogleAdsConversaoService {
         // identificador, e mandar assim derrubaria o lote inteiro.
         OR: [
           { gclid: { not: null } },
+          { gbraid: { not: null } },
+          { wbraid: { not: null } },
           { customerEmail: { not: null } },
           { customerPhone: { not: null } },
         ],
@@ -457,7 +463,7 @@ export class GoogleAdsConversaoService {
     const semChave: any[] = [];
     for (const p of pedidos) {
       const userData = this.identificadoresDe(p);
-      if (!p.gclid && !userData) semChave.push(p);
+      if (!p.gclid && !p.gbraid && !p.wbraid && !userData) semChave.push(p);
       else enviaveis.push({ pedido: p, userData });
     }
     if (semChave.length) {
@@ -470,7 +476,16 @@ export class GoogleAdsConversaoService {
     const eventos = enviaveis.map(({ pedido: p, userData }: any) => ({
       // O clique quando existe; a pessoa sempre que der. Os dois juntos é o
       // caso de melhor casamento — confirmado aceito pela API.
-      ...(p.gclid ? { adIdentifiers: { gclid: p.gclid } } : {}),
+      // `gbraid`/`wbraid` são o clique em iOS/ITP, onde o `gclid` não existe.
+      ...(p.gclid || p.gbraid || p.wbraid
+        ? {
+            adIdentifiers: {
+              ...(p.gclid ? { gclid: p.gclid } : {}),
+              ...(p.gbraid ? { gbraid: p.gbraid } : {}),
+              ...(p.wbraid ? { wbraid: p.wbraid } : {}),
+            },
+          }
+        : {}),
       ...(userData ? { userData } : {}),
       // A hora da CONVERSÃO é a do pagamento — o PIX pago no dia seguinte
       // pertence ao dia seguinte. Aqui o formato é RFC 3339, com 'T'; o

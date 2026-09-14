@@ -270,7 +270,7 @@ export function captureAttribution(): Attribution {
    * paga que trouxe ela na semana passada.
    */
   const temToqueNovo = Boolean(
-    q.get('utm_source') || q.get('utm_campaign') || q.get('gclid') || q.get('fbclid'),
+    q.get('utm_source') || q.get('utm_campaign') || q.get('gclid') || q.get('gbraid') || q.get('wbraid') || q.get('fbclid'),
   );
 
   const guardada = lerAtribuicao();
@@ -287,6 +287,15 @@ export function captureAttribution(): Attribution {
     // chegava e era jogado fora.
     id: q.get('utm_id') || undefined,
     gclid: q.get('gclid') || undefined,
+    /**
+     * `gbraid`/`wbraid` — o id de clique do Google Ads quando o aparelho é iOS
+     * com ITP (Safari/app): ali o Google NÃO manda `gclid`. Sem capturar os
+     * dois, todo clique pago de iPhone chegava aqui como "orgânico" e o upload
+     * de conversão caía no casamento por e-mail/telefone. A API do Data Manager
+     * aceita os três em `adIdentifiers` (auditoria de 14/09/2026).
+     */
+    gbraid: q.get('gbraid') || undefined,
+    wbraid: q.get('wbraid') || undefined,
     fbclid: q.get('fbclid') || undefined,
     landing_page: window.location.pathname,
   };

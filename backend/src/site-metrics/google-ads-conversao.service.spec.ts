@@ -436,6 +436,13 @@ describe('GoogleAdsConversaoService', () => {
       });
     });
 
+    it('pedido de iOS chega com wbraid no lugar do gclid — e o clique vai junto', async () => {
+      const { svc, ads } = monta([comPessoa({ gclid: null, wbraid: 'wbraid-ios' })]);
+      await svc.enviarPendentes();
+      const corpo = ads.requisitarDataManager.mock.calls[0][1];
+      expect(corpo.events[0].adIdentifiers).toEqual({ wbraid: 'wbraid-ios' });
+    });
+
     it('pedido SEM gclid entra no lote pela pessoa — era isso que faltava', async () => {
       const { svc, ads } = monta([comPessoa({ gclid: null })]);
       const r = await svc.enviarPendentes();
@@ -497,6 +504,9 @@ describe('GoogleAdsConversaoService', () => {
       expect(where.gclid).toBeUndefined();
       expect(where.OR).toEqual([
         { gclid: { not: null } },
+        // iOS/ITP: o clique vem como gbraid (app) ou wbraid (web), sem gclid.
+        { gbraid: { not: null } },
+        { wbraid: { not: null } },
         { customerEmail: { not: null } },
         { customerPhone: { not: null } },
       ]);
