@@ -271,3 +271,26 @@ sumir — que é exatamente o que acontecia até aqui.
 - `backend/src/site-metrics/site-metrics.service.ts` → `segmentosDisponiveis()`
   (une os dois espelhos e casa com `orders`)
 - `frontend/src/app/retaguarda/cliques-lojas/page.tsx` → as pílulas da cascata
+
+## Estado em 14/09/2026 — o que mudou desde a Parte 3 (a Parte 3 acima é HISTÓRIA)
+
+A auditoria completa está em `docs/auditorias/2026-09-14-ecossistema-google.md`. O que este
+documento dizia e já não vale:
+
+- **Não é mais `uploadClickConversions`.** Desde 23/08 o `GoogleAdsConversaoService` usa a
+  **Data Manager API** (`datamanager.googleapis.com/v1/events:ingest`) — o corte de 15/06/2026
+  recusa o caminho antigo para token novo. A resposta é TUDO OU NADA (sem resultado por evento;
+  `fieldWarnings` não é recusa). O cron é `37 * * * *` (hora em hora), não 10 min.
+- **O `gclid` deixou de ser obrigatório (02/09).** Pedido com e-mail OU telefone entra no lote
+  com `userData` hasheado (SHA-256, `encoding: HEX`) — enhanced conversions. Em 30 dias:
+  636 de 636 pedidos pagos enviados; 132 creditados pelo Google a clique dele.
+- **`gbraid`/`wbraid` (iOS/ITP) entraram em 14/09:** `Order.gbraid`/`Order.wbraid`, capturados
+  no site e enviados em `adIdentifiers` ao lado do `gclid`.
+- **Alarme de silêncio** (`alertaSilencio`, 10h BRT, `GOOGLE_ADS_ALERTA_WHATS`): grita se a fila
+  não andou em 24h, se nenhum pedido do Google trouxe id de clique, ou se gastou e ninguém chegou.
+- **Ação principal**: `Compra Flow (upload)` (7731356807) é a ÚNICA principal da meta Compras na
+  conta ECOMM; `[GA4] purchase` voltou a receber (client_id do cookie `_ga`, 27/08) e é secundária.
+  Na conta LOJAS as duas ações de compra viraram secundárias em 14/09
+  (`backend/scripts/google-ads-lojas-correcoes-medicao.js`).
+- **UTM da conta LOJAS**: modelo passou a `utm_source=google&utm_medium=cpc&utm_campaign={_campanha}&utm_id={campaignid}`
+  (mesmo desenho da ECOMM). O parâmetro `_campanha` por campanha é o passo C do script.
