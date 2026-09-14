@@ -464,6 +464,16 @@ model Order {
   /// A última recusa, como veio do Google. É o que distingue "tenta de novo"
   /// (rede) de "nunca mais" (clique expirado, ação de tipo errado).
   adsConversaoErro       String?   @map("ads_conversao_erro")
+  /// IDEMPOTÊNCIA PERSISTENTE DO `purchase` (14/09/2026). O aviso ao e-commerce
+  /// (`notificarEcommerce` → `/api/webhooks/payment` → Meta CAPI + GA4 MP) era
+  /// fire-and-forget SEM carimbo: se o site não respondesse em 8s a venda
+  /// simplesmente não virava purchase em plataforma nenhuma, e ninguém sabia.
+  /// Carimbo = "o site confirmou que emitiu". NULL com `paidAt` preenchido =
+  /// pendência que o `LojaPurchaseRetryService` reenvia. O GA4 deduplica por
+  /// `transaction_id`, a Meta por `event_id` e o Ads por `transactionId` — mas
+  /// a decisão de NÃO reenviar o que já foi aceito mora aqui, não neles.
+  purchaseNotificadoEm   DateTime? @map("purchase_notificado_em")
+  purchaseNotificadoTentativas Int  @default(0) @map("purchase_notificado_tentativas")
   // ── Atribuição de venda (atendente que iniciou o contato — cliente fecha no site) ──
   // Marcação manual via UI (operadora matriz). Relatório mensal soma por vendedora.
   sellerId               String?   @map("seller_id")

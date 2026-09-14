@@ -2625,12 +2625,12 @@ export class LojaOrdersService {
    * configuradas, pula em silêncio (debug) — é o caso do ambiente que ainda
    * não subiu o site novo.
    */
-  private async notificarEcommerce(order: any): Promise<void> {
+  private async notificarEcommerce(order: any): Promise<boolean> {
     const url = (process.env.ECOMMERCE_URL || '').replace(/\/+$/, '');
     const secret = process.env.PAYMENT_WEBHOOK_SECRET || '';
     if (!url || !secret) {
       this.logger.debug(`[loja] purchase não notificado (ECOMMERCE_URL/PAYMENT_WEBHOOK_SECRET ausentes)`);
-      return;
+      return false;
     }
 
     try {
@@ -2698,11 +2698,36 @@ export class LojaOrdersService {
         }),
       );
       this.logger.log(`[loja] purchase notificado ao e-commerce (pedido ${order.wcOrderNumber})`);
+      // Carimbo persistente: é o que impede o retry de reenviar o que o site já
+      // emitiu, e o que denuncia (NULL) a venda que nunca virou purchase.
+      await (this.prisma as any).order
+        .update({ where: { id: order.id }, data: { purchaseNotificadoEm: new Date() } })
+        .catch(() => undefined);
+      return true;
     } catch (e: any) {
-      // Só loga: o pedido está pago, a Meta que espere o retry manual.
+      // O pedido está pago; o `LojaPurchaseRetryService` tenta de novo em minutos.
       this.logger.warn(
-        `[loja] purchase NÃO notificado (pedido ${order?.wcOrderNumber} segue pago): ${e?.response?.status || ''} ${e?.message || e}`,
+        `[loja] purchase NÃO notificado (pedido ${order?.wcOrderNumber} segue pago, entra no retry): ${e?.response?.status || ''} ${e?.message || e}`,
       );
+      await (this.prisma as any).order
+        .update({ where: { id: order.id }, data: { purchaseNotificadoTentativas: { increment: 1 } } })
+        .catch(() => undefined);
+      return false;
     }
+  }
+
+  /**
+   * Reenvio do `purchase` que o site não confirmou — chamado pelo
+   * `LojaPurchaseRetryService`. Público de propósito: o payload é montado pelo
+   * mesmo `notificarEcommerce`, então o retry manda EXATAMENTE o que o webhook
+   * teria mandado (mesmo `transaction_id`, mesmos sinais do navegador).
+   */
+  async reenviarPurchase(orderId: string): Promise<boolean> {
+    const order = await (this.prisma as any).order.findUnique({
+      where: { id: orderId },
+      include: { items: true },
+    });
+    if (!order || !order.paidAt || order.purchaseNotificadoEm) return false;
+    return this.notificarEcommerce(order);
   }
 }
