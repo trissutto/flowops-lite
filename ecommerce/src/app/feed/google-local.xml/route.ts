@@ -199,7 +199,26 @@ export async function GET() {
 
   const linhas: string[] = [];
 
-  for (const p of pecas) {
+  /**
+   * SÓ A VITRINE COMBINADA (dono, 14/09/2026): a ficha de cada loja e as PMax
+   * de loja mostram a LINHA CONFORTO + as últimas cadastradas no Flow — os
+   * mesmos rótulos que o feed nacional carrega em `custom_label_2=novidades`
+   * e `custom_label_3=conforto`, e que o filtro de listagem das 14 campanhas
+   * já usa. Antes o inventário local saía com o estoque INTEIRO (~950 REFs,
+   * 12,5 mil linhas), e a vitrine da ficha no Google mostraria tudo.
+   * `FEED_LOCAL_SO_VITRINE=0` volta a mandar o estoque inteiro.
+   */
+  const soVitrine = process.env.FEED_LOCAL_SO_VITRINE !== '0';
+  const pecasDaVitrine = soVitrine ? pecas.filter((p) => p.novidade || p.linhaConforto) : pecas;
+  if (soVitrine && pecas.length > 0 && pecasDaVitrine.length === 0) {
+    // O catálogo veio mas nenhuma peça tem rótulo: o backend não está
+    // carimbando `novidade`/`linhaConforto`. Feed vazio aqui apagaria a vitrine
+    // das 14 fichas — melhor gritar e cair pro estoque inteiro.
+    console.error('[feed-local] catálogo sem novidade/linhaConforto — mandando o estoque inteiro');
+  }
+  const fonte = pecasDaVitrine.length ? pecasDaVitrine : pecas;
+
+  for (const p of fonte) {
     if (!p.ref || !p.slug || !(p.preco > 0)) continue;
     const ref = p.ref.trim().toUpperCase();
     const vars = variantes(p);
