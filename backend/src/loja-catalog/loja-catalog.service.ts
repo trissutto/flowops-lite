@@ -10,6 +10,7 @@ import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { coresDoFeed, tamanhosDoFeed } from '../common/atributos-do-feed';
+import { veredictoDaGrade } from '../common/grade-furada';
 import { casaBusca } from '../common/busca-texto';
 import { ordenarGradeDaCategoria } from '../common/ordem-por-subcategoria';
 
@@ -1104,6 +1105,8 @@ export class LojaCatalogService {
      */
     const coresOcultas: Array<{
       nome: string; estoque: number; refDona: string; marcaDona: string | null; motivo: string;
+      /** Só em `grade_furada`: os números que faltam pra cor voltar ao ar. */
+      faltando?: string[];
     }> = [];
     const coresVisiveis = coresDetalhadas.filter((c) => {
       if (fichaPorCor.get(c.nome.toUpperCase())?.statusPublicacao === 'nao_publicar') {
@@ -1117,6 +1120,22 @@ export class LojaCatalogService {
         coresOcultas.push({
           nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
           motivo: 'estoque_baixo',
+        });
+        return false;
+      }
+      /**
+       * 3. GRADE FURADA (regra do dono, 13/09/2026): cor com MAIS DE 2
+       *    numerações zeradas sai do site e volta sozinha quando a reposição
+       *    chega. A cliente plus size escolhe a cor e só então o número — cor
+       *    de meia grade gasta o clique dela pra dizer "justo o seu não tem".
+       *    Igual ao piso acima, o corte é DINÂMICO: nada é gravado e nada
+       *    precisa ser republicado. Régua e medição em `common/grade-furada.ts`.
+       */
+      const grade = veredictoDaGrade(c.tamanhos);
+      if (grade.furada) {
+        coresOcultas.push({
+          nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
+          motivo: 'grade_furada', faltando: grade.faltando,
         });
         return false;
       }

@@ -34,6 +34,8 @@ interface CorSemFoto {
 }
 interface CorOculta extends CorSemFoto {
   motivo: string;
+  /** Só em `grade_furada`: as numerações zeradas — é o que a matriz repõe. */
+  faltando?: string[];
 }
 interface PecaRadar {
   ref: string;
@@ -289,6 +291,17 @@ export default function CoresSemFotoPage() {
                           {c.motivo === 'estoque_baixo' ? (
                             <span className="rounded-full border border-slate-300 px-2 py-0.5 text-xs" title="Regra automática: variação com menos de 10 peças sai do site e volta quando repõe">
                               estoque &lt; 10
+                            </span>
+                          ) : c.motivo === 'grade_furada' ? (
+                            /* Grade furada também não tem botão: publicar de
+                               volta não adianta, a regra a esconderia de novo.
+                               Ela volta REPONDO — por isso o chip diz QUAIS
+                               números faltam, que é a ação que resolve. */
+                            <span
+                              className="rounded-full border border-slate-300 px-2 py-0.5 text-xs"
+                              title="Regra automática: mais de 2 numerações zeradas tira a cor do site; ela volta sozinha quando a reposição chegar"
+                            >
+                              {c.faltando?.length ? `faltam ${c.faltando.join(' · ')}` : 'grade furada'}
                             </span>
                           ) : (
                             <button
