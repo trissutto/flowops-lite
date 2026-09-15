@@ -67,7 +67,7 @@ interface ProductCardProps {
    * atenção com foto, nome e preço.
    *
    * O modo enxuga o que é DECORAÇÃO nessa largura (tecido, faixa de tamanhos,
-   * a repetição do "-50%") e aperta etiqueta e botões. O que faz a cliente
+   * a repetição do "-30%") e aperta etiqueta e botões. O que faz a cliente
    * parar continua inteiro: foto, nome, preço riscado, preço atual e Pix.
    * Resultado medido a 360px — bloco de texto de 145px sob foto de 122px, com
    * variação de altura ZERO entre os 18 cards, contra 189px antes do enxugo.
@@ -452,11 +452,13 @@ function ProductCardBase({
               >
                 {formatPrice(product.price)}
               </span>
-              {/* O "-50%" sai do card estreito porque ele é a TERCEIRA ficha
+              {/* O "-N%" sai do card estreito porque ele é a TERCEIRA ficha
                   de preço numa linha de 91px — os três não cabem e a linha
                   virava três, 72px de texto. É também o único dos três que se
                   repete: a etiqueta "Promoção" já está na foto, logo acima. O
-                  par riscado/atual fica, que é o que faz a cliente parar. */}
+                  par riscado/atual fica, que é o que faz a cliente parar. O
+                  número é calculado do riscado × atual — a campanha do caixa
+                  (Inverno 30% desde 15/09/2026) muda o % sem mexer aqui. */}
               {discount > 0 && !compact && (
                 <span className="tabular text-small font-medium text-secondary">-{discount}%</span>
               )}
