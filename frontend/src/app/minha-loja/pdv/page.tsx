@@ -1694,15 +1694,9 @@ function PdvPageInner() {
         if (item && item.desconto > 0) {
           toast('success', 'Item na promoção (só nesta venda)', `${item.descricao || item.ref || item.sku} · ${brl(item.desconto)} off`);
         } else {
-          toast(
-            'warning',
-            'Sem desconto pra este item',
-            /tirada/i.test(item?.promoTag || '')
-              ? 'A matriz tirou esta peça da campanha.'
-              : /exclu/i.test(item?.promoTag || '')
-                ? 'A campanha exclui esta peça (ex.: bermuda, uniforme).'
-                : 'A campanha está desligada na retaguarda.',
-          );
+          // O ⬆️ passa por cima de toda regra — sem desconto aqui só com a
+          // campanha desligada na retaguarda.
+          toast('warning', 'Sem desconto pra este item', 'A campanha está desligada na retaguarda.');
         }
       } else if (patch.forcePromo === false) {
         const item = fresh.items.find((i) => i.id === itemId);
@@ -3246,14 +3240,17 @@ function PdvPageInner() {
                           sem modal, e vale SÓ NESTA LINHA desta venda (dono,
                           15/09/2026) — cadastro e outras vendas não mudam:
                             🚫 cinza = linha COM o desconto da campanha → tirar
-                            ⬆️ azul  = linha sem desconto (a régua deixou fora,
-                                       ou a vendedora tirou) → pôr na campanha
+                            ⬆️ azul  = linha sem desconto — por QUALQUER motivo
+                                       (régua não pegou, palavra que exclui,
+                                       básica, tirada pela matriz ou pela
+                                       vendedora) → pôr na campanha
                             🎁 verde = 4 leva 3: tirada → volta ao automático
-                          Peça protegida (a matriz tirou a família, ou tem
-                          palavra que a campanha exclui — bermuda, uniforme)
-                          não ganha o ⬆️: "tem que sair" não volta num clique.
-                          Tirar a peça da campanha na REDE toda é na Consulta
-                          de promoção (🏷), não aqui. */}
+                          "Botão de incluir e excluir em TODOS os itens" (dono,
+                          15/09/2026). Fica sem botão só o que não é peça pra
+                          campanha: frete, item digitado e peça com preço
+                          próprio (desconto manual com senha, marcado com
+                          desconto). Tirar a peça da campanha na REDE toda é na
+                          Consulta de promoção (🏷), não aqui. */}
                       {sale.activePromotion && sale.activePromotion !== 'NONE' && (() => {
                         const tag = it.promoTag || '';
                         const comDescontoDaCampanha = it.desconto > 0 && /^(PROMO|4 LEVA)/.test(tag);
@@ -3269,8 +3266,11 @@ function PdvPageInner() {
                         if (sale.activePromotion === 'POR_TERMO') {
                           const pecaDeCatalogo =
                             it.ref !== 'FRETE' && it.ref !== 'MANUAL' && !String(it.sku || '').startsWith('MANUAL-');
-                          const podePor =
-                            pecaDeCatalogo && (tag === 'SEM_PROMO' || tag === 'Sem promo' || tag === 'Básico · sem promo');
+                          const semDesconto =
+                            tag === 'SEM_PROMO' ||
+                            tag === 'Básico · sem promo' ||
+                            (tag.startsWith('Sem promo') && tag !== 'Sem promo · campanha desligada');
+                          const podePor = pecaDeCatalogo && semDesconto;
                           if (!podePor) return null;
                           return (
                             <button
