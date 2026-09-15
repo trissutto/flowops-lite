@@ -133,6 +133,8 @@ export class PromoConfigService {
       campanha: {
         ...normalizarConfig({
           ativa: pedida.ativa !== false, nome, pct, termos, termosExclusao, grupos, subgrupos,
+          // Só desliga com `false` explícito: "linha básica não entra" é a regra.
+          excluirBasico: pedida.excluirBasico !== false,
         }),
         atualizadaEm: new Date().toISOString(),
         atualizadaPor: usuario || null,

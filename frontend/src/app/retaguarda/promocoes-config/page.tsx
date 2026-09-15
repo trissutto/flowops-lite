@@ -37,6 +37,8 @@ interface Campanha {
   termosExclusao: string[];
   grupos: number[];
   subgrupos: number[];
+  /** Linha BÁSICA (Produtos Loja → Classificação) não entra pela regra. */
+  excluirBasico: boolean;
   atualizadaEm?: string | null;
   atualizadaPor?: string | null;
 }
@@ -104,7 +106,7 @@ interface ProdutoBusca {
   estoque: number;
   codigos: number;
   codigosNaCampanha: number;
-  situacao: 'entra' | 'parcial' | 'fora' | 'excluida' | 'tirada' | 'incluida';
+  situacao: 'entra' | 'parcial' | 'fora' | 'excluida' | 'basico' | 'tirada' | 'incluida';
   origens: string[];
   exclusoes: string[];
   /** Tipos de peça sob a mesma REF-BASE — mais de um = REF reciclada. */
@@ -155,6 +157,7 @@ const comListas = (c: Campanha): Campanha => ({
   termosExclusao: c.termosExclusao ?? [],
   grupos: c.grupos ?? [],
   subgrupos: c.subgrupos ?? [],
+  excluirBasico: c.excluirBasico !== false,
 });
 
 /** O que vai pro backend como rascunho (prévia e busca respondem por ele). */
@@ -165,6 +168,7 @@ const corpoRascunho = (c: Campanha) => ({
   termosExclusao: c.termosExclusao,
   grupos: c.grupos,
   subgrupos: c.subgrupos,
+  excluirBasico: c.excluirBasico,
 });
 
 const SITUACAO: Record<ProdutoBusca['situacao'], { rotulo: string; classe: string }> = {
@@ -173,6 +177,7 @@ const SITUACAO: Record<ProdutoBusca['situacao'], { rotulo: string; classe: strin
   incluida: { rotulo: 'Incluída na mão', classe: 'bg-emerald-100 text-emerald-900' },
   fora: { rotulo: 'Fora', classe: 'bg-slate-100 text-slate-600' },
   excluida: { rotulo: 'Excluída por palavra', classe: 'bg-rose-100 text-rose-800' },
+  basico: { rotulo: 'Linha BÁSICA', classe: 'bg-blue-100 text-blue-800' },
   tirada: { rotulo: 'Tirada na mão', classe: 'bg-rose-100 text-rose-800' },
 };
 
@@ -247,7 +252,8 @@ export default function PromocoesConfigPage() {
       !mesmaLista(gravada.termos, rascunho.termos) ||
       !mesmaLista(gravada.termosExclusao, rascunho.termosExclusao) ||
       !mesmaLista(gravada.grupos, rascunho.grupos) ||
-      !mesmaLista(gravada.subgrupos, rascunho.subgrupos)
+      !mesmaLista(gravada.subgrupos, rascunho.subgrupos) ||
+      gravada.excluirBasico !== rascunho.excluirBasico
     );
   }, [gravada, rascunho]);
 
@@ -278,7 +284,10 @@ export default function PromocoesConfigPage() {
   }, []);
 
   const chavePrevia = rascunho
-    ? JSON.stringify([rascunho.nome, rascunho.pct, rascunho.termos, rascunho.termosExclusao, rascunho.grupos, rascunho.subgrupos])
+    ? JSON.stringify([
+        rascunho.nome, rascunho.pct, rascunho.termos, rascunho.termosExclusao,
+        rascunho.grupos, rascunho.subgrupos, rascunho.excluirBasico,
+      ])
     : '';
   useEffect(() => {
     if (!rascunho) return;
@@ -719,6 +728,24 @@ export default function PromocoesConfigPage() {
                     loja não consegue pôr na venda. Só a inclusão na mão da matriz passa por cima.
                   </p>
                 </div>
+
+                {/* LINHA BÁSICA */}
+                <label className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rascunho.excluirBasico}
+                    onChange={(e) => setRascunho({ ...rascunho, excluirBasico: e.target.checked })}
+                    className="w-5 h-5 mt-0.5 accent-blue-700"
+                  />
+                  <span className="text-sm text-slate-700">
+                    <b className="text-blue-900">Linha BÁSICA não entra</b> — peça marcada como BÁSICO em{' '}
+                    <Link href="/cadastros/classificacao-produtos" className="underline font-semibold text-blue-800">
+                      Produtos Loja → Classificação
+                    </Link>{' '}
+                    fica fora da regra, mesmo tendo CASACO/MOLETOM na descrição. No PDV a vendedora ainda põe a peça básica
+                    só naquela venda com o ⬆️, e a matriz pode incluir na mão.
+                  </span>
+                </label>
 
                 {/* GRUPOS / SUBGRUPOS */}
                 <div>

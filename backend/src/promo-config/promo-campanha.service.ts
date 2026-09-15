@@ -84,8 +84,11 @@ export interface ProdutoNaBusca {
   estoque: number;
   codigos: number;
   codigosNaCampanha: number;
-  /** entra/parcial pela regra · fora sem regra · excluida por palavra · tirada/incluida na mão. */
-  situacao: 'entra' | 'parcial' | 'fora' | 'excluida' | 'tirada' | 'incluida';
+  /**
+   * entra/parcial pela regra · fora sem regra · excluida por palavra · basico
+   * (linha BÁSICA na Classificação) · tirada/incluida na mão.
+   */
+  situacao: 'entra' | 'parcial' | 'fora' | 'excluida' | 'basico' | 'tirada' | 'incluida';
   /** Termos e grupos/subgrupos que puseram a peça. */
   origens: string[];
   /** Palavras que tiraram a peça da regra. */
@@ -202,6 +205,13 @@ export class PromoCampanhaService {
   /** Decisões da última busca da tela: trocar só o filtro não decide o catálogo de novo. */
   private memoDecisoes: { chave: string; decisoes: DecisaoCampanha[] } | null = null;
 
+  /**
+   * As REFs marcadas BÁSICO na tela de Classificação (~8,5 mil em 15/09),
+   * relidas junto com a régua (60s): reclassificar lá vale no caixa e no site
+   * em até um minuto, sem esta tela precisar saber que a outra gravou.
+   */
+  private cacheBasicos: { at: number; chaves: Set<string> } | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly promoConfig: PromoConfigService,
@@ -211,8 +221,31 @@ export class PromoCampanhaService {
   invalidar() {
     this.cache = null;
     this.cacheEstrutura = null;
+    this.cacheBasicos = null;
     this.memoDecisoes = null;
     this.promoConfig.clearCache();
+  }
+
+  /**
+   * Chaves BÁSICO (`chaveDeClassificacao`). Erro de leitura SOBE: sem a lista
+   * não se sabe o que é básico, e a régua anterior (que sabia) continua
+   * valendo pelo fallback de `regra()` — errar pro lado de dar desconto em
+   * linha básica é o que o dono proibiu.
+   */
+  private async basicos(): Promise<Set<string>> {
+    const c = this.cacheBasicos;
+    if (c && Date.now() - c.at < PromoCampanhaService.TTL) return c.chaves;
+    const rows: any[] = await (this.prisma as any).productClassification.findMany({
+      where: { tipoProduto: 1 },
+      select: { ref: true },
+    });
+    const chaves = new Set<string>();
+    for (const r of rows) {
+      const k = String(r.ref ?? '').trim().toUpperCase();
+      if (k) chaves.add(k);
+    }
+    this.cacheBasicos = { at: Date.now(), chaves };
+    return chaves;
   }
 
   async regra(): Promise<RegraCampanha> {
@@ -224,7 +257,8 @@ export class PromoCampanhaService {
         const { campanha } = await this.promoConfig.getConfig();
         const excecoes = await this.excecoesDe(chaveDaCampanha(campanha.nome));
         const estrutura = await this.estruturaDe(campanha.grupos, campanha.subgrupos);
-        const regra = criarRegra(campanha, excecoes, estrutura);
+        const basicos = campanha.excluirBasico ? await this.basicos() : null;
+        const regra = criarRegra(campanha, excecoes, estrutura, basicos);
         this.cache = { at: Date.now(), regra };
         return regra;
       } catch (e: any) {
@@ -572,7 +606,8 @@ export class PromoCampanhaService {
     const excecoes = await this.excecoesDe(chaveCampanha);
     const excecaoPorChave = new Map(excecoes.map((e) => [e.chave, e]));
     const linhas = await this.catalogoComEstoque();
-    const regra = criarRegra(config, excecoes, this.estruturaDasLinhas(linhas, config));
+    const basicos = config.excluirBasico ? await this.basicos() : null;
+    const regra = criarRegra(config, excecoes, this.estruturaDasLinhas(linhas, config), basicos);
     return { config, chaveCampanha, excecoes, excecaoPorChave, linhas, regra };
   }
 
@@ -751,7 +786,7 @@ export class PromoCampanhaService {
       chave: string; refs: Set<string>; descricoes: Map<string, number>; grupos: Map<string, number>;
       subgrupos: Map<string, number>; marcas: Map<string, number>; tipos: Map<string, number>;
       precoMin: number; precoMax: number; precoPromoMin: number; estoque: number; codigos: number;
-      naCampanha: number; origens: Set<string>; exclusoes: Set<string>;
+      naCampanha: number; origens: Set<string>; exclusoes: Set<string>; basicas: number;
     };
     const somarMapa = (m: Map<string, number>, k: string | null | undefined, n: number) => {
       const chave = String(k ?? '').trim();
@@ -769,7 +804,7 @@ export class PromoCampanhaService {
         acc = {
           chave, refs: new Set(), descricoes: new Map(), grupos: new Map(), subgrupos: new Map(), marcas: new Map(),
           tipos: new Map(), precoMin: Infinity, precoMax: 0, precoPromoMin: Infinity, estoque: 0, codigos: 0,
-          naCampanha: 0, origens: new Set(), exclusoes: new Set(),
+          naCampanha: 0, origens: new Set(), exclusoes: new Set(), basicas: 0,
         };
         familias.set(chave, acc);
       }
@@ -792,6 +827,8 @@ export class PromoCampanhaService {
         if (l.preco > 0) acc.precoPromoMin = Math.min(acc.precoPromoMin, precoComDesconto(l.preco, config.pct));
       } else if (d.exclusao) {
         acc.exclusoes.add(d.exclusao);
+      } else if (d.criterio === 'basico') {
+        acc.basicas++;
       }
     }
 
@@ -802,7 +839,7 @@ export class PromoCampanhaService {
       const situacao: ProdutoNaBusca['situacao'] = exc
         ? exc.decisao === 'fora' ? 'tirada' : 'incluida'
         : acc.naCampanha === 0
-          ? acc.exclusoes.size ? 'excluida' : 'fora'
+          ? acc.exclusoes.size ? 'excluida' : acc.basicas ? 'basico' : 'fora'
           : acc.naCampanha < acc.codigos ? 'parcial' : 'entra';
       if (acc.naCampanha > 0) dentro++;
       if (participacao === 'dentro' && acc.naCampanha === 0) continue;

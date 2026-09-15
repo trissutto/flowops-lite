@@ -31,6 +31,13 @@ describe('PromoConfigService — gravar a campanha', () => {
     expect((await svc.getConfig()).campanha.grupos).toEqual([13, 97]);
   });
 
+  it('linha BÁSICA fora é o padrão; só desliga com false explícito', async () => {
+    const svc = montar();
+    expect((await svc.getConfig()).campanha.excluirBasico).toBe(true);
+    expect((await svc.setConfig({ campanha: { pct: 30 } })).campanha.excluirBasico).toBe(true);
+    expect((await svc.setConfig({ campanha: { excluirBasico: false } })).campanha.excluirBasico).toBe(false);
+  });
+
   it('recusa grupo/subgrupo nulo ou vazio — viraria o subgrupo 0, que existe', async () => {
     const svc = montar();
     await expect(svc.setConfig({ campanha: { subgrupos: [null as any] } })).rejects.toThrow(BadRequestException);

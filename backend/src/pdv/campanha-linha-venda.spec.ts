@@ -27,7 +27,7 @@ describe('PdvService — a linha da venda na campanha por termo', () => {
     ]),
   );
 
-  function montar(opts: { activePromotion: string | null; itens: any[]; excecoes?: any[]; ativa?: boolean }) {
+  function montar(opts: { activePromotion: string | null; itens: any[]; excecoes?: any[]; ativa?: boolean; basicos?: string[] }) {
     const itens = new Map<string, any>(opts.itens.map((i) => [i.id, { ...i, saleId: 's1' }]));
     const prisma: any = {
       pdvSale: {
@@ -44,7 +44,12 @@ describe('PdvService — a linha da venda na campanha por termo', () => {
         }),
       },
     };
-    const regra = criarRegra({ ...CAMPANHA_PADRAO, ativa: opts.ativa !== false }, opts.excecoes ?? []);
+    const regra = criarRegra(
+      { ...CAMPANHA_PADRAO, ativa: opts.ativa !== false },
+      opts.excecoes ?? [],
+      null,
+      new Set(opts.basicos ?? []),
+    );
     const promoCampanha: any = {
       regra: jest.fn().mockResolvedValue(regra),
       linhasPorCodigo: jest.fn().mockResolvedValue(catalogo),
@@ -109,6 +114,14 @@ describe('PdvService — a linha da venda na campanha por termo', () => {
     const { svc, itens } = montar({ activePromotion: 'POR_TERMO', itens: [blusa], ativa: false });
     await svc.updateItem({ saleId: 's1', itemId: 'b1', forcePromo: true });
     expect(itens.get('b1')).toMatchObject({ desconto: 0, promoTag: 'Sem promo · campanha desligada' });
+  });
+
+  it('calça de moletom da linha BÁSICA sai cheia com "Básico · sem promo" — e o ⬆️ põe só nesta venda', async () => {
+    const { svc, itens } = montar({ activePromotion: 'POR_TERMO', itens: [calca], basicos: ['CAL-10'] });
+    await svc.applyAutoDiscounts('s1');
+    expect(itens.get('m1')).toMatchObject({ desconto: 0, total: 179.9, promoTag: 'Básico · sem promo' });
+    await svc.updateItem({ saleId: 's1', itemId: 'm1', forcePromo: true });
+    expect(itens.get('m1')).toMatchObject({ total: precoComDesconto(179.9, 30), promoTag: 'PROMO 30% · inverno · na mão' });
   });
 
   it('produto NÃO elegível incluído pela matriz entra (sem precisar do clique)', async () => {

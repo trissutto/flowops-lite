@@ -24,7 +24,7 @@ describe('PromoCampanhaService — grupos, busca e lote', () => {
     linha({ codigo: '41', ref: 'BLV-1', descricao: 'BLUSA VISCOLYCRA', grupoId: 1, subgrupoId: 1, grupoNome: 'BLUSA FEMININA', subgrupoNome: 'MANGA CURTA', marca: 'JOIN', preco: 119.9, estoque: 20 }),
   ];
 
-  function montar(opts: { config?: any; excecoes?: any[]; linhas?: any[] } = {}) {
+  function montar(opts: { config?: any; excecoes?: any[]; linhas?: any[]; basicos?: string[] } = {}) {
     const linhas = opts.linhas ?? catalogo;
     const upserts: any[] = [];
     const logs: any[] = [];
@@ -46,6 +46,9 @@ describe('PromoCampanhaService — grupos, busca e lote', () => {
       },
       $transaction: jest.fn(async (ops: any[]) => Promise.all(ops)),
       integrationLog: { create: jest.fn(async (a: any) => { logs.push(a.data); return {}; }) },
+      productClassification: {
+        findMany: jest.fn(async () => (opts.basicos || []).map((ref) => ({ ref }))),
+      },
     };
     const promoConfig: any = {
       getConfig: jest.fn(async () => ({ campanha: { ...CAMPANHA_PADRAO, ...(opts.config || {}) } })),
@@ -118,6 +121,27 @@ describe('PromoCampanhaService — grupos, busca e lote', () => {
     const { svc } = montar();
     const r = await svc.produtos({ busca: 'CJ-9 MA' });
     expect(r.produtos[0]).toMatchObject({ refs: ['CJ-9 MA', 'CJ-9 P'], estoque: 14, codigos: 2 });
+  });
+
+  it('linha BÁSICA (Classificação) não entra: o blusão de moletom básico sai da prévia e aparece como "basico" na busca', async () => {
+    const { svc } = montar({ basicos: ['MOL-1'] });
+    expect((await svc.preview()).familias.map((f) => f.chave)).toEqual([]);
+    const r = await svc.produtos({ busca: 'blusao' });
+    expect(r.produtos[0]).toMatchObject({ chave: 'MOL-1', situacao: 'basico', codigosNaCampanha: 0 });
+    // Com a opção desligada no rascunho, volta a entrar pelo termo.
+    const semFiltro = await svc.produtos({ busca: 'blusao' }, { excluirBasico: false });
+    expect(semFiltro.produtos[0]).toMatchObject({ situacao: 'entra' });
+  });
+
+  it('a régua do caixa/site lê a classificação BÁSICO (e a assinatura muda quando ela muda)', async () => {
+    const a = montar({ basicos: [] });
+    const b = montar({ basicos: ['MOL-1'] });
+    const regraA = await a.svc.regra();
+    const regraB = await b.svc.regra();
+    const blusao = { ref: 'MOL-1', codigo: '31', descricao: 'BLUSAO MOLETOM' };
+    expect(regraA.decidir(blusao).entra).toBe(true);
+    expect(regraB.decidir(blusao)).toMatchObject({ entra: false, criterio: 'basico' });
+    expect(regraA.assinatura).not.toBe(regraB.assinatura);
   });
 
   it('busca: REF reciclada (bolero + calça sob o mesmo número) avisa os TIPOS de peça da família', async () => {

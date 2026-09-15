@@ -159,6 +159,7 @@ export class PdvService {
     else if (d.excecao?.decisao === 'fora') motivo = `Tirada da campanha ${nome} na mão — não entra nem pondo na venda.`;
     else if (d.excecao?.decisao === 'dentro') motivo = `A matriz pôs esta peça na campanha ${nome} na mão.`;
     else if (d.exclusao) motivo = `Fora: a descrição tem "${d.exclusao}", palavra que a campanha ${nome} exclui.`;
+    else if (d.criterio === 'basico') motivo = `Fora: peça da linha BÁSICA (Classificação) — dá pra pôr só nesta venda com o ⬆️ do item.`;
     else if (d.termo) motivo = `Entra: a descrição tem "${d.termo}".`;
     else if (d.estrutura) motivo = `Entra: está no ${d.estrutura}.`;
     else motivo = `Nenhum termo nem grupo da campanha ${nome} — fora da promoção.`;
@@ -3140,7 +3141,8 @@ export class PdvService {
        * pro cadastro nem pra outra venda. Não vale pra peça PROTEGIDA — família
        * tirada na mão pela matriz ou peça com palavra que exclui (BERMUDA,
        * uniforme 22 DE ABRIL): "tem que sair" não pode voltar num clique de loja.
-       * Campanha desligada também não dá desconto a ninguém.
+       * Campanha desligada também não dá desconto a ninguém. A linha BÁSICA
+       * NÃO é protegida: é o caso de uso original do ⬆️ (desde 15/07).
        */
       const regra = await this.promoCampanha.regra();
       const catalogo = await this.promoCampanha.linhasPorCodigo(
@@ -3170,7 +3172,9 @@ export class PdvService {
               ? 'Sem promo · tirada'
               : d.criterio === 'exclusao'
                 ? 'Sem promo · excluída'
-                : 'Sem promo';
+                : d.criterio === 'basico'
+                  ? 'Básico · sem promo' // a etiqueta de sempre — o front já a conhece
+                  : 'Sem promo';
           updates.push({ id: it.id, desconto: 0, total: bruto, tag });
         }
       }

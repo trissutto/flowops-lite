@@ -47,8 +47,12 @@ import { refBaseOf } from './ref-base';
  *   3. família INCLUÍDA na mão (`dentro`) → entra
  *   4. palavra que EXCLUI ("BERMUDA")    → fora — trava do termo largo:
  *      "MOLETOM" puxava ~250 peças de bermuda de moletom (medido em 15/09)
- *   5. termo OU grupo/subgrupo do ERP    → entra
- *   6. nada disso                        → fora
+ *   5. linha BÁSICA (Produtos Loja → Classificação) → fora — "essa
+ *      classificação permanece, linha básica não entra" (dono, 15/09). É a
+ *      mesma regra do 50% antigo: a vendedora ainda põe a peça básica NA
+ *      VENDA com o ⬆️, como sempre pôde; palavra que exclui, não.
+ *   6. termo OU grupo/subgrupo do ERP    → entra
+ *   7. nada disso                        → fora
  *
  * O grupo/subgrupo entra por CÓDIGO (`EstruturaCampanha`, montada por quem
  * carrega a régua): todo chamador já manda o código, então nenhum SQL de
@@ -76,6 +80,11 @@ export interface ConfigCampanha {
   grupos: number[];
   /** Subgrupos do ERP (`wincred_produtos.subgrupo`) cujas peças entram. */
   subgrupos: number[];
+  /**
+   * Linha BÁSICA (`product_classification.tipo_produto = 1`, tela Produtos
+   * Loja → Classificação) fica fora da regra automática. Ligado de fábrica.
+   */
+  excluirBasico: boolean;
 }
 
 export type DecisaoExcecao = 'fora' | 'dentro';
@@ -106,7 +115,7 @@ export interface LinhaCampanha {
  * Quem decidiu, na ordem da régua. É o que a tela usa pra explicar a linha —
  * e o que os testes trancam: a precedência não pode mudar sem alguém ver.
  */
-export type CriterioCampanha = 'desligada' | 'excecao' | 'exclusao' | 'termo' | 'estrutura' | 'nenhum';
+export type CriterioCampanha = 'desligada' | 'excecao' | 'exclusao' | 'basico' | 'termo' | 'estrutura' | 'nenhum';
 
 export interface DecisaoCampanha {
   entra: boolean;
@@ -146,6 +155,7 @@ export const CAMPANHA_PADRAO: ConfigCampanha = {
   termosExclusao: ['BERMUDA', '22 DE ABRIL'],
   grupos: [],
   subgrupos: [],
+  excluirBasico: true,
 };
 
 export const PCT_MIN = 1;
@@ -346,7 +356,20 @@ export function normalizarConfig(c: Partial<ConfigCampanha> | null | undefined):
     termosExclusao: listaDeTermos(base.termosExclusao),
     grupos: listaDeIds(base.grupos),
     subgrupos: listaDeIds(base.subgrupos),
+    excluirBasico: base.excluirBasico !== false,
   };
+}
+
+/**
+ * A chave com que a tela de Classificação grava BÁSICO/MODA: a REF inteira
+ * (maiúscula, sem espaço nas pontas) ou `#<codigo>` pra peça sem REF. É por
+ * REF, não por família: é assim que a matriz marca, uma REF por linha.
+ */
+export function chaveDeClassificacao(ref: unknown, codigo?: unknown): string {
+  const r = String(ref ?? '').trim().toUpperCase();
+  if (r && r !== 'MARCADO') return r;
+  const c = String(codigo ?? '').trim().toUpperCase();
+  return c ? `#${c}` : '';
 }
 
 /** Impressão curta de um conjunto de códigos — muda quando entra ou sai um. */
@@ -391,6 +414,8 @@ export function criarRegra(
   configEntrada: Partial<ConfigCampanha> | null | undefined,
   excecoes: ExcecaoCampanha[] = [],
   estrutura: EstruturaCampanha | null = null,
+  /** Chaves (`chaveDeClassificacao`) marcadas BÁSICO na tela de Classificação. */
+  basicos: Set<string> | null = null,
 ): RegraCampanha {
   const config = normalizarConfig(configEntrada);
   const compilar = (lista: string[]) =>
@@ -406,6 +431,7 @@ export function criarRegra(
   // passe um mapa velho, ele não dá desconto a ninguém.
   const temEstrutura = config.grupos.length > 0 || config.subgrupos.length > 0;
   const porCodigo = temEstrutura ? estrutura?.porCodigo ?? new Map<string, string>() : new Map<string, string>();
+  const setBasicos = config.excluirBasico && basicos ? basicos : new Set<string>();
 
   const excecaoDe = (ref: unknown, codigo?: unknown) =>
     porChave.get(chaveDaFamilia(ref, codigo)) ?? null;
@@ -439,6 +465,9 @@ export function criarRegra(
         exclusao: exclui.original,
       });
     }
+    if (setBasicos.size && setBasicos.has(chaveDeClassificacao(linha?.ref, linha?.codigo))) {
+      return decisao(chave, false, 'basico', 'linha BÁSICA (classificação) — não entra pela regra');
+    }
     const casou = termos.find((t) => termoCasa(t, texto));
     if (casou) {
       return decisao(chave, true, 'termo', `casou com "${casou.original}"`, { termo: casou.original });
@@ -454,6 +483,8 @@ export function criarRegra(
     config,
     [...porChave.values()].map((e) => `${e.chave}:${e.decisao}`).sort(),
     temEstrutura ? digestoDe(porCodigo.keys()) : '',
+    // Reclassificar BÁSICO/MODA muda preço no site: a vitrine remonta por aqui.
+    config.excluirBasico ? digestoDe(setBasicos) : '',
   ]);
 
   return {

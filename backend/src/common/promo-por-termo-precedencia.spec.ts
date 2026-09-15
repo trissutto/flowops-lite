@@ -136,6 +136,50 @@ describe('promo-por-termo — precedência: quem decide', () => {
   });
 });
 
+/**
+ * "Essa classificação permanece — linha básica não entra" (dono, 15/09/2026).
+ * A tela Produtos Loja → Classificação marca BÁSICO por REF; a campanha lê.
+ */
+describe('promo-por-termo — linha BÁSICA', () => {
+  const basicos = new Set(['CAL-7', '#8000123']);
+  const calcaBasica = { ref: 'CAL-7', codigo: '7001', descricao: 'CALCA MOLETOM FEMININA PLUS SIZE LUNENDER' };
+
+  it('peça BÁSICA não entra, mesmo casando com MOLETOM', () => {
+    const d = criarRegra(CAMPANHA_PADRAO, [], null, basicos).decidir(calcaBasica);
+    expect(d).toMatchObject({ entra: false, criterio: 'basico' });
+  });
+
+  it('a MODA da mesma descrição continua entrando', () => {
+    expect(criarRegra(CAMPANHA_PADRAO, [], null, basicos).decidir({ ...calcaBasica, ref: 'CAL-8' }).entra).toBe(true);
+  });
+
+  it('peça sem REF é classificada pelo código (#codigo), igual à tela de Classificação', () => {
+    const d = criarRegra(CAMPANHA_PADRAO, [], null, basicos).decidir({ ref: null, codigo: '8000123', descricao: 'MEIA MOLETOM' });
+    expect(d.criterio).toBe('basico');
+  });
+
+  it('com a opção desligada na retaguarda, a básica volta a entrar pelo termo', () => {
+    const d = criarRegra({ ...CAMPANHA_PADRAO, excluirBasico: false }, [], null, basicos).decidir(calcaBasica);
+    expect(d).toMatchObject({ entra: true, criterio: 'termo' });
+  });
+
+  it('a matriz incluindo a família na mão passa por cima da linha básica', () => {
+    const d = criarRegra(CAMPANHA_PADRAO, [{ chave: 'CAL-7', decisao: 'dentro' }], null, basicos).decidir(calcaBasica);
+    expect(d).toMatchObject({ entra: true, criterio: 'excecao' });
+  });
+
+  it('básica com palavra que exclui responde pela palavra (é ela que a loja não consegue desfazer)', () => {
+    const d = criarRegra(CAMPANHA_PADRAO, [], null, new Set(['BER-1'])).decidir({ ref: 'BER-1', codigo: '1', descricao: 'BERMUDA MOLETOM' });
+    expect(d.criterio).toBe('exclusao');
+  });
+
+  it('config de fábrica: linha básica fica fora', () => {
+    expect(CAMPANHA_PADRAO.excluirBasico).toBe(true);
+    expect(normalizarConfig({ excluirBasico: undefined } as any).excluirBasico).toBe(true);
+    expect(normalizarConfig({ excluirBasico: false }).excluirBasico).toBe(false);
+  });
+});
+
 describe('promo-por-termo — conectivos e config nova', () => {
   it('DE/DA/COM… não viram palavra obrigatória; letra solta (tamanho) continua', () => {
     expect(compilarTermo('CALÇA DE MOLETOM')?.palavras.map((p) => p.raiz)).toEqual(['CALCA', 'MOLETOM']);

@@ -3269,7 +3269,8 @@ function PdvPageInner() {
                         if (sale.activePromotion === 'POR_TERMO') {
                           const pecaDeCatalogo =
                             it.ref !== 'FRETE' && it.ref !== 'MANUAL' && !String(it.sku || '').startsWith('MANUAL-');
-                          const podePor = pecaDeCatalogo && (tag === 'SEM_PROMO' || tag === 'Sem promo');
+                          const podePor =
+                            pecaDeCatalogo && (tag === 'SEM_PROMO' || tag === 'Sem promo' || tag === 'Básico · sem promo');
                           if (!podePor) return null;
                           return (
                             <button
