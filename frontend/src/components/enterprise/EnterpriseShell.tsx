@@ -62,7 +62,7 @@ export default function EnterpriseShell({
   return (
     <div className={`${display.variable} ${sans.variable} min-h-screen bg-oo-bg font-oo-sans text-oo-ink antialiased`}>
       <header className="bg-oo-nav text-white">
-        <div className="flex h-14 items-center gap-6 px-4 sm:px-6 2xl:px-10">
+        <div className="flex h-14 items-center gap-6 px-4 sm:px-6 2xl:px-12">
           <Link
             href="/"
             className="flex shrink-0 items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary"
@@ -114,8 +114,8 @@ export default function EnterpriseShell({
         </div>
 
         {/* Trilha */}
-        <div className="border-t border-oo-nav-line bg-oo-nav-2">
-          <ol className="flex h-9 items-center gap-1.5 overflow-x-auto px-4 text-[12px] text-slate-400 sm:px-6 2xl:px-10">
+        <div className="border-y border-oo-nav-line bg-oo-nav">
+          <ol className="flex h-9 items-center gap-1.5 overflow-x-auto px-4 text-[12px] text-slate-400 sm:px-6 2xl:px-12">
             {trilha.map((t, i) => (
               <li key={t.label} className="flex shrink-0 items-center gap-1.5">
                 {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-slate-600" />}
