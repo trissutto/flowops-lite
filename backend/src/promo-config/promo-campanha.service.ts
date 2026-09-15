@@ -234,7 +234,18 @@ export class PromoCampanhaService {
     let chave = '';
 
     if (codigo) {
-      const linha = (await this.linhasPorCodigo([codigo])).get(codigo);
+      let linha = (await this.linhasPorCodigo([codigo])).get(codigo);
+      if (!linha) {
+        // Etiqueta antiga traz o EAN do fornecedor, não o código — o bipe do
+        // PDV acha pela coluna `ean`, e a retaguarda tem que achar a mesma peça.
+        const digitos = codigo.replace(/\D/g, '');
+        const porEan: any[] = await this.prisma.$queryRawUnsafe(
+          `SELECT codigo FROM wincred_produtos WHERE ean = ANY($1) LIMIT 1`,
+          Array.from(new Set([codigo, digitos])).filter((e) => e.length >= 8),
+        );
+        const cod = porEan[0]?.codigo ? String(porEan[0].codigo) : '';
+        if (cod) linha = (await this.linhasPorCodigo([cod])).get(cod);
+      }
       if (!linha) throw new NotFoundException(`Código ${codigo} não está no catálogo.`);
       chave = chaveDaFamilia(linha.ref, linha.codigo);
       refExemplo = linha.ref || `#${linha.codigo}`;

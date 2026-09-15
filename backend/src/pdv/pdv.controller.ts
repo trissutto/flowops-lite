@@ -702,6 +702,14 @@ export class PdvController {
     @Body() body: { codigo?: string; motivo?: string; saleId?: string },
   ) {
     this.requireRole(req);
+    // Treino não mexe no que vale pra rede: a exceção seria gravada de
+    // verdade e o modelo sairia dos 30% nas lojas e no site por causa de uma
+    // venda de mentira.
+    if (isTrainingRequest(req)) {
+      throw new BadRequestException(
+        'Modo treinamento: a peça não sai da campanha de verdade. Use "Só nesta venda".',
+      );
+    }
     if (body?.saleId && req?.user?.role === 'store') {
       const sale = await (this.prisma as any).pdvSale.findUnique({
         where: { id: body.saleId },

@@ -126,7 +126,7 @@ function handleUnauthorized() {
  * adiciona header `x-training-mode: 1` em TODAS as chamadas. Backend
  * detecta esse header e pula integrações reais (estoque, NFC-e, caixa).
  */
-function isTrainingMode(): boolean {
+export function isTrainingMode(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     return sessionStorage.getItem('flowops_training') === '1';

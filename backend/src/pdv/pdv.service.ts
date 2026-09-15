@@ -3190,6 +3190,14 @@ export class PdvService {
    * Recalcula tudo automaticamente.
    */
   async setPromotion(input: { saleId: string; promotion: string | null }) {
+    // PDV com a tela VELHA aberta (sem hard-refresh depois do deploy de 15/09)
+    // ainda manda o "Liquida antigos". Trocar calado por NONE deixaria a
+    // vendedora achando que deu o desconto — então fala alto e diz o que fazer.
+    if (input.promotion === 'YEAR_BASED') {
+      throw new BadRequestException(
+        'A promoção "Liquida antigos" saiu do ar. Atualize a tela (Ctrl+Shift+R) pra ver a campanha nova.',
+      );
+    }
     const allowed = ['POR_TERMO', 'FOUR_FOR_THREE', 'NONE'];
     const promo = input.promotion && allowed.includes(input.promotion) ? input.promotion : 'NONE';
     const sale = await (this.prisma as any).pdvSale.findUnique({

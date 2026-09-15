@@ -18,6 +18,9 @@ describe('PromoCampanhaService', () => {
     const upserts: any[] = [];
     const prisma: any = {
       $queryRawUnsafe: jest.fn(async (sql: string, ...args: any[]) => {
+        if (sql.includes('ean = ANY')) {
+          return (opts.linhas || []).filter((l) => l.ean && (args[0] as string[]).includes(l.ean)).slice(0, 1);
+        }
         if (sql.includes('LIMIT 1')) {
           return (opts.linhas || []).filter((l) => l.ref === args[0]).slice(0, 1);
         }
@@ -120,6 +123,14 @@ describe('PromoCampanhaService', () => {
     expect(upserts[0].where).toEqual({ campanha_chave: { campanha: 'inverno', chave: 'VMS-223' } });
     expect(upserts[0].create).toMatchObject({ decisao: 'fora', origem: 'pdv', storeCode: '05', refExemplo: 'VMS-223 MA', motivo: 'é de verão' });
     expect(r.excecao.chave).toBe('VMS-223');
+  });
+
+  it('EAN de etiqueta antiga acha a peça pelo código dela (igual ao bipe)', async () => {
+    const { svc, upserts } = montar({
+      linhas: [linha({ codigo: '8002', ref: 'CAS-77', descricao: 'CASACO', ean: '7891234567895' })],
+    });
+    await svc.gravarExcecao({ codigo: '7891234567895', decisao: 'dentro', origem: 'retaguarda' });
+    expect(upserts[0].where.campanha_chave.chave).toBe('CAS-77');
   });
 
   it('código que não existe no catálogo não grava exceção fantasma', async () => {

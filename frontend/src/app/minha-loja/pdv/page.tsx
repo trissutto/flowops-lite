@@ -34,7 +34,7 @@ import {
   Target, Trophy,
   type LucideIcon,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, isTrainingMode } from '@/lib/api';
 import { abrirWhatsApp } from '@/lib/whatsapp';
 import {
   type DadosClienteOnline,
@@ -1031,18 +1031,21 @@ function PdvPageInner() {
 
   // CAMPANHA DA RETAGUARDA (15/09/2026 — hoje "Inverno 30%"): o seletor da
   // venda mostra o nome e o % que a matriz gravou, nunca um texto chumbado.
-  // O PDV fica aberto o dia inteiro: relê a cada 5 min pra a campanha
-  // desligada na matriz não seguir aparecendo como opção aqui.
+  // O PDV fica aberto o dia inteiro: relê a cada minuto e ao abrir o seletor.
+  // Falha de leitura (backend reiniciando no deploy) NÃO apaga o que já se
+  // sabia — e sem saber nada o botão fica ligado: quem decide é o backend,
+  // que recusa com frase clara se a campanha estiver desligada.
   const [campanha, setCampanha] = useState<{ ativa: boolean; nome: string; pct: number } | null>(null);
-  useEffect(() => {
-    const ler = () =>
-      api<{ ativa: boolean; nome: string; pct: number }>('/pdv/promo-campanha')
-        .then((r) => { if (r && typeof r.pct === 'number') setCampanha(r); })
-        .catch(() => {});
-    void ler();
-    const t = setInterval(ler, 5 * 60_000);
-    return () => clearInterval(t);
+  const lerCampanha = useCallback(() => {
+    api<{ ativa: boolean; nome: string; pct: number }>('/pdv/promo-campanha')
+      .then((r) => { if (r && typeof r.pct === 'number') setCampanha(r); })
+      .catch(() => { /* mantém o último valor; a próxima leitura tenta de novo */ });
   }, []);
+  useEffect(() => {
+    lerCampanha();
+    const t = setInterval(lerCampanha, 60_000);
+    return () => clearInterval(t);
+  }, [lerCampanha]);
   const rotuloCampanha = campanha ? `${campanha.nome} ${campanha.pct}%` : 'Campanha';
 
   // Menu lateral recolhível (só visual). Persiste a preferência por PC.
@@ -1120,6 +1123,13 @@ function PdvPageInner() {
   // Declarado AQUI (antes do kbdRef) porque o handler global de teclado conta
   // o trilho como modal aberto — senão F2/F6/F8 empilhavam modal por cima.
   const [trilhoCartao, setTrilhoCartao] = useState<{ tipo: 'credito' | 'debito'; bandeira: string | null } | null>(null);
+  // 🚫 na campanha por termo ("não é da campanha" × "só nesta venda"). Também
+  // AQUI, antes do kbdRef: com ele aberto o handler global não pode tratar a
+  // leitura do leitor como atalho — senão o foco pula pra barra de bipe e a
+  // peça é lançada na venda por trás do modal.
+  const [tirarPromoItem, setTirarPromoItem] = useState<
+    { id: string; sku: string; descricao?: string | null; ref?: string | null } | null
+  >(null);
 
   const [quickConvenioAtivo, setQuickConvenioAtivo] = useState<{ id: string; nome: string } | null>(null);
   useEffect(() => {
@@ -1453,10 +1463,12 @@ function PdvPageInner() {
   const kbdRef = useRef({
     sale, showCustomer, showPayment, showFinalized, showVendedora,
     showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
+    promoCheckOpen, tirarPromoItem,
   });
   kbdRef.current = {
     sale, showCustomer, showPayment, showFinalized, showVendedora,
     showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
+    promoCheckOpen, tirarPromoItem,
   };
   // `removeItem` é declarada mais abaixo — guardar por effect (que roda DEPOIS
   // do render) evita o erro de usar a const antes da declaração.
@@ -1467,12 +1479,15 @@ function PdvPageInner() {
       const {
         sale, showCustomer, showPayment, showFinalized, showVendedora,
         showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
+        promoCheckOpen, tirarPromoItem,
       } = kbdRef.current;
       const removeItem = removeItemRef.current;
       if (!sale || sale.status !== 'open') return;
+      // Os dois modais da promoção contam: o handler é do `document`, o mesmo
+      // nó onde o React escuta — o stopPropagation dos modais não o segura.
       const anyModal =
         showCustomer || showPayment || showFinalized || showVendedora || showConfirmSale ||
-        !!showDiscount || showShortcuts || !!trilhoCartao;
+        !!showDiscount || showShortcuts || !!trilhoCartao || promoCheckOpen || !!tirarPromoItem;
       // ── PDV2: Esc fecha modais — roda ANTES do early-return de modal
       // (no PDV v1 o listener inteiro era desativado com modal aberto) ──
       if (e.key === 'Escape') {
@@ -1881,10 +1896,8 @@ function PdvPageInner() {
   const [showCarrinhos, setShowCarrinhos] = useState(false);
   // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
   const [promoExpanded, setPromoExpanded] = useState(false);
-  // ── 🚫 na campanha por termo: "não é da campanha" × "só nesta venda" ──
-  const [tirarPromoItem, setTirarPromoItem] = useState<
-    { id: string; sku: string; descricao?: string | null; ref?: string | null } | null
-  >(null);
+  // Abriu o seletor: confere a campanha na hora (a matriz pode ter ligado agora).
+  useEffect(() => { if (promoExpanded) lerCampanha(); }, [promoExpanded, lerCampanha]);
   const loadOpenCount = async () => {
     if (!storeCode) return;
     try {
@@ -3022,8 +3035,8 @@ function PdvPageInner() {
                     ligar aqui (a venda que já estava com ela sai cheia). */}
                 <button
                   onClick={() => setPromotion('POR_TERMO')}
-                  disabled={!campanha?.ativa}
-                  title={campanha?.ativa ? undefined : 'A campanha está desligada na retaguarda'}
+                  disabled={campanha ? !campanha.ativa : false}
+                  title={campanha && !campanha.ativa ? 'A campanha está desligada na retaguarda' : undefined}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border disabled:opacity-40 ${
                     sale.activePromotion === 'POR_TERMO'
                       ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
@@ -3032,9 +3045,11 @@ function PdvPageInner() {
                 >
                   ❄️ {rotuloCampanha}
                   <div className="text-[9px] font-normal">
-                    {campanha?.ativa
-                      ? `peças de ${campanha.nome.toLowerCase()} = ${campanha.pct}% off`
-                      : 'campanha desligada'}
+                    {!campanha
+                      ? 'desconto nas peças da campanha'
+                      : campanha.ativa
+                        ? `peças de ${campanha.nome.toLowerCase()} = ${campanha.pct}% off`
+                        : 'campanha desligada'}
                   </div>
                 </button>
               </div>
@@ -13470,6 +13485,12 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
  * É daqui também que a vendedora tira da campanha a peça que entrou por
  * engano ("não é peça de inverno") — com a cliente na frente, sem precisar
  * lançar a peça na venda.
+ *
+ * ⚠️ O LEITOR DE CÓDIGO DIGITA E APERTA ENTER. Tirar da campanha vale pra rede
+ * inteira e pro site, então só um CLIQUE no botão tira: o campo do motivo não
+ * nasce com foco, Enter nele não envia nada, e o foco volta pro "Bipe a peça"
+ * — a próxima leitura consulta a próxima peça e fecha a confirmação, em vez
+ * de tirar a peça anterior com o código de barras como motivo.
  */
 function PromoCheckModal({
   open,
@@ -13490,6 +13511,7 @@ function PromoCheckModal({
   const [tirando, setTirando] = useState<{ motivo: string } | null>(null);
   const [salvandoTirar, setSalvandoTirar] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const treino = isTrainingMode();
 
   useEffect(() => {
     if (!open) { setCodigo(''); setRes(null); setErro(''); setTirando(null); return; }
@@ -13515,26 +13537,31 @@ function PromoCheckModal({
       inputRef.current?.focus();
     } catch (e: any) {
       setRes(null);
-      setErro(humanizeError(e).hint || humanizeError(e).title || 'Falha na consulta');
+      const h = humanizeError(e);
+      setErro(h.hint ? `${h.title} — ${h.hint}` : h.title);
     } finally { setBusy(false); }
   };
 
   const tirar = async () => {
     if (!res?.sku || !tirando || salvandoTirar) return;
     setSalvandoTirar(true); setErro('');
+    // Motivo que é só número comprido é leitura do leitor caindo no campo.
+    const motivo = /^\d{6,}$/.test(tirando.motivo.trim()) ? '' : tirando.motivo.trim();
     try {
       const r = await api<any>('/pdv/promo-campanha/tirar', {
         method: 'POST',
-        body: JSON.stringify({ codigo: res.sku, motivo: tirando.motivo.trim() || undefined, saleId: saleId || undefined }),
+        body: JSON.stringify({ codigo: res.sku, motivo: motivo || undefined, saleId: saleId || undefined }),
       });
       if (r?.sale?.id && Array.isArray(r.sale.items)) onSaleAtualizada?.(r.sale as Sale);
       setTirando(null);
       await buscar(String(res.sku));
-      inputRef.current?.focus();
     } catch (e: any) {
       const h = humanizeError(e);
       setErro(h.hint ? `${h.title} — ${h.hint}` : h.title);
-    } finally { setSalvandoTirar(false); }
+    } finally {
+      setSalvandoTirar(false);
+      inputRef.current?.focus();
+    }
   };
 
   if (!open) return null;
@@ -13633,29 +13660,31 @@ function PromoCheckModal({
                 </div>
               )}
 
-              {res.podeTirar && !tirando && (
+              {res.podeTirar && !tirando && !treino && (
                 <button
                   type="button"
-                  onClick={() => setTirando({ motivo: '' })}
+                  onClick={() => { setTirando({ motivo: '' }); setTimeout(() => inputRef.current?.focus(), 30); }}
                   className="mt-3 w-full py-2 rounded-lg border-2 border-rose-200 text-rose-700 text-sm font-bold hover:bg-rose-50"
                 >
                   Não é peça de {camp?.nome?.toLowerCase() || 'campanha'}? Tirar da campanha
                 </button>
               )}
+              {res.podeTirar && treino && (
+                <p className="mt-3 text-[11px] text-slate-400">
+                  Modo treinamento: tirar da campanha fica desligado (valeria pra rede de verdade).
+                </p>
+              )}
 
               {tirando && (
-                <form
-                  onSubmit={(e) => { e.preventDefault(); void tirar(); }}
-                  className="mt-3 rounded-lg border-2 border-rose-200 bg-rose-50/50 p-3"
-                >
+                <div className="mt-3 rounded-lg border-2 border-rose-200 bg-rose-50/50 p-3">
                   <p className="text-xs text-rose-900">
                     Tira este modelo da campanha em <b>todas as cores</b>, em <b>todas as lojas</b> e no <b>site</b>.
                     Fica registrado com a sua loja.
                   </p>
                   <input
-                    autoFocus
                     value={tirando.motivo}
                     onChange={(e) => setTirando({ motivo: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
                     placeholder="Por quê? (opcional — ex.: é blusa de verão)"
                     maxLength={300}
                     className="mt-2 w-full px-3 py-2 rounded-lg border border-rose-200 bg-white text-sm"
@@ -13663,20 +13692,21 @@ function PromoCheckModal({
                   <div className="mt-2 flex gap-2">
                     <button
                       type="button"
-                      onClick={() => setTirando(null)}
+                      onClick={() => { setTirando(null); inputRef.current?.focus(); }}
                       className="flex-1 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-bold"
                     >
                       Cancelar
                     </button>
                     <button
-                      type="submit"
+                      type="button"
+                      onClick={() => void tirar()}
                       disabled={salvandoTirar}
                       className="flex-[2] py-2 rounded-lg bg-rose-600 text-white text-sm font-black disabled:opacity-50"
                     >
                       {salvandoTirar ? 'Tirando…' : 'Tirar da campanha'}
                     </button>
                   </div>
-                </form>
+                </div>
               )}
             </div>
           )}
@@ -13696,6 +13726,10 @@ function PromoCheckModal({
  *     erro" que o dono pediu.
  *   - "Só nesta venda": o que o 🚫 sempre fez — a peça continua na campanha
  *     pras outras clientes.
+ *
+ * Nada aqui responde a teclado: o foco fica na caixa do modal (a leitura do
+ * leitor morre nela e não lança peça na venda por trás), o motivo não nasce
+ * com foco e Enter não escolhe opção. Tirar da rede é só no clique.
  */
 function TirarPromoModal({
   item,
@@ -13712,24 +13746,40 @@ function TirarPromoModal({
 }) {
   const [motivo, setMotivo] = useState('');
   const [salvando, setSalvando] = useState(false);
+  const caixaRef = useRef<HTMLDivElement>(null);
+  const treino = isTrainingMode();
 
-  useEffect(() => { setMotivo(''); setSalvando(false); }, [item?.id]);
+  useEffect(() => {
+    setMotivo('');
+    setSalvando(false);
+    if (item) setTimeout(() => caixaRef.current?.focus(), 30);
+  }, [item?.id]);
 
   if (!item) return null;
   const nome = campanha?.nome?.toLowerCase() || 'campanha';
 
   const naoEh = async () => {
-    if (salvando) return;
+    if (salvando || treino) return;
     setSalvando(true);
-    try { await onNaoEhDaCampanha(motivo); } finally { setSalvando(false); }
+    try {
+      await onNaoEhDaCampanha(/^\d{6,}$/.test(motivo.trim()) ? '' : motivo);
+    } finally {
+      setSalvando(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className="w-full max-w-md bg-[#FAFAF7] rounded-2xl shadow-xl overflow-hidden"
+        ref={caixaRef}
+        tabIndex={-1}
+        className="w-full max-w-md bg-[#FAFAF7] rounded-2xl shadow-xl overflow-hidden outline-none"
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') onClose(); }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Escape') onClose();
+          if (e.key === 'Enter') e.preventDefault();
+        }}
       >
         <div className="px-5 py-3.5 bg-white border-b border-[#E5E2D9] flex items-center gap-2.5">
           <span className="text-lg">🚫</span>
@@ -13742,31 +13792,30 @@ function TirarPromoModal({
             <p className="text-xs text-slate-500">SKU {item.sku}{item.ref ? ` · ref ${item.ref}` : ''}</p>
           </div>
 
-          <form
-            onSubmit={(e) => { e.preventDefault(); void naoEh(); }}
-            className="rounded-xl border-2 border-rose-200 bg-white p-3"
-          >
+          <div className={`rounded-xl border-2 border-rose-200 bg-white p-3 ${treino ? 'opacity-60' : ''}`}>
             <div className="font-bold text-rose-800 text-sm">❄️ Não é peça de {nome}</div>
             <p className="text-xs text-slate-600 mt-0.5">
-              Tira o modelo da campanha em todas as cores, em todas as lojas e no site. Fica registrado com a
-              sua loja — se foi engano, a matriz devolve.
+              {treino
+                ? 'Modo treinamento: esta opção fica desligada — ela tiraria a peça da campanha na rede de verdade.'
+                : 'Tira o modelo da campanha em todas as cores, em todas as lojas e no site. Fica registrado com a sua loja — se foi engano, a matriz devolve.'}
             </p>
             <input
-              autoFocus
               value={motivo}
               onChange={(e) => setMotivo(e.target.value)}
               placeholder="Por quê? (opcional)"
               maxLength={300}
-              className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
+              disabled={treino}
+              className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-300 text-sm disabled:bg-slate-50"
             />
             <button
-              type="submit"
-              disabled={salvando}
+              type="button"
+              onClick={() => void naoEh()}
+              disabled={salvando || treino}
               className="mt-2 w-full py-2.5 rounded-lg bg-rose-600 text-white text-sm font-black disabled:opacity-50"
             >
               {salvando ? 'Tirando…' : 'Tirar da campanha'}
             </button>
-          </form>
+          </div>
 
           <button
             type="button"

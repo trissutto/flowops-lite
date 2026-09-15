@@ -95,6 +95,11 @@ describe('PdvService — campanha por termo', () => {
     expect(saleUpdates[0].data.activePromotion).toBeNull();
   });
 
+  it('PDV com a tela velha pedindo o "Liquida antigos" leva erro que manda atualizar — nunca desconto sumido calado', async () => {
+    const { svc } = montar({ activePromotion: null, itens: [casaco] });
+    await expect(svc.setPromotion({ saleId: 's1', promotion: 'YEAR_BASED' })).rejects.toThrow(/Atualize a tela/);
+  });
+
   it('campanha "Nenhuma" limpa a etiqueta "Sem promo" que o motor tinha escrito', async () => {
     const { svc, updates } = montar({ activePromotion: null, itens: [{ ...vestido, promoTag: 'Sem promo' }] });
     await svc.applyAutoDiscounts('s1');

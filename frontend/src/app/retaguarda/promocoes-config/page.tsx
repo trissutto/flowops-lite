@@ -110,7 +110,7 @@ export default function PromocoesConfigPage() {
   const [limite, setLimite] = useState(100);
   const [acaoEm, setAcaoEm] = useState<string | null>(null);
   const [tirando, setTirando] = useState<{ chave: string; motivo: string } | null>(null);
-  const [incluir, setIncluir] = useState({ ref: '', motivo: '' });
+  const [incluir, setIncluir] = useState<{ ref: string; motivo: string; tipo: 'ref' | 'codigo' }>({ ref: '', motivo: '', tipo: 'ref' });
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -204,6 +204,10 @@ export default function PromocoesConfigPage() {
   };
 
   const tirar = async (f: Familia, motivo: string) => {
+    if (nomeMudou) {
+      setErro('Salve o nome da campanha antes de mexer nas peças tiradas ou incluídas.');
+      return;
+    }
     setAcaoEm(f.chave);
     setErro(null);
     try {
@@ -221,6 +225,10 @@ export default function PromocoesConfigPage() {
   };
 
   const removerExcecao = async (chave: string) => {
+    if (nomeMudou) {
+      setErro('Salve o nome da campanha antes de mexer nas peças tiradas ou incluídas.');
+      return;
+    }
     setAcaoEm(chave);
     setErro(null);
     try {
@@ -234,22 +242,26 @@ export default function PromocoesConfigPage() {
   };
 
   const incluirNaMao = async () => {
+    if (nomeMudou) {
+      setErro('Salve o nome da campanha antes de mexer nas peças tiradas ou incluídas.');
+      return;
+    }
     const termo = incluir.ref.trim();
     if (!termo) return;
     setAcaoEm('__incluir__');
     setErro(null);
     try {
-      // Só dígitos e comprido = código de barras/código; o resto é REF.
-      const ehCodigo = /^\d{8,14}$/.test(termo);
+      // REF ou código é ESCOLHA de quem digita, nunca adivinhação: "10115" é
+      // código de uma calça e REF de umas meias ao mesmo tempo.
       await api('/admin/promo-config/excecoes', {
         method: 'POST',
         body: JSON.stringify({
-          ...(ehCodigo ? { codigo: termo } : { ref: termo }),
+          ...(incluir.tipo === 'codigo' ? { codigo: termo } : { ref: termo }),
           decisao: 'dentro',
           motivo: incluir.motivo.trim() || undefined,
         }),
       });
-      setIncluir({ ref: '', motivo: '' });
+      setIncluir({ ref: '', motivo: '', tipo: incluir.tipo });
       setAba('incluidas');
       if (rascunho) await calcular(rascunho);
     } catch (e: any) {
@@ -474,6 +486,8 @@ export default function PromocoesConfigPage() {
                   <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                     Trocar o nome começa uma campanha nova: as peças tiradas ou incluídas na mão em
                     &quot;{gravada?.nome}&quot; não valem pra &quot;{rascunho.nome}&quot; (e voltam se o nome voltar).
+                    Tirar, devolver e incluir peça ficam travados até salvar o nome — senão mexeriam na
+                    campanha que está valendo, e não na que aparece aqui.
                   </div>
                 )}
 
@@ -664,7 +678,9 @@ export default function PromocoesConfigPage() {
                                 ) : (
                                   <button
                                     onClick={() => setTirando({ chave: f.chave, motivo: '' })}
-                                    className="px-2.5 py-1 rounded-lg border border-rose-300 text-rose-700 text-xs font-bold hover:bg-rose-50"
+                                    disabled={nomeMudou}
+                                    title={nomeMudou ? 'Salve o nome da campanha antes' : undefined}
+                                    className="px-2.5 py-1 rounded-lg border border-rose-300 text-rose-700 text-xs font-bold hover:bg-rose-50 disabled:opacity-40"
                                   >
                                     Tirar da campanha
                                   </button>
@@ -672,7 +688,8 @@ export default function PromocoesConfigPage() {
                               ) : ex ? (
                                 <button
                                   onClick={() => void removerExcecao(ex.chave)}
-                                  disabled={acaoEm === ex.chave}
+                                  disabled={acaoEm === ex.chave || nomeMudou}
+                                  title={nomeMudou ? 'Salve o nome da campanha antes' : undefined}
                                   className="px-2.5 py-1 rounded-lg border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-100 disabled:opacity-50"
                                 >
                                   {acaoEm === ex.chave ? '…' : ex.decisao === 'fora' ? 'Devolver à campanha' : 'Tirar a inclusão'}
@@ -712,10 +729,19 @@ export default function PromocoesConfigPage() {
                 onSubmit={(e) => { e.preventDefault(); void incluirNaMao(); }}
                 className="mt-2 flex flex-wrap gap-2"
               >
+                <select
+                  value={incluir.tipo}
+                  onChange={(e) => setIncluir({ ...incluir, tipo: e.target.value as 'ref' | 'codigo' })}
+                  className="px-2 py-2 rounded-lg border border-slate-300 text-sm bg-white"
+                  aria-label="O que está sendo digitado"
+                >
+                  <option value="ref">REF</option>
+                  <option value="codigo">Código ou EAN</option>
+                </select>
                 <input
                   value={incluir.ref}
                   onChange={(e) => setIncluir({ ...incluir, ref: e.target.value })}
-                  placeholder="REF ou código da peça"
+                  placeholder={incluir.tipo === 'ref' ? 'REF da peça' : 'Código ou EAN da etiqueta'}
                   className="w-48 px-3 py-2 rounded-lg border border-slate-300 text-sm"
                 />
                 <input
@@ -726,7 +752,8 @@ export default function PromocoesConfigPage() {
                 />
                 <button
                   type="submit"
-                  disabled={!incluir.ref.trim() || acaoEm === '__incluir__'}
+                  disabled={!incluir.ref.trim() || acaoEm === '__incluir__' || nomeMudou}
+                  title={nomeMudou ? 'Salve o nome da campanha antes' : undefined}
                   className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-bold disabled:opacity-40"
                 >
                   {acaoEm === '__incluir__' ? 'Incluindo…' : 'Incluir'}
