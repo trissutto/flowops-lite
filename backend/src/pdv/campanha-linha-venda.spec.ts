@@ -96,18 +96,29 @@ describe('PdvService — a linha da venda na campanha por termo', () => {
     expect(itens.get('c1')).toMatchObject({ total: precoComDesconto(199.9, 30), promoTag: 'PROMO 30% · inverno' });
   });
 
-  it('⬆️ em BERMUDA (palavra que exclui) não dá desconto', async () => {
+  /**
+   * "Botão de incluir e excluir em TODOS os itens" (dono, 15/09/2026): a
+   * régua decide o automático, mas a linha da venda é da vendedora — o ⬆️
+   * passa por cima de palavra que exclui e de família tirada pela matriz.
+   */
+  it('BERMUDA (palavra que exclui) sai cheia sozinha, mas o ⬆️ põe só nesta venda', async () => {
     const { svc, itens } = montar({ activePromotion: 'POR_TERMO', itens: [bermuda] });
-    await svc.updateItem({ saleId: 's1', itemId: 'e1', forcePromo: true });
+    await svc.applyAutoDiscounts('s1');
     expect(itens.get('e1')).toMatchObject({ desconto: 0, total: 69.9, promoTag: 'Sem promo · excluída' });
+    await svc.updateItem({ saleId: 's1', itemId: 'e1', forcePromo: true });
+    expect(itens.get('e1')).toMatchObject({ total: precoComDesconto(69.9, 30), promoTag: 'PROMO 30% · inverno · na mão' });
   });
 
-  it('⬆️ em peça que a matriz TIROU da campanha não dá desconto (exclusão manual ganha)', async () => {
-    const { svc, itens } = montar({
+  it('peça que a matriz TIROU da campanha também aceita o ⬆️ na venda — e o 🚫 tira de novo', async () => {
+    const { svc, itens, promoCampanha } = montar({
       activePromotion: 'POR_TERMO', itens: [casaco], excecoes: [{ chave: 'CAS-10', decisao: 'fora' }],
     });
     await svc.updateItem({ saleId: 's1', itemId: 'c1', forcePromo: true });
-    expect(itens.get('c1')).toMatchObject({ desconto: 0, promoTag: 'Sem promo · tirada' });
+    expect(itens.get('c1')).toMatchObject({ total: precoComDesconto(199.9, 30), promoTag: 'PROMO 30% · inverno · na mão' });
+    await svc.updateItem({ saleId: 's1', itemId: 'c1', excludePromo: true });
+    expect(itens.get('c1')).toMatchObject({ desconto: 0, total: 199.9, promoTag: 'SEM_PROMO' });
+    // A exceção da matriz continua lá: nada foi gravado na campanha.
+    expect(promoCampanha.gravarExcecao).not.toHaveBeenCalled();
   });
 
   it('⬆️ com a campanha desligada na retaguarda não dá desconto', async () => {

@@ -156,9 +156,9 @@ export class PdvService {
 
     let motivo: string;
     if (!ativa) motivo = 'Nenhuma campanha ligada agora — a peça sai pelo preço da loja.';
-    else if (d.excecao?.decisao === 'fora') motivo = `Tirada da campanha ${nome} na mão — não entra nem pondo na venda.`;
+    else if (d.excecao?.decisao === 'fora') motivo = `Tirada da campanha ${nome} na mão — dá pra pôr só nesta venda com o ⬆️ do item.`;
     else if (d.excecao?.decisao === 'dentro') motivo = `A matriz pôs esta peça na campanha ${nome} na mão.`;
-    else if (d.exclusao) motivo = `Fora: a descrição tem "${d.exclusao}", palavra que a campanha ${nome} exclui.`;
+    else if (d.exclusao) motivo = `Fora: a descrição tem "${d.exclusao}", palavra que a campanha ${nome} exclui — dá pra pôr só nesta venda com o ⬆️.`;
     else if (d.criterio === 'basico') motivo = `Fora: peça da linha BÁSICA (Classificação) — dá pra pôr só nesta venda com o ⬆️ do item.`;
     else if (d.termo) motivo = `Entra: a descrição tem "${d.termo}".`;
     else if (d.estrutura) motivo = `Entra: está no ${d.estrutura}.`;
@@ -2837,10 +2837,9 @@ export class PdvService {
     const excluindoPromo = input.excludePromo === true;
     const reincluindoPromo = input.excludePromo === false;
     // PÔR NA PROMOÇÃO SÓ NESTA LINHA (⬆️, dono 15/09/2026): na campanha por
-    // termo a linha que a régua deixou fora ganha o % da campanha — a peça não
-    // muda no cadastro nem em outra venda. Peça protegida (família tirada pela
-    // matriz, palavra que exclui) segue sem desconto: quem decide é o
-    // applyAutoDiscounts. (Até 15/09 o botão só punha a peça BÁSICA nos 50%.)
+    // termo a linha que a régua deixou fora — por qualquer motivo — ganha o %
+    // da campanha; a peça não muda no cadastro nem em outra venda. Quem aplica
+    // é o applyAutoDiscounts. (Até 15/09 o botão só punha a peça BÁSICA nos 50%.)
     const forcandoPromo = input.forcePromo === true;
     const desforcandoPromo = input.forcePromo === false;
     if (forcandoPromo) {
@@ -3138,11 +3137,11 @@ export class PdvService {
        *
        * ── A LINHA QUE A VENDEDORA PÔS (⬆️, `forcarPromo`) ──
        * Peça que a régua deixou fora entra NESTA linha, nesta venda: nada vai
-       * pro cadastro nem pra outra venda. Não vale pra peça PROTEGIDA — família
-       * tirada na mão pela matriz ou peça com palavra que exclui (BERMUDA,
-       * uniforme 22 DE ABRIL): "tem que sair" não pode voltar num clique de loja.
-       * Campanha desligada também não dá desconto a ninguém. A linha BÁSICA
-       * NÃO é protegida: é o caso de uso original do ⬆️ (desde 15/07).
+       * pro cadastro nem pra outra venda. Vale por cima de QUALQUER motivo da
+       * régua — palavra que exclui, família tirada pela matriz, linha básica
+       * (dono, 15/09/2026: "botão de incluir e excluir em TODOS os itens"). A
+       * régua decide o automático; a linha da venda é decisão da vendedora.
+       * Só a campanha desligada não dá desconto a ninguém.
        */
       const regra = await this.promoCampanha.regra();
       const catalogo = await this.promoCampanha.linhasPorCodigo(
@@ -3154,8 +3153,7 @@ export class PdvService {
           codigo: String(it.sku || ''), ref: it.ref, descricao: it.descricao, descricaoPdv: null, grupo: null,
         };
         const d = regra.decidir(linha);
-        const protegida = d.criterio === 'exclusao' || (d.criterio === 'excecao' && !d.entra);
-        const pelaVendedora = !d.entra && !!it.forcarPromo && regra.config.ativa && !protegida;
+        const pelaVendedora = !d.entra && !!it.forcarPromo && regra.config.ativa;
         if (d.entra || pelaVendedora) {
           const r = totalDoItemComDesconto(it.precoUnit, it.qty, regra.config.pct);
           updates.push({
