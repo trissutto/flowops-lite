@@ -143,6 +143,20 @@ const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUp
 const mesmoTermo = (a: string, b: string) => semAcento(a).replace(/\s+/g, ' ').trim() === semAcento(b).replace(/\s+/g, ' ').trim();
 const mesmaLista = <T,>(a: T[] = [], b: T[] = []) => a.join('|') === b.join('|');
 
+/**
+ * A campanha como a tela precisa: com as listas novas SEMPRE presentes. No
+ * deploy, a Vercel pode subir esta tela minutos antes do backend novo — e o
+ * backend antigo não manda `termosExclusao`/`grupos`/`subgrupos`. Sem isto a
+ * tela quebrava inteira nessa janela.
+ */
+const comListas = (c: Campanha): Campanha => ({
+  ...c,
+  termos: c.termos ?? [],
+  termosExclusao: c.termosExclusao ?? [],
+  grupos: c.grupos ?? [],
+  subgrupos: c.subgrupos ?? [],
+});
+
 /** O que vai pro backend como rascunho (prévia e busca respondem por ele). */
 const corpoRascunho = (c: Campanha) => ({
   nome: c.nome,
@@ -206,8 +220,8 @@ export default function PromocoesConfigPage() {
     setErro(null);
     try {
       const r = await api<{ campanha: Campanha }>('/admin/promo-config');
-      setGravada(r.campanha);
-      setRascunho(r.campanha);
+      setGravada(comListas(r.campanha));
+      setRascunho(comListas(r.campanha));
     } catch (e: any) {
       setErro(msgErro(e));
     } finally {
@@ -353,11 +367,11 @@ export default function PromocoesConfigPage() {
         method: 'POST',
         body: JSON.stringify({ campanha: { ...rascunho, pct: Number(rascunho.pct) } }),
       });
-      setGravada(r.campanha);
-      setRascunho(r.campanha);
+      setGravada(comListas(r.campanha));
+      setRascunho(comListas(r.campanha));
       setAviso(`Salvo — vale agora no caixa das lojas e no site (a vitrine atualiza em até 2 minutos).`);
       setTimeout(() => setAviso(null), 6000);
-      void calcular(r.campanha);
+      void calcular(comListas(r.campanha));
     } catch (e: any) {
       setErro(msgErro(e));
     } finally {
