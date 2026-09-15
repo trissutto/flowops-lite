@@ -680,6 +680,46 @@ export class PdvController {
     return this.svc.consultarPromocao(String(codigo || ''));
   }
 
+  /**
+   * GET /pdv/promo-campanha — nome, % e se a campanha da retaguarda está
+   * ligada. É o que o seletor de campanha da venda mostra.
+   */
+  @Get('promo-campanha')
+  promoCampanha(@Req() req: any) {
+    this.requireRole(req);
+    return this.svc.campanhaDoPdv();
+  }
+
+  /**
+   * POST /pdv/promo-campanha/tirar { codigo, motivo?, saleId? } — "não é
+   * inverno": tira a FAMÍLIA da peça da campanha na rede toda (PDV e site),
+   * com a loja e quem estava logado carimbados. Com `saleId`, devolve a venda
+   * recalculada.
+   */
+  @Post('promo-campanha/tirar')
+  async tirarDaCampanha(
+    @Req() req: any,
+    @Body() body: { codigo?: string; motivo?: string; saleId?: string },
+  ) {
+    this.requireRole(req);
+    if (body?.saleId && req?.user?.role === 'store') {
+      const sale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: body.saleId },
+        select: { storeCode: true },
+      });
+      if (sale && String(req.user.storeCode || '') !== String(sale.storeCode || '')) {
+        throw new ForbiddenException('Venda de outra loja');
+      }
+    }
+    return this.svc.tirarDaCampanha({
+      codigo: String(body?.codigo || ''),
+      motivo: body?.motivo ?? null,
+      saleId: body?.saleId ?? null,
+      usuario: req?.user?.name || req?.user?.email || req?.user?.storeName || null,
+      storeCode: req?.user?.storeCode ?? null,
+    });
+  }
+
   @Get('nfces')
   async listNfces(
     @Req() req: any,
@@ -1002,7 +1042,7 @@ export class PdvController {
   /**
    * PATCH /pdv/sales/:id/promotion { promotion }
    * Define campanha promocional ATIVA (exclusiva).
-   * Valores: 'YEAR_BASED' | 'FOUR_FOR_THREE' | 'NONE' | null
+   * Valores: 'POR_TERMO' (campanha da retaguarda) | 'FOUR_FOR_THREE' | 'NONE' | null
    */
   @Patch('sales/:id/promotion')
   setPromotion(

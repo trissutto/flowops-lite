@@ -88,8 +88,8 @@ export interface PecaApi {
   subcategoria?: string | null;
   preco: number; precoPix: number | null;
   /**
-   * "De" riscado quando há promoção — o `precoPromo` digitado na retaguarda ou
-   * os 50% de coleção passada (a mesma regra do caixa). null = sem promo.
+   * "De" riscado quando há promoção — a campanha do caixa (hoje "Inverno 30%"
+   * por termo) ou a queda de preço da loja. null = sem promo.
    */
   precoDe?: number | null;
   /** Faixas de preço por tamanho — vazio quando a peça tem preço único. */

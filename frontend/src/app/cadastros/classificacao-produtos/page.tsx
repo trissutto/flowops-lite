@@ -32,12 +32,6 @@ interface Row {
   preco?: number | null;
   /** Data de cadastro (DATAALT mais recente da REF) YYYY-MM-DD */
   dataCadastro?: string | null;
-  /** Preço com 50% da PROMO JULHO — null se fora da promo (novo ou básico) */
-  precoPromo?: number | null;
-  /** true = seria elegível pela data mas é BÁSICO (isento por regra) */
-  promoIsento?: boolean;
-  /** Liberada na mão pra promoção, mesmo sendo cadastro novo. */
-  promoLiberada?: boolean;
 }
 
 const brl = (n: number) =>
@@ -214,28 +208,6 @@ export default function ClassificacaoProdutosPage() {
     } catch (e: any) {
       setError(e?.message || 'Falha ao salvar');
       loadList(page); // reverte do servidor
-    }
-  };
-
-  /**
-   * Libera (ou tira) a peça da promoção de 50%.
-   *
-   * Otimista igual ao BÁSICO/MODA, mas recarrega a lista no fim: quem decide o
-   * `precoPromo` é o backend (a regra é a mesma do PDV), e adivinhar o preço
-   * aqui seria a tela contando uma história e o caixa outra.
-   */
-  const togglePromo = async (r: Row) => {
-    const liberada = !r.promoLiberada;
-    setRows((prev) => prev.map((x) => (x.ref === r.ref ? { ...x, promoLiberada: liberada } : x)));
-    try {
-      await api('/product-classification/promo', {
-        method: 'POST',
-        body: JSON.stringify({ ref: r.ref, liberada }),
-      });
-      loadList(page);
-    } catch (e: any) {
-      setError(e?.message || 'Falha ao liberar');
-      loadList(page);
     }
   };
 
@@ -440,15 +412,14 @@ export default function ClassificacaoProdutosPage() {
                 <th className="px-3 py-2.5 text-left">Categoria</th>
                 <th className="px-3 py-2.5 text-center">Plus</th>
                 <th className="px-3 py-2.5 text-right">Preço</th>
-                <th className="px-3 py-2.5 text-right" title="Promoção de julho: cadastro até 31/12/2023 = 50% OFF, exceto linha BÁSICA">Promo julho −50%</th>
                 <th className="px-3 py-2.5 text-center">Tipo Atual</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={9} className="px-3 py-10 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
+                <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={9} className="px-3 py-10 text-center text-slate-400">Nenhum produto encontrado.</td></tr>
+                <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-400">Nenhum produto encontrado.</td></tr>
               ) : (
                 rows.map((r) => {
                   const isSel = allFiltered || selected.has(r.ref);
@@ -492,43 +463,6 @@ export default function ClassificacaoProdutosPage() {
                           </div>
                         ) : (
                           <span className="text-slate-300">—</span>
-                        )}
-                      </td>
-                      {/* PROMO JULHO: cadastro ≤ 31/12/2023 = 50% OFF, exceto BÁSICO */}
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
-                        {r.precoPromo != null ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="text-[9px] px-1 py-0.5 rounded bg-rose-100 text-rose-700 font-black">−50%</span>
-                            <span className="font-mono font-black text-rose-600 tabular-nums">{brl(r.precoPromo)}</span>
-                          </span>
-                        ) : r.promoIsento ? (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500" title="Cadastro antigo, mas linha BÁSICA é isenta da promoção">
-                            isento (básico)
-                          </span>
-                        ) : (
-                          <span className="text-slate-300" title="Fora da promoção — cadastro após 31/12/2023">—</span>
-                        )}
-                        {/* LIBERAR NA MÃO: peça nova que se decide liquidar.
-                            A alternativa seria falsear a data do catálogo — que
-                            é a chave do sync incremental. Aqui a exceção fica
-                            explícita, reversível, e vale também no desconto que
-                            o PDV aplica na venda. */}
-                        {!r.promoIsento && (
-                          <button
-                            type="button"
-                            onClick={() => void togglePromo(r)}
-                            title={r.promoLiberada
-                              ? 'Liberada na mão — clique pra tirar da promoção'
-                              : 'Liberar esta peça pra promoção mesmo sendo cadastro novo'}
-                            className={
-                              'ml-2 rounded px-1.5 py-0.5 text-[10px] font-bold border ' +
-                              (r.promoLiberada
-                                ? 'border-rose-300 bg-rose-50 text-rose-700'
-                                : 'border-slate-300 text-slate-500 hover:bg-slate-50')
-                            }
-                          >
-                            {r.promoLiberada ? 'liberada ✓' : 'liberar'}
-                          </button>
                         )}
                       </td>
                       <td className="px-3 py-2">

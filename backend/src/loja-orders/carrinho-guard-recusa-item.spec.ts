@@ -1,4 +1,5 @@
 import { CarrinhoGuardService } from './carrinho-guard.service';
+import { criarRegra } from '../common/promo-por-termo';
 
 /**
  * TODA RECUSA QUE FALA DE UMA PEÇA DIZ QUAL PEÇA É (12/09).
@@ -42,9 +43,10 @@ describe('CarrinhoGuardService — recusa que diz qual peça é', () => {
     },
   });
 
+  // Campanha desligada: estes testes são das recusas, não do desconto (esse
+  // mora em carrinho-guard-campanha.spec.ts).
   const promoMock = () => ({
-    porChaves: jest.fn().mockResolvedValue(new Map()),
-    precoComDesconto: (p: number) => p / 2,
+    regra: jest.fn().mockResolvedValue(criarRegra({ ativa: false })),
   });
 
   const guard = (linhas: any[], over: any = {}) =>

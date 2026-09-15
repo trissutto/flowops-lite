@@ -68,7 +68,7 @@ function montarTroca(opts: { cardStatus: string; orderStatus: string; irmaos?: a
       tamanho: '52',
     }),
   };
-  const promo: any = { porChave: jest.fn().mockResolvedValue(null), ligada: true, precoComDesconto: (v: number) => v };
+  const promo: any = { decidirCodigo: jest.fn().mockResolvedValue(null) };
   const routing: any = {
     estornarCardDaTroca: jest.fn().mockImplementation(async () => {
       ordem.push('estorna-card');

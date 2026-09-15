@@ -62,7 +62,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/produtos-agrupados',   label: 'Produtos agrupados', subtitle: 'Catálogo', description: 'Mesma peça em REFs diferentes (cor)', tone: 'purple', icon: Package2 },
   { href: '/retaguarda/cupons',               label: 'Cupons',         subtitle: 'Site + PDV',  description: 'Vale de troca da cliente · campanhas', tone: 'rose',  icon: Ticket       },
   { href: '/retaguarda/loja-frete',           label: 'Frete & Cupons', subtitle: 'Site',        description: 'Frete grátis · promocional · cupons', tone: 'sky',    icon: Truck        },
-  { href: '/retaguarda/promocoes-config',     label: 'Promoções PDV',  subtitle: 'Config',      description: '50% · básico fora · 4 leva 3',  tone: 'amber',  icon: Percent      },
+  { href: '/retaguarda/promocoes-config',     label: 'Promoções',      subtitle: 'Campanha',    description: 'Inverno por termo · 4 leva 3',  tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/descontos-senhas',     label: 'Descontos & Senhas', subtitle: 'Config',  description: 'Faixas de desconto + senhas',   tone: 'amber',  icon: KeyRound     },
   { href: '/retaguarda/mapa-urls',            label: 'Mapa de URLs',   subtitle: 'Sistema',     description: 'Todas as telas + flag de atalho', tone: 'slate',  icon: Map          },
   { href: '/retaguarda/manychat-import',      label: 'ManyChat IDs',   subtitle: 'Live',        description: 'CSV → vínculo p/ DM automática', tone: 'purple', icon: Zap          },

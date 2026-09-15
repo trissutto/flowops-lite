@@ -16,10 +16,14 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
  * O CRITÉRIO MUDOU EM 15/08: entra quem tem DESCONTO DE VERDADE, não quem tem
  * a marquinha de promoção. A marca vinha do `on_sale` do WooCommerce e o preço
  * promocional não veio junto — medido em produção: **49 peças aqui e 1 com
- * "de/por"**. Agora o preço sai da mesma promoção que o caixa aplica na loja
- * (50% em peça de MODA cadastrada até 31/12/2023), com o `precoPromo` digitado
- * na retaguarda vencendo a regra quando existe. Ver
- * `backend/src/promo-site/promo-site.service.ts`.
+ * "de/por"**. O preço sai da mesma campanha que o caixa aplica na loja — até
+ * 15/09/2026 os 50% do "liquida antigos", desde então a campanha por termo da
+ * retaguarda (hoje "Inverno 30%", `backend/src/common/promo-por-termo.ts`) —
+ * mais o "de/por" de quando a loja baixa o preço.
+ *
+ * ⚠️ A cópia desta página NÃO fala em porcentagem: o % é da campanha, que a
+ * matriz troca sem deploy. Com o "Até 50% OFF" antigo, a troca pro inverno
+ * 30% deixaria a página anunciando um desconto que não existe mais.
  *
  * Não é vitrine por faixa de preço: outlet é a peça que a loja baixou, não a
  * peça barata. Preço teto já existe em `/ate/59-90` e `/ate/99-90`.
@@ -32,11 +36,11 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 export const revalidate = 60;
 
 export const metadata = buildMetadata({
-  title: 'Outlet — até 50% OFF',
+  title: 'Outlet — peças com desconto',
   description:
-    'Coleções passadas com até 50% OFF na Lurd’s Plus Size, do 44 ao 60. Enquanto durar o estoque.',
+    'Peças com desconto na Lurd’s Plus Size, do 44 ao 60 — o mesmo preço do caixa das lojas. Enquanto durar o estoque.',
   path: '/outlet',
-  keywords: ['outlet plus size', 'promoção plus size', '50% off plus size', 'desconto roupa plus size'],
+  keywords: ['outlet plus size', 'promoção plus size', 'desconto plus size', 'desconto roupa plus size'],
 });
 
 const trail = [
@@ -64,7 +68,7 @@ export default async function OutletPage() {
         <SectionTitle
           eyebrow="Enquanto durar o estoque"
           title="Outlet"
-          description="Até 50% OFF nas coleções passadas, do 44 ao 60 — o mesmo desconto que vale no caixa das lojas. O que sai daqui não volta pelo mesmo preço."
+          description="Peças com desconto, do 44 ao 60 — o mesmo preço que vale no caixa das lojas. O que sai daqui não volta pelo mesmo preço."
           as="h1"
         />
       </Section>

@@ -723,9 +723,9 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         {searchLoading && (
           <Loader2 className="w-4 h-4 text-slate-400 animate-spin shrink-0" />
         )}
-        {/* Consulta de promoção: bipa e responde "entra nos 50%?" sem lançar
-            nada na venda. A regra tem 3 partes (ano, coleção -INV/-VER e
-            básico) e ninguém decora as três com a cliente na frente. */}
+        {/* Consulta de promoção: bipa e responde "entra na campanha?" sem
+            lançar nada na venda — e é dali que a loja tira da campanha a peça
+            que entrou por engano. */}
         <button
           type="button"
           onClick={onAbrirPromoCheck}
@@ -1028,6 +1028,22 @@ function PdvPageInner() {
       })
       .catch(() => {});
   }, []);
+
+  // CAMPANHA DA RETAGUARDA (15/09/2026 — hoje "Inverno 30%"): o seletor da
+  // venda mostra o nome e o % que a matriz gravou, nunca um texto chumbado.
+  // O PDV fica aberto o dia inteiro: relê a cada 5 min pra a campanha
+  // desligada na matriz não seguir aparecendo como opção aqui.
+  const [campanha, setCampanha] = useState<{ ativa: boolean; nome: string; pct: number } | null>(null);
+  useEffect(() => {
+    const ler = () =>
+      api<{ ativa: boolean; nome: string; pct: number }>('/pdv/promo-campanha')
+        .then((r) => { if (r && typeof r.pct === 'number') setCampanha(r); })
+        .catch(() => {});
+    void ler();
+    const t = setInterval(ler, 5 * 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const rotuloCampanha = campanha ? `${campanha.nome} ${campanha.pct}%` : 'Campanha';
 
   // Menu lateral recolhível (só visual). Persiste a preferência por PC.
   const [menuCollapsed, setMenuCollapsed] = useState(false);
@@ -1697,6 +1713,34 @@ function PdvPageInner() {
     }
   };
 
+  // ── "NÃO É PEÇA DA CAMPANHA" (15/09/2026) ──
+  // Tira o MODELO da campanha na rede toda — todas as cores, todas as lojas e
+  // o site — com a loja carimbada. A matriz vê a lista e devolve se foi
+  // engano. A venda aberta volta recalculada (a peça já sai cheia).
+  const tirarDaCampanhaNaRede = async (
+    item: { sku: string; descricao?: string | null; ref?: string | null },
+    motivo: string,
+  ): Promise<boolean> => {
+    if (!sale) return false;
+    try {
+      const r = await api<any>('/pdv/promo-campanha/tirar', {
+        method: 'POST',
+        body: JSON.stringify({ codigo: item.sku, motivo: motivo.trim() || undefined, saleId: sale.id }),
+      });
+      setSale(await saleFromResponse(r, sale.id));
+      toast(
+        'success',
+        r?.jaEstavaFora ? 'A peça já estava fora da campanha' : 'Peça tirada da campanha',
+        `${item.descricao || item.ref || item.sku} — vale pra rede toda e pro site`,
+      );
+      return true;
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+      return false;
+    }
+  };
+
   // ── Aplicar desconto na venda inteira (extra, soma com descontos de item) ──
   const setSaleDiscount = async (desconto: number) => {
     if (!sale) return;
@@ -1837,6 +1881,10 @@ function PdvPageInner() {
   const [showCarrinhos, setShowCarrinhos] = useState(false);
   // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
   const [promoExpanded, setPromoExpanded] = useState(false);
+  // ── 🚫 na campanha por termo: "não é da campanha" × "só nesta venda" ──
+  const [tirarPromoItem, setTirarPromoItem] = useState<
+    { id: string; sku: string; descricao?: string | null; ref?: string | null } | null
+  >(null);
   const loadOpenCount = async () => {
     if (!storeCode) return;
     try {
@@ -2941,7 +2989,7 @@ function PdvPageInner() {
                   <span>🎁</span>
                   <span className="uppercase tracking-wider">Campanha:</span>
                   <span className="font-black">
-                    {sale.activePromotion === 'YEAR_BASED' ? 'Liquida antigos 50%' :
+                    {sale.activePromotion === 'POR_TERMO' ? rotuloCampanha :
                      <span className="text-slate-500 font-medium">Nenhuma</span>}
                   </span>
                 </div>
@@ -2969,16 +3017,25 @@ function PdvPageInner() {
                 >
                   Nenhuma
                 </button>
+                {/* A campanha por termo da retaguarda (15/09/2026) no lugar do
+                    "Liquida antigos 50%". Desligada na matriz = sem botão pra
+                    ligar aqui (a venda que já estava com ela sai cheia). */}
                 <button
-                  onClick={() => setPromotion('YEAR_BASED')}
-                  className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
-                    sale.activePromotion === 'YEAR_BASED'
+                  onClick={() => setPromotion('POR_TERMO')}
+                  disabled={!campanha?.ativa}
+                  title={campanha?.ativa ? undefined : 'A campanha está desligada na retaguarda'}
+                  className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border disabled:opacity-40 ${
+                    sale.activePromotion === 'POR_TERMO'
                       ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
                       : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
                   }`}
                 >
-                  Liquida antigos
-                  <div className="text-[9px] font-normal">até 31/12/2023 = 50% off</div>
+                  ❄️ {rotuloCampanha}
+                  <div className="text-[9px] font-normal">
+                    {campanha?.ativa
+                      ? `peças de ${campanha.nome.toLowerCase()} = ${campanha.pct}% off`
+                      : 'campanha desligada'}
+                  </div>
                 </button>
               </div>
               {/* Recalcular preços — resgata o preço ATUAL (promoção) de cada
@@ -3236,11 +3293,18 @@ function PdvPageInner() {
                           );
                         }
                         if (autoPromo) {
+                          // Na campanha por termo o 🚫 pergunta: "não é peça
+                          // da campanha" (tira o modelo da rede e do site) ou
+                          // "só nesta venda" (o que o botão sempre fez).
                           return (
                             <button
-                              onClick={() => updateItem(it.id, { excludePromo: true })}
+                              onClick={() =>
+                                sale.activePromotion === 'POR_TERMO'
+                                  ? setTirarPromoItem({ id: it.id, sku: it.sku, descricao: it.descricao, ref: it.ref })
+                                  : updateItem(it.id, { excludePromo: true })
+                              }
                               className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
-                              title="Tirar este item da promoção (não participa)"
+                              title="Tirar este item da promoção"
                             >🚫</button>
                           );
                         }
@@ -4435,7 +4499,27 @@ function PdvPageInner() {
           }}
         />
       )}
-      <PromoCheckModal open={promoCheckOpen} onClose={() => setPromoCheckOpen(false)} />
+      <PromoCheckModal
+        open={promoCheckOpen}
+        onClose={() => setPromoCheckOpen(false)}
+        saleId={sale?.id || null}
+        onSaleAtualizada={(s) => setSale(s)}
+      />
+      <TirarPromoModal
+        item={tirarPromoItem}
+        campanha={campanha}
+        onClose={() => setTirarPromoItem(null)}
+        onSoNestaVenda={async () => {
+          const it = tirarPromoItem;
+          setTirarPromoItem(null);
+          if (it) await updateItem(it.id, { excludePromo: true });
+        }}
+        onNaoEhDaCampanha={async (motivo) => {
+          const it = tirarPromoItem;
+          if (!it) return;
+          if (await tirarDaCampanhaNaRede(it, motivo)) setTirarPromoItem(null);
+        }}
+      />
     </div>
   );
 }
@@ -13376,50 +13460,101 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * "Essa peça entra na promoção?" — consulta pura (dono 01/08).
+ * "Essa peça entra na promoção?" — consulta pura (dono 01/08; campanha por
+ * termo desde 15/09/2026).
  *
- * Não cria venda, não lança item, não mexe em estoque. A regra dos 50% tem
- * três partes (ano de cadastro ≤ 2023, coleção -INV/-VER e o filtro de
- * BÁSICO) e a vendedora tinha que lembrar das três de cabeça com a cliente
- * na frente. O backend responde o veredito pronto — a mesma regra da venda.
+ * Não cria venda, não lança item, não mexe em estoque. O backend responde com
+ * a MESMA régua da venda e do site: o termo que casou, ou quem tirou/pôs a
+ * peça na mão (loja, pessoa, data e motivo).
+ *
+ * É daqui também que a vendedora tira da campanha a peça que entrou por
+ * engano ("não é peça de inverno") — com a cliente na frente, sem precisar
+ * lançar a peça na venda.
  */
-function PromoCheckModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function PromoCheckModal({
+  open,
+  onClose,
+  saleId,
+  onSaleAtualizada,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** Venda aberta: recalcula na hora se a peça tirada estiver nela. */
+  saleId?: string | null;
+  onSaleAtualizada?: (s: Sale) => void;
+}) {
   const [codigo, setCodigo] = useState('');
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<any>(null);
   const [erro, setErro] = useState('');
+  const [tirando, setTirando] = useState<{ motivo: string } | null>(null);
+  const [salvandoTirar, setSalvandoTirar] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) { setCodigo(''); setRes(null); setErro(''); return; }
+    if (!open) { setCodigo(''); setRes(null); setErro(''); setTirando(null); return; }
     const t = setTimeout(() => inputRef.current?.focus(), 60);
     return () => clearTimeout(t);
   }, [open]);
+
+  const buscar = async (termo: string) => {
+    const r = await api<any>(`/pdv/promo-check?codigo=${encodeURIComponent(termo)}`);
+    if (!r?.achou) { setRes(null); setErro(`Não achei nada com "${termo}"`); }
+    else { setRes(r); setErro(''); }
+  };
 
   const consultar = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const termo = codigo.trim();
     if (!termo || busy) return;
-    setBusy(true); setErro('');
+    setBusy(true); setErro(''); setTirando(null);
     try {
-      const r = await api<any>(`/pdv/promo-check?codigo=${encodeURIComponent(termo)}`);
-      if (!r?.achou) { setRes(null); setErro(`Não achei nada com "${termo}"`); }
-      else setRes(r);
+      await buscar(termo);
       // Pronto pro próximo bipe sem tirar a mão do leitor.
       setCodigo('');
       inputRef.current?.focus();
     } catch (e: any) {
       setRes(null);
-      setErro(e?.message || 'Falha na consulta');
+      setErro(humanizeError(e).hint || humanizeError(e).title || 'Falha na consulta');
     } finally { setBusy(false); }
+  };
+
+  const tirar = async () => {
+    if (!res?.sku || !tirando || salvandoTirar) return;
+    setSalvandoTirar(true); setErro('');
+    try {
+      const r = await api<any>('/pdv/promo-campanha/tirar', {
+        method: 'POST',
+        body: JSON.stringify({ codigo: res.sku, motivo: tirando.motivo.trim() || undefined, saleId: saleId || undefined }),
+      });
+      if (r?.sale?.id && Array.isArray(r.sale.items)) onSaleAtualizada?.(r.sale as Sale);
+      setTirando(null);
+      await buscar(String(res.sku));
+      inputRef.current?.focus();
+    } catch (e: any) {
+      const h = humanizeError(e);
+      setErro(h.hint ? `${h.title} — ${h.hint}` : h.title);
+    } finally { setSalvandoTirar(false); }
   };
 
   if (!open) return null;
   const brlv = (n: number) => Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const camp = res?.campanha as { ativa: boolean; nome: string; pct: number } | undefined;
+  const ex = res?.excecao as
+    | { decisao: 'fora' | 'dentro'; usuario?: string | null; storeCode?: string | null; origem?: string | null; motivo?: string | null; em?: string | null }
+    | null
+    | undefined;
+  const quandoEx = ex?.em
+    ? new Date(ex.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 pt-16" onClick={onClose}>
-      <div className="w-full max-w-lg bg-[#FAFAF7] rounded-2xl shadow-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="w-full max-w-lg bg-[#FAFAF7] rounded-2xl shadow-xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <div className="px-5 py-3.5 bg-white border-b border-[#E5E2D9] flex items-center gap-2.5">
           <Tag className="w-5 h-5 text-[#8C7325]" />
           <span className="font-bold text-slate-900">Consulta de promoção</span>
@@ -13460,21 +13595,15 @@ function PromoCheckModal({ open, onClose }: { open: boolean; onClose: () => void
                 <span className={`shrink-0 px-3 py-1 rounded-lg text-xs font-bold ${
                   res.entra ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
                 }`}>
-                  {res.entra ? 'Entra · 50%' : 'Fora · preço cheio'}
+                  {res.entra ? `Entra · ${camp?.pct ?? ''}%` : camp?.ativa ? 'Fora · preço cheio' : 'Sem campanha'}
                 </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 mt-4">
+              <div className="grid grid-cols-2 gap-2 mt-4">
                 <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
-                  <div className="text-[11px] text-slate-500">Data de cadastro</div>
+                  <div className="text-[11px] text-slate-500">Campanha</div>
                   <div className="text-lg font-bold text-slate-900">
-                    {res.dataCadastro ? res.dataCadastro.split('-').reverse().join('/') : '—'}
-                  </div>
-                </div>
-                <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
-                  <div className="text-[11px] text-slate-500">Classificação</div>
-                  <div className={`text-lg font-bold ${res.classificacao === 'BASICO' ? 'text-amber-800' : 'text-slate-900'}`}>
-                    {res.classificacao === 'BASICO' ? 'Básico' : 'Moda'}
+                    {camp?.ativa ? `❄️ ${camp.nome} ${camp.pct}%` : 'Desligada'}
                   </div>
                 </div>
                 <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
@@ -13493,14 +13622,161 @@ function PromoCheckModal({ open, onClose }: { open: boolean; onClose: () => void
                 <span>{res.motivo}</span>
               </div>
 
-              {res.avisoData && (
-                <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-[11px] text-slate-500">
-                  A data de cadastro muda quando alguém edita a peça (preço, descrição).
-                  Peça antiga reeditada aparece nova aqui — confirme com a matriz antes de dar o desconto na mão.
+              {ex && (
+                <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-[11px] text-slate-600">
+                  {ex.decisao === 'fora' ? 'Tirada' : 'Posta'}
+                  {ex.origem === 'pdv' ? ` pela loja ${ex.storeCode || '?'}` : ' pela matriz'}
+                  {ex.usuario ? ` (${ex.usuario})` : ''}
+                  {quandoEx ? ` em ${quandoEx}` : ''}
+                  {ex.motivo ? ` — “${ex.motivo}”` : ''}.
+                  {ex.decisao === 'fora' && ' Se foi engano, a matriz devolve em Promoções.'}
                 </div>
+              )}
+
+              {res.podeTirar && !tirando && (
+                <button
+                  type="button"
+                  onClick={() => setTirando({ motivo: '' })}
+                  className="mt-3 w-full py-2 rounded-lg border-2 border-rose-200 text-rose-700 text-sm font-bold hover:bg-rose-50"
+                >
+                  Não é peça de {camp?.nome?.toLowerCase() || 'campanha'}? Tirar da campanha
+                </button>
+              )}
+
+              {tirando && (
+                <form
+                  onSubmit={(e) => { e.preventDefault(); void tirar(); }}
+                  className="mt-3 rounded-lg border-2 border-rose-200 bg-rose-50/50 p-3"
+                >
+                  <p className="text-xs text-rose-900">
+                    Tira este modelo da campanha em <b>todas as cores</b>, em <b>todas as lojas</b> e no <b>site</b>.
+                    Fica registrado com a sua loja.
+                  </p>
+                  <input
+                    autoFocus
+                    value={tirando.motivo}
+                    onChange={(e) => setTirando({ motivo: e.target.value })}
+                    placeholder="Por quê? (opcional — ex.: é blusa de verão)"
+                    maxLength={300}
+                    className="mt-2 w-full px-3 py-2 rounded-lg border border-rose-200 bg-white text-sm"
+                  />
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTirando(null)}
+                      className="flex-1 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-bold"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={salvandoTirar}
+                      className="flex-[2] py-2 rounded-lg bg-rose-600 text-white text-sm font-black disabled:opacity-50"
+                    >
+                      {salvandoTirar ? 'Tirando…' : 'Tirar da campanha'}
+                    </button>
+                  </div>
+                </form>
               )}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 🚫 NA CAMPANHA POR TERMO — duas saídas diferentes, e a vendedora escolhe
+ * (15/09/2026):
+ *
+ *   - "Não é peça da campanha": o termo errou (a blusa de verão que tem
+ *     "INVERNO" no nome da coleção). Tira o MODELO da campanha na rede toda e
+ *     no site, com a loja carimbada — é o "desmarcar quando alguém identificar
+ *     erro" que o dono pediu.
+ *   - "Só nesta venda": o que o 🚫 sempre fez — a peça continua na campanha
+ *     pras outras clientes.
+ */
+function TirarPromoModal({
+  item,
+  campanha,
+  onClose,
+  onSoNestaVenda,
+  onNaoEhDaCampanha,
+}: {
+  item: { id: string; sku: string; descricao?: string | null; ref?: string | null } | null;
+  campanha: { ativa: boolean; nome: string; pct: number } | null;
+  onClose: () => void;
+  onSoNestaVenda: () => Promise<void>;
+  onNaoEhDaCampanha: (motivo: string) => Promise<void>;
+}) {
+  const [motivo, setMotivo] = useState('');
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => { setMotivo(''); setSalvando(false); }, [item?.id]);
+
+  if (!item) return null;
+  const nome = campanha?.nome?.toLowerCase() || 'campanha';
+
+  const naoEh = async () => {
+    if (salvando) return;
+    setSalvando(true);
+    try { await onNaoEhDaCampanha(motivo); } finally { setSalvando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md bg-[#FAFAF7] rounded-2xl shadow-xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') onClose(); }}
+      >
+        <div className="px-5 py-3.5 bg-white border-b border-[#E5E2D9] flex items-center gap-2.5">
+          <span className="text-lg">🚫</span>
+          <span className="font-bold text-slate-900">Tirar da promoção</span>
+          <button onClick={onClose} className="ml-auto p-1 rounded hover:bg-slate-100 text-slate-400"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div>
+            <p className="font-bold text-slate-900 leading-snug">{item.descricao || item.ref || item.sku}</p>
+            <p className="text-xs text-slate-500">SKU {item.sku}{item.ref ? ` · ref ${item.ref}` : ''}</p>
+          </div>
+
+          <form
+            onSubmit={(e) => { e.preventDefault(); void naoEh(); }}
+            className="rounded-xl border-2 border-rose-200 bg-white p-3"
+          >
+            <div className="font-bold text-rose-800 text-sm">❄️ Não é peça de {nome}</div>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Tira o modelo da campanha em todas as cores, em todas as lojas e no site. Fica registrado com a
+              sua loja — se foi engano, a matriz devolve.
+            </p>
+            <input
+              autoFocus
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              placeholder="Por quê? (opcional)"
+              maxLength={300}
+              className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
+            />
+            <button
+              type="submit"
+              disabled={salvando}
+              className="mt-2 w-full py-2.5 rounded-lg bg-rose-600 text-white text-sm font-black disabled:opacity-50"
+            >
+              {salvando ? 'Tirando…' : 'Tirar da campanha'}
+            </button>
+          </form>
+
+          <button
+            type="button"
+            onClick={() => void onSoNestaVenda()}
+            disabled={salvando}
+            className="w-full rounded-xl border-2 border-[#E5E2D9] bg-white p-3 text-left hover:border-[#D4AF37] disabled:opacity-50"
+          >
+            <div className="font-bold text-slate-800 text-sm">Só nesta venda</div>
+            <div className="text-xs text-slate-500">A peça continua na campanha pras outras clientes.</div>
+          </button>
         </div>
       </div>
     </div>

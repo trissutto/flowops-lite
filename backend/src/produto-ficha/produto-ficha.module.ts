@@ -17,7 +17,7 @@ import { ProdutoFichaController } from './produto-ficha.controller';
  *
  * `LojaCatalogModule` entra pra DERRUBAR O CACHE do catálogo quando a ficha
  * muda (o que a tela master salva é o que a vitrine mostra). Aresta conferida
- * contra ciclo: `LojaCatalogModule` importa Prisma/Http/Live/PromoSite e nada
+ * contra ciclo: `LojaCatalogModule` importa Prisma/Live/PromoConfig e nada
  * nesse ramo importa a ficha — só `app.module` e `site-content-editor` fazem.
  */
 @Module({

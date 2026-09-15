@@ -1963,7 +1963,9 @@ model PdvSale {
   desconto               Float     @default(0)
   total                  Float     @default(0)
   // Campanha promocional ATIVA (exclusiva — uma de cada vez)
-  // Valores: 'YEAR_BASED' | 'FOUR_FOR_THREE' | 'NONE' (default)
+  // Valores: 'POR_TERMO' (inverno 30%, 15/09/2026) | 'FOUR_FOR_THREE' | 'NONE' (default)
+  // 'YEAR_BASED' (liquida antigos 50%) saiu do ar em 15/09 — venda velha com
+  // ele é lida como NONE.
   activePromotion        String?   @map("active_promotion")
   // Pagamento
   paymentMethod          String?   @map("payment_method")
@@ -2790,9 +2792,9 @@ model PdvSaleItem {
   precoDeCents     Int?      @map("preco_de_cents")
   desconto         Float     @default(0)
   promoTag         String?   @map("promo_tag") // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
-  // FORÇAR PROMO (15/07): botão AZUL "colocar na promoção" — o item entra na
-  // campanha mesmo sendo BÁSICO. Ignora SÓ o filtro básico; data e coleção
-  // (-INV/-VER) continuam valendo (item novo forçado não ganha desconto).
+  // FORÇAR PROMO (15/07): botão AZUL "colocar na promoção" — o item entrava nos
+  // 50% mesmo sendo BÁSICO. A campanha por termo (15/09) não tem filtro de
+  // básico, então a flag não muda mais o desconto; fica pelo histórico.
   // Flag separada do promoTag porque o recálculo automático sobrescreve a tag.
   forcarPromo      Boolean   @default(false) @map("forcar_promo")
   total            Float
@@ -5576,14 +5578,11 @@ model ProductClassification {
   ref                   String   @id @db.VarChar(20)
   tipoProduto           Int      @default(0) @map("tipo_produto") // 0=MODA, 1=BASICO
   classificacaoRevisada Boolean  @default(false) @map("classificacao_revisada")
-  /// LIBERADA NA MÃO pra promoção, mesmo fora da regra de data.
-  ///
-  /// A promo pega quem foi cadastrado até 31/12/2023 (ou REF -INV/-VER). Peça
-  /// nova que o dono quer liquidar ficava de fora, e a saída seria falsear a
-  /// `dataAlt` do catálogo — que é a chave do sync incremental e do
-  /// "recém-cadastrado". Mentir na data resolveria a promo e deixaria a mentira
-  /// pra próxima regra ler. Aqui a exceção fica explícita, reversível e com
-  /// autor (`updatedBy`/`updatedAt` já existem nesta tabela).
+  /// LETRA MORTA desde 15/09/2026: era a liberação na mão da promoção de 50%
+  /// ("liquida antigos"), que saiu do ar. Nenhum caminho lê. A coluna fica
+  /// porque o deploy roda `db push --accept-data-loss` — tirar do schema
+  /// apagaria o registro de quem liberou o quê. A exceção da campanha que
+  /// valeu no lugar mora em `promo_campanha_excecao`.
   promoLiberada         Boolean  @default(false) @map("promo_liberada")
   updatedBy             String?  @map("updated_by")
   updatedAt             DateTime @updatedAt @map("updated_at")
@@ -5591,6 +5590,43 @@ model ProductClassification {
   @@index([tipoProduto])
   @@index([classificacaoRevisada])
   @@map("product_classification")
+}
+
+/// PROMOÇÃO POR TERMO — a peça tirada (ou posta) NA MÃO (dono, 15/09/2026).
+///
+/// A campanha pega a peça pelo texto (`common/promo-por-termo.ts`): "CASACO",
+/// "CALÇA MOLETOM"… Termo erra — e quem vê o erro primeiro é a vendedora, com
+/// a peça bipada. Esta tabela é o "não é inverno" dela (origem `pdv`) e o
+/// ajuste da matriz (origem `retaguarda`), com autor, loja e motivo.
+///
+/// A chave é a FAMÍLIA (REF-BASE, ou `#codigo` pra peça sem REF): tirar a
+/// marinho tira a preta do mesmo modelo. `campanha` é o nome da campanha
+/// normalizado — trocar "Inverno" por "Verão" começa uma lista nova, e voltar
+/// pro "Inverno" no ano seguinte traz as exceções de volta.
+///
+/// Devolver a peça à campanha apaga UMA linha; o histórico de quem tirou e
+/// quem devolveu fica no `integration_log`.
+model PromoCampanhaExcecao {
+  id         String   @id @default(cuid())
+  campanha   String   @db.VarChar(40)
+  chave      String   @db.VarChar(40)
+  /// 'fora' = tirada da campanha · 'dentro' = incluída sem termo
+  decisao    String   @db.VarChar(10)
+  motivo     String?  @db.VarChar(300)
+  /// 'pdv' | 'retaguarda'
+  origem     String   @db.VarChar(20)
+  storeCode  String?  @map("store_code") @db.VarChar(10)
+  usuario    String?  @db.VarChar(120)
+  /// A REF/descrição que a pessoa estava vendo — a tela explica a linha mesmo
+  /// depois que o cadastro mudar.
+  refExemplo String?  @map("ref_exemplo") @db.VarChar(40)
+  descricao  String?  @db.VarChar(120)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([campanha, chave])
+  @@index([campanha, decisao])
+  @@map("promo_campanha_excecao")
 }
 
 /// GRADE DE MEDIDAS — template reutilizável (busto/cintura/quadril por tamanho).

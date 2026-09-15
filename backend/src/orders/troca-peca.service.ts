@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { StockService } from '../stock/stock.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
-import { PromoSiteService } from '../promo-site/promo-site.service';
+import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
 import { RoutingService } from '../routing/routing.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { conferirDiferencaNoGateway, diferencaDeTrocaPendente } from '../common/diferenca-troca';
@@ -51,7 +51,7 @@ import { LOJA_CANAL_CODES } from '../common/loja-canal';
  *  pela peça que continua parada no card de outra.
  *
  *  O VALOR É SUGERIDO, NÃO IMPOSTO: o preview calcula a diferença pela régua
- *  do site (preço da loja, com a promoção de 50% quando elegível — 26/08),
+ *  do site (preço da loja, com a campanha do caixa quando a peça entra),
  *  mas quem confirma o número é a matriz — ela é quem negociou com a cliente,
  *  e cortesia/arredondamento existe todo dia.
  * ═══════════════════════════════════════════════════════════════════════════
@@ -68,7 +68,7 @@ export class TrocaPecaService {
     private readonly catalog: WincredCatalogService,
     private readonly stock: StockService,
     private readonly pagarme: PagarmeService,
-    private readonly promo: PromoSiteService,
+    private readonly promo: PromoCampanhaService,
     private readonly routing: RoutingService,
   ) {}
 
@@ -830,8 +830,8 @@ export class TrocaPecaService {
 
   /**
    * A peça nova, com o preço QUE O SITE COBRA hoje — a mesma régua do
-   * catálogo (26/08): o preço da LOJA (`vendaUn`), com a promoção de 50%
-   * automática quando elegível.
+   * catálogo (26/08): o preço da LOJA (`vendaUn`), com a campanha do caixa
+   * (hoje "Inverno 30%" por termo) quando a peça entra.
    */
   private async resolverPeca(codigo: string) {
     const sku = String(codigo || '').trim();
@@ -844,17 +844,22 @@ export class TrocaPecaService {
     const ref = info.ref ? String(info.ref).trim() : null;
 
     // O preço do site É o da loja (26/08) — `vendaUn` com a única promoção
-    // compartilhada (50% do caixa). O `precoPromo` digitado saiu da fórmula
-    // aqui junto com a vitrine e a trava do carrinho.
+    // compartilhada (a campanha do caixa), decidida pelo CÓDIGO da peça nova,
+    // igual à vitrine. O `precoPromo` digitado saiu da fórmula aqui junto com
+    // a vitrine e a trava do carrinho.
+    //
+    // O valor aqui é SUGESTÃO pra matriz (ver cabeçalho): sem a campanha
+    // carregada, sugere o preço da loja e diz isso — não trava a troca.
     let precoSite = precoErp;
-    let motivoDoPreco = 'preço da loja (ERP)';
-    if (ref) {
-      const chave = ref.toUpperCase().replace(/\s+/g, '');
-      const promo = await this.promo.porChave(chave).catch(() => null);
-      if (promo?.elegivel && this.promo.ligada && precoErp > 0) {
-        precoSite = this.promo.precoComDesconto(precoErp);
-        motivoDoPreco = `promoção de 50% (${promo.motivo})`;
-      }
+    let motivoDoPreco = 'preço da loja';
+    const campanha = await this.promo.decidirCodigo(info.sku).catch((e: any) => {
+      this.logger.warn(`[troca-peca] campanha indisponível pra ${info.sku}: ${e?.message || e}`);
+      motivoDoPreco = 'preço da loja (não consegui conferir a campanha agora)';
+      return null;
+    });
+    if (campanha?.decisao.entra && precoErp > 0) {
+      precoSite = campanha.regra.precoComDesconto(precoErp);
+      motivoDoPreco = `${campanha.regra.config.nome} ${campanha.regra.config.pct}% (${campanha.decisao.motivo})`;
     }
 
     return {

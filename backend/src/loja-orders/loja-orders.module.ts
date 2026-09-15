@@ -14,9 +14,9 @@ import { LojaAdminController } from './loja-admin.controller';
 import { CuponsAdminController } from './cupons-admin.controller';
 import { FreteService } from './frete.service';
 import { PersonIdentityModule } from '../person-identity/person-identity.module';
-// A promoção de 50% do caixa: a trava do carrinho tem que cobrar o MESMO
-// preço que a vitrine mostrou (módulo folha — não cria aresta nova no grafo).
-import { PromoSiteModule } from '../promo-site/promo-site.module';
+// A campanha do caixa (promoção por termo): a trava do carrinho tem que cobrar
+// o MESMO preço que a vitrine mostrou (módulo folha — não cria aresta nova no grafo).
+import { PromoConfigModule } from '../promo-config/promo-config.module';
 import { EmailModule } from '../email/email.module';
 // WhatsappModule → o WhatsApp direto dos eventos que o n8n descarta
 // (pix_nao_pago / pedido_enviado / pedido_entregue). Ver PedidoEmailService.
@@ -43,7 +43,7 @@ import { RiscoModule } from '../risco/risco.module';
 @Module({
   imports: [
     PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule, WhatsappModule,
-    PromoSiteModule,
+    PromoConfigModule,
     ProgressiveDiscountModule,
     // Análise de risco: o pedido novo gera as chaves de cruzamento assim que
     // fecha. Seta de mão única — o RiscoModule não conhece este.

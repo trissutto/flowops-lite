@@ -4,8 +4,8 @@ import { refBaseOf } from '../common/ref-base';
 import { avisarVitrine } from '../common/avisar-vitrine';
 import { limparNomeVitrine, nomeDaDescricaoErp } from './nome-vitrine';
 import { classificarPorNome } from './classificacao-por-nome';
-import { aplicarDescontoPromo } from '../common/promo-julho';
-import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.service';
+import type { RegraCampanha } from '../common/promo-por-termo';
+import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
 import { EventLoopService } from '../health/event-loop.service';
 import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
@@ -78,6 +78,8 @@ type LinhaErp = {
   marca: string | null;
   categoria: string | null;
   descricao: string | null;
+  /** Descrição curta do PDV — a campanha por termo lê as duas. */
+  descricaoPdv?: string | null;
   preco: number;
   custo: number | null;
   ean: string | null;
@@ -115,7 +117,7 @@ export class LojaCatalogService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly promoSite: PromoSiteService,
+    private readonly promoCampanha: PromoCampanhaService,
     private readonly eventLoop: EventLoopService,
   ) {}
 
@@ -615,6 +617,7 @@ export class LojaCatalogService {
       NULLIF(TRIM(p.marca), '')                     AS marca,
       NULLIF(TRIM(p."nomeGrupo"), '')              AS categoria,
       NULLIF(TRIM(p."descricaoCompleta"), '')      AS descricao,
+      NULLIF(TRIM(p."descricaoPdv"), '')           AS "descricaoPdv",
       COALESCE(p."vendaUn", 0)::float8             AS preco,
       p.custo::float8                             AS custo,
       NULLIF(TRIM(p.ean), '')                     AS ean,
@@ -691,10 +694,11 @@ export class LojaCatalogService {
      */
     fichasTodas: any[] = [],
     /**
-     * A promoção de 50% do caixa, já decidida pra esta família
-     * (`PromoSiteService`). null = peça fora da promoção.
+     * A campanha por termo (`PromoCampanhaService.regra()`), a MESMA que a
+     * trava do carrinho e o caixa usam. Decide LINHA a LINHA. null = sem
+     * campanha (a peça monta com o preço da loja).
      */
-    promoAuto: PromoDaPeca | null = null,
+    regraCampanha: RegraCampanha | null = null,
     /**
      * Preço ANTERIOR por código (`precoAnteriorPorCodigo`) — o histórico de
      * onde nasce o "de/por" automático. null = caminho sem o mapa: a peça
@@ -886,36 +890,63 @@ export class LojaCatalogService {
      * estavam a R$ 59,90 no site com o caixa das 14 lojas cobrando R$ 79,90 —
      * exatamente a divergência que a ordem proíbe. A loja tem UM preço
      * (`vendaUn`), e é ele que o site vende, com a única promoção
-     * compartilhada (os 50% do caixa, logo abaixo). Promoção de site agora se
-     * faz baixando o preço DA LOJA (editor de produtos, "Preço em bloco") — o
-     * espelho reflete na hora e o "de/por" nasce sozinho do histórico. As
+     * compartilhada (a campanha do caixa, logo abaixo). Promoção de site agora
+     * se faz baixando o preço DA LOJA (editor de produtos, "Preço em bloco") —
+     * o espelho reflete na hora e o "de/por" nasce sozinho do histórico. As
      * colunas `precoPromo`/`precoDe` ficam no banco como registro do que já
      * foi digitado; nenhum caminho as lê mais (nem a trava do carrinho, nem a
      * troca de peça — divergir entre eles recusaria pedido no checkout).
      */
 
     /**
-     * PROMOÇÃO DE 50% DO CAIXA, VALENDO NO SITE (dono, 15/08).
+     * CAMPANHA DO CAIXA VALENDO NO SITE — hoje "Inverno 30%" por termo
+     * (15/09/2026; até ali eram os 50% do "liquida antigos", desde 15/08).
      *
      * O desconto é aplicado LINHA A LINHA, antes de qualquer conta: preço da
      * peça, faixas por tamanho, preço de cada cor, preço de cada tamanho e as
-     * variações que o carrinho lê nascem todos já com metade. Descontar só no
+     * variações que o carrinho lê nascem todos já descontados. Descontar só no
      * total deixaria a bolinha da cor e a grade da PDP mostrando preço cheio —
      * a cliente escolhe a cor e o número "sobe".
      *
-     * Quem decide é o `PromoSiteService`, o MESMO que a trava do carrinho
+     * E a DECISÃO também é por linha, pelo texto de cada código: a REF que o
+     * Giga reciclou (bolero + calça + vestido sob o mesmo número) não passa o
+     * desconto do casaco pra peça do lado.
+     *
+     * Quem decide é a régua da campanha, a MESMA que a trava do carrinho
      * consulta na hora de cobrar. Divergir aqui não faz a cliente pagar mais:
      * faz o pedido ser RECUSADO no checkout ("o preço foi atualizado").
      */
-    const daPromo50 = !!promoAuto?.elegivel && precoCheio > 0;
-    if (daPromo50) {
-      unicas = unicas.map((l) =>
-        l.preco > 0 ? { ...l, preco: aplicarDescontoPromo(l.preco) } : l,
-      );
+    const cheioPorCodigo = new Map(unicas.map((l) => [l.codigo, l.preco]));
+    const naCampanha = new Set<string>();
+    let motivoCampanha: string | null = null;
+    if (regraCampanha && precoCheio > 0) {
+      for (const l of unicas) {
+        if (!(l.preco > 0)) continue;
+        const d = regraCampanha.decidir({
+          ref: l.ref, codigo: l.codigo, descricao: l.descricao,
+          descricaoPdv: l.descricaoPdv ?? null, grupo: l.categoria,
+        });
+        if (!d.entra) continue;
+        naCampanha.add(l.codigo);
+        motivoCampanha = motivoCampanha ?? d.motivo;
+      }
+      if (naCampanha.size) {
+        unicas = unicas.map((l) =>
+          naCampanha.has(l.codigo) ? { ...l, preco: regraCampanha.precoComDesconto(l.preco) } : l,
+        );
+      }
     }
 
     const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
     const preco = precos.length ? Math.min(...precos) : 0;
+    /**
+     * A âncora da campanha é o preço CHEIO da linha que dá o "a partir de".
+     * Família inteira na campanha (o normal) → é o `precoCheio` de sempre.
+     * Família de REF reciclada com só parte dentro → o riscado é o da peça
+     * que está com desconto, nunca o preço de outra peça da mesma REF.
+     */
+    const linhaDoPreco = unicas.find((l) => l.preco === preco && naCampanha.has(l.codigo));
+    const ancoraCampanha = linhaDoPreco ? (cheioPorCodigo.get(linhaDoPreco.codigo) ?? null) : null;
 
     /**
      * "DE/POR" AUTOMÁTICO — o preço original é o que a PRÓPRIA LOJA cobrava.
@@ -925,7 +956,7 @@ export class LojaCatalogService {
      * preço MAIOR praticado dentro da janela (`SITE_PRECO_DE_DIAS`, 90 dias) —
      * âncora real, do nosso próprio caixa, não número de criativo. Aumento de
      * preço não vira "de" (anterior menor que o atual é descartado), e a peça
-     * dos 50% mantém o preço cheio como âncora (é o que o caixa riscaria).
+     * da campanha mantém o preço cheio como âncora (é o que o caixa riscaria).
      */
     const maiorNoMapa = (mapa: Map<string, number> | null): number | null => {
       if (!mapa?.size || !(preco > 0)) return null;
@@ -938,12 +969,12 @@ export class LojaCatalogService {
       return maior > preco ? Math.round(maior * 100) / 100 : null;
     };
     /**
-     * Precedência da âncora: 50% do caixa (preço cheio) → DE REGISTRADO pela
-     * retaguarda (`product.precoDe`, 26/08) → histórico automático de queda.
+     * Precedência da âncora: campanha do caixa (preço cheio) → DE REGISTRADO
+     * pela retaguarda (`product.precoDe`, 26/08) → histórico automático de queda.
      */
-    const anchorRegistrado = daPromo50 ? null : maiorNoMapa(precoDeRegistrado);
-    const anchorHistorico = daPromo50 || anchorRegistrado ? null : maiorNoMapa(precoAnterior);
-    const precoDe = daPromo50 ? precoCheio : (anchorRegistrado ?? anchorHistorico);
+    const anchorRegistrado = ancoraCampanha ? null : maiorNoMapa(precoDeRegistrado);
+    const anchorHistorico = ancoraCampanha || anchorRegistrado ? null : maiorNoMapa(precoAnterior);
+    const precoDe = ancoraCampanha ?? (anchorRegistrado ?? anchorHistorico);
     const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
 
     /**
@@ -1509,11 +1540,11 @@ export class LojaCatalogService {
        * cadastro (e a retaguarda continua podendo usá-la), mas quem decide o
        * que é "promoção" pra cliente é o desconto existir.
        *
-       * Peça que a loja quer no Outlet sem cair na regra dos 50% tem UM
-       * caminho honesto (26/08): baixar o preço DA LOJA no editor de produtos
-       * — o "de/por" nasce do histórico e a peça entra aqui sozinha. (O
-       * `precoPromo` de site morreu; o botão "liberar promoção" da tela de
-       * Classificação continua valendo, porque vale no caixa também.)
+       * Peça que a loja quer no Outlet sem cair na campanha tem UM caminho
+       * honesto (26/08): baixar o preço DA LOJA no editor de produtos — o
+       * "de/por" nasce do histórico e a peça entra aqui sozinha. (O
+       * `precoPromo` de site morreu; pôr a peça na campanha "na mão" é em
+       * /retaguarda/promocoes-config, porque vale no caixa também.)
        */
       promocao: precoDe != null && precoDe > preco,
       /**
@@ -1523,7 +1554,7 @@ export class LojaCatalogService {
        */
       selecaoComercial: !!site?.promocao,
       /** Por que caiu (ou não) — a retaguarda precisa poder explicar o preço. */
-      promoMotivo: promoAuto?.motivo ?? null,
+      promoMotivo: motivoCampanha,
       atualizadoEm: dataAlt ?? null,
       /** Quando a peça entrou no ar — o eixo da ordenação "novidades". */
       publicadoEm: site?.publicadoEm ?? null,
@@ -1817,7 +1848,15 @@ export class LojaCatalogService {
     );
     const r = linhas?.[0];
     if (!r) return null;
-    return `${r.n}|${r.ult ?? ''}`;
+    /**
+     * A CAMPANHA ENTRA NA DIGITAL (15/09). A trava do carrinho lê a régua na
+     * hora; se a vitrine esperasse o teto de 10 min, a peça que a vendedora
+     * acabou de tirar da campanha seguiria anunciada com desconto e o checkout
+     * recusaria o pedido por "preço subiu". A régua está em memória — ler a
+     * assinatura dela não custa ida ao banco.
+     */
+    const campanha = (await this.promoCampanha.regra()).assinatura;
+    return `${r.n}|${r.ult ?? ''}|${campanha}`;
   }
 
   /**
@@ -2272,11 +2311,11 @@ export class LojaCatalogService {
     }
 
     /**
-     * A PROMOÇÃO DE 50% DO CAIXA — uma consulta pro catálogo inteiro, pela
-     * chave da família (a mesma que a peça leva pro carrinho). Decidir peça a
-     * peça aqui dentro seriam ~700 idas ao banco a cada expiração do cache.
+     * A CAMPANHA DO CAIXA — a régua carregada UMA vez pro catálogo inteiro
+     * (config + exceções em memória); cada linha decide pelo próprio texto
+     * dentro de `montarPeca`, sem ida ao banco por peça.
      */
-    const promo50 = await this.promoSite.porChaves([...agrupadas.keys()]);
+    const regraCampanha = await this.promoCampanha.regra();
 
     const pecas: any[] = [];
     for (const [ref, todas] of agrupadas) {
@@ -2341,7 +2380,7 @@ export class LojaCatalogService {
             (s, base) => s + (vendas.get(base) ?? 0), 0,
           ),
           fichasDaFamilia,
-          promo50.get(this.normRef(ref)) ?? null,
+          regraCampanha,
           precoAnterior,
           precoDeReg,
         ),
@@ -3504,9 +3543,9 @@ export class LojaCatalogService {
           ref, linhasSoltas, null, c.fit.get(ref), c.fotos.get(ref) ?? [],
           this.escolherFicha(c.fichas.get(ref), linhasSoltas.find((l) => l.marca)?.marca),
           0, c.fichas.get(ref) ?? [],
-          // Link direto de peça fora da vitrine: a promoção vale igual, senão
+          // Link direto de peça fora da vitrine: a campanha vale igual, senão
           // a mesma peça teria dois preços dependendo de como se chega nela.
-          await this.promoSite.porChave(ref),
+          await this.promoCampanha.regra(),
           await this.precoAnteriorPorCodigo(),
           await this.precoDeRegistradoPorCodigo(),
         );
@@ -3522,7 +3561,7 @@ export class LojaCatalogService {
       registro.ref, linhas, registro, c.fit.get(registro.ref), c.fotos.get(registro.ref) ?? [],
       this.escolherFicha(c.fichas.get(registro.ref), linhas.find((l) => l.marca)?.marca),
       0, c.fichas.get(registro.ref) ?? [],
-      await this.promoSite.porChave(registro.ref),
+      await this.promoCampanha.regra(),
       await this.precoAnteriorPorCodigo(),
       await this.precoDeRegistradoPorCodigo(),
     );

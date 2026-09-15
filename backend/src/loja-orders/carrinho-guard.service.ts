@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { reservaLigada, sqlReservadoPorSku } from '../common/estoque-reservado';
-import { PromoSiteService } from '../promo-site/promo-site.service';
+import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
+import type { RegraCampanha } from '../common/promo-por-termo';
 import { sqlEstoqueEntregavelPorCodigo } from '../common/estoque-entregavel';
 
 /**
@@ -17,8 +18,9 @@ import { sqlEstoqueEntregavelPorCodigo } from '../common/estoque-entregavel';
  *   preço  → o `vendaUn` do espelho Wincred, que é a MESMA fonte da vitrine —
  *            e o MESMO preço do caixa das 14 lojas ("o site segue o da loja
  *            SEMPRE", ordem do dono 26/08; o `precoPromo` digitado morreu)
- *   promo  → só os 50% do caixa (`PromoSiteService`) — o mesmo serviço que a
- *            vitrine consulta
+ *   promo  → só a campanha do caixa (`PromoCampanhaService`, hoje "Inverno
+ *            30%" por termo) — a mesma régua que a vitrine consulta, decidida
+ *            linha a linha pelo texto de cada código
  *   estoque→ o saldo ENTREGÁVEL no momento de fechar (`common/estoque-entregavel.ts`):
  *            `wincred_estoque` menos a loja-canal, menos loja inativa e menos a
  *            peça que a loja já disse que não achou — as MESMAS exclusões do
@@ -158,6 +160,10 @@ type LinhaCatalogo = {
   tamanho: string | null;
   preco: number;
   estoque: number;
+  /** O texto que a campanha lê — os mesmos 4 campos da vitrine. */
+  descricao?: string | null;
+  descricaoPdv?: string | null;
+  grupo?: string | null;
 };
 
 @Injectable()
@@ -170,12 +176,12 @@ export class CarrinhoGuardService {
   constructor(
     private readonly prisma: PrismaService,
     /**
-     * A promoção de 50% do caixa. É o MESMO serviço que a vitrine consulta —
-     * de propósito: se os dois discordassem, o preço da página ficaria abaixo
-     * do preço "real" e o pedido seria RECUSADO aqui embaixo, na cara da
-     * cliente que já escolheu tudo.
+     * A campanha do caixa. É a MESMA régua que a vitrine consulta — de
+     * propósito: se as duas discordassem, o preço da página ficaria abaixo do
+     * preço "real" e o pedido seria RECUSADO aqui embaixo, na cara da cliente
+     * que já escolheu tudo.
      */
-    private readonly promoSite: PromoSiteService,
+    private readonly promoCampanha: PromoCampanhaService,
   ) {}
 
   private norm(v: any): string {
@@ -209,7 +215,10 @@ export class CarrinhoGuardService {
         NULLIF(TRIM(p.cor), '')       AS cor,
         NULLIF(TRIM(p.tamanho), '')   AS tamanho,
         COALESCE(p."vendaUn", 0)::float8 AS preco,
-        COALESCE(e.total, 0)::int     AS estoque
+        COALESCE(e.total, 0)::int     AS estoque,
+        NULLIF(TRIM(p."descricaoCompleta"), '') AS descricao,
+        NULLIF(TRIM(p."descricaoPdv"), '')      AS "descricaoPdv",
+        NULLIF(TRIM(p."nomeGrupo"), '')         AS grupo
       FROM wincred_produtos p
       LEFT JOIN (
         -- O SALDO QUE A REDE CONSEGUE ENTREGAR — a MESMA subquery da vitrine
@@ -345,14 +354,21 @@ export class CarrinhoGuardService {
 
     const bloqueadas = await this.despublicadas(Array.from(porRef.keys()));
     /**
-     * Os 50% de peça antiga (a promoção do caixa). Vem pelas MESMAS chaves que
-     * a vitrine usou pra montar a peça — a resposta tem que ser a mesma dos
-     * dois lados, senão o guard recusa o pedido por "preço atualizado".
+     * A campanha do caixa — a MESMA régua que montou a vitrine, decidida por
+     * linha. Sem ela não se cobra no escuro: um preço sem a campanha seria
+     * maior que o da página (recusa injusta) ou, pior, a campanha desligada
+     * seguiria dando desconto. Mesma saída do catálogo fora do ar.
      */
-    const promo50 = await this.promoSite.porChaves([
-      ...porRef.keys(),
-      ...itens.map((it) => this.normRef(it.sku)),
-    ]);
+    let regraCampanha: RegraCampanha;
+    try {
+      regraCampanha = await this.promoCampanha.regra();
+    } catch (e: any) {
+      this.logger.error(`[guard] campanha indisponível: ${e?.message || e}`);
+      return {
+        ok: false, motivo: 'catalogo_fora',
+        erro: 'Não conseguimos confirmar os preços da sua sacola agora. Tente de novo em instantes — nada foi cobrado. 💜',
+      };
+    }
     // Uma consulta só pra sacola inteira: os códigos de TODAS as variações das
     // REFs do carrinho, resolvidos ou não. Consultar dentro do laço faria uma
     // ida ao banco por item.
@@ -469,13 +485,22 @@ export class CarrinhoGuardService {
        * O PREÇO É O DA LOJA (26/08): `vendaUn` — o mesmo do caixa das 14
        * lojas. O `precoPromo` digitado só no site saiu da fórmula junto com a
        * vitrine (CHIC/SMILE a 59,90 no site com o caixa em 79,90 foi a gota).
-       * A única promoção é a de 50% do caixa (15/08): peça de MODA cadastrada
-       * até 2023 sai por metade na vitrine, e a cobrança tem que fechar com a
-       * página — a regra é a MESMA do catálogo, pelo MESMO serviço.
+       * A única promoção é a campanha do caixa (hoje "Inverno 30%" por termo,
+       * 15/09): o desconto vai em cada VARIAÇÃO que entra, antes do mínimo —
+       * exatamente como `montarPeca` monta a página que a cliente leu.
        */
-      const precoCheio = Math.min(...precos);
-      const daPromo50 = !!(promo50.get(chave) ?? promo50.get(ref))?.elegivel;
-      const precoCatalogo = daPromo50 ? this.promoSite.precoComDesconto(precoCheio) : precoCheio;
+      const precoCatalogo = Math.min(
+        ...variacoes
+          .filter((l) => this.dinheiro(l.preco) > 0)
+          .map((l) => {
+            const cheio = this.dinheiro(l.preco);
+            const d = regraCampanha.decidir({
+              ref: l.ref, codigo: l.codigo, descricao: l.descricao ?? null,
+              descricaoPdv: l.descricaoPdv ?? null, grupo: l.grupo ?? null,
+            });
+            return d.entra ? regraCampanha.precoComDesconto(cheio) : cheio;
+          }),
+      );
 
       /**
        * 4) Item 5 — ESTOQUE no fechamento, não só ao adicionar.

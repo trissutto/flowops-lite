@@ -1220,8 +1220,8 @@ export class MarcadosService {
       const descricao = String(row.DESCRICAO || row.CODIGO || 'Item marcado').slice(0, 80);
       const sku = String(row.CODIGO || `MARCADO-${row.id}`);
       // Resolve REF real + dataCadastro (+cor/tam/ncm/cfop/ean) pelo catálogo,
-      // igual ao bipe. SEM isso a campanha (liquida antigos por data / coleção
-      // -INV/-VER por REF) não consegue avaliar a peça e o desconto não aplica.
+      // igual ao bipe. A campanha por termo decide pelo CÓDIGO no catálogo e, se
+      // ele faltar lá, pela REF/descrição gravadas aqui — sem elas o desconto não aplica.
       // precoUnit fica o da marcação (a campanha aplica o % em cima dele).
       let info: any = null;
       try { info = await this.catalog.getPdvProductInfo(sku); } catch { /* mantém básico */ }

@@ -12,7 +12,8 @@ import { ErpService } from '../erp/erp.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
-import { PromoConfigService } from '../promo-config/promo-config.service';
+import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
+import { totalDoItemComDesconto } from '../common/promo-por-termo';
 import { AccessPolicyService } from '../access-policy/access-policy.service';
 import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
@@ -112,7 +113,7 @@ export class PdvService {
     private readonly catalog: WincredCatalogService,
     private readonly cash: CashService,
     private readonly nfce: NfceService,
-    private readonly promoConfig: PromoConfigService,
+    private readonly promoCampanha: PromoCampanhaService,
     private readonly accessPolicy: AccessPolicyService,
     private readonly convenios: ConveniosService,
     private readonly cashback: CashbackService,
@@ -120,64 +121,22 @@ export class PdvService {
   ) {}
 
   /**
-   * Conjunto de REFs (normalizadas TRIM+UPPER) classificadas como BÁSICO
-   * dentre as informadas. Usado pela promoção 50% pra pular peças básicas.
-   * Retorna Set vazio se a tabela não existir ou der erro (fail-open).
+   * A campanha em uma frase pro PDV: o botão da venda e a consulta mostram o
+   * nome e o % que a matriz gravou — "Inverno 30%" não fica escrito no front.
    */
-  private async basicoRefsIn(refs: string[]): Promise<Set<string>> {
-    const norm = (r: any) => String(r || '').trim().toUpperCase();
-    const wanted = Array.from(new Set(refs.map(norm).filter(Boolean)));
-    if (!wanted.length) return new Set();
-    try {
-      const rows = await (this.prisma as any).productClassification.findMany({
-        where: { ref: { in: wanted }, tipoProduto: 1 },
-        select: { ref: true },
-      });
-      return new Set((rows as any[]).map((r) => norm(r.ref)));
-    } catch (e: any) {
-      this.logger.warn(`[pdv] lookup básico falhou (fail-open): ${e?.message}`);
-      return new Set();
-    }
+  async campanhaDoPdv() {
+    const { ativa, nome, pct } = (await this.promoCampanha.regra()).config;
+    return { ativa, nome, pct, rotulo: `${nome} ${pct}%` };
   }
 
   /**
-   * REFs LIBERADAS na mão pra promoção (toggle da tela de Classificação).
+   * CONSULTA DE PROMOÇÃO (dono 01/08; campanha por termo desde 15/09/2026) —
+   * bipa a peça e responde se ela entra na campanha, SEM lançar nada na venda.
    *
-   * Sem isto a exceção valeria só na tela de planejamento e o caixa cobraria
-   * preço cheio — a cliente vendo 50% na etiqueta e o cupom saindo cheio. A
-   * regra de quem entra na promo é a mesma dos dois lados
-   * (`common/promo-julho.ts`); esta consulta só traz o dado que falta aqui.
-   */
-  private async promoLiberadaRefsIn(refs: string[]): Promise<Set<string>> {
-    const norm = (r: any) => String(r || '').trim().toUpperCase();
-    const wanted = Array.from(new Set(refs.map(norm).filter(Boolean)));
-    if (!wanted.length) return new Set();
-    try {
-      const rows = await (this.prisma as any).productClassification.findMany({
-        where: { ref: { in: wanted }, promoLiberada: true },
-        select: { ref: true },
-      });
-      return new Set((rows as any[]).map((r) => norm(r.ref)));
-    } catch (e: any) {
-      // fail-open pro lado SEGURO: sem a lista, vale só a regra de data — a
-      // venda não trava e ninguém ganha desconto por acidente.
-      this.logger.warn(`[pdv] lookup promo liberada falhou (fail-open): ${e?.message}`);
-      return new Set();
-    }
-  }
-
-  /**
-   * CONSULTA DE PROMOÇÃO (dono 01/08) — bipa a peça e responde se ela entra
-   * nos 50%, SEM lançar nada na venda.
-   *
-   * Por que existe: a regra tem três partes (ano de cadastro, coleção -INV/-VER
-   * e o filtro de BÁSICO) e a vendedora tinha que lembrar das três de cabeça
-   * pra responder "essa entra na promoção?" com a cliente na frente. O sistema
-   * já sabe — só não contava.
-   *
-   * A regra abaixo é a MESMA do applyAutoDiscounts (YEAR_BASED). Se mudar lá,
-   * muda aqui: as duas leem o mesmo corte (2023-12-31), o mesmo sufixo de
-   * coleção e a mesma classificação Básico/Moda.
+   * A resposta sai da MESMA régua que a venda aplica (`applyAutoDiscounts`) e
+   * que o site cobra: o termo que casou, ou a exceção de quem tirou/pôs a
+   * família na mão — com nome, loja e data, pra vendedora não desfazer a
+   * decisão de outra loja sem saber que ela existe.
    */
   async consultarPromocao(codigo: string) {
     const termo = String(codigo || '').trim();
@@ -188,65 +147,107 @@ export class PdvService {
       return { achou: false, termo };
     }
 
-    const ref = String(info.ref || '').trim();
-    const data = info.dataCadastro ? String(info.dataCadastro).slice(0, 10) : null;
-    const ano = data ? Number(data.slice(0, 4)) : null;
-
-    // Mesmas 3 pernas da regra da venda
-    const porColecao = /-(INV|VER)$/i.test(ref);
-    const porData = !!data && data <= '2023-12-31';
-
-    const clsKey = ref ? ref.toUpperCase() : (info.sku ? `#${info.sku}`.toUpperCase() : '');
-    let ehBasico = false;
-    let filtroBasicoLigado = false;
-    try {
-      const cfg = await this.promoConfig.getConfig();
-      filtroBasicoLigado = !!cfg.excluirBasicoNa50;
-      if (filtroBasicoLigado && clsKey) {
-        ehBasico = (await this.basicoRefsIn([clsKey])).has(clsKey);
-      }
-    } catch { /* fail-open: igual à venda */ }
-
-    const bloqueadoPorBasico = ehBasico && filtroBasicoLigado;
-    const entra = (porColecao || porData) && !bloqueadoPorBasico;
+    const regra = await this.promoCampanha.regra();
+    const linha = (await this.promoCampanha.linhasPorCodigo([info.sku])).get(String(info.sku)) ?? {
+      codigo: String(info.sku), ref: info.ref, descricao: info.descricao, descricaoPdv: null, grupo: null, preco: info.preco,
+    };
+    const d = regra.decidir(linha);
+    const { ativa, nome, pct } = regra.config;
 
     let motivo: string;
-    if (bloqueadoPorBasico) {
-      motivo = porColecao || porData
-        ? 'A data entra, mas a peça está classificada como BÁSICO — fora da promoção de 50%.'
-        : 'Peça BÁSICA e sem data/coleção de promoção.';
-    } else if (porColecao) {
-      motivo = `Coleção ${ref.slice(-3).toUpperCase()} entra independente do ano de cadastro.`;
-    } else if (porData) {
-      motivo = `Cadastrada em ${ano} (até 2023) — entra na liquidação de peças antigas.`;
-    } else if (!data) {
-      motivo = 'Produto sem data de cadastro no ERP — não dá pra decidir pela data.';
-    } else {
-      motivo = `Cadastrada em ${ano} (de 2024 em diante) — fora da promoção.`;
-    }
+    if (!ativa) motivo = 'Nenhuma campanha ligada agora — a peça sai pelo preço da loja.';
+    else if (d.excecao?.decisao === 'fora') motivo = `Tirada da campanha ${nome} na mão.`;
+    else if (d.excecao?.decisao === 'dentro') motivo = `A matriz pôs esta peça na campanha ${nome} na mão.`;
+    else if (d.termo) motivo = `Entra: a descrição tem "${d.termo}".`;
+    else motivo = `Nenhum termo da campanha ${nome} na descrição — fora da promoção.`;
 
     const preco = Number(info.preco) || 0;
     return {
       achou: true,
       sku: info.sku,
-      ref: ref || null,
+      ref: info.ref || null,
       descricao: info.descricao,
       cor: info.cor,
       tamanho: info.tamanho,
-      dataCadastro: data,
-      classificacao: ehBasico ? 'BASICO' : 'MODA',
-      entra,
+      campanha: { ativa, nome, pct },
+      entra: d.entra,
       motivo,
-      porColecao,
-      porData,
-      bloqueadoPorBasico,
+      termo: d.termo,
+      excecao: d.excecao,
+      // A loja só TIRA — e só o que entrou por termo. Pôr na campanha é dar
+      // desconto, e desfazer a inclusão que a matriz fez é decisão dela.
+      podeTirar: ativa && d.entra && !d.excecao,
       preco,
-      precoPromo: entra ? Math.round(preco * 50) / 100 : preco,
-      // A ÚNICA data do produto no Giga é a DATAALT, e ela MUDA quando alguém
-      // edita o cadastro (preço, descrição). Peça velha reeditada aparece
-      // nova e perde a promo. Só avisa quando a data é o que reprovou —
-      // é a hora em que isso muda a resposta.
-      avisoData: !entra && !porColecao && !!data && !bloqueadoPorBasico,
+      precoPromo: d.entra ? regra.precoComDesconto(preco) : preco,
+    };
+  }
+
+  /**
+   * "NÃO É INVERNO" (dono, 15/09/2026) — a vendedora identifica o erro do
+   * termo e tira a FAMÍLIA da campanha na rede toda: todas as cores, todas as
+   * lojas e o site. Fica com o nome dela, a loja e o motivo; a matriz vê em
+   * /retaguarda/promocoes-config e devolve com um clique se foi engano.
+   *
+   * Com `saleId`, a venda aberta recalcula na hora e volta pronta — a peça
+   * bipada já sai pelo preço cheio.
+   *
+   * Só TIRA. Pôr na campanha é dar desconto — isso é da matriz.
+   */
+  async tirarDaCampanha(input: {
+    codigo: string;
+    motivo?: string | null;
+    saleId?: string | null;
+    usuario?: string | null;
+    storeCode?: string | null;
+  }) {
+    const codigo = String(input.codigo || '').trim();
+    if (!codigo) throw new BadRequestException('Bipe ou digite o código da peça');
+
+    const info = await this.catalog.getPdvProductInfo(codigo);
+    if (!info) throw new NotFoundException(`Peça ${codigo} não encontrada no catálogo`);
+    const atual = await this.promoCampanha.decidirCodigo(String(info.sku));
+    if (!atual) throw new NotFoundException(`Peça ${info.sku} não encontrada no catálogo`);
+    const { regra, decisao } = atual;
+    if (!regra.config.ativa) throw new BadRequestException('Nenhuma campanha ligada agora.');
+    if (decisao.excecao?.decisao === 'dentro') {
+      throw new BadRequestException(
+        `A matriz pôs esta peça na campanha ${regra.config.nome} na mão — pra tirar, fale com a matriz.`,
+      );
+    }
+
+    let sale: any = null;
+    if (input.saleId) {
+      sale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: input.saleId },
+        select: { id: true, status: true, storeCode: true },
+      });
+      if (!sale) throw new NotFoundException('Venda não encontrada');
+      if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+    }
+
+    let excecao = decisao.excecao;
+    if (decisao.entra) {
+      const r = await this.promoCampanha.gravarExcecao({
+        codigo: String(info.sku),
+        decisao: 'fora',
+        motivo: input.motivo,
+        origem: 'pdv',
+        storeCode: input.storeCode || sale?.storeCode || null,
+        usuario: input.usuario,
+      });
+      excecao = r.excecao;
+    }
+
+    if (sale) {
+      await this.applyAutoDiscounts(sale.id);
+      await this.recalcTotals(sale.id);
+    }
+    return {
+      ok: true,
+      jaEstavaFora: !decisao.entra,
+      chave: decisao.chave,
+      excecao,
+      sale: sale ? await this.getSale(sale.id) : undefined,
     };
   }
 
@@ -926,7 +927,7 @@ export class PdvService {
      * 💰 A PEÇA ENTROU POR OUTRO PREÇO QUE O DA VITRINE.
      *
      * O site cobra pelas regras do SITE (`precoPromo` digitado na retaguarda,
-     * promoção automática de 50%) e o PDV cobra pelas regras do CAIXA — as
+     * na época; hoje só a campanha automática) e o PDV cobra pelas regras do CAIXA — as
      * duas réguas existem, são diferentes de propósito, e ninguém garante que
      * batem numa peça específica. Medido na cliente que motivou este fix:
      * sacola R$ 59,90, caixa R$ 79,90 na MESMA blusa.
@@ -2798,6 +2799,11 @@ export class PdvService {
       });
       itens.push({ itemId: it.id, sku, descricao: String(it.descricao || ''), antes, depois: novo });
     }
+    // A campanha da venda (hoje a por termo) recalcula em cima do preço NOVO:
+    // o desconto automático é % do preço, e ficaria com o valor do preço
+    // antigo se só o `precoUnit` mudasse. Manual e marcado com desconto seguem
+    // intocados (a trava é a mesma do bipe).
+    await this.applyAutoDiscounts(input.saleId);
     await this.recalcTotals(input.saleId);
     this.logger.log(`[pdv] recalcularPrecos venda ${input.saleId}: ${itens.length} item(ns) atualizado(s)`);
     // PERF: venda completa no retorno — evita o GET extra do PDV (ver addItem).
@@ -2822,7 +2828,7 @@ export class PdvService {
 
     // EXCLUSÃO DA PROMOÇÃO POR ITEM (pedido da loja): peça que NÃO participa da
     // campanha. excludePromo=true → zera o desconto e TRAVA como 'SEM_PROMO', que
-    // o applyAutoDiscounts preserva (não re-aplica os 50%). É REMOVER desconto,
+    // o applyAutoDiscounts preserva (não re-aplica a campanha). É REMOVER desconto,
     // então é permitido MESMO com campanha ativa e NÃO exige senha. excludePromo
     // =false → re-inclui na promoção (volta ao automático, tag null).
     const excluindoPromo = input.excludePromo === true;
@@ -3010,10 +3016,14 @@ export class PdvService {
    * Aplica APENAS a campanha promocional ATIVA da venda (exclusiva).
    *
    * Campanhas disponíveis (sale.activePromotion):
-   *   - 'YEAR_BASED'    → desconto por data de cadastro do produto
-   *                       ate 31/12/2023 = 50% off (liquida produtos antigos)
+   *   - 'POR_TERMO'     → a campanha da retaguarda (hoje "Inverno 30%", 15/09/2026):
+   *                       peça cujo texto casa com um termo, menos a família tirada
+   *                       na mão — a MESMA régua do site (`common/promo-por-termo.ts`)
    *   - 'FOUR_FOR_THREE' → carrinho com ≥4 peças, a menor sai de graça (1 un)
    *   - null/'NONE'     → SEM promoção (zera todos os descontos auto)
+   *
+   * 'YEAR_BASED' (liquida antigos 50%) saiu do ar em 15/09/2026: venda que
+   * ficou aberta com ele é recalculada como NONE.
    *
    * As campanhas NÃO são acumulativas — só uma roda por vez.
    * Desconto manual (item ou venda) é separado e não é tocado por aqui.
@@ -3034,6 +3044,15 @@ export class PdvService {
       });
       activePromotion = (sale as any)?.activePromotion || 'NONE';
     }
+    if (activePromotion === 'YEAR_BASED') {
+      // A venda aberta antes do deploy de 15/09 perde os 50% no próximo
+      // recálculo, e o seletor da tela deixa de mostrar uma campanha que não
+      // existe mais.
+      activePromotion = 'NONE';
+      await (this.prisma as any).pdvSale
+        .update({ where: { id: saleId }, data: { activePromotion: null } })
+        .catch(() => undefined);
+    }
 
     const items = await (this.prisma as any).pdvSaleItem.findMany({
       where: { saleId },
@@ -3049,9 +3068,9 @@ export class PdvService {
     //   - promoTag='SEM_PROMO' → peça que a loja tirou da campanha (não participa).
     //   - promoTag='MARCADO' COM desconto → a peça saiu da loja com um preço
     //     combinado com a cliente (promo do dia da marcação ou desconto de
-    //     senha). Aplicar a campanha de novo daria 50% em cima de 50% — a peça
-    //     de R$ 80 marcada por R$ 40 fecharia a R$ 20 (31/08). Marcado SEM
-    //     desconto continua elegível: é peça a preço cheio, e a campanha do
+    //     senha). Aplicar a campanha de novo daria desconto em cima de desconto
+    //     — a peça de R$ 80 marcada por R$ 40 fecharia a R$ 20 (31/08). Marcado
+    //     SEM desconto continua elegível: é peça a preço cheio, e a campanha do
     //     dia do fechamento vale pra ela como pra qualquer outra.
     // Promoção automática só mexe nos demais.
     const isManual = (it: any) =>
@@ -3063,89 +3082,48 @@ export class PdvService {
       // Zera tudo (apenas resetando o que veio de promo automática)
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual
-        // Se o promoTag começa com "PROMO" ou "4 LEVA", é auto e zera
-        const wasAuto = !it.promoTag || /^(PROMO|4 LEVA)/.test(it.promoTag);
+        // Etiqueta que o próprio motor escreveu ("PROMO…", "4 LEVA…", "Sem
+        // promo…", as do 50% antigo) é auto e zera — senão "🚫 Sem promo"
+        // ficava na linha de uma venda sem campanha nenhuma.
+        const wasAuto = !it.promoTag || /^(PROMO|4 LEVA|Sem promo|Sem data|Básico)/.test(it.promoTag);
         if (wasAuto) {
           const bruto = it.precoUnit * it.qty;
           updates.push({ id: it.id, desconto: 0, total: bruto, tag: null });
         }
       }
-    } else if (activePromotion === 'YEAR_BASED') {
-      // Regra: tudo cadastrado ATE 31/12/2023 = 50% off (liquida antigos).
-      // Coleções marcadas na REF também entram, independente do ano de
-      // cadastro: sufixo -INV (inverno) ou -VER (verão) — regra do dono 10/07/2026.
-      const isColecaoPromo = (it: any) => /-(INV|VER)$/i.test(String(it.ref || '').trim());
-      const promoByYear = (data: string | null): { pct: number; tag: string } | null => {
-        if (!data) return null;
-        const dataStr = data.slice(0, 10);
-        if (dataStr <= '2023-12-31') {
-          const year = parseInt(dataStr.slice(0, 4), 10);
-          return { pct: 0.50, tag: `PROMO 50% · ${isNaN(year) ? 'antigo' : year}` };
-        }
-        return null;
-      };
-
-      // Filtro configurável (tela "Promoções PDV"): não dar 50% no que é BÁSICO.
-      // A classificação Básico/Moda vem da tela "Produtos Loja".
-      // Chave de classificação do item: REF quando existe; senão "#<codigo>"
-      // (produtos sem REF — meias/acessórios — são classificados pelo código).
-      const clsKey = (it: any): string => {
-        const ref = String(it.ref || '').trim();
-        if (ref) return ref.toUpperCase();
-        const cod = String(it.sku || '').trim();
-        return cod ? `#${cod}`.toUpperCase() : '';
-      };
-      let basicoRefs = new Set<string>();
-      try {
-        const cfg = await this.promoConfig.getConfig();
-        if (cfg.excluirBasicoNa50) {
-          const keys = (items as any[]).map(clsKey).filter(Boolean);
-          basicoRefs = await this.basicoRefsIn(keys);
-        }
-      } catch {
-        // fail-open: sem config, mantém comportamento antigo (50% em tudo elegível)
-      }
-      const isBasico = (it: any) =>
-        basicoRefs.size > 0 && basicoRefs.has(clsKey(it));
-
-      // Liberadas na mão (tela de Classificação): entram na promo mesmo sendo
-      // de cadastro novo. Uma consulta só, com as REFs do carrinho.
-      const liberadas = await this.promoLiberadaRefsIn(
-        (items as any[]).map(clsKey).filter(Boolean),
+    } else if (activePromotion === 'POR_TERMO') {
+      /**
+       * CAMPANHA POR TERMO (dono, 15/09/2026) — a MESMA régua da vitrine e da
+       * trava do carrinho, decidida pelo texto do CÓDIGO bipado no espelho
+       * `wincred_produtos` (a fonte do site). Peça fora do espelho decide pelo
+       * que o item gravou no bipe.
+       *
+       * Sem régua não se adivinha desconto: o erro SOBE e a vendedora vê — dá
+       * pra seguir a venda tirando a campanha ("Nenhuma").
+       *
+       * O total parte do preço unitário COM desconto × quantidade (e não do
+       * desconto subtraído), senão o caixa cobraria 1 centavo diferente do site
+       * em preço como R$ 99,95.
+       */
+      const regra = await this.promoCampanha.regra();
+      const catalogo = await this.promoCampanha.linhasPorCodigo(
+        (items as any[]).map((it) => String(it.sku || '')),
       );
-      const isLiberada = (it: any) => liberadas.size > 0 && liberadas.has(clsKey(it));
-
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual
-        const bruto = it.precoUnit * it.qty;
-        // Peça básica: fica fora da promoção de 50% (preço cheio) — SALVO se a
-        // operadora FORÇOU a entrada (botão azul). Forçar ignora só o filtro
-        // básico; data e coleção (-INV/-VER) continuam decidindo abaixo, então
-        // um básico NOVO forçado não ganha desconto (cai no 'Sem promo · ano').
-        if (isBasico(it) && !it.forcarPromo) {
-          updates.push({ id: it.id, desconto: 0, total: bruto, tag: 'Básico · sem promo' });
-          continue;
-        }
-        const promo = isColecaoPromo(it)
-          ? { pct: 0.50, tag: 'PROMO 50% · coleção' }
-          : isLiberada(it)
-            ? { pct: 0.50, tag: 'PROMO 50% · liberada' }
-            : promoByYear(it.dataCadastro || null);
-        if (promo) {
-          const desconto = Math.round(bruto * promo.pct * 100) / 100;
-          updates.push({
-            id: it.id,
-            desconto,
-            total: Math.round((bruto - desconto) * 100) / 100,
-            tag: promo.tag,
-          });
+        const linha = catalogo.get(String(it.sku || '').trim()) ?? {
+          codigo: String(it.sku || ''), ref: it.ref, descricao: it.descricao, descricaoPdv: null, grupo: null,
+        };
+        const d = regra.decidir(linha);
+        if (d.entra) {
+          const r = totalDoItemComDesconto(it.precoUnit, it.qty, regra.config.pct);
+          updates.push({ id: it.id, desconto: r.desconto, total: r.total, tag: regra.rotulo });
         } else {
-          updates.push({
-            id: it.id,
-            desconto: 0,
-            total: bruto,
-            tag: it.dataCadastro ? `Sem promo · ${it.dataCadastro.slice(0, 4)}` : 'Sem data cad.',
-          });
+          const bruto = it.precoUnit * it.qty;
+          const tag = d.excecao?.decisao === 'fora'
+            ? 'Sem promo · tirada'
+            : !regra.config.ativa ? 'Sem promo · campanha desligada' : 'Sem promo';
+          updates.push({ id: it.id, desconto: 0, total: bruto, tag });
         }
       }
     } else if (activePromotion === 'FOUR_FOR_THREE') {
@@ -3212,13 +3190,16 @@ export class PdvService {
    * Recalcula tudo automaticamente.
    */
   async setPromotion(input: { saleId: string; promotion: string | null }) {
-    const allowed = ['YEAR_BASED', 'FOUR_FOR_THREE', 'NONE'];
+    const allowed = ['POR_TERMO', 'FOUR_FOR_THREE', 'NONE'];
     const promo = input.promotion && allowed.includes(input.promotion) ? input.promotion : 'NONE';
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+    if (promo === 'POR_TERMO' && !(await this.promoCampanha.regra()).config.ativa) {
+      throw new BadRequestException('A campanha está desligada na retaguarda — não há desconto pra aplicar.');
+    }
 
     try {
       await (this.prisma as any).pdvSale.update({

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { LiveModule } from '../live/live.module';
 import { PrismaModule } from '../prisma/prisma.module';
-import { PromoSiteModule } from '../promo-site/promo-site.module';
+import { PromoConfigModule } from '../promo-config/promo-config.module';
 import { LojaCatalogService } from './loja-catalog.service';
 import { InstagramFeedService } from './instagram-feed.service';
 import { GrupoRefService } from './grupo-ref.service';
@@ -33,7 +33,7 @@ import { LojaCatalogPublicController, LojaCatalogAdminController } from './loja-
   // HttpModule saiu (09/2026): nenhum provider daqui injeta HttpService — quem
   // fala com a Graph API é o MetaService, que vem pelo LiveModule com o
   // limitador de requisição dele.
-  imports: [PrismaModule, LiveModule, PromoSiteModule],
+  imports: [PrismaModule, LiveModule, PromoConfigModule],
   controllers: [LojaCatalogPublicController, LojaCatalogAdminController],
   providers: [LojaCatalogService, SiteSyncService, InstagramFeedService, GrupoRefService, ClassificacaoService],
   exports: [LojaCatalogService],
