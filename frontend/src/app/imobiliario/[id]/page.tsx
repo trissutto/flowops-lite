@@ -11,30 +11,42 @@
  *   - Taxas (múltiplas)
  *   - Matrícula
  *   - Escritura
- *   - Anexos
+ *   - Gestão de Obra
+ *   - Ficha p/ Corretores
  *   - Histórico (logs)
+ *
+ * ORDER ONE · Executive Operations UI (15/09/2026): casca navy, faixa de
+ * comando com o DOSSIÊ do imóvel (os 5 documentos clicáveis, levando à aba)
+ * e a folha branca com as abas. Mesma lógica, mesmas chamadas de antes.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft, Building2, Loader2, Save, Edit3, Archive, ArchiveRestore,
-  Copy, MapPin, Droplet, Zap, Receipt, FileText, Scroll, Folder, History,
-  Plus, Trash2, AlertCircle, Calendar, Tag, Megaphone, HardHat,
+  ArrowLeft, Building2, Loader2, Save, Archive, ArchiveRestore,
+  Copy, MapPin, Droplet, Zap, Receipt, FileText, Scroll, History,
+  Plus, Trash2, AlertCircle, Tag, Megaphone, HardHat, Check, AlertTriangle,
+  X, UploadCloud, NotebookPen, ChevronDown,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PropertyCommercialTab } from '@/components/imobiliario/PropertyCommercialTab';
 import { PropertyConstructionTab } from '@/components/imobiliario/PropertyConstructionTab';
+import EnterpriseShell from '@/components/enterprise/EnterpriseShell';
+import PageHeader from '@/components/enterprise/PageHeader';
+import { EmptyState } from '@/components/enterprise/Indicators';
+import {
+  BarraAcoes, BTN_ESCURO, BTN_PRIMARIO, BTN_SECUNDARIO, CAMPO, ROTULO, Secao,
+} from '@/components/enterprise/Form';
 
 type Property = any;
 
 const STATUS_OPTIONS = [
-  { value: 'ativo', label: 'Ativo', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
-  { value: 'em_construcao', label: 'Em Construção', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
-  { value: 'pronta_locacao', label: 'Pronta p/ Locação', color: 'bg-sky-500/20 text-sky-300 border-sky-500/40' },
-  { value: 'vendido', label: 'Vendido', color: 'bg-violet-500/20 text-violet-300 border-violet-500/40' },
-  { value: 'inativo', label: 'Inativo', color: 'bg-slate-600/40 text-slate-300 border-slate-500/40' },
+  { value: 'ativo', label: 'Ativo', ponto: 'bg-[#47CD89]' },
+  { value: 'em_construcao', label: 'Em Construção', ponto: 'bg-[#53B1FD]' },
+  { value: 'pronta_locacao', label: 'Pronta p/ Locação', ponto: 'bg-white' },
+  { value: 'vendido', label: 'Vendido', ponto: 'border-[1.5px] border-slate-400' },
+  { value: 'inativo', label: 'Inativo', ponto: 'border-[1.5px] border-slate-400' },
 ];
 
 const TABS = [
@@ -50,6 +62,16 @@ const TABS = [
   { id: 'historico', label: 'Histórico', icon: History },
 ];
 
+const SITUACAO_IPTU: Record<string, string> = { em_dia: 'Em dia', em_atraso: 'Em atraso', parcelado: 'Parcelado' };
+const MESES = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
+
+/** data só-dia gravada à meia-noite UTC → lê pela parte UTC */
+function dataCurta(v: string | null | undefined): string | null {
+  if (!v) return null;
+  const [a, m, d] = new Date(v).toISOString().slice(0, 10).split('-');
+  return `${d} ${MESES[Number(m) - 1]} ${a}`;
+}
+
 export default function ImovelDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -59,7 +81,6 @@ export default function ImovelDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState('geral');
-  const [saving, setSaving] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -77,24 +98,45 @@ export default function ImovelDetailPage() {
     if (id) fetchData();
   }, [id, fetchData]);
 
-  if (loading) {
+  const trilhaBase = [{ label: 'Início', href: '/' }, { label: 'Imobiliário', href: '/imobiliario' }];
+
+  if (loading && !data) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-amber-400" />
-      </div>
+      <EnterpriseShell trilha={[...trilhaBase, { label: 'Carregando…' }]}>
+        <div className="bg-oo-nav pb-20">
+          <div className="mx-auto w-full max-w-[1600px] px-4 pt-8 sm:px-6 2xl:px-12">
+            <div className="h-4 w-20 animate-pulse rounded bg-white/10" />
+            <div className="mt-5 h-9 w-72 max-w-full animate-pulse rounded bg-white/10" />
+            <div className="mt-3 h-4 w-96 max-w-full animate-pulse rounded bg-white/10" />
+            <div className="mt-8 h-24 animate-pulse rounded-lg bg-white/[0.06]" />
+          </div>
+        </div>
+        <main className="mx-auto -mt-12 w-full max-w-[1600px] px-4 pb-12 sm:px-6 2xl:px-12">
+          <div className="flex h-72 items-center justify-center rounded-xl border border-oo-line bg-oo-surface">
+            <Loader2 className="h-6 w-6 animate-spin text-oo-primary" />
+          </div>
+        </main>
+      </EnterpriseShell>
     );
   }
   if (error || !data) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-center p-8">
-        <div className="bg-rose-500/10 border border-rose-500/30 text-rose-200 rounded-lg p-6 max-w-md">
-          <AlertCircle className="w-10 h-10 mb-3" />
-          <div className="font-bold">{error || 'Imóvel não encontrado'}</div>
-          <Link href="/imobiliario" className="mt-4 inline-block text-sm underline text-rose-300">
-            ← Voltar pra lista
-          </Link>
-        </div>
-      </div>
+      <EnterpriseShell trilha={[...trilhaBase, { label: 'Imóvel' }]}>
+        <main className="mx-auto w-full max-w-[720px] px-4 py-12 sm:px-6">
+          <div className="rounded-xl border border-oo-line bg-oo-surface">
+            <EmptyState
+              icone={<AlertCircle className="h-5 w-5 text-oo-danger" />}
+              titulo={error || 'Imóvel não encontrado'}
+              acoes={
+                <Link href="/imobiliario" className={BTN_SECUNDARIO}>
+                  <ArrowLeft className="h-4 w-4" />
+                  Voltar pra lista
+                </Link>
+              }
+            />
+          </div>
+        </main>
+      </EnterpriseShell>
     );
   }
 
@@ -127,187 +169,338 @@ export default function ImovelDetailPage() {
     }
   };
 
+  const endereco = [data.endereco, data.numero, data.bairro, data.cidade, data.estado].filter(Boolean).join(', ') || 'Sem endereço';
+  const docsFaltando = new Set(
+    [
+      !data.water && 'agua',
+      !data.energy && 'energia',
+      !data.iptu && 'iptu',
+      !data.deed && 'matricula',
+      !data.scripture && 'escritura',
+    ].filter(Boolean) as string[],
+  );
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      <header className="bg-slate-900/80 backdrop-blur-xl border-b border-white/10 sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
-          <Link href="/imobiliario" className="p-2 rounded-lg hover:bg-white/10">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center">
-            <Building2 className="w-5 h-5 text-white" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-black truncate">{data.name}</h1>
-              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${st.color}`}>
-                {st.label}
-              </span>
-              {data.archivedAt && (
-                <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-slate-700 text-slate-300 border-slate-500">
-                  Arquivado
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-400 truncate flex items-center gap-1 mt-0.5">
-              <MapPin className="w-3 h-3" />
-              {[data.endereco, data.numero, data.bairro, data.cidade, data.estado].filter(Boolean).join(', ') || 'Sem endereço'}
-            </p>
-          </div>
-          <button
-            onClick={duplicar}
-            className="px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold rounded-lg flex items-center gap-1.5"
-            title="Duplicar"
+    <EnterpriseShell trilha={[...trilhaBase, { label: data.name }]}>
+      {/* Faixa de comando */}
+      <div className="bg-oo-nav pb-16 sm:pb-20">
+        <div className="mx-auto w-full max-w-[1600px] px-4 pt-6 sm:px-6 sm:pt-8 2xl:px-12">
+          <Link
+            href="/imobiliario"
+            className="mb-4 inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium text-slate-400 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
           >
-            <Copy className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Duplicar</span>
-          </button>
-          {data.archivedAt ? (
-            <button
-              onClick={desarquivar}
-              className="px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-bold rounded-lg flex items-center gap-1.5"
-            >
-              <ArchiveRestore className="w-3.5 h-3.5" />
-              Desarquivar
-            </button>
-          ) : (
-            <button
-              onClick={arquivar}
-              className="px-3 py-2 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 text-xs font-bold rounded-lg flex items-center gap-1.5"
-            >
-              <Archive className="w-3.5 h-3.5" />
-              Arquivar
-            </button>
+            <ArrowLeft className="h-4 w-4" />
+            Imóveis
+          </Link>
+
+          <PageHeader
+            escuro
+            icone={<Building2 className="h-5 w-5" />}
+            titulo={<span className="break-words">{data.name}</span>}
+            subtitulo={
+              <span className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                <span className="inline-flex items-center gap-2 font-semibold text-white">
+                  <span className={`h-2 w-2 rounded-full ${st.ponto}`} aria-hidden="true" />
+                  {st.label}
+                </span>
+                {data.archivedAt && (
+                  <span className="inline-flex items-center gap-1 rounded border border-white/20 px-1.5 py-px text-[11px] font-semibold uppercase tracking-[0.04em] text-slate-300">
+                    <Archive className="h-3 w-3" />
+                    Arquivado
+                  </span>
+                )}
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <MapPin className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{endereco}</span>
+                </span>
+              </span>
+            }
+            acoes={
+              <>
+                <button onClick={duplicar} className={BTN_ESCURO} title="Duplicar">
+                  <Copy className="h-4 w-4" />
+                  <span className="hidden sm:inline">Duplicar</span>
+                </button>
+                {data.archivedAt ? (
+                  <button onClick={desarquivar} className={BTN_ESCURO}>
+                    <ArchiveRestore className="h-4 w-4" />
+                    Desarquivar
+                  </button>
+                ) : (
+                  <button onClick={arquivar} className={`${BTN_ESCURO} hover:border-[#FF8A7A]/50 hover:text-[#FF8A7A]`}>
+                    <Archive className="h-4 w-4" />
+                    Arquivar
+                  </button>
+                )}
+              </>
+            }
+          />
+
+          {/* Dossiê: os documentos do imóvel, cada um leva à sua aba */}
+          <div className="mt-6 flex gap-px overflow-x-auto rounded-lg border border-white/10 bg-white/10 [scrollbar-width:none] sm:mt-8">
+            <CelulaDossie
+              rotulo="Água"
+              ativo={tab === 'agua'}
+              onClick={() => setTab('agua')}
+              estado={data.water ? 'ok' : 'pendente'}
+              valor={data.water ? 'Cadastrada' : 'Pendente'}
+              detalhe={data.water ? (data.water.vencimentoDia ? `vence dia ${data.water.vencimentoDia}` : data.water.companhia || null) : 'sem cadastro'}
+              anexo={!!data.water?.attachmentUrl}
+            />
+            <CelulaDossie
+              rotulo="Energia"
+              ativo={tab === 'energia'}
+              onClick={() => setTab('energia')}
+              estado={data.energy ? 'ok' : 'pendente'}
+              valor={data.energy ? 'Cadastrada' : 'Pendente'}
+              detalhe={data.energy ? (data.energy.vencimentoDia ? `vence dia ${data.energy.vencimentoDia}` : data.energy.companhia || null) : 'sem cadastro'}
+              anexo={!!data.energy?.attachmentUrl}
+            />
+            <CelulaDossie
+              rotulo="IPTU"
+              ativo={tab === 'iptu'}
+              onClick={() => setTab('iptu')}
+              estado={!data.iptu ? 'pendente' : data.iptu.situacao === 'em_atraso' ? 'critico' : 'ok'}
+              valor={!data.iptu ? 'Pendente' : SITUACAO_IPTU[data.iptu.situacao] || 'Cadastrado'}
+              detalhe={!data.iptu ? 'sem cadastro' : dataCurta(data.iptu.dataVencimento) ? `venc. ${dataCurta(data.iptu.dataVencimento)}` : 'sem vencimento'}
+              anexo={!!data.iptu?.attachmentUrl}
+            />
+            <CelulaDossie
+              rotulo="Matrícula"
+              ativo={tab === 'matricula'}
+              onClick={() => setTab('matricula')}
+              estado={data.deed ? 'ok' : 'pendente'}
+              valor={data.deed ? 'Cadastrada' : 'Pendente'}
+              detalhe={data.deed ? (data.deed.numero ? `nº ${data.deed.numero}` : data.deed.cartorio || null) : 'sem cadastro'}
+              anexo={!!data.deed?.attachmentUrl}
+            />
+            <CelulaDossie
+              rotulo="Escritura"
+              ativo={tab === 'escritura'}
+              onClick={() => setTab('escritura')}
+              estado={data.scripture ? 'ok' : 'pendente'}
+              valor={data.scripture ? 'Cadastrada' : 'Pendente'}
+              detalhe={data.scripture ? (data.scripture.numero ? `nº ${data.scripture.numero}` : data.scripture.cartorio || null) : 'sem cadastro'}
+              anexo={!!data.scripture?.attachmentUrl}
+            />
+            <CelulaDossie
+              rotulo="Taxas"
+              ativo={tab === 'taxas'}
+              onClick={() => setTab('taxas')}
+              estado="neutro"
+              valor={`${(data.taxes || []).length} ${(data.taxes || []).length === 1 ? 'taxa' : 'taxas'}`}
+              detalhe="condomínio, lixo, foro…"
+            />
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto -mt-10 w-full max-w-[1600px] px-4 pb-12 sm:-mt-12 sm:px-6 2xl:px-12">
+        <div className="rounded-xl border border-oo-line bg-oo-surface shadow-[0_1px_2px_rgba(16,24,40,.06),0_8px_24px_-12px_rgba(16,24,40,.12)]">
+          {/* Abas */}
+          <div className="flex overflow-x-auto border-b border-oo-line px-2 [scrollbar-width:none] sm:px-4" role="tablist" aria-label="Seções do imóvel">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setTab(t.id)}
+                  className={`relative flex h-12 shrink-0 items-center gap-2 px-3 text-[13px] font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-oo-primary ${
+                    active ? 'text-oo-ink' : 'text-oo-muted hover:text-oo-ink'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {t.label}
+                  {docsFaltando.has(t.id) && <span className="h-1.5 w-1.5 rounded-full bg-oo-warning" title="Pendente" />}
+                  {active && <span className="absolute inset-x-3 bottom-0 h-[2px] bg-oo-ink" />}
+                </button>
+              );
+            })}
+          </div>
+
+          {tab === 'geral' && <TabGeral data={data} id={id} onSave={fetchData} />}
+          {tab === 'agua' && (
+            <UtilityForm
+              title="Conta de Água"
+              icon={Droplet}
+              data={data.water}
+              endpoint={`/properties/${id}/water`}
+              propertyId={id}
+              scope="water"
+              fields={[
+                { key: 'companhia', label: 'Companhia (ex: SABESP)' },
+                { key: 'titular', label: 'Titular da conta' },
+                { key: 'codigoFornecimento', label: 'Código de fornecimento' },
+                { key: 'vencimentoDia', label: 'Dia do vencimento (1-31)', type: 'number' },
+                { key: 'observacoes', label: 'Observações', type: 'textarea' },
+              ]}
+              onSaved={fetchData}
+            />
           )}
+          {tab === 'energia' && (
+            <UtilityForm
+              title="Conta de Energia"
+              icon={Zap}
+              data={data.energy}
+              endpoint={`/properties/${id}/energy`}
+              propertyId={id}
+              scope="energy"
+              fields={[
+                { key: 'companhia', label: 'Companhia (ex: ENEL, CPFL)' },
+                { key: 'titular', label: 'Titular' },
+                { key: 'codigoCliente', label: 'Código do cliente' },
+                { key: 'vencimentoDia', label: 'Dia do vencimento (1-31)', type: 'number' },
+                { key: 'observacoes', label: 'Observações', type: 'textarea' },
+              ]}
+              onSaved={fetchData}
+            />
+          )}
+          {tab === 'iptu' && (
+            <UtilityForm
+              title="IPTU"
+              icon={Receipt}
+              data={data.iptu}
+              endpoint={`/properties/${id}/iptu`}
+              propertyId={id}
+              scope="iptu"
+              fields={[
+                { key: 'proprietario', label: 'Nome do proprietário' },
+                { key: 'codigoCadastro', label: 'Código do cadastro' },
+                { key: 'valorAnual', label: 'Valor anual (R$)', type: 'number' },
+                { key: 'situacao', label: 'Situação', type: 'select', options: [
+                  { value: 'em_dia', label: 'Em dia' },
+                  { value: 'em_atraso', label: 'Em atraso' },
+                  { value: 'parcelado', label: 'Parcelado' },
+                ]},
+                { key: 'dataVencimento', label: 'Data de vencimento', type: 'date' },
+                { key: 'observacoes', label: 'Observações', type: 'textarea' },
+              ]}
+              onSaved={fetchData}
+            />
+          )}
+          {tab === 'taxas' && <TabTaxas data={data} id={id} onChange={fetchData} />}
+          {tab === 'matricula' && (
+            <UtilityForm
+              title="Matrícula"
+              icon={FileText}
+              data={data.deed}
+              endpoint={`/properties/${id}/deed`}
+              propertyId={id}
+              scope="deed"
+              fields={[
+                { key: 'numero', label: 'Número da matrícula' },
+                { key: 'cartorio', label: 'Cartório' },
+                { key: 'cidadeCartorio', label: 'Cidade do cartório' },
+                { key: 'dataEmissao', label: 'Data de emissão', type: 'date' },
+                { key: 'observacoes', label: 'Observações', type: 'textarea' },
+              ]}
+              onSaved={fetchData}
+            />
+          )}
+          {tab === 'escritura' && (
+            <UtilityForm
+              title="Escritura"
+              icon={Scroll}
+              data={data.scripture}
+              endpoint={`/properties/${id}/scripture`}
+              propertyId={id}
+              scope="scripture"
+              fields={[
+                { key: 'numero', label: 'Número da escritura' },
+                { key: 'data', label: 'Data', type: 'date' },
+                { key: 'livro', label: 'Livro' },
+                { key: 'folha', label: 'Folha' },
+                { key: 'cartorio', label: 'Cartório' },
+                { key: 'observacoes', label: 'Observações', type: 'textarea' },
+              ]}
+              onSaved={fetchData}
+            />
+          )}
+          {tab === 'obras' && (
+            <div className="p-5 sm:p-8">
+              <PropertyConstructionTab propertyId={id} />
+            </div>
+          )}
+          {tab === 'corretores' && (
+            <div className="p-5 sm:p-8">
+              <PropertyCommercialTab propertyId={id} />
+            </div>
+          )}
+          {tab === 'historico' && <TabHistorico id={id} />}
         </div>
-
-        {/* Tabs */}
-        <div className="max-w-6xl mx-auto px-6 flex gap-1 overflow-x-auto pb-1">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const active = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`px-4 py-2.5 text-xs font-bold rounded-t-lg flex items-center gap-1.5 transition whitespace-nowrap ${
-                  active
-                    ? 'bg-white/10 text-amber-300 border-t-2 border-amber-400'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto p-6 space-y-4">
-        {tab === 'geral' && <TabGeral data={data} id={id} onSave={fetchData} />}
-        {tab === 'agua' && (
-          <UtilityForm
-            title="Conta de Água"
-            icon={Droplet}
-            data={data.water}
-            endpoint={`/properties/${id}/water`}
-            propertyId={id}
-            scope="water"
-            fields={[
-              { key: 'companhia', label: 'Companhia (ex: SABESP)' },
-              { key: 'titular', label: 'Titular da conta' },
-              { key: 'codigoFornecimento', label: 'Código de fornecimento' },
-              { key: 'vencimentoDia', label: 'Dia do vencimento (1-31)', type: 'number' },
-              { key: 'observacoes', label: 'Observações', type: 'textarea' },
-            ]}
-            onSaved={fetchData}
-          />
-        )}
-        {tab === 'energia' && (
-          <UtilityForm
-            title="Conta de Energia"
-            icon={Zap}
-            data={data.energy}
-            endpoint={`/properties/${id}/energy`}
-            propertyId={id}
-            scope="energy"
-            fields={[
-              { key: 'companhia', label: 'Companhia (ex: ENEL, CPFL)' },
-              { key: 'titular', label: 'Titular' },
-              { key: 'codigoCliente', label: 'Código do cliente' },
-              { key: 'vencimentoDia', label: 'Dia do vencimento (1-31)', type: 'number' },
-              { key: 'observacoes', label: 'Observações', type: 'textarea' },
-            ]}
-            onSaved={fetchData}
-          />
-        )}
-        {tab === 'iptu' && (
-          <UtilityForm
-            title="IPTU"
-            icon={Receipt}
-            data={data.iptu}
-            endpoint={`/properties/${id}/iptu`}
-            propertyId={id}
-            scope="iptu"
-            fields={[
-              { key: 'proprietario', label: 'Nome do proprietário' },
-              { key: 'codigoCadastro', label: 'Código do cadastro' },
-              { key: 'valorAnual', label: 'Valor anual (R$)', type: 'number' },
-              { key: 'situacao', label: 'Situação', type: 'select', options: [
-                { value: 'em_dia', label: 'Em dia' },
-                { value: 'em_atraso', label: 'Em atraso' },
-                { value: 'parcelado', label: 'Parcelado' },
-              ]},
-              { key: 'dataVencimento', label: 'Data de vencimento', type: 'date' },
-              { key: 'observacoes', label: 'Observações', type: 'textarea' },
-            ]}
-            onSaved={fetchData}
-          />
-        )}
-        {tab === 'taxas' && <TabTaxas data={data} id={id} onChange={fetchData} />}
-        {tab === 'matricula' && (
-          <UtilityForm
-            title="Matrícula"
-            icon={FileText}
-            data={data.deed}
-            endpoint={`/properties/${id}/deed`}
-            propertyId={id}
-            scope="deed"
-            fields={[
-              { key: 'numero', label: 'Número da matrícula' },
-              { key: 'cartorio', label: 'Cartório' },
-              { key: 'cidadeCartorio', label: 'Cidade do cartório' },
-              { key: 'dataEmissao', label: 'Data de emissão', type: 'date' },
-              { key: 'observacoes', label: 'Observações', type: 'textarea' },
-            ]}
-            onSaved={fetchData}
-          />
-        )}
-        {tab === 'escritura' && (
-          <UtilityForm
-            title="Escritura"
-            icon={Scroll}
-            data={data.scripture}
-            endpoint={`/properties/${id}/scripture`}
-            propertyId={id}
-            scope="scripture"
-            fields={[
-              { key: 'numero', label: 'Número da escritura' },
-              { key: 'data', label: 'Data', type: 'date' },
-              { key: 'livro', label: 'Livro' },
-              { key: 'folha', label: 'Folha' },
-              { key: 'cartorio', label: 'Cartório' },
-              { key: 'observacoes', label: 'Observações', type: 'textarea' },
-            ]}
-            onSaved={fetchData}
-          />
-        )}
-        {tab === 'obras' && <PropertyConstructionTab propertyId={id} />}
-        {tab === 'corretores' && <PropertyCommercialTab propertyId={id} />}
-        {tab === 'historico' && <TabHistorico id={id} />}
       </main>
-    </div>
+    </EnterpriseShell>
+  );
+}
+
+// ─── CÉLULA DO DOSSIÊ (faixa navy) ──────────────────────────────────────
+function CelulaDossie({
+  rotulo,
+  valor,
+  detalhe,
+  estado,
+  anexo,
+  ativo,
+  onClick,
+}: {
+  rotulo: string;
+  valor: string;
+  detalhe?: string | null;
+  estado: 'ok' | 'pendente' | 'critico' | 'neutro';
+  anexo?: boolean;
+  ativo: boolean;
+  onClick: () => void;
+}) {
+  const icone =
+    estado === 'ok' ? <Check className="h-4 w-4 text-[#47CD89]" strokeWidth={2.5} /> :
+    estado === 'pendente' ? <AlertTriangle className="h-4 w-4 text-[#FDB022]" /> :
+    estado === 'critico' ? <X className="h-4 w-4 text-[#FF8A7A]" strokeWidth={2.5} /> :
+    <Tag className="h-4 w-4 text-slate-400" />;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={ativo}
+      className={`group relative min-w-[150px] flex-1 px-4 py-4 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/60 sm:px-5 ${
+        ativo ? 'bg-oo-nav-2' : 'bg-oo-nav hover:bg-oo-nav-2'
+      }`}
+    >
+      <span className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">{rotulo}</span>
+      <span
+        className={`mt-2 flex items-center gap-2 text-[15px] font-semibold ${
+          estado === 'pendente' ? 'text-[#FDB022]' : estado === 'critico' ? 'text-[#FF8A7A]' : 'text-white'
+        }`}
+      >
+        {icone}
+        {valor}
+      </span>
+      <span className="mt-1 flex items-center gap-2 truncate text-[12px] text-slate-400">
+        {detalhe && <span className="truncate">{detalhe}</span>}
+        {anexo && (
+          <span className="inline-flex shrink-0 items-center gap-1 text-slate-300" title="Arquivo anexado">
+            <FileText className="h-3 w-3" />
+            anexo
+          </span>
+        )}
+      </span>
+      {ativo && <span className="absolute inset-x-0 bottom-0 h-[2px] bg-oo-primary" />}
+    </button>
+  );
+}
+
+// ─── FEEDBACK DE SALVAR ─────────────────────────────────────────────────
+function Feedback({ msg }: { msg: string | null }) {
+  if (!msg) return null;
+  const erro = msg.startsWith('Erro');
+  return (
+    <span className={`inline-flex items-center gap-1.5 ${erro ? 'text-oo-danger' : 'text-oo-success'}`} role="status">
+      {erro ? <AlertCircle className="h-4 w-4" /> : <Check className="h-4 w-4" strokeWidth={2.5} />}
+      {msg.replace(/^✓\s*/, '')}
+    </span>
   );
 }
 
@@ -349,45 +542,34 @@ function TabGeral({ data, id, onSave }: any) {
   };
 
   return (
-    <div className="bg-white/5 border border-white/10 rounded-2xl p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold flex items-center gap-2">
-          <Building2 className="w-5 h-5 text-amber-400" />
-          Dados gerais
-        </h2>
-        {msg && <span className="text-xs text-emerald-400">{msg}</span>}
-      </div>
-
-      <FieldDark label="Nome do imóvel" value={name} onChange={setName} />
-      <FieldDark label="Proprietário" value={proprietario} onChange={setProprietario} />
-      <div className="grid grid-cols-2 gap-3">
-        <FieldDark label="CEP" value={cep} onChange={(v: string) => setCep(v.replace(/\D/g, '').slice(0, 8))} />
-        <SelectDark label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} />
-      </div>
-      <FieldDark label="Logradouro" value={endereco} onChange={setEndereco} />
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <FieldDark label="Número" value={numero} onChange={setNumero} />
-        <div className="col-span-2">
-          <FieldDark label="Complemento" value={complemento} onChange={setComplemento} />
+    <div>
+      <Secao titulo="Dados gerais" icone={<Building2 className="h-4 w-4" />} descricao="Nome, proprietário e situação do imóvel.">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FieldLight label="Nome do imóvel" value={name} onChange={setName} className="sm:col-span-2" />
+          <FieldLight label="Proprietário" value={proprietario} onChange={setProprietario} />
+          <SelectLight label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} />
         </div>
-      </div>
-      <FieldDark label="Bairro" value={bairro} onChange={setBairro} />
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <div className="col-span-2">
-          <FieldDark label="Cidade" value={cidade} onChange={setCidade} />
+      </Secao>
+      <Secao titulo="Endereço" icone={<MapPin className="h-4 w-4" />}>
+        <div className="grid gap-4 sm:grid-cols-6">
+          <FieldLight label="CEP" value={cep} onChange={(v: string) => setCep(v.replace(/\D/g, '').slice(0, 8))} className="sm:col-span-2" />
+          <FieldLight label="Logradouro" value={endereco} onChange={setEndereco} className="sm:col-span-4" />
+          <FieldLight label="Número" value={numero} onChange={setNumero} className="sm:col-span-2" />
+          <FieldLight label="Complemento" value={complemento} onChange={setComplemento} className="sm:col-span-4" />
+          <FieldLight label="Bairro" value={bairro} onChange={setBairro} className="sm:col-span-2" />
+          <FieldLight label="Cidade" value={cidade} onChange={setCidade} className="sm:col-span-3" />
+          <FieldLight label="UF" value={estado} onChange={(v: string) => setEstado(v.toUpperCase().slice(0, 2))} />
         </div>
-        <FieldDark label="UF" value={estado} onChange={(v: string) => setEstado(v.toUpperCase().slice(0, 2))} />
-      </div>
-      <FieldDark label="Observações" value={observacoes} onChange={setObservacoes} type="textarea" />
-
-      <button
-        onClick={salvar}
-        disabled={saving}
-        className="w-full mt-3 px-5 py-3 bg-gradient-to-br from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white font-bold rounded-lg shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
-      >
-        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-        Salvar alterações
-      </button>
+      </Secao>
+      <Secao titulo="Observações" icone={<NotebookPen className="h-4 w-4" />}>
+        <FieldLight label="Observações" value={observacoes} onChange={setObservacoes} type="textarea" />
+      </Secao>
+      <BarraAcoes feedback={<Feedback msg={msg} />}>
+        <button onClick={salvar} disabled={saving} className={BTN_PRIMARIO}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          Salvar alterações
+        </button>
+      </BarraAcoes>
     </div>
   );
 }
@@ -424,54 +606,60 @@ function UtilityForm({ title, icon: Icon, data, endpoint, fields, onSaved, prope
   };
 
   return (
-    <div className="bg-white/5 border border-white/10 rounded-2xl p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold flex items-center gap-2">
-          <Icon className="w-5 h-5 text-amber-400" />
-          {title}
-        </h2>
-        {msg && <span className="text-xs text-emerald-400">{msg}</span>}
-      </div>
-
-      {fields.map((f: any) => (
-        <div key={f.key}>
-          {f.type === 'select' ? (
-            <SelectDark
-              label={f.label}
-              value={form[f.key] || ''}
-              onChange={(v: string) => setForm({ ...form, [f.key]: v })}
-              options={f.options}
-            />
+    <div>
+      <Secao
+        titulo={title}
+        icone={<Icon className="h-4 w-4" />}
+        descricao={data ? 'Registro cadastrado. Edite e salve para atualizar.' : 'Ainda não cadastrado — preencha e salve.'}
+        acao={
+          data ? (
+            <span className="inline-flex items-center gap-1.5 rounded bg-oo-success-soft px-2 py-0.5 text-[12px] font-semibold text-oo-success">
+              <Check className="h-3.5 w-3.5" strokeWidth={2.5} /> Cadastrado
+            </span>
           ) : (
-            <FieldDark
-              label={f.label}
-              value={form[f.key] ?? ''}
-              onChange={(v: string) => setForm({ ...form, [f.key]: v })}
-              type={f.type}
-            />
+            <span className="inline-flex items-center gap-1.5 rounded bg-oo-warning-soft px-2 py-0.5 text-[12px] font-semibold text-oo-warning">
+              <AlertTriangle className="h-3.5 w-3.5" /> Pendente
+            </span>
+          )
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          {fields.map((f: any) =>
+            f.type === 'select' ? (
+              <SelectLight
+                key={f.key}
+                label={f.label}
+                value={form[f.key] || ''}
+                onChange={(v: string) => setForm({ ...form, [f.key]: v })}
+                options={f.options}
+              />
+            ) : (
+              <FieldLight
+                key={f.key}
+                label={f.label}
+                value={form[f.key] ?? ''}
+                onChange={(v: string) => setForm({ ...form, [f.key]: v })}
+                type={f.type}
+                className={f.type === 'textarea' ? 'sm:col-span-2' : undefined}
+              />
+            ),
           )}
         </div>
-      ))}
+      </Secao>
 
       {/* Upload do PDF/JPG da seção (carnê IPTU, conta, escritura, etc) */}
       {propertyId && scope && (
-        <UploadSlot
-          propertyId={propertyId}
-          scope={scope}
-          currentUrl={data?.attachmentUrl}
-          onUploaded={onSaved}
-          label="📎 Anexo principal (PDF/JPG)"
-        />
+        <Secao titulo="Anexo principal" icone={<UploadCloud className="h-4 w-4" />} descricao="Anexo principal (PDF/JPG)">
+          <UploadSlot propertyId={propertyId} scope={scope} currentUrl={data?.attachmentUrl} onUploaded={onSaved} />
+        </Secao>
       )}
 
-      <button
-        onClick={salvar}
-        disabled={saving}
-        className="w-full mt-3 px-5 py-3 bg-gradient-to-br from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white font-bold rounded-lg shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
-      >
-        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-        Salvar
-      </button>
+      <BarraAcoes feedback={<Feedback msg={msg} />}>
+        <button onClick={salvar} disabled={saving} className={BTN_PRIMARIO}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          Salvar
+        </button>
+      </BarraAcoes>
     </div>
   );
 }
@@ -531,87 +719,79 @@ function TabTaxas({ data, id, onChange }: any) {
   };
 
   return (
-    <div className="space-y-3">
-      <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <Tag className="w-5 h-5 text-amber-400" />
-            Taxas ({taxas.length})
-          </h2>
-          {!adding && (
-            <button
-              onClick={() => setAdding(true)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold rounded-lg"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Nova taxa
-            </button>
-          )}
-        </div>
-
-        {adding && (
-          <div className="bg-black/20 border border-amber-500/30 rounded-xl p-4 space-y-3 mb-4">
-            <SelectDark
-              label="Tipo"
-              value={tipo}
-              onChange={setTipo}
-              options={tiposPadrao}
-            />
-            {tipo === 'outros' && (
-              <FieldDark label="Nome da taxa" value={nome} onChange={setNome} />
-            )}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <FieldDark label="Valor (R$)" value={valor} onChange={setValor} />
-              <FieldDark label="Dia vencimento" value={vencimentoDia} onChange={setVencimentoDia} type="number" />
-              <FieldDark label="Código (opcional)" value={codigo} onChange={setCodigo} />
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setAdding(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-300 hover:bg-white/5 rounded"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={adicionar}
-                className="flex-1 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold rounded"
-              >
-                Adicionar taxa
-              </button>
-            </div>
-          </div>
-        )}
-
-        {taxas.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 text-sm">
-            Nenhuma taxa cadastrada
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {taxas.map((t: any) => (
-              <div key={t.id} className="flex items-center gap-3 p-3 bg-white/5 border border-white/5 rounded-lg">
-                <div className="flex-1">
-                  <div className="font-bold text-sm capitalize">
-                    {t.tipo === 'outros' ? t.nome || 'Outros' : t.tipo}
-                  </div>
-                  <div className="text-xs text-slate-400 flex gap-3 mt-0.5">
-                    {t.valor && <span>R$ {Number(t.valor).toFixed(2)}</span>}
-                    {t.vencimentoDia && <span>vence dia {t.vencimentoDia}</span>}
-                    {t.codigo && <span>cód {t.codigo}</span>}
-                  </div>
-                </div>
-                <button
-                  onClick={() => remover(t.id)}
-                  className="p-2 text-rose-400 hover:bg-rose-500/10 rounded"
-                  title="Remover"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
+    <div className="px-5 py-6 sm:px-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2 font-oo-display text-[16px] font-semibold text-oo-ink">
+          <Tag className="h-4 w-4 text-oo-muted" />
+          Taxas <span className="rounded bg-oo-hover px-1.5 py-0.5 text-[12px] font-semibold tabular-nums text-oo-ink-2">{taxas.length}</span>
+        </h2>
+        {!adding && (
+          <button onClick={() => setAdding(true)} className={BTN_PRIMARIO}>
+            <Plus className="h-4 w-4" strokeWidth={2.5} />
+            Nova taxa
+          </button>
         )}
       </div>
+
+      {adding && (
+        <div className="mt-4 rounded-lg border border-oo-line bg-oo-subtle p-4 sm:p-5">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <SelectLight label="Tipo" value={tipo} onChange={setTipo} options={tiposPadrao} className="sm:col-span-3" />
+            {tipo === 'outros' && <FieldLight label="Nome da taxa" value={nome} onChange={setNome} className="sm:col-span-3" />}
+            <FieldLight label="Valor (R$)" value={valor} onChange={setValor} />
+            <FieldLight label="Dia vencimento" value={vencimentoDia} onChange={setVencimentoDia} type="number" />
+            <FieldLight label="Código (opcional)" value={codigo} onChange={setCodigo} />
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <button onClick={() => setAdding(false)} className={BTN_SECUNDARIO}>
+              Cancelar
+            </button>
+            <button onClick={adicionar} className={BTN_PRIMARIO}>
+              Adicionar taxa
+            </button>
+          </div>
+        </div>
+      )}
+
+      {taxas.length === 0 ? (
+        <div className="mt-4 rounded-lg border border-dashed border-oo-line-strong py-10 text-center text-[14px] text-oo-ink-2">
+          Nenhuma taxa cadastrada
+        </div>
+      ) : (
+        <div className="mt-4 overflow-x-auto rounded-lg border border-oo-line">
+          <table className="w-full text-[14px]">
+            <thead>
+              <tr className="border-b border-oo-line bg-oo-subtle text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-oo-ink-2">
+                <th className="px-4 py-2.5">Tipo</th>
+                <th className="px-4 py-2.5 text-right">Valor</th>
+                <th className="px-4 py-2.5">Vencimento</th>
+                <th className="px-4 py-2.5">Código</th>
+                <th className="w-12 px-2 py-2.5" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-oo-line">
+              {taxas.map((t: any) => (
+                <tr key={t.id} className="transition-colors hover:bg-oo-subtle">
+                  <td className="px-4 py-3 font-semibold capitalize text-oo-ink">{t.tipo === 'outros' ? t.nome || 'Outros' : t.tipo}</td>
+                  <td className="px-4 py-3 text-right font-semibold tabular-nums text-oo-ink">{t.valor ? `R$ ${Number(t.valor).toFixed(2)}` : '—'}</td>
+                  <td className="px-4 py-3 text-oo-ink-2">{t.vencimentoDia ? `vence dia ${t.vencimentoDia}` : '—'}</td>
+                  <td className="px-4 py-3 tabular-nums text-oo-ink-2">{t.codigo ? `cód ${t.codigo}` : '—'}</td>
+                  <td className="px-2 py-3 text-right">
+                    <button
+                      onClick={() => remover(t.id)}
+                      className="grid h-8 w-8 place-items-center rounded-md text-oo-muted transition-colors hover:bg-oo-danger-soft hover:text-oo-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-danger"
+                      title="Remover"
+                      aria-label="Remover"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -671,7 +851,7 @@ function UploadSlot({
 
   return (
     <div className="space-y-2">
-      {label && <div className="text-xs font-bold text-slate-300">{label}</div>}
+      {label && <div className={ROTULO}>{label}</div>}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
@@ -681,42 +861,35 @@ function UploadSlot({
           const f = e.dataTransfer.files?.[0];
           if (f) doUpload(f);
         }}
-        className={`border-2 border-dashed rounded-xl p-4 transition ${
-          dragOver
-            ? 'border-amber-400 bg-amber-500/10'
-            : 'border-white/20 bg-white/5 hover:bg-white/10'
+        className={`rounded-lg border-2 border-dashed p-4 transition-colors duration-150 ${
+          dragOver ? 'border-oo-primary bg-oo-primary/5' : 'border-oo-line-strong bg-oo-subtle hover:bg-oo-hover'
         }`}
       >
         {uploading ? (
           <div className="flex items-center justify-center gap-2 py-2">
-            <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-            <span className="text-sm text-slate-300">Enviando...</span>
+            <Loader2 className="h-4 w-4 animate-spin text-oo-primary" />
+            <span className="text-[14px] font-medium text-oo-ink-2">Enviando...</span>
           </div>
         ) : currentUrl ? (
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-500/20 rounded-lg flex items-center justify-center">
-              <FileText className="w-5 h-5 text-emerald-400" />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-oo-success/20 bg-oo-success-soft">
+              <FileText className="h-5 w-5 text-oo-success" />
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs text-emerald-300 font-bold">✓ Arquivo anexado</div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-semibold text-oo-success">✓ Arquivo anexado</div>
               <a
                 href={currentUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-[11px] text-slate-400 hover:text-white truncate block underline"
+                className="block truncate text-[12px] text-oo-ink-2 underline underline-offset-2 hover:text-oo-ink"
               >
                 {currentUrl.split('/').pop()?.split('?')[0]}
               </a>
             </div>
-            <a
-              href={currentUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-xs font-bold"
-            >
+            <a href={currentUrl} target="_blank" rel="noopener noreferrer" className={`${BTN_SECUNDARIO} h-9`}>
               Ver
             </a>
-            <label className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-white rounded text-xs font-bold cursor-pointer">
+            <label className={`${BTN_PRIMARIO} h-9 cursor-pointer`}>
               Trocar
               <input
                 type="file"
@@ -730,12 +903,12 @@ function UploadSlot({
             </label>
           </div>
         ) : (
-          <label className="cursor-pointer flex flex-col items-center justify-center gap-2 py-3 text-center">
-            <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center">
-              <Plus className="w-6 h-6 text-amber-400" />
+          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 py-3 text-center">
+            <div className="grid h-11 w-11 place-items-center rounded-full border border-oo-line bg-oo-surface">
+              <UploadCloud className="h-5 w-5 text-oo-ink-2" />
             </div>
-            <div className="text-sm font-bold text-slate-200">Arraste o arquivo aqui</div>
-            <div className="text-[10px] text-slate-500">ou clique pra escolher · PDF / JPG / PNG · máx 10MB</div>
+            <div className="text-[14px] font-semibold text-oo-ink">Arraste o arquivo aqui</div>
+            <div className="text-[12px] text-oo-muted">ou clique pra escolher · PDF / JPG / PNG · máx 10MB</div>
             <input
               type="file"
               accept={accept || '.pdf,.jpg,.jpeg,.png'}
@@ -748,8 +921,9 @@ function UploadSlot({
           </label>
         )}
         {error && (
-          <div className="mt-2 text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded p-2">
-            ⚠ {error}
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-oo-danger/20 bg-oo-danger-soft px-3 py-2 text-[13px] font-medium text-oo-danger">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            {error}
           </div>
         )}
       </div>
@@ -770,63 +944,69 @@ function TabHistorico({ id }: { id: string }) {
   }, [id]);
 
   return (
-    <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-      <h2 className="text-lg font-bold flex items-center gap-2 mb-4">
-        <History className="w-5 h-5 text-amber-400" />
+    <div className="px-5 py-6 sm:px-8">
+      <h2 className="flex items-center gap-2 font-oo-display text-[16px] font-semibold text-oo-ink">
+        <History className="h-4 w-4 text-oo-muted" />
         Histórico de alterações
       </h2>
       {loading ? (
-        <Loader2 className="w-6 h-6 animate-spin text-amber-400 mx-auto" />
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-6 w-6 animate-spin text-oo-primary" />
+        </div>
       ) : logs.length === 0 ? (
-        <div className="text-center py-8 text-slate-500 text-sm">Nenhuma alteração registrada</div>
+        <div className="mt-4 rounded-lg border border-dashed border-oo-line-strong py-10 text-center text-[14px] text-oo-ink-2">
+          Nenhuma alteração registrada
+        </div>
       ) : (
-        <div className="space-y-2">
+        <ol className="relative mt-5 space-y-5 border-l border-oo-line pl-6">
           {logs.map((log) => (
-            <div key={log.id} className="flex items-start gap-3 p-3 bg-white/5 rounded-lg">
-              <div className="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center shrink-0">
-                <Calendar className="w-4 h-4 text-amber-400" />
+            <li key={log.id} className="relative">
+              <span className="absolute -left-[31px] top-1 h-3 w-3 rounded-full border-2 border-oo-surface bg-oo-ink-2 ring-1 ring-oo-line" aria-hidden="true" />
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[14px]">
+                <b className="font-semibold text-oo-ink">{log.userName || 'Sistema'}</b>
+                <span className="rounded bg-oo-hover px-1.5 py-px text-[12px] font-medium text-oo-ink-2">{log.action}</span>
+                <span className="rounded bg-oo-hover px-1.5 py-px text-[12px] font-medium text-oo-ink-2">{log.scope}</span>
+                <span className="text-[12px] tabular-nums text-oo-muted">{new Date(log.createdAt).toLocaleString('pt-BR')}</span>
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm">
-                  <b>{log.userName || 'Sistema'}</b>
-                  <span className="text-slate-400"> · {log.action} · {log.scope}</span>
-                </div>
-                <div className="text-[11px] text-slate-500 mt-0.5">
-                  {new Date(log.createdAt).toLocaleString('pt-BR')}
-                </div>
-                {log.details && (
-                  <pre className="text-[10px] text-slate-400 mt-1 bg-black/20 rounded p-2 overflow-auto max-h-32">
+              {log.details && (
+                <details className="group mt-2">
+                  <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[12px] font-semibold text-oo-primary hover:underline">
+                    <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                    Detalhes
+                  </summary>
+                  <pre className="mt-2 max-h-48 overflow-auto rounded-md border border-oo-line bg-oo-subtle p-3 text-[12px] leading-relaxed text-oo-ink-2">
                     {(() => {
                       try { return JSON.stringify(JSON.parse(log.details), null, 2); }
                       catch { return log.details; }
                     })()}
                   </pre>
-                )}
-              </div>
-            </div>
+                </details>
+              )}
+            </li>
           ))}
-        </div>
+        </ol>
       )}
     </div>
   );
 }
 
 // ─── INPUTS REUSÁVEIS ──────────────────────────────────────────────────
-function FieldDark({ label, value, onChange, type }: {
+function FieldLight({ label, value, onChange, type, className }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   type?: string;
+  className?: string;
 }) {
   return (
-    <label className="block">
-      <span className="text-xs font-bold text-slate-300 mb-1.5 block">{label}</span>
+    <label className={`block min-w-0 ${className || ''}`}>
+      <span className={`mb-1.5 block ${ROTULO}`}>{label}</span>
       {type === 'textarea' ? (
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
           rows={3}
-          className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400 resize-y"
+          className={`${CAMPO} resize-y py-2.5`}
         />
       ) : (
         <input
@@ -834,29 +1014,26 @@ function FieldDark({ label, value, onChange, type }: {
           inputMode={type === 'number' ? 'decimal' : undefined}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+          className={`${CAMPO} h-10 ${type === 'number' ? 'tabular-nums' : ''}`}
         />
       )}
     </label>
   );
 }
-function SelectDark({ label, value, onChange, options }: {
+function SelectLight({ label, value, onChange, options, className }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
+  className?: string;
 }) {
   return (
-    <label className="block">
-      <span className="text-xs font-bold text-slate-300 mb-1.5 block">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-amber-400"
-      >
-        <option value="" className="bg-slate-800">— Selecione —</option>
+    <label className={`block min-w-0 ${className || ''}`}>
+      <span className={`mb-1.5 block ${ROTULO}`}>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={`${CAMPO} h-10`}>
+        <option value="">— Selecione —</option>
         {options.map((o: any) => (
-          <option key={o.value} value={o.value} className="bg-slate-800">{o.label}</option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
     </label>

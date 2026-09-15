@@ -3,13 +3,19 @@
 /**
  * /imobiliario/novo — Cadastro de novo imóvel.
  * ViaCEP auto-preenche endereço quando CEP completo (8 dígitos).
+ *
+ * ORDER ONE · Executive Operations UI (15/09/2026): casca navy, faixa de
+ * comando e formulário em seções de duas colunas. Mesma lógica de antes.
  */
 
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Building2, Loader2, Save, Search } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Building2, Loader2, MapPin, NotebookPen, Save } from 'lucide-react';
 import { api } from '@/lib/api';
+import EnterpriseShell from '@/components/enterprise/EnterpriseShell';
+import PageHeader from '@/components/enterprise/PageHeader';
+import { BarraAcoes, BTN_PRIMARIO, BTN_SECUNDARIO, CAMPO, Campo, Secao } from '@/components/enterprise/Form';
 
 const STATUS_OPTIONS = [
   { value: 'ativo', label: 'Ativo' },
@@ -80,202 +86,139 @@ export default function NovoImovelPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      <header className="bg-slate-900/80 backdrop-blur-xl border-b border-white/10 sticky top-0 z-30">
-        <div className="max-w-3xl mx-auto px-6 py-4 flex items-center gap-3">
-          <Link href="/imobiliario" className="p-2 rounded-lg hover:bg-white/10 transition">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center">
-            <Building2 className="w-5 h-5 text-white" />
-          </div>
-          <div className="flex-1">
-            <h1 className="text-lg font-black">Novo imóvel</h1>
-            <p className="text-xs text-slate-400">Cadastro rápido — depois você adiciona docs e taxas</p>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto p-6 space-y-4">
-        {error && (
-          <div className="bg-rose-500/10 border border-rose-500/30 text-rose-200 rounded-lg p-3 text-sm">
-            ⚠ {error}
-          </div>
-        )}
-
-        {/* Dados principais */}
-        <section className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 space-y-4">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-amber-400">Dados principais</h2>
-
-          <Field label="Nome do imóvel *" required>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ex: Apto Moema 302, Sala Vila Olímpia"
-              className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-              autoFocus
-            />
-          </Field>
-
-          <Field label="Proprietário">
-            <input
-              value={proprietario}
-              onChange={(e) => setProprietario(e.target.value)}
-              placeholder="Nome ou razão social"
-              className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-            />
-          </Field>
-
-          <Field label="Status">
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-amber-400"
-            >
-              {STATUS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value} className="bg-slate-800">{o.label}</option>
-              ))}
-            </select>
-          </Field>
-        </section>
-
-        {/* Endereço */}
-        <section className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 space-y-4">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-amber-400">Endereço</h2>
-
-          <Field label="CEP">
-            <div className="flex gap-2">
-              <input
-                value={cep}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, '').slice(0, 8);
-                  setCep(v);
-                  if (v.length === 8) lookupCep(v);
-                }}
-                placeholder="só números"
-                maxLength={8}
-                inputMode="numeric"
-                className="flex-1 px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white font-mono placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-              />
-              {cepLoading && (
-                <div className="flex items-center px-3 text-amber-400">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                </div>
-              )}
-            </div>
-            <p className="text-[10px] text-slate-500 mt-1">8 dígitos completam endereço automaticamente</p>
-          </Field>
-
-          <Field label="Logradouro">
-            <input
-              value={endereco}
-              onChange={(e) => setEndereco(e.target.value)}
-              placeholder="Rua / Avenida"
-              className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-            />
-          </Field>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <Field label="Número">
-              <input
-                value={numero}
-                onChange={(e) => setNumero(e.target.value)}
-                placeholder="Nº"
-                className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-              />
-            </Field>
-            <div className="col-span-2">
-              <Field label="Complemento">
-                <input
-                  value={complemento}
-                  onChange={(e) => setComplemento(e.target.value)}
-                  placeholder="Apto, sala, bloco"
-                  className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-                />
-              </Field>
-            </div>
-          </div>
-
-          <Field label="Bairro">
-            <input
-              value={bairro}
-              onChange={(e) => setBairro(e.target.value)}
-              placeholder="Bairro"
-              className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-            />
-          </Field>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <div className="col-span-2">
-              <Field label="Cidade">
-                <input
-                  value={cidade}
-                  onChange={(e) => setCidade(e.target.value)}
-                  placeholder="Cidade"
-                  className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-                />
-              </Field>
-            </div>
-            <Field label="UF">
-              <input
-                value={estado}
-                onChange={(e) => setEstado(e.target.value.toUpperCase().slice(0, 2))}
-                placeholder="SP"
-                maxLength={2}
-                className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white font-mono uppercase placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
-              />
-            </Field>
-          </div>
-        </section>
-
-        {/* Observações */}
-        <section className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 space-y-4">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-amber-400">Observações</h2>
-          <textarea
-            value={observacoes}
-            onChange={(e) => setObservacoes(e.target.value)}
-            placeholder="Notas internas, contatos, particularidades..."
-            rows={4}
-            className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400 resize-y"
-          />
-        </section>
-
-        {/* Ações */}
-        <div className="flex items-center gap-3 sticky bottom-4">
+    <EnterpriseShell trilha={[{ label: 'Início', href: '/' }, { label: 'Imobiliário', href: '/imobiliario' }, { label: 'Novo imóvel' }]}>
+      <div className="bg-oo-nav pb-16 sm:pb-20">
+        <div className="mx-auto w-full max-w-[1200px] px-4 pt-6 sm:px-6 sm:pt-8">
           <Link
             href="/imobiliario"
-            className="px-5 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-bold transition"
+            className="mb-4 inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium text-slate-400 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
           >
-            Cancelar
+            <ArrowLeft className="h-4 w-4" />
+            Imóveis
           </Link>
-          <button
-            onClick={salvar}
-            disabled={saving || !name.trim()}
-            className="flex-1 px-5 py-3 bg-gradient-to-br from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white font-bold rounded-lg shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all"
-          >
-            {saving ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Salvando...
-              </>
-            ) : (
-              <>
-                <Save className="w-4 h-4" />
-                Salvar imóvel
-              </>
-            )}
-          </button>
+          <PageHeader
+            escuro
+            icone={<Building2 className="h-5 w-5" />}
+            titulo="Novo imóvel"
+            subtitulo="Cadastro rápido — depois você adiciona docs e taxas"
+          />
+        </div>
+      </div>
+
+      <main className="mx-auto -mt-10 w-full max-w-[1200px] px-4 pb-12 sm:-mt-12 sm:px-6">
+        <div className="overflow-hidden rounded-xl border border-oo-line bg-oo-surface shadow-[0_1px_2px_rgba(16,24,40,.06),0_8px_24px_-12px_rgba(16,24,40,.12)]">
+          {error && (
+            <div className="flex items-center gap-2 border-b border-oo-danger/20 bg-oo-danger-soft px-5 py-3 text-[14px] font-medium text-oo-danger sm:px-8" role="alert">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {error}
+            </div>
+          )}
+
+          <Secao titulo="Dados principais" icone={<Building2 className="h-4 w-4" />} descricao="Como o imóvel aparece na lista e quem é o dono.">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Campo label="Nome do imóvel *" className="sm:col-span-2">
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Ex: Apto Moema 302, Sala Vila Olímpia"
+                  className={`${CAMPO} h-10`}
+                  autoFocus
+                />
+              </Campo>
+              <Campo label="Proprietário">
+                <input
+                  value={proprietario}
+                  onChange={(e) => setProprietario(e.target.value)}
+                  placeholder="Nome ou razão social"
+                  className={`${CAMPO} h-10`}
+                />
+              </Campo>
+              <Campo label="Status">
+                <select value={status} onChange={(e) => setStatus(e.target.value)} className={`${CAMPO} h-10`}>
+                  {STATUS_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </Campo>
+            </div>
+          </Secao>
+
+          <Secao titulo="Endereço" icone={<MapPin className="h-4 w-4" />} descricao="8 dígitos completam endereço automaticamente">
+            <div className="grid gap-4 sm:grid-cols-6">
+              <Campo label="CEP" className="sm:col-span-2">
+                <div className="relative">
+                  <input
+                    value={cep}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').slice(0, 8);
+                      setCep(v);
+                      if (v.length === 8) lookupCep(v);
+                    }}
+                    placeholder="só números"
+                    maxLength={8}
+                    inputMode="numeric"
+                    className={`${CAMPO} h-10 pr-9 tabular-nums`}
+                  />
+                  {cepLoading && <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-oo-primary" />}
+                </div>
+              </Campo>
+              <Campo label="Logradouro" className="sm:col-span-4">
+                <input value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Rua / Avenida" className={`${CAMPO} h-10`} />
+              </Campo>
+              <Campo label="Número" className="sm:col-span-2">
+                <input value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="Nº" className={`${CAMPO} h-10`} />
+              </Campo>
+              <Campo label="Complemento" className="sm:col-span-4">
+                <input value={complemento} onChange={(e) => setComplemento(e.target.value)} placeholder="Apto, sala, bloco" className={`${CAMPO} h-10`} />
+              </Campo>
+              <Campo label="Bairro" className="sm:col-span-2">
+                <input value={bairro} onChange={(e) => setBairro(e.target.value)} placeholder="Bairro" className={`${CAMPO} h-10`} />
+              </Campo>
+              <Campo label="Cidade" className="sm:col-span-3">
+                <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade" className={`${CAMPO} h-10`} />
+              </Campo>
+              <Campo label="UF">
+                <input
+                  value={estado}
+                  onChange={(e) => setEstado(e.target.value.toUpperCase().slice(0, 2))}
+                  placeholder="SP"
+                  maxLength={2}
+                  className={`${CAMPO} h-10 uppercase`}
+                />
+              </Campo>
+            </div>
+          </Secao>
+
+          <Secao titulo="Observações" icone={<NotebookPen className="h-4 w-4" />} descricao="Notas internas, contatos, particularidades.">
+            <textarea
+              value={observacoes}
+              onChange={(e) => setObservacoes(e.target.value)}
+              placeholder="Notas internas, contatos, particularidades..."
+              rows={4}
+              className={`${CAMPO} resize-y py-2.5`}
+            />
+          </Secao>
+
+          <BarraAcoes>
+            <Link href="/imobiliario" className={BTN_SECUNDARIO}>
+              Cancelar
+            </Link>
+            <button onClick={salvar} disabled={saving || !name.trim()} className={BTN_PRIMARIO}>
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4" />
+                  Salvar imóvel
+                </>
+              )}
+            </button>
+          </BarraAcoes>
         </div>
       </main>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; required?: boolean; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="text-xs font-bold text-slate-300 mb-1.5 block">{label}</span>
-      {children}
-    </label>
+    </EnterpriseShell>
   );
 }
