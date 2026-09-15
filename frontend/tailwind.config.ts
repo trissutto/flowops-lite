@@ -59,6 +59,41 @@ const config: Config = {
         'warn-soft': '#FBF1DE',
         ok:          '#2E9E5B',
         'ok-soft':   '#E7F5ED',
+
+        /* ── ORDER ONE · Executive Operations UI (15/09/2026) ────────
+           Linguagem enterprise, estreada em /imobiliario. Prefixo `oo-`
+           pra conviver com o Semáforo sem colisão; tela migra por adição.
+           Cor só quando significa algo: success/warning/danger/info. */
+        'oo-bg':            '#F3F5F7',
+        'oo-surface':       '#FFFFFF',
+        'oo-subtle':        '#F8FAFC',
+        'oo-hover':         '#F1F5F9',
+        'oo-nav':           '#0B1220',
+        'oo-nav-2':         '#111827',
+        'oo-nav-line':      '#1F2937',
+        'oo-ink':           '#101828',
+        'oo-ink-2':         '#475467',
+        'oo-muted':         '#667085',
+        'oo-line':          '#DDE2E8',
+        'oo-line-strong':   '#CBD2D9',
+        'oo-primary':       '#2563EB',
+        'oo-primary-hover': '#1D4ED8',
+        'oo-success':       '#15803D',
+        'oo-success-soft':  '#ECFDF3',
+        'oo-warning':       '#B45309',
+        'oo-warning-soft':  '#FFF7ED',
+        'oo-danger':        '#B42318',
+        'oo-danger-soft':   '#FEF3F2',
+        'oo-info':          '#0369A1',
+      },
+      fontFamily: {
+        /* variáveis carregadas pelo EnterpriseShell (next/font) */
+        'oo-display': ['var(--font-oo-display)', 'var(--font-oo-sans)', 'system-ui', 'sans-serif'],
+        'oo-sans':    ['var(--font-oo-sans)', 'system-ui', 'sans-serif'],
+      },
+      boxShadow: {
+        /* sombra só pra camada flutuante (dropdown, popover, modal) */
+        'oo-pop': '0 12px 32px -8px rgba(16,24,40,.18), 0 2px 6px rgba(16,24,40,.08)',
       },
       borderRadius: {
         card:  '7px',

@@ -3,29 +3,39 @@
 /**
  * /imobiliario — Hub principal do módulo IMOBILIÁRIO.
  *
- * Visual SEMÁFORO (15/09/2026): cinza e grafite, cor só pra pendência.
- *  - As contagens do dashboard viram ABAS de situação (filtram a lista).
- *  - A lista é uma folha só com colunas fixas: os 5 documentos lado a lado,
- *    ✓ discreto quando existe e "falta" em âmbar quando não — dá pra correr o
- *    olho pela coluna e ver quem está sem Escritura, por exemplo.
- *  - IPTU mostra a data: âmbar se vence em até 30 dias, vermelho se já venceu.
- *  - Mobile tem layout próprio (filtros recolhíveis, imóvel em bloco).
+ * ORDER ONE · Executive Operations UI (15/09/2026) — primeira tela da
+ * linguagem enterprise: casca navy (EnterpriseShell), faixa de indicadores,
+ * abas com sublinhado, busca protagonista, filtros em popover e tabela densa
+ * com barra de risco. Tokens `oo-*` no tailwind.config.ts.
+ *
+ * Tudo que aparece JÁ vem de /properties e /properties/dashboard:
+ *  - documentos = `docsFaltando` (Água, Energia, IPTU, Matrícula, Escritura);
+ *  - IPTU = `iptu.dataVencimento` + flag `iptuVencendo` (vence em até 30 dias
+ *    OU já venceu — regra do backend); os DIAS saem da própria data.
+ *  - "Com pendência" é recorte da lista carregada, não regra nova.
  *
  * ⚠️ Sem `sticky`: o `overflow-x: hidden` do html/body (globals.css) desliga
- * sticky no app inteiro — o cabeçalho antigo "fixo" rolava junto.
+ * sticky no app inteiro.
  *
  * Acesso: roles admin, imobiliario_admin, imobiliario_user, imobiliario_viewer.
  * Click numa linha abre /imobiliario/[id] (painel individual).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  Building2, Plus, Search, Loader2, AlertCircle, FileText, AlertTriangle,
-  Archive, ArrowLeft, Check, ChevronRight, SlidersHorizontal, X,
+  AlertCircle, Archive, Building2, ChevronDown, ChevronRight, FileText,
+  ListFilter, Plus, RotateCw, Search, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import EnterpriseShell from '@/components/enterprise/EnterpriseShell';
+import PageHeader from '@/components/enterprise/PageHeader';
+import MetricStrip from '@/components/enterprise/MetricStrip';
+import {
+  DocumentStatus, EmptyState, RiskBar, StatusIndicator,
+  type EstadoDoc, type Risco, type TomStatus,
+} from '@/components/enterprise/Indicators';
 
 type Property = {
   id: string;
@@ -63,62 +73,88 @@ type Dashboard = {
   iptuVencendo: number;
 };
 
-const STATUS_OPTIONS = [
-  { value: 'ativo', label: 'Ativo', aba: 'Ativos', desc: 'em operação', conta: (d: Dashboard) => d.ativos },
-  { value: 'em_construcao', label: 'Em construção', aba: 'Em construção', desc: 'obra em andamento', conta: (d: Dashboard) => d.em_construcao },
-  { value: 'pronta_locacao', label: 'Pronta p/ locação', aba: 'Pronta p/ locação', desc: 'disponível', conta: (d: Dashboard) => d.pronta_locacao },
-  { value: 'vendido', label: 'Vendido', aba: 'Vendidos', desc: 'histórico', conta: (d: Dashboard) => d.vendidos },
-  { value: 'inativo', label: 'Inativo', aba: 'Inativos', desc: 'fora de operação', conta: (d: Dashboard) => d.inativos },
+const STATUS: { value: string; label: string; aba: string; tom: TomStatus; conta: (d: Dashboard) => number }[] = [
+  { value: 'ativo', label: 'Ativo', aba: 'Ativos', tom: 'success', conta: (d) => d.ativos },
+  { value: 'em_construcao', label: 'Em construção', aba: 'Em construção', tom: 'info', conta: (d) => d.em_construcao },
+  { value: 'pronta_locacao', label: 'Pronta p/ locação', aba: 'Para locação', tom: 'neutral', conta: (d) => d.pronta_locacao },
+  { value: 'vendido', label: 'Vendido', aba: 'Vendidos', tom: 'muted', conta: (d) => d.vendidos },
+  { value: 'inativo', label: 'Inativo', aba: 'Inativos', tom: 'muted', conta: (d) => d.inativos },
 ];
-
-const statusLabel = (s: string) => STATUS_OPTIONS.find((o) => o.value === s)?.label || s;
+const ABAS = [{ value: '', aba: 'Todos', conta: (d: Dashboard) => d.total }, ...STATUS];
+const statusDe = (s: string) => STATUS.find((o) => o.value === s) || { label: s, tom: 'muted' as TomStatus };
 
 /** Mesma ordem e nomes que o backend usa em `docsFaltando`. */
 const DOCS = ['Água', 'Energia', 'IPTU', 'Matrícula', 'Escritura'];
+const MESES = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
 
-/* ── IPTU: a data é só-dia gravada à meia-noite UTC → compara pela parte UTC ── */
+/* ── IPTU: data só-dia gravada à meia-noite UTC → compara pela parte UTC ── */
 function hojeBrasilia(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 }
 
-type IptuAviso = { texto: string; tom: 'crit' | 'warn' } | null;
+type LeituraIptu = {
+  rotulo: string;
+  detalhe: string;
+  tom: 'danger' | 'warning' | 'neutral' | 'muted';
+};
 
-function avisoIptu(p: Property): IptuAviso {
-  if (!p.iptuVencendo) return null;
+function lerIptu(p: Property): LeituraIptu {
+  if (p.docsFaltando.includes('IPTU')) return { rotulo: 'Sem cadastro', detalhe: 'não registrado', tom: 'warning' };
   const iso = p.iptu?.dataVencimento ? new Date(p.iptu.dataVencimento).toISOString().slice(0, 10) : null;
-  if (!iso) return { texto: 'vencendo', tom: 'warn' };
+  if (!iso) return { rotulo: 'Sem vencimento', detalhe: 'data não informada', tom: 'muted' };
   const hoje = hojeBrasilia();
-  const [a, m, d] = iso.split('-');
-  const data = a === hoje.slice(0, 4) ? `${d}/${m}` : `${d}/${m}/${a}`;
-  if (iso < hoje) return { texto: `venceu ${data}`, tom: 'crit' };
-  if (iso === hoje) return { texto: 'vence hoje', tom: 'warn' };
-  return { texto: `vence ${data}`, tom: 'warn' };
+  const [a, m, d] = iso.split('-').map(Number);
+  const [ha, hm, hd] = hoje.split('-').map(Number);
+  const dias = Math.round((Date.UTC(a, m - 1, d) - Date.UTC(ha, hm - 1, hd)) / 86_400_000);
+  const data = `${String(d).padStart(2, '0')} ${MESES[m - 1]}${a !== ha ? ` ${a}` : ''}`;
+  if (dias < 0) return { rotulo: 'Vencido', detalhe: `${data} · há ${-dias} ${dias === -1 ? 'dia' : 'dias'}`, tom: 'danger' };
+  if (dias === 0) return { rotulo: 'Vence hoje', detalhe: data, tom: 'warning' };
+  if (p.iptuVencendo) return { rotulo: 'A vencer', detalhe: `${data} · em ${dias} ${dias === 1 ? 'dia' : 'dias'}`, tom: 'warning' };
+  return { rotulo: 'Vence', detalhe: `${data} · em ${dias} dias`, tom: 'neutral' };
 }
 
-function estadoLinha(p: Property): 'crit' | 'warn' | null {
-  if (avisoIptu(p)?.tom === 'crit') return 'crit';
-  if (p.docsFaltandoCount > 0 || p.iptuVencendo) return 'warn';
+function riscoDe(p: Property, iptu: LeituraIptu): Risco {
+  if (iptu.tom === 'danger') return 'critico';
+  if (p.docsFaltandoCount > 0 || p.iptuVencendo) return 'atencao';
   return null;
 }
 
-function enderecoDe(p: Property): string {
-  const rua = [p.endereco, p.numero].filter(Boolean).join(', ');
-  const local = [p.bairro, [p.cidade, p.estado].filter(Boolean).join('/')].filter(Boolean).join(', ');
-  return [rua, local].filter(Boolean).join(', ');
+function docsDe(p: Property, iptu: LeituraIptu): { nome: string; estado: EstadoDoc; nota?: string }[] {
+  const faltando = new Set(p.docsFaltando);
+  const lista = DOCS.map((nome) => {
+    if (faltando.has(nome)) return { nome, estado: 'pendente' as EstadoDoc };
+    if (nome === 'IPTU' && iptu.tom === 'danger') return { nome, estado: 'vencido' as EstadoDoc, nota: `vencido · ${iptu.detalhe}` };
+    return { nome, estado: 'ok' as EstadoDoc };
+  });
+  /* documento que o backend venha a criar e a tela ainda não conhece */
+  for (const nome of p.docsFaltando) if (!DOCS.includes(nome)) lista.push({ nome, estado: 'pendente' });
+  return lista;
 }
 
-const FAIXA: Record<'crit' | 'warn', string> = {
-  crit: 'before:bg-crit',
-  warn: 'before:bg-warn',
+const TOM_IPTU = {
+  danger: 'text-oo-danger',
+  warning: 'text-oo-warning',
+  neutral: 'text-oo-ink-2',
+  muted: 'text-oo-muted',
 };
-
-const CAMPO =
-  'w-full rounded-field border border-line bg-surface px-3 py-2 text-[14px] text-ink ' +
-  'placeholder:text-ink-faint focus:border-action focus:outline-none focus:ring-2 focus:ring-action';
 
 /* colunas do desktop — cabeçalho e linhas usam o MESMO molde */
 const GRADE =
-  'lg:grid lg:grid-cols-[minmax(0,1fr)_128px_60px_64px_72px_104px_80px_80px_60px_16px] lg:items-center lg:gap-x-3';
+  'lg:grid lg:items-center lg:gap-x-5 lg:grid-cols-[minmax(0,1fr)_148px_196px_172px_64px_20px] ' +
+  'xl:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_156px_196px_188px_72px_20px]';
+
+const BTN_PRIMARIO =
+  'inline-flex h-10 items-center gap-2 rounded-md bg-oo-primary px-4 text-[14px] font-semibold text-white ' +
+  'transition-colors duration-150 hover:bg-oo-primary-hover active:translate-y-px ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary focus-visible:ring-offset-2';
+const BTN_SECUNDARIO =
+  'inline-flex h-10 items-center gap-2 rounded-md border border-oo-line-strong bg-oo-surface px-3.5 text-[14px] font-medium text-oo-ink ' +
+  'transition-colors duration-150 hover:bg-oo-subtle active:translate-y-px ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary';
+const CAMPO =
+  'h-10 w-full rounded-md border border-oo-line-strong bg-oo-surface px-3 text-[14px] font-medium text-oo-ink ' +
+  'placeholder:font-normal placeholder:text-oo-muted transition-shadow duration-150 ' +
+  'focus:border-oo-primary focus:outline-none focus:ring-[3px] focus:ring-oo-primary/15';
 
 export default function ImobiliarioPage() {
   const router = useRouter();
@@ -134,8 +170,10 @@ export default function ImobiliarioPage() {
   const [status, setStatus] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [searchDebounce, setSearchDebounce] = useState('');
+  const [soPendencias, setSoPendencias] = useState(false);
   const [filtrosAbertos, setFiltrosAbertos] = useState(false);
   const pedido = useRef(0);
+  const popover = useRef<HTMLDivElement>(null);
 
   // Auth check
   useEffect(() => {
@@ -160,6 +198,21 @@ export default function ImobiliarioPage() {
     const t = setTimeout(() => setSearchDebounce(search), 400);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Popover de filtros fecha no clique fora e no Esc
+  useEffect(() => {
+    if (!filtrosAbertos) return;
+    const fora = (e: MouseEvent) => {
+      if (popover.current && !popover.current.contains(e.target as Node)) setFiltrosAbertos(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setFiltrosAbertos(false);
+    document.addEventListener('mousedown', fora);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', fora);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [filtrosAbertos]);
 
   const fetchData = useCallback(async () => {
     const meu = ++pedido.current;
@@ -198,64 +251,88 @@ export default function ImobiliarioPage() {
     setBairro('');
     setStatus('');
     setShowArchived(false);
+    setSoPendencias(false);
   };
 
-  const filtrosLigados = !!(search || cidade || bairro || status || showArchived);
-  const extrasLigados = [cidade, bairro, showArchived].filter(Boolean).length;
+  const linhas = useMemo(
+    () =>
+      (properties || []).map((p) => {
+        const iptu = lerIptu(p);
+        return { p, iptu, risco: riscoDe(p, iptu), docs: docsDe(p, iptu) };
+      }),
+    [properties],
+  );
+  const comPendencia = linhas.filter((l) => l.risco).length;
+  const criticas = linhas.filter((l) => l.risco === 'critico').length;
+  const visiveis = soPendencias ? linhas.filter((l) => l.risco) : linhas;
+
+  const extras = [cidade, bairro, showArchived].filter(Boolean).length;
+  const filtrosLigados = !!(search || cidade || bairro || status || showArchived || soPendencias);
   const primeiraCarga = loading && properties === null;
 
   return (
-    <div className="min-h-screen bg-ground text-ink">
-      {/* Cabeçalho */}
-      <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex max-w-[1280px] items-center gap-3 px-4 py-3 sm:px-6 sm:py-4">
-          <Link
-            href="/"
-            className="-ml-1 rounded-field p-2 text-ink-soft transition-colors hover:bg-line-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
-            title="Voltar pro hub principal"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
-          <div className="min-w-0 flex-1">
-            <h1 className="flex items-center gap-2 text-[19px] font-semibold tracking-[-.02em] sm:text-[21px]">
-              <Building2 className="hidden h-5 w-5 text-ink-soft sm:block" />
-              Imobiliário
-            </h1>
-            <p className="truncate text-[12px] text-ink-soft sm:text-[13px]">Gestão de imóveis · documentos · taxas</p>
-          </div>
-          <Link
-            href="/imobiliario/novo"
-            className="inline-flex min-h-[44px] shrink-0 items-center gap-2 rounded-field bg-action px-4 text-[14px] font-semibold text-action-ink transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action focus-visible:ring-offset-2"
-          >
-            <Plus className="h-4 w-4" />
-            <span className="sm:hidden">Novo</span>
-            <span className="hidden sm:inline">Novo imóvel</span>
-          </Link>
+    <EnterpriseShell trilha={[{ label: 'Início', href: '/' }, { label: 'Imobiliário' }]}>
+      <main className="mx-auto w-full max-w-[1760px] px-4 pb-12 pt-6 sm:px-6 sm:pt-8 2xl:px-10">
+        <PageHeader
+          icone={<Building2 className="h-5 w-5" />}
+          titulo="Imobiliário"
+          subtitulo="Gestão de imóveis · documentos · taxas"
+          acoes={
+            <Link href="/imobiliario/novo" className={BTN_PRIMARIO}>
+              <Plus className="h-4 w-4" strokeWidth={2.5} />
+              Novo imóvel
+            </Link>
+          }
+        />
+
+        {/* Camada de indicadores */}
+        <div className="mt-6">
+          <MetricStrip
+            carregando={!dashboard}
+            metricas={
+              dashboard
+                ? [
+                    {
+                      rotulo: 'Imóveis',
+                      valor: dashboard.total,
+                      apoio: `${dashboard.ativos} ${dashboard.ativos === 1 ? "ativo" : "ativos"} · ${dashboard.em_construcao} em construção`,
+                      title: 'imóveis no portfólio (sem arquivados)',
+                    },
+                    {
+                      rotulo: 'Documentos pendentes',
+                      valor: dashboard.docsFaltando,
+                      tom: dashboard.docsFaltando > 0 ? 'warning' : undefined,
+                      apoio: `de ${dashboard.total * DOCS.length} esperados`,
+                      title: 'Água, Energia, IPTU, Matrícula e Escritura não cadastrados',
+                    },
+                    {
+                      rotulo: 'IPTU vencendo',
+                      valor: dashboard.iptuVencendo,
+                      tom: dashboard.iptuVencendo > 0 ? 'danger' : undefined,
+                      apoio: 'vence em até 30 dias ou já venceu',
+                    },
+                    {
+                      rotulo: 'IPTU pendente',
+                      valor: dashboard.iptuPendente,
+                      tom: dashboard.iptuPendente > 0 ? 'warning' : undefined,
+                      apoio: 'sem cadastro ou em atraso',
+                    },
+                    {
+                      rotulo: 'Anexos',
+                      valor: dashboard.totalAnexos,
+                      apoio: 'arquivos no portfólio',
+                    },
+                  ]
+                : ['Imóveis', 'Documentos pendentes', 'IPTU vencendo', 'IPTU pendente', 'Anexos'].map((rotulo) => ({ rotulo, valor: 0 }))
+            }
+          />
         </div>
-      </header>
 
-      <main className="mx-auto max-w-[1280px] px-4 py-4 sm:px-6 sm:py-6">
-        {/* Pendências do portfólio */}
-        {dashboard && (
-          <div
-            className={`mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-[14px] ${
-              dashboard.docsFaltando + dashboard.iptuVencendo > 0 ? 'text-warn' : 'text-ink-soft'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1.5 font-semibold">
-              <AlertTriangle className="h-4 w-4" />
-              <span className="tabular-nums">{dashboard.docsFaltando}</span> documentos pendentes
-            </span>
-            <span className="font-semibold" title="IPTU com vencimento nos próximos 30 dias ou já vencido">
-              <span className="tabular-nums">{dashboard.iptuVencendo}</span> IPTU vencendo
-            </span>
-          </div>
-        )}
-
-        <section className="overflow-hidden rounded-card border border-line bg-surface">
-          {/* Abas de situação = contagens do portfólio */}
-          <div className="flex gap-1 overflow-x-auto border-b border-line px-2 py-2 [scrollbar-width:none] sm:px-3" role="tablist" aria-label="Filtrar por situação">
-            {[{ value: '', aba: 'Todos', desc: 'imóveis no portfólio', conta: (d: Dashboard) => d.total }, ...STATUS_OPTIONS].map((o) => {
+        {/* Área de dados */}
+        <section className="mt-6 rounded-lg border border-oo-line bg-oo-surface">
+          {/* Abas */}
+          <div className="flex overflow-x-auto border-b border-oo-line px-2 [scrollbar-width:none] sm:px-4" role="tablist" aria-label="Filtrar por situação">
+            {ABAS.map((o) => {
               const ativo = status === o.value;
               return (
                 <button
@@ -264,259 +341,315 @@ export default function ImobiliarioPage() {
                   role="tab"
                   aria-selected={ativo}
                   onClick={() => setStatus(o.value)}
-                  title={dashboard ? `${o.conta(dashboard)} ${o.desc}` : o.desc}
-                  className={`inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-field px-3 text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action ${
-                    ativo ? 'bg-action font-semibold text-action-ink' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
+                  className={`relative flex h-12 shrink-0 items-center gap-2 px-3 text-[13px] font-semibold uppercase tracking-[0.04em] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-oo-primary ${
+                    ativo ? 'text-oo-ink' : 'text-oo-muted hover:text-oo-ink'
                   }`}
                 >
                   {o.aba}
-                  <span className={`tabular-nums text-[13px] ${ativo ? 'text-action-ink/80' : 'font-semibold text-ink'}`}>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[12px] tabular-nums tracking-normal ${
+                      ativo ? 'bg-oo-ink text-white' : 'bg-oo-hover text-oo-ink-2'
+                    }`}
+                  >
                     {dashboard ? o.conta(dashboard) : '–'}
                   </span>
+                  {ativo && <span className="absolute inset-x-3 bottom-0 h-[2px] bg-oo-ink" />}
                 </button>
               );
             })}
           </div>
 
-          {/* Busca + filtros */}
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-3 sm:px-4">
-            <div className="relative min-w-0 flex-1 sm:min-w-[260px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-faint" />
+          {/* Barra de busca e filtros */}
+          <div className="flex flex-wrap items-center gap-2 border-b border-oo-line px-3 py-3 sm:px-4">
+            <div className="relative min-w-0 flex-1 basis-full sm:basis-auto lg:max-w-[520px]">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-oo-muted" />
               <input
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar por nome, endereço, proprietário..."
-                aria-label="Buscar imóvel"
+                placeholder="Buscar imóvel, endereço, proprietário"
+                aria-label="Buscar por nome, endereço, proprietário"
                 className={`${CAMPO} pl-9`}
               />
             </div>
-            <button
-              type="button"
-              onClick={() => setFiltrosAbertos((v) => !v)}
-              aria-expanded={filtrosAbertos}
-              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-field border border-line px-3 text-[14px] text-ink sm:hidden"
-            >
-              <SlidersHorizontal className="h-4 w-4" />
-              Filtros
-              {extrasLigados > 0 && (
-                <span className="rounded-full bg-action px-1.5 text-[12px] font-semibold text-action-ink tabular-nums">{extrasLigados}</span>
-              )}
-            </button>
-            <div className={`${filtrosAbertos ? 'grid' : 'hidden'} w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center`}>
-              <input
-                type="text"
-                value={cidade}
-                onChange={(e) => setCidade(e.target.value)}
-                placeholder="Cidade"
-                aria-label="Cidade"
-                className={`${CAMPO} sm:w-40`}
-              />
-              <input
-                type="text"
-                value={bairro}
-                onChange={(e) => setBairro(e.target.value)}
-                placeholder="Bairro"
-                aria-label="Bairro"
-                className={`${CAMPO} sm:w-40`}
-              />
-              <label className="col-span-2 inline-flex min-h-[40px] cursor-pointer items-center gap-2 rounded-field px-2 text-[14px] text-ink-soft hover:text-ink">
-                <input
-                  type="checkbox"
-                  checked={showArchived}
-                  onChange={(e) => setShowArchived(e.target.checked)}
-                  className="h-4 w-4 accent-[#2B2D31]"
-                />
-                Mostrar arquivados
-              </label>
+
+            <div ref={popover} className="relative">
               <button
                 type="button"
-                onClick={limparFiltros}
-                disabled={!filtrosLigados}
-                className="col-span-2 inline-flex min-h-[40px] items-center justify-center gap-1 rounded-field px-3 text-[14px] text-ink-soft transition-colors hover:bg-line-soft hover:text-ink disabled:pointer-events-none disabled:opacity-40"
+                onClick={() => setFiltrosAbertos((v) => !v)}
+                aria-expanded={filtrosAbertos}
+                className={`${BTN_SECUNDARIO} ${extras > 0 ? 'border-oo-ink' : ''}`}
               >
-                <X className="h-4 w-4" />
-                Limpar
+                <ListFilter className="h-4 w-4" />
+                Filtros
+                {extras > 0 && (
+                  <span className="grid h-5 min-w-[20px] place-items-center rounded bg-oo-ink px-1 text-[12px] font-semibold text-white tabular-nums">{extras}</span>
+                )}
+                <ChevronDown className={`h-4 w-4 text-oo-muted transition-transform duration-150 ${filtrosAbertos ? 'rotate-180' : ''}`} />
               </button>
+              {filtrosAbertos && (
+                <div className="absolute left-0 top-full z-30 mt-2 w-[min(320px,calc(100vw-32px))] rounded-lg border border-oo-line bg-oo-surface p-4 shadow-oo-pop">
+                  <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-oo-muted" htmlFor="f-cidade">Cidade</label>
+                  <input id="f-cidade" type="text" value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Itanhaém" className={`${CAMPO} mt-1.5`} />
+                  <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.06em] text-oo-muted" htmlFor="f-bairro">Bairro</label>
+                  <input id="f-bairro" type="text" value={bairro} onChange={(e) => setBairro(e.target.value)} placeholder="Centro" className={`${CAMPO} mt-1.5`} />
+                  <label className="mt-4 flex cursor-pointer items-center gap-2.5 text-[14px] font-medium text-oo-ink">
+                    <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} className="h-4 w-4 accent-[#2563EB]" />
+                    Mostrar arquivados
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSoPendencias((v) => !v)}
+              aria-pressed={soPendencias}
+              className={`${BTN_SECUNDARIO} ${soPendencias ? 'border-oo-ink bg-oo-ink text-white hover:bg-oo-nav-2' : ''}`}
+            >
+              <span className={`h-2 w-2 rounded-full ${soPendencias ? 'bg-white' : 'bg-oo-warning'}`} />
+              Com pendência
+              <span className={`text-[12px] tabular-nums ${soPendencias ? 'text-white/80' : 'text-oo-muted'}`}>{properties ? comPendencia : '–'}</span>
+            </button>
+
+            {/* Filtros ligados, visíveis sem abrir o popover */}
+            {cidade && <Chip onRemover={() => setCidade('')}>Cidade: {cidade}</Chip>}
+            {bairro && <Chip onRemover={() => setBairro('')}>Bairro: {bairro}</Chip>}
+            {showArchived && <Chip onRemover={() => setShowArchived(false)}>Com arquivados</Chip>}
+
+            <div className="ml-auto flex items-center gap-3">
+              {filtrosLigados && (
+                <button
+                  type="button"
+                  onClick={limparFiltros}
+                  className="inline-flex h-10 items-center rounded-md px-2.5 text-[13px] font-semibold text-oo-primary transition-colors duration-150 hover:bg-oo-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary"
+                >
+                  Limpar
+                </button>
+              )}
+              <span className="hidden text-[13px] font-medium text-oo-ink-2 sm:inline">
+                <span className="font-semibold text-oo-ink tabular-nums">{properties ? visiveis.length : '–'}</span>{' '}
+                {visiveis.length === 1 ? 'imóvel' : 'imóveis'}
+                {criticas > 0 && (
+                  <>
+                    {' · '}
+                    <span className="font-semibold text-oo-danger tabular-nums">{criticas}</span> {criticas === 1 ? 'crítico' : 'críticos'}
+                  </>
+                )}
+              </span>
             </div>
           </div>
 
-          {/* Lista */}
-          {primeiraCarga ? (
-            <div className="p-16 text-center">
-              <Loader2 className="mx-auto h-7 w-7 animate-spin text-ink-faint" />
-              <div className="mt-3 text-[14px] text-ink-soft">Carregando imóveis...</div>
-            </div>
-          ) : error ? (
-            <div className="p-12 text-center">
-              <AlertCircle className="mx-auto h-9 w-9 text-crit" />
-              <div className="mt-3 text-[15px] font-semibold text-ink">{error}</div>
-              <button
-                onClick={fetchData}
-                className="mt-4 inline-flex min-h-[44px] items-center rounded-field bg-action px-4 text-[14px] font-semibold text-action-ink hover:brightness-125"
-              >
-                Tentar novamente
-              </button>
-            </div>
-          ) : !properties || properties.length === 0 ? (
-            <div className="p-16 text-center">
-              <Building2 className="mx-auto h-10 w-10 text-ink-faint" />
-              <div className="mt-3 text-[15px] font-semibold text-ink">Nenhum imóvel encontrado</div>
-              <div className="mt-1 text-[13px] text-ink-soft">
-                {search || cidade || bairro || status
-                  ? 'Tente ajustar os filtros'
-                  : 'Comece cadastrando seu primeiro imóvel'}
-              </div>
-              <div className="mt-4 flex flex-wrap justify-center gap-2">
-                {filtrosLigados && (
-                  <button
-                    onClick={limparFiltros}
-                    className="inline-flex min-h-[44px] items-center rounded-field border border-line px-4 text-[14px] font-semibold text-ink hover:bg-line-soft"
-                  >
-                    Limpar filtros
-                  </button>
-                )}
-                <Link
-                  href="/imobiliario/novo"
-                  className="inline-flex min-h-[44px] items-center gap-2 rounded-field bg-action px-4 text-[14px] font-semibold text-action-ink hover:brightness-125"
-                >
-                  <Plus className="h-4 w-4" />
-                  {filtrosLigados ? 'Novo imóvel' : 'Cadastrar primeiro imóvel'}
-                </Link>
-              </div>
-            </div>
+          {/* Progresso de atualização (não apaga a lista) */}
+          <div className="relative h-0.5 overflow-hidden" aria-hidden="true">
+            {loading && !primeiraCarga && <div className="absolute inset-y-0 w-1/3 animate-[oo-barra_1s_ease-in-out_infinite] bg-oo-primary" />}
+          </div>
+
+          {/* Tabela */}
+          {error ? (
+            <EmptyState
+              icone={<AlertCircle className="h-5 w-5 text-oo-danger" />}
+              titulo="Não foi possível carregar os imóveis"
+              texto={error}
+              acoes={
+                <button onClick={fetchData} className={BTN_PRIMARIO}>
+                  <RotateCw className="h-4 w-4" />
+                  Tentar novamente
+                </button>
+              }
+            />
           ) : (
-            <div className={loading ? 'opacity-60 transition-opacity' : 'transition-opacity'} aria-busy={loading}>
-              {/* Cabeçalho das colunas (desktop) */}
-              <div className={`hidden border-b border-line bg-surface-2 py-2 pl-6 pr-4 text-[12px] font-medium text-ink-soft ${GRADE}`}>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-ink tabular-nums">{properties.length}</span>
-                  {properties.length === 1 ? 'imóvel' : 'imóveis'}
-                  {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            <div role="table" aria-label="Imóveis" aria-busy={loading}>
+              <div
+                role="row"
+                className={`hidden border-b border-oo-line bg-oo-subtle py-2.5 pl-5 pr-4 text-[11px] font-semibold uppercase tracking-[0.06em] text-oo-ink-2 ${GRADE}`}
+              >
+                <span role="columnheader">Imóvel</span>
+                <span role="columnheader" className="hidden xl:block">Proprietário</span>
+                <span role="columnheader">Situação</span>
+                <span role="columnheader" title="Água · Energia · IPTU · Matrícula · Escritura">Documentos</span>
+                <span role="columnheader">IPTU</span>
+                <span role="columnheader" className="text-right">Anexos</span>
+                <span />
+              </div>
+
+              {primeiraCarga ? (
+                <Esqueleto />
+              ) : visiveis.length === 0 ? (
+                <EmptyState
+                  icone={<Building2 className="h-5 w-5" />}
+                  titulo="Nenhum imóvel encontrado"
+                  texto={
+                    search || cidade || bairro || status || soPendencias
+                      ? 'Tente ajustar os filtros'
+                      : 'Comece cadastrando seu primeiro imóvel'
+                  }
+                  acoes={
+                    <>
+                      {filtrosLigados && (
+                        <button onClick={limparFiltros} className={BTN_SECUNDARIO}>
+                          Limpar filtros
+                        </button>
+                      )}
+                      <Link href="/imobiliario/novo" className={BTN_PRIMARIO}>
+                        <Plus className="h-4 w-4" strokeWidth={2.5} />
+                        {filtrosLigados ? 'Novo imóvel' : 'Cadastrar primeiro imóvel'}
+                      </Link>
+                    </>
+                  }
+                />
+              ) : (
+                <div className="divide-y divide-oo-line">
+                  {visiveis.map(({ p, iptu, risco, docs }) => (
+                    <Linha key={p.id} p={p} iptu={iptu} risco={risco} docs={docs} />
+                  ))}
                 </div>
-                <div>Situação</div>
-                <div className="text-right" title="Documentos que faltam cadastrar">Faltam</div>
-                {DOCS.map((doc) => (
-                  <div key={doc} className="text-center">{doc}</div>
-                ))}
-                <div className="text-right">Anexos</div>
-                <div />
-              </div>
-
-              {/* Contador (mobile) */}
-              <div className="flex items-center gap-2 border-b border-line-soft px-4 py-2 text-[13px] text-ink-soft lg:hidden">
-                <span className="font-semibold text-ink tabular-nums">{properties.length}</span>
-                {properties.length === 1 ? 'imóvel' : 'imóveis'}
-                {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              </div>
-
-              <ul className="divide-y divide-line-soft">
-                {properties.map((p) => (
-                  <li key={p.id}>
-                    <LinhaImovel p={p} />
-                  </li>
-                ))}
-              </ul>
+              )}
             </div>
           )}
         </section>
+
+        {/* Legenda */}
+        {!primeiraCarga && !error && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 px-1 text-[12px] font-medium text-oo-ink-2">
+            <span className="inline-flex items-center gap-2"><span className="h-3 w-[3px] rounded bg-oo-danger" />Crítico: IPTU vencido</span>
+            <span className="inline-flex items-center gap-2"><span className="h-3 w-[3px] rounded bg-oo-warning" />Atenção: documento pendente ou IPTU a vencer em 30 dias</span>
+          </div>
+        )}
       </main>
-    </div>
+      <style>{`@keyframes oo-barra{0%{left:-33%}100%{left:100%}}`}</style>
+    </EnterpriseShell>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Linha do imóvel — uma Link só (ctrl+clique abre em aba nova)
+// Linha — uma Link só (ctrl+clique abre em aba nova)
 // ─────────────────────────────────────────────────────────────────────────
-function LinhaImovel({ p }: { p: Property }) {
-  const isArchived = !!p.archivedAt;
-  const estado = estadoLinha(p);
-  const iptu = avisoIptu(p);
-  const endereco = enderecoDe(p);
-  const faltando = new Set(p.docsFaltando);
-  const faltaFora = p.docsFaltando.filter((doc) => !DOCS.includes(doc));
+function Linha({
+  p,
+  iptu,
+  risco,
+  docs,
+}: {
+  p: Property;
+  iptu: LeituraIptu;
+  risco: Risco;
+  docs: { nome: string; estado: EstadoDoc; nota?: string }[];
+}) {
+  const st = statusDe(p.status);
+  const arquivado = !!p.archivedAt;
+  const rua = [p.endereco, p.numero].filter(Boolean).join(', ');
+  const local = [p.bairro, [p.cidade, p.estado].filter(Boolean).join('/')].filter(Boolean).join(' · ');
+  const okDocs = docs.filter((d) => d.estado === 'ok').length;
 
   return (
     <Link
+      role="row"
       href={`/imobiliario/${p.id}`}
-      className={`group relative block py-3 pl-6 pr-4 transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action ${
-        isArchived ? 'bg-surface-2' : ''
-      } ${estado ? `before:absolute before:bottom-3 before:left-2 before:top-3 before:w-[3px] before:rounded-full before:content-[''] ${FAIXA[estado]}` : ''} ${GRADE}`}
+      className={`group relative block py-2.5 pl-5 pr-4 transition-colors duration-150 hover:bg-oo-subtle focus-visible:bg-oo-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-oo-primary lg:min-h-[64px] ${
+        arquivado ? 'bg-oo-subtle/60' : ''
+      } ${GRADE}`}
     >
+      <RiskBar risco={risco} />
+
       {/* Imóvel */}
-      <div className="min-w-0 pr-6 lg:pr-0">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className={`text-[15px] font-semibold leading-snug lg:truncate ${isArchived ? 'text-ink-soft' : 'text-ink'}`}>
-            {p.name}
-          </span>
-          {isArchived && (
-            <span className="inline-flex items-center gap-1 rounded-field bg-line-soft px-1.5 py-0.5 text-[12px] font-medium text-ink-soft">
+      <div role="cell" className="min-w-0 pr-8 lg:pr-0">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-[15px] font-semibold tracking-[-0.005em] text-oo-ink">{p.name}</span>
+          {arquivado && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded border border-oo-line-strong px-1.5 py-px text-[11px] font-semibold uppercase tracking-[0.04em] text-oo-ink-2">
               <Archive className="h-3 w-3" />
               Arquivado
             </span>
           )}
         </div>
-        <div className="mt-0.5 text-[13px] leading-snug text-ink-soft lg:truncate">{endereco || '—'}</div>
-
-        {/* Mobile: situação + pendências em texto */}
-        <div className="mt-2 flex flex-col gap-1 text-[13px] lg:hidden">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-soft">
-            <span className="font-medium text-ink">{statusLabel(p.status)}</span>
-            {p.anexosCount > 0 && (
-              <span className="inline-flex items-center gap-1" title="Anexos">
-                <FileText className="h-3.5 w-3.5" />
-                {p.anexosCount} {p.anexosCount === 1 ? 'anexo' : 'anexos'}
-              </span>
-            )}
-          </div>
-          {p.docsFaltandoCount > 0 && (
-            <span className="font-semibold text-warn">
-              {p.docsFaltandoCount === 1 ? 'Falta' : `Faltam ${p.docsFaltandoCount}`}: {p.docsFaltando.join(', ')}
-            </span>
-          )}
-          {iptu && (
-            <span className={`font-semibold ${iptu.tom === 'crit' ? 'text-crit' : 'text-warn'}`}>IPTU {iptu.texto}</span>
-          )}
-          {p.docsFaltandoCount === 0 && !iptu && <span className="text-ink-faint">Documentos em dia</span>}
-        </div>
-        <ChevronRight className="absolute right-3 top-4 h-5 w-5 text-ink-faint lg:hidden" />
-      </div>
-
-      {/* Desktop: colunas */}
-      <div className="hidden text-[14px] text-ink-soft lg:block">{statusLabel(p.status)}</div>
-      <div
-        className={`hidden text-right text-[14px] tabular-nums lg:block ${p.docsFaltandoCount > 0 ? 'font-semibold text-warn' : 'text-ink-faint'}`}
-        title={p.docsFaltandoCount > 0 ? `Faltando: ${p.docsFaltando.join(', ')}` : undefined}
-      >
-        {p.docsFaltandoCount > 0 ? p.docsFaltandoCount : '—'}
-        {faltaFora.length > 0 && <span className="sr-only"> ({faltaFora.join(', ')})</span>}
-      </div>
-      {DOCS.map((doc) => (
-        <div key={doc} className="hidden justify-center lg:flex">
-          {faltando.has(doc) ? (
-            <span className="rounded-field bg-warn-soft px-1.5 py-0.5 text-[12px] font-semibold text-warn">falta</span>
-          ) : doc === 'IPTU' && iptu ? (
-            <span
-              className={`whitespace-nowrap rounded-field px-1.5 py-0.5 text-[12px] font-semibold ${
-                iptu.tom === 'crit' ? 'bg-crit-soft text-crit' : 'bg-warn-soft text-warn'
-              }`}
-            >
-              {iptu.texto}
-            </span>
+        <div className="mt-0.5 truncate text-[12px] font-medium text-oo-muted">
+          {rua || local ? (
+            <>
+              {rua}
+              {rua && local ? <span className="text-oo-line-strong"> · </span> : null}
+              {local}
+            </>
           ) : (
-            <Check className="h-4 w-4 text-ink-faint" aria-label={`${doc} ok`} />
+            '—'
           )}
         </div>
-      ))}
-      <div className="hidden items-center justify-end gap-1 text-[13px] text-ink-soft tabular-nums lg:flex" title="Anexos">
-        {p.anexosCount > 0 && (
+
+        {/* Mobile: situação, documentos e IPTU numa faixa compacta */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 lg:hidden">
+          <StatusIndicator tom={st.tom}>{st.label}</StatusIndicator>
+          <DocumentStatus docs={docs} />
+          <span className={`text-[12px] font-semibold ${TOM_IPTU[iptu.tom]}`}>
+            IPTU {iptu.rotulo.toLowerCase()} <span className="font-medium text-oo-muted">{iptu.detalhe}</span>
+          </span>
+        </div>
+        <ChevronRight className="absolute right-3 top-4 h-5 w-5 text-oo-muted lg:hidden" />
+      </div>
+
+      {/* Desktop */}
+      <div role="cell" className="hidden min-w-0 truncate text-[13px] font-medium text-oo-ink-2 xl:block">{p.proprietario || '—'}</div>
+      <div role="cell" className="hidden lg:block">
+        <StatusIndicator tom={st.tom}>{st.label}</StatusIndicator>
+      </div>
+      <div role="cell" className="hidden items-center gap-3 lg:flex">
+        <DocumentStatus docs={docs} />
+        <span className={`text-[12px] font-semibold tabular-nums ${p.docsFaltandoCount > 0 ? 'text-oo-warning' : 'text-oo-muted'}`}>
+          {okDocs}/{docs.length}
+        </span>
+      </div>
+      <div role="cell" className="hidden min-w-0 lg:block" title={p.iptu?.situacao ? `Situação cadastrada: ${p.iptu.situacao.replace('_', ' ')}` : undefined}>
+        <div className={`text-[11px] font-bold uppercase tracking-[0.06em] ${TOM_IPTU[iptu.tom]}`}>{iptu.rotulo}</div>
+        <div className="mt-0.5 truncate text-[13px] font-medium text-oo-ink tabular-nums">{iptu.detalhe}</div>
+      </div>
+      <div role="cell" className="hidden items-center justify-end gap-1.5 text-[13px] font-semibold text-oo-ink tabular-nums lg:flex" title="Anexos">
+        {p.anexosCount > 0 ? (
           <>
-            <FileText className="h-3.5 w-3.5" />
+            <FileText className="h-3.5 w-3.5 text-oo-muted" />
             {p.anexosCount}
           </>
+        ) : (
+          <span className="font-medium text-oo-line-strong">—</span>
         )}
       </div>
-      <ChevronRight className="hidden h-4 w-4 text-ink-faint transition-colors group-hover:text-ink lg:block" />
+      <ChevronRight className="hidden h-4 w-4 text-oo-line-strong transition-colors duration-150 group-hover:text-oo-ink lg:block" />
     </Link>
+  );
+}
+
+function Chip({ children, onRemover }: { children: ReactNode; onRemover: () => void }) {
+  return (
+    <span className="inline-flex h-8 items-center gap-1 rounded-md border border-oo-line bg-oo-subtle pl-2.5 pr-1 text-[13px] font-medium text-oo-ink">
+      {children}
+      <button
+        type="button"
+        onClick={onRemover}
+        aria-label="Remover filtro"
+        className="grid h-6 w-6 place-items-center rounded text-oo-muted transition-colors hover:bg-oo-hover hover:text-oo-ink"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </span>
+  );
+}
+
+function Esqueleto() {
+  return (
+    <div className="divide-y divide-oo-line" aria-label="Carregando imóveis...">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className={`py-3 pl-5 pr-4 lg:min-h-[64px] ${GRADE}`}>
+          <div>
+            <div className="h-3.5 w-48 animate-pulse rounded bg-oo-hover" />
+            <div className="mt-2 h-3 w-72 max-w-full animate-pulse rounded bg-oo-hover" />
+          </div>
+          <div className="hidden h-3 w-24 animate-pulse rounded bg-oo-hover xl:block" />
+          <div className="hidden h-3 w-20 animate-pulse rounded bg-oo-hover lg:block" />
+          <div className="hidden h-6 w-36 animate-pulse rounded bg-oo-hover lg:block" />
+          <div className="hidden h-7 w-28 animate-pulse rounded bg-oo-hover lg:block" />
+          <div className="hidden h-3 w-6 animate-pulse justify-self-end rounded bg-oo-hover lg:block" />
+          <span />
+        </div>
+      ))}
+      <span className="sr-only">Carregando imóveis...</span>
+    </div>
   );
 }
