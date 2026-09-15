@@ -5,6 +5,7 @@ import {
   ConfigCampanha,
   DecisaoCampanha,
   DecisaoExcecao,
+  EstruturaCampanha,
   ExcecaoCampanha,
   LinhaCampanha,
   RegraCampanha,
@@ -13,18 +14,107 @@ import {
   chaveDaFamilia,
   compilarTermo,
   criarRegra,
+  formaDoTermo,
   normalizarConfig,
   precoComDesconto,
   sugestoesPara,
   termoCasa,
   textoDaLinha,
+  textoNormalizado,
 } from '../common/promo-por-termo';
+import { familiaDaDescricao } from '../common/produto-discriminador';
 
 /** Linha do catálogo com o que a campanha lê e o que a tela mostra. */
 export interface LinhaCatalogoCampanha extends LinhaCampanha {
   codigo: string;
   ref: string | null;
   preco: number;
+}
+
+/** Grupo/subgrupo do ERP de uma linha — pra régua (por código) e pros filtros da tela. */
+interface EstruturaDaLinha {
+  grupoId: number | null;
+  subgrupoId: number | null;
+  /** Nome pela tabela de grupos (o `nomeGrupo` do produto vem vazio em 12 mil códigos). */
+  grupoNome: string | null;
+  subgrupoNome: string | null;
+}
+
+/**
+ * De onde a peça entrou pela estrutura — o texto que a tela e o PDV mostram.
+ * Subgrupo escolhido fala mais que o grupo (é a escolha mais fina).
+ */
+function rotuloDaEstrutura(l: EstruturaDaLinha, grupos: Set<number>, subgrupos: Set<number>): string | null {
+  if (l.subgrupoId != null && subgrupos.has(l.subgrupoId)) {
+    const nome = l.subgrupoNome || `#${l.subgrupoId}`;
+    return `subgrupo ${nome}${l.grupoNome ? ` (${l.grupoNome})` : ''}`;
+  }
+  if (l.grupoId != null && grupos.has(l.grupoId)) return `grupo ${l.grupoNome || `#${l.grupoId}`}`;
+  return null;
+}
+
+const numeroOuNull = (v: unknown): number | null => {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isInteger(n) ? n : null;
+};
+
+export interface FiltroProdutosCampanha {
+  /** REF, código ou palavras da descrição (todas precisam aparecer). */
+  busca?: string | null;
+  grupo?: number | null;
+  subgrupo?: number | null;
+  marca?: string | null;
+  participacao?: 'todos' | 'dentro' | 'fora';
+  pagina?: number;
+  porPagina?: number;
+}
+
+export interface ProdutoNaBusca {
+  chave: string;
+  refs: string[];
+  descricao: string;
+  grupo: string | null;
+  subgrupo: string | null;
+  marca: string | null;
+  precoMin: number;
+  precoMax: number;
+  /** Menor preço com desconto entre as linhas que entram (0 = nenhuma entra). */
+  precoPromoMin: number;
+  estoque: number;
+  codigos: number;
+  codigosNaCampanha: number;
+  /** entra/parcial pela regra · fora sem regra · excluida por palavra · tirada/incluida na mão. */
+  situacao: 'entra' | 'parcial' | 'fora' | 'excluida' | 'tirada' | 'incluida';
+  /** Termos e grupos/subgrupos que puseram a peça. */
+  origens: string[];
+  /** Palavras que tiraram a peça da regra. */
+  exclusoes: string[];
+  /**
+   * Os TIPOS de peça sob a mesma REF-BASE ("CALCA", "BOLERO"…), mais estoque
+   * primeiro. Mais de um = REF reciclada: incluir/tirar vale pra família
+   * inteira, e a matriz precisa ver que a calça vai junto com o casaco.
+   */
+  tipos: string[];
+  excecao: ExcecaoCampanha | null;
+}
+
+export interface BuscaProdutosCampanha {
+  campanha: ConfigCampanha;
+  chaveCampanha: string;
+  total: number;
+  totais: { dentro: number; fora: number };
+  pagina: number;
+  porPagina: number;
+  produtos: ProdutoNaBusca[];
+}
+
+export interface EstruturaDoCatalogo {
+  grupos: Array<{ codigo: number; nome: string; codigos: number; pecas: number }>;
+  subgrupos: Array<{ codigo: number; nome: string; grupo: number | null; grupoNome: string | null; codigos: number; pecas: number }>;
+  marcas: Array<{ nome: string; pecas: number }>;
+  pecasTotal: number;
+  pecasSemGrupo: number;
 }
 
 export interface FamiliaNaCampanha {
@@ -43,6 +133,8 @@ export interface FamiliaNaCampanha {
   codigos: number;
   codigosNaCampanha: number;
   termos: string[];
+  /** Termos + grupos/subgrupos que puseram a peça (o que a tela mostra na coluna). */
+  origens: string[];
   /** entra = todas as linhas · parcial = REF reciclada, só parte casou. */
   situacao: 'entra' | 'parcial' | 'tirada' | 'incluida';
   excecao: ExcecaoCampanha | null;
@@ -59,7 +151,8 @@ export interface PreviewCampanha {
   calculadoEm: string;
 }
 
-type LinhaIndexada = { l: LinhaCatalogoCampanha & { estoque: number }; t: TextoIndexado; chave: string };
+type LinhaDoCatalogo = LinhaCatalogoCampanha & EstruturaDaLinha & { estoque: number; marca: string | null };
+type LinhaIndexada = { l: LinhaDoCatalogo; t: TextoIndexado; chave: string };
 
 /** Devolve a vez pro event loop — varredura do catálogo não pode travar o bipe das lojas. */
 const folga = () => new Promise<void>((res) => setImmediate(res));
@@ -91,11 +184,23 @@ export class PromoCampanhaService {
   private static readonly TTL = 60_000;
 
   /**
+   * Os códigos dos grupos/subgrupos escolhidos, guardados 5 min: a lista muda
+   * só quando nasce produto no ERP, e sem isto seria uma varredura do espelho a
+   * cada minuto de régua. A chave é a própria escolha — mudar a config erra o
+   * cache sozinha.
+   */
+  private cacheEstrutura: { chave: string; at: number; estrutura: EstruturaCampanha } | null = null;
+  private static readonly TTL_ESTRUTURA = 5 * 60_000;
+
+  /**
    * Catálogo COM ESTOQUE NA REDE, indexado uma vez e guardado 2 min: a matriz
    * digita um termo e confere o efeito na hora, várias vezes seguidas — sem
    * este cache seria uma varredura do espelho inteiro por tecla.
    */
   private baseCatalogo: { at: number; linhas: LinhaIndexada[] } | null = null;
+
+  /** Decisões da última busca da tela: trocar só o filtro não decide o catálogo de novo. */
+  private memoDecisoes: { chave: string; decisoes: DecisaoCampanha[] } | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -105,6 +210,8 @@ export class PromoCampanhaService {
   /** Derruba a régua em memória — toda gravação chama. */
   invalidar() {
     this.cache = null;
+    this.cacheEstrutura = null;
+    this.memoDecisoes = null;
     this.promoConfig.clearCache();
   }
 
@@ -116,7 +223,8 @@ export class PromoCampanhaService {
         this.promoConfig.clearCache();
         const { campanha } = await this.promoConfig.getConfig();
         const excecoes = await this.excecoesDe(chaveDaCampanha(campanha.nome));
-        const regra = criarRegra(campanha, excecoes);
+        const estrutura = await this.estruturaDe(campanha.grupos, campanha.subgrupos);
+        const regra = criarRegra(campanha, excecoes, estrutura);
         this.cache = { at: Date.now(), regra };
         return regra;
       } catch (e: any) {
@@ -132,6 +240,65 @@ export class PromoCampanhaService {
       }
     })();
     return this.emVoo;
+  }
+
+  /**
+   * Os códigos que entram por grupo/subgrupo — do espelho INTEIRO, com ou sem
+   * estoque: o caixa vende peça que o espelho conta zerada (divergência de
+   * saldo), e ela tem que sair com o mesmo preço que a vitrine mostraria.
+   * Sem escolha nenhuma não vai ao banco.
+   */
+  private async estruturaDe(grupos: number[], subgrupos: number[]): Promise<EstruturaCampanha | null> {
+    if (!grupos.length && !subgrupos.length) return null;
+    const chave = `${grupos.join(',')}|${subgrupos.join(',')}`;
+    const c = this.cacheEstrutura;
+    if (c && c.chave === chave && Date.now() - c.at < PromoCampanhaService.TTL_ESTRUTURA) return c.estrutura;
+
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT p.codigo,
+              p.grupo    AS "grupoId",
+              p.subgrupo AS "subgrupoId",
+              COALESCE(NULLIF(TRIM(g.grupo), ''), NULLIF(TRIM(p."nomeGrupo"), '')) AS "grupoNome",
+              NULLIF(TRIM(s.subgrupo), '') AS "subgrupoNome"
+         FROM wincred_produtos p
+         LEFT JOIN wincred_grupos g ON g.codigo = p.grupo
+         LEFT JOIN wincred_subgrupos s ON s.codigo = p.subgrupo
+        WHERE p.grupo = ANY($1::int[]) OR p.subgrupo = ANY($2::int[])`,
+      grupos,
+      subgrupos,
+    );
+    const setG = new Set(grupos);
+    const setS = new Set(subgrupos);
+    const porCodigo = new Map<string, string>();
+    for (const r of rows) {
+      const rotulo = rotuloDaEstrutura(
+        {
+          grupoId: numeroOuNull(r.grupoId),
+          subgrupoId: numeroOuNull(r.subgrupoId),
+          grupoNome: r.grupoNome ?? null,
+          subgrupoNome: r.subgrupoNome ?? null,
+        },
+        setG,
+        setS,
+      );
+      if (rotulo) porCodigo.set(String(r.codigo).trim(), rotulo);
+    }
+    const estrutura: EstruturaCampanha = { porCodigo };
+    this.cacheEstrutura = { chave, at: Date.now(), estrutura };
+    return estrutura;
+  }
+
+  /** A mesma estrutura, montada das linhas já carregadas (prévia do rascunho). */
+  private estruturaDasLinhas(linhas: LinhaIndexada[], config: ConfigCampanha): EstruturaCampanha | null {
+    if (!config.grupos.length && !config.subgrupos.length) return null;
+    const setG = new Set(config.grupos);
+    const setS = new Set(config.subgrupos);
+    const porCodigo = new Map<string, string>();
+    for (const { l } of linhas) {
+      const rotulo = rotuloDaEstrutura(l, setG, setS);
+      if (rotulo) porCodigo.set(String(l.codigo).trim(), rotulo);
+    }
+    return { porCodigo };
   }
 
   private async excecoesDe(campanha: string): Promise<ExcecaoCampanha[]> {
@@ -337,12 +504,21 @@ export class PromoCampanhaService {
   private async catalogoComEstoque(): Promise<LinhaIndexada[]> {
     if (this.baseCatalogo && Date.now() - this.baseCatalogo.at < 120_000) return this.baseCatalogo.linhas;
     const t0 = Date.now();
+    // `grupo` (o `nomeGrupo` do PRODUTO) é o que a régua lê como texto — o
+    // mesmo campo da vitrine e da trava do carrinho. O nome pela tabela de
+    // grupos (`grupoNome`) é só pra tela e pros filtros: ler outro texto na
+    // prévia faria a matriz ver uma peça entrar que o site não daria desconto.
     const rows: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT p.codigo,
               NULLIF(UPPER(TRIM(p.ref)), '') AS ref,
               p."descricaoCompleta" AS descricao,
               p."descricaoPdv"      AS "descricaoPdv",
               p."nomeGrupo"         AS grupo,
+              p.grupo               AS "grupoId",
+              p.subgrupo            AS "subgrupoId",
+              COALESCE(NULLIF(TRIM(g.grupo), ''), NULLIF(TRIM(p."nomeGrupo"), '')) AS "grupoNome",
+              NULLIF(TRIM(s.subgrupo), '') AS "subgrupoNome",
+              NULLIF(UPPER(TRIM(p.marca)), '') AS marca,
               COALESCE(p."vendaUn", 0)::float8 AS preco,
               e.total::int AS estoque
          FROM wincred_produtos p
@@ -351,17 +527,24 @@ export class PromoCampanhaService {
              FROM wincred_estoque
             GROUP BY codigo
            HAVING SUM(GREATEST(COALESCE(estoque, 0), 0)) > 0
-         ) e ON e.codigo = p.codigo`,
+         ) e ON e.codigo = p.codigo
+         LEFT JOIN wincred_grupos g ON g.codigo = p.grupo
+         LEFT JOIN wincred_subgrupos s ON s.codigo = p.subgrupo`,
     );
     const linhas: LinhaIndexada[] = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const l = {
+      const l: LinhaDoCatalogo = {
         codigo: String(r.codigo),
         ref: r.ref ?? null,
         descricao: r.descricao ?? null,
         descricaoPdv: r.descricaoPdv ?? null,
         grupo: r.grupo ?? null,
+        grupoId: numeroOuNull(r.grupoId),
+        subgrupoId: numeroOuNull(r.subgrupoId),
+        grupoNome: r.grupoNome ?? null,
+        subgrupoNome: r.subgrupoNome ?? null,
+        marca: r.marca ?? null,
         preco: Number(r.preco) || 0,
         estoque: Number(r.estoque) || 0,
       };
@@ -373,6 +556,39 @@ export class PromoCampanhaService {
     return linhas;
   }
 
+
+  /**
+   * A campanha que a tela está olhando — a gravada com o RASCUNHO por cima — e
+   * tudo que prévia e busca precisam: régua, exceções e catálogo com estoque.
+   *
+   * `ativa: true` de propósito: a tela mostra o que ENTRARIA — com a campanha
+   * desligada a régua responderia "ninguém", e a matriz não teria como conferir
+   * os termos antes de ligar.
+   */
+  private async contexto(rascunho?: Partial<ConfigCampanha> | null) {
+    const gravada = (await this.promoConfig.getConfig()).campanha;
+    const config = normalizarConfig({ ...gravada, ...(rascunho || {}), ativa: true });
+    const chaveCampanha = chaveDaCampanha(config.nome);
+    const excecoes = await this.excecoesDe(chaveCampanha);
+    const excecaoPorChave = new Map(excecoes.map((e) => [e.chave, e]));
+    const linhas = await this.catalogoComEstoque();
+    const regra = criarRegra(config, excecoes, this.estruturaDasLinhas(linhas, config));
+    return { config, chaveCampanha, excecoes, excecaoPorChave, linhas, regra };
+  }
+
+  /** A decisão de cada linha do catálogo — a busca troca filtro sem decidir tudo de novo. */
+  private async decisoesDe(regra: RegraCampanha, linhas: LinhaIndexada[]): Promise<DecisaoCampanha[]> {
+    const chave = `${regra.assinatura}|${this.baseCatalogo?.at ?? 0}|${linhas.length}`;
+    if (this.memoDecisoes?.chave === chave) return this.memoDecisoes.decisoes;
+    const decisoes: DecisaoCampanha[] = new Array(linhas.length);
+    for (let i = 0; i < linhas.length; i++) {
+      decisoes[i] = regra.decidir(linhas[i].l, linhas[i].t);
+      if (i % 4000 === 3999) await folga();
+    }
+    this.memoDecisoes = { chave, decisoes };
+    return decisoes;
+  }
+
   /**
    * O QUE ENTRA — com a campanha gravada ou com um RASCUNHO (termos que a
    * matriz está digitando e ainda não salvou). O rascunho não grava nada: é o
@@ -380,27 +596,13 @@ export class PromoCampanhaService {
    * desconto no caixa.
    */
   async preview(rascunho?: Partial<ConfigCampanha> | null): Promise<PreviewCampanha> {
-    const gravada = (await this.promoConfig.getConfig()).campanha;
-    // `ativa: true` de propósito: a tela mostra o que ENTRARIA — com a campanha
-    // desligada a régua responderia "ninguém", e a matriz não teria como
-    // conferir os termos antes de ligar.
-    const config = normalizarConfig({ ...gravada, ...(rascunho || {}), ativa: true });
-    const chaveCampanha = chaveDaCampanha(config.nome);
-    const excecoes = await this.excecoesDe(chaveCampanha);
-    const excecaoPorChave = new Map(excecoes.map((e) => [e.chave, e]));
-    const regra = criarRegra(config, excecoes);
-    const linhas = await this.catalogoComEstoque();
+    const { config, chaveCampanha, excecoes, excecaoPorChave, linhas, regra } = await this.contexto(rascunho);
 
     // 1ª passada: a decisão de cada linha. Uma família vai pra lista se alguma
     // linha dela entrou ou se ela tem exceção.
-    const decisoes: DecisaoCampanha[] = new Array(linhas.length);
+    const decisoes = await this.decisoesDe(regra, linhas);
     const relevantes = new Set<string>();
-    for (let i = 0; i < linhas.length; i++) {
-      const d = regra.decidir(linhas[i].l, linhas[i].t);
-      decisoes[i] = d;
-      if (d.entra || d.excecao) relevantes.add(d.chave);
-      if (i % 4000 === 3999) await folga();
-    }
+    for (const d of decisoes) if (d.entra || d.excecao) relevantes.add(d.chave);
 
     // 2ª passada: soma as linhas das famílias da lista em DOIS montes — as que
     // entram e todas. A tela mostra o monte que entra (descrição, preço, peças):
@@ -409,13 +611,13 @@ export class PromoCampanhaService {
     type Monte = { descricoes: Map<string, number>; grupo: string | null; precoMin: number; precoMax: number; estoque: number };
     type Acc = {
       chave: string; refs: Set<string>; todas: Monte; dentro: Monte;
-      precoPromoMin: number; codigos: number; naCampanha: number; termos: Set<string>;
+      precoPromoMin: number; codigos: number; naCampanha: number; termos: Set<string>; origens: Set<string>;
     };
     const monte = (): Monte => ({ descricoes: new Map(), grupo: null, precoMin: Infinity, precoMax: 0, estoque: 0 });
-    const somar = (m: Monte, l: LinhaIndexada['l']) => {
+    const somar = (m: Monte, l: LinhaDoCatalogo) => {
       const desc = String(l.descricao || l.descricaoPdv || '').trim();
       if (desc) m.descricoes.set(desc, (m.descricoes.get(desc) || 0) + l.estoque);
-      if (m.grupo == null) m.grupo = l.grupo ?? null;
+      if (m.grupo == null) m.grupo = l.grupoNome ?? l.grupo ?? null;
       m.estoque += l.estoque;
       if (l.preco > 0) {
         m.precoMin = Math.min(m.precoMin, l.preco);
@@ -431,7 +633,7 @@ export class PromoCampanhaService {
       if (!acc) {
         acc = {
           chave, refs: new Set(), todas: monte(), dentro: monte(),
-          precoPromoMin: Infinity, codigos: 0, naCampanha: 0, termos: new Set(),
+          precoPromoMin: Infinity, codigos: 0, naCampanha: 0, termos: new Set(), origens: new Set(),
         };
         familias.set(chave, acc);
       }
@@ -441,7 +643,11 @@ export class PromoCampanhaService {
       if (d.entra) {
         acc.naCampanha++;
         somar(acc.dentro, l);
-        if (d.termo) acc.termos.add(d.termo);
+        if (d.termo) {
+          acc.termos.add(d.termo);
+          acc.origens.add(d.termo);
+        }
+        if (d.estrutura) acc.origens.add(d.estrutura);
         if (l.preco > 0) acc.precoPromoMin = Math.min(acc.precoPromoMin, precoComDesconto(l.preco, config.pct));
       }
     }
@@ -471,6 +677,7 @@ export class PromoCampanhaService {
         codigos: acc.codigos,
         codigosNaCampanha: acc.naCampanha,
         termos: [...acc.termos],
+        origens: [...acc.origens],
         situacao,
         excecao: exc,
       });
@@ -498,17 +705,293 @@ export class PromoCampanhaService {
   }
 
   /**
+   * BUSCAR PRODUTOS — o catálogo com estoque inteiro, DENTRO e FORA da
+   * campanha, com os filtros que existem de verdade no cadastro (busca, grupo,
+   * subgrupo, marca). É daqui que a matriz escolhe várias peças e inclui ou
+   * tira de uma vez.
+   *
+   * A linha da tela é a FAMÍLIA (a exceção vale pra peça em todas as cores): a
+   * família aparece se QUALQUER linha dela passa no filtro, e o resumo conta a
+   * família inteira — senão "PRETO" na busca mostraria meia peça e o clique
+   * tiraria a peça inteira sem a matriz ver.
+   */
+  async produtos(
+    filtro: FiltroProdutosCampanha = {},
+    rascunho?: Partial<ConfigCampanha> | null,
+  ): Promise<BuscaProdutosCampanha> {
+    const { config, chaveCampanha, excecaoPorChave, linhas, regra } = await this.contexto(rascunho);
+    const decisoes = await this.decisoesDe(regra, linhas);
+
+    const palavras = textoNormalizado(filtro.busca).split(' ').filter(Boolean);
+    const grupo = numeroOuNull(filtro.grupo);
+    const subgrupo = numeroOuNull(filtro.subgrupo);
+    const marca = textoNormalizado(filtro.marca);
+    const participacao = filtro.participacao === 'dentro' || filtro.participacao === 'fora' ? filtro.participacao : 'todos';
+
+    const passa = (l: LinhaDoCatalogo) => {
+      if (grupo != null && l.grupoId !== grupo) return false;
+      if (subgrupo != null && l.subgrupoId !== subgrupo) return false;
+      if (marca && textoNormalizado(l.marca) !== marca) return false;
+      if (palavras.length) {
+        const texto = textoNormalizado(
+          [l.codigo, l.ref, l.descricao, l.descricaoPdv, l.marca, l.grupoNome, l.subgrupoNome].filter(Boolean).join(' '),
+        );
+        if (!palavras.every((p) => texto.includes(p))) return false;
+      }
+      return true;
+    };
+
+    const escolhidas = new Set<string>();
+    for (let i = 0; i < linhas.length; i++) {
+      if (passa(linhas[i].l)) escolhidas.add(linhas[i].chave);
+      if (i % 8000 === 7999) await folga();
+    }
+
+    type Acc = {
+      chave: string; refs: Set<string>; descricoes: Map<string, number>; grupos: Map<string, number>;
+      subgrupos: Map<string, number>; marcas: Map<string, number>; tipos: Map<string, number>;
+      precoMin: number; precoMax: number; precoPromoMin: number; estoque: number; codigos: number;
+      naCampanha: number; origens: Set<string>; exclusoes: Set<string>;
+    };
+    const somarMapa = (m: Map<string, number>, k: string | null | undefined, n: number) => {
+      const chave = String(k ?? '').trim();
+      if (chave) m.set(chave, (m.get(chave) || 0) + n);
+    };
+    const maior = (m: Map<string, number>) => [...m.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+    const familias = new Map<string, Acc>();
+    for (let i = 0; i < linhas.length; i++) {
+      const { l, chave } = linhas[i];
+      if (!escolhidas.has(chave)) continue;
+      const d = decisoes[i];
+      let acc = familias.get(chave);
+      if (!acc) {
+        acc = {
+          chave, refs: new Set(), descricoes: new Map(), grupos: new Map(), subgrupos: new Map(), marcas: new Map(),
+          tipos: new Map(), precoMin: Infinity, precoMax: 0, precoPromoMin: Infinity, estoque: 0, codigos: 0,
+          naCampanha: 0, origens: new Set(), exclusoes: new Set(),
+        };
+        familias.set(chave, acc);
+      }
+      if (l.ref) acc.refs.add(l.ref);
+      acc.codigos++;
+      acc.estoque += l.estoque;
+      somarMapa(acc.descricoes, l.descricao || l.descricaoPdv, l.estoque);
+      somarMapa(acc.tipos, familiaDaDescricao(l.descricao || l.descricaoPdv).toUpperCase(), Math.max(1, l.estoque));
+      somarMapa(acc.grupos, l.grupoNome, l.estoque);
+      somarMapa(acc.subgrupos, l.subgrupoNome, l.estoque);
+      somarMapa(acc.marcas, l.marca, l.estoque);
+      if (l.preco > 0) {
+        acc.precoMin = Math.min(acc.precoMin, l.preco);
+        acc.precoMax = Math.max(acc.precoMax, l.preco);
+      }
+      if (d.entra) {
+        acc.naCampanha++;
+        if (d.termo) acc.origens.add(d.termo);
+        if (d.estrutura) acc.origens.add(d.estrutura);
+        if (l.preco > 0) acc.precoPromoMin = Math.min(acc.precoPromoMin, precoComDesconto(l.preco, config.pct));
+      } else if (d.exclusao) {
+        acc.exclusoes.add(d.exclusao);
+      }
+    }
+
+    const todos: ProdutoNaBusca[] = [];
+    let dentro = 0;
+    for (const acc of familias.values()) {
+      const exc = excecaoPorChave.get(acc.chave) ?? null;
+      const situacao: ProdutoNaBusca['situacao'] = exc
+        ? exc.decisao === 'fora' ? 'tirada' : 'incluida'
+        : acc.naCampanha === 0
+          ? acc.exclusoes.size ? 'excluida' : 'fora'
+          : acc.naCampanha < acc.codigos ? 'parcial' : 'entra';
+      if (acc.naCampanha > 0) dentro++;
+      if (participacao === 'dentro' && acc.naCampanha === 0) continue;
+      if (participacao === 'fora' && acc.naCampanha > 0) continue;
+      todos.push({
+        chave: acc.chave,
+        refs: [...acc.refs].sort(),
+        descricao: maior(acc.descricoes) || exc?.descricao || '',
+        grupo: maior(acc.grupos),
+        subgrupo: maior(acc.subgrupos),
+        marca: maior(acc.marcas),
+        precoMin: Number.isFinite(acc.precoMin) ? acc.precoMin : 0,
+        precoMax: acc.precoMax,
+        precoPromoMin: Number.isFinite(acc.precoPromoMin) ? acc.precoPromoMin : 0,
+        estoque: acc.estoque,
+        codigos: acc.codigos,
+        codigosNaCampanha: acc.naCampanha,
+        situacao,
+        origens: [...acc.origens],
+        exclusoes: [...acc.exclusoes],
+        tipos: [...acc.tipos.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t]) => t),
+        excecao: exc,
+      });
+    }
+    todos.sort((a, b) => b.estoque - a.estoque || a.chave.localeCompare(b.chave));
+
+    const porPagina = Math.min(200, Math.max(1, Math.floor(Number(filtro.porPagina) || 50)));
+    const pagina = Math.max(1, Math.floor(Number(filtro.pagina) || 1));
+    return {
+      campanha: config,
+      chaveCampanha,
+      total: todos.length,
+      totais: { dentro, fora: familias.size - dentro },
+      pagina,
+      porPagina,
+      produtos: todos.slice((pagina - 1) * porPagina, pagina * porPagina),
+    };
+  }
+
+  /**
+   * Grupos, subgrupos e marcas QUE TÊM PEÇA NA REDE — as opções dos filtros e da
+   * escolha de grupo/subgrupo da campanha. Nome de grupo sem estoque não
+   * aparece: escolher o que não vende só confunde a conta da prévia.
+   */
+  async estrutura(): Promise<EstruturaDoCatalogo> {
+    const linhas = await this.catalogoComEstoque();
+    const grupos = new Map<number, { codigo: number; nome: string; codigos: number; pecas: number }>();
+    const subgrupos = new Map<number, EstruturaDoCatalogo['subgrupos'][number]>();
+    const marcas = new Map<string, number>();
+    let pecasTotal = 0;
+    let pecasSemGrupo = 0;
+    for (const { l } of linhas) {
+      pecasTotal += l.estoque;
+      if (l.marca) marcas.set(l.marca, (marcas.get(l.marca) || 0) + l.estoque);
+      if (l.grupoId == null && l.subgrupoId == null) {
+        pecasSemGrupo += l.estoque;
+        continue;
+      }
+      if (l.grupoId != null) {
+        const g = grupos.get(l.grupoId) ?? { codigo: l.grupoId, nome: l.grupoNome || `Grupo ${l.grupoId}`, codigos: 0, pecas: 0 };
+        g.codigos++;
+        g.pecas += l.estoque;
+        grupos.set(l.grupoId, g);
+      }
+      if (l.subgrupoId != null) {
+        const s = subgrupos.get(l.subgrupoId) ?? {
+          codigo: l.subgrupoId, nome: l.subgrupoNome || `Subgrupo ${l.subgrupoId}`,
+          grupo: l.grupoId, grupoNome: l.grupoNome, codigos: 0, pecas: 0,
+        };
+        s.codigos++;
+        s.pecas += l.estoque;
+        subgrupos.set(l.subgrupoId, s);
+      }
+    }
+    const porNome = (a: { nome: string }, b: { nome: string }) => a.nome.localeCompare(b.nome, 'pt-BR');
+    return {
+      grupos: [...grupos.values()].sort(porNome),
+      subgrupos: [...subgrupos.values()].sort(
+        (a, b) => String(a.grupoNome || '').localeCompare(String(b.grupoNome || ''), 'pt-BR') || porNome(a, b),
+      ),
+      marcas: [...marcas.entries()].map(([nome, pecas]) => ({ nome, pecas })).sort((a, b) => b.pecas - a.pecas),
+      pecasTotal,
+      pecasSemGrupo,
+    };
+  }
+
+  /**
+   * INCLUIR / TIRAR / DEVOLVER VÁRIAS FAMÍLIAS DE UMA VEZ (a seleção da busca).
+   *
+   * Grava a MESMA exceção por família que o "tirar" de uma peça grava — nada de
+   * lista paralela: a régua, o site e o caixa leem a mesma tabela. Família que
+   * não está no catálogo com estoque é IGNORADA (e volta na resposta): exceção
+   * sem peça por trás é fantasma que ninguém consegue conferir.
+   */
+  async excecoesEmLote(input: {
+    chaves: string[];
+    decisao: DecisaoExcecao | 'remover';
+    motivo?: string | null;
+    usuario?: string | null;
+    storeCode?: string | null;
+  }): Promise<{ ok: true; campanha: string; alteradas: number; ignoradas: string[] }> {
+    const decisao = input.decisao;
+    if (decisao !== 'fora' && decisao !== 'dentro' && decisao !== 'remover') {
+      throw new BadRequestException('decisao tem que ser "fora", "dentro" ou "remover"');
+    }
+    const chaves = Array.from(
+      new Set((Array.isArray(input.chaves) ? input.chaves : []).map((c) => String(c ?? '').trim().toUpperCase()).filter(Boolean)),
+    );
+    if (!chaves.length) throw new BadRequestException('Selecione pelo menos uma peça.');
+    if (chaves.length > 500) throw new BadRequestException('No máximo 500 peças por vez.');
+
+    const { campanha: cfg } = await this.promoConfig.getConfig();
+    const campanha = chaveDaCampanha(cfg.nome);
+    const motivo = String(input.motivo ?? '').trim().slice(0, 300) || null;
+    const usuario = input.usuario ? String(input.usuario).slice(0, 120) : null;
+    const storeCode = input.storeCode ? String(input.storeCode).slice(0, 10) : null;
+
+    let alteradas = 0;
+    let ignoradas: string[] = [];
+    if (decisao === 'remover') {
+      const r = await (this.prisma as any).promoCampanhaExcecao.deleteMany({
+        where: { campanha, chave: { in: chaves } },
+      });
+      alteradas = Number(r?.count) || 0;
+    } else {
+      // A descrição e uma REF de exemplo vêm do catálogo — a lista da tela
+      // explica a linha mesmo depois que o cadastro mudar.
+      const linhas = await this.catalogoComEstoque();
+      const amostra = new Map<string, { ref: string | null; descricao: string | null; estoque: number }>();
+      const pedidas = new Set(chaves);
+      for (const { l, chave } of linhas) {
+        if (!pedidas.has(chave)) continue;
+        const atual = amostra.get(chave);
+        if (!atual || l.estoque > atual.estoque) {
+          amostra.set(chave, { ref: l.ref || `#${l.codigo}`, descricao: l.descricao || l.descricaoPdv || null, estoque: l.estoque });
+        }
+      }
+      ignoradas = chaves.filter((c) => !amostra.has(c));
+      const validas = chaves.filter((c) => amostra.has(c));
+      if (validas.length) {
+        await (this.prisma as any).$transaction(
+          validas.map((chave) => {
+            const a = amostra.get(chave)!;
+            const dados = {
+              decisao,
+              motivo,
+              origem: 'retaguarda',
+              storeCode,
+              usuario,
+              refExemplo: a.ref ? a.ref.slice(0, 40) : null,
+              descricao: a.descricao ? String(a.descricao).trim().slice(0, 120) : null,
+            };
+            return (this.prisma as any).promoCampanhaExcecao.upsert({
+              where: { campanha_chave: { campanha, chave } },
+              create: { campanha, chave, ...dados },
+              update: dados,
+            });
+          }),
+        );
+      }
+      alteradas = validas.length;
+    }
+
+    this.invalidar();
+    await this.registrar('promo-campanha.excecao-lote', {
+      campanha, decisao, alteradas, ignoradas: ignoradas.slice(0, 50),
+      chaves: chaves.slice(0, 200), motivo, usuario, storeCode, origem: 'retaguarda',
+    });
+    this.logger.log(
+      `[campanha] lote "${decisao}" em ${alteradas} família(s) da campanha "${cfg.nome}" · por ${usuario || '?'}` +
+        (ignoradas.length ? ` · ${ignoradas.length} ignorada(s) sem estoque` : ''),
+    );
+    return { ok: true, campanha, alteradas, ignoradas };
+  }
+
+  /**
    * Palavra do dicionário que existe no catálogo e traria modelo NOVO pra
    * campanha. Nunca entra sozinha: termo é dinheiro — a tela só mostra "se
    * incluir TRICÔ, entram mais 58 modelos (412 peças)".
    *
    * `jaNaLista` = famílias que já entram OU que têm exceção — a tirada na mão
-   * não volta por sugestão.
+   * não volta por sugestão. A peça que uma palavra de exclusão tira também não
+   * conta: ela não entraria nem com o termo novo.
    */
   private async sugestoes(config: ConfigCampanha, linhas: LinhaIndexada[], jaNaLista: Set<string>) {
-    const formaDoTermo = (t: string) =>
-      compilarTermo(t)?.palavras.map((p) => `${p.raiz}${p.prefixo ? '*' : ''}`).join(' ') ?? '';
     const atuais = new Set(config.termos.map(formaDoTermo));
+    const exclusoes = config.termosExclusao
+      .map((t) => compilarTermo(t))
+      .filter((t): t is NonNullable<ReturnType<typeof compilarTermo>> => !!t);
     const out: PreviewCampanha['sugestoes'] = [];
     for (const sug of sugestoesPara(config.nome)) {
       const comp = compilarTermo(sug);
@@ -517,6 +1000,7 @@ export class PromoCampanhaService {
       const exemplos: string[] = [];
       for (const { l, t, chave } of linhas) {
         if (jaNaLista.has(chave) || !termoCasa(comp, t)) continue;
+        if (exclusoes.some((e) => termoCasa(e, t))) continue;
         if (!novas.has(chave) && exemplos.length < 3) {
           exemplos.push(String(l.descricao || l.descricaoPdv || chave).trim());
         }

@@ -156,10 +156,12 @@ export class PdvService {
 
     let motivo: string;
     if (!ativa) motivo = 'Nenhuma campanha ligada agora — a peça sai pelo preço da loja.';
-    else if (d.excecao?.decisao === 'fora') motivo = `Tirada da campanha ${nome} na mão.`;
+    else if (d.excecao?.decisao === 'fora') motivo = `Tirada da campanha ${nome} na mão — não entra nem pondo na venda.`;
     else if (d.excecao?.decisao === 'dentro') motivo = `A matriz pôs esta peça na campanha ${nome} na mão.`;
+    else if (d.exclusao) motivo = `Fora: a descrição tem "${d.exclusao}", palavra que a campanha ${nome} exclui.`;
     else if (d.termo) motivo = `Entra: a descrição tem "${d.termo}".`;
-    else motivo = `Nenhum termo da campanha ${nome} na descrição — fora da promoção.`;
+    else if (d.estrutura) motivo = `Entra: está no ${d.estrutura}.`;
+    else motivo = `Nenhum termo nem grupo da campanha ${nome} — fora da promoção.`;
 
     const preco = Number(info.preco) || 0;
     return {
@@ -2833,10 +2835,30 @@ export class PdvService {
     // =false → re-inclui na promoção (volta ao automático, tag null).
     const excluindoPromo = input.excludePromo === true;
     const reincluindoPromo = input.excludePromo === false;
-    // FORÇAR PROMO (15/07): botão AZUL — coloca o item BÁSICO na promoção
-    // (ignora só o filtro básico; data/coleção seguem valendo no recálculo).
+    // PÔR NA PROMOÇÃO SÓ NESTA LINHA (⬆️, dono 15/09/2026): na campanha por
+    // termo a linha que a régua deixou fora ganha o % da campanha — a peça não
+    // muda no cadastro nem em outra venda. Peça protegida (família tirada pela
+    // matriz, palavra que exclui) segue sem desconto: quem decide é o
+    // applyAutoDiscounts. (Até 15/09 o botão só punha a peça BÁSICA nos 50%.)
     const forcandoPromo = input.forcePromo === true;
     const desforcandoPromo = input.forcePromo === false;
+    if (forcandoPromo) {
+      // Só peça de catálogo entra: item digitado à mão, frete, desconto manual
+      // (dado com senha) e marcado já têm o preço deles — a campanha por cima
+      // trocaria esse preço sem ninguém ver.
+      // MARCADO fica fora mesmo sem desconto: trocar a etiqueta 'MARCADO' faz
+      // a baixa de estoque da venda contar de novo uma peça que já saiu do
+      // estoque na marcação (`isStockEligibleItem`). O caminho automático tem
+      // esse mesmo risco (medido em 15/09, pendência registrada) — este clique
+      // não abre mais uma porta pra ele.
+      const semCatalogo = String(item.sku || '').startsWith('MANUAL-') || item.ref === 'MANUAL' || item.ref === 'FRETE';
+      const comPrecoProprio = item.promoTag === 'MANUAL' || item.promoTag === 'FRETE' || item.promoTag === 'MARCADO';
+      if (semCatalogo || comPrecoProprio) {
+        throw new BadRequestException(
+          'Este item já tem um preço próprio (desconto manual, marcado ou frete) — ele não entra na campanha por cima.',
+        );
+      }
+    }
 
     const newDesconto = excluindoPromo
       ? 0
@@ -2896,6 +2918,14 @@ export class PdvService {
         forcarPromo: newForcar,
       },
     });
+    if (excluindoPromo || reincluindoPromo || forcandoPromo || desforcandoPromo) {
+      // O rastro do clique: a linha guarda só o estado final (tag + flag), e a
+      // pergunta "quem deu esse desconto?" chega dias depois.
+      this.logger.log(
+        `[pdv-promo] venda ${input.saleId} loja ${sale.storeCode || '?'} · item ${item.sku} ` +
+          `${excluindoPromo ? 'TIRADO da' : forcandoPromo ? 'POSTO na' : 'devolvido à regra da'} campanha ${sale.activePromotion || 'NONE'}`,
+      );
+    }
     await this.applyAutoDiscounts(input.saleId);
     await this.recalcTotals(input.saleId);
     // PERF: devolve a venda COMPLETA junto (mesmo padrão do bipe) — o PDV não
@@ -3104,6 +3134,13 @@ export class PdvService {
        * O total parte do preço unitário COM desconto × quantidade (e não do
        * desconto subtraído), senão o caixa cobraria 1 centavo diferente do site
        * em preço como R$ 99,95.
+       *
+       * ── A LINHA QUE A VENDEDORA PÔS (⬆️, `forcarPromo`) ──
+       * Peça que a régua deixou fora entra NESTA linha, nesta venda: nada vai
+       * pro cadastro nem pra outra venda. Não vale pra peça PROTEGIDA — família
+       * tirada na mão pela matriz ou peça com palavra que exclui (BERMUDA,
+       * uniforme 22 DE ABRIL): "tem que sair" não pode voltar num clique de loja.
+       * Campanha desligada também não dá desconto a ninguém.
        */
       const regra = await this.promoCampanha.regra();
       const catalogo = await this.promoCampanha.linhasPorCodigo(
@@ -3115,14 +3152,25 @@ export class PdvService {
           codigo: String(it.sku || ''), ref: it.ref, descricao: it.descricao, descricaoPdv: null, grupo: null,
         };
         const d = regra.decidir(linha);
-        if (d.entra) {
+        const protegida = d.criterio === 'exclusao' || (d.criterio === 'excecao' && !d.entra);
+        const pelaVendedora = !d.entra && !!it.forcarPromo && regra.config.ativa && !protegida;
+        if (d.entra || pelaVendedora) {
           const r = totalDoItemComDesconto(it.precoUnit, it.qty, regra.config.pct);
-          updates.push({ id: it.id, desconto: r.desconto, total: r.total, tag: regra.rotulo });
+          updates.push({
+            id: it.id,
+            desconto: r.desconto,
+            total: r.total,
+            tag: pelaVendedora ? `${regra.rotulo} · na mão` : regra.rotulo,
+          });
         } else {
           const bruto = it.precoUnit * it.qty;
-          const tag = d.excecao?.decisao === 'fora'
-            ? 'Sem promo · tirada'
-            : !regra.config.ativa ? 'Sem promo · campanha desligada' : 'Sem promo';
+          const tag = !regra.config.ativa
+            ? 'Sem promo · campanha desligada'
+            : d.criterio === 'excecao'
+              ? 'Sem promo · tirada'
+              : d.criterio === 'exclusao'
+                ? 'Sem promo · excluída'
+                : 'Sem promo';
           updates.push({ id: it.id, desconto: 0, total: bruto, tag });
         }
       }

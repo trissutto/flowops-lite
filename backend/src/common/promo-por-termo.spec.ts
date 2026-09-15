@@ -23,7 +23,7 @@ describe('promo-por-termo — quem entra', () => {
     ref: '700979', codigo: '8001', descricao, descricaoPdv: null, grupo: null, ...over,
   });
 
-  it('as 4 palavras do dono entram de fábrica', () => {
+  it('as palavras do dono entram de fábrica', () => {
     const r = criarRegra(CAMPANHA_PADRAO);
     expect(r.decidir(linha('CASACO LONGO PLUS SIZE PRETO 52')).entra).toBe(true);
     expect(r.decidir(linha('JAQUETA JEANS PLUS SIZE 48')).entra).toBe(true);

@@ -2792,9 +2792,10 @@ model PdvSaleItem {
   precoDeCents     Int?      @map("preco_de_cents")
   desconto         Float     @default(0)
   promoTag         String?   @map("promo_tag") // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
-  // FORÇAR PROMO (15/07): botão AZUL "colocar na promoção" — o item entrava nos
-  // 50% mesmo sendo BÁSICO. A campanha por termo (15/09) não tem filtro de
-  // básico, então a flag não muda mais o desconto; fica pelo histórico.
+  // PÔR NA PROMOÇÃO SÓ NESTA LINHA (⬆️ do PDV). Até 15/09 punha a peça BÁSICA
+  // nos 50%; na campanha por termo (15/09/2026, 2ª rodada) a linha que a régua
+  // deixou fora ganha o % da campanha — menos peça protegida (família tirada
+  // pela matriz, palavra que exclui). Não mexe no cadastro nem em outra venda.
   // Flag separada do promoTag porque o recálculo automático sobrescreve a tag.
   forcarPromo      Boolean   @default(false) @map("forcar_promo")
   total            Float

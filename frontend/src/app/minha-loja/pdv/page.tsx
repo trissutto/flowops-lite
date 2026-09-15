@@ -1123,13 +1123,6 @@ function PdvPageInner() {
   // Declarado AQUI (antes do kbdRef) porque o handler global de teclado conta
   // o trilho como modal aberto — senão F2/F6/F8 empilhavam modal por cima.
   const [trilhoCartao, setTrilhoCartao] = useState<{ tipo: 'credito' | 'debito'; bandeira: string | null } | null>(null);
-  // 🚫 na campanha por termo ("não é da campanha" × "só nesta venda"). Também
-  // AQUI, antes do kbdRef: com ele aberto o handler global não pode tratar a
-  // leitura do leitor como atalho — senão o foco pula pra barra de bipe e a
-  // peça é lançada na venda por trás do modal.
-  const [tirarPromoItem, setTirarPromoItem] = useState<
-    { id: string; sku: string; descricao?: string | null; ref?: string | null } | null
-  >(null);
 
   const [quickConvenioAtivo, setQuickConvenioAtivo] = useState<{ id: string; nome: string } | null>(null);
   useEffect(() => {
@@ -1463,12 +1456,12 @@ function PdvPageInner() {
   const kbdRef = useRef({
     sale, showCustomer, showPayment, showFinalized, showVendedora,
     showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
-    promoCheckOpen, tirarPromoItem,
+    promoCheckOpen,
   });
   kbdRef.current = {
     sale, showCustomer, showPayment, showFinalized, showVendedora,
     showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
-    promoCheckOpen, tirarPromoItem,
+    promoCheckOpen,
   };
   // `removeItem` é declarada mais abaixo — guardar por effect (que roda DEPOIS
   // do render) evita o erro de usar a const antes da declaração.
@@ -1479,15 +1472,15 @@ function PdvPageInner() {
       const {
         sale, showCustomer, showPayment, showFinalized, showVendedora,
         showConfirmSale, showDiscount, showShortcuts, trilhoCartao,
-        promoCheckOpen, tirarPromoItem,
+        promoCheckOpen,
       } = kbdRef.current;
       const removeItem = removeItemRef.current;
       if (!sale || sale.status !== 'open') return;
-      // Os dois modais da promoção contam: o handler é do `document`, o mesmo
-      // nó onde o React escuta — o stopPropagation dos modais não o segura.
+      // A Consulta de promoção conta: o handler é do `document`, o mesmo nó
+      // onde o React escuta — o stopPropagation do modal não o segura.
       const anyModal =
         showCustomer || showPayment || showFinalized || showVendedora || showConfirmSale ||
-        !!showDiscount || showShortcuts || !!trilhoCartao || promoCheckOpen || !!tirarPromoItem;
+        !!showDiscount || showShortcuts || !!trilhoCartao || promoCheckOpen;
       // ── PDV2: Esc fecha modais — roda ANTES do early-return de modal
       // (no PDV v1 o listener inteiro era desativado com modal aberto) ──
       if (e.key === 'Escape') {
@@ -1693,18 +1686,27 @@ function PdvPageInner() {
           toast('success', 'Item de volta na promoção', item?.descricao || item?.ref || item?.sku);
         }
       }
-      // Feedback de FORÇAR promo (botão azul): avisa se a data/coleção barrou
-      // (item novo forçado não ganha desconto — o filtro de data ainda vale).
+      // Feedback do ⬆️ "pôr na promoção só nesta linha": avisa quando a peça é
+      // protegida (a matriz tirou, ou tem palavra que a campanha exclui) — o
+      // backend não dá o desconto e a vendedora precisa saber por quê.
       if (patch.forcePromo === true) {
         const item = fresh.items.find((i) => i.id === itemId);
         if (item && item.desconto > 0) {
-          toast('success', 'Item colocado na promoção', `${item.descricao || item.ref || item.sku} · ${brl(item.desconto)} off`);
+          toast('success', 'Item na promoção (só nesta venda)', `${item.descricao || item.ref || item.sku} · ${brl(item.desconto)} off`);
         } else {
-          toast('warning', 'Sem desconto pra este item', 'Forçado, mas a data/coleção não se enquadra na campanha.');
+          toast(
+            'warning',
+            'Sem desconto pra este item',
+            /tirada/i.test(item?.promoTag || '')
+              ? 'A matriz tirou esta peça da campanha.'
+              : /exclu/i.test(item?.promoTag || '')
+                ? 'A campanha exclui esta peça (ex.: bermuda, uniforme).'
+                : 'A campanha está desligada na retaguarda.',
+          );
         }
       } else if (patch.forcePromo === false) {
         const item = fresh.items.find((i) => i.id === itemId);
-        toast('info', 'Item voltou a básico', item?.descricao || item?.ref || item?.sku);
+        toast('info', 'Item voltou à regra da campanha', item?.descricao || item?.ref || item?.sku);
       }
     } catch (e: any) {
       const h = humanizeError(e);
@@ -1725,34 +1727,6 @@ function PdvPageInner() {
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
-    }
-  };
-
-  // ── "NÃO É PEÇA DA CAMPANHA" (15/09/2026) ──
-  // Tira o MODELO da campanha na rede toda — todas as cores, todas as lojas e
-  // o site — com a loja carimbada. A matriz vê a lista e devolve se foi
-  // engano. A venda aberta volta recalculada (a peça já sai cheia).
-  const tirarDaCampanhaNaRede = async (
-    item: { sku: string; descricao?: string | null; ref?: string | null },
-    motivo: string,
-  ): Promise<boolean> => {
-    if (!sale) return false;
-    try {
-      const r = await api<any>('/pdv/promo-campanha/tirar', {
-        method: 'POST',
-        body: JSON.stringify({ codigo: item.sku, motivo: motivo.trim() || undefined, saleId: sale.id }),
-      });
-      setSale(await saleFromResponse(r, sale.id));
-      toast(
-        'success',
-        r?.jaEstavaFora ? 'A peça já estava fora da campanha' : 'Peça tirada da campanha',
-        `${item.descricao || item.ref || item.sku} — vale pra rede toda e pro site`,
-      );
-      return true;
-    } catch (e: any) {
-      const h = humanizeError(e);
-      toast('error', h.title, h.hint);
-      return false;
     }
   };
 
@@ -3268,59 +3242,50 @@ function PdvPageInner() {
                       >
                         <Percent className="w-4 h-4" />
                       </button>
-                      {/* Botão de PROMOÇÃO por item (campanha ativa). Um só botão,
-                          conforme o estado:
-                            🎁 verde  = SEM_PROMO → voltar ao automático
-                            ⬆️ azul   = BÁSICO → COLOCAR na promoção (força, ignora
-                                        só o filtro básico; data/coleção seguem)
-                            ⬇️ azul   = FORÇADO → tirar da promo forçada (volta básico)
-                            🚫 cinza  = promo automática → tirar da promoção */}
+                      {/* Botão de PROMOÇÃO por item (campanha ativa). UM CLIQUE,
+                          sem modal, e vale SÓ NESTA LINHA desta venda (dono,
+                          15/09/2026) — cadastro e outras vendas não mudam:
+                            🚫 cinza = linha COM o desconto da campanha → tirar
+                            ⬆️ azul  = linha sem desconto (a régua deixou fora,
+                                       ou a vendedora tirou) → pôr na campanha
+                            🎁 verde = 4 leva 3: tirada → volta ao automático
+                          Peça protegida (a matriz tirou a família, ou tem
+                          palavra que a campanha exclui — bermuda, uniforme)
+                          não ganha o ⬆️: "tem que sair" não volta num clique.
+                          Tirar a peça da campanha na REDE toda é na Consulta
+                          de promoção (🏷), não aqui. */}
                       {sale.activePromotion && sale.activePromotion !== 'NONE' && (() => {
-                        const semPromoTag = it.promoTag === 'SEM_PROMO';
-                        const isForced = !!it.forcarPromo;
-                        const basicoTag = !isForced && /b[áa]sico/i.test(it.promoTag || '');
-                        const autoPromo = !isForced && it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || '');
-                        if (semPromoTag) {
+                        const tag = it.promoTag || '';
+                        const comDescontoDaCampanha = it.desconto > 0 && /^(PROMO|4 LEVA)/.test(tag);
+                        if (comDescontoDaCampanha) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { excludePromo: true })}
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
+                              title="Tirar este item da promoção (só nesta venda)"
+                            >🚫</button>
+                          );
+                        }
+                        if (sale.activePromotion === 'POR_TERMO') {
+                          const pecaDeCatalogo =
+                            it.ref !== 'FRETE' && it.ref !== 'MANUAL' && !String(it.sku || '').startsWith('MANUAL-');
+                          const podePor = pecaDeCatalogo && (tag === 'SEM_PROMO' || tag === 'Sem promo');
+                          if (!podePor) return null;
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { forcePromo: true })}
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
+                              title={`Pôr este item na promoção ${rotuloCampanha} (só nesta venda)`}
+                            >⬆️</button>
+                          );
+                        }
+                        if (tag === 'SEM_PROMO') {
                           return (
                             <button
                               onClick={() => updateItem(it.id, { excludePromo: false })}
                               className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
                               title="Incluir este item na promoção (volta ao automático)"
                             >🎁</button>
-                          );
-                        }
-                        if (isForced) {
-                          return (
-                            <button
-                              onClick={() => updateItem(it.id, { forcePromo: false })}
-                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-600 text-white hover:bg-blue-700"
-                              title="Tirar da promoção forçada (volta a básico)"
-                            >⬇️</button>
-                          );
-                        }
-                        if (basicoTag) {
-                          return (
-                            <button
-                              onClick={() => updateItem(it.id, { forcePromo: true })}
-                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
-                              title="Colocar este item na promoção (aplica o desconto mesmo sendo básico)"
-                            >⬆️</button>
-                          );
-                        }
-                        if (autoPromo) {
-                          // Na campanha por termo o 🚫 pergunta: "não é peça
-                          // da campanha" (tira o modelo da rede e do site) ou
-                          // "só nesta venda" (o que o botão sempre fez).
-                          return (
-                            <button
-                              onClick={() =>
-                                sale.activePromotion === 'POR_TERMO'
-                                  ? setTirarPromoItem({ id: it.id, sku: it.sku, descricao: it.descricao, ref: it.ref })
-                                  : updateItem(it.id, { excludePromo: true })
-                              }
-                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
-                              title="Tirar este item da promoção"
-                            >🚫</button>
                           );
                         }
                         return null;
@@ -4519,21 +4484,6 @@ function PdvPageInner() {
         onClose={() => setPromoCheckOpen(false)}
         saleId={sale?.id || null}
         onSaleAtualizada={(s) => setSale(s)}
-      />
-      <TirarPromoModal
-        item={tirarPromoItem}
-        campanha={campanha}
-        onClose={() => setTirarPromoItem(null)}
-        onSoNestaVenda={async () => {
-          const it = tirarPromoItem;
-          setTirarPromoItem(null);
-          if (it) await updateItem(it.id, { excludePromo: true });
-        }}
-        onNaoEhDaCampanha={async (motivo) => {
-          const it = tirarPromoItem;
-          if (!it) return;
-          if (await tirarDaCampanhaNaRede(it, motivo)) setTirarPromoItem(null);
-        }}
       />
     </div>
   );
@@ -13710,122 +13660,6 @@ function PromoCheckModal({
               )}
             </div>
           )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * 🚫 NA CAMPANHA POR TERMO — duas saídas diferentes, e a vendedora escolhe
- * (15/09/2026):
- *
- *   - "Não é peça da campanha": o termo errou (a blusa de verão que tem
- *     "INVERNO" no nome da coleção). Tira o MODELO da campanha na rede toda e
- *     no site, com a loja carimbada — é o "desmarcar quando alguém identificar
- *     erro" que o dono pediu.
- *   - "Só nesta venda": o que o 🚫 sempre fez — a peça continua na campanha
- *     pras outras clientes.
- *
- * Nada aqui responde a teclado: o foco fica na caixa do modal (a leitura do
- * leitor morre nela e não lança peça na venda por trás), o motivo não nasce
- * com foco e Enter não escolhe opção. Tirar da rede é só no clique.
- */
-function TirarPromoModal({
-  item,
-  campanha,
-  onClose,
-  onSoNestaVenda,
-  onNaoEhDaCampanha,
-}: {
-  item: { id: string; sku: string; descricao?: string | null; ref?: string | null } | null;
-  campanha: { ativa: boolean; nome: string; pct: number } | null;
-  onClose: () => void;
-  onSoNestaVenda: () => Promise<void>;
-  onNaoEhDaCampanha: (motivo: string) => Promise<void>;
-}) {
-  const [motivo, setMotivo] = useState('');
-  const [salvando, setSalvando] = useState(false);
-  const caixaRef = useRef<HTMLDivElement>(null);
-  const treino = isTrainingMode();
-
-  useEffect(() => {
-    setMotivo('');
-    setSalvando(false);
-    if (item) setTimeout(() => caixaRef.current?.focus(), 30);
-  }, [item?.id]);
-
-  if (!item) return null;
-  const nome = campanha?.nome?.toLowerCase() || 'campanha';
-
-  const naoEh = async () => {
-    if (salvando || treino) return;
-    setSalvando(true);
-    try {
-      await onNaoEhDaCampanha(/^\d{6,}$/.test(motivo.trim()) ? '' : motivo);
-    } finally {
-      setSalvando(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        ref={caixaRef}
-        tabIndex={-1}
-        className="w-full max-w-md bg-[#FAFAF7] rounded-2xl shadow-xl overflow-hidden outline-none"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === 'Escape') onClose();
-          if (e.key === 'Enter') e.preventDefault();
-        }}
-      >
-        <div className="px-5 py-3.5 bg-white border-b border-[#E5E2D9] flex items-center gap-2.5">
-          <span className="text-lg">🚫</span>
-          <span className="font-bold text-slate-900">Tirar da promoção</span>
-          <button onClick={onClose} className="ml-auto p-1 rounded hover:bg-slate-100 text-slate-400"><X className="w-4 h-4" /></button>
-        </div>
-        <div className="p-5 space-y-3">
-          <div>
-            <p className="font-bold text-slate-900 leading-snug">{item.descricao || item.ref || item.sku}</p>
-            <p className="text-xs text-slate-500">SKU {item.sku}{item.ref ? ` · ref ${item.ref}` : ''}</p>
-          </div>
-
-          <div className={`rounded-xl border-2 border-rose-200 bg-white p-3 ${treino ? 'opacity-60' : ''}`}>
-            <div className="font-bold text-rose-800 text-sm">❄️ Não é peça de {nome}</div>
-            <p className="text-xs text-slate-600 mt-0.5">
-              {treino
-                ? 'Modo treinamento: esta opção fica desligada — ela tiraria a peça da campanha na rede de verdade.'
-                : 'Tira o modelo da campanha em todas as cores, em todas as lojas e no site. Fica registrado com a sua loja — se foi engano, a matriz devolve.'}
-            </p>
-            <input
-              value={motivo}
-              onChange={(e) => setMotivo(e.target.value)}
-              placeholder="Por quê? (opcional)"
-              maxLength={300}
-              disabled={treino}
-              className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-300 text-sm disabled:bg-slate-50"
-            />
-            <button
-              type="button"
-              onClick={() => void naoEh()}
-              disabled={salvando || treino}
-              className="mt-2 w-full py-2.5 rounded-lg bg-rose-600 text-white text-sm font-black disabled:opacity-50"
-            >
-              {salvando ? 'Tirando…' : 'Tirar da campanha'}
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => void onSoNestaVenda()}
-            disabled={salvando}
-            className="w-full rounded-xl border-2 border-[#E5E2D9] bg-white p-3 text-left hover:border-[#D4AF37] disabled:opacity-50"
-          >
-            <div className="font-bold text-slate-800 text-sm">Só nesta venda</div>
-            <div className="text-xs text-slate-500">A peça continua na campanha pras outras clientes.</div>
-          </button>
         </div>
       </div>
     </div>

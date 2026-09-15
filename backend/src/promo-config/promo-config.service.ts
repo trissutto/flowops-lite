@@ -3,10 +3,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   CAMPANHA_PADRAO,
   ConfigCampanha,
+  ESTRUTURA_MAX,
   PCT_MAX,
   PCT_MIN,
   TERMOS_MAX,
   compilarTermo,
+  idDeEstrutura,
   normalizarConfig,
 } from '../common/promo-por-termo';
 
@@ -17,9 +19,12 @@ const APP_CONFIG_KEY = 'promo-config';
  *
  * Até 15/09/2026 guardava só o filtro de BÁSICO da promoção de 50% ("liquida
  * antigos"). A promoção saiu do ar e o que mora aqui agora é a CAMPANHA POR
- * TERMO (`common/promo-por-termo.ts`): ligada, nome, % e termos. O resto da
- * regra (quem entra, exceção por família, arredondamento) é da régua, não
- * desta config.
+ * TERMO (`common/promo-por-termo.ts`): ligada, nome, %, termos, palavras que
+ * excluem e grupos/subgrupos do ERP. O resto da regra (quem entra, exceção por
+ * família, arredondamento) é da régua, não desta config.
+ *
+ * Config gravada antes dos campos novos existirem lê o padrão deles (ex.: as
+ * palavras que excluem BERMUDA e 22 DE ABRIL) — o `normalizarConfig` completa.
  *
  * O campo antigo `excluirBasicoNa50` pode continuar gravado na linha do banco:
  * é ignorado na leitura e some na primeira gravação.
@@ -92,21 +97,43 @@ export class PromoConfigService {
       throw new BadRequestException(`O desconto tem que ser um número inteiro de ${PCT_MIN} a ${PCT_MAX} (%).`);
     }
 
-    const termos = Array.isArray(pedida.termos) ? pedida.termos.map((t) => String(t ?? '')) : [];
-    const invalidos = termos.filter((t) => t.trim() && !compilarTermo(t));
-    if (invalidos.length) {
-      throw new BadRequestException(
-        `Termo que não pega nenhuma peça: ${invalidos.map((t) => `"${t.trim()}"`).join(', ')}. ` +
-          'Com * no fim, deixe pelo menos 3 letras antes (TRIC*).',
-      );
-    }
-    if (termos.filter((t) => t.trim()).length > TERMOS_MAX) {
-      throw new BadRequestException(`No máximo ${TERMOS_MAX} termos.`);
+    const lerTermos = (lista: unknown, rotulo: string): string[] => {
+      const termos = Array.isArray(lista) ? lista.map((t) => String(t ?? '')) : [];
+      const invalidos = termos.filter((t) => t.trim() && !compilarTermo(t));
+      if (invalidos.length) {
+        throw new BadRequestException(
+          `${rotulo} que não pega nenhuma peça: ${invalidos.map((t) => `"${t.trim()}"`).join(', ')}. ` +
+            'Com * no fim, deixe pelo menos 3 letras antes (TRIC*); só "DE", "DA", "COM"… sozinhos não valem.',
+        );
+      }
+      if (termos.filter((t) => t.trim()).length > TERMOS_MAX) {
+        throw new BadRequestException(`No máximo ${TERMOS_MAX} itens em "${rotulo}".`);
+      }
+      return termos;
+    };
+    const termos = lerTermos(pedida.termos, 'Termo');
+    const termosExclusao = lerTermos(pedida.termosExclusao, 'Palavra que exclui');
+
+    const lerIds = (lista: unknown, rotulo: string): number[] => {
+      const brutos = Array.isArray(lista) ? lista : [];
+      // Nulo/vazio viraria o subgrupo 0 (que existe) — recusa em vez de adivinhar.
+      const ruins = brutos.filter((v) => idDeEstrutura(v) == null);
+      if (ruins.length) {
+        throw new BadRequestException(`${rotulo} inválido: ${ruins.slice(0, 5).map((v) => JSON.stringify(v)).join(', ')}.`);
+      }
+      return brutos.map((v) => idDeEstrutura(v) as number);
+    };
+    const grupos = lerIds(pedida.grupos, 'Grupo');
+    const subgrupos = lerIds(pedida.subgrupos, 'Subgrupo');
+    if (new Set(grupos).size + new Set(subgrupos).size > ESTRUTURA_MAX) {
+      throw new BadRequestException(`No máximo ${ESTRUTURA_MAX} grupos e subgrupos somados.`);
     }
 
     const novo: PromoConfig = {
       campanha: {
-        ...normalizarConfig({ ativa: pedida.ativa !== false, nome, pct, termos }),
+        ...normalizarConfig({
+          ativa: pedida.ativa !== false, nome, pct, termos, termosExclusao, grupos, subgrupos,
+        }),
         atualizadaEm: new Date().toISOString(),
         atualizadaPor: usuario || null,
       },
@@ -120,7 +147,9 @@ export class PromoConfigService {
     this._cache = novo;
     this.logger.log(
       `[promo-config] campanha "${novo.campanha.nome}" ${novo.campanha.ativa ? 'LIGADA' : 'desligada'} · ` +
-        `${novo.campanha.pct}% · ${novo.campanha.termos.length} termo(s) · por ${usuario || '?'}`,
+        `${novo.campanha.pct}% · ${novo.campanha.termos.length} termo(s) · ` +
+        `${novo.campanha.termosExclusao.length} exclusão(ões) · ` +
+        `${novo.campanha.grupos.length} grupo(s) · ${novo.campanha.subgrupos.length} subgrupo(s) · por ${usuario || '?'}`,
     );
     return novo;
   }
