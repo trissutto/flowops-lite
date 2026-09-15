@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEscapeKey, useFocusTrap, useLockScroll } from '@/hooks';
@@ -15,7 +16,19 @@ import { useEscapeKey, useFocusTrap, useLockScroll } from '@/hooks';
  * deixando o painel órfão no DOM. Com `inert` + `pointer-events: none` o
  * painel fechado sai da ordem de tab e da árvore de acessibilidade, que é o
  * que realmente importa. Ver docs/animations.md.
+ *
+ * NO CLIENTE O OVERLAY MORA NO `<body>` (portal, 15/09). `fixed` + z-index só
+ * valem dentro da camada do ancestral: a coluna de compra da PDP é
+ * `lg:sticky`, e sticky SEMPRE cria camada própria — a "Tabela de medidas"
+ * abria no PC POR TRÁS da galeria (que vem depois no DOM) e com o topo
+ * cortado pelo cabeçalho (z 30). Dentro do portal os tokens de z valem pra
+ * página inteira, seja qual for o pai de quem abre. No servidor e na
+ * hidratação o overlay continua renderizando no lugar (o HTML não muda — os
+ * links do menu do celular seguem no HTML) e só então muda pro `<body>`.
  */
+
+/** Nada a assinar: o valor só separa servidor/hidratação (false) do cliente (true). */
+const semAssinatura = () => () => {};
 
 type Side = 'right' | 'left' | 'bottom' | 'center';
 
@@ -59,14 +72,17 @@ export function Overlay({
 }: OverlayProps) {
   const panelRef = useFocusTrap<HTMLDivElement>(open);
   const inertRef = useRef<HTMLDivElement | null>(null);
+  const noCliente = useSyncExternalStore(semAssinatura, () => true, () => false);
 
   useLockScroll(open);
   useEscapeKey(open, onClose);
 
   // Painel fechado sai da navegação por teclado e do leitor de tela.
+  // `noCliente` nas dependências: a mudança pro portal cria um painel NOVO,
+  // e sem reaplicar o `inert` ele nasceria tabulável com o overlay fechado.
   useEffect(() => {
     if (inertRef.current) inertRef.current.inert = !open;
-  }, [open]);
+  }, [open, noCliente]);
 
   // O backdrop do MODAL fica ACIMA do drawer (65 > 60): quando a janelinha do
   // Quick Add abre por cima do mini-cart, o clique fora dela tem que fechar o
@@ -74,7 +90,7 @@ export function Overlay({
   const zBackdrop = layer === 'modal' ? 'z-[var(--z-modal-backdrop)]' : 'z-[var(--z-overlay)]';
   const zPanel = layer === 'modal' ? 'z-[var(--z-modal)]' : 'z-[var(--z-drawer)]';
 
-  return (
+  const conteudo = (
     <>
       <div
         aria-hidden
@@ -120,4 +136,6 @@ export function Overlay({
       </div>
     </>
   );
+
+  return noCliente ? createPortal(conteudo, document.body) : conteudo;
 }
