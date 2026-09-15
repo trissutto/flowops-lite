@@ -31,7 +31,7 @@ import {
 import { api } from '@/lib/api';
 import EnterpriseShell from '@/components/enterprise/EnterpriseShell';
 import PageHeader from '@/components/enterprise/PageHeader';
-import MetricStrip from '@/components/enterprise/MetricStrip';
+import MetricStrip, { BarraSegmentos } from '@/components/enterprise/MetricStrip';
 import {
   DocumentStatus, EmptyState, RiskBar, StatusIndicator,
   type EstadoDoc, type Risco, type TomStatus,
@@ -95,27 +95,66 @@ function hojeBrasilia(): string {
 type LeituraIptu = {
   rotulo: string;
   detalhe: string;
-  tom: 'danger' | 'warning' | 'neutral' | 'muted';
+  tom: 'danger' | 'warning' | 'success' | 'neutral' | 'muted';
+  risco: Risco;
 };
 
+/**
+ * IPTU = DATA + SITUAÇÃO CADASTRADA (em_dia | em_atraso | parcelado).
+ *
+ * ⚠️ Data passada NÃO é atraso. Em produção (15/09) 11 de 12 IPTU "vencendo"
+ * tinham a data do carnê de janeiro com situação "em dia" — pintar tudo de
+ * vermelho foi alarme falso ("12 críticos" com só 1 em atraso de verdade).
+ * Crítico é SÓ a situação `em_atraso`. Data passada sem situação informada é
+ * atenção (alguém precisa confirmar), nunca crítico.
+ */
 function lerIptu(p: Property): LeituraIptu {
-  if (p.docsFaltando.includes('IPTU')) return { rotulo: 'Sem cadastro', detalhe: 'não registrado', tom: 'warning' };
+  if (p.docsFaltando.includes('IPTU')) return { rotulo: 'Sem cadastro', detalhe: 'não registrado', tom: 'warning', risco: 'atencao' };
+  const situacao = p.iptu?.situacao || null;
   const iso = p.iptu?.dataVencimento ? new Date(p.iptu.dataVencimento).toISOString().slice(0, 10) : null;
-  if (!iso) return { rotulo: 'Sem vencimento', detalhe: 'data não informada', tom: 'muted' };
-  const hoje = hojeBrasilia();
-  const [a, m, d] = iso.split('-').map(Number);
-  const [ha, hm, hd] = hoje.split('-').map(Number);
-  const dias = Math.round((Date.UTC(a, m - 1, d) - Date.UTC(ha, hm - 1, hd)) / 86_400_000);
-  const data = `${String(d).padStart(2, '0')} ${MESES[m - 1]}${a !== ha ? ` ${a}` : ''}`;
-  if (dias < 0) return { rotulo: 'Vencido', detalhe: `${data} · há ${-dias} ${dias === -1 ? 'dia' : 'dias'}`, tom: 'danger' };
-  if (dias === 0) return { rotulo: 'Vence hoje', detalhe: data, tom: 'warning' };
-  if (p.iptuVencendo) return { rotulo: 'A vencer', detalhe: `${data} · em ${dias} ${dias === 1 ? 'dia' : 'dias'}`, tom: 'warning' };
-  return { rotulo: 'Vence', detalhe: `${data} · em ${dias} dias`, tom: 'neutral' };
+
+  let data = '';
+  let dias = 0;
+  if (iso) {
+    const hoje = hojeBrasilia();
+    const [a, m, d] = iso.split('-').map(Number);
+    const [ha, hm, hd] = hoje.split('-').map(Number);
+    dias = Math.round((Date.UTC(a, m - 1, d) - Date.UTC(ha, hm - 1, hd)) / 86_400_000);
+    data = `${String(d).padStart(2, '0')} ${MESES[m - 1]}${a !== ha ? ` ${a}` : ''}`;
+  }
+  const plural = (n: number) => `${n} ${n === 1 ? 'dia' : 'dias'}`;
+
+  if (situacao === 'em_atraso') {
+    return {
+      rotulo: 'Em atraso',
+      detalhe: !iso ? 'situação cadastrada' : dias < 0 ? `venc. ${data} · há ${plural(-dias)}` : `venc. ${data}`,
+      tom: 'danger',
+      risco: 'critico',
+    };
+  }
+  if (!iso) {
+    if (situacao === 'em_dia') return { rotulo: 'Em dia', detalhe: 'sem data de vencimento', tom: 'success', risco: null };
+    if (situacao === 'parcelado') return { rotulo: 'Parcelado', detalhe: 'sem data de vencimento', tom: 'neutral', risco: null };
+    return { rotulo: 'Sem vencimento', detalhe: 'data não informada', tom: 'muted', risco: null };
+  }
+  if (dias < 0) {
+    if (situacao === 'em_dia') return { rotulo: 'Em dia', detalhe: `último venc. ${data}`, tom: 'success', risco: null };
+    if (situacao === 'parcelado') return { rotulo: 'Parcelado', detalhe: `venc. ${data}`, tom: 'neutral', risco: null };
+    return { rotulo: 'Data vencida', detalhe: `${data} · situação não informada`, tom: 'warning', risco: 'atencao' };
+  }
+  if (dias === 0) return { rotulo: 'Vence hoje', detalhe: data, tom: 'warning', risco: 'atencao' };
+  if (p.iptuVencendo) return { rotulo: 'A vencer', detalhe: `${data} · em ${plural(dias)}`, tom: 'warning', risco: 'atencao' };
+  return {
+    rotulo: situacao === 'parcelado' ? 'Parcelado' : situacao === 'em_dia' ? 'Em dia' : 'Vence',
+    detalhe: `venc. ${data} · em ${plural(dias)}`,
+    tom: situacao === 'em_dia' ? 'success' : 'neutral',
+    risco: null,
+  };
 }
 
 function riscoDe(p: Property, iptu: LeituraIptu): Risco {
-  if (iptu.tom === 'danger') return 'critico';
-  if (p.docsFaltandoCount > 0 || p.iptuVencendo) return 'atencao';
+  if (iptu.risco === 'critico') return 'critico';
+  if (p.docsFaltandoCount > 0 || iptu.risco === 'atencao') return 'atencao';
   return null;
 }
 
@@ -123,7 +162,8 @@ function docsDe(p: Property, iptu: LeituraIptu): { nome: string; estado: EstadoD
   const faltando = new Set(p.docsFaltando);
   const lista = DOCS.map((nome) => {
     if (faltando.has(nome)) return { nome, estado: 'pendente' as EstadoDoc };
-    if (nome === 'IPTU' && iptu.tom === 'danger') return { nome, estado: 'vencido' as EstadoDoc, nota: `vencido · ${iptu.detalhe}` };
+    if (nome === 'IPTU' && iptu.risco === 'critico') return { nome, estado: 'vencido' as EstadoDoc, nota: `${iptu.rotulo.toLowerCase()} · ${iptu.detalhe}` };
+    if (nome === 'IPTU' && iptu.risco === 'atencao') return { nome, estado: 'pendente' as EstadoDoc, nota: `${iptu.rotulo.toLowerCase()} · ${iptu.detalhe}` };
     return { nome, estado: 'ok' as EstadoDoc };
   });
   /* documento que o backend venha a criar e a tela ainda não conhece */
@@ -134,6 +174,7 @@ function docsDe(p: Property, iptu: LeituraIptu): { nome: string; estado: EstadoD
 const TOM_IPTU = {
   danger: 'text-oo-danger',
   warning: 'text-oo-warning',
+  success: 'text-oo-success',
   neutral: 'text-oo-ink-2',
   muted: 'text-oo-muted',
 };
@@ -174,6 +215,20 @@ export default function ImobiliarioPage() {
   const [filtrosAbertos, setFiltrosAbertos] = useState(false);
   const pedido = useRef(0);
   const popover = useRef<HTMLDivElement>(null);
+  const busca = useRef<HTMLInputElement>(null);
+
+  // Atalho '/' foca a busca (fora de campo de texto)
+  useEffect(() => {
+    const atalho = (e: KeyboardEvent) => {
+      const alvo = e.target as HTMLElement | null;
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (alvo && alvo.closest('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      busca.current?.focus();
+    };
+    document.addEventListener('keydown', atalho);
+    return () => document.removeEventListener('keydown', atalho);
+  }, []);
 
   // Auth check
   useEffect(() => {
@@ -272,64 +327,92 @@ export default function ImobiliarioPage() {
 
   return (
     <EnterpriseShell trilha={[{ label: 'Início', href: '/' }, { label: 'Imobiliário' }]}>
-      <main className="mx-auto w-full max-w-[1760px] px-4 pb-12 pt-6 sm:px-6 sm:pt-8 2xl:px-10">
-        <PageHeader
-          icone={<Building2 className="h-5 w-5" />}
-          titulo="Imobiliário"
-          subtitulo="Gestão de imóveis · documentos · taxas"
-          acoes={
-            <Link href="/imobiliario/novo" className={BTN_PRIMARIO}>
-              <Plus className="h-4 w-4" strokeWidth={2.5} />
-              Novo imóvel
-            </Link>
-          }
-        />
-
-        {/* Camada de indicadores */}
-        <div className="mt-6">
-          <MetricStrip
-            carregando={!dashboard}
-            metricas={
-              dashboard
-                ? [
-                    {
-                      rotulo: 'Imóveis',
-                      valor: dashboard.total,
-                      apoio: `${dashboard.ativos} ${dashboard.ativos === 1 ? "ativo" : "ativos"} · ${dashboard.em_construcao} em construção`,
-                      title: 'imóveis no portfólio (sem arquivados)',
-                    },
-                    {
-                      rotulo: 'Documentos pendentes',
-                      valor: dashboard.docsFaltando,
-                      tom: dashboard.docsFaltando > 0 ? 'warning' : undefined,
-                      apoio: `de ${dashboard.total * DOCS.length} esperados`,
-                      title: 'Água, Energia, IPTU, Matrícula e Escritura não cadastrados',
-                    },
-                    {
-                      rotulo: 'IPTU vencendo',
-                      valor: dashboard.iptuVencendo,
-                      tom: dashboard.iptuVencendo > 0 ? 'danger' : undefined,
-                      apoio: 'vence em até 30 dias ou já venceu',
-                    },
-                    {
-                      rotulo: 'IPTU pendente',
-                      valor: dashboard.iptuPendente,
-                      tom: dashboard.iptuPendente > 0 ? 'warning' : undefined,
-                      apoio: 'sem cadastro ou em atraso',
-                    },
-                    {
-                      rotulo: 'Anexos',
-                      valor: dashboard.totalAnexos,
-                      apoio: 'arquivos no portfólio',
-                    },
-                  ]
-                : ['Imóveis', 'Documentos pendentes', 'IPTU vencendo', 'IPTU pendente', 'Anexos'].map((rotulo) => ({ rotulo, valor: 0 }))
+      {/* Faixa de comando: título + inteligência operacional sobre o navy da casca */}
+      <div className="bg-oo-nav pb-16 sm:pb-20">
+        <div className="mx-auto w-full max-w-[2400px] px-4 pt-6 sm:px-6 sm:pt-8 2xl:px-12">
+          <PageHeader
+            escuro
+            icone={<Building2 className="h-5 w-5" />}
+            titulo="Imobiliário"
+            subtitulo="Gestão de imóveis · documentos · taxas"
+            acoes={
+              <Link href="/imobiliario/novo" className={`${BTN_PRIMARIO} focus-visible:ring-offset-oo-nav`}>
+                <Plus className="h-4 w-4" strokeWidth={2.5} />
+                Novo imóvel
+              </Link>
             }
           />
-        </div>
 
-        {/* Área de dados */}
-        <section className="mt-6 rounded-lg border border-oo-line bg-oo-surface">
+          <div className="mt-6 sm:mt-8">
+            <MetricStrip
+              escuro
+              carregando={!dashboard}
+              metricas={
+                dashboard
+                  ? [
+                      {
+                        rotulo: 'Imóveis',
+                        valor: dashboard.total,
+                        title: 'imóveis no portfólio (sem arquivados)',
+                        viz: (
+                          <BarraSegmentos
+                            escuro
+                            partes={[
+                              { valor: dashboard.ativos, cor: 'bg-[#47CD89]', title: `${dashboard.ativos} ativo(s)` },
+                              { valor: dashboard.em_construcao, cor: 'bg-[#53B1FD]', title: `${dashboard.em_construcao} em construção` },
+                              { valor: dashboard.pronta_locacao, cor: 'bg-slate-200', title: `${dashboard.pronta_locacao} pronta(s) p/ locação` },
+                              { valor: dashboard.vendidos, cor: 'bg-slate-400', title: `${dashboard.vendidos} vendido(s)` },
+                              { valor: dashboard.inativos, cor: 'bg-slate-600', title: `${dashboard.inativos} inativo(s)` },
+                            ]}
+                          />
+                        ),
+                        apoio: `${dashboard.ativos} ${dashboard.ativos === 1 ? 'ativo' : 'ativos'} · ${dashboard.em_construcao} em construção · ${dashboard.inativos} ${dashboard.inativos === 1 ? 'inativo' : 'inativos'}`,
+                      },
+                      {
+                        rotulo: 'Documentos pendentes',
+                        valor: dashboard.docsFaltando,
+                        tom: dashboard.docsFaltando > 0 ? 'warning' : undefined,
+                        title: 'Água, Energia, IPTU, Matrícula e Escritura não cadastrados',
+                        viz: (
+                          <BarraSegmentos
+                            escuro
+                            partes={[
+                              { valor: dashboard.total * DOCS.length - dashboard.docsFaltando, cor: 'bg-white', title: 'cadastrados' },
+                              { valor: dashboard.docsFaltando, cor: 'bg-[#FDB022]', title: 'pendentes' },
+                            ]}
+                          />
+                        ),
+                        apoio: `${dashboard.total * DOCS.length - dashboard.docsFaltando} de ${dashboard.total * DOCS.length} cadastrados`,
+                      },
+                      {
+                        rotulo: 'IPTU pendente',
+                        valor: dashboard.iptuPendente,
+                        tom: dashboard.iptuPendente > 0 ? 'danger' : undefined,
+                        apoio: 'sem cadastro ou em atraso',
+                      },
+                      {
+                        rotulo: 'IPTU vencendo',
+                        valor: dashboard.iptuVencendo,
+                        tom: dashboard.iptuVencendo > 0 ? 'warning' : undefined,
+                        apoio: 'data em até 30 dias ou já passou',
+                        title: 'Conta a data do carnê, não a situação — veja a coluna IPTU',
+                      },
+                      {
+                        rotulo: 'Anexos',
+                        valor: dashboard.totalAnexos,
+                        apoio: 'arquivos no portfólio',
+                      },
+                    ]
+                  : ['Imóveis', 'Documentos pendentes', 'IPTU pendente', 'IPTU vencendo', 'Anexos'].map((rotulo) => ({ rotulo, valor: 0 }))
+              }
+            />
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto -mt-10 w-full max-w-[2400px] px-4 pb-12 sm:-mt-12 sm:px-6 2xl:px-12">
+        {/* Área de dados — folha sobreposta à faixa */}
+        <section className="relative rounded-xl border border-oo-line bg-oo-surface shadow-[0_1px_2px_rgba(16,24,40,.06),0_8px_24px_-12px_rgba(16,24,40,.12)]">
           {/* Abas */}
           <div className="flex overflow-x-auto border-b border-oo-line px-2 [scrollbar-width:none] sm:px-4" role="tablist" aria-label="Filtrar por situação">
             {ABAS.map((o) => {
@@ -369,8 +452,10 @@ export default function ImobiliarioPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Buscar imóvel, endereço, proprietário"
                 aria-label="Buscar por nome, endereço, proprietário"
-                className={`${CAMPO} pl-9`}
+                ref={busca}
+                className={`${CAMPO} pl-9 sm:pr-9`}
               />
+              <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-oo-line bg-oo-subtle px-1.5 py-px text-[11px] font-semibold text-oo-muted sm:block" title="Atalho: /">/</kbd>
             </div>
 
             <div ref={popover} className="relative">
@@ -512,8 +597,8 @@ export default function ImobiliarioPage() {
         {/* Legenda */}
         {!primeiraCarga && !error && (
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 px-1 text-[12px] font-medium text-oo-ink-2">
-            <span className="inline-flex items-center gap-2"><span className="h-3 w-[3px] rounded bg-oo-danger" />Crítico: IPTU vencido</span>
-            <span className="inline-flex items-center gap-2"><span className="h-3 w-[3px] rounded bg-oo-warning" />Atenção: documento pendente ou IPTU a vencer em 30 dias</span>
+            <span className="inline-flex items-center gap-2"><span className="h-3 w-[3px] rounded bg-oo-danger" />Crítico: IPTU em atraso (situação cadastrada)</span>
+            <span className="inline-flex items-center gap-2"><span className="h-3 w-[3px] rounded bg-oo-warning" />Atenção: documento pendente, IPTU a vencer em 30 dias ou data vencida sem situação</span>
           </div>
         )}
       </main>
@@ -540,7 +625,7 @@ function Linha({
   const arquivado = !!p.archivedAt;
   const rua = [p.endereco, p.numero].filter(Boolean).join(', ');
   const local = [p.bairro, [p.cidade, p.estado].filter(Boolean).join('/')].filter(Boolean).join(' · ');
-  const okDocs = docs.filter((d) => d.estado === 'ok').length;
+  const okDocs = docs.length - p.docsFaltando.length; // cadastrados (IPTU a vencer continua cadastrado)
 
   return (
     <Link
