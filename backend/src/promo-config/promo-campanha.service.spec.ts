@@ -38,6 +38,7 @@ describe('PromoCampanhaService', () => {
         delete: jest.fn().mockResolvedValue({}),
       },
       integrationLog: { create: jest.fn().mockResolvedValue({}) },
+      productClassification: { findMany: jest.fn().mockResolvedValue([]) },
     };
     let falhar = !!opts.falharConfig;
     const promoConfig: any = {
