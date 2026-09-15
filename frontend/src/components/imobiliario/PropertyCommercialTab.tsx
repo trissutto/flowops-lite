@@ -107,14 +107,14 @@ const PROPERTY_TYPES: Array<[string, string]> = [
 ];
 
 const STATUS_LABELS: Record<string, { label: string; className: string }> = {
-  draft: { label: 'Rascunho', className: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
-  publishing: { label: 'Publicando', className: 'bg-sky-500/15 text-sky-300 border-sky-500/30' },
-  published: { label: 'Publicado', className: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
-  update_pending: { label: 'Atualização pendente', className: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
-  updating: { label: 'Atualizando', className: 'bg-sky-500/15 text-sky-300 border-sky-500/30' },
-  unpublishing: { label: 'Despublicando', className: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
-  unpublished: { label: 'Despublicado', className: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
-  error: { label: 'Erro na sincronização', className: 'bg-rose-500/15 text-rose-300 border-rose-500/30' },
+  draft: { label: 'Rascunho', className: 'border-oo-line-strong bg-oo-hover text-oo-ink-2' },
+  publishing: { label: 'Publicando', className: 'border-oo-info/30 bg-oo-hover text-oo-info' },
+  published: { label: 'Publicado', className: 'border-oo-success/30 bg-oo-success-soft text-oo-success' },
+  update_pending: { label: 'Atualização pendente', className: 'border-oo-warning/30 bg-oo-warning-soft text-oo-warning' },
+  updating: { label: 'Atualizando', className: 'border-oo-info/30 bg-oo-hover text-oo-info' },
+  unpublishing: { label: 'Despublicando', className: 'border-oo-warning/30 bg-oo-warning-soft text-oo-warning' },
+  unpublished: { label: 'Despublicado', className: 'border-oo-line-strong bg-oo-hover text-oo-ink-2' },
+  error: { label: 'Erro na sincronização', className: 'border-oo-danger/30 bg-oo-danger-soft text-oo-danger' },
 };
 
 const TRANSITIONAL = new Set(['publishing', 'updating', 'unpublishing']);
@@ -342,7 +342,7 @@ export function PropertyCommercialTab({ propertyId }: { propertyId: string }) {
   };
 
   if (loading) {
-    return <div className="py-20 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-amber-400" /></div>;
+    return <div className="py-20 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-oo-primary" /></div>;
   }
   if (!data) {
     return <Message tone="error">{error || 'Não foi possível carregar a ficha comercial.'}</Message>;
@@ -356,24 +356,24 @@ export function PropertyCommercialTab({ propertyId }: { propertyId: string }) {
 
   return (
     <div className="space-y-5">
-      <section className="bg-gradient-to-br from-amber-500/10 to-slate-900/30 border border-amber-500/25 rounded-2xl p-5">
+      <section className="bg-oo-subtle border border-oo-line rounded-lg p-5">
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0">
-            <Globe2 className="w-6 h-6 text-amber-300" />
+          <div className="w-12 h-12 rounded-lg border border-oo-line bg-oo-surface flex items-center justify-center shrink-0">
+            <Globe2 className="w-6 h-6 text-oo-ink-2" />
           </div>
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-black">Ficha para Corretores</h2>
-              <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-full border ${statusInfo.className}`}>
+              <h2 className="font-oo-display text-lg font-semibold tracking-[-0.01em] text-oo-ink">Ficha para Corretores</h2>
+              <span className={`text-[11px] font-semibold uppercase tracking-[0.04em] px-1.5 py-px rounded border ${statusInfo.className}`}>
                 {statusInfo.label}
               </span>
-              {dirty && <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-full border bg-amber-500/15 text-amber-300 border-amber-500/30">Alterações não salvas</span>}
+              {dirty && <span className="text-[11px] font-semibold uppercase tracking-[0.04em] px-1.5 py-px rounded border border-oo-warning/30 bg-oo-warning-soft text-oo-warning">Alterações não salvas</span>}
             </div>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-[13px] text-oo-ink-2 mt-1">
               Somente os dados desta aba e as mídias comerciais podem seguir para o portal isolado.
             </p>
             {publication?.lastError && (
-              <p className="text-xs text-rose-300 mt-2">{publication.lastError}</p>
+              <p className="text-[13px] font-medium text-oo-danger mt-2">{publication.lastError}</p>
             )}
           </div>
           <div className="flex flex-wrap gap-2">
@@ -383,7 +383,7 @@ export function PropertyCommercialTab({ propertyId }: { propertyId: string }) {
             {publication?.publicUrl && status !== 'unpublished' && (
               <>
                 <ActionButton icon={Copy} onClick={copyLink} secondary>Copiar link</ActionButton>
-                <a href={publication.publicUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-xs font-bold hover:bg-white/10">
+                <a href={publication.publicUrl} target="_blank" rel="noreferrer" className="inline-flex h-10 items-center justify-center gap-2 px-3.5 rounded-md border border-oo-line-strong bg-oo-surface text-[14px] font-medium text-oo-ink transition-colors duration-150 hover:bg-oo-hover active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary">
                   <ExternalLink className="w-3.5 h-3.5" /> Abrir
                 </a>
               </>
@@ -411,7 +411,7 @@ export function PropertyCommercialTab({ propertyId }: { propertyId: string }) {
           </FormSection>
 
           <FormSection title="Localização pública">
-            <div className="p-3 bg-black/20 border border-white/10 rounded-xl text-xs text-slate-300">
+            <div className="px-3 py-2.5 bg-oo-subtle border border-oo-line rounded-md text-[13px] text-oo-ink-2">
               {[data.property.endereco, data.property.numero, data.property.complemento, data.property.bairro, data.property.cidade, data.property.estado]
                 .filter(Boolean).join(', ') || 'Endereço ainda não cadastrado na aba Geral.'}
             </div>
@@ -464,35 +464,35 @@ export function PropertyCommercialTab({ propertyId }: { propertyId: string }) {
             <Field label="Observações internas de negociação" value={form.internalNegotiationNotes} onChange={(v) => setField('internalNegotiationNotes', v)} type="textarea" />
           </FormSection>
 
-          <button onClick={save} disabled={saving} className="w-full px-5 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black flex items-center justify-center gap-2 disabled:opacity-50">
+          <button onClick={save} disabled={saving} className="w-full h-11 px-5 rounded-md bg-oo-primary enabled:hover:bg-oo-primary-hover text-white text-[14px] font-semibold flex items-center justify-center gap-2 transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Salvar ficha comercial
           </button>
 
           <FormSection title="Fotos e materiais comerciais">
             <div
-              className="border-2 border-dashed border-amber-500/30 rounded-xl p-6 text-center hover:bg-amber-500/5 cursor-pointer"
+              className="border-2 border-dashed border-oo-line-strong rounded-lg p-6 text-center bg-oo-subtle hover:bg-oo-hover transition-colors duration-150 cursor-pointer"
               onClick={() => fileInputRef.current?.click()}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => { event.preventDefault(); uploadFiles(event.dataTransfer.files); }}
             >
-              {uploading ? <Loader2 className="w-8 h-8 animate-spin text-amber-400 mx-auto" /> : <UploadCloud className="w-8 h-8 text-amber-400 mx-auto" />}
-              <div className="font-bold text-sm mt-2">{uploading ? 'Enviando arquivos...' : 'Enviar fotos ou planta'}</div>
-              <div className="text-[11px] text-slate-500 mt-1">JPG, PNG ou PDF · até 10 MB por arquivo</div>
+              {uploading ? <Loader2 className="w-8 h-8 animate-spin text-oo-primary mx-auto" /> : <UploadCloud className="w-8 h-8 text-oo-muted mx-auto" />}
+              <div className="text-[14px] font-semibold text-oo-ink mt-2">{uploading ? 'Enviando arquivos...' : 'Enviar fotos ou planta'}</div>
+              <div className="text-[12px] text-oo-muted mt-1">JPG, PNG ou PDF · até 10 MB por arquivo</div>
               <input ref={fileInputRef} type="file" multiple accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={(event) => event.target.files && uploadFiles(event.target.files)} />
             </div>
 
-            <div className="grid md:grid-cols-[140px_1fr_1fr_auto] gap-2 items-end p-3 bg-black/20 rounded-xl">
+            <div className="grid md:grid-cols-[140px_1fr_1fr_auto] gap-2 items-end p-3 bg-oo-subtle border border-oo-line rounded-lg">
               <SelectField label="Tipo do link" value={linkKind} onChange={setLinkKind} options={[["video", "Vídeo"], ["virtual_tour", "Tour virtual"]]} />
               <Field label="URL HTTPS" value={linkUrl} onChange={setLinkUrl} placeholder="https://..." />
               <Field label="Legenda" value={linkCaption} onChange={setLinkCaption} />
-              <button onClick={addLink} disabled={!linkUrl.trim() || working === 'link'} className="h-[42px] px-4 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-bold disabled:opacity-40 flex items-center gap-2">
+              <button onClick={addLink} disabled={!linkUrl.trim() || working === 'link'} className="h-10 px-3.5 rounded-md border border-oo-line-strong bg-oo-surface enabled:hover:bg-oo-hover text-[14px] font-medium text-oo-ink transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2">
                 <Link2 className="w-4 h-4" /> Adicionar
               </button>
             </div>
 
             {data.media.length === 0 ? (
-              <div className="py-10 text-center text-slate-500 text-sm"><ImagePlus className="w-9 h-9 mx-auto mb-2 opacity-50" />Nenhuma mídia comercial.</div>
+              <div className="py-10 text-center text-oo-ink-2 text-[14px]"><ImagePlus className="w-9 h-9 mx-auto mb-2 text-oo-muted" />Nenhuma mídia comercial.</div>
             ) : (
               <div className="space-y-2">
                 {data.media.map((media, index) => (
@@ -516,35 +516,35 @@ export function PropertyCommercialTab({ propertyId }: { propertyId: string }) {
         </div>
 
         <aside className="space-y-4 xl:sticky xl:top-28">
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-            <h3 className="font-black text-sm flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-amber-400" />Checklist de publicação</h3>
+          <div className="bg-oo-surface border border-oo-line rounded-lg p-4">
+            <h3 className="font-oo-display text-[15px] font-semibold tracking-[-0.01em] text-oo-ink flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-oo-muted" />Checklist de publicação</h3>
             <div className="space-y-2 mt-4">
               {data.checklist.items.map((item) => (
-                <div key={item.key} className="flex items-center gap-2 text-xs">
-                  {item.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />}
-                  <span className={item.ok ? 'text-slate-300' : 'text-amber-200'}>{item.label}</span>
+                <div key={item.key} className="flex items-center gap-2 text-[13px]">
+                  {item.ok ? <CheckCircle2 className="w-4 h-4 text-oo-success shrink-0" /> : <AlertTriangle className="w-4 h-4 text-oo-warning shrink-0" />}
+                  <span className={item.ok ? 'text-oo-ink-2' : 'font-medium text-oo-warning'}>{item.label}</span>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-3">
-            <h3 className="font-black text-sm flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-emerald-400" />Publicação segura</h3>
-            <p className="text-[11px] text-slate-400">A página pública recebe uma cópia sanitizada. O portal não acessa o banco do FlowOps.</p>
+          <div className="bg-oo-surface border border-oo-line rounded-lg p-4 space-y-3">
+            <h3 className="font-oo-display text-[15px] font-semibold tracking-[-0.01em] text-oo-ink flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-oo-success" />Publicação segura</h3>
+            <p className="text-[12px] leading-5 text-oo-ink-2">A página pública recebe uma cópia sanitizada. O portal não acessa o banco do FlowOps.</p>
 
             {(status === 'draft' || status === 'unpublished' || status === 'published' || status === 'update_pending') && (
-              <button onClick={() => publicationAction('publish')} disabled={busy || dirty || !data.checklist.ready} title={dirty ? 'Salve as alterações antes de publicar.' : undefined} className="w-full px-4 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black disabled:opacity-40 flex items-center justify-center gap-2">
+              <button onClick={() => publicationAction('publish')} disabled={busy || dirty || !data.checklist.ready} title={dirty ? 'Salve as alterações antes de publicar.' : undefined} className="w-full h-10 px-4 rounded-md bg-oo-primary enabled:hover:bg-oo-primary-hover text-white text-[14px] font-semibold transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2">
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe2 className="w-4 h-4" />}
                 {status === 'published' || status === 'update_pending' ? 'Atualizar publicação' : 'Publicar ficha'}
               </button>
             )}
             {status === 'error' && (
-              <button onClick={() => publicationAction('retry')} disabled={busy} className="w-full px-4 py-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-black flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4" />Tentar novamente</button>
+              <button onClick={() => publicationAction('retry')} disabled={busy} className="w-full h-10 px-4 rounded-md bg-oo-primary enabled:hover:bg-oo-primary-hover text-white text-[14px] font-semibold transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4" />Tentar novamente</button>
             )}
             {publication?.publishedVersion > 0 && status !== 'unpublished' && (
               <>
-                <button onClick={() => publicationAction('rotate-link')} disabled={busy} className="w-full px-4 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold disabled:opacity-40 flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4" />Gerar novo link</button>
-                <button onClick={() => publicationAction('unpublish')} disabled={busy} className="w-full px-4 py-2.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-300 text-xs font-bold disabled:opacity-40 flex items-center justify-center gap-2"><Unlink className="w-4 h-4" />Despublicar</button>
+                <button onClick={() => publicationAction('rotate-link')} disabled={busy} className="w-full h-10 px-4 rounded-md border border-oo-line-strong bg-oo-surface enabled:hover:bg-oo-subtle text-[14px] font-medium text-oo-ink transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4" />Gerar novo link</button>
+                <button onClick={() => publicationAction('unpublish')} disabled={busy} className="w-full h-10 px-4 rounded-md border border-oo-danger/30 bg-oo-surface enabled:hover:bg-oo-danger-soft text-[14px] font-medium text-oo-danger transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-danger disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"><Unlink className="w-4 h-4" />Despublicar</button>
               </>
             )}
           </div>
@@ -585,32 +585,32 @@ function MediaRow({
       onDragStart={onDragStart}
       onDragOver={(event) => event.preventDefault()}
       onDrop={onDrop}
-      className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-xl border transition ${dragged ? 'opacity-40 border-amber-400' : 'bg-white/5 border-white/10'}`}
+      className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-lg border transition-colors duration-150 ${dragged ? 'border-dashed border-oo-primary bg-oo-hover' : 'bg-oo-surface border-oo-line hover:border-oo-line-strong'}`}
     >
-      <GripVertical className="hidden sm:block w-4 h-4 text-slate-600 cursor-grab" />
-      <div className="w-full sm:w-24 h-20 rounded-lg overflow-hidden bg-black/30 shrink-0 flex items-center justify-center">
-        {media.kind === 'photo' ? <img src={media.sourceUrl} alt={media.caption || media.fileName} className="w-full h-full object-cover" /> : <FileImage className="w-7 h-7 text-amber-400" />}
+      <GripVertical className="hidden sm:block w-4 h-4 text-oo-muted cursor-grab" />
+      <div className="w-full sm:w-24 h-20 rounded-md overflow-hidden border border-oo-line bg-oo-hover shrink-0 flex items-center justify-center">
+        {media.kind === 'photo' ? <img src={media.sourceUrl} alt={media.caption || media.fileName} className="w-full h-full object-cover" /> : <FileImage className="w-7 h-7 text-oo-muted" />}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-bold truncate">{media.fileName}</span>
-          <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-white/10 text-slate-400">{media.kind}</span>
-          {media.isCover && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Capa</span>}
-          {!media.active && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">Oculta</span>}
+          <span className="text-[13px] font-semibold text-oo-ink truncate">{media.fileName}</span>
+          <span className="text-[11px] font-semibold uppercase tracking-[0.04em] px-1.5 py-px rounded border border-oo-line bg-oo-hover text-oo-ink-2">{media.kind}</span>
+          {media.isCover && <span className="text-[11px] font-semibold uppercase tracking-[0.04em] px-1.5 py-px rounded border border-oo-ink bg-oo-ink text-white">Capa</span>}
+          {!media.active && <span className="text-[11px] font-semibold uppercase tracking-[0.04em] px-1.5 py-px rounded border border-oo-danger/30 bg-oo-danger-soft text-oo-danger">Oculta</span>}
         </div>
         <input
           defaultValue={media.caption || ''}
           onBlur={(event) => event.target.value !== (media.caption || '') && onPatch({ caption: event.target.value })}
           placeholder="Legenda da mídia"
-          className="w-full mt-2 px-2.5 py-1.5 bg-black/20 border border-white/10 rounded text-xs focus:outline-none focus:border-amber-400"
+          className="w-full mt-2 h-8 px-2.5 bg-oo-surface border border-oo-line-strong rounded-md text-[13px] text-oo-ink placeholder:text-oo-muted transition-shadow duration-150 focus:outline-none focus:border-oo-primary focus:ring-[3px] focus:ring-oo-primary/15"
         />
       </div>
       <div className="flex items-center gap-1">
-        <button onClick={() => onMove(-1)} disabled={index === 0 || working} className="p-2 hover:bg-white/10 rounded disabled:opacity-25" title="Subir"><ChevronUp className="w-4 h-4" /></button>
-        <button onClick={() => onMove(1)} disabled={index === total - 1 || working} className="p-2 hover:bg-white/10 rounded disabled:opacity-25" title="Descer"><ChevronDown className="w-4 h-4" /></button>
-        {media.kind === 'photo' && !media.isCover && <button onClick={() => onPatch({ isCover: true })} disabled={working} className="px-2 py-1.5 text-[10px] font-bold bg-amber-500/10 text-amber-300 rounded">Capa</button>}
-        <button onClick={() => onPatch({ active: !media.active })} disabled={working} className="px-2 py-1.5 text-[10px] font-bold bg-white/5 rounded">{media.active ? 'Ocultar' : 'Exibir'}</button>
-        <button onClick={onDelete} disabled={working} className="p-2 text-rose-400 hover:bg-rose-500/10 rounded"><Trash2 className="w-4 h-4" /></button>
+        <button onClick={() => onMove(-1)} disabled={index === 0 || working} className="p-2 rounded-md text-oo-ink-2 transition-colors duration-150 enabled:hover:bg-oo-hover enabled:hover:text-oo-ink disabled:cursor-not-allowed disabled:opacity-30" title="Subir"><ChevronUp className="w-4 h-4" /></button>
+        <button onClick={() => onMove(1)} disabled={index === total - 1 || working} className="p-2 rounded-md text-oo-ink-2 transition-colors duration-150 enabled:hover:bg-oo-hover enabled:hover:text-oo-ink disabled:cursor-not-allowed disabled:opacity-30" title="Descer"><ChevronDown className="w-4 h-4" /></button>
+        {media.kind === 'photo' && !media.isCover && <button onClick={() => onPatch({ isCover: true })} disabled={working} className="h-8 px-2.5 rounded-md border border-oo-line-strong bg-oo-surface text-[12px] font-semibold text-oo-ink transition-colors duration-150 enabled:hover:bg-oo-subtle disabled:cursor-not-allowed disabled:opacity-50">Capa</button>}
+        <button onClick={() => onPatch({ active: !media.active })} disabled={working} className="h-8 px-2.5 rounded-md border border-oo-line-strong bg-oo-surface text-[12px] font-semibold text-oo-ink transition-colors duration-150 enabled:hover:bg-oo-subtle disabled:cursor-not-allowed disabled:opacity-50">{media.active ? 'Ocultar' : 'Exibir'}</button>
+        <button onClick={onDelete} disabled={working} className="p-2 rounded-md text-oo-danger transition-colors duration-150 enabled:hover:bg-oo-danger-soft disabled:cursor-not-allowed disabled:opacity-50"><Trash2 className="w-4 h-4" /></button>
       </div>
     </div>
   );
@@ -620,20 +620,20 @@ function PreviewModal({ data, onClose }: { data: PreviewData; onClose: () => voi
   const snapshot = data.snapshot;
   const photos = data.mediaSources.filter((media) => media.kind === 'photo');
   return (
-    <div className="fixed inset-0 z-[100] bg-black/75 backdrop-blur-sm p-4 overflow-y-auto" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="max-w-5xl mx-auto bg-slate-900 border border-white/15 rounded-2xl overflow-hidden shadow-2xl">
-        <div className="p-4 border-b border-white/10 flex items-center gap-3 sticky top-0 bg-slate-900 z-10">
-          <Eye className="w-5 h-5 text-amber-400" />
-          <div className="flex-1"><div className="font-black">Prévia exata da publicação</div><div className="text-[11px] text-slate-500">Nenhum dado é enviado ao abrir esta tela.</div></div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded"><X className="w-5 h-5" /></button>
+    <div className="fixed inset-0 z-[100] bg-oo-ink/50 p-4 overflow-y-auto" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="max-w-5xl mx-auto bg-oo-surface border border-oo-line rounded-lg overflow-hidden shadow-oo-pop">
+        <div className="p-4 border-b border-oo-line flex items-center gap-3 sticky top-0 bg-oo-surface z-10">
+          <Eye className="w-5 h-5 text-oo-muted" />
+          <div className="flex-1"><div className="font-oo-display text-[16px] font-semibold tracking-[-0.01em] text-oo-ink">Prévia exata da publicação</div><div className="text-[12px] text-oo-muted">Nenhum dado é enviado ao abrir esta tela.</div></div>
+          <button onClick={onClose} className="p-2 rounded-md text-oo-ink-2 transition-colors duration-150 hover:bg-oo-hover hover:text-oo-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary"><X className="w-5 h-5" /></button>
         </div>
         {photos[0] && <img src={photos[0].sourceUrl} alt="Foto de capa" className="w-full h-64 md:h-96 object-cover" />}
         <div className="p-6 grid lg:grid-cols-[1fr_300px] gap-6">
           <div>
-            <div className="text-xs uppercase tracking-widest text-amber-400 font-bold">{snapshot.propertyType}</div>
-            <h2 className="text-3xl font-black mt-1">{snapshot.campaignTitle || snapshot.name}</h2>
-            <div className="text-slate-400 mt-2">{[snapshot.address.endereco, snapshot.address.numero, snapshot.address.bairro, snapshot.address.cidade, snapshot.address.estado].filter(Boolean).join(', ')}</div>
-            <div className="text-3xl font-black text-emerald-400 mt-5">{formatCurrency(snapshot.financial.salePrice)}</div>
+            <div className="text-[11px] uppercase tracking-[0.06em] text-oo-muted font-semibold">{snapshot.propertyType}</div>
+            <h2 className="font-oo-display text-3xl font-semibold tracking-[-0.02em] text-oo-ink mt-1">{snapshot.campaignTitle || snapshot.name}</h2>
+            <div className="text-[14px] text-oo-ink-2 mt-2">{[snapshot.address.endereco, snapshot.address.numero, snapshot.address.bairro, snapshot.address.cidade, snapshot.address.estado].filter(Boolean).join(', ')}</div>
+            <div className="font-oo-display text-3xl font-semibold tabular-nums text-oo-ink mt-5">{formatCurrency(snapshot.financial.salePrice)}</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-5">
               {snapshot.areas.landM2 && <PreviewMetric label="Terreno" value={`${snapshot.areas.landM2} m²`} />}
               {snapshot.areas.builtM2 && <PreviewMetric label="Construída" value={`${snapshot.areas.builtM2} m²`} />}
@@ -642,15 +642,15 @@ function PreviewModal({ data, onClose }: { data: PreviewData; onClose: () => voi
               {snapshot.characteristics.bathrooms !== null && <PreviewMetric label="Banheiros" value={snapshot.characteristics.bathrooms} />}
               {snapshot.characteristics.parkingSpaces !== null && <PreviewMetric label="Vagas" value={snapshot.characteristics.parkingSpaces} />}
             </div>
-            <p className="whitespace-pre-line text-sm text-slate-300 leading-7 mt-6">{snapshot.description}</p>
-            {photos.length > 1 && <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-6">{photos.slice(1).map((photo) => <img key={photo.id} src={photo.sourceUrl} alt={photo.caption || photo.fileName} className="w-full h-36 object-cover rounded-lg" />)}</div>}
+            <p className="whitespace-pre-line text-[14px] text-oo-ink-2 leading-7 mt-6">{snapshot.description}</p>
+            {photos.length > 1 && <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-6">{photos.slice(1).map((photo) => <img key={photo.id} src={photo.sourceUrl} alt={photo.caption || photo.fileName} className="w-full h-36 object-cover rounded-md" />)}</div>}
           </div>
           <aside className="space-y-4">
-            <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
-              <div className="font-black text-sm text-emerald-300 flex items-center gap-2"><ShieldCheck className="w-4 h-4" />Dados bloqueados</div>
-              <div className="space-y-1.5 mt-3">{data.privateFields.map((field) => <div key={field} className="text-xs text-slate-400">• {field}</div>)}</div>
+            <div className="p-4 rounded-lg bg-oo-success-soft border border-oo-success/20">
+              <div className="text-[14px] font-semibold text-oo-success flex items-center gap-2"><ShieldCheck className="w-4 h-4" />Dados bloqueados</div>
+              <div className="space-y-1.5 mt-3">{data.privateFields.map((field) => <div key={field} className="text-[13px] text-oo-ink-2">• {field}</div>)}</div>
             </div>
-            <div className="p-4 rounded-xl bg-white/5 border border-white/10 text-xs text-slate-400">Inscrição municipal: <b className="text-white">{snapshot.municipalRegistration}</b></div>
+            <div className="p-4 rounded-lg bg-oo-subtle border border-oo-line text-[13px] text-oo-ink-2">Inscrição municipal: <b className="font-semibold tabular-nums text-oo-ink">{snapshot.municipalRegistration}</b></div>
           </aside>
         </div>
       </div>
@@ -659,7 +659,7 @@ function PreviewModal({ data, onClose }: { data: PreviewData; onClose: () => voi
 }
 
 function FormSection({ title, children, privateSection = false }: { title: string; children: React.ReactNode; privateSection?: boolean }) {
-  return <section className={`border rounded-2xl p-5 space-y-4 ${privateSection ? 'bg-rose-500/5 border-rose-500/20' : 'bg-white/5 border-white/10'}`}><h3 className={`text-xs font-black uppercase tracking-wider ${privateSection ? 'text-rose-300' : 'text-amber-400'}`}>{title}</h3>{children}</section>;
+  return <section className={`border rounded-lg p-5 space-y-4 ${privateSection ? 'bg-oo-danger-soft border-oo-danger/20' : 'bg-oo-surface border-oo-line'}`}><h3 className={`font-oo-display text-[15px] font-semibold tracking-[-0.01em] ${privateSection ? 'text-oo-danger' : 'text-oo-ink'}`}>{title}</h3>{children}</section>;
 }
 
 function Field({ label, value, onChange, type = 'text', placeholder, rows = 3 }: {
@@ -670,8 +670,8 @@ function Field({ label, value, onChange, type = 'text', placeholder, rows = 3 }:
   placeholder?: string;
   rows?: number;
 }) {
-  const className = 'w-full px-3 py-2.5 bg-black/20 border border-white/10 rounded-lg text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-amber-400';
-  return <label className="block"><span className="text-xs font-bold text-slate-300 mb-1.5 block">{label}</span>{type === 'textarea' ? <textarea value={value ?? ''} rows={rows} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} className={`${className} resize-y`} /> : <input type={type} value={value ?? ''} placeholder={placeholder} min={type === 'number' ? 0 : undefined} step={type === 'number' ? '0.01' : undefined} onChange={(event) => onChange(event.target.value)} className={className} />}</label>;
+  const className = 'w-full px-3 bg-oo-surface border border-oo-line-strong rounded-md text-[14px] font-medium text-oo-ink placeholder:font-normal placeholder:text-oo-muted transition-shadow duration-150 focus:outline-none focus:border-oo-primary focus:ring-[3px] focus:ring-oo-primary/15';
+  return <label className="block"><span className="text-[12px] font-semibold text-oo-ink-2 mb-1.5 block">{label}</span>{type === 'textarea' ? <textarea value={value ?? ''} rows={rows} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} className={`${className} py-2.5 resize-y`} /> : <input type={type} value={value ?? ''} placeholder={placeholder} min={type === 'number' ? 0 : undefined} step={type === 'number' ? '0.01' : undefined} onChange={(event) => onChange(event.target.value)} className={`${className} h-10${type === 'number' ? ' tabular-nums' : ''}`} />}</label>;
 }
 
 function SelectField({ label, value, onChange, options }: {
@@ -680,7 +680,7 @@ function SelectField({ label, value, onChange, options }: {
   onChange: (value: string) => void;
   options: ReadonlyArray<readonly [string, string]>;
 }) {
-  return <label className="block"><span className="text-xs font-bold text-slate-300 mb-1.5 block">{label}</span><select value={value ?? ''} onChange={(event) => onChange(event.target.value)} className="w-full px-3 py-2.5 bg-slate-900 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-amber-400"><option value="">Selecione</option>{options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}</select></label>;
+  return <label className="block"><span className="text-[12px] font-semibold text-oo-ink-2 mb-1.5 block">{label}</span><select value={value ?? ''} onChange={(event) => onChange(event.target.value)} className="w-full h-10 px-3 bg-oo-surface border border-oo-line-strong rounded-md text-[14px] font-medium text-oo-ink transition-shadow duration-150 focus:outline-none focus:border-oo-primary focus:ring-[3px] focus:ring-oo-primary/15"><option value="">Selecione</option>{options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}</select></label>;
 }
 
 function TriState({ label, value, onChange }: {
@@ -697,7 +697,7 @@ function Toggle({ label, checked, onChange }: {
   checked: boolean;
   onChange: (value: boolean) => void;
 }) {
-  return <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="w-4 h-4 accent-amber-500" /><span className="text-xs font-bold text-slate-300">{label}</span></label>;
+  return <label className="flex items-center gap-2.5 cursor-pointer"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="w-4 h-4 accent-oo-primary" /><span className="text-[13px] font-medium text-oo-ink">{label}</span></label>;
 }
 
 function AreaField({ label, value, notApplicable, onValue, onNotApplicable }: {
@@ -711,15 +711,15 @@ function AreaField({ label, value, notApplicable, onValue, onNotApplicable }: {
 }
 
 function ActionButton({ icon: Icon, children, onClick, disabled, secondary }: any) {
-  return <button onClick={onClick} disabled={disabled} className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold disabled:opacity-40 ${secondary ? 'bg-white/5 hover:bg-white/10 border border-white/10' : 'bg-amber-500 text-slate-950'}`}><Icon className="w-3.5 h-3.5" />{children}</button>;
+  return <button onClick={onClick} disabled={disabled} className={`inline-flex h-10 items-center justify-center gap-2 px-3.5 rounded-md text-[14px] transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oo-primary disabled:cursor-not-allowed disabled:opacity-50 ${secondary ? 'border border-oo-line-strong bg-oo-surface font-medium text-oo-ink enabled:hover:bg-oo-hover' : 'bg-oo-primary font-semibold text-white enabled:hover:bg-oo-primary-hover focus-visible:ring-offset-2'}`}><Icon className="w-3.5 h-3.5" />{children}</button>;
 }
 
 function Message({ tone, children }: { tone: 'error' | 'success'; children: React.ReactNode }) {
-  return <div className={`p-3 rounded-xl border text-sm ${tone === 'error' ? 'bg-rose-500/10 border-rose-500/30 text-rose-200' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'}`}>{children}</div>;
+  return <div className={`px-3 py-2.5 rounded-md border text-[13px] font-medium ${tone === 'error' ? 'bg-oo-danger-soft border-oo-danger/20 text-oo-danger' : 'bg-oo-success-soft border-oo-success/20 text-oo-success'}`}>{children}</div>;
 }
 
 function PreviewMetric({ label, value }: any) {
-  return <div className="p-3 rounded-lg bg-white/5 border border-white/10"><div className="font-black">{value}</div><div className="text-[10px] text-slate-500 uppercase">{label}</div></div>;
+  return <div className="p-3 rounded-md bg-oo-subtle border border-oo-line"><div className="text-[16px] font-semibold tabular-nums text-oo-ink">{value}</div><div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-oo-muted mt-0.5">{label}</div></div>;
 }
 
 function normalizeFeatures(value: unknown) {
