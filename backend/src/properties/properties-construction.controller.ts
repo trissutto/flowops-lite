@@ -17,13 +17,9 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { isSupremo } from '../common/supremo';
 import { PropertiesConstructionService } from './properties-construction.service';
 import { PropertiesConstructionStorageService } from './properties-construction-storage.service';
-
-const supremoEmails = () => (process.env.SUPREMO_EMAILS || 'trissutto@gmail.com')
-  .split(',')
-  .map((email) => email.trim().toLowerCase())
-  .filter(Boolean);
 
 @UseGuards(JwtAuthGuard)
 @Controller('properties')
@@ -259,8 +255,7 @@ export class PropertiesConstructionController {
   }
 
   private requireSupremo(req: any) {
-    const email = String(req?.user?.email || '').trim().toLowerCase();
-    if (!supremoEmails().includes(email)) {
+    if (!isSupremo(req?.user?.email)) {
       throw new ForbiddenException('Acesso restrito ao módulo imobiliário (SUPREMO).');
     }
   }
