@@ -29,6 +29,7 @@ import {
   ListFilter, Plus, RotateCw, Search, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { podeVerImoveis, type MeSupremo } from '@/lib/supremo';
 import EnterpriseShell from '@/components/enterprise/EnterpriseShell';
 import PageHeader from '@/components/enterprise/PageHeader';
 import MetricStrip, { BarraSegmentos } from '@/components/enterprise/MetricStrip';
@@ -237,10 +238,10 @@ export default function ImobiliarioPage() {
       router.push('/login?redirect=/imobiliario');
       return;
     }
-    api<{ role: string; name: string; email?: string }>('/auth/me')
+    api<{ role: string; name: string } & MeSupremo>('/auth/me')
       .then((me) => {
-        // SUPREMO: módulo Imobiliário restrito a este e-mail (acima de admin).
-        if (String(me.email || '').trim().toLowerCase() !== 'trissutto@gmail.com') {
+        // SUPREMO: módulo Imobiliário restrito à lista do backend (acima de admin).
+        if (!podeVerImoveis(me)) {
           alert('Você não tem acesso ao módulo Imobiliário.');
           router.push('/');
         }

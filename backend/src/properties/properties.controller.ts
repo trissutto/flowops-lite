@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { isSupremo } from '../common/supremo';
 import { PropertiesService } from './properties.service';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
@@ -64,19 +65,9 @@ function getR2Client(): S3Client {
 /**
  * /properties — módulo IMOBILIÁRIO.
  *
- * Roles permitidas:
- *   - admin (senha suprema)
- *   - imobiliario_admin (CRUD completo + gestão usuários)
- *   - imobiliario_user (CRUD imóveis + docs, sem deletar)
- *   - imobiliario_viewer (só leitura)
+ * Acesso EXCLUSIVO dos e-mails SUPREMO (acima de admin) — a lista mora em
+ * `common/supremo.ts`, a MESMA que o /auth/me usa pra tela decidir.
  */
-// SUPREMO — módulo Imobiliário é EXCLUSIVO destes e-mails (acima de admin).
-// Configurável por env SUPREMO_EMAILS (CSV); fallback = trissutto@gmail.com.
-const SUPREMO_EMAILS = (process.env.SUPREMO_EMAILS || 'trissutto@gmail.com')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
-
 @UseGuards(JwtAuthGuard)
 @Controller('properties')
 export class PropertiesController {
@@ -85,8 +76,7 @@ export class PropertiesController {
   // Acesso ao Imobiliário restrito ao SUPREMO (por e-mail). Read/Write/Delete
   // usam a mesma trava — só o(s) e-mail(s) SUPREMO entram.
   private requireSupremo(req: any) {
-    const email = String(req?.user?.email || '').trim().toLowerCase();
-    if (!SUPREMO_EMAILS.includes(email)) {
+    if (!isSupremo(req?.user?.email)) {
       throw new ForbiddenException('Acesso restrito ao módulo imobiliário (SUPREMO)');
     }
   }

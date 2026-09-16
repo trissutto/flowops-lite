@@ -3,6 +3,7 @@ import { IsEmail, IsString, MinLength } from 'class-validator';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { isSupremo } from '../common/supremo';
 
 class LoginDto {
   @IsEmail() email: string;
@@ -97,6 +98,9 @@ export class AuthController {
       impersonatedBy: u.impersonatedBy ?? null,
       impersonatedByEmail: u.impersonatedByEmail ?? null,
       impersonatedByName: u.impersonatedByName ?? null,
+      // Módulo Imóveis: a tela pergunta aqui em vez de ter e-mail no código.
+      // Mesma régua e mesmo campo (`email` do token) que a porta /properties.
+      supremo: isSupremo(u.email),
     };
   }
 }

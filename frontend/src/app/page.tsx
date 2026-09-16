@@ -25,6 +25,7 @@ import {
 import { api } from '@/lib/api';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
 import { getDailyQuote } from '@/lib/daily-quote';
+import { podeVerImoveis, type MeSupremo } from '@/lib/supremo';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
 import HubGrid, { type HubItem } from '@/components/HubGrid';
 
@@ -112,21 +113,18 @@ export default function DashboardHome() {
       setVisitor(true);
       return;
     }
-    api<{ role: string; name?: string; email?: string; impersonatedByEmail?: string | null }>('/auth/me')
+    api<{ role: string; name?: string } & MeSupremo>('/auth/me')
       .then((me) => {
         if (me.role === 'store') router.push('/minha-loja/pdv');
         else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
         else if (me.role === 'master_franquia') router.push('/retaguarda/super-painel-caixas');
         else if (me.role === 'franquias') router.push('/franquias');
         if (me.name) setUserName(me.name);
-        // SUPREMO: só este e-mail enxerga o módulo Imóveis. Vale TAMBÉM quando
-        // ele está impersonando outro usuário (29/08 — "sumiu a aba Imóveis"):
-        // o token de impersonação fica preso na aba (sessionStorage) e o
-        // /auth/me passa a responder como o outro usuário — mas o
-        // impersonatedByEmail diz quem está por trás, e é ele que manda.
-        const eu = (e?: string | null) =>
-          String(e || '').trim().toLowerCase() === 'trissutto@gmail.com';
-        setSupremo(eu(me.email) || eu(me.impersonatedByEmail));
+        // SUPREMO: quem enxerga o módulo Imóveis é decidido pelo backend
+        // (lib/supremo.ts). Vale também com token de "entrar como loja"
+        // (29/08 — "sumiu a aba Imóveis"): o e-mail desse token é o de quem
+        // entrou, e é ele que a régua olha.
+        setSupremo(podeVerImoveis(me));
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
