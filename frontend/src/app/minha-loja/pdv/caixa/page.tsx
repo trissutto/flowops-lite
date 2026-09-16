@@ -15,6 +15,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, DollarSign, TrendingDown, TrendingUp, FileText, X, Lock, Clock, Store as StoreIcon } from 'lucide-react';
 import { api } from '@/lib/api';
+import TicketsDaAbertura, { type EstadoTickets } from '@/components/conferencia-tickets/TicketsDaAbertura';
 
 type StoreOpt = { code: string; name: string; active?: boolean };
 
@@ -1082,14 +1083,16 @@ function ModalShell({
   title,
   onClose,
   children,
+  largo,
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  largo?: boolean;
 }) {
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+      <div className={`bg-white rounded-2xl shadow-2xl w-full max-h-[90vh] overflow-y-auto ${largo ? 'max-w-xl' : 'max-w-md'}`}>
         <div className="flex items-center justify-between p-5 border-b">
           <h2 className="text-lg font-bold text-rose-900">{title}</h2>
           <button onClick={onClose}>
@@ -1107,12 +1110,19 @@ function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; on
   const [obs, setObs] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // Conferência de tickets (16/09): o caixa só abre com as fotos do último
+  // movimento enviadas ou com o motivo dito. Se a etapa falhar, não trava.
+  const [tickets, setTickets] = useState<EstadoTickets>({ pronto: false });
 
   async function submit() {
     setErr('');
     const v = parseFloat(fundo.replace(',', '.'));
     if (isNaN(v) || v < 0) {
       setErr('Informe o fundo de troco (R$)');
+      return;
+    }
+    if (!tickets.pronto) {
+      setErr('Fotografe os tickets do último movimento (ou diga por que estão faltando)');
       return;
     }
     setBusy(true);
@@ -1123,6 +1133,10 @@ function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; on
         method: 'POST',
         body: JSON.stringify(body),
       });
+      if (tickets.loteId && tickets.fotos) {
+        // Só carimba "terminei" e reconfere — foto que chegar depois continua valendo.
+        api(`/pdv/conferencia-tickets/lote/${tickets.loteId}/terminei`, { method: 'POST' }).catch(() => {});
+      }
       onSuccess();
     } catch (e: any) {
       setErr(e?.message || 'Falha ao abrir caixa');
@@ -1132,7 +1146,7 @@ function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; on
   }
 
   return (
-    <ModalShell title="Abrir Caixa" onClose={onClose}>
+    <ModalShell title="Abrir Caixa" onClose={onClose} largo>
       {/* Aviso explicando que esse valor faz papel duplo:
           1) fundo de troco de hoje
           2) contagem retroativa do dia anterior (vira dinheiroFisico daquela sessão) */}
@@ -1154,6 +1168,10 @@ function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; on
         className="w-full p-3 border rounded-lg text-lg focus:ring-2 focus:ring-rose-400"
         autoFocus
       />
+      <TicketsDaAbertura storeCode={storeCode} onEstado={setTickets} />
+      {tickets.aviso && (
+        <p className="mt-1 text-[11px] text-gray-500">O caixa abre normalmente; os tickets podem ir depois.</p>
+      )}
       <label className="block text-sm font-semibold text-gray-700 mb-1 mt-4">
         Observação (opcional)
       </label>
@@ -1173,11 +1191,12 @@ function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; on
           Cancelar
         </button>
         <button
-          disabled={busy}
+          disabled={busy || !tickets.pronto}
           onClick={submit}
+          title={tickets.pronto ? undefined : 'Fotografe os tickets do último movimento, ou diga por que estão faltando'}
           className="flex-1 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold disabled:opacity-50"
         >
-          {busy ? '...' : 'Abrir Caixa'}
+          {busy ? '...' : tickets.pronto ? 'Abrir Caixa' : 'Faltam os tickets'}
         </button>
       </div>
     </ModalShell>

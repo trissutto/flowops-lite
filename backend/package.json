@@ -24,6 +24,7 @@
     "customer-person:operational": "node scripts/customer-person/backfill-operational.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
     "@aws-sdk/client-s3": "^3.633.0",
     "@nestjs/axios": "^3.0.1",
     "@nestjs/common": "^10.3.0",

@@ -8495,3 +8495,137 @@ model AvisoEnviado {
   @@index([createdAt(sort: Desc)])
   @@map("avisos_enviados")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFERÊNCIA DE TICKETS POR FOTO (16/09/2026)
+//
+// Ao abrir o caixa, a operadora fotografa os tickets do movimento anterior
+// (maquininha, cupom das vendas em dinheiro/PIX, recibo de crediário,
+// comprovante de PIX). A IA lê cada foto e o sistema cruza com o que o Flow
+// gravou — o resultado é o checklist de /retaguarda/conferencia-tickets e o
+// resumo diário no WhatsApp. Régua: backend/src/conferencia-tickets/cruzamento.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Um lote = uma loja × um dia de movimento (o dia, em Brasília, em que as
+/// sessões de caixa conferidas ABRIRAM).
+model TicketLote {
+  id        String  @id @default(uuid())
+  storeCode String  @map("store_code")
+  storeName String? @map("store_name")
+  /// 'YYYY-MM-DD'
+  dia       String  @db.VarChar(10)
+  /// aguardando_fotos | lendo | confere | atencao | divergente | sem_movimento
+  status    String  @default("aguardando_fotos") @db.VarChar(20)
+
+  /// Link do celular (QR na abertura do caixa): aleatório, guardado aqui e
+  /// conferido a cada envio.
+  token         String   @unique @db.VarChar(64)
+  tokenExpiraEm DateTime @map("token_expira_em")
+
+  /// A operadora abriu o caixa sem os tickets e disse por quê.
+  semTicketsMotivo String?   @map("sem_tickets_motivo") @db.Text
+  semTicketsPor    String?   @map("sem_tickets_por")
+  semTicketsEm     DateTime? @map("sem_tickets_em")
+  /// "Terminei" (PC ou celular).
+  finalizadoEm     DateTime? @map("finalizado_em")
+  finalizadoPor    String?   @map("finalizado_por")
+
+  fotosEnviadas Int       @default(0) @map("fotos_enviadas")
+  /// Último cruzamento: { resultado, esperados, sistema } — ver o service.
+  resultado     Json?
+  conferidoEm   DateTime? @map("conferido_em")
+  divergencias  Int       @default(0)
+  atencoes      Int       @default(0)
+
+  /// "Visto" da matriz, com nota. Não muda o cruzamento.
+  revisadoEm   DateTime? @map("revisado_em")
+  revisadoPor  String?   @map("revisado_por")
+  revisadoNota String?   @map("revisado_nota") @db.Text
+
+  criadoPor String?  @map("criado_por")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  fotos   TicketFoto[]
+  tickets TicketLido[]
+
+  @@unique([storeCode, dia])
+  @@index([dia])
+  @@index([status])
+  @@map("conferencia_ticket_lotes")
+}
+
+model TicketFoto {
+  id         String  @id @default(uuid())
+  loteId     String  @map("lote_id")
+  /// Chave no R2. A URL pública nunca é gravada nem vai pra tela (o recibo de
+  /// crediário tem CPF) — a foto abre por link assinado do backend.
+  chave      String
+  /// md5 do arquivo recebido: a mesma foto duas vezes não é lida (nem paga) duas vezes.
+  hash       String  @db.VarChar(32)
+  bytes      Int
+  mime       String  @db.VarChar(40)
+  /// pc | celular
+  origem     String  @default("pc") @db.VarChar(10)
+  enviadaPor String? @map("enviada_por")
+
+  /// pendente | lendo | lida | ilegivel | erro
+  status             String    @default("pendente") @db.VarChar(12)
+  tentativas         Int       @default(0)
+  proximaTentativaEm DateTime? @map("proxima_tentativa_em")
+  lendoDesde         DateTime? @map("lendo_desde")
+  erro               String?   @db.Text
+  lidaEm             DateTime? @map("lida_em")
+  /// O que a IA disse da foto inteira ("tickets sobrepostos", "reflexo").
+  observacao         String?   @db.Text
+  modelo             String?   @db.VarChar(60)
+  tokensEntrada      Int?      @map("tokens_entrada")
+  tokensSaida        Int?      @map("tokens_saida")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  lote    TicketLote   @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  tickets TicketLido[]
+
+  @@unique([loteId, hash])
+  @@index([status, createdAt])
+  @@index([loteId])
+  @@map("conferencia_ticket_fotos")
+}
+
+/// Um comprovante de papel lido numa foto (uma foto pode ter vários).
+model TicketLido {
+  id     String @id @default(uuid())
+  loteId String @map("lote_id")
+  fotoId String @map("foto_id")
+  ordem  Int    @default(0)
+
+  /// maquininha | cupom_venda | recibo_crediario | comprovante_pix | outro
+  origem      String  @db.VarChar(20)
+  /// credito | debito | pix | voucher | dinheiro | crediario | estorno | misto | desconhecida
+  operacao    String  @db.VarChar(20)
+  valor       Float?
+  data        String? @db.VarChar(10)
+  hora        String? @db.VarChar(5)
+  nsu         String? @db.VarChar(40)
+  autorizacao String? @db.VarChar(40)
+  bandeira    String? @db.VarChar(30)
+  finalCartao String? @map("final_cartao") @db.VarChar(4)
+  parcelas    Int?
+  adquirente  String? @db.VarChar(40)
+  numero      String? @db.VarChar(40)
+  formas      Json?
+  cliente     String? @db.VarChar(120)
+  legivel     Boolean @default(true)
+  confianca   String  @default("media") @db.VarChar(6)
+  observacao  String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  lote TicketLote @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  foto TicketFoto @relation(fields: [fotoId], references: [id], onDelete: Cascade)
+
+  @@index([loteId])
+  @@index([fotoId])
+  @@map("conferencia_tickets_lidos")
+}
