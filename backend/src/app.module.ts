@@ -104,6 +104,7 @@ import { AccessPolicyModule } from './access-policy/access-policy.module';
 import { OperadorPinModule } from './operador-pin/operador-pin.module';
 import { SiteMediaModule } from './site-media/site-media.module';
 import { SiteContentEditorModule } from './site-content-editor/site-content-editor.module';
+import { ConciliacaoCartaoModule } from './conciliacao-cartao/conciliacao-cartao.module';
 
 @Module({
   imports: [
@@ -214,6 +215,7 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     SiteMetricsModule,
     EmailMarketingModule,
     WhatsappCampaignModule,
+    ConciliacaoCartaoModule,
   ],
 })
 export class AppModule {}

@@ -94,6 +94,7 @@ export default function TopBreadcrumb() {
     // ORDER ONE · Executive Operations UI (15/09): a lista do Imobiliário
     // tem casca própria (EnterpriseShell) — lista, ficha e cadastro.
     pathname.startsWith('/imobiliario') ||
+    pathname.startsWith('/retaguarda/conciliacao-cartoes') ||
     pathname.includes('/imprimir');
 
   // Monta o breadcrumb a partir do pathname — cada nível é clicável (exceto o último)
