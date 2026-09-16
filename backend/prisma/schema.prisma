@@ -2085,6 +2085,18 @@ model StoneTransaction {
   // Payload bruto pra auditoria
   rawPayload        String    @map("raw_payload") @db.Text
   receivedAt        DateTime  @default(now()) @map("received_at")
+  // Arquivo de conciliação da Stone (16/09/2026) — `amount` passa a ser o
+  // valor LÍQUIDO de cancelamento (capturado − cancelado); o bruto fica aqui.
+  origem            String?   @db.VarChar(10) // arquivo | webhook
+  dataReferencia    String?   @map("data_referencia") @db.VarChar(10) // dia da captura (Brasília)
+  valorCapturado    Float?    @map("valor_capturado")
+  valorCancelado    Float?    @map("valor_cancelado")
+  valorLiquido      Float?    @map("valor_liquido") // o que a Stone repassa (bruto − taxa)
+  taxa              Float?
+  previsaoPagamento String?   @map("previsao_pagamento") @db.VarChar(10) // 1ª parcela
+  tipoTerminal      String?   @map("tipo_terminal") @db.VarChar(12) // POS | ECOMMERCE | TEF…
+  serialTerminal    String?   @map("serial_terminal") @db.VarChar(32)
+  canceladaEm       DateTime? @map("cancelada_em")
 
   @@index([capturedAt(sort: Desc)])
   @@index([matchedSaleId])
@@ -8494,4 +8506,69 @@ model AvisoEnviado {
   @@index([evento, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc)])
   @@map("avisos_enviados")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFERÊNCIA DE CARTÕES × STONE (16/09/2026)
+//
+// Todo dia o Flow baixa o arquivo de conciliação da Stone (um por StoneCode ×
+// dia, disponível a partir das 4h do dia seguinte) e cruza as transações da
+// maquininha com as vendas no cartão do PDV. Régua:
+// backend/src/conciliacao-cartao/conciliar-cartoes.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cada arquivo baixado (ou tentado). É por aqui que se sabe se o dia já tem
+/// o lado da Stone — sem isso, "sem transação" seria alarme falso.
+model StoneArquivo {
+  id            String    @id @default(uuid())
+  stoneCode     String    @map("stone_code") @db.VarChar(20)
+  /// 'YYYY-MM-DD' — dia de referência do arquivo
+  dia           String    @db.VarChar(10)
+  storeCode     String?   @map("store_code")
+  /// ok | erro | sem_acesso | indisponivel | limite
+  status        String    @db.VarChar(16)
+  capturas      Int       @default(0)
+  cancelamentos Int       @default(0)
+  bytes         Int?
+  erro          String?   @db.Text
+  /// últimos 4 caracteres da chave que abriu o arquivo (nunca a chave)
+  chaveFinal    String?   @map("chave_final") @db.VarChar(8)
+  tentativas    Int       @default(0)
+  ultimaTentativa DateTime? @map("ultima_tentativa")
+  baixadoEm     DateTime? @map("baixado_em")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([stoneCode, dia])
+  @@index([dia])
+  @@map("stone_arquivos")
+}
+
+/// O checklist: uma linha por loja × dia de venda.
+model ConciliacaoCartaoDia {
+  id              String    @id @default(uuid())
+  storeCode       String    @map("store_code")
+  dia             String    @db.VarChar(10)
+  /// sem_stone | aguardando_arquivo | erro_arquivo | confere | atencao | divergente | sem_movimento
+  status          String    @db.VarChar(20)
+  qtdSistema      Int       @default(0) @map("qtd_sistema")
+  valorSistema    Float     @default(0) @map("valor_sistema")
+  qtdStone        Int       @default(0) @map("qtd_stone")
+  valorStone      Float     @default(0) @map("valor_stone")
+  divergencias    Int       @default(0)
+  atencoes        Int       @default(0)
+  valorDivergente Float     @default(0) @map("valor_divergente")
+  /// { resultado, frases, arquivos }
+  resultado       Json?
+  conferidoEm     DateTime  @default(now()) @map("conferido_em")
+  revisadoEm      DateTime? @map("revisado_em")
+  revisadoPor     String?   @map("revisado_por")
+  revisadoNota    String?   @map("revisado_nota") @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([storeCode, dia])
+  @@index([dia])
+  @@index([status])
+  @@map("conciliacao_cartao_dias")
 }

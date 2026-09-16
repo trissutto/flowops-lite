@@ -52,6 +52,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/produtos',             label: 'Produtos',          subtitle: 'Ficha da peça', description: 'Estoque, vendas, fotos, site e histórico', tone: 'teal', icon: Package },
   { href: '/retaguarda/produto-estoque',      label: 'Produto & Estoque', subtitle: 'Módulo unificado', description: 'Ficha Master · grades · entradas · movimentações', tone: 'teal', icon: Package },
   { href: '/retaguarda/demandas',             label: 'Demandas',          subtitle: 'Backlog',       description: 'Prompt + prints · criticidade', tone: 'amber',  icon: ClipboardList },
+  { href: '/retaguarda/conciliacao-cartoes',  label: 'Conferência dos cartões', subtitle: 'PDV × Stone', description: 'Cada venda no cartão × a transação da maquininha, por loja e dia', tone: 'green', icon: CreditCard },
   { href: '/retaguarda/conciliacao',          label: 'Conciliação',       subtitle: 'Financeiro',    description: 'Stone · PagBank · Pagar.me × vendas', tone: 'green', icon: DollarSign },
   { href: '/retaguarda/risco',                label: 'Central de Risco',  subtitle: 'Cruzamento de pedidos', description: 'Relação com pedido contestado · fila de análise · chargebacks', tone: 'rose', icon: ShieldAlert },
   { href: '/retaguarda/dashboard',            label: 'Dashboard',         subtitle: 'KPIs',          description: 'Visão geral em tempo real',     tone: 'teal',   icon: LayoutDashboard },
