@@ -491,8 +491,11 @@ export default function CheckoutPage() {
       paymentMethod: pagamento.method,
       installments: pagamento.installments,
       // Token do cartão (quando houver): o número ficou no navegador, isto é
-      // a única coisa que viaja — ver CardForm.
+      // a única coisa que viaja — ver CardForm. PagBank manda o blob
+      // criptografado no lugar do token.
       cardToken: pagamento.cardToken,
+      cardEncrypted: pagamento.cardEncrypted,
+      cardHolder: pagamento.cardHolder,
       tracking: {
         anonymous_id: getAnonymousId(),
         session_id: getSessionId(),

@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
+import { PagbankEventoCobranca, PagbankService } from '../pagbank/pagbank.service';
 import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
@@ -177,7 +178,16 @@ export interface CriarPedidoInput {
   payment: {
     method: 'pix' | 'card';
     installments?: number;
+    /** Token da Pagar.me, gerado no navegador (caminho Pagar.me). */
     cardToken?: string;
+    /**
+     * Cartão CRIPTOGRAFADO pelo SDK do PagBank no navegador (caminho
+     * PagBank, 16/09). Só o blob viaja — PAN/CVV nunca chegam aqui. Qual dos
+     * dois veio decide o gateway do cartão (ver `gatewayDoCartao`).
+     */
+    cardEncrypted?: string;
+    /** Nome do titular como digitado — o PagBank exige `holder.name`. */
+    cardHolder?: string;
   };
   tracking?: LojaTrackingInput;
   /**
@@ -278,7 +288,7 @@ export interface CriarPedidoResult {
 /* ─────────────────────────────── SERVICE ──────────────────────────────── */
 
 @Injectable()
-export class LojaOrdersService {
+export class LojaOrdersService implements OnModuleInit {
   private readonly logger = new Logger(LojaOrdersService.name);
 
   /** Base dos wcOrderId sintéticos da LOJA (live usa 900M, WC real usa < 1M). */
@@ -357,7 +367,30 @@ export class LojaOrdersService {
     private readonly riscoChaves: RiscoChavesService,
     private readonly risco: RiscoService,
     private readonly escudo: EscudoCheckoutService,
+    private readonly pagbank: PagbankService,
   ) {}
+
+  /**
+   * O PagBank avisa aqui quando uma cobrança do SITE muda (webhook ou
+   * consulta do reconcile). É o equivalente do bloco "E-COMMERCE NOVO" do
+   * `pagarme.controller.ts` — só que sem o módulo do gateway conhecer este
+   * (seta de mão única; ver `PagbankEventoCobranca`).
+   */
+  onModuleInit(): void {
+    this.pagbank.registrarOuvinte(async (ev: PagbankEventoCobranca) => {
+      if (ev.origem !== 'site') return;
+      if (ev.status === 'paid') {
+        const r = await this.confirmarPagamento(ev.saleId);
+        if (r.ok && !r.already) this.logger.log(`[loja] pedido ${ev.saleId} confirmado pelo PagBank (${ev.fonte}, ${ev.method})`);
+        return;
+      }
+      if (ev.status === 'cancelled' && ev.method === 'credit_card') {
+        // Só toca cartão em `awaiting_payment` sem paidAt (trava atômica lá
+        // dentro): PIX vencido e pedido pago passam intocados.
+        await this.registrarRecusaTardia(ev.saleId, `pagbank: ${ev.detalhe || 'cancelada/recusada'}`);
+      }
+    });
+  }
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
 
@@ -466,7 +499,11 @@ export class LojaOrdersService {
     if (input.payment?.method !== 'pix' && input.payment?.method !== 'card') {
       return 'Forma de pagamento não disponível.';
     }
-    if (input.payment.method === 'card' && !String(input.payment.cardToken || '').trim()) {
+    if (
+      input.payment.method === 'card' &&
+      !String(input.payment.cardToken || '').trim() &&
+      !String(input.payment.cardEncrypted || '').trim()
+    ) {
       return 'Não conseguimos ler os dados do cartão. Tente preencher novamente.';
     }
 
@@ -1358,6 +1395,158 @@ export class LojaOrdersService {
     return process.env.LOJA_PAGARME_STORE_CODE || 'SITE';
   }
 
+  /* ────────────────────── GATEWAY DO SITE (16/09) ─────────────────────── */
+
+  /**
+   * QUEM COBRA O SITE: `SITE_GATEWAY=pagbank` liga o PagBank (PIX e cartão);
+   * ausente/qualquer outro valor = Pagar.me, como sempre foi. Decisão do
+   * dono (16/09): "deixar tudo na PagBank pra fazer as conciliações" — a
+   * Pagar.me segurava liberações e o caixa não fechava.
+   *
+   * A chave é a volta em 1 env: nada do caminho Pagar.me foi apagado, e o
+   * pedido carrega `paymentInfo.gateway` pra o reconcile/conciliação saberem
+   * a quem perguntar — pedido nascido na Pagar.me continua fechando por lá
+   * mesmo depois da virada.
+   */
+  private gatewayDoSite(): 'pagbank' | 'pagarme' {
+    return process.env.SITE_GATEWAY === 'pagbank' ? 'pagbank' : 'pagarme';
+  }
+
+  /** Loja PagBank do dinheiro do site: config própria da loja SITE ou a matriz. */
+  private lojaDoDinheiroPagbank(): string {
+    return process.env.LOJA_PAGBANK_STORE_CODE || 'SITE';
+  }
+
+  /**
+   * O gateway do CARTÃO segue a CREDENCIAL que veio, não só a env: aba velha
+   * do site aberta há dias ainda manda `cardToken` (Pagar.me) depois da
+   * virada — cobrar esse token no PagBank é impossível, então ele vai pra
+   * Pagar.me. E `cardEncrypted` só existe se o site já está no PagBank.
+   */
+  private gatewayDoCartao(input: CriarPedidoInput): 'pagbank' | 'pagarme' {
+    if (String(input.payment.cardEncrypted || '').trim() && this.gatewayDoSite() === 'pagbank') return 'pagbank';
+    return 'pagarme';
+  }
+
+  /**
+   * GET /public/loja/config → bloco `pagamento`: o site lê daqui com qual
+   * gateway tokenizar/criptografar o cartão. A chave pública do PagBank vem
+   * junto (é pública — só criptografa, não movimenta nada). Se o PagBank
+   * está ligado mas a chave não vem (token recusado, API fora), o cartão
+   * DEGRADA pra Pagar.me em vez de virar um formulário que não cobra.
+   */
+  async configPagamentoPublica(): Promise<{
+    gateway: 'pagbank' | 'pagarme';
+    cartao: { gateway: 'pagbank' | 'pagarme'; pagbankPublicKey: string | null };
+  }> {
+    const gateway = this.gatewayDoSite();
+    if (gateway !== 'pagbank') return { gateway, cartao: { gateway: 'pagarme', pagbankPublicKey: null } };
+    try {
+      const k = await this.pagbank.chavePublicaCartao(this.lojaDoDinheiroPagbank());
+      return { gateway, cartao: { gateway: 'pagbank', pagbankPublicKey: k.publicKey } };
+    } catch (e: any) {
+      this.logger.error(`[loja][ALERTA] PagBank ligado mas SEM chave pública de cartão — cartão do site caiu pra Pagar.me: ${e?.message || e}`);
+      return { gateway, cartao: { gateway: 'pagarme', pagbankPublicKey: null } };
+    }
+  }
+
+  /** PIX pelo PagBank — mesmo retorno do `cobrarPix` da Pagar.me. */
+  private async cobrarPixPagbank(order: any, input: CriarPedidoInput) {
+    const pix = await this.pagbank.createPixCharge({
+      saleId: order.id,
+      valor: this.dinheiro(input.total),
+      storeCode: this.lojaDoDinheiroPagbank(),
+      customerName: String(input.customer.name || '').trim(),
+      customerCpf: this.digits(input.customer.cpf),
+      customerEmail: String(input.customer.email || '').trim(),
+      customerPhone: this.fone(input.customer.phone),
+      descricao: `Pedido ${order.wcOrderNumber} — lurds.com.br`,
+      expiresInMinutes: LojaOrdersService.PIX_EXPIRA_MIN,
+      origem: 'site',
+    });
+    return {
+      gatewayOrderId: pix.pagbankOrderId,
+      pix: {
+        // O PagBank devolve o PNG em base64 (já baixado pelo service): vira
+        // data URL, que o `<img>` do site aceita igual à URL da Pagar.me.
+        qrCode: pix.qrCodeImageB64 ? `data:image/png;base64,${pix.qrCodeImageB64}` : null,
+        copyPaste: pix.qrCodeText,
+        expiresAt: pix.expiresAt.toISOString(),
+      },
+    };
+  }
+
+  /**
+   * CARTÃO pelo PagBank — mesma união de retorno do `cobrarCartao` da
+   * Pagar.me, pra o `criarPedido` não precisar saber quem cobrou.
+   */
+  private async cobrarCartaoPagbank(
+    order: any,
+    input: CriarPedidoInput,
+  ): Promise<
+    | { ok: true; status: 'paid' | 'pending'; gatewayOrderId: string; gatewayChargeId: string | null; transacao: DadosTransacao | null }
+    | { ok: false; kind: 'recusa' | 'integracao'; error: string; detalhe: string; gatewayOrderId?: string | null; gatewayChargeId?: string | null }
+  > {
+    const end = input.shippingAddress;
+    const r = await this.pagbank.createCardCharge({
+      saleId: order.id,
+      storeCode: this.lojaDoDinheiroPagbank(),
+      valor: this.dinheiro(input.total),
+      referencia: this.codigoCobranca(order),
+      descricao: `Pedido ${order.wcOrderNumber} — lurds.com.br`,
+      installments: Math.max(1, Math.min(12, Number(input.payment.installments || 1))),
+      cardEncrypted: String(input.payment.cardEncrypted || ''),
+      holderName: String(input.payment.cardHolder || input.customer.name || '').trim(),
+      // Titular = a cliente do pedido. Medido em 01/08: cartão em nome de
+      // outra pessoa NÃO muda aprovação, e o checkout não pede CPF do titular.
+      holderTaxId: this.digits(input.customer.cpf),
+      customer: {
+        name: String(input.customer.name || '').trim(),
+        email: String(input.customer.email || '').trim(),
+        cpf: this.digits(input.customer.cpf),
+        phone: this.fone(input.customer.phone),
+      },
+      shippingAddress: end
+        ? {
+            street: String(end.street || ''),
+            number: String(end.number || 'S/N'),
+            complement: end.complement || undefined,
+            neighborhood: String(end.neighborhood || ''),
+            city: String(end.city || ''),
+            uf: String(end.uf || ''),
+            cep: this.digits(end.cep),
+          }
+        : null,
+      origem: 'site',
+    });
+
+    if (!r.ok) {
+      return {
+        ok: false,
+        kind: r.kind,
+        error: r.kind === 'recusa' ? this.mensagemRecusaTexto(r.lido?.mensagem || r.detalhe) : LojaOrdersService.MSG_CARTAO_INDISPONIVEL,
+        detalhe: r.detalhe,
+        gatewayOrderId: r.pagbankOrderId ?? null,
+        gatewayChargeId: r.pagbankChargeId ?? null,
+      };
+    }
+    const l = r.lido;
+    const transacao: DadosTransacao = {
+      ultimos4: l.ultimos4,
+      bandeira: l.bandeira,
+      titular: l.titular,
+      tid: null,
+      nsu: l.referencia,
+      autorizacao: null,
+      status: l.chargeStatus,
+      codigoRetorno: l.codigo,
+      antifraudeStatus: null,
+      antifraudeScore: null,
+      capturadoEm: new Date().toISOString(),
+    };
+    return { ok: true, status: r.status, gatewayOrderId: r.pagbankOrderId, gatewayChargeId: r.pagbankChargeId, transacao };
+  }
+
   /** Config Pagar.me pra montar a cobrança de CARTÃO (o PIX vai pelo service).
    *  Duplicado de propósito: o módulo `pagarme/` é caminho crítico de PDV e
    *  live — a sprint só estende o webhook de lá, não mexe no resto. */
@@ -1873,15 +2062,21 @@ export class LojaOrdersService {
   private mensagemRecusa(gw: any): string {
     const charge = (gw?.charges || [])[0];
     const tx = charge?.last_transaction || {};
-    const cru = [
-      tx.acquirer_message,
-      tx.gateway_response?.errors?.map((e: any) => e?.message).join(' '),
-      gw?.message,
-      typeof gw?.errors === 'object' ? JSON.stringify(gw.errors) : '',
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
+    return this.mensagemRecusaTexto(
+      [
+        tx.acquirer_message,
+        tx.gateway_response?.errors?.map((e: any) => e?.message).join(' '),
+        gw?.message,
+        typeof gw?.errors === 'object' ? JSON.stringify(gw.errors) : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    );
+  }
+
+  /** A régua de frases, separada do formato do gateway (Pagar.me e PagBank leem daqui). */
+  private mensagemRecusaTexto(texto: string | null | undefined): string {
+    const cru = String(texto || '').toLowerCase();
 
     if (/insufficient|saldo|limite/.test(cru)) {
       return 'O cartão não tinha limite disponível pra esse valor. Tente outro cartão ou pague com PIX. 💜';
@@ -1974,6 +2169,9 @@ export class LojaOrdersService {
     let paymentInfo: any = {
       method: input.payment.method,
       installments: input.payment.method === 'card' ? Number(input.payment.installments || 1) : null,
+      // Quem cobrou ESTE pedido — o reconcile e a conciliação perguntam ao
+      // gateway certo mesmo depois da virada de `SITE_GATEWAY`.
+      gateway: input.payment.method === 'card' ? this.gatewayDoCartao(input) : this.gatewayDoSite(),
       gatewayOrderId: null,
       gatewayChargeId: null,
       pix: null,
@@ -1993,10 +2191,10 @@ export class LojaOrdersService {
 
     try {
       if (input.payment.method === 'pix') {
-        const r = await this.cobrarPix(order, input);
+        const r = paymentInfo.gateway === 'pagbank' ? await this.cobrarPixPagbank(order, input) : await this.cobrarPix(order, input);
         paymentInfo = { ...paymentInfo, gatewayOrderId: r.gatewayOrderId, pix: r.pix };
       } else {
-        const r = await this.cobrarCartao(order, input);
+        const r = paymentInfo.gateway === 'pagbank' ? await this.cobrarCartaoPagbank(order, input) : await this.cobrarCartao(order, input);
         if (!r.ok) {
           // Recusa REAL da operadora arma o escudo anti-teste-de-cartão: é a
           // contagem dela que separa "uma cliente sem limite" (1/dia) de

@@ -59,6 +59,21 @@ export class PagbankController {
   }
 
   /**
+   * POST /pagbank/cartao/diagnose — "a conta aceita CARTÃO via API?"
+   *
+   * Consulta/cria a chave pública de cartão e pede a simulação de parcelas
+   * ao PagBank. Não cobra nada. É a prova que se tira ANTES de ligar
+   * `SITE_GATEWAY=pagbank`. `storeCode` default = a loja do dinheiro do site.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('cartao/diagnose')
+  async diagnosticarCartao(@Req() req: any, @Body() body: { storeCode?: string }) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const storeCode = String(body?.storeCode || process.env.LOJA_PAGBANK_STORE_CODE || 'SITE').trim();
+    return this.svc.diagnosticarCartao(storeCode);
+  }
+
+  /**
    * POST /pagbank/pix/test-sandbox
    *
    * Cria um PIX REAL em sandbox (R$ 1,00) e retorna request + response

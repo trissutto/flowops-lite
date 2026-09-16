@@ -162,6 +162,10 @@ const bodySchema = z.object({
   // Token da Pagar.me gerado NO NAVEGADOR (PCI: o número do cartão não passa
   // por este servidor nem pelo backend). Só o token trafega.
   cardToken: z.string().min(5).max(200).optional(),
+  // Cartão CRIPTOGRAFADO pelo SDK do PagBank no navegador (16/09) — blob RSA
+  // em base64, ~350 chars. Mesma regra do token: só ele trafega.
+  cardEncrypted: z.string().min(20).max(4000).optional(),
+  cardHolder: z.string().trim().min(2).max(80).optional(),
   tracking: trackingSchema,
   /**
    * O QUE A CLIENTE LEU NA TELA (17/08): frete já com o cupom de frete
@@ -436,10 +440,11 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   // aba de Boleto no checkout que só era recusada AQUI — depois da cliente ter
   // preenchido o pedido inteiro.
 
-  if (input.paymentMethod === 'card' && !input.cardToken) {
-    // Cartão sem token = a tokenização no navegador não rodou (chave pública
-    // ausente ou falha na Pagar.me). Não adianta mandar pro backend: ele não
-    // tem como cobrar, e o número do cartão nunca vai trafegar por aqui.
+  if (input.paymentMethod === 'card' && !input.cardToken && !input.cardEncrypted) {
+    // Cartão sem token nem blob = a tokenização/criptografia no navegador não
+    // rodou (chave pública ausente ou falha no gateway). Não adianta mandar
+    // pro backend: ele não tem como cobrar, e o número do cartão nunca vai
+    // trafegar por aqui.
     return NextResponse.json({
       ok: false,
       error: 'Não conseguimos validar seu cartão agora. Tente de novo ou finalize com Pix (com 5% off).',
@@ -496,6 +501,8 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
       method: input.paymentMethod,
       installments: input.paymentMethod === 'card' ? (input.installments ?? 1) : undefined,
       cardToken: input.cardToken,
+      cardEncrypted: input.cardEncrypted,
+      cardHolder: input.cardHolder,
     },
     tracking: input.tracking,
   };

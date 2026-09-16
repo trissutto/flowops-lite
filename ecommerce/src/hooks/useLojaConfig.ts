@@ -19,12 +19,20 @@ export interface LojaConfig {
   freteGratis: { ativo: boolean; minimo: number; ufs: string | null };
   retirada: { prazoHoras: number; instrucoes: string | null };
   diasSeparacao: number;
+  /**
+   * QUEM COBRA O CARTÃO (16/09): decisão do backend (`SITE_GATEWAY`).
+   * `pagbank` vem com a chave PÚBLICA da conta pro SDK criptografar o cartão
+   * no navegador; `pagarme` é o caminho de sempre (token via `pk_`). Enquanto
+   * a config não responde vale Pagar.me — nunca um formulário sem gateway.
+   */
+  pagamento: { cartao: 'pagbank' | 'pagarme'; pagbankPublicKey: string | null };
 }
 
 const PADRAO: LojaConfig = {
   freteGratis: { ativo: true, minimo: FREE_SHIPPING_FROM, ufs: null },
   retirada: { prazoHoras: 3, instrucoes: null },
   diasSeparacao: 2,
+  pagamento: { cartao: 'pagarme', pagbankPublicKey: null },
 };
 
 let cache: LojaConfig | null = null;
@@ -49,6 +57,14 @@ function carregar(): Promise<LojaConfig> {
               instrucoes: d.retirada?.instrucoes ?? null,
             },
             diasSeparacao: Number(d.diasSeparacao) || 2,
+            pagamento: {
+              cartao:
+                d.pagamento?.cartao?.gateway === 'pagbank' && typeof d.pagamento?.cartao?.pagbankPublicKey === 'string'
+                  ? 'pagbank'
+                  : 'pagarme',
+              pagbankPublicKey:
+                typeof d.pagamento?.cartao?.pagbankPublicKey === 'string' ? d.pagamento.cartao.pagbankPublicKey : null,
+            },
           }
         : PADRAO;
       cache = cfg;

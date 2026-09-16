@@ -106,6 +106,23 @@ export default function PagbankConfigPage() {
     }
   }
 
+  // Cartão via API (site lurds.com.br) — prova ANTES de ligar SITE_GATEWAY=pagbank
+  const [testingCartao, setTestingCartao] = useState(false);
+  const [cartaoResult, setCartaoResult] = useState<any>(null);
+
+  async function runDiagnoseCartao() {
+    setTestingCartao(true);
+    setCartaoResult(null);
+    try {
+      const r = await api<any>('/pagbank/cartao/diagnose', { method: 'POST', body: JSON.stringify({}) });
+      setCartaoResult(r);
+    } catch (e: any) {
+      setCartaoResult({ ok: false, erro: e?.message || String(e) });
+    } finally {
+      setTestingCartao(false);
+    }
+  }
+
   function copyEvidence() {
     if (!testPixResult) return;
     // Formato idêntico ao que a Nathalia enviou como exemplo
@@ -629,6 +646,72 @@ Thiago Rissutto — Lurd's Plus Size`;
                 {testResult.ok && (
                   <div className="text-xs mt-1">
                     Token autenticado. Pode usar PIX no PDV.
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+
+          {/* CARTÃO VIA API — o site (lurds.com.br) cobra cartão pelo PagBank desde 16/09 */}
+          <Card
+            title="Cartão via API (site)"
+            subtitle="Consulta/cria a chave pública de cartão da conta e pede ao PagBank a simulação de parcelas. Não cobra nada."
+          >
+            <div className="bg-slate-50 border border-slate-300 rounded-lg p-3 text-xs text-slate-800 mb-3">
+              O checkout de <b>lurds.com.br</b> cobra PIX e cartão aqui quando a variável <code>SITE_GATEWAY=pagbank</code> está
+              no Railway. Este teste diz se a conta aceita cartão pela API — rode antes de ligar. Usa a config da loja{' '}
+              <b>SITE</b> se existir; senão, a da matriz.
+            </div>
+            <button
+              onClick={runDiagnoseCartao}
+              disabled={testingCartao || !cfg.hasToken}
+              className="w-full p-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {testingCartao ? 'Testando…' : '💳 Testar cartão via API'}
+            </button>
+
+            {cartaoResult && (
+              <div
+                className={`mt-3 rounded-lg p-3 text-sm ${
+                  cartaoResult.ok
+                    ? 'bg-emerald-50 border border-emerald-300 text-emerald-900'
+                    : 'bg-red-50 border border-red-300 text-red-900'
+                }`}
+              >
+                <div className="font-bold mb-1">
+                  {cartaoResult.ok ? '✓ Conta aceita cartão via API' : '✗ Cartão via API não respondeu como esperado'}
+                </div>
+                {cartaoResult.erro && <div className="text-xs">{cartaoResult.erro}</div>}
+                {cartaoResult.ambiente && (
+                  <div className="text-xs">
+                    Conta: <b>{cartaoResult.source === 'store' ? `loja ${cartaoResult.storeCode}` : 'matriz'}</b> · ambiente{' '}
+                    <b className="uppercase">{cartaoResult.ambiente}</b> · site cobrando em{' '}
+                    <b className="uppercase">{cartaoResult.siteGateway}</b>
+                  </div>
+                )}
+                {cartaoResult.chavePublica && (
+                  <div className="text-xs mt-1">
+                    Chave pública: {cartaoResult.chavePublica.ok
+                      ? `OK (${cartaoResult.chavePublica.tamanho} chars${cartaoResult.chavePublica.criadaAgora ? ', criada agora' : ''})`
+                      : `falhou — ${cartaoResult.chavePublica.erro}`}
+                  </div>
+                )}
+                {cartaoResult.taxas && (
+                  <div className="text-xs mt-1">
+                    Simulação de parcelas (R$ 100):{' '}
+                    {cartaoResult.taxas.ok
+                      ? `OK — ${cartaoResult.taxas.planos?.length || 0} plano(s)` +
+                        (cartaoResult.taxas.taxaPix != null ? ` · taxa PIX R$ ${Number(cartaoResult.taxas.taxaPix).toFixed(2)}` : '')
+                      : `falhou — HTTP ${cartaoResult.taxas.httpStatus ?? '?'} ${cartaoResult.taxas.erro || ''}`}
+                  </div>
+                )}
+                {cartaoResult.taxas?.ok && cartaoResult.taxas.planos?.length > 0 && (
+                  <div className="mt-2 max-h-40 overflow-auto text-[11px] font-mono bg-white/60 rounded p-2">
+                    {cartaoResult.taxas.planos.slice(0, 40).map((p: any, i: number) => (
+                      <div key={i}>
+                        {p.bandeira} {p.parcelas}x de R$ {Number(p.valorParcela).toFixed(2)}{p.semJuros ? ' sem juros' : ` (total R$ ${Number(p.total).toFixed(2)})`}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

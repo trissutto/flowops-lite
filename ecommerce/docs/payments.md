@@ -10,12 +10,32 @@ evento de compra.
 | Papel | Onde mora |
 |---|---|
 | Pedido (nasce, vive, muda de status) | Backend FlowOps — Postgres |
-| Cobrança na Pagar.me (PIX e cartão) | Backend FlowOps (`PagarmeService`) |
+| Cobrança no gateway (PIX e cartão) | Backend FlowOps (`PagbankService` com `SITE_GATEWAY=pagbank`; `PagarmeService` sem) |
 | Webhook do gateway | Backend FlowOps |
 | Confirmação do pagamento | Backend FlowOps |
 | Recálculo de cupom/frete/total (1ª barreira) | Ecommerce — `POST /api/checkout` |
-| Tokenização do cartão | **Navegador** (chave pública Pagar.me) |
+| Tokenização/criptografia do cartão | **Navegador** — PagBank: `PagSeguro.encryptCard` com a chave pública da conta (vem de `/api/loja/config` → `pagamento.cartao`); Pagar.me: token via `NEXT_PUBLIC_PAGARME_PUBLIC_KEY` |
 | Evento `purchase` (GA4 + Meta CAPI) | Ecommerce — `POST /api/webhooks/payment` |
+
+## Dois gateways, uma chave (16/09/2026)
+
+Quem cobra o site é decisão do **backend**: `SITE_GATEWAY=pagbank` no Railway
+liga o PagBank pra PIX e cartão (decisão do dono: tudo na PagBank pra fechar o
+caixa num extrato só). Sem a env, Pagar.me como sempre — nada do caminho antigo
+foi apagado, e cada pedido guarda `paymentInfo.gateway` pra o reconcile saber
+a quem perguntar depois da virada.
+
+No navegador, o `CardForm` lê `pagamento.cartao` de `/api/loja/config`:
+
+- `pagbank` + `pagbankPublicKey` → carrega o SDK oficial
+  (`assets.pagseguro.com.br/.../pagseguro.min.js`) sob demanda e manda
+  `cardEncrypted` + `cardHolder`;
+- qualquer outra coisa → tokeniza na Pagar.me e manda `cardToken`.
+
+O backend cobra pelo gateway da **credencial que veio** (aba velha aberta há
+dias ainda manda `cardToken` depois da virada — e ela vai pra Pagar.me). Se o
+PagBank está ligado mas a chave pública não vem (token recusado), o cartão
+degrada pra Pagar.me sozinho, com `[loja][ALERTA]` no log.
 
 **Por que o backend e não aqui:** o pedido precisa estar no Postgres pro resto
 da casa funcionar — CRM, roteamento pra loja, separação, NF-e. Pedido que só o
