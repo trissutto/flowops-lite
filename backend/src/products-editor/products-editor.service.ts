@@ -5,6 +5,7 @@ import { ErpService } from '../erp/erp.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 import { LojaCatalogService } from '../loja-catalog/loja-catalog.service';
 import { avisarVitrine } from '../common/avisar-vitrine';
+import { refBaseOf } from '../common/ref-base';
 
 /**
  * EDITOR DE PRODUTOS (/retaguarda/editor-produtos) — padronizar REF, corrigir
@@ -670,7 +671,14 @@ export class ProductsEditorService {
     for (const g of grupos.values()) {
       try {
         const gp: any = {};
-        if (g.set.ref !== undefined) gp.ref = g.set.ref;
+        // A REF-BASE vai junto com a REF: a grade da live abre a família pela
+        // `ref_base` do espelho, e o backfill do GigaMirror só preenche linha
+        // VAZIA. Sem isto a peça renomeada continuava na família antiga — caso
+        // da saia 207279 cadastrada como 207282 (16/09/2026).
+        if (g.set.ref !== undefined) {
+          gp.ref = g.set.ref;
+          gp.refBase = refBaseOf(g.set.ref);
+        }
         if (g.set.descricaoCompleta !== undefined) gp.descricao = g.set.descricaoCompleta;
         if (g.set.cor !== undefined) gp.cor = g.set.cor;
         if (g.set.tamanho !== undefined) gp.tamanho = g.set.tamanho;
