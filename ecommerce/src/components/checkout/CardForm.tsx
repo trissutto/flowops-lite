@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/Button';
 import { formatPrice } from '@/lib/utils';
 import { MAX_PARCELAS } from '@/lib/commerce/cartao';
 import { trackCheckoutValidationError } from '@/lib/tracking';
+import { useLojaConfig } from '@/hooks/useLojaConfig';
+import { encryptPagbankCard } from '@/lib/payments/pagbank-sdk';
 import {
   CARD_BRAND_LABEL,
   detectCardBrand,
@@ -33,6 +35,12 @@ import {
  * intactas) mas não gera token: o BFF recusa cartão sem token com a mensagem
  * elegante de "estamos finalizando este meio de pagamento". Melhor isso do que
  * uma tela que finge cobrar.
+ *
+ * DOIS GATEWAYS, UMA REGRA (16/09): quem cobra o site é decisão do backend
+ * (`/api/loja/config` → `pagamento.cartao`). PagBank → o cartão é
+ * CRIPTOGRAFADO pelo SDK oficial com a chave pública da conta e viaja como
+ * `cardEncrypted`; Pagar.me → tokenizado como sempre (`cardToken`). Nos dois
+ * casos o PAN morre neste componente.
  */
 
 const schema = z.object({
@@ -56,10 +64,18 @@ interface CardFormProps {
   total: number;
   /** Pedido em processamento no checkout; impede um segundo envio. */
   enviando?: boolean;
-  onDone: (payment: { method: 'card'; installments: number; cardToken?: string }) => void;
+  onDone: (payment: {
+    method: 'card';
+    installments: number;
+    cardToken?: string;
+    cardEncrypted?: string;
+    cardHolder?: string;
+  }) => void;
 }
 
 export function CardForm({ total, enviando = false, onDone }: CardFormProps) {
+  const { pagamento } = useLojaConfig();
+  const viaPagbank = pagamento.cartao === 'pagbank' && !!pagamento.pagbankPublicKey;
   const {
     register,
     handleSubmit,
@@ -118,21 +134,44 @@ export function CardForm({ total, enviando = false, onDone }: CardFormProps) {
     return data.id;
   }
 
+  /**
+   * PagBank: o SDK oficial criptografa com a chave pública da conta, no
+   * navegador. O blob RSA é o único dado que sai daqui.
+   */
+  async function criptografarPagbank(values: FormValues): Promise<string> {
+    const [mm, yy] = values.expiry.split('/');
+    return encryptPagbankCard({
+      publicKey: pagamento.pagbankPublicKey!,
+      holder: values.holder.trim(),
+      number: onlyDigits(values.number),
+      expMonth: mm,
+      // O SDK pede o ano com 4 dígitos.
+      expYear: yy.length === 2 ? `20${yy}` : yy,
+      securityCode: values.cvv,
+    });
+  }
+
   async function submit(values: FormValues) {
     setErroToken(null);
     const installments = Number(values.installments);
 
-    // Sem chave configurada: segue sem token. O server recusa com elegância —
-    // e a cliente não fica presa num botão que não faz nada.
-    if (!process.env.NEXT_PUBLIC_PAGARME_PUBLIC_KEY) {
+    // Sem chave configurada (nem PagBank, nem Pagar.me): segue sem token. O
+    // server recusa com elegância — e a cliente não fica presa num botão que
+    // não faz nada.
+    if (!viaPagbank && !process.env.NEXT_PUBLIC_PAGARME_PUBLIC_KEY) {
       onDone({ method: 'card', installments });
       return;
     }
 
     setTokenizando(true);
     try {
-      const cardToken = await tokenizar(values);
-      onDone({ method: 'card', installments, cardToken });
+      if (viaPagbank) {
+        const cardEncrypted = await criptografarPagbank(values);
+        onDone({ method: 'card', installments, cardEncrypted, cardHolder: values.holder.trim() });
+      } else {
+        const cardToken = await tokenizar(values);
+        onDone({ method: 'card', installments, cardToken });
+      }
     } catch (err) {
       // Log sem NENHUM dado do cartão — só o motivo técnico.
       console.error('[checkout] tokenização do cartão falhou:', err instanceof Error ? err.message : err);

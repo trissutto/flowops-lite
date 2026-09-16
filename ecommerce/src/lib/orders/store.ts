@@ -77,6 +77,9 @@ export interface NewOrderPayload {
     installments?: number;
     /** Token da Pagar.me gerado NO NAVEGADOR — o número do cartão nunca sai de lá. */
     cardToken?: string;
+    /** Cartão criptografado pelo SDK do PagBank NO NAVEGADOR (gateway PagBank). */
+    cardEncrypted?: string;
+    cardHolder?: string;
   };
   tracking?: Order['tracking'];
 }

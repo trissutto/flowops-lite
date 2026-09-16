@@ -243,7 +243,7 @@ export class PdvController {
 
     const orfaos: any[] = [];
     for (const p of pagos) {
-      const [venda, cart, baixa] = await Promise.all([
+      const [venda, cart, baixa, pedidoSite] = await Promise.all([
         (this.svc as any).prisma.pdvSale.findUnique({ where: { id: p.saleId }, select: { id: true } }),
         (this.svc as any).prisma.livePdvCart
           .findUnique({ where: { id: p.saleId }, select: { id: true } })
@@ -251,8 +251,13 @@ export class PdvController {
         (this.svc as any).prisma.crediarioBaixa
           .findUnique({ where: { id: p.saleId }, select: { id: true } })
           .catch(() => null),
+        // Pedido do site (lurds.com.br) cobra no PagBank desde 16/09 com
+        // saleId = Order.id — tem dono, não é órfão.
+        (this.svc as any).prisma.order
+          .findUnique({ where: { id: p.saleId }, select: { id: true } })
+          .catch(() => null),
       ]);
-      if (!venda && !cart && !baixa) orfaos.push(p);
+      if (!venda && !cart && !baixa && !pedidoSite) orfaos.push(p);
     }
     return {
       janelaDias: janela,

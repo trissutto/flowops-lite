@@ -205,6 +205,9 @@ export interface CreateOrderInput {
    * servidor nenhum — nem o nosso BFF, nem o backend FlowOps (PCI-DSS).
    */
   cardToken?: string;
+  /** O mesmo, no caminho PagBank: blob RSA do SDK oficial + nome do titular. */
+  cardEncrypted?: string;
+  cardHolder?: string;
   tracking?: Order['tracking'];
 }
 

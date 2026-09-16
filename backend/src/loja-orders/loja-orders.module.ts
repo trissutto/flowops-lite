@@ -2,6 +2,10 @@ import { Module, forwardRef } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
+// PagBank cobra o site desde 16/09 (`SITE_GATEWAY=pagbank`). Seta de mão
+// única: o PagbankModule NÃO conhece este — o webhook de lá avisa por
+// `registrarOuvinte` (ver LojaOrdersService.onModuleInit).
+import { PagbankModule } from '../pagbank/pagbank.module';
 import { CorreiosModule } from '../correios/correios.module';
 import { LojaOrdersService } from './loja-orders.service';
 import { LojaOrdersController } from './loja-orders.controller';
@@ -49,6 +53,9 @@ import { RiscoModule } from '../risco/risco.module';
     // fecha. Seta de mão única — o RiscoModule não conhece este.
     RiscoModule,
     forwardRef(() => PagarmeModule),
+    // forwardRef porque o PagbankModule importa CrediariosModule, que importa
+    // PagarmeModule, que importa este — o mesmo laço que a Pagar.me já fecha.
+    forwardRef(() => PagbankModule),
   ],
   controllers: [LojaOrdersController, LojaAdminController, CuponsAdminController],
   providers: [

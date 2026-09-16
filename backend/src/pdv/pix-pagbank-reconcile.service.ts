@@ -149,16 +149,20 @@ export class PixPagbankReconcileService {
   /** Ids já avisados — evita o mesmo warn a cada ciclo de 30s. Zera no deploy, tudo bem. */
   private readonly orfaosAvisados = new Set<string>();
 
-  /** O saleId pertence a algum fluxo conhecido (carrinho da live / crediário)? */
+  /** O saleId pertence a algum fluxo conhecido (carrinho da live / crediário / pedido do site)? */
   private async temDonoConhecido(saleId: string): Promise<boolean> {
-    const [cart, baixa] = await Promise.all([
+    const [cart, baixa, pedidoSite] = await Promise.all([
       (this.prisma as any).livePdvCart
         .findUnique({ where: { id: saleId }, select: { id: true } })
         .catch(() => null),
       (this.prisma as any).crediarioBaixa
         .findUnique({ where: { id: saleId }, select: { id: true } })
         .catch(() => null),
+      // Site (lurds.com.br) no PagBank desde 16/09: saleId = Order.id.
+      (this.prisma as any).order
+        .findUnique({ where: { id: saleId }, select: { id: true } })
+        .catch(() => null),
     ]);
-    return !!(cart || baixa);
+    return !!(cart || baixa || pedidoSite);
   }
 }

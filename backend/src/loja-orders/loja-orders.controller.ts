@@ -190,6 +190,9 @@ export class LojaOrdersController {
     const { cfg } = await this.freteSvc.config();
     return {
       ok: true,
+      // Com qual gateway o site tokeniza/criptografa o cartão (16/09). A chave
+      // pública do PagBank vai junto — é pública, só criptografa.
+      pagamento: await this.svc.configPagamentoPublica(),
       freteGratis: {
         ativo: !!cfg?.freteGratisAtivo,
         minimo: Number(cfg?.freteGratisMinimo ?? 0),

@@ -34,6 +34,10 @@ export interface PaymentSelection {
    * cartão que sai do navegador — ver o cabeçalho do CardForm.
    */
   cardToken?: string;
+  /** Cartão criptografado pelo SDK do PagBank (quando o gateway é PagBank). */
+  cardEncrypted?: string;
+  /** Nome do titular, que o PagBank exige junto do blob. */
+  cardHolder?: string;
 }
 
 const TABS: Array<{ method: PaymentMethod; label: string; icon: React.ElementType }> = [

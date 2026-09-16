@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
+import { PagbankService } from '../pagbank/pagbank.service';
 import { LojaOrdersService } from './loja-orders.service';
 
 /**
@@ -61,6 +62,7 @@ export class LojaPagamentoReconcileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pagarme: PagarmeService,
+    private readonly pagbank: PagbankService,
     private readonly orders: LojaOrdersService,
   ) {}
 
@@ -84,7 +86,7 @@ export class LojaPagamentoReconcileService {
           },
           orderBy: { createdAt: 'desc' },
           take: 200,
-          select: { id: true, wcOrderNumber: true, createdAt: true },
+          select: { id: true, wcOrderNumber: true, createdAt: true, paymentInfo: true },
         })
         .catch(() => []);
       if (!pendentes.length) return;
@@ -100,15 +102,35 @@ export class LojaPagamentoReconcileService {
           continue;
         }
 
+        // Quem cobrou este pedido (16/09): `paymentInfo.gateway`. Pedido de
+        // antes da chave não tem o campo — é Pagar.me.
+        let gateway = 'pagarme';
+        try {
+          gateway = JSON.parse(o.paymentInfo || '{}')?.gateway === 'pagbank' ? 'pagbank' : 'pagarme';
+        } catch {
+          /* paymentInfo torto = Pagar.me, como sempre */
+        }
+
         // PASSO 1 — o banco local já sabe? (webhook gravou o pagamento mas o
         // gancho do pedido não rodou). De graça, e é o caso mais comum.
-        const pagamento = await (this.prisma as any).pagarmePayment
-          .findFirst({
-            where: { saleId: o.id },
-            orderBy: { createdAt: 'desc' },
-            select: { pagarmeOrderId: true, status: true },
-          })
-          .catch(() => null);
+        const pagamento =
+          gateway === 'pagbank'
+            ? await (this.prisma as any).pagbankPayment
+                .findFirst({
+                  where: { saleId: o.id },
+                  orderBy: { createdAt: 'desc' },
+                  select: { pagbankOrderId: true, status: true },
+                })
+                .then((p: any) => (p ? { gatewayOrderId: p.pagbankOrderId, status: p.status } : null))
+                .catch(() => null)
+            : await (this.prisma as any).pagarmePayment
+                .findFirst({
+                  where: { saleId: o.id },
+                  orderBy: { createdAt: 'desc' },
+                  select: { pagarmeOrderId: true, status: true },
+                })
+                .then((p: any) => (p ? { gatewayOrderId: p.pagarmeOrderId, status: p.status } : null))
+                .catch(() => null);
 
         if (pagamento?.status === 'paid') {
           if (await this.confirmar(o, 'pagamento local já constava pago')) confirmados++;
@@ -116,15 +138,20 @@ export class LojaPagamentoReconcileService {
         }
 
         // PASSO 2 — perguntar ao gateway, com throttle.
-        if (!pagamento?.pagarmeOrderId) continue;
+        if (!pagamento?.gatewayOrderId) continue;
         const ultima = this.ultimaConsulta.get(o.id) || 0;
         if (agora - ultima < LojaPagamentoReconcileService.THROTTLE_MS) continue;
         this.ultimaConsulta.set(o.id, agora);
         consultados++;
 
         try {
-          // `checkOrderStatus` já persiste o status novo no PagarmePayment.
-          const r: any = await this.pagarme.checkOrderStatus(pagamento.pagarmeOrderId);
+          // `checkOrderStatus` já persiste o status novo na tabela do gateway
+          // (e, no PagBank, avisa o ouvinte do pedido — que confirma sozinho;
+          // o `confirmar` abaixo então sai em `already`, sem contar duas vezes).
+          const r: any =
+            gateway === 'pagbank'
+              ? await this.pagbank.checkOrderStatus(pagamento.gatewayOrderId)
+              : await this.pagarme.checkOrderStatus(pagamento.gatewayOrderId);
           const st = String(r?.status || '').toLowerCase();
           if (st === 'paid') {
             if (await this.confirmar(o, 'gateway confirmou fora do webhook')) confirmados++;
@@ -341,18 +368,23 @@ export class LojaPagamentoReconcileService {
     });
 
     const ids = pedidos.map((p) => p.id);
+    // As DUAS tabelas de gateway (16/09): o pedido pode ter sido cobrado na
+    // Pagar.me ou no PagBank — a conciliação olha as duas e bate por pedido.
     const pagamentos: any[] = ids.length
-      ? await (this.prisma as any).pagarmePayment.findMany({
-          where: { saleId: { in: ids } },
-          select: {
-            saleId: true,
-            pagarmeOrderId: true,
-            status: true,
-            valor: true,
-            paidAt: true,
-            method: true,
-          },
-        })
+      ? [
+          ...(await (this.prisma as any).pagarmePayment.findMany({
+            where: { saleId: { in: ids } },
+            select: { saleId: true, pagarmeOrderId: true, status: true, valor: true, paidAt: true, method: true },
+          })),
+          ...(
+            await (this.prisma as any).pagbankPayment
+              .findMany({
+                where: { saleId: { in: ids } },
+                select: { saleId: true, pagbankOrderId: true, status: true, valor: true, paidAt: true, method: true },
+              })
+              .catch(() => [])
+          ).map((p: any) => ({ ...p, pagarmeOrderId: `pagbank:${p.pagbankOrderId}` })),
+        ]
       : [];
 
     // Um pedido pode ter mais de uma tentativa de cobrança (cartão recusado e

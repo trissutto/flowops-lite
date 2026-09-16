@@ -9,6 +9,43 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import * as crypto from 'crypto';
 import { SELECT_VENDA_COBRANCA } from '../common/cobranca-venda-online';
+import {
+  CartaoPagbankLido,
+  erroHttpEhDadoDoCartao,
+  lerCartaoPagbank,
+  resumirErrosPagbank,
+} from '../common/pagbank-cartao';
+
+/**
+ * O que uma cobrança do PagBank virou — avisado a quem se inscreveu com
+ * `registrarOuvinte`. Nasceu pro pedido do SITE (`origem='site'`): o
+ * `LojaOrdersService` se inscreve no boot e confirma/recusa o pedido sem
+ * este módulo precisar conhecê-lo (a seta continua de mão única —
+ * loja-orders → pagbank — e não nasce ciclo de módulo, que já derrubou o
+ * backend em 07/08).
+ */
+export interface PagbankEventoCobranca {
+  saleId: string;
+  storeCode: string;
+  pagbankOrderId: string;
+  method: string;
+  origem: string | null;
+  status: 'paid' | 'cancelled' | 'expired';
+  /** De onde veio a mudança — só pra log. */
+  fonte: 'webhook' | 'consulta';
+  detalhe?: string;
+}
+
+/** Endereço de entrega no formato que a Orders API pede (`shipping.address`). */
+export interface PagbankEndereco {
+  street: string;
+  number: string;
+  complement?: string;
+  neighborhood: string;
+  city: string;
+  uf: string;
+  cep: string;
+}
 
 /**
  * PagBank — integração via Order API moderna (REST/JSON com Bearer Token).
@@ -265,8 +302,15 @@ export class PagbankService {
     customerName?: string;
     customerCpf?: string;
     customerEmail?: string;
+    /** Celular real da cliente (site). Sem ele vai o placeholder do PDV. */
+    customerPhone?: string;
+    /** Nome do item na fatura/painel. Sem ele: `Venda PDV <id>`. */
+    descricao?: string;
     expiresInMinutes?: number;
-    /** 'venda_online' = PIX do painel Venda Online do PDV (ver coluna `origem`). */
+    /**
+     * 'venda_online' = PIX do painel Venda Online do PDV; 'site' = PIX do
+     * checkout de lurds.com.br (ver coluna `origem`).
+     */
     origem?: string | null;
   }): Promise<{
     pagbankOrderId: string;
@@ -325,7 +369,7 @@ export class PagbankService {
         // PagBank exige phones em alguns casos. Manda default
         // se não foi informado pra evitar rejection.
         phones: [
-          {
+          this.telefonePagbank(input.customerPhone) || {
             country: '55',
             area: '13',
             number: '999999999',
@@ -336,7 +380,7 @@ export class PagbankService {
       items: [
         {
           reference_id: input.saleId.slice(-12),
-          name: `Venda PDV ${input.saleId.slice(-6).toUpperCase()}`,
+          name: (input.descricao || `Venda PDV ${input.saleId.slice(-6).toUpperCase()}`).slice(0, 64),
           quantity: 1,
           unit_amount: valorCentavos,
         },
@@ -450,7 +494,7 @@ export class PagbankService {
         valor: input.valor,
         status: 'pending',
         // Só o valor conhecido entra; qualquer outra coisa vira null (balcão).
-        origem: input.origem === 'venda_online' ? 'venda_online' : null,
+        origem: input.origem === 'venda_online' || input.origem === 'site' ? input.origem : null,
         qrCodeText,
         qrCodeImageB64,
         linkToken,
@@ -641,6 +685,20 @@ export class PagbankService {
           ...(chargePaga?.id ? { pagbankChargeId: chargePaga.id } : {}),
         },
       });
+      // Mesmo aviso que o webhook dá: quem se inscreveu (pedido do site)
+      // fecha ou recusa o pedido sem esperar o próximo ciclo de ninguém.
+      if (newStatus === 'paid' || newStatus === 'cancelled') {
+        await this.avisarOuvintes({
+          saleId: local.saleId,
+          storeCode: local.storeCode,
+          pagbankOrderId,
+          method: local.method,
+          origem: local.origem ?? null,
+          status: newStatus,
+          fonte: 'consulta',
+          detalhe: charges.map((c) => st(c)).join(',') || undefined,
+        });
+      }
     }
 
     return {
@@ -846,8 +904,420 @@ export class PagbankService {
       `[pagbank] webhook: order=${orderId} sale=${local.saleId} ${local.status} → ${newStatus}`,
     );
 
+    if (newStatus === 'paid' || newStatus === 'cancelled') {
+      await this.avisarOuvintes({
+        saleId: local.saleId,
+        storeCode: local.storeCode,
+        pagbankOrderId: orderId,
+        method: local.method,
+        origem: local.origem ?? null,
+        status: newStatus,
+        fonte: 'webhook',
+        detalhe: status || undefined,
+      });
+    }
+
     // statusChanged=true → controller deve disparar confirmBaixaPixIfExists (1ª vez que virou paid)
     return { ok: true, saleId: local.saleId, status: newStatus, statusChanged: true };
+  }
+
+  // ── Ouvintes (pedido do site) ──────────────────────────────────────
+
+  private readonly ouvintes: Array<(ev: PagbankEventoCobranca) => Promise<void> | void> = [];
+
+  /**
+   * Inscreve quem precisa saber que uma cobrança virou paga/recusada. Hoje:
+   * o `LojaOrdersService`, que confirma (`confirmarPagamento`) ou recusa
+   * (`registrarRecusaTardia`) o pedido do site. Um ouvinte que estoura não
+   * derruba o webhook nem os outros ouvintes — o reconcile do site (60s)
+   * cobre a falha lendo o `status` que já ficou gravado aqui.
+   */
+  registrarOuvinte(fn: (ev: PagbankEventoCobranca) => Promise<void> | void): void {
+    this.ouvintes.push(fn);
+  }
+
+  private async avisarOuvintes(ev: PagbankEventoCobranca): Promise<void> {
+    for (const fn of this.ouvintes) {
+      try {
+        await fn(ev);
+      } catch (e: any) {
+        this.logger.warn(
+          `[pagbank] ouvinte falhou (order=${ev.pagbankOrderId} sale=${ev.saleId} ${ev.status}): ${e?.message || e}`,
+        );
+      }
+    }
+  }
+
+  // ── CARTÃO (site lurds.com.br) ─────────────────────────────────────
+
+  /**
+   * CHAVE PÚBLICA DE CARTÃO da conta — a que o site usa pra criptografar o
+   * cartão no navegador (`PagSeguro.encryptCard`). Sem ela não existe cartão
+   * pelo PagBank: o número NUNCA pode chegar ao nosso servidor (PCI), então
+   * a criptografia acontece antes de sair do navegador, e só o blob viaja.
+   *
+   * Gerada UMA vez com o token da conta (`POST /public-keys {type:'card'}`)
+   * e guardada na config — não é o mesmo token da Reservas Ita que revoga
+   * (chave pública não revoga nada; ver memória "PagBank: token único por
+   * conta"). `GET /public-keys/card` primeiro: se a conta já tem, reaproveita.
+   * Persistida na config de onde saiu o token (loja ou matriz), porque a
+   * chave é DA CONTA — trocar o token da loja SITE por outra conta exige
+   * `forcar=true` pra buscar a chave nova.
+   */
+  async chavePublicaCartao(
+    storeCode: string,
+    forcar = false,
+  ): Promise<{ publicKey: string; source: 'store' | 'singleton'; ambiente: string; criadaAgora: boolean }> {
+    const cfg = await this.getConfigInternalForStore(storeCode);
+    if (cfg.cardPublicKey && !forcar) {
+      return { publicKey: cfg.cardPublicKey, source: cfg.source, ambiente: cfg.ambiente, criadaAgora: false };
+    }
+
+    const baseUrl = this.getBaseUrl(cfg.ambiente);
+    const headers = {
+      Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+
+    let publicKey = '';
+    let criadaAgora = false;
+    // 1) já existe na conta?
+    try {
+      const r = await firstValueFrom(
+        this.http.get(`${baseUrl}/public-keys/card`, { headers, timeout: 10000, validateStatus: () => true }),
+      );
+      if (r.status >= 200 && r.status < 300 && r.data?.public_key) publicKey = String(r.data.public_key);
+      else if (r.status === 401 || r.status === 403) {
+        throw new BadRequestException(`PagBank recusou o token ao consultar a chave pública (HTTP ${r.status})`);
+      }
+    } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
+      this.logger.warn(`[pagbank] GET /public-keys/card falhou (${e?.message || e}) — tentando criar`);
+    }
+    // 2) não existe: cria.
+    if (!publicKey) {
+      const r = await firstValueFrom(
+        this.http.post(`${baseUrl}/public-keys`, { type: 'card' }, { headers, timeout: 10000, validateStatus: () => true }),
+      );
+      if (!(r.status >= 200 && r.status < 300) || !r.data?.public_key) {
+        throw new BadRequestException(
+          `PagBank não devolveu chave pública (HTTP ${r.status}): ${resumirErrosPagbank(r.data, JSON.stringify(r.data || {}).slice(0, 200))}`,
+        );
+      }
+      publicKey = String(r.data.public_key);
+      criadaAgora = true;
+    }
+
+    if (cfg.source === 'store') {
+      await (this.prisma as any).pagbankStoreConfig.update({
+        where: { storeCode: cfg.storeCode },
+        data: { cardPublicKey: publicKey },
+      });
+    } else {
+      await (this.prisma as any).pagbankConfig.update({
+        where: { id: 'singleton' },
+        data: { cardPublicKey: publicKey },
+      });
+    }
+    this.logger.log(
+      `[pagbank] chave pública de cartão ${criadaAgora ? 'CRIADA' : 'lida'} pra loja ${storeCode} (${cfg.source}, ${cfg.ambiente})`,
+    );
+    return { publicKey, source: cfg.source, ambiente: cfg.ambiente, criadaAgora };
+  }
+
+  /**
+   * COBRANÇA DE CARTÃO (Orders API, `charges[].payment_method.CREDIT_CARD`).
+   *
+   * Recebe o cartão JÁ CRIPTOGRAFADO pelo navegador (`cardEncrypted`) — o
+   * PAN/CVV nunca passam por aqui. Captura na hora (`capture:true`), até
+   * 12x sem juros pra cliente (a loja absorve a taxa da parcela — decisão do
+   * dono, 16/09).
+   *
+   * Três saídas, iguais às do cartão da Pagar.me em `loja-orders`:
+   *   ok:true  status 'paid'    → aprovado, confirma na hora
+   *   ok:true  status 'pending' → em análise; webhook/reconcile fecham
+   *   ok:false kind 'recusa'    → a operadora disse não (cliente pode trocar o cartão)
+   *   ok:false kind 'integracao'→ falha nossa/do PagBank — a cliente NÃO deve
+   *                               trocar de cartão por causa disso
+   *
+   * Timeout/5xx é resposta AMBÍGUA (o PagBank pode ter cobrado): antes de
+   * declarar falha, procura a order pelo `reference_id` — achou, segue com
+   * ela. É a mesma rede do `procurarOrderPagarmePorCode`.
+   */
+  async createCardCharge(input: {
+    saleId: string;
+    storeCode: string;
+    /** Em REAIS. */
+    valor: number;
+    /** `reference_id` da order — único por tentativa (LP, LP-T2, …). */
+    referencia: string;
+    descricao: string;
+    installments: number;
+    cardEncrypted: string;
+    holderName: string;
+    holderTaxId: string;
+    customer: { name: string; email: string; cpf: string; phone: string };
+    shippingAddress?: PagbankEndereco | null;
+    origem: 'site';
+  }): Promise<
+    | { ok: true; status: 'paid' | 'pending'; pagbankOrderId: string; pagbankChargeId: string | null; lido: CartaoPagbankLido }
+    | { ok: false; kind: 'recusa' | 'integracao'; detalhe: string; lido?: CartaoPagbankLido; pagbankOrderId?: string | null; pagbankChargeId?: string | null }
+  > {
+    const cfg = await this.getConfigInternalForStore(input.storeCode);
+    const baseUrl = this.getBaseUrl(cfg.ambiente);
+    const headers = {
+      Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+    const valorCentavos = Math.round(input.valor * 100);
+    const parcelas = Math.max(1, Math.min(12, Math.floor(Number(input.installments) || 1)));
+    const cpf = String(input.customer.cpf || '').replace(/\D/g, '');
+    const telefone = this.telefonePagbank(input.customer.phone);
+    if (!telefone) {
+      // O checkout já exige celular com DDD — chegar aqui sem ele é bug de
+      // quem chamou, e o PagBank recusaria com 400 de qualquer jeito.
+      return { ok: false, kind: 'integracao', detalhe: `telefone inválido pra cobrança: "${input.customer.phone}"` };
+    }
+
+    const end = input.shippingAddress;
+    const body: any = {
+      reference_id: String(input.referencia).slice(0, 64),
+      customer: {
+        name: String(input.customer.name || '').trim().slice(0, 64),
+        email: String(input.customer.email || '').trim().slice(0, 254),
+        tax_id: cpf,
+        phones: [telefone],
+      },
+      items: [
+        {
+          reference_id: input.saleId.slice(-12),
+          name: String(input.descricao || 'Pedido').slice(0, 64),
+          quantity: 1,
+          unit_amount: valorCentavos,
+        },
+      ],
+      ...(end
+        ? {
+            shipping: {
+              address: {
+                street: String(end.street || '').slice(0, 160),
+                number: String(end.number || 'S/N').slice(0, 20),
+                ...(end.complement ? { complement: String(end.complement).slice(0, 40) } : {}),
+                locality: String(end.neighborhood || '').slice(0, 60),
+                city: String(end.city || '').slice(0, 90),
+                region_code: String(end.uf || '').toUpperCase().slice(0, 2),
+                country: 'BRA',
+                postal_code: String(end.cep || '').replace(/\D/g, '').slice(0, 8),
+              },
+            },
+          }
+        : {}),
+      charges: [
+        {
+          reference_id: String(input.referencia).slice(0, 64),
+          description: String(input.descricao || 'Pedido').slice(0, 64),
+          amount: { value: valorCentavos, currency: 'BRL' },
+          payment_method: {
+            type: 'CREDIT_CARD',
+            installments: parcelas,
+            capture: true,
+            soft_descriptor: 'LURDS',
+            card: { encrypted: String(input.cardEncrypted), store: false },
+            holder: { name: String(input.holderName || input.customer.name).trim().slice(0, 64), tax_id: String(input.holderTaxId || cpf).replace(/\D/g, '') },
+          },
+        },
+      ],
+    };
+    const webhook = this.getWebhookUrl();
+    if (webhook) body.notification_urls = [webhook];
+
+    let order: any = null;
+    try {
+      const resp = await firstValueFrom(
+        this.http.post(`${baseUrl}/orders`, body, { headers, timeout: 10000 }),
+      );
+      order = resp?.data ?? null;
+    } catch (e: any) {
+      const httpStatus: number | undefined = e?.response?.status;
+      const data = e?.response?.data;
+      const resumo = resumirErrosPagbank(data, e?.message || String(e));
+
+      // Sem resposta / 5xx: o PagBank PODE ter cobrado. Pergunta antes de desistir.
+      const ambigua = !e?.response || (typeof httpStatus === 'number' && httpStatus >= 500);
+      if (ambigua) {
+        order = await this.procurarOrderPorReferencia(cfg, body.reference_id);
+        if (order) {
+          this.logger.warn(
+            `[pagbank] cartão ${input.referencia}: POST sem resposta (HTTP ${httpStatus ?? 'timeout/rede'}) ` +
+              `mas a order ${order.id} EXISTE — seguindo com ela`,
+          );
+        }
+      }
+
+      if (!order) {
+        if (typeof httpStatus === 'number' && httpStatus >= 400 && httpStatus < 500 && erroHttpEhDadoDoCartao(data)) {
+          // Cartão criptografado/titular inválido: é dado que a cliente pode corrigir.
+          this.logger.warn(`[pagbank] cartão ${input.referencia}: dado do cartão recusado pelo PagBank (HTTP ${httpStatus}): ${resumo}`);
+          return { ok: false, kind: 'recusa', detalhe: `HTTP ${httpStatus}: ${resumo}` };
+        }
+        // ERROR com marcador fixo — é o que se filtra no Railway pra ver que o
+        // cartão caiu por NOSSA causa, não por recusa.
+        this.logger.error(
+          `[pagbank][ALERTA] cartão: erro de integração HTTP ${httpStatus ?? 'sem resposta (timeout/rede)'} ` +
+            `ref=${input.referencia}: ${resumo}`,
+        );
+        return { ok: false, kind: 'integracao', detalhe: `HTTP ${httpStatus ?? 'timeout/rede'}: ${resumo}` };
+      }
+    }
+
+    if (!order?.id) {
+      this.logger.error(`[pagbank][ALERTA] cartão: resposta sem id de order ref=${input.referencia}: ${JSON.stringify(order).slice(0, 400)}`);
+      return { ok: false, kind: 'integracao', detalhe: `resposta sem id de order: ${JSON.stringify(order).slice(0, 300)}` };
+    }
+
+    const lido = lerCartaoPagbank(order);
+    const status = lido.classe === 'paid' ? 'paid' : lido.classe === 'pending' ? 'pending' : 'cancelled';
+
+    // A MESMA tabela do PIX do PDV/live: conciliação, painel e webhook
+    // enxergam a venda do site por aqui. `origem='site'` é o que o
+    // `LojaOrdersService` usa pra saber que o evento é dele.
+    try {
+      await (this.prisma as any).pagbankPayment.create({
+        data: {
+          saleId: input.saleId,
+          storeCode: input.storeCode,
+          pagbankOrderId: order.id,
+          pagbankChargeId: lido.chargeId,
+          method: 'credit_card',
+          valor: input.valor,
+          status,
+          origem: 'site',
+          ...(status === 'paid' ? { paidAt: new Date() } : {}),
+          rawWebhook: JSON.stringify(order).slice(0, 5000),
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`[pagbank] PagbankPayment do cartão não gravado (cobrança seguiu): ${e?.message || e}`);
+    }
+
+    if (lido.classe === 'recusa') {
+      this.logger.warn(
+        `[pagbank] cartão recusado ref=${input.referencia} order=${order.id} charge=${lido.chargeStatus} ${lido.codigo || ''} ${lido.mensagem || ''}`,
+      );
+      return {
+        ok: false,
+        kind: 'recusa',
+        detalhe: `recusa: charge=${lido.chargeStatus} code=${lido.codigo || '?'} ${lido.mensagem || ''}`.trim().slice(0, 300),
+        lido,
+        pagbankOrderId: order.id,
+        pagbankChargeId: lido.chargeId,
+      };
+    }
+    if (lido.classe === 'pending') {
+      this.logger.warn(
+        `[pagbank] cartão EM ANÁLISE ref=${input.referencia} order=${order.id} charge=${lido.chargeStatus} — pedido fica aguardando; webhook/reconcile fecham`,
+      );
+    } else {
+      this.logger.log(`[pagbank] cartão APROVADO ref=${input.referencia} order=${order.id} ${parcelas}x R$${input.valor.toFixed(2)}`);
+    }
+    return { ok: true, status: lido.classe === 'paid' ? 'paid' : 'pending', pagbankOrderId: order.id, pagbankChargeId: lido.chargeId, lido };
+  }
+
+  /**
+   * A ORDER QUE A GENTE NÃO VIU NASCER: `GET /orders?reference_id=`. Confere o
+   * `reference_id` de novo no resultado — se o filtro for ignorado um dia,
+   * isto não pode pegar a order de outra cliente.
+   */
+  private async procurarOrderPorReferencia(cfg: any, referenceId: string): Promise<any | null> {
+    try {
+      const r = await firstValueFrom(
+        this.http.get(`${this.getBaseUrl(cfg.ambiente)}/orders`, {
+          params: { reference_id: referenceId },
+          headers: { Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`, Accept: 'application/json' },
+          timeout: 3000,
+          validateStatus: () => true,
+        }),
+      );
+      const lista: any[] = Array.isArray(r.data?.orders) ? r.data.orders : Array.isArray(r.data) ? r.data : r.data?.id ? [r.data] : [];
+      return lista.find((o) => String(o?.reference_id || '') === referenceId) || null;
+    } catch (e: any) {
+      this.logger.warn(`[pagbank] busca da order por reference_id=${referenceId} também falhou: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /**
+   * DIAGNÓSTICO DO CARTÃO VIA API — responde "a conta aceita cartão?" antes
+   * de ligar o site: consulta/cria a chave pública e pede ao PagBank a
+   * simulação de parcelas (`GET /charges/fees/calculate`). Conta sem cartão
+   * habilitado falha num dos dois, com o motivo. Não cobra nada.
+   */
+  async diagnosticarCartao(storeCode: string): Promise<{
+    ok: boolean;
+    storeCode: string;
+    source: string;
+    ambiente: string;
+    chavePublica: { ok: boolean; tamanho?: number; criadaAgora?: boolean; erro?: string };
+    taxas: { ok: boolean; httpStatus?: number; planos?: Array<{ bandeira: string; parcelas: number; valorParcela: number; semJuros: boolean; total: number }>; taxaPix?: number | null; erro?: string };
+    siteGateway: string;
+  }> {
+    const cfg = await this.getConfigInternalForStore(storeCode);
+    const out: any = {
+      ok: false,
+      storeCode,
+      source: cfg.source,
+      ambiente: cfg.ambiente,
+      chavePublica: { ok: false },
+      taxas: { ok: false },
+      siteGateway: process.env.SITE_GATEWAY === 'pagbank' ? 'pagbank' : 'pagarme',
+    };
+    try {
+      const k = await this.chavePublicaCartao(storeCode);
+      out.chavePublica = { ok: true, tamanho: k.publicKey.length, criadaAgora: k.criadaAgora };
+    } catch (e: any) {
+      out.chavePublica = { ok: false, erro: e?.message || String(e) };
+    }
+    try {
+      const r = await firstValueFrom(
+        this.http.get(`${this.getBaseUrl(cfg.ambiente)}/charges/fees/calculate`, {
+          params: {
+            payment_methods: 'CREDIT_CARD,PIX',
+            value: 10000,
+            max_installments: 12,
+            max_installments_no_interest: 12,
+            show_seller_fees: true,
+          },
+          headers: { Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`, Accept: 'application/json' },
+          timeout: 10000,
+          validateStatus: () => true,
+        }),
+      );
+      if (r.status >= 200 && r.status < 300) {
+        const cc = r.data?.payment_methods?.credit_card || {};
+        const planos: any[] = [];
+        for (const [bandeira, v] of Object.entries<any>(cc)) {
+          for (const p of v?.installment_plans || []) {
+            planos.push({
+              bandeira,
+              parcelas: Number(p.installments),
+              valorParcela: Number(p.installment_value) / 100,
+              semJuros: !!p.interest_free,
+              total: Number(p.amount?.value ?? 0) / 100,
+            });
+          }
+        }
+        const pixFee = r.data?.payment_methods?.pix?.amount?.fees?.seller?.total;
+        out.taxas = { ok: true, httpStatus: r.status, planos, taxaPix: pixFee != null ? Number(pixFee) / 100 : null };
+      } else {
+        out.taxas = { ok: false, httpStatus: r.status, erro: resumirErrosPagbank(r.data, JSON.stringify(r.data || {}).slice(0, 200)) };
+      }
+    } catch (e: any) {
+      out.taxas = { ok: false, erro: e?.message || String(e) };
+    }
+    out.ok = out.chavePublica.ok && out.taxas.ok;
+    return out;
   }
 
   // ── Listagem (pra dashboard de PIX) ────────────────────────────────
@@ -1327,6 +1797,18 @@ export class PagbankService {
     return ambiente === 'production'
       ? 'https://api.pagseguro.com'
       : 'https://sandbox.api.pagseguro.com';
+  }
+
+  /**
+   * Celular no formato do PagBank (`{country, area, number, type}`), ou null
+   * quando não dá pra montar — o chamador decide entre placeholder (PDV, que
+   * pode não ter o número) e erro (site, que exige o número real).
+   */
+  private telefonePagbank(raw?: string | null): { country: string; area: string; number: string; type: 'MOBILE' } | null {
+    let d = String(raw ?? '').replace(/\D/g, '').replace(/^0+/, '');
+    if ((d.length === 12 || d.length === 13) && d.startsWith('55')) d = d.slice(2);
+    if (d.length !== 10 && d.length !== 11) return null;
+    return { country: '55', area: d.slice(0, 2), number: d.slice(2), type: 'MOBILE' };
   }
 
   /**

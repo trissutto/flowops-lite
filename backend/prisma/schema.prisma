@@ -2384,6 +2384,10 @@ model PagbankConfig {
   webhookSecret String?  @map("webhook_secret")
   // Habilitado? Se false, PDV cai no fallback PIX local
   enabled       Boolean  @default(false)
+  /// Chave pública RSA de CARTÃO da conta (GET/POST /public-keys), gerada
+  /// uma vez e guardada aqui. O site criptografa o cartão com ela no
+  /// navegador (PagSeguro.encryptCard). Não vence; rotação manual.
+  cardPublicKey String?  @map("card_public_key") @db.Text
   // Auditoria
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
@@ -2405,6 +2409,8 @@ model PagbankStoreConfig {
   bearerToken   String? @map("bearer_token") @db.Text
   webhookSecret String? @map("webhook_secret")
   enabled       Boolean @default(false)
+  /// Chave pública de cartão DESTA conta (ver PagbankConfig.cardPublicKey).
+  cardPublicKey String? @map("card_public_key") @db.Text
   // Identificacao visual: razao social ou nome curto da conta PagBank
   // (ajuda admin lembrar qual conta esta vinculada a essa loja)
   contaLabel    String? @map("conta_label") @db.VarChar(80)
