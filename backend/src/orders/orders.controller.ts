@@ -3,6 +3,7 @@ import { startOfDayBR } from '../lib/date-br';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
+import { wordpressLegadoLigado } from '../common/replica-giga';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoPago, STATUS_NUNCA_RECEITA } from '../common/pedido-pago';
@@ -2014,6 +2015,21 @@ export class OrdersController {
     if (liveLocal && (liveLocal.source === 'ecommerce' || liveLocal.source === 'pdv_online')) {
       // 'pdv_online' grava checkoutInfo no MESMO shape do e-commerce — o
       // detalhe local serve pros dois (buscar no WC daria o mesmo 500 da live).
+      return this.detalheEcommerce(liveLocal);
+    }
+
+    /**
+     * PEDIDO DO SITE ANTIGO (WooCommerce, ~22 mil históricos) — 17/09/2026.
+     *
+     * Caso #198205 (13/08, Sorocaba, R$ 329,79): a cliente ligou dizendo que
+     * faltou uma peça, a matriz abriu a ficha e levou "410: não existe mais
+     * pra onde ir". O WP foi apagado em 27/08 e este ramo ainda ia buscar o
+     * detalhe LÁ — mas o pedido inteiro (itens, endereço no shape do WC,
+     * cliente, rastreio, status) já vivia no nosso Postgres desde o sync.
+     * Com o WP desligado, a ficha monta do Postgres, igual à do site novo:
+     * sem `checkoutInfo` o detalhe cai nas colunas do Order/OrderItem.
+     */
+    if (liveLocal && !wordpressLegadoLigado()) {
       return this.detalheEcommerce(liveLocal);
     }
 
