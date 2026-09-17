@@ -99,6 +99,13 @@ O cron `crediario-mirror-abertas` (10min) roda `espelharDaNativa()` e **cobre s�
 
 Fora do espelho, `previewBaixa` ainda **confere a nativa antes de negar** — é a janela da parcela nascida no Flow há menos de 10min, e é a aplicação concreta da regra de ouro do erro honesto.
 
+**Juros negociado no balcão (17/09/2026).** A vendedora reduz o juros na PRÓPRIA tela de Recebimentos — clique no juros do rodapé (ou "Ajustar o desconto no juros" dentro do pagamento) abre o painel "Reduzir juros": atalhos (−25/−50/zerar), campo de %, campo "ou juros fica R$" e prévia do que a cliente paga antes de aplicar. Régua única em `common/juros-negociado.ts` (com spec).
+
+- O desconto incide **só no JUROS e parcela a parcela** — nunca no principal, e nunca somado-e-rateado (daria diferença de centavo entre o recibo e o que cada parcela leva pro histórico). 100% zera o juros, **não a dívida**.
+- 🚨 **`totalJuros`/`jurosCalculado` continuam significando COBRADO.** É o que faz `totalPago = totalPrincipal + totalJuros` e `valorPago = valorParcela + jurosCalculado` seguirem verdade pro caixa, o recibo, a página do PIX e a fila do ERP. O valor CALCULADO (antes da negociação) mora em `totalJurosCheio`/`jurosCheio`, junto com `descontoJuros`, `descontoJurosPct` e `descontoMotivo` na `CrediarioBaixa`. Quem inverter isso faz o caixa fechar errado calado.
+- **Teto é da matriz, e é conferido no SERVIDOR** (preview, dinheiro, PIX, link e split): `CrediarioConfig.descontoJurosMaxPct` (padrão **100** = livre, `0` = só a matriz negocia), editável em `/loja/juros-crediario`. Role de loja leva o teto; admin/operator não tem teto. Acima do teto a resposta diz quem libera e a tela não aplica nada.
+- O desconto sai no recibo (com motivo e quem recebeu) e na página de PIX da cliente.
+
 O cron `crediario-nativo-sync` das 04:10 é **no-op** — ele apagaria as parcelas com `flowIsSource=false` e recarregaria de uma fonte que não recebe mais as baixas: **cliente que pagou hoje voltaria devendo amanhã**.
 
 ## O ERP legado — encerrado em 27/08/2026
