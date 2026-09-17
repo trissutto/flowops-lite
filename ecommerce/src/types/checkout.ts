@@ -60,6 +60,16 @@ export interface ShippingQuote {
   storeSlug?: string;
   storeLabel?: string;
   /**
+   * RETIRADA (17/09): a sacola inteira está NESTA loja (`'loja'` → pronta em
+   * ~`readyInHours` depois que a loja confirma) ou alguma peça vem de outra
+   * (`'transferencia'` → até `readyInDays` dias úteis)? Quem decide é o
+   * backend, pelo estoque da loja. Ausente = não deu pra conferir, e o texto
+   * fala as duas possibilidades — nunca promete 3h no escuro.
+   */
+  retiradaCobertura?: 'loja' | 'transferencia';
+  /** Dias úteis quando a peça vem de outra loja (só em kind = retirada). */
+  readyInDays?: number;
+  /**
    * Preço de tabela promocional (SP SEDEX R$ 9,99, RJ/MG/PR/SC/RS PAC
    * R$ 19,99), não cotação dos Correios. Quem decide é o backend, que
    * conhece a campanha vigente — o site só carrega o carimbo pra ordenar.
@@ -127,6 +137,18 @@ export interface Order {
   customer: CustomerIdentity;
   shippingAddress?: Address;
   shipping: ShippingQuote;
+  /**
+   * O carimbo da retirada, feito pelo backend quando o pedido NASCEU: a
+   * sacola estava na loja de retirada ('loja'), vinha de outra
+   * ('transferencia') ou não deu pra conferir ('desconhecida'). É o que a
+   * confirmação usa pra dizer "~3h depois que a loja confirmar" ou "até N
+   * dias úteis" — em vez do "~3h" pra todo mundo de antes de 17/09.
+   */
+  retirada?: {
+    cobertura: 'loja' | 'transferencia' | 'desconhecida';
+    prazoHoras: number;
+    prazoDiasUteis: number;
+  };
   items: CartLine[];
   subtotal: number;
   discount: number;

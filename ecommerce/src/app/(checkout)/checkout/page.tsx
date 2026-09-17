@@ -351,6 +351,13 @@ export default function CheckoutPage() {
     }).catch(() => undefined);
   }
 
+  /* Carrinho → linhas pra cotação da retirada (memoizado: a etapa de entrega
+     recota quando isto muda, e um array novo por render seria loop). */
+  const itensCotacao = useMemo(
+    () => lines.map((l) => ({ sku: l.productId, size: l.size, color: l.color, quantity: l.quantity })),
+    [lines],
+  );
+
   /* Carrinho → formato de tracking (uma vez, reusado pelos 4 eventos). */
   const itemsTracked: TrackedItem[] = useMemo(
     () =>
@@ -764,6 +771,7 @@ export default function CheckoutPage() {
             <ShippingStep
               subtotal={subtotal}
               pecas={lines.reduce((s, l) => s + l.quantity, 0)}
+              itens={itensCotacao}
               itemsTracked={itemsTracked}
               defaults={shipping}
               salvos={enderecosSalvos}

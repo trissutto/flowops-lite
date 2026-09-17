@@ -17,6 +17,8 @@ import { ProgressiveDiscountService, DiscountResult } from '../progressive-disco
 import { RiscoChavesService } from '../risco/risco-chaves.service';
 import { RiscoService } from '../risco/risco.service';
 import { EscudoCheckoutService } from './escudo-checkout.service';
+import { RetiradaCoberturaService } from './retirada-cobertura.service';
+import { CoberturaRetirada, coberturaDaLoja, diasUteisRetiradaTransferencia } from '../common/retirada-prazo';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -368,6 +370,7 @@ export class LojaOrdersService implements OnModuleInit {
     private readonly risco: RiscoService,
     private readonly escudo: EscudoCheckoutService,
     private readonly pagbank: PagbankService,
+    private readonly retiradaCobertura: RetiradaCoberturaService,
   ) {}
 
   /**
@@ -917,6 +920,75 @@ export class LojaOrdersService implements OnModuleInit {
    * do que travar a venda por causa de um slug novo).
    */
   private async resolvePickupStoreCode(slug?: string): Promise<{ code: string; name: string } | null> {
+    return this.resolveLojaPorSlug(slug);
+  }
+
+  /**
+   * A COBERTURA DA RETIRADA, LOJA A LOJA, ANTES DO PEDIDO EXISTIR (17/09).
+   *
+   * O site manda a sacola (`itens`, no mesmo formato do carrinho) e os slugs
+   * das lojas que vai oferecer; volta `{ slug: 'loja' | 'transferencia' |
+   * 'desconhecida' }`. É o que decide se a opção de retirada diz "~3h depois
+   * que a loja confirma" ou "vem de outra loja · até N dias úteis".
+   *
+   * Sem `itens` ou sem `lojas` → `null` (o site fala as duas possibilidades).
+   * Slug que não casa com loja nenhuma → 'desconhecida' (nunca 3h no escuro).
+   */
+  async coberturaRetiradaPorSlug(
+    itens?: Array<{ sku: string; size?: string; color?: string; quantity?: number }>,
+    lojas?: string[],
+  ): Promise<Record<string, CoberturaRetirada> | null> {
+    if (!Array.isArray(itens) || !itens.length || !Array.isArray(lojas) || !lojas.length) return null;
+    const slugs = Array.from(new Set(lojas.map((s) => String(s || '').trim()).filter(Boolean))).slice(0, 40);
+    if (!slugs.length) return null;
+
+    const pedido = await this.guard.codigosDasLinhas(itens.slice(0, 60));
+    const codePorSlug = new Map<string, string>();
+    for (const slug of slugs) {
+      const loja = await this.resolveLojaPorSlug(slug);
+      if (loja?.code) codePorSlug.set(slug, loja.code);
+    }
+    const porCode = await this.retiradaCobertura.coberturaPorLoja(pedido, Array.from(codePorSlug.values()));
+
+    const out: Record<string, CoberturaRetirada> = {};
+    for (const slug of slugs) {
+      const code = codePorSlug.get(slug);
+      out[slug] = (code && porCode.get(code)) || 'desconhecida';
+    }
+    return out;
+  }
+
+  /**
+   * O CARIMBO DA RETIRADA NO NASCIMENTO DO PEDIDO — vai em
+   * `checkoutInfo.retirada` e é o que a página de confirmação lê. Os `sku`
+   * dos itens já são CÓDIGO aqui (o guard trocou REF por código antes).
+   */
+  private async carimboRetirada(
+    pickup: { code: string; name: string } | null,
+    itens: Array<{ sku: string; quantity: number }>,
+  ): Promise<{ cobertura: CoberturaRetirada; prazoHoras: number; prazoDiasUteis: number }> {
+    let prazoHoras = 3;
+    try {
+      const { cfg } = await this.frete.config();
+      prazoHoras = Number(cfg?.retiradaPrazoHoras ?? 3) || 3;
+    } catch {}
+    const base = { prazoHoras, prazoDiasUteis: diasUteisRetiradaTransferencia() };
+    if (!pickup?.code) return { cobertura: 'desconhecida', ...base };
+    const pedido = itens.map((it) => ({ codigo: String(it.sku || ''), qtd: Number(it.quantity) || 1 }));
+    try {
+      const saldo = await this.retiradaCobertura.saldoPorLoja(
+        pedido.map((p) => p.codigo),
+        [pickup.code],
+      );
+      const daLoja = saldo.get(String(pickup.code).trim().toUpperCase().replace(/^(LJ)?0*/, '')) ?? new Map();
+      return { cobertura: coberturaDaLoja(pedido, daLoja), ...base };
+    } catch (e: any) {
+      this.logger.warn(`[loja] cobertura da retirada em ${pickup.code} não conferida: ${e?.message || e}`);
+      return { cobertura: 'desconhecida', ...base };
+    }
+  }
+
+  private async resolveLojaPorSlug(slug?: string): Promise<{ code: string; name: string } | null> {
     const alvo = this.slugify(slug);
     if (!alvo) return null;
 
@@ -1042,6 +1114,17 @@ export class LojaOrdersService implements OnModuleInit {
         storeSlug: input.shipping.storeSlug || null,
         storeLabel: input.shipping.storeLabel || pickup?.name || null,
       },
+      // A peça está NA loja de retirada ou vem de outra? Carimbado AGORA, no
+      // nascimento — depois que o roteamento tira a peça da arara o saldo da
+      // loja muda e a conta ao vivo mentiria (ver common/retirada-prazo.ts).
+      ...(retirada
+        ? {
+            retirada: await this.carimboRetirada(
+              pickup,
+              input.items.map((it) => ({ sku: String(it.sku), quantity: Number(it.quantity) || 1 })),
+            ),
+          }
+        : {}),
       // Endereço no formato do E-COMMERCE, não do WC. O `shippingAddress` do
       // Order é o shape do WooCommerce (address_1 = "rua, número") porque é o
       // que a separação/etiqueta lê — desmontar aquilo de volta em rua+número
@@ -2577,6 +2660,18 @@ export class LojaOrdersService implements OnModuleInit {
           label: order.shippingMethod || 'Entrega',
           price: 0,
         },
+        // Prazo honesto da retirada (17/09): 'loja' = ~3h depois que a loja
+        // confirma; 'transferencia' = dias úteis; pedido antigo sem carimbo
+        // vem 'desconhecida' e a tela fala as duas possibilidades.
+        ...(order.isPickup
+          ? {
+              retirada: ck.retirada || {
+                cobertura: 'desconhecida',
+                prazoHoras: 3,
+                prazoDiasUteis: diasUteisRetiradaTransferencia(),
+              },
+            }
+          : {}),
         items: Array.isArray(ck.items) && ck.items.length
           ? ck.items
           : (order.items || []).map((it: any) => ({

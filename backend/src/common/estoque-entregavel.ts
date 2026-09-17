@@ -68,14 +68,14 @@ export function estoqueEntregavelLigado(): boolean {
  * vazia não pode casar com loja vazia num JOIN: seria a rede inteira virando
  * uma loja só.
  */
-function lojaNorm(col: string): string {
+export function lojaNorm(col: string): string {
   // um regexp só ('^(LJ)?0*') em vez de dois: são ~295 mil linhas de espelho,
   // e cada passada a mais aparece no relógio do checkout.
   return `NULLIF(regexp_replace(UPPER(TRIM(${col})), '^(LJ)?0*', ''), '')`;
 }
 
 /** SKU sem zeros à esquerda — a mesma régua do espelho e do roteamento. */
-function skuNorm(col: string): string {
+export function skuNorm(col: string): string {
   return `ltrim(TRIM(${col}), '0')`;
 }
 

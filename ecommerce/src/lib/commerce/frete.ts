@@ -36,6 +36,40 @@ import type { ShippingQuote } from '@/types/checkout';
  */
 export const FREE_SHIPPING_FROM = 499.9;
 
+/* ───────────────────────── prazo da retirada ───────────────────────────── */
+
+/** O que o backend diz sobre a sacola numa loja de retirada (ver `pickupStoresFor`). */
+export type CoberturaRetirada = 'loja' | 'transferencia' | 'desconhecida';
+
+/**
+ * Dias úteis quando a peça vem de outra loja. Espelho do default do backend
+ * (`RETIRADA_TRANSFER_DIAS_UTEIS`); a cotação de verdade traz o valor vigente
+ * em `retirada.prazoDiasTransferencia` e este só vale na tabela local.
+ */
+export const PRAZO_DIAS_TRANSFERENCIA_PADRAO = 4;
+
+/**
+ * A FRASE DO PRAZO DA RETIRADA — uma só pra sacola, checkout, simulador e
+ * confirmação, porque quatro textos diferentes é como a promessa errada
+ * voltou a nascer.
+ *
+ *  - 'loja'          → "A loja confirma e fica pronta em ~3h"
+ *  - 'transferencia' → "Vem de outra loja · até 4 dias úteis"
+ *  - sem cobertura   → as duas, sem prometer nenhuma
+ */
+export function textoPrazoRetirada(q: {
+  retiradaCobertura?: CoberturaRetirada;
+  readyInHours?: number;
+  readyInDays?: number;
+}): string {
+  const h = q.readyInHours ?? 3;
+  const d = q.readyInDays ?? PRAZO_DIAS_TRANSFERENCIA_PADRAO;
+  const dias = `${d} dia${d === 1 ? '' : 's'} ${d === 1 ? 'útil' : 'úteis'}`;
+  if (q.retiradaCobertura === 'loja') return `A loja confirma e fica pronta em ~${h}h`;
+  if (q.retiradaCobertura === 'transferencia') return `Vem de outra loja · até ${dias}`;
+  return `~${h}h se a peça estiver na loja · até ${dias} se vier de outra`;
+}
+
 /** Faixas de CEP (2 primeiros dígitos) → grupo de preço/prazo. */
 type Zone = 'sp-capital' | 'sp-interior' | 'sudeste' | 'sul' | 'centro-nordeste' | 'norte';
 
@@ -157,21 +191,39 @@ export function isValidCep(v: string): boolean {
  *
  * COM `coord`: só as lojas a até 20 km, da mais perto pra mais longe.
  * SEM `coord`: a tabela de prefixos, que é aproximada.
+ *
+ * O PRAZO, desde 17/09, depende de a peça estar NAQUELA loja (`cobertura`,
+ * decidida pelo backend pelo estoque da loja): 'loja' → ~`prazoHoras` depois
+ * que a loja confirma; 'transferencia' → até `prazoDias` dias úteis (a peça
+ * viaja pelo carro da rede). Sem cobertura, o texto fala as duas — o "~3h"
+ * pra todo mundo foi o que prometeu 3 horas numa peça que estava a 200 km
+ * (LP-001490).
  */
-export function pickupStoresFor(cep: string, prazoHoras = 3, coord?: Ponto | null): ShippingQuote[] {
+export function pickupStoresFor(
+  cep: string,
+  prazoHoras = 3,
+  coord?: Ponto | null,
+  cobertura?: Record<string, CoberturaRetirada> | null,
+  prazoDias = PRAZO_DIAS_TRANSFERENCIA_PADRAO,
+): ShippingQuote[] {
   const digits = onlyDigits(cep);
   if (digits.length < 3) return [];
 
-  const monta = (s: (typeof stores)[number], km?: number): ShippingQuote => ({
-    id: `retirada-${s.slug}`,
-    kind: 'retirada' as const,
-    label: `Retirar na loja ${s.unit}`,
-    price: 0,
-    readyInHours: prazoHoras,
-    storeSlug: s.slug,
-    storeLabel: `${s.unit} · ${s.city}/${s.uf}`,
-    ...(km == null ? {} : { distanciaKm: Math.round(km * 10) / 10 }),
-  });
+  const monta = (s: (typeof stores)[number], km?: number): ShippingQuote => {
+    const cob = cobertura?.[s.slug];
+    return {
+      id: `retirada-${s.slug}`,
+      kind: 'retirada' as const,
+      label: `Retirar na loja ${s.unit}`,
+      price: 0,
+      readyInHours: prazoHoras,
+      readyInDays: prazoDias,
+      storeSlug: s.slug,
+      storeLabel: `${s.unit} · ${s.city}/${s.uf}`,
+      ...(cob === 'loja' || cob === 'transferencia' ? { retiradaCobertura: cob } : {}),
+      ...(km == null ? {} : { distanciaKm: Math.round(km * 10) / 10 }),
+    };
+  };
 
   if (coord) {
     return stores
@@ -252,7 +304,23 @@ export interface CotacaoDoSite {
   /** Só quando `origem === 'local'`: o motivo que o BFF viu (telemetria + retry). */
   motivo?: MotivoFalhaCotacao;
   /** Texto da retirada em loja, cadastrado na retaguarda. */
-  retirada?: { prazoHoras: number; instrucoes: string | null };
+  retirada?: {
+    prazoHoras: number;
+    instrucoes: string | null;
+    /** Dias úteis quando a peça vem de outra loja (backend, env). */
+    prazoDiasTransferencia?: number;
+    /** slug da loja → cobertura da sacola nela. Só quando a chamada levou `itens`. */
+    coberturaPorSlug?: Record<string, CoberturaRetirada>;
+  };
+}
+
+/** Uma linha da sacola, no formato que o backend resolve até o código da peça. */
+export interface ItemParaCotacao {
+  /** O `productId` do carrinho (a REF). */
+  sku: string;
+  size?: string;
+  color?: string;
+  quantity: number;
 }
 
 /**
@@ -275,6 +343,12 @@ export async function fetchQuotes(
   subtotal: number,
   pecas = 1,
   signal?: AbortSignal,
+  /**
+   * A sacola (17/09). Com ela o backend diz, loja a loja, se a retirada é
+   * "~3h" (peça na loja) ou "até N dias úteis" (vem de outra). Sem ela — o
+   * simulador da PDP não sabe o tamanho — o texto fala as duas.
+   */
+  itens?: ItemParaCotacao[],
 ): Promise<CotacaoDoSite> {
   const digits = onlyDigits(cep);
 
@@ -327,7 +401,14 @@ export async function fetchQuotes(
       const res = await fetch('/api/loja/frete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cep: digits, subtotal, pecas }),
+        body: JSON.stringify({
+          cep: digits,
+          subtotal,
+          pecas,
+          // Sacola + as lojas que o site pode oferecer: o backend responde a
+          // cobertura de cada uma pelo slug (só quando há sacola).
+          ...(itens?.length ? { itens, lojas: stores.map((s) => s.slug) } : {}),
+        }),
         signal,
       });
       return (await res.json().catch(() => null)) as RespostaBff;
@@ -369,7 +450,13 @@ export async function fetchQuotes(
             promocional: o.promocional === true,
           }),
         ),
-        ...pickupStoresFor(digits, dados.retirada?.prazoHoras, dados.coord),
+        ...pickupStoresFor(
+          digits,
+          dados.retirada?.prazoHoras,
+          dados.coord,
+          dados.retirada?.coberturaPorSlug ?? null,
+          dados.retirada?.prazoDiasTransferencia ?? PRAZO_DIAS_TRANSFERENCIA_PADRAO,
+        ),
       ]),
       freteGratis: dados.freteGratis ?? {
         ativo: true,

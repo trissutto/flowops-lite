@@ -401,6 +401,19 @@ function asString(v: unknown, fallback = ''): string {
  * cliente pagar. Preferimos exibir o pedido com um pedaço vazio a não exibir
  * nada. (Mesma lição da ficha do CRM que travava em "Carregando...".)
  */
+/** `retirada` do GET do pedido → `Order['retirada']`, ou `undefined` sem shape. */
+function normalizarRetirada(raw: unknown): Order['retirada'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const cobertura =
+    r.cobertura === 'loja' || r.cobertura === 'transferencia' ? r.cobertura : ('desconhecida' as const);
+  return {
+    cobertura,
+    prazoHoras: typeof r.prazoHoras === 'number' && r.prazoHoras > 0 ? r.prazoHoras : 3,
+    prazoDiasUteis: typeof r.prazoDiasUteis === 'number' && r.prazoDiasUteis > 0 ? r.prazoDiasUteis : 4,
+  };
+}
+
 function normalizarOrder(raw: unknown): Order | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
@@ -435,6 +448,9 @@ function normalizarOrder(raw: unknown): Order | undefined {
       storeSlug: typeof shipping.storeSlug === 'string' ? shipping.storeSlug : undefined,
       storeLabel: typeof shipping.storeLabel === 'string' ? shipping.storeLabel : undefined,
     },
+    // O carimbo da retirada (17/09) — tolerante: backend antigo não manda, e
+    // aí a confirmação fala as duas possibilidades de prazo.
+    retirada: normalizarRetirada(o.retirada),
     items: Array.isArray(o.items) ? (o.items as Order['items']) : [],
     subtotal: asNumber(o.subtotal),
     discount: asNumber(o.discount),
