@@ -35,10 +35,11 @@ describe('LojaOrdersService — retentativa recobra o mesmo pedido', () => {
     // As dependências viram stub — este teste é do reaproveitamento do
     // pedido recusado, não da injeção. As duas penúltimas são o módulo de
     // risco (chaves + análise, 27/08); depois o escudo anti-teste-de-
-    // cartão (28/08) e, por último, o PagBank (gateway do site, 16/09).
+    // cartão (28/08), o PagBank (gateway do site, 16/09) e, por último, a
+    // cobertura da retirada (17/09).
     new LojaOrdersService(
       prisma,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
       {} as any, {} as any, {} as any, {} as any,
     );
 

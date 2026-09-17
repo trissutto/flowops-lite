@@ -152,7 +152,7 @@ async function coordenadaDoCep(cep: string): Promise<{ lat: number; lng: number 
 }
 
 export async function POST(req: Request) {
-  let body: { cep?: unknown; subtotal?: unknown; pecas?: unknown } | null = null;
+  let body: { cep?: unknown; subtotal?: unknown; pecas?: unknown; itens?: unknown; lojas?: unknown } | null = null;
   try {
     body = await req.json();
   } catch {
@@ -197,6 +197,21 @@ export async function POST(req: Request) {
         cep,
         pecas: Number(body?.pecas) || 1,
         subtotal: Number(body?.subtotal) || 0,
+        // Sacola e lojas (17/09) — só repassa; quem decide a cobertura da
+        // retirada é o backend. Tetos porque isto vem do navegador.
+        ...(Array.isArray(body?.itens) && body.itens.length
+          ? {
+              itens: (body.itens as Array<Record<string, unknown>>).slice(0, 60).map((it) => ({
+                sku: String(it?.sku ?? '').slice(0, 80),
+                size: it?.size == null ? undefined : String(it.size).slice(0, 20),
+                color: it?.color == null ? undefined : String(it.color).slice(0, 60),
+                quantity: Math.max(1, Math.floor(Number(it?.quantity) || 1)),
+              })),
+            }
+          : {}),
+        ...(Array.isArray(body?.lojas) && body.lojas.length
+          ? { lojas: (body.lojas as unknown[]).slice(0, 40).map((s) => String(s ?? '').slice(0, 60)) }
+          : {}),
       }),
       signal: controller.signal,
       cache: 'no-store',

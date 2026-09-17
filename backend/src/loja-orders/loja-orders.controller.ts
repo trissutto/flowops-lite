@@ -13,6 +13,7 @@ import * as crypto from 'crypto';
 import { CriarPedidoInput, LojaOrdersService } from './loja-orders.service';
 import { FreteService } from './frete.service';
 import { CupomService } from './cupom.service';
+import { diasUteisRetiradaTransferencia } from '../common/retirada-prazo';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO — porta SERVER-TO-SERVER (sprint 011).
@@ -200,15 +201,32 @@ export class LojaOrdersController {
       },
       retirada: {
         prazoHoras: Number(cfg?.retiradaPrazoHoras ?? 3),
+        prazoDiasTransferencia: diasUteisRetiradaTransferencia(),
         instrucoes: cfg?.retiradaInstrucoes ?? null,
       },
       diasSeparacao: Number(cfg?.diasSeparacao ?? 2),
     };
   }
 
+  /**
+   * POST /api/public/loja/frete
+   *
+   * `itens` + `lojas` são OPCIONAIS e existem pra retirada (17/09): com eles
+   * a resposta diz, loja a loja (pelo slug que o site usa), se a sacola
+   * inteira está NAQUELA loja (`'loja'` → ~3h depois que a loja confirma) ou
+   * se alguma peça vem de outra (`'transferencia'` → dias úteis). Sem eles
+   * o site fala as duas possibilidades — nunca promete 3h no escuro.
+   */
   @Post('frete')
   async frete(
-    @Body() body: { cep: string; pecas?: number; subtotal?: number },
+    @Body()
+    body: {
+      cep: string;
+      pecas?: number;
+      subtotal?: number;
+      itens?: Array<{ sku: string; size?: string; color?: string; quantity?: number }>;
+      lojas?: string[];
+    },
     @Headers('x-loja-token') token: string,
     @Req() req: any,
     @Res({ passthrough: true }) res: any,
@@ -229,13 +247,18 @@ export class LojaOrdersController {
         pecas: Number(body?.pecas) || 1,
       });
       const { cfg } = await this.freteSvc.config();
+      const coberturaPorSlug = await this.svc.coberturaRetiradaPorSlug(body?.itens, body?.lojas);
       return {
         ...cotacao,
         // A tela de entrega monta o texto da retirada com isto (item 27) — não
         // é página de ajuda, é a informação no momento da escolha.
         retirada: {
           prazoHoras: Number(cfg?.retiradaPrazoHoras ?? 3),
+          prazoDiasTransferencia: diasUteisRetiradaTransferencia(),
           instrucoes: cfg?.retiradaInstrucoes ?? null,
+          // slug do site → 'loja' | 'transferencia' | 'desconhecida'. Só vem
+          // quando o site mandou a sacola e as lojas.
+          ...(coberturaPorSlug ? { coberturaPorSlug } : {}),
         },
       };
     } catch (e: any) {

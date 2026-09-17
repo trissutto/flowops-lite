@@ -29,6 +29,7 @@ import { PedidoEmailService } from './pedido-email.service';
 import { PixResgateCron } from './pix-resgate.cron';
 import { PedidoExpiraCron } from './pedido-expira.cron';
 import { EscudoCheckoutService } from './escudo-checkout.service';
+import { RetiradaCoberturaService } from './retirada-cobertura.service';
 import { ProgressiveDiscountModule } from '../progressive-discount/progressive-discount.module';
 import { RiscoModule } from '../risco/risco.module';
 
@@ -78,6 +79,7 @@ import { RiscoModule } from '../risco/risco.module';
     // Escudo anti-teste-de-cartão (28/08): bloqueia ANTES de criar Order e de
     // chamar a Pagar.me quando o checkout vira banco de testes de cartão.
     EscudoCheckoutService,
+    RetiradaCoberturaService,
   ],
   exports: [LojaOrdersService, CupomService],
 })

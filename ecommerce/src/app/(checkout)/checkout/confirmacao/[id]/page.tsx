@@ -62,6 +62,26 @@ import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
  */
 
 
+/**
+ * O PRAZO DA RETIRADA, pelo carimbo que o backend fez quando o pedido nasceu
+ * (`order.retirada`). Antes de 17/09 era "~3h após a confirmação" pra todo
+ * mundo — inclusive pro LP-001490, retirada em São José com a peça em
+ * Itanhaém. A regra do dono: 3h só com a peça NA loja, e depois que a loja
+ * confirma; vindo de outra, pelo menos 4 dias úteis. Pedido antigo (sem
+ * carimbo) fala as duas.
+ */
+function textoRetiradaConfirmacao(order: Order): string {
+  const r = order.retirada;
+  const h = r?.prazoHoras ?? order.shipping.readyInHours ?? 3;
+  const d = r?.prazoDiasUteis ?? 4;
+  const dias = `${d} dia${d === 1 ? '' : 's'} ${d === 1 ? 'útil' : 'úteis'}`;
+  if (r?.cobertura === 'loja') return `a loja confirma e em ~${h}h fica pronta pra você`;
+  if (r?.cobertura === 'transferencia') {
+    return `sua peça vem de outra loja e fica pronta em até ${dias}. Avisamos quando chegar`;
+  }
+  return `~${h}h se a peça estiver na loja, ou até ${dias} se vier de outra. Avisamos quando estiver pronta`;
+}
+
 type Estado =
   | { fase: 'carregando' }
   | { fase: 'nao-encontrado' }
@@ -205,7 +225,7 @@ export default function ConfirmacaoPage() {
               done={false}
               label={
                 retirada
-                  ? `Você retira na loja ${store?.unit ?? ''} — fica pronto em ~${order.shipping.readyInHours ?? 3}h após a confirmação`
+                  ? `Você retira na loja ${store?.unit ?? ''} — ${textoRetiradaConfirmacao(order)}`
                   : 'Você recebe em casa e arrasa'
               }
             />

@@ -8,7 +8,7 @@ import { Clock, MapPin, RefreshCw, TriangleAlert, Truck } from 'lucide-react';
 import { cn, formatPrice } from '@/lib/utils';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { fetchQuotes, isValidCep, type CotacaoDoSite } from '@/lib/commerce/frete';
+import { fetchQuotes, isValidCep, textoPrazoRetirada, type CotacaoDoSite, type ItemParaCotacao } from '@/lib/commerce/frete';
 import { stores } from '@/data/stores';
 import { trackAddShippingInfo, trackCheckoutValidationError, trackShippingQuoteFallback, type TrackedItem } from '@/lib/tracking';
 import type { Address, ShippingQuote } from '@/types/checkout';
@@ -72,10 +72,15 @@ interface ShippingStepProps {
    * física). Vazio pra visitante — e aí a etapa é exatamente a de sempre.
    */
   salvos?: EnderecoSalvo[];
+  /**
+   * A sacola, linha a linha (17/09): é o que deixa o backend dizer se a
+   * retirada naquela loja é "~3h" ou "até N dias úteis".
+   */
+  itens?: ItemParaCotacao[];
   onDone: (selection: ShippingSelection) => void;
 }
 
-export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, salvos = [], onDone }: ShippingStepProps) {
+export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, salvos = [], itens, onDone }: ShippingStepProps) {
   /**
    * O CEP JÁ VEM PREENCHIDO quando ela calculou o frete na peça ou na sacola
    * (`store/cep`). Era a QUARTA vez que o site pedia os mesmos 8 dígitos na
@@ -184,7 +189,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, salv
     }
     const controller = new AbortController();
     setCotando(true);
-    fetchQuotes(cep, subtotal, pecas, controller.signal)
+    fetchQuotes(cep, subtotal, pecas, controller.signal, itens)
       .then((r) => {
         if (controller.signal.aborted) return;
         setQuotes(r.quotes);
@@ -205,7 +210,9 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, salv
         if (!controller.signal.aborted) setCotando(false);
       });
     return () => controller.abort();
-  }, [cep, cepValido, subtotal, pecas, recotacao, guardarCep]);
+    // `itens` precisa vir MEMOIZADO do pai (useMemo sobre as linhas): um array
+    // novo a cada render aqui viraria cotação em loop.
+  }, [cep, cepValido, subtotal, pecas, recotacao, guardarCep, itens]);
 
   // Ficam de pé DURANTE a recotação (a lista antiga continua na tela com o
   // "calculando…"): é o que deixa o botão girar em vez do aviso sumir e voltar.
@@ -763,7 +770,7 @@ function QuoteOption({
                 argumento: quem está perto entende na hora que buscar sai de
                 graça e hoje, em vez de pagar frete e esperar dias. */}
             <span className="flex items-center gap-1.5 text-small text-ink-muted">
-              <Clock className="size-3.5" /> Pronto em ~{quote.readyInHours ?? 3}h
+              <Clock className="size-3.5" /> {textoPrazoRetirada(quote)}
               {quote.distanciaKm != null && (
                 <span>· a {quote.distanciaKm.toLocaleString('pt-BR', { maximumFractionDigits: quote.distanciaKm < 10 ? 1 : 0 })} km de você</span>
               )}

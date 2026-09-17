@@ -17,7 +17,7 @@ import { useCartStore } from '@/store/cart';
 import { useCepGuardado, useCepStore } from '@/store/cep';
 import { useMounted } from '@/hooks';
 import { applyCoupon, conheceCupom, validarCupomRemoto } from '@/lib/commerce/cupom';
-import { fetchQuotes, isValidCep, onlyDigits } from '@/lib/commerce/frete';
+import { fetchQuotes, isValidCep, onlyDigits, textoPrazoRetirada } from '@/lib/commerce/frete';
 import {
   avisoDaLinha as calcularAvisoDaLinha,
   cartStockBlocksCheckout,
@@ -188,11 +188,14 @@ export default function CarrinhoPage() {
       return;
     }
     const controller = new AbortController();
-    void fetchQuotes(cepInput, subtotal, pecasNaSacola || 1, controller.signal).then((r) => {
+    // As linhas vão junto (17/09): é o que deixa a retirada dizer "~3h" só
+    // quando a peça está naquela loja, e "até N dias úteis" quando não está.
+    const itens = lines.map((l) => ({ sku: l.productId, size: l.size, color: l.color, quantity: l.quantity }));
+    void fetchQuotes(cepInput, subtotal, pecasNaSacola || 1, controller.signal, itens).then((r) => {
       if (!controller.signal.aborted) setCotacoes(r.quotes);
     });
     return () => controller.abort();
-  }, [cepInput, subtotal, pecasNaSacola]);
+  }, [cepInput, subtotal, pecasNaSacola, lines]);
 
   function aoDigitarCep(value: string) {
     const mascarado = maskCep(value);
@@ -562,7 +565,7 @@ export default function CarrinhoPage() {
                                 <span className="text-small font-medium text-ink">{quote.label}</span>
                                 <span className="text-[0.6875rem] font-light text-ink-soft">
                                   {quote.kind === 'retirada'
-                                    ? `${quote.storeLabel} · pronta em ~${quote.readyInHours}h`
+                                    ? `${quote.storeLabel} · ${textoPrazoRetirada(quote)}`
                                     : quote.etaDays
                                       ? `${quote.etaDays.min}–${quote.etaDays.max} dias úteis`
                                       : ''}

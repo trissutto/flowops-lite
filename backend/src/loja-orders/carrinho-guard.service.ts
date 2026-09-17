@@ -317,6 +317,53 @@ export class CarrinhoGuardService {
   }
 
   /**
+   * SÓ O CÓDIGO de cada linha da sacola — a mesma resolução REF+cor+tamanho
+   * do `conferir`, sem preço, sem campanha, sem reserva.
+   *
+   * Existe pra COTAÇÃO de retirada (17/09): pra dizer se a loja escolhida
+   * tem a sacola inteira é preciso saber QUAL código cada linha é, e a
+   * cotação roda a cada toque na sacola — o `conferir` completo custaria três
+   * consultas a mais por cotação. Linha que não resolve numa variação única
+   * volta `null` (a cobertura vira "desconhecida", nunca promessa de 3h).
+   * Catálogo fora do ar → `null` em tudo, pelo mesmo motivo.
+   */
+  async codigosDasLinhas(
+    itens: Array<{ sku: string; size?: string; color?: string; quantity?: number }>,
+  ): Promise<Array<{ codigo: string | null; qtd: number }>> {
+    const qtdDe = (it: { quantity?: unknown }) => Math.max(1, Math.floor(Number(it.quantity) || 1));
+    if (!Array.isArray(itens) || !itens.length) return [];
+    const chaves = Array.from(new Set(itens.map((it) => this.normRef(it.sku)).filter(Boolean)));
+    const linhas = await this.carregar(chaves, chaves).catch((e) => {
+      this.logger.warn(`[guard] catálogo indisponível na cotação de retirada: ${e?.message || e}`);
+      return null;
+    });
+    if (linhas === null) return itens.map((it) => ({ codigo: null, qtd: qtdDe(it) }));
+
+    const porRef = new Map<string, LinhaCatalogo[]>();
+    const porCodigo = new Map<string, LinhaCatalogo>();
+    for (const l of linhas) {
+      const r = this.normRef(l.ref);
+      if (!porRef.has(r)) porRef.set(r, []);
+      porRef.get(r)!.push(l);
+      porCodigo.set(this.normRef(l.codigo), l);
+    }
+
+    return itens.map((it) => {
+      const chave = this.normRef(it.sku);
+      let candidatas = porRef.get(chave) ?? [];
+      const porCod = porCodigo.get(chave);
+      if (!candidatas.length && porCod) candidatas = [porCod];
+      let variacoes = this.dedupe(candidatas);
+      const cor = this.norm(it.color);
+      if (cor) variacoes = variacoes.filter((l) => this.norm(l.cor) === cor);
+      const tam = this.norm(it.size);
+      if (tam) variacoes = variacoes.filter((l) => this.norm(l.tamanho) === tam);
+      const codigo = variacoes.length === 1 && variacoes[0].codigo ? String(variacoes[0].codigo) : null;
+      return { codigo, qtd: qtdDe(it) };
+    });
+  }
+
+  /**
    * Confere o carrinho inteiro. Devolve a primeira recusa (a cliente resolve
    * uma coisa por vez) ou os preços/estoques reais de cada linha.
    *

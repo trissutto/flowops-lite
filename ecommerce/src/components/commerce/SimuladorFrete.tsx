@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Clock, MapPin, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { cn, formatPrice } from '@/lib/utils';
-import { fetchQuotes, isValidCep, onlyDigits, type CotacaoDoSite } from '@/lib/commerce/frete';
+import { fetchQuotes, isValidCep, onlyDigits, textoPrazoRetirada, type CotacaoDoSite } from '@/lib/commerce/frete';
 import { useCepGuardado, useCepStore } from '@/store/cep';
 
 /**
@@ -162,7 +162,10 @@ function SimuladorFreteBase({ preco }: { preco: number }) {
                 <MapPin className="size-3.5 shrink-0 text-primary-strong" />
                 <span className="truncate text-ink">{q.storeLabel ?? q.label}</span>
                 <span className="flex shrink-0 items-center gap-1 text-ink-muted">
-                  <Clock className="size-3" /> ~{q.readyInHours ?? 3}h
+                  {/* Na PDP não há tamanho escolhido, então a cotação vai sem
+                      sacola e o texto fala as duas possibilidades (~3h se a
+                      peça estiver na loja · até N dias úteis se vier de outra). */}
+                  <Clock className="size-3" /> {textoPrazoRetirada(q)}
                 </span>
               </span>
               <span className="tabular shrink-0 font-medium text-success">Grátis</span>
