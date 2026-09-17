@@ -5,7 +5,8 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
-import { pedidoPago } from '../common/pedido-pago';
+import { pedidoPago, STATUS_NUNCA_RECEITA } from '../common/pedido-pago';
+import { PedidoEmailService, metodoDePagamento } from '../loja-orders/pedido-email.service';
 import { dentroDeSaoPaulo } from '../common/politica-frete';
 import { lojasDaRotaPropria } from '../common/rota-propria';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
@@ -336,6 +337,8 @@ export class OrdersController {
     private readonly maisEnvios: MaisEnviosService,
     // Vigilância semanal da separação (nº 17).
     private readonly vigilancia: VigilanciaSeparacaoCron,
+    // Aviso de CANCELAMENTO pra cliente (17/09) — WhatsApp direto + e-mail.
+    private readonly pedidoEmail: PedidoEmailService,
   ) {}
 
   /**
@@ -2749,9 +2752,18 @@ export class OrdersController {
     try {
       const local = await (this.prisma as any).order.findUnique({
         where: { wcOrderId },
-        select: { id: true, status: true },
+        select: {
+          id: true, status: true, source: true, paidAt: true, paymentInfo: true,
+          wcOrderNumber: true, customerName: true, customerPhone: true, customerEmail: true,
+        },
       });
       if (!local) return;
+
+      // "O dinheiro entrou?" decidido AQUI, com o status de ANTES: depois do
+      // update abaixo a régua devolve falso pra todo mundo (cancelado nunca é
+      // receita) e o aviso diria "nada foi cobrado" pra quem pagou.
+      const pago = pedidoPago(local);
+      const jaEstavaMorto = STATUS_NUNCA_RECEITA.includes(String(local.status));
 
       await (this.prisma as any).order.update({
         where: { id: local.id },
@@ -2796,6 +2808,21 @@ export class OrdersController {
           },
         })
         .catch(() => {});
+
+      // AVISA A CLIENTE (17/09) — até aqui o cancelamento era mudo: nem
+      // WhatsApp nem e-mail (LP-001483, teste do dono). Pedido que já estava
+      // cancelado/recusado não recebe de novo: cancelar duas vezes é
+      // idempotente no banco e tem que ser no WhatsApp também.
+      // ⚠️ O `motivo` digitado pela matriz fica no histórico e NÃO vai na
+      // mensagem: foi escrito pra equipe ("extraviada na 05"), não pra cliente.
+      if (!jaEstavaMorto) {
+        void this.pedidoEmail
+          .aoCancelarPedido(local, { pago, metodo: metodoDePagamento(local.paymentInfo) })
+          .catch((err: any) =>
+            // eslint-disable-next-line no-console
+            console.warn(`[orders] aviso de cancelamento falhou (wc=${wcOrderId}): ${err?.message || err}`),
+          );
+      }
     } catch (e: any) {
       // Não bloqueia: o cancelamento no site já valeu.
       // eslint-disable-next-line no-console
