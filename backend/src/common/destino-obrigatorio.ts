@@ -55,3 +55,30 @@ export function transferenciaParaDestino(
   }
   return { isTransfer: true, transferToStoreCode: destino };
 }
+
+/**
+ * FEEDER APONTANDO PRA LOJA SEM CARD É ÓRFÃO? Depende do pedido.
+ *
+ * Em SEDEX/PAC a juntada exige uma ÂNCORA que separa: feeder apontando pra
+ * loja sem card é caixa viajando pra quem não separa nada (LP-000244). Em
+ * RETIRADA/MOTOBOY a loja de destino é RECEPTORA — ela recebe a caixa e
+ * entrega pra cliente sem separar nada, então NÃO precisa ter card. Feeder
+ * apontando pro destino obrigatório é o desenho certo, não um defeito.
+ *
+ * ⚠️ O CASO (950001490, 17/09/2026). Retirada em SÃO JOSÉ (08), peça em
+ * Itanhaém. O card de Itanhaém nasceu feeder da 08, como devia — e a tela
+ * subiu dois avisos vermelhos ("a juntada aponta pra loja 08, que NÃO tem
+ * card") mandando reescolher a âncora. A tela e a limpeza de card vazio já
+ * sabiam da exceção; o aviso do "mover peça" e o alerta da linha do tempo
+ * não. Alarme falso na fila mata a confiança no alarme verdadeiro.
+ */
+export function feederOrfao(
+  order: { isPickup?: boolean | null; pickupStoreCode?: string | null; shippingMethod?: string | null },
+  transferToStoreCode: string | null | undefined,
+  temCardNaAncora: boolean,
+): boolean {
+  const anc = String(transferToStoreCode || '').trim();
+  if (!anc) return false;
+  if (temCardNaAncora) return false;
+  return destinoObrigatorioDoPedido(order) !== anc;
+}

@@ -9,7 +9,7 @@ import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 import { diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import { lojasDaRotaPropria } from '../common/rota-propria';
 import { consolidacaoObrigatoria } from '../common/politica-frete';
-import { destinoObrigatorioDoPedido, transferenciaParaDestino } from '../common/destino-obrigatorio';
+import { destinoObrigatorioDoPedido, feederOrfao, transferenciaParaDestino } from '../common/destino-obrigatorio';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { computeCommittedStock } from './committed-stock.util';
 import { planSplitAssignment, demandasPorSku } from './split-assign.util';
@@ -2043,7 +2043,9 @@ export class RoutingService {
     if (feedersDepois.length) {
       const anc = String(feedersDepois[0].transferToStoreCode);
       const temAncora = depois.some((c) => !c.isTransfer && c.store?.code === anc);
-      if (!temAncora) {
+      // Retirada/motoboy: a loja de destino RECEBE e não separa — feeder
+      // apontando pra ela sem card lá é o desenho certo (950001490, 17/09).
+      if (feederOrfao(order, anc, temAncora)) {
         avisoJuntada =
           `A juntada aponta pra loja ${anc}, que NÃO tem card neste pedido — as caixas dos ` +
           `feeders viajam pra quem não separa nada. Escolha a âncora de novo ou mande uma peça pra ${anc}.`;
