@@ -17,6 +17,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, CheckCircle2, AlertCircle, Banknote, QrCode, Copy, Check, X,
   User, RefreshCw, ChevronDown, ChevronRight, Link as LinkIcon, MessageCircle, Printer,
+  Percent, Pencil,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { falarComCliente } from '@/lib/whatsapp';
@@ -290,11 +291,96 @@ export default function RecebimentosPage() {
     () => Math.round(selecionadas.reduce((s, p) => s + p.valorParcela, 0) * 100) / 100,
     [selecionadas],
   );
-  const totalJuros = useMemo(
+  /**
+   * ── JUROS NEGOCIADO NO BALCÃO (dono, 17/09/2026) ──
+   *
+   * "Preciso reduzir os juros... uma forma de clicar em algum lugar na tela."
+   * O desconto é em % e incide SÓ no juros — o principal não se toca. A conta
+   * é a MESMA do backend (`common/juros-negociado.ts`): arredonda parcela a
+   * parcela e só depois soma, senão a tela mostra um centavo e o recibo outro.
+   * Quem manda é o servidor: ao aplicar, a tela confirma no `/baixa/preview`
+   * (que também recusa desconto acima do teto da loja) e todo recebimento
+   * manda o mesmo `descontoJurosPct`.
+   */
+  const [descontoPct, setDescontoPct] = useState(0);
+  const [descontoMotivo, setDescontoMotivo] = useState('');
+  const [editandoJuros, setEditandoJuros] = useState(false);
+  const [rascunhoPct, setRascunhoPct] = useState('');
+  const [rascunhoValor, setRascunhoValor] = useState('');
+  const [erroDesconto, setErroDesconto] = useState('');
+  const [salvandoDesconto, setSalvandoDesconto] = useState(false);
+
+  const jurosCheio = useMemo(
     () => Math.round(selecionadas.reduce((s, p) => s + p.jurosCalculado, 0) * 100) / 100,
     [selecionadas],
   );
+  const jurosComDesconto = (lista: Installment[], pct: number) =>
+    Math.round(
+      lista.reduce((s, p) => {
+        const j = Math.max(0, Math.round((p.jurosCalculado || 0) * 100) / 100);
+        return s + (j > 0 ? Math.round(j * ((100 - pct) / 100) * 100) / 100 : 0);
+      }, 0) * 100,
+    ) / 100;
+  const totalJuros = useMemo(
+    () => jurosComDesconto(selecionadas, descontoPct),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selecionadas, descontoPct],
+  );
+  const descontoJuros = Math.round((jurosCheio - totalJuros) * 100) / 100;
   const totalPago = Math.round((totalPrincipal + totalJuros) * 100) / 100;
+
+  // Trocou de cliente → a negociação anterior não vale mais (era com outra
+  // pessoa). Mudar a seleção do MESMO cliente mantém o %, que é o combinado.
+  useEffect(() => {
+    setDescontoPct(0);
+    setDescontoMotivo('');
+    setEditandoJuros(false);
+  }, [expandedCod]);
+
+  function abrirEditorJuros() {
+    setRascunhoPct(descontoPct ? String(descontoPct).replace('.', ',') : '');
+    setRascunhoValor('');
+    setErroDesconto('');
+    setEditandoJuros(true);
+  }
+
+  const pctDoRascunho = (): number => {
+    const txt = String(rascunhoPct ?? '').replace(',', '.').trim();
+    const n = Number(txt);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(100, Math.round(n * 100) / 100);
+  };
+  const jurosPrevisto = jurosComDesconto(selecionadas, pctDoRascunho());
+
+  /** Digitou o juros final em R$ → vira o % que chega mais perto. */
+  function pctDoValor(txt: string): number {
+    const alvo = Number(String(txt || '').replace(/\./g, '').replace(',', '.'));
+    if (!Number.isFinite(alvo) || alvo < 0 || jurosCheio <= 0) return 0;
+    if (alvo >= jurosCheio) return 0;
+    return Math.min(100, Math.round((1 - alvo / jurosCheio) * 100 * 100) / 100);
+  }
+
+  async function aplicarDesconto(pct: number) {
+    setSalvandoDesconto(true);
+    setErroDesconto('');
+    try {
+      // O servidor é quem vale: confirma a conta e barra desconto acima do
+      // teto da loja ANTES de a vendedora abrir o pagamento.
+      const r = await api<{ descontoJurosPct: number }>('/crediarios/baixa/preview', {
+        method: 'POST',
+        body: JSON.stringify({
+          parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
+          descontoJurosPct: pct,
+        }),
+      });
+      setDescontoPct(Number(r?.descontoJurosPct) || 0);
+      setEditandoJuros(false);
+    } catch (e: any) {
+      setErroDesconto(e?.body?.message || e?.message || 'Não consegui aplicar o desconto');
+    } finally {
+      setSalvandoDesconto(false);
+    }
+  }
 
   // ── Pagamento ──────────────────────────────────────────────
 
@@ -308,6 +394,13 @@ export default function RecebimentosPage() {
 
   const clienteAtual = clientes.find((c) => c.codCliente === expandedCod) || null;
 
+  /** O desconto negociado vai em TODO caminho de recebimento (dinheiro, PIX,
+   *  link e split) — o servidor recalcula por cima das parcelas. */
+  const descontoNoCorpo = () =>
+    descontoPct > 0
+      ? { descontoJurosPct: descontoPct, descontoMotivo: descontoMotivo.trim() || undefined }
+      : {};
+
   async function aplicarDinheiro() {
     if (!exigirLoja()) return;
     setAplicando(true);
@@ -317,6 +410,7 @@ export default function RecebimentosPage() {
         body: JSON.stringify({
           parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
           storeCode: lojaDoRecebimento || undefined,
+          ...descontoNoCorpo(),
         }),
       });
       printReceipt(r.baixaId);
@@ -339,6 +433,7 @@ export default function RecebimentosPage() {
           storeCode: lojaDoRecebimento || undefined,
           customerName: clienteAtual?.nome || undefined,
           customerPhone: clienteAtual?.telefone || undefined,
+          ...descontoNoCorpo(),
         }),
       });
       setPixCharge(r);
@@ -376,6 +471,7 @@ export default function RecebimentosPage() {
           storeCode: lojaDoRecebimento || undefined,
           customerName: clienteAtual?.nome || undefined,
           customerPhone: clienteAtual?.telefone || undefined,
+          ...descontoNoCorpo(),
         }),
       });
       setPixCharge(r);
@@ -397,6 +493,7 @@ export default function RecebimentosPage() {
           storeCode: lojaDoRecebimento || undefined,
           customerName: clienteAtual?.nome || undefined,
           customerPhone: clienteAtual?.telefone || undefined,
+          ...descontoNoCorpo(),
         }),
       });
       // Monta URL pública
@@ -765,10 +862,30 @@ export default function RecebimentosPage() {
                 <div className="text-2xl md:text-3xl font-black text-emerald-700 tabular-nums">
                   {brl(totalPago)}
                 </div>
-                {totalJuros > 0 && (
-                  <div className="text-xs text-gray-600">
-                    Principal {brl(totalPrincipal)} + juros {brl(totalJuros)}
-                  </div>
+                {/* O JUROS É CLICÁVEL (dono, 17/09/2026): é daqui que a loja
+                    negocia a redução, sem sair da tela de recebimento. */}
+                {jurosCheio > 0 ? (
+                  <button
+                    type="button"
+                    onClick={abrirEditorJuros}
+                    className="mt-0.5 flex items-center gap-1.5 text-xs text-gray-600 hover:text-rose-800 group"
+                    title="Clique pra reduzir o juros desta negociação"
+                  >
+                    <span>Principal {brl(totalPrincipal)} + juros</span>
+                    <span className={descontoJuros > 0 ? 'font-bold text-emerald-700' : 'font-bold text-rose-700'}>
+                      {brl(totalJuros)}
+                    </span>
+                    {descontoJuros > 0 && (
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 py-0.5">
+                        −{String(descontoPct).replace('.', ',')}% · era {brl(jurosCheio)}
+                      </span>
+                    )}
+                    <Pencil size={12} className="text-gray-400 group-hover:text-rose-700" />
+                  </button>
+                ) : (
+                  totalPrincipal > 0 && (
+                    <div className="text-xs text-gray-600">Principal {brl(totalPrincipal)} · sem juros</div>
+                  )
                 )}
               </div>
               <button
@@ -782,6 +899,151 @@ export default function RecebimentosPage() {
           </div>
         )}
       </main>
+
+      {/* ── REDUZIR JUROS (dono, 17/09/2026) ───────────────────────────────
+          Não é tela nova: é o painel que abre ao clicar no juros, no rodapé ou
+          dentro do pagamento (por isso z-50, acima do modal de pagamento).
+          O % é o que viaja pro servidor; o campo em R$ é só conveniência — o
+          valor exato é o que a conta por parcela devolve, e é ele que aparece
+          aqui antes de aplicar. */}
+      {editandoJuros && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full">
+            <div className="border-b p-4 flex items-center gap-2">
+              <Percent size={18} className="text-rose-700" />
+              <h2 className="font-bold text-lg text-rose-900 flex-1">Reduzir juros</h2>
+              <button
+                onClick={() => setEditandoJuros(false)}
+                className="text-gray-500 hover:text-gray-800 p-1"
+                aria-label="Fechar"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div className="text-xs text-gray-600">
+                {clienteAtual?.nome || 'Cliente'} · {selecionadas.length} parcela
+                {selecionadas.length > 1 ? 's' : ''} · juros calculado{' '}
+                <b className="text-rose-700">{brl(jurosCheio)}</b>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {[0, 25, 50, 100].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => { setRascunhoPct(v ? String(v) : ''); setRascunhoValor(''); }}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border ${
+                      pctDoRascunho() === v
+                        ? 'bg-rose-700 text-white border-rose-700'
+                        : 'bg-white text-rose-800 border-rose-200 hover:border-rose-400'
+                    }`}
+                  >
+                    {v === 0 ? 'Sem desconto' : v === 100 ? 'Zerar juros' : `−${v}%`}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-[11px] font-bold uppercase text-gray-500">% de desconto</span>
+                  <input
+                    autoFocus
+                    inputMode="decimal"
+                    value={rascunhoPct}
+                    onChange={(e) => { setRascunhoPct(e.target.value); setRascunhoValor(''); }}
+                    placeholder="0"
+                    className="mt-0.5 w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-rose-400 outline-none text-lg font-bold tabular-nums"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold uppercase text-gray-500">ou juros fica R$</span>
+                  <input
+                    inputMode="decimal"
+                    value={rascunhoValor}
+                    onChange={(e) => {
+                      setRascunhoValor(e.target.value);
+                      const pct = pctDoValor(e.target.value);
+                      setRascunhoPct(pct ? String(pct).replace('.', ',') : '');
+                    }}
+                    placeholder={jurosCheio.toFixed(2).replace('.', ',')}
+                    className="mt-0.5 w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-rose-400 outline-none text-lg font-bold tabular-nums"
+                  />
+                </label>
+              </div>
+
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm">
+                <div className="flex justify-between">
+                  <span>Principal</span>
+                  <span className="tabular-nums">{brl(totalPrincipal)}</span>
+                </div>
+                <div className="flex justify-between text-rose-700">
+                  <span>Juros</span>
+                  <span className="tabular-nums">
+                    {brl(jurosPrevisto)}
+                    {jurosPrevisto < jurosCheio && (
+                      <span className="ml-1.5 text-xs text-gray-400 line-through">{brl(jurosCheio)}</span>
+                    )}
+                  </span>
+                </div>
+                <div className="border-t border-emerald-200 pt-1 mt-1 flex justify-between text-lg font-bold">
+                  <span>Cliente paga</span>
+                  <span className="tabular-nums text-emerald-700">
+                    {brl(Math.round((totalPrincipal + jurosPrevisto) * 100) / 100)}
+                  </span>
+                </div>
+                {jurosPrevisto < jurosCheio && (
+                  <div className="text-[11px] text-emerald-800 mt-1">
+                    A loja abre mão de {brl(Math.round((jurosCheio - jurosPrevisto) * 100) / 100)} de juros. O
+                    principal continua inteiro.
+                  </div>
+                )}
+              </div>
+
+              <label className="block">
+                <span className="text-[11px] font-bold uppercase text-gray-500">Motivo (opcional)</span>
+                <input
+                  value={descontoMotivo}
+                  onChange={(e) => setDescontoMotivo(e.target.value)}
+                  maxLength={300}
+                  placeholder="ex.: cliente quitou tudo de uma vez"
+                  className="mt-0.5 w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-rose-400 outline-none text-sm"
+                />
+              </label>
+
+              {erroDesconto && (
+                <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-2 text-xs text-rose-800 flex items-start gap-1.5">
+                  <AlertCircle size={14} className="mt-px shrink-0" />
+                  <span>{erroDesconto}</span>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setEditandoJuros(false)}
+                  className="flex-1 py-2.5 rounded-xl border-2 border-gray-200 text-gray-700 font-bold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void aplicarDesconto(pctDoRascunho())}
+                  disabled={salvandoDesconto}
+                  className="flex-[2] py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-black disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {salvandoDesconto && <Loader2 size={16} className="animate-spin" />}
+                  {pctDoRascunho() > 0 ? 'Aplicar desconto' : 'Cobrar juros cheio'}
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-400 text-center">
+                Fica registrado no recibo e no histórico, com quem recebeu.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Pagamento (mantido igual) */}
       {showPagamento && (
@@ -803,11 +1065,26 @@ export default function RecebimentosPage() {
                   <span>{selecionadas.length} parcela{selecionadas.length > 1 ? 's' : ''}</span>
                   <span className="tabular-nums">{brl(totalPrincipal)}</span>
                 </div>
-                {totalJuros > 0 && (
-                  <div className="flex justify-between text-rose-700">
-                    <span>Juros</span>
-                    <span className="tabular-nums">{brl(totalJuros)}</span>
-                  </div>
+                {jurosCheio > 0 && (
+                  <>
+                    <div className="flex justify-between text-rose-700">
+                      <span>Juros</span>
+                      <span className="tabular-nums">{brl(totalJuros)}</span>
+                    </div>
+                    {descontoJuros > 0 && (
+                      <div className="flex justify-between text-emerald-700 text-xs">
+                        <span>Desconto no juros ({String(descontoPct).replace('.', ',')}%)</span>
+                        <span className="tabular-nums">− {brl(descontoJuros)}</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={abrirEditorJuros}
+                      className="mt-1 text-[11px] font-bold text-rose-700 underline underline-offset-2 hover:text-rose-900"
+                    >
+                      {descontoJuros > 0 ? 'Ajustar o desconto no juros' : 'Reduzir o juros'}
+                    </button>
+                  </>
                 )}
                 <div className="border-t border-emerald-200 pt-1 mt-1 flex justify-between text-lg font-bold">
                   <span>TOTAL</span>

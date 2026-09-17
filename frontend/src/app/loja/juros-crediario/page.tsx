@@ -29,6 +29,8 @@ type Config = {
   // Multa + teto de juros
   multaPercent: number;
   jurosMaxPercentParcela: number;
+  // Quanto do juros a LOJA pode perdoar no recebimento (100 = livre)
+  descontoJurosMaxPct: number;
   // Limite de crédito (bloqueio no PDV)
   limiteEnabled: boolean;
   limiteMaxParcelasVencidas: number;
@@ -45,6 +47,7 @@ export default function CrediarioJurosConfigPage() {
     enabled: false,
     multaPercent: 0,
     jurosMaxPercentParcela: 0,
+    descontoJurosMaxPct: 100,
     limiteEnabled: false,
     limiteMaxParcelasVencidas: 0,
     limiteMaxValorEmAberto: 0,
@@ -267,6 +270,35 @@ export default function CrediarioJurosConfigPage() {
             </div>
             <div className="mt-2 text-xs text-gray-500">
               Ex: teto <b>100</b> = juros+multa nunca passam do valor da parcela.
+            </div>
+
+            {/* ── QUANTO A LOJA PODE PERDOAR NO BALCÃO (17/09/2026) ──
+                A tela de Recebimentos deixa reduzir o juros na hora da
+                negociação. Aqui a matriz decide até onde a LOJA vai sozinha —
+                ela mesma (admin/operator) não passa por este teto. */}
+            <div className="mt-4 pt-4 border-t border-rose-100">
+              <label className="text-xs font-bold uppercase text-gray-700">
+                Desconto de juros que a loja pode dar (%)
+              </label>
+              <input
+                type="number"
+                step={5}
+                min={0}
+                max={100}
+                value={cfg.descontoJurosMaxPct}
+                onChange={(e) =>
+                  setCfg({
+                    ...cfg,
+                    descontoJurosMaxPct: Math.max(0, Math.min(100, Number(e.target.value || 0))),
+                  })
+                }
+                className="w-full md:w-48 p-3 border-2 rounded-lg text-center text-xl font-bold tabular-nums"
+              />
+              <div className="mt-2 text-xs text-gray-500">
+                No recebimento a loja clica no juros e reduz.{' '}
+                <b>100</b> = livre (padrão) · <b>0</b> = só a matriz negocia juros.
+                O desconto sai no recibo com o nome de quem recebeu.
+              </div>
             </div>
           </div>
 

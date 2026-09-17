@@ -29,6 +29,9 @@ type PixInfo = {
   totalParcelas: number;
   totalPrincipal: number;
   totalJuros: number;
+  /** Juros negociado no balcão (17/09/2026): o que a loja tirou. */
+  totalJurosCheio?: number | null;
+  descontoJuros?: number | null;
   totalPago: number;
   paidAt: string | null;
   createdAt: string;
@@ -294,6 +297,12 @@ export default function PixPublicoPage() {
                   <span>Juros por atraso:</span>
                   <span className="tabular-nums">{brl(info.totalJuros)}</span>
                 </div>
+                {Number(info.descontoJuros || 0) > 0 && (
+                  <div className="flex justify-between text-emerald-700">
+                    <span>Desconto no juros:</span>
+                    <span className="tabular-nums">− {brl(Number(info.descontoJuros || 0))}</span>
+                  </div>
+                )}
                 <div className="border-t border-gray-300 pt-1 mt-1 flex justify-between font-bold">
                   <span>Total:</span>
                   <span className="tabular-nums text-emerald-700">{brl(info.totalPago)}</span>

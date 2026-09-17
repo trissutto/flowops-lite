@@ -92,6 +92,10 @@ export class CrediarioBaixaPublicController {
       totalParcelas: baixa.totalParcelas,
       totalPrincipal: baixa.totalPrincipal,
       totalJuros: baixa.totalJuros,
+      // Juros negociado no balcão (17/09/2026): a página da cliente mostra o
+      // desconto que a loja deu — é o que ela combinou no atendimento.
+      totalJurosCheio: baixa.totalJurosCheio ?? baixa.totalJuros,
+      descontoJuros: baixa.descontoJuros ?? 0,
       totalPago: baixa.totalPago,
       paidAt: baixa.paidAt,
       createdAt: baixa.createdAt,

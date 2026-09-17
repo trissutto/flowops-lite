@@ -31,6 +31,7 @@ import { CrediarioMirrorService } from './crediario-mirror.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { PagbankService } from '../pagbank/pagbank.service';
 import { sqlParcelaAberta } from '../common/crediario-pago';
+import { aplicarDescontoJuros, normalizarPctDesconto } from '../common/juros-negociado';
 
 export interface JurosConfig {
   diasCarencia: number;
@@ -44,6 +45,8 @@ export interface JurosConfig {
   limiteEnabled: boolean;
   limiteMaxParcelasVencidas: number;
   limiteMaxValorEmAberto: number;
+  /** Quanto do juros a LOJA pode perdoar no balcão (100 = livre). */
+  descontoJurosMaxPct: number;
 }
 
 export interface OpenInstallment {
@@ -55,7 +58,10 @@ export interface OpenInstallment {
   vencimento: string;
   valorParcela: number;
   diasAtraso: number;
+  /** Juros COBRADO — já com o desconto negociado, quando houve. */
   jurosCalculado: number;
+  /** O que a regra calculou antes da negociação (igual quando não há desconto). */
+  jurosCheio?: number;
   valorComJuros: number;
   // Cliente (denormalizado)
   codCliente: string;
@@ -234,6 +240,7 @@ export class CrediarioBaixaService {
       limiteEnabled: cfg.limiteEnabled ?? false,
       limiteMaxParcelasVencidas: cfg.limiteMaxParcelasVencidas ?? 0,
       limiteMaxValorEmAberto: cfg.limiteMaxValorEmAberto ?? 0,
+      descontoJurosMaxPct: cfg.descontoJurosMaxPct ?? 100,
     };
   }
 
@@ -260,6 +267,9 @@ export class CrediarioBaixaService {
     }
     if (input.limiteMaxValorEmAberto != null) {
       data.limiteMaxValorEmAberto = Math.max(0, Number(input.limiteMaxValorEmAberto));
+    }
+    if (input.descontoJurosMaxPct != null) {
+      data.descontoJurosMaxPct = Math.max(0, Math.min(100, Number(input.descontoJurosMaxPct)));
     }
     await (this.prisma as any).crediarioConfig.upsert({
       where: { id: 'singleton' },
@@ -1296,10 +1306,26 @@ export class CrediarioBaixaService {
   async previewBaixa(input: {
     parcelas: Array<{ registro: string; controle: string }>;
     storeCode?: string;
+    /**
+     * JUROS NEGOCIADO NO BALCÃO (17/09/2026) — % de desconto sobre o JUROS
+     * (nunca sobre o principal). Régua em `common/juros-negociado.ts`.
+     */
+    descontoJurosPct?: number | string | null;
+    /**
+     * Teto que vale pra QUEM está pedindo: a loja respeita o
+     * `descontoJurosMaxPct` da config, a matriz passa `null` (sem teto).
+     * Vem do controller porque é decisão de PAPEL, não de cálculo.
+     */
+    tetoDescontoPct?: number | null;
   }): Promise<{
     parcelas: OpenInstallment[];
     totalPrincipal: number;
+    /** Juros COBRADO (com o desconto, se houve). */
     totalJuros: number;
+    /** Juros que a regra calculou, antes da negociação. */
+    totalJurosCheio: number;
+    descontoJuros: number;
+    descontoJurosPct: number;
     totalPago: number;
   }> {
     if (!input.parcelas?.length) throw new BadRequestException('Selecione pelo menos 1 parcela');
@@ -1349,11 +1375,41 @@ export class CrediarioBaixaService {
       });
     }
 
+    /**
+     * A NEGOCIAÇÃO ENTRA AQUI, no fim — depois que cada parcela já tem o juros
+     * da regra. Assim todo caminho de recebimento (dinheiro, PIX, link, split)
+     * passa pelo MESMO desconto: o preview que a tela mostra é o que o caixa
+     * cobra e o que o recibo imprime.
+     */
+    const pedido = normalizarPctDesconto(input.descontoJurosPct);
+    const teto = input.tetoDescontoPct;
+    if (pedido > 0 && teto != null && pedido > teto) {
+      throw new BadRequestException(
+        teto <= 0
+          ? 'Esta loja não pode dar desconto no juros — quem libera é a matriz.'
+          : `Esta loja pode tirar até ${teto}% do juros. Acima disso, quem libera é a matriz.`,
+      );
+    }
+    const negociado = aplicarDescontoJuros(result.map((p) => p.jurosCalculado), pedido);
+    result.forEach((p, i) => {
+      p.jurosCheio = p.jurosCalculado;
+      p.jurosCalculado = negociado.jurosCobrado[i];
+      p.valorComJuros = Math.round((p.valorParcela + p.jurosCalculado) * 100) / 100;
+    });
+
     const totalPrincipal = Math.round(result.reduce((a, p) => a + p.valorParcela, 0) * 100) / 100;
-    const totalJuros = Math.round(result.reduce((a, p) => a + p.jurosCalculado, 0) * 100) / 100;
+    const totalJuros = negociado.totalCobrado;
     const totalPago = Math.round((totalPrincipal + totalJuros) * 100) / 100;
 
-    return { parcelas: result, totalPrincipal, totalJuros, totalPago };
+    return {
+      parcelas: result,
+      totalPrincipal,
+      totalJuros,
+      totalJurosCheio: negociado.totalCheio,
+      descontoJuros: negociado.desconto,
+      descontoJurosPct: negociado.pct,
+      totalPago,
+    };
   }
 
   // ── Aplicar baixa (DINHEIRO — direto) ─────────────────────────────
@@ -1364,10 +1420,20 @@ export class CrediarioBaixaService {
     lojaName?: string;
     userId?: string;
     userName?: string;
+    /** % de desconto no JUROS negociado no balcão (0 = sem desconto). */
+    descontoJurosPct?: number | string | null;
+    descontoMotivo?: string | null;
+    /** Teto do papel de quem pediu (null = matriz, sem teto). */
+    tetoDescontoPct?: number | null;
   }): Promise<{ baixaId: string }> {
-    const preview = await this.previewBaixa({ parcelas: input.parcelas });
+    const preview = await this.previewBaixa({
+      parcelas: input.parcelas,
+      descontoJurosPct: input.descontoJurosPct,
+      tetoDescontoPct: input.tetoDescontoPct,
+    });
     const baixaId = await this.persistBaixa({
       preview,
+      descontoMotivo: input.descontoMotivo,
       formaPagamento: 'dinheiro',
       status: 'paid',
       paidAt: new Date(),
@@ -1400,6 +1466,11 @@ export class CrediarioBaixaService {
     /** Origem do PIX — 'presencial' (QR loja) ou 'link' (WhatsApp remoto).
      *  Define se mostra alerta global na tela quando pago. */
     origem?: 'presencial' | 'link';
+    /** % de desconto no JUROS negociado no balcão (0 = sem desconto). */
+    descontoJurosPct?: number | string | null;
+    descontoMotivo?: string | null;
+    /** Teto do papel de quem pediu (null = matriz, sem teto). */
+    tetoDescontoPct?: number | null;
   }): Promise<{
     baixaId: string;
     pagarmeOrderId: string;
@@ -1407,12 +1478,17 @@ export class CrediarioBaixaService {
     qrCodeImageUrl: string;
     valor: number;
   }> {
-    const preview = await this.previewBaixa({ parcelas: input.parcelas });
+    const preview = await this.previewBaixa({
+      parcelas: input.parcelas,
+      descontoJurosPct: input.descontoJurosPct,
+      tetoDescontoPct: input.tetoDescontoPct,
+    });
     if (preview.totalPago <= 0) {
       throw new BadRequestException('Total da baixa deve ser > 0');
     }
     const baixaId = await this.persistBaixa({
       preview,
+      descontoMotivo: input.descontoMotivo,
       formaPagamento: 'pix',
       status: 'pending',
       paidAt: null,
@@ -1480,6 +1556,11 @@ export class CrediarioBaixaService {
     customerPhone?: string;
     customerEmail?: string;
     expiresInMinutes?: number;
+    /** % de desconto no JUROS negociado no balcão (0 = sem desconto). */
+    descontoJurosPct?: number | string | null;
+    descontoMotivo?: string | null;
+    /** Teto do papel de quem pediu (null = matriz, sem teto). */
+    tetoDescontoPct?: number | null;
   }): Promise<{
     baixaId: string;
     pagarmeOrderId: string;
@@ -1489,7 +1570,11 @@ export class CrediarioBaixaService {
     valorDinheiro: number;
     valorPix: number;
   }> {
-    const preview = await this.previewBaixa({ parcelas: input.parcelas });
+    const preview = await this.previewBaixa({
+      parcelas: input.parcelas,
+      descontoJurosPct: input.descontoJurosPct,
+      tetoDescontoPct: input.tetoDescontoPct,
+    });
     const valorDinheiro = Math.round((Number(input.valorDinheiro) || 0) * 100) / 100;
     const valorPix = Math.round((Number(input.valorPix) || 0) * 100) / 100;
     if (valorDinheiro <= 0 || valorPix <= 0) {
@@ -1506,6 +1591,7 @@ export class CrediarioBaixaService {
 
     const baixaId = await this.persistBaixa({
       preview,
+      descontoMotivo: input.descontoMotivo,
       formaPagamento: 'misto',
       status: 'pending',
       paidAt: null,
@@ -1682,6 +1768,8 @@ export class CrediarioBaixaService {
     valorDinheiro?: number;
     valorPix?: number;
     origem?: string;
+    /** O que a vendedora escreveu ao perdoar parte do juros (opcional). */
+    descontoMotivo?: string | null;
   }): Promise<string> {
     const cliente = input.preview.parcelas[0] || null;
     const baixa = await (this.prisma as any).crediarioBaixa.create({
@@ -1697,6 +1785,12 @@ export class CrediarioBaixaService {
         totalParcelas: input.preview.parcelas.length,
         totalPrincipal: input.preview.totalPrincipal,
         totalJuros: input.preview.totalJuros,
+        totalJurosCheio: input.preview.totalJurosCheio,
+        descontoJuros: input.preview.descontoJuros,
+        descontoJurosPct: input.preview.descontoJurosPct,
+        descontoMotivo: input.preview.descontoJuros > 0
+          ? (String(input.descontoMotivo ?? '').trim().slice(0, 300) || null)
+          : null,
         totalPago: input.preview.totalPago,
         formaPagamento: input.formaPagamento,
         valorDinheiro: input.valorDinheiro ?? null,
@@ -1716,6 +1810,7 @@ export class CrediarioBaixaService {
             vencimento: new Date(p.vencimento),
             valorParcela: p.valorParcela,
             jurosCalculado: p.jurosCalculado,
+            jurosCheio: p.jurosCheio ?? p.jurosCalculado,
             diasAtraso: p.diasAtraso,
             valorPago: p.valorComJuros,
           })),

@@ -56,6 +56,20 @@ export class CrediarioBaixaController {
       throw new ForbiddenException('Apenas admin ou loja');
   }
 
+  /**
+   * TETO DA NEGOCIAÇÃO DE JUROS pra quem está pedindo (17/09/2026).
+   *
+   * Loja respeita o `descontoJurosMaxPct` da config (padrão 100 = livre);
+   * matriz (admin/operator) não tem teto — é ela quem aperta a régua. Isto é
+   * decisão de PAPEL, por isso mora no controller e não no cálculo.
+   */
+  private async tetoDescontoJuros(req: any): Promise<number | null> {
+    if (req?.user?.role !== 'store') return null;
+    const cfg = await this.svc.getConfig();
+    const teto = Number(cfg.descontoJurosMaxPct ?? 100);
+    return Number.isFinite(teto) ? Math.max(0, Math.min(100, teto)) : 100;
+  }
+
   private resolveStore(req: any, override?: string): { code: string; name: string } {
     const role = req?.user?.role;
     if (role === 'admin') {
@@ -117,6 +131,7 @@ export class CrediarioBaixaController {
       limiteEnabled?: boolean;
       limiteMaxParcelasVencidas?: number;
       limiteMaxValorEmAberto?: number;
+      descontoJurosMaxPct?: number;
     },
   ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
@@ -251,10 +266,18 @@ export class CrediarioBaixaController {
   @Post('preview')
   async preview(
     @Req() req: any,
-    @Body() body: { parcelas: Array<{ registro: string; controle: string }> },
+    @Body() body: {
+      parcelas: Array<{ registro: string; controle: string }>;
+      /** % de desconto no juros que a tela está simulando (0 = sem desconto). */
+      descontoJurosPct?: number;
+    },
   ) {
     this.requireRole(req);
-    return this.svc.previewBaixa({ parcelas: body?.parcelas || [] });
+    return this.svc.previewBaixa({
+      parcelas: body?.parcelas || [],
+      descontoJurosPct: body?.descontoJurosPct,
+      tetoDescontoPct: await this.tetoDescontoJuros(req),
+    });
   }
 
   // ── Aplicar baixa (DINHEIRO) ─────────────────────────────────────
@@ -266,6 +289,8 @@ export class CrediarioBaixaController {
     body: {
       parcelas: Array<{ registro: string; controle: string }>;
       storeCode?: string;
+      descontoJurosPct?: number;
+      descontoMotivo?: string;
     },
   ) {
     this.requireRole(req);
@@ -276,6 +301,9 @@ export class CrediarioBaixaController {
       lojaName: name,
       userId: req?.user?.sub || req?.user?.id || null,
       userName: req?.user?.name || req?.user?.email || null,
+      descontoJurosPct: body?.descontoJurosPct,
+      descontoMotivo: body?.descontoMotivo,
+      tetoDescontoPct: await this.tetoDescontoJuros(req),
     });
   }
 
@@ -293,6 +321,8 @@ export class CrediarioBaixaController {
       customerCpf?: string;
       customerEmail?: string;
       customerPhone?: string;
+      descontoJurosPct?: number;
+      descontoMotivo?: string;
     },
   ) {
     this.requireRole(req);
@@ -309,6 +339,9 @@ export class CrediarioBaixaController {
       customerEmail: body?.customerEmail,
       expiresInMinutes: 1440, // 24h pra link compartilhável
       origem: 'link', // alerta global mostra so essas baixas
+      descontoJurosPct: body?.descontoJurosPct,
+      descontoMotivo: body?.descontoMotivo,
+      tetoDescontoPct: await this.tetoDescontoJuros(req),
     });
     return result;
   }
@@ -330,6 +363,8 @@ export class CrediarioBaixaController {
       customerCpf?: string;
       customerEmail?: string;
       customerPhone?: string;
+      descontoJurosPct?: number;
+      descontoMotivo?: string;
     },
   ) {
     this.requireRole(req);
@@ -346,6 +381,9 @@ export class CrediarioBaixaController {
       customerCpf: body?.customerCpf,
       customerPhone: body?.customerPhone,
       customerEmail: body?.customerEmail,
+      descontoJurosPct: body?.descontoJurosPct,
+      descontoMotivo: body?.descontoMotivo,
+      tetoDescontoPct: await this.tetoDescontoJuros(req),
     });
   }
 
@@ -362,6 +400,8 @@ export class CrediarioBaixaController {
       customerCpf?: string;
       customerEmail?: string;
       customerPhone?: string;
+      descontoJurosPct?: number;
+      descontoMotivo?: string;
     },
   ) {
     this.requireRole(req);
@@ -377,6 +417,9 @@ export class CrediarioBaixaController {
       customerPhone: body?.customerPhone,
       customerEmail: body?.customerEmail,
       origem: 'presencial', // QR loja — vendedora ve o cliente pagar, sem alerta global
+      descontoJurosPct: body?.descontoJurosPct,
+      descontoMotivo: body?.descontoMotivo,
+      tetoDescontoPct: await this.tetoDescontoJuros(req),
     });
   }
 

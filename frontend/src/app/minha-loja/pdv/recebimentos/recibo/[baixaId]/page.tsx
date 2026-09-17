@@ -46,6 +46,11 @@ type Baixa = {
   totalParcelas: number;
   totalPrincipal: number;
   totalJuros: number;
+  // Juros negociado no balcão (17/09/2026) — o recibo mostra o desconto dado.
+  totalJurosCheio?: number | null;
+  descontoJuros?: number | null;
+  descontoJurosPct?: number | null;
+  descontoMotivo?: string | null;
   totalPago: number;
   formaPagamento: string;
   // Pagamento MISTO: discriminacao dinheiro+PIX (preenchidos so quando misto)
@@ -357,6 +362,27 @@ function ReciboBaixaInner() {
             <div>Juros:</div>
             <div>{brl(baixa.totalJuros)}</div>
           </div>
+        )}
+        {/* O QUE A LOJA PERDOOU fica escrito (17/09/2026): recibo de juros
+            menor que o calculado sem dizer por quê é o que ninguém consegue
+            explicar depois. */}
+        {Number(baixa.descontoJuros || 0) > 0 && (
+          <>
+            <div className="row">
+              <div>Juros calculado:</div>
+              <div>{brl(Number(baixa.totalJurosCheio || 0))}</div>
+            </div>
+            <div className="row">
+              <div>Desconto no juros{baixa.descontoJurosPct ? ` (${String(baixa.descontoJurosPct).replace('.', ',')}%)` : ''}:</div>
+              <div>- {brl(Number(baixa.descontoJuros || 0))}</div>
+            </div>
+            {baixa.descontoMotivo && (
+              <div className="row" style={{ fontSize: 9 }}>
+                <div>Motivo:</div>
+                <div>{baixa.descontoMotivo}</div>
+              </div>
+            )}
+          </>
         )}
         <hr className="sep" />
         <div className="row huge">

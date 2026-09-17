@@ -1786,6 +1786,11 @@ model CrediarioConfig {
   limiteMaxParcelasVencidas Int      @default(0) @map("limite_max_parcelas_vencidas")
   // Máximo de valor TOTAL em aberto (vencido + a vencer). 0 = ignora.
   limiteMaxValorEmAberto    Float    @default(0) @map("limite_max_valor_em_aberto")
+  /// TETO DA NEGOCIAÇÃO DE JUROS (17/09/2026) — quanto do juros a LOJA pode
+  /// perdoar no balcão (`common/juros-negociado.ts`). 100 = livre, que é o
+  /// padrão e o comportamento de quando isto nasceu. A matriz (admin/operator)
+  /// não passa por este teto: quem aperta a régua é ela mesma.
+  descontoJurosMaxPct       Float    @default(100) @map("desconto_juros_max_pct")
   createdAt                 DateTime @default(now()) @map("created_at")
   updatedAt                 DateTime @updatedAt @map("updated_at")
 
@@ -1810,8 +1815,21 @@ model CrediarioBaixa {
   // Totais calculados na hora da baixa
   totalParcelas      Int       @default(0) @map("total_parcelas")
   totalPrincipal     Float     @default(0) @map("total_principal")
+  /// Juros COBRADO (já com a negociação do balcão, se houve). Continua valendo
+  /// `totalPago = totalPrincipal + totalJuros` — é o que o caixa, o recibo e a
+  /// página do PIX leem.
   totalJuros         Float     @default(0) @map("total_juros")
   totalPago          Float     @default(0) @map("total_pago")
+  // ── JUROS NEGOCIADO NO BALCÃO (17/09/2026) ──
+  // A loja pode perdoar parte do juros na hora de receber. O que a régua
+  // calculou fica registrado aqui do lado do que foi cobrado — sem isso, um
+  // recibo de R$ 300 em cima de R$ 633 de juros não teria como ser explicado
+  // depois. `descontoJuros = totalJurosCheio − totalJuros`.
+  totalJurosCheio    Float     @default(0) @map("total_juros_cheio")
+  descontoJuros      Float     @default(0) @map("desconto_juros")
+  descontoJurosPct   Float     @default(0) @map("desconto_juros_pct")
+  /// O que a vendedora escreveu ao dar o desconto (opcional, sai no recibo).
+  descontoMotivo     String?   @map("desconto_motivo")
   // Forma de pagamento usada
   formaPagamento     String // pix | dinheiro | misto (split dinheiro+pix)
   // Origem do PIX: 'presencial' (QR loja, cliente la) ou 'link' (WhatsApp remoto).
@@ -1859,7 +1877,13 @@ model CrediarioBaixaItem {
   totalParcelas  Int?     @map("total_parcelas")
   vencimento     DateTime
   valorParcela   Float    @map("valor_parcela")
+  /// Juros COBRADO desta parcela — já com o desconto negociado no balcão,
+  /// quando houve (17/09/2026). É o número que vai pro ERP, pro caixa e pro
+  /// histórico do cliente, e o que mantém `valorPago = valorParcela + juros`.
   jurosCalculado Float    @default(0) @map("juros_calculado")
+  /// O que a regra calculou antes da negociação (igual ao cobrado quando não
+  /// houve desconto).
+  jurosCheio     Float    @default(0) @map("juros_cheio")
   diasAtraso     Int      @default(0) @map("dias_atraso")
   valorPago      Float    @map("valor_pago") // valorParcela + jurosCalculado
   // Resultado do UPDATE no Giga (audit)
