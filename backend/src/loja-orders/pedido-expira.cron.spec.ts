@@ -6,12 +6,22 @@ const AGORA = Date.parse('2026-08-22T22:00:00.000Z');
 
 function montar(opts: { alvos?: any[]; env?: Record<string, string | undefined>; afetados?: number } = {}) {
   const alvos = opts.alvos ?? [];
-  const findMany = jest.fn().mockResolvedValue(alvos);
-  const updateMany = jest.fn().mockResolvedValue({ count: opts.afetados ?? alvos.length });
+  const afetados = opts.afetados ?? alvos.length;
+  // 1ª chamada: os alvos. 2ª (status: 'cancelled'): só quem de fato virou
+  // cancelado — o mock simula o pedido que pagou no meio ficando de fora.
+  const findMany = jest.fn().mockImplementation(async (args: any) =>
+    args?.where?.status === 'cancelled' ? alvos.slice(0, afetados) : alvos,
+  );
+  const updateMany = jest.fn().mockResolvedValue({ count: afetados });
   const config = { get: jest.fn((chave: string) => opts.env?.[chave]) };
-  const cron = new PedidoExpiraCron({ order: { findMany, updateMany } } as any, config as any);
+  const aoCancelarPedido = jest.fn().mockResolvedValue(true);
+  const cron = new PedidoExpiraCron(
+    { order: { findMany, updateMany } } as any,
+    config as any,
+    { aoCancelarPedido } as any,
+  );
   const log = jest.spyOn((cron as any).logger, 'log').mockImplementation(() => undefined);
-  return { cron, findMany, updateMany, log };
+  return { cron, findMany, updateMany, log, aoCancelarPedido };
 }
 
 const pedido = (id: string) => ({ id, wcOrderNumber: id, createdAt: new Date(AGORA - 9 * DIA), totalAmount: 100 });
@@ -51,6 +61,30 @@ describe('PedidoExpiraCron', () => {
     const { cron, log } = montar({ alvos: [pedido('A'), pedido('B')], afetados: 1 });
     await cron.ciclo();
     expect(log.mock.calls.some((c) => String(c[0]).includes('escaparam'))).toBe(true);
+  });
+
+  /**
+   * O aviso (17/09) vai pra quem VIROU cancelado — relido do banco, nunca a
+   * lista original: o pedido que pagou entre a busca e o update não pode
+   * receber "seu pedido foi cancelado". E vai sempre como NÃO PAGO: este cron
+   * só cancela `paidAt: null`.
+   */
+  it('avisa só quem de fato foi cancelado, como pedido não pago', async () => {
+    const { cron, aoCancelarPedido } = montar({ alvos: [pedido('A'), pedido('B')], afetados: 1 });
+    await cron.ciclo();
+    expect(aoCancelarPedido).toHaveBeenCalledTimes(1);
+    expect(aoCancelarPedido.mock.calls[0][0]).toMatchObject({ id: 'A' });
+    expect(aoCancelarPedido.mock.calls[0][1]).toMatchObject({ pago: false });
+  });
+
+  it('aviso que falha não derruba o ciclo nem o cancelamento', async () => {
+    const { cron, aoCancelarPedido, updateMany } = montar({ alvos: [pedido('A'), pedido('B')] });
+    aoCancelarPedido.mockRejectedValueOnce(new Error('whats fora'));
+    const warn = jest.spyOn((cron as any).logger, 'warn').mockImplementation(() => undefined);
+    await expect(cron.ciclo()).resolves.toBeUndefined();
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(aoCancelarPedido).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('aviso não saiu'))).toBe(true);
   });
 
   it('não encosta em nada quando não há pedido vencido', async () => {

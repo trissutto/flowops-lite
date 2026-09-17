@@ -14,6 +14,10 @@ import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { TrocaPecaService } from './troca-peca.service';
 import { DespachoBackfillService } from './despacho-backfill.service';
 import { LinhaDoTempoService } from './linha-do-tempo.service';
+import { HttpModule } from '@nestjs/axios';
+import { EmailModule } from '../email/email.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 
 @Module({
   // PickScanModule → estorno dos bipes no cancelamento/reembolso do pedido.
@@ -23,12 +27,15 @@ import { LinhaDoTempoService } from './linha-do-tempo.service';
   // PagarmeModule → link de pagamento da diferença da troca de peça.
   // PromoConfigModule → o preço que o SITE cobra hoje pela peça nova (preço da
   // loja, com a campanha do caixa quando a peça entra), pra sugerir a diferença certa.
-  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoConfigModule, MaisEnviosModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
+  // EmailModule/HttpModule/WhatsappModule → PedidoEmailService com instância
+  // própria (mesma receita do PickOrdersModule): o aviso de CANCELAMENTO pra
+  // cliente sai do cancelarLocalmente sem importar o LojaOrdersModule inteiro.
+  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoConfigModule, MaisEnviosModule, EmailModule, HttpModule, WhatsappModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
   // DespachoBackfillService → preenche `shipped_at` do que já estava
   // despachado quando a coluna nasceu (25/08). Roda uma vez e some.
   // LinhaDoTempoService → raio-x "onde está cada peça" + histórico assinado
   // da tela do pedido (contrato 26/08, casos ON-000106/LP-000244).
-  providers: [OrdersService, TrocaPecaService, DespachoBackfillService, LinhaDoTempoService],
+  providers: [OrdersService, TrocaPecaService, DespachoBackfillService, LinhaDoTempoService, PedidoEmailService],
   controllers: [OrdersController],
   exports: [OrdersService, TrocaPecaService],
 })

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { PedidoEmailService, metodoDePagamento } from './pedido-email.service';
 
 /**
  * PEDIDO QUE NUNCA FOI PAGO VIRA CANCELADO (dono, 22/08/2026).
@@ -51,6 +52,7 @@ export class PedidoExpiraCron {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly pedidoEmail: PedidoEmailService,
   ) {}
 
   private get ligado(): boolean {
@@ -128,6 +130,32 @@ export class PedidoExpiraCron {
       this.logger.log(
         `[pedido-expira] ${alvos.length - r.count} pedido(s) escaparam do cancelamento (pagaram no meio)`,
       );
+    }
+
+    /**
+     * AVISA QUEM FOI CANCELADO (17/09). Relê quem de fato virou `cancelled`
+     * — nunca a lista original: o pedido que pagou no meio não pode receber
+     * "seu pedido foi cancelado". Sequencial e best-effort: aviso que falha
+     * vira log, nunca desfaz o cancelamento.
+     */
+    if (!r.count) return;
+    const cancelados = await (this.prisma as any).order.findMany({
+      where: { id: { in: alvos.map((o: any) => o.id) }, status: 'cancelled' },
+      select: {
+        id: true, wcOrderNumber: true, customerName: true, customerPhone: true,
+        customerEmail: true, paymentInfo: true,
+      },
+    });
+    for (const o of cancelados) {
+      try {
+        await this.pedidoEmail.aoCancelarPedido(o, {
+          pago: false,
+          motivo: 'pagamento não concluído',
+          metodo: metodoDePagamento(o.paymentInfo),
+        });
+      } catch (e: any) {
+        this.logger.warn(`[pedido-expira] aviso não saiu (${o.wcOrderNumber ?? o.id}): ${e?.message ?? e}`);
+      }
     }
   }
 }

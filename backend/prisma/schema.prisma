@@ -8491,7 +8491,7 @@ model AvisoEnviado {
   wcOrderNumber String? @map("wc_order_number")
 
   /// pedido_criado | pagamento_confirmado | pix_nao_pago | pedido_enviado |
-  /// pedido_entregue | pedido_online_registro
+  /// pedido_entregue | pedido_online_registro | pedido_cancelado
   evento String @db.VarChar(40)
   /// n8n (WhatsApp do fluxo) | whatsapp (direto) | email
   canal String @db.VarChar(20)

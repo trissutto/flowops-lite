@@ -19,6 +19,43 @@ export interface CaixaAviso {
 }
 
 /**
+ * O QUE A CLIENTE PRECISA SABER DO CANCELAMENTO (17/09) — o dinheiro.
+ *
+ * "Seu pedido foi cancelado" seco pra quem já pagou gera a ligação no mesmo
+ * minuto ("e o meu dinheiro?"). Quem decide `pago` é quem cancela, lendo o
+ * pedido ANTES de trocar o status (depois de `cancelled` a régua `pedidoPago`
+ * devolve falso pra todo mundo, e a mensagem mentiria "nada foi cobrado" pra
+ * quem pagou).
+ */
+export interface Cancelamento {
+  /** O dinheiro ENTROU? Decide entre "estorno a caminho" e "nada foi cobrado". */
+  pago: boolean;
+  /**
+   * Por que — SÓ texto escrito pra cliente ler ("pagamento não concluído").
+   * O motivo que a matriz digita no cancelamento manual NÃO passa por aqui.
+   */
+  motivo?: string | null;
+  /** Como pagou (`pix`, `credit_card`...) — muda a frase do prazo de estorno. */
+  metodo?: string | null;
+}
+
+/**
+ * Lê o `method` de `Order.paymentInfo` (JSON gravado pelo checkout:
+ * `{ method, installments, gatewayOrderId, ... }`). Texto quebrado ou vazio
+ * devolve null — o aviso cai na frase genérica, nunca lança.
+ */
+export function metodoDePagamento(paymentInfo: unknown): string | null {
+  if (!paymentInfo) return null;
+  try {
+    const p = typeof paymentInfo === 'string' ? JSON.parse(paymentInfo) : paymentInfo;
+    const m = String((p as any)?.method ?? '').trim().toLowerCase();
+    return m || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * O E-MAIL QUE A CLIENTE ESPERA — e que não existia (achado de 12/08/2026).
  *
  * Medido na revisão de prontidão do site: o pedido do e-commerce **não
@@ -134,9 +171,10 @@ export class PedidoEmailService {
   }
 
   private async avisarWhatsDireto(
-    evento: 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
+    evento: 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue' | 'pedido_cancelado',
     order: any,
     caixa?: CaixaAviso | null,
+    cancelamento?: Cancelamento | null,
   ): Promise<boolean> {
     if (!this.whatsDiretoLigado) return false;
     const telefone = String(order?.customerPhone || '').replace(/\D/g, '');
@@ -175,6 +213,8 @@ export class PedidoEmailService {
         this.linhaItensCaixa(caixa) +
         (codigo ? `\n\n📦 Código: *${codigo}*` : '') +
         (link ? `\n${link}` : '');
+    } else if (evento === 'pedido_cancelado') {
+      texto = `Oi, ${nome}! 💛\n\n${this.textoCancelamento(numero, cancelamento)}`;
     } else {
       const limite = new Date(Date.now() + PedidoEmailService.DIAS_TROCA * 24 * 60 * 60 * 1000);
       texto =
@@ -237,7 +277,7 @@ export class PedidoEmailService {
    * o jeito mais rápido de o fluxo quebrar na primeira manutenção.
    */
   private async avisarN8n(
-    evento: 'pedido_criado' | 'pagamento_confirmado' | 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
+    evento: 'pedido_criado' | 'pagamento_confirmado' | 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue' | 'pedido_cancelado',
     order: any,
     caixa?: CaixaAviso | null,
   ): Promise<boolean> {
@@ -781,6 +821,65 @@ export class PedidoEmailService {
       para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape, 'pedido_entregue',
     );
     return n8nOk || whatsOk || emailOk;
+  }
+
+  /**
+   * PEDIDO CANCELADO — o aviso que não existia (achado do dono, 16/09/2026).
+   *
+   * Cancelou o LP-001483 pela retaguarda e o WhatsApp ficou mudo: dos cinco
+   * eventos do ciclo (criado, pago, pix parado, enviado, entregue) nenhum era
+   * o cancelamento. A cliente que pagou e teve o pedido cancelado descobria
+   * pelo extrato, dias depois — ou nunca, se o estorno demorasse.
+   *
+   * Duas mensagens, e a diferença é o dinheiro:
+   *  - PAGO → "o estorno já foi pedido, cai no mesmo meio de pagamento";
+   *  - NÃO PAGO (Pix vencido, cartão recusado, cancelado antes de pagar) →
+   *    "nada foi cobrado".
+   *
+   * Sai pelo WhatsApp direto (o n8n descarta tudo que não é `processing`) e
+   * pelo e-mail próprio quando ligado. Chamada sem `await` por quem cancela:
+   * aviso nunca desfaz cancelamento.
+   */
+  async aoCancelarPedido(order: any, cancelamento: Cancelamento): Promise<boolean> {
+    const n8nOk = await this.avisarN8n('pedido_cancelado', order);
+    const whatsOk = await this.avisarWhatsDireto('pedido_cancelado', order, null, cancelamento);
+    if (!this.emailProprioLigado) return n8nOk || whatsOk;
+
+    const para = this.destinatario(order);
+    if (!para) return n8nOk || whatsOk;
+
+    const nome = this.primeiroNome(order?.customerName);
+    const titulo = 'Seu pedido foi cancelado';
+    const chamada = `${nome}, ${this.escapar(this.textoCancelamento('', cancelamento)).replace(/\n+/g, '<br>')}`;
+    const rodape = 'Qualquer dúvida, responda este e-mail ou chame uma consultora no WhatsApp.';
+    const emailOk = await this.enviar(
+      para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape, 'pedido_cancelado',
+    );
+    return n8nOk || whatsOk || emailOk;
+  }
+
+  /** O corpo do aviso de cancelamento — o mesmo texto no WhatsApp e no e-mail. */
+  textoCancelamento(numero: string, c?: Cancelamento | null): string {
+    const motivo = String(c?.motivo || '').trim();
+    const porque = motivo ? ` Motivo: ${motivo}.` : '';
+    if (c?.pago) {
+      const metodo = String(c?.metodo || '').toLowerCase();
+      const prazo = metodo === 'pix'
+        ? 'Como você pagou por Pix, o valor volta pra sua conta em até 1 dia útil.'
+        : metodo.includes('card') || metodo.includes('cart')
+          ? 'Como você pagou no cartão, o valor aparece como estorno na fatura — o prazo depende da operadora, e costuma ser de 1 a 2 faturas.'
+          : 'O valor volta pelo mesmo meio de pagamento que você usou.';
+      return (
+        `Seu pedido${numero} foi cancelado.${porque}\n\n` +
+        `Já pedimos o estorno do valor pago. ${prazo}\n\n` +
+        `Se quiser escolher outra peça, é só chamar uma consultora por aqui.`
+      );
+    }
+    return (
+      `Seu pedido${numero} foi cancelado.${porque}\n\n` +
+      `Nada foi cobrado: o pagamento não chegou a ser concluído, então não há nenhum valor pra estornar.\n\n` +
+      `Se ainda quiser as peças, é só fazer um novo pedido ou chamar uma consultora por aqui.`
+    );
   }
 
   /** Devolve se o e-mail SAIU — o resgate do PIX usa isso pra decidir o carimbo. */
