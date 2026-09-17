@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { feederOrfao } from '../common/destino-obrigatorio';
 
 /**
  * LINHA DO TEMPO + RAIO-X DO PEDIDO (26/08/2026 — contrato do dono).
@@ -523,7 +524,9 @@ export class LinhaDoTempoService {
       const ancoraViva = order.pickOrders.some(
         (a: any) => a.store?.code === p.transferToStoreCode && !a.isTransfer && cardsAtivos.includes(a.status),
       );
-      if (!ancoraViva) {
+      // Retirada/motoboy: a loja de destino RECEBE e não separa — feeder
+      // apontando pra ela sem card lá é o desenho certo (950001490, 17/09).
+      if (feederOrfao(order, p.transferToStoreCode, ancoraViva)) {
         const cx = caixaDoCard(p.id);
         alertas.push(
           `Caixa da loja ${p.store?.code} aponta pra âncora ${p.transferToStoreCode}, que NÃO tem mais card neste pedido` +

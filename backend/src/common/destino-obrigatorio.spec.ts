@@ -1,4 +1,4 @@
-import { destinoObrigatorioDoPedido, transferenciaParaDestino } from './destino-obrigatorio';
+import { destinoObrigatorioDoPedido, feederOrfao, transferenciaParaDestino } from './destino-obrigatorio';
 
 /**
  * Trava o comportamento que faltava no LP-001224 (06/09/2026): retirada em
@@ -64,5 +64,34 @@ describe('transferenciaParaDestino', () => {
       isTransfer: false,
       transferToStoreCode: null,
     });
+  });
+});
+
+describe('feederOrfao', () => {
+  // 950001490 (17/09/2026): retirada em São José (08), Itanhaém alimenta a
+  // 08. A 08 não separa nada — sem card nela NÃO é órfão.
+  const retirada = { isPickup: true, pickupStoreCode: '08', shippingMethod: 'Retirada em loja' };
+  const sedex = { isPickup: false, pickupStoreCode: null, shippingMethod: 'SEDEX' };
+
+  it('retirada: feeder pro destino obrigatório sem card lá é legítimo', () => {
+    expect(feederOrfao(retirada, '08', false)).toBe(false);
+  });
+
+  it('retirada: feeder pra OUTRA loja sem card continua órfão', () => {
+    expect(feederOrfao(retirada, '02', false)).toBe(true);
+  });
+
+  it('SEDEX (juntada): âncora sem card é órfão — LP-000244', () => {
+    expect(feederOrfao(sedex, '08', false)).toBe(true);
+  });
+
+  it('âncora com card nunca é órfã, em qualquer pedido', () => {
+    expect(feederOrfao(sedex, '08', true)).toBe(false);
+    expect(feederOrfao(retirada, '02', true)).toBe(false);
+  });
+
+  it('card sem transferToStoreCode não é feeder', () => {
+    expect(feederOrfao(sedex, null, false)).toBe(false);
+    expect(feederOrfao(sedex, '', false)).toBe(false);
   });
 });
