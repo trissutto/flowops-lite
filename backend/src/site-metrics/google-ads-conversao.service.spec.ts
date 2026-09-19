@@ -376,6 +376,92 @@ describe('GoogleAdsConversaoService', () => {
       expect(texto).toMatch(/ZERO conversão/);
       // A conta tem que aparecer: a campanha vive FORA da conta de e-commerce.
       expect(texto).toMatch(/9564998046/);
+      // Separa "parou de vender" de "parou de medir" pra quem lê no celular.
+      expect(texto).toMatch(/o Flow também não viu venda/);
+    });
+
+    /**
+     * ZERO NO PAINEL NÃO É ZERO DE VENDA (19/09/2026). O caso real: a Search
+     * Institucional gastou R$ 457 em 7 dias com ZERO conversão no painel e o
+     * alarme mandou "a medição de compra pode ter parado". Não tinha parado:
+     * no Flow ela vendeu 5 pedidos (R$ 2.444), todos entregues ao Google, e a
+     * conta seguia convertendo todo dia — o modelo de atribuição deu o crédito
+     * a outra campanha.
+     */
+    const searchInstitucional = (extra: Record<string, unknown> = {}) => ({
+      conta_id: '8925231246',
+      campanha_id: '20597374226',
+      nome: '[Petter][Search Institucional Lurds]',
+      gasto: 457.77,
+      antes: 12,
+      conv_conta: 35.58,
+      vendas_flow: 5,
+      enviadas_flow: 5,
+      valor_flow: 2444.63,
+      ...extra,
+    });
+
+    it('fica calado quando o Google só deu o crédito a outra campanha (o Flow viu a venda e entregou)', async () => {
+      const problemas = await svcCom(
+        prismaDiag([4, 2, 3, 3], 0, [searchInstitucional()]),
+      ).diagnosticarSilencio();
+      expect(problemas).toEqual([]);
+    });
+
+    it('grita se a CONTA inteira parou de receber conversão — aí é o Google que parou de contar', async () => {
+      const problemas = await svcCom(
+        prismaDiag([4, 2, 3, 3], 0, [searchInstitucional({ conv_conta: 0 })]),
+      ).diagnosticarSilencio();
+      const texto = problemas.join(' ');
+      expect(texto).toMatch(/Search Institucional/);
+      expect(texto).toMatch(/o Flow viu 5 venda\(s\) dela \(R\$ 2444\.63\), 5 enviada\(s\) ao Google/);
+    });
+
+    it('grita se nenhuma venda dela chegou ao Google — aí o cano furado é o nosso', async () => {
+      const problemas = await svcCom(
+        prismaDiag([4, 2, 3, 3], 0, [searchInstitucional({ enviadas_flow: 0 })]),
+      ).diagnosticarSilencio();
+      expect(problemas.join(' ')).toMatch(/0 enviada\(s\) ao Google/);
+    });
+
+    it('venda no Flow não absolve campanha de OUTRA conta — o upload só credita a conta que o recebe', async () => {
+      const linha = searchInstitucional({ conta_id: '9564998046', nome: 'PMax Raio Lojas ecomm' });
+      const problemas = await svcCom(prismaDiag([4, 2, 3, 3], 0, [linha])).diagnosticarSilencio();
+      expect(problemas.join(' ')).toMatch(/PMax Raio Lojas ecomm/);
+    });
+
+    it('reatribuída mais cara não empurra um apagão de verdade pra fora do teto de 5', async () => {
+      const reatribuidas = Array.from({ length: 6 }, (_, i) =>
+        searchInstitucional({ campanha_id: `r${i}`, nome: `Reatribuida ${i}`, gasto: 900 - i }),
+      );
+      const real = { conta_id: '9564998046', campanha_id: 'x1', nome: 'Apagao de verdade', gasto: 150, antes: 9 };
+      const problemas = await svcCom(
+        prismaDiag([4, 2, 3, 3], 0, [...reatribuidas, real]),
+      ).diagnosticarSilencio();
+      expect(problemas).toHaveLength(1);
+      expect(problemas[0]).toMatch(/Apagao de verdade/);
+    });
+
+    it('o teto de linhas no WhatsApp continua 5', async () => {
+      const reais = Array.from({ length: 8 }, (_, i) => ({
+        conta_id: '9564998046',
+        campanha_id: `c${i}`,
+        nome: `Campanha ${i}`,
+        gasto: 500 - i,
+        antes: 10,
+      }));
+      const problemas = await svcCom(prismaDiag([4, 2, 3, 3], 0, reais)).diagnosticarSilencio();
+      expect(problemas).toHaveLength(5);
+    });
+
+    it('a consulta do apagão cruza com o que o Flow viu chegar pela campanha (utm_id)', async () => {
+      const prisma = prismaDiag([4, 2, 3, 3], 0, []);
+      await svcCom(prisma).diagnosticarSilencio();
+      const [sql] = prisma.$queryRawUnsafe.mock.calls[1];
+      expect(sql).toMatch(/LEFT JOIN flow f ON f\.utm_id = r\.campanha_id/);
+      expect(sql).toMatch(/ads_conversao_enviada_em IS NOT NULL/);
+      // Dia de Brasília, não de UTC: a venda das 22h não pode cair no dia seguinte.
+      expect(sql).toMatch(/AT TIME ZONE 'America\/Sao_Paulo'/);
     });
 
     /** Campanha que NUNCA converteu não é apagão — é o normal dela. */

@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { GoogleAdsService } from './google-ads.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { contasDeLojaTodas } from '../common/contas-de-anuncio';
+import { diaBrasiliaSql } from '../common/tz';
 
 /**
  * A VENDA VOLTA PRO GOOGLE PELO SERVIDOR — sem GA4 no meio.
@@ -236,8 +237,41 @@ export class GoogleAdsConversaoService {
     // Campanha que nunca converteu (as locais, que medem visita de loja) não
     // entra, porque a janela de comparação exige conversão no passado. Sem
     // essa distinção o alarme acusaria as 29 campanhas de cidade todo dia.
+    //
+    // ── ZERO NO PAINEL NÃO É ZERO DE VENDA (19/09/2026) ──
+    //
+    // O cheque 5 gritou "a medição de compra pode ter parado" pela Search
+    // Institucional: R$ 457 em 7 dias, ZERO conversão. A medição estava de pé
+    // — o upload entregou 100% das vendas pagas e a conta registrou compra
+    // todo dia (Shopping 18,75, PMax 16,83). No Flow a Search tinha vendido 5
+    // pedidos, R$ 2.444, todos com o gclid dela e todos entregues ao Google.
+    // O zero foi o modelo baseado em dados dando o crédito a outra campanha
+    // (mesmo caso de 03/09: R$ 751 vendidos, zero creditado — busca pela marca
+    // é espoliada sistematicamente). Alarme de "medição parou" disparando pra
+    // isso todo dia treina todo mundo a ignorar o dia em que ela parar mesmo.
+    //
+    // Por isso cada candidata é conferida contra o que o FLOW viu chegar por
+    // ela (último clique, `utm_id` = id da campanha). Só fica calado quando as
+    // TRÊS coisas valem juntas:
+    //  · a campanha é da conta que RECEBE o nosso upload — venda enviada pra
+    //    uma conta não credita campanha de outra (a PMax Raio Lojas vivia na
+    //    conta de loja: pra ela, venda no Flow NÃO prova medição nenhuma);
+    //  · pelo menos uma venda dela já foi ENTREGUE ao Google — o Google
+    //    recebeu e escolheu não creditar; não é o cano que está furado;
+    //  · as campanhas irmãs da conta RECEBERAM conversão no período — se a
+    //    conta inteira zerou, é o Google que parou de contar, e aí grita.
     const apagadas = await this.prisma.$queryRawUnsafe<
-      Array<{ conta_id: string; campanha_id: string; nome: string | null; gasto: number; antes: number }>
+      Array<{
+        conta_id: string;
+        campanha_id: string;
+        nome: string | null;
+        gasto: number;
+        antes: number;
+        conv_conta: number;
+        vendas_flow: number;
+        enviadas_flow: number;
+        valor_flow: number;
+      }>
     >(
       `WITH recente AS (
          SELECT conta_id, campanha_id, MAX(campanha_nome) AS nome,
@@ -252,19 +286,72 @@ export class GoogleAdsConversaoService {
           WHERE dia >= (CURRENT_DATE - INTERVAL '37 days')::date
             AND dia <  (CURRENT_DATE - INTERVAL '7 days')::date
           GROUP BY conta_id, campanha_id
+       ),
+       conta AS (
+         SELECT conta_id, SUM(conversoes)::float AS conv
+           FROM google_ads_gasto_dia
+          WHERE dia >= (CURRENT_DATE - INTERVAL '7 days')::date
+          GROUP BY conta_id
+       ),
+       flow AS (
+         SELECT utm_id,
+                COUNT(*)::int AS vendas,
+                COUNT(*) FILTER (WHERE ads_conversao_enviada_em IS NOT NULL)::int AS enviadas,
+                COALESCE(SUM(total_amount), 0)::float AS valor
+           FROM orders
+          WHERE source = 'ecommerce'
+            AND paid_at IS NOT NULL
+            AND status NOT IN ('cancelled', 'failed')
+            AND utm_id IS NOT NULL
+            AND ${diaBrasiliaSql('paid_at')} >= (CURRENT_DATE - INTERVAL '7 days')::date
+          GROUP BY utm_id
        )
-       SELECT r.conta_id, r.campanha_id, r.nome, r.gasto, p.conv AS antes
+       SELECT r.conta_id, r.campanha_id, r.nome, r.gasto, p.conv AS antes,
+              COALESCE(k.conv, 0)::float AS conv_conta,
+              COALESCE(f.vendas, 0)::int AS vendas_flow,
+              COALESCE(f.enviadas, 0)::int AS enviadas_flow,
+              COALESCE(f.valor, 0)::float AS valor_flow
          FROM recente r
          JOIN passado p ON p.conta_id = r.conta_id AND p.campanha_id = r.campanha_id
+         LEFT JOIN conta k ON k.conta_id = r.conta_id
+         LEFT JOIN flow f ON f.utm_id = r.campanha_id
         WHERE r.gasto >= 100 AND r.conv = 0 AND p.conv >= 5
         ORDER BY r.gasto DESC
-        LIMIT 5`,
+        LIMIT 20`,
     );
+    const contaDoUpload = this.conta();
+    let apagoes = 0;
     for (const c of apagadas) {
+      const nome = c.nome ?? c.campanha_id;
+      const vendas = Number(c.vendas_flow) || 0;
+      const enviadas = Number(c.enviadas_flow) || 0;
+      const valor = Number(c.valor_flow) || 0;
+      const reatribuida =
+        c.conta_id === contaDoUpload && enviadas > 0 && Number(c.conv_conta) > 0;
+
+      if (reatribuida) {
+        // Fica no log, não no WhatsApp: é o painel do Google, não a medição.
+        this.logger.warn(
+          `[google-ads] "${nome}" teve ZERO conversão creditada em 7 dias, mas o Flow viu ` +
+            `${vendas} venda(s) dela (R$ ${valor.toFixed(2)}), ${enviadas} já entregue(s) ao Google, ` +
+            'e a conta segue convertendo — o modelo de atribuição deu o crédito a outra campanha. ' +
+            'Não é apagão; não decida essa campanha pelo ROAS do painel.',
+        );
+        continue;
+      }
+
+      // O teto de 5 linhas vale pro que VAI pro WhatsApp — por isso a consulta
+      // traz até 20: uma reatribuída mais cara não pode empurrar um apagão de
+      // verdade pra fora da lista.
+      if (apagoes >= 5) break;
+      apagoes += 1;
       problemas.push(
-        `campanha "${c.nome ?? c.campanha_id}" (conta ${c.conta_id}) gastou ` +
+        `campanha "${nome}" (conta ${c.conta_id}) gastou ` +
           `R$ ${Number(c.gasto).toFixed(2)} em 7 dias com ZERO conversão — ` +
-          `vinha de ${Number(c.antes).toFixed(0)} nos 30 dias anteriores`,
+          `vinha de ${Number(c.antes).toFixed(0)} nos 30 dias anteriores` +
+          (vendas > 0
+            ? `; o Flow viu ${vendas} venda(s) dela (R$ ${valor.toFixed(2)}), ${enviadas} enviada(s) ao Google`
+            : '; o Flow também não viu venda com o utm_id dela'),
       );
     }
 
