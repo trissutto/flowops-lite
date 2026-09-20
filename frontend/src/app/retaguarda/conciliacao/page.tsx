@@ -29,6 +29,14 @@ const STATUS_LABEL: Record<string, string> = {
   NAO_ENCONTRADO: 'Pgto sem venda',
   DUPLICADO: 'Duplicado',
 };
+// O que cada número QUER DIZER — a tela tem que se explicar sozinha (em 20/09
+// eram 1.519 "Pgto sem venda" e ninguém sabia dizer por quê).
+const STATUS_AJUDA: Record<string, string> = {
+  CONCILIADO: 'casou com venda, live, crediário ou pedido do site',
+  DIVERGENTE: 'valor diferente, ou pago em cima de venda/pedido cancelado',
+  NAO_ENCONTRADO: 'dinheiro no gateway sem dono nenhum no sistema',
+  DUPLICADO: 'possível pagamento em dobro',
+};
 
 export default function ConciliacaoPage() {
   const router = useRouter();
@@ -134,6 +142,7 @@ export default function ConciliacaoPage() {
               <div className={`text-2xl font-black ${s === 'CONCILIADO' ? 'text-emerald-700' : s === 'DIVERGENTE' ? 'text-rose-600' : 'text-slate-800'}`}>
                 {contagem(s)}
               </div>
+              <div className="text-[11px] text-slate-500 leading-tight mt-0.5">{STATUS_AJUDA[s]}</div>
             </button>
           ))}
         </div>
@@ -197,6 +206,10 @@ export default function ConciliacaoPage() {
                         title={r.motivo || ''}>
                         {STATUS_LABEL[r.status] || r.status}
                       </span>
+                      {/* O que pede ação traz o PORQUÊ na própria linha — tooltip ninguém descobre. */}
+                      {r.status !== 'CONCILIADO' && r.motivo && (
+                        <div className="text-[11px] text-slate-600 leading-tight mt-1 mx-auto max-w-[240px] text-left">{r.motivo}</div>
+                      )}
                     </td>
                     <td className="px-2 py-2 text-center">
                       <button onClick={() => verJson(r.transactionId)} title="Ver JSON bruto da adquirente"
