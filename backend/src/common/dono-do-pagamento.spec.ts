@@ -115,6 +115,7 @@ describe('dono do pagamento', () => {
       const donos = await donosDosPagamentos(prismaFalso(tabelas), ['venda-1', 'live-1', 'baixa-1', 'pedido-1']);
       expect(donos.get('venda-1')).toEqual({
         tipo: 'pdv', cents: 68960, clienteNome: 'Consumidor Final', status: 'finalized', situacao: 'ok',
+        vendaComEntrega: false,
       });
       expect(donos.get('live-1')).toEqual({
         tipo: 'live', cents: 15990, clienteNome: '@maria', status: 'shipped', situacao: 'ok',
@@ -135,6 +136,20 @@ describe('dono do pagamento', () => {
         { id: 'pg-2', method: 'dinheiro', cents: 50000, details: null },
       ]);
       expect(donos.get('pedido-1')!.pagamentos).toBeUndefined();
+    });
+
+    it('venda do PDV com ENTREGA é venda online — é o que separa do balcão na coluna Origem', async () => {
+      const prisma = prismaFalso({
+        pdvSale: [
+          { id: 'balcao', total: 10, status: 'finalized', customerName: null, entregaTipo: null },
+          { id: 'online', total: 10, status: 'finalized', customerName: null, entregaTipo: 'sedex' },
+          { id: 'vazio', total: 10, status: 'finalized', customerName: null, entregaTipo: '  ' },
+        ],
+      });
+      const donos = await donosDosPagamentos(prisma, ['balcao', 'online', 'vazio']);
+      expect(donos.get('balcao')!.vendaComEntrega).toBe(false);
+      expect(donos.get('online')!.vendaComEntrega).toBe(true);
+      expect(donos.get('vazio')!.vendaComEntrega).toBe(false);
     });
 
     it('sem comPagamentos (lista da tela, pix-orfaos) nem consulta os pagamentos', async () => {

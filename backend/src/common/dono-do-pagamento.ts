@@ -53,6 +53,12 @@ export interface DonoDoPagamento {
   situacao: SituacaoDono;
   /** Só na venda do PDV, e só quando pedido (`comPagamentos`). */
   pagamentos?: PagamentoDaVenda[];
+  /**
+   * Só na venda do PDV: a venda tem ENTREGA (`entregaTipo` — sedex, pac,
+   * motoboy, retirada). É o que separa a venda online do balcão quando o
+   * pagamento foi lançado como `pix` comum (14 casos medidos em 20/09).
+   */
+  vendaComEntrega?: boolean;
 }
 
 export const ROTULO_DONO: Record<TipoDono, string> = {
@@ -133,7 +139,10 @@ export async function donosDosPagamentos(
     const lote = ids.slice(i, i + LOTE);
     const where = { id: { in: lote } };
     const [vendas, carrinhos, baixas, pedidos, pagamentos] = await Promise.all([
-      prisma.pdvSale.findMany({ where, select: { id: true, total: true, status: true, customerName: true } }),
+      prisma.pdvSale.findMany({
+        where,
+        select: { id: true, total: true, status: true, customerName: true, entregaTipo: true },
+      }),
       prisma.livePdvCart.findMany({ where, select: { id: true, totalCents: true, status: true, customerName: true } }),
       prisma.crediarioBaixa.findMany({
         where,
@@ -159,7 +168,11 @@ export async function donosDosPagamentos(
       out.set(c.id, dono('live', Number.isFinite(cents) ? cents : null, c));
     }
     for (const v of vendas as any[]) {
-      out.set(v.id, { ...dono('pdv', reaisParaCents(v.total), v), ...(opts.comPagamentos ? { pagamentos: [] } : {}) });
+      out.set(v.id, {
+        ...dono('pdv', reaisParaCents(v.total), v),
+        vendaComEntrega: !!String(v.entregaTipo || '').trim(),
+        ...(opts.comPagamentos ? { pagamentos: [] } : {}),
+      });
     }
     for (const p of pagamentos as any[]) {
       const venda = out.get(p.saleId);

@@ -21,18 +21,50 @@ import { DonoDoPagamento, PagamentoDaVenda, ROTULO_DONO } from '../common/dono-d
 
 export type StatusConciliacao = 'CONCILIADO' | 'DIVERGENTE' | 'NAO_ENCONTRADO' | 'DUPLICADO';
 
+/**
+ * DE ONDE o dinheiro veio — pedido do dono em 20/09: "precisa identificar se
+ * foi venda física na loja, pagamento de crediário, venda link, estas coisas".
+ */
+export type OrigemDoPagamento = 'loja' | 'link' | 'pix_online' | 'crediario' | 'site' | 'live';
+
 export interface TransacaoPaga {
   id: string;
   pedidoRef: string | null;
   /** Id da order no gateway (`or_…` / `ORDE_…`) — é o que o pagamento da venda cita. */
   gatewayOrderId: string | null;
   cents: number | null;
+  /** Forma como o GATEWAY registrou (`pix`, `credit_card`, `checkout`…). */
+  formaGateway?: string | null;
 }
 
 export interface Veredito {
   status: StatusConciliacao;
   motivo: string | null;
   valorSistemaCents: number | null;
+  /** Null só no pagamento sem dono. */
+  origem: OrigemDoPagamento | null;
+}
+
+type VereditoSemOrigem = Omit<Veredito, 'origem'>;
+
+/**
+ * Medido em produção (20/09, 1.242 pagamentos de venda do PDV):
+ *  - `checkout` é SÓ o link de pagamento da Pagar.me (262) — inclusive quando a
+ *    cliente paga por PIX dentro do link;
+ *  - PIX mandado pra cliente à distância fecha a venda com o método
+ *    `venda_online` (128); em 14 casos saiu como `pix` comum, mas a venda tem
+ *    ENTREGA — balcão não tem sedex nem motoboy;
+ *  - o resto (843) é PIX no balcão.
+ */
+export function origemDoPagamento(
+  t: TransacaoPaga,
+  dono: DonoDoPagamento,
+  citado: PagamentoDaVenda | null,
+): OrigemDoPagamento {
+  if (dono.tipo !== 'pdv') return dono.tipo;
+  if (String(t.formaGateway || '').trim().toLowerCase() === 'checkout') return 'link';
+  if (citado?.method.toLowerCase() === 'venda_online' || dono.vendaComEntrega) return 'pix_online';
+  return 'loja';
 }
 
 /** Métodos do PDV cujo dinheiro passa por gateway (medido: só estes dois citam order). */
@@ -102,13 +134,17 @@ export function classificarPagamentos(
           ? `${ref(t)} não é venda, carrinho da live, baixa de crediário nem pedido do site`
           : 'pagamento sem venda vinculada',
         valorSistemaCents: null,
+        origem: null,
       });
       continue;
     }
 
     const irmas = irmasPorRef.get(ref(t)) || [t];
-    const veredito =
-      dono.tipo === 'pdv' ? vereditoDaVenda(t, dono, irmas) : vereditoDeDonoUnico(t, dono, irmas.length);
+    const citado = dono.tipo === 'pdv' ? pagamentoQueCita(dono.pagamentos, t.gatewayOrderId) : null;
+    const veredito: Veredito = {
+      ...(dono.tipo === 'pdv' ? vereditoDaVenda(t, dono, irmas, citado) : vereditoDeDonoUnico(t, dono, irmas.length)),
+      origem: origemDoPagamento(t, dono, citado),
+    };
 
     // Dono que não está de pé: o valor bater não faz disso um conciliado.
     if (dono.situacao !== 'ok') {
@@ -126,7 +162,7 @@ export function classificarPagamentos(
 }
 
 /** Live, crediário e pedido do site: um dono, um pagamento. */
-function vereditoDeDonoUnico(t: TransacaoPaga, dono: DonoDoPagamento, pagas: number): Veredito {
+function vereditoDeDonoUnico(t: TransacaoPaga, dono: DonoDoPagamento, pagas: number): VereditoSemOrigem {
   const rotulo = ROTULO_DONO[dono.tipo];
   if (pagas > 1) {
     return {
@@ -146,9 +182,13 @@ function vereditoDeDonoUnico(t: TransacaoPaga, dono: DonoDoPagamento, pagas: num
 }
 
 /** Venda do PDV: pode ser dividida em vários pagamentos — casa com o pagamento que cita a order. */
-function vereditoDaVenda(t: TransacaoPaga, dono: DonoDoPagamento, irmas: TransacaoPaga[]): Veredito {
+function vereditoDaVenda(
+  t: TransacaoPaga,
+  dono: DonoDoPagamento,
+  irmas: TransacaoPaga[],
+  citado: PagamentoDaVenda | null,
+): VereditoSemOrigem {
   const pagamentos = dono.pagamentos || [];
-  const citado = pagamentoQueCita(pagamentos, t.gatewayOrderId);
 
   if (citado && bate(t.cents, citado.cents)) {
     return {

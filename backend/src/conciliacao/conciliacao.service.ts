@@ -222,6 +222,7 @@ export class ConciliacaoService {
         pedidoRef: t.pedidoRef,
         gatewayOrderId: t.transactionId,
         cents: Number(t.valorBrutoCents) || null,
+        formaGateway: t.tipoPagamento,
       })),
       donos,
     );
@@ -230,7 +231,7 @@ export class ConciliacaoService {
     };
     for (const t of pagas) {
       const v = vereditos.get(t.id)!;
-      const { status, motivo } = v;
+      const { status, motivo, origem } = v;
       const valorSistema = v.valorSistemaCents;
       const gw = Number(t.valorBrutoCents) || null;
       r[contador[status]]++;
@@ -240,11 +241,11 @@ export class ConciliacaoService {
         create: {
           transactionId: t.id, pedidoRef: t.pedidoRef, gateway: t.gateway, status,
           valorSistemaCents: valorSistema, valorGatewayCents: gw,
-          diferencaCents: diferenca, motivo,
+          diferencaCents: diferenca, motivo, origem,
         },
         update: {
           status, pedidoRef: t.pedidoRef, valorSistemaCents: valorSistema,
-          valorGatewayCents: gw, diferencaCents: diferenca, motivo,
+          valorGatewayCents: gw, diferencaCents: diferenca, motivo, origem,
           ultimaConciliacao: new Date(),
         },
       });
@@ -258,12 +259,13 @@ export class ConciliacaoService {
   }
 
   /** Lista pra tela: transação + conciliação, filtrável. */
-  async listar(f: { status?: string; gateway?: string; storeCode?: string; page?: number; perPage?: number }) {
+  async listar(f: { status?: string; gateway?: string; origem?: string; storeCode?: string; page?: number; perPage?: number }) {
     const page = Math.max(1, f.page || 1);
     const perPage = Math.min(200, Math.max(10, f.perPage || 50));
     const where: any = {};
     if (f.status) where.status = f.status;
     if (f.gateway) where.gateway = f.gateway;
+    if (f.origem) where.origem = f.origem;
     // Filtro por LOJA: a loja mora na transação — resolve os ids primeiro
     if (f.storeCode) {
       const txsDaLoja: any[] = await (this.prisma as any).financialTransaction.findMany({
@@ -350,10 +352,46 @@ export class ConciliacaoService {
       by: ['status'],
       _count: { _all: true },
     }).catch(() => []);
+    // DE ONDE veio o dinheiro pago: loja, link, PIX online, crediário, site, live.
+    // Sem catch: se a conta falhar a tela mostra o erro, não um "zero" inventado.
+    const porOrigem: any[] = await (this.prisma as any).financialConciliacao.groupBy({
+      by: ['origem'],
+      _count: { _all: true },
+      _sum: { valorGatewayCents: true },
+    });
     return {
       transacoes: porGateway.map((g) => ({ gateway: g.gateway, qtd: g._count._all, brutoCents: g._sum.valorBrutoCents || 0 })),
       conciliacoes: conciliacoes.map((c) => ({ status: c.status, qtd: c._count._all })),
+      origens: porOrigem
+        .filter((o) => o.origem)
+        .map((o) => ({ origem: o.origem, qtd: o._count._all, cents: o._sum.valorGatewayCents || 0 })),
       importando: this.running,
     };
+  }
+
+  /**
+   * A coluna `origem` nasceu em 20/09 com ~3 mil linhas já conciliadas — e a
+   * lição do dia foi que conserto que depende de alguém clicar "2. Conciliar"
+   * não chega na tela. Então o boot confere: tem linha COM dono e SEM origem?
+   * Roda o motor uma vez, em segundo plano. Depois disso a conta dá zero e o
+   * boot não faz mais nada (o motor sempre grava a origem).
+   */
+  onApplicationBootstrap() {
+    if (process.env.NODE_ENV === 'test') return;
+    setTimeout(() => {
+      void this.preencherOrigemQueFalta().catch((e) =>
+        this.logger.error(`[conciliacao] preencher origem no boot falhou: ${(e as Error).message}`),
+      );
+    }, 90_000).unref?.();
+  }
+
+  async preencherOrigemQueFalta(): Promise<{ faltavam: number; rodou: boolean }> {
+    const faltavam: number = await (this.prisma as any).financialConciliacao.count({
+      where: { origem: null, status: { not: 'NAO_ENCONTRADO' } },
+    });
+    if (!faltavam) return { faltavam: 0, rodou: false };
+    this.logger.log(`[conciliacao] ${faltavam} linha(s) com dono e sem origem — rodando o motor pra preencher`);
+    await this.conciliar();
+    return { faltavam, rodou: true };
   }
 }

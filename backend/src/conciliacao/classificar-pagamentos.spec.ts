@@ -1,5 +1,7 @@
 import { DonoDoPagamento, PagamentoDaVenda } from '../common/dono-do-pagamento';
-import { classificarPagamentos, MOTIVO_MAX, pagamentoQueCita, TransacaoPaga } from './classificar-pagamentos';
+import {
+  classificarPagamentos, MOTIVO_MAX, origemDoPagamento, pagamentoQueCita, TransacaoPaga,
+} from './classificar-pagamentos';
 
 const pag = (id: string, method: string, reais: number, cita?: string): PagamentoDaVenda => ({
   id,
@@ -24,11 +26,12 @@ const dono = (
   situacao: DonoDoPagamento['situacao'] = 'ok',
 ): DonoDoPagamento => ({ tipo, cents: Math.round(reais * 100), clienteNome: null, status, situacao });
 
-const tx = (id: string, pedidoRef: string | null, reais: number): TransacaoPaga => ({
+const tx = (id: string, pedidoRef: string | null, reais: number, formaGateway = 'pix'): TransacaoPaga => ({
   id,
   pedidoRef,
   gatewayOrderId: id,
   cents: Math.round(reais * 100),
+  formaGateway,
 });
 
 describe('classificarPagamentos', () => {
@@ -101,7 +104,7 @@ describe('classificarPagamentos', () => {
     it('sem citação no details (venda antiga): compara com o total', () => {
       const donos = new Map([['v1', venda(199.9, [pag('p1', 'pix', 199.9)])]]);
       const v = classificarPagamentos([tx('ORDE_88888888', 'v1', 199.9)], donos).get('ORDE_88888888')!;
-      expect(v).toEqual({ status: 'CONCILIADO', motivo: 'casou com venda do PDV', valorSistemaCents: 19990 });
+      expect(v).toEqual({ status: 'CONCILIADO', motivo: 'casou com venda do PDV', valorSistemaCents: 19990, origem: 'loja' });
     });
 
     it('divergência REAL continua divergente (caso real: gateway R$ 1.059,15 × venda R$ 209,70 no crédito)', () => {
@@ -171,7 +174,9 @@ describe('classificarPagamentos', () => {
         [tx('ORDE_site0001', 'o1', 275.61), tx('ORDE_cred0001', 'b1', 790.57), tx('ORDE_live0001', 'c1', 159.9)],
         donos,
       );
-      expect(r.get('ORDE_site0001')).toEqual({ status: 'CONCILIADO', motivo: 'casou com pedido do site', valorSistemaCents: 27561 });
+      expect(r.get('ORDE_site0001')).toEqual({
+        status: 'CONCILIADO', motivo: 'casou com pedido do site', valorSistemaCents: 27561, origem: 'site',
+      });
       expect(r.get('ORDE_cred0001')!.motivo).toBe('casou com baixa de crediário');
       expect(r.get('ORDE_live0001')!.motivo).toBe('casou com carrinho da live');
     });
@@ -200,7 +205,9 @@ describe('classificarPagamentos', () => {
 
     it('sem ref', () => {
       const v = classificarPagamentos([tx('ORDE_orfao002', null, 50)], new Map()).get('ORDE_orfao002')!;
-      expect(v).toEqual({ status: 'NAO_ENCONTRADO', motivo: 'pagamento sem venda vinculada', valorSistemaCents: null });
+      expect(v).toEqual({
+        status: 'NAO_ENCONTRADO', motivo: 'pagamento sem venda vinculada', valorSistemaCents: null, origem: null,
+      });
     });
   });
 
@@ -212,6 +219,53 @@ describe('classificarPagamentos', () => {
     );
     for (const v of r.values()) expect((v.motivo || '').length).toBeLessThanOrEqual(MOTIVO_MAX);
     expect(r.get('or_iiiiiii99')!.status).toBe('DUPLICADO');
+  });
+});
+
+describe('origemDoPagamento — "venda física na loja, crediário, venda link, estas coisas" (dono, 20/09)', () => {
+  const citaPix = pag('p1', 'pix', 100, 'ORDE_AAAAAAAA');
+  const citaOnline = pag('p2', 'venda_online', 100, 'ORDE_BBBBBBBB');
+
+  it('PIX no balcão = loja', () => {
+    expect(origemDoPagamento(tx('ORDE_AAAAAAAA', 'v1', 100), venda(100, [citaPix]), citaPix)).toBe('loja');
+    // venda antiga, sem citação no details: continua balcão
+    expect(origemDoPagamento(tx('ORDE_ZZZZZZZZ', 'v1', 100), venda(100, []), null)).toBe('loja');
+  });
+
+  it('checkout da Pagar.me = link de pagamento, mesmo que a venda tenha lançado outro método', () => {
+    expect(origemDoPagamento(tx('or_link00001', 'v1', 100, 'checkout'), venda(100, [citaOnline]), citaOnline)).toBe('link');
+    expect(origemDoPagamento(tx('or_link00002', 'v1', 100, 'checkout'), venda(100, []), null)).toBe('link');
+    expect(origemDoPagamento(tx('or_link00003', 'v1', 100, 'CHECKOUT'), venda(100, [citaPix]), citaPix)).toBe('link');
+  });
+
+  it('PIX mandado pra cliente à distância (método venda_online) = pix_online', () => {
+    expect(origemDoPagamento(tx('ORDE_BBBBBBBB', 'v1', 100), venda(100, [citaOnline]), citaOnline)).toBe('pix_online');
+  });
+
+  it('PIX lançado como comum numa venda COM ENTREGA também é online — balcão não tem sedex nem motoboy', () => {
+    const comEntrega = { ...venda(100, [citaPix]), vendaComEntrega: true };
+    expect(origemDoPagamento(tx('ORDE_AAAAAAAA', 'v1', 100), comEntrega, citaPix)).toBe('pix_online');
+  });
+
+  it('crediário, site e live saem do próprio dono', () => {
+    expect(origemDoPagamento(tx('ORDE_cred0001', 'b1', 10), dono('crediario', 10, 'paid'), null)).toBe('crediario');
+    expect(origemDoPagamento(tx('ORDE_site0001', 'o1', 10, 'credit_card'), dono('site', 10, 'shipped'), null)).toBe('site');
+    // live paga por link da Pagar.me continua sendo LIVE, não "link"
+    expect(origemDoPagamento(tx('or_live00001', 'c1', 10, 'checkout'), dono('live', 10, 'shipped'), null)).toBe('live');
+  });
+
+  it('o veredito carrega a origem — inclusive no divergente e no duplicado', () => {
+    const donos = new Map([
+      ['v1', venda(330, [pag('p1', 'pix', 330, 'ORDE_55555555')])],
+      ['o1', dono('site', 1137.41, 'cancelled', 'cancelado')],
+    ]);
+    const r = classificarPagamentos(
+      [tx('ORDE_44444444', 'v1', 330), tx('ORDE_55555555', 'v1', 330), tx('ORDE_bbbbbbb2', 'o1', 1137.41, 'credit_card')],
+      donos,
+    );
+    expect(r.get('ORDE_44444444')).toMatchObject({ status: 'DUPLICADO', origem: 'loja' });
+    expect(r.get('ORDE_55555555')).toMatchObject({ status: 'CONCILIADO', origem: 'loja' });
+    expect(r.get('ORDE_bbbbbbb2')).toMatchObject({ status: 'DIVERGENTE', origem: 'site' });
   });
 });
 
