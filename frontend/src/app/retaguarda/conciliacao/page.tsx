@@ -37,6 +37,18 @@ const STATUS_AJUDA: Record<string, string> = {
   NAO_ENCONTRADO: 'dinheiro no gateway sem dono nenhum no sistema',
   DUPLICADO: 'possível pagamento em dobro',
 };
+// DE ONDE o dinheiro veio (dono, 20/09: "precisa identificar se foi venda física
+// na loja, pagamento de crediário, venda link, estas coisas"). A ordem é a dos
+// chips; a chave vem do motor (`conciliacao/classificar-pagamentos.ts`).
+const ORIGENS: Array<{ key: string; label: string; ajuda: string; cor: string }> = [
+  { key: 'loja', label: 'Loja', ajuda: 'venda física — PIX no balcão', cor: 'bg-slate-100 text-slate-700 border-slate-300' },
+  { key: 'link', label: 'Link', ajuda: 'venda por link de pagamento', cor: 'bg-sky-50 text-sky-800 border-sky-300' },
+  { key: 'pix_online', label: 'PIX online', ajuda: 'venda à distância — PIX mandado pra cliente', cor: 'bg-cyan-50 text-cyan-800 border-cyan-300' },
+  { key: 'crediario', label: 'Crediário', ajuda: 'parcela de crediário paga por PIX', cor: 'bg-amber-50 text-amber-800 border-amber-300' },
+  { key: 'site', label: 'Site', ajuda: 'pedido de lurds.com.br', cor: 'bg-violet-50 text-violet-800 border-violet-300' },
+  { key: 'live', label: 'Live', ajuda: 'carrinho da live', cor: 'bg-pink-50 text-pink-800 border-pink-300' },
+];
+const ORIGEM_POR_KEY = Object.fromEntries(ORIGENS.map((o) => [o.key, o]));
 
 export default function ConciliacaoPage() {
   const router = useRouter();
@@ -47,6 +59,7 @@ export default function ConciliacaoPage() {
   const [page, setPage] = useState(1);
   const [fStatus, setFStatus] = useState('');
   const [fGateway, setFGateway] = useState('');
+  const [fOrigem, setFOrigem] = useState('');
   const [fLoja, setFLoja] = useState('');
   // Abreviação do nome da loja (mesmo padrão do editor de produtos)
   const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
@@ -76,7 +89,7 @@ export default function ConciliacaoPage() {
     try {
       const [st, lista] = await Promise.all([
         api<any>('/conciliacao/status'),
-        api<any>(`/conciliacao/list?status=${fStatus}&gateway=${fGateway}&loja=${fLoja}&page=${page}`),
+        api<any>(`/conciliacao/list?status=${fStatus}&gateway=${fGateway}&origem=${fOrigem}&loja=${fLoja}&page=${page}`),
       ]);
       setStatus(st);
       setRows(lista.rows || []);
@@ -84,7 +97,7 @@ export default function ConciliacaoPage() {
     } catch (e: any) { setErr(e?.message || 'Falha ao carregar'); }
     finally { setBusy(false); }
   };
-  useEffect(() => { if (allowed) carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, fStatus, fGateway, fLoja, page]);
+  useEffect(() => { if (allowed) carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, fStatus, fGateway, fOrigem, fLoja, page]);
 
   const rodar = async (qual: 'importar' | 'conciliar') => {
     setRodando(qual); setErr('');
@@ -105,6 +118,9 @@ export default function ConciliacaoPage() {
   };
 
   const contagem = (s: string) => (status?.conciliacoes || []).find((c: any) => c.status === s)?.qtd || 0;
+  // NSU/cartão só existe em transação de maquininha (Stone). PIX e link não têm:
+  // a coluna inteira era "—" e o lugar dela é da Origem. Volta sozinha quando houver.
+  const temNsu = rows.some((r) => r.nsu || r.cartaoFinal);
 
   if (!allowed) return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Carregando…</div>;
 
@@ -164,6 +180,23 @@ export default function ConciliacaoPage() {
           </div>
         )}
 
+        {/* De onde veio o dinheiro (clicável = filtro) */}
+        {status?.origens?.length > 0 && (
+          <div className="flex gap-2 flex-wrap items-center text-xs">
+            <span className="text-[11px] font-bold uppercase text-slate-500">Origem</span>
+            {ORIGENS.map((o) => {
+              const n = status.origens.find((x: any) => x.origem === o.key);
+              if (!n?.qtd) return null;
+              return (
+                <button key={o.key} title={o.ajuda} onClick={() => { setFOrigem(fOrigem === o.key ? '' : o.key); setPage(1); }}
+                  className={`px-3 py-1.5 rounded-full border-2 font-bold ${fOrigem === o.key ? 'bg-slate-800 text-white border-slate-800' : o.cor}`}>
+                  {o.label} · {n.qtd} · {brl(n.cents)}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Tabela */}
         <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-x-auto">
           {busy && !rows.length ? (
@@ -173,11 +206,12 @@ export default function ConciliacaoPage() {
               <thead>
                 <tr className="bg-[#FAFAF7] text-[10px] uppercase tracking-wide text-slate-500 border-b border-[#E7E2D8]">
                   <th className="text-left px-3 py-2">Data venda</th>
+                  <th className="text-left px-3 py-2">Origem</th>
                   <th className="text-left px-3 py-2">Gateway</th>
                   <th className="text-left px-3 py-2">Loja</th>
                   <th className="text-left px-3 py-2">Cliente</th>
                   <th className="text-left px-3 py-2">Forma</th>
-                  <th className="text-left px-3 py-2">NSU / cartão</th>
+                  {temNsu && <th className="text-left px-3 py-2">NSU / cartão</th>}
                   <th className="text-left px-3 py-2">Pedido</th>
                   <th className="text-right px-3 py-2">Sistema</th>
                   <th className="text-right px-3 py-2">Gateway</th>
@@ -190,11 +224,19 @@ export default function ConciliacaoPage() {
                 {rows.map((r) => (
                   <tr key={r.id} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6]">
                     <td className="px-3 py-2 whitespace-nowrap text-xs">{fmtData(r.dataVenda)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {ORIGEM_POR_KEY[r.origem] ? (
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${ORIGEM_POR_KEY[r.origem].cor}`}
+                          title={ORIGEM_POR_KEY[r.origem].ajuda}>
+                          {ORIGEM_POR_KEY[r.origem].label}
+                        </span>
+                      ) : <span className="text-slate-400 text-xs">—</span>}
+                    </td>
                     <td className="px-3 py-2 text-xs font-bold">{r.gateway}</td>
                     <td className="px-3 py-2 text-xs font-bold text-slate-600" title={r.storeCode ? `Loja ${r.storeCode}` : 'sem loja na transação'}>{lojaAbbr(r.storeCode)}</td>
                     <td className="px-3 py-2 text-xs text-slate-700 max-w-[170px] truncate" title={r.clienteNome || ''}>{r.clienteNome || '—'}</td>
                     <td className="px-3 py-2 text-xs">{r.tipoPagamento || '—'}{r.bandeira ? ` · ${r.bandeira}` : ''}{r.parcelas > 1 ? ` ${r.parcelas}x` : ''}</td>
-                    <td className="px-3 py-2 text-xs font-mono text-slate-500">{r.nsu || '—'}{r.cartaoFinal ? ` ·${r.cartaoFinal}` : ''}</td>
+                    {temNsu && <td className="px-3 py-2 text-xs font-mono text-slate-500">{r.nsu || '—'}{r.cartaoFinal ? ` ·${r.cartaoFinal}` : ''}</td>}
                     <td className="px-3 py-2 text-xs font-mono text-slate-500">{r.pedidoRef ? String(r.pedidoRef).slice(0, 8) : '—'}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{brl(r.valorSistemaCents)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{brl(r.valorGatewayCents)}</td>
@@ -220,7 +262,7 @@ export default function ConciliacaoPage() {
                   </tr>
                 ))}
                 {!rows.length && !busy && (
-                  <tr><td colSpan={12} className="text-center text-slate-400 py-10">
+                  <tr><td colSpan={13} className="text-center text-slate-400 py-10">
                     Nada aqui ainda — clique em <b>1. Importar</b> e depois <b>2. Conciliar</b>.
                   </td></tr>
                 )}

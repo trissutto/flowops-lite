@@ -7078,11 +7078,16 @@ model FinancialConciliacao {
   valorRecebidoCents Int?     @map("valor_recebido_cents")
   diferencaCents     Int?     @map("diferenca_cents")
   motivo             String?  @db.VarChar(200)
+  /// DE ONDE o dinheiro veio (20/09): loja | link | pix_online | crediario |
+  /// site | live. Null = sem dono (o órfão) ou linha que o motor ainda não
+  /// reclassificou. Régua em `conciliacao/classificar-pagamentos.ts`.
+  origem             String?  @db.VarChar(16)
   ultimaConciliacao  DateTime @default(now()) @map("ultima_conciliacao")
   createdAt          DateTime @default(now()) @map("created_at")
 
   @@index([status])
   @@index([gateway, status])
+  @@index([origem])
   @@map("financial_conciliacoes")
 }
 
