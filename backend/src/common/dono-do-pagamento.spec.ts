@@ -1,4 +1,4 @@
-import { centsDaBaixaNoGateway, donosDosPagamentos, reaisParaCents } from './dono-do-pagamento';
+import { centsDaBaixaNoGateway, donosDosPagamentos, reaisParaCents, situacaoDoDono } from './dono-do-pagamento';
 
 /** Prisma de mentira: cada tabela devolve só as linhas cujo id foi pedido. */
 function prismaFalso(tabelas: {
@@ -6,9 +6,10 @@ function prismaFalso(tabelas: {
   livePdvCart?: any[];
   crediarioBaixa?: any[];
   order?: any[];
+  pdvSalePayment?: any[];
 }) {
   const chamadas: Record<string, number> = { pdvSale: 0, livePdvCart: 0, crediarioBaixa: 0, order: 0 };
-  const tabela = (nome: keyof typeof tabelas) => ({
+  const tabela = (nome: 'pdvSale' | 'livePdvCart' | 'crediarioBaixa' | 'order') => ({
     findMany: jest.fn(async ({ where }: any) => {
       chamadas[nome]++;
       const ids: string[] = where.id.in;
@@ -21,6 +22,11 @@ function prismaFalso(tabelas: {
     livePdvCart: tabela('livePdvCart'),
     crediarioBaixa: tabela('crediarioBaixa'),
     order: tabela('order'),
+    pdvSalePayment: {
+      findMany: jest.fn(async ({ where }: any) =>
+        (tabelas.pdvSalePayment || []).filter((l) => where.saleId.in.includes(l.saleId)),
+      ),
+    },
   };
 }
 
@@ -56,22 +62,86 @@ describe('dono do pagamento', () => {
     });
   });
 
+  describe('situacaoDoDono — vocabulário medido em produção (20/09)', () => {
+    it('cancelado nas duas grafias da casa', () => {
+      expect(situacaoDoDono('pdv', 'cancelled')).toBe('cancelado');
+      expect(situacaoDoDono('site', 'cancelled')).toBe('cancelado');
+      expect(situacaoDoDono('crediario', 'canceled')).toBe('cancelado');
+      expect(situacaoDoDono('live', 'CANCELLED')).toBe('cancelado');
+    });
+
+    it('dono que nunca fechou: pagamento pago em cima dele é dinheiro que o sistema não viu', () => {
+      expect(situacaoDoDono('pdv', 'open')).toBe('em_aberto');
+      expect(situacaoDoDono('live', 'open')).toBe('em_aberto');
+      expect(situacaoDoDono('crediario', 'pending')).toBe('em_aberto');
+      for (const s of ['awaiting_payment', 'payment_failed', 'pending']) expect(situacaoDoDono('site', s)).toBe('em_aberto');
+    });
+
+    it('de pé', () => {
+      expect(situacaoDoDono('pdv', 'finalized')).toBe('ok');
+      expect(situacaoDoDono('crediario', 'paid')).toBe('ok');
+      for (const s of ['paid', 'separating', 'shipped']) expect(situacaoDoDono('live', s)).toBe('ok');
+      for (const s of ['processing', 'awaiting_stock', 'separating', 'shipped', 'delivered']) {
+        expect(situacaoDoDono('site', s)).toBe('ok');
+      }
+    });
+
+    it('status desconhecido ou vazio NÃO acusa — na dúvida, sem alarme', () => {
+      expect(situacaoDoDono('site', 'status_que_ainda_nao_existe')).toBe('ok');
+      expect(situacaoDoDono('pdv', null)).toBe('ok');
+      expect(situacaoDoDono('pdv', undefined)).toBe('ok');
+    });
+  });
+
   describe('donosDosPagamentos', () => {
     const tabelas = {
-      pdvSale: [{ id: 'venda-1', total: 689.6, customerName: 'Consumidor Final' }],
-      livePdvCart: [{ id: 'live-1', totalCents: 15990, customerName: '@maria' }],
+      pdvSale: [{ id: 'venda-1', total: 689.6, status: 'finalized', customerName: 'Consumidor Final' }],
+      livePdvCart: [{ id: 'live-1', totalCents: 15990, status: 'shipped', customerName: '@maria' }],
       crediarioBaixa: [
-        { id: 'baixa-1', formaPagamento: 'pix', valorPix: null, totalPago: 790.57, customerName: 'ALINI BORGES DE LIMA' },
+        {
+          id: 'baixa-1', formaPagamento: 'pix', valorPix: null, totalPago: 790.57,
+          status: 'paid', customerName: 'ALINI BORGES DE LIMA',
+        },
       ],
-      order: [{ id: 'pedido-1', totalAmount: 275.61, customerName: 'Camila Rigolo' }],
+      order: [{ id: 'pedido-1', totalAmount: 275.61, status: 'cancelled', customerName: 'Camila Rigolo' }],
+      pdvSalePayment: [
+        { id: 'pg-1', saleId: 'venda-1', method: 'pix', valor: 189.6, details: '{"pagbankOrderId":"ORDE_AAAAAAAA"}' },
+        { id: 'pg-2', saleId: 'venda-1', method: 'dinheiro', valor: 500, details: null },
+        { id: 'pg-9', saleId: 'outra-venda', method: 'pix', valor: 10, details: null },
+      ],
     };
 
-    it('reconhece os QUATRO donos — pedido do site e crediário inclusive', async () => {
+    it('reconhece os QUATRO donos — pedido do site e crediário inclusive — com o status de cada um', async () => {
       const donos = await donosDosPagamentos(prismaFalso(tabelas), ['venda-1', 'live-1', 'baixa-1', 'pedido-1']);
-      expect(donos.get('venda-1')).toEqual({ tipo: 'pdv', cents: 68960, clienteNome: 'Consumidor Final' });
-      expect(donos.get('live-1')).toEqual({ tipo: 'live', cents: 15990, clienteNome: '@maria' });
-      expect(donos.get('baixa-1')).toEqual({ tipo: 'crediario', cents: 79057, clienteNome: 'ALINI BORGES DE LIMA' });
-      expect(donos.get('pedido-1')).toEqual({ tipo: 'site', cents: 27561, clienteNome: 'Camila Rigolo' });
+      expect(donos.get('venda-1')).toEqual({
+        tipo: 'pdv', cents: 68960, clienteNome: 'Consumidor Final', status: 'finalized', situacao: 'ok',
+      });
+      expect(donos.get('live-1')).toEqual({
+        tipo: 'live', cents: 15990, clienteNome: '@maria', status: 'shipped', situacao: 'ok',
+      });
+      expect(donos.get('baixa-1')).toEqual({
+        tipo: 'crediario', cents: 79057, clienteNome: 'ALINI BORGES DE LIMA', status: 'paid', situacao: 'ok',
+      });
+      expect(donos.get('pedido-1')).toEqual({
+        tipo: 'site', cents: 27561, clienteNome: 'Camila Rigolo', status: 'cancelled', situacao: 'cancelado',
+      });
+    });
+
+    it('comPagamentos: a venda do PDV vem com os SEUS pagamentos (é o que casa venda dividida)', async () => {
+      const prisma = prismaFalso(tabelas);
+      const donos = await donosDosPagamentos(prisma, ['venda-1', 'pedido-1'], { comPagamentos: true });
+      expect(donos.get('venda-1')!.pagamentos).toEqual([
+        { id: 'pg-1', method: 'pix', cents: 18960, details: '{"pagbankOrderId":"ORDE_AAAAAAAA"}' },
+        { id: 'pg-2', method: 'dinheiro', cents: 50000, details: null },
+      ]);
+      expect(donos.get('pedido-1')!.pagamentos).toBeUndefined();
+    });
+
+    it('sem comPagamentos (lista da tela, pix-orfaos) nem consulta os pagamentos', async () => {
+      const prisma = prismaFalso(tabelas);
+      const donos = await donosDosPagamentos(prisma, ['venda-1']);
+      expect(prisma.pdvSalePayment.findMany).not.toHaveBeenCalled();
+      expect(donos.get('venda-1')!.pagamentos).toBeUndefined();
     });
 
     it('quem não está em tabela nenhuma fica FORA do mapa — é o órfão de verdade', async () => {

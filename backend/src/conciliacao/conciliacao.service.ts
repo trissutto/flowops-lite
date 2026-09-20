@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { donosDosPagamentos, ROTULO_DONO } from '../common/dono-do-pagamento';
+import { donosDosPagamentos } from '../common/dono-do-pagamento';
+import { classificarPagamentos } from './classificar-pagamentos';
 
 /**
  * CONCILIAÇÃO FINANCEIRA — FASE 2: importadores (aprovado 17/07).
@@ -22,6 +23,11 @@ export class ConciliacaoService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * 02:00 — importa E concilia. Até 20/09 o cron só importava: o veredito só
+   * mudava quando alguém clicava "2. Conciliar", então a tela amanhecia com a
+   * foto do último clique (e um conserto no motor não aparecia sozinho).
+   */
   @Cron('0 2 * * *', { name: 'conciliacao-importar-diario' })
   async cronDiario() {
     try {
@@ -29,6 +35,12 @@ export class ConciliacaoService {
       this.logger.log(`[conciliacao] importação diária: ${JSON.stringify(r)}`);
     } catch (e) {
       this.logger.error(`[conciliacao] importação diária falhou: ${(e as Error).message}`);
+      return;
+    }
+    try {
+      await this.conciliar();
+    } catch (e) {
+      this.logger.error(`[conciliacao] motor diário falhou: ${(e as Error).message}`);
     }
   }
 
@@ -198,44 +210,30 @@ export class ConciliacaoService {
       orderBy: { dataVenda: 'asc' },
     });
     const pagas = txs.filter((t) => ConciliacaoService.PAGO.has(String(t.statusGateway || '')));
-    const porPedido = new Map<string, number>();
-    for (const t of pagas) {
-      if (t.pedidoRef) porPedido.set(t.pedidoRef, (porPedido.get(t.pedidoRef) || 0) + 1);
-    }
     const r = { conciliadas: 0, divergentes: 0, semVenda: 0, duplicadas: 0, total: pagas.length };
     // Uma ida ao banco pro lote inteiro. Erro aqui SOBE de propósito: consulta
     // que falhou não pode virar "sem venda" carimbado em venda boa.
-    const donos = await donosDosPagamentos(this.prisma, pagas.map((t) => t.pedidoRef));
+    const donos = await donosDosPagamentos(this.prisma, pagas.map((t) => t.pedidoRef), { comPagamentos: true });
+    // O veredito é puro e tem spec: `classificar-pagamentos.ts` (venda
+    // dividida casa com o pagamento que cita a order; dono cancelado não concilia).
+    const vereditos = classificarPagamentos(
+      pagas.map((t) => ({
+        id: t.id,
+        pedidoRef: t.pedidoRef,
+        gatewayOrderId: t.transactionId,
+        cents: Number(t.valorBrutoCents) || null,
+      })),
+      donos,
+    );
+    const contador: Record<string, keyof typeof r> = {
+      CONCILIADO: 'conciliadas', DIVERGENTE: 'divergentes', NAO_ENCONTRADO: 'semVenda', DUPLICADO: 'duplicadas',
+    };
     for (const t of pagas) {
-      let status = 'NAO_ENCONTRADO';
-      let motivo: string | null = null;
-      let valorSistema: number | null = null;
+      const v = vereditos.get(t.id)!;
+      const { status, motivo } = v;
+      const valorSistema = v.valorSistemaCents;
       const gw = Number(t.valorBrutoCents) || null;
-      const dono = t.pedidoRef ? donos.get(String(t.pedidoRef).trim()) : undefined;
-      if (t.pedidoRef && (porPedido.get(t.pedidoRef) || 0) > 1) {
-        status = 'DUPLICADO';
-        motivo = `${porPedido.get(t.pedidoRef)} transações pagas pro mesmo pedido`;
-        valorSistema = dono?.cents ?? null;
-        r.duplicadas++;
-      } else if (!dono) {
-        status = 'NAO_ENCONTRADO';
-        motivo = t.pedidoRef
-          ? `${t.pedidoRef} não é venda, carrinho da live, baixa de crediário nem pedido do site`
-          : 'pagamento sem venda vinculada';
-        r.semVenda++;
-      } else {
-        valorSistema = dono.cents;
-        const dif = gw != null && valorSistema != null ? gw - valorSistema : null;
-        if (dif != null && Math.abs(dif) <= 1) {
-          status = 'CONCILIADO';
-          motivo = `casou com ${ROTULO_DONO[dono.tipo]}`;
-          r.conciliadas++;
-        } else {
-          status = 'DIVERGENTE';
-          motivo = `valor gateway ${gw ?? '?'}c ≠ ${ROTULO_DONO[dono.tipo]} ${valorSistema ?? '?'}c`;
-          r.divergentes++;
-        }
-      }
+      r[contador[status]]++;
       const diferenca = gw != null && valorSistema != null ? gw - valorSistema : null;
       await (this.prisma as any).financialConciliacao.upsert({
         where: { transactionId: t.id },
