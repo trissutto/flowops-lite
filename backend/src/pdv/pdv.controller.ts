@@ -38,6 +38,7 @@ import { ReturnsService } from './returns.service';
 import { CobrancasOnlineService } from './cobrancas-online.service';
 import { LastroRedeService } from './lastro-rede.service';
 import type { CobrancaOnline } from './cobrancas-online.service';
+import { donosDosPagamentos } from '../common/dono-do-pagamento';
 
 /**
  * /pdv — frente de caixa.
@@ -217,8 +218,8 @@ export class PdvController {
   }
 
   /**
-   * GET /pdv/pix-orfaos — PIX PagBank PAGO cujo saleId não é venda, carrinho
-   * nem baixa de crediário (admin).
+   * GET /pdv/pix-orfaos — PIX PagBank PAGO cujo saleId não é venda, carrinho,
+   * baixa de crediário nem pedido do site (admin).
    *
    * É a lista do dinheiro invisível: a auditoria de 11/08 achou 11 desses em
    * 48h (R$88 a R$1.448) — pagos, na conta, e sem registro pra fechar. O guard
@@ -241,24 +242,11 @@ export class PdvController {
       },
     });
 
-    const orfaos: any[] = [];
-    for (const p of pagos) {
-      const [venda, cart, baixa, pedidoSite] = await Promise.all([
-        (this.svc as any).prisma.pdvSale.findUnique({ where: { id: p.saleId }, select: { id: true } }),
-        (this.svc as any).prisma.livePdvCart
-          .findUnique({ where: { id: p.saleId }, select: { id: true } })
-          .catch(() => null),
-        (this.svc as any).prisma.crediarioBaixa
-          .findUnique({ where: { id: p.saleId }, select: { id: true } })
-          .catch(() => null),
-        // Pedido do site (lurds.com.br) cobra no PagBank desde 16/09 com
-        // saleId = Order.id — tem dono, não é órfão.
-        (this.svc as any).prisma.order
-          .findUnique({ where: { id: p.saleId }, select: { id: true } })
-          .catch(() => null),
-      ]);
-      if (!venda && !cart && !baixa && !pedidoSite) orfaos.push(p);
-    }
+    // Os quatro donos possíveis (venda, live, crediário, pedido do site) moram
+    // numa régua só — a MESMA do motor da conciliação. Eram duas listas, e a
+    // do motor ficou pra trás: 1.519 "Pgto sem venda" falsos em 20/09.
+    const donos = await donosDosPagamentos((this.svc as any).prisma, pagos.map((p) => p.saleId));
+    const orfaos = pagos.filter((p) => !donos.has(String(p.saleId || '').trim()));
     return {
       janelaDias: janela,
       totalPagos: pagos.length,

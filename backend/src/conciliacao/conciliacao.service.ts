@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { donosDosPagamentos, ROTULO_DONO } from '../common/dono-do-pagamento';
 
 /**
  * CONCILIAÇÃO FINANCEIRA — FASE 2: importadores (aprovado 17/07).
@@ -182,21 +183,14 @@ export class ConciliacaoService {
   // ── FASE 3: MOTOR DE CONCILIAÇÃO ──────────────────────────────────────
   private static readonly PAGO = new Set(['paid', 'captured', 'approved', 'succeeded', 'PAID', 'CAPTURED']);
 
-  /** Acha a venda no sistema pelo pedidoRef: PdvSale OU carrinho da live. */
-  private async valorSistemaCents(pedidoRef: string | null): Promise<{ achou: boolean; cents: number | null; origem: string | null }> {
-    if (!pedidoRef) return { achou: false, cents: null, origem: null };
-    const sale: any = await (this.prisma as any).pdvSale.findUnique({
-      where: { id: pedidoRef }, select: { total: true, status: true },
-    }).catch(() => null);
-    if (sale) return { achou: true, cents: this.toCents(sale.total), origem: 'pdv' };
-    const cart: any = await (this.prisma as any).livePdvCart.findUnique({
-      where: { id: pedidoRef }, select: { totalCents: true },
-    }).catch(() => null);
-    if (cart) return { achou: true, cents: Number(cart.totalCents) || 0, origem: 'live' };
-    return { achou: false, cents: null, origem: null };
-  }
-
-  /** Roda o motor sobre as transações PAGAS da janela. Idempotente. */
+  /**
+   * Roda o motor sobre as transações PAGAS da janela. Idempotente.
+   *
+   * O dono do pagamento sai da régua única (`common/dono-do-pagamento.ts`):
+   * venda do PDV, carrinho da live, baixa de crediário OU pedido do site. Até
+   * 20/09 o motor só conhecia os dois primeiros, e todo pedido do site e toda
+   * parcela paga por PIX apareciam como "Pgto sem venda" (1.519 na tela).
+   */
   async conciliar(desdeDias = 400): Promise<{ conciliadas: number; divergentes: number; semVenda: number; duplicadas: number; total: number }> {
     const desde = new Date(Date.now() - desdeDias * 86400000);
     const txs: any[] = await (this.prisma as any).financialTransaction.findMany({
@@ -209,30 +203,36 @@ export class ConciliacaoService {
       if (t.pedidoRef) porPedido.set(t.pedidoRef, (porPedido.get(t.pedidoRef) || 0) + 1);
     }
     const r = { conciliadas: 0, divergentes: 0, semVenda: 0, duplicadas: 0, total: pagas.length };
+    // Uma ida ao banco pro lote inteiro. Erro aqui SOBE de propósito: consulta
+    // que falhou não pode virar "sem venda" carimbado em venda boa.
+    const donos = await donosDosPagamentos(this.prisma, pagas.map((t) => t.pedidoRef));
     for (const t of pagas) {
       let status = 'NAO_ENCONTRADO';
       let motivo: string | null = null;
       let valorSistema: number | null = null;
       const gw = Number(t.valorBrutoCents) || null;
-      const sis = await this.valorSistemaCents(t.pedidoRef);
+      const dono = t.pedidoRef ? donos.get(String(t.pedidoRef).trim()) : undefined;
       if (t.pedidoRef && (porPedido.get(t.pedidoRef) || 0) > 1) {
         status = 'DUPLICADO';
         motivo = `${porPedido.get(t.pedidoRef)} transações pagas pro mesmo pedido`;
-        valorSistema = sis.cents;
+        valorSistema = dono?.cents ?? null;
         r.duplicadas++;
-      } else if (!sis.achou) {
+      } else if (!dono) {
         status = 'NAO_ENCONTRADO';
-        motivo = t.pedidoRef ? `pedido ${t.pedidoRef} não existe no sistema` : 'pagamento sem venda vinculada';
+        motivo = t.pedidoRef
+          ? `${t.pedidoRef} não é venda, carrinho da live, baixa de crediário nem pedido do site`
+          : 'pagamento sem venda vinculada';
         r.semVenda++;
       } else {
-        valorSistema = sis.cents;
+        valorSistema = dono.cents;
         const dif = gw != null && valorSistema != null ? gw - valorSistema : null;
         if (dif != null && Math.abs(dif) <= 1) {
           status = 'CONCILIADO';
+          motivo = `casou com ${ROTULO_DONO[dono.tipo]}`;
           r.conciliadas++;
         } else {
           status = 'DIVERGENTE';
-          motivo = `valor gateway ${gw ?? '?'}c ≠ sistema ${valorSistema ?? '?'}c`;
+          motivo = `valor gateway ${gw ?? '?'}c ≠ ${ROTULO_DONO[dono.tipo]} ${valorSistema ?? '?'}c`;
           r.divergentes++;
         }
       }
@@ -289,30 +289,19 @@ export class ConciliacaoService {
     });
     const porId = new Map(txs.map((t) => [t.id, t]));
 
-    // NOME DO CLIENTE: da venda quando o pedido casa (PDV ou carrinho da live);
-    // quando é "pgto sem venda", tenta o nome do PAGADOR no raw do gateway
-    // (o sistema envia customer.name ao criar a order). Ajuda a identificar de
-    // quem é cada PIX que caiu sem venda vinculada.
-    const pedidoRefs = Array.from(
-      new Set(rows.map((r: any) => r.pedidoRef).filter(Boolean)),
-    ) as string[];
-    const [vendas, carrinhos] = await Promise.all([
-      pedidoRefs.length
-        ? (this.prisma as any).pdvSale.findMany({ where: { id: { in: pedidoRefs } }, select: { id: true, customerName: true } })
-        : [],
-      pedidoRefs.length
-        ? (this.prisma as any).livePdvCart.findMany({ where: { id: { in: pedidoRefs } }, select: { id: true, customerName: true } })
-        : [],
-    ]);
-    const nomeVenda = new Map<string, string | null>((vendas as any[]).map((v) => [v.id, v.customerName]));
-    const nomeCart = new Map<string, string | null>((carrinhos as any[]).map((v) => [v.id, v.customerName]));
+    // NOME DO CLIENTE: do dono do pagamento quando ele existe (mesma régua do
+    // motor — venda, live, crediário ou pedido do site); quando é "pgto sem
+    // venda", tenta o nome do PAGADOR no raw do gateway (o sistema envia
+    // customer.name ao criar a order). Ajuda a identificar de quem é cada PIX
+    // que caiu sem venda vinculada.
+    const donos = await donosDosPagamentos(this.prisma, rows.map((r: any) => r.pedidoRef));
 
     return {
       total, page, perPage,
       rows: rows.map((c: any) => {
         const t: any = porId.get(c.transactionId) || {};
         const clienteNome =
-          (c.pedidoRef && (nomeVenda.get(c.pedidoRef) || nomeCart.get(c.pedidoRef))) ||
+          (c.pedidoRef && donos.get(String(c.pedidoRef).trim())?.clienteNome) ||
           this.nomeDoRaw(t.rawJson) ||
           null;
         return {
