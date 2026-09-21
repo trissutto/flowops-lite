@@ -67,7 +67,7 @@ export class WcReturnsController {
    *   wcOrderId,
    *   receivingStoreCode,    // loja FÍSICA que recebeu de volta
    *   modo: 'devolucao' | 'troca' | 'credito',
-   *   items: [{sku, qty}],
+   *   items: [{linhaId, sku, qty}],   // linhaId = a linha do pedido (peças iguais têm o mesmo SKU)
    *   motivo?, obs?,
    *   forceOutOfPrazo?, creditoValidadeDias?
    * }
@@ -80,7 +80,7 @@ export class WcReturnsController {
       wcOrderId: number;
       receivingStoreCode: string;
       modo: 'devolucao' | 'troca' | 'credito';
-      items: Array<{ sku: string; qty: number; productName?: string }>;
+      items: Array<{ linhaId?: string; sku: string; qty: number; productName?: string }>;
       motivo?: string;
       obs?: string;
       forceOutOfPrazo?: boolean;
