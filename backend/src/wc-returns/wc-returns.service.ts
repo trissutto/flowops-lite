@@ -7,6 +7,18 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import {
+  alocarPedidoDeTroca,
+  chaveSku,
+  saldoPorLinha,
+  somarPorChave,
+  type ErroDaAlocacao,
+  type LinhaDeTroca,
+} from '../common/troca-por-linha';
+
+/** Uma LINHA do pedido como a tela de troca vê — identidade é a `linhaId`, não o SKU. */
+type LinhaDoPedido = LinhaDeTroca & { productName: string; cancelada?: boolean };
 
 /**
  * Troca/devolução de QUALQUER venda online, no balcão da loja física.
@@ -238,30 +250,25 @@ export class WcReturnsService {
       ? Math.floor((Date.now() - baseDate.getTime()) / 86_400_000)
       : null;
 
-    const devolvidoBySku = new Map<string, number>();
-    for (const r of previousReturns as any[]) {
-      for (const it of r.items || []) {
-        devolvidoBySku.set(it.sku, (devolvidoBySku.get(it.sku) || 0) + (it.qty || 0));
-      }
-    }
-
-    const items = (orderItems || []).map((it: any) => {
-      const sku = String(it.sku ?? '').trim();
-      const qty = Number(it.quantity ?? it.qty) || 1;
-      const jaDev = devolvidoBySku.get(sku) || 0;
-      const precoUnit = Number(it.unitPrice ?? it.unit_price) || 0;
-      const nome = it.productName ?? it.product_name ?? sku;
-      const variacao = [it.cor, it.tamanho].filter(Boolean).join(' · ');
-      return {
-        sku,
-        productName: variacao && !String(nome).includes(variacao) ? `${nome} · ${variacao}` : nome,
-        qty,
-        precoUnit: Math.round(precoUnit * 100) / 100,
-        total: Math.round(precoUnit * qty * 100) / 100,
-        jaDevolvido: jaDev,
-        disponivel: Math.max(0, qty - jaDev),
-      };
-    });
+    // UMA LINHA POR PEÇA (29/08): duas blusas iguais são duas linhas com o
+    // mesmo SKU, e é a `linhaId` que deixa a vendedora marcar só uma. Frete e
+    // linha avulsa (venda online da loja) não são peça — não voltam pra arara.
+    const linhas: LinhaDoPedido[] = (orderItems || [])
+      .filter((it: any) => !ehItemSemEstoque(it))
+      .map((it: any, idx: number) => {
+        const sku = String(it.sku ?? '').trim();
+        const nome = it.productName ?? it.product_name ?? sku;
+        const variacao = [it.cor, it.tamanho].filter(Boolean).join(' · ');
+        return {
+          linhaId: String(it.id ?? `linha-${idx}`),
+          sku,
+          productName: variacao && !String(nome).includes(variacao) ? `${nome} · ${variacao}` : nome,
+          qty: Number(it.quantity ?? it.qty) || 1,
+          precoUnit: Math.round((Number(it.unitPrice ?? it.unit_price) || 0) * 100) / 100,
+          cancelada: !!(it.cancelledAt ?? it.cancelled_at),
+        };
+      });
+    const items = this.comSaldo(linhas, previousReturns);
 
     // shipping_address é JSON em texto — cidade/UF são só pra vendedora
     // conferir que é a cliente certa, então falha de parse não pode derrubar.
@@ -308,6 +315,64 @@ export class WcReturnsService {
   }
 
   /**
+   * As linhas do pedido com o quanto de CADA UMA ainda pode voltar.
+   *
+   * Até 21/09 o "já devolvido" era somado por SKU e descontado de CADA linha
+   * daquele SKU: a cliente com duas blusas iguais devolvia uma e as DUAS
+   * linhas ficavam "tudo já devolvido" — a segunda nunca mais podia voltar. O
+   * registro da devolução guarda SKU, não linha, então o que voltou é
+   * distribuído pelas linhas do SKU (`common/troca-por-linha.ts`).
+   *
+   * Peça cancelada no pedido não foi entregue: aparece, mas sem saldo, e não
+   * absorve devolução nenhuma.
+   */
+  private comSaldo(linhas: LinhaDoPedido[], previousReturns: any[]) {
+    const devolvidas = (previousReturns as any[]).flatMap((r) =>
+      (r.items || []).map((it: any) => ({ sku: it.sku, qty: Number(it.qty) || 0, precoUnit: it.precoUnit })),
+    );
+    const saldo = saldoPorLinha(
+      linhas.filter((l) => !l.cancelada),
+      devolvidas,
+    );
+    return linhas.map((l) => {
+      const s = saldo.get(l.linhaId) ?? { ja: 0, disponivel: 0 };
+      return {
+        linhaId: l.linhaId,
+        sku: l.sku,
+        productName: l.productName,
+        qty: l.qty,
+        precoUnit: l.precoUnit,
+        total: Math.round(l.precoUnit * l.qty * 100) / 100,
+        jaDevolvido: s.ja,
+        disponivel: s.disponivel,
+        cancelada: !!l.cancelada,
+      };
+    });
+  }
+
+  /** A frase da recusa pra VENDEDORA — ela está com a peça na mão e a cliente no balcão. */
+  private mensagemDaAlocacao(e: ErroDaAlocacao<LinhaDoPedido>, pedido: string | number): string {
+    switch (e.erro) {
+      case 'sem_sku':
+        return 'Item sem SKU';
+      case 'fora_do_pedido':
+        return `SKU ${e.sku} não está no pedido ${pedido}`;
+      case 'linha_inexistente':
+        return `Essa peça${e.sku ? ` (${e.sku})` : ''} não está mais no pedido ${pedido} — recarregue a tela e marque de novo.`;
+      case 'linha_mudou':
+        return (
+          `A peça ${e.linha.productName} mudou no pedido ${pedido} (a tela mostrava ${e.skuPedido}, ` +
+          `agora é ${e.linha.sku}) — recarregue a tela e confira a peça que está voltando.`
+        );
+      case 'sem_saldo':
+        return (
+          `${e.linha.productName} (${e.sku}): pediu ${e.pedido} mas só tem ${e.disponivel} ` +
+          `disponível pra devolução.`
+        );
+    }
+  }
+
+  /**
    * Formata pedido WC pra resposta consistente.
    */
   private formatOrder(
@@ -333,32 +398,20 @@ export class WcReturnsService {
     const dentroDoPrazo =
       diasDesde != null ? diasDesde <= prazoDias : true; // sem data → assume sim
 
-    // Quantidades já devolvidas por SKU
-    const devolvidoBySku = new Map<string, number>();
-    for (const r of previousReturns as any[]) {
-      for (const it of r.items || []) {
-        devolvidoBySku.set(it.sku, (devolvidoBySku.get(it.sku) || 0) + (it.qty || 0));
-      }
-    }
-
-    const items = (o.line_items || []).map((it: any) => {
+    const linhas: LinhaDoPedido[] = (o.line_items || []).map((it: any, idx: number) => {
       const sku = String(it.sku || '').trim();
       const qty = Number(it.quantity) || 1;
-      const jaDev = devolvidoBySku.get(sku) || 0;
-      const disponivel = Math.max(0, qty - jaDev);
       // total/qty = preço unit (com desconto rateado se houver)
       const total = parseFloat(String(it.total ?? '0')) || 0;
-      const precoUnit = qty > 0 ? total / qty : total;
       return {
+        linhaId: `wc-${it.id ?? idx}`,
         sku,
         productName: it.name || sku,
         qty,
-        precoUnit: Math.round(precoUnit * 100) / 100,
-        total: Math.round(total * 100) / 100,
-        jaDevolvido: jaDev,
-        disponivel,
+        precoUnit: Math.round((qty > 0 ? total / qty : total) * 100) / 100,
       };
     });
+    const items = this.comSaldo(linhas, previousReturns);
 
     const billing = o.billing || {};
     const shipping = o.shipping || {};
@@ -408,14 +461,18 @@ export class WcReturnsService {
   }
 
   /**
-   * Aceita a troca/devolução: estorna estoque Giga DA LOJA receptora +
+   * Aceita a troca/devolução: devolve a peça ao estoque DA LOJA receptora +
    * cria registro WcReturnRequest. Se modo=troca/credito, gera vale.
+   *
+   * Cada item pedido aponta a LINHA do pedido (`linhaId`) — é o que deixa
+   * devolver só uma de duas peças iguais. Sem `linhaId` (aba velha aberta num
+   * PC de loja) o SKU ainda vale: a quantidade é espalhada pelas linhas dele.
    */
   async accept(input: {
     wcOrderId: number;
     receivingStoreCode: string;
     modo: 'devolucao' | 'troca' | 'credito';
-    items: Array<{ sku: string; qty: number; productName?: string }>;
+    items: Array<{ linhaId?: string; sku: string; qty: number; productName?: string }>;
     motivo?: string;
     obs?: string;
     creditoValidadeDias?: number;
@@ -449,40 +506,51 @@ export class WcReturnsService {
       );
     }
 
-    // Mapa de items disponíveis
-    const itemBySku = new Map<string, any>();
-    for (const it of detail.items) itemBySku.set(it.sku, it);
-
-    // Valida cada item solicitado
-    const itemsToCreate: any[] = [];
-    let valorTotal = 0;
-    for (const reqItem of items) {
-      const sku = String(reqItem.sku || '').trim();
-      if (!sku) throw new BadRequestException('Item sem SKU');
-      const original = itemBySku.get(sku);
-      if (!original) {
-        throw new BadRequestException(`SKU ${sku} não está no pedido ${wcOrderId}`);
-      }
-      const qty = Math.max(1, Math.floor(Number(reqItem.qty) || 0));
-      if (qty > original.disponivel) {
-        throw new BadRequestException(
-          `${original.productName} (${sku}): pediu ${qty} mas só tem ${original.disponivel} disponível pra devolução.`,
-        );
-      }
-      const totalItem = original.precoUnit * qty;
-      valorTotal += totalItem;
-      itemsToCreate.push({
-        sku,
-        productName: reqItem.productName || original.productName,
-        qty,
-        precoUnit: original.precoUnit,
-        total: Math.round(totalItem * 100) / 100,
-      });
+    // Peça cancelada no pedido nunca chegou na cliente — não tem o que devolver.
+    const pedidaCancelada = (detail.items as any[]).find(
+      (it) => it.cancelada && items.some((i) => i?.linhaId && String(i.linhaId) === String(it.linhaId)),
+    );
+    if (pedidaCancelada) {
+      throw new BadRequestException(
+        `A peça ${pedidaCancelada.productName} (${pedidaCancelada.sku}) foi cancelada neste pedido ` +
+          `(não foi entregue) — não tem o que devolver.`,
+      );
     }
-    valorTotal = Math.round(valorTotal * 100) / 100;
 
-    // Estorna estoque Giga na loja receptora
-    const stockAttempts: Array<{ sku: string; ok: boolean; error?: string }> = [];
+    // Cada peça pedida vira a peça de uma LINHA do pedido (a régua mora em
+    // common/troca-por-linha.ts — é ela que separa duas peças iguais).
+    const aloc = alocarPedidoDeTroca(
+      (detail.items as any[]).filter((it) => !it.cancelada) as Array<LinhaDoPedido & { disponivel: number }>,
+      items.map((i) => ({ linhaId: i?.linhaId, sku: i?.sku, qty: i?.qty })),
+    );
+    if (!aloc.ok) {
+      throw new BadRequestException(this.mensagemDaAlocacao(aloc, detail.wcOrderNumber || wcOrderId));
+    }
+
+    // O registro continua UMA linha por peça igual (mesmo SKU e preço): duas
+    // blusas iguais devolvidas juntas viram "qty 2", como sempre foi.
+    const itemsToCreate = somarPorChave(
+      aloc.alocacoes,
+      (l) => `${chaveSku(l.sku)}|${Math.round(l.precoUnit * 100)}`,
+    ).map(({ linha, qty }) => ({
+      sku: linha.sku,
+      productName: linha.productName,
+      qty,
+      precoUnit: linha.precoUnit,
+      total: Math.round(linha.precoUnit * qty * 100) / 100,
+    }));
+    const valorTotal =
+      Math.round(itemsToCreate.reduce((s, it) => s + it.precoUnit * it.qty, 0) * 100) / 100;
+
+    // Devolve a peça ao estoque da loja receptora.
+    //
+    // `success: true` NÃO prova que todas entraram: fora de transação o erro
+    // por item vira log `[flow-estoque]` e o item só fica de fora do `applied`
+    // (CLAUDE.md, "constituição de 14/07"). Então cada peça confere o seu
+    // pedaço do `applied` — sem isso a tela dizia "✓ peça de volta no
+    // estoque" com o saldo parado.
+    const aplicadoPorSku = new Map<string, number>();
+    let erroEstoque: string | null = null;
     try {
       const result = await this.erp.increaseStockAsync(
         itemsToCreate.map((it) => ({
@@ -491,15 +559,32 @@ export class WcReturnsService {
           storeCode: receivingStoreCode,
         })),
       );
-      if (result.success) {
-        for (const it of itemsToCreate) stockAttempts.push({ sku: it.sku, ok: true });
-      } else {
-        for (const it of itemsToCreate)
-          stockAttempts.push({ sku: it.sku, ok: false, error: result.error });
+      if (!result.success) erroEstoque = result.error || 'a entrada no estoque falhou';
+      for (const a of result.applied || []) {
+        const k = chaveSku(a.sku);
+        aplicadoPorSku.set(k, (aplicadoPorSku.get(k) || 0) + (Number(a.qty) || 0));
       }
     } catch (e: any) {
-      for (const it of itemsToCreate)
-        stockAttempts.push({ sku: it.sku, ok: false, error: e?.message || String(e) });
+      erroEstoque = e?.message || String(e);
+    }
+    const stockAttempts = itemsToCreate.map((it) => {
+      const k = chaveSku(it.sku);
+      const entrou = aplicadoPorSku.get(k) || 0;
+      if (entrou >= it.qty) {
+        aplicadoPorSku.set(k, entrou - it.qty);
+        return { sku: it.sku, ok: true as const };
+      }
+      return {
+        sku: it.sku,
+        ok: false as const,
+        error: erroEstoque || 'a entrada no estoque não foi gravada (ver log [flow-estoque])',
+      };
+    });
+    if (stockAttempts.some((a) => !a.ok)) {
+      this.logger.error(
+        `[wc-return] pedido=${wcOrderId} loja=${receivingStoreCode}: estoque NÃO entrou em ` +
+          stockAttempts.filter((a) => !a.ok).map((a) => a.sku).join(', '),
+      );
     }
 
     // Crédito (se troca/credito)

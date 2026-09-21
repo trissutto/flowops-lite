@@ -1,4 +1,4 @@
-import { avisoDaTroca, bloqueioDaTroca, cardDaPeca, motivoDeBloqueioDaTroca } from './troca-bloqueio';
+import { avisoDaTroca, bipesDaTroca, bloqueioDaTroca, cardDaPeca, motivoDeBloqueioDaTroca } from './troca-bloqueio';
 
 /**
  * A TRAVA DA TROCA — testes da régua que decide se ESTA peça ainda pode ser
@@ -123,6 +123,56 @@ describe('pode trocar esta peça?', () => {
     expect(
       motivoDeBloqueioDaTroca({ orderStatus: 'separating', card: dela, bipesDaPeca: 0 }),
     ).toBeNull();
+  });
+
+  /**
+   * DUAS PEÇAS IGUAIS (21/09): mesmo SKU, lojas diferentes. O bipe congela o
+   * SKU, não a linha — o bipe da irmã que já foi postada travava a troca da
+   * que ficou pra trás ("esta peça já saiu").
+   */
+  describe('bipes de peças iguais (mesmo SKU)', () => {
+    const status = new Map([
+      ['card-sorocaba', 'shipped'],
+      ['card-itanhaem', 'new'],
+    ]);
+
+    test('irmã IGUAL postada por outra loja: não trava a que ficou na arara', () => {
+      const r = bipesDaTroca([{ pickOrderId: 'card-sorocaba' }], status, { id: 'card-itanhaem' });
+      expect(r).toEqual({ bipesDaPeca: 0, bipesEnviados: 0 });
+      expect(
+        motivoDeBloqueioDaTroca({
+          orderStatus: 'shipped',
+          card: card('card-itanhaem', 'new', 'store-01', '01', 'ITANHAÉM'),
+          ...r,
+        }),
+      ).toBeNull();
+    });
+
+    test('irmã postada e ESTA sem loja nenhuma (ruptura): troca liberada', () => {
+      expect(bipesDaTroca([{ pickOrderId: 'card-sorocaba' }], status, null)).toEqual({
+        bipesDaPeca: 0,
+        bipesEnviados: 0,
+      });
+    });
+
+    test('bipe no card DELA ainda aberto: só aviso', () => {
+      expect(bipesDaTroca([{ pickOrderId: 'card-itanhaem' }], status, { id: 'card-itanhaem' })).toEqual({
+        bipesDaPeca: 1,
+        bipesEnviados: 0,
+      });
+    });
+
+    test('bipe no card DELA já postado: conta como enviado', () => {
+      expect(bipesDaTroca([{ pickOrderId: 'card-sorocaba' }], status, { id: 'card-sorocaba' })).toEqual({
+        bipesDaPeca: 0,
+        bipesEnviados: 1,
+      });
+    });
+
+    test('bipe de card APAGADO (órfão — ON-000106) continua travando, com ou sem card', () => {
+      expect(bipesDaTroca([{ pickOrderId: 'apagado' }], status, { id: 'card-itanhaem' }).bipesEnviados).toBe(1);
+      expect(bipesDaTroca([{ pickOrderId: 'apagado' }], status, null).bipesEnviados).toBe(1);
+    });
   });
 
   describe('de quem é a peça', () => {

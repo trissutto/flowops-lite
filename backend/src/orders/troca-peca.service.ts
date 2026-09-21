@@ -12,6 +12,7 @@ import {
   CARD_ENVIADO,
   CARD_SEPARADO,
   avisoDaTroca,
+  bipesDaTroca,
   bloqueioDaTroca,
   cardDaPeca,
   type TrocaCtx,
@@ -778,6 +779,8 @@ export class TrocaPecaService {
      * - bipe de card POSTADO ou APAGADO sem estorno → prova de que a peça
      *   saiu (é a evidência que sobra quando o card morre — ON-000106), e aí
      *   trava: o que já saiu se resolve por devolução.
+     * Bipe de OUTRO card vivo é da peça irmã IGUAL (mesmo SKU, outra loja) e
+     * não fala por esta — ver `bipesDaTroca` (21/09).
      */
     let bipesDaPeca = 0;
     let bipesEnviados = 0;
@@ -786,14 +789,10 @@ export class TrocaPecaService {
         where: { orderId: order.id, sku: String(item.sku || ''), revertedAt: null },
         select: { pickOrderId: true },
       });
-      const statusPorCard = new Map(
-        ((order.pickOrders || []) as any[]).map((c: any) => [c.id, String(c.status)]),
+      const statusPorCard = new Map<string, string>(
+        ((order.pickOrders || []) as any[]).map((c: any) => [String(c.id), String(c.status)]),
       );
-      for (const s of scans) {
-        const st = statusPorCard.get(s.pickOrderId);
-        if (!st || st === 'shipped' || st === 'delivered') bipesEnviados += 1;
-        else if (!card || s.pickOrderId === card.id) bipesDaPeca += 1;
-      }
+      ({ bipesDaPeca, bipesEnviados } = bipesDaTroca(scans, statusPorCard, card));
     } catch {
       /* sem os bipes a régua decide pelo resto */
     }

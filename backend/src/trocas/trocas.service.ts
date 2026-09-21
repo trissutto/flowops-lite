@@ -11,6 +11,14 @@ import { EmailService } from '../email/email.service';
 import { ErpService } from '../erp/erp.service';
 import { CorreiosService } from '../correios/correios.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import {
+  agruparPorSku,
+  alocarPedidoDeTroca,
+  chaveSku,
+  saldoPorLinha,
+  somarPorChave,
+} from '../common/troca-por-linha';
 
 /**
  * trocas.service.ts — PORTAL DE TROCAS self-service do e-commerce.
@@ -384,13 +392,19 @@ export class TrocasService {
         email: local.customerEmail || '',
         phone: local.customerPhone || '',
       },
-      line_items: (local.items || []).map((it: any) => ({
-        sku: it.sku,
-        name: it.productName || it.sku,
-        quantity: it.quantity,
-        subtotal: String(((it.baseUnitPrice ?? it.unitPrice) || 0) * (it.quantity || 1)),
-        total: String((it.unitPrice || 0) * (it.quantity || 1)),
-      })),
+      // `id` = a LINHA do pedido: desde 29/08 duas peças iguais são duas
+      // linhas com o mesmo SKU. Frete/linha avulsa (venda online da loja) e
+      // peça cancelada no pedido (nunca chegou) não são trocáveis.
+      line_items: (local.items || [])
+        .filter((it: any) => !ehItemSemEstoque(it) && !it.cancelledAt)
+        .map((it: any) => ({
+          id: it.id,
+          sku: it.sku,
+          name: it.productName || it.sku,
+          quantity: it.quantity,
+          subtotal: String(((it.baseUnitPrice ?? it.unitPrice) || 0) * (it.quantity || 1)),
+          total: String((it.unitPrice || 0) * (it.quantity || 1)),
+        })),
       fee_lines: [],
       // CUPOM DO PEDIDO LOCAL (14/08): vinha sempre vazio, e é ele que diz se
       // a compra foi paga com vale-troca — a regra que decide se este pedido
@@ -620,12 +634,13 @@ export class TrocasService {
     }, 0);
     const factor = itemsTotal > 0 ? Math.max(0, (itemsTotal - feeDiscount) / itemsTotal) : 1;
 
-    return lineItems.map((it) => {
+    return lineItems.map((it, idx) => {
       const qty = Number(it.quantity) || 1;
       const subtotal = parseFloat(String(it.subtotal ?? it.total ?? '0')) || 0;
       const total = parseFloat(String(it.total ?? '0')) || 0;
       const pago = total * factor;
       return {
+        linhaId: String(it.id ?? `linha-${idx}`),
         sku: String(it.sku || '').trim(),
         productName: String(it.name || it.sku || ''),
         qty,
@@ -634,6 +649,30 @@ export class TrocasService {
         totalPago: round2(pago),
       };
     });
+  }
+
+  /**
+   * As peças do pedido, UMA POR LINHA, com o quanto ainda pode entrar em troca.
+   *
+   * Desde 29/08 duas peças iguais são duas linhas com o MESMO SKU. O que as
+   * trocas ativas já seguram era somado por SKU e descontado de CADA linha:
+   * a cliente pedia a troca de 1 de 2 blusas iguais e as DUAS viravam "já
+   * solicitada". Agora o que está em troca é distribuído pelas linhas do SKU
+   * (`common/troca-por-linha.ts`).
+   */
+  private linhasTrocaveis(order: any, trocas: any[]) {
+    const linhas = this.computeItemValues(order).map((it) => ({ ...it, precoUnit: it.valorPagoUnit }));
+    const emTroca = (trocas || [])
+      .filter((t: any) => STATUS_ATIVOS.includes(t.status))
+      .flatMap((t: any) =>
+        (t.items || []).map((i: any) => ({ sku: i.sku, qty: Number(i.qty) || 0, precoUnit: i.valorPagoUnit })),
+      );
+    const saldo = saldoPorLinha(linhas, emTroca);
+    return linhas.map((l) => ({
+      ...l,
+      jaSolicitado: saldo.get(l.linhaId)?.ja ?? 0,
+      disponivel: saldo.get(l.linhaId)?.disponivel ?? 0,
+    }));
   }
 
   // ── Benefício da reversa grátis (por COMPRA) ────────────────────────
@@ -722,7 +761,6 @@ export class TrocasService {
     const { order } = await this.findAndVerifyOrder(input);
     const prazoDias = await this.getPrazoDias();
     const prazo = await this.checkPrazo(order, prazoDias);
-    const itemValues = this.computeItemValues(order);
 
     // Trocas já existentes desse pedido (histórico + saldo elegível)
     const trocas = await (this.prisma as any).trocaSolicitacao.findMany({
@@ -736,17 +774,28 @@ export class TrocasService {
       orderBy: { createdAt: 'asc' },
     });
 
-    const solicitadoBySku = new Map<string, number>();
-    for (const t of trocas) {
-      if (!STATUS_ATIVOS.includes(t.status)) continue;
-      for (const it of t.items) {
-        solicitadoBySku.set(it.sku, (solicitadoBySku.get(it.sku) || 0) + it.qty);
-      }
-    }
-
-    const items = itemValues.map((it) => {
-      const ja = solicitadoBySku.get(it.sku) || 0;
-      return { ...it, jaSolicitado: ja, disponivel: Math.max(0, it.qty - ja) };
+    /**
+     * A cliente vê UMA linha por PEÇA DIFERENTE e escolhe QUANTAS trocar (os
+     * botões 1, 2… do portal). Duas blusas iguais aparecem como "Blusa X — 2
+     * disponíveis", não como duas linhas idênticas que se marcam juntas — o
+     * `solicitar` espalha a quantidade pelas linhas do pedido. O valor por peça
+     * é a média das linhas do SKU (igual em 99% dos casos; quando difere, o
+     * `solicitar` grava o valor exato de cada linha).
+     */
+    const items = agruparPorSku(this.linhasTrocaveis(order, trocas)).map((grupo) => {
+      const soma = (f: (l: (typeof grupo)[number]) => number) => grupo.reduce((s, l) => s + f(l), 0);
+      const qty = soma((l) => l.qty);
+      const totalPago = round2(soma((l) => l.totalPago));
+      return {
+        sku: grupo[0].sku,
+        productName: grupo[0].productName,
+        qty,
+        valorOriginalUnit: round2(qty ? soma((l) => l.valorOriginalUnit * l.qty) / qty : 0),
+        valorPagoUnit: round2(qty ? totalPago / qty : 0),
+        totalPago,
+        jaSolicitado: soma((l) => l.jaSolicitado),
+        disponivel: soma((l) => l.disponivel),
+      };
     });
 
     const billing = order.billing || {};
@@ -830,7 +879,8 @@ export class TrocasService {
   async solicitar(input: {
     pedido: string;
     doc: string;
-    items: Array<{ sku: string; qty: number }>;
+    /** `linhaId` é opcional: o portal pergunta QUANTAS de cada peça (por SKU). */
+    items: Array<{ linhaId?: string; sku: string; qty: number }>;
     motivo: string;
     motivoDetalhe?: string;
     declaracaoAceita: boolean;
@@ -866,34 +916,50 @@ export class TrocasService {
       );
     }
 
-    // Saldo elegível por SKU (desconta trocas ativas anteriores)
-    const detail = await this.localizar(input);
-    const bySku = new Map(detail.items.map((it: any) => [it.sku, it]));
-
-    const itemsToCreate: any[] = [];
-    let valorTotalPago = 0;
-    for (const req of input.items) {
-      const sku = String(req.sku || '').trim();
-      const original: any = bySku.get(sku);
-      if (!original) throw new BadRequestException(`A peça ${sku} não está neste pedido.`);
-      const qty = Math.max(1, Math.floor(Number(req.qty) || 0));
-      if (qty > original.disponivel) {
-        throw new BadRequestException(
-          `${original.productName}: já existe troca em andamento pra essa peça (disponível: ${original.disponivel}).`,
-        );
+    // Saldo elegível POR LINHA (desconta trocas ativas anteriores). A cliente
+    // pede "N desta peça"; a régua espalha pelas linhas do pedido — duas
+    // blusas iguais são duas linhas, e pedir 1 não pode travar a outra.
+    const trocasDoPedido = await (this.prisma as any).trocaSolicitacao.findMany({
+      where: { wcOrderId: Number(order.id) },
+      select: { status: true, items: { select: { sku: true, qty: true, valorPagoUnit: true } } },
+    });
+    const linhas = this.linhasTrocaveis(order, trocasDoPedido);
+    const aloc = alocarPedidoDeTroca(
+      linhas,
+      input.items.map((i: any) => ({ linhaId: i?.linhaId, sku: i?.sku, qty: i?.qty })),
+    );
+    if (!aloc.ok) {
+      switch (aloc.erro) {
+        case 'fora_do_pedido':
+          throw new BadRequestException(`A peça ${aloc.sku} não está neste pedido.`);
+        case 'sem_saldo':
+          throw new BadRequestException(
+            aloc.disponivel > 0
+              ? `${aloc.linha.productName}: dá pra trocar no máximo ${aloc.disponivel} desta peça.`
+              : `${aloc.linha.productName}: já existe troca em andamento pra essa peça (disponível: 0).`,
+          );
+        default:
+          throw new BadRequestException(
+            'Uma das peças escolhidas mudou neste pedido. Atualize a página e escolha de novo.',
+          );
       }
-      const totalPago = round2(original.valorPagoUnit * qty);
-      valorTotalPago += totalPago;
-      itemsToCreate.push({
-        sku,
-        productName: original.productName,
-        qty,
-        valorOriginalUnit: original.valorOriginalUnit,
-        valorPagoUnit: original.valorPagoUnit,
-        totalPago,
-      });
     }
-    valorTotalPago = round2(valorTotalPago);
+
+    // O registro continua UMA linha por peça igual (mesmo SKU e mesmo valor):
+    // duas blusas iguais pedidas juntas viram "qty 2", como sempre foi.
+    const itemsToCreate = somarPorChave(
+      aloc.alocacoes,
+      (l) =>
+        `${chaveSku(l.sku)}|${Math.round(l.valorPagoUnit * 100)}|${Math.round(l.valorOriginalUnit * 100)}`,
+    ).map(({ linha, qty }) => ({
+      sku: linha.sku,
+      productName: linha.productName,
+      qty,
+      valorOriginalUnit: linha.valorOriginalUnit,
+      valorPagoUnit: linha.valorPagoUnit,
+      totalPago: round2(linha.valorPagoUnit * qty),
+    }));
+    const valorTotalPago = round2(itemsToCreate.reduce((s, it) => s + it.totalPago, 0));
 
     const billing = order.billing || {};
     const cpfDigits = onlyDigits(billing.cpf);

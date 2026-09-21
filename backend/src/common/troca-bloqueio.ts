@@ -66,6 +66,37 @@ export function cardDaPeca<T extends CardDaTroca>(
   return lista.length === 1 ? lista[0] : null;
 }
 
+/**
+ * Os bipes que falam por ESTA peça (21/09/2026 — duas peças iguais).
+ *
+ * O bipe congela o SKU, não a linha do pedido: com duas peças IGUAIS, os bipes
+ * das duas têm o mesmo SKU. Quem desempata é o CARD — cada peça é do card da
+ * loja dela (`cardDaPeca`), e um card só aceita bipe até o que ele espera. Até
+ * aqui, o bipe da irmã que JÁ SAIU no card postado de OUTRA loja contava como
+ * "esta peça já saiu" e travava a troca da que ainda estava na arara (ou que
+ * nenhuma loja tinha — justamente a que a cliente aceita trocar).
+ *
+ * - bipe de OUTRO card que ainda existe → é de outra peça, não conta;
+ * - bipe do card DELA → aviso se o card está aberto, trava se foi postado;
+ * - bipe de card APAGADO (órfão, ON-000106) → não dá pra saber de quem era:
+ *   conta como enviado, que é o lado seguro.
+ */
+export function bipesDaTroca(
+  scans: Array<{ pickOrderId: string }>,
+  statusPorCard: Map<string, string>,
+  card: { id: string } | null,
+): { bipesDaPeca: number; bipesEnviados: number } {
+  let bipesDaPeca = 0;
+  let bipesEnviados = 0;
+  for (const s of scans) {
+    const st = statusPorCard.get(s.pickOrderId);
+    if (st !== undefined && s.pickOrderId !== card?.id) continue;
+    if (st === undefined || CARD_ENVIADO.includes(st)) bipesEnviados += 1;
+    else bipesDaPeca += 1;
+  }
+  return { bipesDaPeca, bipesEnviados };
+}
+
 /** Nome curto da loja pra mensagem ("06/SOROCABA" vira "SOROCABA"). */
 function nomeDaLoja(card: CardDaTroca | null): string {
   const s = card?.store;

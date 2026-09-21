@@ -23,6 +23,28 @@ import {
 import { api } from '@/lib/api';
 import AlertaAvisosTroca from '@/components/AlertaAvisosTroca';
 
+/**
+ * Uma LINHA do pedido. Desde 29/08 ("peça é peça") duas peças iguais são duas
+ * linhas com o MESMO SKU — por isso quem identifica a peça aqui é a `linhaId`.
+ * Com o SKU como chave, marcar uma blusa marcava as duas e o botão cobrava as
+ * duas: não havia como devolver só uma (21/09).
+ */
+type ItemTroca = {
+  linhaId?: string;
+  sku: string;
+  productName: string;
+  qty: number;
+  precoUnit: number;
+  total: number;
+  jaDevolvido: number;
+  disponivel: number;
+  /** Peça cancelada no pedido — nunca chegou na cliente. */
+  cancelada?: boolean;
+};
+
+/** Chave da linha na tela. Backend antigo (sem `linhaId`) cai na posição. */
+const chaveDaLinha = (it: ItemTroca, idx: number) => it.linhaId || `${it.sku}#${idx}`;
+
 type SearchResult = {
   wcOrderId: number;
   wcOrderNumber: string;
@@ -41,7 +63,7 @@ type SearchResult = {
   customerPhone: string | null;
   shippingCity: string | null;
   shippingState: string | null;
-  items: any[];
+  items: ItemTroca[];
   itemCount: number;
   previousReturnsCount: number;
   previousReturnsValor: number;
@@ -351,22 +373,33 @@ function OrderDetail({
     setReceivingStore(saved && stores.some((s) => s.code === saved) ? saved : stores[0].code);
   }, [minhaLoja, stores, receivingStore]);
 
-  function toggle(sku: string, max: number) {
+  // `selected` é por LINHA (chaveDaLinha), nunca por SKU. Marcar começa em 1
+  // peça: a linha com mais de uma (pedido antigo) sobe no "+" — começar no
+  // máximo devolvia peça que não voltou quando a vendedora não via o contador.
+  function toggle(chave: string) {
     setSelected((prev) => {
       const next = { ...prev };
-      if (next[sku]) delete next[sku];
-      else next[sku] = max;
+      if (next[chave]) delete next[chave];
+      else next[chave] = 1;
       return next;
     });
   }
 
-  function setQty(sku: string, qty: number, max: number) {
-    setSelected((prev) => ({ ...prev, [sku]: Math.max(1, Math.min(max, qty)) }));
+  function setQty(chave: string, qty: number, max: number) {
+    setSelected((prev) => ({ ...prev, [chave]: Math.max(1, Math.min(max, qty)) }));
   }
 
-  const totalDevolucao = (detail?.items || [])
-    .filter((it) => selected[it.sku])
-    .reduce((s, it) => s + (it.precoUnit || 0) * (selected[it.sku] || 0), 0);
+  const totalDevolucao = (detail?.items || []).reduce(
+    (s, it, idx) => s + (it.precoUnit || 0) * (selected[chaveDaLinha(it, idx)] || 0),
+    0,
+  );
+
+  // "Peça 1 de 2 iguais" — sem isso as duas linhas parecem a mesma repetida.
+  const iguaisPorSku = new Map<string, number>();
+  for (const it of detail?.items || []) {
+    if (!it.cancelada) iguaisPorSku.set(it.sku, (iguaisPorSku.get(it.sku) || 0) + 1);
+  }
+  const temPecasIguais = Array.from(iguaisPorSku.values()).some((n) => n > 1);
 
   async function accept() {
     setErr('');
@@ -374,9 +407,12 @@ function OrderDetail({
       setErr('Selecione a loja que está recebendo a peça.');
       return;
     }
-    const items = Object.entries(selected).map(([sku, qty]) => {
-      const item = (detail?.items || []).find((it) => it.sku === sku);
-      return { sku, qty, productName: item?.productName };
+    // Cada peça vai com a LINHA dela — é o que separa duas peças iguais.
+    const items = (detail?.items || []).flatMap((it, idx) => {
+      const qty = selected[chaveDaLinha(it, idx)] || 0;
+      return qty > 0
+        ? [{ linhaId: it.linhaId, sku: it.sku, qty, productName: it.productName }]
+        : [];
     });
     if (!items.length) {
       setErr('Selecione ao menos uma peça.');
@@ -458,11 +494,20 @@ function OrderDetail({
           R$ {fmt(success.valorTotal)} em {success.modo} · Loja {success.receivingStoreCode}
         </div>
 
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-4 text-emerald-800 text-sm">
-          <strong>✓ Peça de volta no estoque</strong> da loja {success.receivingStoreName}.
-          <br />
-          A peça já está disponível pra venda novamente.
-        </div>
+        {/* O verde só aparece quando o estoque ENTROU de fato — o backend
+            confere peça a peça (antes o "✓" saía junto com o alerta vermelho). */}
+        {!(success.items || []).some((it: any) => it.stockError) && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-4 text-emerald-800 text-sm">
+            <strong>
+              ✓ {(success.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0) > 1
+                ? 'Peças de volta no estoque'
+                : 'Peça de volta no estoque'}
+            </strong>{' '}
+            da loja {success.receivingStoreName}.
+            <br />
+            Já está disponível pra venda novamente.
+          </div>
+        )}
 
         {success.creditoCode && (
           <div className="bg-rose-50 rounded-lg p-4 mb-4 text-rose-800">
@@ -561,14 +606,25 @@ function OrderDetail({
       {/* Itens */}
       <div className="bg-white rounded-xl shadow-sm p-4">
         <h3 className="font-bold text-rose-900 text-sm mb-2">Peças que estão voltando</h3>
+        {temPecasIguais && (
+          <div className="text-xs bg-sky-50 border border-sky-200 text-sky-900 rounded-lg px-3 py-2 mb-2">
+            Este pedido tem <strong>peças iguais</strong> — cada linha é UMA peça. Marque só as que
+            estão voltando.
+          </div>
+        )}
         <div className="space-y-1.5">
-          {detail.items.map((it) => {
-            const isSel = !!selected[it.sku];
-            const sel = selected[it.sku] || 0;
-            const disabled = it.disponivel <= 0;
+          {detail.items.map((it, idx) => {
+            const chave = chaveDaLinha(it, idx);
+            const isSel = !!selected[chave];
+            const sel = selected[chave] || 0;
+            const disabled = !!it.cancelada || it.disponivel <= 0;
+            const iguais = it.cancelada ? 0 : iguaisPorSku.get(it.sku) || 0;
+            const posicao = iguais > 1
+              ? detail.items.slice(0, idx + 1).filter((o) => !o.cancelada && o.sku === it.sku).length
+              : 0;
             return (
               <div
-                key={it.sku}
+                key={chave}
                 className={`rounded-lg px-3 py-2 transition border-2 ${
                   disabled
                     ? 'bg-gray-100 border-gray-200 opacity-50'
@@ -582,16 +638,23 @@ function OrderDetail({
                     type="checkbox"
                     checked={isSel}
                     disabled={disabled}
-                    onChange={() => toggle(it.sku, it.disponivel)}
+                    onChange={() => toggle(chave)}
                     className="w-5 h-5 cursor-pointer shrink-0"
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-gray-800 text-sm leading-tight">{it.productName}</div>
+                    <div className="font-semibold text-gray-800 text-sm leading-tight">
+                      {it.productName}
+                      {posicao > 0 && (
+                        <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-sky-800 bg-sky-100 rounded-full px-2 py-0.5 align-middle">
+                          peça {posicao} de {iguais} iguais
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-gray-500 flex flex-wrap gap-2">
                       <span className="font-mono">SKU {it.sku}</span>
                       <span>R$ {fmt(it.precoUnit)} unit</span>
-                      <span>Comprou {it.qty}</span>
-                      {it.jaDevolvido > 0 && (
+                      {it.qty > 1 && <span>Comprou {it.qty}</span>}
+                      {it.qty > 1 && it.jaDevolvido > 0 && (
                         <span className="text-amber-700 font-bold">já devolveu {it.jaDevolvido}</span>
                       )}
                     </div>
@@ -599,21 +662,31 @@ function OrderDetail({
                   {isSel && it.disponivel > 1 && (
                     <div className="flex items-center gap-1 shrink-0">
                       <button
-                        onClick={() => setQty(it.sku, sel - 1, it.disponivel)}
+                        onClick={() => setQty(chave, sel - 1, it.disponivel)}
                         className="w-8 h-8 bg-rose-200 rounded font-bold"
                       >
                         −
                       </button>
-                      <span className="w-8 text-center font-bold">{sel}</span>
+                      <span className="w-12 text-center font-bold">
+                        {sel} de {it.disponivel}
+                      </span>
                       <button
-                        onClick={() => setQty(it.sku, sel + 1, it.disponivel)}
+                        onClick={() => setQty(chave, sel + 1, it.disponivel)}
                         className="w-8 h-8 bg-rose-200 rounded font-bold"
                       >
                         +
                       </button>
                     </div>
                   )}
-                  {disabled && <div className="text-xs text-red-600">Tudo já devolvido</div>}
+                  {it.cancelada ? (
+                    <div className="text-xs text-gray-600">Cancelada no pedido — não foi entregue</div>
+                  ) : (
+                    disabled && (
+                      <div className="text-xs text-red-600">
+                        {it.qty > 1 ? 'Tudo já devolvido' : 'Já devolvida'}
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
             );
