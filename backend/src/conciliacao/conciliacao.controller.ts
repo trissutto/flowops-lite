@@ -12,11 +12,20 @@ export class ConciliacaoController {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
   }
 
-  /** GET /conciliacao/status — contagens por gateway e status. */
+  /**
+   * GET /conciliacao/status?status=&gateway=&origem=&loja= — os números de cima
+   * da tela, já recortados pelos MESMOS filtros da lista.
+   */
   @Get('status')
-  async status(@Req() req: any) {
+  async status(
+    @Req() req: any,
+    @Query('status') status?: string,
+    @Query('gateway') gateway?: string,
+    @Query('origem') origem?: string,
+    @Query('loja') loja?: string,
+  ) {
     this.requireAdmin(req);
-    return this.svc.status();
+    return this.svc.status({ status, gateway, origem, storeCode: loja });
   }
 
   /** POST /conciliacao/importar?dias=400 — varredura manual das fontes locais. */
