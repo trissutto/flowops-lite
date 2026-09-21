@@ -238,6 +238,17 @@ describe('origemDoPagamento — "venda física na loja, crediário, venda link, 
     expect(origemDoPagamento(tx('or_link00003', 'v1', 100, 'CHECKOUT'), venda(100, [citaPix]), citaPix)).toBe('link');
   });
 
+  it('link de pagamento do PDV pelo PagBank (21/09) = link, pago no cartão OU no PIX da página', () => {
+    const citaLinkPix: PagamentoDaVenda = {
+      id: 'p9',
+      method: 'venda_online',
+      cents: 10000,
+      details: JSON.stringify({ tipo: 'pagbank_link', formaLink: 'pix', pagbankOrderId: 'ORDE_LINKPIX01' }),
+    };
+    expect(origemDoPagamento(tx('ORDE_LINKPIX01', 'v1', 100), venda(100, [citaLinkPix]), citaLinkPix)).toBe('link');
+    expect(origemDoPagamento(tx('ORDE_LINKCARD1', 'v1', 100, 'credit_card'), venda(100, []), null)).toBe('link');
+  });
+
   it('PIX mandado pra cliente à distância (método venda_online) = pix_online', () => {
     expect(origemDoPagamento(tx('ORDE_BBBBBBBB', 'v1', 100), venda(100, [citaOnline]), citaOnline)).toBe('pix_online');
   });

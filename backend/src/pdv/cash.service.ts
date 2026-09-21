@@ -39,6 +39,8 @@ export class CashService {
    *   'pix'          → PIX direto (cliente pagou na chave da loja)
    *   'link'         → link externo (pago por fora, outro meio)
    *   'pagarme_link' → link de cartão gerado pelo Flow (Pagar.me)
+   *   'pagbank_link' → link de pagamento do Flow pelo PagBank (21/09 — cartão
+   *                    ou PIX pela página /pague/<token>; forma em `formaLink`)
    *
    * O PDV já grava isso desde que a venda online existe; o painel só não
    * mostrava — "VENDA ONLINE R$ 80,95" não dizia COMO entrou o dinheiro.
@@ -231,7 +233,7 @@ export class CashService {
         sellerName: string | null;
         finalizedAt: string | null;
         parcelas?: number;
-        // Venda online: 'pix' | 'link' | 'pagarme_link' (ver onlineTipoDoPagamento)
+        // Venda online: 'pix' | 'link' | 'pagarme_link' | 'pagbank_link' | 'pix_gerar' (ver onlineTipoDoPagamento)
         onlineTipo?: string | null;
         // Itens pra recebimentos crediário — lista de parcelas individuais pagas
         items?: Array<{

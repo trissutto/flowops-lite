@@ -228,6 +228,9 @@ const ONLINE_FORMATOS: Array<{ key: string; label: string; curto: string }> = [
   { key: 'pix', label: 'PIX direto (chave da loja)', curto: 'PIX direto' },
   { key: 'link', label: 'Link externo (pago por fora)', curto: 'Link externo' },
   { key: 'pagarme_link', label: 'Link Pagar.me (cartão)', curto: 'Link cartão' },
+  // Link de pagamento pelo PagBank (21/09): cartão ou PIX pela página /pagar.
+  { key: 'pagbank_link', label: 'Link PagBank (cartão ou PIX)', curto: 'Link PagBank' },
+  { key: 'pix_gerar', label: 'PIX gerado pra cliente (PagBank)', curto: 'PIX gerado' },
   { key: '', label: 'Formato não informado', curto: 'Sem formato' },
 ];
 

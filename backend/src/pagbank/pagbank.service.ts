@@ -2,13 +2,25 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  HttpException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import * as crypto from 'crypto';
-import { SELECT_VENDA_COBRANCA } from '../common/cobranca-venda-online';
+import { SELECT_VENDA_COBRANCA, restanteCentsDaVenda } from '../common/cobranca-venda-online';
+import { cpfValido } from '../common/dados-cliente-online';
+import {
+  EstadoLinkPagbank,
+  ORIGEM_LINK_PAGBANK,
+  estadoDoLinkPagbank,
+  linkPagbankVenceEm,
+  maxParcelasLink,
+  maxTentativasCartaoLink,
+  mensagemRecusaCartaoLink,
+  referenciaCartaoLink,
+} from '../common/link-pagamento-pagbank';
 import {
   CartaoPagbankLido,
   erroHttpEhDadoDoCartao,
@@ -309,7 +321,8 @@ export class PagbankService {
     expiresInMinutes?: number;
     /**
      * 'venda_online' = PIX do painel Venda Online do PDV; 'site' = PIX do
-     * checkout de lurds.com.br (ver coluna `origem`).
+     * checkout de lurds.com.br; 'venda_online_link' = PIX do link de
+     * pagamento do PDV (`/pague/<token>`) (ver coluna `origem`).
      */
     origem?: string | null;
   }): Promise<{
@@ -318,6 +331,8 @@ export class PagbankService {
     qrCodeImageB64: string;
     expiresAt: Date;
     valor: number;
+    /** Token da cobrança (`/qr/<token>` e, no link do PDV, `/pague/<token>`). */
+    linkToken: string;
     /**
      * Link público /qr/<token> — é ELE que vai no WhatsApp, não o
      * copia-e-cola cru. O EMV da PagBank tem uma URL no meio
@@ -494,7 +509,10 @@ export class PagbankService {
         valor: input.valor,
         status: 'pending',
         // Só o valor conhecido entra; qualquer outra coisa vira null (balcão).
-        origem: input.origem === 'venda_online' || input.origem === 'site' ? input.origem : null,
+        origem:
+          input.origem === 'venda_online' || input.origem === 'site' || input.origem === ORIGEM_LINK_PAGBANK
+            ? input.origem
+            : null,
         qrCodeText,
         qrCodeImageB64,
         linkToken,
@@ -504,7 +522,8 @@ export class PagbankService {
 
     this.logger.log(
       `[pagbank] PIX criado: order=${orderId} sale=${input.saleId} loja=${input.storeCode} R$${input.valor.toFixed(2)}` +
-        (input.origem === 'venda_online' ? ' (venda online)' : ''),
+        (input.origem === 'venda_online' ? ' (venda online)' : '') +
+        (input.origem === ORIGEM_LINK_PAGBANK ? ' (link de pagamento)' : ''),
     );
 
     return {
@@ -513,6 +532,7 @@ export class PagbankService {
       qrCodeImageB64,
       expiresAt,
       valor: input.valor,
+      linkToken,
       shortUrl: `${this.baseUrlPublica()}/qr/${linkToken}`,
     };
   }
@@ -1059,7 +1079,8 @@ export class PagbankService {
     holderTaxId: string;
     customer: { name: string; email: string; cpf: string; phone: string };
     shippingAddress?: PagbankEndereco | null;
-    origem: 'site';
+    /** 'site' = checkout de lurds.com.br; 'venda_online_link' = página do link do PDV. */
+    origem: 'site' | typeof ORIGEM_LINK_PAGBANK;
   }): Promise<
     | { ok: true; status: 'paid' | 'pending'; pagbankOrderId: string; pagbankChargeId: string | null; lido: CartaoPagbankLido }
     | { ok: false; kind: 'recusa' | 'integracao'; detalhe: string; lido?: CartaoPagbankLido; pagbankOrderId?: string | null; pagbankChargeId?: string | null }
@@ -1182,7 +1203,8 @@ export class PagbankService {
 
     // A MESMA tabela do PIX do PDV/live: conciliação, painel e webhook
     // enxergam a venda do site por aqui. `origem='site'` é o que o
-    // `LojaOrdersService` usa pra saber que o evento é dele.
+    // `LojaOrdersService` usa pra saber que o evento é dele; o link do PDV
+    // grava a origem dele, que é o que os reconciliadores do PDV leem.
     try {
       await (this.prisma as any).pagbankPayment.create({
         data: {
@@ -1193,7 +1215,7 @@ export class PagbankService {
           method: 'credit_card',
           valor: input.valor,
           status,
-          origem: 'site',
+          origem: input.origem === ORIGEM_LINK_PAGBANK ? ORIGEM_LINK_PAGBANK : 'site',
           ...(status === 'paid' ? { paidAt: new Date() } : {}),
           rawWebhook: JSON.stringify(order).slice(0, 5000),
         },
@@ -1380,6 +1402,575 @@ export class PagbankService {
       // travas, e assim a rota não faz dois SELECT na mesma venda.
       select: SELECT_VENDA_COBRANCA,
     });
+  }
+
+  // ── LINK DE PAGAMENTO DO PDV (21/09/2026) ───────────────────────────
+  //
+  // A história e a régua moram em `common/link-pagamento-pagbank.ts`. Em uma
+  // linha: a Pagar.me desligou o checkout da conta e o link pronto do PagBank
+  // pede allowlist, então o link é NOSSO (`/pague/<token>`) e cobra pela
+  // Orders API — PIX, ou cartão criptografado no navegador (o caminho do site).
+  //
+  // Quem fecha a venda NÃO é este bloco: tudo nasce em `pagbank_payments` com
+  // a origem do link, e os reconciliadores que já existem (gateway → `paid`;
+  // PDV → registra `venda_online` e finaliza) fazem o resto, com a vendedora
+  // em outro atendimento ou com o PDV desligado.
+
+  /** Última conferência ao vivo por venda — o botão "Conferir" não martela o PagBank. */
+  private readonly ultimaConferenciaLink = new Map<string, number>();
+  /** Venda com cartão EM VOO — dois toques no "Pagar" não viram duas cobranças. */
+  private readonly cartaoLinkEmVoo = new Set<string>();
+  /** Loja cuja chave pública falhou há pouco — o polling da página não martela o PagBank. */
+  private readonly chaveCartaoFalhouEm = new Map<string, number>();
+
+  private static readonly RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+  /**
+   * GERA O LINK: um PIX de venda online com a origem do link — a "âncora". O
+   * token dele é o da página. A rota do PDV já conferiu venda aberta, forma de
+   * entrega e valor cheio antes de chegar aqui.
+   */
+  async criarLinkPagamento(input: {
+    saleId: string;
+    valor: number;
+    storeCode: string;
+    customerName?: string;
+    customerCpf?: string;
+    customerEmail?: string;
+    customerPhone?: string;
+  }): Promise<{
+    gateway: 'pagbank';
+    pagbankOrderId: string;
+    paymentUrl: string;
+    shortUrl: string;
+    expiresAt: Date;
+    valor: number;
+    tentativasCartao: number;
+  }> {
+    // O e-mail/celular que a vendedora digitou no painel é o que o cartão vai
+    // usar lá na página (e é o que o antifraude pontua). Só preenche o que a
+    // venda NÃO tem — cadastro existente não é reescrito.
+    await this.completarContatoDaVenda(input.saleId, input.customerEmail, input.customerPhone);
+
+    const pix = await this.createPixCharge({
+      saleId: input.saleId,
+      valor: input.valor,
+      storeCode: input.storeCode,
+      customerName: input.customerName,
+      customerCpf: input.customerCpf,
+      customerEmail: input.customerEmail,
+      customerPhone: input.customerPhone,
+      descricao: `Venda Online ${input.storeCode}`,
+      // O CÓDIGO PIX vale 1h (igual ao "Gerar PIX"); o LINK vale
+      // `PAGBANK_LINK_HORAS`. Código vencido, a página gera outro.
+      expiresInMinutes: 60,
+      origem: ORIGEM_LINK_PAGBANK,
+    });
+    const url = `${this.baseUrlPublica()}/pague/${pix.linkToken}`;
+    const tentativasCartao = await this.contarCartoesDaVenda(input.saleId);
+    this.logger.log(
+      `[pagbank-link] link gerado: sale=${input.saleId} loja=${input.storeCode} ` +
+        `R$${Number(input.valor).toFixed(2)} → /pague/${pix.linkToken}`,
+    );
+    return {
+      gateway: 'pagbank',
+      pagbankOrderId: pix.pagbankOrderId,
+      paymentUrl: url,
+      shortUrl: url,
+      expiresAt: linkPagbankVenceEm(new Date()),
+      valor: input.valor,
+      tentativasCartao,
+    };
+  }
+
+  /**
+   * O QUE A PÁGINA `/pague/<token>` MOSTRA — e o que ela consulta no polling.
+   *
+   * Lê só do nosso Postgres (quem mantém o status fresco é o webhook + o
+   * reconciliador); a única ida ao PagBank é a chave pública do cartão, que
+   * fica guardada na config depois da primeira vez. Não expõe CPF, telefone,
+   * e-mail nem itens — só valor, loja e o que a cliente precisa pra pagar.
+   */
+  async estadoDoLinkPublico(token: string): Promise<{
+    estado: EstadoLinkPagbank | 'inexistente';
+    motivo?: string;
+    mensagem?: string;
+    valor?: number;
+    lojaNome?: string;
+    lojaWhatsapp?: string | null;
+    venceEm?: Date;
+    pagoEm?: Date | null;
+    formaPaga?: 'pix' | 'cartao';
+    pix?: { qrCodeText: string; qrCodeImageB64: string; expiraEm: Date | null } | null;
+    cartao?: {
+      habilitado: boolean;
+      publicKey: string | null;
+      maxParcelas: number;
+      tentativasRestantes: number;
+      emAnalise: boolean;
+      precisaEmail: boolean;
+      precisaCelular: boolean;
+      motivo?: string;
+    };
+  }> {
+    const p = await this.linhaDoLink(token);
+    if (!p) return { estado: 'inexistente' };
+    const [venda, cobr, loja] = await Promise.all([
+      this.vendaDoLink(p.saleId),
+      this.cobrancasDaVendaDoLink(p.saleId),
+      this.dadosDaLoja(p.storeCode),
+    ]);
+    const sit = this.situacaoDoLink(p, venda, cobr);
+    const base = {
+      valor: Number(p.valor) || 0,
+      lojaNome: loja.nome,
+      lojaWhatsapp: loja.whatsapp,
+      venceEm: sit.venceEm,
+    };
+
+    if (sit.estado === 'pago') {
+      const paga = cobr.find((c) => c.status === 'paid');
+      return {
+        estado: 'pago',
+        ...base,
+        pagoEm: paga?.paidAt ?? null,
+        formaPaga: paga?.method === 'credit_card' ? 'cartao' : 'pix',
+      };
+    }
+    if (sit.estado !== 'aberto') {
+      return { estado: sit.estado, motivo: sit.motivo, mensagem: this.fraseDoLink(sit), ...base };
+    }
+
+    const vivo = this.pixVivoDoLink(cobr);
+    const [pix, cartao] = await Promise.all([
+      vivo ? this.qrDaCobranca(vivo.pagbankOrderId) : Promise.resolve(null),
+      this.cartaoDoLinkInfo(p.storeCode, venda, cobr),
+    ]);
+    return { estado: 'aberto', ...base, pix, cartao };
+  }
+
+  /** O QR de UMA cobrança — as listas não carregam imagem (o polling é de 10s). */
+  private async qrDaCobranca(
+    pagbankOrderId: string,
+  ): Promise<{ qrCodeText: string; qrCodeImageB64: string; expiraEm: Date | null } | null> {
+    const q: any = await (this.prisma as any).pagbankPayment.findUnique({
+      where: { pagbankOrderId },
+      select: { qrCodeText: true, qrCodeImageB64: true, expiresAt: true },
+    });
+    if (!q?.qrCodeText) return null;
+    return {
+      qrCodeText: String(q.qrCodeText),
+      qrCodeImageB64: String(q.qrCodeImageB64 || ''),
+      expiraEm: q.expiresAt ?? null,
+    };
+  }
+
+  /**
+   * PIX PELA PÁGINA: devolve o código que ainda está de pé ou gera outro (o
+   * código vale 1h; o link, dias). Idempotente enquanto o código vive —
+   * tocar duas vezes não cria duas cobranças.
+   */
+  async pixDoLinkPublico(token: string): Promise<{ qrCodeText: string; qrCodeImageB64: string; expiraEm: Date | null }> {
+    const p = await this.linhaDoLink(token);
+    if (!p) throw new NotFoundException('Link não encontrado');
+    const [venda, cobr] = await Promise.all([this.vendaDoLink(p.saleId), this.cobrancasDaVendaDoLink(p.saleId)]);
+    const sit = this.situacaoDoLink(p, venda, cobr);
+    if (sit.estado !== 'aberto') throw new BadRequestException(this.fraseDoLink(sit));
+
+    const vivo = this.pixVivoDoLink(cobr);
+    if (vivo) {
+      const qr = await this.qrDaCobranca(vivo.pagbankOrderId);
+      if (qr) return qr;
+    }
+    const gerados = cobr.filter((c) => c.origem === ORIGEM_LINK_PAGBANK && c.method === 'pix').length;
+    if (gerados >= 20) {
+      throw new HttpException('Muitos códigos PIX gerados pra este pedido. Fale com a loja 💜', 429);
+    }
+    // O código novo não pode passar da validade do LINK.
+    const minutosDoLink = Math.floor((sit.venceEm.getTime() - Date.now()) / 60_000);
+    const novo = await this.createPixCharge({
+      saleId: p.saleId,
+      valor: Number(p.valor),
+      storeCode: p.storeCode,
+      customerName: venda?.customerName || undefined,
+      customerCpf: venda?.customerCpf || undefined,
+      customerEmail: venda?.customerEmail || undefined,
+      customerPhone: venda?.customerPhone || undefined,
+      descricao: `Venda Online ${p.storeCode}`,
+      expiresInMinutes: Math.max(5, Math.min(60, minutosDoLink)),
+      origem: ORIGEM_LINK_PAGBANK,
+    });
+    return { qrCodeText: novo.qrCodeText, qrCodeImageB64: novo.qrCodeImageB64, expiraEm: novo.expiresAt };
+  }
+
+  /**
+   * CARTÃO PELA PÁGINA. O cartão chega CRIPTOGRAFADO pelo SDK do PagBank no
+   * navegador da cliente — número e CVV nunca passam por aqui (PCI).
+   *
+   * Defesas de página aberta (o ataque de 28/08 no site testou ~650 cartões):
+   * token sorteado, teto de tentativas POR VENDA, uma cobrança em voo por
+   * venda, e o rate limit por IP no controller.
+   */
+  async cartaoDoLinkPublico(
+    token: string,
+    input: {
+      cardEncrypted?: string;
+      holderName?: string;
+      holderCpf?: string;
+      installments?: number;
+      email?: string;
+      phone?: string;
+    },
+  ): Promise<{ resultado: 'pago' | 'analise' | 'recusado' | 'erro'; mensagem: string; tentativasRestantes: number }> {
+    const p = await this.linhaDoLink(token);
+    if (!p) throw new NotFoundException('Link não encontrado');
+
+    const enc = String(input?.cardEncrypted || '').trim();
+    if (enc.length < 50 || enc.length > 8000) {
+      throw new BadRequestException('Não conseguimos ler o cartão. Confira os dados e tente de novo.');
+    }
+    const holderName = String(input?.holderName || '').trim().replace(/\s+/g, ' ').slice(0, 64);
+    if (holderName.length < 3) throw new BadRequestException('Digite o nome como está impresso no cartão.');
+    const holderCpf = String(input?.holderCpf || '').replace(/\D/g, '');
+    if (!cpfValido(holderCpf)) throw new BadRequestException('Confira o CPF do titular do cartão.');
+    const parcelas = Math.floor(Number(input?.installments) || 1);
+    if (parcelas < 1 || parcelas > maxParcelasLink()) throw new BadRequestException('Parcelamento inválido.');
+
+    if (this.cartaoLinkEmVoo.has(p.saleId)) {
+      throw new HttpException('Já estamos processando o seu pagamento — aguarde um instante 💜', 409);
+    }
+    this.cartaoLinkEmVoo.add(p.saleId);
+    try {
+      const [venda, cobr] = await Promise.all([this.vendaDoLink(p.saleId), this.cobrancasDaVendaDoLink(p.saleId)]);
+      const sit = this.situacaoDoLink(p, venda, cobr);
+      if (sit.estado !== 'aberto') throw new BadRequestException(this.fraseDoLink(sit));
+
+      const max = maxTentativasCartaoLink();
+      const usadas = cobr.filter((c) => c.method === 'credit_card').length;
+      if (cobr.some((c) => c.method === 'credit_card' && c.status === 'pending')) {
+        throw new BadRequestException(
+          'Seu pagamento com cartão está em análise no banco. Assim que ele responder, esta página confirma sozinha 💜',
+        );
+      }
+      if (usadas >= max) {
+        throw new HttpException(
+          'Este pedido já teve muitas tentativas no cartão. Pague com PIX ou fale com a loja 💜',
+          429,
+        );
+      }
+
+      const emailVenda = String(venda?.customerEmail || '').trim();
+      const email = PagbankService.RE_EMAIL.test(emailVenda) ? emailVenda : String(input?.email || '').trim();
+      if (!PagbankService.RE_EMAIL.test(email)) {
+        throw new BadRequestException('Digite um e-mail válido pra receber a confirmação.');
+      }
+      const fone = this.telefonePagbank(venda?.customerPhone) ? String(venda.customerPhone) : String(input?.phone || '');
+      if (!this.telefonePagbank(fone)) throw new BadRequestException('Digite um celular com DDD.');
+      const cpfCliente = cpfValido(venda?.customerCpf) ? String(venda.customerCpf).replace(/\D/g, '') : holderCpf;
+      const nomeVenda = String(venda?.customerName || '').trim();
+      const nome = nomeVenda.split(/\s+/).filter(Boolean).length >= 2 ? nomeVenda : holderName;
+
+      const r = await this.createCardCharge({
+        saleId: p.saleId,
+        storeCode: p.storeCode,
+        valor: Number(p.valor),
+        referencia: referenciaCartaoLink(p.saleId, p.storeCode, usadas + 1),
+        descricao: `Venda Online ${p.storeCode}`,
+        installments: parcelas,
+        cardEncrypted: enc,
+        holderName,
+        holderTaxId: holderCpf,
+        customer: { name: nome, email, cpf: cpfCliente, phone: fone },
+        shippingAddress: this.enderecoDaVenda(venda),
+        origem: ORIGEM_LINK_PAGBANK,
+      });
+
+      if (r.ok) {
+        await this.completarContatoDaVenda(p.saleId, email, fone);
+        this.logger.log(
+          `[pagbank-link] cartão ${r.status === 'paid' ? 'APROVADO' : 'EM ANÁLISE'}: sale=${p.saleId} ` +
+            `loja=${p.storeCode} ${parcelas}x R$${Number(p.valor).toFixed(2)} order=${r.pagbankOrderId}`,
+        );
+        return r.status === 'paid'
+          ? { resultado: 'pago', mensagem: 'Pagamento aprovado! 💜', tentativasRestantes: Math.max(0, max - usadas - 1) }
+          : {
+              resultado: 'analise',
+              mensagem: 'Seu pagamento está em análise no banco. Assim que ele confirmar, esta página avisa sozinha 💜',
+              tentativasRestantes: Math.max(0, max - usadas - 1),
+            };
+      }
+      // Recusa com order criada gasta tentativa; falha nossa (sem order) não.
+      const gastou = !!r.pagbankOrderId;
+      const restantes = Math.max(0, max - usadas - (gastou ? 1 : 0));
+      if (r.kind === 'recusa') {
+        return { resultado: 'recusado', mensagem: mensagemRecusaCartaoLink(r.lido?.mensagem || r.detalhe), tentativasRestantes: restantes };
+      }
+      return {
+        resultado: 'erro',
+        mensagem:
+          'Não conseguimos falar com a operadora agora — o problema não é o seu cartão. ' +
+          'Tente de novo em instantes ou pague com PIX. 💜',
+        tentativasRestantes: restantes,
+      };
+    } finally {
+      this.cartaoLinkEmVoo.delete(p.saleId);
+    }
+  }
+
+  /**
+   * O PDV PERGUNTA: o link desta venda foi pago? Qualquer cobrança do link
+   * paga (PIX ou cartão) responde `paid` com o id da order — é ele que vai no
+   * `details` do pagamento e que a prova de pagamento confere.
+   */
+  async statusDoLinkPorVenda(saleId: string): Promise<{
+    found: boolean;
+    status: 'paid' | 'pending' | 'none';
+    isPaid: boolean;
+    pagbankOrderId?: string;
+    forma?: 'pix' | 'credito';
+    paidAt?: Date | null;
+    valor?: number;
+    emAnalise?: boolean;
+    tentativasCartao: number;
+  }> {
+    const cobr = (await this.cobrancasDaVendaDoLink(saleId)).filter((c) => c.origem === ORIGEM_LINK_PAGBANK);
+    const tentativasCartao = cobr.filter((c) => c.method === 'credit_card').length;
+    if (!cobr.length) return { found: false, status: 'none', isPaid: false, tentativasCartao };
+    const paga = cobr.find((c) => c.status === 'paid');
+    if (paga) {
+      return {
+        found: true,
+        status: 'paid',
+        isPaid: true,
+        pagbankOrderId: paga.pagbankOrderId,
+        forma: paga.method === 'credit_card' ? 'credito' : 'pix',
+        paidAt: paga.paidAt ?? null,
+        valor: Number(paga.valor) || 0,
+        tentativasCartao,
+      };
+    }
+    return {
+      found: true,
+      status: 'pending',
+      isPaid: false,
+      emAnalise: cobr.some((c) => c.method === 'credit_card' && c.status === 'pending'),
+      tentativasCartao,
+    };
+  }
+
+  /**
+   * Botão "Conferir" do PDV: pergunta AO VIVO pelas cobranças ainda pendentes
+   * do link (webhook atrasado). No máximo uma vez a cada 15s por venda.
+   */
+  async conferirLinkPorVenda(saleId: string) {
+    const agora = Date.now();
+    const ultima = this.ultimaConferenciaLink.get(saleId) || 0;
+    if (agora - ultima >= 15_000) {
+      this.ultimaConferenciaLink.set(saleId, agora);
+      if (this.ultimaConferenciaLink.size > 2000) this.ultimaConferenciaLink.clear();
+      const cobr = (await this.cobrancasDaVendaDoLink(saleId)).filter(
+        (c) =>
+          c.origem === ORIGEM_LINK_PAGBANK &&
+          c.status === 'pending' &&
+          (c.method === 'credit_card' || !c.expiresAt || new Date(c.expiresAt).getTime() > agora - 6 * 3600_000),
+      );
+      for (const c of cobr.slice(0, 5)) {
+        try {
+          await this.checkOrderStatus(c.pagbankOrderId);
+        } catch (e: any) {
+          this.logger.warn(`[pagbank-link] conferir ${c.pagbankOrderId} falhou: ${e?.message || e}`);
+        }
+      }
+    }
+    return this.statusDoLinkPorVenda(saleId);
+  }
+
+  /** Quantas tentativas de cartão pelo PagBank esta venda já teve. */
+  private async contarCartoesDaVenda(saleId: string): Promise<number> {
+    return (this.prisma as any).pagbankPayment
+      .count({ where: { saleId, method: 'credit_card' } })
+      .catch(() => 0);
+  }
+
+  /** A linha do token — só cobrança nascida do link abre a página de pagamento. */
+  private async linhaDoLink(token: string): Promise<any | null> {
+    const t = String(token || '').trim();
+    if (!t || t.length > 40) return null;
+    const p: any = await (this.prisma as any).pagbankPayment.findUnique({ where: { linkToken: t } });
+    if (!p || p.origem !== ORIGEM_LINK_PAGBANK) return null;
+    return p;
+  }
+
+  /**
+   * TODAS as cobranças PagBank da venda — não só as do link: um PIX de balcão
+   * ou um "Gerar PIX" pago na mesma venda também encerra o link (senão a
+   * cliente paga duas vezes).
+   */
+  private async cobrancasDaVendaDoLink(saleId: string): Promise<any[]> {
+    return (this.prisma as any).pagbankPayment.findMany({
+      where: { saleId },
+      orderBy: { createdAt: 'desc' },
+      take: 60,
+      // Sem o QR (a imagem pesa): quem precisa dele busca UMA linha em `qrDaCobranca`.
+      select: {
+        pagbankOrderId: true,
+        method: true,
+        status: true,
+        origem: true,
+        valor: true,
+        expiresAt: true,
+        createdAt: true,
+        paidAt: true,
+      },
+    });
+  }
+
+  private async vendaDoLink(saleId: string): Promise<any | null> {
+    return (this.prisma as any).pdvSale.findUnique({
+      where: { id: String(saleId || '') },
+      select: {
+        ...SELECT_VENDA_COBRANCA,
+        storeCode: true,
+        customerName: true,
+        customerCpf: true,
+        customerEmail: true,
+        customerPhone: true,
+        customerCep: true,
+        customerEndereco: true,
+        customerNumero: true,
+        customerComplemento: true,
+        customerBairro: true,
+        customerCidade: true,
+        customerUf: true,
+      },
+    });
+  }
+
+  /**
+   * Estado do link + a trava do VALOR: o link cobra exatamente o que a venda
+   * deve. Se a loja mexeu na venda depois de mandar o link (peça a mais, a
+   * menos), pagar o valor velho deixaria a venda sem fechar ou paga a mais —
+   * a página recusa e manda pedir um link novo.
+   */
+  private situacaoDoLink(
+    p: any,
+    venda: any,
+    cobr: any[],
+  ): { estado: EstadoLinkPagbank; motivo?: 'valor' | 'quitada'; venceEm: Date } {
+    const venceEm = linkPagbankVenceEm(p.createdAt);
+    const estado = estadoDoLinkPagbank({
+      statusDasCobrancas: cobr.map((c) => String(c.status || '')),
+      statusDaVenda: venda?.status ?? null,
+      venceEm,
+    });
+    if (estado !== 'aberto') return { estado, venceEm };
+    const restante = restanteCentsDaVenda(venda);
+    if (restante <= 0) return { estado: 'encerrado', motivo: 'quitada', venceEm };
+    if (Math.abs(Math.round(Number(p.valor || 0) * 100) - restante) > 1) {
+      return { estado: 'encerrado', motivo: 'valor', venceEm };
+    }
+    return { estado: 'aberto', venceEm };
+  }
+
+  private fraseDoLink(sit: { estado: string; motivo?: string }): string {
+    if (sit.estado === 'pago') return 'Este pedido já está pago 💜';
+    if (sit.estado === 'vencido') {
+      return 'Este link venceu — nada foi cobrado. Fale com a loja pra receber um link novo 💜';
+    }
+    if (sit.motivo === 'valor') {
+      return 'O valor do seu pedido mudou depois que o link foi gerado — nada foi cobrado. Fale com a loja pra receber um link novo 💜';
+    }
+    return 'Este link não está mais ativo — nada foi cobrado. Fale com a loja 💜';
+  }
+
+  /** O código PIX do link que ainda dá tempo de pagar (margem de 2 min). */
+  private pixVivoDoLink(cobr: any[]): any | null {
+    const limite = Date.now() + 2 * 60_000;
+    return (
+      cobr.find(
+        (c) =>
+          c.origem === ORIGEM_LINK_PAGBANK &&
+          c.method === 'pix' &&
+          c.status === 'pending' &&
+          c.expiresAt &&
+          new Date(c.expiresAt).getTime() > limite,
+      ) || null
+    );
+  }
+
+  private async cartaoDoLinkInfo(storeCode: string, venda: any, cobr: any[]) {
+    const max = maxTentativasCartaoLink();
+    const usadas = cobr.filter((c) => c.method === 'credit_card').length;
+    const emAnalise = cobr.some((c) => c.method === 'credit_card' && c.status === 'pending');
+    let motivo: string | undefined;
+    let publicKey: string | null = null;
+    if (emAnalise) motivo = 'analise';
+    else if (usadas >= max) motivo = 'tentativas';
+    else {
+      const falhou = this.chaveCartaoFalhouEm.get(storeCode) || 0;
+      if (Date.now() - falhou < 60_000) motivo = 'indisponivel';
+      else {
+        try {
+          publicKey = (await this.chavePublicaCartao(storeCode)).publicKey;
+        } catch (e: any) {
+          this.chaveCartaoFalhouEm.set(storeCode, Date.now());
+          this.logger.warn(`[pagbank-link] chave pública da loja ${storeCode} indisponível: ${e?.message || e}`);
+          motivo = 'indisponivel';
+        }
+      }
+    }
+    return {
+      habilitado: !!publicKey && !motivo,
+      publicKey,
+      maxParcelas: maxParcelasLink(),
+      tentativasRestantes: Math.max(0, max - usadas),
+      emAnalise,
+      precisaEmail: !PagbankService.RE_EMAIL.test(String(venda?.customerEmail || '').trim()),
+      precisaCelular: !this.telefonePagbank(venda?.customerPhone),
+      ...(motivo ? { motivo } : {}),
+    };
+  }
+
+  /** Endereço de entrega da venda online no formato do PagBank — só se estiver completo. */
+  private enderecoDaVenda(venda: any): PagbankEndereco | null {
+    const cep = String(venda?.customerCep || '').replace(/\D/g, '');
+    const street = String(venda?.customerEndereco || '').trim();
+    const city = String(venda?.customerCidade || '').trim();
+    const uf = String(venda?.customerUf || '').trim().toUpperCase();
+    if (cep.length !== 8 || !street || !city || uf.length !== 2) return null;
+    return {
+      street,
+      number: String(venda?.customerNumero || '').trim() || 'S/N',
+      complement: String(venda?.customerComplemento || '').trim() || undefined,
+      neighborhood: String(venda?.customerBairro || '').trim() || 'Centro',
+      city,
+      uf,
+      cep,
+    };
+  }
+
+  /** Grava e-mail/celular na venda SÓ onde ela não tem — nunca reescreve cadastro. */
+  private async completarContatoDaVenda(saleId: string, email?: string | null, phone?: string | null): Promise<void> {
+    const e = String(email || '').trim().slice(0, 254);
+    let f = String(phone || '').replace(/\D/g, '');
+    if ((f.length === 12 || f.length === 13) && f.startsWith('55')) f = f.slice(2);
+    try {
+      if (PagbankService.RE_EMAIL.test(e)) {
+        await (this.prisma as any).pdvSale.updateMany({
+          where: { id: saleId, OR: [{ customerEmail: null }, { customerEmail: '' }] },
+          data: { customerEmail: e },
+        });
+      }
+      if (f.length === 10 || f.length === 11) {
+        await (this.prisma as any).pdvSale.updateMany({
+          where: { id: saleId, OR: [{ customerPhone: null }, { customerPhone: '' }] },
+          data: { customerPhone: f },
+        });
+      }
+    } catch (err: any) {
+      // Contato é bônus pra cobrança — nunca derruba o link.
+      this.logger.warn(`[pagbank-link] contato não gravado na venda ${saleId}: ${err?.message || err}`);
+    }
   }
 
   // ── Diagnóstico ─────────────────────────────────────────────────────

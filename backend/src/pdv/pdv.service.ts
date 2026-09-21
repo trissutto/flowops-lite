@@ -24,6 +24,7 @@ import { faltandoDadosClienteOnline } from '../common/dados-cliente-online';
 import { vendaViraPedidoOnline } from '../common/venda-vira-pedido-online';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { SQL_SEM_LOJA_CANAL, ehLojaCanal } from '../common/loja-canal';
+import { ORIGEM_LINK_PAGBANK, TIPO_LINK_PAGBANK, ehOrigemVendaOnline } from '../common/link-pagamento-pagbank';
 import {
   assumirAtendimentoCarrinho,
   atendimentosAtivosCarrinho,
@@ -4773,16 +4774,37 @@ export class PdvService {
        * O segundo sinal cobre as cobranças criadas antes desta versão.
        */
       const cobranca: any = await (this.prisma as any).pagbankPayment
-        .findUnique({ where: { pagbankOrderId: input.pagbankOrderId }, select: { origem: true } })
+        .findUnique({ where: { pagbankOrderId: input.pagbankOrderId }, select: { origem: true, method: true } })
         .catch(() => null);
       const vendaOnline =
-        cobranca?.origem === 'venda_online' || !!String(sale.entregaTipo || '').trim();
+        ehOrigemVendaOnline(cobranca?.origem) || !!String(sale.entregaTipo || '').trim();
+      /**
+       * LINK DE PAGAMENTO DO PDV PELO PAGBANK (21/09). Mesmo `venda_online`,
+       * com o tipo do link — e, quando a cliente pagou no CARTÃO, nada de
+       * pixTxid/pixProvider: não foi PIX. A forma real fica em `formaLink`,
+       * igual ao registro do link da Pagar.me (`PagarmeLinkReconcileService`).
+       */
+      const doLink = cobranca?.origem === ORIGEM_LINK_PAGBANK;
+      const noCartao = String(cobranca?.method || '') === 'credit_card';
 
       await this.addPayment({
         saleId: sale.id,
         method: vendaOnline ? 'venda_online' : 'pix',
         valor: input.valor,
-        details: vendaOnline
+        details: doLink
+          ? {
+              tipo: TIPO_LINK_PAGBANK,
+              origem: 'whatsapp_instagram',
+              formaLink: noCartao ? 'credito' : 'pix',
+              pagbankOrderId: input.pagbankOrderId,
+              ...(noCartao
+                ? {}
+                : { pixTxid: input.pagbankOrderId, pixChave: 'PagBank', pixProvider: 'pagbank' }),
+              linkPagbank: true,
+              paidByWebhook: true,
+              reconciliadoPeloCron: true,
+            }
+          : vendaOnline
           ? {
               // O MESMO registro que o botão FINALIZAR da tela grava pra
               // "Gerar PIX" — o finalize e os relatórios leem igual.

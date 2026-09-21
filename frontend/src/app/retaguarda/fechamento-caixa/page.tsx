@@ -79,7 +79,8 @@ const BANDEIRA_LABEL: Record<string, string> = {
   DEBITO_GENERICO: 'Sem bandeira',
 };
 const ONLINE_LABEL: Record<string, string> = {
-  pix: 'PIX direto', link: 'Link externo', pagarme_link: 'Link cartão', '': 'Sem formato',
+  pix: 'PIX direto', link: 'Link externo', pagarme_link: 'Link cartão', pagbank_link: 'Link PagBank',
+  pix_gerar: 'PIX gerado', '': 'Sem formato',
 };
 
 /**

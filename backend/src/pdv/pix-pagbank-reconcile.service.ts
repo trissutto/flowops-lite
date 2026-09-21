@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PdvService } from './pdv.service';
+import { ORIGEM_LINK_PAGBANK } from '../common/link-pagamento-pagbank';
 
 /**
  * PIX PAGO QUE NINGUÉM FECHOU — a rede de segurança do PDV (dono 07/08).
@@ -86,14 +87,23 @@ export class PixPagbankReconcileService {
     // recentes (todos já finalizados) — ela nunca chegava a ser olhada.
     // Custo: 2 queries baratas por ciclo; ids de baixa de crediário (que
     // também vivem em pagbank_payments) caem fora naturalmente no filtro.
-    const pagos: Array<{ saleId: string; pagbankOrderId: string; valor: number }> =
+    const pagos: Array<{ saleId: string; pagbankOrderId: string; valor: number; origem: string | null }> =
       await (this.prisma as any).pagbankPayment.findMany({
-        where: { status: 'paid', method: 'pix', paidAt: { gte: desde } },
+        where: {
+          status: 'paid',
+          paidAt: { gte: desde },
+          // O CARTÃO do link de pagamento do PDV (21/09) fecha a venda pelo
+          // MESMO caminho do PIX — é dinheiro de venda online no PagBank. O
+          // cartão do site (`origem='site'`) não é venda de PDV e fica fora.
+          OR: [{ method: 'pix' }, { method: 'credit_card', origem: ORIGEM_LINK_PAGBANK }],
+        },
         orderBy: { paidAt: 'desc' },
         take: 500,
-        select: { saleId: true, pagbankOrderId: true, valor: true },
+        select: { saleId: true, pagbankOrderId: true, valor: true, origem: true },
       });
     if (!pagos.length) return;
+
+    await this.avisarLinkPagoEmVendaFechada(pagos);
 
     const abertas: Array<{ id: string }> = await (this.prisma as any).pdvSale.findMany({
       where: { id: { in: [...new Set(pagos.map((p) => p.saleId))] }, status: 'open' },
@@ -148,6 +158,42 @@ export class PixPagbankReconcileService {
 
   /** Ids já avisados — evita o mesmo warn a cada ciclo de 30s. Zera no deploy, tudo bem. */
   private readonly orfaosAvisados = new Set<string>();
+
+  /**
+   * LINK PAGO NUMA VENDA QUE JÁ NÃO ESTÁ ABERTA (21/09).
+   *
+   * O link de pagamento do PDV aceita PIX E cartão na mesma página. A página
+   * se fecha quando algo é pago, mas nada impede a cliente de ter copiado o
+   * código PIX antes de pagar no cartão — ou a loja de cancelar a venda com o
+   * link ainda na rua. O filtro de venda ABERTA lá embaixo deixaria esse
+   * dinheiro passar em silêncio (é a regra do PIX órfão de 11/08): pago no
+   * gateway, venda que não cita a order. Um warn por pagamento.
+   */
+  private async avisarLinkPagoEmVendaFechada(
+    pagos: Array<{ saleId: string; pagbankOrderId: string; valor: number; origem: string | null }>,
+  ): Promise<void> {
+    const doLink = pagos.filter(
+      (p) => p.origem === ORIGEM_LINK_PAGBANK && !this.orfaosAvisados.has(p.pagbankOrderId),
+    );
+    if (!doLink.length) return;
+    const vendas: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: { id: { in: [...new Set(doLink.map((p) => p.saleId))] }, status: { in: ['finalized', 'cancelled'] } },
+      select: { id: true, status: true, storeCode: true, payments: { select: { details: true } } },
+    });
+    const porId = new Map<string, any>(vendas.map((v) => [v.id, v]));
+    for (const p of doLink) {
+      const v = porId.get(p.saleId);
+      if (!v) continue;
+      const citada = (v.payments || []).some((x: any) => String(x?.details || '').includes(p.pagbankOrderId));
+      if (citada) continue;
+      this.orfaosAvisados.add(p.pagbankOrderId);
+      this.logger.warn(
+        `[pix-reconcile] ⚠️ LINK DE PAGAMENTO PAGO EM VENDA ${v.status === 'cancelled' ? 'CANCELADA' : 'JÁ FECHADA'}: ` +
+          `R$${Number(p.valor || 0).toFixed(2)} loja ${v.storeCode} venda ${p.saleId} order ${p.pagbankOrderId} — ` +
+          `a venda não cita esta cobrança (pagamento em dobro?). Conferir e estornar no PagBank se for o caso.`,
+      );
+    }
+  }
 
   /** O saleId pertence a algum fluxo conhecido (carrinho da live / crediário / pedido do site)? */
   private async temDonoConhecido(saleId: string): Promise<boolean> {

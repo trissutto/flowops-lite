@@ -85,6 +85,12 @@ export default function TopBreadcrumb() {
     pathname.startsWith('/meus-pedidos') ||
     pathname.startsWith('/pagar') ||
     pathname.startsWith('/p/') ||
+    // Páginas de PAGAMENTO que a cliente abre pelo WhatsApp: link de
+    // pagamento (/pague, 21/09), PIX (/qr) e o link antigo da Pagar.me (/pg).
+    // A barra da equipe (com "sair") não tem nada a fazer ali.
+    pathname.startsWith('/pague/') ||
+    pathname.startsWith('/qr/') ||
+    pathname.startsWith('/pg/') ||
     pathname.startsWith('/meu-pedido') ||
     // Redesign 11/08: lista e lançamento de pedidos de compra têm sidebar +
     // breadcrumb próprios (design system LURD'S). Telas internas ([id],
