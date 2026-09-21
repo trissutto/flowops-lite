@@ -6,7 +6,7 @@
  * Só admin. Fluxo: Importar → Conciliar → revisar divergências.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Scale, Loader2, RefreshCw, X, FileJson } from 'lucide-react';
@@ -84,19 +84,47 @@ export default function ConciliacaoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Os números de cima e a lista saem do MESMO recorte (dono, 21/09: "filtrei
+  // Itanhaém e lá em cima não mudou nada"). `pedido` descarta resposta velha:
+  // clicando rápido, a do filtro anterior podia chegar por último e a tela
+  // ficava com o resumo de uma loja em cima da lista de outra.
+  const pedido = useRef(0);
   const carregar = async () => {
+    const meu = ++pedido.current;
     setBusy(true); setErr('');
+    const filtros = `status=${encodeURIComponent(fStatus)}&gateway=${encodeURIComponent(fGateway)}&origem=${encodeURIComponent(fOrigem)}&loja=${encodeURIComponent(fLoja)}`;
     try {
       const [st, lista] = await Promise.all([
-        api<any>('/conciliacao/status'),
-        api<any>(`/conciliacao/list?status=${fStatus}&gateway=${fGateway}&origem=${fOrigem}&loja=${fLoja}&page=${page}`),
+        api<any>(`/conciliacao/status?${filtros}`),
+        api<any>(`/conciliacao/list?${filtros}&page=${page}`),
       ]);
+      if (meu !== pedido.current) return;
       setStatus(st);
       setRows(lista.rows || []);
       setTotal(lista.total || 0);
-    } catch (e: any) { setErr(e?.message || 'Falha ao carregar'); }
-    finally { setBusy(false); }
+    } catch (e: any) { if (meu === pedido.current) setErr(e?.message || 'Falha ao carregar'); }
+    finally { if (meu === pedido.current) setBusy(false); }
   };
+  const temFiltro = !!(fStatus || fGateway || fOrigem || fLoja);
+  const limparFiltros = () => { setFStatus(''); setFGateway(''); setFOrigem(''); setFLoja(''); setPage(1); };
+
+  // O seletor de loja sai dos DADOS, não do cadastro: o dinheiro do checkout do
+  // site é gravado com o código `SITE`, que não existe no cadastro de lojas (lá
+  // o site é a 13) — 742 pagamentos ficavam sem como filtrar. A loja clicada
+  // entra sempre, mesmo zerada no recorte, senão o select fica sem valor.
+  const opcoesDeLoja = (() => {
+    const nome = (code: string) => {
+      const l = lojas.find((x) => x.code === code || x.code === String(code).padStart(2, '0'));
+      return l?.name || (code === 'SITE' ? 'checkout lurds.com.br' : '');
+    };
+    const contagem: Array<{ storeCode: string; qtd: number }> = status?.lojas
+      || lojas.map((l) => ({ storeCode: l.code, qtd: -1 })); // backend antigo: cai no cadastro, sem número
+    const codigos = new Map(contagem.map((c) => [c.storeCode, c.qtd]));
+    if (fLoja && !codigos.has(fLoja)) codigos.set(fLoja, 0);
+    return [...codigos.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([code, qtd]) => ({ code, label: `${code}${nome(code) ? ` · ${nome(code)}` : ''}${qtd >= 0 ? ` (${qtd})` : ''}` }));
+  })();
   useEffect(() => { if (allowed) carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, fStatus, fGateway, fOrigem, fLoja, page]);
 
   const rodar = async (qual: 'importar' | 'conciliar') => {
@@ -163,37 +191,57 @@ export default function ConciliacaoPage() {
           ))}
         </div>
 
-        {/* Transações importadas por gateway */}
+        {/* Gateway e loja — os números já vêm recortados pelos OUTROS filtros ativos */}
         {status?.transacoes?.length > 0 && (
           <div className="flex gap-2 flex-wrap text-xs">
-            {status.transacoes.map((t: any) => (
-              <button key={t.gateway} onClick={() => { setFGateway(fGateway === t.gateway ? '' : t.gateway); setPage(1); }}
-                className={`px-3 py-1.5 rounded-full border-2 font-bold ${fGateway === t.gateway ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-[#E7E2D8] text-slate-600'}`}>
-                {t.gateway} · {t.qtd} transações · {brl(t.brutoCents)}
-              </button>
-            ))}
+            {status.transacoes.map((t: any) => {
+              // `gateways` = pagamentos PAGOS no recorte. Backend antigo (deploy no meio) não manda: cai no total importado.
+              const n = status.gateways ? status.gateways.find((g: any) => g.gateway === t.gateway) || { qtd: 0, cents: 0 } : null;
+              const ativo = fGateway === t.gateway;
+              return (
+                <button key={t.gateway} onClick={() => { setFGateway(ativo ? '' : t.gateway); setPage(1); }}
+                  className={`px-3 py-1.5 rounded-full border-2 font-bold ${ativo ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-[#E7E2D8] text-slate-600'} ${n && !n.qtd && !ativo ? 'opacity-40' : ''}`}>
+                  {n ? `${t.gateway} · ${n.qtd} ${n.qtd === 1 ? 'pago' : 'pagos'} · ${brl(n.cents)}` : `${t.gateway} · ${t.qtd} transações · ${brl(t.brutoCents)}`}
+                </button>
+              );
+            })}
             <select value={fLoja} onChange={(e) => { setFLoja(e.target.value); setPage(1); }}
-              className="px-3 py-1.5 rounded-full border-2 border-[#E7E2D8] bg-white text-slate-600 font-bold">
+              className={`px-3 py-1.5 rounded-full border-2 font-bold ${fLoja ? 'bg-slate-800 text-white border-slate-800' : 'border-[#E7E2D8] bg-white text-slate-600'}`}>
               <option value="">Loja: todas</option>
-              {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.name}</option>)}
+              {opcoesDeLoja.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
             </select>
+            {temFiltro && (
+              <button onClick={limparFiltros}
+                className="px-3 py-1.5 rounded-full border-2 border-rose-200 bg-rose-50 text-rose-700 font-bold flex items-center gap-1">
+                <X className="w-3.5 h-3.5" /> Limpar filtros
+              </button>
+            )}
           </div>
         )}
 
         {/* De onde veio o dinheiro (clicável = filtro) */}
-        {status?.origens?.length > 0 && (
+        {status?.origens && (
           <div className="flex gap-2 flex-wrap items-center text-xs">
             <span className="text-[11px] font-bold uppercase text-slate-500">Origem</span>
             {ORIGENS.map((o) => {
               const n = status.origens.find((x: any) => x.origem === o.key);
-              if (!n?.qtd) return null;
+              const ativo = fOrigem === o.key;
+              // Origem zerada no recorte some — menos a que está clicada, senão não há onde desclicar.
+              if (!n?.qtd && !ativo) return null;
               return (
-                <button key={o.key} title={o.ajuda} onClick={() => { setFOrigem(fOrigem === o.key ? '' : o.key); setPage(1); }}
-                  className={`px-3 py-1.5 rounded-full border-2 font-bold ${fOrigem === o.key ? 'bg-slate-800 text-white border-slate-800' : o.cor}`}>
-                  {o.label} · {n.qtd} · {brl(n.cents)}
+                <button key={o.key} title={o.ajuda} onClick={() => { setFOrigem(ativo ? '' : o.key); setPage(1); }}
+                  className={`px-3 py-1.5 rounded-full border-2 font-bold ${ativo ? 'bg-slate-800 text-white border-slate-800' : o.cor}`}>
+                  {o.label} · {n?.qtd || 0} · {brl(n?.cents || 0)}
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* O recorte em uma linha: é o que a lista abaixo soma */}
+        {temFiltro && status?.total && (
+          <div className="text-sm text-slate-700">
+            <b>{status.total.qtd}</b> pagamento(s) neste recorte · <b className="text-[#2E7D46]">{brl(status.total.cents)}</b>
           </div>
         )}
 

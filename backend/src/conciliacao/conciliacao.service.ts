@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { donosDosPagamentos } from '../common/dono-do-pagamento';
 import { classificarPagamentos } from './classificar-pagamentos';
+import { facetarConciliacoes, FiltrosConciliacao, LinhaResumo } from './facetas';
 
 /**
  * CONCILIAÇÃO FINANCEIRA — FASE 2: importadores (aprovado 17/07).
@@ -189,6 +190,7 @@ export class ConciliacaoService {
       return out;
     } finally {
       this.running = false;
+      this.resumoCache = null;
     }
   }
 
@@ -254,6 +256,7 @@ export class ConciliacaoService {
         data: { statusInterno: status.toLowerCase() },
       }).catch(() => null);
     }
+    this.resumoCache = null; // os números de cima têm que refletir a rodada que acabou
     this.logger.log(`[conciliacao] motor: ${JSON.stringify(r)}`);
     return r;
   }
@@ -342,31 +345,62 @@ export class ConciliacaoService {
     try { return JSON.parse(s); } catch { return { raw: s }; }
   }
 
-  async status() {
-    const porGateway: any[] = await (this.prisma as any).financialTransaction.groupBy({
-      by: ['gateway'],
-      _count: { _all: true },
-      _sum: { valorBrutoCents: true },
-    });
-    const conciliacoes: any[] = await (this.prisma as any).financialConciliacao.groupBy({
-      by: ['status'],
-      _count: { _all: true },
-    }).catch(() => []);
-    // DE ONDE veio o dinheiro pago: loja, link, PIX online, crediário, site, live.
-    // Sem catch: se a conta falhar a tela mostra o erro, não um "zero" inventado.
-    const porOrigem: any[] = await (this.prisma as any).financialConciliacao.groupBy({
-      by: ['origem'],
-      _count: { _all: true },
-      _sum: { valorGatewayCents: true },
-    });
+  /**
+   * OS NÚMEROS DE CIMA — cartões de status, chips de gateway, de origem e o
+   * seletor de loja — obedecem os MESMOS filtros da lista (dono, 21/09:
+   * "filtrei Itanhaém e lá em cima não mudou nada"). A conta é a de
+   * `facetas.ts`, em memória, sobre os pagamentos já conciliados.
+   *
+   * `transacoes` (tudo o que foi importado, pago ou não) segue na resposta só
+   * pra aba aberta com a tela antiga não quebrar.
+   */
+  async status(f: FiltrosConciliacao = {}) {
+    const [porGateway, linhas] = await Promise.all([
+      (this.prisma as any).financialTransaction.groupBy({
+        by: ['gateway'],
+        _count: { _all: true },
+        _sum: { valorBrutoCents: true },
+      }),
+      this.linhasDoResumo(),
+    ]);
     return {
-      transacoes: porGateway.map((g) => ({ gateway: g.gateway, qtd: g._count._all, brutoCents: g._sum.valorBrutoCents || 0 })),
-      conciliacoes: conciliacoes.map((c) => ({ status: c.status, qtd: c._count._all })),
-      origens: porOrigem
-        .filter((o) => o.origem)
-        .map((o) => ({ origem: o.origem, qtd: o._count._all, cents: o._sum.valorGatewayCents || 0 })),
+      ...facetarConciliacoes(linhas, f),
+      transacoes: (porGateway as any[]).map((g) => ({
+        gateway: g.gateway, qtd: g._count._all, brutoCents: g._sum.valorBrutoCents || 0,
+      })),
       importando: this.running,
     };
+  }
+
+  /**
+   * Base das facetas: uma linha por pagamento conciliado, com a loja da
+   * transação. Cada clique de filtro chama o `status`, então a leitura (~8 mil
+   * linhas magras) fica 15s em memória; importar e conciliar derrubam o cache.
+   * Sem catch: se a leitura falhar a tela mostra o erro, não um zero inventado.
+   */
+  private resumoCache: { em: number; linhas: LinhaResumo[] } | null = null;
+
+  private async linhasDoResumo(): Promise<LinhaResumo[]> {
+    if (this.resumoCache && Date.now() - this.resumoCache.em < 15_000) return this.resumoCache.linhas;
+    const [concs, txs] = await Promise.all([
+      (this.prisma as any).financialConciliacao.findMany({
+        select: { transactionId: true, status: true, gateway: true, origem: true, valorGatewayCents: true },
+      }),
+      (this.prisma as any).financialTransaction.findMany({
+        where: { storeCode: { not: null } },
+        select: { id: true, storeCode: true },
+      }),
+    ]);
+    const lojaDaTx = new Map<string, string>((txs as any[]).map((t) => [t.id, t.storeCode]));
+    const linhas: LinhaResumo[] = (concs as any[]).map((c) => ({
+      status: c.status,
+      gateway: c.gateway,
+      origem: c.origem ?? null,
+      storeCode: lojaDaTx.get(c.transactionId) ?? null,
+      cents: Number(c.valorGatewayCents) || 0,
+    }));
+    this.resumoCache = { em: Date.now(), linhas };
+    return linhas;
   }
 
   /**
