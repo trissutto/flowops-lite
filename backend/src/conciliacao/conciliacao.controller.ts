@@ -13,8 +13,9 @@ export class ConciliacaoController {
   }
 
   /**
-   * GET /conciliacao/status?status=&gateway=&origem=&loja= — os números de cima
-   * da tela, já recortados pelos MESMOS filtros da lista.
+   * GET /conciliacao/status?status=&gateway=&origem=&loja=&from=&to= — os números
+   * de cima da tela, já recortados pelos MESMOS filtros da lista. `from`/`to`
+   * são dias de Brasília (YYYY-MM-DD), inclusos, sobre a data da venda.
    */
   @Get('status')
   async status(
@@ -23,9 +24,11 @@ export class ConciliacaoController {
     @Query('gateway') gateway?: string,
     @Query('origem') origem?: string,
     @Query('loja') loja?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
     this.requireAdmin(req);
-    return this.svc.status({ status, gateway, origem, storeCode: loja });
+    return this.svc.status({ status, gateway, origem, storeCode: loja, from, to });
   }
 
   /** POST /conciliacao/importar?dias=400 — varredura manual das fontes locais. */
@@ -44,7 +47,7 @@ export class ConciliacaoController {
     return this.svc.conciliar(d);
   }
 
-  /** GET /conciliacao/list?status=&gateway=&page= — dados pra tela. */
+  /** GET /conciliacao/list?status=&gateway=&origem=&loja=&from=&to=&page= — a lista, no mesmo recorte do `status`. */
   @Get('list')
   async list(
     @Req() req: any,
@@ -53,10 +56,12 @@ export class ConciliacaoController {
     @Query('loja') loja?: string,
     @Query('page') page?: string,
     @Query('origem') origem?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
     this.requireAdmin(req);
     return this.svc.listar({
-      status, gateway, origem: origem || undefined, storeCode: loja || undefined,
+      status, gateway, origem, storeCode: loja, from, to,
       page: parseInt(page || '1', 10) || 1,
     });
   }

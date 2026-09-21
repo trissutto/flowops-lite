@@ -50,6 +50,17 @@ const ORIGENS: Array<{ key: string; label: string; ajuda: string; cor: string }>
 ];
 const ORIGEM_POR_KEY = Object.fromEntries(ORIGENS.map((o) => [o.key, o]));
 
+// Dia LOCAL do PC (Brasília) — nunca `toISOString()`, que vira o dia seguinte depois das 21h.
+const diaIso = (deslocamentoEmDias: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + deslocamentoEmDias);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+// O input de data dispara onChange com ANO PARCIAL enquanto a pessoa digita
+// ("0002-09-21"): só data inteira vira filtro.
+const diaValido = (s: string) => /^(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s || '');
+const diaBr = (iso: string) => (diaValido(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '');
+
 export default function ConciliacaoPage() {
   const router = useRouter();
   const [allowed, setAllowed] = useState(false);
@@ -61,6 +72,9 @@ export default function ConciliacaoPage() {
   const [fGateway, setFGateway] = useState('');
   const [fOrigem, setFOrigem] = useState('');
   const [fLoja, setFLoja] = useState('');
+  const [de, setDe] = useState('');
+  const [ate, setAte] = useState('');
+  const [periodo, setPeriodo] = useState<{ de: string; ate: string }>({ de: '', ate: '' });
   // Abreviação do nome da loja (mesmo padrão do editor de produtos)
   const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
   useEffect(() => {
@@ -92,7 +106,7 @@ export default function ConciliacaoPage() {
   const carregar = async () => {
     const meu = ++pedido.current;
     setBusy(true); setErr('');
-    const filtros = `status=${encodeURIComponent(fStatus)}&gateway=${encodeURIComponent(fGateway)}&origem=${encodeURIComponent(fOrigem)}&loja=${encodeURIComponent(fLoja)}`;
+    const filtros = `status=${encodeURIComponent(fStatus)}&gateway=${encodeURIComponent(fGateway)}&origem=${encodeURIComponent(fOrigem)}&loja=${encodeURIComponent(fLoja)}&from=${encodeURIComponent(periodo.de)}&to=${encodeURIComponent(periodo.ate)}`;
     try {
       const [st, lista] = await Promise.all([
         api<any>(`/conciliacao/status?${filtros}`),
@@ -105,8 +119,29 @@ export default function ConciliacaoPage() {
     } catch (e: any) { if (meu === pedido.current) setErr(e?.message || 'Falha ao carregar'); }
     finally { if (meu === pedido.current) setBusy(false); }
   };
-  const temFiltro = !!(fStatus || fGateway || fOrigem || fLoja);
-  const limparFiltros = () => { setFStatus(''); setFGateway(''); setFOrigem(''); setFLoja(''); setPage(1); };
+  const temFiltro = !!(fStatus || fGateway || fOrigem || fLoja || periodo.de || periodo.ate);
+  const limparFiltros = () => {
+    setFStatus(''); setFGateway(''); setFOrigem(''); setFLoja('');
+    setDe(''); setAte(''); setPeriodo({ de: '', ate: '' }); setPage(1);
+  };
+
+  // PERÍODO (padrão da casa: De/Até livres + atalhos que aplicam na hora). A
+  // data é a da VENDA, em dia de Brasília. `de`/`ate` são o que está digitado;
+  // `periodo` é o que VALE — só muda com data inteira, porque o input dispara
+  // com ano parcial enquanto a pessoa digita ("0002-09-21").
+  const aplicarPeriodo = (novoDe: string, novoAte: string) => {
+    setDe(novoDe); setAte(novoAte);
+    if ((novoDe === '' || diaValido(novoDe)) && (novoAte === '' || diaValido(novoAte))) {
+      setPeriodo({ de: novoDe, ate: novoAte }); setPage(1);
+    }
+  };
+  const ATALHOS: Array<{ label: string; title: string; de: string; ate: string }> = [
+    { label: 'Hoje', title: 'Só hoje', de: diaIso(0), ate: diaIso(0) },
+    { label: 'Ontem', title: 'Só ontem', de: diaIso(-1), ate: diaIso(-1) },
+    { label: '7 dias', title: 'Últimos 7 dias', de: diaIso(-7), ate: diaIso(0) },
+    { label: 'Mês', title: 'Mês atual', de: `${diaIso(0).slice(0, 8)}01`, ate: diaIso(0) },
+    { label: 'Tudo', title: 'Sem limite de data', de: '', ate: '' },
+  ];
 
   // O seletor de loja sai dos DADOS, não do cadastro: o dinheiro do checkout do
   // site é gravado com o código `SITE`, que não existe no cadastro de lojas (lá
@@ -125,7 +160,7 @@ export default function ConciliacaoPage() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([code, qtd]) => ({ code, label: `${code}${nome(code) ? ` · ${nome(code)}` : ''}${qtd >= 0 ? ` (${qtd})` : ''}` }));
   })();
-  useEffect(() => { if (allowed) carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, fStatus, fGateway, fOrigem, fLoja, page]);
+  useEffect(() => { if (allowed) carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, fStatus, fGateway, fOrigem, fLoja, periodo.de, periodo.ate, page]);
 
   const rodar = async (qual: 'importar' | 'conciliar') => {
     setRodando(qual); setErr('');
@@ -191,6 +226,37 @@ export default function ConciliacaoPage() {
           ))}
         </div>
 
+        {/* Período — De/Até livres + atalhos que aplicam na hora (data da VENDA, dia de Brasília) */}
+        <div className="flex gap-2 flex-wrap items-center text-xs">
+          <span className="text-[11px] font-bold uppercase text-slate-500">Período</span>
+          <label className="flex items-center gap-1 text-slate-600 font-bold">
+            De
+            <input type="date" value={de} max={ate || undefined} onChange={(e) => aplicarPeriodo(e.target.value, ate)}
+              className={`px-2 py-1 rounded-lg border-2 bg-white font-normal ${periodo.de ? 'border-slate-800' : 'border-[#E7E2D8]'}`} />
+          </label>
+          <label className="flex items-center gap-1 text-slate-600 font-bold">
+            Até
+            <input type="date" value={ate} min={de || undefined} onChange={(e) => aplicarPeriodo(de, e.target.value)}
+              className={`px-2 py-1 rounded-lg border-2 bg-white font-normal ${periodo.ate ? 'border-slate-800' : 'border-[#E7E2D8]'}`} />
+          </label>
+          {ATALHOS.map((a) => {
+            const ativo = periodo.de === a.de && periodo.ate === a.ate;
+            return (
+              <button key={a.label} title={a.title} onClick={() => aplicarPeriodo(a.de, a.ate)}
+                className={`px-3 py-1.5 rounded-full border-2 font-bold ${ativo ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-[#E7E2D8] text-slate-600'}`}>
+                {a.label}
+              </button>
+            );
+          })}
+          {/* Até onde os dados vão: "Hoje" vazio tem que se explicar sozinho */}
+          <span className="text-[11px] text-slate-500 ml-auto">
+            {status?.atualizadoEm
+              ? `atualizado às ${new Date(status.atualizadoEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · `
+              : ''}
+            atualiza sozinho a cada hora
+          </span>
+        </div>
+
         {/* Gateway e loja — os números já vêm recortados pelos OUTROS filtros ativos */}
         {status?.transacoes?.length > 0 && (
           <div className="flex gap-2 flex-wrap text-xs">
@@ -242,6 +308,13 @@ export default function ConciliacaoPage() {
         {temFiltro && status?.total && (
           <div className="text-sm text-slate-700">
             <b>{status.total.qtd}</b> pagamento(s) neste recorte · <b className="text-[#2E7D46]">{brl(status.total.cents)}</b>
+            {(periodo.de || periodo.ate) && (
+              <span className="text-slate-500">
+                {' '}· vendas {periodo.de && periodo.de === periodo.ate
+                  ? `de ${diaBr(periodo.de)}`
+                  : `${periodo.de ? `de ${diaBr(periodo.de)} ` : ''}${periodo.ate ? `até ${diaBr(periodo.ate)}` : 'em diante'}`}
+              </span>
+            )}
           </div>
         )}
 
