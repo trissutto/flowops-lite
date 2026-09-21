@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PagbankService } from './pagbank.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
+import { ORIGEM_LINK_PAGBANK } from '../common/link-pagamento-pagbank';
 
 /**
  * PIX PAGBANK PENDENTE — O SERVIDOR PERGUNTA (12/08/2026).
@@ -112,7 +113,15 @@ export class PagbankPixReconcileService {
       createdAt: Date;
       expiresAt: Date | null;
     }> = await (this.prisma as any).pagbankPayment.findMany({
-      where: { status: 'pending', method: 'pix', createdAt: { gte: desde } },
+      where: {
+        status: 'pending',
+        createdAt: { gte: desde },
+        // O cartão do LINK de pagamento do PDV (21/09) que ficou EM ANÁLISE
+        // também precisa de alguém perguntando — o webhook pode não chegar,
+        // igual ao PIX. O cartão do site tem o reconciliador dele
+        // (`LojaPagamentoReconcileService`), por isso só a origem do link.
+        OR: [{ method: 'pix' }, { method: 'credit_card', origem: ORIGEM_LINK_PAGBANK }],
+      },
       orderBy: { createdAt: 'desc' },
       take: 300,
       select: {

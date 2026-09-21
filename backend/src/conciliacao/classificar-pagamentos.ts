@@ -62,7 +62,15 @@ export function origemDoPagamento(
   citado: PagamentoDaVenda | null,
 ): OrigemDoPagamento {
   if (dono.tipo !== 'pdv') return dono.tipo;
-  if (String(t.formaGateway || '').trim().toLowerCase() === 'checkout') return 'link';
+  const forma = String(t.formaGateway || '').trim().toLowerCase();
+  if (forma === 'checkout') return 'link';
+  /**
+   * LINK DE PAGAMENTO DO PDV PELO PAGBANK (21/09). Cartão de venda do PDV no
+   * PagBank só existe pelo link (o balcão passa cartão na maquininha da
+   * Stone); e o PIX pago pela página do link fica citado com o tipo do link.
+   */
+  if (forma === 'credit_card') return 'link';
+  if (String(citado?.details || '').includes('"tipo":"pagbank_link"')) return 'link';
   if (citado?.method.toLowerCase() === 'venda_online' || dono.vendaComEntrega) return 'pix_online';
   return 'loja';
 }

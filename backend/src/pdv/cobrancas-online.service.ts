@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { restanteCentsDaVenda } from '../common/cobranca-venda-online';
 import { linkCheckoutAindaDePe } from '../common/cobranca-link-viva';
+import { ORIGEM_LINK_PAGBANK, linkPagbankVenceEm } from '../common/link-pagamento-pagbank';
 
 /**
  * COBRANÇA ONLINE AGUARDANDO PAGAMENTO — a lista que faltava (25/08/2026).
@@ -63,6 +64,13 @@ export interface CobrancaOnline {
   /** Quanto ainda falta cobrar — é ELE que vai numa cobrança nova. */
   restante: number;
   meio: 'pix' | 'link';
+  /**
+   * Quem cobrou. `link` deixou de ser sinônimo de Pagar.me em 21/09 (link de
+   * pagamento do PDV pelo PagBank) — quem registra o pagamento na mão precisa
+   * saber em qual chave do `details` gravar a order (`pagbankOrderId` ×
+   * `pagarmeOrderId`), senão a prova de pagamento não acha nada.
+   */
+  gateway: 'pagbank' | 'pagarme';
   situacao: SituacaoCobranca;
   /** Status cru do gateway (pending/paid/expired/canceled/failed). */
   statusGateway: string;
@@ -82,6 +90,12 @@ export interface CobrancaOnline {
 
 type LinhaCobranca = {
   meio: 'pix' | 'link';
+  /**
+   * Link de pagamento do PDV pelo PagBank (21/09): o PIX da página e cada
+   * tentativa de cartão viram linha aqui. Vale a validade do LINK (dias), não
+   * a do código PIX (1h) — e cartão recusado não "vence" o link.
+   */
+  linkPagbank?: boolean;
   saleId: string;
   status: string;
   valor: number;
@@ -114,12 +128,15 @@ export class CobrancasOnlineService {
 
     const [pix, links] = await Promise.all([
       (this.prisma as any).pagbankPayment.findMany({
-        where: { method: 'pix', createdAt: { gte: cutoff } },
+        where: {
+          createdAt: { gte: cutoff },
+          OR: [{ method: 'pix' }, { method: 'credit_card', origem: ORIGEM_LINK_PAGBANK }],
+        },
         orderBy: { createdAt: 'desc' },
         take: 1000,
         select: {
           saleId: true, status: true, valor: true, pagbankOrderId: true,
-          linkToken: true, createdAt: true, paidAt: true, expiresAt: true,
+          linkToken: true, createdAt: true, paidAt: true, expiresAt: true, origem: true,
         },
       }),
       (this.prisma as any).pagarmePayment.findMany({
@@ -134,20 +151,25 @@ export class CobrancasOnlineService {
     ]);
 
     const linhas: LinhaCobranca[] = [
-      ...pix.map((p: any) => ({
-        meio: 'pix' as const,
-        saleId: p.saleId,
-        status: String(p.status || ''),
-        valor: Number(p.valor) || 0,
-        orderId: p.pagbankOrderId || null,
-        linkToken: p.linkToken || null,
-        // O copia-e-cola do PIX NÃO é link: sem `linkToken` a cobrança antiga
-        // fica sem botão de reenvio (o caminho é gerar cobrança nova).
-        urlCrua: null,
-        createdAt: p.createdAt,
-        paidAt: p.paidAt || null,
-        expiresAt: p.expiresAt || null,
-      })),
+      ...pix.map((p: any) => {
+        const doLink = p.origem === ORIGEM_LINK_PAGBANK;
+        return {
+          meio: doLink ? ('link' as const) : ('pix' as const),
+          linkPagbank: doLink,
+          saleId: p.saleId,
+          status: String(p.status || ''),
+          valor: Number(p.valor) || 0,
+          orderId: p.pagbankOrderId || null,
+          linkToken: p.linkToken || null,
+          // O copia-e-cola do PIX NÃO é link: sem `linkToken` a cobrança antiga
+          // fica sem botão de reenvio (o caminho é gerar cobrança nova).
+          urlCrua: null,
+          createdAt: p.createdAt,
+          paidAt: p.paidAt || null,
+          // Link do PagBank: vale o LINK, não o código PIX de 1h.
+          expiresAt: doLink ? linkPagbankVenceEm(p.createdAt) : p.expiresAt || null,
+        };
+      }),
       ...links.map((g: any) => ({
         meio: 'link' as const,
         saleId: g.saleId,
@@ -207,6 +229,18 @@ export class CobrancasOnlineService {
       const s = saleById.get(saleId);
       const principal = this.escolherPrincipal(cobr, agora);
       const primeira = cobr.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+      /**
+       * O link do PagBank que a cliente TEM é o token da PRIMEIRA cobrança do
+       * link (a âncora que a loja mandou). O PIX regerado na página e as
+       * tentativas de cartão não têm token próprio pra reenviar — reenviar o
+       * link é reenviar a âncora.
+       */
+      if (principal.linkPagbank) {
+        const ancora = cobr
+          .filter((c) => c.linkPagbank && c.linkToken)
+          .reduce<LinhaCobranca | null>((a, b) => (!a || b.createdAt < a.createdAt ? b : a), null);
+        if (ancora) principal.linkToken = ancora.linkToken;
+      }
       itens.push({
         saleId,
         saleCode: saleId.slice(-6).toUpperCase(),
@@ -220,6 +254,7 @@ export class CobrancasOnlineService {
         total: Number(s.total) || 0,
         restante: Math.round(restanteCentsDaVenda(s)) / 100,
         meio: principal.meio,
+        gateway: principal.meio === 'pix' || principal.linkPagbank ? 'pagbank' : 'pagarme',
         situacao: this.situacaoDe(principal, agora),
         statusGateway: principal.status,
         valor: principal.valor,
@@ -261,6 +296,11 @@ export class CobrancasOnlineService {
    */
   private situacaoDe(c: LinhaCobranca, agora: number): SituacaoCobranca {
     if (c.status === 'paid') return 'pago';
+    // Link do PagBank: código PIX vencido ou cartão recusado não matam o
+    // link — a cliente paga de novo pela mesma página até o link vencer.
+    if (c.linkPagbank) {
+      return c.expiresAt && new Date(c.expiresAt).getTime() < agora ? 'venceu' : 'aguardando';
+    }
     /**
      * ...MAS CARTÃO RECUSADO NÃO É LINK VENCIDO (10/09). O checkout da
      * Pagar.me aceita nova tentativa até o prazo acabar, e chamar isso de
@@ -281,8 +321,10 @@ export class CobrancasOnlineService {
    */
   private linkDaCobranca(c: LinhaCobranca): string | null {
     if (c.linkToken) {
-      return `${this.baseUrlPublica()}/${c.meio === 'pix' ? 'qr' : 'pg'}/${c.linkToken}`;
+      const rota = c.linkPagbank ? 'pague' : c.meio === 'pix' ? 'qr' : 'pg';
+      return `${this.baseUrlPublica()}/${rota}/${c.linkToken}`;
     }
+    if (c.linkPagbank) return null;
     return c.meio === 'link' ? c.urlCrua : null;
   }
 

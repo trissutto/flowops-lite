@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagbankService } from './pagbank.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { conferirCobrancaCobreVendaOnline } from '../common/cobranca-venda-online';
+import { gatewayDoLinkPdv, horasDoLinkPagbank, maxParcelasLink } from '../common/link-pagamento-pagbank';
 import type { Request } from 'express';
 
 @Controller('pagbank')
@@ -252,6 +253,103 @@ export class PagbankController {
       ...body,
       origem: body.origem === 'venda_online' ? 'venda_online' : null,
     });
+  }
+
+  // ── LINK DE PAGAMENTO DO PDV (21/09/2026) ──────────────────────────
+  //
+  // A Pagar.me desligou o checkout da conta (412 desde 15:17 de 21/09) e o
+  // link pronto do PagBank pede allowlist. O link agora é NOSSO:
+  // `/pague/<token>`, cobrado pela Orders API do PagBank (PIX ou cartão).
+  // Régua em `common/link-pagamento-pagbank.ts`.
+
+  /**
+   * GET /pagbank/link/config — por qual gateway o botão de link do PDV sai.
+   * A tela pergunta antes de desenhar o botão; sem resposta (backend velho)
+   * ela fica no caminho antigo.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('link/config')
+  linkConfig(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    return { gateway: gatewayDoLinkPdv(), horas: horasDoLinkPagbank(), maxParcelas: maxParcelasLink() };
+  }
+
+  /**
+   * POST /pagbank/link/create — gera o link de pagamento da VENDA ONLINE.
+   * As MESMAS travas do PIX da venda online (`pix/create` com origem
+   * venda_online): venda existe e está aberta, forma de entrega escolhida e
+   * valor cheio — quem fecha esta venda depois é o reconciliador do servidor,
+   * com a vendedora já em outro atendimento.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('link/create')
+  async createLink(
+    @Req() req: any,
+    @Body()
+    body: {
+      saleId: string;
+      valor: number;
+      storeCode: string;
+      customerName?: string;
+      customerCpf?: string;
+      customerEmail?: string;
+      customerPhone?: string;
+    },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') {
+      throw new ForbiddenException('Apenas admin ou loja');
+    }
+    if (!body?.saleId) throw new BadRequestException('saleId obrigatório');
+    if (!body?.valor) throw new BadRequestException('valor obrigatório');
+    if (!body?.storeCode) throw new BadRequestException('storeCode obrigatório');
+    const venda = await this.svc.buscarVendaPdv(body.saleId);
+    if (!venda) {
+      throw new BadRequestException(
+        'Esta venda não existe mais no servidor. Recarregue o PDV (F5) e monte a venda de novo — NÃO envie link antigo pra cliente.',
+      );
+    }
+    if (venda.status !== 'open') {
+      throw new BadRequestException(
+        `Esta venda já está ${venda.status === 'finalized' ? 'finalizada' : venda.status}. Abra uma venda nova antes de gerar o link.`,
+      );
+    }
+    if (!venda.entregaTipo) {
+      throw new BadRequestException(
+        'Escolha a forma de entrega (SEDEX, PAC, motoboy ou retirada) antes de gerar o link. ' +
+          'Quando o pagamento cai, o sistema fecha a venda sozinho — sem essa escolha o pedido ' +
+          'sai como "Entrega (não informada)" e a etiqueta vira PAC fora de São Paulo.',
+      );
+    }
+    conferirCobrancaCobreVendaOnline(venda, Number(body.valor));
+    return this.svc.criarLinkPagamento({
+      saleId: body.saleId,
+      valor: Number(body.valor),
+      storeCode: body.storeCode,
+      customerName: body.customerName,
+      customerCpf: body.customerCpf,
+      customerEmail: body.customerEmail,
+      customerPhone: body.customerPhone,
+    });
+  }
+
+  /** GET /pagbank/link/status/:saleId — o PDV pergunta se o link foi pago (lê só o banco). */
+  @UseGuards(JwtAuthGuard)
+  @Get('link/status/:saleId')
+  async linkStatus(@Req() req: any, @Param('saleId') saleId: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    return this.svc.statusDoLinkPorVenda(saleId);
+  }
+
+  /** POST /pagbank/link/conferir/:saleId — botão "Conferir": pergunta ao PagBank ao vivo (15s de trava por venda). */
+  @UseGuards(JwtAuthGuard)
+  @Post('link/conferir/:saleId')
+  async linkConferir(@Req() req: any, @Param('saleId') saleId: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    return this.svc.conferirLinkPorVenda(saleId);
   }
 
   /** GET /pagbank/pix/status/:saleId — frontend faz polling rápido */

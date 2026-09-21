@@ -217,7 +217,8 @@ const VENDA_ONLINE_LABEL: Record<string, string> = {
   pix_gerar: 'Gerar PIX',
   pix: 'PIX recebido',
   link: 'Link externo',
-  pagarme_link: 'Link Pagar.me',
+  pagarme_link: 'Link de pagamento',
+  pagbank_link: 'Link de pagamento (PagBank)',
 };
 
 function freteSugerido(tipo: string | null, uf?: string | null): number | null {
@@ -1838,6 +1839,8 @@ function PdvPageInner() {
     total: number;
     restante: number;
     meio: 'pix' | 'link';
+    /** Quem cobrou — `link` não é mais sinônimo de Pagar.me (link PagBank, 21/09). Ausente = backend velho. */
+    gateway?: 'pagbank' | 'pagarme';
     situacao: 'pago' | 'aguardando' | 'venceu';
     statusGateway: string;
     valor: number;
@@ -4092,10 +4095,14 @@ function PdvPageInner() {
                             onClick={async () => {
                               // AUTO-FINALIZA: cria payment 'venda_online' + chama finalize.
                               // Não abre PaymentModal (já tá pago — só registra e fecha).
+                              // `link` deixou de ser sinônimo de Pagar.me em 21/09
+                              // (link de pagamento pelo PagBank). Backend velho não
+                              // manda `gateway`: aí vale a regra antiga (pix = PagBank).
+                              const viaPagbank = p.gateway ? p.gateway === 'pagbank' : p.meio === 'pix';
                               if (!confirm(
                                 `Finalizar venda #${p.saleCode} de ${p.customerName || 'cliente'} ` +
                                 `(${brl(p.total)})?\n\nO pagamento já foi confirmado ` +
-                                `${p.meio === 'pix' ? 'pelo PagBank' : 'pela Pagar.me'}.`,
+                                `${viaPagbank ? 'pelo PagBank' : 'pela Pagar.me'}.`,
                               )) return;
                               try {
                                 // 1) Cria PdvSalePayment como venda_online
@@ -4109,9 +4116,10 @@ function PdvPageInner() {
                                       // como `pagarme_link` jogaria a venda no
                                       // balde errado do relatório e da
                                       // conferência de cobrança.
-                                      tipo: p.meio === 'pix' ? 'pix_gerar' : 'pagarme_link',
+                                      tipo: p.meio === 'pix' ? 'pix_gerar' : viaPagbank ? 'pagbank_link' : 'pagarme_link',
                                       origem: 'whatsapp_instagram',
-                                      ...(p.meio === 'pix'
+                                      // A chave decide onde a prova de pagamento procura.
+                                      ...(viaPagbank
                                         ? { pagbankOrderId: p.orderId }
                                         : { pagarmeOrderId: p.orderId }),
                                       paidByWebhook: true,
@@ -6097,6 +6105,8 @@ function PaymentModal({
   const escolherPagamentoGuiado = (tipo: 'pix_gerar' | 'pagarme_link' | 'pix' | 'link') => {
     setVendaOnlineTipo(tipo);
     setPagarmeLink(null);
+    setLinkPagoOrderId(null);
+    setLinkPagoForma(null);
     if (!hasSeller) {
       setEtapaOnline('vendedora');
       return;
@@ -6703,6 +6713,27 @@ function PaymentModal({
   const [pagarmeLinkLoading, setPagarmeLinkLoading] = useState(false);
   const [pagarmeLinkPaid, setPagarmeLinkPaid] = useState(false);
   const [pagarmeLinkCopied, setPagarmeLinkCopied] = useState(false);
+  /**
+   * POR QUAL GATEWAY O LINK SAI (21/09/2026). A Pagar.me desligou o checkout
+   * da conta ("The checkout payment method is not available for this
+   * account", 412 desde 15:17) e o dono mandou o link pro PagBank: página
+   * nossa (/pague/<token>), cartão ou PIX. Quem decide é o backend
+   * (`PDV_LINK_GATEWAY`); sem resposta (backend velho) fica o caminho antigo.
+   * O estado do link (`pagarmeLink`, `pagarmeLinkPaid`) é o MESMO nos dois
+   * gateways — muda só pra onde a tela pergunta.
+   */
+  const [linkGateway, setLinkGateway] = useState<'pagbank' | 'pagarme' | null>(null);
+  const linkPagbank = linkGateway === 'pagbank';
+  /** Order PagBank que PAGOU o link (PIX ou cartão) — é ela que vai no `details`. */
+  const [linkPagoOrderId, setLinkPagoOrderId] = useState<string | null>(null);
+  const [linkPagoForma, setLinkPagoForma] = useState<'pix' | 'credito' | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    api<{ gateway?: string }>('/pagbank/link/config')
+      .then((r) => { if (vivo) setLinkGateway(r?.gateway === 'pagarme' ? 'pagarme' : 'pagbank'); })
+      .catch(() => { if (vivo) setLinkGateway('pagarme'); });
+    return () => { vivo = false; };
+  }, []);
   // E-mail/telefone usados NA COBRANÇA. Vêm do cadastro quando existe; quando
   // não, a vendedora digita aqui — é o dado que o antifraude pontua, e sem ele
   // o Flow mandava e-mail inventado e um telefone fixo igual pra rede inteira.
@@ -6717,13 +6748,19 @@ function PaymentModal({
   // diante ZERO (0 de 21). Avisa antes de queimar mais uma.
   const [linkTentativas, setLinkTentativas] = useState(0);
   useEffect(() => {
-    if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link' || !saleId) return;
+    if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link' || !saleId || !linkGateway) return;
     let vivo = true;
-    api<{ tentativas: number }>(`/pagarme/checkout/tentativas/${saleId}`)
-      .then((r) => { if (vivo) setLinkTentativas(r.tentativas || 0); })
-      .catch(() => { /* contador é aviso, não pode travar a venda */ });
+    if (linkPagbank) {
+      api<{ tentativasCartao?: number }>(`/pagbank/link/status/${saleId}`)
+        .then((r) => { if (vivo) setLinkTentativas(r.tentativasCartao || 0); })
+        .catch(() => { /* contador é aviso, não pode travar a venda */ });
+    } else {
+      api<{ tentativas: number }>(`/pagarme/checkout/tentativas/${saleId}`)
+        .then((r) => { if (vivo) setLinkTentativas(r.tentativas || 0); })
+        .catch(() => { /* contador é aviso, não pode travar a venda */ });
+    }
     return () => { vivo = false; };
-  }, [selected, vendaOnlineTipo, saleId]);
+  }, [selected, vendaOnlineTipo, saleId, linkGateway, linkPagbank]);
 
   useEffect(() => {
     if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link') return;
@@ -6912,17 +6949,19 @@ function PaymentModal({
           return;
         }
       }
-      // Link Pagar.me: exige link gerado E pago confirmado pelo webhook
+      // Link de pagamento: exige link gerado E pago confirmado pelo gateway
       if (vendaOnlineTipo === 'pagarme_link') {
         if (!pagarmeLink) {
           toast(
             'warning',
-            'Gere o link Pagar.me primeiro',
-            'Clique em "Gerar Link Pagar.me" pra criar a URL pra cliente pagar.',
+            'Gere o link de pagamento primeiro',
+            `Clique em "${linkPagbank ? 'Gerar link de pagamento' : 'Gerar Link Pagar.me'}" pra criar o link pra cliente pagar.`,
           );
           return;
         }
-        if (!pagarmeLinkPaid) {
+        // PagBank: o `details` precisa da order que PAGOU (é ela que a prova
+        // de pagamento confere) — sem ela, espera o polling trazer.
+        if (!pagarmeLinkPaid || (linkPagbank && !linkPagoOrderId)) {
           toast(
             'warning',
             'Aguardando pagamento',
@@ -7027,7 +7066,22 @@ function PaymentModal({
       // Só pra histórico — não dispara cobrança real
       details.tipo = vendaOnlineTipo; // 'pix' | 'link' | 'pagarme_link' | 'pix_gerar'
       details.origem = 'whatsapp_instagram';
-      if (vendaOnlineTipo === 'pagarme_link' && pagarmeLink) {
+      if (vendaOnlineTipo === 'pagarme_link' && pagarmeLink && linkPagbank) {
+        // MESMO registro que o reconciliador do servidor grava quando chega
+        // antes (`confirmPixPagoSeVendaAberta`, tipo `pagbank_link`): o
+        // finalize, a prova de pagamento e os relatórios leem igual.
+        details.tipo = 'pagbank_link';
+        details.formaLink = linkPagoForma || 'credito';
+        details.pagbankOrderId = linkPagoOrderId;
+        details.linkPagbank = true;
+        details.linkUrl = pagarmeLink.shortUrl || pagarmeLink.paymentUrl;
+        details.paidByWebhook = pagarmeLinkPaid;
+        if (linkPagoForma === 'pix' && linkPagoOrderId) {
+          details.pixTxid = linkPagoOrderId;
+          details.pixChave = 'PagBank';
+          details.pixProvider = 'pagbank';
+        }
+      } else if (vendaOnlineTipo === 'pagarme_link' && pagarmeLink) {
         details.pagarmeOrderId = pagarmeLink.pagarmeOrderId;
         details.pagarmePaymentUrl = pagarmeLink.paymentUrl;
         details.paidByWebhook = pagarmeLinkPaid;
@@ -7512,6 +7566,41 @@ function PaymentModal({
   useEffect(() => {
     if (!pagarmeLink || pagarmeLinkPaid) return;
     let cancelled = false;
+    /**
+     * LINK PAGBANK (21/09): pergunta SÓ o nosso banco (o webhook + o
+     * reconciliador do servidor mantêm o status). Cartão recusado NÃO mata o
+     * link — a cliente tenta de novo na mesma página até vencer —, então aqui
+     * não existe o "link falhou, gere outro" da Pagar.me.
+     */
+    if (linkPagbank) {
+      let emVoo = false;
+      const tickPb = async () => {
+        if (emVoo) return;
+        emVoo = true;
+        try {
+          const r = await api<{ isPaid?: boolean; pagbankOrderId?: string; forma?: 'pix' | 'credito' }>(
+            `/pagbank/link/status/${saleId}`,
+          );
+          if (cancelled) return;
+          if (r?.isPaid) {
+            setLinkPagoOrderId(r.pagbankOrderId || null);
+            setLinkPagoForma(r.forma || null);
+            setPagarmeLinkPaid(true);
+            toast('success', 'Link pago!', `${r.forma === 'credito' ? 'Cartão aprovado' : 'PIX recebido'} — a venda fecha sozinha.`);
+          }
+        } catch {
+          // silencioso — polling tolerante
+        } finally {
+          emVoo = false;
+        }
+      };
+      void tickPb();
+      const idPb = setInterval(tickPb, 4000);
+      return () => {
+        cancelled = true;
+        clearInterval(idPb);
+      };
+    }
     const tick = async () => {
       try {
         const r = await api<{ status: string; isPaid?: boolean; isFailed?: boolean }>(
@@ -7539,7 +7628,7 @@ function PaymentModal({
       cancelled = true;
       clearInterval(id);
     };
-  }, [pagarmeLink, pagarmeLinkPaid, saleId, toast]);
+  }, [pagarmeLink, pagarmeLinkPaid, saleId, toast, linkPagbank]);
 
   const copyPix = async () => {
     if (!pixCharge) return;
@@ -8196,7 +8285,12 @@ function PaymentModal({
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     {([
                       { id: 'pix_gerar', icone: '📲', label: 'GERAR PIX', hint: 'Manda o QR pra ela' },
-                      { id: 'pagarme_link', icone: '🔗', label: 'LINK PAGAR.ME', hint: 'Cartão · gera agora' },
+                      {
+                        id: 'pagarme_link',
+                        icone: '🔗',
+                        label: linkPagbank ? 'LINK DE PAGAMENTO' : 'LINK PAGAR.ME',
+                        hint: linkPagbank ? 'Cartão ou PIX · PagBank' : 'Cartão · gera agora',
+                      },
                     ] as const).map((op) => (
                       <button
                         key={op.id}
@@ -8978,6 +9072,49 @@ function PaymentModal({
                           return;
                         }
                         setPagarmeLinkLoading(true);
+                        setLinkPagoOrderId(null);
+                        setLinkPagoForma(null);
+                        /**
+                         * LINK PELO PAGBANK (21/09) — página nossa
+                         * (/pague/<token>) que cobra cartão ou PIX no PagBank.
+                         * As mesmas travas do caminho da Pagar.me valem no
+                         * servidor (`/pagbank/link/create`): venda aberta,
+                         * entrega escolhida e valor cheio.
+                         */
+                        if (linkPagbank) {
+                          try {
+                            const r = await api<{
+                              pagbankOrderId: string;
+                              paymentUrl: string;
+                              shortUrl: string;
+                              expiresAt: string;
+                              tentativasCartao?: number;
+                            }>('/pagbank/link/create', {
+                              method: 'POST',
+                              body: JSON.stringify({
+                                saleId,
+                                valor: restante > 0 ? restante : total,
+                                storeCode,
+                                customerName,
+                                customerCpf,
+                                customerEmail: linkEmail.trim(),
+                                customerPhone: linkPhone.replace(/\D/g, ''),
+                              }),
+                            });
+                            setPagarmeLink({
+                              pagarmeOrderId: r.pagbankOrderId,
+                              paymentUrl: r.paymentUrl,
+                              shortUrl: r.shortUrl,
+                              expiresAt: r.expiresAt,
+                            });
+                            if (typeof r.tentativasCartao === 'number') setLinkTentativas(r.tentativasCartao);
+                          } catch (e: any) {
+                            toast('error', 'Erro ao gerar o link de pagamento', e?.message || 'Tente de novo');
+                          } finally {
+                            setPagarmeLinkLoading(false);
+                          }
+                          return;
+                        }
                         try {
                           const r = await api<{
                             pagarmeOrderId: string;
@@ -9015,7 +9152,16 @@ function PaymentModal({
                           setPagarmeLink(r);
                           if (r.tentativa) setLinkTentativas(r.tentativa);
                         } catch (e: any) {
-                          toast('error', 'Erro ao gerar link Pagar.me', e?.message || 'Tente de novo');
+                          // A Pagar.me recusa com mensagem em inglês quando o
+                          // checkout está desligado na conta (21/09) — a loja
+                          // precisa ler o que fazer, não o código cru.
+                          toast(
+                            'error',
+                            'Erro ao gerar link Pagar.me',
+                            /not available for this account/i.test(String(e?.message || ''))
+                              ? 'A Pagar.me desligou o link de pagamento nesta conta. Use "Gerar PIX" ou peça à matriz.'
+                              : e?.message || 'Tente de novo',
+                          );
                         } finally {
                           setPagarmeLinkLoading(false);
                         }
@@ -9029,7 +9175,7 @@ function PaymentModal({
                         </>
                       ) : (
                         <>
-                          🔗 Gerar Link Pagar.me — {brl(restante > 0 ? restante : total)}
+                          🔗 {linkPagbank ? 'Gerar link de pagamento' : 'Gerar Link Pagar.me'} — {brl(restante > 0 ? restante : total)}
                         </>
                       )}
                     </button>
@@ -9086,6 +9232,29 @@ function PaymentModal({
                         type="button"
                         disabled={pagarmeLinkPaid}
                         onClick={async () => {
+                          if (linkPagbank) {
+                            // PagBank: pergunta ao vivo pelas cobranças pendentes
+                            // do link (PIX e cartão em análise) — trava de 15s no servidor.
+                            try {
+                              const r = await api<{ isPaid?: boolean; pagbankOrderId?: string; forma?: 'pix' | 'credito'; emAnalise?: boolean }>(
+                                `/pagbank/link/conferir/${saleId}`,
+                                { method: 'POST' },
+                              );
+                              if (r?.isPaid) {
+                                setLinkPagoOrderId(r.pagbankOrderId || null);
+                                setLinkPagoForma(r.forma || null);
+                                setPagarmeLinkPaid(true);
+                                toast('success', 'Pago!', 'A venda fecha sozinha — ou aperte FINALIZAR.');
+                              } else if (r?.emAnalise) {
+                                toast('info', 'Cartão em análise no banco', 'Assim que o banco responder, a tela confirma sozinha.');
+                              } else {
+                                toast('info', 'Ainda não foi pago', 'A cliente ainda não pagou o link.');
+                              }
+                            } catch (e: any) {
+                              toast('error', 'Erro ao conferir', e?.message || 'Tente de novo');
+                            }
+                            return;
+                          }
                           try {
                             const r = await api<{ status: string; isPaid?: boolean }>(
                               `/pagarme/pix/check/${pagarmeLink.pagarmeOrderId}`,

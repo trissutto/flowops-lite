@@ -34,6 +34,7 @@ export class ConferenciaVendasService {
       case 'pix': return 'PIX recebido';
       case 'link': return 'Link externo';
       case 'pagarme_link': return 'Link Pagar.me';
+      case 'pagbank_link': return 'Link PagBank';
       case 'pix_gerar': return 'PIX gerado';
       default: return 'sem detalhe';
     }
