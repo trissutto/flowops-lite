@@ -32,6 +32,8 @@ type Order = {
   totalCusto: number;
   totalVenda: number;
   recebidoAt: string | null;
+  /** 'vitalicios' = gerado pela aba Vitalícios (21/09); null = lançado à mão. */
+  origem?: string | null;
   _count?: { items: number };
 };
 
@@ -200,6 +202,14 @@ export default function PedidosComprapage() {
                           <Icon className="w-3 h-3" />
                           {st.label}
                         </span>
+                        {o.origem === 'vitalicios' && (
+                          <span
+                            className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-violet-50 text-violet-800 border-violet-300"
+                            title="Gerado automaticamente pela aba Vitalícios (completa até o IDEAL)"
+                          >
+                            Auto · Vitalícios
+                          </span>
+                        )}
                         {o.dataPrevista && o.status !== 'recebido' && o.status !== 'recebido_com_erro' && o.status !== 'cancelado' && (() => {
                           const dias = Math.ceil(
                             (new Date(o.dataPrevista).getTime() - Date.now()) / 86400000,

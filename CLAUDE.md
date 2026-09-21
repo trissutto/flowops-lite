@@ -233,6 +233,16 @@ Pedido do dono: *"um checklist diário se o sistema bate"*. A primeira versão e
 - **Configuração sem deploy** em `/retaguarda/conciliacao-cartoes` → Configurar Stone (admin): StoneCode(s) de cada loja (um StoneCode não pode estar em duas lojas), quem recebe o resumo e a hora. Chaves só no Railway.
 - **Limite conhecido**: venda passada às 23h58 e lançada às 0h01 cai em dias diferentes (aparece como "sem venda" num dia e "sem transação" no outro).
 
+### Compra dos vitalícios — aba de PEDIDOS (21/09/2026)
+
+Pedido do dono: uma tela pra decidir a compra das peças que a rede **sempre repõe**, com MÍNIMO e IDEAL digitados por nós, que gera o pedido automático até o IDEAL e o registra em PEDIDOS igual ao lançado à mão (sem cadastro de representante — o PDF de sempre vai pelo WhatsApp).
+
+- **Tela**: `/loja/pedidos-compra/vitalicios` (item "Vitalícios" da barra de PEDIDOS). Marca-se a REF inteira em "Adicionar vitalício" ou no ☆ da matriz de reposição da ficha do produto. Chave = **REF-BASE + MARCA** (a mesma da ficha), tabela `produto_vitalicio`.
+- **Mínimo/IDEAL** são os da matriz `produto_reposicao` (por cor e tamanho, total da rede): a tela grava pela MESMA rota da ficha (`PUT /produto-ficha/reposicao`, só admin).
+- **A conta** (régua em `common/compra-vitalicios.ts`, com spec): TENHO = estoque de `wincred_estoque` na **rede inteira, franquias inclusive** + peça em caixa `in_transit` sem pedido (a régua do `LastroRedeService`) + item de pedido de compra ainda a chegar. COMPRAR = IDEAL − TENHO em **todo** tamanho abaixo do IDEAL (o mínimo só pinta de vermelho), peça avulsa. Sem IDEAL = célula vazia, nunca zero. IDEAL 0 com peça na rede = "encalhe".
+- 🚨 **Rascunho esquecido não segura compra**: pedido lançado à mão em `rascunho` NÃO conta como "a caminho" — só o gerado pela aba (`PurchaseOrder.origem='vitalicios'`), senão gerar duas vezes dobraria a compra. Pedido cancelado nunca conta; recebido parcial conta só o que falta.
+- **Gerar pedidos** (`POST /compras-vitalicios/gerar-pedidos`): **um pedido por marca, em RASCUNHO**, pelo mesmo `PurchaseOrdersService.create` do lançamento à mão (a lista mostra o selo "Auto · Vitalícios"). Custo = o do último pedido pago da REF/cor (senão o do cadastro); preço = o de venda de hoje; fornecedor/CNPJ = o do último pedido da marca (senão o CNPJ mais frequente no cadastro). Linha sem custo ou sem preço fica FORA com o motivo na tela — nunca entra com R$ 0. O COMPRAR ajustado na tela vale só pro pedido; o servidor confere que cada REF é vitalícia.
+
 ### Letra morta — podem sair do Railway
 
 Estas envs governavam caminhos que dependiam do MySQL desligado. Ligar qualquer uma delas não muda nada — deixá-las no Railway só confunde a próxima pessoa que for auditar. São **dois casos diferentes**, e a distinção importa pra quem for mexer no código:
@@ -283,6 +293,7 @@ Estas envs governavam caminhos que dependiam do MySQL desligado. Ligar qualquer 
 - `conciliacao-cartao/` — **conferência dos cartões × Stone** (arquivo de conciliação da Stone → `stone_transactions` → cruzamento com as vendas no cartão → checklist e resumo no WhatsApp). O `stone/` antigo é o webhook que nunca foi ligado; o leitor do arquivo mora lá (`stone-arquivo.parser.ts`).
 - `customers/`, `crm/`, `person-identity/` — CRM (base mestra `Customer`, dedup por telefone/@, clientes da live com origem 'live').
 - `products/`, `stock/`, `routing/`, `pick-orders/`, `realignment/` — consulta/vitrine/roteamento de pedidos do site/separação/realinhamento. **Todos leem Postgres.**
+- `purchase-orders/` — pedidos de compra de fornecedor (lançamento, PDF, recebimento que cadastra os SKUs) + a **compra dos vitalícios** (`vitalicios.service`, rotas em `/compras-vitalicios` — ver a seção acima).
 - `site-publish/`, `site-categorias/`, `site-vitrines/`, `site-banners/`, `loja-catalog/` — vitrine do e-commerce próprio.
 - `tracking/`, `correios/`, `mais-envios/`, `nfe/`, `trocas/` — logística, etiqueta, nota e pós-venda.
 - `site-metrics/`, `telemetria/`, `intelligence/`, `reports/`, `faturamento/`, `dre/` — medição, ROAS (Meta/Google) e relatórios.

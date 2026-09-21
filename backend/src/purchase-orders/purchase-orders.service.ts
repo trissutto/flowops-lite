@@ -281,6 +281,8 @@ export class PurchaseOrdersService {
     dataPrevista?: string;
     nfNumero?: string;
     observacoes?: string;
+    /** Quem gerou: ausente = lançado à mão; 'vitalicios' = aba Vitalícios. */
+    origem?: string;
     items?: Array<{
       ref: string;
       descricaoBase: string;
@@ -316,6 +318,7 @@ export class PurchaseOrdersService {
         nfNumero: input.nfNumero?.trim() || null,
         observacoes: input.observacoes?.trim() || null,
         status: 'rascunho',
+        origem: input.origem?.trim().slice(0, 20) || null,
         createdByUserId: userId || null,
       },
     });
