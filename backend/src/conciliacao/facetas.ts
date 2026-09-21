@@ -22,6 +22,12 @@ export interface LinhaResumo {
   origem: string | null;
   storeCode: string | null;
   cents: number;
+  /**
+   * Dia da venda em BRASÍLIA ('YYYY-MM-DD'). Já vem convertido por quem monta a
+   * linha (`diaBrasiliaDe`): PIX das 22h30 está gravado como 01h30 UTC do dia
+   * SEGUINTE, e comparar pelo dia UTC jogaria a noite inteira no dia errado.
+   */
+  dia?: string | null;
 }
 
 export interface FiltrosConciliacao {
@@ -29,6 +35,9 @@ export interface FiltrosConciliacao {
   gateway?: string | null;
   origem?: string | null;
   storeCode?: string | null;
+  /** Período em dias de Brasília, `from` e `to` INCLUSOS ('YYYY-MM-DD'). Vazio = sem limite daquele lado. */
+  from?: string | null;
+  to?: string | null;
 }
 
 export interface ResumoFacetado {
@@ -39,15 +48,50 @@ export interface ResumoFacetado {
   total: { qtd: number; cents: number };
 }
 
-type Campo = keyof FiltrosConciliacao;
+type Campo = 'status' | 'gateway' | 'origem' | 'storeCode';
 const CAMPOS: Campo[] = ['status', 'gateway', 'origem', 'storeCode'];
 
 const limpo = (v: string | null | undefined) => String(v ?? '').trim();
 
-export function facetarConciliacoes(linhas: LinhaResumo[], filtros: FiltrosConciliacao): ResumoFacetado {
+/**
+ * O input de data dispara com ano PARCIAL enquanto a pessoa digita
+ * ("0002-09-21") — data torta é ignorada em vez de zerar a tela. De > Até
+ * (clicou nos campos na ordem trocada) vale como o intervalo entre as duas.
+ */
+const DIA_ISO = /^(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+export function periodoDosFiltros(f: FiltrosConciliacao): { from: string | null; to: string | null } {
+  const from = DIA_ISO.test(limpo(f.from)) ? limpo(f.from) : null;
+  const to = DIA_ISO.test(limpo(f.to)) ? limpo(f.to) : null;
+  return from && to && from > to ? { from: to, to: from } : { from, to };
+}
+
+/**
+ * O predicado ÚNICO do recorte — a lista e os números de cima passam por aqui,
+ * então não têm como discordar. `ignorar` tira UM campo da conta (é o que faz
+ * cada grupo de chips continuar mostrando as alternativas dele). O período não
+ * é grupo de chips: vale sempre.
+ */
+function montarPredicado(filtros: FiltrosConciliacao) {
   const ativos = CAMPOS.filter((c) => limpo(filtros[c])).map((c) => [c, limpo(filtros[c])] as const);
-  const passa = (l: LinhaResumo, ignorar?: Campo) =>
-    ativos.every(([campo, valor]) => campo === ignorar || limpo(l[campo]) === valor);
+  const { from, to } = periodoDosFiltros(filtros);
+  return (l: LinhaResumo, ignorar?: Campo) => {
+    if (from || to) {
+      const dia = limpo(l.dia);
+      // Linha sem data não pertence a período nenhum.
+      if (!dia || (from && dia < from) || (to && dia > to)) return false;
+    }
+    return ativos.every(([campo, valor]) => campo === ignorar || limpo(l[campo]) === valor);
+  };
+}
+
+/** As linhas do recorte, com TODOS os filtros — é o que a lista pagina. */
+export function filtrarLinhas<T extends LinhaResumo>(linhas: T[], filtros: FiltrosConciliacao): T[] {
+  const passa = montarPredicado(filtros);
+  return linhas.filter((l) => passa(l));
+}
+
+export function facetarConciliacoes(linhas: LinhaResumo[], filtros: FiltrosConciliacao): ResumoFacetado {
+  const passa = montarPredicado(filtros);
 
   const contar = (campo: Campo) => {
     const mapa = new Map<string, { qtd: number; cents: number }>();
