@@ -4458,6 +4458,11 @@ model PurchaseOrder {
   recebidoAt       DateTime? @map("recebido_at")
   recebidoByUserId String?   @map("recebido_by_user_id")
   cadastroLog      String?   @map("cadastro_log") @db.Text // JSON com resumo do auto-cadastro
+  /// QUEM GEROU o pedido (21/09/2026). Null = lançado à mão (o de sempre);
+  /// 'vitalicios' = gerado pela aba Vitalícios (compra automática até o
+  /// IDEAL). É o que deixa a aba contar o RASCUNHO gerado por ela como "já
+  /// pedido" — sem isso, gerar duas vezes seguidas compraria em dobro.
+  origem           String?   @db.VarChar(20)
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
@@ -5814,6 +5819,28 @@ model ProdutoFichaCor {
 /// Chaveada em REF + MARCA + COR + TAMANHO. A MARCA entra porque REF numérica
 /// é reciclada entre fornecedores (mesma regra do resto da ficha), e nada é
 /// herdado por REF-base: cada referência é única por decisão do dono (21/08).
+/// VITALÍCIO (21/09/2026) — REF que a rede SEMPRE repõe.
+///
+/// Pedido do dono: uma aba em PEDIDOS que lista só essas peças, compara o que
+/// a rede TEM com o MÍNIMO/IDEAL da `produto_reposicao` e gera o pedido de
+/// compra por marca até o IDEAL. A marcação é da REF INTEIRA (decisão dele):
+/// todas as cores e tamanhos entram; o mínimo/ideal continuam por cor e
+/// tamanho, na matriz que já existia.
+///
+/// Chave = REF-BASE + MARCA, a MESMA da ficha e da matriz (`chave()` do
+/// `ProdutoFichaService`): REF sozinha se repete entre fornecedores.
+/// Desmarcar APAGA a linha — a tabela é "quem está marcado agora".
+model ProdutoVitalicio {
+  id         String   @id @default(uuid())
+  ref        String
+  marca      String
+  marcadoPor String?  @map("marcado_por")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([ref, marca])
+  @@map("produto_vitalicio")
+}
+
 model ProdutoReposicao {
   id      String @id @default(uuid())
   ref     String

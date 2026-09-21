@@ -16,13 +16,15 @@ import { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   Home, ChevronRight, LayoutDashboard, ShoppingBag, Box, Layers,
-  Users, CircleDollarSign, BarChart3, Tag, Settings,
+  Users, CircleDollarSign, BarChart3, Tag, Settings, Repeat,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
 const SIDE_NAV: Array<{ label: string; icon: any; href?: string }> = [
   { label: 'Dashboard', icon: LayoutDashboard, href: '/loja' },
   { label: 'Pedidos', icon: ShoppingBag, href: '/loja/pedidos-compra' },
+  // Compra das peças que a rede SEMPRE repõe, até o IDEAL (21/09/2026).
+  { label: 'Vitalícios', icon: Repeat, href: '/loja/pedidos-compra/vitalicios' },
   { label: 'Produtos', icon: Box, href: '/produtos' },
   { label: 'Coleções', icon: Layers },
   { label: 'Fornecedores', icon: Users },

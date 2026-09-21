@@ -410,6 +410,7 @@ export default function MatrizReposicao({
         <span className="ml-auto text-[10px] font-bold uppercase tracking-wide text-slate-400">
           peças na rede · {nLojas} lojas
         </span>
+        <SeloVitalicio ref_={ref_} marca={marca} />
       </div>
 
       {/* Falha de leitura do mínimo/ideal: avisa em vez de deixar a tela
@@ -629,5 +630,67 @@ export default function MatrizReposicao({
         <span className="text-slate-400">tamanho apagado = fora da grade da casa (46–60)</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * VITALÍCIA (21/09/2026) — a REF que a rede SEMPRE repõe entra na aba
+ * "Vitalícios" de PEDIDOS, que gera o pedido de compra até o IDEAL.
+ *
+ * A marcação é da REF INTEIRA (decisão do dono): mora aqui no cabeçalho da
+ * matriz porque é aqui que o mínimo e o ideal da peça são digitados. Erro de
+ * leitura NÃO vira "não é vitalícia" — o botão some em vez de mentir.
+ */
+function SeloVitalicio({ ref_, marca }: { ref_: string; marca: string }) {
+  const [estado, setEstado] = useState<'carregando' | 'sim' | 'nao' | 'erro'>('carregando');
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    let vivo = true;
+    setEstado('carregando');
+    const qs = new URLSearchParams({ ref: ref_, marca });
+    api<{ vitalicio?: boolean }>(`/compras-vitalicios/status?${qs}`)
+      .then((r) => { if (vivo) setEstado(r?.vitalicio ? 'sim' : 'nao'); })
+      .catch(() => { if (vivo) setEstado('erro'); });
+    return () => { vivo = false; };
+  }, [ref_, marca]);
+
+  if (estado === 'carregando' || estado === 'erro') return null;
+  const sim = estado === 'sim';
+
+  const alternar = async () => {
+    if (salvando) return;
+    setSalvando(true);
+    try {
+      await api(`/compras-vitalicios/${sim ? 'desmarcar' : 'marcar'}`, {
+        method: 'POST',
+        body: JSON.stringify({ itens: [{ ref: ref_, marca }] }),
+      });
+      setEstado(sim ? 'nao' : 'sim');
+    } catch (e: any) {
+      alert(`Não deu pra ${sim ? 'desmarcar' : 'marcar'}: ${e?.body?.message || e?.message || 'erro'}`);
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void alternar()}
+      disabled={salvando}
+      title={
+        sim
+          ? 'Esta REF é VITALÍCIA: entra na aba Vitalícios de PEDIDOS e no pedido automático até o IDEAL. Clique pra tirar.'
+          : 'Marcar a REF inteira como VITALÍCIA (sempre reposta): ela passa a aparecer na aba Vitalícios de PEDIDOS.'
+      }
+      className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border disabled:opacity-60 ${
+        sim
+          ? 'bg-amber-500 border-amber-500 text-white hover:bg-amber-600'
+          : 'bg-white border-amber-300 text-amber-700 hover:bg-amber-50'
+      }`}
+    >
+      {salvando ? '…' : sim ? '★ Vitalícia' : '☆ Marcar vitalícia'}
+    </button>
   );
 }
