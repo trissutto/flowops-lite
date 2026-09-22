@@ -73,8 +73,20 @@ export class EmailService implements OnModuleInit {
     return nome ? `${nome} <${user}>` : user;
   }
 
-  /** Envia um email. Retorna true se OK, false se falhou ou não configurado. */
-  async send(to: string, subject: string, html: string, text?: string): Promise<boolean> {
+  /**
+   * Envia um email. Retorna true se OK, false se falhou ou não configurado.
+   *
+   * `anexos` entrou em 22/09/2026 pro comprovante de ESTORNO, que a cliente
+   * precisa receber como PDF de verdade (link some, PDF fica). O buffer vai
+   * direto pro nodemailer — nenhum anexo é gravado em disco.
+   */
+  async send(
+    to: string,
+    subject: string,
+    html: string,
+    text?: string,
+    anexos?: Array<{ filename: string; content: Buffer; contentType?: string }>,
+  ): Promise<boolean> {
     if (!this.transporter) return false;
     if (!to || !to.includes('@')) return false;
 
@@ -85,6 +97,9 @@ export class EmailService implements OnModuleInit {
         subject,
         html,
         text: text || stripHtml(html),
+        ...(anexos?.length
+          ? { attachments: anexos.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType })) }
+          : {}),
       });
       this.logger.log(`[email] enviado pra ${to}: "${subject}"`);
       return true;

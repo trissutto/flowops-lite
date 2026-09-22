@@ -1631,6 +1631,78 @@ export class PagarmeService {
     );
   }
 
+  // ── ESTORNO / DEVOLUÇÃO (22/09/2026) ───────────────────────────────
+  //
+  // Pedido do site pago ANTES de 16/09 cobrou aqui, e a devolução dele tem
+  // que sair pela Pagar.me: `DELETE /charges/{id}` com `{amount}` em centavos
+  // (sem amount = integral). Cartão responde na hora (`canceled`/`refunded`);
+  // PIX pode voltar `pending_refund` e terminar depois — a leitura da resposta
+  // é do `common/estornos.ts`.
+  //
+  // ⚠️ O checkout da conta está desligado desde 21/09 (412 em todo link novo);
+  // isso NÃO impede consultar e estornar cobrança antiga — mas se um dia a
+  // conta for encerrada de vez, o estorno aqui passa a responder erro honesto.
+
+  /** A cobrança como a Pagar.me a enxerga agora (inclui `canceled_amount`). */
+  async consultarCobranca(chargeId: string, storeCode?: string): Promise<any> {
+    const cfg = await this.getConfigInternalForStore(String(storeCode || ''));
+    const r = await firstValueFrom(
+      this.http.get(`${this.BASE_URL}/charges/${encodeURIComponent(chargeId)}`, {
+        headers: { Authorization: this.authHeader(cfg.apiKey), Accept: 'application/json' },
+        timeout: 10000,
+      }),
+    );
+    return r.data;
+  }
+
+  /** Pede o estorno. Mesmas três saídas do PagBank (ver `estornarCobranca` de lá). */
+  async estornarCobranca(input: {
+    chargeId: string;
+    valorCents: number;
+    storeCode?: string;
+  }): Promise<
+    | { ok: true; charge: any }
+    | { ok: false; ambigua: boolean; httpStatus?: number; detalhe: string; charge?: any }
+  > {
+    const cfg = await this.getConfigInternalForStore(String(input.storeCode || ''));
+    const url = `${this.BASE_URL}/charges/${encodeURIComponent(input.chargeId)}`;
+    try {
+      const r = await firstValueFrom(
+        this.http.delete(url, {
+          headers: {
+            Authorization: this.authHeader(cfg.apiKey),
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          data: { amount: Math.round(input.valorCents) },
+          timeout: 20000,
+        }),
+      );
+      this.logger.log(
+        `[pagarme-estorno] charge=${input.chargeId} R$${(input.valorCents / 100).toFixed(2)} → ` +
+          `status=${r.data?.status} canceled_amount=${r.data?.canceled_amount ?? '?'}`,
+      );
+      return { ok: true, charge: r.data };
+    } catch (e: any) {
+      const httpStatus: number | undefined = e?.response?.status;
+      const data = e?.response?.data;
+      const detalhe = String(
+        data?.message || data?.errors?.[0]?.message || e?.message || 'falha ao falar com a Pagar.me',
+      ).slice(0, 300);
+      const ambigua = !e?.response || (typeof httpStatus === 'number' && httpStatus >= 500);
+      if (ambigua) {
+        const charge = await this.consultarCobranca(input.chargeId, input.storeCode).catch(() => null);
+        this.logger.warn(
+          `[pagarme-estorno][ALERTA] charge=${input.chargeId}: resposta ambígua (HTTP ${httpStatus ?? 'timeout/rede'}) — ` +
+            `canceled_amount agora=${charge?.canceled_amount ?? '?'}`,
+        );
+        return { ok: false, ambigua: true, httpStatus, detalhe, charge: charge ?? undefined };
+      }
+      this.logger.warn(`[pagarme-estorno] charge=${input.chargeId} recusado HTTP ${httpStatus}: ${detalhe}`);
+      return { ok: false, ambigua: false, httpStatus, detalhe };
+    }
+  }
+
   // ── Helpers ─────────────────────────────────────────────────────────
 
   async getPaymentBySale(saleId: string) {
