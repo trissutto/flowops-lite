@@ -28,6 +28,24 @@ import {
  * (xml-crypto + node-forge) e SOAP (axios + xml). Quando o certificado A1
  * estiver carregado, plugar a função `transmitToSefaz()` abaixo.
  */
+/**
+ * PAGAMENTO QUE NÃO É DINHEIRO — vira vDesc, nunca detPag.
+ *
+ * O GRAVÍSSIMO da NFC-e 94 (Moema, 21/07/2026) foi o vale-troca de R$ 559,80
+ * entrar como "MULTIPLO" e a nota sair com vNF CHEIO de R$ 1.429: tributou
+ * ICMS sobre dinheiro que a cliente não entregou.
+ *
+ * CASHBACK entrou nesta lista em 22/09/2026 pelo MESMO motivo, e é importante
+ * que seja a mesma lista e não uma cópia: o defeito nasceu de três filtros
+ * iguais espalhados pelo arquivo, e o quarto caso ia esquecer um deles.
+ *
+ * A diferença entre os dois é só a origem do abatimento — o vale vem de uma
+ * peça que já pagou ICMS na nota original; o cashback é desconto incondicional
+ * concedido na própria venda. Os dois reduzem a base de cálculo, e nenhum dos
+ * dois é forma de pagamento.
+ */
+const ABATIMENTOS = ['vale_troca', 'vale', 'troca', 'cashback'];
+
 @Injectable()
 export class NfceService {
   private readonly logger = new Logger(NfceService.name);
@@ -431,7 +449,7 @@ export class NfceService {
     // é o que a cliente pagou de verdade. SEFAZ exige vDesc(itens) somando
     // o vDesc total (cStat 537), então o vale precisa ser rateado aqui.
     const valeDesconto = ((sale.payments || []) as any[])
-      .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()))
+      .filter((p: any) => ABATIMENTOS.includes(String(p.method || '').toLowerCase()))
       .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
     const totalLiquido = Math.max(0, Number(sale.total || 0) - valeDesconto);
     const descontoEfetivoTotal = Math.max(0, brutoTotal - totalLiquido);
@@ -644,15 +662,15 @@ export class NfceService {
     // dentro do "MULTIPLO"). A peça devolvida já pagou ICMS na nota original —
     // a nota nova só pode tributar o que a cliente efetivamente pagou:
     //   vNF = sale.total − vale · vale entra no vDesc · detPag SEM o vale.
-    const valeTrocaTotal = ((sale.payments || []) as any[])
-      .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()))
+    const abatimentoTotal = ((sale.payments || []) as any[])
+      .filter((p: any) => ABATIMENTOS.includes(String(p.method || '').toLowerCase()))
       .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
-    const vNFNum = Math.round((Number(sale.total || 0) - valeTrocaTotal) * 100) / 100;
+    const vNFNum = Math.round((Number(sale.total || 0) - abatimentoTotal) * 100) / 100;
     if (vNFNum <= 0.009) {
       // Troca PAR (vale cobre 100%): a NFC-e original já cobriu o ICMS —
       // não há fato gerador novo, NÃO se emite nota com vNF zero.
       throw new BadRequestException(
-        'Venda coberta 100% pelo vale-troca (troca par) — sem valor a tributar, NFC-e não deve ser emitida.',
+        'Venda coberta 100% por vale-troca e/ou cashback — sem valor a tributar, NFC-e não deve ser emitida.',
       );
     }
     // SEFAZ valida: vNF = vProd - vDesc. Calcula vDesc TOTAL como diferença
@@ -666,7 +684,7 @@ export class NfceService {
     // detPag SEM os pagamentos de vale (viraram vDesc acima) — soma dos
     // <vPag> tem que bater com o vNF.
     const payments = ((sale.payments || []) as any[]).filter(
-      (p: any) => !['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()),
+      (p: any) => !ABATIMENTOS.includes(String(p.method || '').toLowerCase()),
     );
     // CNPJ usado como "instituição de pagamento" no grupo <card>. Usa o CNPJ do
     // próprio emitente como genérico (comprovado em produção: SEFAZ ACEITA — a
@@ -886,6 +904,7 @@ export class NfceService {
     const m = String(method || '').toLowerCase().trim();
     const map: Record<string, string> = {
       vale_troca: 'VALE TROCA',
+      cashback: 'CASHBACK',
       venda_online: 'VENDA ONLINE',
       cartao: 'CARTAO',
       link: 'LINK DE PAGAMENTO',

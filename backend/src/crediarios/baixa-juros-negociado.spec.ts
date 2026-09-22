@@ -44,7 +44,7 @@ describe('previewBaixa — juros negociado', () => {
       },
       crediarioParcela: { findFirst: jest.fn().mockResolvedValue(null) },
     };
-    const svc = new CrediarioBaixaService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any) as any;
+    const svc = new CrediarioBaixaService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any) as any;
     // O juros de cada parcela vem da régua de sempre (calcJuros) — aqui ele é
     // fixado pra o teste falar só da NEGOCIAÇÃO.
     jest.spyOn(svc, 'calcJuros').mockImplementation((_venc: any, valor: any) => ({

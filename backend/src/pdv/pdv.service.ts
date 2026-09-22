@@ -1358,84 +1358,45 @@ export class PdvService {
 
     /* ─── PASSO 3: Revogar cashback ganho ─── */
     /**
-     * ⚠️ CORRIGIDO EM 10/08/2026 — ESTE PASSO TIRAVA DINHEIRO QUE A VENDA
-     * NUNCA TINHA DADO.
+     * CASHBACK — a venda cancelada desfaz os DOIS lados.
      *
-     * O código antigo calculava `total × 10%` e descontava esse valor do saldo
-     * do app. Só que **venda de PDV nunca creditou o saldo do app**: quem
-     * credita ali é pedido do app e bônus de boas-vindas (ver
-     * `CustomerCashbackService`). Ou seja, o cancelamento não desfazia um
-     * crédito — ele confiscava saldo de outra origem.
+     * ⚠️ HISTÓRIA, porque o passo já errou feio duas vezes e a segunda versão
+     * ficou certa pelo motivo errado.
      *
-     * Caso concreto: cliente instala o app e ganha R$ 20 de boas-vindas.
-     * Compra R$ 500 na loja. A caixa erra e cancela a venda. O sistema tirava
-     * R$ 50 (10% de 500) de um saldo de R$ 20 — o `Math.max(0, ...)` zerava a
-     * conta. A cliente perdia os R$ 20 do app por causa de um cancelamento de
-     * loja física que nada tinha a ver com aquilo. Sem log, sem extrato: o
-     * `CustomerCashbackTx` nem era criado, então nem dava pra descobrir depois
-     * pra onde o dinheiro foi.
+     * Versão 1 (até 10/08/2026) calculava `total × 10%` e tirava do saldo do
+     * APP — ledger que venda de PDV nunca creditou. Cliente que ganhou R$ 20
+     * de boas-vindas e teve uma venda de loja cancelada perdia os R$ 20, sem
+     * log e sem extrato.
      *
-     * Agora a regra é a única correta: **só se revoga o que esta venda
-     * creditou**. O crédito é procurado pelo `pdvSaleId` no extrato. Hoje esse
-     * campo nunca é preenchido (venda de PDV não credita), então na prática
-     * este passo não mexe em saldo nenhum — que é exatamente o certo. No dia em
-     * que a venda de PDV passar a creditar gravando `pdvSaleId`, a revogação
-     * volta a funcionar sozinha, e pelo valor real.
+     * Versão 2 procurava o crédito por `pdvSaleId` no extrato do app. Parou
+     * de confiscar, mas passou a responder "esta venda não gerou cashback" em
+     * 100% dos casos — porque o crédito da venda nunca esteve ali.
+     *
+     * Agora lê o ledger que de fato recebe o crédito da venda
+     * (`cashback_creditos`, chave = CPF) e desfaz as duas pontas:
+     *
+     *   · o que a venda GANHOU some (e vira saldo negativo se já foi gasto —
+     *     senão comprar-ganhar-gastar-cancelar seria dinheiro de graça);
+     *   · o que a venda USOU de saldo VOLTA pro mesmo crédito, com a validade
+     *     original. Crédito novo daria sobrevida a saldo vencido.
+     *
+     * Best-effort como todo o resto do estorno: falha aqui vira passo
+     * "falhou" na tela, nunca exceção que trava o cancelamento.
      */
     if (sale.customerCpf && !sale.isTraining) {
       try {
-        const creditos = await (this.prisma as any).customerCashbackTx.findMany({
-          where: { pdvSaleId: sale.id, amountCents: { gt: 0 } },
-          select: { id: true, accountId: true, amountCents: true },
+        const [revogado, devolvido] = await Promise.all([
+          this.cashback.cancelarCreditoDeVenda(sale.id, 'estorno master'),
+          this.cashback.estornarUso(sale.id, 'estorno master'),
+        ]);
+        const partes: string[] = [];
+        if (revogado?.cancelado) partes.push(`R$ ${revogado.cancelado.toFixed(2)} de crédito revogado`);
+        if (devolvido?.devolvido) partes.push(`R$ ${devolvido.devolvido.toFixed(2)} devolvido ao saldo da cliente`);
+        passos.push({
+          passo: 'Cashback cliente',
+          status: 'ok',
+          detalhe: partes.length ? partes.join(' · ') : 'Esta venda não ganhou nem usou cashback',
         });
-
-        if (creditos.length === 0) {
-          passos.push({
-            passo: 'Cashback cliente',
-            status: 'pulado',
-            detalhe: 'Esta venda não gerou cashback — nada a revogar',
-          });
-        } else {
-          const totalRevogado = creditos.reduce((s: number, c: any) => s + c.amountCents, 0);
-          const accountId = creditos[0].accountId;
-          const acc = await (this.prisma as any).customerAccount.findUnique({
-            where: { id: accountId },
-            select: { cashbackBalanceCents: true },
-          });
-          const saldoAtual = acc?.cashbackBalanceCents || 0;
-          // Se a cliente já gastou parte, não dá pra tirar o que não está mais
-          // lá — vira dívida zero, não saldo negativo (o app não sabe exibir
-          // saldo negativo, ver CustomerCashbackService.creditAndUpdate).
-          const revogavel = Math.min(saldoAtual, totalRevogado);
-
-          await (this.prisma as any).$transaction([
-            (this.prisma as any).customerAccount.update({
-              where: { id: accountId },
-              data: {
-                cashbackBalanceCents: saldoAtual - revogavel,
-                cashbackEarnedCents: { decrement: BigInt(revogavel) },
-              },
-            }),
-            // Extrato: o antigo mexia no saldo sem deixar rastro. Sem esta
-            // linha, a cliente vê o saldo cair e ninguém sabe explicar.
-            (this.prisma as any).customerCashbackTx.create({
-              data: {
-                accountId,
-                type: 'adjust',
-                amountCents: -revogavel,
-                balanceAfterCents: saldoAtual - revogavel,
-                description: `Venda cancelada (${String(sale.id).slice(0, 8)})`,
-                pdvSaleId: sale.id,
-              },
-            }),
-          ]);
-
-          passos.push({
-            passo: 'Cashback cliente',
-            status: 'ok',
-            detalhe: `Revogados R$ ${(revogavel / 100).toFixed(2)} (crédito desta venda)`,
-          });
-        }
       } catch (e: any) {
         passos.push({
           passo: 'Cashback cliente',
@@ -1823,6 +1784,51 @@ export class PdvService {
       }
     }
 
+    /**
+     * CASHBACK — o resgate na loja física.
+     *
+     * Entra como PAGAMENTO porque é assim que a vendedora pensa ("abate R$ 30
+     * do cashback dela"), mas na NFC-e vira DESCONTO, não tPag: a cliente não
+     * entregou dinheiro nenhum, e tributar o valor cheio cobraria ICMS sobre
+     * um valor que não foi pago. Mesma régua do vale-troca, pelo mesmo motivo
+     * (ver o bloco do vNF em `nfce.service.ts`).
+     *
+     * A régua toda é do servidor. A tela mostra o permitido, mas quem decide é
+     * `quantoPodeUsar`: programa ligado, saldo liberado (fora da carência e
+     * dentro da validade), mínimo e teto de % da compra. O saldo pode ter
+     * mudado entre a tela e o clique — dois PDVs, a live, o site.
+     *
+     * UMA LINHA POR VENDA. Não é limitação, é o que torna o desfazer simples:
+     * remover o pagamento devolve exatamente o que foi consumido.
+     */
+    if (input.method === 'cashback') {
+      if (!sale.customerCpf) {
+        throw new BadRequestException('Cashback exige o CPF da cliente — identifique antes.');
+      }
+      const jaTem = await (this.prisma as any).pdvSalePayment.findFirst({
+        where: { saleId: input.saleId, method: 'cashback' },
+        select: { id: true },
+      });
+      if (jaTem) {
+        throw new BadRequestException(
+          'Esta venda já tem cashback aplicado. Remova o pagamento antes de aplicar outro valor.',
+        );
+      }
+      const pode = await this.cashback.quantoPodeUsar(sale.customerCpf, Number(sale.total) || 0);
+      if (!pode.ativo) throw new BadRequestException('Programa de cashback está desligado.');
+      if (pode.permitido <= 0) {
+        throw new BadRequestException(
+          pode.motivo || 'A cliente não tem saldo de cashback disponível.',
+        );
+      }
+      if (Number(input.valor) > pode.permitido + 0.001) {
+        throw new BadRequestException(
+          `Cashback: no máximo R$ ${pode.permitido.toFixed(2)} nesta compra` +
+            (pode.motivo ? ` (${pode.motivo})` : '') + '.',
+        );
+      }
+    }
+
     // Não deixa pagar mais que o total
     const jaPago = await this.sumPaidValue(input.saleId);
     // CENTAVO (10/08 — Campinas): o total da venda podia carregar FRAÇÃO de
@@ -1866,14 +1872,62 @@ export class PdvService {
       }
     }
 
-    const payment = await (this.prisma as any).pdvSalePayment.create({
-      data: {
+    /**
+     * O SALDO SAI AQUI, não antes.
+     *
+     * `valor` já passou pelo teto do restante da venda logo acima — consumir
+     * antes disso tiraria do saldo da cliente um pedaço que a venda nem iria
+     * cobrar. E o pagamento é gravado com o que o ledger REALMENTE entregou:
+     * entre a tela e este ponto o saldo pode ter caído (outro PDV, o site, a
+     * live), e uma linha de R$ 30 lastreada por R$ 22 de crédito seria caixa
+     * furado — a venda fecharia com R$ 8 que ninguém pagou.
+     */
+    if (input.method === 'cashback') {
+      const r = await this.cashback.usar({
+        cpf: String(sale.customerCpf),
         saleId: input.saleId,
-        method: input.method,
+        storeCode: sale.storeCode,
         valor,
-        details: details ? JSON.stringify(details) : null,
-      },
-    });
+      });
+      if (!r.usado || r.usado <= 0) {
+        throw new BadRequestException(
+          r.erro
+            ? `Não deu pra usar o cashback: ${r.erro}`
+            : 'O saldo de cashback da cliente acabou de mudar. Consulte de novo.',
+        );
+      }
+      if (r.usado < valor - 0.001) {
+        this.logger.warn(
+          `[pdv] cashback pedido R$ ${valor.toFixed(2)} mas o saldo só cobriu ` +
+            `R$ ${r.usado.toFixed(2)} (venda ${input.saleId}) — pagamento gravado pelo consumido`,
+        );
+      }
+      valor = Math.round(r.usado * 100) / 100;
+      details = { ...(details || {}), cashbackUsado: valor, cpf: sale.customerCpf };
+    }
+
+    let payment;
+    try {
+      payment = await (this.prisma as any).pdvSalePayment.create({
+        data: {
+          saleId: input.saleId,
+          method: input.method,
+          valor,
+          details: details ? JSON.stringify(details) : null,
+        },
+      });
+    } catch (e: any) {
+      // O saldo de cashback já saiu do ledger logo acima. Sem esta devolução
+      // a cliente perderia o crédito e não haveria linha nenhuma apontando
+      // pra ele — dinheiro sumindo sem rastro é o pior desfecho possível.
+      if (input.method === 'cashback') {
+        await this.cashback.estornarUso(input.saleId, 'pagamento não gravou');
+        this.logger.error(
+          `[pdv] cashback consumido mas o pagamento não gravou na venda ${input.saleId} — saldo devolvido: ${e?.message}`,
+        );
+      }
+      throw e;
+    }
 
     return payment;
   }
@@ -2134,6 +2188,17 @@ export class PdvService {
     });
     if (sale?.status !== 'open') throw new BadRequestException('Venda já fechada');
     await (this.prisma as any).pdvSalePayment.delete({ where: { id: input.paymentId } });
+    /**
+     * CASHBACK volta pro saldo da cliente.
+     *
+     * Tirar a linha sem devolver o crédito faria a vendedora "consertar" a
+     * venda e a cliente sair com menos cashback do que entrou — o jeito mais
+     * silencioso de perder saldo. `estornarUso` devolve ao MESMO crédito
+     * (validade original) e é idempotente.
+     */
+    if (String(payment.method || '').toLowerCase() === 'cashback') {
+      await this.cashback.estornarUso(input.saleId, 'pagamento removido');
+    }
     // PERF: venda completa no retorno — evita o GET extra do PDV (ver addItem).
     return { ok: true, sale: await this.getSale(input.saleId) };
   }
@@ -3851,12 +3916,21 @@ export class PdvService {
     // de propósito: nenhuma linha depois de "venda finalizada" pode derrubar
     // uma venda que já entrou no caixa.
     try {
+      // Quanto desta venda foi pago COM saldo — não gera cashback de novo.
+      // Soma direta pelo método: uma lista de exclusão erraria pro lado caro
+      // no dia em que aparecesse uma forma de pagamento nova.
+      const pagoComCashback = await (this.prisma as any).pdvSalePayment
+        .findMany({ where: { saleId: sale.id, method: 'cashback' }, select: { valor: true } })
+        .then((ps: any[]) => ps.reduce((t, x) => t + (Number(x.valor) || 0), 0))
+        .catch(() => 0);
+
       const cb = await this.cashback.creditarVenda({
         saleId: sale.id,
         cpf: (sale as any).customerCpf,
         storeCode: sale.storeCode,
         total: sale.total,
         isTraining: (sale as any).isTraining,
+        pagoComCashback,
       });
       if (cb) {
         this.logger.log(
@@ -4873,6 +4947,18 @@ export class PdvService {
         cancelReason: input.reason || null,
       },
     });
+
+    /**
+     * CASHBACK volta pro saldo da cliente.
+     *
+     * Carrinho cancelado é o caminho mais comum do PDV. Sem esta linha, a
+     * cliente que aplicou o cashback e desistiu da compra perdia o saldo — e
+     * a vendedora não teria como devolver por tela nenhuma.
+     *
+     * Só o USO volta: venda aberta nunca creditou nada, então não há crédito
+     * a revogar aqui (isso é do estorno master, sobre venda finalizada).
+     */
+    await this.cashback.estornarUso(sale.id, 'venda cancelada');
 
     // Venda veio de "Puxar marcados" → DEVOLVE as peças pra tela de Marcados
     // (status 'puxado' → 'ativo'). Sem isso ficariam presas fora da tela.

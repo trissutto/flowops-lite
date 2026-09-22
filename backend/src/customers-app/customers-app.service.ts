@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { situacaoPublica, SituacaoPublica } from '../common/situacao-pedido';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { EmailService } from '../email/email.service';
+import { CashbackService } from '../cashback/cashback.service';
 import { AppLoginDto, AppRegisterDto } from './dto/app-auth.dto';
 
 /**
@@ -38,6 +39,7 @@ export class CustomersAppService {
     private readonly jwt: JwtService,
     private readonly cfg: ConfigService,
     private readonly email: EmailService,
+    private readonly cashback: CashbackService,
   ) {
     this.WELCOME_BONUS_CENTS =
       this.cfg.get<number>('APP_WELCOME_BONUS_CENTS') ?? 2000;
@@ -1181,41 +1183,49 @@ export class CustomersAppService {
   /* ─────────────────── WELCOME BONUS ─────────────────── */
 
   /**
-   * Credita R$ 20 (configurável via APP_WELCOME_BONUS_CENTS) no cashback
-   * da conta NA HORA do cadastro. Idempotente (welcomeBonusAt).
-   * Não usa CustomerCashbackService pra evitar circular dep entre módulos.
+   * Bônus de boas-vindas (APP_WELCOME_BONUS_CENTS, R$ 20 por padrão) NA HORA
+   * do cadastro. Idempotente por `welcomeBonusAt`.
+   *
+   * ── MUDOU DE DESTINO EM 22/09/2026 ──
+   *
+   * Creditava `customer_accounts.cashback_balance_cents` — o ledger do app,
+   * que desde a unificação ninguém mais lê. Mantido ali, o push "🎁 R$ 20
+   * caiu no seu cashback" sairia e a cliente abriria o app pra ver zero: a
+   * mesma promessa vazia que este trabalho inteiro veio consertar.
+   *
+   * Vai pro ledger único (chave = CPF), que é o que o site, o app e o caixa
+   * da loja enxergam. Efeito colateral bem-vindo: o bônus do app agora pode
+   * ser gasto na loja física, o que antes era impossível.
    */
   private async creditWelcomeBonus(accountId: string): Promise<void> {
     const account = await this.prisma.customerAccount.findUnique({
       where: { id: accountId },
-      select: { welcomeBonusAt: true, cashbackBalanceCents: true },
+      select: { welcomeBonusAt: true, cashbackBalanceCents: true, cpf: true },
     });
     if (!account || account.welcomeBonusAt) return;
 
-    const TTL_DAYS = Number(this.cfg.get('CASHBACK_TTL_DAYS') ?? 30);
+    // A validade agora é a do programa (CashbackService.config), não a do
+    // env do app: dois prazos diferentes pro mesmo saldo é receita de briga.
     const amountCents = this.WELCOME_BONUS_CENTS;
-    const expiresAt = new Date(Date.now() + TTL_DAYS * 86400 * 1000);
-    const newBalance = account.cashbackBalanceCents + amountCents;
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.customerCashbackTx.create({
-        data: {
-          accountId,
-          type: 'welcome',
-          amountCents,
-          balanceAfterCents: newBalance,
-          description: '🎁 Bônus de boas-vindas R$ 20',
-          expiresAt,
-        },
-      });
-      await tx.customerAccount.update({
-        where: { id: accountId },
-        data: {
-          cashbackBalanceCents: newBalance,
-          cashbackEarnedCents: { increment: BigInt(amountCents) },
-          welcomeBonusAt: new Date(),
-        },
-      });
+    const r = await this.cashback.creditarBonus({
+      cpf: account.cpf,
+      valor: amountCents / 100,
+      // A conta é única por CPF e nasce uma vez: chave estável por ocasião.
+      chave: `welcome:${accountId}`,
+      descricao: 'boas-vindas do app',
+    });
+    if (!r) {
+      // Programa desligado, CPF torto ou bônus já creditado: NÃO carimba
+      // `welcomeBonusAt`. Carimbar aqui queimaria o direito da cliente por
+      // causa de uma condição temporária.
+      this.logger.warn(`Welcome bonus não creditado pra account=${accountId} (cashback off ou já dado)`);
+      return;
+    }
+
+    await this.prisma.customerAccount.update({
+      where: { id: accountId },
+      data: { welcomeBonusAt: new Date() },
     });
 
     this.logger.log(

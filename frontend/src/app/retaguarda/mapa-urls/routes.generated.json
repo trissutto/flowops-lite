@@ -824,13 +824,6 @@
       "file": "src/app/retaguarda/cashback/page.tsx"
     },
     {
-      "route": "/retaguarda/cashback-config",
-      "section": "retaguarda",
-      "dynamic": false,
-      "hasShortcut": false,
-      "file": "src/app/retaguarda/cashback-config/page.tsx"
-    },
-    {
       "route": "/retaguarda/categorias",
       "section": "retaguarda",
       "dynamic": false,

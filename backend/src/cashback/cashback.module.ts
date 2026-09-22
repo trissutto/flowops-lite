@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CashbackService } from './cashback.service';
 import { CashbackPreviaService } from './cashback-previa.service';
+import { CashbackMigracaoService } from './cashback-migracao.service';
 import { CashbackController } from './cashback.controller';
 
 /**
@@ -18,7 +19,7 @@ import { CashbackController } from './cashback.controller';
 @Module({
   imports: [PrismaModule],
   controllers: [CashbackController],
-  providers: [CashbackService, CashbackPreviaService],
+  providers: [CashbackService, CashbackPreviaService, CashbackMigracaoService],
   exports: [CashbackService],
 })
 export class CashbackModule {}

@@ -3,16 +3,39 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CustomerPushService } from './customer-push.service';
+import { CashbackService } from '../cashback/cashback.service';
 
 /**
- * Cashback do app cliente.
+ * A VISÃO DO APP SOBRE O CASHBACK — e só isso.
  *
- * REGRAS (jun/2026):
- *   - 10% de cashback sobre compras (configurável em env CASHBACK_RATE_PCT)
- *   - Validade 30 dias (CASHBACK_TTL_DAYS)
- *   - Bônus de instalação R$ 20 quando: 1ª compra confirmada DEPOIS de install PWA
- *   - Alerta push em D-7 da expiração
- *   - Expira automaticamente no job diário
+ * ── O QUE ERA, E POR QUE ENCOLHEU (22/09/2026) ──
+ *
+ * Este service era um LEDGER inteiro e paralelo: creditava, resgatava,
+ * expirava e guardava saldo em `customer_accounts.cashback_balance_cents` +
+ * `customer_cashback_txs`. O ganho vinha dos hooks de pedido do WooCommerce
+ * (deletados na Onda 3, porque o WP morreu em 27/08) e o gasto, do checkout do
+ * app, que batia no mesmo WordPress apagado. Sobrou um saldo que não crescia,
+ * não podia ser gasto e mesmo assim aparecia pra cliente com o rótulo
+ * "Disponível pra usar".
+ *
+ * Era o terceiro de TRÊS cashbacks (este, o do CRM e o da rede), cada tela
+ * lendo um. Agora existe um só — `CashbackService`, chave = CPF — e este
+ * arquivo virou o que sempre deveria ter sido: a ponte entre o app e ele.
+ *
+ * Ficaram duas coisas, as duas de LEITURA:
+ *   · `getStatement` — saldo e extrato pra tela /conta/cashback e pro app;
+ *   · `warnExpiringSoon` — o push de D-7.
+ *
+ * Saíram `earnFromOrder`, `earnWelcomeBonus`, `redeem`, `creditAndUpdate` e o
+ * job diário de expirar. Os três primeiros não tinham chamador desde a Onda 3;
+ * o bônus de boas-vindas agora entra por `CashbackService.creditarBonus`, e o
+ * vencimento é aritmética de data, não estado gravado por cron.
+ *
+ * As envs CASHBACK_RATE_PCT / CASHBACK_TTL_DAYS / APP_WELCOME_BONUS_CENTS
+ * seguem aqui porque o bônus de boas-vindas ainda lê a última. As duas
+ * primeiras viraram letra morta: a regra (10% / 3%, validade) é a do
+ * `SystemSetting: cashback_rede_config`, editável em /retaguarda/cashback sem
+ * deploy.
  */
 @Injectable()
 export class CustomerCashbackService {
@@ -27,6 +50,7 @@ export class CustomerCashbackService {
     private readonly prisma: PrismaService,
     private readonly cfg: ConfigService,
     private readonly push: CustomerPushService,
+    private readonly cashbackRede: CashbackService,
   ) {
     this.RATE_PCT = Number(this.cfg.get('CASHBACK_RATE_PCT') ?? 10);
     this.TTL_DAYS = Number(this.cfg.get('CASHBACK_TTL_DAYS') ?? 30);
@@ -34,347 +58,139 @@ export class CustomerCashbackService {
     this.EXPIRE_WARNING_DAYS = Number(this.cfg.get('CASHBACK_WARNING_DAYS') ?? 7);
   }
 
-  /* ──────────────────────── EARN ──────────────────────── */
-
   /**
-   * Credita 10% de uma compra como cashback.
-   * Chamado quando Order vira 'shipped'/'delivered'/'completed'.
+   * O EXTRATO QUE A CLIENTE VÊ — site (/conta/cashback) e app.
+   *
+   * ── MUDOU DE FONTE EM 22/09/2026, e o formato foi mantido de propósito ──
+   *
+   * Lia `customer_accounts.cashback_balance_cents` + `customer_cashback_txs`:
+   * um terceiro ledger, que só a conta do app enxergava. O ganho dele vinha
+   * dos hooks de pedido do WooCommerce (`order-app-hooks.service`, deletado na
+   * Onda 3) e o gasto, do checkout do app que batia no WordPress apagado em
+   * 27/08. Resultado: a tela dizia "Disponível pra usar" sobre um saldo que
+   * parou de crescer em agosto e que não tinha onde ser gasto.
+   *
+   * Agora lê `cashback_creditos` (chave = CPF) — o mesmo saldo que a loja
+   * física mostra e aceita. A CHAVE MUDOU junto: era a conta do app, agora é
+   * o CPF da pessoa. Quem comprou na loja passa a ver o saldo no site, o que
+   * antes não acontecia.
+   *
+   * O formato de resposta é o mesmo de antes (`balance`, `rate`, `ttlDays`,
+   * `nextExpiration`, `transactions`) porque o site e o app já o consomem —
+   * trocar a fonte e o contrato no mesmo passo deixaria a tela em branco sem
+   * ninguém saber qual das duas mudanças quebrou.
    */
-  async earnFromOrder(accountId: string, orderId: string, orderTotalCents: number) {
-    if (orderTotalCents <= 0) return null;
-
-    const amountCents = Math.round(orderTotalCents * (this.RATE_PCT / 100));
-    if (amountCents <= 0) return null;
-
-    // Idempotência: se já creditou pra essa Order, ignora
-    const already = await this.prisma.customerCashbackTx.findFirst({
-      where: { accountId, orderId, type: 'earn' },
-    });
-    if (already) {
-      return { skipped: true, txId: already.id };
-    }
-
-    return this.creditAndUpdate(accountId, {
-      type: 'earn',
-      amountCents,
-      orderId,
-      description: `Cashback ${this.RATE_PCT}% da compra #${orderId.slice(0, 8)}`,
-    });
-  }
-
-  /**
-   * Credita bônus de boas-vindas R$ 20.
-   * Cai NA HORA DO CADASTRO (não espera instalar PWA ou comprar).
-   * 1 vez por account (welcomeBonusAt fica setado pra idempotência).
-   */
-  async earnWelcomeBonus(accountId: string) {
-    const account = await this.prisma.customerAccount.findUnique({
-      where: { id: accountId },
-      select: { welcomeBonusAt: true },
-    });
-    if (!account) throw new BadRequestException('Conta não encontrada');
-
-    if (account.welcomeBonusAt) {
-      return { skipped: true, reason: 'already received' };
-    }
-
-    const result = await this.creditAndUpdate(accountId, {
-      type: 'welcome',
-      amountCents: this.WELCOME_CENTS,
-      description: '🎁 Bônus de boas-vindas R$ 20',
-    });
-
-    await this.prisma.customerAccount.update({
-      where: { id: accountId },
-      data: { welcomeBonusAt: new Date() },
-    });
-
-    // Push de comemoração (best-effort, só funciona se já ativou push)
-    this.push
-      .sendToAccount(accountId, {
-        title: '🎁 R$ 20 caiu no seu cashback!',
-        body: 'Bem-vinda à Lurd\'s! Use no seu próximo pedido.',
-        url: '/cashback',
-        tag: 'welcome-bonus',
-      })
-      .catch(() => null);
-
-    this.logger.log(`Welcome bonus creditado: account=${accountId} valor=R$${this.WELCOME_CENTS / 100}`);
-    return result;
-  }
-
-  /* ──────────────────────── REDEEM ──────────────────────── */
-
-  async redeem(accountId: string, amountCents: number, refDescription?: string) {
-    if (amountCents <= 0) throw new BadRequestException('Valor inválido');
-
-    const account = await this.prisma.customerAccount.findUnique({
-      where: { id: accountId },
-      select: { cashbackBalanceCents: true },
-    });
-    if (!account) throw new BadRequestException('Conta não encontrada');
-
-    if (account.cashbackBalanceCents < amountCents) {
-      throw new BadRequestException(
-        `Saldo insuficiente. Disponível: R$ ${(account.cashbackBalanceCents / 100).toFixed(2)}`,
-      );
-    }
-
-    return this.creditAndUpdate(accountId, {
-      type: 'redeem',
-      amountCents: -amountCents, // negativo
-      description: refDescription || 'Cashback utilizado em compra',
-    });
-  }
-
-  /* ──────────────────────── STATEMENT ──────────────────────── */
-
   async getStatement(accountId: string, opts?: { limit?: number }) {
     const limit = Math.min(opts?.limit || 50, 100);
 
     const account = await this.prisma.customerAccount.findUnique({
       where: { id: accountId },
-      select: {
-        cashbackBalanceCents: true,
-        cashbackEarnedCents: true,
-        cashbackSpentCents: true,
-      },
+      select: { cpf: true },
     });
     if (!account) throw new BadRequestException('Conta não encontrada');
 
-    const txs = await this.prisma.customerCashbackTx.findMany({
-      where: { accountId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
-
-    // Próxima expiração (crédito mais próximo de expirar)
-    const nextExpiring = await this.prisma.customerCashbackTx.findFirst({
-      where: {
-        accountId,
-        type: { in: ['earn', 'welcome'] },
-        expiredAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { expiresAt: 'asc' },
-      select: { amountCents: true, expiresAt: true },
-    });
+    const e = await this.cashbackRede.extrato(account.cpf, limit);
 
     return {
-      balance: account.cashbackBalanceCents / 100,
-      earned: Number(account.cashbackEarnedCents) / 100,
-      spent: Number(account.cashbackSpentCents) / 100,
-      rate: this.RATE_PCT,
-      ttlDays: this.TTL_DAYS,
-      nextExpiration: nextExpiring && nextExpiring.expiresAt
-        ? {
-            amount: nextExpiring.amountCents / 100,
-            expiresAt: nextExpiring.expiresAt,
-            daysLeft: Math.ceil(
-              (nextExpiring.expiresAt.getTime() - Date.now()) / 86400000,
-            ),
-          }
+      balance: e.saldo,
+      earned: e.totalGanho,
+      spent: e.totalUsado,
+      // A taxa é a das PRÓXIMAS compras dela. Mostrar 10% (primeira compra)
+      // pra quem já comprou seria prometer o dobro do que ela vai receber.
+      rate: e.pctDemais,
+      ttlDays: e.validadeDias,
+      /** Saldo que existe mas ainda está na carência — a tela avisa a data. */
+      aLiberar: e.aLiberar,
+      liberaEm: e.liberaEm,
+      /** Onde ela pode gastar. É a pergunta que o extrato antigo não respondia. */
+      ondeUsar: e.ativo
+        ? `Em qualquer loja Lurd's — é só dar o CPF no caixa. Dá pra abater até ${e.usoMaxPctCompra}% da compra, a partir de R$ ${e.minimoUsoReais.toFixed(2)} de saldo.`
         : null,
-      transactions: txs.map((t) => ({
-        id: t.id,
-        type: t.type,
-        amount: t.amountCents / 100,
-        balanceAfter: t.balanceAfterCents / 100,
-        description: t.description,
-        date: t.createdAt,
-        expiresAt: t.expiresAt,
+      ativo: e.ativo,
+      nextExpiration:
+        e.proximaExpiracao && e.expiraEmBreve > 0
+          ? {
+              amount: e.expiraEmBreve,
+              expiresAt: new Date(`${e.proximaExpiracao}T12:00:00.000Z`),
+              daysLeft: Math.max(
+                0,
+                Math.ceil(
+                  (new Date(`${e.proximaExpiracao}T12:00:00.000Z`).getTime() - Date.now()) / 86400000,
+                ),
+              ),
+            }
+          : null,
+      transactions: e.movimentos.map((m) => ({
+        id: m.id,
+        // Vocabulário do site: 'earn' entra, 'spend' sai. O ledger novo fala
+        // 'ganho'/'usado'/'expirado'/'estorno' — a tradução mora aqui pra a
+        // página não precisar aprender duas línguas.
+        type:
+          m.tipo === 'ganho' ? 'earn'
+          : m.tipo === 'usado' ? 'spend'
+          : m.tipo === 'expirado' ? 'expire'
+          : 'adjust',
+        amount: m.valor,
+        balanceAfter: null,
+        description: m.descricao,
+        date: m.data,
+        expiresAt: m.expiraEm ? new Date(`${m.expiraEm}T12:00:00.000Z`) : null,
       })),
     };
   }
 
-  /* ──────────────────────── HELPER TRANSACIONAL ──────────────────────── */
-
-  private async creditAndUpdate(
-    accountId: string,
-    data: {
-      type: string;
-      amountCents: number;
-      description?: string;
-      orderId?: string;
-      pdvSaleId?: string;
-    },
-  ) {
-    return this.prisma.$transaction(async (tx) => {
-      const account = await tx.customerAccount.findUnique({
-        where: { id: accountId },
-        select: {
-          cashbackBalanceCents: true,
-          cashbackEarnedCents: true,
-          cashbackSpentCents: true,
-        },
-      });
-      if (!account) throw new BadRequestException('Conta não encontrada');
-
-      const newBalance = account.cashbackBalanceCents + data.amountCents;
-      if (newBalance < 0) {
-        throw new BadRequestException('Saldo ficaria negativo');
-      }
-
-      const expiresAt =
-        data.type === 'earn' || data.type === 'welcome'
-          ? new Date(Date.now() + this.TTL_DAYS * 86400 * 1000)
-          : null;
-
-      const txRow = await tx.customerCashbackTx.create({
-        data: {
-          accountId,
-          type: data.type,
-          amountCents: data.amountCents,
-          balanceAfterCents: newBalance,
-          description: data.description,
-          orderId: data.orderId,
-          pdvSaleId: data.pdvSaleId,
-          expiresAt,
-        },
-      });
-
-      const earnedDelta = data.amountCents > 0 ? BigInt(data.amountCents) : 0n;
-      const spentDelta = data.amountCents < 0 ? BigInt(-data.amountCents) : 0n;
-
-      await tx.customerAccount.update({
-        where: { id: accountId },
-        data: {
-          cashbackBalanceCents: newBalance,
-          cashbackEarnedCents: { increment: earnedDelta },
-          cashbackSpentCents: { increment: spentDelta },
-        },
-      });
-
-      return { txId: txRow.id, newBalance: newBalance / 100 };
-    });
-  }
-
-  /* ──────────────────────── JOBS (cron diário) ──────────────────────── */
-
   /**
-   * Job diário às 9h — varre cashbacks que expiram em ≤7 dias e ainda não
-   * notificou, manda push pra cada cliente afetado.
+   * AVISO DE VENCIMENTO — push em D-7.
+   *
+   * ── REESCRITO EM 22/09/2026 ──
+   *
+   * Lia `customer_cashback_txs`, o ledger do app. Depois da unificação isso
+   * viraria o pior tipo de notificação: "R$ 30 do seu cashback vencem em 7
+   * dias" calculado sobre um saldo que a tela /cashback não mostra mais. A
+   * cliente abriria o app e veria outro número — ou nenhum.
+   *
+   * Agora pergunta ao ledger único, pelo CPF da conta. Quem tem push ativo e
+   * saldo vencendo recebe; quem não tem conta no app não recebe nada por aqui
+   * (o aviso dela é a vendedora no caixa).
+   *
+   * O JOB DE EXPIRAR SUMIU e não faz falta: no ledger único o vencimento é
+   * ARITMÉTICA de data em cima do crédito (`saldo()` compara com `expiraEm`),
+   * não um estado gravado por um cron. Cron que precisa rodar pra um número
+   * ficar certo é cron que, quando falha, deixa o número errado — foi assim
+   * que o crediário quase ressuscitou dívida paga.
    */
   @Cron('0 0 9 * * *')
   async warnExpiringSoon() {
-    const warnUntil = new Date(Date.now() + this.EXPIRE_WARNING_DAYS * 86400 * 1000);
-
-    const txs = await this.prisma.customerCashbackTx.findMany({
-      where: {
-        type: { in: ['earn', 'welcome'] },
-        expiredAt: null,
-        notifiedExpireWarning: false,
-        expiresAt: { lte: warnUntil, gt: new Date() },
-      },
-      include: {
-        account: { select: { id: true, name: true, cashbackBalanceCents: true } },
-      },
+    // Só quem tem conta no app: o push é o canal, sem conta não há pra onde
+    // mandar. A varredura é pelo CPF, que é a chave do ledger.
+    const contas = await this.prisma.customerAccount.findMany({
+      select: { id: true, cpf: true, name: true },
     });
-
-    if (txs.length === 0) return { warned: 0 };
-
-    // Agrega por account (evita 5 pushes pro mesmo cliente)
-    const byAccount = new Map<
-      string,
-      { id: string; name: string | null; total: number; balance: number }
-    >();
-    for (const t of txs) {
-      const acc = t.account;
-      const cur = byAccount.get(acc.id) || {
-        id: acc.id,
-        name: acc.name,
-        total: 0,
-        balance: acc.cashbackBalanceCents,
-      };
-      cur.total += t.amountCents;
-      byAccount.set(acc.id, cur);
-    }
 
     let warned = 0;
-    for (const acc of byAccount.values()) {
-      await this.push
-        .sendToAccount(acc.id, {
-          title: '💸 Seu cashback está expirando',
-          body: `R$ ${(acc.total / 100).toFixed(2).replace('.', ',')} expira em até ${this.EXPIRE_WARNING_DAYS} dias. Aproveita!`,
-          url: '/cashback',
-          tag: 'cashback-warning',
-        })
-        .catch(() => null);
-      warned++;
-    }
-
-    // Marca como notificado
-    await this.prisma.customerCashbackTx.updateMany({
-      where: { id: { in: txs.map((t) => t.id) } },
-      data: { notifiedExpireWarning: true },
-    });
-
-    this.logger.log(`Cashback expire warnings enviados: ${warned}`);
-    return { warned };
-  }
-
-  /**
-   * Job diário às 3h — expira créditos vencidos. Cria tx 'expire' negativa.
-   */
-  @Cron(CronExpression.EVERY_DAY_AT_3AM)
-  async expireOldCashback() {
-    const expired = await this.prisma.customerCashbackTx.findMany({
-      where: {
-        type: { in: ['earn', 'welcome'] },
-        expiredAt: null,
-        expiresAt: { lte: new Date() },
-      },
-      include: {
-        account: { select: { id: true, cashbackBalanceCents: true } },
-      },
-    });
-
-    if (expired.length === 0) return { expired: 0 };
-
-    let totalExpired = 0;
-    for (const tx of expired) {
+    for (const conta of contas) {
       try {
-        await this.prisma.$transaction(async (db) => {
-          // Marca o crédito original como expirado
-          await db.customerCashbackTx.update({
-            where: { id: tx.id },
-            data: { expiredAt: new Date() },
-          });
+        const s = await this.cashbackRede.saldo(conta.cpf);
+        if (s.expiraEmBreve <= 0) continue;
 
-          // Diminui saldo (até o limite — se já gastou parcial, expira só o resto)
-          const account = await db.customerAccount.findUnique({
-            where: { id: tx.accountId },
-            select: { cashbackBalanceCents: true },
-          });
-          if (!account) return;
-
-          const toExpire = Math.min(tx.amountCents, account.cashbackBalanceCents);
-          if (toExpire <= 0) return;
-
-          const newBalance = account.cashbackBalanceCents - toExpire;
-          await db.customerCashbackTx.create({
-            data: {
-              accountId: tx.accountId,
-              type: 'expire',
-              amountCents: -toExpire,
-              balanceAfterCents: newBalance,
-              description: `Cashback expirado (validade ${this.TTL_DAYS} dias)`,
-            },
-          });
-          await db.customerAccount.update({
-            where: { id: tx.accountId },
-            data: { cashbackBalanceCents: newBalance },
-          });
-        });
-        totalExpired += tx.amountCents;
-      } catch (err: any) {
-        this.logger.warn(`Falha ao expirar tx ${tx.id}: ${err?.message}`);
+        await this.push
+          .sendToAccount(conta.id, {
+            title: '💸 Seu cashback está expirando',
+            body:
+              `R$ ${s.expiraEmBreve.toFixed(2).replace('.', ',')} vencem até ` +
+              `${new Date(`${s.proximaExpiracao}T12:00:00`).toLocaleDateString('pt-BR')}. ` +
+              'Use em qualquer loja Lurd\'s — é só dar o CPF no caixa.',
+            url: '/cashback',
+            tag: 'cashback-warning',
+          })
+          .catch(() => null);
+        warned++;
+      } catch {
+        /* uma conta com CPF torto não pode derrubar a varredura inteira */
       }
     }
 
-    this.logger.log(
-      `Cashback expirado: ${expired.length} tx, total R$ ${(totalExpired / 100).toFixed(2)}`,
-    );
-    return { expired: expired.length, totalCents: totalExpired };
+    this.logger.log(`Cashback expire warnings enviados: ${warned}`);
+    return { warned };
   }
 }

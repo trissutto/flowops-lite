@@ -2076,15 +2076,35 @@ function PdvPageInner() {
   // pelo CPF: cashback e LTV somados + origem do cadastro. Alimenta o badge
   // no card da venda ("🌐 Cliente do SITE" / "loja tal" + cashback total).
   const [clientePessoa, setClientePessoa] = useState<any>(null);
+  /**
+   * Saldo de cashback da PESSOA (ledger único, chave = CPF).
+   *
+   * Vem separado de `clientePessoa` porque existe mesmo quando a cliente não
+   * tem ficha no CRM: quem comprou só no site tem saldo e não tem cadastro de
+   * loja. Ler de dentro do `customer` deixaria essa cliente sem cashback
+   * justamente no caixa, que é onde ela vem gastar.
+   */
+  const [cashbackPessoa, setCashbackPessoa] = useState<any>(null);
+  /** Bump pra reconsultar o saldo depois de aplicar/remover. */
+  const [cashbackTick, setCashbackTick] = useState(0);
   useEffect(() => {
     const digits = String(sale?.customerCpf || '').replace(/\D/g, '');
     if (digits.length !== 11) { setClientePessoa(null); return; }
     let cancelled = false;
     api<any>(`/pdv/customer-resume?cpf=${digits}`)
-      .then((r) => { if (!cancelled) setClientePessoa(r?.found ? r.customer : null); })
-      .catch(() => { if (!cancelled) setClientePessoa(null); });
+      .then((r) => {
+        if (cancelled) return;
+        setClientePessoa(r?.found ? r.customer : null);
+        // `cashback` vem no resume mesmo com found:false — ver o controller.
+        setCashbackPessoa(r?.cashback || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setClientePessoa(null);
+        setCashbackPessoa(null);
+      });
     return () => { cancelled = true; };
-  }, [sale?.customerCpf]);
+  }, [sale?.customerCpf, cashbackTick]);
 
   // ── Cancelar ──
   /**
@@ -3355,6 +3375,23 @@ function PdvPageInner() {
           (s: number, p: any) => p.method === 'vale_troca' ? s + (Number(p.valor) || 0) : s,
           0,
         );
+        /** O pagamento de cashback desta venda (uma linha só, por regra). */
+        const cashbackPgto = (sale.payments || []).find((p: any) => p.method === 'cashback') || null;
+        const cashbackPago = Number(cashbackPgto?.valor) || 0;
+        /**
+         * Oferece o cashback quando há saldo e ainda não foi aplicado.
+         *
+         * O VALOR não é calculado aqui de propósito: quem diz quanto dá pra
+         * usar é o servidor (carência, validade, mínimo e teto de % da
+         * compra), no clique. A tela só precisa saber SE tem — mostrar uma
+         * conta que o backend pode recusar é como a tela antiga, que
+         * anunciava "pode usar R$ X" sem ter onde aplicar.
+         */
+        const cashbackOferece =
+          !cashbackPgto &&
+          !!cashbackPessoa?.disponivel &&
+          cashbackPessoa.disponivel > 0 &&
+          podePagar;
         const payBtnCls = 'flex items-center gap-2 border border-[#E5E2D9] rounded-lg px-3 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-[#FBF6E6] hover:border-[#CDA434] hover:text-[#8C7325] transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-[#E5E2D9] disabled:hover:text-slate-700';
         return (
       <>
@@ -3439,6 +3476,31 @@ function PdvPageInner() {
                 <span className="font-semibold text-rose-600 tabular-nums">− {brl(valeTrocaPago)}</span>
               </div>
             )}
+            {cashbackPago > 0.01 && (
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium flex items-center gap-1">
+                  Cashback
+                  <button
+                    type="button"
+                    title="Tirar o cashback desta venda (o saldo volta pra cliente)"
+                    onClick={async () => {
+                      try {
+                        const r = await api<any>(`/pdv/sales/${sale.id}/payments/${cashbackPgto?.id}`, { method: 'DELETE' });
+                        setSale(await saleFromResponse(r, sale.id));
+                        setCashbackTick((n) => n + 1);
+                        toast('success', 'Cashback removido', 'O saldo voltou pra cliente');
+                      } catch (e: any) {
+                        toast('error', 'Falha ao remover cashback', e?.message || '');
+                      }
+                    }}
+                    className="text-rose-500 hover:text-rose-700"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+                <span className="font-semibold text-rose-600 tabular-nums">− {brl(cashbackPago)}</span>
+              </div>
+            )}
             {temPgtoParcial && (
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 font-medium">Já pago</span>
@@ -3479,6 +3541,82 @@ function PdvPageInner() {
               <span className={`text-[28px] font-black tabular-nums leading-none ${ehCredito ? 'text-rose-600' : 'text-[#2E7D46]'}`}>
                 {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
               </span>
+            </div>
+          )}
+
+          {/**
+            * USAR O CASHBACK — um clique, sem digitar nada.
+            *
+            * Fica colado no total porque é ali que a vendedora olha quando a
+            * cliente pergunta "quanto ficou". O valor sai do servidor no
+            * clique (`/cashback/pode-usar`) e é o MÁXIMO permitido: pedir pra
+            * ela calcular 30% da compra de cabeça, com fila no caixa, é pedir
+            * pra não usar.
+            *
+            * Só aparece com saldo de verdade. A versão anterior desta tela
+            * mostrava "💰 pode usar R$ X" pra toda cliente com saldo e não
+            * tinha botão nenhum — a vendedora repetia a promessa e o caixa
+            * não aceitava. É essa a linha que a cliente ouviu antes de xingar.
+            */}
+          {cashbackOferece && (
+            <button
+              type="button"
+              onClick={async () => {
+                const cpfDig = String(sale.customerCpf || '').replace(/\D/g, '');
+                if (cpfDig.length !== 11) {
+                  toast('error', 'Identifique a cliente', 'O cashback é do CPF');
+                  return;
+                }
+                try {
+                  const pode = await api<any>(
+                    `/cashback/pode-usar/${cpfDig}?total=${sale.total}`,
+                  );
+                  if (!pode?.permitido || pode.permitido <= 0) {
+                    toast('info', 'Cashback não dá pra usar agora', pode?.motivo || 'Sem saldo liberado');
+                    setCashbackTick((n) => n + 1);
+                    return;
+                  }
+                  const r = await api<any>(`/pdv/sales/${sale.id}/payments`, {
+                    method: 'POST',
+                    body: JSON.stringify({ method: 'cashback', valor: pode.permitido }),
+                  });
+                  const fresh = await saleFromResponse(r, sale.id);
+                  setSale(fresh);
+                  setCashbackTick((n) => n + 1);
+                  toast('success', `Cashback de ${brl(pode.permitido)} aplicado`, 'Abateu do total');
+                } catch (e: any) {
+                  toast('error', 'Não deu pra usar o cashback', e?.message || '');
+                }
+              }}
+              className="w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 border-2 border-[#2E7D46] bg-[#EEF7F0] hover:bg-[#E2F0E7] transition text-left"
+              title="Abate o cashback da cliente nesta venda"
+            >
+              <span className="min-w-0">
+                <span className="block text-[11px] font-black uppercase tracking-wide text-[#2E7D46]">
+                  💰 Cashback da cliente
+                </span>
+                <span className="block text-[11px] text-slate-600">
+                  Saldo {brl(cashbackPessoa.disponivel)} — toque pra abater
+                </span>
+              </span>
+              <span className="text-sm font-black text-[#2E7D46] shrink-0">USAR</span>
+            </button>
+          )}
+          {/**
+            * SALDO NA CARÊNCIA — informação, não botão.
+            *
+            * A cliente pergunta "e o cashback da compra de ontem?". Sem esta
+            * linha a vendedora responde "não tem", que é falso, e a cliente
+            * vai embora achando que o programa não funciona.
+            */}
+          {!cashbackPago && !cashbackOferece && (cashbackPessoa?.aLiberar || 0) > 0 && (
+            <div className="w-full rounded-lg px-3 py-2 bg-[#FBF6E6] border border-[#E5E2D9] text-[11px] text-[#8C7325]">
+              💰 {brl(cashbackPessoa.aLiberar)} de cashback liberam em{' '}
+              <strong>
+                {cashbackPessoa.liberaEm
+                  ? new Date(`${cashbackPessoa.liberaEm}T12:00:00`).toLocaleDateString('pt-BR')
+                  : 'breve'}
+              </strong>
             </div>
           )}
 
@@ -5200,7 +5338,11 @@ function CustomerModal({
             ouro: 'bg-yellow-100 text-yellow-900 border-yellow-500',
             diamante: 'bg-violet-100 text-violet-900 border-violet-500',
           };
-          const podeUsarCashback = c.cashbackBalanceCents >= (cfg.minimoUsoReais ?? 20) * 100 && cfg.ativo;
+          // `cfg` agora é a config do ledger único (CashbackService): o teto
+          // chama-se usoMaxPctCompra. O nome antigo (usoMaxPct) era da config do
+          // CRM e passaria despercebido como "undefined ?? 30".
+          const cashbackTeto = cfg.usoMaxPctCompra ?? cfg.usoMaxPct ?? 30;
+          const podeUsarCashback = c.cashbackBalanceCents >= (cfg.minimoUsoReais ?? 5) * 100 && cfg.ativo;
           // Direcionamento pra vendedora
           const sugestoes: string[] = [];
           if (c.orderCount === 0) sugestoes.push('🆕 PRIMEIRA COMPRA — atenção VIP, ofereça cashback');
@@ -5208,7 +5350,9 @@ function CustomerModal({
           else if (diasUltima !== null && diasUltima < 30) sugestoes.push(`🔥 Cliente FREQUENTE (última há ${diasUltima}d)`);
           if (c.vipTier === 'diamante') sugestoes.push('💎 DIAMANTE — máxima prioridade');
           else if (c.vipTier === 'ouro') sugestoes.push('🥇 OURO — VIP');
-          if (podeUsarCashback) sugestoes.push(`💰 Pode usar R$ ${cashbackBrl} de cashback (até ${cfg.usoMaxPct ?? 30}% da compra)`);
+          // O texto aponta pro botão que existe — a versão antiga anunciava o
+          // valor e não havia onde clicar.
+          if (podeUsarCashback) sugestoes.push(`💰 R$ ${cashbackBrl} de cashback — o botão VERDE no total abate até ${cashbackTeto}% da compra`);
           if (c.bloqueado) sugestoes.push('🚫 CLIENTE BLOQUEADO na ficha — CUIDADO');
           if (c.negativado) sugestoes.push('⚠️ NEGATIVADO no SPC — sem crediário');
 
@@ -5265,7 +5409,7 @@ function CustomerModal({
                     <div className="text-[10px] uppercase font-bold text-emerald-900">💰 Cashback disponível</div>
                     <div className="font-black text-lg text-emerald-700">R$ {cashbackBrl}</div>
                     {!podeUsarCashback && (
-                      <div className="text-[9px] text-amber-700">Mínimo R$ {cfg.minimoUsoReais ?? 20} pra usar</div>
+                      <div className="text-[9px] text-amber-700">Mínimo R$ {cfg.minimoUsoReais ?? 5} pra usar</div>
                     )}
                   </div>
                   {c.cashbackExpiraEm && (

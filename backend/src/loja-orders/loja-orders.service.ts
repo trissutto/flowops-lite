@@ -10,6 +10,7 @@ import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { localBrPhone } from '../lib/phone-br';
 import { CarrinhoGuardService, ItemRecusado, MotivoRecusa } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
+import { CashbackService } from '../cashback/cashback.service';
 import { FreteService } from './frete.service';
 import { PersonIdentityService } from '../person-identity/person-identity.service';
 import { PedidoEmailService } from './pedido-email.service';
@@ -371,6 +372,7 @@ export class LojaOrdersService implements OnModuleInit {
     private readonly escudo: EscudoCheckoutService,
     private readonly pagbank: PagbankService,
     private readonly retiradaCobertura: RetiradaCoberturaService,
+    private readonly cashback: CashbackService,
   ) {}
 
   /**
@@ -2782,6 +2784,55 @@ export class LojaOrdersService implements OnModuleInit {
       data: { paidAt, status: 'processing' },
     });
     if (trava.count === 0) return { ok: true, already: true };
+
+    /**
+     * CASHBACK DO PEDIDO DO SITE (22/09).
+     *
+     * Aqui, e não em `criarPedido`: cashback é sobre dinheiro que ENTROU. O
+     * PIX que a cliente gera e nunca paga não pode virar saldo, e este é o
+     * único ponto do sistema por onde um pedido da loja passa a ser pago —
+     * com trava atômica logo acima, então roda exatamente uma vez.
+     *
+     * Vem DEPOIS da trava de propósito: antes dela, o webhook e o reconcile
+     * chegando juntos creditariam dois cashbacks pelo mesmo pedido. (O índice
+     * único de `cashback_creditos` barraria o segundo de qualquer jeito — mas
+     * depender do banco pra corrigir uma corrida que dá pra não criar é o tipo
+     * de economia que custa caro.)
+     *
+     * BASE = mercadoria, sem frete. Frete é custo repassado, não compra: dar
+     * 3% do PAC de volta é devolver margem de uma coisa que a loja nem vendeu.
+     * `checkoutInfo` guarda o recorte; sem ele, sobra o total.
+     *
+     * Best-effort — o service não lança, e o try/catch fica de guarda: nada
+     * depois de "pagamento confirmado" pode derrubar um pedido já pago.
+     */
+    try {
+      const cpfPedido = String(order.customerCpf || '').replace(/\D/g, '');
+      if (cpfPedido.length === 11) {
+        let base = Number(order.totalAmount) || 0;
+        try {
+          const ci = order.checkoutInfo ? JSON.parse(order.checkoutInfo) : null;
+          const frete = Number(ci?.frete ?? ci?.shipping ?? 0) || 0;
+          if (frete > 0 && frete < base) base = Math.round((base - frete) * 100) / 100;
+        } catch { /* sem recorte: vale o total */ }
+
+        const cb = await this.cashback.creditarVenda({
+          origem: 'pedido_site',
+          saleId: order.id,
+          cpf: cpfPedido,
+          storeCode: String(order.sellerStoreCode || '13'),
+          total: base,
+        });
+        if (cb) {
+          this.logger.log(
+            `[loja] cashback de R$ ${cb.creditado.toFixed(2)} creditado no pedido ` +
+              `${order.wcOrderNumber}${cb.primeira ? ' (primeira compra)' : ''}`,
+          );
+        }
+      }
+    } catch (e: any) {
+      this.logger.error(`[loja] cashback do pedido ${order.id} falhou: ${e?.message}`);
+    }
 
     /**
      * PAGO DEPOIS DE "RECUSADO" É CASO DE CONCILIAÇÃO, não de silêncio.
