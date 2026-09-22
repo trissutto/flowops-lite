@@ -1,6 +1,14 @@
 import {
   ORIGEM_LINK_PAGBANK,
+  ORIGEM_LIVE_CARTAO,
+  ORIGEM_TROCA_LINK,
+  ORIGENS_CARTAO_RECONCILIADAS,
+  ORIGENS_PAGINA_PAGUE,
   ehOrigemVendaOnline,
+  saleIdDaTroca,
+  situacaoDoCartao,
+  statusDaTrocaComoVenda,
+  swapIdDoSaleId,
   estadoDoLinkPagbank,
   gatewayDoLinkPdv,
   horasDoLinkPagbank,
@@ -116,6 +124,65 @@ describe('link de pagamento do PDV pelo PagBank — a régua', () => {
       expect(
         estadoDoLinkPagbank({ statusDasCobrancas: ['pending'], statusDaVenda: 'open', venceEm, agora: depois }),
       ).toBe('vencido');
+    });
+  });
+});
+
+describe('cartão da live e link da troca pelo PagBank (22/09) — a régua', () => {
+  it('a página /pague abre o link do PDV E o da troca; nunca o cartão da live', () => {
+    expect(ORIGENS_PAGINA_PAGUE).toEqual([ORIGEM_LINK_PAGBANK, ORIGEM_TROCA_LINK]);
+    expect(ORIGENS_PAGINA_PAGUE).not.toContain(ORIGEM_LIVE_CARTAO);
+  });
+
+  it('o reconciliador pergunta pelos três cartões EM ANÁLISE — o do site tem o dele', () => {
+    expect([...ORIGENS_CARTAO_RECONCILIADAS].sort()).toEqual(
+      [ORIGEM_LINK_PAGBANK, ORIGEM_TROCA_LINK, ORIGEM_LIVE_CARTAO].sort(),
+    );
+    expect(ORIGENS_CARTAO_RECONCILIADAS).not.toContain('site');
+  });
+
+  it('saleId da troca: ida e volta', () => {
+    expect(saleIdDaTroca('abc-123')).toBe('troca:abc-123');
+    expect(swapIdDoSaleId('troca:abc-123')).toBe('abc-123');
+    expect(swapIdDoSaleId('abc-123')).toBeNull();
+    expect(swapIdDoSaleId('troca:')).toBeNull();
+    expect(swapIdDoSaleId(null)).toBeNull();
+  });
+
+  it('troca vista como venda: só a pendente aceita pagamento', () => {
+    expect(statusDaTrocaComoVenda('pending')).toBe('open');
+    expect(statusDaTrocaComoVenda('settled')).toBe('finalized');
+    expect(statusDaTrocaComoVenda('cancelled')).toBe('cancelled');
+    expect(statusDaTrocaComoVenda('canceled')).toBe('cancelled');
+    // Estado que ninguém conhece não reabre cobrança.
+    expect(statusDaTrocaComoVenda(undefined)).toBe('finalized');
+  });
+
+  describe('situacaoDoCartao — pode tentar o cartão agora?', () => {
+    it('sem nada cobrado: pode, com o teto inteiro', () => {
+      expect(situacaoDoCartao([], 4)).toEqual({ pode: true, usadas: 0, restantes: 4 });
+    });
+
+    it('PIX pendente não conta como tentativa de cartão', () => {
+      expect(situacaoDoCartao([{ method: 'pix', status: 'pending' }], 4)).toEqual({ pode: true, usadas: 0, restantes: 4 });
+    });
+
+    it('qualquer cobrança PAGA (até PIX) fecha a porta — não cobra duas vezes', () => {
+      const r = situacaoDoCartao([{ method: 'pix', status: 'paid' }], 4);
+      expect(r.pode).toBe(false);
+      expect(r.motivo).toBe('pago');
+    });
+
+    it('cartão EM ANÁLISE segura a próxima tentativa (senão vira cobrança em dobro)', () => {
+      const r = situacaoDoCartao([{ method: 'credit_card', status: 'pending' }], 4);
+      expect(r).toEqual({ pode: false, motivo: 'analise', usadas: 1, restantes: 3 });
+    });
+
+    it('recusas gastam tentativa até o teto', () => {
+      const recusas = Array.from({ length: 3 }, () => ({ method: 'credit_card', status: 'cancelled' }));
+      expect(situacaoDoCartao(recusas, 4)).toEqual({ pode: true, usadas: 3, restantes: 1 });
+      const r = situacaoDoCartao([...recusas, { method: 'credit_card', status: 'cancelled' }], 4);
+      expect(r).toEqual({ pode: false, motivo: 'tentativas', usadas: 4, restantes: 0 });
     });
   });
 });

@@ -8,7 +8,7 @@ import { ErpModule } from '../erp/erp.module';
 import { PickScanModule } from '../pick-orders/pick-scan.module';
 import { PickOrdersModule } from '../pick-orders/pick-orders.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
-import { PagarmeModule } from '../pagarme/pagarme.module';
+import { PagbankModule } from '../pagbank/pagbank.module';
 import { PromoConfigModule } from '../promo-config/promo-config.module';
 import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { TrocaPecaService } from './troca-peca.service';
@@ -24,13 +24,15 @@ import { PedidoEmailService } from '../loja-orders/pedido-email.service';
   // PickOrdersModule (forwardRef) → JuntadaService dos endpoints /juntar.
   // WincredMirrorModule → WincredCatalogService (troca manual de item lê a
   // peça nova pelo espelho, mesmo caminho do bipe do PDV).
-  // PagarmeModule → link de pagamento da diferença da troca de peça.
+  // PagbankModule (forwardRef) → link de pagamento da diferença da troca de
+  // peça (22/09 — era Pagar.me, que desligou o checkout). forwardRef porque o
+  // PagbankModule mora no laço Crediarios ↔ Pagarme ↔ LojaOrders.
   // PromoConfigModule → o preço que o SITE cobra hoje pela peça nova (preço da
   // loja, com a campanha do caixa quando a peça entra), pra sugerir a diferença certa.
   // EmailModule/HttpModule/WhatsappModule → PedidoEmailService com instância
   // própria (mesma receita do PickOrdersModule): o aviso de CANCELAMENTO pra
   // cliente sai do cancelarLocalmente sem importar o LojaOrdersModule inteiro.
-  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, PagarmeModule, PromoConfigModule, MaisEnviosModule, EmailModule, HttpModule, WhatsappModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
+  imports: [StockModule, RoutingModule, ErpModule, PickScanModule, WincredMirrorModule, forwardRef(() => PagbankModule), PromoConfigModule, MaisEnviosModule, EmailModule, HttpModule, WhatsappModule, forwardRef(() => WooCommerceModule), forwardRef(() => PickOrdersModule)],
   // DespachoBackfillService → preenche `shipped_at` do que já estava
   // despachado quando a coluna nasceu (25/08). Roda uma vez e some.
   // LinhaDoTempoService → raio-x "onde está cada peça" + histórico assinado

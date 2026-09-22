@@ -14,12 +14,18 @@ import { cpfValido } from '../common/dados-cliente-online';
 import {
   EstadoLinkPagbank,
   ORIGEM_LINK_PAGBANK,
+  ORIGEM_LIVE_CARTAO,
+  ORIGEM_TROCA_LINK,
+  ORIGENS_PAGINA_PAGUE,
   estadoDoLinkPagbank,
   linkPagbankVenceEm,
   maxParcelasLink,
   maxTentativasCartaoLink,
   mensagemRecusaCartaoLink,
   referenciaCartaoLink,
+  saleIdDaTroca,
+  statusDaTrocaComoVenda,
+  swapIdDoSaleId,
 } from '../common/link-pagamento-pagbank';
 import {
   CartaoPagbankLido,
@@ -510,7 +516,10 @@ export class PagbankService {
         status: 'pending',
         // Só o valor conhecido entra; qualquer outra coisa vira null (balcão).
         origem:
-          input.origem === 'venda_online' || input.origem === 'site' || input.origem === ORIGEM_LINK_PAGBANK
+          input.origem === 'venda_online' ||
+          input.origem === 'site' ||
+          input.origem === ORIGEM_LINK_PAGBANK ||
+          input.origem === ORIGEM_TROCA_LINK
             ? input.origem
             : null,
         qrCodeText,
@@ -523,7 +532,8 @@ export class PagbankService {
     this.logger.log(
       `[pagbank] PIX criado: order=${orderId} sale=${input.saleId} loja=${input.storeCode} R$${input.valor.toFixed(2)}` +
         (input.origem === 'venda_online' ? ' (venda online)' : '') +
-        (input.origem === ORIGEM_LINK_PAGBANK ? ' (link de pagamento)' : ''),
+        (input.origem === ORIGEM_LINK_PAGBANK ? ' (link de pagamento)' : '') +
+        (input.origem === ORIGEM_TROCA_LINK ? ' (link da troca de peça)' : ''),
     );
 
     return {
@@ -1079,8 +1089,12 @@ export class PagbankService {
     holderTaxId: string;
     customer: { name: string; email: string; cpf: string; phone: string };
     shippingAddress?: PagbankEndereco | null;
-    /** 'site' = checkout de lurds.com.br; 'venda_online_link' = página do link do PDV. */
-    origem: 'site' | typeof ORIGEM_LINK_PAGBANK;
+    /**
+     * 'site' = checkout de lurds.com.br; 'venda_online_link' = página do link
+     * do PDV; 'troca_link' = a mesma página cobrando a diferença de uma troca;
+     * 'live_cartao' = página de fechamento da live (22/09).
+     */
+    origem: 'site' | typeof ORIGEM_LINK_PAGBANK | typeof ORIGEM_TROCA_LINK | typeof ORIGEM_LIVE_CARTAO;
   }): Promise<
     | { ok: true; status: 'paid' | 'pending'; pagbankOrderId: string; pagbankChargeId: string | null; lido: CartaoPagbankLido }
     | { ok: false; kind: 'recusa' | 'integracao'; detalhe: string; lido?: CartaoPagbankLido; pagbankOrderId?: string | null; pagbankChargeId?: string | null }
@@ -1215,7 +1229,9 @@ export class PagbankService {
           method: 'credit_card',
           valor: input.valor,
           status,
-          origem: input.origem === ORIGEM_LINK_PAGBANK ? ORIGEM_LINK_PAGBANK : 'site',
+          origem: [ORIGEM_LINK_PAGBANK, ORIGEM_TROCA_LINK, ORIGEM_LIVE_CARTAO].includes(input.origem)
+            ? input.origem
+            : 'site',
           ...(status === 'paid' ? { paidAt: new Date() } : {}),
           rawWebhook: JSON.stringify(order).slice(0, 5000),
         },
@@ -1484,6 +1500,51 @@ export class PagbankService {
   }
 
   /**
+   * LINK DA DIFERENÇA DA TROCA DE PEÇA (22/09): a MESMA página `/pague/<token>`
+   * do link do PDV, com a âncora no `saleId` da troca (`troca:<id>`). A régua
+   * da página vale igual — só a "venda" por trás é a troca (`vendaDaTroca`).
+   * Quem libera a separação quando o dinheiro cai é a trava da diferença
+   * (`common/diferenca-troca.ts`), que lê estas linhas.
+   */
+  async criarLinkTroca(input: {
+    swapId: string;
+    /** Em REAIS. */
+    valor: number;
+    storeCode: string;
+    pedidoNumero?: string | null;
+    customerName?: string;
+    customerCpf?: string;
+    customerEmail?: string;
+    customerPhone?: string;
+  }): Promise<{ pagbankOrderId: string; linkToken: string; shortUrl: string; expiresAt: Date; valor: number }> {
+    const pix = await this.createPixCharge({
+      saleId: saleIdDaTroca(input.swapId),
+      valor: input.valor,
+      storeCode: input.storeCode,
+      customerName: input.customerName,
+      customerCpf: input.customerCpf,
+      customerEmail: input.customerEmail,
+      customerPhone: input.customerPhone,
+      descricao: `Troca de peça ${input.pedidoNumero || ''}`.trim(),
+      // O código PIX vale 1h; o LINK vale `PAGBANK_LINK_HORAS` (a página regera o código).
+      expiresInMinutes: 60,
+      origem: ORIGEM_TROCA_LINK,
+    });
+    const url = `${this.baseUrlPublica()}/pague/${pix.linkToken}`;
+    this.logger.log(
+      `[pagbank-link] link da TROCA gerado: swap=${input.swapId} pedido=${input.pedidoNumero || '?'} ` +
+        `R$${Number(input.valor).toFixed(2)} → /pague/${pix.linkToken}`,
+    );
+    return {
+      pagbankOrderId: pix.pagbankOrderId,
+      linkToken: pix.linkToken,
+      shortUrl: url,
+      expiresAt: linkPagbankVenceEm(new Date()),
+      valor: input.valor,
+    };
+  }
+
+  /**
    * O QUE A PÁGINA `/pague/<token>` MOSTRA — e o que ela consulta no polling.
    *
    * Lê só do nosso Postgres (quem mantém o status fresco é o webhook + o
@@ -1541,7 +1602,7 @@ export class PagbankService {
       return { estado: sit.estado, motivo: sit.motivo, mensagem: this.fraseDoLink(sit), ...base };
     }
 
-    const vivo = this.pixVivoDoLink(cobr);
+    const vivo = this.pixVivoDoLink(cobr, p.origem);
     const [pix, cartao] = await Promise.all([
       vivo ? this.qrDaCobranca(vivo.pagbankOrderId) : Promise.resolve(null),
       this.cartaoDoLinkInfo(p.storeCode, venda, cobr),
@@ -1577,12 +1638,12 @@ export class PagbankService {
     const sit = this.situacaoDoLink(p, venda, cobr);
     if (sit.estado !== 'aberto') throw new BadRequestException(this.fraseDoLink(sit));
 
-    const vivo = this.pixVivoDoLink(cobr);
+    const vivo = this.pixVivoDoLink(cobr, p.origem);
     if (vivo) {
       const qr = await this.qrDaCobranca(vivo.pagbankOrderId);
       if (qr) return qr;
     }
-    const gerados = cobr.filter((c) => c.origem === ORIGEM_LINK_PAGBANK && c.method === 'pix').length;
+    const gerados = cobr.filter((c) => c.origem === p.origem && c.method === 'pix').length;
     if (gerados >= 20) {
       throw new HttpException('Muitos códigos PIX gerados pra este pedido. Fale com a loja 💜', 429);
     }
@@ -1596,9 +1657,10 @@ export class PagbankService {
       customerCpf: venda?.customerCpf || undefined,
       customerEmail: venda?.customerEmail || undefined,
       customerPhone: venda?.customerPhone || undefined,
-      descricao: `Venda Online ${p.storeCode}`,
+      descricao: this.descricaoDoLink(p, venda),
       expiresInMinutes: Math.max(5, Math.min(60, minutosDoLink)),
-      origem: ORIGEM_LINK_PAGBANK,
+      // A origem da ÂNCORA: link do PDV ou link da troca.
+      origem: p.origem,
     });
     return { qrCodeText: novo.qrCodeText, qrCodeImageB64: novo.qrCodeImageB64, expiraEm: novo.expiresAt };
   }
@@ -1675,14 +1737,14 @@ export class PagbankService {
         storeCode: p.storeCode,
         valor: Number(p.valor),
         referencia: referenciaCartaoLink(p.saleId, p.storeCode, usadas + 1),
-        descricao: `Venda Online ${p.storeCode}`,
+        descricao: this.descricaoDoLink(p, venda),
         installments: parcelas,
         cardEncrypted: enc,
         holderName,
         holderTaxId: holderCpf,
         customer: { name: nome, email, cpf: cpfCliente, phone: fone },
         shippingAddress: this.enderecoDaVenda(venda),
-        origem: ORIGEM_LINK_PAGBANK,
+        origem: p.origem === ORIGEM_TROCA_LINK ? ORIGEM_TROCA_LINK : ORIGEM_LINK_PAGBANK,
       });
 
       if (r.ok) {
@@ -1792,13 +1854,23 @@ export class PagbankService {
       .catch(() => 0);
   }
 
-  /** A linha do token — só cobrança nascida do link abre a página de pagamento. */
+  /**
+   * A linha do token — só cobrança nascida de um LINK (do PDV ou da troca de
+   * peça) abre a página de pagamento. O `/qr/<token>` do "Gerar PIX" e o PIX
+   * da live têm token também, e nunca viram página de cartão.
+   */
   private async linhaDoLink(token: string): Promise<any | null> {
     const t = String(token || '').trim();
     if (!t || t.length > 40) return null;
     const p: any = await (this.prisma as any).pagbankPayment.findUnique({ where: { linkToken: t } });
-    if (!p || p.origem !== ORIGEM_LINK_PAGBANK) return null;
+    if (!p || !ORIGENS_PAGINA_PAGUE.includes(String(p.origem || ''))) return null;
     return p;
+  }
+
+  /** O nome da cobrança no PagBank (item e fatura) — venda online ou troca de peça. */
+  private descricaoDoLink(p: any, venda: any): string {
+    if (p?.origem === ORIGEM_TROCA_LINK) return `Troca de peça ${venda?.pedidoNumero || ''}`.trim();
+    return `Venda Online ${p?.storeCode || ''}`.trim();
   }
 
   /**
@@ -1826,6 +1898,8 @@ export class PagbankService {
   }
 
   private async vendaDoLink(saleId: string): Promise<any | null> {
+    const swapId = swapIdDoSaleId(saleId);
+    if (swapId) return this.vendaDaTroca(swapId);
     return (this.prisma as any).pdvSale.findUnique({
       where: { id: String(saleId || '') },
       select: {
@@ -1844,6 +1918,40 @@ export class PagbankService {
         customerUf: true,
       },
     });
+  }
+
+  /**
+   * A TROCA vista como "venda" pelo link (22/09). A régua da página (estado,
+   * valor que falta, dados da cliente pro cartão) é a mesma do link do PDV —
+   * muda só de onde sai: o valor é a DIFERENÇA gravada na troca, e o dado da
+   * cliente é o do pedido. Troca já paga, desfeita ou de pedido cancelado
+   * encerra o link (`statusDaTrocaComoVenda`).
+   */
+  private async vendaDaTroca(swapId: string): Promise<any | null> {
+    const t: any = await (this.prisma as any).orderItemSwap.findUnique({
+      where: { id: swapId },
+      select: {
+        tipo: true,
+        status: true,
+        diffCents: true,
+        wcOrderNumber: true,
+        order: {
+          select: { status: true, customerName: true, customerCpf: true, customerEmail: true, customerPhone: true },
+        },
+      },
+    });
+    if (!t) return null;
+    const aberta = t.tipo === 'cobranca' && String(t.order?.status || '') !== 'cancelled';
+    return {
+      status: aberta ? statusDaTrocaComoVenda(t.status) : 'cancelled',
+      total: Math.max(0, Number(t.diffCents) || 0) / 100,
+      payments: [],
+      pedidoNumero: t.wcOrderNumber ?? null,
+      customerName: t.order?.customerName ?? null,
+      customerCpf: t.order?.customerCpf ?? null,
+      customerEmail: t.order?.customerEmail ?? null,
+      customerPhone: t.order?.customerPhone ?? null,
+    };
   }
 
   /**
@@ -1884,12 +1992,12 @@ export class PagbankService {
   }
 
   /** O código PIX do link que ainda dá tempo de pagar (margem de 2 min). */
-  private pixVivoDoLink(cobr: any[]): any | null {
+  private pixVivoDoLink(cobr: any[], origem: string): any | null {
     const limite = Date.now() + 2 * 60_000;
     return (
       cobr.find(
         (c) =>
-          c.origem === ORIGEM_LINK_PAGBANK &&
+          c.origem === origem &&
           c.method === 'pix' &&
           c.status === 'pending' &&
           c.expiresAt &&

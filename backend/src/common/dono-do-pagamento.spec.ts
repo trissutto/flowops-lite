@@ -7,6 +7,7 @@ function prismaFalso(tabelas: {
   crediarioBaixa?: any[];
   order?: any[];
   pdvSalePayment?: any[];
+  orderItemSwap?: any[];
 }) {
   const chamadas: Record<string, number> = { pdvSale: 0, livePdvCart: 0, crediarioBaixa: 0, order: 0 };
   const tabela = (nome: 'pdvSale' | 'livePdvCart' | 'crediarioBaixa' | 'order') => ({
@@ -25,6 +26,11 @@ function prismaFalso(tabelas: {
     pdvSalePayment: {
       findMany: jest.fn(async ({ where }: any) =>
         (tabelas.pdvSalePayment || []).filter((l) => where.saleId.in.includes(l.saleId)),
+      ),
+    },
+    orderItemSwap: {
+      findMany: jest.fn(async ({ where }: any) =>
+        (tabelas.orderItemSwap || []).filter((l) => where.id.in.includes(l.id)),
       ),
     },
   };
@@ -185,6 +191,31 @@ describe('dono do pagamento', () => {
       const refs = Array.from({ length: 2500 }, (_, i) => `ref-${i}`);
       await donosDosPagamentos(prisma, refs);
       expect(prisma.chamadas).toEqual({ pdvSale: 3, livePdvCart: 3, crediarioBaixa: 3, order: 3 });
+    });
+
+    it('diferença de TROCA de peça (troca:<id>) é dinheiro do pedido do site — não é órfã', async () => {
+      const prisma = prismaFalso({
+        orderItemSwap: [
+          { id: 'swap-1', diffCents: 2990, status: 'pending', order: { customerName: 'Maria Souza' } },
+          { id: 'swap-2', diffCents: 1500, status: 'settled', order: { customerName: 'Ana Lima' } },
+        ],
+      });
+      const donos = await donosDosPagamentos(prisma, ['troca:swap-1', 'troca:swap-2', 'troca:sumiu']);
+      // Pago no gateway com a troca ainda "pending" = o sistema não viu o dinheiro: alguém confere.
+      expect(donos.get('troca:swap-1')).toEqual({
+        tipo: 'site', cents: 2990, clienteNome: 'Maria Souza', status: 'pending', situacao: 'em_aberto',
+      });
+      expect(donos.get('troca:swap-2')).toEqual({
+        tipo: 'site', cents: 1500, clienteNome: 'Ana Lima', status: 'settled', situacao: 'ok',
+      });
+      expect(donos.has('troca:sumiu')).toBe(false);
+      expect(prisma.orderItemSwap.findMany.mock.calls[0][0].where.id.in).toEqual(['swap-1', 'swap-2', 'sumiu']);
+    });
+
+    it('lote sem cobrança de troca nem consulta a tabela de trocas', async () => {
+      const prisma = prismaFalso(tabelas);
+      await donosDosPagamentos(prisma, ['venda-1', 'pedido-1']);
+      expect(prisma.orderItemSwap.findMany).not.toHaveBeenCalled();
     });
 
     it('erro do banco SOBE — consulta que falhou não pode virar "sem dono"', async () => {

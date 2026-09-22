@@ -20,7 +20,7 @@ describe('diferença da troca de peça', () => {
   };
 
   /** Prisma de mentira: só o que a régua consulta. */
-  const fakePrisma = (opts: { swaps?: any[]; pago?: any }) => ({
+  const fakePrisma = (opts: { swaps?: any[]; pago?: any; pagoPagbank?: any }) => ({
     orderItemSwap: {
       findMany: jest.fn().mockResolvedValue(opts.swaps ?? []),
       update: jest.fn().mockImplementation(({ data }: any) =>
@@ -28,6 +28,7 @@ describe('diferença da troca de peça', () => {
       ),
     },
     pagarmePayment: { findFirst: jest.fn().mockResolvedValue(opts.pago ?? null) },
+    pagbankPayment: { findFirst: jest.fn().mockResolvedValue(opts.pagoPagbank ?? null) },
     orderHistory: { create: jest.fn().mockResolvedValue({}) },
   });
 
@@ -82,5 +83,49 @@ describe('diferença da troca de peça', () => {
     const r = await conferirDiferencaNoGateway(prisma as any, jaPago);
     expect(r).toBe(jaPago);
     expect(prisma.orderItemSwap.update).not.toHaveBeenCalled();
+  });
+
+  describe('PagBank (22/09): o link da troca saiu da Pagar.me', () => {
+    const trocaNova = { ...swapCobrancaPendente, pagarmeOrderId: null };
+
+    test('PIX/cartão pago no PagBank libera — procurado pelo saleId da troca', async () => {
+      const prisma = fakePrisma({ swaps: [trocaNova], pagoPagbank: { paidAt: new Date('2026-09-22T15:00:00Z') } });
+      const r = await diferencaDeTrocaPendente(prisma as any, 'order-1');
+      expect(r.travado).toBe(false);
+      expect(prisma.pagbankPayment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { saleId: 'troca:swap-1', status: 'paid' } }),
+      );
+      // Troca sem pedido da Pagar.me nem pergunta pra Pagar.me.
+      expect(prisma.pagarmePayment.findFirst).not.toHaveBeenCalled();
+      expect(prisma.orderItemSwap.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'settled' }) }),
+      );
+    });
+
+    test('link do PagBank ainda sem pagamento continua TRAVANDO', async () => {
+      const prisma = fakePrisma({ swaps: [trocaNova], pagoPagbank: null });
+      const r = await diferencaDeTrocaPendente(prisma as any, 'order-1');
+      expect(r.travado).toBe(true);
+    });
+
+    test('link antigo da Pagar.me pago segue liberando (e nem precisa do PagBank)', async () => {
+      const prisma = fakePrisma({ swaps: [swapCobrancaPendente], pago: { paidAt: new Date() } });
+      const r = await diferencaDeTrocaPendente(prisma as any, 'order-1');
+      expect(r.travado).toBe(false);
+      expect(prisma.pagbankPayment.findFirst).not.toHaveBeenCalled();
+    });
+
+    test('link antigo da Pagar.me sem pagamento ainda confere o PagBank (troca refeita no link novo)', async () => {
+      const prisma = fakePrisma({ swaps: [swapCobrancaPendente], pago: null, pagoPagbank: { paidAt: new Date() } });
+      const r = await diferencaDeTrocaPendente(prisma as any, 'order-1');
+      expect(r.travado).toBe(false);
+    });
+
+    test('erro de leitura do PagBank NÃO solta a peça — a trava fica de pé', async () => {
+      const prisma = fakePrisma({ swaps: [trocaNova] });
+      prisma.pagbankPayment.findFirst = jest.fn().mockRejectedValue(new Error('banco caiu'));
+      const r = await diferencaDeTrocaPendente(prisma as any, 'order-1');
+      expect(r.travado).toBe(true);
+    });
   });
 });

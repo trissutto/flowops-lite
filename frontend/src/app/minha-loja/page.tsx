@@ -2372,7 +2372,13 @@ function LiveOrderCard({
             <div>
               Forma:{' '}
               <span className="font-semibold text-slate-800">
-                {group.paymentMethod === 'link' ? 'Link (cartão)' : group.paymentMethod === 'pix' ? 'PIX' : '—'}
+                {group.paymentMethod === 'link'
+                  ? 'Link (cartão)'
+                  : group.paymentMethod === 'cartao'
+                    ? 'Cartão'
+                    : group.paymentMethod === 'pix'
+                      ? 'PIX'
+                      : '—'}
               </span>
               {group.paidAt && (
                 <span className="text-slate-400">

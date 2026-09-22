@@ -28,8 +28,11 @@ function cpfValido(v: string): boolean {
  * Controller PÚBLICO (SEM JwtAuthGuard) — página de fechamento da cliente.
  *
  * A apresentadora manda o link /pagar/<cartId> pra cliente. Ela informa o CEP
- * (calcula frete), escolhe PIX (PagBank) ou cartão até 12x sem juros (link
- * Pagar.me) e paga. A confirmação é automática (mesmo cron/webhook da live).
+ * (calcula frete), escolhe PIX ou cartão até 12x sem juros — os dois pelo
+ * PagBank desde 22/09 (o cartão era um link do checkout da Pagar.me, que a
+ * conta desligou em 21/09) — e paga. O cartão é cobrado NESTA página, com o
+ * número criptografado no navegador. A confirmação é automática (mesmo cron
+ * da live).
  *
  * Segurança: o cartId é um UUID (não adivinhável) e o único dado sensível
  * exposto é o primeiro nome + itens + total. Nada de CPF/telefone/custo.
@@ -264,11 +267,63 @@ export class LivePayPublicController {
     return this.svc.startPayment(cartId);
   }
 
+  /**
+   * Rota do cartão ANTIGO (link do checkout da Pagar.me, desligado na conta em
+   * 21/09). Só uma aba aberta antes do deploy chama isto — ela recebe o motivo
+   * em vez de um link que não cobra.
+   */
   @Post(':cartId/card')
-  async card(@Param('cartId') key: string) {
+  card() {
+    throw new BadRequestException(
+      'O pagamento com cartão foi atualizado. Recarregue esta página e toque em "Cartão" de novo 💜',
+    );
+  }
+
+  // ─── Cartão pelo PagBank, nesta página (22/09) ───
+  // Teto por IP próprio do cartão, além do teto por compra do service — o
+  // ataque de 28/08 no site testou ~650 cartões numa noite.
+  private static readonly RL_CARTAO_JANELA_MS = 5 * 60_000;
+  private static readonly RL_CARTAO_MAX = 8;
+  private readonly rlCartao = new Map<string, { n: number; resetAt: number }>();
+
+  private throttleCartao(req: any): void {
+    const ip =
+      String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim() ||
+      String(req?.ip || 'desconhecido');
+    const now = Date.now();
+    if (this.rlCartao.size > 5000) {
+      for (const [k, v] of this.rlCartao) if (v.resetAt < now) this.rlCartao.delete(k);
+    }
+    const cur = this.rlCartao.get(ip);
+    if (!cur || cur.resetAt < now) {
+      this.rlCartao.set(ip, { n: 1, resetAt: now + LivePayPublicController.RL_CARTAO_JANELA_MS });
+      return;
+    }
+    cur.n += 1;
+    if (cur.n > LivePayPublicController.RL_CARTAO_MAX) {
+      throw new HttpException('Muitas tentativas. Espera uns minutinhos 💜', 429);
+    }
+  }
+
+  /** Chave pública, parcelas e se ainda dá pra tentar — o que o formulário de cartão precisa. */
+  @Get(':cartId/cartao')
+  async cartaoInfo(@Param('cartId') key: string) {
+    const cartId = await this.svc.resolvePublicCartId(key);
+    return this.svc.cartaoInfo(cartId);
+  }
+
+  /** Cobra o cartão (criptografado no navegador). Mesma trava de dados do PIX. */
+  @Post(':cartId/cartao')
+  async cartao(
+    @Param('cartId') key: string,
+    @Req() req: any,
+    @Body()
+    body: { cardEncrypted?: string; holderName?: string; holderCpf?: string; installments?: number; email?: string },
+  ) {
+    this.throttleCartao(req);
     const cartId = await this.svc.resolvePublicCartId(key);
     await this.guardPayable(cartId);
-    return this.svc.startPaymentLink(cartId);
+    return this.svc.pagarCartao(cartId, body || {});
   }
 
   /**

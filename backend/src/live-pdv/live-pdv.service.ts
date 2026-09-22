@@ -1,4 +1,4 @@
-﻿import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+﻿import { BadRequestException, ForbiddenException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,7 +6,14 @@ import { ErpService } from '../erp/erp.service';
 import { RoutingEngine } from '../routing/routing.engine';
 import { RoutingService } from '../routing/routing.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
-import { PagbankService } from '../pagbank/pagbank.service';
+import { PagbankService, type PagbankEndereco } from '../pagbank/pagbank.service';
+import {
+  ORIGEM_LIVE_CARTAO,
+  maxParcelasLink,
+  mensagemRecusaCartaoLink,
+  referenciaCartaoLink,
+  situacaoDoCartao,
+} from '../common/link-pagamento-pagbank';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
 import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
@@ -2676,7 +2683,10 @@ export class LivePdvService {
       pix: cart.paymentMethod === 'pix'
         ? { qrCodeText: cart.qrCodeText, qrCodeImageUrl: cart.qrCodeImageUrl }
         : null,
-      paymentUrl: cart.paymentMethod === 'link' ? cart.qrCodeText : null,
+      // Cartão da página (PagBank) esperando o banco — a tela avisa e não deixa pagar de novo.
+      cartaoEmAnalise: cart.paymentMethod === 'cartao' && cart.status === 'awaiting_payment',
+      // O link do checkout da Pagar.me morreu em 21/09 (conta sem checkout): nunca mais oferecido.
+      paymentUrl: null,
     };
   }
 
@@ -3115,6 +3125,17 @@ export class LivePdvService {
   async startPayment(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    // Cartão EM ANÁLISE no banco (22/09): um PIX agora vira cobrança em dobro
+    // se o cartão aprovar depois. Espera o banco responder.
+    const cartaoEmAnalise = await (this.prisma as any).pagbankPayment.count({
+      where: { saleId: cartId, method: 'credit_card', status: 'pending' },
+    });
+    if (cartaoEmAnalise) {
+      throw new BadRequestException(
+        'O pagamento com cartão desta compra está em análise no banco — espere a resposta antes de gerar PIX ' +
+          '(senão pode cobrar duas vezes). 💜',
+      );
+    }
     const items = await (this.prisma as any).livePdvItem.findMany({
       where: { cartId, status: 'reserved' },
     });
@@ -3162,9 +3183,14 @@ export class LivePdvService {
   }
 
   /**
-   * Gera um LINK DE PAGAMENTO (checkout Pagar.me) pra cliente pagar por fora
-   * (WhatsApp/Instagram), com PIX ou cartão. Mesma confirmação automática do
-   * PIX (o checkPayment já detecta pago independente do método).
+   * LINK DE PAGAMENTO do console (botão "Link") — desde 22/09 é a PRÓPRIA
+   * página de fechamento da live (`/p/<código>`), onde a cliente confere as
+   * peças e paga PIX ou cartão até 12x pelo PagBank.
+   *
+   * Era o checkout da Pagar.me, desligado na conta em 21/09 (todo link voltava
+   * 412): a cliente recebia um link que não cobrava. Aqui NÃO nasce cobrança
+   * nenhuma — quem cria a cobrança é a cliente, na página; a confirmação é a
+   * de sempre (cron da live / botão "Já pagou?").
    */
   async startPaymentLink(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
@@ -3173,45 +3199,234 @@ export class LivePdvService {
       where: { cartId, status: 'reserved' },
     });
     if (!items.length) throw new BadRequestException('Carrinho sem itens reservados');
-    const session = await this.getSession(cart.sessionId);
     await this.recalcCart(cartId);
     const fresh = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     const valor = (fresh.totalCents || 0) / 100;
     if (valor <= 0) throw new BadRequestException('Total inválido');
-    // NÃO passa pelo assertGatewayAllowed: o cartão usa o Pagar.me da MATRIZ,
-    // independente do PIX da loja (franquia com PIX externo também gera cartão).
 
-    const link = await this.pagarme.createCheckoutLink({
-      saleId: cartId,
-      valor,
-      storeCode: session.liveStoreCode,
-      storeName: session.liveStoreName,
-      customerName: cart.customerName,
-      customerCpf: cart.customerCpf || undefined,
-      customerPhone: cart.customerPhone || undefined,
-      customerEmail: cart.customerEmail || undefined,
-      // expiresInMinutes OMITIDO: vale a régua da casa (PAGARME_LINK_HORAS).
-      maxInstallments: Number(process.env.PAGARME_MAX_PARCELAS) || 12, // sem juros no cartão (PAGARME_MAX_PARCELAS ajusta a rede)
-    });
+    // O link curto (/p/<código>) nasce com a comanda; carrinho antigo ganha um aqui.
+    let code: string | null = fresh.payCode || null;
+    if (!code) {
+      try {
+        const upd = await (this.prisma as any).livePdvCart.update({
+          where: { id: cartId },
+          data: { payCode: this.genPayCode() },
+          select: { payCode: true },
+        });
+        code = upd.payCode;
+      } catch { /* raro — usa o link longo */ }
+    }
+    // FRONTEND_URL pode ser lista (formato do CORS) — o link usa SÓ o primeiro domínio.
+    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app')
+      .split(',')[0]
+      .trim()
+      .replace(/\/$/, '');
+    const paymentUrl = code ? `${base}/p/${code}` : `${base}/pagar/${cartId}`;
+    return { cart: fresh, paymentUrl, expiresAt: null, valor, gateway: 'pagbank' as const };
+  }
 
-    const updated = await (this.prisma as any).livePdvCart.update({
-      where: { id: cartId },
-      data: {
-        status: 'awaiting_payment',
-        paymentMethod: 'link',
-        pagarmeOrderId: link.pagarmeOrderId,
-        // Guarda o link NOSSO (/pg/<token>): a URL crua da Pagar.me morre
-        // quando a cobrança fecha e a cliente cai no 404 deles.
-        qrCodeText: link.shortUrl || link.paymentUrl,
-        paymentExpiresAt: link.expiresAt,
-      },
+  // ─── Cartão pela página da live (PagBank, 22/09) ─────────────────────────
+  //
+  // O cartão é cobrado NA PRÓPRIA página `/pagar/<carrinho>` — ela já tem
+  // endereço, CPF e celular da cliente (a mesma trava do PIX). O número do
+  // cartão é CRIPTOGRAFADO no navegador pelo SDK do PagBank (chave pública da
+  // conta) e só o blob chega aqui: PAN e CVV nunca passam pelo servidor (PCI).
+  // Régua das tentativas em `common/link-pagamento-pagbank.ts`.
+
+  /** Carrinho com cartão EM VOO — dois toques no "Pagar" não viram duas cobranças. */
+  private readonly cartaoEmVoo = new Set<string>();
+
+  private static readonly RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+  /** As cobranças PagBank do carrinho (PIX e cartão) — sem o QR, que pesa. */
+  private async cobrancasPagbankDoCarrinho(cartId: string): Promise<Array<{ method: string; status: string }>> {
+    return (this.prisma as any).pagbankPayment.findMany({
+      where: { saleId: cartId },
+      orderBy: { createdAt: 'desc' },
+      take: 60,
+      select: { method: true, status: true },
     });
+  }
+
+  /** Endereço de entrega do carrinho no formato do PagBank — só completo, e nunca na retirada. */
+  private enderecoPagbankDoCarrinho(cart: any): PagbankEndereco | null {
+    if (cart?.isPickup) return null;
+    const cep = String(cart?.customerCep || '').replace(/\D/g, '');
+    const street = String(cart?.customerEndereco || '').trim();
+    const city = String(cart?.customerCidade || '').trim();
+    const uf = String(cart?.customerUf || '').trim().toUpperCase();
+    if (cep.length !== 8 || !street || !city || uf.length !== 2) return null;
     return {
-      cart: updated,
-      paymentUrl: link.shortUrl || link.paymentUrl,
-      expiresAt: link.expiresAt,
-      valor,
+      street,
+      number: String(cart?.customerNumero || '').trim() || 'S/N',
+      complement: String(cart?.customerComplemento || '').trim() || undefined,
+      neighborhood: String(cart?.customerBairro || '').trim() || 'Centro',
+      city,
+      uf,
+      cep,
     };
+  }
+
+  /**
+   * O QUE O FORMULÁRIO DE CARTÃO PRECISA: a chave pública da conta PagBank da
+   * loja da live (a mesma conta que cobra o PIX), as parcelas e se ainda dá
+   * pra tentar. Não expõe dado nenhum da cliente.
+   */
+  async cartaoInfo(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Compra não encontrada');
+    const session = await this.getSession(cart.sessionId);
+    const sit = situacaoDoCartao(await this.cobrancasPagbankDoCarrinho(cartId));
+    let motivo: string | undefined = sit.pode ? undefined : sit.motivo;
+    let publicKey: string | null = null;
+    if (sit.pode) {
+      try {
+        publicKey = (await this.pagbank.chavePublicaCartao(session.liveStoreCode)).publicKey;
+      } catch (e: any) {
+        this.logger.warn(`[live-cartao] chave pública da loja ${session.liveStoreCode} indisponível: ${e?.message || e}`);
+        motivo = 'indisponivel';
+      }
+    }
+    return {
+      habilitado: !!publicKey && !motivo,
+      publicKey,
+      maxParcelas: maxParcelasLink(),
+      tentativasRestantes: sit.restantes,
+      emAnalise: sit.motivo === 'analise',
+      precisaEmail: !LivePdvService.RE_EMAIL.test(String(cart.customerEmail || '').trim()),
+      totalCents: cart.totalCents || 0,
+      ...(motivo ? { motivo } : {}),
+    };
+  }
+
+  /**
+   * COBRA O CARTÃO. Aprovado → `onCartPaid` na hora (separação + aviso, igual
+   * ao PIX). Em análise → o carrinho fica esperando com `paymentMethod
+   * 'cartao'` e o `checkPayment` (cron de 15s) fecha quando o banco responder.
+   * Recusado → a cliente pode tentar outro cartão até o teto, ou pagar PIX.
+   */
+  async pagarCartao(
+    cartId: string,
+    input: { cardEncrypted?: string; holderName?: string; holderCpf?: string; installments?: number; email?: string },
+  ): Promise<{ resultado: 'pago' | 'analise' | 'recusado' | 'erro'; mensagem: string; tentativasRestantes: number }> {
+    const enc = String(input?.cardEncrypted || '').trim();
+    if (enc.length < 50 || enc.length > 8000) {
+      throw new BadRequestException('Não conseguimos ler o cartão. Confira os dados e tente de novo.');
+    }
+    const holderName = String(input?.holderName || '').trim().replace(/\s+/g, ' ').slice(0, 64);
+    if (holderName.length < 3) throw new BadRequestException('Digite o nome como está impresso no cartão.');
+    const holderCpf = String(input?.holderCpf || '').replace(/\D/g, '');
+    if (!this.cpfValido(holderCpf)) throw new BadRequestException('Confira o CPF do titular do cartão.');
+    const parcelas = Math.floor(Number(input?.installments) || 1);
+    if (parcelas < 1 || parcelas > maxParcelasLink()) throw new BadRequestException('Parcelamento inválido.');
+
+    if (this.cartaoEmVoo.has(cartId)) {
+      throw new HttpException('Já estamos processando o seu pagamento — aguarde um instante 💜', 409);
+    }
+    this.cartaoEmVoo.add(cartId);
+    try {
+      const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+      if (!cart) throw new NotFoundException('Compra não encontrada');
+      if (LivePdvService.PAID_STATES.includes(cart.status)) {
+        return { resultado: 'pago', mensagem: 'Essa compra já está paga 💜', tentativasRestantes: 0 };
+      }
+      const items = await (this.prisma as any).livePdvItem.findMany({ where: { cartId, status: 'reserved' } });
+      if (!items.length) throw new BadRequestException('Essa compra não tem mais peças reservadas. Fale com a loja 💜');
+      const session = await this.getSession(cart.sessionId);
+      await this.recalcCart(cartId);
+      const fresh = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+      const valor = (fresh.totalCents || 0) / 100;
+      if (valor <= 0) throw new BadRequestException('Total inválido');
+
+      const sit = situacaoDoCartao(await this.cobrancasPagbankDoCarrinho(cartId));
+      if (!sit.pode) {
+        if (sit.motivo === 'pago') {
+          // O dinheiro já entrou (um PIX pago que o cron ainda não fechou): fecha agora, sem cobrar de novo.
+          await this.onCartPaid(cartId);
+          return { resultado: 'pago', mensagem: 'Essa compra já está paga 💜', tentativasRestantes: sit.restantes };
+        }
+        if (sit.motivo === 'analise') {
+          throw new BadRequestException(
+            'Seu pagamento com cartão está em análise no banco. Assim que ele responder, esta página confirma sozinha 💜',
+          );
+        }
+        throw new HttpException('Esta compra já teve muitas tentativas no cartão. Pague com PIX ou fale com a loja 💜', 429);
+      }
+
+      // O PagBank exige e-mail: vale o do carrinho; sem ele, o que a cliente digitou.
+      const emailCarrinho = String(fresh.customerEmail || '').trim();
+      const email = LivePdvService.RE_EMAIL.test(emailCarrinho) ? emailCarrinho : String(input?.email || '').trim();
+      if (!LivePdvService.RE_EMAIL.test(email)) {
+        throw new BadRequestException('Digite um e-mail válido pra receber a confirmação.');
+      }
+
+      const r = await this.pagbank.createCardCharge({
+        saleId: cartId,
+        storeCode: session.liveStoreCode,
+        valor,
+        referencia: referenciaCartaoLink(cartId, session.liveStoreCode, sit.usadas + 1),
+        descricao: `Live ${session.liveStoreName || session.liveStoreCode}`,
+        installments: parcelas,
+        cardEncrypted: enc,
+        holderName,
+        holderTaxId: holderCpf,
+        // Nome, CPF e celular da cliente: a página só deixa chegar aqui com os três (guardPayable).
+        customer: {
+          name: String(fresh.customerName || holderName),
+          email,
+          cpf: String(fresh.customerCpf || holderCpf),
+          phone: String(fresh.customerPhone || ''),
+        },
+        shippingAddress: this.enderecoPagbankDoCarrinho(fresh),
+        origem: ORIGEM_LIVE_CARTAO,
+      });
+
+      if (r.ok) {
+        const data: any = {
+          paymentMethod: 'cartao',
+          pagarmeOrderId: r.pagbankOrderId,
+          // O QR de um PIX gerado antes sai da tela: a compra agora é do cartão.
+          qrCodeText: null,
+          qrCodeImageUrl: null,
+        };
+        if (!LivePdvService.RE_EMAIL.test(emailCarrinho)) data.customerEmail = email;
+        if (r.status === 'paid') {
+          await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
+          await this.onCartPaid(cartId);
+          this.logger.log(
+            `[live-cartao] APROVADO carrinho ${cartId} (@${cart.customerInstagram || '?'}) ` +
+              `${parcelas}x R$${valor.toFixed(2)} order=${r.pagbankOrderId}`,
+          );
+          return { resultado: 'pago', mensagem: 'Pagamento aprovado! 💜', tentativasRestantes: Math.max(0, sit.restantes - 1) };
+        }
+        // EM ANÁLISE: o carrinho espera o banco. A validade acompanha a janela
+        // do reconciliador do PagBank (72h) — depois disso ninguém mais pergunta.
+        await (this.prisma as any).livePdvCart.update({
+          where: { id: cartId },
+          data: { ...data, status: 'awaiting_payment', paymentExpiresAt: new Date(Date.now() + 72 * 3600_000) },
+        });
+        this.logger.warn(`[live-cartao] EM ANÁLISE carrinho ${cartId} order=${r.pagbankOrderId} — o cron fecha quando o banco responder`);
+        return {
+          resultado: 'analise',
+          mensagem: 'Seu pagamento está em análise no banco. Assim que ele confirmar, esta página avisa sozinha 💜',
+          tentativasRestantes: Math.max(0, sit.restantes - 1),
+        };
+      }
+      // Recusa com order criada gasta tentativa; falha nossa (sem order) não.
+      const restantes = Math.max(0, sit.restantes - (r.pagbankOrderId ? 1 : 0));
+      if (r.kind === 'recusa') {
+        return { resultado: 'recusado', mensagem: mensagemRecusaCartaoLink(r.lido?.mensagem || r.detalhe), tentativasRestantes: restantes };
+      }
+      return {
+        resultado: 'erro',
+        mensagem:
+          'Não conseguimos falar com a operadora agora — o problema não é o seu cartão. ' +
+          'Tente de novo em instantes ou pague com PIX. 💜',
+        tentativasRestantes: restantes,
+      };
+    } finally {
+      this.cartaoEmVoo.delete(cartId);
+    }
   }
 
   /**
@@ -3288,9 +3503,40 @@ export class LivePdvService {
     const now = Date.now();
     const allowLive = now - (this.lastLiveCheck.get(cartId) || 0) >= 8000;
 
-    // PIX = PagBank; Link de pagamento = Pagar.me. Consulta o gateway certo.
+    // PIX = PagBank; cartão da página = PagBank (22/09); 'link' = checkout
+    // antigo da Pagar.me (carrinho de antes de 22/09). Consulta o gateway certo.
     let isPaid = false;
-    if (cart.paymentMethod === 'link') {
+    if (cart.paymentMethod === 'cartao') {
+      // O carrinho só espera no cartão quando ele caiu EM ANÁLISE — qualquer
+      // cobrança PagBank paga do carrinho vale (PIX ou cartão). O banco pode
+      // levar horas: pergunta ao vivo no máximo 1x/min (o reconciliador do
+      // PagBank e o webhook também mantêm a linha fresca).
+      const pago = await (this.prisma as any).pagbankPayment.findFirst({
+        where: { saleId: cartId, status: 'paid' },
+        select: { pagbankOrderId: true },
+      });
+      isPaid = !!pago;
+      if (!isPaid && cart.pagarmeOrderId && now - (this.lastLiveCheck.get(cartId) || 0) >= 60_000) {
+        this.lastLiveCheck.set(cartId, now);
+        try {
+          isPaid = (await this.pagbank.checkOrderStatus(cart.pagarmeOrderId)).isPaid;
+        } catch {}
+      }
+      if (!isPaid && cart.status === 'awaiting_payment') {
+        const emAnalise = await (this.prisma as any).pagbankPayment.count({
+          where: { saleId: cartId, method: 'credit_card', status: 'pending' },
+        });
+        if (!emAnalise) {
+          // O banco disse NÃO depois da análise: a compra volta a ficar em
+          // aberto (itens intactos) e a cliente pode tentar de novo.
+          await (this.prisma as any).livePdvCart.update({
+            where: { id: cartId },
+            data: { status: 'open', paymentExpiresAt: null },
+          });
+          this.logger.log(`[live-cartao] carrinho ${cartId}: cartão recusado depois da análise — compra reaberta`);
+        }
+      }
+    } else if (cart.paymentMethod === 'link') {
       const payment = await this.pagarme.getPaymentBySale(cartId).catch(() => null);
       isPaid = payment?.status === 'paid';
       if (!isPaid && allowLive && cart.pagarmeOrderId) {
@@ -3509,12 +3755,17 @@ export class LivePdvService {
       return this.getCart(cartId);
     }
     const now = new Date();
-    await (this.prisma as any).livePdvItem.updateMany({
-      where: { cartId, status: 'reserved' },
+    // CARIMBO ATÔMICO (22/09): só UM chamador vira o carrinho pra pago. O cron
+    // de 15s, o "Já pagou?" do console, o cartão da página e a consulta da
+    // página podem chegar juntos — e o resto daqui (separação, DM, socket) não
+    // pode rodar duas vezes. Quem perde a corrida só devolve o carrinho.
+    const carimbo = await (this.prisma as any).livePdvCart.updateMany({
+      where: { id: cartId, status: { notIn: LivePdvService.PAID_STATES } },
       data: { status: 'paid', paidAt: now },
     });
-    await (this.prisma as any).livePdvCart.update({
-      where: { id: cartId },
+    if (!carimbo?.count) return this.getCart(cartId);
+    await (this.prisma as any).livePdvItem.updateMany({
+      where: { cartId, status: 'reserved' },
       data: { status: 'paid', paidAt: now },
     });
     // RE-CONSOLIDAÇÃO AUTOMÁTICA (11/07): junta as origens do carrinho no

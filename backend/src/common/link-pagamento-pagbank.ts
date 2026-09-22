@@ -31,6 +31,61 @@
 /** A origem de TUDO que nasce do link de pagamento do PDV (âncora, PIX e cartão). */
 export const ORIGEM_LINK_PAGBANK = 'venda_online_link';
 
+/**
+ * ── OS OUTROS DOIS QUE USAVAM O CHECKOUT DA PAGAR.ME (22/09/2026) ──
+ *
+ * O cartão da LIVE (página `/pagar/<carrinho>`) e o link da DIFERENÇA da troca
+ * de peça também saíam pelo checkout da Pagar.me desligado em 21/09 — os dois
+ * estavam sem cobrar cartão. Dono: "pode fazer sim" (passar pro PagBank).
+ *
+ * - LIVE: o cartão é cobrado NA PRÓPRIA página da live (que já tem endereço,
+ *   CPF e celular da cliente) — cada tentativa nasce com `saleId` = id do
+ *   carrinho e esta origem. Quem fecha o carrinho é o `checkPayment` da live.
+ * - TROCA: o link é a MESMA página `/pague/<token>` do PDV, com `saleId =
+ *   troca:<id da troca>`. Quem libera a separação é a trava da diferença
+ *   (`common/diferenca-troca.ts`), que agora também lê o PagBank.
+ */
+export const ORIGEM_LIVE_CARTAO = 'live_cartao';
+export const ORIGEM_TROCA_LINK = 'troca_link';
+
+/** Origens cuja ÂNCORA abre a página pública `/pague/<token>`. */
+export const ORIGENS_PAGINA_PAGUE: readonly string[] = [ORIGEM_LINK_PAGBANK, ORIGEM_TROCA_LINK];
+
+/**
+ * Cartões que o `PagbankPixReconcileService` pergunta ao PagBank quando ficam
+ * EM ANÁLISE (o webhook pode não chegar). O cartão do site tem reconciliador
+ * próprio (`LojaPagamentoReconcileService`) e fica fora.
+ */
+export const ORIGENS_CARTAO_RECONCILIADAS: readonly string[] = [
+  ORIGEM_LINK_PAGBANK,
+  ORIGEM_TROCA_LINK,
+  ORIGEM_LIVE_CARTAO,
+];
+
+/** O `saleId` da cobrança da diferença de uma troca de peça — nos dois gateways. */
+export function saleIdDaTroca(swapId: string): string {
+  return `troca:${swapId}`;
+}
+
+/** O id da troca por trás de um `saleId` de cobrança — ou null se não for de troca. */
+export function swapIdDoSaleId(saleId: string | null | undefined): string | null {
+  const s = String(saleId || '').trim();
+  if (!s.startsWith('troca:')) return null;
+  const id = s.slice('troca:'.length).trim();
+  return id || null;
+}
+
+/**
+ * A troca vista como "venda" pela régua do link: aberta enquanto espera a
+ * cliente pagar; paga ou desfeita, o link se encerra (`estadoDoLinkPagbank`).
+ */
+export function statusDaTrocaComoVenda(statusDaTroca: string | null | undefined): 'open' | 'finalized' | 'cancelled' {
+  const s = String(statusDaTroca || '').trim().toLowerCase();
+  if (s === 'pending') return 'open';
+  if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+  return 'finalized';
+}
+
 /** `details.tipo` do pagamento que a venda ganha quando o link é pago. */
 export const TIPO_LINK_PAGBANK = 'pagbank_link';
 
@@ -90,6 +145,25 @@ export function gatewayDoLinkPdv(): 'pagbank' | 'pagarme' {
   return String(process.env.PDV_LINK_GATEWAY || '').trim().toLowerCase() === 'pagarme'
     ? 'pagarme'
     : 'pagbank';
+}
+
+/**
+ * A CLIENTE PODE TENTAR O CARTÃO AGORA? Régua do cartão da live (22/09), a
+ * mesma defesa da página do link: dinheiro já entrou → não cobra de novo;
+ * cartão EM ANÁLISE → espera o banco (outra tentativa viraria cobrança em
+ * dobro se a primeira aprovar depois); teto de tentativas por compra.
+ */
+export function situacaoDoCartao(
+  cobrancas: Array<{ method?: string | null; status?: string | null }>,
+  max = maxTentativasCartaoLink(),
+): { pode: boolean; motivo?: 'pago' | 'analise' | 'tentativas'; usadas: number; restantes: number } {
+  const cartoes = cobrancas.filter((c) => String(c.method || '') === 'credit_card');
+  const usadas = cartoes.length;
+  const restantes = Math.max(0, max - usadas);
+  if (cobrancas.some((c) => String(c.status || '') === 'paid')) return { pode: false, motivo: 'pago', usadas, restantes };
+  if (cartoes.some((c) => String(c.status || '') === 'pending')) return { pode: false, motivo: 'analise', usadas, restantes };
+  if (usadas >= max) return { pode: false, motivo: 'tentativas', usadas, restantes };
+  return { pode: true, usadas, restantes };
 }
 
 /** `reference_id` de cada tentativa de cartão — único por tentativa (máx. 64). */

@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { StockService } from '../stock/stock.service';
-import { PagarmeService } from '../pagarme/pagarme.service';
+import { PagbankService } from '../pagbank/pagbank.service';
 import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
 import { RoutingService } from '../routing/routing.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
@@ -68,7 +68,7 @@ export class TrocaPecaService {
     private readonly prisma: PrismaService,
     private readonly catalog: WincredCatalogService,
     private readonly stock: StockService,
-    private readonly pagarme: PagarmeService,
+    private readonly pagbank: PagbankService,
     private readonly promo: PromoCampanhaService,
     private readonly routing: RoutingService,
   ) {}
@@ -586,15 +586,19 @@ export class TrocaPecaService {
   //  ACERTOS
   // ─────────────────────────────────────────────────────────────────────────
 
-  /** Link de pagamento da diferença (Pagar.me, pelo nosso /pg/<token>). */
+  /**
+   * Link de pagamento da diferença — PagBank, pela nossa página
+   * `/pague/<token>` (PIX ou cartão até 12x). Era o checkout da Pagar.me, que
+   * a conta desligou em 21/09. O `saleId` da cobrança é `troca:<id>` — é por
+   * ele que a trava da diferença (`common/diferenca-troca.ts`) acha o
+   * pagamento; `pagarmeOrderId` fica nulo nas trocas novas.
+   */
   private async gerarCobranca(order: any, swapId: string, valor: number) {
-    const link = await this.pagarme.createCheckoutLink({
-      // `saleId` aqui não é venda de PDV: é a chave de rastreio do pagamento.
-      // O webhook só atualiza o `pagarme_payments` por `pagarmeOrderId`, e o
-      // resto do fluxo dele ignora saleId que não é carrinho de live.
-      saleId: `troca:${swapId}`,
+    const link = await this.pagbank.criarLinkTroca({
+      swapId,
       valor,
       storeCode: TrocaPecaService.CANAL_STORE_CODE,
+      pedidoNumero: order.wcOrderNumber || null,
       customerName: order.customerName || undefined,
       customerCpf: order.customerCpf || undefined,
       customerEmail: order.customerEmail || undefined,
@@ -603,8 +607,8 @@ export class TrocaPecaService {
     await (this.prisma as any).orderItemSwap.update({
       where: { id: swapId },
       data: {
-        pagarmeOrderId: link.pagarmeOrderId,
-        linkToken: link.shortUrl.split('/').pop() ?? null,
+        pagarmeOrderId: null,
+        linkToken: link.linkToken,
         linkUrl: link.shortUrl,
         linkExpiresAt: link.expiresAt,
       },

@@ -101,7 +101,7 @@ interface Cart {
   subtotalCents: number;
   freteCents: number;
   totalCents: number;
-  paymentMethod?: string | null; // 'pix' | 'link' — pra reabrir a cobrança pendente
+  paymentMethod?: string | null; // 'pix' | 'cartao' (PagBank, 22/09) | 'link' (Pagar.me antigo) — pra reabrir a cobrança pendente
   qrCodeText?: string | null;
   qrCodeImageUrl?: string | null;
   hasManychat?: boolean; // cliente tem vínculo ManyChat → DM automática funciona
@@ -2650,7 +2650,11 @@ export default function LivePdvPage() {
                         <div className="text-[11px] text-slate-500 tabular-nums">{brl(c.totalCents)}</div>
                       </div>
                       <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-sky-700">
-                        {c.paymentMethod === 'link' ? 'Link/cartão' : 'PIX'}
+                        {c.paymentMethod === 'link'
+                          ? 'Link/cartão'
+                          : c.paymentMethod === 'cartao'
+                            ? 'Cartão em análise'
+                            : 'PIX'}
                       </span>
                     </button>
                   ))}
@@ -3993,7 +3997,13 @@ function Dashboard({ sessionId }: { sessionId: string }) {
                 {p.customerInstagram ? <span className="text-slate-400"> @{p.customerInstagram}</span> : null}
               </span>
               <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-500">
-                {p.paymentMethod === 'link' ? 'Link/cartão' : p.paymentMethod === 'pix' ? 'PIX' : '—'}
+                {p.paymentMethod === 'link'
+                  ? 'Link/cartão'
+                  : p.paymentMethod === 'cartao'
+                    ? 'Cartão'
+                    : p.paymentMethod === 'pix'
+                      ? 'PIX'
+                      : '—'}
               </span>
               <span
                 className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${

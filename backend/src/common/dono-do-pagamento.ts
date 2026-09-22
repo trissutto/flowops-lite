@@ -9,6 +9,11 @@
  *   - baixa de crediário (PIX)→ `crediario_baixas.id`
  *   - pedido do site          → `orders.id` (Pagar.me desde o go-live, PagBank
  *                               desde 16/09 com `origem='site'`)
+ *   - diferença de TROCA DE PEÇA → `troca:<order_item_swaps.id>` — dinheiro do
+ *                               pedido do site, então entra como `site`, com o
+ *                               valor da DIFERENÇA (Pagar.me até 21/09, PagBank
+ *                               desde 22/09). Antes daqui ela aparecia como
+ *                               pagamento sem dono.
  *
  * O `GET /pdv/pix-orfaos` já conferia os quatro; o motor da conciliação nasceu
  * em 17/07 conhecendo só os dois primeiros. Resultado medido na tela em 20/09:
@@ -23,6 +28,8 @@
  * falhou com cara de "sem dono" carimbaria venda boa como órfã (a família
  * "fonte morta com cara de não-existe").
  */
+
+import { saleIdDaTroca, swapIdDoSaleId } from './link-pagamento-pagbank';
 
 export type TipoDono = 'pdv' | 'live' | 'crediario' | 'site';
 
@@ -138,7 +145,8 @@ export async function donosDosPagamentos(
   for (let i = 0; i < ids.length; i += LOTE) {
     const lote = ids.slice(i, i + LOTE);
     const where = { id: { in: lote } };
-    const [vendas, carrinhos, baixas, pedidos, pagamentos] = await Promise.all([
+    const idsDeTroca = lote.map((s) => swapIdDoSaleId(s)).filter((s): s is string => !!s);
+    const [vendas, carrinhos, baixas, pedidos, pagamentos, trocas] = await Promise.all([
       prisma.pdvSale.findMany({
         where,
         select: { id: true, total: true, status: true, customerName: true, entregaTipo: true },
@@ -156,8 +164,24 @@ export async function donosDosPagamentos(
             orderBy: { createdAt: 'asc' },
           })
         : [],
+      // Só consulta quando o lote TEM cobrança de troca (a maioria não tem).
+      idsDeTroca.length
+        ? prisma.orderItemSwap.findMany({
+            where: { id: { in: idsDeTroca } },
+            select: { id: true, diffCents: true, status: true, order: { select: { customerName: true } } },
+          })
+        : [],
     ]);
 
+    // Diferença de troca: `site`, com o valor da diferença e o status da TROCA
+    // (pending = ainda esperando o dinheiro; settled = acertada; cancelled).
+    for (const t of trocas as any[]) {
+      const cents = Math.abs(Number(t.diffCents));
+      out.set(
+        saleIdDaTroca(t.id),
+        dono('site', Number.isFinite(cents) ? cents : null, { customerName: t.order?.customerName, status: t.status }),
+      );
+    }
     // Ordem inversa de precedência: quem grava por último ganha (pdv > live >
     // crediário > site). Os ids são uuid — colisão é teórica, mas a ordem fica
     // escrita pra não depender de sorte.
