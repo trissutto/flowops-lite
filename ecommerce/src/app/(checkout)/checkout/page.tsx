@@ -229,6 +229,14 @@ export default function CheckoutPage() {
   const removeLine = useCartStore((s) => s.remove);
   const setLineQuantity = useCartStore((s) => s.setQuantity);
   const subtotal = useCartSubtotal();
+  /**
+   * CASHBACK APLICADO, em reais (22/09).
+   *
+   * Zero por padrão: ninguém gasta saldo sem clicar. O valor vem do servidor
+   * (o máximo permitido pra esta sacola) — a tela não calcula teto de %, e o
+   * backend reconfere tudo de novo quando o pedido nasce.
+   */
+  const [cashbackUsado, setCashbackUsado] = useState(0);
 
   /* Estado das 4 seções — a página é a dona da sequência. */
   const [step, setStep] = useState<Step>(1);
@@ -414,8 +422,21 @@ export default function CheckoutPage() {
    * 10% + 5% não virarem 15% sobre o valor original.
    */
   const descontoPix = pixDiscount(subtotal - discount, payment?.method);
-  const total = subtotal - discount - descontoPix + (shippingPrice ?? 0);
-  const totalPix = pixTotal(subtotal - discount, shippingPrice ?? 0);
+  /**
+   * O cashback é o ÚLTIMO abatimento, depois de cupom e Pix.
+   *
+   * Nessa ordem porque o teto de 30% do programa é sobre o que ela vai pagar
+   * pelas peças, não sobre o preço de tabela — e porque é assim que o backend
+   * recalcula (`reprecificar`). Tela e servidor em ordens diferentes fariam o
+   * total da tela nunca bater com o cobrado.
+   *
+   * `baseCashback` (sem frete) é o que vai pro servidor decidir o permitido:
+   * saldo não paga transportadora.
+   */
+  const baseCashback = Math.max(0, subtotal - discount - descontoPix);
+  const cashbackAplicado = Math.min(cashbackUsado, baseCashback);
+  const total = subtotal - discount - descontoPix - cashbackAplicado + (shippingPrice ?? 0);
+  const totalPix = pixTotal(subtotal - discount, shippingPrice ?? 0) - cashbackAplicado;
 
   /** O CPF que está valendo AGORA no checkout (só dígitos, '' enquanto falta). */
   const cpfAtual = (customer?.cpf ?? '').replace(/\D/g, '');
@@ -592,8 +613,15 @@ export default function CheckoutPage() {
      */
     const arredonda = (v: number) => Math.round(v * 100) / 100;
     const freteVisto = arredonda(freteZerado(shipping.quote) ? 0 : shipping.quote.price);
+    /**
+     * O cashback entra aqui também — `totalSeen` tem que ser o número que ela
+     * viu, com abatimento e tudo. O backend desfaz os dois lados antes de
+     * comparar (ver o teto em `reprecificar`), então conceder menos que o
+     * pedido não vira "a sacola mudou".
+     */
     const totalVisto = arredonda(
-      subtotal - descontoFinal - pixDiscount(subtotal - descontoFinal, pagamento.method) + freteVisto,
+      subtotal - descontoFinal - pixDiscount(subtotal - descontoFinal, pagamento.method)
+        - cashbackAplicado + freteVisto,
     );
 
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
@@ -608,6 +636,8 @@ export default function CheckoutPage() {
       cep: shipping.cep,
       items: lines,
       couponCode: cupomFinal?.ok ? cupomFinal.code : undefined,
+      // Vai como PEDIDO. Quem decide quanto sai do saldo é o backend.
+      ...(cashbackAplicado > 0 ? { cashback: cashbackAplicado } : {}),
       paymentMethod: pagamento.method,
       installments: pagamento.installments,
       // Token do cartão (quando houver): o número ficou no navegador, isto é
@@ -830,6 +860,7 @@ export default function CheckoutPage() {
           onApplyCoupon={handleApplyCoupon}
           onRemoveCoupon={handleRemoveCoupon}
           pixDiscount={descontoPix}
+          cashback={cashbackAplicado}
           total={total}
           className="lg:sticky lg:top-8 lg:col-start-2 lg:row-start-1"
         />
@@ -936,6 +967,12 @@ export default function CheckoutPage() {
               coupon={coupon}
               onApplyCoupon={handleApplyCoupon}
               onRemoveCoupon={handleRemoveCoupon}
+              cashback={{
+                phone: (contact?.phone ?? '').replace(/\D/g, ''),
+                base: baseCashback,
+                value: cashbackAplicado,
+                onChange: setCashbackUsado,
+              }}
               enviando={submitting}
               onDone={(p, nota) => {
                 if (!contact) return;

@@ -236,6 +236,8 @@ export interface CreateOrderInput {
   cep: string;
   items: CartLine[];
   couponCode?: string;
+  /** Cashback pedido, em reais. O backend decide quanto de fato sai do saldo. */
+  cashback?: number;
   paymentMethod: PaymentMethod;
   installments?: number;
   /**

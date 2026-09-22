@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { CashbackService } from '../cashback/cashback.service';
 import { PedidoEmailService, metodoDePagamento } from './pedido-email.service';
 
 /**
@@ -53,6 +54,7 @@ export class PedidoExpiraCron {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly pedidoEmail: PedidoEmailService,
+    private readonly cashback: CashbackService,
   ) {}
 
   private get ligado(): boolean {
@@ -116,6 +118,26 @@ export class PedidoExpiraCron {
       },
       data: { status: 'cancelled', cancelledAt: new Date() },
     });
+
+    /**
+     * CASHBACK VOLTA PRA CLIENTE.
+     *
+     * O saldo saiu quando o pedido nasceu (é ele que fez o PIX vir mais
+     * barato). Pedido que expirou sem pagar nunca virou compra — segurar o
+     * cashback seria cobrar da cliente um pedido que ela não fez.
+     *
+     * Relê quem DE FATO virou `cancelled` logo abaixo? Não: aqui basta varrer
+     * os alvos, porque `estornarUso` é idempotente e só mexe em uso pendente.
+     * Pedido que escapou (pagou no meio) teve o uso mantido pelo caminho
+     * normal e não tem linha pendente pra devolver — ele não é tocado.
+     *
+     * Best-effort: nenhuma devolução pode derrubar a varredura de expiração.
+     */
+    for (const o of alvos) {
+      await this.cashback
+        .estornarUso(String(o.id), 'pedido expirou sem pagamento')
+        .catch(() => null);
+    }
 
     if (r.count) {
       const numeros = alvos.slice(0, 10).map((o: any) => o.wcOrderNumber ?? o.id).join(', ');

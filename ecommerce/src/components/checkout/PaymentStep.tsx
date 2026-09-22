@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/Badge';
 import { trackAddPaymentInfo, trackPaymentMethodSelected, type TrackedItem } from '@/lib/tracking';
 import type { CouponResult, PaymentMethod } from '@/types/checkout';
 import { CouponField } from './CouponField';
+import { CashbackField } from './CashbackField';
 import { CardForm } from './CardForm';
 
 /**
@@ -49,7 +50,21 @@ const TABS: Array<{ method: PaymentMethod; label: string; icon: React.ElementTyp
 /** Dados da nota, coletados AQUI antes de escolher como pagar. */
 export interface DadosDaNota { email: string; cpf: string }
 
+/** O que o cashback precisa pra existir nesta etapa. Tudo opcional: sem estes
+ *  campos o checkout segue igual a antes (nenhum abatimento oferecido). */
+export interface CashbackProps {
+  /** Só dígitos, com DDD — vem da primeira etapa do checkout. */
+  phone: string;
+  /** Base do teto de %: peças já sem cupom/promoção e SEM frete. */
+  base: number;
+  /** Quanto está aplicado agora, em reais. */
+  value: number;
+  onChange: (valor: number) => void;
+}
+
 interface PaymentStepProps {
+  /** Cashback da cliente nesta etapa. Ausente = etapa sem cashback. */
+  cashback?: CashbackProps;
   /** Total estimado (subtotal − desconto + frete) — só pra exibir parcelas. */
   total: number;
   /** Total de exibição com o desconto PIX já aplicado. */
@@ -106,7 +121,7 @@ interface PaymentStepProps {
  * Mostrar em vez de esconder continua deliberado: ela VÊ que PIX e Cartão
  * existem e entende o que falta.
  */
-export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange, coupon, onApplyCoupon, onRemoveCoupon }: PaymentStepProps) {
+export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange, coupon, onApplyCoupon, onRemoveCoupon, cashback }: PaymentStepProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [tracked, setTracked] = useState<Set<PaymentMethod>>(new Set());
   const [email, setEmail] = useState(defaultsNota?.email ?? '');
@@ -217,6 +232,21 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
               onApply={onApplyCoupon}
               onRemove={onRemoveCoupon}
               temCpf={cpfOk}
+            />
+          </div>
+        )}
+
+        {/* CASHBACK — mesma vizinhança do vale-troca, e pelo mesmo motivo: os
+            dois são crédito NOMINAL, presos ao CPF que ela acabou de digitar.
+            O campo se esconde sozinho quando não há saldo. */}
+        {cashback && (
+          <div className="rounded-md border border-border bg-surface-alt p-4">
+            <CashbackField
+              cpf={cpfOk ? onlyDigits(cpf) : ''}
+              phone={cashback.phone}
+              base={cashback.base}
+              value={cashback.value}
+              onChange={cashback.onChange}
             />
           </div>
         )}

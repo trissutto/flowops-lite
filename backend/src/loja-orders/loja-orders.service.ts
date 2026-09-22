@@ -173,6 +173,14 @@ export interface CriarPedidoInput {
   shipping: LojaShippingInput;
   items: LojaItemInput[];
   couponCode?: string;
+  /**
+   * Cashback que a cliente pediu pra usar, em REAIS.
+   *
+   * É PEDIDO, não ordem: o servidor reconfere saldo, carência, validade,
+   * mínimo e teto de % da compra, e aplica o que for permitido — igual ao
+   * cupom. Número vindo da tela nunca decide quanto sai do saldo dela.
+   */
+  cashback?: number;
   /** Todos em REAIS. */
   subtotal: number;
   discount: number;
@@ -555,6 +563,7 @@ export class LojaOrdersService implements OnModuleInit {
         descontoCupom: number;
         descontoPix: number;
         descontoPromocao: number;
+        descontoCashback: number;
         frete: number;
         total: number;
         couponCode: string | null;
@@ -704,8 +713,42 @@ export class LojaOrdersService implements OnModuleInit {
         ? this.dinheiro((baseComDesconto * pct) / 100)
         : 0;
 
-    // 4) Total do zero.
-    const total = this.dinheiro(subtotal - descontoCupom - descontoPix - descontoPromocao + frete);
+    /**
+     * 4) CASHBACK — o último abatimento, e o único que sai do bolso da casa.
+     *
+     * Vem DEPOIS de cupom, promoção e PIX porque o teto de 30% é sobre o que
+     * a cliente vai de fato pagar pelas peças, não sobre o preço de tabela:
+     * calcular antes deixaria o cashback pagar um pedaço de desconto que a
+     * loja já tinha dado.
+     *
+     * A BASE DO TETO NÃO INCLUI O FRETE. Frete é custo repassado — deixar o
+     * saldo pagar o PAC é a loja bancando transportadora com o próprio
+     * benefício. A cliente abate peça; o frete ela paga.
+     *
+     * O valor é PEDIDO pela tela e DECIDIDO aqui: `quantoPodeUsar` reconfere
+     * saldo liberado (fora da carência, dentro da validade), mínimo e teto.
+     * Entre a tela e este ponto o saldo pode ter mudado — outro pedido, a
+     * loja física, a live.
+     */
+    let descontoCashback = 0;
+    const cashbackPedido = Math.max(0, this.dinheiro(input.cashback));
+    if (cashbackPedido > 0) {
+      const cpfCliente = this.digits(input.customer?.cpf);
+      const basePecas = Math.max(0, this.dinheiro(subtotal - descontoCupom - descontoPix - descontoPromocao));
+      const pode = await this.cashback.quantoPodeUsar(cpfCliente, basePecas).catch(() => null);
+      descontoCashback = this.dinheiro(Math.min(cashbackPedido, pode?.permitido || 0));
+      if (descontoCashback < cashbackPedido) {
+        this.logger.log(
+          `[loja] cashback pedido R$ ${cashbackPedido.toFixed(2)} → permitido R$ ${descontoCashback.toFixed(2)}` +
+            (pode?.motivo ? ` (${pode.motivo})` : ''),
+        );
+      }
+    }
+
+    // 5) Total do zero.
+    const total = this.dinheiro(
+      subtotal - descontoCupom - descontoPix - descontoPromocao - descontoCashback + frete,
+    );
     if (total <= 0) {
       this.logger.warn(`[loja] total recalculado <= 0 (subtotal=${subtotal} cupom=${descontoCupom})`);
       return {
@@ -716,7 +759,17 @@ export class LojaOrdersService implements OnModuleInit {
     }
 
     // TETO: nunca cobrar acima do que a cliente viu.
-    const informado = this.dinheiro(input.total);
+    //
+    // O cashback sai dos DOIS lados da comparação: a tela informou o total já
+    // abatido do que ela PEDIU, e aqui pode ter sido concedido menos (saldo
+    // mudou no meio). Sem isto, conceder menos disparava "os valores da sacola
+    // mudaram, atualize a página" — mensagem errada e sem saída, porque o F5
+    // recalcularia igual. O que o teto mede é peça, cupom e frete.
+    // Os dois lados voltam pro preço SEM cashback antes de comparar:
+    //   nosso  = total + concedido        (desfaz o abatimento daqui)
+    //   tela   = input.total + pedido      (desfaz o que ela viu abatido)
+    // Comparar sem desfazer faria "concedi menos" parecer "a sacola mudou".
+    const informado = this.dinheiro(input.total + cashbackPedido - descontoCashback);
     if (informado > 0 && total > informado + LojaOrdersService.TOLERANCIA) {
       this.logger.warn(
         `[loja] recálculo acima do informado: nosso=${total.toFixed(2)} site=${informado.toFixed(2)} ` +
@@ -772,10 +825,13 @@ export class LojaOrdersService implements OnModuleInit {
     // O input passa a carregar a conta da casa — cobrança, Order e resposta
     // leem daqui pra frente uma coisa só.
     input.subtotal = subtotal;
-    input.discount = this.dinheiro(descontoCupom + descontoPix + descontoPromocao);
+    input.discount = this.dinheiro(
+      descontoCupom + descontoPix + descontoPromocao + descontoCashback,
+    );
     input.shippingPrice = frete;
     input.shipping.price = frete;
     input.total = total;
+    input.cashback = descontoCashback;
     input.couponCode = couponCode || undefined;
 
     return {
@@ -784,11 +840,109 @@ export class LojaOrdersService implements OnModuleInit {
       descontoCupom,
       descontoPix,
       descontoPromocao,
+      descontoCashback,
       frete,
       total,
       couponCode,
       promocao: promocao.applied ? promocao : null,
     };
+  }
+
+  /* ──────────────────────────── CASHBACK ──────────────────────────────── */
+
+  /**
+   * QUANTO A CLIENTE PODE ABATER NESTA SACOLA.
+   *
+   * Consultado no checkout, na etapa em que ela digita o CPF — o mesmo lugar
+   * onde o vale-troca nominal já é resolvido.
+   *
+   * ── POR QUE O TELEFONE É EXIGIDO ──
+   *
+   * O cashback é preso ao CPF e não tem código: quem digitar um CPF qualquer
+   * descobriria se aquela pessoa é cliente da loja e quanto ela tem de saldo.
+   * Cupom não tem esse problema (é preciso SABER o código); aqui o CPF
+   * sozinho seria uma porta de sondagem.
+   *
+   * O checkout já pediu o WhatsApp na PRIMEIRA etapa, antes do CPF. Então
+   * exigir que os dois batam com um cadastro existente não custa um campo a
+   * mais pra cliente de verdade, e fecha a sondagem: quem não tem o telefone
+   * não descobre nada.
+   *
+   * ⚠️ A recusa NÃO diz qual dos dois não bateu, de propósito — dizer "o CPF
+   * tem saldo mas o telefone não confere" entregaria metade do que a guarda
+   * existe pra proteger. Mas também não mente por omissão: a resposta explica
+   * o que fazer (`dica`), que é a diferença entre uma guarda e um buraco.
+   */
+  async saldoCashback(input: { cpf?: string; phone?: string; subtotal?: number }): Promise<{
+    ok: true;
+    saldo: number;
+    permitido: number;
+    motivo: string | null;
+    ativo: boolean;
+    dica: string | null;
+  }> {
+    const vazio = (dica: string | null = null) => ({
+      ok: true as const, saldo: 0, permitido: 0, motivo: null, ativo: true, dica,
+    });
+
+    const cpf = this.digits(input.cpf);
+    const fone = this.digits(input.phone);
+    if (cpf.length !== 11) return vazio();
+    // Últimos 8 dígitos: a base tem telefone com e sem DDD, com e sem o 9.
+    const fone8 = fone.slice(-8);
+    if (fone8.length !== 8) return vazio();
+
+    const confere = await this.cpfEFoneBatem(cpf, fone8);
+    if (!confere) {
+      return vazio(
+        'Se você já comprou com a gente, use o mesmo WhatsApp do seu cadastro pra ver seu cashback.',
+      );
+    }
+
+    const base = Math.max(0, this.dinheiro(input.subtotal));
+    const r = await this.cashback.quantoPodeUsar(cpf, base);
+    return {
+      ok: true,
+      saldo: r.saldo,
+      permitido: r.permitido,
+      motivo: r.motivo,
+      ativo: r.ativo,
+      dica: null,
+    };
+  }
+
+  /**
+   * Existe algum cadastro que ligue este CPF a este telefone?
+   *
+   * Olha as duas bases com índice em CPF: a ficha do CRM (`customers`, que
+   * recebe tanto o cadastro da loja física quanto o do site) e os pedidos do
+   * site. Uma só já basta — a pergunta é "esta pessoa é quem diz ser", não
+   * "em quantos lugares ela aparece".
+   *
+   * Erro de banco responde NÃO (e loga): numa consulta que existe pra proteger
+   * dado de cliente, falha tem que fechar a porta, não abrir.
+   */
+  private async cpfEFoneBatem(cpf: string, fone8: string): Promise<boolean> {
+    const cpfFmt = `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`;
+    try {
+      const r: any[] = await (this.prisma as any).$queryRawUnsafe(
+        `SELECT 1 FROM customers
+           WHERE (cpf = $1 OR cpf = $2)
+             AND (right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 8) = $3
+               OR right(regexp_replace(COALESCE(whatsapp,''), '\\D', '', 'g'), 8) = $3)
+           LIMIT 1
+         UNION ALL
+         SELECT 1 FROM orders
+           WHERE regexp_replace(COALESCE(customer_cpf,''), '\\D', '', 'g') = $4
+             AND right(regexp_replace(COALESCE(customer_phone,''), '\\D', '', 'g'), 8) = $3
+           LIMIT 1`,
+        cpf, cpfFmt, fone8, cpf,
+      );
+      return r.length > 0;
+    } catch (e: any) {
+      this.logger.warn(`[loja][cashback] conferência CPF×telefone falhou: ${e?.message}`);
+      return false;
+    }
   }
 
   /* ───────────────────────────── CRM ──────────────────────────────────── */
@@ -1096,6 +1250,7 @@ export class LojaOrdersService implements OnModuleInit {
       descontoCupom: number;
       descontoPix: number;
       descontoPromocao?: number;
+      descontoCashback?: number;
       promocao?: DiscountResult | null;
     },
   ): Promise<any> {
@@ -1149,6 +1304,10 @@ export class LojaOrdersService implements OnModuleInit {
       descontoCupom: this.dinheiro(conta?.descontoCupom ?? 0),
       descontoPix: this.dinheiro(conta?.descontoPix ?? 0),
       descontoPromocao: this.dinheiro(conta?.descontoPromocao ?? 0),
+      // Cashback abatido. Fica no recorte porque a cliente pergunta "e o meu
+      // cashback?" olhando o pedido, e porque quem confere caixa precisa
+      // separar o que foi desconto da loja do que foi saldo dela.
+      descontoCashback: this.dinheiro(conta?.descontoCashback ?? 0),
       promocao: conta?.promocao
         ? {
             campaignCode: conta.promocao.campaignCode,
@@ -2250,6 +2409,59 @@ export class LojaOrdersService implements OnModuleInit {
       };
     }
 
+    /**
+     * O SALDO SAI AQUI — entre o pedido existir e a cobrança sair.
+     *
+     * Depois de `criarOrder` porque `cashback_usos` aponta pro pedido: sem o
+     * id não há como devolver depois. Antes da cobrança porque é ela que vai
+     * cobrar o valor já abatido — consumir depois deixaria a janela em que a
+     * cliente paga menos sem que nada tenha saído do saldo dela.
+     *
+     * SHORTFALL: entre a tela e este ponto o saldo pode ter caído (outro
+     * pedido, a loja física, a live). `usar` entrega o que tem e diz quanto
+     * foi — se veio menos, o pedido volta a custar a diferença, AQUI, com a
+     * cobrança ainda por nascer. Cobrar o valor abatido sem lastro no ledger
+     * seria a loja pagando a diferença calada.
+     */
+    if (this.dinheiro(input.cashback) > 0) {
+      const pedido = this.dinheiro(input.cashback);
+      const r = await this.cashback.usar({
+        cpf: this.digits(input.customer.cpf),
+        saleId: order.id,
+        storeCode: String(order.sellerStoreCode || '13'),
+        valor: pedido,
+      });
+      const usado = this.dinheiro(r.usado);
+
+      if (usado < pedido - 0.001) {
+        const diferenca = this.dinheiro(pedido - usado);
+        const totalNovo = this.dinheiro(input.total + diferenca);
+        this.logger.warn(
+          `[loja] cashback do pedido ${order.wcOrderNumber}: pedido R$ ${pedido.toFixed(2)}, ` +
+            `saldo cobriu R$ ${usado.toFixed(2)} — total corrigido de R$ ${input.total.toFixed(2)} ` +
+            `pra R$ ${totalNovo.toFixed(2)} antes de cobrar`,
+        );
+        input.total = totalNovo;
+        input.cashback = usado;
+        input.discount = this.dinheiro(Math.max(0, input.discount - diferenca));
+        await (this.prisma as any).order
+          .update({
+            where: { id: order.id },
+            data: { totalAmount: totalNovo },
+          })
+          .catch((e: any) =>
+            this.logger.error(`[loja] não deu pra corrigir o total do pedido ${order.id}: ${e?.message}`),
+          );
+        order.totalAmount = totalNovo;
+      }
+
+      if (usado > 0) {
+        this.logger.log(
+          `[loja] cashback de R$ ${usado.toFixed(2)} abatido no pedido ${order.wcOrderNumber}`,
+        );
+      }
+    }
+
     // ── Cobrança ──
     let paymentInfo: any = {
       method: input.payment.method,
@@ -2496,6 +2708,16 @@ export class LojaOrdersService implements OnModuleInit {
 
   /** Remove o pedido que não virou venda. Falhou o delete → marca cancelado. */
   private async descartarPedido(orderId: string): Promise<void> {
+    /**
+     * O CASHBACK VOLTA ANTES DE O PEDIDO SUMIR.
+     *
+     * Aqui o pedido é APAGADO (cobrança que estourou, cartão recusado), e
+     * a tabela cashback_usos aponta pro id dele por string, sem FK: depois do
+     * delete ninguém mais liga aquele saldo a essa compra. A rede de
+     * segurança (CashbackDevolucaoCron) ainda pegaria pelo caminho do "órfão",
+     * mas até uma hora depois — e é saldo da cliente parado por nada.
+     */
+    await this.cashback.estornarUso(orderId, 'pedido descartado');
     try {
       await (this.prisma as any).order.delete({ where: { id: orderId } });
     } catch (e: any) {

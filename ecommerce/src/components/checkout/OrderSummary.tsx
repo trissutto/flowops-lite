@@ -36,6 +36,9 @@ interface OrderSummaryProps {
   onRemoveCoupon: () => void;
   /** Desconto do Pix em reais — 0 fora do Pix ou antes de escolher. */
   pixDiscount?: number;
+  /** Cashback abatido em reais. Mesma razão do Pix: desconto sem linha é
+   *  desconto que a cliente acha que não recebeu. */
+  cashback?: number;
   total: number;
   className?: string;
 }
@@ -49,6 +52,7 @@ export function OrderSummary({
   onApplyCoupon,
   onRemoveCoupon,
   pixDiscount = 0,
+  cashback = 0,
   total,
   className,
 }: OrderSummaryProps) {
@@ -117,6 +121,12 @@ export function OrderSummary({
           <div className="flex justify-between text-success">
             <dt>Desconto Pix ({PIX_DESCONTO_PCT}%)</dt>
             <dd className="tabular">−{formatPrice(pixDiscount)}</dd>
+          </div>
+        )}
+        {cashback > 0 && (
+          <div className="flex justify-between text-success">
+            <dt>Cashback</dt>
+            <dd className="tabular">−{formatPrice(cashback)}</dd>
           </div>
         )}
         <div className="flex items-baseline justify-between border-t border-border pt-3">
