@@ -17,7 +17,7 @@ import {
   ClipboardList, Megaphone, Users, Globe, ShoppingBag,
   FileSearch, MessageCircle, Store, ArrowRightLeft, ArrowLeft,
   LayoutDashboard, Globe2, BarChart3, Settings, DollarSign, UserPlus, MapPin,
-  Tags, LayoutGrid, TrendingUp, ShieldCheck,
+  Tags, LayoutGrid, TrendingUp, ShieldCheck, Undo2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -47,6 +47,11 @@ const SITE_ITEMS: SiteItem[] = [
   // gateway conferindo (caso ON-000049, 19/08) — esta tela é a conferência
   // humana: o que está vermelho, ninguém provou que foi pago.
   { href: '/retaguarda/conferencia-vendas', label: 'Conferência de Vendas', subtitle: 'Pagamento', description: 'Venda online sem prova · envio · rastreio', tone: 'rose', icon: ShieldCheck },
+  // Devolver dinheiro pela API do gateway, sem ninguém abrir a conta do
+  // PagBank. Entra com senha Master/Suprema e cada estorno pede a senha de
+  // novo (22/09) — por isso o cartão vem ao lado da Conferência: são as duas
+  // telas onde o dinheiro do site é conferido e desfeito.
+  { href: '/site/estornos', label: 'Estornos e Devoluções', subtitle: 'Senha Master', description: 'Devolver PIX e cartão pelo gateway · comprovante', tone: 'rose', icon: Undo2 },
   { href: '/financeiro',               label: 'Financeiro',      subtitle: 'Analítico WC', description: 'Faturamento · ticket médio · KPIs', tone: 'green', icon: DollarSign },
   { href: '/marketing',                label: 'Marketing',       subtitle: 'CRM',          description: 'Recuperação · campanhas', tone: 'rose',  icon: Megaphone      },
   { href: '/retaguarda/vendedoras',    label: 'Vendedoras',      subtitle: 'Atribuição',   description: 'Quem vende cada pedido',  tone: 'orange', icon: Users         },

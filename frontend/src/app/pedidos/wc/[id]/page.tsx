@@ -18,6 +18,7 @@ import SellerTag from '@/components/SellerTag';
 import TrocaPecaModal from './TrocaPecaModal';
 import CampanhaCascata, { Atribuicao } from './CampanhaCascata';
 import PainelRisco from './PainelRisco';
+import BlocoEstornos from './BlocoEstornos';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X, FileText } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -2424,6 +2425,9 @@ export default function PedidoDetailPage() {
           painel se recolhe sozinho quando o risco é baixo, e NÃO bloqueia
           pedido nenhum — só alerta e registra a decisão (dono, 27/08). */}
       <PainelRisco pedidoRef={wcId} />
+
+      {/* Dinheiro que JA voltou neste pedido. Some quando nao ha estorno. */}
+      <BlocoEstornos pedidoRef={wcId} />
 
       {/* DE QUAL CAMPANHA VEIO — o nome do anúncio que trouxe a cliente, com a
           cascata inteira a um clique. Antes isso era uma linha cinza de 12px no

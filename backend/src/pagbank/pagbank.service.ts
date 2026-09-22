@@ -1358,6 +1358,81 @@ export class PagbankService {
     return out;
   }
 
+  // ── ESTORNO / DEVOLUÇÃO (22/09/2026) ───────────────────────────────
+  //
+  // `POST /charges/{id}/cancel` com `{amount:{value}}` em centavos: parcial ou
+  // integral, só de cobrança PAGA (doc oficial). A régua da resposta e os
+  // limites (PIX até 90 dias, cartão na fatura em ~2 dias úteis) moram em
+  // `common/estornos.ts`. Aqui é só a ida ao gateway — quem decide o status é
+  // o `EstornosService`, lendo a resposta.
+
+  /** A cobrança como o PagBank a enxerga AGORA (saldo devolvido incluso). */
+  async consultarCobranca(chargeId: string, storeCode?: string): Promise<any> {
+    const cfg = await this.getConfigInternalForStore(String(storeCode || ''));
+    const r = await firstValueFrom(
+      this.http.get(`${this.getBaseUrl(cfg.ambiente)}/charges/${encodeURIComponent(chargeId)}`, {
+        headers: { Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`, Accept: 'application/json' },
+        timeout: 10000,
+      }),
+    );
+    return r.data;
+  }
+
+  /**
+   * PEDE O ESTORNO. Três saídas, e nenhuma delas mente:
+   *   ok:true              → o PagBank respondeu; a cobrança devolvida diz o resto
+   *   ok:false ambigua     → timeout/5xx: o dinheiro PODE ter saído (nunca "erro"
+   *                          seco; quem chamou marca EM PROCESSAMENTO e reconsulta)
+   *   ok:false             → recusa com motivo (4xx) ou falha de credencial
+   *
+   * `x-idempotency-key` (vale 48h no PagBank): repetir a MESMA chave não cobra
+   * duas vezes nem devolve duas vezes — é a trava do duplo clique no lado deles.
+   */
+  async estornarCobranca(input: {
+    chargeId: string;
+    valorCents: number;
+    idempotencyKey: string;
+    storeCode?: string;
+  }): Promise<
+    | { ok: true; charge: any }
+    | { ok: false; ambigua: boolean; httpStatus?: number; detalhe: string; charge?: any }
+  > {
+    const cfg = await this.getConfigInternalForStore(String(input.storeCode || ''));
+    const url = `${this.getBaseUrl(cfg.ambiente)}/charges/${encodeURIComponent(input.chargeId)}/cancel`;
+    const headers = {
+      Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'x-idempotency-key': String(input.idempotencyKey).slice(0, 64),
+    };
+    const body = { amount: { value: Math.round(input.valorCents) } };
+    try {
+      const r = await firstValueFrom(this.http.post(url, body, { headers, timeout: 20000 }));
+      this.logger.log(
+        `[pagbank-estorno] charge=${input.chargeId} R$${(input.valorCents / 100).toFixed(2)} → ` +
+          `status=${r.data?.status} refunded=${r.data?.amount?.summary?.refunded ?? '?'}`,
+      );
+      return { ok: true, charge: r.data };
+    } catch (e: any) {
+      const httpStatus: number | undefined = e?.response?.status;
+      const data = e?.response?.data;
+      const detalhe = resumirErrosPagbank(data, e?.message || String(e));
+      // Sem resposta ou 5xx: o PagBank pode ter processado. Pergunta a cobrança
+      // antes de declarar qualquer coisa — é a mesma rede do cartão do site.
+      const ambigua = !e?.response || (typeof httpStatus === 'number' && httpStatus >= 500);
+      if (ambigua) {
+        const charge = await this.consultarCobranca(input.chargeId, input.storeCode).catch(() => null);
+        this.logger.warn(
+          `[pagbank-estorno][ALERTA] charge=${input.chargeId}: resposta ambígua (HTTP ${httpStatus ?? 'timeout/rede'}) — ` +
+            `refunded agora=${charge?.amount?.summary?.refunded ?? '?'}`,
+        );
+        return { ok: false, ambigua: true, httpStatus, detalhe, charge: charge ?? undefined };
+      }
+      this.logger.warn(`[pagbank-estorno] charge=${input.chargeId} recusado HTTP ${httpStatus}: ${detalhe}`);
+      return { ok: false, ambigua: false, httpStatus, detalhe };
+    }
+  }
+
   // ── Listagem (pra dashboard de PIX) ────────────────────────────────
 
   async listPayments(input: { saleId?: string; status?: string; limit?: number }) {

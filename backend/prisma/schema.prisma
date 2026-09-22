@@ -2491,6 +2491,101 @@ model PagbankPayment {
   @@map("pagbank_payments")
 }
 
+/// ESTORNOS E DEVOLUÇÕES (22/09/2026) — uma linha por OPERAÇÃO de devolução
+/// pedida ao gateway (PagBank ou Pagar.me), do site, da venda online do PDV
+/// ou da live. É o registro permanente do dinheiro que voltou (ou tentou
+/// voltar) pra cliente: nenhuma tela apaga, e o status só anda com o que a
+/// API respondeu (régua em `common/estornos.ts`).
+model EstornoPagamento {
+  id                   String    @id @default(uuid())
+  /// 'site' | 'pdv_online' | 'live'
+  origem               String    @db.VarChar(20)
+  /// Order.id (site e ON-) ou LivePdvCart.id (live)
+  refId                String    @map("ref_id")
+  /// LP-000123 · ON-000045 · comanda da live — o que a pessoa lê na tela
+  refNumero            String?   @map("ref_numero")
+  /// Venda do PDV por trás do pedido ON- (é dela que o pagamento é)
+  pdvSaleId            String?   @map("pdv_sale_id")
+  clienteNome          String?   @map("cliente_nome")
+  clienteCpf           String?   @map("cliente_cpf")
+  clienteEmail         String?   @map("cliente_email")
+  /// 'pagbank' | 'pagarme'
+  gateway              String    @db.VarChar(16)
+  /// 'pix' | 'credit_card'
+  metodo               String    @db.VarChar(16)
+  gatewayOrderId       String?   @map("gateway_order_id")
+  gatewayChargeId      String    @map("gateway_charge_id")
+  /// Loja dona da conta do gateway (o token certo pra cancelar)
+  storeCode            String?   @map("store_code")
+  valorPagoCents       Int       @map("valor_pago_cents")
+  /// Quanto já tinha sido estornado ANTES desta operação
+  jaEstornadoCents     Int       @default(0) @map("ja_estornado_cents")
+  valorCents           Int       @map("valor_cents")
+  /// 'integral' | 'parcial'
+  tipo                 String    @db.VarChar(10)
+  motivo               String    @db.VarChar(40)
+  motivoTexto          String?   @map("motivo_texto") @db.VarChar(300)
+  observacao           String?   @db.VarChar(500)
+  /// iniciado | enviado | processando | processado | recusado | erro
+  status               String    @default("iniciado") @db.VarChar(16)
+  statusGateway        String?   @map("status_gateway") @db.VarChar(40)
+  mensagemGateway      String?   @map("mensagem_gateway") @db.VarChar(300)
+  /// Total devolvido nesta cobrança segundo o gateway (acumulado)
+  estornadoTotalCents  Int?      @map("estornado_total_cents")
+  /// Chave da operação — trava o duplo clique aqui e no PagBank (48h)
+  idempotencyKey       String    @unique @map("idempotency_key")
+  respostaGateway      String?   @map("resposta_gateway") @db.Text
+  usuarioId            String?   @map("usuario_id")
+  usuarioNome          String?   @map("usuario_nome")
+  /// MASTER | SUPREMA — o tipo de autorização usado
+  nivelAutorizacao     String    @map("nivel_autorizacao") @db.VarChar(12)
+  /// Preenchidos quando a autorização veio de PIN pessoal
+  autorizadoPorNome    String?   @map("autorizado_por_nome")
+  autorizadoPorCpf     String?   @map("autorizado_por_cpf")
+  ip                   String?   @db.VarChar(60)
+  dispositivo          String?   @db.VarChar(200)
+  comprovanteEnviadoEm DateTime? @map("comprovante_enviado_em")
+  comprovanteEmail     String?   @map("comprovante_email")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+  processadoEm         DateTime? @map("processado_em")
+  consultadoEm         DateTime? @map("consultado_em")
+
+  @@index([refId])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([gatewayChargeId])
+  @@map("estornos_pagamento")
+}
+
+/// LOG DE SEGURANÇA E AUDITORIA dos estornos — inclusive a TENTATIVA de
+/// acesso que falhou (é o que segura 5 senhas erradas) e cada mudança de
+/// status. Insert-only: nenhuma tela apaga, e não expira como o
+/// `integration_log` (que some com 90 dias).
+model EstornoEvento {
+  id          String   @id @default(uuid())
+  estornoId   String?  @map("estorno_id")
+  /// acesso_ok | acesso_negado | acesso_bloqueado | solicitado | status |
+  /// comprovante | email_ok | email_erro | cancelamento_pedido
+  tipo        String   @db.VarChar(30)
+  usuarioId   String?  @map("usuario_id")
+  usuarioNome String?  @map("usuario_nome")
+  nivel       String?  @db.VarChar(12)
+  refId       String?  @map("ref_id")
+  refNumero   String?  @map("ref_numero")
+  statusDe    String?  @map("status_de") @db.VarChar(16)
+  statusPara  String?  @map("status_para") @db.VarChar(16)
+  detalhe     String?  @db.Text
+  ip          String?  @db.VarChar(60)
+  dispositivo String?  @db.VarChar(200)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([estornoId])
+  @@index([tipo, createdAt(sort: Desc)])
+  @@index([usuarioId, createdAt(sort: Desc)])
+  @@map("estornos_eventos")
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // TROCA DE PEDIDO DO SITE (WC) — peça volta pro estoque da loja receptora
 // ═══════════════════════════════════════════════════════════════════════

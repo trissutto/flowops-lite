@@ -1,6 +1,12 @@
 // Mock da API do FlowOps pra preview local do FRONTEND (porta 3001, prefixo /api).
 // Uso: entrada "mock-api" do .claude/launch.json. Cobre só o que a tela em
-// desenvolvimento precisa — hoje: /loja/reposicao (cascata).
+// desenvolvimento precisa — hoje: /loja/reposicao (cascata) e /site/estornos
+// (senha do mock: "123").
+//
+// ⚠️ Rodando de dentro de um WORKTREE: o launch.json lido é o do repo
+// PRINCIPAL e o caminho `.claude/mock-api.js` resolve lá. Pra previewar a tela
+// de um worktree, crie uma entrada temporária apontando pro caminho ABSOLUTO
+// deste arquivo (e apague depois) — foi assim que /site/estornos foi conferida.
 const http = require('http');
 
 const GRADE = (de, ate) => { const t = []; for (let x = de; x <= ate; x += 2) t.push(String(x)); return t; };
@@ -22,7 +28,7 @@ const norm = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, x-estorno-sessao, x-training-mode');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const url = new URL(req.url, 'http://localhost');
@@ -180,7 +186,109 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  // ── ESTORNOS E DEVOLUCOES (22/09) — /site/estornos ──
+  // Senha do mock: "123". Cobre porta, busca, ficha, estorno e historico.
+  if (url.pathname === '/api/admin/estornos/sessao') {
+    return lerCorpo(req, (body) => {
+      if (String(body.password || '') !== '123') return json({ message: 'Senha Master/Suprema invalida' }, 403);
+      json({ token: 'mock-sessao', nivel: 'MASTER', minutos: 15 });
+    });
+  }
+  if (url.pathname === '/api/admin/estornos/motivos') {
+    return json({
+      motivos: [
+        { codigo: 'devolucao_produto', label: 'Devolucao de produto', exigeTexto: false },
+        { codigo: 'cancelamento_pedido', label: 'Cancelamento do pedido', exigeTexto: false },
+        { codigo: 'cobranca_duplicada', label: 'Cobranca duplicada', exigeTexto: false },
+        { codigo: 'outros', label: 'Outros', exigeTexto: true },
+      ],
+    });
+  }
+  if (url.pathname === '/api/admin/estornos/buscar') {
+    return json({ pagamentos: ESTORNOS_PAGAMENTOS, total: ESTORNOS_PAGAMENTOS.length });
+  }
+  if (url.pathname.startsWith('/api/admin/estornos/pagamento/')) {
+    const id = decodeURIComponent(url.pathname.split('/').pop());
+    const p = ESTORNOS_PAGAMENTOS.find((x) => x.pagamentoId === id) || ESTORNOS_PAGAMENTOS[0];
+    return json({ pagamento: p, gatewayOnline: true, statusGateway: 'PAID', historico: [] });
+  }
+  if (url.pathname === '/api/admin/estornos/solicitar') {
+    return lerCorpo(req, (body) => {
+      if (String(body.password || '') !== '123') return json({ message: 'Senha Master/Suprema invalida' }, 403);
+      const p = ESTORNOS_PAGAMENTOS.find((x) => x.pagamentoId === body.pagamentoId) || ESTORNOS_PAGAMENTOS[0];
+      json({
+        estorno: {
+          id: 'mock-est-1',
+          status: body.tipo === 'integral' ? 'processado' : 'processando',
+          tipo: body.tipo,
+          valorCents: body.tipo === 'integral' ? p.saldoCents : body.valorCents,
+          metodo: p.metodo,
+          motivo: body.motivo,
+          statusGateway: body.tipo === 'integral' ? 'CANCELED' : 'PAID',
+          refNumero: p.refNumero,
+          clienteEmail: p.clienteEmail,
+          createdAt: new Date().toISOString(),
+        },
+        mensagem: 'ok',
+      });
+    });
+  }
+  if (url.pathname === '/api/admin/estornos/historico') {
+    const linhas = [
+      { id: 'h1', createdAt: new Date().toISOString(), refNumero: 'LP-001311', origem: 'site', clienteNome: 'Maria Aparecida', metodo: 'credit_card', valorCents: 18990, status: 'processado', motivo: 'devolucao_produto', usuarioNome: 'Thiago', nivelAutorizacao: 'SUPREMA' },
+      { id: 'h2', createdAt: new Date(Date.now() - 864e5).toISOString(), refNumero: 'ON-000221', origem: 'pdv_online', clienteNome: 'Jussara Lima', metodo: 'pix', valorCents: 7500, status: 'processando', motivo: 'cobranca_duplicada', usuarioNome: 'Marcia', nivelAutorizacao: 'MASTER' },
+      { id: 'h3', createdAt: new Date(Date.now() - 2 * 864e5).toISOString(), refNumero: 'LP-001290', origem: 'live', clienteNome: 'Rita de Cassia', metodo: 'pix', valorCents: 12000, status: 'recusado', motivo: 'outros', motivoTexto: 'cliente desistiu', usuarioNome: 'Thiago', nivelAutorizacao: 'MASTER' },
+    ];
+    return json({
+      linhas,
+      total: linhas.length,
+      resumo: { quantidade: 3, totalCents: 26490, pixCents: 7500, pixQtd: 1, cartaoCents: 18990, cartaoQtd: 1, pendentes: 1, pendentesCents: 7500, erros: 1 },
+    });
+  }
+
   json({ error: 'mock: rota nao coberta ' + url.pathname }, 404);
 });
+
+/** Corpo JSON do POST — o mock nasceu só com GET. */
+function lerCorpo(req, cb) {
+  let bruto = '';
+  req.on('data', (c) => { bruto += c; });
+  req.on('end', () => {
+    try { cb(JSON.parse(bruto || '{}')); } catch { cb({}); }
+  });
+}
+
+const ESTORNOS_PAGAMENTOS = [
+  {
+    pagamentoId: 'pagbank:p1', gateway: 'pagbank', chargeId: 'CHAR_ABC123', gatewayOrderId: 'ORDE_1',
+    metodo: 'credit_card', metodoLabel: 'Cartao de credito', storeCode: 'SITE',
+    valorPagoCents: 18990, pagoEm: new Date(Date.now() - 3 * 864e5).toISOString(),
+    estornadoCents: 0, saldoCents: 18990, pode: true, emAndamento: false,
+    origem: 'site', refId: 'uuid-1', refNumero: 'LP-001311', refWcOrderId: 1311, refStatus: 'delivered',
+    clienteNome: 'Maria Aparecida', clienteCpf: '123.456.789-09', clienteEmail: 'maria@exemplo.com',
+    totalCents: 18990, pdvSaleId: null,
+    aviso: 'O estorno devolve o dinheiro. O pedido NAO e cancelado automaticamente.',
+  },
+  {
+    pagamentoId: 'pagbank:p2', gateway: 'pagbank', chargeId: 'CHAR_DEF456', gatewayOrderId: 'ORDE_2',
+    metodo: 'pix', metodoLabel: 'PIX', storeCode: '01',
+    valorPagoCents: 15000, pagoEm: new Date(Date.now() - 10 * 864e5).toISOString(),
+    estornadoCents: 5000, saldoCents: 10000, pode: true, emAndamento: false,
+    origem: 'pdv_online', refId: 'uuid-2', refNumero: 'ON-000221', refWcOrderId: 950000221, refStatus: 'shipped',
+    clienteNome: 'Jussara Lima', clienteCpf: null, clienteEmail: 'jussara@exemplo.com',
+    totalCents: 15000, pdvSaleId: 'venda-2',
+    aviso: 'Venda online do PDV. O estorno devolve o dinheiro; a venda e o estoque continuam como estao.',
+  },
+  {
+    pagamentoId: 'pagarme:p3', gateway: 'pagarme', chargeId: 'ch_old', gatewayOrderId: 'or_old',
+    metodo: 'pix', metodoLabel: 'PIX', storeCode: 'SITE',
+    valorPagoCents: 22000, pagoEm: new Date(Date.now() - 120 * 864e5).toISOString(),
+    estornadoCents: 0, saldoCents: 22000, pode: false,
+    motivoBloqueio: 'Devolucao de PIX so ate 90 dias do pagamento (este tem 120 dias). Faca por outro meio.',
+    emAndamento: false,
+    origem: 'live', refId: 'uuid-3', refNumero: 'LP-001290', refWcOrderId: 1290, refStatus: 'delivered',
+    clienteNome: 'Rita de Cassia', clienteCpf: null, clienteEmail: null, totalCents: 22000, pdvSaleId: null,
+  },
+];
 
 server.listen(3001, () => console.log('mock-api na 3001 (prefixo /api)'));

@@ -11,6 +11,7 @@ import { CustomersAppModule } from './customers-app/customers-app.module';
 import { SizeFeedbackModule } from './size-feedback/size-feedback.module';
 import { AvaliacoesModule } from './avaliacoes/avaliacoes.module';
 import { RiscoModule } from './risco/risco.module';
+import { EstornosModule } from './estornos/estornos.module';
 import { PosVendaModule } from './pos-venda/pos-venda.module';
 import { ContaResumoModule } from './conta-resumo/conta-resumo.module';
 import { CatalogModule } from './catalog/catalog.module';
@@ -123,6 +124,7 @@ import { ConciliacaoCartaoModule } from './conciliacao-cartao/conciliacao-cartao
     SizeFeedbackModule,
     AvaliacoesModule,
     RiscoModule,
+    EstornosModule,
     PosVendaModule,
     ContaResumoModule,
     CatalogModule,
