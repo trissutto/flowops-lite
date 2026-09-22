@@ -2,10 +2,10 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
-import { ChevronDown, TicketPercent, X } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { BLUR_DATA_URL, cn, formatPrice } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
-import { Button } from '@/components/ui/Button';
+import { CouponField } from './CouponField';
 import type { CartLine } from '@/types';
 import type { CouponResult, ShippingQuote } from '@/types/checkout';
 
@@ -102,9 +102,11 @@ export function OrderSummary({
             {shippingPrice === undefined ? 'a calcular' : shippingPrice === 0 ? 'Grátis' : formatPrice(shippingPrice)}
           </dd>
         </div>
+        {/* "Cupom de troca" por extenso: é o crédito DELA voltando, não uma
+            promoção da loja — e é o nome que ela usa ao ligar perguntando. */}
         {coupon?.ok && coupon.discount > 0 && (
           <div className="flex justify-between text-success">
-            <dt>Cupom {coupon.code}</dt>
+            <dt>{coupon.nominal ? 'Cupom de troca' : `Cupom ${coupon.code}`}</dt>
             <dd className="tabular">−{formatPrice(coupon.discount)}</dd>
           </div>
         )}
@@ -155,71 +157,5 @@ export function OrderSummary({
         {detalhes}
       </div>
     </div>
-  );
-}
-
-/* ────────────────────────────────────────────────────────────────────────── */
-
-/** Campo de cupom — aplicado vira uma linha com "remover"; erro vira texto. */
-function CouponField({
-  coupon,
-  onApply,
-  onRemove,
-}: {
-  coupon: CouponResult | null;
-  onApply: (code: string) => void;
-  onRemove: () => void;
-}) {
-  const [code, setCode] = useState('');
-
-  if (coupon?.ok) {
-    return (
-      <div className="flex items-center justify-between gap-3 rounded-sm bg-primary-wash px-4 py-3">
-        <span className="flex items-center gap-2 text-small font-medium text-primary-strong">
-          <TicketPercent className="size-4" /> {coupon.code}
-        </span>
-        <button
-          type="button"
-          onClick={onRemove}
-          aria-label={`Remover cupom ${coupon.code}`}
-          className="text-ink-muted transition-colors hover:text-danger"
-        >
-          <X className="size-4" />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (code.trim()) onApply(code);
-      }}
-      className="flex flex-col gap-2"
-    >
-      <div className="flex gap-2">
-        <label htmlFor="checkout-cupom" className="sr-only">
-          Cupom de desconto
-        </label>
-        <input
-          id="checkout-cupom"
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          placeholder="Cupom de desconto"
-          autoComplete="off"
-          className="w-full min-w-0 flex-1 rounded-md border border-border bg-surface px-4 py-2.5 text-small text-ink placeholder:text-ink-muted/70 focus:border-primary focus:outline-none"
-        />
-        <Button type="submit" variant="secondary" size="sm" className="shrink-0">
-          Aplicar
-        </Button>
-      </div>
-      {/* Mensagem de cupom inválido — sempre elegante, vem de applyCoupon. */}
-      {coupon && !coupon.ok && (
-        <p role="alert" className="text-small text-danger">
-          {coupon.message}
-        </p>
-      )}
-    </form>
   );
 }

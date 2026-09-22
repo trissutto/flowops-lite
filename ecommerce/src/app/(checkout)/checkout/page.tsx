@@ -15,7 +15,7 @@ import { PaymentStep, type PaymentSelection } from '@/components/checkout/Paymen
 import { ReviewCard } from '@/components/checkout/ReviewCard';
 import { OrderSummary } from '@/components/checkout/OrderSummary';
 import { maskPhone } from '@/components/checkout/masks';
-import { validarCupomRemoto } from '@/lib/commerce/cupom';
+import { applyCoupon, conheceCupom, validarCupomRemoto } from '@/lib/commerce/cupom';
 import { PIX_DESCONTO_PCT, pixDiscount, pixTotal } from '@/lib/commerce/pix';
 import { clearCheckoutDraft, readCheckoutDraft, writeCheckoutDraft } from '@/lib/commerce/checkout-draft';
 import { useClienteLogada } from '@/hooks/useClienteLogada';
@@ -211,6 +211,19 @@ export default function CheckoutPage() {
   const mounted = useMounted();
 
   const lines = useCartStore((s) => s.lines);
+  /**
+   * O CUPOM MORA NA SACOLA, NÃO NO CHECKOUT (22/09).
+   *
+   * Até aqui o checkout nascia com `coupon = null` e nunca olhava o store: o
+   * código que a cliente aplicou na sacola ficava salvo em `lurds-cart` e a
+   * tela seguinte abria com o campo vazio, como se ela não tivesse feito
+   * nada. Ela redigitava, o vale nominal respondia "informe o CPF" (que só
+   * existe duas seções abaixo), e a conclusão era que o cupom não funciona.
+   * Agora a sacola é a dona do CÓDIGO nos dois lados — aplicar/remover aqui
+   * escreve lá, e voltar pra sacola encontra o mesmo cupom.
+   */
+  const couponCode = useCartStore((s) => s.couponCode);
+  const setCartCoupon = useCartStore((s) => s.setCoupon);
   const clearCart = useCartStore((s) => s.clear);
   const refreshPrice = useCartStore((s) => s.refreshPrice);
   const removeLine = useCartStore((s) => s.remove);
@@ -404,19 +417,98 @@ export default function CheckoutPage() {
   const total = subtotal - discount - descontoPix + (shippingPrice ?? 0);
   const totalPix = pixTotal(subtotal - discount, shippingPrice ?? 0);
 
+  /** O CPF que está valendo AGORA no checkout (só dígitos, '' enquanto falta). */
+  const cpfAtual = (customer?.cpf ?? '').replace(/\D/g, '');
+
+  /**
+   * O PAR (CÓDIGO, CPF) JÁ CONFERIDO NO BACKEND NESTA ABA.
+   *
+   * O CPF entra no par de propósito: é o que faz a troca de CPF disparar uma
+   * reconferência em vez de manter o veredito antigo. Sem isso, um vale
+   * aprovado no CPF A continuaria "aplicado" na tela depois de a cliente
+   * digitar o CPF B — o pedido morreria no último clique (o servidor
+   * reconfere), que é exatamente a falha tardia que queremos evitar.
+   */
+  const cupomConferidoRef = useRef<string | null>(null);
+  const [regrasRev, setRegrasRev] = useState(0);
+
+  /**
+   * RECÁLCULO LOCAL — só para código cuja regra esta aba já conhece.
+   *
+   * Mantém o desconto certo quando o subtotal muda (a cliente tira uma peça
+   * no resumo) sem uma ida à rede por render. Código desconhecido não passa
+   * por aqui: quem fala é o resultado remoto, que tem a frase exata do
+   * backend ("expirou", "vale a partir de R$ X") — recalcular localmente
+   * trocaria isso por um genérico "não encontramos esse cupom".
+   */
+  useEffect(() => {
+    if (!couponCode) {
+      /**
+       * Sem código na sacola, some o que estava APLICADO — mas a recusa que
+       * acabou de ser digitada FICA na tela. Código inválido não entra no
+       * store (não faria sentido guardá-lo), então aqui ele apareceria como
+       * "sem cupom" e a mensagem — a única explicação que ela tem — sumiria
+       * no mesmo instante em que nasceu.
+       */
+      setCoupon((atual) => (atual?.ok ? null : atual));
+      return;
+    }
+    if (!conheceCupom(couponCode)) return;
+    setCoupon(applyCoupon(couponCode, subtotal, cpfAtual || undefined));
+  }, [couponCode, subtotal, cpfAtual, regrasRev]);
+
+  /**
+   * CONFERÊNCIA NO BACKEND — no mount (cupom vindo da sacola) e a cada vez
+   * que o CPF muda. É o que realiza a promessa "não digite o mesmo cupom
+   * duas vezes": o código veio da sacola, e assim que o CPF é preenchido na
+   * etapa de pagamento o vale nominal é validado sozinho e o desconto entra
+   * no resumo na hora.
+   */
+  useEffect(() => {
+    if (!mounted || !draftReady || !couponCode) return;
+    const chave = `${couponCode}|${cpfAtual}`;
+    if (cupomConferidoRef.current === chave) return;
+    cupomConferidoRef.current = chave;
+    let vivo = true;
+    void validarCupomRemoto(couponCode, subtotal, cpfAtual || undefined).then((r) => {
+      if (!vivo) return;
+      setCoupon(r);
+      setRegrasRev((v) => v + 1);
+    });
+    return () => {
+      vivo = false;
+    };
+    // `subtotal` de propósito fora das deps: ele muda o VALOR do desconto, não
+    // o veredito, e o recálculo local acima já cobre isso. Nas deps, cada +/−
+    // de peça viraria uma chamada de rede.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, draftReady, couponCode, cpfAtual]);
+
   async function handleApplyCoupon(code: string) {
     // Backend valida (site_cupons: campanha da retaguarda + vale-troca).
-    // O CPF ainda não existe nesta altura do checkout (só entra junto do
-    // pagamento) — vale nominal volta `reason='nominal_sem_cpf'` com a frase
-    // "continue a compra", e o `finalizar` reaplica com o CPF na mão.
-    const result = await validarCupomRemoto(code, subtotal, customer?.cpf);
+    const result = await validarCupomRemoto(code, subtotal, cpfAtual || undefined);
+    cupomConferidoRef.current = `${code.trim().toUpperCase()}|${cpfAtual}`;
     setCoupon(result);
+    setRegrasRev((v) => v + 1);
+    /**
+     * O QUE FICA GUARDADO NA SACOLA.
+     *
+     * Sucesso guarda, claro. Mas a recusa NOMINAL também: é a cliente que
+     * digitou o vale antes de existir CPF na tela (ou com o CPF ainda
+     * errado). Jogar o código fora aqui a obrigaria a digitar de novo depois
+     * do CPF — o incômodo que este PR existe pra matar. Cupom errado de
+     * verdade (inexistente, expirado, vencido) não fica: guardar sujaria a
+     * sacola com um código que nunca vai valer.
+     */
+    if (result.ok || result.reason) setCartCoupon(result.code);
     if (result.ok) trackCouponApplied(result.code, result.discount);
   }
 
   function handleRemoveCoupon() {
     if (coupon?.ok) trackCouponRemoved(coupon.code);
+    cupomConferidoRef.current = null;
     setCoupon(null);
+    setCartCoupon(null);
   }
 
   /* ------------------------------------------------------------- SUBMIT */
@@ -452,9 +544,30 @@ export default function CheckoutPage() {
      * o pedido NÃO nasce e a frase explica, em vez de cobrar cheio calado.
      */
     let cupomFinal = coupon;
-    if (coupon && !coupon.ok && coupon.reason === 'nominal_sem_cpf') {
-      const valido = await validarCupomRemoto(coupon.code, subtotal, cliente.cpf);
+    /**
+     * ⚠️ A condição NÃO é só "faltava CPF".
+     *
+     * Ela também cobre o caminho que deixava o desconto de pé indevidamente:
+     * vale aprovado no CPF A e, depois, CPF B digitado no pagamento. Nesse
+     * caso `coupon.ok` continua true (a regra ficou em memória) e o antigo
+     * `reason === 'nominal_sem_cpf'` não pegava — o pedido saía com o cupom
+     * e só morria no backend. Comparar `cpfAprovado` com o CPF DESTE envio
+     * fecha isso: qualquer divergência reconfere antes de criar o pedido.
+     *
+     * `cliente.cpf` (o argumento) é a fonte, não o estado: no clique o
+     * `customer` do render ainda pode ser o anterior.
+     */
+    const cpfDoEnvio = (cliente.cpf ?? '').replace(/\D/g, '');
+    const precisaReconferir =
+      !!coupon &&
+      (coupon.reason === 'nominal_sem_cpf' ||
+        coupon.reason === 'nominal_cpf_diferente' ||
+        (coupon.nominal === true && coupon.cpfAprovado !== cpfDoEnvio));
+    if (coupon && precisaReconferir) {
+      const valido = await validarCupomRemoto(coupon.code, subtotal, cpfDoEnvio || undefined);
+      cupomConferidoRef.current = `${coupon.code}|${cpfDoEnvio}`;
       setCoupon(valido);
+      setRegrasRev((v) => v + 1);
       cupomFinal = valido;
       if (!valido.ok) {
         setSubmitError(valido.message);
@@ -818,6 +931,11 @@ export default function CheckoutPage() {
               // sem isto ele mandaria o valor velho de novo, e a cliente veria a
               // mesma recusa por um erro que já tinha consertado.
               onNotaChange={(nota) => setCustomer((atual) => (atual ? { ...atual, ...nota } : atual))}
+              // MESMO estado do campo do resumo — a página é a única dona do
+              // cupom. Aplicar aqui reflete lá e vice-versa, na hora.
+              coupon={coupon}
+              onApplyCoupon={handleApplyCoupon}
+              onRemoveCoupon={handleRemoveCoupon}
               enviando={submitting}
               onDone={(p, nota) => {
                 if (!contact) return;

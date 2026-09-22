@@ -311,10 +311,13 @@ export function MiniCart() {
       // Backend primeiro (site_cupons: retaguarda + vale-troca); rede fora
       // cai na tabela local de campanhas dentro do próprio helper.
       const resultado = await validarCupomRemoto(codigoDigitado, subtotal);
-      setAvisoCupom({ ok: resultado.ok, texto: resultado.message });
-      if (resultado.ok) {
+      setAvisoCupom({ ok: resultado.ok || !!resultado.reason, texto: resultado.message });
+      // Vale de troca guarda igual (ver o mesmo trecho em /carrinho): aqui não
+      // existe CPF, então ele SEMPRE volta `nominal_sem_cpf` — descartar o
+      // código era obrigar a redigitá-lo no checkout.
+      if (resultado.ok || resultado.reason) {
         setCoupon(resultado.code);
-        trackCouponApplied(resultado.code, resultado.discount);
+        if (resultado.ok) trackCouponApplied(resultado.code, resultado.discount);
         setCodigoDigitado('');
       }
     } finally {
@@ -518,7 +521,8 @@ export function MiniCart() {
                 <p
                   className={cn(
                     'flex items-center gap-2 text-small',
-                    cupomAplicado.ok ? 'text-ink' : 'text-danger',
+                    // Vale esperando CPF não é erro — ver /carrinho.
+                    cupomAplicado.ok || cupomAplicado.reason ? 'text-ink' : 'text-danger',
                   )}
                 >
                   <Ticket className="size-3.5 shrink-0 text-primary-strong" strokeWidth={1.75} />

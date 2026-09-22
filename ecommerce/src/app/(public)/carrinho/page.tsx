@@ -128,10 +128,20 @@ export default function CarrinhoPage() {
       // Backend primeiro (site_cupons: retaguarda + vale-troca); rede fora
       // cai na tabela local de campanhas dentro do próprio helper.
       const resultado = await validarCupomRemoto(codigoDigitado, subtotal);
-      setAvisoCupom({ ok: resultado.ok, texto: resultado.message });
-      if (resultado.ok) {
+      setAvisoCupom({ ok: resultado.ok || !!resultado.reason, texto: resultado.message });
+      /**
+       * VALE DE TROCA TAMBÉM FICA GUARDADO (22/09).
+       *
+       * Aqui na sacola não existe CPF, e o vale é nominal — o backend sempre
+       * responde `nominal_sem_cpf`. Guardar só no `ok` fazia o código digitado
+       * AQUI ser jogado fora: ela via a frase "continue a compra e informe o
+       * CPF", seguia, e no checkout o campo estava vazio de novo. Agora a
+       * recusa nominal também guarda, e o checkout valida sozinho quando o
+       * CPF entrar.
+       */
+      if (resultado.ok || resultado.reason) {
         setCoupon(resultado.code);
-        trackCouponApplied(resultado.code, resultado.discount);
+        if (resultado.ok) trackCouponApplied(resultado.code, resultado.discount);
         setCodigoDigitado('');
       }
     } finally {
@@ -470,10 +480,13 @@ export default function CarrinhoPage() {
                 <div className="mt-6 border-t border-border pt-6">
                   {couponCode && cupomAplicado ? (
                     <div className="flex items-start justify-between gap-3">
+                      {/* Vale de troca esperando o CPF NÃO é erro: o código
+                          está guardado e entra sozinho no checkout. Vermelho
+                          aqui convidava a apagar um cupom que ia funcionar. */}
                       <p
                         className={cn(
                           'flex items-start gap-2 text-small',
-                          cupomAplicado.ok ? 'text-ink' : 'text-danger',
+                          cupomAplicado.ok || cupomAplicado.reason ? 'text-ink' : 'text-danger',
                         )}
                       >
                         <Ticket className="mt-0.5 size-3.5 shrink-0 text-primary-strong" strokeWidth={1.75} />

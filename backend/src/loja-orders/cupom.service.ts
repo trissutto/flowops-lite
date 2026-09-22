@@ -62,6 +62,13 @@ export interface ResultadoCupom {
    * recalcular o desconto quando o subtotal muda (+/− peça na sacola) sem
    * bater aqui de novo a cada render. Vale nominal nunca sai daqui sem o CPF
    * ter batido (o `aplicar` já barrou antes).
+   *
+   * ⚠️ `nominal` é o que impede a regra cacheada de virar brecha: o site
+   * guarda esta regra em memória pra recalcular sozinho, e sem a marca ele
+   * recalcularia o vale de OUTRA pessoa depois que a cliente trocasse o CPF
+   * no checkout — o CPF só era conferido aqui, na validação. Com a marca, o
+   * site sabe que este código NÃO pode ser recalculado localmente sem
+   * reconferir o CPF. O CPF dono NUNCA sai daqui (seria PII de terceiro).
    */
   regra?: {
     tipo: TipoCupom;
@@ -69,6 +76,8 @@ export interface ResultadoCupom {
     minSubtotal: number | null;
     fimEm: string | null;
     label: string;
+    /** true = vale-troca preso a um CPF; recalcular exige reconferir. */
+    nominal: boolean;
   };
 }
 
@@ -325,6 +334,7 @@ export class CupomService {
         minSubtotal: regra.minSubtotal ?? null,
         fimEm: regra.fimEm ? new Date(regra.fimEm).toISOString() : null,
         label: regra.label,
+        nominal: Boolean(regra.cpf),
       },
     };
   }

@@ -95,6 +95,23 @@ export interface CouponResult {
    * checkout guarda o código e reaplica sozinho quando o CPF entrar.
    */
   reason?: 'nominal_sem_cpf' | 'nominal_cpf_diferente';
+  /**
+   * VALE-TROCA (`site_cupons.cpf` preenchido) — o crédito de UMA cliente, não
+   * uma campanha pública. Vem do backend (`regra.nominal`) e muda dois
+   * comportamentos: a tela rotula "Cupom de troca" em vez de "Cupom", e o
+   * recálculo local passa a exigir CPF (ver `applyCoupon`).
+   */
+  nominal?: boolean;
+  /**
+   * O CPF (só dígitos) com que ESTE resultado foi aprovado pelo backend.
+   *
+   * É a amarra que impede o desconto de sobreviver a uma troca de CPF: quem
+   * exibe ou envia o cupom compara este valor com o CPF que está no checkout
+   * AGORA e, se diferirem, revalida em vez de repetir o desconto. Só existe
+   * no sucesso de um vale nominal. Nunca é o CPF dono do vale — é o que a
+   * própria cliente digitou e o backend aceitou.
+   */
+  cpfAprovado?: string;
 }
 
 /* ---------------------------------------------------------------- PAGAMENTO */

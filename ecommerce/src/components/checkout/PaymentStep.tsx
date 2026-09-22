@@ -9,7 +9,8 @@ import { cn, formatPrice } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Badge } from '@/components/ui/Badge';
 import { trackAddPaymentInfo, trackPaymentMethodSelected, type TrackedItem } from '@/lib/tracking';
-import type { PaymentMethod } from '@/types/checkout';
+import type { CouponResult, PaymentMethod } from '@/types/checkout';
+import { CouponField } from './CouponField';
 import { CardForm } from './CardForm';
 
 /**
@@ -67,6 +68,21 @@ interface PaymentStepProps {
    * o estado precisa ter o valor que ela acabou de corrigir aqui.
    */
   onNotaChange?: (nota: DadosDaNota) => void;
+  /**
+   * CUPOM DE TROCA, COLADO NO CPF (22/09, pedido do dono).
+   *
+   * O vale-troca é NOMINAL: só vale pro CPF de quem fez a troca. Enquanto o
+   * único campo de cupom vivia no "Resumo do pedido" — antes do CPF existir
+   * na tela — aplicar um vale ali só podia responder "informe o CPF", e a
+   * cliente concluía que o cupom estava quebrado. Aqui o CPF já está na
+   * mesma dobra: aplicar valida de verdade e o desconto entra no resumo.
+   *
+   * É o MESMO estado do campo do resumo (a página é a dona) — não há cupom
+   * "do resumo" e cupom "do pagamento". Ausente = a seção não mostra o bloco.
+   */
+  coupon?: CouponResult | null;
+  onApplyCoupon?: (code: string) => void;
+  onRemoveCoupon?: () => void;
 }
 
 /**
@@ -90,7 +106,7 @@ interface PaymentStepProps {
  * Mostrar em vez de esconder continua deliberado: ela VÊ que PIX e Cartão
  * existem e entende o que falta.
  */
-export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange }: PaymentStepProps) {
+export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange, coupon, onApplyCoupon, onRemoveCoupon }: PaymentStepProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [tracked, setTracked] = useState<Set<PaymentMethod>>(new Set());
   const [email, setEmail] = useState(defaultsNota?.email ?? '');
@@ -189,6 +205,21 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
           onBlur={() => setTocou((t) => ({ ...t, email: true }))}
           error={tocou.email && !emailOk ? 'Digite um e-mail válido (ex.: nome@gmail.com).' : undefined}
         />
+
+        {/* O vale-troca pede CPF — por isso ele pergunta AQUI, logo abaixo
+            dele, e não lá em cima no resumo. Mesmo estado do campo do
+            resumo: aplicar num lugar já aparece no outro. */}
+        {onApplyCoupon && onRemoveCoupon && (
+          <div className="rounded-md border border-border bg-surface-alt p-4">
+            <CouponField
+              variant="troca"
+              coupon={coupon ?? null}
+              onApply={onApplyCoupon}
+              onRemove={onRemoveCoupon}
+              temCpf={cpfOk}
+            />
+          </div>
+        )}
       </div>
 
       {enviando ? (
