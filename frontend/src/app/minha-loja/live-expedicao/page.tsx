@@ -312,7 +312,13 @@ export default function LiveExpedicaoPage() {
                   <div>
                     Forma:{' '}
                     <span className="font-semibold text-slate-800">
-                      {g.paymentMethod === 'link' ? 'Link (cartão)' : g.paymentMethod === 'pix' ? 'PIX' : '—'}
+                      {g.paymentMethod === 'link'
+                        ? 'Link (cartão)'
+                        : g.paymentMethod === 'cartao'
+                          ? 'Cartão'
+                          : g.paymentMethod === 'pix'
+                            ? 'PIX'
+                            : '—'}
                     </span>
                     {g.paidAt && (
                       <span className="text-slate-400">

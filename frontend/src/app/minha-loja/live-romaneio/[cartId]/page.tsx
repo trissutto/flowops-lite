@@ -55,7 +55,14 @@ export default function LiveRomaneioPage() {
   if (error) return <div style={{ padding: 24, fontFamily: 'system-ui', color: '#b91c1c' }}>{error}</div>;
   if (!group) return <div style={{ padding: 16, fontFamily: 'monospace' }}>Carregando romaneio…</div>;
 
-  const pagas = group.paymentMethod === 'link' ? 'LINK (CARTÃO)' : group.paymentMethod === 'pix' ? 'PIX' : '—';
+  const pagas =
+    group.paymentMethod === 'link'
+      ? 'LINK (CARTÃO)'
+      : group.paymentMethod === 'cartao'
+        ? 'CARTÃO'
+        : group.paymentMethod === 'pix'
+          ? 'PIX'
+          : '—';
 
   return (
     <>

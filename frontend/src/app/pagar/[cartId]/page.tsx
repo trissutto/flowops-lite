@@ -6,13 +6,16 @@
  * A apresentadora manda esse link. A cliente:
  *   1. confere as peças e o subtotal
  *   2. informa o CEP → calcula o frete (SP 9,99 · Sul/Sudeste 19,99 · demais 39,99)
- *   3. escolhe PIX (PagBank) ou Cartão até 12x sem juros (link Pagar.me)
+ *   3. escolhe PIX ou Cartão até 12x sem juros — os dois pelo PagBank. O cartão
+ *      é cobrado AQUI mesmo (`CartaoLive`, 22/09): era um link do checkout da
+ *      Pagar.me, que a conta desligou em 21/09.
  * A confirmação do pagamento é automática (mesmo cron/webhook da live).
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import CartaoLive from './CartaoLive';
 
 const GOLD = '#B8912B';
 
@@ -46,6 +49,8 @@ type Summary = {
   lojas?: Array<{ code: string; name: string; city: string | null }>;
   storeName: string | null; paid: boolean; pixAvailable: boolean; items: Item[];
   pix: { qrCodeText: string; qrCodeImageUrl: string } | null; paymentUrl: string | null;
+  /** Cartão pago aqui caiu EM ANÁLISE no banco — a tela espera, sem deixar pagar de novo. */
+  cartaoEmAnalise?: boolean;
 };
 function maskCel(v: string): string {
   const d = v.replace(/\D/g, '').slice(0, 11);
@@ -126,7 +131,6 @@ export default function PagarPage() {
   const [addrDone, setAddrDone] = useState(false);
   const [method, setMethod] = useState<'pix' | 'card' | null>(null);
   const [pix, setPix] = useState<{ qrCodeText: string; qrCodeImageUrl: string } | null>(null);
-  const [cardUrl, setCardUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState<'pix' | 'card' | null>(null);
   const [paid, setPaid] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -179,7 +183,8 @@ export default function PagarPage() {
       setSum(s);
       if (s.paid) setPaid(true);
       if (s.pix?.qrCodeText) { setPix(s.pix); setMethod('pix'); }
-      if (s.paymentMethod === 'link' && s.paymentUrl) { setCardUrl(s.paymentUrl); setMethod('card'); }
+      // Cartão em análise: reabre o bloco do cartão (ele mostra a espera) e o poll de confirmação roda.
+      if (s.cartaoEmAnalise) { setPix(null); setMethod('card'); }
       if (s.isPickup && s.pickupStoreCode) {
         setModo('retirada');
         setLojaRetirada(s.pickupStoreCode);
@@ -216,18 +221,17 @@ export default function PagarPage() {
       await saveEndereco(); // endereço vai junto — a loja recebe pronto pra postar
       const r = await api<any>(`/public/live-pay/${cartId}/pix`, { method: 'POST' });
       setPix({ qrCodeText: r.qrCodeText, qrCodeImageUrl: r.qrCodeImageUrl });
-      setCardUrl(null);
       setMethod('pix');
     } catch (e: any) { setErr(parseErr(e)); }
     finally { setBusy(null); }
   }
+  // Cartão: salva endereço/dados e abre o formulário AQUI (PagBank). Não cria
+  // cobrança nenhuma — quem cobra é o "Pagar no cartão" do formulário.
   async function payCard() {
     if (busy) return;
     setBusy('card'); setErr(null);
     try {
       await saveEndereco();
-      const r = await api<any>(`/public/live-pay/${cartId}/card`, { method: 'POST' });
-      setCardUrl(r.paymentUrl);
       setPix(null);
       setMethod('card');
     } catch (e: any) { setErr(parseErr(e)); }
@@ -348,7 +352,8 @@ export default function PagarPage() {
   const pedirNome = !sum.dados?.hasNome;
   const pedirCelular = !sum.dados?.hasPhone;
   const pedirCpf = !sum.dados?.hasCpf;
-  const pedirEmail = !sum.dados?.hasEmail;
+  // Com o cartão aberto o e-mail é pedido LÁ (o PagBank exige) — não pergunta duas vezes.
+  const pedirEmail = !sum.dados?.hasEmail && method !== 'card';
   const dadosVisiveis = retirada ? retiradaOk : !!frete;
   const inputCls =
     'w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]';
@@ -582,15 +587,9 @@ export default function PagarPage() {
           </div>
         )}
 
-        {/* Cartão gerado */}
-        {method === 'card' && cardUrl && (
-          <div className="rounded-2xl border-2 border-[#ECD9A0] bg-[#FBF6E6]/60 p-4 mb-3 text-center">
-            <div className="text-sm font-bold text-[#8C7325] mb-2">Cartão até 12x sem juros — {brl(total)}</div>
-            <a href={cardUrl} target="_blank" rel="noopener noreferrer" className="block w-full rounded-xl bg-[#B8912B] py-3 text-[15px] font-extrabold text-white hover:bg-[#A07F22]">
-              Ir para o pagamento no cartão →
-            </a>
-            <div className="mt-2 text-[11px] text-[#A08A4E]">Abre numa nova aba. Depois de pagar, volte aqui — a confirmação é automática. 💜</div>
-          </div>
+        {/* Cartão — formulário do PagBank aqui mesmo (o cartão é criptografado no celular dela) */}
+        {method === 'card' && (
+          <CartaoLive cartId={cartId} totalCents={total} onPago={() => setPaid(true)} />
         )}
 
         {/* Botões de escolha */}
@@ -608,7 +607,7 @@ export default function PagarPage() {
             disabled={!canPay}
             className="w-full py-3.5 text-[16px] font-extrabold text-white rounded-xl bg-[#B8912B] hover:bg-[#A07F22] disabled:opacity-50 transition-colors"
           >
-            {busy === 'card' ? 'Gerando link…' : 'Cartão até 12x sem juros'}
+            {busy === 'card' ? 'Abrindo…' : 'Cartão até 12x sem juros'}
           </button>
         </div>
         {!retirada && !frete && (

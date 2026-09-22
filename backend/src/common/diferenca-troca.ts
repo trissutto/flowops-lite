@@ -10,10 +10,16 @@
  * Mora aqui, e não num service, porque o routing não pode importar o módulo
  * de orders (fecharia ciclo) — mesmo motivo do `prova-pagamento.ts`.
  *
- * "Pago" é o que o gateway diz: o webhook da Pagar.me grava `paid` em
- * `pagarme_payments`, e é isso que a gente lê. Palavra de quem clicou não
- * conta (a mesma lição do ON-000049).
+ * "Pago" é o que o gateway diz, e é isso que a gente lê — palavra de quem
+ * clicou não conta (a mesma lição do ON-000049):
+ *   - PagBank (desde 22/09, depois que a Pagar.me desligou o checkout): o link
+ *     é a página `/pague/<token>` e toda cobrança dele (PIX ou cartão) nasce
+ *     em `pagbank_payments` com `saleId = troca:<id da troca>`;
+ *   - Pagar.me (links gerados até 21/09): o webhook grava `paid` em
+ *     `pagarme_payments` pelo `pagarmeOrderId` da troca.
  */
+
+import { saleIdDaTroca } from './link-pagamento-pagbank';
 
 /** A trava está ligada? `TROCA_PECA_TRAVA=0` desliga. */
 export function trocaTravaLigada(): boolean {
@@ -25,10 +31,19 @@ export function trocaTravaLigada(): boolean {
  * atualizado — ou o mesmo, quando ainda não pagou.
  */
 export async function conferirDiferencaNoGateway(prisma: any, swap: any): Promise<any> {
-  if (swap?.tipo !== 'cobranca' || swap?.status !== 'pending' || !swap?.pagarmeOrderId) return swap;
-  const pago = await prisma.pagarmePayment
-    .findFirst({ where: { pagarmeOrderId: swap.pagarmeOrderId, status: 'paid' } })
-    .catch(() => null);
+  if (swap?.tipo !== 'cobranca' || swap?.status !== 'pending' || !swap?.id) return swap;
+  // Erro de leitura fica "não pago" de propósito: a trava continua de pé
+  // (peça não viaja sem dinheiro provado) e a próxima conferência tenta de novo.
+  const pagoPagarme = swap.pagarmeOrderId
+    ? await prisma.pagarmePayment
+        .findFirst({ where: { pagarmeOrderId: swap.pagarmeOrderId, status: 'paid' } })
+        .catch(() => null)
+    : null;
+  const pago =
+    pagoPagarme ??
+    (await prisma.pagbankPayment
+      .findFirst({ where: { saleId: saleIdDaTroca(swap.id), status: 'paid' }, orderBy: { paidAt: 'desc' } })
+      .catch(() => null));
   if (!pago) return swap;
 
   const atualizado = await prisma.orderItemSwap.update({
