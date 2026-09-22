@@ -23,6 +23,15 @@ export interface CouponRule {
   /** ISO — cupom morto depois disso. */
   expiresAt?: string;
   label: string;
+  /**
+   * VALE-TROCA PRESO A UM CPF (`site_cupons.cpf`, origem='troca').
+   *
+   * Muda o contrato do recálculo local: regra normal pode ser recalculada à
+   * vontade, nominal SÓ vale para o CPF que o backend já conferiu. Ver
+   * `applyCoupon`. O CPF dono nunca chega aqui — o que guardamos é o CPF que
+   * a própria cliente digitou e que o backend aprovou.
+   */
+  nominal?: boolean;
 }
 
 /**
@@ -62,11 +71,28 @@ function rules(): CouponRule[] {
  * chamada de rede por render. Nunca vai pro localStorage — regra persistida
  * é desconto de ontem cobrado amanhã (a mesma filosofia do cart store).
  */
-const REGRAS_REMOTAS = new Map<string, CouponRule>();
+const REGRAS_REMOTAS = new Map<string, { rule: CouponRule; cpfAprovado?: string }>();
 
-/** Guarda a regra validada pelo backend pro recálculo local. */
-export function seedCouponRule(rule: CouponRule): void {
-  REGRAS_REMOTAS.set(rule.code.toUpperCase(), rule);
+/**
+ * Guarda a regra validada pelo backend pro recálculo local.
+ *
+ * `cpfAprovado` é o CPF que a cliente digitou e que o backend ACEITOU para
+ * este vale nominal — é o que permite recalcular o desconto quando o subtotal
+ * muda sem reabrir a brecha: se o CPF do checkout deixar de ser este, o
+ * `applyCoupon` recusa em vez de repetir o desconto de outra pessoa.
+ *
+ * Só no NAVEGADOR: este Map é de módulo e, no servidor, seria compartilhado
+ * entre as requisições de todas as clientes — o CPF de uma vazaria pro cupom
+ * da outra. No server o `applyCoupon` só enxerga a tabela local (campanha),
+ * que nunca é nominal.
+ */
+export function seedCouponRule(rule: CouponRule, cpfAprovado?: string): void {
+  if (typeof window === 'undefined') return;
+  const cpf = cpfAprovado ? cpfAprovado.replace(/\D/g, '') : '';
+  REGRAS_REMOTAS.set(rule.code.toUpperCase(), {
+    rule,
+    ...(cpf.length === 11 ? { cpfAprovado: cpf } : {}),
+  });
 }
 
 /**
@@ -79,6 +105,21 @@ export function conheceCupom(code: string): boolean {
   return REGRAS_REMOTAS.has(c) || rules().some((r) => r.code.toUpperCase() === c);
 }
 
+/**
+ * "Este código é um VALE-TROCA nominal?" — só responde true depois que o
+ * backend validou o código uma vez nesta aba. Serve pra TELA (rotular a linha
+ * do resumo como "Cupom de troca", explicar que falta o CPF); a decisão de
+ * aplicar ou não é sempre do `applyCoupon`/backend, nunca daqui.
+ */
+export function cupomNominal(code: string): boolean {
+  return REGRAS_REMOTAS.get(code.trim().toUpperCase())?.rule.nominal === true;
+}
+
+/** O CPF que o backend já aprovou pra este vale nesta aba (só dígitos). */
+export function cpfAprovadoDoCupom(code: string): string | undefined {
+  return REGRAS_REMOTAS.get(code.trim().toUpperCase())?.cpfAprovado;
+}
+
 function fmt(v: number): string {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -87,15 +128,54 @@ function fmt(v: number): string {
  * Valida e calcula. Mensagens ELEGANTES por contrato — a spec proíbe erro
  * técnico na frente da cliente.
  */
-export function applyCoupon(rawCode: string, subtotal: number): CouponResult {
+export function applyCoupon(rawCode: string, subtotal: number, cpfAtual?: string): CouponResult {
   const code = rawCode.trim().toUpperCase();
   if (!code) return { ok: false, code, discount: 0, message: 'Digite o código do cupom.' };
 
   // Regra do backend na frente: se o mesmo código existe nos dois lados
   // (caso VESTIDO139 — cópia local que envelhece), vale a de quem cobra.
-  const rule = REGRAS_REMOTAS.get(code) ?? rules().find((r) => r.code.toUpperCase() === code);
+  const cacheado = REGRAS_REMOTAS.get(code);
+  const rule = cacheado?.rule ?? rules().find((r) => r.code.toUpperCase() === code);
   if (!rule) {
     return { ok: false, code, discount: 0, message: 'Não encontramos esse cupom. Confira o código e tente de novo.' };
+  }
+
+  /**
+   * O VALE NOMINAL NÃO SE RECALCULA SOZINHO (22/09).
+   *
+   * A regra cacheada existe pra recalcular o desconto quando o subtotal muda.
+   * Para o vale-troca isso era uma brecha: o backend conferia o CPF uma vez,
+   * semeava a regra, e daí em diante a tela repetia o desconto por conta
+   * própria — inclusive depois de a cliente TROCAR o CPF no checkout. O
+   * pedido era barrado lá no fim (o servidor reconfere), mas ela via o
+   * desconto na tela até o último clique.
+   *
+   * Agora o desconto local só sai para o CPF que o backend aprovou. Qualquer
+   * outro (ou nenhum) devolve `reason`, e quem chama reaplica no backend —
+   * que é o único que conhece o CPF dono do vale.
+   */
+  if (rule.nominal) {
+    const atual = (cpfAtual ?? '').replace(/\D/g, '');
+    if (!atual) {
+      return {
+        ok: false,
+        code,
+        discount: 0,
+        nominal: true,
+        reason: 'nominal_sem_cpf',
+        message: 'Esse vale é nominal. Continue a compra e informe o CPF de quem fez a troca — o desconto entra na hora. 💜',
+      };
+    }
+    if (atual !== cacheado?.cpfAprovado) {
+      return {
+        ok: false,
+        code,
+        discount: 0,
+        nominal: true,
+        reason: 'nominal_cpf_diferente',
+        message: 'Esse cupom de troca está vinculado a outro CPF. Confira o CPF informado ou utilize o cupom correspondente à sua troca.',
+      };
+    }
   }
   if (rule.expiresAt && new Date(rule.expiresAt).getTime() < Date.now()) {
     return { ok: false, code, discount: 0, message: 'Esse cupom já expirou — mas fique de olho: sempre temos novidades.' };
@@ -121,10 +201,13 @@ export function applyCoupon(rawCode: string, subtotal: number): CouponResult {
     code,
     discount,
     kind: rule.kind,
+    ...(rule.nominal ? { nominal: true, cpfAprovado: cacheado?.cpfAprovado } : {}),
     message:
       rule.kind === 'shipping'
         ? 'Cupom aplicado: seu frete sai grátis.'
-        : `Cupom aplicado: ${rule.label.toLowerCase()} (−${fmt(discount)}).`,
+        : rule.nominal
+          ? `Cupom de troca aplicado com sucesso! (−${fmt(discount)})`
+          : `Cupom aplicado: ${rule.label.toLowerCase()} (−${fmt(discount)}).`,
   };
 }
 
@@ -148,6 +231,7 @@ export async function validarCupomRemoto(
 ): Promise<CouponResult> {
   const code = rawCode.trim().toUpperCase();
   if (!code) return { ok: false, code, discount: 0, message: 'Digite o código do cupom.' };
+  const cpfDigitos = (cpf ?? '').replace(/\D/g, '');
 
   try {
     const res = await fetch('/api/loja/cupom', {
@@ -156,17 +240,27 @@ export async function validarCupomRemoto(
       body: JSON.stringify({
         code,
         subtotal,
-        ...(cpf ? { cpf: cpf.replace(/\D/g, '') } : {}),
+        ...(cpfDigitos ? { cpf: cpfDigitos } : {}),
       }),
       cache: 'no-store',
     });
     const dados = (await res.json().catch(() => null)) as
       | (CouponResult & { rule?: CouponRule; fallback?: boolean })
       | null;
-    if (!dados || typeof dados.ok !== 'boolean') return applyCoupon(code, subtotal);
-    if (dados.rule) seedCouponRule(dados.rule);
-    return dados;
+    if (!dados || typeof dados.ok !== 'boolean') return applyCoupon(code, subtotal, cpfDigitos);
+    /**
+     * A regra só é semeada com o CPF que ACOMPANHOU esta validação — e o
+     * backend só devolve `rule` no sucesso. Logo, `cpfAprovado` é sempre um
+     * CPF que passou pela trava nominal de lá; é isso que autoriza o
+     * `applyCoupon` a recalcular localmente depois.
+     */
+    if (dados.rule) seedCouponRule(dados.rule, cpfDigitos);
+    return {
+      ...dados,
+      ...(dados.rule?.nominal ? { nominal: true } : {}),
+      ...(dados.ok && dados.rule?.nominal && cpfDigitos ? { cpfAprovado: cpfDigitos } : {}),
+    };
   } catch {
-    return applyCoupon(code, subtotal);
+    return applyCoupon(code, subtotal, cpfDigitos);
   }
 }

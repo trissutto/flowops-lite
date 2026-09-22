@@ -41,6 +41,8 @@ interface RespostaBackend {
       minSubtotal?: number | null;
       fimEm?: string | null;
       label?: string;
+      /** true = vale-troca nominal; o client não pode recalcular sem CPF. */
+      nominal?: boolean;
     };
   };
 }
@@ -93,6 +95,9 @@ export async function validarCupomServer(input: {
       message: String(r.mensagem || ''),
       ...(r.tipo ? { kind: r.tipo } : {}),
       ...(r.motivo ? { reason: r.motivo } : {}),
+      // `motivo` só existe na recusa nominal, e `regra.nominal` só no sucesso:
+      // juntos dizem "isto é um vale-troca" nos dois desfechos.
+      ...(r.motivo || r.regra?.nominal ? { nominal: true } : {}),
       ...(r.ok && r.regra?.tipo
         ? {
             rule: {
@@ -102,6 +107,7 @@ export async function validarCupomServer(input: {
               ...(r.regra.minSubtotal != null ? { minSubtotal: Number(r.regra.minSubtotal) } : {}),
               ...(r.regra.fimEm ? { expiresAt: r.regra.fimEm } : {}),
               label: String(r.regra.label || r.code || code),
+              ...(r.regra.nominal ? { nominal: true } : {}),
             } satisfies CouponRule,
           }
         : {}),
