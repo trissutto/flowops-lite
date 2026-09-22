@@ -19,6 +19,8 @@ function montar(opts: { alvos?: any[]; env?: Record<string, string | undefined>;
     { order: { findMany, updateMany } } as any,
     config as any,
     { aoCancelarPedido } as any,
+    // Cashback: o cron devolve o saldo dos pedidos que expiraram (22/09).
+    { estornarUso: jest.fn().mockResolvedValue({ devolvido: 0 }) } as any,
   );
   const log = jest.spyOn((cron as any).logger, 'log').mockImplementation(() => undefined);
   return { cron, findMany, updateMany, log, aoCancelarPedido };

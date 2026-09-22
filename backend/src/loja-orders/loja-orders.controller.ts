@@ -303,6 +303,37 @@ export class LojaOrdersController {
   }
 
   /**
+   * POST /api/public/loja/cashback — quanto a cliente pode abater nesta sacola.
+   *
+   * Chamada na etapa em que ela digita o CPF, ao lado do campo de cupom de
+   * troca. Exige CPF **e** WhatsApp porque o cashback não tem código: sem a
+   * segunda chave, digitar um CPF qualquer viraria consulta ao saldo alheio
+   * (ver `saldoCashback`). O WhatsApp o checkout já pediu na primeira etapa,
+   * então não custa campo nenhum pra quem está comprando de verdade.
+   *
+   * Mesmo balde de rate-limit do cupom: as duas são consulta pré-pedido, e o
+   * abuso que interessa barrar aqui (varrer CPF) tem a mesma cara.
+   */
+  @Post('cashback')
+  async cashback(
+    @Body() body: { cpf?: string; phone?: string; subtotal?: number },
+    @Headers('x-loja-token') token: string,
+    @Req() req: any,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    this.exigirToken(token);
+    if (excedeuLimite('cupom', this.ipDe(req))) {
+      res.status(429);
+      return { ok: false, error: 'Muitas tentativas seguidas. Tente de novo em instantes.' };
+    }
+    return this.svc.saldoCashback({
+      cpf: body?.cpf,
+      phone: body?.phone,
+      subtotal: Number(body?.subtotal) || 0,
+    });
+  }
+
+  /**
    * POST /api/public/loja/pedido
    *  201 { ok: true, order: { id, number, status, total, payment } }
    *      `status` pode vir `awaiting_payment` TAMBÉM no cartão (17/08): é a

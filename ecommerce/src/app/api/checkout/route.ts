@@ -157,6 +157,14 @@ const bodySchema = z.object({
   cep: z.string().min(8).max(9), // com ou sem hífen — findQuote normaliza
   items: z.array(cartLineSchema).min(1).max(50),
   couponCode: z.string().max(30).optional(),
+  /**
+   * CASHBACK pedido, em reais. Passa direto pro backend — ver `NewOrderPayload`.
+   *
+   * O teto de 500 é só sanidade de payload (o backend recusa qualquer coisa
+   * acima do saldo e do limite de % da compra); serve pra número absurdo não
+   * atravessar três camadas antes de morrer.
+   */
+  cashback: z.number().min(0).max(500).optional(),
   paymentMethod: z.enum(['pix', 'card']),
   installments: z.number().int().min(1).max(12).optional(),
   // Token da Pagar.me gerado NO NAVEGADOR (PCI: o número do cartão não passa
@@ -493,6 +501,16 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
       unitPrice: l.unitPrice,
     })),
     couponCode,
+    /**
+     * O cashback vai CRU e não entra no `total` daqui de propósito.
+     *
+     * Este total serve de TETO pro backend ("nunca cobrar acima do que ela
+     * viu"), e o `totalSeen` da tela já vem com o cashback abatido — o
+     * `Math.min` acima escolhe o menor dos dois. Subtrair aqui um número que
+     * o cliente mandou e o BFF não tem como conferir deixaria um `cashback`
+     * forjado derrubar o teto pra perto de zero.
+     */
+    cashback: input.cashback,
     subtotal,
     discount: round2(discount + descontoPix + promotionDiscount),
     shippingPrice,

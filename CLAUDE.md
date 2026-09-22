@@ -124,7 +124,11 @@ A fonte é **`cashback_creditos` + `cashback_usos`** (`backend/src/cashback/`), 
 
 **Onde GANHA** — venda do PDV (`pdv.service` no finalize), **pedido do site** (`loja-orders.service.confirmarPagamento`, depois da trava atômica, base **sem frete**), **parcela de crediário paga** (`crediario-baixa.service`, base = principal, sem juros/multa) e **bônus** de boas-vindas/indicação (`creditarBonus`).
 
-**Onde GASTA** — **só o PDV**: `addPayment` com `method: 'cashback'`. Consome FIFO pelo que vence primeiro, uma linha por venda. **Devolve** no `removePayment`, no `cancel` do carrinho e no estorno master. ⚠️ **O checkout do site ainda NÃO aceita** — a cliente ganha no site e gasta na loja.
+**Onde GASTA** — **PDV e SITE**. No PDV, `addPayment` com `method: 'cashback'` (botão verde no total). No site, o checkout pede o abatimento em `criarPedido` e o saldo sai ENTRE o pedido nascer e a cobrança sair — se o ledger entregar menos que o pedido (saldo mudou no meio), o total volta a subir a diferença ANTES de cobrar. Consome FIFO pelo que vence primeiro.
+
+🚨 **A consulta de saldo do site exige CPF + WhatsApp.** Cashback não tem código: CPF sozinho viraria sondagem do saldo alheio. O checkout já pede o WhatsApp na 1ª etapa, então a guarda não custa campo (`saldoCashback` → `cpfEFoneBatem`, que casa pelos ÚLTIMOS 8 dígitos e **fecha a porta se o banco falhar**). A recusa não diz QUAL dado não bateu, mas diz o que fazer.
+
+**DEVOLVE** em: `removePayment` e `cancel` do PDV, estorno master, `descartarPedido` (cobrança que estourou), cron de pedido expirado — e a rede de segurança `CashbackDevolucaoCron` (de hora em hora), que varre uso pendente cuja compra está cancelada ou sumiu. A rede existe porque os caminhos de cancelamento são muitos e vão crescer; `estornarUso` é idempotente, então os dois podem rodar sobre o mesmo uso.
 
 ⚠️ **`cashback` é DESCONTO na NFC-e, não tPag** — entra na lista `ABATIMENTOS` de `nfce.service.ts`, junto do vale-troca, pelo mesmo motivo do GRAVÍSSIMO da NFC-e 94 (21/07): tributar o valor cheio cobraria ICMS sobre dinheiro que a cliente não entregou. **Decisão fiscal — confirmar com a contabilidade.**
 

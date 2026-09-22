@@ -68,6 +68,15 @@ export interface NewOrderPayload {
   shipping: ShippingQuote;
   items: NewOrderItem[];
   couponCode?: string;
+  /**
+   * Cashback que a cliente pediu pra abater, em reais.
+   *
+   * O BFF NÃO valida (não tem como: o saldo é do backend) e NÃO subtrai do
+   * próprio total — só repassa. Quem decide quanto sai do saldo é o
+   * `reprecificar` do backend, que reconfere carência, validade, mínimo e o
+   * teto de % da compra. Número de cliente nunca vira desconto sozinho.
+   */
+  cashback?: number;
   subtotal: number;
   discount: number;
   shippingPrice: number;
