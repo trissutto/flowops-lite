@@ -218,6 +218,48 @@ describe('EstornosService.consultar', () => {
     expect(r.status).toBe('processando');
   });
 
+  it('"iniciado" velho (requisição que nem saiu) fecha como erro e destrava a cobrança', async () => {
+    const { service, chamadas } = montar({
+      estornos: [
+        {
+          id: 'est1',
+          gateway: 'pagbank',
+          gatewayChargeId: 'CHAR_1',
+          storeCode: 'SITE',
+          status: 'iniciado',
+          valorCents: 10000,
+          jaEstornadoCents: 0,
+          createdAt: new Date(Date.now() - 30 * 60_000),
+        },
+      ],
+    });
+    const r = await service.consultar('est1');
+    expect(r.status).toBe('erro');
+    expect(r.mensagemGateway).toMatch(/não chegou a ser enviada/i);
+    // Não pergunta ao gateway: a cobrança nunca foi tocada.
+    expect(chamadas.consultas).toBe(0);
+  });
+
+  it('"iniciado" recém-criado NÃO é fechado (a requisição pode estar em voo)', async () => {
+    const { service } = montar({
+      estornos: [
+        {
+          id: 'est1',
+          gateway: 'pagbank',
+          gatewayChargeId: 'CHAR_1',
+          storeCode: 'SITE',
+          status: 'iniciado',
+          valorCents: 10000,
+          jaEstornadoCents: 0,
+          createdAt: new Date(),
+        },
+      ],
+      cobranca: { status: 'PAID', amount: { summary: { paid: 10000, refunded: 0 } } },
+    });
+    const r = await service.consultar('est1');
+    expect(r.status).toBe('processando');
+  });
+
   it('estorno já fechado não é reconsultado', async () => {
     const { service, chamadas } = montar({
       estornos: [{ id: 'est1', gateway: 'pagbank', gatewayChargeId: 'CHAR_1', status: 'processado', valorCents: 100 }],
