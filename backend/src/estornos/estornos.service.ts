@@ -888,6 +888,40 @@ export class EstornosService {
     if (!(STATUS_EM_ABERTO as readonly string[]).includes(String(estorno.status))) {
       return estorno;
     }
+
+    /**
+     * 🚨 'iniciado' VELHO = REQUISIÇÃO QUE NEM SAIU — e trava a cobrança.
+     *
+     * O status vira 'enviado' ANTES da chamada HTTP, então quem ficou em
+     * 'iniciado' morreu entre o INSERT e o envio (restart de deploy no meio).
+     * O dinheiro não saiu, mas a linha continua "em andamento" e o guard
+     * recusa qualquer nova tentativa naquela cobrança: sem isto, um restart
+     * infeliz tranca o estorno daquela cliente pra sempre, em silêncio.
+     * Fecha como ERRO com o motivo escrito — a matriz pede de novo.
+     */
+    const nascida = new Date(estorno.createdAt).getTime();
+    if (estorno.status === 'iniciado' && Number.isFinite(nascida) && Date.now() - nascida > 10 * 60_000) {
+      const fechado = await (this.prisma as any).estornoPagamento.update({
+        where: { id: estorno.id },
+        data: {
+          status: 'erro',
+          mensagemGateway: 'A solicitação não chegou a ser enviada ao gateway (o sistema reiniciou no meio). Nada foi estornado — peça de novo.',
+          consultadoEm: new Date(),
+        },
+      });
+      await this.acesso.registrar({
+        tipo: 'status',
+        ator,
+        estornoId: estorno.id,
+        refId: estorno.refId,
+        refNumero: estorno.refNumero,
+        statusDe: 'iniciado',
+        statusPara: 'erro',
+        detalhe: 'requisição nunca enviada — linha fechada pra não travar a cobrança',
+      });
+      return fechado;
+    }
+
     try {
       const atual = await this.lerCobranca(estorno.gateway, estorno.gatewayChargeId, estorno.storeCode);
       const leitura =
