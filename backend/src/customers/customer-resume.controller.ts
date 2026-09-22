@@ -1,19 +1,35 @@
 import { Body, Controller, Get, Param, Post, Query, Req, UseGuards, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CashbackConfigService } from './cashback-config.service';
+import { CashbackService } from '../cashback/cashback.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { findAllCustomersByCpf, aggregatePerson } from './customer-aggregation.helper';
 
 /**
  * /pdv/customer-resume — ficha do cliente pra PDV. Agregado POR PESSOA
- * (todos os Customers com mesmo CPF/personKey). Cashback é da PESSOA.
+ * (todos os Customers com mesmo CPF/personKey).
+ *
+ * ── O CASHBACK MUDOU DE FONTE EM 22/09/2026 ──
+ *
+ * Esta tela anunciava pra vendedora "pode usar R$ X de cashback, até 30% da
+ * compra" lendo `cashback_balances` (o saldo por ficha do CRM). Só que não
+ * existia botão nenhum que gastasse aquele saldo: a rota de resgate existia e
+ * nenhum lugar do frontend a chamava. A vendedora repetia a promessa pra
+ * cliente e o caixa não tinha onde aplicar.
+ *
+ * Agora lê `cashback_creditos` — o mesmo ledger (chave = CPF) que o site e o
+ * app mostram e que o `addPayment` do PDV consome com `method: 'cashback'`.
+ * Uma fonte, uma porta: o número que aparece aqui é o que o caixa aceita.
+ *
+ * O saldo já vem com carência e validade aplicadas, então "disponível" aqui
+ * quer dizer disponível AGORA — `aLiberar` é separado, porque a cliente
+ * pergunta e a vendedora precisa saber responder "libera dia tal".
  */
 @Controller('pdv')
 @UseGuards(JwtAuthGuard)
 export class CustomerResumeController {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cashbackCfg: CashbackConfigService,
+    private readonly cashback: CashbackService,
   ) {}
 
   @Get('customer-resume')
@@ -24,10 +40,23 @@ export class CustomerResumeController {
 
     const storeId = req?.user?.storeId || null;
     const customers = await findAllCustomersByCpf(this.prisma, digits);
-    const cashbackCfg = await this.cashbackCfg.getConfig();
+    const [cashbackCfg, saldo] = await Promise.all([
+      this.cashback.config(),
+      this.cashback.saldo(digits),
+    ]);
 
     if (customers.length === 0) {
-      return { found: false, message: 'Cliente nao encontrado no CRM', cashbackConfig: cashbackCfg };
+      /**
+       * Cliente fora do CRM PODE ter cashback: a chave é o CPF, não a ficha.
+       * Quem comprou no site sem cadastro de loja cai aqui — devolver o saldo
+       * junto evita a vendedora dizer "você não tem nada" pra quem tem.
+       */
+      return {
+        found: false,
+        message: 'Cliente nao encontrado no CRM',
+        cashbackConfig: cashbackCfg,
+        cashback: saldo,
+      };
     }
 
     const agg = aggregatePerson(customers, storeId);
@@ -77,8 +106,12 @@ export class CustomerResumeController {
         originSource: c.originSource,
         bloqueado: customers.some((x) => x.bloqueadoGiga),
         negativado: customers.some((x) => x.negativadoGiga),
-        cashbackBalanceCents: agg.cashbackBalanceCents,
-        cashbackExpiraEm: agg.cashbackExpiraEm,
+        // Centavos: o formato que a tela do PDV já consome. O valor é o do
+        // ledger único, não mais o do saldo por ficha do CRM.
+        cashbackBalanceCents: Math.round(saldo.disponivel * 100),
+        cashbackExpiraEm: saldo.proximaExpiracao,
+        cashbackALiberarCents: Math.round(saldo.aLiberar * 100),
+        cashbackLiberaEm: saldo.liberaEm,
         cadastrosEm: customers.map((x) => x.originStore?.name).filter(Boolean),
         // Origem do cadastro primário — pra tela avisar "cliente do SITE" /
         // "cliente da loja X" e a vendedora NÃO recadastrar. daLojaAtual=true
@@ -91,97 +124,22 @@ export class CustomerResumeController {
         },
       },
       cashbackConfig: cashbackCfg,
+      cashback: saldo,
     };
   }
 
-  @Post('sales/:saleId/cashback-redeem')
-  async redeem(
-    @Param('saleId') saleId: string,
-    @Body() body: { valueCents: number },
-    @Req() req: any,
-  ) {
-    const cfg = await this.cashbackCfg.getConfig();
-    if (!cfg.ativo) throw new BadRequestException('Programa de cashback PAUSADO');
-
-    const valueCents = Math.max(0, Math.floor(Number(body?.valueCents) || 0));
-    if (valueCents <= 0) throw new BadRequestException('Valor invalido');
-
-    const sale = await (this.prisma as any).pdvSale.findUnique({
-      where: { id: saleId },
-      select: { id: true, status: true, total: true, storeCode: true, customerCpf: true },
-    });
-    if (!sale) throw new NotFoundException('Venda nao encontrada');
-    if (sale.status !== 'open') throw new BadRequestException('Venda esta ' + sale.status);
-    if (!sale.customerCpf) throw new BadRequestException('Identifique o cliente primeiro');
-
-    const store = await (this.prisma as any).store.findUnique({
-      where: { code: sale.storeCode }, select: { id: true },
-    });
-    const storeId = store?.id || null;
-
-    const customers = await findAllCustomersByCpf(this.prisma, sale.customerCpf);
-    if (customers.length === 0) throw new NotFoundException('Cliente nao esta no CRM');
-
-    const agg = aggregatePerson(customers, storeId);
-    const saldoTotal = agg.cashbackBalanceCents;
-    const minimoCents = Math.round(cfg.minimoUsoReais * 100);
-
-    if (saldoTotal < minimoCents) {
-      throw new BadRequestException('Saldo R$ ' + (saldoTotal / 100).toFixed(2) + ' abaixo do minimo R$ ' + cfg.minimoUsoReais);
-    }
-    if (valueCents > saldoTotal) {
-      throw new BadRequestException('Saldo insuficiente. Disponivel: R$ ' + (saldoTotal / 100).toFixed(2));
-    }
-    const totalCents = Math.round(Number(sale.total || 0) * 100);
-    const maxCents = Math.round((totalCents * cfg.usoMaxPct) / 100);
-    if (valueCents > maxCents) {
-      throw new BadRequestException('Pode usar no maximo R$ ' + (maxCents / 100).toFixed(2) + ' (' + cfg.usoMaxPct + '%)');
-    }
-
-    const userId = req?.user?.sub || req?.user?.id || null;
-
-    // Deduz primeiro do primary, depois dos demais ate completar
-    let restante = valueCents;
-    const deduzir: Array<{ customerId: string; saldoAntes: number; saldoDepois: number; deduzido: number }> = [];
-    const ordered = [agg.primary, ...customers.filter((c) => c.id !== agg.primary.id)];
-    for (const c of ordered) {
-      if (restante <= 0) break;
-      const saldoC = c.cashbackBalance?.balanceCents ?? 0;
-      if (saldoC <= 0) continue;
-      const ded = Math.min(saldoC, restante);
-      deduzir.push({ customerId: c.id, saldoAntes: saldoC, saldoDepois: saldoC - ded, deduzido: ded });
-      restante -= ded;
-    }
-
-    await (this.prisma as any).$transaction(async (tx: any) => {
-      for (const d of deduzir) {
-        await tx.cashbackTransaction.create({
-          data: {
-            customerId: d.customerId, type: 'redeem', valueCents: d.deduzido,
-            balanceBeforeCents: d.saldoAntes, balanceAfterCents: d.saldoDepois,
-            orderId: sale.id, purchaseValueCents: totalCents,
-            description: 'Resgate PDV ' + sale.id.slice(0, 8),
-            userId,
-          },
-        });
-        await tx.cashbackBalance.update({
-          where: { customerId: d.customerId },
-          data: { balanceCents: d.saldoDepois, redeemedTotalCents: { increment: d.deduzido } },
-        });
-      }
-      await tx.pdvSalePayment.create({
-        data: {
-          saleId: sale.id, method: 'cashback', valor: valueCents / 100,
-          details: JSON.stringify({ split: deduzir, saldoAggregateAntes: saldoTotal }),
-        },
-      });
-    });
-
-    return {
-      ok: true,
-      valorAplicado: valueCents / 100,
-      saldoRestante: (saldoTotal - valueCents) / 100,
-      splitEntreLojas: deduzir.length > 1,
-    };
-  }
+  /**
+   * ⚰️ A ROTA DE RESGATE SAIU DAQUI EM 22/09/2026.
+   *
+   * `POST /pdv/sales/:saleId/cashback-redeem` debitava `cashback_balances` e
+   * gravava um `pdvSalePayment method='cashback'` por fora do fluxo de
+   * pagamento do PDV. Nunca teve chamador — nenhuma tela do frontend a
+   * conhecia — e, se tivesse, teria furado o caixa e a NFC-e: o método
+   * 'cashback' não era tratado em `cash.service` nem em `nfce.service`, então
+   * a venda sairia com nota cheia sobre dinheiro que a cliente não pagou.
+   *
+   * O resgate agora é UM só: `addPayment` com `method: 'cashback'`, que valida
+   * pela régua do servidor, consome `cashback_creditos` em FIFO, devolve no
+   * `removePayment` e entra na nota como desconto — igual ao vale-troca.
+   */
 }

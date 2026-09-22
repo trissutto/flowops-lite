@@ -4,6 +4,7 @@ import { ErpModule } from '../erp/erp.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
 import { PagbankModule } from '../pagbank/pagbank.module';
+import { CashbackModule } from '../cashback/cashback.module';
 import { CrediariosService } from './crediarios.service';
 import { CrediariosController } from './crediarios.controller';
 import { CobrancaAutoService } from './cobranca-auto.service';
@@ -19,6 +20,7 @@ import { CrediarioBaixaPublicController } from './crediario-baixa-public.control
     WhatsappModule,
     forwardRef(() => PagarmeModule),
     forwardRef(() => PagbankModule),
+    CashbackModule,
   ],
   controllers: [CrediariosController, CrediarioBaixaController, CrediarioBaixaPublicController],
   providers: [CrediariosService, CobrancaAutoService, CrediarioBaixaService, CrediarioMirrorService],

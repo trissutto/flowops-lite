@@ -354,14 +354,11 @@ export class CustomersAppController {
     return this.cashback.getStatement(req.customer.id);
   }
 
-  /** POST /customers/app/admin/cashback/expire-now — força run do job (admin) */
-  @Post('admin/cashback/expire-now')
-  @HttpCode(200)
-  @UseGuards(JwtAuthGuard)
-  async cashbackExpireNow(@Req() req: any) {
-    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
-    return this.cashback.expireOldCashback();
-  }
+  /**
+   * A rota admin de FORÇAR EXPIRAÇÃO saiu em 22/09/2026: no ledger único o
+   * vencimento é aritmética de data, não estado gravado — não há job pra
+   * forçar. Ver CustomerCashbackService.
+   */
 
   /** POST /customers/app/admin/cashback/warn-now — força run alerta D-7 */
   @Post('admin/cashback/warn-now')

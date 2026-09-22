@@ -4,6 +4,8 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { EmailModule } from '../email/email.module';
+// O extrato do app lê o ledger unico do cashback (chave = CPF) desde 22/09.
+import { CashbackModule } from '../cashback/cashback.module';
 import { CustomersAppService } from './customers-app.service';
 import { CustomersAppController } from './customers-app.controller';
 import { CustomerJwtGuard } from './customer-jwt.guard';
@@ -27,6 +29,7 @@ import { CustomerPasswordResetService } from './customer-password-reset.service'
     PrismaModule,
     WhatsappModule,
     EmailModule,
+    CashbackModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (cfg: ConfigService) => ({

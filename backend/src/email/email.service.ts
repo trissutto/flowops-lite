@@ -97,6 +97,20 @@ export class EmailService implements OnModuleInit {
   /**
    * Email de boas-vindas LGPD-compliant.
    * Lista dados coletados, direitos do titular, e CTA pro app.
+   *
+   * ── O BLOCO DO CASHBACK MUDOU EM 22/09/2026 ──
+   *
+   * Prometia "R$ 20 grátis caem no seu cashback após a primeira compra" desde
+   * junho. O bônus existia no código (CustomerCashbackService.earnWelcomeBonus)
+   * e ficou SEM CHAMADOR quando os hooks de pedido do WooCommerce foram
+   * deletados: a promessa saiu em todo cadastro novo por meses e o crédito
+   * nunca caiu. Foi uma das razões pra cliente chegar na loja cobrando saldo
+   * que não existia.
+   *
+   * O texto agora é a regra que roda de verdade: 10% na primeira compra, 3%
+   * nas seguintes, liberando no 5º dia e valendo 30 dias — e diz ONDE usar,
+   * que era a informação que faltava. Se o bônus de R$ 20 voltar, ele volta
+   * como crédito real primeiro e como promessa depois, nunca o contrário.
    */
   async sendWelcome(opts: {
     to: string;
@@ -168,18 +182,21 @@ function buildWelcomeHtml(p: {
         </td>
       </tr>
 
-      <!-- Bônus R$20 -->
+      <!-- Cashback: a regra real (ver a nota em sendWelcome) -->
       <tr>
         <td style="padding:0 32px;">
           <div style="background:linear-gradient(135deg,#C9A961,#E0C589);border-radius:12px;padding:24px;text-align:center;">
             <div style="font-size:11px;color:#0a0a0a;opacity:0.7;font-weight:bold;text-transform:uppercase;letter-spacing:3px;">
-              🎁 Boas-vindas
+              🎁 Seu cashback
             </div>
             <div style="font-family:Georgia,'Playfair Display',serif;font-size:36px;font-weight:900;color:#0a0a0a;margin:4px 0;">
-              R$ 20 grátis
+              10% de volta
             </div>
             <div style="font-size:13px;color:#0a0a0a;opacity:0.85;">
-              caem no seu cashback após a primeira compra
+              na sua primeira compra — e 3% nas próximas
+            </div>
+            <div style="font-size:12px;color:#0a0a0a;opacity:0.7;margin-top:8px;">
+              Use em qualquer loja Lurd's: é só dar o seu CPF no caixa.
             </div>
           </div>
         </td>

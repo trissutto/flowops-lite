@@ -241,14 +241,29 @@ export class CashbackService {
           WHERE regexp_replace(COALESCE(cpf,''), '\\D', '', 'g') = $1 LIMIT 1`,
         cpf,
       ).catch(() => []),
+      // Crédito anterior de COMPRA (loja ou site) prova que já comprou. A
+      // migração de saldo e os ajustes ficam de fora de propósito: saldo
+      // herdado não desqualifica ninguém da primeira compra.
       (this.prisma as any).cashbackCredito.count({
-        where: { cpf, origem: 'venda', isTraining: false },
+        where: { cpf, origem: { in: ['venda', 'pedido_site'] }, isTraining: false },
         take: 1,
       }).catch(() => 0),
     ]);
 
     if ((fichaGiga as any[])?.length) return false;
     if (creditoAnterior > 0) return false;
+
+    // PEDIDO DO SITE (22/09) — a checagem olhava só `pdv_sales` e as fichas do
+    // Giga. Cliente que só compra no site não aparecia em nenhum dos dois e
+    // ganhava 10% DE NOVO a cada pedido, pra sempre. `orders` tem índice em
+    // customer_cpf, então a comparação exata é barata aqui.
+    const pedidoSite: any[] = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT 1 FROM orders
+        WHERE regexp_replace(COALESCE(customer_cpf,''), '\\D', '', 'g') = $1
+          AND status <> 'cancelled' LIMIT 1`,
+      cpf,
+    ).catch(() => []);
+    if (pedidoSite.length) return false;
 
     // O `contains` acima é só pra baratear; a checagem que vale é exata.
     if (vendaFlow > 0) {
@@ -280,6 +295,13 @@ export class CashbackService {
     /** Quanto dessa venda foi pago COM cashback — não gera cashback de novo. */
     pagoComCashback?: number;
     customerId?: string | null;
+    /**
+     * 'venda' (PDV) ou 'pedido_site' (e-commerce). O índice único é
+     * (origem, saleId, parcelaId): os dois espaços de id não se cruzam, e a
+     * origem é o que deixa a prévia e o extrato separarem loja de site sem
+     * precisar adivinhar pelo formato do id.
+     */
+    origem?: 'venda' | 'pedido_site';
   }): Promise<{ creditado: number; primeira: boolean } | null> {
     try {
       const cfg = await this.config();
@@ -306,7 +328,7 @@ export class CashbackService {
       await (this.prisma as any).cashbackCredito.create({
         data: {
           cpf, customerId: input.customerId || null,
-          origem: 'venda', saleId: input.saleId,
+          origem: input.origem || 'venda', saleId: input.saleId,
           storeCode: input.storeCode,
           percentual: pct, base, valor,
           liberaEm, expiraEm,
@@ -540,5 +562,277 @@ export class CashbackService {
       this.logger.error(`[cashback] creditarParcelaPaga(${input.parcelaId}) falhou: ${e?.message}`);
       return null;
     }
+  }
+
+  /**
+   * BÔNUS — crédito que não nasce de compra.
+   *
+   * Boas-vindas do app e indicação de vendedora. Vinham sendo gravados em
+   * `customer_accounts.cashback_balance_cents`, o ledger do app, que a partir
+   * de 22/09 ninguém mais lê: continuar ali faria a cliente receber o push
+   * "R$ 20 caiu no seu cashback" e abrir o app pra ver zero.
+   *
+   * `chave` é o que garante a idempotência (o índice único de
+   * (origem, sale_id, parcela_id) com `sale_id = 'bonus:<chave>'`). Use algo
+   * estável por ocasião — o id da conta pro bônus de cadastro, o token pro
+   * convite —, nunca algo que mude a cada chamada.
+   *
+   * SEM CARÊNCIA: bônus de boas-vindas é convite pra voltar à loja. Segurar
+   * cinco dias o crédito de quem acabou de se cadastrar é o oposto disso.
+   */
+  async creditarBonus(input: {
+    cpf?: string | null;
+    valor: number;
+    chave: string;
+    storeCode?: string | null;
+    descricao?: string;
+  }): Promise<{ creditado: number } | null> {
+    try {
+      const cfg = await this.config();
+      if (!cfg.ativo) return null;
+
+      const cpf = this.cpfChave(input.cpf);
+      if (!cpf) return null;
+      const valor = this.cent(input.valor);
+      if (valor <= 0) return null;
+
+      const agora = this.hoje();
+      await (this.prisma as any).cashbackCredito.create({
+        data: {
+          cpf,
+          origem: 'bonus',
+          saleId: `bonus:${input.chave}`,
+          storeCode: String(input.storeCode || 'APP').slice(0, 4),
+          percentual: 0,
+          base: 0,
+          valor,
+          liberaEm: agora,
+          expiraEm: this.maisDias(agora, cfg.validadeDias),
+        },
+      });
+      this.logger.log(
+        `[cashback] bônus de R$ ${valor.toFixed(2)} pra ${cpf} (${input.descricao || input.chave})`,
+      );
+      return { creditado: valor };
+    } catch (e: any) {
+      if (String(e?.code) === 'P2002') return null;
+      this.logger.error(`[cashback] creditarBonus(${input.chave}) falhou: ${e?.message}`);
+      return null;
+    }
+  }
+
+  // ─────────────────────────── desfazer ───────────────────────────
+
+  /**
+   * Devolve o saldo que uma venda consumiu.
+   *
+   * Chamado quando o pagamento de cashback é REMOVIDO da venda, quando a venda
+   * é CANCELADA e quando o pedido do site expira sem pagar. Sem isso o saldo
+   * evapora num carrinho que nunca virou compra — o pior jeito de perder a
+   * confiança da cliente num benefício.
+   *
+   * ⚠️ Devolve ao MESMO crédito que bancou, não a um crédito novo: a validade
+   * original tem que valer. Crédito novo daria sobrevida a saldo vencido e a
+   * cliente aprenderia a "renovar" o cashback pedindo pra cancelar a venda.
+   *
+   * Idempotente por `estornadoEm`: rodar duas vezes não devolve duas vezes.
+   */
+  async estornarUso(saleId: string, motivo = 'cancelamento'): Promise<{ devolvido: number }> {
+    try {
+      return await (this.prisma as any).$transaction(async (tx: any) => {
+        const usos: any[] = await tx.cashbackUso.findMany({
+          where: { saleId, estornadoEm: null },
+        });
+        let devolvido = 0;
+        for (const u of usos) {
+          const v = this.cent(Number(u.valor));
+          if (v <= 0) continue;
+          await tx.cashbackCredito.update({
+            where: { id: u.creditoId },
+            data: { usado: { decrement: v } },
+          });
+          await tx.cashbackUso.update({
+            where: { id: u.id },
+            data: { estornadoEm: new Date() },
+          });
+          devolvido = this.cent(devolvido + v);
+        }
+        if (devolvido > 0) {
+          this.logger.log(
+            `[cashback] devolvido R$ ${devolvido.toFixed(2)} da venda ${saleId} (${motivo})`,
+          );
+        }
+        return { devolvido };
+      });
+    } catch (e: any) {
+      this.logger.error(`[cashback] estornarUso(${saleId}) falhou: ${e?.message}`);
+      return { devolvido: 0 };
+    }
+  }
+
+  /**
+   * A venda foi cancelada: o cashback GANHO nela deixa de existir.
+   *
+   * É a devolução total vista pelo outro lado — `estornarDevolucao` cuida da
+   * peça que volta, este cuida da venda que nunca existiu. Se a cliente já
+   * gastou o crédito, o descoberto vira saldo NEGATIVO pela mesma razão: sem
+   * isso, comprar-ganhar-gastar-cancelar seria dinheiro de graça.
+   */
+  async cancelarCreditoDeVenda(saleId: string, motivo = 'venda cancelada'): Promise<{ cancelado: number } | null> {
+    try {
+      const credito = await (this.prisma as any).cashbackCredito.findFirst({
+        where: { saleId, origem: { in: ['venda', 'pedido_site'] }, isTraining: false },
+      });
+      if (!credito) return null;
+
+      const valor = Number(credito.valor) || 0;
+      const jaCancelado = Number(credito.cancelado) || 0;
+      const usado = Number(credito.usado) || 0;
+      const cancelavel = this.cent(Math.max(0, valor - usado - jaCancelado));
+      const descoberto = this.cent(Math.max(0, valor - jaCancelado - cancelavel));
+      if (cancelavel <= 0 && descoberto <= 0) return null;
+
+      await (this.prisma as any).$transaction(async (tx: any) => {
+        if (cancelavel > 0) {
+          await tx.cashbackCredito.update({
+            where: { id: credito.id },
+            data: { cancelado: { increment: cancelavel } },
+          });
+        }
+        if (descoberto > 0) {
+          await tx.cashbackCredito.create({
+            data: {
+              cpf: credito.cpf, customerId: credito.customerId,
+              origem: 'estorno_venda_cancelada',
+              saleId, storeCode: credito.storeCode,
+              percentual: 0, base: 0, valor: -descoberto,
+              liberaEm: this.hoje(),
+              expiraEm: new Date('2099-12-31T00:00:00.000Z'),
+            },
+          });
+        }
+      });
+
+      this.logger.log(
+        `[cashback] ${motivo} ${saleId}: cancelou R$ ${cancelavel.toFixed(2)}` +
+        (descoberto > 0 ? ` + R$ ${descoberto.toFixed(2)} vira saldo negativo` : ''),
+      );
+      return { cancelado: this.cent(cancelavel + descoberto) };
+    } catch (e: any) {
+      if (String(e?.code) === 'P2002') return null;
+      this.logger.error(`[cashback] cancelarCreditoDeVenda(${saleId}) falhou: ${e?.message}`);
+      return null;
+    }
+  }
+
+  // ─────────────────────────── extrato da cliente ───────────────────────────
+
+  /**
+   * O que a CLIENTE vê — no site, no app e na ficha do PDV.
+   *
+   * Uma fonte só. Até 22/09 existiam três saldos diferentes (este, o do CRM e
+   * o do app), cada tela lendo um: a vendedora anunciava um número, o site
+   * mostrava outro e nenhum dos dois podia ser gasto.
+   *
+   * O extrato importa tanto quanto o saldo: "R$ 23,40" sem origem é um número
+   * que a cliente não entende, e número que ela não entende ela não gasta.
+   */
+  async extrato(cpfRaw: string, limite = 50): Promise<{
+    cpf: string;
+    saldo: number;
+    aLiberar: number;
+    liberaEm: string | null;
+    proximaExpiracao: string | null;
+    expiraEmBreve: number;
+    totalGanho: number;
+    totalUsado: number;
+    totalExpirado: number;
+    ativo: boolean;
+    pctPrimeiraCompra: number;
+    pctDemais: number;
+    validadeDias: number;
+    carenciaDias: number;
+    usoMaxPctCompra: number;
+    minimoUsoReais: number;
+    movimentos: Array<{
+      id: string; tipo: string; descricao: string; valor: number;
+      data: string; liberaEm: string | null; expiraEm: string | null;
+    }>;
+  }> {
+    const cfg = await this.config();
+    const s = await this.saldo(cpfRaw);
+    const cpf = this.cpfChave(cpfRaw);
+
+    const base = {
+      cpf: cpf || '',
+      saldo: s.disponivel, aLiberar: s.aLiberar, liberaEm: s.liberaEm,
+      proximaExpiracao: s.proximaExpiracao, expiraEmBreve: s.expiraEmBreve,
+      totalGanho: s.totalGanho, totalUsado: s.totalUsado, totalExpirado: s.totalExpirado,
+      ativo: cfg.ativo,
+      pctPrimeiraCompra: cfg.pctPrimeiraCompra, pctDemais: cfg.pctDemais,
+      validadeDias: cfg.validadeDias, carenciaDias: cfg.carenciaDias,
+      usoMaxPctCompra: cfg.usoMaxPctCompra, minimoUsoReais: cfg.minimoUsoReais,
+      movimentos: [] as any[],
+    };
+    if (!cpf) return base;
+
+    const n = Math.max(1, Math.min(200, Number(limite) || 50));
+    const [creditos, usos]: [any[], any[]] = await Promise.all([
+      (this.prisma as any).cashbackCredito.findMany({
+        where: { cpf, isTraining: false },
+        orderBy: { createdAt: 'desc' },
+        take: n,
+      }),
+      (this.prisma as any).cashbackUso.findMany({
+        where: { cpf, estornadoEm: null },
+        orderBy: { createdAt: 'desc' },
+        take: n,
+      }),
+    ]);
+
+    const agora = this.hoje();
+    const movimentos = [
+      ...creditos.map((c: any) => {
+        const negativo = Number(c.valor) < 0;
+        const vencido = !negativo && agora > c.expiraEm;
+        return {
+          id: c.id,
+          tipo: negativo ? 'estorno' : vencido ? 'expirado' : 'ganho',
+          descricao: this.descreveCredito(c, negativo, vencido),
+          valor: this.cent(Number(c.valor)),
+          data: new Date(c.createdAt).toISOString(),
+          liberaEm: new Date(c.liberaEm).toISOString().slice(0, 10),
+          expiraEm: negativo ? null : new Date(c.expiraEm).toISOString().slice(0, 10),
+        };
+      }),
+      ...usos.map((u: any) => ({
+        id: u.id,
+        tipo: 'usado',
+        descricao: 'Usado na compra',
+        valor: -this.cent(Number(u.valor)),
+        data: new Date(u.createdAt).toISOString(),
+        liberaEm: null,
+        expiraEm: null,
+      })),
+    ]
+      .sort((a, b) => (a.data < b.data ? 1 : -1))
+      .slice(0, n);
+
+    return { ...base, movimentos };
+  }
+
+  /** Vocabulário do banco → o que a cliente entende. */
+  private descreveCredito(c: any, negativo: boolean, vencido: boolean): string {
+    if (negativo) {
+      return c.origem === 'estorno_venda_cancelada'
+        ? 'Compra cancelada — cashback devolvido'
+        : 'Peça devolvida — cashback devolvido';
+    }
+    if (vencido) return 'Cashback que venceu';
+    if (c.origem === 'crediario_parcela') return 'Ganho na parcela paga';
+    if (c.origem === 'pedido_site') return 'Ganho na compra do site';
+    if (c.origem === 'migracao') return 'Saldo que você já tinha';
+    if (c.primeiraCompra) return 'Ganho na primeira compra';
+    return 'Ganho na compra';
   }
 }

@@ -81,6 +81,12 @@ Fonte única de "onde a peça está" e de "chegou". `TrackingService` consulta e
 ⚠️ `Accept-Language: pt-BR` é obrigatório no SRO — sem ele, HTTP 400 em 100% das chamadas. Era essa a causa de 0 pedidos entregues em 90 dias e de 3 avisos "seu pedido chegou" em 22.678 pedidos (18/08).
 ⚠️ **Regra da estreia**: objeto que entra no radar JÁ entregue é notícia velha — aparece na tela mas NÃO dispara aviso pra cliente.
 
+### Fechamento de caixa — a régua do faturamento
+
+`faturamento = vendido − vale-troca − cashback − devoluções` (`CashService.blocoFaturamento`).
+
+🚨 **O vale-troca nunca foi abatido no resumo da SESSÃO até 22/09/2026** e o número saía inflado. A régua de 04/08 estava escrita certa, mas `getSessionTotals` não tinha ramo de `vale_troca` no `if/else` que classifica pagamento: o vale caía em `OUTROS`, `totais.VALE_TROCA.valor` ficava sempre zero e a subtração não tirava nada. Corrigido junto com a entrada do cashback (que usa o mesmo caminho). **O faturamento do fechamento diminuiu** — pro valor certo.
+
 ### Financeiro — `backend/src/financeiro/giga-mirror.service.ts`
 
 Nome herdado; hoje o serviço **espelha o próprio Flow**. Cron de 1h roda `espelharCaixaMovDoFlow`: as vendas e devoluções do `pdv_sales`/`pdv_returns` viram linhas de `giga_caixa_mov` (registro sintético `f<md5>`/`r<md5>`, corte em 25/08/2026 — antes disso a tabela é história e ninguém toca). **É a espinha dos relatórios**: faturamento, DRE, Inteligência, metas e o **ranking de vendedoras do PDV** leem daí. ⚠️ A **COMISSÃO não** — ela conta direto em `pdv_sales`/`pdv_returns` (`commission-engine.service.ts`); quem for debugar diferença de comissão está no espelho errado. **Royalty/franquias** leem a outra tabela, `giga_caixa_diario` (`conta-corrente.service.ts`, `franquias.service.ts`), montada por `vendaDiariaDoFlow`. Conta corrente lê 100% do espelho.
@@ -109,6 +115,22 @@ Fora do espelho, `previewBaixa` ainda **confere a nativa antes de negar** — é
 - O desconto sai no recibo (com motivo e quem recebeu) e na página de PIX da cliente.
 
 O cron `crediario-nativo-sync` das 04:10 é **no-op** — ele apagaria as parcelas com `flowIsSource=false` e recarregaria de uma fonte que não recebe mais as baixas: **cliente que pagou hoje voltaria devendo amanhã**.
+
+### Cashback — UM ledger, chave = CPF (22/09/2026)
+
+A fonte é **`cashback_creditos` + `cashback_usos`** (`backend/src/cashback/`), chave **CPF**. Vale na rede inteira, no site e na live. Regra do dono (01/08): **10% na primeira compra da pessoa, 3% nas seguintes**, libera no 5º dia, vale 30 dias, paga no **máximo 30% de uma compra**, mínimo R$ 5.
+
+🚨 **Até 22/09 existiam TRÊS cashbacks e nenhum podia ser gasto.** O PDV anunciava "pode usar R$ X" lendo `cashback_balances` (CRM) e não havia botão; o site dizia "Disponível pra usar" lendo `customer_accounts.cashback_balance_cents` (app), cujo ganho morreu com os hooks do WooCommerce e cujo gasto passava pelo WordPress apagado em 27/08. Cliente via número em três telas e não gastava em lugar nenhum. Os dois ledgers antigos **não são mais lidos** (ficam pra auditoria) e o saldo deles entra aqui por **`/retaguarda/cashback` → "Trazer o saldo"** (`CashbackMigracaoService`: prévia com a conta antes, idempotente por CPF, teto por pessoa).
+
+**Onde GANHA** — venda do PDV (`pdv.service` no finalize), **pedido do site** (`loja-orders.service.confirmarPagamento`, depois da trava atômica, base **sem frete**), **parcela de crediário paga** (`crediario-baixa.service`, base = principal, sem juros/multa) e **bônus** de boas-vindas/indicação (`creditarBonus`).
+
+**Onde GASTA** — **só o PDV**: `addPayment` com `method: 'cashback'`. Consome FIFO pelo que vence primeiro, uma linha por venda. **Devolve** no `removePayment`, no `cancel` do carrinho e no estorno master. ⚠️ **O checkout do site ainda NÃO aceita** — a cliente ganha no site e gasta na loja.
+
+⚠️ **`cashback` é DESCONTO na NFC-e, não tPag** — entra na lista `ABATIMENTOS` de `nfce.service.ts`, junto do vale-troca, pelo mesmo motivo do GRAVÍSSIMO da NFC-e 94 (21/07): tributar o valor cheio cobraria ICMS sobre dinheiro que a cliente não entregou. **Decisão fiscal — confirmar com a contabilidade.**
+
+⚠️ **Nasce DESLIGADO** (`SystemSetting: cashback_rede_config`, botão em `/retaguarda/cashback`). Desligado: não credita e recusa resgate com motivo. Saldo já gerado **não some** — é dívida com a cliente.
+
+⚠️ **Saldo negativo não expira.** Devolveu a peça depois de gastar o cashback → o descoberto vira crédito negativo com validade em 2099, de propósito: comprar-ganhar-gastar-devolver seria dinheiro de graça.
 
 ## O ERP legado — encerrado em 27/08/2026
 
@@ -290,6 +312,7 @@ Estas envs governavam caminhos que dependiam do MySQL desligado. Ligar qualquer 
 - `wincred-mirror/` — espelhos `wincred_produtos`/`wincred_estoque` + `WincredCatalogService` (bipe e busca do PDV, hoje 100% Postgres). Os botões de importação da tela são resquício e respondem erro; quem escreve nos espelhos é o próprio Flow.
 - `product-native/`, `products-editor/`, `product-search/` — tabela nativa `product` (fonte do catálogo), edição e busca.
 - `product-registration/` — cadastro de peça nova. O **código do produto É o EAN-13 de prefixo 8**, gerado pela `EanSequence` do Postgres dentro de transação — não sai de tabela do ERP. ⚠️ `wincred_codigos` é OUTRA coisa (código de vendedora/operador, lida por 9 serviços) e **nunca serviu de sequência de produto**.
+- `cashback/` — **ledger único do cashback** (chave = CPF): motor, prévia de custo, migração do saldo dos dois ledgers antigos. Exporta `CashbackService` — quem credita e quem gasta chamam ele, nunca escrevem na tabela.
 - `crediario-nativo/`, `crediarios/` — `crediario_parcelas` nativa, criação na venda, baixa/estorno, cobrança e espelho de abertas.
 - `financeiro/` — `giga-mirror.service` (nome herdado: **espelha o Flow**, alimenta `giga_caixa_mov`), conta corrente, DRE, royalties.
 - `conciliacao-cartao/` — **conferência dos cartões × Stone** (arquivo de conciliação da Stone → `stone_transactions` → cruzamento com as vendas no cartão → checklist e resumo no WhatsApp). O `stone/` antigo é o webhook que nunca foi ligado; o leitor do arquivo mora lá (`stone-arquivo.parser.ts`).

@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { CashbackService } from './cashback.service';
 import { CashbackPreviaService } from './cashback-previa.service';
+import { CashbackMigracaoService } from './cashback-migracao.service';
 
 /**
  * Rotas do cashback da rede.
@@ -24,6 +25,7 @@ export class CashbackController {
   constructor(
     private readonly svc: CashbackService,
     private readonly previa: CashbackPreviaService,
+    private readonly migracao: CashbackMigracaoService,
   ) {}
 
   @Get('config')
@@ -57,6 +59,30 @@ export class CashbackController {
   @Get('saldo/:cpf')
   saldo(@Param('cpf') cpf: string) {
     return this.svc.saldo(cpf);
+  }
+
+  /**
+   * A MUDANÇA DE CASA DO SALDO ANTIGO — ver CashbackMigracaoService.
+   *
+   * A prévia mostra a conta ANTES: quantas pessoas, quanto em cada fonte, e
+   * quanto sai somando × pegando o maior. O aplicar só roda por clique.
+   */
+  @Get('migracao/previa')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  migracaoPrevia() {
+    return this.migracao.previa();
+  }
+
+  @Post('migracao/aplicar')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  migracaoAplicar(@Body() body: any, @Req() req: any) {
+    return this.migracao.aplicar({
+      modo: body?.modo === 'maior' ? 'maior' : 'soma',
+      teto: Number(body?.teto) || 0,
+      usuario: req?.user?.email || req?.user?.id || 'desconhecido',
+    });
   }
 
   @Get('pode-usar/:cpf')

@@ -18,6 +18,17 @@ import { buildMetadata } from '@/lib/seo';
  * A EXPIRAÇÃO vem primeiro e destacada. É o único dado com prazo, e descobrir
  * que venceu depois é a maneira mais rápida de transformar um benefício em
  * reclamação.
+ *
+ * ── ONDE USAR (22/09/2026) ──
+ *
+ * Esta página dizia "Disponível pra usar" e NÃO dizia onde — porque não havia
+ * onde: o saldo vinha de um ledger que só o app enxergava, e o único checkout
+ * que o aceitava batia no WordPress apagado em agosto. A cliente lia o número,
+ * tentava usar e não conseguia em lugar nenhum.
+ *
+ * Agora o saldo é o mesmo que o caixa da loja aceita (a chave é o CPF), e a
+ * página diz isso com todas as letras. Saldo sem instrução de uso é promessa
+ * pela metade — e promessa pela metade foi o que gerou a reclamação.
  */
 
 export const metadata = buildMetadata({
@@ -44,6 +55,12 @@ interface Extrato {
   spent: number;
   rate: number;
   ttlDays: number;
+  /** Saldo que existe mas ainda está na carência. */
+  aLiberar?: number;
+  liberaEm?: string | null;
+  /** Frase pronta do servidor — a regra mora num lugar só. */
+  ondeUsar?: string | null;
+  ativo?: boolean;
   nextExpiration: { amount: number; expiresAt: string; daysLeft: number } | null;
   transactions: Movimento[];
 }
@@ -98,11 +115,32 @@ export default async function CashbackPage() {
           </p>
         )}
 
+        {!!extrato.aLiberar && extrato.aLiberar > 0 && (
+          <p className="mt-2 text-small text-ink-muted">
+            Mais {formatPrice(extrato.aLiberar)} liberam
+            {extrato.liberaEm
+              ? ` em ${new Date(`${extrato.liberaEm}T12:00:00`).toLocaleDateString('pt-BR')}`
+              : ' em breve'}
+            .
+          </p>
+        )}
+
         <p className="mt-3 text-small text-ink-muted">
           Você recebe {extrato.rate}% de volta em cada compra. O crédito vale por{' '}
           {extrato.ttlDays} dias.
         </p>
       </div>
+
+      {/* ONDE USAR — a informação que faltava, e o motivo da reclamação. */}
+      {extrato.ondeUsar && extrato.balance > 0 && (
+        <div className="mt-4 rounded-sm border border-border bg-surface-alt p-5">
+          <p className="eyebrow text-ink-muted">Como usar</p>
+          <p className="mt-1 text-body text-ink">{extrato.ondeUsar}</p>
+          <p className="mt-2 text-small text-ink-muted">
+            <Link href="/lojas" className="link-underline text-ink">Ver as lojas</Link>
+          </p>
+        </div>
+      )}
 
       <h2 className="mt-10 mb-3 text-h4">Extrato</h2>
 

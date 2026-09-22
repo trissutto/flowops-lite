@@ -36,11 +36,11 @@ describe('LojaOrdersService — retentativa recobra o mesmo pedido', () => {
     // pedido recusado, não da injeção. As duas penúltimas são o módulo de
     // risco (chaves + análise, 27/08); depois o escudo anti-teste-de-
     // cartão (28/08), o PagBank (gateway do site, 16/09) e, por último, a
-    // cobertura da retirada (17/09).
+    // cobertura da retirada (17/09) e o cashback (22/09).
     new LojaOrdersService(
       prisma,
       {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any,
     );
 
   const prismaMock = (over: any = {}) => ({

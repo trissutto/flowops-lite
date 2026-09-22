@@ -32,6 +32,8 @@ import { EscudoCheckoutService } from './escudo-checkout.service';
 import { RetiradaCoberturaService } from './retirada-cobertura.service';
 import { ProgressiveDiscountModule } from '../progressive-discount/progressive-discount.module';
 import { RiscoModule } from '../risco/risco.module';
+// Cashback: o pedido pago credita o saldo da cliente (confirmarPagamento).
+import { CashbackModule } from '../cashback/cashback.module';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -49,6 +51,7 @@ import { RiscoModule } from '../risco/risco.module';
   imports: [
     PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule, WhatsappModule,
     PromoConfigModule,
+    CashbackModule,
     ProgressiveDiscountModule,
     // Análise de risco: o pedido novo gera as chaves de cruzamento assim que
     // fecha. Seta de mão única — o RiscoModule não conhece este.

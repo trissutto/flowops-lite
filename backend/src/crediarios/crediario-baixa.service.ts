@@ -30,6 +30,7 @@ import { CrediariosService } from './crediarios.service';
 import { CrediarioMirrorService } from './crediario-mirror.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { PagbankService } from '../pagbank/pagbank.service';
+import { CashbackService } from '../cashback/cashback.service';
 import { sqlParcelaAberta } from '../common/crediario-pago';
 import { aplicarDescontoJuros, normalizarPctDesconto } from '../common/juros-negociado';
 
@@ -119,6 +120,7 @@ export class CrediarioBaixaService {
     private readonly crediarioMirror: CrediarioMirrorService,
     private readonly pagarme: PagarmeService,
     private readonly pagbank: PagbankService,
+    private readonly cashback: CashbackService,
   ) {}
 
   /**
@@ -1445,6 +1447,7 @@ export class CrediarioBaixaService {
     // Executa UPDATE no Giga
     await this.executeGigaUpdates(baixaId);
     this.clearListCache();
+    void this.creditarCashbackDaBaixa(baixaId);
     return { baixaId };
   }
 
@@ -1691,6 +1694,7 @@ export class CrediarioBaixaService {
 
     await this.executeGigaUpdates(baixaId);
     this.clearListCache();
+    void this.creditarCashbackDaBaixa(baixaId);
     this.logger.log('[confirmBaixaPix] baixa ' + baixaId + ' confirmada + Giga atualizado');
     return { confirmed: true };
   }
@@ -1922,6 +1926,60 @@ export class CrediarioBaixaService {
           .marcarPagasNoEspelho([it.registro])
           .catch(() => { /* cron corrige */ });
       }
+    }
+  }
+
+  /**
+   * CASHBACK DA PARCELA PAGA.
+   *
+   * Decisão do dono (01/08): crediário NÃO credita no fechamento da venda —
+   * credita conforme o dinheiro entra. Há centenas de milhares de reais de
+   * dívida real em aberto; creditar na venda premiaria quem ainda não pagou.
+   *
+   * `CashbackService.creditarParcelaPaga` existia desde 01/08 e nunca teve
+   * chamador — este é ele. A base é o PRINCIPAL da parcela, não o valor com
+   * juros e multa: juro não é compra, e dar 3% de cashback sobre a multa de
+   * atraso seria devolver parte da punição.
+   *
+   * Best-effort e disparado sem await: nenhuma linha de cashback pode atrasar
+   * ou derrubar o recibo de uma parcela que a cliente acabou de pagar.
+   */
+  private async creditarCashbackDaBaixa(baixaId: string): Promise<void> {
+    try {
+      const baixa: any = await (this.prisma as any).crediarioBaixa.findUnique({
+        where: { id: baixaId },
+        include: { items: { select: { id: true, registro: true, controle: true, valorParcela: true } } },
+      });
+      if (!baixa || baixa.status !== 'paid') return;
+
+      // CPF é a chave do cashback. A baixa nem sempre o guarda (a tela de
+      // cobrança lê o espelho de abertas, que não tem CPF) — nesse caso vem
+      // da ficha, pelo código do cliente.
+      let cpf = String(baixa.customerCpf || '').replace(/\D/g, '');
+      if (cpf.length !== 11 && baixa.codCliente) {
+        const ficha: any[] = await (this.prisma as any).$queryRawUnsafe(
+          `SELECT cpf FROM giga_clientes
+             WHERE codigo = $1
+               AND length(regexp_replace(COALESCE(cpf,''), '\\D', '', 'g')) = 11
+             LIMIT 1`,
+          String(baixa.codCliente),
+        ).catch(() => []);
+        cpf = String(ficha?.[0]?.cpf || '').replace(/\D/g, '');
+      }
+      if (cpf.length !== 11) return;
+
+      for (const it of baixa.items || []) {
+        await this.cashback.creditarParcelaPaga({
+          // Uma parcela = um crédito. O id do item é único e é o que torna
+          // a operação idempotente se a confirmação do PIX rodar duas vezes.
+          parcelaId: String(it.id),
+          cpf,
+          storeCode: String(baixa.lojaCode || ''),
+          valorPago: Number(it.valorParcela) || 0,
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[crediario-baixa] cashback da baixa ${baixaId} falhou: ${e?.message}`);
     }
   }
 

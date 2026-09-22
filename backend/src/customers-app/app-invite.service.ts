@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
-import { CustomerCashbackService } from './customer-cashback.service';
+import { CashbackService } from '../cashback/cashback.service';
 import * as crypto from 'crypto';
 
 /**
@@ -28,7 +28,7 @@ export class AppInviteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cfg: ConfigService,
-    private readonly cashback: CustomerCashbackService,
+    private readonly cashback: CashbackService,
   ) {
     this.DEFAULT_BONUS_CENTS = Number(this.cfg.get('APP_WELCOME_BONUS_CENTS') ?? 2000);
   }
@@ -127,33 +127,31 @@ export class AppInviteService {
       data: { pwaInstalledAt: new Date() },
     });
 
-    // Credita o bônus do invite (no MESMO momento, sem esperar 1ª compra)
-    const balance = await this.prisma.customerAccount.findUnique({
+    /**
+     * Credita o bônus da indicação NA HORA (sem esperar a 1ª compra).
+     *
+     * Vai pro ledger único (chave = CPF) desde 22/09 — escrever no saldo do
+     * app faria a cliente receber "🎁 você ganhou R$ 20 da loja X" e não ver
+     * nada em lugar nenhum. A loja que indicou fica gravada no crédito, que é
+     * o que permite o acerto entre lojas se o dono um dia quiser.
+     */
+    const conta = await this.prisma.customerAccount.findUnique({
       where: { id: accountId },
-      select: { cashbackBalanceCents: true },
+      select: { cpf: true },
     });
-    const newBalance = (balance?.cashbackBalanceCents ?? 0) + inv.bonusCents;
-
-    await this.prisma.$transaction([
-      this.prisma.customerCashbackTx.create({
-        data: {
-          accountId,
-          type: 'welcome',
-          amountCents: inv.bonusCents,
-          balanceAfterCents: newBalance,
-          description: `🎁 Bônus de boas-vindas (indicação loja ${inv.storeCode}${inv.sellerName ? ' / ' + inv.sellerName : ''})`,
-          expiresAt: new Date(Date.now() + 30 * 86400 * 1000),
-        },
-      }),
-      this.prisma.customerAccount.update({
+    const creditado = await this.cashback.creditarBonus({
+      cpf: conta?.cpf,
+      valor: inv.bonusCents / 100,
+      chave: `invite:${token}`,
+      storeCode: inv.storeCode,
+      descricao: `indicação loja ${inv.storeCode}${inv.sellerName ? ' / ' + inv.sellerName : ''}`,
+    });
+    if (creditado) {
+      await this.prisma.customerAccount.update({
         where: { id: accountId },
-        data: {
-          cashbackBalanceCents: newBalance,
-          cashbackEarnedCents: { increment: BigInt(inv.bonusCents) },
-          welcomeBonusAt: new Date(),
-        },
-      }),
-    ]);
+        data: { welcomeBonusAt: new Date() },
+      });
+    }
 
     this.logger.log(
       `Invite ${token} resgatado → R$ ${(inv.bonusCents / 100).toFixed(2)} pra account ${accountId} (origem: ${inv.storeCode}/${inv.sellerName})`,

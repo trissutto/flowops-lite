@@ -58,18 +58,32 @@ export default function CashbackPage() {
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  /**
+   * A MUDANÇA DE CASA DO SALDO ANTIGO (22/09).
+   *
+   * Até aqui o Flow tinha três cashbacks e a cliente via o número em três
+   * telas sem poder gastar em nenhuma. Este painel traz o saldo dos dois
+   * ledgers antigos pra dentro deste — e mostra a conta ANTES, porque o
+   * dinheiro é do dono, não meu.
+   */
+  const [mig, setMig] = useState<any>(null);
+  const [migModo, setMigModo] = useState<'soma' | 'maior'>('soma');
+  const [migTeto, setMigTeto] = useState(200);
+  const [migRodando, setMigRodando] = useState(false);
 
   async function carregar() {
     setLoading(true);
     setErro(null);
     try {
-      const [p, e] = await Promise.all([
+      const [p, e, m] = await Promise.all([
         api<Previa>(`/cashback/previa?dias=${dias}`),
         api<any>('/cashback/extrato').catch(() => null),
+        api<any>('/cashback/migracao/previa').catch(() => null),
       ]);
       setPrevia(p);
       setCfg(p.config);
       setExtrato(e);
+      setMig(m);
     } catch (e: any) {
       setErro(e?.message || 'Erro ao carregar');
     } finally {
@@ -94,6 +108,34 @@ export default function CashbackPage() {
       alert('Erro: ' + (e?.message || e));
     } finally {
       setSalvando(false);
+    }
+  }
+
+  async function migrar() {
+    if (!mig) return;
+    const total = migModo === 'soma' ? mig.totalSomado : mig.totalMaior;
+    if (
+      !confirm(
+        `Trazer o saldo antigo pra cá?\n\n` +
+          `${mig.pendentes} cliente(s) · ${brl(total)}${migTeto > 0 ? ` (teto de ${brl(migTeto)} por pessoa)` : ''}\n\n` +
+          `Vira crédito de verdade, que a cliente pode gastar na loja a partir de hoje. ` +
+          `As tabelas antigas não são apagadas — ficam pra conferência.\n\n` +
+          `Rodar de novo depois NÃO credita em dobro.`,
+      )
+    ) return;
+    setMigRodando(true);
+    try {
+      const r = await api<any>('/cashback/migracao/aplicar', {
+        method: 'POST',
+        body: JSON.stringify({ modo: migModo, teto: migTeto }),
+      });
+      alert(`Pronto: ${r.migrados} cliente(s), ${brl(r.total)}.` +
+        (r.cortados?.length ? `\n\n${r.cortados.length} saldo(s) cortado(s) pelo teto — confira no log.` : ''));
+      await carregar();
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setMigRodando(false);
     }
   }
 
@@ -152,6 +194,96 @@ export default function CashbackPage() {
               </button>
             </div>
           </div>
+
+          {/* ── SALDO ANTIGO: A PRIMEIRA COISA A FAZER ── */}
+          {mig && mig.pendentes > 0 && (
+            <div className="rounded-xl border-2 border-violet-300 bg-violet-50 p-5">
+              <div className="font-semibold text-violet-900 text-lg">
+                Tem saldo antigo pra trazer pra cá
+              </div>
+              <p className="text-sm text-violet-900/80 mt-1">
+                Até 22/09 o sistema tinha <strong>três cashbacks separados</strong> e nenhum
+                deles podia ser gasto: a tela do PDV anunciava um número, a do site mostrava
+                outro, e não existia botão que aceitasse. Agora existe — e este painel traz o
+                saldo dos dois ledgers antigos pro ledger que o caixa aceita.
+              </p>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+                <Kpi label="Clientes" valor={String(mig.pendentes)} />
+                <Kpi label="Saldo do CRM" valor={brl(mig.crm.total)} />
+                <Kpi label="Saldo do app/site" valor={brl(mig.app.total)} />
+                <Kpi
+                  label={migModo === 'soma' ? 'Total a creditar' : 'Total (só o maior)'}
+                  valor={brl(migModo === 'soma' ? mig.totalSomado : mig.totalMaior)}
+                  destaque
+                />
+              </div>
+
+              {mig.nasDuasFontes.pessoas > 0 && (
+                <p className="text-sm text-violet-900/80 mt-3">
+                  <strong>{mig.nasDuasFontes.pessoas} cliente(s) têm saldo nas DUAS fontes.</strong>{' '}
+                  Somar é o que ela entende — viu os dois números e os dois diziam "seu cashback".
+                  Pegar só o maior evita pagar duas vezes se as duas fontes creditaram a mesma
+                  compra. A diferença entre as opções é {brl(mig.totalSomado - mig.totalMaior)}.
+                </p>
+              )}
+
+              <div className="flex items-end gap-3 flex-wrap mt-4">
+                <label className="text-sm">
+                  <span className="block text-slate-600 mb-1">Como contar</span>
+                  <select
+                    value={migModo}
+                    onChange={(e) => setMigModo(e.target.value as any)}
+                    className="border rounded px-3 py-2 bg-white"
+                  >
+                    <option value="soma">Somar as duas fontes</option>
+                    <option value="maior">Só o maior dos dois</option>
+                  </select>
+                </label>
+                <label className="text-sm">
+                  <span className="block text-slate-600 mb-1">Teto por pessoa (0 = sem teto)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={migTeto}
+                    onChange={(e) => setMigTeto(Math.max(0, Number(e.target.value) || 0))}
+                    className="border rounded px-3 py-2 w-32"
+                  />
+                </label>
+                <button
+                  onClick={migrar}
+                  disabled={migRodando}
+                  className="px-5 py-2.5 rounded-lg bg-violet-700 hover:bg-violet-800 text-white font-semibold disabled:opacity-50"
+                >
+                  {migRodando ? 'Trazendo…' : 'Trazer o saldo'}
+                </button>
+              </div>
+
+              {mig.maiores?.length > 0 && (
+                <div className="mt-4 text-xs text-violet-900/70">
+                  <div className="font-semibold mb-1">Maiores saldos (confira se algum está absurdo)</div>
+                  <div className="flex flex-wrap gap-2">
+                    {mig.maiores.map((m: any) => (
+                      <span key={m.cpf} className="bg-white border border-violet-200 rounded px-2 py-1">
+                        {m.cpf}: {brl(m.crm + m.app)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-violet-900/60 mt-3">
+                O teto é rede de segurança: saldo acima dele entra cortado. As tabelas antigas
+                não são apagadas, e rodar de novo não credita em dobro.
+              </p>
+            </div>
+          )}
+          {mig && mig.pendentes === 0 && mig.jaMigrados > 0 && (
+            <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-900">
+              ✅ Saldo antigo já foi trazido pra cá — {mig.jaMigrados} cliente(s). Uma fonte só
+              agora: o número que o PDV mostra é o que o caixa aceita.
+            </div>
+          )}
 
           {/* ── O ALCANCE, ANTES DO CUSTO ── */}
           {previa.alcance.pctSemCpf > 0 && (
