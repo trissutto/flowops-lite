@@ -15,6 +15,12 @@ export interface StoreInput {
   cep?: string | null;
   priorityScore: number;
   active: boolean;
+  /**
+   * `Store.tipo`: REDE (loja própria) ou FILIAL (franquia). Regra 1 do dono
+   * (25/09): franquia vence o desempate dentro do mesmo número de caixas —
+   * ver `common/prioridade-lojas.ts`. Ausente = trata como REDE.
+   */
+  tipo?: string | null;
 }
 
 /**
@@ -132,6 +138,21 @@ export interface RoutingContext {
    * ROUTING_JUNTADA_FORA_ESTADO=0 / ROUTING_JUNTADA_MOTOBOY=0.
    */
   consolidacaoObrigatoria?: boolean;
+  /**
+   * REGRA 1 DO DONO (25/09): franquia (`StoreInput.tipo = FILIAL`) vence o
+   * desempate dentro do MESMO número de caixas. `undefined` = ligada; a
+   * service desliga por env `ROUTING_FRANQUIA_PRIMEIRO=0`.
+   */
+  franquiaPrimeiro?: boolean;
+  /**
+   * REGRA 2 DO DONO (25/09): lojas que só entram quando NENHUMA outra tem a
+   * peça (Indaiatuba, sem coleta dos Correios). A engine roda uma passada sem
+   * o estoque delas e só devolve, na segunda, os SKUs que ficaram em ruptura.
+   * Não vale pra loja de retirada, fixada/preferida pelo operador ou
+   * vendedora da venda online. Service: env `ROUTING_ULTIMO_CASO_CODES`
+   * (default "04"; vazio desliga).
+   */
+  ultimoCasoStoreCodes?: string[];
 }
 
 export interface PickAssignment {
@@ -179,6 +200,10 @@ export interface RoutingResult {
     distanceScore: number;   // 0..1 (proximidade com o CEP do cliente)
     finalScore: number;      // soma ponderada final (0..1)
     fullCoverage: boolean;   // true se essa loja tem TODOS os itens
+    /** REDE | FILIAL (regra 1, 25/09) — pra UI explicar por que a franquia ganhou. */
+    tipo?: string | null;
+    /** 0 = franquia (vence o desempate), 1 = demais. */
+    tier?: number;
     /** Diferença entre quota ideal e cessão atual; positiva = loja está DEVENDO, precisa ceder mais. */
     proportionalityDelta?: number;
     /** Quota ideal (0..1) pra essa loja, baseada na proporcionalidade inversa de venda. */

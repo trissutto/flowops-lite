@@ -34,6 +34,10 @@ import { ProgressiveDiscountModule } from '../progressive-discount/progressive-d
 import { RiscoModule } from '../risco/risco.module';
 // Cashback: o pedido pago credita o saldo da cliente (confirmarPagamento).
 import { CashbackModule } from '../cashback/cashback.module';
+// SEPARAÇÃO AUTOMÁTICA (25/09): o pedido pago dispara o roteamento sozinho
+// (SeparacaoAutomaticaService). Seta de mão única — o RoutingModule não
+// conhece este.
+import { RoutingModule } from '../routing/routing.module';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -56,6 +60,7 @@ import { CashbackModule } from '../cashback/cashback.module';
     // Análise de risco: o pedido novo gera as chaves de cruzamento assim que
     // fecha. Seta de mão única — o RiscoModule não conhece este.
     RiscoModule,
+    RoutingModule,
     forwardRef(() => PagarmeModule),
     // forwardRef porque o PagbankModule importa CrediariosModule, que importa
     // PagarmeModule, que importa este — o mesmo laço que a Pagar.me já fecha.

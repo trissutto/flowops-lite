@@ -10,13 +10,17 @@ import { WebsocketModule } from '../websocket/websocket.module';
 import { ErpModule } from '../erp/erp.module';
 import { PushModule } from '../push/push.module';
 import { PickScanModule } from '../pick-orders/pick-scan.module';
+// SEPARAÇÃO AUTOMÁTICA (25/09): o pedido pago do site roteia sozinho e avisa
+// a loja pelo WhatsApp — por isso o WhatsappModule entra aqui.
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { SeparacaoAutomaticaService } from './separacao-automatica.service';
 
 @Module({
   // PickScanModule → estorno dos bipes quando o recalcular/trocar-loja apaga
   // um card. Só depende de Prisma+Erp, então não fecha ciclo com pick-orders.
   imports: [
-    PecasExtraviadasModule,StockModule, WebsocketModule, ErpModule, PushModule, PickScanModule],
-  providers: [RoutingEngine, RoutingService, SalesStatsService, AwaitingStockRetryCron, VigilanciaSeparacaoCron],
-  exports: [RoutingEngine, RoutingService, SalesStatsService, VigilanciaSeparacaoCron],
+    PecasExtraviadasModule,StockModule, WebsocketModule, ErpModule, PushModule, PickScanModule, WhatsappModule],
+  providers: [RoutingEngine, RoutingService, SalesStatsService, AwaitingStockRetryCron, VigilanciaSeparacaoCron, SeparacaoAutomaticaService],
+  exports: [RoutingEngine, RoutingService, SalesStatsService, VigilanciaSeparacaoCron, SeparacaoAutomaticaService],
 })
 export class RoutingModule {}

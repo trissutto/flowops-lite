@@ -20,6 +20,8 @@ import { RiscoService } from '../risco/risco.service';
 import { EscudoCheckoutService } from './escudo-checkout.service';
 import { RetiradaCoberturaService } from './retirada-cobertura.service';
 import { CoberturaRetirada, coberturaDaLoja, diasUteisRetiradaTransferencia } from '../common/retirada-prazo';
+// SEPARAÇÃO AUTOMÁTICA (25/09): o pedido pago roteia sozinho (teste do dono).
+import { SeparacaoAutomaticaService } from '../routing/separacao-automatica.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -381,6 +383,7 @@ export class LojaOrdersService implements OnModuleInit {
     private readonly pagbank: PagbankService,
     private readonly retiradaCobertura: RetiradaCoberturaService,
     private readonly cashback: CashbackService,
+    private readonly separacaoAutomatica: SeparacaoAutomaticaService,
   ) {}
 
   /**
@@ -3122,6 +3125,16 @@ export class LojaOrdersService implements OnModuleInit {
      * entrou, e SMTP fora do ar não pode segurar o ack do webhook.
      */
     void this.pedidoEmail.aoConfirmarPagamento(atualizado);
+
+    /**
+     * SEPARAÇÃO AUTOMÁTICA (teste do dono, 25/09). Com a chave ligada, o
+     * pedido pago vai sozinho pra(s) loja(s) — mesma engine, mesmas regras,
+     * WhatsApp pra loja — em vez de esperar o clique na retaguarda. Fire-and-
+     * forget pela mesma razão do e-mail: nada segura o ack do gateway. O que
+     * a máquina não resolve (retirada sem peça na loja, ruptura, reporte)
+     * fica pra retaguarda, com a razão no histórico.
+     */
+    this.separacaoAutomatica.disparar(order.id, 'pagamento-site');
 
     return { ok: true };
   }

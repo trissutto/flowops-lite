@@ -9,6 +9,7 @@ import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 import { diferencaDeTrocaPendente } from '../common/diferenca-troca';
 import { lojasDaRotaPropria } from '../common/rota-propria';
 import { consolidacaoObrigatoria } from '../common/politica-frete';
+import { franquiaPrimeiroLigado, lojasUltimoCaso } from '../common/prioridade-lojas';
 import { destinoObrigatorioDoPedido, feederOrfao, transferenciaParaDestino } from '../common/destino-obrigatorio';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { computeCommittedStock } from './committed-stock.util';
@@ -221,8 +222,13 @@ export class RoutingService {
         cep: s.cep,
         priorityScore: s.priorityScore,
         active: s.active,
+        tipo: (s as any).tipo ?? null,
       })),
       stock: liquidStock,
+      // Regras 1 e 2 do dono (25/09): franquia primeiro no mesmo número de
+      // caixas; Indaiatuba só pra peça que ninguém mais tem.
+      franquiaPrimeiro: franquiaPrimeiroLigado(),
+      ultimoCasoStoreCodes: lojasUltimoCaso(),
       shippingCep: order.shippingCep,
       pickupStoreCode: order.pickupStoreCode, // ativa lógica de retirada em loja se preenchido
       preferStoreCode: opts?.preferStoreCode ?? null, // override manual via radio button
@@ -2415,8 +2421,12 @@ export class RoutingService {
         cep: s.cep,
         priorityScore: s.priorityScore,
         active: s.active,
+        tipo: (s as any).tipo ?? null,
       })),
       stock: liquidStock,
+      // Regras 1 e 2 do dono (25/09) — mesma régua do previewRoute.
+      franquiaPrimeiro: franquiaPrimeiroLigado(),
+      ultimoCasoStoreCodes: lojasUltimoCaso(),
       shippingCep: input.address.postcode ?? undefined,
       pickupStoreCode: input.pickupStoreCode ?? null,
       preferStoreCode: input.preferStoreCode ?? null,
@@ -2686,8 +2696,12 @@ export class RoutingService {
           cep: s.cep,
           priorityScore: s.priorityScore,
           active: s.active,
+          tipo: (s as any).tipo ?? null,
         })),
         stock: stockForEngine,
+        // Regras 1 e 2 do dono (25/09) — a batelada segue a mesma régua.
+        franquiaPrimeiro: franquiaPrimeiroLigado(),
+        ultimoCasoStoreCodes: lojasUltimoCaso(),
         shippingCep: input.address?.postcode ?? undefined,
         pickupStoreCode: input.pickupStoreCode ?? null,
         cedeStats, // <-- HABILITA proporcionalidade

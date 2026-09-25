@@ -41,6 +41,8 @@ describe('LojaOrdersService — retentativa recobra o mesmo pedido', () => {
       prisma,
       {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
       {} as any, {} as any, {} as any, {} as any, {} as any,
+      // e a separação automática (25/09) — fire-and-forget no pagamento.
+      { disparar: () => undefined } as any,
     );
 
   const prismaMock = (over: any = {}) => ({

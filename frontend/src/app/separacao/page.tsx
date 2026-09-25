@@ -108,6 +108,8 @@ interface WcOrderListItem {
   // Marketing: nome da campanha de origem (Order Attribution do WC). Só vem
   // preenchido se o anúncio carregou UTM na URL. null = direto/sem campanha.
   utmCampaign?: string | null;
+  /** 🤖 Roteado pela SEPARAÇÃO AUTOMÁTICA (teste do dono, 25/09) — sem clique humano. */
+  automatico?: boolean;
   // ── Aba "Em trânsito" ──
   // Último evento conhecido do objeto, lido do cache `rastreio_objetos` (o
   // backend só preenche nessa aba). null = o cron ainda não olhou pra ele —
@@ -319,6 +321,42 @@ function SeparacaoPageInner() {
   // Commerce) · 'ecommerce' (site NOVO, sprint 011 — nº "LP-xxxxxx").
   // As três origens entram na MESMA fila: quem sabe rotear Order roteia todas.
   const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce' | 'pdv_online'>('');
+
+  /**
+   * 🤖 SEPARAÇÃO AUTOMÁTICA (teste do dono, 25/09). A chave é a mesma do
+   * piloto antigo (`SystemSetting pilot_automatic_on`, rotas `/pilot/*`, só
+   * admin): ligada, o pedido pago do site vai sozinho pra(s) loja(s) com as
+   * regras do dono (franquia primeiro; Indaiatuba só em último caso), e o
+   * que a máquina não resolve (retirada sem a peça na loja, ruptura, pedido
+   * reportado) continua caindo nesta fila. Quem não é admin não vê o botão
+   * (a rota responde 403 e `autoSep` fica null).
+   */
+  const [autoSep, setAutoSep] = useState<{ on: boolean } | null>(null);
+  const [autoSepBusy, setAutoSepBusy] = useState(false);
+  useEffect(() => {
+    api<{ on: boolean }>('/pilot/status')
+      .then((r) => setAutoSep({ on: !!r?.on }))
+      .catch(() => setAutoSep(null));
+  }, []);
+  async function toggleAutoSep() {
+    if (!autoSep || autoSepBusy) return;
+    const ligar = !autoSep.on;
+    const ok = window.confirm(
+      ligar
+        ? 'LIGAR a separação automática?\n\nTodo pedido PAGO do site vai sozinho pra(s) loja(s) em segundos, com WhatsApp pra loja e a tag 🤖 AUTO aqui na lista.\n\nContinuam vindo pra você: retirada em loja que NÃO tem a peça, pedido sem estoque na rede e pedido reportado pela loja.'
+        : 'DESLIGAR a separação automática?\n\nOs pedidos pagos voltam a esperar o clique "Confirmar separação" aqui na retaguarda.',
+    );
+    if (!ok) return;
+    setAutoSepBusy(true);
+    try {
+      const r = await api<{ on: boolean }>('/pilot/toggle', { method: 'PATCH', body: JSON.stringify({ on: ligar }) });
+      setAutoSep({ on: !!r?.on });
+    } catch (e: any) {
+      alert(e?.message || 'Não consegui mudar a chave da separação automática');
+    } finally {
+      setAutoSepBusy(false);
+    }
+  }
 
   /**
    * O QUE A MATRIZ REALMENTE VÊ — a lista já passada pelo filtro de origem.
@@ -1413,6 +1451,28 @@ function SeparacaoPageInner() {
           ))}
         </div>
 
+        {/* 🤖 CHAVE DA SEPARAÇÃO AUTOMÁTICA (teste do dono, 25/09) — só admin
+            vê. Verde = a máquina está roteando o pedido pago do site sozinha. */}
+        {autoSep && (
+          <button
+            type="button"
+            onClick={toggleAutoSep}
+            disabled={autoSepBusy}
+            className={`ml-3 rounded-field border px-3 py-1.5 text-xs font-bold transition disabled:opacity-50 ${
+              autoSep.on
+                ? 'border-ok/40 bg-ok-soft text-ok'
+                : 'border-line bg-surface text-ink-soft hover:bg-surface-2 hover:text-ink'
+            }`}
+            title={
+              autoSep.on
+                ? 'Separação automática LIGADA: pedido pago do site vai sozinho pra loja (franquia primeiro; Indaiatuba só em último caso; retirada só se a própria loja tem a peça). Clique pra desligar.'
+                : 'Separação automática DESLIGADA: pedido pago espera o clique aqui. Clique pra ligar o teste.'
+            }
+          >
+            🤖 Automática: {autoSep.on ? 'LIGADA' : 'desligada'}
+          </button>
+        )}
+
         {/* ─── FILTRO LOJA RESPONSÁVEL ─── */}
         <div className="flex items-center gap-2 ml-auto">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
@@ -1699,6 +1759,17 @@ function SeparacaoPageInner() {
                       {(o as any).orderSource === 'live' && (
                         <span className="text-[10px] font-bold text-ink-soft" title="Pedido da Live Commerce">
                           LIVE
+                        </span>
+                      )}
+                      {/* A TAG do teste (dono, 25/09): este pedido foi pra loja
+                          sem clique humano — a matriz precisa saber de quem
+                          cobrar quando algo sair torto. */}
+                      {o.automatico && (
+                        <span
+                          className="rounded-full border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-soft"
+                          title="Separação AUTOMÁTICA: roteado pela máquina assim que o pagamento confirmou (franquia primeiro; Indaiatuba só em último caso)"
+                        >
+                          🤖 AUTO
                         </span>
                       )}
                     </div>

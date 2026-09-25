@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { normalizarCodigoLoja, tierDaLoja } from '../common/prioridade-lojas';
 import {
   OrderItemInput,
   RoutingContext,
@@ -81,7 +82,63 @@ export class RoutingEngine {
   private readonly W_PROP_PRIORITY = 5;
   private readonly W_PROP_DISTANCE = 2;
 
+  /**
+   * ÚLTIMO CASO (dono, 25/09): lojas em `ctx.ultimoCasoStoreCodes`
+   * (Indaiatuba, sem coleta dos Correios) só entram quando NENHUMA outra
+   * loja tem a peça. Duas passadas: a primeira roda SEM o estoque dessas
+   * lojas — se cobriu, é essa, mesmo que custe mais caixas do que elas
+   * fechariam sozinhas (decisão do dono na pergunta de 25/09). Se sobrou
+   * ruptura, a segunda passada devolve a elas SÓ os SKUs que faltaram; o
+   * resto do plano continua sem elas.
+   *
+   * Isenções: a loja de RETIRADA da cliente (ela escolheu buscar lá), a loja
+   * FIXADA/preferida pelo operador (a escolha dele manda) e a VENDEDORA da
+   * venda online (peça na mão de quem vendeu tem frete zero).
+   * Régua e envs em `common/prioridade-lojas.ts`.
+   */
   route(ctx: RoutingContext): RoutingResult {
+    ctx = { ...ctx, items: this.mergeItemsBySku(ctx.items) };
+    const ultimoCaso = this.lojasUltimoCasoAplicaveis(ctx);
+    if (!ultimoCaso.size) return this.routeUmaPassada(ctx);
+
+    const foraDelas = (e: StockEntry) => !ultimoCaso.has(normalizarCodigoLoja(e.storeCode));
+    const primeira = this.routeUmaPassada({ ...ctx, stock: ctx.stock.filter(foraDelas) });
+    if (primeira.success) return primeira;
+    const faltam = new Set(primeira.missing.map((m) => m.sku));
+    if (!faltam.size) return primeira;
+    this.logger.log(
+      `[ultimo-caso] ${Array.from(ultimoCaso).join(',')} entra só pra ${faltam.size} SKU(s) que ` +
+        `ninguém mais tem: ${Array.from(faltam).join(', ')}`,
+    );
+    return this.routeUmaPassada({
+      ...ctx,
+      stock: ctx.stock.filter((e) => foraDelas(e) || faltam.has(e.sku)),
+    });
+  }
+
+  /** Lojas de último caso que valem NESTE pedido (tira as isentas e as inativas). */
+  private lojasUltimoCasoAplicaveis(ctx: RoutingContext): Set<string> {
+    const base = (ctx.ultimoCasoStoreCodes ?? []).map((c) => normalizarCodigoLoja(c)).filter(Boolean);
+    if (!base.length) return new Set();
+    const isentas = new Set(
+      [ctx.pickupStoreCode, ctx.preferStoreCode, ctx.sellerStoreCode, ...(ctx.pinStoreCodes ?? [])]
+        .map((c) => normalizarCodigoLoja(c))
+        .filter(Boolean),
+    );
+    const ativas = new Set(ctx.stores.filter((s) => s.active).map((s) => normalizarCodigoLoja(s.code)));
+    const out = new Set<string>();
+    for (const c of base) if (!isentas.has(c) && ativas.has(c)) out.add(c);
+    // Só sobrou loja de último caso: não existe "outra" — passada única decide.
+    if (out.size && out.size >= ativas.size) return new Set();
+    return out;
+  }
+
+  /** 0 = franquia (vence o desempate), 1 = demais — regra 1 do dono (25/09). */
+  private tier(store: StoreInput, ctx: RoutingContext): number {
+    return tierDaLoja(store, ctx.franquiaPrimeiro !== false);
+  }
+
+  private routeUmaPassada(ctx: RoutingContext): RoutingResult {
     // O MESMO SKU PODE CHEGAR EM DUAS LINHAS (27/08). Desde o conserto do
     // LP-000289, um SKU dividido entre lojas vira DUAS linhas de `order_items`
     // (ver `split-assign.util.ts`) — e o pedido do site também pode nascer com
@@ -626,6 +683,13 @@ export class RoutingEngine {
     // Quando ctx.cedeStats está presente, usa o score composto V2 com pesos do CEO.
     if (ctx.cedeStats) {
       return [...stores].sort((a, b) => {
+        // 0. FRANQUIA PRIMEIRO (dono, 25/09): aqui todas cobrem o pedido
+        //    inteiro (mesmo número de caixas), então a franquia vence antes
+        //    de estoque, distância e score.
+        const tA = this.tier(a, ctx);
+        const tB = this.tier(b, ctx);
+        if (tA !== tB) return tA - tB;
+
         // 1. Quantidade absoluta do pedido ainda manda (uma loja com 10 peças desse
         //    SKU sempre vai ser melhor que 3 — protege contra concorrência física).
         const qtyA = this.totalRawQty(a, ctx.items, stockMap);
@@ -639,6 +703,12 @@ export class RoutingEngine {
 
     // MODO LEGADO (sem cedeStats) — mantém comportamento hierárquico anterior.
     return [...stores].sort((a, b) => {
+      // 0. FRANQUIA PRIMEIRO (dono, 25/09) — mesmo número de caixas, a
+      //    franquia vence antes de tudo.
+      const tA = this.tier(a, ctx);
+      const tB = this.tier(b, ctx);
+      if (tA !== tB) return tA - tB;
+
       // 1. Quantidade absoluta total das peças do pedido que a loja tem
       const qtyA = this.totalRawQty(a, ctx.items, stockMap);
       const qtyB = this.totalRawQty(b, ctx.items, stockMap);
@@ -827,6 +897,7 @@ export class RoutingEngine {
       let bestStore: StoreInput | null = null;
       let bestCovered: OrderItemInput[] = [];
       let bestCoveredCount = -1;
+      let bestTier = Number.POSITIVE_INFINITY;
       let bestCoveredTotalQty = -1;
       let bestRatio = -1;
       let bestPriority = -1;
@@ -857,19 +928,26 @@ export class RoutingEngine {
           ? this.scoreStoreV2(store, ctx, stockMap)
           : this.scoreStore(store, ctx, stockMap);
         const ratioNorm = minRatio === Infinity ? 0 : minRatio;
+        // FRANQUIA PRIMEIRO (dono, 25/09): entre lojas que cobrem o MESMO
+        // número de SKUs restantes (= não abre caixa a mais), a franquia
+        // vence antes de estoque, prioridade manual e score.
+        const tier = this.tier(store, ctx);
 
         // Comparação hierárquica (early-return ao achar diferença num nível superior).
+        const mesmaCobertura = covered.length === bestCoveredCount;
         const isBetter =
           covered.length > bestCoveredCount ||
-          (covered.length === bestCoveredCount && coveredTotalQty > bestCoveredTotalQty) ||
-          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm > bestRatio) ||
-          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm === bestRatio && store.priorityScore > bestPriority) ||
-          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm === bestRatio && store.priorityScore === bestPriority && storeScore > bestScore);
+          (mesmaCobertura && tier < bestTier) ||
+          (mesmaCobertura && tier === bestTier && coveredTotalQty > bestCoveredTotalQty) ||
+          (mesmaCobertura && tier === bestTier && coveredTotalQty === bestCoveredTotalQty && ratioNorm > bestRatio) ||
+          (mesmaCobertura && tier === bestTier && coveredTotalQty === bestCoveredTotalQty && ratioNorm === bestRatio && store.priorityScore > bestPriority) ||
+          (mesmaCobertura && tier === bestTier && coveredTotalQty === bestCoveredTotalQty && ratioNorm === bestRatio && store.priorityScore === bestPriority && storeScore > bestScore);
 
         if (isBetter) {
           bestStore = store;
           bestCovered = covered;
           bestCoveredCount = covered.length;
+          bestTier = tier;
           bestCoveredTotalQty = coveredTotalQty;
           bestRatio = ratioNorm;
           bestPriority = store.priorityScore;
@@ -975,6 +1053,9 @@ export class RoutingEngine {
         distanceScore: Number(distance.toFixed(4)),
         finalScore: Number(finalScore.toFixed(4)),
         fullCoverage: this.canFulfillAll(s.code, ctx.items, stockMap),
+        // Regra 1 (25/09): a UI explica "franquia ganhou" sem adivinhar.
+        tipo: s.tipo ?? null,
+        tier: this.tier(s, ctx),
       };
       if (ctx.cedeStats) {
         const quota = ctx.cedeStats.targetQuotaByStore[s.code] ?? 0;
