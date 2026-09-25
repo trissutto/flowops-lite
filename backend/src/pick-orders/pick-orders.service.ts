@@ -22,6 +22,7 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pacotesAguardandoLiberacao, dentroDeSaoPaulo } from '../common/politica-frete';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
+import { caixaDesviadaPara, etapaDoFeeder } from '../common/juntada-etapa';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
@@ -2363,7 +2364,7 @@ export class PickOrdersService {
           select: {
             id: true, code: true, status: true, trackingCode: true, carrier: true,
             transportMode: true, orderId: true, pickOrderId: true, toStoreCode: true,
-            fromStoreName: true, receivedAt: true,
+            toStoreName: true, fromStoreName: true, receivedAt: true,
           },
         })
       : [];
@@ -2514,11 +2515,23 @@ export class PickOrdersService {
       const souAncora = !r.isTransfer;
       // Onde a cliente encosta a mão no pedido: buscando na loja ou pelos Correios.
       const ehRetiradaComposta = souAncora && !!r.order?.isPickup;
-      // As caixas que JÁ nasceram (só existem depois do Finalizar do feeder).
+      /**
+       * As caixas que JÁ nasceram (só existem depois do Finalizar do feeder).
+       *
+       * A CAIXA DO FEEDER CONTA POR `pickOrderId`, NÃO PELO DESTINO (25/09).
+       * Este filtro exigia `toStoreCode === minha loja` — e a caixa que saiu
+       * pra âncora ANTIGA, antes de a matriz trocar a âncora, sumia daqui: a
+       * linha da loja de origem dizia "já saiu" pra sempre, `recebidas`
+       * ficava 1 de 2 e o botão de etiqueta nunca aparecia, mesmo com as duas
+       * caixas `received` (LP-001508, Itanhaém → Indaiatuba, âncora trocada
+       * pra Anália Franco). A porta (`travarEnvioAncoraSeFaltamCaixas`) e a
+       * retaguarda (`statusJuntada`) casam pelo `pickOrderId` e diziam
+       * "completa" — tela e porta não podem discordar. A caixa desviada não
+       * some: vem marcada (`desviadaPara`) e o card avisa
+       * (`common/juntada-etapa`).
+       */
       const caixasChegando = souAncora
-        ? (caixasDoPedido.get(r.orderId) ?? []).filter(
-            (c) => c.toStoreCode === minhaLoja?.code && c.pickOrderId !== r.id,
-          )
+        ? (caixasDoPedido.get(r.orderId) ?? []).filter((c) => c.pickOrderId !== r.id)
         : [];
       const caixaPorPick = new Map(caixasChegando.map((c) => [c.pickOrderId, c]));
       /**
@@ -2542,22 +2555,18 @@ export class PickOrdersService {
              * Vale também pro feeder de juntada cuja caixa não nasceu
              * (falha no Finalizar): "separada, aguardando sair" é a
              * verdade, "ainda separando" não é.
+             *
+             * Régua única em `common/juntada-etapa` (com spec).
              */
-            const etapa = caixa
-              ? caixa.status === 'received'
-                ? 'chegou'
-                : 'a_caminho'
-              : f.issueReason
-                ? 'problema'
-                : f.status === 'shipped'
-                  ? 'a_caminho'
-                  : f.status === 'separated' || f.status === 'ready'
-                    ? 'pronta'
-                    : 'separando';
+            const etapa = etapaDoFeeder(caixa, f);
+            // Caixa endereçada a OUTRA loja (âncora trocada depois do
+            // despacho): conta como a porta conta, mas o card avisa.
+            const desviadaPara = caixaDesviadaPara(caixa, minhaLoja?.code);
             return {
               code: caixa?.code ?? null,
               status: caixa?.status ?? f.status,
               etapa,
+              desviadaPara,
               fromStoreName: caixa?.fromStoreName ?? f.store?.name ?? null,
               trackingCode: caixa?.trackingCode ?? null,
               pecas: f.pecas ?? 0,
@@ -2638,6 +2647,8 @@ export class PickOrdersService {
               total: chegando.length,
               // "Recebidas" conta CAIXA QUE CHEGOU — é o que libera o envio.
               // Feeder ainda separando (sem caixa) não conta, de propósito.
+              // Caixa recebida em OUTRA loja conta (é o que a porta faz);
+              // ela vem com `desviadaPara` e o card manda conferir na mão.
               recebidas: chegando.filter((c) => c.etapa === 'chegou').length,
               // Quantas peças vêm de fora: com as da própria loja, é o total
               // do pedido composto que a âncora vai despachar.
@@ -2646,6 +2657,7 @@ export class PickOrdersService {
                 code: c.code,
                 status: c.status,
                 etapa: c.etapa,
+                desviadaPara: c.desviadaPara ?? null,
                 fromStoreName: c.fromStoreName,
                 trackingCode: c.trackingCode,
                 pecas: c.pecas,
