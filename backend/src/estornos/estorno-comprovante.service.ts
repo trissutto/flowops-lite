@@ -1,11 +1,37 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import * as PDFDocument from 'pdfkit';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+/**
+ * ⚠️ `import PDFDocument from 'pdfkit'` — DEFAULT, não `import * as`.
+ *
+ * O pdfkit é CommonJS puro (`module.exports = PDFDocument`, sem `__esModule`)
+ * e o tsconfig tem `esModuleInterop: true`. Com isso, `import * as X` compila
+ * pra `__importStar(require('pdfkit'))`, que embrulha a classe num objeto
+ * `{ default: PDFDocument, ... }` — e `new X()` morre em
+ * `TypeError: PDFDocument is not a constructor`. Foi o 500 do "Baixar PDF"
+ * em 25/09/2026 (dois cliques do dono no log do Railway). O `as any` que
+ * havia no `new` escondia justamente o erro de tipo que avisava disso.
+ */
+import PDFDocument from 'pdfkit';
 import * as path from 'path';
 import * as fs from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AtorEstorno, EstornosAcessoService } from './estornos-acesso.service';
-import { StatusEstorno, brl, fraseDoComprovante, mascararCpf, mascararEmail, rotuloDoMotivo } from '../common/estornos';
+import { EstornosService } from './estornos.service';
+import {
+  STATUS_EM_ABERTO,
+  StatusEstorno,
+  brl,
+  fraseDoComprovante,
+  mascararCpf,
+  mascararEmail,
+  rotuloDoMotivo,
+} from '../common/estornos';
 
 const MARROM = '#5e3823';
 const COBRE = '#985d3f';
@@ -38,21 +64,63 @@ export class EstornoComprovanteService {
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly acesso: EstornosAcessoService,
+    private readonly estornos: EstornosService,
   ) {}
 
-  async gerar(estornoId: string): Promise<{ buffer: Buffer; filename: string; titulo: string }> {
-    const e = await (this.prisma as any).estornoPagamento.findUnique({ where: { id: estornoId } });
-    if (!e) throw new BadRequestException('Estorno não encontrado.');
+  /**
+   * Gera o PDF. É LEITURA: não cria, não repete e não altera o estorno —
+   * clicar de novo depois de uma falha é seguro.
+   *
+   * A única escrita possível aqui é a do PRÓPRIO gateway: estorno ainda em
+   * aberto é reconsultado antes de imprimir (o mesmo `consultar` do botão
+   * "Atualizar status"), porque o papel tem que dizer o que o gateway diz
+   * AGORA — não o que dizia quando a tela abriu. Se o gateway não responder,
+   * o estorno fica como está e o papel sai "EM PROCESSAMENTO", que é a verdade
+   * conhecida. `processado` é terminal e só nasce de resposta do gateway, então
+   * não precisa de nova pergunta.
+   */
+  async gerar(
+    estornoId: string,
+    ator?: AtorEstorno,
+  ): Promise<{ buffer: Buffer; filename: string; titulo: string; estorno: any }> {
+    let e = await (this.prisma as any).estornoPagamento.findUnique({ where: { id: estornoId } });
+    if (!e) throw new NotFoundException('Estorno não encontrado.');
+
+    if ((STATUS_EM_ABERTO as readonly string[]).includes(String(e.status))) {
+      try {
+        e = (await this.estornos.consultar(e.id, ator)) || e;
+      } catch (err: any) {
+        this.logger.warn(`[estornos] comprovante ${e.id}: reconsulta ao gateway falhou (${err?.message || err}) — sai com o último status conhecido "${e.status}"`);
+      }
+    }
+
     const frase = fraseDoComprovante(String(e.status) as StatusEstorno);
     if (!frase.podeEmitir) {
       throw new BadRequestException(
         `Este estorno está "${e.status}" — não existe comprovante de estorno que não saiu. Consulte o gateway e tente de novo quando ele confirmar.`,
       );
     }
+
     const empresa = await this.empresa(e.storeCode);
-    const buffer = await this.montar(e, empresa, frase.titulo);
+    let buffer: Buffer;
+    try {
+      buffer = await this.montar(e, empresa, frase.titulo);
+    } catch (err: any) {
+      // Falha de DESENHO não pode chegar na tela como `{"statusCode":500}` cru:
+      // o stack vai pro log, a pessoa recebe o que fazer. Nada do estorno mudou.
+      this.logger.error(`[estornos] comprovante ${e.id} não gerado: ${err?.message || err}`, err?.stack);
+      throw new InternalServerErrorException(
+        'Não foi possível gerar o PDF do comprovante agora. O estorno não foi alterado — tente de novo em instantes; se continuar falhando, avise o suporte.',
+      );
+    }
+    if (!buffer?.length || buffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
+      this.logger.error(`[estornos] comprovante ${e.id}: o gerador devolveu ${buffer?.length ?? 0} bytes sem cabeçalho PDF`);
+      throw new InternalServerErrorException(
+        'O comprovante saiu vazio ou inválido. O estorno não foi alterado — tente de novo em instantes.',
+      );
+    }
     const nome = String(e.refNumero || e.id.slice(-8)).replace(/[^\w-]/g, '');
-    return { buffer, filename: `estorno-${nome}.pdf`, titulo: frase.titulo };
+    return { buffer, filename: `estorno-${nome}.pdf`, titulo: frase.titulo, estorno: e };
   }
 
   /**
@@ -61,14 +129,16 @@ export class EstornoComprovanteService {
    * — pra quem, quando — fica gravado no estorno e no log.
    */
   async enviarPorEmail(estornoId: string, paraDigitado: string | undefined, ator: AtorEstorno) {
-    const e = await (this.prisma as any).estornoPagamento.findUnique({ where: { id: estornoId } });
-    if (!e) throw new BadRequestException('Estorno não encontrado.');
-    const para = String(paraDigitado || e.clienteEmail || '').trim();
+    const antes = await (this.prisma as any).estornoPagamento.findUnique({ where: { id: estornoId } });
+    if (!antes) throw new NotFoundException('Estorno não encontrado.');
+    const para = String(paraDigitado || antes.clienteEmail || '').trim();
     if (!para.includes('@')) {
       throw new BadRequestException('Este pedido não tem e-mail da cliente — digite o endereço pra enviar.');
     }
 
-    const { buffer, filename, titulo } = await this.gerar(estornoId);
+    // `e` é o estorno DEPOIS da reconsulta do `gerar` — o texto do e-mail e o
+    // PDF anexado têm que contar a mesma história.
+    const { buffer, filename, titulo, estorno: e } = await this.gerar(estornoId, ator);
     const ok = await this.email.send(
       para,
       `${titulo} — pedido ${e.refNumero || ''}`.trim(),
@@ -159,7 +229,8 @@ export class EstornoComprovanteService {
   private montar(e: any, empresa: any, titulo: string): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       try {
-        const doc = new (PDFDocument as any)({
+        // Sem `as any`: se o import voltar a virar namespace, o tsc acusa aqui.
+        const doc = new PDFDocument({
           size: 'A4',
           margin: 44,
           info: {
@@ -215,39 +286,53 @@ export class EstornoComprovanteService {
     this.regua(doc);
   }
 
+  /**
+   * O CONTEÚDO do comprovante, seção a seção — separado do desenho pra ser
+   * conferido em teste sem abrir o PDF (o pdfkit comprime o texto). Tudo que a
+   * cliente precisa pra cobrar o banco está aqui: pedido, quem é, quanto, de
+   * que tipo, quando, o código da transação e o que o gateway respondeu.
+   */
+  linhasDoComprovante(e: any): { pedido: Array<[string, string]>; valores: Array<[string, string]>; transacao: Array<[string, string]> } {
+    const saldo = Math.max(0, Number(e.valorPagoCents || 0) - Number(e.jaEstornadoCents || 0) - Number(e.valorCents || 0));
+    return {
+      pedido: [
+        ['Pedido', e.refNumero || String(e.refId || '').slice(-8) || SEM_DADO],
+        ['Origem', this.rotuloOrigem(e.origem)],
+        ['Cliente', e.clienteNome || SEM_DADO],
+        ['CPF', e.clienteCpf ? mascararCpf(e.clienteCpf) : SEM_DADO],
+        ['E-mail', e.clienteEmail ? mascararEmail(e.clienteEmail) : SEM_DADO],
+      ],
+      valores: [
+        ['Valor pago', brl(e.valorPagoCents)],
+        ['Já estornado antes desta operação', brl(e.jaEstornadoCents)],
+        ['Valor DESTE estorno', `${brl(e.valorCents)} (${e.tipo === 'integral' ? 'integral' : 'parcial'})`],
+        ['Saldo que continua pago', brl(saldo)],
+      ],
+      transacao: [
+        ['Forma de pagamento', this.rotuloMetodo(e.metodo)],
+        ['Gateway', e.gateway === 'pagbank' ? 'PagBank' : 'Pagar.me'],
+        ['Código da transação', e.gatewayChargeId || SEM_DADO],
+        ['Pedido no gateway', e.gatewayOrderId || SEM_DADO],
+        ['Estorno solicitado em', this.dataHora(e.createdAt)],
+        ['Confirmado pelo gateway em', e.processadoEm ? this.dataHora(e.processadoEm) : 'aguardando confirmação'],
+        ['Situação informada pelo gateway', e.statusGateway || SEM_DADO],
+      ],
+    };
+  }
+
   private blocoPedido(doc: any, e: any) {
     this.titulo(doc, 'Pedido e cliente');
-    this.par(doc, [
-      ['Pedido', e.refNumero || String(e.refId).slice(-8)],
-      ['Origem', this.rotuloOrigem(e.origem)],
-      ['Cliente', e.clienteNome || SEM_DADO],
-      ['CPF', e.clienteCpf ? mascararCpf(e.clienteCpf) : SEM_DADO],
-      ['E-mail', e.clienteEmail ? mascararEmail(e.clienteEmail) : SEM_DADO],
-    ]);
+    this.par(doc, this.linhasDoComprovante(e).pedido);
   }
 
   private blocoFinanceiro(doc: any, e: any) {
-    const saldo = Math.max(0, Number(e.valorPagoCents || 0) - Number(e.jaEstornadoCents || 0) - Number(e.valorCents || 0));
     this.titulo(doc, 'Valores');
-    this.par(doc, [
-      ['Valor pago', brl(e.valorPagoCents)],
-      ['Já estornado antes desta operação', brl(e.jaEstornadoCents)],
-      ['Valor DESTE estorno', `${brl(e.valorCents)} (${e.tipo === 'integral' ? 'integral' : 'parcial'})`],
-      ['Saldo que continua pago', brl(saldo)],
-    ]);
+    this.par(doc, this.linhasDoComprovante(e).valores);
   }
 
   private blocoTransacao(doc: any, e: any) {
     this.titulo(doc, 'Transação');
-    this.par(doc, [
-      ['Forma de pagamento', this.rotuloMetodo(e.metodo)],
-      ['Gateway', e.gateway === 'pagbank' ? 'PagBank' : 'Pagar.me'],
-      ['Código da transação', e.gatewayChargeId || SEM_DADO],
-      ['Pedido no gateway', e.gatewayOrderId || SEM_DADO],
-      ['Estorno solicitado em', this.dataHora(e.createdAt)],
-      ['Confirmado pelo gateway em', e.processadoEm ? this.dataHora(e.processadoEm) : 'aguardando confirmação'],
-      ['Situação informada pelo gateway', e.statusGateway || SEM_DADO],
-    ]);
+    this.par(doc, this.linhasDoComprovante(e).transacao);
   }
 
   private blocoMotivo(doc: any, e: any) {

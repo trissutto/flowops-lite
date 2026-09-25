@@ -1,6 +1,9 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import * as PDFDocument from 'pdfkit';
+// DEFAULT import, não `import * as`: o pdfkit é CommonJS e, com
+// `esModuleInterop`, o namespace não é construível ("PDFDocument is not a
+// constructor" — o 500 do comprovante de estorno em 25/09/2026, mesmo import).
+import PDFDocument from 'pdfkit';
 
 /**
  * FechamentoPdfService — gera PDF do comprovante mensal por filial.
