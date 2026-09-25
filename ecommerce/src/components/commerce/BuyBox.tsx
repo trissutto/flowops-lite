@@ -5,10 +5,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { AlertCircle, ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { Modal } from '@/components/ui/Modal';
 import { Overlay } from '@/components/ui/Overlay';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { MaisDaFamilia } from '@/components/commerce/MaisDaFamilia';
+import { AbrirTabelaDeMedidas, TabelaDeMedidas } from '@/components/commerce/TabelaDeMedidas';
 import { SizePill } from '@/components/ui/Choice';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
@@ -16,7 +16,7 @@ import { useLookOfferStore } from '@/store/look-offer';
 import { useUiStore } from '@/store/ui';
 import { useWishlistStore } from '@/store/wishlist';
 import { trackAddToCart, trackAddToCartBlocked, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
-import { useMounted } from '@/hooks';
+import { useMounted, useNearViewport } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
 import { rotuloDaCor, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
@@ -138,6 +138,13 @@ export function BuyBox({
   const [sizeError, setSizeError] = useState(false);
   // A tabela abre sobre a PDP para a cliente não perder a seleção da peça.
   const [sizeChartOpen, setSizeChartOpen] = useState(false);
+  /**
+   * A imagem da tabela é pedida quando o passo do tamanho CHEGA PERTO da tela
+   * — antes do clique. Sem isso o modal abria com um retângulo branco até a
+   * imagem chegar (ver `TabelaDeMedidas`). São ~20 KB em AVIF, só pra quem
+   * rolou até os números.
+   */
+  const [seletorTamanhoRef, seletorTamanhoPerto] = useNearViewport<HTMLDivElement>();
   /** Folha de tamanhos — sobe quando ela tenta comprar sem ter escolhido. */
   const [folhaTamanho, setFolhaTamanho] = useState(false);
   const { toast } = useToast();
@@ -407,6 +414,7 @@ export function BuyBox({
           celular vira buraco. No PC segue 36. */}
       <div
         id="seletor-tamanho"
+        ref={seletorTamanhoRef}
         className={cn(
           'mt-6 scroll-mt-28 rounded-lg transition-all duration-300 lg:mt-9',
           sizeError &&
@@ -425,14 +433,19 @@ export function BuyBox({
             escolhido={size}
             sufixoEscolhido="tamanho"
           />
-          <button
-            type="button"
-            onClick={() => setSizeChartOpen(true)}
-            className="inline-flex items-center gap-1.5 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
+          {/* Link, não botão — funciona antes da hidratação (ver
+              `AbrirTabelaDeMedidas`). O padding com margem negativa igual
+              (`-mt-2 pt-2`, `-mb-3 pb-3`, `-mx-2 px-2`) leva o alvo de toque
+              de 20 px pra 40 px de altura SEM mover o texto nem o desenho:
+              cresce só pro respiro acima e pro `mt-3` da grade abaixo, sem
+              invadir as pílulas. */}
+          <AbrirTabelaDeMedidas
+            onAbrir={() => setSizeChartOpen(true)}
+            className="-mx-2 -mt-2 -mb-3 inline-flex items-center gap-1.5 px-2 pt-2 pb-3 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
           >
             <Ruler className="size-3.5" strokeWidth={1.75} />
             Tabela de medidas
-          </button>
+          </AbrirTabelaDeMedidas>
         </div>
 
         {/* TODOS OS NÚMEROS NUMA LINHA SÓ, SEM QUEBRA (dono, 20/08): o 60
@@ -663,23 +676,11 @@ export function BuyBox({
         </li>
       </ul>
 
-      <Modal
+      <TabelaDeMedidas
         open={sizeChartOpen}
         onClose={() => setSizeChartOpen(false)}
-        label="Tabela de medidas"
-        title="Tabela de medidas"
-        size="lg"
-        className="max-h-[94vh]"
-      >
-        <Image
-          src="/images/guia-tamanhos/tabela-medidas-lurds.png"
-          alt="Tabela de medidas Lurd's para os tamanhos 46 a 60"
-          width={750}
-          height={1075}
-          sizes="(max-width: 640px) 88vw, 750px"
-          className="mx-auto h-auto w-full max-w-[750px]"
-        />
-      </Modal>
+        preparar={seletorTamanhoPerto}
+      />
 
       {/* FOLHA DE TAMANHOS — a escolha vai até o dedo dela.
 
@@ -730,17 +731,18 @@ export function BuyBox({
 
           {/* Não saber o número É um motivo de não escolher — e a saída não
               pode ser fechar a folha e procurar a tabela na página. */}
-          <button
-            type="button"
-            onClick={() => {
+          {/* `-my-3 py-3`: alvo de 44 px sem mover o texto (o `mt-5` acima e
+              o respiro de baixo da folha absorvem os 12 px de cada lado). */}
+          <AbrirTabelaDeMedidas
+            onAbrir={() => {
               setFolhaTamanho(false);
               setSizeChartOpen(true);
             }}
-            className="mt-5 inline-flex items-center gap-1.5 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
+            className="-mx-2 mt-5 -mb-3 inline-flex items-center gap-1.5 px-2 py-3 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
           >
             <Ruler className="size-3.5" strokeWidth={1.75} />
             Não sei meu número — ver tabela de medidas
-          </button>
+          </AbrirTabelaDeMedidas>
         </div>
       </Overlay>
 
@@ -763,13 +765,15 @@ export function BuyBox({
             <div className="mx-auto max-w-lg">
               <p className="mb-1.5 flex items-baseline justify-between gap-3 text-xs">
                 <span className="truncate font-medium text-ink">Toque no seu número</span>
-                <button
-                  type="button"
-                  onClick={() => setSizeChartOpen(true)}
-                  className="shrink-0 text-ink-soft underline decoration-border underline-offset-4"
+                {/* Era um alvo de 16 px de altura. Cresce pro `pt-2` da barra
+                    acima e pro `mb-1.5` abaixo (30 px) — sem encostar nas
+                    pílulas, que não podem perder um pixel de toque. */}
+                <AbrirTabelaDeMedidas
+                  onAbrir={() => setSizeChartOpen(true)}
+                  className="-mx-2 -mt-2 -mb-1.5 shrink-0 px-2 pt-2 pb-1.5 text-ink-soft underline decoration-border underline-offset-4"
                 >
                   Não sei meu número
-                </button>
+                </AbrirTabelaDeMedidas>
               </p>
               <div className="grid grid-flow-col auto-cols-fr gap-1.5">
                 {product.sizes.map((option) => (

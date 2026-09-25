@@ -77,6 +77,24 @@ Padrão adotado:
 que é o efeito que realmente importa. Bônus: testável por estado, sem depender
 de animação ter rodado.
 
+Três consequências do "sempre montado" que já viraram bug (25/09):
+
+- **Imagem `lazy` dentro de overlay fechado NÃO carrega** — o navegador só
+  pede a imagem quando o painel fica visível, ou seja, no clique. Conteúdo
+  pesado dentro de overlay precisa de gatilho próprio (ver `TabelaDeMedidas`,
+  que troca `loading` pra `eager` quando o passo do tamanho chega perto da
+  tela) e de um estado de carregamento visível — retângulo branco parece
+  "não abriu".
+- **`useLockScroll` é um contador.** Dois overlays abertos ao mesmo tempo
+  (mini-cart + Quick Add, folha de tamanhos → tabela) restauravam o
+  `overflow` um do outro e podiam deixar o body preso. Enquanto houver
+  overlay aberto o `<html>` carrega `data-overlay-open`; quem precisa sair da
+  frente (o banner de consentimento, z 80 > modal 70) se pendura nesse
+  atributo em vez de contar overlays por conta própria.
+- **`inert` sai num `useLayoutEffect`.** O `useFocusTrap` foca o primeiro
+  botão num efeito comum; se o `inert` só saísse depois, o `.focus()` era
+  ignorado e o foco nunca entrava no diálogo.
+
 ⚠️ Ao animar `x`/`y` entre string e número, use **sempre** o mesmo tipo:
 `'0%'` → `'100%'`. Misturar `0` (número) com `'100%'` (string) não interpola.
 

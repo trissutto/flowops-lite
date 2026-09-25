@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -80,7 +80,14 @@ export function Overlay({
   // Painel fechado sai da navegação por teclado e do leitor de tela.
   // `noCliente` nas dependências: a mudança pro portal cria um painel NOVO,
   // e sem reaplicar o `inert` ele nasceria tabulável com o overlay fechado.
-  useEffect(() => {
+  //
+  // `useLayoutEffect`, e não `useEffect` (25/09): o `useFocusTrap` acima
+  // tenta focar o primeiro botão do painel num efeito comum, e este aqui
+  // rodava DEPOIS dele — o painel ainda estava `inert` na hora do `.focus()`,
+  // que era ignorado, e o foco ficava fora do diálogo em toda abertura. O
+  // efeito de layout roda antes dos comuns, então o painel já está
+  // tabulável quando o foco chega.
+  useLayoutEffect(() => {
     if (inertRef.current) inertRef.current.inert = !open;
   }, [open, noCliente]);
 
