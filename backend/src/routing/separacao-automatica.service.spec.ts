@@ -11,6 +11,10 @@ function monta(opts: {
   reportes?: number;
   preview?: any;
   confirmErro?: string;
+  /** O que o confirmRoute devolve (ex.: `{ persisted: false, alreadyRouted: true }`). */
+  confirmRetorno?: any;
+  /** Linhas relidas do banco depois do confirmRoute (com `assignedStoreId`). */
+  linhas?: any[];
 }) {
   const historico: string[] = [];
   const enviados: Array<{ numero: string; texto: string }> = [];
@@ -19,6 +23,7 @@ function monta(opts: {
       findUnique: jest.fn(async () => (opts.chave === null ? null : { value: opts.chave ?? '1' })),
     },
     order: { findUnique: jest.fn(async () => opts.order ?? null) },
+    orderItem: { findMany: jest.fn(async () => opts.linhas ?? opts.order?.items ?? []) },
     pickOrderItemReport: { count: jest.fn(async () => opts.reportes ?? 0) },
     orderHistory: {
       create: jest.fn(async ({ data }: any) => {
@@ -31,6 +36,7 @@ function monta(opts: {
     previewRoute: jest.fn(async () => opts.preview),
     confirmRoute: jest.fn(async () => {
       if (opts.confirmErro) throw new Error(opts.confirmErro);
+      return opts.confirmRetorno;
     }),
   };
   const whatsapp: any = {
@@ -175,5 +181,85 @@ describe('SeparacaoAutomaticaService — portas', () => {
     });
     expect(() => m.svc.disparar('o1', 'teste')).not.toThrow();
     await new Promise((r) => setTimeout(r, 0));
+  });
+
+  // ── A MENSAGEM: cada loja recebe SÓ o que ela separa (dono, 25/09 — LP-001687) ──
+  const vestido = (extra: Record<string, any> = {}) => ({
+    sku: '5410644',
+    quantity: 1,
+    productName: 'Vestido Manga Curta — VMM-225 · PRETO · 56',
+    cor: 'PRETO',
+    tamanho: '56',
+    ...extra,
+  });
+  const previewDividido = () => ({
+    success: true,
+    strategy: 'multi-store',
+    assignments: [
+      { storeId: 'pira', storeCode: '02', storeName: 'PIRACICABA', items: [{ sku: '5410644', quantity: 1 }], whatsapp: '5519900000002' },
+      { storeId: 'pg', storeCode: '07', storeName: 'PRAIA GRANDE', items: [{ sku: '5410644', quantity: 1 }], whatsapp: '5513900000007' },
+    ],
+    missing: [],
+  });
+
+  it('LP-001687: mesmo SKU dividido em 2 lojas → cada loja recebe UMA peça, não o pedido inteiro', async () => {
+    const order = pedidoSite({ wcOrderNumber: 'LP-001687', items: [vestido(), vestido()] });
+    const m = monta({
+      order,
+      preview: previewDividido(),
+      linhas: [vestido({ id: 'l1', assignedStoreId: 'pira' }), vestido({ id: 'l2', assignedStoreId: 'pg' })],
+    });
+    await expect(m.svc.tentar('o1')).resolves.toEqual({ aplicado: true, motivo: 'multi-store' });
+    expect(m.enviados).toHaveLength(2);
+    for (const e of m.enviados) {
+      expect(e.texto.match(/SKU 5410644/g)).toHaveLength(1);
+      expect(e.texto).toContain('(1 peça)');
+      expect(e.texto).toContain('outra loja');
+      expect(e.texto).not.toContain('2 peças');
+    }
+  });
+
+  it('sem o carimbo do banco (releitura falhou) ainda divide pela cota da engine, nunca pelo SKU', async () => {
+    const order = pedidoSite({ items: [vestido(), vestido()] });
+    const m = monta({ order, preview: previewDividido() });
+    m.prisma.orderItem.findMany = jest.fn(async () => {
+      throw new Error('banco fora');
+    });
+    await m.svc.tentar('o1');
+    expect(m.enviados).toHaveLength(2);
+    for (const e of m.enviados) expect(e.texto.match(/SKU 5410644/g)).toHaveLength(1);
+  });
+
+  it('retirada na loja (pickup-lock): a loja recebe o PEDIDO INTEIRO, sem endereço e sem pedir rastreio', async () => {
+    const blusa = { sku: 'B', quantity: 1, productName: 'Blusa', cor: 'AZUL', tamanho: '50' };
+    const order = pedidoSite({
+      isPickup: true,
+      pickupStoreCode: '03',
+      shippingMethod: 'Retirada em loja (Vinhedo)',
+      items: [vestido(), blusa],
+    });
+    const preview = previewOk('pickup-lock');
+    preview.assignments[0].items = [{ sku: '5410644', quantity: 1 }, { sku: 'B', quantity: 1 }];
+    const m = monta({
+      order,
+      preview,
+      linhas: [vestido({ assignedStoreId: 's03' }), { ...blusa, assignedStoreId: 's03' }],
+    });
+    await expect(m.svc.tentar('o1')).resolves.toEqual({ aplicado: true, motivo: 'pickup-lock' });
+    expect(m.enviados).toHaveLength(1);
+    const t = m.enviados[0].texto;
+    expect(t).toContain('RETIRADA NA LOJA');
+    expect(t).toContain('SKU 5410644');
+    expect(t).toContain('SKU B');
+    expect(t).toContain('(2 peças)');
+    expect(t).not.toContain('rastreio');
+    expect(t).not.toContain('Rua X');
+  });
+
+  it('confirmRoute não persistiu (gatilho duplicado, card já ativo) → sem WhatsApp e sem nota de "enviado"', async () => {
+    const m = monta({ order: pedidoSite(), preview: previewOk(), confirmRetorno: { persisted: false, alreadyRouted: true } });
+    await expect(m.svc.tentar('o1')).resolves.toEqual({ aplicado: false, motivo: 'ja-tem-card' });
+    expect(m.enviados).toHaveLength(0);
+    expect(m.historico.some((n) => n.startsWith('🤖 SEPARAÇÃO AUTOMÁTICA'))).toBe(false);
   });
 });

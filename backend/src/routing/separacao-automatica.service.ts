@@ -4,6 +4,8 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { RoutingService } from './routing.service';
 import { buildWhatsappMessage } from './whatsapp-message.util';
+import { pecasDaLoja } from './pecas-por-loja.util';
+import type { LinhaDoPedido } from './pecas-por-loja.util';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -102,12 +104,19 @@ export class SeparacaoAutomaticaService {
 
     // A TAG vai dentro do routingResult (confirmRoute grava o preview inteiro).
     preview.automatico = { em: new Date().toISOString(), origem, versao: 1 };
+    let confirmado: any;
     try {
-      await this.routing.confirmRoute(orderId, preview);
+      confirmado = await this.routing.confirmRoute(orderId, preview);
     } catch (e) {
       // confirmRoute recusa com motivo humano (pagamento sem prova, troca
       // pendente, pedido fechado…). Fica pra retaguarda, com a razão escrita.
       return this.pular(orderId, rot, `confirm: ${(e as Error)?.message ?? 'recusado'}`, true);
+    }
+    // Ele também recusa SEM lançar (`persisted:false`): gatilho duplicado com
+    // card já ativo, ou ruptura na gravação. Sem card não há o que avisar — e
+    // avisar de novo é a loja receber o mesmo pedido duas vezes.
+    if (confirmado && confirmado.persisted === false) {
+      return this.pular(orderId, rot, confirmado.alreadyRouted ? 'ja-tem-card' : 'confirm: nao-persistiu');
     }
 
     const lojas = (preview.assignments ?? [])
@@ -120,7 +129,7 @@ export class SeparacaoAutomaticaService {
     );
     this.logger.log(`[auto-sep] ${rot} → ${preview.strategy}: ${lojas}`);
 
-    await this.avisarLojas(order, preview.assignments ?? []);
+    await this.avisarLojas(order, preview);
     return { aplicado: true, motivo: String(preview.strategy) };
   }
 
@@ -156,27 +165,36 @@ export class SeparacaoAutomaticaService {
    * WhatsApp pra loja — a MESMA mensagem que o 1-clique da tela manda
    * (`buildWhatsappMessage`), pelo mesmo canal (`WhatsappService.sendText`,
    * Evolution primeiro). Best-effort: a loja já viu o card pelo socket/push.
+   *
+   * CADA LOJA RECEBE SÓ O QUE ELA SEPARA (dono, 25/09 — LP-001687: 2 linhas
+   * do mesmo vestido, 1 pra Piracicaba e 1 pra Praia Grande, e as duas lojas
+   * receberam as duas linhas porque o filtro era por SKU). As linhas são
+   * relidas do banco DEPOIS do confirmRoute, carimbadas com `assignedStoreId`
+   * — é exatamente o card que a loja vê. O pedido INTEIRO só vai quando a
+   * cliente retira na própria loja (`pecas-por-loja.util.ts`).
    */
-  private async avisarLojas(order: any, assignments: any[]): Promise<void> {
+  private async avisarLojas(order: any, preview: any): Promise<void> {
+    const assignments: any[] = preview?.assignments ?? [];
+    if (!assignments.length) return;
     let addr: any = {};
     try {
       addr = JSON.parse(order.shippingAddress || '{}');
     } catch {
       addr = {};
     }
-    const itensDoPedido = (order.items ?? []).filter((i: any) => !i.cancelledAt);
+    const linhas = await this.linhasDoPedido(order);
+    const ehRetirada = !!order.isPickup || !!order.pickupStoreCode;
+    const ancoraJuntada = String(preview?.consolidateStoreCode ?? '').trim();
+    const dividido = assignments.length > 1;
     for (const a of assignments) {
       const numero = String(a.whatsapp ?? '').trim();
       if (!numero) continue;
-      const skus = new Set((a.items ?? []).map((i: any) => String(i.sku)));
-      const itens = itensDoPedido
-        .filter((i: any) => skus.has(String(i.sku)))
-        .map((i: any) => ({
-          sku: String(i.sku ?? '').trim(),
-          quantity: Number(i.quantity ?? 1),
-          productName: String(i.productName ?? ''),
-          variant: [i.cor, i.tamanho].filter(Boolean).join(' ') || undefined,
-        }));
+      const retiraAqui = ehRetirada && !a.isTransfer;
+      const itens = pecasDaLoja(linhas, { storeId: a.storeId, items: a.items }, { pedidoInteiro: retiraAqui });
+      if (!itens.length) {
+        this.logger.warn(`[auto-sep] ${a.storeCode}: nenhuma peça atribuída à loja — aviso não enviado`);
+        continue;
+      }
       const texto = buildWhatsappMessage({
         wcOrderNumber: String(order.wcOrderNumber ?? order.wcOrderId ?? ''),
         orderDateIso: (order.wcDateCreated ?? order.createdAt ?? new Date()).toISOString(),
@@ -200,7 +218,11 @@ export class SeparacaoAutomaticaService {
         storeName: a.storeName,
         isTransfer: !!a.isTransfer,
         transferToStoreName: a.transferToStoreName ?? null,
-      } as any);
+        isPickup: retiraAqui,
+        isJuntada: !!a.isTransfer && !!ancoraJuntada && String(a.transferToStoreCode ?? '') === ancoraJuntada,
+        isJuntadaAncora: !a.isTransfer && !!ancoraJuntada && String(a.storeCode ?? '') === ancoraJuntada,
+        pedidoDividido: dividido,
+      });
       try {
         const r: any = await this.whatsapp.sendText(numero, `${texto}\n\n🤖 _Separação automática_`);
         if (!r?.ok) this.logger.warn(`[auto-sep] WhatsApp pra ${a.storeCode} falhou: ${r?.error ?? '?'}`);
@@ -208,5 +230,24 @@ export class SeparacaoAutomaticaService {
         this.logger.warn(`[auto-sep] WhatsApp pra ${a.storeCode} falhou: ${(e as Error)?.message}`);
       }
     }
+  }
+
+  /**
+   * Linhas do pedido relidas DEPOIS do confirmRoute — é ele que carimba o
+   * `assignedStoreId` (e, no SKU dividido, cria a linha clone da outra loja).
+   * Se a releitura falhar, cai nas linhas que já estavam na mão: a régua
+   * então divide pela cota da engine, nunca pelo SKU.
+   */
+  private async linhasDoPedido(order: any): Promise<LinhaDoPedido[]> {
+    try {
+      const rows = await this.prisma.orderItem.findMany({
+        where: { orderId: order.id },
+        orderBy: { id: 'asc' },
+      });
+      if (rows?.length) return rows as LinhaDoPedido[];
+    } catch (e) {
+      this.logger.warn(`[auto-sep] releitura das linhas falhou (${order.id}): ${(e as Error)?.message}`);
+    }
+    return (order.items ?? []) as LinhaDoPedido[];
   }
 }
