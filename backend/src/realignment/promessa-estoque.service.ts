@@ -242,6 +242,99 @@ export class PromessaEstoqueService {
     );
   }
 
+  /**
+   * PEÇA VENDIDA NÃO VAI POR TRANSFERÊNCIA COMUM (25/09/2026, LP-001508).
+   *
+   * O bipe da separação É a baixa de estoque: a peça bipada num card de
+   * pedido já saiu do saldo desta loja e está aqui esperando embarque (ou a
+   * caixa da juntada). Se alguém bipa essa MESMA unidade numa transferência
+   * comum, o "Fechar e enviar" baixa de novo na origem (saldo negativo) e a
+   * entrada SOMA no destino uma peça que é da cliente — que o site pode
+   * vender de novo. Foi o que Itanhaém fez pra "reencaminhar" a calça do
+   * LP-001508 quando o card da âncora não liberava a etiqueta: 01 = -1,
+   * 18 = +1, calados.
+   *
+   * A régua olha o SALDO, como as outras travas daqui: a unidade vendida só é
+   * "a que está na mão" quando o estoque livre não cobre a transferência
+   * (`estoque - qty < 0`) E existe bipe ATIVO de pedido deste código nesta
+   * loja com o card ainda aberto (não `shipped`). Loja com 2 peças, 1
+   * vendida, transfere a outra normalmente. Espelho que não conhece o código
+   * → fail-open, igual ao `garantirNaoDuplicaBipe`.
+   */
+  async garantirNaoLevaPecaVendida(input: {
+    itens: Array<{ codigo?: string | null; qty?: number | null; rotulo?: string | null }>;
+    origemCode: string;
+  }): Promise<void> {
+    const origem = String(input.origemCode ?? '').trim();
+    if (!origem) return;
+    const porCodigo = new Map<string, { qty: number; rotulo: string }>();
+    for (const it of input.itens ?? []) {
+      const codigo = String(it.codigo ?? '').trim();
+      if (!codigo) continue;
+      const cur = porCodigo.get(codigo) ?? { qty: 0, rotulo: String(it.rotulo || '').trim() || codigo };
+      cur.qty += Math.max(1, Number(it.qty) || 1);
+      porCodigo.set(codigo, cur);
+    }
+    if (!porCodigo.size) return;
+
+    // Bipes ATIVOS de pedido nesta loja: não estornados e com a baixa feita.
+    const variantes = new Map<string, string>(); // variante -> código pedido
+    for (const c of porCodigo.keys()) {
+      variantes.set(c, c);
+      variantes.set(this.normalizeCodigo(c), c);
+    }
+    const lojas = Array.from(new Set([origem, origem.replace(/^0+/, '') || origem, origem.padStart(2, '0')]));
+    const scans: any[] = await (this.prisma as any).pickOrderScan.findMany({
+      where: {
+        storeCode: { in: lojas },
+        sku: { in: Array.from(variantes.keys()) },
+        revertedAt: null,
+        stockDecreasedAt: { not: null },
+      },
+      select: { sku: true, pickOrderId: true },
+    });
+    if (!scans.length) return;
+
+    // Só conta card AINDA ABERTO: card `shipped` = a peça já embarcou daqui.
+    const pickIds = Array.from(new Set(scans.map((s) => String(s.pickOrderId))));
+    const picks: any[] = await this.prisma.pickOrder.findMany({
+      where: { id: { in: pickIds }, status: { notIn: ['shipped', 'cancelled'] } },
+      select: { id: true, order: { select: { wcOrderNumber: true, wcOrderId: true } } },
+    });
+    if (!picks.length) return;
+    const pickAberto = new Map(picks.map((p) => [String(p.id), p]));
+
+    const vendidasPorCodigo = new Map<string, { qtd: number; pedidos: Set<string> }>();
+    for (const s of scans) {
+      const p = pickAberto.get(String(s.pickOrderId));
+      if (!p) continue;
+      const codigo = variantes.get(String(s.sku)) ?? String(s.sku);
+      const cur = vendidasPorCodigo.get(codigo) ?? { qtd: 0, pedidos: new Set<string>() };
+      cur.qtd += 1;
+      cur.pedidos.add(String(p.order?.wcOrderNumber || p.order?.wcOrderId || 'pedido'));
+      vendidasPorCodigo.set(codigo, cur);
+    }
+    if (!vendidasPorCodigo.size) return;
+
+    const estoques = await this.estoqueNoEspelho(Array.from(vendidasPorCodigo.keys()), origem);
+    const recusas: string[] = [];
+    for (const [codigo, v] of vendidasPorCodigo) {
+      const estoque = estoques.get(codigo);
+      if (estoque == null) continue; // espelho não conhece o código — fail-open
+      const pedido = porCodigo.get(codigo);
+      if (!pedido) continue;
+      if (estoque - pedido.qty >= 0) continue; // sobra peça livre pra transferir
+      recusas.push(`${pedido.rotulo} (pedido ${Array.from(v.pedidos).join(', ')})`);
+    }
+    if (!recusas.length) return;
+    throw new BadRequestException(
+      `🚫 PEÇA VENDIDA — ${recusas.join(' · ')}: está bipada num pedido e já saiu do estoque desta loja; ` +
+        `a unidade na sua mão é da cliente. Ela não pode ir por transferência comum (baixaria o estoque de novo ` +
+        `e viraria peça fantasma no destino). Se é a caixa da JUNTADA, use "Documentos da caixa" no card do pedido; ` +
+        `se a caixa precisa mudar de loja, é a matriz quem reencaminha pela tela do pedido.`,
+    );
+  }
+
   /** Promessas abertas deste código, desta origem, PARA UM destino. */
   private async abertasPorDestino(
     codigo: string,

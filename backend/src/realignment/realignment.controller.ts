@@ -1210,6 +1210,23 @@ export class RealignmentController {
   }
 
   /**
+   * GET /realignment/shipments/admin/desviadas · admin/operator
+   *
+   * CAIXA DE JUNTADA DESVIADA (25/09, LP-001508): caixa do pedido indo pra
+   * uma loja que não é mais a âncora (a matriz trocou a âncora depois do
+   * despacho). Lista viva enquanto o pedido não sai — a matriz combina o
+   * reencaminhamento em vez de descobrir pelo histórico. Antes de
+   * `shipments/admin/:id` pelo mesmo motivo do `paradas` abaixo.
+   */
+  @Get('shipments/admin/desviadas')
+  shipmentsDesviadas(@Req() req: any) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.shipment.listCaixasDesviadas();
+  }
+
+  /**
    * GET /realignment/shipments/admin/paradas?minDias=3 · admin/operator
    *
    * MUTIRÃO: caixas em trânsito paradas — saíram da origem (estoque baixado)
