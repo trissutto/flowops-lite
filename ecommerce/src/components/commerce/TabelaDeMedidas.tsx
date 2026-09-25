@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { Modal } from '@/components/ui/Modal';
 
@@ -60,16 +60,43 @@ export function TabelaDeMedidas({
 }) {
   const [estado, setEstado] = useState<Estado>('carregando');
   const crua = estado === 'sem-otimizador';
-  // Identidade estável de propósito: o next/image guarda `onError` nas
-  // dependências do ref do <img> e, a cada identidade nova, reatribui
-  // `img.src = img.src` (é o contorno dele pra erro perdido antes da
-  // hidratação). Com função inline isso rodava a cada re-render do BuyBox —
-  // toda troca de tamanho. Estável, roda uma vez.
-  const aoCarregar = useCallback(() => setEstado('pronta'), []);
-  const aoFalhar = useCallback(
-    () => setEstado((atual) => (atual === 'sem-otimizador' ? 'falhou' : 'sem-otimizador')),
-    [],
-  );
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  /**
+   * A VERDADE É O PRÓPRIO <img>, não o `onLoad` do next/image.
+   *
+   * O `onLoad` dele só chama depois de `img.decode()` — e o `decode()` fica
+   * pendente enquanto a aba está oculta (medido em produção: `complete: true`
+   * e `naturalWidth: 330` com o aviso "Carregando…" ainda em pé 9 s depois).
+   * Um aviso de carregando sobre uma imagem pronta é exatamente o "não aparece
+   * direito" que este componente existe pra evitar. Então: `complete` +
+   * `naturalWidth` decidem na hora, e os eventos nativos `load`/`error` cobrem
+   * o que ainda vai chegar. Sem `onError` no next/image também some o
+   * `img.src = img.src` que ele reatribui a cada render quando a prop existe.
+   *
+   * Roda de novo quando `estado` muda porque a troca pro PNG cru REMONTA o
+   * <img> (chave nova) — o ref já aponta pro elemento novo.
+   */
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el || estado === 'pronta' || estado === 'falhou') return;
+    const pronta = () => setEstado('pronta');
+    const falhou = () =>
+      setEstado((atual) => (atual === 'sem-otimizador' ? 'falhou' : 'sem-otimizador'));
+    // `complete` com largura é imagem na tela; `complete` sem largura é
+    // imagem quebrada. Imagem `lazy` que nem começou não é `complete`.
+    if (el.complete) {
+      if (el.naturalWidth > 0) pronta();
+      else falhou();
+      return;
+    }
+    el.addEventListener('load', pronta);
+    el.addEventListener('error', falhou);
+    return () => {
+      el.removeEventListener('load', pronta);
+      el.removeEventListener('error', falhou);
+    };
+  }, [estado, open, preparar]);
 
   return (
     <Modal
@@ -86,12 +113,16 @@ export function TabelaDeMedidas({
     >
       {/* A caixa reserva a PROPORÇÃO da imagem antes dela chegar: o modal já
           abre do tamanho certo e não pula quando a imagem entra. */}
-      <div className="relative mx-auto aspect-[750/1075] w-full max-w-[750px]">
+      {/* `isolate`: o aviso de carregando fica ATRÁS da imagem na ordem de
+          pintura (`-z-10` dentro deste contexto). Mesmo que o estado atrase
+          um quadro, imagem pronta cobre o aviso — nunca o contrário. */}
+      <div className="relative isolate mx-auto aspect-[750/1075] w-full max-w-[750px]">
         {estado !== 'falhou' && (
           <Image
             // Trocar a chave remonta o <img>: é o que faz o navegador tentar
             // de novo com o PNG cru depois que o otimizador falhou.
             key={crua ? 'crua' : 'otimizada'}
+            ref={imgRef}
             src={IMAGEM}
             alt={ALT}
             width={LARGURA}
@@ -101,15 +132,13 @@ export function TabelaDeMedidas({
             // (é o comportamento definido na spec pra troca do atributo).
             loading={open || preparar ? 'eager' : 'lazy'}
             unoptimized={crua}
-            onLoad={aoCarregar}
-            onError={aoFalhar}
             className="h-auto w-full"
           />
         )}
         {(estado === 'carregando' || crua) && (
           <p
             role="status"
-            className="absolute inset-0 flex items-center justify-center text-small text-ink-soft"
+            className="absolute inset-0 -z-10 flex items-center justify-center text-small text-ink-soft"
           >
             Carregando a tabela…
           </p>
