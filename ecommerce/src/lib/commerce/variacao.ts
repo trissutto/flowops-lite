@@ -38,3 +38,24 @@ export function codigoDaVariacao(
   const sku = t?.sku ? String(t.sku).trim() : '';
   return sku || undefined;
 }
+
+/**
+ * O NOME DA LINHA DA SACOLA NUNCA CARREGA A COR (25/09/2026, pedido LP-001196).
+ *
+ * O card da vitrine explodido por cor se chama "Blusa Manga Curta — VOGUE ·
+ * Marrom Dourado" (`explodirPorCor`), e o quick add levava esse nome pra
+ * sacola. Quando a cor escolhida na janelinha era OUTRA (a cliente tocou na
+ * bolinha PRETA, que no celular é igual à marrom-dourada), a linha nascia
+ * dizendo "Marrom Dourado" no nome e "PRETO" no campo cor — e o pedido, a
+ * separação e a entrega seguiram o campo. A cliente leu o nome.
+ *
+ * Regra: o nome é o da PEÇA; a cor mora no campo `color`, uma fonte só.
+ * Tira o sufixo " · <rótulo>" que o card acrescentou — e só ele, no fim.
+ */
+export function nomeSemRotuloDeCor(nome: string, rotulo: string | null | undefined): string {
+  const base = String(nome ?? '').trim();
+  const r = String(rotulo ?? '').trim();
+  if (!r) return base;
+  const sufixo = ` · ${r}`;
+  return base.endsWith(sufixo) ? base.slice(0, -sufixo.length).trim() : base;
+}

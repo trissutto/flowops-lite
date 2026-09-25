@@ -11,7 +11,7 @@ import { useCartStore } from '@/store/cart';
 import { useQuickAddStore } from '@/store/quick-add';
 import { trackAddToCart } from '@/lib/tracking';
 import { formatPrice } from '@/lib/utils';
-import { codigoDaVariacao } from '@/lib/commerce/variacao';
+import { codigoDaVariacao, nomeSemRotuloDeCor } from '@/lib/commerce/variacao';
 import type { CorApi, PecaApi } from '@/services/products';
 
 /**
@@ -40,6 +40,14 @@ export function QuickAddSheet() {
   const [cor, setCor] = useState<string | null>(null);
   const [tamanho, setTamanho] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  /**
+   * A COR DO CARD NÃO PÔDE SER PRÉ-MARCADA (esgotou entre a vitrine e a
+   * janelinha, ou não voltou na grade). A cliente veio de um card "· Marrom
+   * Dourado" e vai escolher OUTRA cor — isso tem que ser dito na cara dela,
+   * senão a troca passa despercebida (pedido LP-001196: bolinha preta tocada
+   * no lugar da marrom-dourada, e a peça errada foi entregue).
+   */
+  const [corDoCardSumiu, setCorDoCardSumiu] = useState<string | null>(null);
 
   // Zera a escolha a cada peça — senão o 48 escolhido na anterior vem junto.
   useEffect(() => {
@@ -47,6 +55,7 @@ export function QuickAddSheet() {
     setTamanho(null);
     setAviso(null);
     setCores([]);
+    setCorDoCardSumiu(null);
     if (!produto) return;
 
     let vivo = true;
@@ -65,6 +74,9 @@ export function QuickAddSheet() {
           setCor(doCard);
           return;
         }
+        // O card era uma cor e ela não está aqui pra ser marcada: avisa, e a
+        // escolha que vier é consciente.
+        if (doCard && lista.length > 0) setCorDoCardSumiu(produto?.vitrineCor?.rotulo || doCard);
         const comEstoque = lista.filter((c) => c.estoque > 0);
         if (comEstoque.length === 1) setCor(comEstoque[0].nome);
       })
@@ -97,7 +109,10 @@ export function QuickAddSheet() {
     }
     // Nome LIMPO: a cor vai no campo `color` e a sacola já a mostra separada.
     // Repetir aqui produzia "Vestido · VINHO · VINHO · 48" na linha do pedido.
-    const nome = produto!.name;
+    // E o rótulo de cor que o CARD explodido traz no nome ("· Marrom Dourado")
+    // sai também: a cor escolhida aqui pode ser outra, e a linha do pedido
+    // não pode dizer uma cor no nome e outra no campo (LP-001196).
+    const nome = nomeSemRotuloDeCor(produto!.name, produto!.vitrineCor?.rotulo);
     addToCart({
       productId: produto!.id,
       // O código exato da variação (cor + tamanho) — a grade real veio por
@@ -162,6 +177,12 @@ export function QuickAddSheet() {
               <p className="eyebrow text-ink">
                 Cor {cor && <span className="ml-1 normal-case text-ink-soft">{cor}</span>}
               </p>
+              {corDoCardSumiu && (
+                <p role="status" className="mt-2 text-small text-danger">
+                  A cor {corDoCardSumiu} deste card não está disponível agora. Se escolher outra cor
+                  aqui, é ela que vai na sacola.
+                </p>
+              )}
               <div className="mt-3 flex flex-wrap gap-3">
                 {cores.map((c) => {
                   const estilo: React.CSSProperties =
