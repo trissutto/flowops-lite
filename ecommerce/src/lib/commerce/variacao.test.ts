@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { codigoDaVariacao } from './variacao';
+import { codigoDaVariacao, nomeSemRotuloDeCor } from './variacao';
+
+describe('nomeSemRotuloDeCor — o nome da linha não carrega a cor do card', () => {
+  it('tira o sufixo " · Marrom Dourado" do card explodido (caso LP-001196)', () => {
+    expect(nomeSemRotuloDeCor('Blusa Manga Curta — VOGUE · Marrom Dourado', 'Marrom Dourado'))
+      .toBe('Blusa Manga Curta — VOGUE');
+  });
+
+  it('não mexe em nome sem o sufixo, nem no meio do nome', () => {
+    expect(nomeSemRotuloDeCor('Blusa Manga Curta — VOGUE', 'Marrom Dourado')).toBe('Blusa Manga Curta — VOGUE');
+    expect(nomeSemRotuloDeCor('Vestido · Preto · Longo', 'Preto')).toBe('Vestido · Preto · Longo');
+    expect(nomeSemRotuloDeCor('Blusa — 9230', null)).toBe('Blusa — 9230');
+    expect(nomeSemRotuloDeCor('Blusa — 9230 · Azul', '')).toBe('Blusa — 9230 · Azul');
+  });
+});
 
 /**
  * O caso real de 25/09: VOGUE em duas cores, as duas com 52. A sacola tem
