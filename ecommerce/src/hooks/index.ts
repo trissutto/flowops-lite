@@ -8,14 +8,40 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * dentro do componente. Ver docs/coding-guidelines.md.
  */
 
-/** Trava o scroll do body enquanto um overlay está aberto. */
+/**
+ * Trava o scroll do body enquanto um overlay está aberto.
+ *
+ * É um CONTADOR, não "guarda o valor anterior" (25/09). Com dois overlays
+ * abertos ao mesmo tempo (mini-cart + janelinha do Quick Add; folha de
+ * tamanhos → tabela de medidas) o "anterior" do segundo era o `hidden` do
+ * primeiro, e a ORDEM de fechar decidia o resultado: fechar o primeiro
+ * destravava a página com o segundo ainda aberto, e fechar o segundo por
+ * último deixava o body PRESO em `overflow: hidden` — o site "travado" sem
+ * nenhum erro no console. Agora o body só destrava quando o ÚLTIMO fecha.
+ *
+ * Enquanto houver overlay aberto, `<html>` carrega `data-overlay-open`. É
+ * por esse atributo que o banner de consentimento (z 80) cede a vez pro modal
+ * (z 70) em vez de subir por cima da tabela de medidas — qualquer coisa que
+ * precise "sair da frente" de um overlay se pendura nele, sem contar overlays
+ * por conta própria.
+ */
+let overlaysAbertos = 0;
+let overflowAntesDoPrimeiro = '';
+
 export function useLockScroll(locked: boolean): void {
   useEffect(() => {
     if (!locked) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    if (overlaysAbertos === 0) {
+      overflowAntesDoPrimeiro = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      document.documentElement.setAttribute('data-overlay-open', '');
+    }
+    overlaysAbertos += 1;
     return () => {
-      document.body.style.overflow = previous;
+      overlaysAbertos -= 1;
+      if (overlaysAbertos > 0) return;
+      document.body.style.overflow = overflowAntesDoPrimeiro;
+      document.documentElement.removeAttribute('data-overlay-open');
     };
   }, [locked]);
 }

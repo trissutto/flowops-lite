@@ -113,7 +113,15 @@ export function ConsentBanner() {
          alcançava o "Adicionar à sacola" sem decidir o cookie primeiro.
          Consentimento nunca pode ser pedágio da compra: sobe 96px e as duas
          coisas convivem. No desktop (lg) não há barra fixa — volta pro pé. */
-      className="fixed inset-x-0 bottom-20 z-[80] p-2.5 sm:p-4 lg:bottom-0"
+      /* CEDE A VEZ A QUALQUER OVERLAY ABERTO (25/09). O z 80 daqui ganha do
+         modal (z 70): o banner aparecia 8 s depois do carregamento POR CIMA
+         da tabela de medidas e, no celular, cobria a metade de baixo dela —
+         a cliente via "a tabela não abre direito" só na primeira visita, e
+         no teste seguinte (cookie já decidido) tudo funcionava. Enquanto o
+         `<html>` tiver `data-overlay-open` (ver `useLockScroll`) o cartão
+         fica invisível; fechou o overlay, ele volta. Não mexe em nenhuma
+         regra de consentimento — só na ordem de quem fala primeiro. */
+      className="fixed inset-x-0 bottom-20 z-[80] p-2.5 sm:p-4 lg:bottom-0 [html[data-overlay-open]_&]:invisible"
     >
       {/* Cartão da marca, não faixa de sistema: borda dourada, sombra de
           elevação e largura de leitura. É pra parecer parte da loja falando —
