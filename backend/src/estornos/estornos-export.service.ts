@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
-import * as PDFDocument from 'pdfkit';
+// DEFAULT import, não `import * as`: o pdfkit é CommonJS e, com
+// `esModuleInterop`, o namespace não é construível ("is not a constructor").
+// Mesmo bug do comprovante de estorno (25/09/2026) — ver estorno-comprovante.service.ts.
+import PDFDocument from 'pdfkit';
 import { brl, rotuloDoMotivo } from '../common/estornos';
 
 const COLUNAS = [
@@ -97,7 +100,7 @@ export class EstornosExportService {
   private pdf(linhas: any[], periodo: { de?: string; ate?: string }): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       try {
-        const doc = new (PDFDocument as any)({ size: 'A4', layout: 'landscape', margin: 30 });
+        const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 30 });
         const chunks: Buffer[] = [];
         doc.on('data', (c: Buffer) => chunks.push(c));
         doc.on('end', () => resolve(Buffer.concat(chunks)));

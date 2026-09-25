@@ -106,6 +106,29 @@ const dataHora = (v: string | null | undefined) =>
     : '—';
 const limpo = (e: unknown) => String((e as Error)?.message || '').replace(/^\d+:\s*/, '') || 'Falhou';
 
+/**
+ * O que a pessoa lê quando o download (PDF/planilha) falha. A API responde
+ * JSON `{ statusCode, message }`; é a `message` que vale — nunca o JSON cru
+ * (`{"statusCode":500,"message":"Internal server error"}` foi o que apareceu
+ * na tela em 25/09/2026). Erro de servidor sem frase própria vira um convite
+ * a tentar de novo: gerar o arquivo é leitura, não repete nem altera nada.
+ */
+const mensagemDaResposta = async (res: Response, oQue: string): Promise<string> => {
+  const texto = await res.text().catch(() => '');
+  let msg = '';
+  try {
+    const corpo = JSON.parse(texto);
+    const m = corpo?.message;
+    msg = Array.isArray(m) ? m.join(' ') : String(m || '');
+  } catch {
+    msg = texto;
+  }
+  if (res.status >= 500 && (!msg || /internal server error/i.test(msg))) {
+    return `Não foi possível gerar ${oQue} agora. Nada foi alterado — tente de novo em instantes.`;
+  }
+  return msg || `HTTP ${res.status}`;
+};
+
 const ORIGENS: Record<string, string> = {
   site: 'Pedido do site',
   pdv_online: 'Venda online do PDV',
@@ -900,6 +923,12 @@ function Resultado({
     }
   };
 
+  /**
+   * Baixar é LEITURA: falhou, clica de novo — o estorno não é repetido nem
+   * alterado. Estorno ainda em aberto é reconsultado no gateway pelo backend
+   * antes de imprimir, então depois do download a tela relê o estorno pra
+   * mostrar o mesmo status que saiu no papel.
+   */
   const baixarPdf = async () => {
     setIndo('pdf');
     setErro(null);
@@ -910,16 +939,29 @@ function Resultado({
           'x-estorno-sessao': sessao,
         },
       });
-      if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(await mensagemDaResposta(res, 'o PDF do comprovante'));
       const blob = await res.blob();
+      if (blob.type && !blob.type.includes('pdf')) {
+        throw new Error('A resposta não veio como PDF. Nada foi alterado — tente de novo em instantes.');
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `estorno-${estorno.refNumero || estorno.id.slice(0, 8)}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
+      if (pendente) {
+        try {
+          const atual = await api<Estorno>(`/admin/estornos/estorno/${estorno.id}`, {
+            headers: { 'x-estorno-sessao': sessao },
+          });
+          if (atual?.id) aoAtualizar(atual);
+        } catch {
+          /* a tela fica como está — o botão "Atualizar status" continua ali */
+        }
+      }
     } catch (e) {
-      setErro(limpo(e));
+      if (!expirou(e)) setErro(limpo(e));
     } finally {
       setIndo(null);
     }
@@ -1131,7 +1173,7 @@ function Historico({ sessao, expirou }: { sessao: string; expirou: (e: unknown) 
       const res = await fetch(`${API_URL}/api/admin/estornos/historico/exportar?${q.toString()}`, {
         headers: { Authorization: `Bearer ${getAuthToken() || ''}`, 'x-estorno-sessao': sessao },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(await mensagemDaResposta(res, 'a exportação'));
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1140,7 +1182,7 @@ function Historico({ sessao, expirou }: { sessao: string; expirou: (e: unknown) 
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setErro(limpo(e));
+      if (!expirou(e)) setErro(limpo(e));
     }
   };
 

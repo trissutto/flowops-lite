@@ -188,13 +188,28 @@ export class EstornosController {
 
   // ── Comprovante ───────────────────────────────────────────────────────────
 
-  /** GET /:id/comprovante — o PDF. Só sai com o gateway tendo confirmado ou aceitado. */
+  /**
+   * GET /:id/comprovante — o PDF. Só sai com o gateway tendo confirmado ou
+   * aceitado (estorno em aberto é reconsultado no gateway antes de imprimir).
+   *
+   * É LEITURA: falhou, a pessoa clica de novo — nada do estorno é criado,
+   * repetido ou alterado por esta rota. As três portas continuam na frente:
+   * JWT + role da matriz (guards da classe) + o bilhete de 15 min.
+   */
   @Get(':id/comprovante')
-  async comprovante(@Param('id') id: string, @Headers('x-estorno-sessao') token: string, @Res() res: Response) {
+  async comprovante(
+    @Param('id') id: string,
+    @Headers('x-estorno-sessao') token: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
     this.acesso.exigirSessao(token);
-    const { buffer, filename } = await this.comprovantes.gerar(id);
+    const { buffer, filename } = await this.comprovantes.gerar(id, this.ator(req));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    // Dado pessoal da cliente: nenhum proxy ou navegador guarda cópia.
+    res.setHeader('Cache-Control', 'no-store');
     res.send(buffer);
   }
 
