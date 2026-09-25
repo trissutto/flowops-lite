@@ -294,7 +294,8 @@ export function ReviewCard({
         </div>
         {coupon?.ok && coupon.discount > 0 && (
           <div className="flex justify-between text-success">
-            <dt>Cupom {coupon.code}</dt>
+            {/* Mesmo rótulo do resumo: vale-troca é o crédito DELA, não campanha. */}
+            <dt>{coupon.nominal ? 'Cupom de troca' : `Cupom ${coupon.code}`}</dt>
             <dd className="tabular">−{formatPrice(coupon.discount)}</dd>
           </div>
         )}

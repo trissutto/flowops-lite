@@ -296,7 +296,10 @@ export class CupomService {
           code,
           desconto: 0,
           motivo: 'nominal_cpf_diferente',
-          mensagem: 'Esse vale-troca é nominal e está no CPF de quem fez a troca. Faça o pedido com esse CPF pra usar. 💜',
+          // Mesma frase do site (`MENSAGEM_NOMINAL_CPF_DIFERENTE`), pedida
+          // pelo dono em 25/09 — o checkout também a mostra quando o pedido
+          // é recusado por `coupon_invalid`.
+          mensagem: 'Este cupom de troca está vinculado a outro CPF. Confira o CPF informado ou utilize o cupom correspondente à sua troca.',
         };
       }
     }

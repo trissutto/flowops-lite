@@ -15,7 +15,7 @@ import { PaymentStep, type PaymentSelection } from '@/components/checkout/Paymen
 import { ReviewCard } from '@/components/checkout/ReviewCard';
 import { OrderSummary } from '@/components/checkout/OrderSummary';
 import { maskPhone } from '@/components/checkout/masks';
-import { applyCoupon, conheceCupom, validarCupomRemoto } from '@/lib/commerce/cupom';
+import { applyCoupon, conheceCupom, cupomPrecisaReconferir, validarCupomRemoto } from '@/lib/commerce/cupom';
 import { PIX_DESCONTO_PCT, pixDiscount, pixTotal } from '@/lib/commerce/pix';
 import { clearCheckoutDraft, readCheckoutDraft, writeCheckoutDraft } from '@/lib/commerce/checkout-draft';
 import { useClienteLogada } from '@/hooks/useClienteLogada';
@@ -438,8 +438,29 @@ export default function CheckoutPage() {
   const total = subtotal - discount - descontoPix - cashbackAplicado + (shippingPrice ?? 0);
   const totalPix = pixTotal(subtotal - discount, shippingPrice ?? 0) - cashbackAplicado;
 
+  /**
+   * O CPF QUE A ETAPA DE PAGAMENTO ESTÁ MOSTRANDO (25/09).
+   *
+   * `null` = a etapa ainda não se pronunciou (nunca abriu nesta visita);
+   * '' = abriu e o campo está vazio ou incompleto; dígitos = CPF válido na
+   * tela. Ver `onCpfChange` no PaymentStep.
+   *
+   * ERA AQUI O BURACO do "cupom de troca some / pede o CPF de novo": o CPF
+   * digitado na etapa 3 só chegava em `customer` quando CPF E e-mail estavam
+   * válidos — e, pra cliente sem cadastro e sem rascunho, nem assim, porque
+   * o handler só atualizava uma identidade que já existia (`atual ? … :
+   * atual`). `cpfAtual` ficava '' até o clique de pagar; o vale nominal
+   * digitado na sacola nunca era reconferido, e o "Aplicar" ao lado do CPF
+   * mandava a validação SEM CPF — o backend respondia "informe o CPF" pra
+   * um CPF que estava na tela. Agora a etapa avisa o CPF no instante em que
+   * ele fica válido, e o campo vazio/trocado também avisa — pra um vale
+   * aprovado num CPF que já saiu da tela não continuar aplicado por inércia.
+   */
+  const [cpfNaTela, setCpfNaTela] = useState<string | null>(null);
   /** O CPF que está valendo AGORA no checkout (só dígitos, '' enquanto falta). */
-  const cpfAtual = (customer?.cpf ?? '').replace(/\D/g, '');
+  const cpfAtual = cpfNaTela ?? (customer?.cpf ?? '').replace(/\D/g, '');
+  /** Validação do cupom em voo no backend — pros dois campos dizerem "conferindo". */
+  const [conferindoCupom, setConferindoCupom] = useState(false);
 
   /**
    * O PAR (CÓDIGO, CPF) JÁ CONFERIDO NO BACKEND NESTA ABA.
@@ -491,13 +512,16 @@ export default function CheckoutPage() {
     if (cupomConferidoRef.current === chave) return;
     cupomConferidoRef.current = chave;
     let vivo = true;
+    setConferindoCupom(true);
     void validarCupomRemoto(couponCode, subtotal, cpfAtual || undefined).then((r) => {
       if (!vivo) return;
       setCoupon(r);
       setRegrasRev((v) => v + 1);
+      setConferindoCupom(false);
     });
     return () => {
       vivo = false;
+      setConferindoCupom(false);
     };
     // `subtotal` de propósito fora das deps: ele muda o VALOR do desconto, não
     // o veredito, e o recálculo local acima já cobre isso. Nas deps, cada +/−
@@ -579,12 +603,7 @@ export default function CheckoutPage() {
      * `customer` do render ainda pode ser o anterior.
      */
     const cpfDoEnvio = (cliente.cpf ?? '').replace(/\D/g, '');
-    const precisaReconferir =
-      !!coupon &&
-      (coupon.reason === 'nominal_sem_cpf' ||
-        coupon.reason === 'nominal_cpf_diferente' ||
-        (coupon.nominal === true && coupon.cpfAprovado !== cpfDoEnvio));
-    if (coupon && precisaReconferir) {
+    if (coupon && cupomPrecisaReconferir(coupon, cpfDoEnvio)) {
       const valido = await validarCupomRemoto(coupon.code, subtotal, cpfDoEnvio || undefined);
       cupomConferidoRef.current = `${coupon.code}|${cpfDoEnvio}`;
       setCoupon(valido);
@@ -859,6 +878,7 @@ export default function CheckoutPage() {
           coupon={coupon}
           onApplyCoupon={handleApplyCoupon}
           onRemoveCoupon={handleRemoveCoupon}
+          conferindoCupom={conferindoCupom}
           pixDiscount={descontoPix}
           cashback={cashbackAplicado}
           total={total}
@@ -956,17 +976,42 @@ export default function CheckoutPage() {
               total={total}
               pixTotal={totalPix}
               itemsTracked={itemsTracked}
-              defaultsNota={customer ? { email: customer.email, cpf: customer.cpf } : null}
+              // O CPF volta pra tela de onde a página o guardou (`cpfNaTela`):
+              // sem isso, "editar entrega" e voltar apagava o CPF da cliente
+              // sem cadastro — a seção remonta e `customer` ainda era nulo.
+              defaultsNota={
+                customer || cpfNaTela
+                  ? { email: customer?.email ?? '', cpf: cpfAtual || customer?.cpf || '' }
+                  : null
+              }
               // Ela corrigiu o CPF/e-mail depois de uma recusa? O painel de erro
               // abaixo reenvia com `finalizar()` sem argumento, que lê o ESTADO —
               // sem isto ele mandaria o valor velho de novo, e a cliente veria a
               // mesma recusa por um erro que já tinha consertado.
-              onNotaChange={(nota) => setCustomer((atual) => (atual ? { ...atual, ...nota } : atual))}
+              //
+              // Cliente sem cadastro NASCE aqui (25/09): antes o handler só
+              // atualizava identidade que já existia, e a nova ficava nula até
+              // o clique de pagar — CPF e e-mail válidos evaporavam ao voltar
+              // uma etapa. Nome e telefone vêm da etapa 1 (a seção não abre
+              // sem `contact`).
+              onNotaChange={(nota) =>
+                setCustomer((atual) =>
+                  atual
+                    ? { ...atual, ...nota }
+                    : contact
+                      ? { name: contact.name, phone: contact.phone, ...nota }
+                      : atual,
+                )
+              }
+              // O CPF sobe SOZINHO, sem esperar o e-mail — é o gatilho do vale
+              // nominal (ver `cpfNaTela`).
+              onCpfChange={setCpfNaTela}
               // MESMO estado do campo do resumo — a página é a única dona do
               // cupom. Aplicar aqui reflete lá e vice-versa, na hora.
               coupon={coupon}
               onApplyCoupon={handleApplyCoupon}
               onRemoveCoupon={handleRemoveCoupon}
+              conferindoCupom={conferindoCupom}
               cashback={{
                 phone: (contact?.phone ?? '').replace(/\D/g, ''),
                 base: baseCashback,
