@@ -37,6 +37,7 @@ import { PickScanService } from '../pick-orders/pick-scan.service';
 import { JuntadaService } from '../pick-orders/juntada.service';
 import { TrocaPecaService } from './troca-peca.service';
 import { LinhaDoTempoService } from './linha-do-tempo.service';
+import { routingFoiAutomatico } from '../common/separacao-automatica-tag';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { montarCascataAtribuicao, EntradaAtribuicao } from './atribuicao-cascata.util';
@@ -1036,6 +1037,9 @@ export class OrdersController {
           // A origem sai do REGISTRO, não fixa: a mesma consulta agora traz
           // live e e-commerce, e a tela filtra/pinta por este campo.
           orderSource: o.source,
+          // 🤖 TAG da separação automática (dono, 25/09): roteado pela
+          // máquina, sem clique humano — a lista mostra o chip.
+          automatico: routingFoiAutomatico(o.routingResult),
           origem:
             o.source === 'ecommerce'
               ? 'Site (novo)'

@@ -43,6 +43,9 @@ describe('LojaOrdersService — cashback no site', () => {
     const svc = new LojaOrdersService(
       prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
       {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, cashback,
+      // Separação automática (25/09): o confirmarPagamento dispara e segue —
+      // fora do que este teste mede.
+      { disparar: () => undefined } as any,
     ) as any;
     return { svc, prisma, cashback, queryRawUnsafe, orderUpdate };
   };

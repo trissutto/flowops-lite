@@ -2195,6 +2195,13 @@ export default function PedidoDetailPage() {
   const precisaConferir = Number(order.total || 0) > TETO_SEM_CONFERIR;
   const conferidoEvento = raiox?.eventos.find((ev) => (ev.detalhe || '').includes(MARCA_CONFERIDO)) ?? null;
   /**
+   * 🤖 SEPARAÇÃO AUTOMÁTICA (teste do dono, 25/09): a máquina roteou este
+   * pedido sem clique humano e deixou a nota no histórico. A tela diz isso
+   * no topo — quando algo sair torto, a matriz sabe que não foi gente.
+   */
+  const separacaoAutomatica =
+    raiox?.eventos.some((ev) => (ev.detalhe || '').startsWith('🤖 SEPARAÇÃO AUTOMÁTICA')) ?? false;
+  /**
    * Peça com PROMOÇÃO: tem preço cheio gravado E ele é maior que o cobrado.
    * A comparação é em centavos — comparar float rende risco em preço igual.
    */
@@ -2350,6 +2357,16 @@ export default function PedidoDetailPage() {
           </span>
         </div>
       </div>
+
+      {separacaoAutomatica && (
+        <div className="mb-4 rounded-card border border-line bg-surface-2 px-4 py-2.5 text-[13px] text-ink">
+          <span className="font-bold">🤖 SEPARAÇÃO AUTOMÁTICA</span>
+          <span className="text-ink-soft">
+            {' '}— este pedido foi pra loja sem clique humano, assim que o pagamento confirmou (franquia primeiro;
+            Indaiatuba só em último caso). A nota está na linha do tempo.
+          </span>
+        </div>
+      )}
 
       {/* VERIFICAÇÃO MANUAL — pedido acima de R$ 499,99 (27/08, ordem do dono).
           A atendente TEM que falar com a cliente e confirmar os dados antes de
