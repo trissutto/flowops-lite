@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoutingService } from '../routing/routing.service';
+import { StockService } from '../stock/stock.service';
 import { ehLojaCanal } from '../common/loja-canal';
 
 /**
@@ -24,6 +25,25 @@ import { ehLojaCanal } from '../common/loja-canal';
  * Só vale pra venda À DISTÂNCIA (online/entrega): balcão com a peça na mão
  * bipada NUNCA passa por aqui — a peça física é a prova (mesma filosofia do
  * garantirNaoDuplicaBipe). Loja-canal (13/SITE) não conta como lastro.
+ *
+ * ── DE ONDE VEM O NÚMERO (25/09) ──
+ *
+ * "MESMO COM ESTOQUE ALTO ESTÁ DANDO COMO ESTOQUE ZERO": Itanhaém vendendo a
+ * REGATA 207333 PRETO 56 — a Consulta mostrava 2 na loja e 12 na rede, e o
+ * passo do frete gritava 🔴 "NÃO EXISTE em nenhuma loja nem em trânsito".
+ * Este serviço lia `giga_estoque` cru, enquanto Consulta, site, bipe e o
+ * PRÓPRIO ROTEAMENTO leem `wincred_estoque` (ordem do dono de 29/08: uma
+ * tabela só, a que todo mundo vê). As duas deviam andar juntas pelo
+ * write-through, mas não andam sempre (o `VigilanciaSeparacaoCron` mede
+ * justamente os pares divergentes) — e o semáforo era o único olho da venda
+ * apontado pra tabela que ninguém mais olha. Vermelho falso é pior que
+ * nenhum semáforo: a vendedora aprende a clicar "vender mesmo assim" e o
+ * aviso morre no dia em que for verdade.
+ *
+ * Agora o bruto por loja sai do `StockService` com `fresh: true` — a MESMA
+ * chamada e a MESMA tabela que o routing usa pra decidir quem separa. Se o
+ * espelho cair, o erro SOBE (500 → o PDV mostra "não consegui conferir o
+ * estoque"); nunca vira vermelho calado.
  */
 @Injectable()
 export class LastroRedeService {
@@ -32,6 +52,7 @@ export class LastroRedeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly routing: RoutingService,
+    private readonly stock: StockService,
   ) {}
 
   private semZeros(v: any): string {
@@ -56,17 +77,31 @@ export class LastroRedeService {
     const lojas = stores.filter((s) => !ehLojaCanal(s.code));
     const codes = lojas.map((s) => s.code);
 
-    // Estoque bruto por loja (raw pra casar zeros à esquerda do codigo).
-    const rows: Array<{ sku: string; loja: string; estoque: number }> =
-      await this.prisma.$queryRawUnsafe(
-        `SELECT regexp_replace(codigo,'^0+','') AS sku, loja, estoque::int AS estoque
-           FROM giga_estoque
-          WHERE regexp_replace(codigo,'^0+','') = ANY($1) AND estoque > 0`,
-        skus,
-      );
+    // Estoque bruto por loja — a vista do ROUTING (`wincred_estoque`, sem o
+    // cache de 30s). Só lojas que cedem peça entram na pergunta, então a
+    // loja-canal já fica de fora aqui. Erro do espelho SOBE.
+    const entries = await this.stock.getStockFor(skus, codes, { fresh: true });
+    const brutoPorLojaSku = new Map<string, number>();
+    for (const e of entries) {
+      const sku = this.semZeros(e.sku);
+      const loja = String(e.storeCode ?? '').trim();
+      const qty = Number(e.availableQty) || 0;
+      if (!sku || !loja || qty <= 0) continue;
+      const k = `${loja}::${sku}`;
+      brutoPorLojaSku.set(k, (brutoPorLojaSku.get(k) ?? 0) + qty);
+    }
 
     // Prometida a card aberto — a MESMA conta do roteamento (esperado − bipado).
-    const committed = await this.routing.getCommittedStock(skus, codes);
+    // A chave vem com o sku do pedido como está gravado; normaliza os zeros à
+    // esquerda pra casar com a chave daqui.
+    const committedRaw = await this.routing.getCommittedStock(skus, codes);
+    const committed = new Map<string, number>();
+    for (const [k, v] of committedRaw) {
+      const sep = k.indexOf('::');
+      if (sep < 0) continue;
+      const kn = `${k.slice(0, sep)}::${this.semZeros(k.slice(sep + 2))}`;
+      committed.set(kn, (committed.get(kn) ?? 0) + (Number(v) || 0));
+    }
 
     // Peça dentro de caixa EM TRÂNSITO entre lojas (limbo da remessa: saiu da
     // origem, ainda não entrou no destino). Caixa de juntada (orderId != null)
@@ -86,18 +121,15 @@ export class LastroRedeService {
           })
         : [];
 
-    const canalCodes = new Set(stores.filter((s) => ehLojaCanal(s.code)).map((s) => s.code));
     const porSku: Record<string, any> = {};
     for (const sku of skus) {
       const precisa = precisaPorSku.get(sku) ?? 1;
       let bruto = 0;
       let disponivel = 0;
       let prometidas = 0;
-      for (const r of rows) {
-        if (r.sku !== sku) continue;
-        const loja = String(r.loja ?? '').trim();
-        if (canalCodes.has(loja) || ehLojaCanal(loja)) continue;
-        const est = Number(r.estoque) || 0;
+      for (const loja of codes) {
+        const est = brutoPorLojaSku.get(`${loja}::${sku}`) ?? 0;
+        if (est <= 0) continue;
         const prom = committed.get(`${loja}::${sku}`) ?? 0;
         bruto += est;
         prometidas += Math.min(est, prom);
