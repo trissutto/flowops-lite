@@ -11,7 +11,16 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyCoupon, conheceCupom, cupomNominal, seedCouponRule, type CouponRule } from './cupom';
+import {
+  applyCoupon,
+  conheceCupom,
+  cupomNominal,
+  cupomPrecisaReconferir,
+  MENSAGEM_NOMINAL_CPF_DIFERENTE,
+  seedCouponRule,
+  validarCupomRemoto,
+  type CouponRule,
+} from './cupom';
 
 const CPF_A = '39053344705';
 const CPF_B = '11144477735';
@@ -145,5 +154,123 @@ describe('helpers de tela', () => {
     const r = applyCoupon('NAO-EXISTE', 200, CPF_A);
     expect(r.ok).toBe(false);
     expect(r.discount).toBe(0);
+  });
+});
+
+/**
+ * A RÉGUA DO "AINDA VALE PARA ESTE CPF?" (25/09) — é o que o checkout
+ * consulta antes de criar o pedido. Os dois cenários que o dono pediu por
+ * escrito estão aqui de novo, agora do ponto de vista do envio do pedido.
+ */
+describe('cupomPrecisaReconferir — o vale segue o CPF do pedido', () => {
+  it('CENÁRIO DO DONO ✅ — aprovado no CPF A, pedido no CPF A: não reconfere, segue aplicado', () => {
+    seedCouponRule(VALE, CPF_A);
+    const aprovado = applyCoupon(VALE.code, 200, CPF_A);
+    expect(aprovado.ok).toBe(true);
+    expect(cupomPrecisaReconferir(aprovado, CPF_A)).toBe(false);
+    // Máscara não muda o CPF.
+    expect(cupomPrecisaReconferir(aprovado, '390.533.447-05')).toBe(false);
+  });
+
+  it('CENÁRIO DO DONO 🚫 — aprovado no CPF A, pedido no CPF B: reconfere (e o backend recusa)', () => {
+    seedCouponRule(VALE, CPF_A);
+    const aprovado = applyCoupon(VALE.code, 200, CPF_A);
+    expect(aprovado.ok).toBe(true);
+    // O `ok: true` cacheado NÃO pode ir pro pedido só porque estava na sacola.
+    expect(cupomPrecisaReconferir(aprovado, CPF_B)).toBe(true);
+    // E o CPF apagado também derruba a inércia.
+    expect(cupomPrecisaReconferir(aprovado, '')).toBe(true);
+  });
+
+  it('vale pendente (sem CPF) ou recusado por outro CPF sempre reconfere', () => {
+    seedCouponRule(VALE, CPF_A);
+    expect(cupomPrecisaReconferir(applyCoupon(VALE.code, 200), CPF_A)).toBe(true);
+    expect(cupomPrecisaReconferir(applyCoupon(VALE.code, 200, CPF_B), CPF_A)).toBe(true);
+  });
+
+  it('nominal "aplicado" sem CPF aprovado registrado não passa sem reconferir', () => {
+    expect(
+      cupomPrecisaReconferir({ ok: true, nominal: true, cpfAprovado: undefined }, CPF_A),
+    ).toBe(true);
+  });
+
+  it('cupom promocional nunca reconfere por CPF', () => {
+    seedCouponRule(CAMPANHA);
+    const r = applyCoupon(CAMPANHA.code, 200);
+    expect(cupomPrecisaReconferir(r, CPF_A)).toBe(false);
+    expect(cupomPrecisaReconferir(r, CPF_B)).toBe(false);
+    expect(cupomPrecisaReconferir(r, '')).toBe(false);
+  });
+
+  it('a frase do "outro CPF" é a que o dono pediu', () => {
+    seedCouponRule(VALE, CPF_A);
+    expect(applyCoupon(VALE.code, 200, CPF_B).message).toBe(MENSAGEM_NOMINAL_CPF_DIFERENTE);
+    expect(MENSAGEM_NOMINAL_CPF_DIFERENTE).toBe(
+      'Este cupom de troca está vinculado a outro CPF. Confira o CPF informado ou utilize o cupom correspondente à sua troca.',
+    );
+  });
+});
+
+/**
+ * O BACKEND SÓ MANDA `rule` NO SUCESSO — e a sacola recalcula localmente.
+ * Sem nada semeado, o vale pendente virava "Não encontramos esse cupom" na
+ * sacola (25/09). Estes testes fingem o BFF e conferem o que a sacola vê.
+ */
+describe('validarCupomRemoto — vale nominal recusado não vira "não existe"', () => {
+  const CODIGO = 'TROCA-REMOTO1';
+  function bff(resposta: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ json: async () => resposta })),
+    );
+  }
+
+  it('recusa por falta de CPF semeia a casca nominal: local diz "informe o CPF", nunca "não existe"', async () => {
+    bff({ ok: false, code: CODIGO, discount: 0, message: 'x', reason: 'nominal_sem_cpf', nominal: true });
+    const r = await validarCupomRemoto(CODIGO, 200);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('nominal_sem_cpf');
+    expect(conheceCupom(CODIGO)).toBe(true);
+    expect(cupomNominal(CODIGO)).toBe(true);
+    const local = applyCoupon(CODIGO, 200);
+    expect(local.reason).toBe('nominal_sem_cpf');
+    expect(local.message).not.toContain('Não encontramos');
+    // Casca nunca dá desconto, com CPF ou sem.
+    expect(applyCoupon(CODIGO, 200, CPF_A).ok).toBe(false);
+    expect(applyCoupon(CODIGO, 200, CPF_A).discount).toBe(0);
+  });
+
+  it('recusa no CPF B NÃO apaga a aprovação do CPF A (voltar pro CPF certo reaplica na hora)', async () => {
+    bff({
+      ok: true, code: CODIGO, discount: 80, kind: 'fixed', message: 'ok', nominal: true,
+      rule: { code: CODIGO, kind: 'fixed', value: 80, label: 'Vale de troca', nominal: true },
+    });
+    const aprovado = await validarCupomRemoto(CODIGO, 200, CPF_A);
+    expect(aprovado.ok).toBe(true);
+    expect(aprovado.cpfAprovado).toBe(CPF_A);
+
+    bff({ ok: false, code: CODIGO, discount: 0, message: 'x', reason: 'nominal_cpf_diferente', nominal: true });
+    const recusado = await validarCupomRemoto(CODIGO, 200, CPF_B);
+    expect(recusado.ok).toBe(false);
+    expect(recusado.reason).toBe('nominal_cpf_diferente');
+
+    expect(applyCoupon(CODIGO, 200, CPF_B).ok).toBe(false);
+    expect(applyCoupon(CODIGO, 200, CPF_A).ok).toBe(true);
+    expect(applyCoupon(CODIGO, 200, CPF_A).discount).toBe(80);
+  });
+
+  it('cupom que não existe continua "não encontramos" (nada é semeado)', async () => {
+    bff({ ok: false, code: 'NADA', discount: 0, message: 'Não encontramos esse cupom.' });
+    const r = await validarCupomRemoto('NADA', 200);
+    expect(r.ok).toBe(false);
+    expect(conheceCupom('NADA')).toBe(false);
+  });
+
+  it('a frase do "outro CPF" é a que o dono pediu (repetida aqui de propósito)', () => {
+    seedCouponRule(VALE, CPF_A);
+    expect(applyCoupon(VALE.code, 200, CPF_B).message).toBe(MENSAGEM_NOMINAL_CPF_DIFERENTE);
+    expect(MENSAGEM_NOMINAL_CPF_DIFERENTE).toBe(
+      'Este cupom de troca está vinculado a outro CPF. Confira o CPF informado ou utilize o cupom correspondente à sua troca.',
+    );
   });
 });

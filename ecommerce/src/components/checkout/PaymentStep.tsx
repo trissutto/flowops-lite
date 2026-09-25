@@ -84,6 +84,21 @@ interface PaymentStepProps {
    */
   onNotaChange?: (nota: DadosDaNota) => void;
   /**
+   * O CPF QUE ESTÁ NA TELA AGORA — só dígitos quando válido, '' quando não
+   * (25/09).
+   *
+   * Diferente do `onNotaChange`, dispara SEM esperar o e-mail: é o gatilho do
+   * vale-troca nominal. Até aqui a página só ficava sabendo do CPF quando
+   * CPF E e-mail estavam válidos — e, pra cliente sem cadastro, nem assim
+   * (o estado dela nascia nulo e o handler só ATUALIZAVA identidade que já
+   * existia). Resultado: ela digitava o CPF certo, clicava "Aplicar" no
+   * cupom de troca e ouvia "informe o CPF". Agora o CPF chega na página no
+   * instante em que fica válido, o vale é conferido sozinho e o desconto
+   * entra no resumo; e apagar/trocar o CPF avisa com '' ou o CPF novo, pra
+   * um vale aprovado no CPF antigo não continuar aplicado por inércia.
+   */
+  onCpfChange?: (cpf: string) => void;
+  /**
    * CUPOM DE TROCA, COLADO NO CPF (22/09, pedido do dono).
    *
    * O vale-troca é NOMINAL: só vale pro CPF de quem fez a troca. Enquanto o
@@ -96,8 +111,10 @@ interface PaymentStepProps {
    * "do resumo" e cupom "do pagamento". Ausente = a seção não mostra o bloco.
    */
   coupon?: CouponResult | null;
-  onApplyCoupon?: (code: string) => void;
+  onApplyCoupon?: (code: string) => void | Promise<void>;
   onRemoveCoupon?: () => void;
+  /** Cupom sendo conferido no backend (vale nominal esperando o veredito do CPF). */
+  conferindoCupom?: boolean;
 }
 
 /**
@@ -121,7 +138,7 @@ interface PaymentStepProps {
  * Mostrar em vez de esconder continua deliberado: ela VÊ que PIX e Cartão
  * existem e entende o que falta.
  */
-export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange, coupon, onApplyCoupon, onRemoveCoupon, cashback }: PaymentStepProps) {
+export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, enviando, onDone, onNotaChange, onCpfChange, coupon, onApplyCoupon, onRemoveCoupon, conferindoCupom, cashback }: PaymentStepProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [tracked, setTracked] = useState<Set<PaymentMethod>>(new Set());
   const [email, setEmail] = useState(defaultsNota?.email ?? '');
@@ -164,6 +181,18 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
     onNotaChange({ cpf: c, email: e });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notaValida]);
+
+  /**
+   * O CPF sobe SOZINHO, sem esperar o e-mail (ver `onCpfChange`). Dispara no
+   * mount também: é o que devolve o CPF pra página quando a seção reabre
+   * depois de um "editar entrega". Meio-CPF conta como '' — o vale nominal
+   * só é conferido com um CPF que existe.
+   */
+  const cpfNaTela = cpfOk ? onlyDigits(cpf) : '';
+  useEffect(() => {
+    onCpfChange?.(cpfNaTela);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cpfNaTela]);
 
   /** Uma vez por método por visita à seção — evita inflar o funil. */
   function ensureTracked(m: PaymentMethod) {
@@ -232,6 +261,7 @@ export function PaymentStep({ total, pixTotal, itemsTracked, defaultsNota, envia
               onApply={onApplyCoupon}
               onRemove={onRemoveCoupon}
               temCpf={cpfOk}
+              conferindo={conferindoCupom}
             />
           </div>
         )}

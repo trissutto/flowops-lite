@@ -25,15 +25,24 @@ import type { CouponResult } from '@/types/checkout';
 
 interface CouponFieldProps {
   coupon: CouponResult | null;
-  onApply: (code: string) => void;
+  onApply: (code: string) => void | Promise<void>;
   onRemove: () => void;
   variant?: 'resumo' | 'troca';
   /** CPF válido na tela — só `troca` usa, pra saber o que dizer enquanto falta. */
   temCpf?: boolean;
+  /**
+   * A página está conferindo o cupom no backend AGORA (o CPF acabou de
+   * entrar e o vale nominal está sendo validado sozinho). Enquanto dura, o
+   * campo diz "conferindo" em vez de repetir "informe o CPF" pra um CPF que
+   * já está na tela.
+   */
+  conferindo?: boolean;
 }
 
-export function CouponField({ coupon, onApply, onRemove, variant = 'resumo', temCpf }: CouponFieldProps) {
+export function CouponField({ coupon, onApply, onRemove, variant = 'resumo', temCpf, conferindo }: CouponFieldProps) {
   const [code, setCode] = useState('');
+  /** Clique em "Aplicar" em voo — o botão avisa e não aceita o segundo clique. */
+  const [aplicando, setAplicando] = useState(false);
   /**
    * Enquanto ela não encostar no campo, ele MOSTRA o código pendente (o vale
    * que veio da sacola) — é o "não digite duas vezes" ficando visível. Depois
@@ -79,13 +88,16 @@ export function CouponField({ coupon, onApply, onRemove, variant = 'resumo', tem
   const pendentePorCpf = coupon?.reason === 'nominal_sem_cpf';
   const codigoGuardado = coupon && !coupon.ok && coupon.reason ? coupon.code : null;
   const valorDoCampo = editou ? code : codigoGuardado ?? code;
+  const ocupado = aplicando || conferindo === true;
 
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         const digitado = valorDoCampo.trim();
-        if (digitado) onApply(digitado);
+        if (!digitado || ocupado) return;
+        setAplicando(true);
+        void Promise.resolve(onApply(digitado)).finally(() => setAplicando(false));
       }}
       className="flex flex-col gap-2"
     >
@@ -111,8 +123,8 @@ export function CouponField({ coupon, onApply, onRemove, variant = 'resumo', tem
           autoComplete="off"
           className="w-full min-w-0 flex-1 rounded-md border border-border bg-surface px-4 py-2.5 text-small text-ink placeholder:text-ink-muted/70 focus:border-primary focus:outline-none"
         />
-        <Button type="submit" variant="secondary" size="sm" className="shrink-0">
-          Aplicar
+        <Button type="submit" variant="secondary" size="sm" className="shrink-0" disabled={ocupado}>
+          {ocupado ? 'Conferindo…' : 'Aplicar'}
         </Button>
       </div>
       {troca && !coupon && (
@@ -122,15 +134,25 @@ export function CouponField({ coupon, onApply, onRemove, variant = 'resumo', tem
             : 'Preencha o CPF acima — é ele que confirma que o cupom é seu.'}
         </p>
       )}
-      {/* Mensagem do backend — elegante por contrato, nunca técnica. */}
-      {coupon && !coupon.ok && (
-        <p
-          role={pendentePorCpf ? undefined : 'alert'}
-          className={pendentePorCpf ? 'text-small text-ink-soft' : 'text-small text-danger'}
-        >
-          {coupon.message}
-        </p>
-      )}
+      {/* Mensagem do backend — elegante por contrato, nunca técnica.
+          Enquanto a página confere o vale com o CPF recém-digitado, a frase
+          "informe o CPF" seria mentira — ela acabou de informar. */}
+      {coupon && !coupon.ok && (() => {
+        // Vale nominal com o veredito em voo: nem "informe o CPF" (ela
+        // acabou de informar) nem "outro CPF" (o recálculo local ainda não
+        // sabe deste CPF — quem sabe é o backend, que está respondendo).
+        const emVoo = coupon.nominal === true && (conferindo || (pendentePorCpf && temCpf));
+        const suave = emVoo || pendentePorCpf;
+        return (
+          <p
+            role={suave ? undefined : 'alert'}
+            aria-live={suave ? 'polite' : undefined}
+            className={suave ? 'text-small text-ink-soft' : 'text-small text-danger'}
+          >
+            {emVoo ? 'Conferindo o cupom de troca com o CPF informado…' : coupon.message}
+          </p>
+        );
+      })()}
     </form>
   );
 }

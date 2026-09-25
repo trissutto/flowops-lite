@@ -32,8 +32,10 @@ interface OrderSummaryProps {
   /** Preço de frete já com cupom FRETEGRATIS aplicado (a página decide). */
   shippingPrice?: number;
   coupon: CouponResult | null;
-  onApplyCoupon: (code: string) => void;
+  onApplyCoupon: (code: string) => void | Promise<void>;
   onRemoveCoupon: () => void;
+  /** Cupom sendo conferido no backend agora (ver CouponField). */
+  conferindoCupom?: boolean;
   /** Desconto do Pix em reais — 0 fora do Pix ou antes de escolher. */
   pixDiscount?: number;
   /** Cashback abatido em reais. Mesma razão do Pix: desconto sem linha é
@@ -51,6 +53,7 @@ export function OrderSummary({
   coupon,
   onApplyCoupon,
   onRemoveCoupon,
+  conferindoCupom,
   pixDiscount = 0,
   cashback = 0,
   total,
@@ -92,7 +95,12 @@ export function OrderSummary({
         ))}
       </ul>
 
-      <CouponField coupon={coupon} onApply={onApplyCoupon} onRemove={onRemoveCoupon} />
+      <CouponField
+        coupon={coupon}
+        onApply={onApplyCoupon}
+        onRemove={onRemoveCoupon}
+        conferindo={conferindoCupom}
+      />
 
       {/* Totais */}
       <dl className="flex flex-col gap-2 border-t border-border pt-4 text-body">

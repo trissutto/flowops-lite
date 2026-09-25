@@ -1,6 +1,11 @@
 import 'server-only';
 
-import { applyCoupon, type CouponRule } from './cupom';
+import {
+  applyCoupon,
+  MENSAGEM_NOMINAL_CPF_DIFERENTE,
+  MENSAGEM_NOMINAL_SEM_CPF,
+  type CouponRule,
+} from './cupom';
 import type { CouponResult } from '@/types/checkout';
 
 /**
@@ -92,7 +97,14 @@ export async function validarCupomServer(input: {
       ok: r.ok,
       code: String(r.code || code),
       discount: Number(r.desconto) || 0,
-      message: String(r.mensagem || ''),
+      // As frases do vale nominal são as do SITE (mesma régua do recálculo
+      // local): o backend manda o `motivo`, o texto que a cliente lê é um só.
+      message:
+        r.motivo === 'nominal_cpf_diferente'
+          ? MENSAGEM_NOMINAL_CPF_DIFERENTE
+          : r.motivo === 'nominal_sem_cpf'
+            ? MENSAGEM_NOMINAL_SEM_CPF
+            : String(r.mensagem || ''),
       ...(r.tipo ? { kind: r.tipo } : {}),
       ...(r.motivo ? { reason: r.motivo } : {}),
       // `motivo` só existe na recusa nominal, e `regra.nominal` só no sucesso:

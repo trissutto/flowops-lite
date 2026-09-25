@@ -120,6 +120,40 @@ export function cpfAprovadoDoCupom(code: string): string | undefined {
   return REGRAS_REMOTAS.get(code.trim().toUpperCase())?.cpfAprovado;
 }
 
+/**
+ * AS DUAS FRASES DO VALE NOMINAL — uma fonte, usada pelo recálculo local e
+ * pelo BFF (`cupom-server.ts`) ao traduzir o `motivo` do backend. O texto
+ * do "outro CPF" é o que o dono pediu por escrito (25/09).
+ */
+export const MENSAGEM_NOMINAL_SEM_CPF =
+  'Esse vale é nominal. Continue a compra e informe o CPF de quem fez a troca — o desconto entra na hora. 💜';
+export const MENSAGEM_NOMINAL_CPF_DIFERENTE =
+  'Este cupom de troca está vinculado a outro CPF. Confira o CPF informado ou utilize o cupom correspondente à sua troca.';
+
+/**
+ * "ESTE RESULTADO AINDA VALE PARA ESTE CPF?" — a régua que o checkout usa
+ * antes de criar o pedido (e que a tela usa pra saber se reconfere).
+ *
+ * Reconfere quando:
+ *   - o vale ficou PENDENTE (sem CPF na hora) ou foi recusado por CPF
+ *     diferente — o CPF pode ter mudado desde então;
+ *   - o vale está APLICADO, mas o CPF que o backend aprovou não é o CPF que
+ *     vai no pedido. É o caso "aprovado no CPF A, pedido no CPF B": sem
+ *     esta comparação o `ok: true` cacheado seguia pro servidor e o pedido
+ *     morria no último clique.
+ * Cupom promocional (não nominal) nunca precisa: CPF não faz parte da regra.
+ */
+export function cupomPrecisaReconferir(
+  coupon: Pick<CouponResult, 'ok' | 'reason' | 'nominal' | 'cpfAprovado'>,
+  cpf: string,
+): boolean {
+  const atual = (cpf ?? '').replace(/\D/g, '');
+  if (coupon.reason === 'nominal_sem_cpf' || coupon.reason === 'nominal_cpf_diferente') return true;
+  // Nominal aplicado sem CPF aprovado registrado não deveria existir; se
+  // existir, reconfere — o backend é quem decide, nunca o cache.
+  return coupon.nominal === true && (!coupon.cpfAprovado || coupon.cpfAprovado !== atual);
+}
+
 function fmt(v: number): string {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -163,7 +197,7 @@ export function applyCoupon(rawCode: string, subtotal: number, cpfAtual?: string
         discount: 0,
         nominal: true,
         reason: 'nominal_sem_cpf',
-        message: 'Esse vale é nominal. Continue a compra e informe o CPF de quem fez a troca — o desconto entra na hora. 💜',
+        message: MENSAGEM_NOMINAL_SEM_CPF,
       };
     }
     if (atual !== cacheado?.cpfAprovado) {
@@ -173,7 +207,7 @@ export function applyCoupon(rawCode: string, subtotal: number, cpfAtual?: string
         discount: 0,
         nominal: true,
         reason: 'nominal_cpf_diferente',
-        message: 'Esse cupom de troca está vinculado a outro CPF. Confira o CPF informado ou utilize o cupom correspondente à sua troca.',
+        message: MENSAGEM_NOMINAL_CPF_DIFERENTE,
       };
     }
   }
@@ -255,6 +289,22 @@ export async function validarCupomRemoto(
      * `applyCoupon` a recalcular localmente depois.
      */
     if (dados.rule) seedCouponRule(dados.rule, cpfDigitos);
+    /**
+     * VALE NOMINAL RECUSADO POR CPF ≠ CÓDIGO DESCONHECIDO (25/09).
+     *
+     * O backend só manda `rule` no sucesso. Sem nada semeado, a sacola e o
+     * MiniCart (que recalculam pelo `applyCoupon` local) respondiam
+     * "Não encontramos esse cupom" pra um vale que EXISTE e só espera o
+     * CPF — a cliente lia "não existe" e apagava. Semeia uma casca nominal
+     * SEM `cpfAprovado`: o recálculo local passa a dizer "informe o CPF" /
+     * "outro CPF", e nunca dá desconto (nominal sem CPF aprovado não
+     * aplica). Não sobrescreve uma regra já aprovada: recusa no CPF B não
+     * pode apagar a aprovação do CPF A — é ela que faz "voltar pro CPF
+     * certo" reaplicar na hora.
+     */
+    if (!dados.ok && dados.reason && !dados.rule && !conheceCupom(code)) {
+      seedCouponRule({ code, kind: 'fixed', value: 0, label: 'Vale de troca', nominal: true });
+    }
     return {
       ...dados,
       ...(dados.rule?.nominal ? { nominal: true } : {}),
