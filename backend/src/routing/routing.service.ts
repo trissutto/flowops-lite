@@ -2473,6 +2473,14 @@ export class RoutingService {
         transferToStoreName: a.transferToStoreName ?? null,
         customerCpf: input.customerCpf ?? null,
         customerEmail: input.customerEmail ?? null,
+        // O texto conta o PAPEL da loja: retira aqui / juntada / pedido
+        // dividido (dono, 25/09 — LP-001687: a loja lia o pedido inteiro e
+        // perguntava se separava tudo).
+        isPickup: (!!input.pickupStoreCode || !!input.isPickup) && !a.isTransfer,
+        isJuntada:
+          !!a.isTransfer && !!result.consolidateStoreCode && a.transferToStoreCode === result.consolidateStoreCode,
+        isJuntadaAncora: !a.isTransfer && !!result.consolidateStoreCode && a.storeCode === result.consolidateStoreCode,
+        pedidoDividido: result.assignments.length > 1,
       } as any);
 
       return {
@@ -2769,6 +2777,11 @@ export class RoutingService {
           transferToStoreName: a.transferToStoreName ?? null,
           customerCpf: input.customerCpf ?? null,
           customerEmail: input.customerEmail ?? null,
+          isPickup: (!!input.pickupStoreCode || !!input.isPickup) && !a.isTransfer,
+          isJuntada:
+            !!a.isTransfer && !!result.consolidateStoreCode && a.transferToStoreCode === result.consolidateStoreCode,
+          isJuntadaAncora: !a.isTransfer && !!result.consolidateStoreCode && a.storeCode === result.consolidateStoreCode,
+          pedidoDividido: result.assignments.length > 1,
         } as any);
         return {
           storeId: a.storeId,
