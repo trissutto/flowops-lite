@@ -49,7 +49,12 @@ import { checkoutErrorCode } from './checkout-error-code';
  * Contrato com o backend
  * ──────────────────────────────────────────────────────────────────────────── */
 
-/** Item do pedido no vocabulário do backend (o `sku` é o que a separação usa). */
+/**
+ * Item do pedido no vocabulário do backend (o `sku` é o que a separação usa).
+ *
+ * `sku` = o CÓDIGO da variação (cor+tamanho) desde 25/09; linha antiga sem
+ * código manda a REF e o backend resolve — recusando, nunca chutando a cor.
+ */
 export interface NewOrderItem {
   productId: string;
   sku: string;

@@ -609,10 +609,20 @@ export class LojaOrdersService implements OnModuleInit {
        * faltava gravar o código que ele encontrou. Sem isso, todo pedido do
        * site nasce impossível de separar.
        *
-       * `codigo` vem nulo quando a variação não é única (peça sem cor
-       * escolhida): aí mantemos a REF, que pelo menos é rastreável na mão.
+       * `codigo` vem nulo quando a variação não é única (tamanho que não
+       * veio): aí mantemos a REF, que pelo menos é rastreável na mão.
+       *
+       * 🚨 DESDE 25/09 o site já manda o CÓDIGO em `sku` (caso VOGUE MARROM
+       * → PRETA): o guard confere cor e tamanho contra a linha dele e só então
+       * confirma. E a cor/tamanho gravados no pedido são os DA LINHA DO
+       * CÓDIGO — o que a separação vai bipar —, não só o texto da sacola.
+       * Sacola sem cor numa peça de várias cores não chega aqui: é recusa.
        */
-      if (c.codigo) input.items[c.indice].sku = c.codigo;
+      if (c.codigo) {
+        input.items[c.indice].sku = c.codigo;
+        if (c.cor) input.items[c.indice].color = c.cor;
+        if (c.tamanho) input.items[c.indice].size = c.tamanho;
+      }
 
       /**
        * A REF vem junto (13/08). O `sku` acima é o CÓDIGO — sete dígitos que

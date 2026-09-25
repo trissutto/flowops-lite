@@ -41,10 +41,25 @@ import { sqlEstoqueEntregavelPorCodigo } from '../common/estoque-entregavel';
  *  c) **`vendaUn` está em REAIS.** Nunca dividir por 100 — foi o bug de 01/07
  *     que derrubou preço 100× (blusa de R$ 80 virou R$ 0,80).
  *
- * O `sku` que chega do site é a REF (o carrinho carrega `product.id`, que o
- * `mapPeca` preenche com a REF). Mesmo assim o guard aceita CÓDIGO também: a
- * grade por cor já expõe `sku` = código por tamanho, e o dia que o carrinho
- * passar a mandar aquilo, isto aqui continua funcionando sem tocar em nada.
+ * 🚨 A IDENTIDADE DA PEÇA É O CÓDIGO, NÃO A REF (25/09/2026 — caso da Blusa
+ * VOGUE: a cliente comprou MARROM 52 e o pedido nasceu, foi separado e
+ * ENTREGUE como PRETO 52; antes disso, uma regata pelo mesmo caminho).
+ *
+ * REF é o MODELO. Cor e tamanho são o que distingue a peça na arara, e no
+ * espelho isso é o `codigo` (uma linha por REF+COR+TAMANHO). Duas regras
+ * valem aqui, e as duas existem porque o contrário já entregou peça errada:
+ *
+ *  1. O site manda o CÓDIGO da variação escolhida (`sku` = `codigo`), que a
+ *     grade por cor da PDP expõe por tamanho. Cor e tamanho vêm junto e são
+ *     CONFERIDOS contra a linha do código — divergiu, recusa. Nunca "corrige"
+ *     pra outra linha.
+ *  2. Sacola antiga (ou cliente que perdeu o código) ainda pode mandar a REF.
+ *     Aí a resolução REF+cor+tamanho vale SÓ quando a cor veio: REF com mais
+ *     de uma cor e sacola sem cor é recusa (`sem_cor`), nunca palpite. Era
+ *     exatamente o palpite — "sobrou uma variação nesse tamanho, deve ser
+ *     essa" — que trocava a cor da cliente pela única cor que a REF mãe tinha.
+ *
+ * Ver `escolherCandidatas` e `semCorEscolhida`.
  */
 
 /* ────────────────────────────── contrato ─────────────────────────────── */
@@ -103,6 +118,14 @@ export interface ItemConferido {
   /** Código do ERP da variação escolhida (o que a separação bipa). */
   codigo: string | null;
   ref: string;
+  /**
+   * COR e TAMANHO da linha do espelho que o `codigo` identifica — a verdade
+   * do que vai ser separado. O pedido grava isto (não só o que o site disse),
+   * pra linha do pedido, a etiqueta e a tela de bipe falarem da MESMA peça
+   * que o código. Nulos quando o código não resolveu.
+   */
+  cor: string | null;
+  tamanho: string | null;
 }
 
 /**
@@ -350,17 +373,65 @@ export class CarrinhoGuardService {
 
     return itens.map((it) => {
       const chave = this.normRef(it.sku);
-      let candidatas = porRef.get(chave) ?? [];
-      const porCod = porCodigo.get(chave);
-      if (!candidatas.length && porCod) candidatas = [porCod];
+      const candidatas = this.escolherCandidatas(chave, it, porRef, porCodigo);
       let variacoes = this.dedupe(candidatas);
       const cor = this.norm(it.color);
+      // Sem cor numa REF de várias cores não se resolve — é a mesma regra do
+      // `conferir`: a cotação não pode prometer 3h pra uma cor que ninguém
+      // escolheu.
+      if (!cor && this.semCorEscolhida(variacoes)) return { codigo: null, qtd: qtdDe(it) };
       if (cor) variacoes = variacoes.filter((l) => this.norm(l.cor) === cor);
       const tam = this.norm(it.size);
       if (tam) variacoes = variacoes.filter((l) => this.norm(l.tamanho) === tam);
       const codigo = variacoes.length === 1 && variacoes[0].codigo ? String(variacoes[0].codigo) : null;
       return { codigo, qtd: qtdDe(it) };
     });
+  }
+
+  /**
+   * QUAIS LINHAS DO ESPELHO PODEM SER ESTA PEÇA DA SACOLA.
+   *
+   * `sku` pode ser o CÓDIGO (o normal desde 25/09) ou a REF (sacola antiga).
+   * O código ganha — mas só se a cor e o tamanho que vieram junto baterem com
+   * a linha dele. Código que diz PRETO com sacola dizendo MARROM não é "a
+   * mesma peça com rótulo diferente": é divergência, e cai na resolução pela
+   * REF (que vai recusar por `sem_cor`/`sem_tamanho` com a mensagem certa).
+   * Sem isso um código velho preso na sacola compraria a cor errada calado.
+   */
+  private escolherCandidatas(
+    chave: string,
+    it: { color?: string; size?: string },
+    porRef: Map<string, LinhaCatalogo[]>,
+    porCodigo: Map<string, LinhaCatalogo>,
+  ): LinhaCatalogo[] {
+    const porCod = porCodigo.get(chave);
+    if (porCod && this.casaComASacola(porCod, it)) return [porCod];
+    const daRef = porRef.get(chave) ?? [];
+    if (daRef.length) return daRef;
+    return porCod ? [porCod] : [];
+  }
+
+  /** A linha do espelho diz a MESMA cor e o MESMO tamanho que a sacola? */
+  private casaComASacola(l: LinhaCatalogo, it: { color?: string; size?: string }): boolean {
+    const cor = this.norm(it.color);
+    const tam = this.norm(it.size);
+    if (cor && this.norm(l.cor) !== cor) return false;
+    if (tam && this.norm(l.tamanho) !== tam) return false;
+    return true;
+  }
+
+  /**
+   * A REF tem mais de uma cor e a sacola não disse qual.
+   *
+   * É o caso que NUNCA pode virar código: resolver pelo tamanho e "ficar com
+   * a que sobrou" foi o que mandou a Blusa VOGUE PRETA pra quem comprou a
+   * MARROM. Cor vazia no espelho conta como uma cor (cadastro que não
+   * preencheu): duas linhas com cores diferentes — ou uma com e outra sem —
+   * são duas peças diferentes até alguém dizer o contrário.
+   */
+  private semCorEscolhida(variacoes: LinhaCatalogo[]): boolean {
+    const cores = new Set(variacoes.map((l) => this.norm(l.cor)));
+    return cores.size > 1;
   }
 
   /**
@@ -459,10 +530,8 @@ export class CarrinhoGuardService {
         precoInformado: this.dinheiro(it.unitPrice),
       };
 
-      // 1) A peça existe no catálogo?
-      let candidatas = porRef.get(chave) ?? [];
-      const porCod = porCodigo.get(chave);
-      if (!candidatas.length && porCod) candidatas = [porCod];
+      // 1) A peça existe no catálogo? (código exato primeiro; REF é o legado)
+      const candidatas = this.escolherCandidatas(chave, it, porRef, porCodigo);
 
       if (!candidatas.length) {
         this.logger.warn(`[guard] SKU "${it.sku}" não existe no catálogo — pedido recusado`);
@@ -472,7 +541,11 @@ export class CarrinhoGuardService {
         };
       }
 
-      const ref = this.normRef(candidatas[0].ref);
+      // A REF como está no espelho ("VOGUE MM", com espaço) é a que vai pro
+      // pedido — a separação procura por ela. A versão sem espaço é só chave
+      // de busca (gate de publicação, telemetria).
+      const refCrua = String(candidatas[0].ref ?? '').trim();
+      const ref = this.normRef(refCrua);
 
       // 2) Item 6 — despublicada durante a sessão não fecha pedido.
       if (bloqueadas.has(ref)) {
@@ -483,10 +556,20 @@ export class CarrinhoGuardService {
         };
       }
 
-      // 3) Achar a VARIAÇÃO: cor (quando o site mandou) + tamanho.
+      // 3) Achar a VARIAÇÃO: cor + tamanho. A cor é OBRIGATÓRIA quando a
+      //    peça tem mais de uma — sem ela não existe "a variação certa".
       let variacoes = this.dedupe(candidatas);
 
       const cor = this.norm(it.color);
+      if (!cor && this.semCorEscolhida(variacoes)) {
+        this.logger.warn(
+          `[guard] REF ${ref} tem ${new Set(variacoes.map((l) => this.norm(l.cor))).size} cores e a sacola veio SEM cor — pedido recusado (nunca escolher por ela)`,
+        );
+        return {
+          ok: false, motivo: 'sem_cor', ref, item: itemParaTirar,
+          erro: `"${nomePeca}" tem mais de uma cor e a sacola não disse qual você escolheu. Toque em "Tirar da sacola e continuar" aqui embaixo e adicione a peça de novo escolhendo a cor — o resto do pedido segue normal. 💜`,
+        };
+      }
       if (cor) {
         const daCor = variacoes.filter((l) => this.norm(l.cor) === cor);
         if (!daCor.length) {
@@ -641,13 +724,24 @@ export class CarrinhoGuardService {
       }
 
       subtotal += precoCatalogo * qtd;
+      // Uma variação só = a peça está identificada; mais de uma (tamanho não
+      // veio) = o código fica nulo e o pedido nasce com a REF, rastreável na
+      // mão. O que NUNCA acontece aqui é escolher entre duas.
+      const unica = variacoes.length === 1 ? variacoes[0] : null;
+      if (!unica) {
+        this.logger.error(
+          `[guard] REF ${ref}: ${variacoes.length} variações depois de cor "${it.color ?? ''}" e tamanho "${it.size ?? ''}" — pedido segue SEM código (não dá pra separar)`,
+        );
+      }
       conferidos.push({
         indice: i,
         precoCatalogo,
         precoInformado,
         estoque,
-        codigo: variacoes.length === 1 ? variacoes[0].codigo : null,
-        ref,
+        codigo: unica?.codigo ?? null,
+        ref: refCrua || ref,
+        cor: unica?.cor ?? null,
+        tamanho: unica?.tamanho ?? null,
       });
     }
 

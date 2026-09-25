@@ -274,6 +274,15 @@ export interface Paginated<T> {
 export interface CartLine {
   id: Id;
   productId: Id;
+  /**
+   * O CÓDIGO da variação (REF+COR+TAMANHO) no espelho do catálogo — é o que
+   * a separação bipa. `productId` é a REF, o MODELO; a mesma REF tem o 52 em
+   * várias cores, e uma linha que só carrega REF+cor+tamanho obriga o backend
+   * a adivinhar o código (25/09: VOGUE MARROM virou PRETA). Opcional porque
+   * sacola guardada antes desta versão não o tem — aí o backend resolve pela
+   * REF, e recusa em vez de chutar. Ver `lib/commerce/variacao.ts`.
+   */
+  sku?: string;
   slug: string;
   name: string;
   image: Media;
