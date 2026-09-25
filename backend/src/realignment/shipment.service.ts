@@ -927,6 +927,17 @@ export class RealignmentShipmentService {
       destinoCode: (destino as any).code,
       rotulo: [ref, cor, tamanho].filter(Boolean).join(' '),
     });
+    /**
+     * PEÇA VENDIDA NÃO VAI POR TRANSFERÊNCIA COMUM (25/09, LP-001508). A
+     * unidade bipada num card de pedido já saiu do estoque; mandá-la por aqui
+     * baixa de novo na origem e soma peça fantasma no destino. Recusa no
+     * bipe, com o número do pedido — a loja fica sabendo NA HORA, não no
+     * fechamento da caixa.
+     */
+    await this.promessa.garantirNaoLevaPecaVendida({
+      origemCode: (origem as any).code,
+      itens: [{ codigo: codigoReal, qty: 1, rotulo: [ref, cor, tamanho].filter(Boolean).join(' ') }],
+    });
 
     // Preço já vem da rotina do PDV. Fallback no espelho local (Postgres) se vier 0.
     // Transferência NÃO bloqueia por preço (é só snapshot pra conferência/impresso).
@@ -1452,6 +1463,27 @@ export class RealignmentShipmentService {
       this.logger.warn(
         `closeAndSend ${shipment.code}: ${precheck.problemas.length} item(ns) com estoque insuficiente no Giga - fechando mesmo assim (allowNegative). Detalhes: ${JSON.stringify(precheck.problemas).slice(0, 500)}`,
       );
+    }
+
+    /**
+     * PEÇA VENDIDA NÃO VAI POR TRANSFERÊNCIA COMUM (25/09, LP-001508). A
+     * caixa da JUNTADA (orderId) nasce com a baixa do bipe e nunca passa por
+     * aqui; a comum não pode levar a unidade que um card de pedido já tirou do
+     * estoque. Recusa ANTES da baixa — depois dela o estrago já está feito
+     * (Itanhaém -1, Anália Franco +1, calados). O bipe da transferência já
+     * barra a peça uma a uma; esta é a porta, pra caixa montada por outro
+     * caminho.
+     */
+    if (!shipment.orderId) {
+      const rotuloDe = new Map<string, string>();
+      for (const it of items as any[]) {
+        const k = String(it.codigoBipado || '').trim();
+        if (k && !rotuloDe.has(k)) rotuloDe.set(k, [it.refCode, it.cor, it.tamanho].filter(Boolean).join(' '));
+      }
+      await this.promessa.garantirNaoLevaPecaVendida({
+        origemCode: shipment.fromStoreCode,
+        itens: stockItems.map((s) => ({ codigo: s.sku, qty: s.qty, rotulo: rotuloDe.get(String(s.sku)) })),
+      });
     }
 
     // BAIXA estoque Giga origem em transação (todos ou nada).
@@ -3054,6 +3086,79 @@ export class RealignmentShipmentService {
   // resolvendo a loja pela PRÓPRIA REMESSA em vez do JWT de quem clica.
   // ═══════════════════════════════════════════════════════════════════════
 
+  /**
+   * CAIXA DE JUNTADA DESVIADA (25/09, LP-001508): caixa com `orderId` cujo
+   * destino NÃO é mais a âncora do pedido — a matriz trocou a âncora depois
+   * do despacho (`juntarPedido` avisa, mas a caixa física continua indo pro
+   * endereço antigo). Enquanto o pedido não sai, a matriz precisa ver isso
+   * numa lista, não numa linha do histórico: sem lista, a loja improvisou uma
+   * transferência comum e dobrou a baixa. Medição 25/09: 1 caso em 90 dias.
+   */
+  async listCaixasDesviadas() {
+    const caixas: any[] = await (this.prisma as any).realignmentShipment.findMany({
+      where: {
+        orderId: { not: null },
+        pickOrderId: { not: null },
+        status: { in: ['open', 'in_transit', 'received'] },
+      },
+      orderBy: { openedAt: 'desc' },
+      take: 500,
+    });
+    if (!caixas.length) return [];
+    const picks: any[] = await this.prisma.pickOrder.findMany({
+      where: { id: { in: caixas.map((c) => String(c.pickOrderId)) } },
+      select: { id: true, transferToStoreCode: true, isTransfer: true },
+    });
+    const pickPorId = new Map(picks.map((p) => [String(p.id), p]));
+    const desviadas = caixas.filter((c) => {
+      const p = pickPorId.get(String(c.pickOrderId));
+      const ancora = String(p?.transferToStoreCode ?? '').trim();
+      return !!p?.isTransfer && !!ancora && ancora !== String(c.toStoreCode ?? '').trim();
+    });
+    if (!desviadas.length) return [];
+    const orders: any[] = await this.prisma.order.findMany({
+      where: { id: { in: Array.from(new Set(desviadas.map((c) => String(c.orderId)))) } },
+      select: { id: true, wcOrderId: true, wcOrderNumber: true, status: true },
+    });
+    const orderPorId = new Map(orders.map((o) => [String(o.id), o]));
+    const ancoras = Array.from(
+      new Set(desviadas.map((c) => String(pickPorId.get(String(c.pickOrderId))?.transferToStoreCode ?? ''))),
+    ).filter(Boolean);
+    const lojas: any[] = ancoras.length
+      ? await this.prisma.store.findMany({ where: { code: { in: ancoras } }, select: { code: true, name: true } as any })
+      : [];
+    const nomeLoja = new Map(lojas.map((l) => [String(l.code), l.name]));
+    return desviadas
+      .filter((c) => {
+        const o = orderPorId.get(String(c.orderId));
+        // Pedido já enviado/entregue/cancelado: a caixa desviada virou história.
+        return !!o && !['shipped', 'delivered', 'cancelled'].includes(String(o.status));
+      })
+      .map((c) => {
+        const p = pickPorId.get(String(c.pickOrderId));
+        const o = orderPorId.get(String(c.orderId));
+        const ancora = String(p?.transferToStoreCode ?? '');
+        return {
+          id: c.id,
+          code: c.code,
+          status: c.status,
+          fromStoreCode: c.fromStoreCode,
+          fromStoreName: c.fromStoreName,
+          toStoreCode: c.toStoreCode,
+          toStoreName: c.toStoreName,
+          ancoraStoreCode: ancora,
+          ancoraStoreName: nomeLoja.get(ancora) ?? null,
+          orderId: c.orderId,
+          wcOrderId: o?.wcOrderId ?? null,
+          wcOrderNumber: o?.wcOrderNumber ?? null,
+          orderStatus: o?.status ?? null,
+          trackingCode: c.trackingCode ?? null,
+          sentAt: c.sentAt ?? null,
+          receivedAt: c.receivedAt ?? null,
+        };
+      });
+  }
+
   /** Caixas em trânsito paradas há mais de `minDias` (rede toda). */
   async listStuckInTransit(minDias = 3) {
     const cutoff = new Date(Date.now() - minDias * 24 * 60 * 60 * 1000);
@@ -3297,6 +3402,46 @@ export class RealignmentShipmentService {
       this.logger.log(
         `[shipment] ${shipment.code}: caixa de JUNTADA recebida — SEM entrada de estoque (peças do pedido, não da arara)`,
       );
+      /**
+       * CAIXA DESVIADA (25/09, LP-001508): a matriz trocou a âncora depois
+       * que esta caixa saiu, e ela deu entrada na âncora ANTIGA. A peça é do
+       * pedido e precisa seguir pra âncora nova — sem transferência comum
+       * (o sistema recusa: dobra a baixa). Aqui só se AVISA, no histórico do
+       * pedido e no log; a lista da matriz (/retaguarda/remessas) mostra a
+       * caixa até o pedido sair. Best-effort: aviso que falha não segura a
+       * entrada.
+       */
+      try {
+        const pickDaCaixa = (shipment as any).pickOrderId
+          ? await this.prisma.pickOrder.findUnique({
+              where: { id: String((shipment as any).pickOrderId) },
+              select: { transferToStoreCode: true },
+            })
+          : null;
+        const ancora = String(pickDaCaixa?.transferToStoreCode ?? '').trim();
+        if (ancora && ancora !== String(shipment.toStoreCode ?? '').trim()) {
+          const lojaAncora: any = await this.prisma.store.findFirst({
+            where: { code: ancora },
+            select: { name: true } as any,
+          });
+          const nomeAncora = `${ancora}${lojaAncora?.name ? ` ${lojaAncora.name}` : ''}`;
+          this.logger.warn(
+            `[shipment] ${shipment.code}: caixa de JUNTADA deu entrada em ${shipment.toStoreCode}, mas o pedido agora junta em ${nomeAncora} — reencaminhar a peça (sem transferência comum)`,
+          );
+          await this.prisma.orderHistory.create({
+            data: {
+              orderId: String((shipment as any).orderId),
+              userId: input.userId ?? null,
+              note:
+                `📦 Caixa ${shipment.code} (de ${shipment.fromStoreName}) deu entrada em ${shipment.toStoreCode} ${shipment.toStoreName}, ` +
+                `mas o pedido agora JUNTA em ${nomeAncora}: a peça precisa ser reencaminhada pra lá. ` +
+                `Ela é do pedido — NÃO entrou no estoque de ${shipment.toStoreCode} e NÃO pode ir por transferência comum (o sistema recusa).`,
+            },
+          });
+        }
+      } catch (e) {
+        this.logger.warn(`[shipment] ${shipment.code}: aviso de caixa desviada falhou: ${(e as Error).message}`);
+      }
     } else if (stockItems.length > 0) {
       /**
        * ENTRADA NO FLOW NA HORA, GIGA PELO OUTBOX (27/08 — Moema travada).

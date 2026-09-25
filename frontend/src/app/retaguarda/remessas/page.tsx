@@ -111,6 +111,30 @@ type StuckRow = {
   envioGeneratedAt?: string | null;
 };
 
+/** Caixa de JUNTADA endereçada a uma loja que NÃO é mais a âncora do pedido
+ *  (GET /realignment/shipments/admin/desviadas). A matriz trocou a âncora
+ *  depois que a caixa saiu (LP-001508, 18/09): a peça vai chegar na loja
+ *  errada e precisa ser reencaminhada — e NÃO entra no estoque de quem
+ *  recebeu, porque é peça vendida. */
+type DesviadaRow = {
+  id: string;
+  code: string;
+  status: string;
+  fromStoreCode: string;
+  fromStoreName: string;
+  toStoreCode: string;
+  toStoreName: string;
+  ancoraStoreCode: string;
+  ancoraStoreName: string | null;
+  orderId: string;
+  wcOrderId: number | null;
+  wcOrderNumber: string | null;
+  orderStatus: string;
+  trackingCode?: string | null;
+  sentAt?: string | null;
+  receivedAt?: string | null;
+};
+
 /** PACOTES A DECIDIR (política de frete 29/08) — pedido DENTRO de SP que
  *  ficou em 2+ pacotes pra cliente. O envio espera a matriz: LIBERAR os
  *  fretes ou JUNTAR numa âncora. Separação/bipe das lojas seguem normais. */
@@ -162,6 +186,8 @@ export default function RemessasAdminPage() {
   const [abertasParadas, setAbertasParadas] = useState<ShipmentRow[]>([]);
   // MUTIRÃO — caixas em trânsito paradas há 3+ dias.
   const [paradas, setParadas] = useState<StuckRow[]>([]);
+  // CAIXA DE JUNTADA DESVIADA — a âncora mudou depois do despacho (LP-001508).
+  const [desviadas, setDesviadas] = useState<DesviadaRow[]>([]);
   const [mutiraoBusy, setMutiraoBusy] = useState<string | null>(null);
   const [mutiraoAberto, setMutiraoAberto] = useState(false);
   // PACOTES A DECIDIR — pedido dentro de SP em 2+ pacotes (política 29/08).
@@ -299,6 +325,7 @@ export default function RemessasAdminPage() {
       api<any[]>('/pick-orders/sem-bipe').then((r) => setSemBipe(Array.isArray(r) ? r : [])).catch(() => setSemBipe([]));
       api<{ itens: any[] }>('/orders/rastreio/parados').then((r) => setRastreioMudo(Array.isArray(r?.itens) ? r.itens : [])).catch(() => setRastreioMudo([]));
       api<{ lojas: any[] }>('/pick-orders/gargalo').then((r) => setGargalo(Array.isArray(r?.lojas) ? r.lojas : [])).catch(() => setGargalo([]));
+      api<DesviadaRow[]>('/realignment/shipments/admin/desviadas').then((r) => setDesviadas(Array.isArray(r) ? r : [])).catch(() => setDesviadas([]));
       api<any>('/orders/frete/painel').then((r) => setFretePainel(r?.semanas ? r : null)).catch(() => setFretePainel(null));
       api<any>('/orders/vigilancia/separacao').then((r) => setVigilancia(r?.medidoEm ? r : null)).catch(() => setVigilancia(null));
       setRows(Array.isArray(list) ? list : []);
@@ -1009,6 +1036,52 @@ export default function RemessasAdminPage() {
             quando alguém dá entrada. No meio, a peça não está no estoque de
             NINGUÉM: some da Consulta e não vende no site. Medição de 11/08:
             198 remessas / 1.057 peças assim, a mais antiga de 15/05. */}
+        {/* 🧲 CAIXA DE JUNTADA DESVIADA — a matriz trocou a loja âncora depois
+            que a caixa já tinha saído (LP-001508, 18/09): a caixa continua indo
+            pro endereço da âncora ANTIGA. A peça precisa ser reencaminhada pra
+            âncora nova e NÃO entra no estoque de quem recebeu (é peça vendida).
+            Sem esta lista o caso só aparecia como uma linha no histórico do
+            pedido — e a loja improvisou uma transferência comum, que dobra a
+            baixa (hoje o sistema recusa). */}
+        {desviadas.length > 0 && (
+          <div className="rounded-xl border-2 border-violet-300 bg-violet-50 overflow-hidden">
+            <div className="px-4 py-2.5 bg-violet-600 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-black uppercase tracking-wide">
+                {desviadas.length} caixa{desviadas.length === 1 ? '' : 's'} de juntada indo pra loja ERRADA — a âncora mudou depois do despacho
+              </span>
+            </div>
+            <div className="divide-y divide-violet-200">
+              {desviadas.map((d) => (
+                <div key={d.id} className="px-4 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  <span className="font-mono font-black text-violet-900">{d.code}</span>
+                  <span className="text-slate-700">
+                    {d.fromStoreCode} {d.fromStoreName} → {d.toStoreCode} {d.toStoreName}
+                  </span>
+                  <span className="text-[10px] font-bold uppercase text-violet-800 bg-violet-100 rounded px-1.5 py-0.5">
+                    {d.status === 'received' ? 'já chegou lá' : d.status === 'in_transit' ? 'em trânsito' : 'ainda aberta'}
+                  </span>
+                  {d.trackingCode && (
+                    <span className="text-[10px] font-bold text-sky-800 bg-sky-100 rounded px-1.5 py-0.5">{d.trackingCode}</span>
+                  )}
+                  <span className="font-bold text-violet-900">
+                    pedido {d.wcOrderNumber ?? d.wcOrderId ?? '—'} junta em {d.ancoraStoreCode} {d.ancoraStoreName ?? ''}
+                  </span>
+                  {d.wcOrderId != null && (
+                    <Link href={`/pedidos/wc/${d.wcOrderId}`} className="ml-auto text-xs font-black text-violet-700 underline">
+                      abrir pedido
+                    </Link>
+                  )}
+                </div>
+              ))}
+              <p className="px-4 py-2 text-[11px] text-violet-900/80 leading-snug">
+                Combine com a loja que recebeu o reencaminhamento pra loja âncora. A peça é do pedido: ela NÃO
+                entra no estoque de quem recebeu e NÃO pode ir por transferência comum (o sistema recusa — isso
+                baixava o estoque duas vezes). O card da âncora mostra essa caixa como &quot;chegou, mas em outra loja&quot;.
+              </p>
+            </div>
+          </div>
+        )}
         {paradas.length > 0 && (
           <div className="rounded-xl border-2 border-amber-300 bg-amber-50 overflow-hidden">
             <button
