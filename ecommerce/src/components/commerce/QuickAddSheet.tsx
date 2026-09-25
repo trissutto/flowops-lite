@@ -11,6 +11,7 @@ import { useCartStore } from '@/store/cart';
 import { useQuickAddStore } from '@/store/quick-add';
 import { trackAddToCart } from '@/lib/tracking';
 import { formatPrice } from '@/lib/utils';
+import { codigoDaVariacao } from '@/lib/commerce/variacao';
 import type { CorApi, PecaApi } from '@/services/products';
 
 /**
@@ -99,6 +100,9 @@ export function QuickAddSheet() {
     const nome = produto!.name;
     addToCart({
       productId: produto!.id,
+      // O código exato da variação (cor + tamanho) — a grade real veio por
+      // cor, então ele já está aqui. Ver `lib/commerce/variacao.ts`.
+      sku: codigoDaVariacao(cores, cor, tamanho),
       slug: produto!.slug,
       name: nome,
       image: produto!.images[0] ?? { src: '', alt: produto!.name },

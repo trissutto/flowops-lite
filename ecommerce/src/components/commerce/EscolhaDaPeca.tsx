@@ -205,7 +205,9 @@ export function EscolhaDaPeca({
         capa: c.fotos[0]?.src ?? null,
         swatch: c.swatch,
         estoque: c.estoque,
-        tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel })),
+        // O código por tamanho vai junto: é ele que identifica a peça na
+        // sacola (cor + tamanho), não a REF.
+        tamanhos: c.tamanhos.map((t) => ({ label: t.label, disponivel: t.disponivel, sku: t.sku })),
       })),
     [cores],
   );

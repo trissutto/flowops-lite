@@ -87,6 +87,10 @@ const imageSchema = z
 const cartLineSchema = z.object({
   id: z.string().min(1),
   productId: z.string().min(1),
+  // O código exato da variação (cor+tamanho). Zod PODA chave desconhecida —
+  // sem esta linha o código que a sacola manda morreria aqui, calado, e o
+  // backend voltaria a resolver pela REF.
+  sku: z.string().max(40).optional(),
   slug: z.string().min(1),
   name: z.string().min(1).max(200),
   image: imageSchema,
@@ -487,12 +491,13 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     // Leva o carimbo `estimado` quando a cotação veio da tabela local ou da
     // estimativa do backend (ver frete-server.ts) — backend antigo ignora.
     shipping: quote,
-    // `sku` é o que a separação usa na loja; enquanto o carrinho não carrega
-    // SKU próprio, o productId é a identidade da peça (mesma escolha do
-    // tracking em `itemsTracked`).
+    // `sku` é o que a separação usa na loja: o CÓDIGO da variação escolhida
+    // (cor+tamanho), que a sacola carrega desde 25/09. Linha antiga sem
+    // código manda a REF (`productId`) e o backend resolve — com a regra de
+    // nunca escolher a cor por ela (caso VOGUE MARROM → PRETA).
     items: input.items.map((l) => ({
       productId: l.productId,
-      sku: l.productId,
+      sku: (l.sku && l.sku.trim()) || l.productId,
       slug: l.slug,
       name: l.name,
       size: l.size,

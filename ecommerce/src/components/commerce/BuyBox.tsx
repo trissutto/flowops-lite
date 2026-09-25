@@ -18,6 +18,7 @@ import { useWishlistStore } from '@/store/wishlist';
 import { trackAddToCart, trackAddToCartBlocked, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
 import { useMounted, useNearViewport } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
+import { codigoDaVariacao } from '@/lib/commerce/variacao';
 import { rotuloDaCor, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
@@ -47,7 +48,12 @@ export interface CorEscolhivel {
    * Opcional porque nem todo chamador tem a grade por cor — sem ela, nenhuma
    * bolinha é riscada, que é o comportamento de antes.
    */
-  tamanhos?: Array<{ label: string; disponivel: boolean }>;
+  tamanhos?: Array<{
+    label: string;
+    disponivel: boolean;
+    /** O CÓDIGO deste tamanho NESTA cor — vai na sacola (ver `lib/commerce/variacao.ts`). */
+    sku?: string | null;
+  }>;
   /**
    * A FOTO da cor — a mesma capa que a fita de miniaturas usa.
    *
@@ -288,6 +294,12 @@ export function BuyBox({
     const cor = corSelecionada ?? (cores?.length === 1 ? cores[0].nome : undefined);
     addToCart({
       productId: product.id,
+      /**
+       * O CÓDIGO da variação (cor + tamanho), a identidade exata da peça.
+       * Sem ele a linha levava só a REF e o backend adivinhava o código — foi
+       * assim que a VOGUE MARROM 52 virou PRETA 52 no pedido (25/09).
+       */
+      sku: codigoDaVariacao(cores, cor, tamanho),
       slug: product.slug,
       /**
        * ⚠️ O NOME NÃO LEVA A COR (corrigido 06/08). Antes era
