@@ -12,6 +12,11 @@ import { AdiantamentosModule } from '../adiantamentos/adiantamentos.module';
 // ⚠️ RoutingModule aqui é seguro: a cadeia dele (Stock/Websocket/Erp/Push)
 // não importa PdvModule — conferido antes de adicionar (lição do ciclo 07/08).
 import { RoutingModule } from '../routing/routing.module';
+// StockModule (25/09): o semáforo de lastro da venda a distância lê o estoque
+// pela MESMA vista do routing (`wincred_estoque` via StockService) — lia
+// `giga_estoque` cru e dava vermelho pra peça que a Consulta mostrava com 12
+// na rede. A cadeia dele (Erp/Prisma/WincredMirror) já está toda aqui.
+import { StockModule } from '../stock/stock.module';
 // EmailModule/HttpModule → PedidoEmailService com instância própria (mesma
 // receita do PickOrdersModule): o aviso ao cliente do pedido online sai daqui
 // sem importar o LojaOrdersModule inteiro e sem criar ciclo.
@@ -76,7 +81,7 @@ import { MetasController } from './metas.controller';
  * qualquer caminho até o host morto.
  */
 @Module({
-  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule, FaturamentoModule],
+  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule, FaturamentoModule, StockModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController, MetasController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou

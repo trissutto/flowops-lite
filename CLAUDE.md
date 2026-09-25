@@ -54,7 +54,7 @@ Toda escrita de estoque aplica **primeiro no Postgres**, na hora: `erp.decreaseS
 
 ### Leituras do estoque — `StockService` + `WincredCatalogService`
 
-`wincred_estoque` é a fonte de leitura (`STOCK_WINCRED_FIRST`, on) — a **MESMA** tabela que site e PDV leem. O routing decidia por outra (`giga_estoque` via ErpService) e podia ver um número que ninguém mais via. Cache in-process de 30s; o routing pede `fresh: true` (decisão de qual loja separa não pode usar número velho).
+`wincred_estoque` é a fonte de leitura (`STOCK_WINCRED_FIRST`, on) — a **MESMA** tabela que site e PDV leem. O routing decidia por outra (`giga_estoque` via ErpService) e podia ver um número que ninguém mais via. Cache in-process de 30s; o routing pede `fresh: true` (decisão de qual loja separa não pode usar número velho). ⚠️ **Nenhuma decisão de venda lê `giga_estoque` direto**: o semáforo de lastro da venda a distância (`pdv/lastro-rede.service.ts`) fazia isso até 25/09 e gritava "NÃO EXISTE em nenhuma loja" pra peça que a Consulta mostrava com 12 na rede (207333 PRETO 56, Itanhaém) — as duas tabelas divergem (o `VigilanciaSeparacaoCron` mede os pares), e o semáforo era o único olho apontado pra que ninguém mais olha. Hoje ele passa pelo `StockService` com `fresh: true`, a mesma vista do routing. Quem ainda lê `giga_estoque` cru: grade da live (`live-pdv.service.ts`), Inteligência e o editor de produtos.
 
 O **bipe** (`getPdvProductInfo`) é **100% Postgres desde a Onda 1**: EAN legado resolve pela coluna `ean` das próprias tabelas, preço zerado volta como ENCONTRADO (a ponta avisa) e erro do espelho **sobe** como 500 honesto em vez de virar "produto não existe" com a cliente na frente.
 
