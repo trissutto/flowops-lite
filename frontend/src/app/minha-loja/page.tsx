@@ -158,6 +158,13 @@ interface PickOrderRow {
       status: string;
       /** separando · pronta (separada, ainda na origem) · problema · a_caminho · chegou */
       etapa?: 'separando' | 'pronta' | 'problema' | 'a_caminho' | 'chegou';
+      /**
+       * A caixa foi endereçada a OUTRA loja (a matriz trocou a âncora depois
+       * do despacho — LP-001508). Ela conta como chegada quando `received`,
+       * igual à porta do envio, mas o sistema não vê o reencaminhamento pra
+       * cá: o card avisa e quem confere a peça na mão é a vendedora.
+       */
+      desviadaPara?: string | null;
       fromStoreName: string | null;
       trackingCode: string | null;
       pecas?: number;
@@ -2896,6 +2903,11 @@ function PickOrderCard({
         const j = composto;
         const ehRet = j.modo === 'retirada';
         const faltam = j.total - j.recebidas;
+        // Caixas que chegaram em OUTRA loja (âncora trocada depois do
+        // despacho): contam como recebidas, mas a peça pode não estar aqui.
+        const desviadas = j.caixas
+          .filter((c) => !!c.desviadaPara && (c.etapa === 'chegou' || c.status === 'received'))
+          .map((c) => c.desviadaPara as string);
         const minhasPecas = items.reduce((s, i) => s + (i.quantity ?? 0), 0);
         const deFora = j.pecasChegando ?? 0;
         const totalPedido = minhasPecas + deFora;
@@ -2945,11 +2957,23 @@ function PickOrderCard({
                       </span>
                     )}
                     {c.etapa === 'chegou' || c.status === 'received' ? (
-                      <span className="font-semibold text-emerald-700">✅ chegou</span>
+                      c.desviadaPara ? (
+                        // A caixa saiu pra âncora ANTIGA e deu entrada LÁ. O
+                        // sistema não vê o reencaminhamento pra cá — a linha
+                        // conta como chegada (igual à porta), mas diz onde.
+                        <span className="font-semibold text-amber-700">
+                          ✅ chegou — mas em {c.desviadaPara} (a caixa saiu antes da troca de loja):
+                          confira que a peça está AQUI antes de postar
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-emerald-700">✅ chegou</span>
+                      )
                     ) : c.etapa === 'a_caminho' ? (
                       <span className="font-semibold text-sky-700">
                         {c.code
-                          ? '📦 em trânsito'
+                          ? c.desviadaPara
+                            ? `📦 em trânsito pra ${c.desviadaPara} — loja errada (a caixa saiu antes da troca de loja): combine o reencaminhamento pra cá`
+                            : '📦 em trânsito'
                           : ehRet
                           ? '🚚 já saiu de lá — confira se chegou aqui'
                           : '📦 já saiu da loja de origem'}
@@ -3001,6 +3025,13 @@ function PickOrderCard({
                 <span className="font-bold">NÃO ENVIE AINDA.</span> Separe e deixe as peças
                 daqui prontas; falta(m) {faltam} caixa(s). Dê entrada na tela de
                 Transferências quando chegar — o envio libera com o pedido completo.
+              </>
+            ) : desviadas.length ? (
+              <>
+                <span className="font-bold">CONFIRA ANTES DE POSTAR.</span> Todas as caixas foram
+                recebidas, mas {desviadas.length === 1 ? 'uma chegou' : `${desviadas.length} chegaram`} em
+                OUTRA loja ({[...new Set(desviadas)].join(', ')}) — a caixa saiu antes da troca de loja e
+                o sistema não vê o reencaminhamento pra cá. Só envie com a(s) peça(s) na mão.
               </>
             ) : (
               <>Todas as caixas chegaram — pode conferir o pedido inteiro e enviar.</>
