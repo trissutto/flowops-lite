@@ -100,6 +100,8 @@ interface WcOrderListItem {
   shipped?: boolean;
   /** Desde quando a caixa está separada esperando postagem (aba "Pronto pra postar"). */
   prontoDesde?: string | null;
+  /** Tudo postado mas o pedido segue aberto: as peças que ainda precisam de decisão da matriz (26/09). */
+  pecasSemDesfecho?: string[];
   trackingCode?: string | null;
   trackingCarrier?: string | null;
   // Vendedora atribuída (tag pra relatório de vendas online por atendente)
@@ -1842,6 +1844,21 @@ function SeparacaoPageInner() {
                     ) : status === 'em-transito' && o.trackingCode ? (
                       <span className="text-ink-faint" title="O objeto entrou na fila do rastreio e ainda não foi consultado (o ciclo roda de 30 em 30 minutos).">
                         aguardando 1ª leitura
+                      </span>
+                    ) : o.shipped && (o.pecasSemDesfecho?.length ?? 0) > 0 ? (
+                      /* Tudo postado, mas o pedido NÃO fechou: sobrou peça
+                         reportada/sem loja (ou caixa de feeder sem card na
+                         âncora). Antes a linha dizia só "Enviado · código" e a
+                         decisão que faltava ficava invisível (26/09). */
+                      <span
+                        className="font-semibold text-warn"
+                        title={
+                          `Caixas postadas${o.trackingCode ? ` (${o.trackingCode})` : ''}, mas o pedido segue aberto — ` +
+                          `decida na ficha (mover pra outra loja ou cancelar com crédito):\n` +
+                          o.pecasSemDesfecho!.join('\n')
+                        }
+                      >
+                        Enviado · falta decidir {o.pecasSemDesfecho!.length} peça{o.pecasSemDesfecho!.length > 1 ? 's' : ''}
                       </span>
                     ) : o.shipped ? (
                       <span className="font-semibold text-ok" title={o.trackingCode ? `${o.trackingCarrier || ''} ${o.trackingCode}` : 'Enviado pela loja'}>

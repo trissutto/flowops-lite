@@ -22,6 +22,13 @@
  *  Report aberto (`PickOrderItemReport.resolvedAt = null`) marca a peça como
  *  pendente-reportada mesmo sem dono — é a fila de decisão da matriz.
  *
+ *  ⚠️ CAIXA DE FEEDER NÃO É ENVIO PRA CLIENTE (26/09). Na juntada e na
+ *  retirada dividida o card `isTransfer` posta a peça pra OUTRA LOJA (a
+ *  âncora), não pra cliente. Quem prova que a peça saiu de verdade é o card
+ *  da âncora. Caso LP-001264: Itanhaém mandou 3 peças pra Santos, a matriz
+ *  removeu o card de Santos e o pedido ficou "Enviado" com as 3 peças na
+ *  prateleira de outra loja e ninguém pra postar.
+ *
  *  Pura de propósito (mesmo padrão de `troca-bloqueio.ts`): quem fecha pedido
  *  chama daqui; o teste roda sem Nest.
  * ═══════════════════════════════════════════════════════════════════════════
@@ -43,7 +50,16 @@ export type ItemDoPedido = {
 
 export type CardDoPedido = {
   storeId?: string | null;
+  /** Código da loja do card — é por ele que o feeder aponta a âncora (`transferToStoreCode`). */
+  storeCode?: string | null;
   status: string;
+  /** Card FEEDER: manda a peça pra OUTRA loja (juntada / retirada dividida), não pra cliente. */
+  isTransfer?: boolean | null;
+  transferToStoreCode?: string | null;
+  carrier?: string | null;
+  trackingCode?: string | null;
+  /** Quando o card mudou pela última vez — pra card postado, é o carimbo do despacho. */
+  updatedAt?: Date | string | null;
 };
 
 export type ReportAberto = {
@@ -55,10 +71,14 @@ export type PecaPendente = {
   itemId: string;
   sku: string;
   rotulo: string;
-  motivo: 'reportada' | 'sem_dono' | 'aguardando_loja';
+  motivo: 'reportada' | 'sem_dono' | 'aguardando_loja' | 'na_loja_ancora';
 };
 
 const CARD_ENVIADO = ['shipped', 'delivered'];
+/** Card que ainda pede alguma coisa da loja — arara, bipe ou postagem. */
+const CARD_ABERTO = ['new', 'separating', 'separated', 'ready'];
+/** Pedido que já teve desfecho: não se fecha de novo nem se reabre por aqui. */
+const PEDIDO_JA_FECHADO = ['shipped', 'delivered', 'cancelled'];
 
 function rotuloDaPeca(it: ItemDoPedido): string {
   return (
@@ -66,6 +86,10 @@ function rotuloDaPeca(it: ItemDoPedido): string {
     it.productName ||
     String(it.sku || it.id)
   );
+}
+
+function codigoLoja(v: unknown): string {
+  return String(v ?? '').trim().toUpperCase();
 }
 
 /**
@@ -98,7 +122,21 @@ export function pecasPendentesDoPedido(ctx: {
     // Prova de envio nº 1: o card da loja DONA da peça já postou.
     const dono = it.assignedStoreId || null;
     const cardDono = dono ? cards.find((c) => c.storeId === dono) ?? null : null;
-    const enviadaPeloCard = !!cardDono && CARD_ENVIADO.includes(String(cardDono.status));
+    let enviadaPeloCard = !!cardDono && CARD_ENVIADO.includes(String(cardDono.status));
+
+    // Card FEEDER postado = a peça foi pra loja ÂNCORA, não pra cliente. Só
+    // conta como enviada quando o card (não-feeder) da âncora também postou.
+    // Sem card na âncora — removido na mão, nunca criado — a peça está numa
+    // caixa em outra loja e ninguém vai postá-la: pendente, e visível.
+    let presaNaAncora = false;
+    if (enviadaPeloCard && cardDono?.isTransfer) {
+      const destino = codigoLoja(cardDono.transferToStoreCode);
+      const cardAncora = destino
+        ? cards.find((c) => !c.isTransfer && codigoLoja(c.storeCode) === destino) ?? null
+        : null;
+      enviadaPeloCard = !!cardAncora && CARD_ENVIADO.includes(String(cardAncora.status));
+      presaNaAncora = !enviadaPeloCard;
+    }
 
     // Prova nº 2 (peça sem dono): bipe de envio ativo que ainda sobre pra ela.
     let enviadaPorBipe = false;
@@ -117,26 +155,97 @@ export function pecasPendentesDoPedido(ctx: {
       itemId: it.id,
       sku,
       rotulo: rotuloDaPeca(it),
-      motivo: reportada ? 'reportada' : !dono || !cardDono ? 'sem_dono' : 'aguardando_loja',
+      motivo: reportada
+        ? 'reportada'
+        : presaNaAncora
+          ? 'na_loja_ancora'
+          : !dono || !cardDono
+            ? 'sem_dono'
+            : 'aguardando_loja',
     });
   }
   return pendentes;
 }
 
 /**
- * Carrega tudo que a régua precisa e devolve as pendências de um pedido.
+ * O PEDIDO FECHA AGORA? — a decisão única de encerramento (26/09).
+ *
+ * Até aqui só o ramo `shipped` do `updateStatus` do card fechava pedido, e só
+ * naquele instante. Se a última caixa postava com uma peça pendente, o pedido
+ * ficava aberto — certo — mas NADA reavaliava depois: a matriz cancelava a
+ * peça com crédito, o card feeder virava `shipped` pelo cron da juntada, o
+ * cron da postagem dos Correios marcava o card postado… e o pedido seguia
+ * "Em separação" pra sempre, com a cliente já de posse da sacola. Medido em
+ * 26/09: 16 dos 21 pedidos da aba "Em separação" estavam assim, o mais velho
+ * com 33 dias.
+ *
+ * Esta função é a régua; quem grava é `PickOrdersService.tentarFecharPedido`,
+ * e TODO desfecho de peça ou de card chama ele. Pura: recebe o que já foi
+ * lido do banco.
+ *
+ *  - pedido já fechado/cancelado → não mexe (nunca reabre, nunca duplica);
+ *  - sem card → não fecha (pedido sem loja é fila da matriz, não desfecho);
+ *  - qualquer card ainda aberto → não fecha;
+ *  - peça pendente (régua acima) → não fecha, e é AQUI que "peça ≠ caixa" vale;
+ *  - senão fecha: `delivered` quando é retirada e a loja que entrega marcou
+ *    "Cliente retirou" (carrier retirada — a entrega aconteceu na frente da
+ *    vendedora), `shipped` no resto. `despachoEm` é o carimbo do ÚLTIMO card
+ *    que entrega (não é `now()`: quem fecha atrasado não pode inventar data —
+ *    é dela que corre a janela do rastreio e o prazo de troca).
+ */
+export type DecisaoFechamento =
+  | { fecha: false; motivo: 'ja_fechado' | 'sem_card' | 'card_aberto' | 'pendencia' }
+  | { fecha: true; como: 'shipped' | 'delivered'; despachoEm: Date };
+
+export function decidirFechamento(ctx: {
+  status: string;
+  isPickup?: boolean | null;
+  cards: CardDoPedido[];
+  pendentes: PecaPendente[];
+  /** Só pra teste — o "agora" usado quando nenhum card tem carimbo. */
+  agora?: Date;
+}): DecisaoFechamento {
+  if (PEDIDO_JA_FECHADO.includes(String(ctx.status))) return { fecha: false, motivo: 'ja_fechado' };
+
+  const vivos = (ctx.cards ?? []).filter((c) => String(c.status) !== 'cancelled');
+  if (!vivos.length) return { fecha: false, motivo: 'sem_card' };
+  const algumAberto = vivos.some(
+    (c) => CARD_ABERTO.includes(String(c.status)) || !CARD_ENVIADO.includes(String(c.status)),
+  );
+  if (algumAberto) return { fecha: false, motivo: 'card_aberto' };
+  if ((ctx.pendentes ?? []).length) return { fecha: false, motivo: 'pendencia' };
+
+  // Quem ENTREGA pra cliente é o card não-feeder; o feeder só alimenta a âncora.
+  const finais = vivos.filter((c) => !c.isTransfer);
+  const quemEntrega = finais.length ? finais : vivos;
+  const retirada = !!ctx.isPickup && quemEntrega.some((c) => /retirada/i.test(String(c.carrier || '')));
+  const carimbos = quemEntrega
+    .map((c) => (c.updatedAt ? new Date(c.updatedAt) : null))
+    .filter((d): d is Date => !!d && !Number.isNaN(+d))
+    .sort((a, b) => +b - +a);
+  const despachoEm = carimbos[0] ?? ctx.agora ?? new Date();
+  return { fecha: true, como: retirada ? 'delivered' : 'shipped', despachoEm };
+}
+
+/**
+ * Carrega tudo que a régua precisa: cards (com loja e destino do feeder) e
+ * as pendências de um pedido.
  *
  * Fica aqui (e não em cada service) pra régua ter UMA leitura do banco: quem
- * fecha pedido — card da loja, botão Concluído, cron do rastreio — conta as
- * mesmas peças do mesmo jeito. `prisma` chega por parâmetro porque o common
- * não participa da injeção do Nest (mesma razão do resto do arquivo ser puro).
+ * fecha pedido — card da loja, botão Concluído, cron do rastreio, varredura —
+ * conta as mesmas peças do mesmo jeito. `prisma` chega por parâmetro porque o
+ * common não participa da injeção do Nest (mesma razão do resto do arquivo ser
+ * puro).
  *
  * Bipe de envio: um scan não estornado cujo card POSTOU — ou sumiu (card
  * apagado depois do fato; a linha órfã é a evidência que sobrou) — conta como
  * prova de que a peça saiu, uma unidade por linha.
  */
-export async function carregarPecasPendentes(prisma: any, orderId: string): Promise<PecaPendente[]> {
-  const [items, cards, reports] = await Promise.all([
+export async function carregarFechamento(
+  prisma: any,
+  orderId: string,
+): Promise<{ cards: CardDoPedido[]; pendentes: PecaPendente[] }> {
+  const [items, cardsCrus, reports] = await Promise.all([
     prisma.orderItem.findMany({
       where: { orderId },
       select: {
@@ -146,12 +255,26 @@ export async function carregarPecasPendentes(prisma: any, orderId: string): Prom
     }),
     prisma.pickOrder.findMany({
       where: { orderId },
-      select: { id: true, storeId: true, status: true },
+      select: {
+        id: true, storeId: true, status: true, isTransfer: true, transferToStoreCode: true,
+        carrier: true, trackingCode: true, updatedAt: true, store: { select: { code: true } },
+      },
     }),
     prisma.pickOrderItemReport
       .findMany({ where: { orderId, resolvedAt: null }, select: { orderItemId: true, sku: true } })
       .catch(() => []),
   ]);
+  const cards: Array<CardDoPedido & { id: string }> = (cardsCrus as any[]).map((c) => ({
+    id: c.id,
+    storeId: c.storeId ?? null,
+    storeCode: c.store?.code ?? null,
+    status: String(c.status),
+    isTransfer: !!c.isTransfer,
+    transferToStoreCode: c.transferToStoreCode ?? null,
+    carrier: c.carrier ?? null,
+    trackingCode: c.trackingCode ?? null,
+    updatedAt: c.updatedAt ?? null,
+  }));
 
   const bipes: Record<string, number> = {};
   try {
@@ -159,7 +282,7 @@ export async function carregarPecasPendentes(prisma: any, orderId: string): Prom
       where: { orderId, revertedAt: null },
       select: { sku: true, pickOrderId: true },
     });
-    const statusPorCard = new Map((cards as any[]).map((c) => [c.id, String(c.status)]));
+    const statusPorCard = new Map(cards.map((c) => [c.id, String(c.status)]));
     for (const s of scans) {
       const st = statusPorCard.get(s.pickOrderId);
       if (st && st !== 'shipped' && st !== 'delivered') continue; // bipe de card ainda aberto não é envio
@@ -171,12 +294,18 @@ export async function carregarPecasPendentes(prisma: any, orderId: string): Prom
     /* sem a prova do bipe a régua só fica mais rígida — nunca mais frouxa */
   }
 
-  return pecasPendentesDoPedido({
+  const pendentes = pecasPendentesDoPedido({
     items,
     cards,
     reportsAbertos: reports,
     bipesEnviadosPorSku: bipes,
   });
+  return { cards, pendentes };
+}
+
+/** Só as pendências — o que a maioria das portas precisa. */
+export async function carregarPecasPendentes(prisma: any, orderId: string): Promise<PecaPendente[]> {
+  return (await carregarFechamento(prisma, orderId)).pendentes;
 }
 
 /** Frase pronta pra história/erro: "BMM-008 PRETO 50 (reportada) · VLM-222 …". */
@@ -187,7 +316,9 @@ export function descreverPendentes(pendentes: PecaPendente[], max = 3): string {
         ? 'reportada, aguardando decisão'
         : p.motivo === 'sem_dono'
           ? 'sem loja definida'
-          : 'ainda com a loja';
+          : p.motivo === 'na_loja_ancora'
+            ? 'na loja âncora, sem card pra postar'
+            : 'ainda com a loja';
     return `${p.rotulo} (${motivo})`;
   });
   const resto = pendentes.length - nomes.length;
