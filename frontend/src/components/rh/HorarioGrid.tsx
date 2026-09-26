@@ -24,6 +24,13 @@
  * ele vale ZERO (`minPrevisto = 0`), então mostrá-lo como 09:00–18:00 era a
  * tela mentindo — e bastava salvar pra mentira virar dado.
  *
+ * O PONTO OBEDECE O INTERVALO (26/09/2026): dia sem almoço tem só entrada e
+ * saída — a batida `auto` e o espelho leem esta grade pela régua
+ * `backend/src/common/jornada-do-dia.ts`. Um almoço de 12:00–13:00 inventado
+ * num sábado de 09:00–13:00 não era só 1h a menos no previsto: virava um dia
+ * de QUATRO batidas, e a saída das 13:00 nascia como "saída almoço" — o dia
+ * ficava sem saída e fechava −4h com o cadastro certo.
+ *
  * Estrutura JSON salva em sellers.horarioTrabalho:
  *   [
  *     { dia: 'SEG', inicio: '09:00', fim: '18:00',
@@ -98,13 +105,11 @@ function normalize(turnos: Turno[]): Turno[] {
   const vazio = turnos.length === 0;
   return DIAS.map((d) => {
     const existing = turnos.find((t) => t.dia === d.key);
-    if (existing) {
-      return {
-        almocoInicio: '12:00',
-        almocoFim: '13:00',
-        ...existing,
-      };
-    }
+    // O que está gravado é o que aparece — sem inventar almoço de 12:00–13:00
+    // num dia que não tem. O sábado 09:00–13:00 gravado pelo lote da loja vem
+    // com almoço NULO, e "sem intervalo" é a informação, não um campo vazio:
+    // é ela que faz o ponto do dia ter duas batidas em vez de quatro.
+    if (existing) return { ...existing };
     return vazio ? padraoComercio(d.key) : { dia: d.key, folga: true };
   });
 }
@@ -115,11 +120,22 @@ const toMin = (s?: string): number => {
   return (h || 0) * 60 + (m || 0);
 };
 
+/**
+ * A MESMA conta do backend (`common/jornada-do-dia.ts` → `minutosPrevistos`):
+ * o almoço só desconta o pedaço que cai DENTRO do turno. É este número que o
+ * espelho cobra dela todo dia — a coluna "Horas" não pode dizer outro.
+ */
 function calcMinutos(t: Turno): number {
-  if (t.folga) return 0;
-  let m = toMin(t.fim) - toMin(t.inicio);
-  const almoco = toMin(t.almocoFim) - toMin(t.almocoInicio);
-  if (almoco > 0) m -= almoco;
+  if (t.folga || !t.inicio || !t.fim) return 0;
+  const ini = toMin(t.inicio);
+  const fim = toMin(t.fim);
+  if (fim <= ini) return 0;
+  let m = fim - ini;
+  if (t.almocoInicio && t.almocoFim) {
+    const aIni = toMin(t.almocoInicio);
+    const aFim = toMin(t.almocoFim);
+    if (aFim > aIni) m -= Math.max(0, Math.min(fim, aFim) - Math.max(ini, aIni));
+  }
   return Math.max(0, m);
 }
 
@@ -150,7 +166,26 @@ export default function HorarioGrid({
    * o mesmo valor antigo do SEG (per-campo). Folga nunca propaga.
    */
   function update(idx: number, patch: Partial<Turno>) {
-    const next = turnos.map((t, i) => (i === idx ? { ...t, ...patch } : t));
+    const next = turnos.map((t, i) => {
+      if (i !== idx) return t;
+      const atual = { ...t, ...patch };
+      // Tirar a folga de um dia que nunca teve horário: nasce com o padrão do
+      // comércio DAQUELE dia (sábado 09–13, o resto 09–18), e o que a tela
+      // mostra é o que vai ser gravado. Antes os campos exibiam 09:00–18:00
+      // sem gravar nada — e pro backend "sem horário" é previsto ZERO.
+      if (patch.folga === false && !t.inicio && !t.fim) {
+        const base = padraoComercio(t.dia);
+        return {
+          ...atual,
+          inicio: base.inicio,
+          fim: base.fim,
+          almocoInicio: base.almocoInicio,
+          almocoFim: base.almocoFim,
+          folga: false,
+        };
+      }
+      return atual;
+    });
 
     if (idx === 0) {
       const patchKeys = Object.keys(patch).filter((k) => k !== 'dia');
@@ -191,7 +226,9 @@ export default function HorarioGrid({
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <p className="text-xs text-slate-500">
           Edite <b className="text-emerald-700">Segunda</b> — os outros dias
-          copiam automaticamente. Para tirar almoço, deixe os dois horários iguais.
+          copiam automaticamente. Sem almoço (sábado de meio período): deixe os
+          dois horários do almoço iguais ou em branco — o ponto desse dia passa
+          a ter só entrada e saída.
         </p>
         <button
           type="button"
@@ -261,25 +298,25 @@ export default function HorarioGrid({
                 <>
                   <input
                     type="time"
-                    value={t.inicio || '09:00'}
+                    value={t.inicio ?? ''}
                     onChange={(e) => update(idx, { inicio: e.target.value })}
                     className="w-full px-2 py-1 border rounded text-sm"
                   />
                   <input
                     type="time"
-                    value={t.almocoInicio || '12:00'}
+                    value={t.almocoInicio ?? ''}
                     onChange={(e) => update(idx, { almocoInicio: e.target.value })}
                     className="w-full px-2 py-1 border rounded text-sm bg-amber-50/50"
                   />
                   <input
                     type="time"
-                    value={t.almocoFim || '13:00'}
+                    value={t.almocoFim ?? ''}
                     onChange={(e) => update(idx, { almocoFim: e.target.value })}
                     className="w-full px-2 py-1 border rounded text-sm bg-amber-50/50"
                   />
                   <input
                     type="time"
-                    value={t.fim || '18:00'}
+                    value={t.fim ?? ''}
                     onChange={(e) => update(idx, { fim: e.target.value })}
                     className="w-full px-2 py-1 border rounded text-sm"
                   />

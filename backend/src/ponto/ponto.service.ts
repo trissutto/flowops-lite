@@ -8,6 +8,19 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaService } from '../prisma/prisma.service';
 import { RhEventosService } from '../rh-eventos/rh-eventos.service';
 import { efeitosDoDia, rotuloEvento } from '../common/eventos-rh';
+import {
+  DIAS_SEMANA,
+  SEQUENCIA_SEM_INTERVALO,
+  TipoBatida,
+  diaSemanaDeChave,
+  interpretarBatidas,
+  janelaDoTurno,
+  minutosPrevistosDoTurno,
+  parseHorarioTrabalho,
+  proximaBatida,
+  sequenciaDoDia,
+  turnoDoDia,
+} from '../common/jornada-do-dia';
 
 /**
  * Retorna chave YYYY-MM-DD da data NA TIMEZONE DE SÃO PAULO (UTC-3).
@@ -67,13 +80,9 @@ export class PontoService {
     'saida',
   ];
 
-  /** Sequência canônica do dia. Usado pra auto-detectar próxima batida. */
-  static readonly SEQUENCIA_DIA = [
-    'entrada',
-    'saida_almoco',
-    'volta_almoco',
-    'saida',
-  ];
+  // A SEQUÊNCIA DO DIA não é mais uma lista fixa aqui: quem diz quantas
+  // batidas o dia tem é a jornada cadastrada (`common/jornada-do-dia.ts`).
+  // Dia sem intervalo tem duas (entrada, saída); com intervalo, quatro.
 
   static readonly SOURCES_VALIDOS = ['face_pdv', 'pwa_selfie', 'manual_admin'];
 
@@ -419,25 +428,49 @@ export class PontoService {
   // ── REGISTRAR PONTO ───────────────────────────────────────────────
 
   /**
-   * Retorna o próximo tipo da sequência do dia que ainda NÃO foi batido.
-   * Retorna null se já completou os 4.
+   * A PRÓXIMA BATIDA DO DIA — o que `tipo: 'auto'` vira.
+   *
+   * Quem responde é a JORNADA CADASTRADA do dia (régua em
+   * `common/jornada-do-dia.ts`): dia sem intervalo tem duas batidas (entrada e
+   * saída), dia com intervalo tem quatro. Até 26/09/2026 a sequência era fixa
+   * em quatro, e no sábado de 09:00–13:00 a saída nascia como "saída almoço":
+   * o espelho não achava `saida`, o trabalhado zerava e o dia fechava −4h com
+   * o cadastro certo ("o sábado está descontando a parte da tarde").
+   *
+   * `agora` é parâmetro só pra teste; em produção é o relógio do servidor.
    */
-  async getNextTipoForSeller(sellerId: string): Promise<string | null> {
-    const now = new Date();
+  async getNextTipoForSeller(
+    sellerId: string,
+    agora: Date = new Date(),
+  ): Promise<{ tipo: TipoBatida | null; sequencia: readonly TipoBatida[]; semIntervalo: boolean }> {
     // Usa "inicio do dia em BR" pra a janela bater com o conceito de "hoje"
     // do funcionario. setHours(0,0,0,0) usaria TZ do servidor (UTC no Railway).
-    const inicioDia = inicioDoDiaBrasil(now);
+    const inicioDia = inicioDoDiaBrasil(agora);
 
-    const batidas = await (this.prisma as any).pontoRegistro.findMany({
-      where: {
-        sellerId,
-        timestamp: { gte: inicioDia, lte: now },
-      },
-      select: { tipo: true },
-    });
+    const [seller, batidas] = await Promise.all([
+      (this.prisma as any).seller.findUnique({
+        where: { id: sellerId },
+        select: { horarioTrabalho: true },
+      }),
+      (this.prisma as any).pontoRegistro.findMany({
+        where: {
+          sellerId,
+          timestamp: { gte: inicioDia, lte: agora },
+        },
+        select: { tipo: true },
+      }),
+    ]);
 
-    const batidasSet = new Set(batidas.map((b: any) => b.tipo));
-    return PontoService.SEQUENCIA_DIA.find((t) => !batidasSet.has(t)) || null;
+    const turno = turnoDoDia(
+      parseHorarioTrabalho(seller?.horarioTrabalho),
+      DIAS_SEMANA[dayOfWeekBrasil(agora)],
+    );
+    const sequencia = sequenciaDoDia(turno);
+    return {
+      tipo: proximaBatida(turno, batidas.map((b: any) => b.tipo)),
+      sequencia,
+      semIntervalo: sequencia === SEQUENCIA_SEM_INTERVALO,
+    };
   }
 
   async registrar(input: {
@@ -454,16 +487,20 @@ export class PontoService {
   }) {
     let tipo = (input.tipo || '').toLowerCase();
 
-    // tipo === 'auto' → backend detecta a próxima batida da sequência do dia.
-    // Vendedora não escolhe nada; primeira do dia vira entrada, segunda saída-almoço, etc.
+    // tipo === 'auto' → backend detecta a próxima batida do dia PELA JORNADA.
+    // Vendedora não escolhe nada: primeira do dia vira entrada; a segunda é
+    // saída-almoço num dia com intervalo e SAÍDA num dia sem (sábado 09–13).
     if (tipo === 'auto') {
-      const next = await this.getNextTipoForSeller(input.sellerId);
-      if (!next) {
+      const proximo = await this.getNextTipoForSeller(input.sellerId);
+      if (!proximo.tipo) {
         throw new BadRequestException(
-          'Você já bateu os 4 pontos do dia. Volta amanhã!',
+          proximo.semIntervalo
+            ? 'Você já bateu entrada e saída de hoje — a jornada de hoje não tem intervalo. ' +
+              'Se precisou sair e voltar, a gerente ajusta no espelho.'
+            : 'Você já bateu os 4 pontos do dia. Volta amanhã!',
         );
       }
-      tipo = next;
+      tipo = proximo.tipo;
     }
 
     if (!PontoService.TIPOS_VALIDOS.includes(tipo)) {
@@ -655,16 +692,9 @@ export class PontoService {
       orderBy: { timestamp: 'asc' },
     });
 
-    // Parse horário esperado
-    let horarioExpected: any[] = [];
-    try {
-      horarioExpected = seller.horarioTrabalho
-        ? JSON.parse(seller.horarioTrabalho)
-        : [];
-    } catch {
-      horarioExpected = [];
-    }
-    const DIAS_KEY = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'];
+    // A jornada cadastrada, lida pela régua (`common/jornada-do-dia.ts`): é
+    // ela que diz quanto o dia cobra E quantas batidas o dia tem.
+    const turnos = parseHorarioTrabalho(seller.horarioTrabalho);
 
     // Agrupa por dia — USA TIMEZONE BRASIL (jun/2026: bug de batida 22:32 BR
     // virava 01:32 UTC do dia seguinte e aparecia no dia errado no espelho)
@@ -692,48 +722,23 @@ export class PontoService {
       // dateKeyBrasil() vai retornar o YYYY-MM-DD correto na zona BR.
       const dt = new Date(ano, mes - 1, d, 12, 0, 0);
       const dKey = dateKeyBrasil(dt);
-      const diaSemana = DIAS_KEY[dayOfWeekBrasil(dt)];
-      const expected = horarioExpected.find((h: any) => h.dia === diaSemana);
+      const diaSemana = DIAS_SEMANA[dayOfWeekBrasil(dt)];
+      const expected = turnoDoDia(turnos, diaSemana);
       const batidas = diasMap[dKey] || [];
 
-      // Mapeia tipos pra horas
-      const findTipo = (tipo: string) =>
-        batidas.find((b: any) => b.tipo === tipo)?.timestamp;
-      const entrada = findTipo('entrada');
-      const saidaAlmoco = findTipo('saida_almoco');
-      const voltaAlmoco = findTipo('volta_almoco');
-      const saida = findTipo('saida');
+      // O que cada batida SIGNIFICA sai da jornada do dia, não do carimbo do
+      // terminal: no sábado sem intervalo a "saída almoço" das 13:00 é a
+      // saída. Sem isso o dia não tinha `saida`, o trabalhado zerava e o
+      // sábado fechava −4h COM o cadastro certo (dono, 26/09/2026: "está
+      // descontando a parte da tarde mesmo cadastrado até as 13").
+      const leitura = interpretarBatidas(batidas, expected);
+      const { entrada, saidaAlmoco, voltaAlmoco, saida } = leitura;
+      let minTrabalhado = leitura.minTrabalhado;
 
-      // Minutos trabalhados real
-      let minTrabalhado = 0;
-      if (entrada && saida) {
-        minTrabalhado = (new Date(saida).getTime() - new Date(entrada).getTime()) / 60000;
-        if (saidaAlmoco && voltaAlmoco) {
-          minTrabalhado -=
-            (new Date(voltaAlmoco).getTime() - new Date(saidaAlmoco).getTime()) / 60000;
-        }
-      }
-      minTrabalhado = Math.max(0, Math.round(minTrabalhado));
-
-      // Minutos previstos
-      let minPrevisto = 0;
-      let folga = false;
-      if (expected) {
-        if (expected.folga) {
-          folga = true;
-        } else {
-          const toMin = (s: string) => {
-            const [h, m] = (s || '0:0').split(':').map(Number);
-            return (h || 0) * 60 + (m || 0);
-          };
-          minPrevisto = toMin(expected.fim) - toMin(expected.inicio);
-          if (expected.almocoInicio && expected.almocoFim) {
-            const almoco = toMin(expected.almocoFim) - toMin(expected.almocoInicio);
-            if (almoco > 0) minPrevisto -= almoco;
-          }
-          minPrevisto = Math.max(0, minPrevisto);
-        }
-      }
+      // Minutos previstos — a MESMA conta do abono (`minutosPrevistos`), pra
+      // previsto e atestado não divergirem sobre o tamanho do mesmo dia.
+      const folga = !!expected?.folga;
+      let minPrevisto = minutosPrevistosDoTurno(expected);
 
       // ── EVENTO DE RH ──────────────────────────────────────────────
       // Atestado, férias, treinamento. O TIPO decide o efeito (régua em
@@ -741,7 +746,7 @@ export class PontoService {
       //
       // Ordem do dono (28/08): atestado abate SOMENTE as horas do atestado —
       // meio período derruba meia jornada, não o dia inteiro.
-      const efeito = efeitosDoDia(eventosDoMes[dKey], expected && !folga ? expected : null);
+      const efeito = efeitosDoDia(eventosDoMes[dKey], janelaDoTurno(expected));
       const minAbonado = efeito.minAbatidos;
       // O previsto cai: sem isso o dia de atestado virava saldo NEGATIVO e a
       // funcionária pagava com hora extra o dia em que estava doente.
@@ -776,15 +781,23 @@ export class PontoService {
         // As BATIDAS com id — sem elas a tela do espelho mensal só sabia
         // MOSTRAR o horário errado, não corrigir: editar exige o id do
         // registro, e a correção só existia na aba "Dia (ao vivo)".
-        registros: batidas.map((b: any) => ({
+        registros: leitura.batidas.map((b: any) => ({
           id: b.id,
+          // O tipo INTERPRETADO pela jornada — é o que a coluna mostra e o
+          // que a caixa "Ajustar" edita. `tipoRegistrado` é o carimbo do
+          // terminal, pra tela dizer quando os dois diferem.
           tipo: b.tipo,
+          tipoRegistrado: b.tipoRegistrado,
           timestamp: b.timestamp,
           source: b.source,
           storeId: b.storeId,
           justificado: b.justificado,
         })),
-        completo: !!entrada && !!saida && (folga ? true : true),
+        // Dia de DUAS batidas (jornada sem intervalo): a tela não cobra "volta
+        // do almoço" de quem não tem almoço.
+        semIntervalo: leitura.semIntervalo,
+        reinterpretada: leitura.reinterpretada,
+        completo: !!entrada && !!saida,
         justificado: batidas.some((b: any) => b.justificado),
         // Pra tela escrever "ATESTADO" no lugar de um dia vermelho vazio — e,
         // com o id, poder REMOVER o evento errado direto do espelho.
@@ -920,32 +933,19 @@ export class PontoService {
     });
     if (!seller) throw new NotFoundException('Funcionária não encontrada');
 
-    // Parse horário cadastrado pra calcular jornada semanal prevista
-    let horarioExpected: any[] = [];
-    try {
-      horarioExpected = seller.horarioTrabalho
-        ? JSON.parse(seller.horarioTrabalho)
-        : [];
-    } catch {
-      horarioExpected = [];
-    }
+    // Jornada cadastrada, pela MESMA régua do espelho (`common/jornada-do-dia.ts`).
+    const horarioExpected = parseHorarioTrabalho(seller.horarioTrabalho);
 
-    const toMin = (s: string) => {
+    const toMin = (s?: string | null) => {
       const [h, m] = (s || '0:0').split(':').map(Number);
       return (h || 0) * 60 + (m || 0);
     };
 
-    // Total semanal previsto (do cadastro)
-    let minSemanaPrevisto = 0;
-    for (const h of horarioExpected) {
-      if (h.folga) continue;
-      let m = toMin(h.fim) - toMin(h.inicio);
-      if (h.almocoInicio && h.almocoFim) {
-        const a = toMin(h.almocoFim) - toMin(h.almocoInicio);
-        if (a > 0) m -= a;
-      }
-      minSemanaPrevisto += Math.max(0, m);
-    }
+    // Total semanal previsto (do cadastro) — a mesma conta por dia do espelho.
+    const minSemanaPrevisto = horarioExpected.reduce(
+      (acc, h) => acc + minutosPrevistosDoTurno(h),
+      0,
+    );
 
     // Limites CLT
     const LIMITE_SEMANAL_LEGAL_MIN = 44 * 60; // 2640 min
@@ -1304,12 +1304,16 @@ export class PontoService {
       where: { timestamp: { gte: start, lt: end } },
       orderBy: { timestamp: 'asc' },
       include: {
-        seller: { select: { id: true, name: true, apelido: true, cargo: true } },
+        seller: { select: { id: true, name: true, apelido: true, cargo: true, horarioTrabalho: true } },
         store: { select: { id: true, code: true, name: true } },
       },
     });
 
-    // Agrupa por funcionária×loja e deriva o status prático do momento
+    // Agrupa por funcionária×loja e deriva o status prático do momento.
+    // A jornada do dia entra porque o TIPO de cada batida sai dela (régua
+    // `jornada-do-dia`): no sábado sem intervalo a "saída almoço" das 13:00 é
+    // a saída — sem isso a funcionária ficava "no almoço" até a meia-noite.
+    const diaSemana = diaSemanaDeChave(dia) ?? '';
     const porFunc = new Map<string, any>();
     for (const r of regs) {
       const k = `${r.sellerId}|${r.storeId}`;
@@ -1323,6 +1327,7 @@ export class PontoService {
           storeId: r.storeId,
           storeCode: r.store?.code || '',
           storeName: r.store?.name || '',
+          turno: turnoDoDia(parseHorarioTrabalho(r.seller?.horarioTrabalho), diaSemana),
           batidas: [],
         };
         porFunc.set(k, f);
@@ -1331,13 +1336,18 @@ export class PontoService {
         id: r.id,
         tipo: r.tipo,
         hora: r.timestamp,
+        timestamp: r.timestamp,
         source: r.source,
         justificado: r.justificado,
         faceConfidence: r.faceConfidence ?? null,
       });
     }
     const funcionarias = Array.from(porFunc.values()).map((f) => {
-      const tem = (t: string) => f.batidas.some((b: any) => b.tipo === t);
+      const { turno, ...func } = f;
+      const batidas = interpretarBatidas(f.batidas, turno).batidas.map(
+        ({ timestamp: _ts, ...b }: any) => b,
+      );
+      const tem = (t: string) => batidas.some((b: any) => b.tipo === t);
       const status = tem('saida')
         ? 'saiu'
         : tem('saida_almoco') && !tem('volta_almoco')
@@ -1345,8 +1355,8 @@ export class PontoService {
           : tem('entrada')
             ? 'trabalhando'
             : 'incompleto';
-      const ultima = f.batidas[f.batidas.length - 1];
-      return { ...f, status, ultimaHora: ultima?.hora || null };
+      const ultima = batidas[batidas.length - 1];
+      return { ...func, batidas, status, ultimaHora: ultima?.hora || null };
     });
 
     const lojasMap = new Map<string, any>();
@@ -1439,12 +1449,11 @@ export class PontoService {
     });
 
     // Batidas do dia-alvo, agrupadas por funcionária e por data BR.
-    const porSeller: Record<string, Record<string, Record<string, Date>>> = {};
+    const porSeller: Record<string, Record<string, Array<{ tipo: string; timestamp: Date }>>> = {};
     for (const r of regs) {
       const chave = dateKeyBrasil(r.timestamp);
-      const [a, m, d] = chave.split('-').map(Number);
-      if (DIAS_KEY[new Date(Date.UTC(a, m - 1, d)).getUTCDay()] !== diaAlvo) continue;
-      ((porSeller[r.sellerId] ||= {})[chave] ||= {})[r.tipo] = r.timestamp;
+      if (diaSemanaDeChave(chave) !== diaAlvo) continue;
+      ((porSeller[r.sellerId] ||= {})[chave] ||= []).push({ tipo: r.tipo, timestamp: r.timestamp });
     }
 
     const mediana = (v: number[]): number | null => {
@@ -1459,38 +1468,22 @@ export class PontoService {
     };
 
     const itens = sellers.map((s: any) => {
-      let turnos: any[] = [];
-      try {
-        turnos = s.horarioTrabalho ? JSON.parse(s.horarioTrabalho) : [];
-      } catch {
-        turnos = [];
-      }
-      const turno = Array.isArray(turnos)
-        ? (turnos.find((t: any) => t.dia === diaAlvo) ?? null)
-        : null;
-
-      let minPrevisto = 0;
-      if (turno && !turno.folga) {
-        minPrevisto = Math.max(0, toMin(turno.fim) - toMin(turno.inicio));
-        const almoco = toMin(turno.almocoFim) - toMin(turno.almocoInicio);
-        if (turno.almocoInicio && turno.almocoFim && almoco > 0) minPrevisto -= almoco;
-        minPrevisto = Math.max(0, minPrevisto);
-      }
+      const turno = turnoDoDia(parseHorarioTrabalho(s.horarioTrabalho), diaAlvo);
+      const minPrevisto = minutosPrevistosDoTurno(turno);
 
       const dias = porSeller[s.id] ?? {};
       const trabalhados: number[] = [];
       const saidas: number[] = [];
       for (const chave of Object.keys(dias)) {
-        const b = dias[chave];
+        // A MESMA leitura do espelho: no sábado sem intervalo a "saída almoço"
+        // das 13:00 é a saída. Antes esses dias saíam daqui como "sem batida"
+        // — a conferência não enxergava justamente quem estava sendo descontada.
+        const b = interpretarBatidas(dias[chave], turno);
         if (!b.entrada || !b.saida) continue;
-        let min = (new Date(b.saida).getTime() - new Date(b.entrada).getTime()) / 60000;
-        if (b.saida_almoco && b.volta_almoco) {
-          min -= (new Date(b.volta_almoco).getTime() - new Date(b.saida_almoco).getTime()) / 60000;
-        }
-        trabalhados.push(Math.max(0, Math.round(min)));
+        trabalhados.push(b.minTrabalhado);
         saidas.push(
           toMin(
-            new Date(b.saida).toLocaleTimeString('pt-BR', {
+            b.saida.toLocaleTimeString('pt-BR', {
               hour: '2-digit',
               minute: '2-digit',
               timeZone: 'America/Sao_Paulo',

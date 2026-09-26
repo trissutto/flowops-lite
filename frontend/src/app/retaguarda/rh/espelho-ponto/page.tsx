@@ -61,6 +61,10 @@ type Espelho = {
       source: string;
       storeId: string;
       justificado: boolean;
+      // O que o terminal carimbou, quando a JORNADA leu diferente: no sábado
+      // sem intervalo a "saída almoço" das 13:00 é a saída (régua
+      // `common/jornada-do-dia.ts`). Ausente na API velha.
+      tipoRegistrado?: string;
     }>;
     // Evento de RH que explica o dia (atestado, férias, treinamento).
     eventos?: Array<{
@@ -112,6 +116,9 @@ const SLOTS: Array<{ tipo: string; label: string }> = [
   { tipo: 'volta_almoco', label: 'Volta almoço' },
   { tipo: 'saida', label: 'Saída' },
 ];
+
+/** Nome de tela de um tipo de batida ("saida" → "Saída"). */
+const nomeSlot = (tipo: string) => SLOTS.find((s) => s.tipo === tipo)?.label ?? tipo;
 
 /** ISO → "HH:MM" no fuso BR. String vazia quando não há batida. */
 const hhmmBR = (iso?: string | null) =>
@@ -1095,6 +1102,24 @@ function ModalAjustarDia({
               Campo vazio que você preencher vira batida nova; campo preenchido
               que você apagar exclui a batida.
             </p>
+            {/* Batida que a JORNADA leu diferente do que o terminal carimbou: o
+                sábado sem intervalo em que a saída das 13:00 nasceu como "saída
+                almoço" (antes de 26/09/2026). O backend já conta certo — aqui
+                só se explica, pra ninguém "corrigir" o que não está errado. */}
+            {registros.some((r) => r.tipoRegistrado && r.tipoRegistrado !== r.tipo) && (
+              <div className="mt-2 bg-sky-50 border border-sky-200 rounded-lg p-2.5 text-[11px] text-sky-900 space-y-1">
+                {registros
+                  .filter((r) => r.tipoRegistrado && r.tipoRegistrado !== r.tipo)
+                  .map((r) => (
+                    <p key={r.id}>
+                      A batida das <b className="font-mono">{hhmmBR(r.timestamp)}</b> foi gravada
+                      pelo terminal como &quot;{nomeSlot(r.tipoRegistrado!)}&quot;. A jornada deste
+                      dia não tem intervalo, então ela vale como <b>{nomeSlot(r.tipo)}</b> — nada
+                      a corrigir.
+                    </p>
+                  ))}
+              </div>
+            )}
           </div>
 
           {/* BATIDAS REPETIDAS — o bipe em sequência */}
