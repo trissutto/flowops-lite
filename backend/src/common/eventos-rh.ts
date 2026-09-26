@@ -649,6 +649,26 @@ function interseccao(a1: number, a2: number, b1: number, b2: number): number {
   return Math.max(0, Math.min(a2, b2) - Math.max(a1, b1));
 }
 
+/**
+ * O EVENTO VALE SÓ UMA JANELA DO DIA?
+ *
+ * Um predicado só, porque a pergunta é feita em dois lugares que não podem
+ * divergir: a conta do espelho (`minutosDaJanela`) e a prévia que a tela
+ * mostra ANTES de gravar (`previaEvento`). Se a prévia dissesse "abona 2h" e o
+ * espelho abatesse o dia inteiro, a supervisão lançaria confiando num número
+ * que o mês não repete.
+ *
+ * Hora em branco ou invertida NÃO é parcial — cai pra dia inteiro. Na régua
+ * isso é defesa pra linha já gravada (campo vazio não pode virar zero abatido
+ * em silêncio); na ENTRADA o service recusa antes de chegar aqui.
+ */
+export function eventoEhParcial(evento: EventoDoDia, tipo: TipoEventoRh | null): boolean {
+  if (!tipo?.admiteParcial || evento.diaInteiro) return false;
+  const ini = paraMinutos(evento.horaInicio);
+  const fim = paraMinutos(evento.horaFim);
+  return ini !== null && fim !== null && fim > ini;
+}
+
 /** Minutos de jornada da janela cadastrada, já sem o almoço. */
 export function minutosPrevistos(janela: JanelaPrevista | null | undefined): number {
   if (!janela) return 0;
@@ -703,29 +723,148 @@ export function minutosDaJanela(
   const previsto = minutosPrevistos(janela);
   if (previsto <= 0) return 0;
 
-  const evIni = paraMinutos(evento.horaInicio);
-  const evFim = paraMinutos(evento.horaFim);
-  const parcial =
-    !evento.diaInteiro &&
-    tipo.admiteParcial &&
-    evIni !== null &&
-    evFim !== null &&
-    evFim > evIni;
-
-  if (!parcial) return previsto;
+  if (!eventoEhParcial(evento, tipo)) return previsto;
+  const evIni = paraMinutos(evento.horaInicio)!;
+  const evFim = paraMinutos(evento.horaFim)!;
 
   const jIni = paraMinutos(janela!.inicio)!;
   const jFim = paraMinutos(janela!.fim)!;
-  let abate = interseccao(jIni, jFim, evIni!, evFim!);
+  let abate = interseccao(jIni, jFim, evIni, evFim);
 
   // O almoço não é jornada — não pode ser abatido duas vezes.
   const aIni = paraMinutos(janela!.almocoInicio);
   const aFim = paraMinutos(janela!.almocoFim);
   if (aIni !== null && aFim !== null && aFim > aIni) {
-    abate -= interseccao(Math.max(jIni, evIni!), Math.min(jFim, evFim!), aIni, aFim);
+    abate -= interseccao(Math.max(jIni, evIni), Math.min(jFim, evFim), aIni, aFim);
   }
 
   return Math.max(0, Math.min(previsto, Math.round(abate)));
+}
+
+// ── O TURNO CADASTRADO DE UM DIA ─────────────────────────────────
+
+/** Chave do dia da semana como `Seller.horarioTrabalho` grava (0=DOM). */
+export const DIAS_SEMANA_KEY = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'];
+
+export interface JanelaDoDia {
+  /** 'SEG'…'DOM' do dia pedido. Vazio se a data não é AAAA-MM-DD. */
+  diaSemana: string;
+  /** Turno cadastrado. Null em folga, sem cadastro ou data inválida. */
+  janela: JanelaPrevista | null;
+  /** O cadastro diz que este dia da semana é folga. */
+  folga: boolean;
+  /** Não há horário pra este dia (JSON ausente, ilegível ou sem o dia). */
+  semCadastro: boolean;
+}
+
+/**
+ * O QUE O CADASTRO PREVÊ PARA UMA DATA — a partir de `Seller.horarioTrabalho`.
+ *
+ * O JSON é uma semana FIXA: `[{dia:'SEG', inicio, fim, almocoInicio,
+ * almocoFim, folga}]`. O dia da semana sai do CALENDÁRIO ("2026-09-26" é
+ * sábado em qualquer fuso) — não há hora envolvida, então não há fuso a errar.
+ * A busca é pela chave exata, igual ao espelho (`h.dia === diaSemana`): se o
+ * espelho não enxerga um turno, a prévia também não pode enxergar.
+ *
+ * Dia que falta no JSON é `semCadastro`, não folga. As duas dão previsto
+ * zero, mas são respostas diferentes pra tela: "cadastre a semana dela" ×
+ * "é folga mesmo".
+ */
+export function janelaDoDia(horarioTrabalho: unknown, data: string): JanelaDoDia {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(data ?? '').slice(0, 10));
+  const diaSemana = m
+    ? DIAS_SEMANA_KEY[
+        new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()
+      ]
+    : '';
+  const vazio: JanelaDoDia = { diaSemana, janela: null, folga: false, semCadastro: true };
+  if (!diaSemana) return vazio;
+
+  let turnos: unknown = horarioTrabalho;
+  if (typeof turnos === 'string') {
+    try {
+      turnos = JSON.parse(turnos);
+    } catch {
+      return vazio;
+    }
+  }
+  if (!Array.isArray(turnos)) return vazio;
+  const turno: any = turnos.find((t: any) => t && t.dia === diaSemana);
+  if (!turno) return vazio;
+  if (turno.folga) return { diaSemana, janela: null, folga: true, semCadastro: false };
+  return {
+    diaSemana,
+    folga: false,
+    semCadastro: false,
+    janela: {
+      inicio: String(turno.inicio ?? ''),
+      fim: String(turno.fim ?? ''),
+      almocoInicio: turno.almocoInicio ?? null,
+      almocoFim: turno.almocoFim ?? null,
+    },
+  };
+}
+
+// ── PRÉVIA: O QUE O EVENTO FARIA NESTE DIA ───────────────────────
+
+export type EfeitoEvento = 'abona' | 'credita' | 'debita' | 'nenhum';
+
+export interface PreviaEvento {
+  /** Jornada do dia, já sem almoço. 0 em folga / sem cadastro. */
+  minPrevisto: number;
+  /** Minutos que o evento pega da jornada — abatidos, creditados ou debitados (ver `efeito`). */
+  minAfetados: number;
+  /** O que sobra pra ela cumprir no dia. */
+  minRestantes: number;
+  efeito: EfeitoEvento;
+  /** O evento foi tratado como janela de horas, e não como dia inteiro. */
+  parcial: boolean;
+  /** Parcial cujas horas NÃO tocam a jornada: nada seria abonado. */
+  foraDaJornada: boolean;
+}
+
+/**
+ * QUANTO ESTE EVENTO ABONA (OU CREDITA, OU DEBITA) NESTE DIA — antes de gravar.
+ *
+ * Existe porque o erro do atestado de horas é MUDO dos dois lados: hora fora
+ * da jornada abona zero sem avisar, e "dia inteiro" marcado por engano abona
+ * 8h de uma consulta de 2h. A prévia roda a MESMA conta do espelho
+ * (`efeitosDoDia`) e devolve o número pra tela mostrar enquanto a supervisão
+ * digita o "até tal hora".
+ */
+export function previaEvento(
+  evento: EventoDoDia,
+  janela: JanelaPrevista | null | undefined,
+): PreviaEvento {
+  const tipo = tipoEvento(evento.tipo);
+  const minPrevisto = minutosPrevistos(janela);
+  const efeito: EfeitoEvento = !tipo
+    ? 'nenhum'
+    : tipo.abonaJornada
+      ? 'abona'
+      : tipo.contaComoTrabalhado
+        ? 'credita'
+        : tipo.debitaBanco
+          ? 'debita'
+          : 'nenhum';
+  const r = efeitosDoDia([evento], janela);
+  const minAfetados =
+    efeito === 'abona'
+      ? r.minAbatidos
+      : efeito === 'credita'
+        ? r.minCreditados
+        : efeito === 'debita'
+          ? r.minDebitadoBanco
+          : 0;
+  const parcial = eventoEhParcial(evento, tipo);
+  return {
+    minPrevisto,
+    minAfetados,
+    minRestantes: Math.max(0, minPrevisto - minAfetados),
+    efeito,
+    parcial,
+    foraDaJornada: parcial && minPrevisto > 0 && efeito !== 'nenhum' && minAfetados === 0,
+  };
 }
 
 export interface EfeitoDoDia {

@@ -23,6 +23,8 @@ import {
   FileText, Clock, Info, RefreshCw, Inbox, Wallet,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { HorasDoEvento } from '@/components/rh/HorasDoEvento';
+import { DIA_INTEIRO, validarHoras, type HorasDoEvento as Horas } from '@/lib/atestado-horas';
 
 type Tipo = {
   codigo: string;
@@ -514,9 +516,9 @@ function FormEvento({
   const [tipo, setTipo] = useState(prefill ? 'ATESTADO_MEDICO' : '');
   const [dataInicio, setDataInicio] = useState(prefill?.dataReferencia ?? ymd(new Date()));
   const [dataFim, setDataFim] = useState(prefill?.dataReferencia ?? ymd(new Date()));
-  const [diaInteiro, setDiaInteiro] = useState(true);
-  const [horaInicio, setHoraInicio] = useState('08:00');
-  const [horaFim, setHoraFim] = useState('12:00');
+  // Dia inteiro ou "das/até". Sem hora chumbada: o DAS nasce da jornada
+  // cadastrada dela (a prévia devolve) e o ATÉ é o que a supervisão digita.
+  const [janelaEvento, setJanelaEvento] = useState<Horas>(DIA_INTEIRO);
   const [observacoes, setObservacoes] = useState('');
   // Documento: ou já veio da caixa de entrada, ou a supervisão sobe agora.
   const [documentoId, setDocumentoId] = useState<string | null>(prefill?.id ?? null);
@@ -533,13 +535,27 @@ function FormEvento({
   // amarelo e lembrar que o papel vai ser cobrado.
   const faltaDoc = pedeDoc && !documentoId;
 
-  // Tipo que não admite parcial volta pro dia inteiro sozinho — senão a tela
-  // mostraria campos de hora que o backend ignora, que é porta falsa.
-  useEffect(() => {
-    if (t && !t.admiteParcial) setDiaInteiro(true);
-  }, [t]);
+  // Só o tipo que admite parcial manda hora; nos outros o bloco nem aparece e
+  // o POST vai como dia inteiro — hora digitada antes de trocar o tipo não
+  // vira ruído no banco.
+  const parcial = !!t?.admiteParcial;
+  const erroHoras = parcial ? validarHoras(janelaEvento) : null;
+  // Quantos dias o lançamento cobre — só muda a frase da prévia.
+  const dias = Math.max(
+    1,
+    Math.round(
+      (new Date(`${dataFim}T00:00:00`).getTime() - new Date(`${dataInicio}T00:00:00`).getTime()) /
+        86_400_000,
+    ) + 1,
+  );
 
   const salvar = async () => {
+    // O backend também recusa (400), mas travar aqui evita subir o anexo pra
+    // depois descobrir que faltou o "até".
+    if (erroHoras) {
+      setErro(erroHoras);
+      return;
+    }
     setSalvando(true);
     setErro(null);
     try {
@@ -564,9 +580,9 @@ function FormEvento({
         method: 'POST',
         body: JSON.stringify({
           sellerId, tipo, dataInicio, dataFim,
-          diaInteiro: t?.admiteParcial ? diaInteiro : true,
-          horaInicio: !diaInteiro ? horaInicio : null,
-          horaFim: !diaInteiro ? horaFim : null,
+          diaInteiro: parcial ? janelaEvento.diaInteiro : true,
+          horaInicio: parcial && !janelaEvento.diaInteiro ? janelaEvento.horaInicio : null,
+          horaFim: parcial && !janelaEvento.diaInteiro ? janelaEvento.horaFim : null,
           observacoes: observacoes || null,
           documentoId: docId,
         }),
@@ -650,34 +666,22 @@ function FormEvento({
             </div>
           </div>
 
-          {t?.admiteParcial && (
-            <div className="border rounded-lg p-3 space-y-3">
-              <label className="flex items-center gap-2 text-sm font-semibold">
-                <input type="checkbox" checked={!diaInteiro}
-                  onChange={(e) => setDiaInteiro(!e.target.checked)} />
-                Só parte do dia
-              </label>
-              {/* Ordem do dono: abate SOMENTE as horas informadas. */}
-              {!diaInteiro && (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Das</label>
-                      <input type="time" value={horaInicio} onChange={(e) => setHoraInicio(e.target.value)}
-                        className="w-full border rounded-lg px-3 py-2 text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Às</label>
-                      <input type="time" value={horaFim} onChange={(e) => setHoraFim(e.target.value)}
-                        className="w-full border rounded-lg px-3 py-2 text-sm" />
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-slate-500">
-                    Abate só essas horas da jornada — o resto do dia ela deve normalmente.
-                  </p>
-                </>
-              )}
-            </div>
+          {/* DIA INTEIRO × SÓ ALGUMAS HORAS — ordem do dono: abate SOMENTE as
+              horas informadas. O bloco é o mesmo da caixa "Ajustar dia" do
+              espelho: o das nasce da jornada cadastrada, a supervisão digita
+              o até, e a prévia diz quanto o dia vai abonar. */}
+          <HorasDoEvento
+            tipo={t ? { codigo: t.codigo, label: t.label, admiteParcial: t.admiteParcial } : null}
+            sellerId={sellerId}
+            data={dataInicio}
+            dias={dias}
+            valor={janelaEvento}
+            onChange={setJanelaEvento}
+          />
+          {parcial && !sellerId && (
+            <p className="text-[11px] text-slate-500 -mt-2">
+              Escolha a funcionária pra ver a jornada cadastrada e a prévia do abono.
+            </p>
           )}
 
           {/* ANEXO — o tipo que exige documento não fecha sem ele. Antes deste
@@ -736,7 +740,7 @@ function FormEvento({
             // Só o essencial trava: funcionária e tipo. O anexo saiu daqui em
             // 11/09 — botão apagado por causa do papel era o que fazia o dia
             // continuar contado como falta enquanto o atestado não chegava.
-            disabled={!sellerId || !tipo || salvando}
+            disabled={!sellerId || !tipo || salvando || !!erroHoras}
             className="px-4 py-2 rounded-lg bg-slate-800 text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {salvando && <Loader2 className="w-4 h-4 animate-spin" />}

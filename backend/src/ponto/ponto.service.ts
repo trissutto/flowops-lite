@@ -800,6 +800,18 @@ export class PontoService {
         minDebitadoBanco,
         abonado: efeito.abonado,
         faltaInjustificada: efeito.faltaInjustificada,
+        // A jornada cadastrada do dia, pra caixa "Ajustar" preencher o "das"
+        // do atestado de horas com a ENTRADA dela — quem lança digita só o
+        // "até". Null em folga e em dia sem cadastro: não há o que preencher.
+        janela:
+          expected && !folga
+            ? {
+                inicio: expected.inicio ?? null,
+                fim: expected.fim ?? null,
+                almocoInicio: expected.almocoInicio ?? null,
+                almocoFim: expected.almocoFim ?? null,
+              }
+            : null,
       });
     }
 

@@ -302,3 +302,164 @@ describe('atestado sem o papel — lança agora, cobra depois', () => {
     ).rejects.toThrow(/máximo 3 dia/i);
   });
 });
+
+/**
+ * ATESTADO DE HORAS (dono, 26/09/2026): "abrindo um campo para colocarmos o
+ * horário de até tal hora — esta jornada não desconta do funcionário".
+ *
+ * A régua já abatia só a janela desde 28/08; o que faltava era a PORTA: a
+ * caixa "Ajustar dia" do espelho mandava sempre dia inteiro. E a porta ganhou
+ * uma trava: parcial sem hora não entra. Antes era gravado e virava dia
+ * inteiro calado — 8h abonadas de uma consulta de 2h.
+ */
+describe('atestado de HORAS — só a janela, e a janela completa', () => {
+  const SEMANA = JSON.stringify([
+    { dia: 'SEG', inicio: '09:00', fim: '18:00', almocoInicio: '12:00', almocoFim: '13:00', folga: false },
+    { dia: 'DOM', folga: true },
+  ]);
+
+  function servico() {
+    const criados: any[] = [];
+    const prisma: any = {
+      sellerEvento: {
+        create: jest.fn(async ({ data }: any) => {
+          criados.push(data);
+          return { id: 'ev1', ...data };
+        }),
+        findUnique: jest.fn(),
+        update: jest.fn(async ({ data }: any) => ({ id: 'ev1', ...data })),
+        findMany: jest.fn(async () => []),
+      },
+      seller: {
+        findUnique: jest.fn(async () => ({
+          id: 's1', name: 'Maria', responsibleStoreId: 'loja13', horarioTrabalho: SEMANA,
+        })),
+      },
+    };
+    return { svc: new RhEventosService(prisma, { upload: jest.fn() } as any), criados, prisma };
+  }
+  const autor = { id: 'u1', nome: 'Supervisão' };
+
+  it('grava só a janela: das 09:00 até 11:00', async () => {
+    const { svc, criados } = servico();
+    await svc.criar(
+      {
+        sellerId: 's1', tipo: 'ATESTADO_MEDICO', dataInicio: '2026-09-28',
+        diaInteiro: false, horaInicio: '9:00', horaFim: '11:00',
+      },
+      autor,
+    );
+    expect(criados[0]).toMatchObject({ diaInteiro: false, horaInicio: '09:00', horaFim: '11:00' });
+  });
+
+  it('"só algumas horas" com o até em branco é 400 — não vira dia inteiro calado', async () => {
+    const { svc, criados } = servico();
+    await expect(
+      svc.criar(
+        {
+          sellerId: 's1', tipo: 'ATESTADO_MEDICO', dataInicio: '2026-09-28',
+          diaInteiro: false, horaInicio: '09:00', horaFim: '',
+        },
+        autor,
+      ),
+    ).rejects.toThrow(/até que horas/i);
+    expect(criados).toHaveLength(0);
+  });
+
+  it('até antes do das também é 400', async () => {
+    const { svc } = servico();
+    await expect(
+      svc.criar(
+        {
+          sellerId: 's1', tipo: 'ATESTADO_MEDICO', dataInicio: '2026-09-28',
+          diaInteiro: false, horaInicio: '11:00', horaFim: '09:00',
+        },
+        autor,
+      ),
+    ).rejects.toThrow(/maior que a de início/i);
+  });
+
+  it('tipo que não admite parcial grava dia inteiro mesmo com hora digitada', async () => {
+    const { svc, criados } = servico();
+    await svc.criar(
+      {
+        sellerId: 's1', tipo: 'FERIAS', dataInicio: '2026-09-28',
+        diaInteiro: false, horaInicio: '09:00', horaFim: '11:00',
+      },
+      autor,
+    );
+    expect(criados[0]).toMatchObject({ diaInteiro: true, horaInicio: null, horaFim: null });
+  });
+
+  it('editar só o "até" mantém o "das" que já estava gravado', async () => {
+    const { svc, prisma } = servico();
+    prisma.sellerEvento.findUnique.mockResolvedValue({
+      id: 'ev1', tipo: 'ATESTADO_MEDICO',
+      dataInicio: dbDate('2026-09-28'), dataFim: dbDate('2026-09-28'),
+      diaInteiro: false, horaInicio: '09:00', horaFim: '11:00',
+      documentoId: null, observacoes: null, canceladoAt: null,
+    });
+    const r: any = await svc.editar('ev1', { horaFim: '12:00' });
+    expect(r).toMatchObject({ diaInteiro: false, horaInicio: '09:00', horaFim: '12:00' });
+  });
+
+  describe('previa — o número que a tela mostra antes de gravar', () => {
+    it('consulta da entrada até 11:00 numa segunda: abona 2h, ela deve 6h', async () => {
+      const { svc } = servico();
+      const p = await svc.previa({
+        sellerId: 's1', data: '2026-09-28', tipo: 'ATESTADO_MEDICO',
+        diaInteiro: false, horaInicio: '09:00', horaFim: '11:00',
+      });
+      expect(p).toMatchObject({
+        data: '2026-09-28', diaSemana: 'SEG', folga: false, semCadastro: false,
+        minPrevisto: 480, minAfetados: 120, minRestantes: 360,
+        efeito: 'abona', parcial: true, foraDaJornada: false,
+      });
+      expect(p.janela).toEqual({
+        inicio: '09:00', fim: '18:00', almocoInicio: '12:00', almocoFim: '13:00',
+      });
+    });
+
+    it('sem hora devolve a jornada do dia — é como a tela preenche o "das"', async () => {
+      const p = await servico().svc.previa({
+        sellerId: 's1', data: '2026-09-28', tipo: 'ATESTADO_MEDICO',
+      });
+      expect(p.janela?.inicio).toBe('09:00');
+      expect(p.parcial).toBe(false);
+      expect(p.minAfetados).toBe(480);
+    });
+
+    it('hora fora da jornada avisa em vez de prometer abono', async () => {
+      const p = await servico().svc.previa({
+        sellerId: 's1', data: '2026-09-28', tipo: 'ATESTADO_MEDICO',
+        diaInteiro: false, horaInicio: '07:00', horaFim: '08:30',
+      });
+      expect(p.foraDaJornada).toBe(true);
+      expect(p.minAfetados).toBe(0);
+    });
+
+    it('domingo é folga no cadastro: previsto zero, e a tela sabe que é folga', async () => {
+      const p = await servico().svc.previa({
+        sellerId: 's1', data: '2026-09-27', tipo: 'ATESTADO_MEDICO',
+      });
+      expect(p.folga).toBe(true);
+      expect(p.minPrevisto).toBe(0);
+    });
+
+    it('recusa tipo desconhecido, data torta e parcial sem hora', async () => {
+      const { svc } = servico();
+      await expect(
+        svc.previa({ sellerId: 's1', data: '2026-09-28', tipo: 'ATESTADO' }),
+      ).rejects.toThrow(/desconhecido/i);
+      await expect(
+        svc.previa({ sellerId: 's1', data: '28/09/2026', tipo: 'ATESTADO_MEDICO' }),
+      ).rejects.toThrow(/inválida/i);
+      await expect(
+        svc.previa({
+          sellerId: 's1', data: '2026-09-28', tipo: 'ATESTADO_MEDICO',
+          diaInteiro: false, horaInicio: '09:00',
+        }),
+      ).rejects.toThrow(/até que horas/i);
+    });
+  });
+});

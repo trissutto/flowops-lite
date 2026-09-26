@@ -20,6 +20,13 @@ import {
   Edit3, Plus, Clock, Users, RefreshCw, Search, Smartphone, Monitor,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { HorasDoEvento } from '@/components/rh/HorasDoEvento';
+import {
+  DIA_INTEIRO,
+  validarHoras,
+  type HorasDoEvento as Horas,
+  type JanelaCadastrada,
+} from '@/lib/atestado-horas';
 
 type Seller = {
   id: string;
@@ -67,6 +74,8 @@ type Espelho = {
     minAbonado?: number;
     abonado?: boolean;
     faltaInjustificada?: boolean;
+    /** Jornada cadastrada do dia — preenche o "das" do atestado de horas. */
+    janela?: JanelaCadastrada | null;
   }>;
   totais: {
     minTrabalhado: number;
@@ -720,6 +729,12 @@ export default function EspelhoPontoPage() {
                                 }
                               >
                                 {evento.label.toUpperCase()}
+                                {/* Atestado de HORAS: a janela aparece na
+                                    linha, senão "ATESTADO" num dia com 6h
+                                    batidas parece dia inteiro lançado errado. */}
+                                {!evento.diaInteiro && evento.horaInicio
+                                  ? ` ${evento.horaInicio}–${evento.horaFim}`
+                                  : ''}
                                 {d.eventos && d.eventos.length > 1
                                   ? ` +${d.eventos.length - 1}`
                                   : ''}
@@ -859,6 +874,12 @@ function ModalAjustarDia({
   // vezes e subir 15 vezes a MESMA foto — a tabela `seller_eventos` já guardava
   // intervalo desde o começo, só a caixa é que mandava sempre dia = dia.
   const [marcarAte, setMarcarAte] = useState(dia.data);
+  // ATESTADO DE HORAS (dono, 26/09/2026): "um campo pro horário de até tal
+  // hora — essa jornada não desconta". Até aqui esta caixa mandava SEMPRE
+  // `diaInteiro: true`: consulta de 2h virava atestado de 8h, ou ficava sem
+  // lançar. A régua do backend já abatia só a janela desde 28/08 — faltava a
+  // porta. O DAS nasce da jornada cadastrada do dia; quem lança digita o ATÉ.
+  const [janelaEvento, setJanelaEvento] = useState<Horas>(DIA_INTEIRO);
   const [anexo, setAnexo] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -878,6 +899,9 @@ function ModalAjustarDia({
   // `?? exigeDocumento`: o Vercel publica em segundos e o Railway leva minutos —
   // sem o fallback o campo de anexo sumiria nesse intervalo.
   const pedeAnexo = !!(tipoMarcado?.pedeDocumento ?? tipoMarcado?.exigeDocumento);
+  // Só tipo que admite parcial manda hora; nos outros o bloco nem aparece.
+  const parcial = !!tipoMarcado?.admiteParcial;
+  const erroHoras = marcarTipo && parcial ? validarHoras(janelaEvento) : null;
   // Quantos dias o lançamento vai cobrir. Inclusivo nas duas pontas.
   const diasMarcados = Math.max(
     1,
@@ -897,6 +921,12 @@ function ModalAjustarDia({
     }
     if (marcarTipo && periodoInvertido) {
       setErro('O "até" do evento é anterior ao dia. Corrija a data final.');
+      return;
+    }
+    // "Só algumas horas" sem o até não grava — o backend também recusa (400),
+    // mas aqui é ANTES de mexer nas batidas e de subir o anexo.
+    if (erroHoras) {
+      setErro(erroHoras);
       return;
     }
     setBusy(true);
@@ -954,7 +984,12 @@ function ModalAjustarDia({
             // intervalo dia a dia (`mapaDoMes`), então 15 dias de atestado são
             // UMA linha e não 15.
             dataFim: marcarAte || dia.data,
-            diaInteiro: true,
+            // Só o tipo que admite parcial manda hora. Dia inteiro continua
+            // sendo o padrão: o que mudou é que agora dá pra dizer "até tal
+            // hora" — e aí o espelho abate SÓ essa janela.
+            diaInteiro: parcial ? janelaEvento.diaInteiro : true,
+            horaInicio: parcial && !janelaEvento.diaInteiro ? janelaEvento.horaInicio : null,
+            horaFim: parcial && !janelaEvento.diaInteiro ? janelaEvento.horaFim : null,
             observacoes: motivo,
             documentoId,
           }),
@@ -1139,6 +1174,19 @@ function ModalAjustarDia({
               </p>
             )}
 
+            {/* DIA INTEIRO × SÓ ALGUMAS HORAS — o atestado de horas. O das
+                nasce da jornada cadastrada deste dia (vem no espelho); a
+                supervisão digita o até; a prévia diz quanto o dia abona. */}
+            <HorasDoEvento
+              tipo={tipoMarcado}
+              sellerId={seller.id}
+              data={dia.data}
+              dias={diasMarcados}
+              valor={janelaEvento}
+              onChange={setJanelaEvento}
+              janela={dia.janela ?? null}
+            />
+
             {/* PERÍODO — atestado de 15 dias é UM lançamento, não 15. */}
             {tipoMarcado && (
               <div className="mt-2 border rounded-lg p-3 bg-slate-50">
@@ -1247,7 +1295,7 @@ function ModalAjustarDia({
             onClick={() => void salvar()}
             // O anexo saiu daqui em 11/09: o que trava é só o que impediria o
             // registro de existir (API velha, nada mudado, período invertido).
-            disabled={busy || apiVelha || periodoInvertido || (!mudou && !marcarTipo)}
+            disabled={busy || apiVelha || periodoInvertido || !!erroHoras || (!mudou && !marcarTipo)}
             className="px-4 py-2 rounded-lg bg-brand text-white font-bold text-sm disabled:opacity-40 flex items-center gap-2"
           >
             {busy && <Loader2 className="w-4 h-4 animate-spin" />}

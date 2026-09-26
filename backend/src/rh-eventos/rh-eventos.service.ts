@@ -5,6 +5,8 @@ import {
   EventoDoDia,
   descontoFolha,
   documentoPendente,
+  janelaDoDia,
+  previaEvento,
   tipoEvento,
   tipoEventoValido,
 } from '../common/eventos-rh';
@@ -69,6 +71,41 @@ export class RhEventosService {
     const [h, m] = s.split(':').map(Number);
     if (h > 23 || m > 59) throw new BadRequestException(`${campo} inválida (use HH:MM)`);
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  /**
+   * DIA INTEIRO OU JANELA — e a janela tem que estar COMPLETA.
+   *
+   * Parcial só existe em tipo que admite: nos outros, hora digitada é ruído
+   * que a régua ignoraria em silêncio — melhor nem gravar.
+   *
+   * Parcial SEM hora vale 400 (26/09/2026). Até aqui era gravado, e a régua
+   * o tratava como dia inteiro (defesa certa pra linha já gravada: campo vazio
+   * não pode virar zero abatido). Na ENTRADA a resposta certa é outra: a
+   * supervisão escolheu "só algumas horas" e deixou o "até" em branco — gravar
+   * isso abonaria 8h de uma consulta de 2h, calado, e o espelho diria que o
+   * dia inteiro foi atestado. Uma função só, porque criar, editar e prévia
+   * fazem a mesma pergunta e não podem responder diferente.
+   */
+  private horasDoEvento(
+    admiteParcial: boolean,
+    diaInteiroIn: unknown,
+    hIni: unknown,
+    hFim: unknown,
+  ): { diaInteiro: boolean; horaInicio: string | null; horaFim: string | null } {
+    const diaInteiro = admiteParcial ? diaInteiroIn !== false : true;
+    if (diaInteiro) return { diaInteiro: true, horaInicio: null, horaFim: null };
+    const horaInicio = this.validarHora(hIni, 'Hora de início');
+    const horaFim = this.validarHora(hFim, 'Hora de fim');
+    if (!horaInicio || !horaFim) {
+      throw new BadRequestException(
+        'Diga das/até que horas o evento vale — ou marque dia inteiro',
+      );
+    }
+    if (horaFim <= horaInicio) {
+      throw new BadRequestException('A hora de fim precisa ser maior que a de início');
+    }
+    return { diaInteiro: false, horaInicio, horaFim };
   }
 
   /** Lista fechada pra tela — fonte única, o front não repete os tipos. */
@@ -151,19 +188,9 @@ export class RhEventosService {
       }
     }
 
-    // Parcial só existe em tipo que admite. Nos outros, hora digitada é ruído
-    // e seria ignorada em silêncio pela régua — melhor não gravar.
-    const admiteParcial = tipo.admiteParcial;
-    const diaInteiro = admiteParcial ? input.diaInteiro !== false : true;
-    const horaInicio = admiteParcial && !diaInteiro
-      ? this.validarHora(input.horaInicio, 'Hora de início')
-      : null;
-    const horaFim = admiteParcial && !diaInteiro
-      ? this.validarHora(input.horaFim, 'Hora de fim')
-      : null;
-    if (!diaInteiro && horaInicio && horaFim && horaFim <= horaInicio) {
-      throw new BadRequestException('A hora de fim precisa ser maior que a de início');
-    }
+    const { diaInteiro, horaInicio, horaFim } = this.horasDoEvento(
+      tipo.admiteParcial, input.diaInteiro, input.horaInicio, input.horaFim,
+    );
 
     // O DOCUMENTO NÃO TRANCA MAIS (ordem do dono, 11/09/2026). O que era 400
     // aqui virou pendência visível — `documentoPendente` na listagem. A trava
@@ -214,9 +241,14 @@ export class RhEventosService {
       throw new BadRequestException('A data de fim é anterior à de início');
     }
 
-    const diaInteiro = admiteParcial
-      ? (input.diaInteiro ?? atual.diaInteiro) !== false
-      : true;
+    // O que não veio no PATCH fica como estava — inclusive as horas: trocar só
+    // o "até" não pode apagar o "das".
+    const { diaInteiro, horaInicio, horaFim } = this.horasDoEvento(
+      admiteParcial,
+      input.diaInteiro ?? atual.diaInteiro,
+      input.horaInicio ?? atual.horaInicio,
+      input.horaFim ?? atual.horaFim,
+    );
 
     return this.tabela.update({
       where: { id },
@@ -224,12 +256,8 @@ export class RhEventosService {
         dataInicio,
         dataFim,
         diaInteiro,
-        horaInicio: admiteParcial && !diaInteiro
-          ? this.validarHora(input.horaInicio ?? atual.horaInicio, 'Hora de início')
-          : null,
-        horaFim: admiteParcial && !diaInteiro
-          ? this.validarHora(input.horaFim ?? atual.horaFim, 'Hora de fim')
-          : null,
+        horaInicio,
+        horaFim,
         documentoId: input.documentoId === undefined ? atual.documentoId : (input.documentoId || null),
         observacoes: input.observacoes === undefined ? atual.observacoes : (input.observacoes || null),
       },
@@ -405,6 +433,61 @@ export class RhEventosService {
       }
     }
     return mapa;
+  }
+
+  // ── PRÉVIA ───────────────────────────────────────────────────────
+
+  /**
+   * QUANTO ESTE EVENTO ABONA NESTE DIA — antes de gravar.
+   *
+   * A tela mostra o número enquanto a supervisão digita o "até tal hora" do
+   * atestado de horas. Sem isto o erro era mudo dos dois lados: hora fora da
+   * jornada abonava zero sem avisar, e "dia inteiro" marcado por engano
+   * abonava 8h de uma consulta de 2h. A conta é a MESMA do espelho
+   * (`previaEvento` → `efeitosDoDia`); aqui só se busca a jornada cadastrada.
+   *
+   * Sem hora (dia inteiro) também serve: devolve a jornada do dia, e é assim
+   * que a tela descobre a ENTRADA dela pra preencher o "das" sozinha.
+   */
+  async previa(input: {
+    sellerId: string;
+    data: string;
+    tipo: string;
+    diaInteiro?: boolean;
+    horaInicio?: string | null;
+    horaFim?: string | null;
+  }) {
+    const sellerId = String(input?.sellerId || '').trim();
+    if (!sellerId) throw new BadRequestException('Funcionária é obrigatória');
+
+    const codigo = String(input?.tipo || '').trim().toUpperCase();
+    if (!tipoEventoValido(codigo)) {
+      throw new BadRequestException(`Tipo de evento desconhecido: ${codigo || '(vazio)'}`);
+    }
+    const tipo = tipoEvento(codigo)!;
+    const data = this.chaveData(this.paraData(input.data, 'Data'));
+
+    const seller = await (this.prisma as any).seller.findUnique({
+      where: { id: sellerId },
+      select: { id: true, horarioTrabalho: true },
+    });
+    if (!seller) throw new NotFoundException('Funcionária não encontrada');
+
+    const horas = this.horasDoEvento(
+      tipo.admiteParcial, input.diaInteiro, input.horaInicio, input.horaFim,
+    );
+    const dia = janelaDoDia(seller.horarioTrabalho, data);
+    const p = previaEvento({ tipo: codigo, ...horas }, dia.janela);
+
+    return {
+      data,
+      diaSemana: dia.diaSemana,
+      janela: dia.janela,
+      folga: dia.folga,
+      semCadastro: dia.semCadastro,
+      ...p,
+      tipo: { codigo, label: tipo.label, admiteParcial: tipo.admiteParcial },
+    };
   }
 
   // ── ANEXO ────────────────────────────────────────────────────────

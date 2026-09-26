@@ -13,6 +13,7 @@
     "test:tokens": "node --test tests/tokens-no-cn.test.mjs",
     "test:grade-consulta": "node --test tests/grade-consulta-celula-soma.test.mjs",
     "test:ficha-cor": "node --test tests/ficha-cor-espelho.test.mjs",
+    "test:atestado-horas": "node --test tests/atestado-horas.test.mjs",
     "rotas": "node scripts/gerar-rotas.mjs"
   },
   "dependencies": {

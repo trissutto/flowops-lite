@@ -39,6 +39,110 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/etiqueta-config') return json({});
 
+  // ── RH — espelho de ponto + atestado de HORAS (26/09/2026) ─────────────────
+  // Uma funcionária, setembro/2026, jornada 09–18 (almoço 12–13) seg–sex e
+  // 09–13 no sábado. Dia 21/09 (segunda) ela entrou 11:00 com atestado: é o
+  // caso do "até tal hora". A prévia repete a conta do backend (interseção da
+  // janela com a jornada, sem o almoço) pra tela mostrar o número real.
+  const RH_JANELA = (d) => {
+    const dow = new Date(`${d}T12:00:00Z`).getUTCDay();
+    if (dow === 0) return null;
+    if (dow === 6) return { inicio: '09:00', fim: '13:00', almocoInicio: null, almocoFim: null };
+    return { inicio: '09:00', fim: '18:00', almocoInicio: '12:00', almocoFim: '13:00' };
+  };
+  const rhMin = (hhmm) => { const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || ''); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const rhPrevisto = (j) => {
+    if (!j) return 0;
+    let t = rhMin(j.fim) - rhMin(j.inicio);
+    if (j.almocoInicio && j.almocoFim) t -= Math.max(0, rhMin(j.almocoFim) - rhMin(j.almocoInicio));
+    return Math.max(0, t);
+  };
+  const rhIso = (d, hhmm) => new Date(`${d}T${hhmm}:00-03:00`).toISOString();
+  if (url.pathname === '/api/sellers') {
+    return json([{ id: 's1', name: 'MARIA APARECIDA', active: true, cargo: 'VENDEDORA', responsibleStoreId: 'loja01' }]);
+  }
+  if (url.pathname === '/api/ponto/dia') {
+    return json({ data: url.searchParams.get('data'), geradoEm: new Date().toISOString(),
+      totais: { funcionarias: 0, trabalhando: 0, almoco: 0, sairam: 0, batidas: 0 }, lojas: [] });
+  }
+  if (url.pathname === '/api/rh/eventos/tipos') {
+    return json([
+      { codigo: 'ATESTADO_MEDICO', label: 'Atestado médico', grupo: 'saude', pedeDocumento: true, exigeDocumento: true, admiteParcial: true, abonaJornada: true, justificaAusencia: true, debitaBanco: false, contaComoTrabalhado: false, descontaSalario: false, descontaDSR: false, contaArt130: false, limiteDias: null, esocial: null, nota: 'Até 15 dias, pago pela empresa.' },
+      { codigo: 'FOLGA', label: 'Folga (escala)', grupo: 'programado', pedeDocumento: false, exigeDocumento: false, admiteParcial: false, abonaJornada: true, justificaAusencia: true, debitaBanco: false, contaComoTrabalhado: false, descontaSalario: false, descontaDSR: false, contaArt130: false, limiteDias: null, esocial: null, nota: null },
+      { codigo: 'TREINAMENTO', label: 'Treinamento', grupo: 'presente', pedeDocumento: false, exigeDocumento: false, admiteParcial: true, abonaJornada: false, justificaAusencia: true, debitaBanco: false, contaComoTrabalhado: true, descontaSalario: false, descontaDSR: false, contaArt130: false, limiteDias: null, esocial: null, nota: null },
+      { codigo: 'FALTA_INJUSTIFICADA', label: 'Falta injustificada', grupo: 'ausencia', pedeDocumento: false, exigeDocumento: false, admiteParcial: false, abonaJornada: false, justificaAusencia: false, debitaBanco: false, contaComoTrabalhado: false, descontaSalario: true, descontaDSR: true, contaArt130: true, limiteDias: null, esocial: null, nota: null },
+    ]);
+  }
+  if (url.pathname === '/api/rh/eventos/atestados-pendentes') return json([]);
+  if (url.pathname === '/api/rh/eventos' && req.method === 'GET') return json([]);
+  if (url.pathname === '/api/rh/eventos' && req.method === 'POST') {
+    return lerCorpo(req, (body) => {
+      console.log(`[mock] POST /rh/eventos ${JSON.stringify(body)}`);
+      json({ ok: true, id: 'ev-mock', ...body });
+    });
+  }
+  if (url.pathname === '/api/rh/eventos/previa') {
+    const data = url.searchParams.get('data');
+    const tipo = url.searchParams.get('tipo');
+    const janela = RH_JANELA(data);
+    const minPrevisto = rhPrevisto(janela);
+    const parcialPedido = url.searchParams.get('diaInteiro') === '0';
+    const hi = rhMin(url.searchParams.get('horaInicio'));
+    const hf = rhMin(url.searchParams.get('horaFim'));
+    const admiteParcial = ['ATESTADO_MEDICO', 'TREINAMENTO'].includes(tipo);
+    const parcial = admiteParcial && parcialPedido && hi !== null && hf !== null && hf > hi;
+    let afetados = minPrevisto;
+    if (parcial && janela) {
+      const ji = rhMin(janela.inicio), jf = rhMin(janela.fim);
+      afetados = Math.max(0, Math.min(jf, hf) - Math.max(ji, hi));
+      if (janela.almocoInicio) {
+        const ai = rhMin(janela.almocoInicio), af = rhMin(janela.almocoFim);
+        afetados -= Math.max(0, Math.min(Math.min(jf, hf), af) - Math.max(Math.max(ji, hi), ai));
+      }
+      afetados = Math.max(0, Math.min(minPrevisto, afetados));
+    }
+    const efeito = tipo === 'ATESTADO_MEDICO' || tipo === 'FOLGA' ? 'abona' : tipo === 'TREINAMENTO' ? 'credita' : 'nenhum';
+    if (efeito === 'nenhum') afetados = 0;
+    const dow = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'][new Date(`${data}T12:00:00Z`).getUTCDay()];
+    console.log(`[mock] previa ${tipo} ${data} ${parcial ? `${url.searchParams.get('horaInicio')}-${url.searchParams.get('horaFim')}` : 'dia inteiro'} -> ${afetados}/${minPrevisto}`);
+    return json({ data, diaSemana: dow, janela, folga: dow === 'DOM', semCadastro: false,
+      minPrevisto, minAfetados: afetados, minRestantes: Math.max(0, minPrevisto - afetados),
+      efeito, parcial, foraDaJornada: parcial && minPrevisto > 0 && efeito !== 'nenhum' && afetados === 0,
+      tipo: { codigo: tipo, label: tipo, admiteParcial } });
+  }
+  if (url.pathname === '/api/ponto/espelho') {
+    const ano = Number(url.searchParams.get('ano')) || 2026;
+    const mes = Number(url.searchParams.get('mes')) || 9;
+    const ultimo = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+    const dias = [];
+    let tT = 0, tP = 0;
+    for (let d = 1; d <= ultimo; d++) {
+      const data = `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const janela = RH_JANELA(data);
+      const diaSemana = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'][new Date(`${data}T12:00:00Z`).getUTCDay()];
+      const minPrevisto = rhPrevisto(janela);
+      const passado = data <= '2026-09-25' && janela;
+      const atrasada = data === '2026-09-21';
+      const horas = !passado ? null
+        : diaSemana === 'SAB' ? { entrada: '09:02', saida: '13:01' }
+        : { entrada: atrasada ? '11:00' : '08:58', saida_almoco: '12:03', volta_almoco: '13:00', saida: '18:04' };
+      const registros = horas ? Object.entries(horas).map(([tipo, h]) => ({ id: `r-${d}-${tipo}`, tipo, timestamp: rhIso(data, h), source: 'face_pdv', storeId: 'loja01', justificado: false })) : [];
+      const ts = (t) => registros.find((r) => r.tipo === t)?.timestamp ?? null;
+      let minTrabalhado = 0;
+      if (ts('entrada') && ts('saida')) {
+        minTrabalhado = (new Date(ts('saida')) - new Date(ts('entrada'))) / 60000;
+        if (ts('saida_almoco') && ts('volta_almoco')) minTrabalhado -= (new Date(ts('volta_almoco')) - new Date(ts('saida_almoco'))) / 60000;
+      }
+      minTrabalhado = Math.round(minTrabalhado);
+      tT += minTrabalhado; tP += minPrevisto;
+      dias.push({ data, diaSemana, folga: !janela, entrada: ts('entrada'), saidaAlmoco: ts('saida_almoco'), voltaAlmoco: ts('volta_almoco'), saida: ts('saida'),
+        minTrabalhado, minPrevisto, saldoMin: minTrabalhado - minPrevisto, batidas: registros.length, registros,
+        completo: !!ts('entrada') && !!ts('saida'), justificado: false, eventos: [], minAbonado: 0, minDebitadoBanco: 0, abonado: false, faltaInjustificada: false, janela });
+    }
+    return json({ seller: { id: 's1', name: 'MARIA APARECIDA', cargo: 'VENDEDORA', storeId: 'loja01' }, periodo: { ano, mes },
+      dias, totais: { minTrabalhado: tT, minPrevisto: tP, saldoMin: tT - tP, minAbonado: 0, minDebitadoBanco: 0 } });
+  }
+
   if (url.pathname === '/api/purchase-orders/reposicao/buscar') {
     const q = norm(url.searchParams.get('q'));
     const out = PRODUTOS.filter((p) => norm(p.ref).includes(q) || norm(p.descricao).includes(q));

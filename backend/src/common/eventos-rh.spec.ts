@@ -3,9 +3,12 @@ import {
   chaveSemana,
   descontoFolha,
   efeitosDoDia,
+  eventoEhParcial,
+  janelaDoDia,
   minutosAbatidos,
   minutosPrevistos,
   paraMinutos,
+  previaEvento,
   tipoEvento,
   tipoEventoValido,
 } from './eventos-rh';
@@ -484,5 +487,154 @@ describe('FERIADO e DAY OFF — abonam o dia inteiro', () => {
       { data: '2026-09-08', tipo: 'DAY_OFF' },
     ]);
     expect(r.diasTotais).toBe(0);
+  });
+});
+
+describe('janelaDoDia — o turno cadastrado de uma data', () => {
+  const SEMANA = JSON.stringify([
+    { dia: 'SEG', inicio: '09:00', fim: '18:00', almocoInicio: '12:00', almocoFim: '13:00', folga: false },
+    { dia: 'SAB', inicio: '09:00', fim: '13:00', almocoInicio: null, almocoFim: null, folga: false },
+    { dia: 'DOM', folga: true },
+  ]);
+
+  it('acha o turno pelo dia da semana do CALENDÁRIO', () => {
+    // 2026-09-28 é segunda; 2026-09-26 é sábado.
+    expect(janelaDoDia(SEMANA, '2026-09-28')).toEqual({
+      diaSemana: 'SEG', folga: false, semCadastro: false,
+      janela: { inicio: '09:00', fim: '18:00', almocoInicio: '12:00', almocoFim: '13:00' },
+    });
+    expect(janelaDoDia(SEMANA, '2026-09-26').janela).toEqual({
+      inicio: '09:00', fim: '13:00', almocoInicio: null, almocoFim: null,
+    });
+  });
+
+  it('folga do cadastro é folga, não "sem cadastro"', () => {
+    expect(janelaDoDia(SEMANA, '2026-09-27')).toEqual({
+      diaSemana: 'DOM', janela: null, folga: true, semCadastro: false,
+    });
+  });
+
+  it('dia que falta no JSON é SEM CADASTRO — a tela pede a ficha, não chama de folga', () => {
+    const r = janelaDoDia(SEMANA, '2026-09-29'); // terça, não está na semana
+    expect(r).toEqual({ diaSemana: 'TER', janela: null, folga: false, semCadastro: true });
+  });
+
+  it('JSON ausente, ilegível ou de outro formato não vira jornada', () => {
+    expect(janelaDoDia(null, '2026-09-28').semCadastro).toBe(true);
+    expect(janelaDoDia('{quebrado', '2026-09-28').semCadastro).toBe(true);
+    expect(janelaDoDia({ dia: 'SEG' }, '2026-09-28').semCadastro).toBe(true);
+  });
+
+  it('aceita a semana já parseada (array) além da string do banco', () => {
+    expect(janelaDoDia(JSON.parse(SEMANA), '2026-09-28').janela?.fim).toBe('18:00');
+  });
+
+  it('data que não é AAAA-MM-DD não tem dia da semana', () => {
+    expect(janelaDoDia(SEMANA, 'ontem')).toEqual({
+      diaSemana: '', janela: null, folga: false, semCadastro: true,
+    });
+  });
+});
+
+describe('previaEvento — o número que a tela mostra antes de gravar', () => {
+  const ATESTADO = (horaInicio: string, horaFim: string) => ({
+    tipo: 'ATESTADO_MEDICO', diaInteiro: false, horaInicio, horaFim,
+  });
+
+  // O caso do pedido do dono (26/09): consulta de manhã, "até tal hora".
+  it('atestado da entrada até 11:00 abona 2h e deixa 6h a cumprir', () => {
+    expect(previaEvento(ATESTADO('09:00', '11:00'), JORNADA)).toEqual({
+      minPrevisto: 480, minAfetados: 120, minRestantes: 360,
+      efeito: 'abona', parcial: true, foraDaJornada: false,
+    });
+  });
+
+  it('a prévia e o espelho fazem a MESMA conta — atravessar o almoço não abona a hora do almoço', () => {
+    const p = previaEvento(ATESTADO('11:00', '14:00'), JORNADA);
+    expect(p.minAfetados).toBe(minutosAbatidos(ATESTADO('11:00', '14:00'), JORNADA));
+    expect(p.minAfetados).toBe(120);
+  });
+
+  it('hora que não cai na jornada é avisada, não engolida', () => {
+    const p = previaEvento(ATESTADO('07:00', '08:30'), JORNADA);
+    expect(p.minAfetados).toBe(0);
+    expect(p.foraDaJornada).toBe(true);
+    expect(p.minRestantes).toBe(480);
+  });
+
+  it('dia inteiro abona a jornada toda e não é parcial', () => {
+    expect(previaEvento({ tipo: 'ATESTADO_MEDICO', diaInteiro: true }, JORNADA)).toEqual({
+      minPrevisto: 480, minAfetados: 480, minRestantes: 0,
+      efeito: 'abona', parcial: false, foraDaJornada: false,
+    });
+  });
+
+  it('em folga / sem cadastro não há jornada — e isso NÃO é "fora da jornada"', () => {
+    const p = previaEvento(ATESTADO('09:00', '11:00'), null);
+    expect(p.minPrevisto).toBe(0);
+    expect(p.minAfetados).toBe(0);
+    expect(p.foraDaJornada).toBe(false);
+  });
+
+  it('treinamento CREDITA em vez de abater', () => {
+    const p = previaEvento(
+      { tipo: 'TREINAMENTO', diaInteiro: false, horaInicio: '13:00', horaFim: '18:00' },
+      JORNADA,
+    );
+    expect(p.efeito).toBe('credita');
+    expect(p.minAfetados).toBe(300);
+    expect(p.minRestantes).toBe(180);
+  });
+
+  it('folga compensatória DEBITA o banco', () => {
+    const p = previaEvento(
+      { tipo: 'FOLGA_COMPENSATORIA', diaInteiro: false, horaInicio: '14:00', horaFim: '18:00' },
+      JORNADA,
+    );
+    expect(p.efeito).toBe('debita');
+    expect(p.minAfetados).toBe(240);
+  });
+
+  it('falta injustificada não mexe em nada: o dia continua devendo tudo', () => {
+    const p = previaEvento({ tipo: 'FALTA_INJUSTIFICADA', diaInteiro: true }, JORNADA);
+    expect(p.efeito).toBe('nenhum');
+    expect(p.minAfetados).toBe(0);
+    expect(p.minRestantes).toBe(480);
+    expect(p.foraDaJornada).toBe(false);
+  });
+
+  it('tipo que não admite parcial ignora as horas — e a prévia diz que não é parcial', () => {
+    const p = previaEvento(
+      { tipo: 'FERIAS', diaInteiro: false, horaInicio: '09:00', horaFim: '10:00' },
+      JORNADA,
+    );
+    expect(p.parcial).toBe(false);
+    expect(p.minAfetados).toBe(480);
+  });
+});
+
+describe('eventoEhParcial — um predicado só pra conta e pra prévia', () => {
+  const t = tipoEvento('ATESTADO_MEDICO');
+
+  it('parcial de verdade: tipo admite, dia não inteiro, horas válidas e em ordem', () => {
+    expect(eventoEhParcial(
+      { tipo: 'ATESTADO_MEDICO', diaInteiro: false, horaInicio: '09:00', horaFim: '11:00' }, t,
+    )).toBe(true);
+  });
+
+  it('hora vazia, invertida, dia inteiro ou tipo sem parcial: não é parcial', () => {
+    expect(eventoEhParcial(
+      { tipo: 'ATESTADO_MEDICO', diaInteiro: false, horaInicio: '09:00', horaFim: null }, t,
+    )).toBe(false);
+    expect(eventoEhParcial(
+      { tipo: 'ATESTADO_MEDICO', diaInteiro: false, horaInicio: '11:00', horaFim: '09:00' }, t,
+    )).toBe(false);
+    expect(eventoEhParcial(
+      { tipo: 'ATESTADO_MEDICO', diaInteiro: true, horaInicio: '09:00', horaFim: '11:00' }, t,
+    )).toBe(false);
+    expect(eventoEhParcial(
+      { tipo: 'FERIAS', diaInteiro: false, horaInicio: '09:00', horaFim: '11:00' },
+      tipoEvento('FERIAS'),
+    )).toBe(false);
   });
 });

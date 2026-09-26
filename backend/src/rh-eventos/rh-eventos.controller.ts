@@ -92,6 +92,37 @@ export class RhEventosController {
     });
   }
 
+  /**
+   * PRÉVIA — quanto o evento abona NESTE dia, antes de gravar.
+   *
+   *   GET /rh/eventos/previa?sellerId=&data=&tipo=&diaInteiro=0&horaInicio=09:00&horaFim=11:00
+   *
+   * É o que a caixa do atestado de horas mostra enquanto a supervisão digita
+   * o "até tal hora". Sem hora (ou `diaInteiro=1`) devolve a jornada
+   * cadastrada do dia e o efeito de dia inteiro — é assim que a tela descobre
+   * a ENTRADA dela pra preencher o "das" sozinha.
+   */
+  @Get('previa')
+  previa(
+    @Req() req: any,
+    @Query('sellerId') sellerId: string,
+    @Query('data') data: string,
+    @Query('tipo') tipo: string,
+    @Query('diaInteiro') diaInteiro?: string,
+    @Query('horaInicio') horaInicio?: string,
+    @Query('horaFim') horaFim?: string,
+  ) {
+    this.assertSupervisao(req);
+    return this.svc.previa({
+      sellerId,
+      data,
+      tipo,
+      diaInteiro: diaInteiro !== '0' && diaInteiro !== 'false',
+      horaInicio,
+      horaFim,
+    });
+  }
+
   @Get('hoje')
   hoje(@Req() req: any, @Query('storeId') storeId?: string, @Query('data') data?: string) {
     const u = this.user(req);
