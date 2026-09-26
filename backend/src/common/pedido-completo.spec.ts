@@ -246,6 +246,32 @@ describe('decidirFechamento', () => {
     expect(r).toMatchObject({ fecha: true, como: 'delivered', despachoEm: d('2026-09-22T14:00:00Z') });
   });
 
+  // LP-001652 (26/09): retirada em Sorocaba, peça vinda de Anália Franco, SEM
+  // card na loja de retirada. O "📦 Enviei pra loja X" da origem (carrier
+  // Retirada) fechava o pedido como ENTREGUE com a caixa ainda na origem.
+  test('retirada só com card de TRANSFERÊNCIA (sem card na loja de retirada) fecha ENVIADO, não entregue', () => {
+    const r = decidirFechamento({
+      status: 'separating',
+      isPickup: true,
+      cards: [{ status: 'shipped', isTransfer: true, carrier: 'Retirada', updatedAt: d('2026-09-24T15:39:00Z') }],
+      pendentes: [],
+    });
+    expect(r).toMatchObject({ fecha: true, como: 'shipped', despachoEm: d('2026-09-24T15:39:00Z') });
+  });
+
+  test('receptor VAZIO da loja de retirada com "Cliente retirou" entrega (feeder fechado antes não conta)', () => {
+    const r = decidirFechamento({
+      status: 'separating',
+      isPickup: true,
+      cards: [
+        { status: 'shipped', isTransfer: true, carrier: 'Retirada', updatedAt: d('2026-09-24T15:39:00Z') },
+        { status: 'shipped', carrier: 'Retirada', updatedAt: d('2026-09-26T13:10:00Z') },
+      ],
+      pendentes: [],
+    });
+    expect(r).toMatchObject({ fecha: true, como: 'delivered', despachoEm: d('2026-09-26T13:10:00Z') });
+  });
+
   test('retirada com card final postado pelos Correios não vira entregue', () => {
     const r = decidirFechamento({
       status: 'separating',

@@ -22,6 +22,7 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pacotesAguardandoLiberacao, dentroDeSaoPaulo } from '../common/politica-frete';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
+import { avancarReceptorSeCaixasChegaram, ehCardReceptor } from '../common/retirada-receptora';
 import { caixaDesviadaPara, etapaDoFeeder } from '../common/juntada-etapa';
 import { carregarFechamento, decidirFechamento, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
@@ -1897,12 +1898,19 @@ export class PickOrdersService {
    * Idempotente: card já shipped só retorna.
    */
   async marcarCaixaJuntadaRecebida(pickOrderId: string) {
-    const pick = await this.prisma.pickOrder.findUnique({ where: { id: pickOrderId } });
+    const pick: any = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: { order: { select: { isPickup: true } } },
+    });
     if (!pick) return { ok: false as const, motivo: 'pick não existe' };
     if (pick.status === 'shipped') return { ok: true as const, jaEnviado: true };
+    // RETIRADA (26/09): a caixa chegou na loja onde a cliente busca — o card
+    // da ORIGEM fecha como `Retirada` (a peça saiu de lá). Isso NÃO entrega o
+    // pedido: `fechaComoEntregue` só aceita o card próprio da loja de retirada.
+    const carrier = pick.carrier ?? (pick.order?.isPickup ? 'Retirada' : 'Juntada entre lojas');
     await this.prisma.pickOrder.update({
       where: { id: pickOrderId },
-      data: { status: 'shipped', carrier: pick.carrier ?? 'Juntada entre lojas' },
+      data: { status: 'shipped', carrier },
     });
     // O feeder fecha por FORA do `updateStatus`, então o pedido é reavaliado
     // aqui também — senão o card vira `shipped` e ninguém pergunta se o
@@ -2825,6 +2833,18 @@ export class PickOrdersService {
         faltamBipar: faltamBiparDe(r),
         // Envio esperando decisão da matriz (2+ pacotes em SP) — pinta a faixa.
         aguardaDecisaoPacotes: aguardaDecisaoDe(r),
+        /**
+         * CARD RECEPTOR DA RETIRADA (26/09, LP-001652): card próprio da loja
+         * onde a cliente busca, SEM peça própria — tudo chega por
+         * transferência. O front esconde bipe/separação e conta a história
+         * certa: "aguardando a peça" → "peça chegou" → "Cliente retirou".
+         * Régua em `common/retirada-receptora`.
+         */
+        receptorRetirada: ehCardReceptor(
+          { isTransfer: r.isTransfer, storeCode: minhaLoja?.code ?? null },
+          r.order as any,
+          (itemsByOrder.get(r.orderId) ?? []).some((i: any) => !i.cancelledAt && !ehItemSemEstoque(i)),
+        ),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,
         /**
@@ -4635,13 +4655,39 @@ export class PickOrdersService {
             input.status === 'shipped'
               ? postagemAutomatica
                 ? `Postagem confirmada pelos Correios — enviado automaticamente. Rastreio: ${input.trackingCode} (${input.carrier})`
-                : `Enviado pela loja. Rastreio: ${input.trackingCode} (${input.carrier})`
+                : current.isTransfer && pedidoDoCard?.isPickup
+                  // Transferência da retirada: a peça SAIU da origem — isso não é
+                  // entrega (26/09). Quem registra a entrega é a loja de retirada.
+                  ? `Peças saíram desta loja pra loja de retirada ${current.transferToStoreCode ?? ''} (${input.carrier}) — aguardando a cliente buscar lá`
+                  : `Enviado pela loja. Rastreio: ${input.trackingCode} (${input.carrier})`
               : `Mudança de status: ${currentStatus} → ${input.status}`,
         },
       })
       .catch((e: any) =>
         this.logger.warn(`[pick-orders] histórico do card ${id} não gravado: ${e?.message || e}`),
       );
+
+    /**
+     * TRANSFERÊNCIA FECHADA NO "📦 Enviei pra loja X" (26/09, revisão): se a
+     * origem mandou SEM caixa no sistema (fechou sem tirar etiqueta), o card
+     * receptor da loja de retirada/motoboy não tem entrada pra esperar — o
+     * "Cliente retirou" libera agora. Com caixa viva é a ENTRADA dela que
+     * libera (`confirmReceived`). Best-effort: nunca derruba o envio.
+     */
+    if (input.status === 'shipped' && current.isTransfer && current.transferToStoreCode) {
+      try {
+        const av = await avancarReceptorSeCaixasChegaram(this.prisma, current.orderId);
+        if (av) {
+          this.gateway.emitPickOrderStatus(av.storeId, { id: av.pickOrderId, status: 'separated', receptorRetirada: true });
+          this.logger.log(
+            `[retirada-receptor] ${updated.order?.wcOrderNumber ?? current.orderId}: receptor da ${av.storeCode} ` +
+              `liberou a entrega (origem ${updated.store?.code ?? storeId} fechou o card sem caixa pra esperar)`,
+          );
+        }
+      } catch (e: any) {
+        this.logger.warn(`[retirada-receptor] avanço após envio do card ${id}: ${e?.message || e}`);
+      }
+    }
 
     /**
      * Se todos os pick-orders do pedido foram shipped, o pedido fecha — mas a

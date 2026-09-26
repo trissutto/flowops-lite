@@ -551,17 +551,19 @@ export class JuntadaService {
       if (!caixas.length) return;
       const abertos = await this.prisma.pickOrder.findMany({
         /**
-         * RETIRADA FICA DE FORA (27/08). A caixa da retirada em outra loja
-         * usa o mesmo trilho desde hoje, mas quem fecha aquele card é a
-         * vendedora no "📦 Enviei pra loja X" — com carrier `Retirada`, que é
-         * o que faz o pedido virar ENTREGUE quando a cliente busca. Fechar
-         * aqui carimbaria `Juntada entre lojas` e o pedido pararia em
-         * "enviado" pra sempre.
+         * RETIRADA ENTRA TAMBÉM (26/09). De 27/08 até aqui a retirada ficava
+         * de fora porque fechar o card da origem com carrier `Retirada` era o
+         * que ENTREGAVA o pedido — e a caixa podia nem ter saído. Isso mudou:
+         * `fechaComoEntregue` (common/retirada-receptora) só aceita o card
+         * PRÓPRIO da loja de retirada; o da origem deixa o pedido ENVIADO.
+         * Então a caixa recebida na loja de retirada pode fechar o card da
+         * origem aqui sem risco — e é preciso: se a origem nunca clicou
+         * "📦 Enviei pra loja X", o "Cliente retirou" do receptor não
+         * encontrava todos os cards fechados e o pedido não virava entregue.
          */
         where: {
           id: { in: caixas.map((c) => c.pickOrderId) },
           status: { not: 'shipped' },
-          order: { isPickup: false },
         },
         select: { id: true },
       });

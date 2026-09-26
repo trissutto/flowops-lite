@@ -35,6 +35,7 @@
  */
 
 import { ehItemSemEstoque } from './item-sem-estoque';
+import { fechaComoEntregue } from './retirada-receptora';
 
 export type ItemDoPedido = {
   id: string;
@@ -218,7 +219,16 @@ export function decidirFechamento(ctx: {
   // Quem ENTREGA pra cliente é o card não-feeder; o feeder só alimenta a âncora.
   const finais = vivos.filter((c) => !c.isTransfer);
   const quemEntrega = finais.length ? finais : vivos;
-  const retirada = !!ctx.isPickup && quemEntrega.some((c) => /retirada/i.test(String(c.carrier || '')));
+  /**
+   * ENTREGUE só pelo card de quem ENTREGA (26/09, LP-001652). O card de
+   * transferência da retirada também fecha com carrier `Retirada` ("📦 Enviei
+   * pra loja X") — e sem card próprio na loja de retirada ele virava
+   * `quemEntrega`: o pedido constava entregue com a caixa ainda na origem.
+   * Régua em `common/retirada-receptora`: transferência nunca entrega; sem
+   * card próprio o pedido fica ENVIADO até a loja de retirada (card receptor)
+   * registrar "Cliente retirou".
+   */
+  const retirada = finais.some((c) => fechaComoEntregue(c, { isPickup: ctx.isPickup }, c.carrier));
   const carimbos = quemEntrega
     .map((c) => (c.updatedAt ? new Date(c.updatedAt) : null))
     .filter((d): d is Date => !!d && !Number.isNaN(+d))
