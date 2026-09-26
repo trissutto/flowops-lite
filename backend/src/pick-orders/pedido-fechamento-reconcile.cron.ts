@@ -46,8 +46,40 @@ export class PedidoFechamentoReconcileCron implements OnApplicationBootstrap {
 
   /** Primeira rodada 90s depois do boot — o app já está servindo e não disputa a subida. */
   onApplicationBootstrap() {
+    // 15s: o carimbo de notícia velha dos fechados pela versão anterior tem
+    // que existir ANTES do cron do convite (:40), não depois.
+    const t0 = setTimeout(() => void this.segurarConvitesDosFechadosPelaVarredura(), 15_000);
+    (t0 as any).unref?.();
     const t = setTimeout(() => void this.run(), 90_000);
     (t as any).unref?.();
+  }
+
+  /**
+   * UMA VEZ POR BOOT: os pedidos que a varredura fechou ANTES desta versão
+   * (12 em 26/09 às 19:01) ganham o carimbo de notícia velha — ordem do dono
+   * no mesmo dia: "NÃO MANDE O CONVITE". A partir desta versão o próprio
+   * `tentarFecharPedido` carimba (`semConvite`). Idempotente: quem já tem o
+   * carimbo não muda. Pode sair do código depois que a leva de 26/09
+   * envelhecer os 30 dias da janela do convite.
+   */
+  private async segurarConvitesDosFechadosPelaVarredura(): Promise<void> {
+    try {
+      const linhas: Array<{ codigo: string | null }> = await this.prisma.$queryRaw`
+        SELECT DISTINCT x.codigo
+          FROM orders o
+          JOIN order_history h ON h.order_id = o.id AND h.note LIKE '%(varredura de fechamento)%'
+          JOIN LATERAL (
+            SELECT o.tracking_code AS codigo
+            UNION SELECT p.tracking_code FROM pick_orders p WHERE p.order_id = o.id
+          ) x ON x.codigo IS NOT NULL AND x.codigo <> ''
+         WHERE o.status IN ('shipped', 'delivered')`;
+      const n = await this.pickOrders.marcarEntregaComoNoticiaVelha(linhas.map((l) => l.codigo));
+      this.logger.log(
+        `[fechamento] convites segurados: ${n} objeto(s) de pedido fechado pela varredura marcado(s) como notícia velha (${linhas.length} código(s) conferido(s))`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`[fechamento] não consegui segurar os convites dos fechados pela varredura: ${e?.message || e}`);
+    }
   }
 
   @Cron('*/10 * * * *', { name: 'pedido-fechamento-reconcile' })
@@ -77,7 +109,8 @@ export class PedidoFechamentoReconcileCron implements OnApplicationBootstrap {
       const presos: string[] = [];
       for (const c of candidatos) {
         try {
-          const r = await this.pickOrders.tentarFecharPedido(c.id, { origem: 'varredura de fechamento' });
+          // Quem a varredura fecha, fecha ATRASADO: sem convite de avaliação.
+          const r = await this.pickOrders.tentarFecharPedido(c.id, { origem: 'varredura de fechamento', semConvite: true });
           if (r.fechou) fechados++;
           else presos.push(`${c.num || c.id}: ${r.motivo}`);
         } catch (e: any) {
