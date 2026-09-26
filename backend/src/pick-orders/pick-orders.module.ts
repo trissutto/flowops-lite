@@ -13,6 +13,7 @@ import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { DceModule } from '../dce/dce.module';
 import { NfeModule } from '../nfe/nfe.module';
 import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cron';
+import { PedidoFechamentoReconcileCron } from './pedido-fechamento-reconcile.cron';
 import { EntregaAvisoCron } from './entrega-aviso.cron';
 import { HttpModule } from '@nestjs/axios';
 import { EmailModule } from '../email/email.module';
@@ -40,7 +41,9 @@ import { JuntadaService } from './juntada.service';
   imports: [
     PecasExtraviadasModule,PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule, PickScanModule, TrackingModule, RealignmentModule],
   controllers: [PickOrdersController],
-  providers: [PickOrdersService, JuntadaService, CorreiosPostagemReconcileCron, EntregaAvisoCron, PedidoEmailService],
+  // PedidoFechamentoReconcileCron → varredura de 10 min do pedido com tudo
+  // postado que nenhum gatilho fechou (rede de segurança do `tentarFecharPedido`).
+  providers: [PickOrdersService, JuntadaService, CorreiosPostagemReconcileCron, PedidoFechamentoReconcileCron, EntregaAvisoCron, PedidoEmailService],
   exports: [PickOrdersService, JuntadaService],
 })
 export class PickOrdersModule {}
