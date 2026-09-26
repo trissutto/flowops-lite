@@ -1978,6 +1978,15 @@ export class PickOrdersService {
       anotarPendencia?: boolean;
       trackingCode?: string | null;
       carrier?: string | null;
+      /**
+       * FECHAMENTO ATRASADO = NOTÍCIA VELHA (26/09, dono: "NÃO MANDE O
+       * CONVITE"). Varredura, peça cancelada/creditada semanas depois da
+       * postagem: a entrega já aconteceu há dias, e a cliente não pode receber
+       * "como ficou?" agora. Marca os objetos com o carimbo que o
+       * PosVendaConviteCron já respeita. O card postado na hora NÃO passa
+       * isto — ali o convite é o normal.
+       */
+      semConvite?: boolean;
     },
   ): Promise<{ fechou: true; como: 'shipped' | 'delivered' } | { fechou: false; motivo: string }> {
     const order = await this.prisma.order.findUnique({
@@ -2047,6 +2056,19 @@ export class PickOrdersService {
     });
     if (venceu.count !== 1) return { fechou: false, motivo: 'corrida' };
 
+    // ANTES do histórico: é o carimbo que segura o convite, e o cron do
+    // convite não espera ninguém.
+    let semConvite = '';
+    if (opts.semConvite) {
+      await this.marcarEntregaComoNoticiaVelha([
+        order.trackingCode,
+        opts.trackingCode,
+        codigo,
+        ...cards.map((c) => c.trackingCode),
+      ]);
+      semConvite = ' · sem convite de avaliação: fechamento atrasado, a entrega é notícia velha';
+    }
+
     await this.prisma.orderHistory
       .create({
         data: {
@@ -2055,9 +2077,10 @@ export class PickOrdersService {
           fromStatus: order.status,
           toStatus: decisao.como,
           note:
-            decisao.como === 'delivered'
+            (decisao.como === 'delivered'
               ? `Cliente retirou na loja — pedido entregue com todas as peças. (${opts.origem})`
-              : `Pedido concluído: todas as caixas postadas e nenhuma peça pendente. (${opts.origem})`,
+              : `Pedido concluído: todas as caixas postadas e nenhuma peça pendente. (${opts.origem})`) +
+            semConvite,
         },
       })
       .catch(() => null);
@@ -2070,6 +2093,41 @@ export class PickOrdersService {
     }
     this.logger.log(`[pick-orders] pedido ${numero} → ${decisao.como} (${opts.origem})`);
     return { fechou: true, como: decisao.como };
+  }
+
+  /**
+   * ENTREGA VIRA NOTÍCIA VELHA (26/09, ordem do dono: "NÃO MANDE O CONVITE").
+   *
+   * Pedido fechado ATRASADO — pela varredura, por peça cancelada ou creditada
+   * semanas depois da postagem — não pode virar "como ficou?" no WhatsApp da
+   * cliente: a entrega aconteceu há dias e, no caso da peça faltante, o
+   * pós-venda já foi o crédito. Reusa o carimbo que o rastreio dá ao objeto
+   * que entrou no radar já entregue (`rastreio_objetos.entrega_na_estreia`):
+   * é por ele que o `PosVendaConviteCron.semEntregaVelha` segura o convite.
+   * O aviso "seu pedido chegou" não muda — ele nasce da transição do cache,
+   * que já passou. Idempotente; objeto que o cache não conhece fica como está
+   * (não inventa linha de rastreio).
+   */
+  async marcarEntregaComoNoticiaVelha(codigos: Array<string | null | undefined>): Promise<number> {
+    const variantes = new Set<string>();
+    for (const c of codigos) {
+      const cru = String(c || '').trim().toUpperCase();
+      if (!cru) continue;
+      variantes.add(cru);
+      const norm = String(TrackingService.normalizarCodigo(cru) || '').trim().toUpperCase();
+      if (norm) variantes.add(norm);
+    }
+    if (!variantes.size) return 0;
+    try {
+      const r = await (this.prisma as any).rastreioObjeto.updateMany({
+        where: { codigo: { in: [...variantes] }, entregaNaEstreia: false },
+        data: { entregaNaEstreia: true },
+      });
+      return Number(r?.count ?? 0);
+    } catch (e: any) {
+      this.logger.warn(`[pick-orders] não consegui marcar a entrega como notícia velha: ${e?.message || e}`);
+      return 0;
+    }
   }
 
   /**
@@ -6105,6 +6163,9 @@ export class PickOrdersService {
     const fechamento = await this.tentarFecharPedido(r.orderId, {
       origem: `reporte resolvido: ${comoResolveu}`,
       userId,
+      // A peça faltou e virou crédito/reembolso: o pós-venda desta cliente já
+      // aconteceu aqui. Não mandar "como ficou?" por cima.
+      semConvite: true,
     }).catch((e: any) => {
       this.logger.warn(`[pick-orders] fechamento após reporte ${r.id}: ${e?.message || e}`);
       return { fechou: false as const, motivo: 'erro' };

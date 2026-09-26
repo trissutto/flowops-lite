@@ -3785,7 +3785,9 @@ export class OrdersController {
      * passava a aceitar, mas ninguém era avisado de que precisava clicar.
      */
     const fechamento = await this.pickOrders
-      .tentarFecharPedido(local.id, { origem: `peça ${pecaTxt} cancelada na ficha`, userId })
+      // Peça cancelada semanas depois da postagem: fechamento atrasado, sem
+      // convite de avaliação (ordem do dono 26/09).
+      .tentarFecharPedido(local.id, { origem: `peça ${pecaTxt} cancelada na ficha`, userId, semConvite: true })
       .catch(() => ({ fechou: false as const, motivo: 'erro' }));
     return { ok: true as const, valorEstornar: valor, peca: pecaTxt, pedidoFechado: fechamento.fechou };
   }
