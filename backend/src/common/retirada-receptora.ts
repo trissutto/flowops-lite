@@ -209,11 +209,23 @@ async function caixasDosFeeders(prisma: any, feederIds: string[]): Promise<Caixa
  * loja de destino não existe. NÃO emite socket nem push — quem chama decide
  * (roteamento avisa a loja; entrada da remessa também).
  */
+/**
+ * Chave de desligar (`RETIRADA_CARD_RECEPTOR=0`). Card automático pra loja é
+ * desenho do dono (ordem de 26/09: "não mande cards para as lojas sem eu
+ * revisar") — este foi aprovado por ele no mesmo dia, pro caso LP-001652, e
+ * por isso nasce LIGADO; a chave existe pra desligar sem deploy. Desligada,
+ * o receptor não é criado (o avanço de card já existente continua).
+ */
+export function cardReceptorLigado(): boolean {
+  return String(process.env.RETIRADA_CARD_RECEPTOR ?? '1').trim() !== '0';
+}
+
 export async function garantirCardReceptor(
   prisma: any,
   orderId: string,
   opts?: { motivo?: string | null; userId?: string | null; nome?: string | null },
 ): Promise<ReceptorCriado | ReceptorNaoCriado> {
+  if (!cardReceptorLigado()) return { criado: false, porque: 'desligado (RETIRADA_CARD_RECEPTOR=0)' };
   const order: any = await prisma.order.findUnique({ where: { id: orderId }, select: SELECT_PEDIDO });
   if (!order) return { criado: false, porque: 'pedido não existe' };
   if (PEDIDO_ENCERRADO.has(String(order.status))) return { criado: false, porque: `pedido ${order.status}` };
