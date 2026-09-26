@@ -22,9 +22,9 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pacotesAguardandoLiberacao, dentroDeSaoPaulo } from '../common/politica-frete';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
-import { ehCardReceptor, fechaComoEntregue } from '../common/retirada-receptora';
+import { avancarReceptorSeCaixasChegaram, ehCardReceptor } from '../common/retirada-receptora';
 import { caixaDesviadaPara, etapaDoFeeder } from '../common/juntada-etapa';
-import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
+import { carregarFechamento, decidirFechamento, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { JuntadaService } from './juntada.service';
@@ -1413,8 +1413,14 @@ export class PickOrdersService {
   }
 
   /**
-   * Cron: marca ENVIADO (Giga + WhatsApp, caminho testado) quando os Correios já
+   * Cron: marca ENVIADO (baixa + WhatsApp, caminho testado) quando os Correios já
    * registraram a postagem. Idempotente — ignora quem já está shipped.
+   *
+   * ⚠️ 'system-correios' é MARCADOR, não usuário: `updateStatus` traduz pra
+   * `null` no histórico (a coluna tem FK pra `users`). Até 26/09 ele ia cru
+   * pro `orderHistory.create`, a FK derrubava a chamada DEPOIS do card virar
+   * `shipped`, e o pedido nunca fechava — 11 pedidos presos em "Em separação"
+   * com a cliente já de posse da sacola (ON-000112, LP-000281, ON-000484…).
    */
   async marcarEnviadoPorPostagem(id: string) {
     const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
@@ -1906,6 +1912,13 @@ export class PickOrdersService {
       where: { id: pickOrderId },
       data: { status: 'shipped', carrier },
     });
+    // O feeder fecha por FORA do `updateStatus`, então o pedido é reavaliado
+    // aqui também — senão o card vira `shipped` e ninguém pergunta se o
+    // pedido pode fechar. (Normalmente a âncora ainda está aberta e a resposta
+    // é "não"; o caso que importa é a âncora ter postado antes do cron.)
+    await this.tentarFecharPedido(pick.orderId, { origem: 'caixa da juntada recebida na âncora' }).catch((e) =>
+      this.logger.warn(`[juntada] fechamento do pedido ${pick.orderId} não avaliado: ${e?.message || e}`),
+    );
     this.afterShippedSideEffects(pickOrderId, {}).catch((e) =>
       this.logger.warn(`[juntada] afterShipped do feeder ${pickOrderId} falhou: ${e?.message || e}`),
     );
@@ -1914,6 +1927,149 @@ export class PickOrdersService {
     } catch { /* socket é best-effort */ }
     this.logger.log(`[juntada] card feeder ${pickOrderId} fechado — caixa recebida na âncora`);
     return { ok: true as const };
+  }
+
+  /**
+   * Id de usuário que PODE ir pro histórico. `order_history.user_id` tem FK
+   * pra `users`: marcador de sistema ('system-correios') ou id de token velho
+   * vira `null` em vez de derrubar a gravação inteira.
+   */
+  private async userIdGravavel(userId?: string | null): Promise<string | null> {
+    const id = String(userId || '').trim();
+    if (!id) return null;
+    try {
+      const u = await this.prisma.user.findUnique({ where: { id }, select: { id: true } });
+      return u?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * TENTA FECHAR O PEDIDO — a porta única de encerramento (26/09).
+   *
+   * Até aqui só o ramo `shipped` do `updateStatus` fechava pedido, e só
+   * naquele instante. Se a última caixa postava com uma peça pendente o
+   * pedido ficava aberto (certo, ordem de 26/08) — mas NADA reavaliava
+   * depois: a matriz cancelava a peça com crédito, o feeder da juntada virava
+   * `shipped` pelo cron, o cron da postagem marcava o card postado… e o pedido
+   * seguia "Em separação" pra sempre, vermelho na fila, reservando estoque no
+   * checkout, sem nunca virar ENTREGUE (o rastreio só promove `shipped`).
+   * Medido em 26/09: 16 dos 21 pedidos da aba estavam assim, o mais velho com
+   * 33 dias e a sacola já na casa da cliente.
+   *
+   * A régua é `decidirFechamento` (pura, testada); aqui é a gravação, com
+   * guard atômico no status lido (dois gatilhos no mesmo segundo não fecham
+   * duas vezes nem escrevem histórico em dobro). Chamada por: card postado
+   * (`updateStatus`), feeder recebido na âncora, desfecho de peça (reporte
+   * resolvido, peça cancelada na ficha) e pela varredura de 10 min
+   * (`PedidoFechamentoReconcileCron`), que é a rede de segurança pra qualquer
+   * caminho novo que mude card sem passar por aqui.
+   *
+   * `anotarPendencia`: só o gatilho do card postado grava a nota "⚠️ Todas as
+   * caixas postadas, mas o pedido NÃO foi concluído" — a varredura reavalia a
+   * cada 10 min e não pode encher o histórico com a mesma frase.
+   */
+  async tentarFecharPedido(
+    orderId: string,
+    opts: {
+      origem: string;
+      userId?: string | null;
+      anotarPendencia?: boolean;
+      trackingCode?: string | null;
+      carrier?: string | null;
+    },
+  ): Promise<{ fechou: true; como: 'shipped' | 'delivered' } | { fechou: false; motivo: string }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true, status: true, isPickup: true, wcOrderNumber: true, trackingCode: true,
+        carrier: true, source: true, liveCartId: true,
+      },
+    });
+    if (!order) return { fechou: false, motivo: 'pedido não existe' };
+
+    const { cards, pendentes } = await carregarFechamento(this.prisma, orderId);
+    const decisao = decidirFechamento({ status: order.status, isPickup: order.isPickup, cards, pendentes });
+    const numero = order.wcOrderNumber || orderId;
+
+    if (!decisao.fecha) {
+      if (decisao.motivo === 'pendencia' && opts.anotarPendencia) {
+        await this.prisma.orderHistory
+          .create({
+            data: {
+              orderId,
+              userId: await this.userIdGravavel(opts.userId),
+              note:
+                `⚠️ Todas as caixas postadas, mas o pedido NÃO foi concluído: ` +
+                `${descreverPendentes(pendentes)}. Resolva cada peça (mover, trocar ou ` +
+                `cancelar com crédito) pra fechar.`,
+            },
+          })
+          .catch(() => null);
+        this.logger.warn(
+          `[pick-orders] pedido ${numero} segue ABERTO com ${pendentes.length} peça(s) pendente(s) (${opts.origem})`,
+        );
+      }
+      return { fechou: false, motivo: decisao.motivo };
+    }
+
+    // Rastreio do pedido: o que ele já tinha, senão o do gatilho, senão o do
+    // último card que entrega pra cliente (feeder não tem código de cliente).
+    const entrega = cards
+      .filter((c) => !c.isTransfer)
+      .sort((a, b) => +new Date(b.updatedAt ?? 0) - +new Date(a.updatedAt ?? 0));
+    const codigo =
+      String(order.trackingCode || '').trim() ||
+      String(opts.trackingCode || '').trim() ||
+      String(entrega.find((c) => c.trackingCode)?.trackingCode || '').trim() ||
+      null;
+    const transportadora =
+      String(order.carrier || '').trim() ||
+      String(opts.carrier || '').trim() ||
+      String(entrega.find((c) => c.carrier)?.carrier || '').trim() ||
+      null;
+
+    // Guard atômico no status LIDO: quem perder a corrida não grava nada.
+    const venceu = await this.prisma.order.updateMany({
+      where: { id: orderId, status: order.status },
+      data: {
+        status: decisao.como,
+        // QUANDO A CAIXA SAIU — carimbo do último card que entrega, não
+        // `now()`: quem fecha atrasado não pode inventar data (é dela que
+        // correm a janela do rastreio e o prazo de troca). Ver
+        // `common/janela-rastreio.ts`.
+        shippedAt: decisao.despachoEm,
+        ...(decisao.como === 'delivered' ? { deliveredAt: decisao.despachoEm } : {}),
+        ...(codigo ? { trackingCode: codigo } : {}),
+        ...(transportadora ? { carrier: transportadora } : {}),
+      },
+    });
+    if (venceu.count !== 1) return { fechou: false, motivo: 'corrida' };
+
+    await this.prisma.orderHistory
+      .create({
+        data: {
+          orderId,
+          userId: await this.userIdGravavel(opts.userId),
+          fromStatus: order.status,
+          toStatus: decisao.como,
+          note:
+            decisao.como === 'delivered'
+              ? `Cliente retirou na loja — pedido entregue com todas as peças. (${opts.origem})`
+              : `Pedido concluído: todas as caixas postadas e nenhuma peça pendente. (${opts.origem})`,
+        },
+      })
+      .catch(() => null);
+
+    // Pedido da LIVE espelha o status no carrinho (console da operadora).
+    if (order.source === 'live' && order.liveCartId) {
+      await (this.prisma as any).livePdvCart
+        .update({ where: { id: order.liveCartId }, data: { status: 'shipped' } })
+        .catch(() => {});
+    }
+    this.logger.log(`[pick-orders] pedido ${numero} → ${decisao.como} (${opts.origem})`);
+    return { fechou: true, como: decisao.como };
   }
 
   /**
@@ -4419,25 +4575,69 @@ export class PickOrdersService {
       },
     });
 
-    // Histórico no pedido
-    await this.prisma.orderHistory.create({
-      data: {
-        orderId: current.orderId,
-        userId,
-        fromStatus: currentStatus,
-        toStatus: input.status,
-        note:
-          input.status === 'shipped'
-            ? current.isTransfer && pedidoDoCard?.isPickup
-              // Transferência da retirada: a peça SAIU da origem — isso não é
-              // entrega (26/09). Quem registra a entrega é a loja de retirada.
-              ? `Peças saíram desta loja pra loja de retirada ${current.transferToStoreCode ?? ''} (${input.carrier}) — aguardando a cliente buscar lá`
-              : `Enviado pela loja. Rastreio: ${input.trackingCode} (${input.carrier})`
-            : `Mudança de status: ${currentStatus} → ${input.status}`,
-      },
-    });
+    /**
+     * Histórico no pedido. `userId` pode ser MARCADOR de sistema
+     * ('system-correios', cron da postagem) ou id de token velho: a coluna tem
+     * FK pra `users`, e gravar um id inexistente derrubava TUDO que vem
+     * depois — o card já estava `shipped`, mas o pedido nunca fechava, o
+     * acerto ÷2,5 e o aviso da cliente não saíam, e nenhum log contava. Onze
+     * pedidos presos em "Em separação" em 26/09 (ON-000112 o mais velho, 33
+     * dias). O histórico é registro, não porta: falha dele vira warn.
+     */
+    const autor = await this.userIdGravavel(userId);
+    const postagemAutomatica = userId === 'system-correios';
+    await this.prisma.orderHistory
+      .create({
+        data: {
+          orderId: current.orderId,
+          userId: autor,
+          fromStatus: currentStatus,
+          toStatus: input.status,
+          note:
+            input.status === 'shipped'
+              ? postagemAutomatica
+                ? `Postagem confirmada pelos Correios — enviado automaticamente. Rastreio: ${input.trackingCode} (${input.carrier})`
+                : current.isTransfer && pedidoDoCard?.isPickup
+                  // Transferência da retirada: a peça SAIU da origem — isso não é
+                  // entrega (26/09). Quem registra a entrega é a loja de retirada.
+                  ? `Peças saíram desta loja pra loja de retirada ${current.transferToStoreCode ?? ''} (${input.carrier}) — aguardando a cliente buscar lá`
+                  : `Enviado pela loja. Rastreio: ${input.trackingCode} (${input.carrier})`
+              : `Mudança de status: ${currentStatus} → ${input.status}`,
+        },
+      })
+      .catch((e: any) =>
+        this.logger.warn(`[pick-orders] histórico do card ${id} não gravado: ${e?.message || e}`),
+      );
 
-    // Se todos os pick-orders do pedido foram shipped, marca order.status=shipped
+    /**
+     * TRANSFERÊNCIA FECHADA NO "📦 Enviei pra loja X" (26/09, revisão): se a
+     * origem mandou SEM caixa no sistema (fechou sem tirar etiqueta), o card
+     * receptor da loja de retirada/motoboy não tem entrada pra esperar — o
+     * "Cliente retirou" libera agora. Com caixa viva é a ENTRADA dela que
+     * libera (`confirmReceived`). Best-effort: nunca derruba o envio.
+     */
+    if (input.status === 'shipped' && current.isTransfer && current.transferToStoreCode) {
+      try {
+        const av = await avancarReceptorSeCaixasChegaram(this.prisma, current.orderId);
+        if (av) {
+          this.gateway.emitPickOrderStatus(av.storeId, { id: av.pickOrderId, status: 'separated', receptorRetirada: true });
+          this.logger.log(
+            `[retirada-receptor] ${updated.order?.wcOrderNumber ?? current.orderId}: receptor da ${av.storeCode} ` +
+              `liberou a entrega (origem ${updated.store?.code ?? storeId} fechou o card sem caixa pra esperar)`,
+          );
+        }
+      } catch (e: any) {
+        this.logger.warn(`[retirada-receptor] avanço após envio do card ${id}: ${e?.message || e}`);
+      }
+    }
+
+    /**
+     * Se todos os pick-orders do pedido foram shipped, o pedido fecha — mas a
+     * DECISÃO (todos os cards postados + nenhuma peça pendente, ordem do dono
+     * de 26/08) mora em `tentarFecharPedido`, a MESMA que a varredura, o
+     * feeder da juntada e o desfecho de peça chamam. Aqui é só o primeiro
+     * dos gatilhos; `allSiblings` continua servindo ao espelho do WooCommerce.
+     */
     let allSiblings: Array<{ status: string; trackingCode: string | null; carrier: string | null; storeId: string }> = [];
     let allShipped = false;
     if (input.status === 'shipped') {
@@ -4445,80 +4645,16 @@ export class PickOrdersService {
         where: { orderId: current.orderId },
         select: { status: true, trackingCode: true, carrier: true, storeId: true },
       });
-      allShipped = allSiblings.every((p) => p.status === 'shipped');
-      if (allShipped) {
-        /**
-         * ORDEM DO DONO (26/08): "não deixar EM HIPÓTESE ALGUMA pedido
-         * concluído com peça ainda em aguardando". Contar só cards deixava a
-         * peça REPORTADA (sem dono, fora de card) e a de card apagado fora da
-         * conta — a loja postava a parte dela e o pedido inteiro fechava com
-         * peça pendurada. Agora a régua conta PEÇAS (`common/pedido-completo`):
-         * com pendência, os cards fecham normalmente mas o PEDIDO fica aberto
-         * e visível nas filas até cada peça ter desfecho (enviada, movida,
-         * trocada ou cancelada com crédito).
-         */
-        const pendentes = await carregarPecasPendentes(this.prisma, current.orderId);
-        if (pendentes.length) {
-          allShipped = false; // o site/WC também não pode ouvir "enviado"
-          await this.prisma.orderHistory
-            .create({
-              data: {
-                orderId: current.orderId,
-                userId,
-                note:
-                  `⚠️ Todas as caixas postadas, mas o pedido NÃO foi concluído: ` +
-                  `${descreverPendentes(pendentes)}. Resolva cada peça (mover, trocar ou ` +
-                  `cancelar com crédito) pra fechar.`,
-              },
-            })
-            .catch(() => null);
-          this.logger.warn(
-            `[pick-orders] pedido ${current.orderId} segue ABERTO com ${pendentes.length} peça(s) pendente(s) após envio do card ${id}`,
-          );
-        } else {
-          /**
-           * RETIRADA: "Cliente retirou" é a entrega acontecendo na frente da
-           * vendedora — o pedido fecha ENTREGUE com carimbo, em vez de ficar
-           * `shipped` pra sempre (o rastreio nunca confirma o que não tem
-           * código; eram 123 retiradas sem `deliveredAt` em 26/08).
-           */
-          /**
-           * SÓ O CARD DE QUEM ENTREGA fecha como entregue (26/09, LP-001652):
-           * o "📦 Enviei pra loja X" da origem também manda `Retirada`, e o
-           * pedido constava ENTREGUE com a caixa ainda dentro da loja de
-           * origem — sem ninguém na loja de retirada ter botão pra registrar
-           * a retirada real. Régua em `common/retirada-receptora`: card de
-           * transferência deixa o pedido ENVIADO; a loja de retirada fecha.
-           */
-          const entregueNaHora = fechaComoEntregue(current, pedidoDoCard, input.carrier);
-          await this.prisma.order.update({
-            where: { id: current.orderId },
-            data: {
-              status: entregueNaHora ? 'delivered' : 'shipped',
-              // QUANDO A CAIXA SAIU. Carimbo próprio porque `updatedAt` é tocado
-              // por dezenas de caminhos que não são envio — ver
-              // `common/janela-rastreio.ts`.
-              shippedAt: new Date(),
-              ...(entregueNaHora ? { deliveredAt: new Date() } : {}),
-              trackingCode: input.trackingCode,
-              carrier: input.carrier,
-            },
-          });
-          if (entregueNaHora) {
-            await this.prisma.orderHistory
-              .create({
-                data: {
-                  orderId: current.orderId,
-                  userId,
-                  fromStatus: 'shipped',
-                  toStatus: 'delivered',
-                  note: 'Cliente retirou na loja — pedido entregue com todas as peças.',
-                },
-              })
-              .catch(() => null);
-          }
-        }
-      }
+      const fechamento = await this.tentarFecharPedido(current.orderId, {
+        origem: `card da loja ${updated.store?.code ?? storeId} postado`,
+        userId: autor,
+        anotarPendencia: true,
+        trackingCode: input.trackingCode,
+        carrier: input.carrier,
+      });
+      // O site/WC e o carrinho da live só ouvem "enviado" quando o pedido
+      // FECHOU de fato: com peça pendente os cards fecham e o pedido não.
+      allShipped = fechamento.fechou;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -5878,28 +6014,102 @@ export class PickOrdersService {
     if (r.resolvedAt) return { ok: true, alreadyResolved: true };
 
     const modo = opts?.modo === 'credito' ? 'credito' : 'reembolso';
-    if (modo === 'reembolso') {
-      await this.prisma.pickOrderItemReport.update({
-        where: { id: reportId },
-        data: { resolvedAt: new Date(), resolvedBy: userId || 'admin' },
-      });
-      return { ok: true, alreadyResolved: false, modo };
-    }
+    const autorNome = opts?.userName || userId || 'admin';
 
     // O vale nasce ANTES do carimbo: se a emissão falhar (pedido sem CPF), o
     // alarme continua na tela. Apagar o aviso e não emitir o crédito seria a
     // pior combinação possível — a cliente fica sem peça e sem dinheiro.
-    const credito = await this.emitirCreditoDoReporte(r, opts?.valor, opts?.userName || userId);
+    const credito = modo === 'credito' ? await this.emitirCreditoDoReporte(r, opts?.valor, autorNome) : null;
     await this.prisma.pickOrderItemReport.update({
       where: { id: reportId },
       data: {
         resolvedAt: new Date(),
         // Mesma convenção do `auto:rerouted`: o prefixo diz COMO se resolveu, e
         // é por ele que `listCreditosByWc` reencontra o vale desta peça.
-        resolvedBy: `credito:${credito.code}`,
+        resolvedBy: credito ? `credito:${credito.code}` : userId || 'admin',
       },
     });
-    return { ok: true, alreadyResolved: false, modo, credito };
+
+    const desfecho = await this.desfechoDaPecaReportada(
+      r,
+      credito ? `crédito ${credito.code}` : 'reembolso (ou resolvido por fora)',
+      autorNome,
+      userId,
+    );
+    return {
+      ok: true,
+      alreadyResolved: false,
+      modo,
+      ...(credito ? { credito } : {}),
+      pecaCancelada: desfecho.pecaCancelada,
+      pedidoFechado: desfecho.pedidoFechado,
+    };
+  }
+
+  /**
+   * A PEÇA REPORTADA GANHA DESFECHO NO PEDIDO (26/09).
+   *
+   * Resolver o reporte (crédito ou reembolso) carimbava só o reporte: a peça
+   * seguia no pedido sem loja e sem `cancelledAt`, a régua da peça pendente
+   * continuava contando ela como "sem loja definida", o botão Concluído
+   * recusava com o vale já emitido, e o pedido ficava "Em separação" pra
+   * sempre. A decisão da matriz aqui É o desfecho: a peça não vai, a cliente
+   * foi compensada. Então a linha vira cancelada com o motivo (mesma marca do
+   * "Cancelar peça" da ficha, sem a nota de estorno — o dinheiro já foi
+   * tratado) e o pedido é reavaliado na hora.
+   *
+   * Só mexe na peça SEM DONO e não cancelada: se a matriz moveu a peça pra
+   * outra loja e resolveu o reporte depois, quem responde por ela é o card
+   * novo — e o `autoResolveReports` já teria fechado esse reporte sozinho.
+   */
+  private async desfechoDaPecaReportada(r: any, comoResolveu: string, autorNome: string, userId: string) {
+    const sku = String(r.sku || '').trim();
+    const selecao = { id: true, ref: true, sku: true, cor: true, tamanho: true };
+    const alvo = r.orderItemId
+      ? await this.prisma.orderItem.findFirst({
+          where: { id: r.orderItemId, orderId: r.orderId, assignedStoreId: null, cancelledAt: null },
+          select: selecao,
+        })
+      : sku
+        ? await this.prisma.orderItem.findFirst({
+            where: { orderId: r.orderId, sku, assignedStoreId: null, cancelledAt: null },
+            select: selecao,
+          })
+        : null;
+
+    let pecaCancelada = false;
+    if (alvo) {
+      await this.prisma.orderItem.update({
+        where: { id: alvo.id },
+        data: {
+          cancelledAt: new Date(),
+          cancelReason: `reporte da loja ${r.storeCode}: ${comoResolveu}`,
+          cancelledBy: autorNome,
+        },
+      });
+      pecaCancelada = true;
+      const pecaTxt = [alvo.ref || alvo.sku, alvo.cor, alvo.tamanho].filter(Boolean).join(' ');
+      await this.prisma.orderHistory
+        .create({
+          data: {
+            orderId: r.orderId,
+            userId: await this.userIdGravavel(userId),
+            note:
+              `Peça ${pecaTxt} saiu do pedido: reporte da loja ${r.storeCode} resolvido com ` +
+              `${comoResolveu}. · por ${autorNome}`,
+          },
+        })
+        .catch(() => null);
+    }
+
+    const fechamento = await this.tentarFecharPedido(r.orderId, {
+      origem: `reporte resolvido: ${comoResolveu}`,
+      userId,
+    }).catch((e: any) => {
+      this.logger.warn(`[pick-orders] fechamento após reporte ${r.id}: ${e?.message || e}`);
+      return { fechou: false as const, motivo: 'erro' };
+    });
+    return { pecaCancelada, pedidoFechado: fechamento.fechou };
   }
 
   /**

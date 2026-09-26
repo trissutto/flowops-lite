@@ -85,7 +85,7 @@ export function faltaCardReceptor(order: PedidoComDestino, cards: CardParaRecept
  * (ainda separando) segura em `new`.
  */
 export function statusDoReceptor(
-  feeders: Array<{ id: string }>,
+  feeders: Array<{ id: string; status?: string | null }>,
   caixas: Array<{ pickOrderId?: string | null; status: string }>,
 ): 'new' | 'separated' {
   if (!feeders.length) return 'new';
@@ -94,8 +94,22 @@ export function statusDoReceptor(
     if (c.status === 'cancelled') continue;
     porPick.set(cod(c.pickOrderId), c);
   }
-  const todasChegaram = feeders.every((f) => porPick.get(f.id)?.status === 'received');
-  return todasChegaram ? 'separated' : 'new';
+  /**
+   * SEM CAIXA NO SISTEMA (revisão de 26/09): a origem pode ter fechado o card
+   * no "📦 Enviei pra loja X" sem nunca tirar a etiqueta — a caixa não existe
+   * e nunca vai dar entrada (33 cards assim desde abril, medido em 27/08).
+   * Esperar `received` deixaria o receptor em "aguardando a peça" pra
+   * sempre, com a peça na mão da vendedora e sem botão. Alimentador
+   * `shipped` SEM caixa viva conta como "a origem mandou": o receptor libera
+   * o "Cliente retirou", e a porta pede a confirmação do gerente (a caixa não
+   * deu entrada — quem confere a peça é quem está lá). Com caixa viva, é a
+   * caixa que manda: só `received` conta.
+   */
+  const chegou = (f: { id: string; status?: string | null }) => {
+    const cx = porPick.get(f.id);
+    return cx ? cx.status === 'received' : String(f.status ?? '') === 'shipped';
+  };
+  return feeders.every(chegou) ? 'separated' : 'new';
 }
 
 /**

@@ -77,12 +77,36 @@ describe('statusDoReceptor — nasce aguardando ou com a peça já aqui', () => 
     expect(statusDoReceptor(dois, caixas)).toBe('new');
   });
 
-  it('caixa cancelada não conta como chegada', () => {
+  it('caixa cancelada não conta como chegada (alimentador ainda aberto)', () => {
     expect(statusDoReceptor(feeders, [{ pickOrderId: 'card-18', status: 'cancelled' }])).toBe('new');
   });
 
   it('sem alimentador não há o que esperar — mas também não é "chegou"', () => {
     expect(statusDoReceptor([], [])).toBe('new');
+  });
+
+  // Revisão de 26/09: a origem fechou no "Enviei pra loja X" sem tirar
+  // etiqueta — não existe caixa pra esperar, e o receptor não pode ficar
+  // "aguardando" pra sempre com a peça na mão da vendedora.
+  it('alimentador já ENVIADO sem caixa no sistema: separated (a origem mandou)', () => {
+    expect(statusDoReceptor([{ id: 'card-18', status: 'shipped' }], [])).toBe('separated');
+  });
+
+  it('alimentador enviado COM caixa em trânsito: new (a caixa é que manda)', () => {
+    expect(
+      statusDoReceptor([{ id: 'card-18', status: 'shipped' }], [{ pickOrderId: 'card-18', status: 'in_transit' }]),
+    ).toBe('new');
+  });
+
+  it('alimentador ainda separando/separado sem caixa: new', () => {
+    expect(statusDoReceptor([{ id: 'card-18', status: 'separating' }], [])).toBe('new');
+    expect(statusDoReceptor([{ id: 'card-18', status: 'separated' }], [])).toBe('new');
+  });
+
+  it('caixa cancelada + alimentador enviado: vale o alimentador (separated)', () => {
+    expect(
+      statusDoReceptor([{ id: 'card-18', status: 'shipped' }], [{ pickOrderId: 'card-18', status: 'cancelled' }]),
+    ).toBe('separated');
   });
 });
 

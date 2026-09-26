@@ -675,6 +675,13 @@ export default function PedidoDetailPage() {
       setItemReports((prev) => prev.filter((x) => x.id !== creditoAlvo.id));
       setCreditoAlvo(null);
       loadCreditos();
+      // O crédito é o DESFECHO da peça (26/09): ela sai do pedido e, se era a
+      // última pendência com tudo postado, o pedido fecha na hora.
+      loadRaiox();
+      if (resp?.pedidoFechado) {
+        setFlash('✅ Crédito emitido e pedido CONCLUÍDO — era a última peça pendente, todas as caixas já estavam postadas.');
+        setTimeout(() => setFlash(null), 12000);
+      }
       const code = resp?.credito?.code;
       const tel = creditoAlvo.cliente?.telefone;
       // O código só serve se chegar na cliente — o WhatsApp já sai escrito.
@@ -790,14 +797,17 @@ export default function PedidoDetailPage() {
     setCancelarBusy(true);
     setCancelarErro(null);
     try {
-      const r = await api<{ ok: boolean; valorEstornar: number; peca?: string }>(
+      const r = await api<{ ok: boolean; valorEstornar: number; peca?: string; pedidoFechado?: boolean }>(
         `/orders/wc/${wcId}/cancelar-peca`,
         { method: 'POST', body: JSON.stringify({ orderItemId: cancelarPeca.orderItemId, motivo: cancelarMotivo.trim() }) },
       );
       setCancelarPeca(null);
       setCancelarMotivo('');
       setFlash(
-        `✂ Peça cancelada. 🔴 ESTORNE R$ ${Number(r.valorEstornar ?? 0).toFixed(2)} pra cliente no gateway — o pedido segue com as outras peças.`,
+        `✂ Peça cancelada. 🔴 ESTORNE R$ ${Number(r.valorEstornar ?? 0).toFixed(2)} pra cliente no gateway — ` +
+          (r.pedidoFechado
+            ? 'era a última pendência: o pedido foi CONCLUÍDO (todas as caixas já estavam postadas).'
+            : 'o pedido segue com as outras peças.'),
       );
       setTimeout(() => setFlash(null), 12000);
       loadRaiox();
@@ -936,11 +946,17 @@ export default function PedidoDetailPage() {
   const resolverItemReport = async (id: string) => {
     setResolvendoReport(id);
     try {
-      await api(`/pick-orders/item-reports/${id}/resolve`, {
+      const resp = await api<any>(`/pick-orders/item-reports/${id}/resolve`, {
         method: 'POST',
         body: JSON.stringify({ modo: 'reembolso' }),
       });
       setItemReports((prev) => prev.filter((r) => r.id !== id));
+      // Reembolso também é desfecho: a peça sai do pedido (26/09).
+      loadRaiox();
+      if (resp?.pedidoFechado) {
+        setFlash('✅ Reporte resolvido e pedido CONCLUÍDO — era a última peça pendente, todas as caixas já estavam postadas.');
+        setTimeout(() => setFlash(null), 12000);
+      }
     } catch {
       loadItemReports();
     } finally {

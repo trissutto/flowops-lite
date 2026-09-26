@@ -40,7 +40,7 @@ type Shipment = {
    * completam um pedido que esta loja posta. Sem isso a vendedora só sabia
    * "1 peça de Anália Franco".
    */
-  pedido?: { numero: string | null; cliente: string | null; retirada: boolean; juntada: boolean } | null;
+  pedido?: { numero: string | null; cliente: string | null; retirada: boolean; motoboy?: boolean; juntada: boolean } | null;
 };
 
 type ShipmentItem = {
@@ -743,6 +743,12 @@ export default function RecebimentoPage() {
                     <div className="mt-1 inline-flex items-center gap-1 text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded">
                       🏬 RETIRADA · pedido #{s.pedido.numero ?? '—'}
                       {s.pedido.cliente ? ` · ${s.pedido.cliente}` : ''} · a cliente busca AQUI — guardar separado
+                    </div>
+                  )}
+                  {s.pedido?.motoboy && (
+                    <div className="mt-1 inline-flex items-center gap-1 text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded">
+                      🛵 MOTOBOY · pedido #{s.pedido.numero ?? '—'}
+                      {s.pedido.cliente ? ` · ${s.pedido.cliente}` : ''} · a moto sai DAQUI — guardar separado
                     </div>
                   )}
                   {s.pedido?.juntada && (

@@ -738,6 +738,8 @@ export default function MinhaLojaPage() {
         };
         return [row, ...prev];
       });
+      // Receptor chega sem o bloco "peças chegando" — o /mine completa.
+      if (pickOrder.receptorRetirada) void loadRows();
 
       if (isRecent) {
         triggerNewOrderAlert(pickOrder);
@@ -767,6 +769,11 @@ export default function MinhaLojaPage() {
             : r,
         ),
       );
+      // RECEPTOR DA RETIRADA (26/09): o evento só traz o status — o bloco
+      // "peças chegando" (recebidas/etapa) vem do /mine. Sem recarregar, o
+      // card dizia "a peça CHEGOU" em cima e "AINDA NÃO CHEGOU" embaixo até
+      // alguém dar F5 (2º PC da loja com a home aberta o dia todo).
+      if (pickOrder.receptorRetirada) void loadRows();
     };
 
     // Matriz cancelou esse pedido pra reatribuir loja → some o card.
@@ -863,7 +870,7 @@ export default function MinhaLojaPage() {
       socket.off('live-pdv:separation-new', onLiveSeparationNew);
       socket.off('live-pdv:separation-removed', onLiveSeparationRemoved);
     };
-  }, [me, loadLiveRows, loadTasksData]);
+  }, [me, loadLiveRows, loadTasksData, loadRows]);
 
   // A fila de tarefas se atualiza sozinha a cada 60s — caixa aberta envelhece
   // e fica vermelha sem depender de reload manual (o PC da loja fica dias aberto).
@@ -947,15 +954,17 @@ export default function MinhaLojaPage() {
       // Franco" e Sorocaba não sabia que era a peça da cliente que vai buscar
       // ALI. Número, cliente e "guardar separado" entram no título.
       const ret = s.pedido?.retirada ? s.pedido : null;
+      const moto = s.pedido?.motoboy ? s.pedido : null;
+      const quem = ret ?? moto;
       tasks.push({
         key: `receber-${s.id}`,
         urgency: h >= 72 ? 'red' : 'yellow',
         icon: Inbox,
-        title: ret
-          ? `Receber a caixa da RETIRADA — pedido #${ret.numero ?? ''}${ret.cliente ? ` (${ret.cliente})` : ''}`
+        title: quem
+          ? `Receber a caixa d${ret ? 'a RETIRADA' : 'o MOTOBOY'} — pedido #${quem.numero ?? ''}${quem.cliente ? ` (${quem.cliente})` : ''}`
           : `Receber remessa de ${s.fromStoreName || s.fromStoreCode}`,
-        subtitle: ret
-          ? `a cliente vai buscar AQUI · guardar separado, não vai pra arara · de ${s.fromStoreName || s.fromStoreCode} · ${s.code} · em trânsito há ${idadeTxt(h)}`
+        subtitle: quem
+          ? `${ret ? 'a cliente vai buscar AQUI · guardar separado, não vai pra arara' : 'a moto sai DAQUI · guardar separado, não vai pra arara'} · de ${s.fromStoreName || s.fromStoreCode} · ${s.code} · em trânsito há ${idadeTxt(h)}`
           : `${s.totalQty || '?'} peça(s) · ${s.code} · em trânsito há ${idadeTxt(h)}${h >= 72 ? ' · a peça está fora do estoque até dar entrada' : ''}`,
         go: () => router.push('/minha-loja/recebimento'),
       });
@@ -996,14 +1005,20 @@ export default function MinhaLojaPage() {
         const cliente = r.order?.customerName ?? 'a cliente';
         const origens =
           (r.juntadaChegando?.caixas ?? []).map((c) => c.fromStoreName).filter(Boolean).join(', ') || 'outra loja';
+        // Motoboy com loja escolhida: a moto sai daqui — não é "a cliente vem buscar".
+        const moto = classifyShipping(r.order?.shippingMethod ?? null, null).kind === 'motoboy';
         if (r.status === 'separated' || r.status === 'ready') {
           const h = horas(r.updatedAt ?? r.createdAt);
           tasks.push({
             key: `retirada-avisar-${r.id}`,
             urgency: h >= 24 ? 'red' : 'yellow',
             icon: Package,
-            title: `Avisar ${cliente}: a peça do pedido #${n} chegou — retira AQUI`,
-            subtitle: `guarde separada (não vai pra arara) · quando ela buscar, clique "Cliente retirou" no card${h >= 24 ? ` · chegou há ${idadeTxt(h)} e a cliente ainda não levou` : ''}`,
+            title: moto
+              ? `Peça do pedido #${n} chegou — sair de motoboy (${cliente})`
+              : `Avisar ${cliente}: a peça do pedido #${n} chegou — retira AQUI`,
+            subtitle: moto
+              ? `confira a peça e clique "Entregue por motoboy" quando a moto sair${h >= 24 ? ` · chegou há ${idadeTxt(h)} e ainda não saiu` : ''}`
+              : `guarde separada (não vai pra arara) · quando ela buscar, clique "Cliente retirou" no card${h >= 24 ? ` · chegou há ${idadeTxt(h)} e a cliente ainda não levou` : ''}`,
             go: () => setFilterTab('ready'),
           });
         } else {
@@ -1011,8 +1026,12 @@ export default function MinhaLojaPage() {
             key: `retirada-aguardando-${r.id}`,
             urgency: 'yellow',
             icon: Inbox,
-            title: `Retirada aqui — pedido #${n} (${cliente}) aguarda a peça de ${origens}`,
-            subtitle: 'nada pra separar · quando a caixa chegar, "Receber remessa" dá entrada e o card libera o "Cliente retirou"',
+            title: moto
+              ? `Motoboy daqui — pedido #${n} (${cliente}) aguarda a peça de ${origens}`
+              : `Retirada aqui — pedido #${n} (${cliente}) aguarda a peça de ${origens}`,
+            subtitle: moto
+              ? 'nada pra separar · quando a caixa chegar, "Receber remessa" dá entrada e o card libera o "Entregue por motoboy"'
+              : 'nada pra separar · quando a caixa chegar, "Receber remessa" dá entrada e o card libera o "Cliente retirou"',
             go: scrollPedidos,
           });
         }
@@ -1650,7 +1669,8 @@ export default function MinhaLojaPage() {
       {/* Lista */}
       <main id="fila-pedidos" className="max-w-3xl mx-auto p-3 space-y-3 pb-10">
         {/* Botões "Imprimir TODOS" + "RESUMO ESTOQUE" — quando filtra Novos/Separando */}
-        {(filterTab === 'new' || filterTab === 'separating') && visibleRows.length > 0 && (
+        {/* Receptor da retirada não tem romaneio: sem card imprimível, sem botão. */}
+        {(filterTab === 'new' || filterTab === 'separating') && visibleRows.some((r) => !r.receptorRetirada) && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               type="button"
@@ -1658,7 +1678,7 @@ export default function MinhaLojaPage() {
               className="w-full px-4 py-3 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-95"
             >
               <Printer className="w-5 h-5" />
-              Imprimir TODOS ({visibleRows.length})
+              Imprimir TODOS ({visibleRows.filter((r) => !r.receptorRetirada).length})
             </button>
             <button
               type="button"
@@ -2809,14 +2829,25 @@ function PickOrderCard({
           loja saber que ela vem, dar entrada na caixa e registrar a retirada. */}
       {ehReceptorRetirada && (
         <div className="bg-amber-600 text-white px-4 py-2.5">
+          {/* MOTOBOY com loja escolhida também ganha receptor (destino
+              obrigatório): a peça chega aqui e a moto sai daqui — o texto
+              não pode mandar "esperar a cliente". */}
           <div className="font-bold text-sm flex items-center gap-2">
-            🏬 RETIRADA AQUI — a cliente vem buscar NESTA loja
+            {ehMotoboy
+              ? '🛵 MOTOBOY SAI DAQUI — a peça vem de outra loja'
+              : '🏬 RETIRADA AQUI — a cliente vem buscar NESTA loja'}
           </div>
           <div className="text-xs opacity-95 mt-0.5">
             {status === 'separated' || status === 'ready'
-              ? 'A peça CHEGOU (a caixa deu entrada). Guarde separada, avise a cliente e, quando ela buscar, clique em "Cliente retirou".'
+              ? ehMotoboy
+                ? 'A peça está aqui (ou a origem informou que enviou). Confira, chame o motoboy e clique em "Entregue por motoboy" quando ele sair.'
+                : 'A peça está aqui (ou a origem informou que enviou). Guarde separada, avise a cliente e, quando ela buscar, clique em "Cliente retirou".'
               : status === 'shipped'
-              ? 'A cliente retirou — pedido entregue.'
+              ? ehMotoboy
+                ? 'Saiu com o motoboy — pedido enviado.'
+                : 'A cliente retirou — pedido entregue.'
+              : ehMotoboy
+              ? 'Nada pra separar: a peça vem de outra loja por transferência. Quando a caixa chegar, dê entrada em "Receber remessa" — o card libera o "Entregue por motoboy" sozinho.'
               : 'Nada pra separar: a peça vem de outra loja por transferência. Quando a caixa chegar, dê entrada em "Receber remessa" — o card libera o "Cliente retirou" sozinho.'}
           </div>
         </div>
@@ -2866,7 +2897,7 @@ function PickOrderCard({
             </span>
             {ehReceptorRetirada && (
               <span className="text-xs px-2 py-1 rounded font-bold uppercase border bg-amber-100 text-amber-900 border-amber-300">
-                🏬 Retirada aqui
+                {ehMotoboy ? '🛵 Motoboy daqui' : '🏬 Retirada aqui'}
               </span>
             )}
             {isTransfer && (
@@ -3122,13 +3153,20 @@ function PickOrderCard({
           </ul>
           <div className={`mt-1.5 text-xs font-medium ${c1.forte}`}>
             {ehRet && minhasPecas === 0 ? (
-              // RECEPTOR (26/09): a entrada da caixa é carimbada — o card
-              // sabe se a peça chegou, e diz o que fazer em cada momento.
-              faltam > 0 ? (
+              // RECEPTOR (26/09): o STATUS do card é quem diz se a peça chegou
+              // (o backend avança o card na entrada da caixa) — o contador de
+              // caixas pode estar velho no 2º PC até o /mine recarregar.
+              status === 'new' || status === 'separating' ? (
                 <>
                   <span className="font-bold">A PEÇA AINDA NÃO CHEGOU.</span> Quando a caixa chegar,
                   dê entrada em &quot;Receber remessa&quot; — este card muda pra &quot;peça aqui&quot;
                   sozinho. Não chame a cliente antes.
+                </>
+              ) : faltam > 0 ? (
+                <>
+                  <span className="font-bold">A ORIGEM INFORMOU QUE ENVIOU</span>, mas a caixa não deu
+                  entrada aqui. Confira a peça na mão antes de entregar — o &quot;Cliente retirou&quot;
+                  vai pedir a confirmação do gerente.
                 </>
               ) : (
                 <>
@@ -3529,7 +3567,10 @@ function PickOrderCard({
             <Truck className="w-6 h-6" /> Enviar c/ rastreio
           </button>
         )}
-        {(status === 'new' || status === 'separating') && (
+        {/* Receptor da retirada não reporta: "sem estoque/defeito" é da loja
+            que separa, e reportar aqui tiraria o card da loja de retirada pra
+            sempre (o /mine esconde card reportado). */}
+        {(status === 'new' || status === 'separating') && !ehReceptorRetirada && (
           <button
             onClick={(e) => { e.stopPropagation(); onReportIssue(); }}
             className="sm:w-auto bg-white hover:bg-red-50 active:scale-[0.98] text-red-700 font-semibold py-4 px-5 rounded-lg flex items-center justify-center gap-2 border-2 border-red-300 transition"

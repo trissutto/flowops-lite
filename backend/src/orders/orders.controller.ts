@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
 import { wordpressLegadoLigado } from '../common/replica-giga';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
-import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
+import { carregarPecasPendentes, descreverPendentes, pecasPendentesDoPedido } from '../common/pedido-completo';
 import { pedidoPago, STATUS_NUNCA_RECEITA } from '../common/pedido-pago';
 import { PedidoEmailService, metodoDePagamento } from '../loja-orders/pedido-email.service';
 import { dentroDeSaoPaulo } from '../common/politica-frete';
@@ -35,6 +35,7 @@ import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
 import { JuntadaService } from '../pick-orders/juntada.service';
+import { PickOrdersService } from '../pick-orders/pick-orders.service';
 import { TrocaPecaService } from './troca-peca.service';
 import { LinhaDoTempoService } from './linha-do-tempo.service';
 import { routingFoiAutomatico } from '../common/separacao-automatica-tag';
@@ -341,6 +342,9 @@ export class OrdersController {
     private readonly vigilancia: VigilanciaSeparacaoCron,
     // Aviso de CANCELAMENTO pra cliente (17/09) — WhatsApp direto + e-mail.
     private readonly pedidoEmail: PedidoEmailService,
+    // Fechamento do pedido quando a ÚLTIMA pendência é uma peça cancelada
+    // aqui na ficha (26/09) — a mesma porta que o card postado usa.
+    private readonly pickOrders: PickOrdersService,
   ) {}
 
   /**
@@ -911,7 +915,21 @@ export class OrdersController {
               // está PARADO — sem a hora, a linha não diz se esperou 1h ou 6
               // dias, e uma fila sem idade não é fila, é lista.
               updatedAt: true,
+              // Pra régua da peça pendente saber quem é feeder e pra quem
+              // manda (caixa de juntada não é envio pra cliente).
+              storeId: true,
+              isTransfer: true,
+              transferToStoreCode: true,
               store: { select: { code: true, name: true } },
+            },
+          },
+          // PEÇA SEM DESFECHO (26/09): pedido com tudo postado que ficou
+          // `separating` esconde uma peça reportada/sem loja — a linha dizia
+          // só "Enviado · código" e a matriz não via que faltava decidir.
+          items: {
+            select: {
+              id: true, sku: true, ref: true, cor: true, tamanho: true,
+              quantity: true, cancelledAt: true, assignedStoreId: true,
             },
           },
         },
@@ -984,6 +1002,28 @@ export class OrdersController {
             .map((p: any) => p.updatedAt)
             .sort((a: any, b: any) => +new Date(a) - +new Date(b))[0] ?? o.updatedAt ?? null;
         const firstTracking = pickOrders.find((p: any) => !!p.trackingCode);
+        /**
+         * PEÇA SEM DESFECHO (26/09): tudo postado e o pedido ainda
+         * `separating` = a régua da peça pendente segurou o fechamento
+         * (peça reportada/sem loja, ou caixa de feeder sem card na âncora). A
+         * linha dizia só "Enviado · código"; agora diz quantas peças faltam
+         * decidir. Mesma régua do fechamento (`common/pedido-completo`), sem
+         * a prova do bipe órfão — caso raro, e a varredura fecha esses em
+         * até 10 min de qualquer jeito.
+         */
+        const pecasSemDesfecho: string[] =
+          allShipped && o.status === 'separating'
+            ? pecasPendentesDoPedido({
+                items: o.items ?? [],
+                cards: (o.pickOrders ?? []).map((p: any) => ({
+                  storeId: p.storeId ?? null,
+                  storeCode: p.store?.code ?? null,
+                  status: p.status,
+                  isTransfer: !!p.isTransfer,
+                  transferToStoreCode: p.transferToStoreCode ?? null,
+                })),
+              }).map((p) => p.rotulo)
+            : [];
         let addrState: string | null = null;
         try { addrState = JSON.parse(o.shippingAddress || '{}')?.state ?? null; } catch {}
         const codigo = String(o.trackingCode || firstTracking?.trackingCode || '').trim().toUpperCase();
@@ -1013,6 +1053,7 @@ export class OrdersController {
           shippingState: addrState,
           pickOrders,
           shipped: allShipped,
+          pecasSemDesfecho,
           prontoDesde: prontoDesde?.toISOString?.() ?? prontoDesde ?? null,
           trackingCode: o.trackingCode ?? firstTracking?.trackingCode ?? null,
           trackingCarrier: o.carrier ?? firstTracking?.carrier ?? null,
@@ -3737,7 +3778,16 @@ export class OrdersController {
         },
       });
     });
-    return { ok: true as const, valorEstornar: valor, peca: pecaTxt };
+    /**
+     * A peça cancelada pode ter sido a ÚLTIMA pendência de um pedido com
+     * tudo postado (26/09): sem isto o pedido ficava "Em separação" pra
+     * sempre, com a cliente já de posse da sacola — o botão Concluído
+     * passava a aceitar, mas ninguém era avisado de que precisava clicar.
+     */
+    const fechamento = await this.pickOrders
+      .tentarFecharPedido(local.id, { origem: `peça ${pecaTxt} cancelada na ficha`, userId })
+      .catch(() => ({ fechou: false as const, motivo: 'erro' }));
+    return { ok: true as const, valorEstornar: valor, peca: pecaTxt, pedidoFechado: fechamento.fechou };
   }
 
   /**

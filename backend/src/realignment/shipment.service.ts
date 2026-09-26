@@ -1792,7 +1792,7 @@ export class RealignmentShipmentService {
   /** `pedido` de cada caixa que nasceu de um pedido (juntada ou retirada). */
   private async anexarPedidoDasCaixas<T extends { orderId?: string | null; toStoreCode?: string | null }>(
     shipments: T[],
-  ): Promise<Array<T & { pedido: { numero: string | null; cliente: string | null; retirada: boolean; juntada: boolean } | null }>> {
+  ): Promise<Array<T & { pedido: { numero: string | null; cliente: string | null; retirada: boolean; motoboy: boolean; juntada: boolean } | null }>> {
     const orderIds = [...new Set(shipments.map((s) => s.orderId).filter((x): x is string => !!x))];
     const pedidos: any[] = orderIds.length
       ? await this.prisma.order.findMany({
@@ -1805,10 +1805,14 @@ export class RealignmentShipmentService {
       const p = s.orderId ? porId.get(s.orderId) : null;
       if (!p) return { ...s, pedido: null };
       const destino = destinoObrigatorioDoPedido(p);
-      const retirada = !!destino && destino === String(s.toStoreCode || '').trim();
+      const paraODestino = !!destino && destino === String(s.toStoreCode || '').trim();
+      // Destino obrigatório vale pra RETIRADA e pra MOTOBOY com loja escolhida —
+      // a tela precisa saber qual: "a cliente busca aqui" × "a moto sai daqui".
+      const retirada = paraODestino && !!p.isPickup;
+      const motoboy = paraODestino && !p.isPickup;
       return {
         ...s,
-        pedido: { numero: p.wcOrderNumber ?? null, cliente: p.customerName ?? null, retirada, juntada: !retirada },
+        pedido: { numero: p.wcOrderNumber ?? null, cliente: p.customerName ?? null, retirada, motoboy, juntada: !paraODestino },
       };
     });
   }
