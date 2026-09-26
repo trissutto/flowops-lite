@@ -361,6 +361,29 @@ export class LinhaDoTempoService {
         if (card.status === 'shipped' || card.status === 'delivered') {
           const ras: any = card.trackingCode ? rastreioPorCodigo.get(card.trackingCode) : null;
           const entregue = order.status === 'delivered' || ras?.entregue;
+          /**
+           * TRANSFERÊNCIA DA RETIRADA (26/09, LP-001652): `shipped` no card de
+           * transferência quer dizer "saiu da origem", não "chegou na mão da
+           * cliente" — o raio-x dizia "entregue à cliente (enviada por Anália
+           * Franco)" com a peça guardada em Sorocaba. A caixa diz onde a peça
+           * está; quem entrega é o card da loja de retirada.
+           */
+          if (!entregue && card.isTransfer && order.isPickup) {
+            const cx = caixaDoCard(card.id);
+            const lojaRet = cx?.toStoreName ?? card.transferToStoreCode ?? 'loja de retirada';
+            return {
+              ...base, ...loja,
+              estado: 'na_caixa',
+              trackingCode: cx?.trackingCode ?? null,
+              onde:
+                cx?.status === 'received'
+                  ? `na loja de retirada ${lojaRet} (caixa ${cx.code}) — aguardando a cliente buscar`
+                  : cx
+                  ? `na caixa ${cx.code}, a caminho da loja de retirada ${lojaRet} (saiu de ${loja.storeName})`
+                  : `saiu de ${loja.storeName} pra loja de retirada ${lojaRet}`,
+              cor_semaforo: 'amarelo',
+            };
+          }
           return {
             ...base, ...loja,
             estado: entregue ? 'entregue' : 'enviada',

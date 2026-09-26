@@ -11,6 +11,7 @@ import { lojasDaRotaPropria } from '../common/rota-propria';
 import { consolidacaoObrigatoria } from '../common/politica-frete';
 import { franquiaPrimeiroLigado, lojasUltimoCaso } from '../common/prioridade-lojas';
 import { destinoObrigatorioDoPedido, feederOrfao, transferenciaParaDestino } from '../common/destino-obrigatorio';
+import { garantirCardReceptor } from '../common/retirada-receptora';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { computeCommittedStock } from './committed-stock.util';
 import { planSplitAssignment, demandasPorSku } from './split-assign.util';
@@ -40,6 +41,90 @@ export class RoutingService {
     private readonly pickScans: PickScanService,
     private readonly extraviadas: PecasExtraviadasService,
   ) {}
+
+  /**
+   * CARD RECEPTOR DA RETIRADA/MOTOBOY (26/09/2026, caso LP-001652).
+   *
+   * A engine só cria card na loja de retirada quando ela cobre ao menos uma
+   * peça (`routePickup`). Sem peça, a loja onde a cliente vai buscar não via
+   * o pedido em tela nenhuma: só a tarefa "Receber remessa", sem número nem
+   * cliente — e depois da entrada, nada. Ninguém tinha botão pra registrar a
+   * retirada (medido em 26/08: 23 de 123 retiradas assim).
+   *
+   * O `cleanupEmptyActivePickOrders` acima JÁ preserva esse card vazio como
+   * "receptor legítimo"; aqui ele passa a EXISTIR. Nasce `new` (aguardando a
+   * peça) ou `separated` (as caixas já chegaram). A loja é avisada como num
+   * pedido novo — socket + push — com `receptorRetirada` no payload pro card
+   * não pedir bipe. Best-effort: falha aqui nunca derruba o roteamento.
+   *
+   * Régua única em `common/retirada-receptora` (com spec); a entrada da
+   * remessa usa a mesma pra criar o receptor de pedido legado.
+   */
+  private async garantirReceptorRetirada(
+    orderId: string,
+    ator: { userId?: string | null; nome?: string | null } | null,
+    motivo: string,
+  ): Promise<void> {
+    try {
+      const r = await garantirCardReceptor(this.prisma, orderId, {
+        motivo,
+        userId: ator?.userId ?? null,
+        nome: ator?.nome ?? null,
+      });
+      if (!r.criado) return;
+
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true, wcOrderId: true, wcOrderNumber: true, source: true,
+          customerName: true, customerPhone: true, shippingCep: true, shippingAddress: true,
+          totalAmount: true, wcDateCreated: true, isPickup: true, pickupStoreCode: true,
+        },
+      });
+      const numero = order?.wcOrderNumber || order?.wcOrderId || r.pickOrderId.slice(0, 8);
+      const origens = r.origens.join(', ');
+
+      try {
+        this.gateway.emitPickOrderToStore(r.storeId, {
+          id: r.pickOrderId,
+          status: r.status,
+          storeId: r.storeId,
+          orderId,
+          order: { ...(order ?? { id: orderId }), items: [] },
+          strategy: 'retirada-receptor',
+          storeCode: r.storeCode,
+          storeName: r.storeName,
+          isTransfer: false,
+          transferToStoreCode: null,
+          transferToStoreName: null,
+          pickupStoreCode: r.storeCode,
+          pickupStoreName: r.storeName,
+          receptorRetirada: true,
+        });
+      } catch (e: any) {
+        this.logger.warn(`[retirada-receptor] socket pra ${r.storeCode} falhou: ${e?.message ?? e}`);
+      }
+
+      this.push
+        .sendToStore(r.storeId, {
+          title: `🏬 Retirada aqui #${numero}`,
+          body:
+            `${order?.customerName || 'Cliente'} vai buscar nesta loja · a peça vem de ${origens}` +
+            (r.status === 'separated' ? ' · a caixa JÁ deu entrada' : ''),
+          tag: `pickorder-${r.pickOrderId}`,
+          icon: '/icon-192.png',
+          requireInteraction: true,
+          data: { url: '/minha-loja', pickOrderId: r.pickOrderId, orderId },
+        })
+        .catch((e) => this.logger.warn(`[retirada-receptor] push falhou: ${e?.message ?? e}`));
+
+      this.logger.log(
+        `[retirada-receptor] ${numero}: card receptor criado na ${r.storeCode} (${r.status}) — ${motivo}`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`[retirada-receptor] pedido ${orderId}: ${e?.message ?? e}`);
+    }
+  }
 
   /**
    * Remove cards operacionais que ficaram sem nenhuma peça atribuída.
@@ -535,6 +620,9 @@ export class RoutingService {
       nome: ator?.nome ?? null,
       reason: 'confirmação do roteamento',
     });
+    // ... e o receptor que a engine NÃO cria quando a loja de retirada não tem
+    // peça nenhuma (26/09, LP-001652) nasce aqui.
+    await this.garantirReceptorRetirada(orderId, ator ?? null, 'confirmação do roteamento');
 
     // Emite por socket pra cada loja — dispara notificação + impressão no app desktop
     try {
@@ -1863,6 +1951,13 @@ export class RoutingService {
       nome: opts?.nome ?? null,
       reason: 'movimentação manual de peça',
     });
+    // Peça movida na mão pra outra loja num pedido de retirada (foi assim que
+    // o LP-001652 nasceu): a loja de retirada ganha o card receptor aqui.
+    await this.garantirReceptorRetirada(
+      orderId,
+      { userId: opts?.userId ?? null, nome: opts?.nome ?? null },
+      'movimentação manual de peça',
+    );
 
     /**
      * "ACHAMOS AGORA" — A MÃO DA MATRIZ APAGA O "NÃO ACHEI" DA LOJA DE DESTINO

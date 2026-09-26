@@ -34,6 +34,13 @@ type Shipment = {
   sentAt: string | null;
   totalItems: number;
   totalQty: number;
+  /**
+   * CAIXA QUE NASCEU DE UM PEDIDO (26/09, LP-001652): retirada = a cliente
+   * busca AQUI (guardar separado, não vai pra arara); juntada = as peças
+   * completam um pedido que esta loja posta. Sem isso a vendedora só sabia
+   * "1 peça de Anália Franco".
+   */
+  pedido?: { numero: string | null; cliente: string | null; retirada: boolean; juntada: boolean } | null;
 };
 
 type ShipmentItem = {
@@ -731,6 +738,18 @@ export default function RecebimentoPage() {
                   <div className="text-sm text-slate-700 font-semibold mt-1">
                     De {s.fromStoreName} ({s.fromStoreCode})
                   </div>
+                  {/* A caixa do PEDIDO diz de quem é e o que fazer com ela (26/09). */}
+                  {s.pedido?.retirada && (
+                    <div className="mt-1 inline-flex items-center gap-1 text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded">
+                      🏬 RETIRADA · pedido #{s.pedido.numero ?? '—'}
+                      {s.pedido.cliente ? ` · ${s.pedido.cliente}` : ''} · a cliente busca AQUI — guardar separado
+                    </div>
+                  )}
+                  {s.pedido?.juntada && (
+                    <div className="mt-1 inline-flex items-center gap-1 text-xs font-bold bg-violet-100 text-violet-900 border border-violet-300 px-2 py-0.5 rounded">
+                      🧲 JUNTADA · pedido #{s.pedido.numero ?? '—'} — completa o pacote que esta loja posta
+                    </div>
+                  )}
                   <div className="text-xs text-slate-500 mt-0.5">
                     {s.totalItems} item(s) · {s.totalQty} peça(s)
                     {s.sentAt && ` · enviada ${new Date(s.sentAt).toLocaleString('pt-BR')}`}

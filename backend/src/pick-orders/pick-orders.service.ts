@@ -22,6 +22,7 @@ import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pacotesAguardandoLiberacao, dentroDeSaoPaulo } from '../common/politica-frete';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { podeGanharCaixa } from '../common/etiqueta-retirada';
+import { ehCardReceptor, fechaComoEntregue } from '../common/retirada-receptora';
 import { caixaDesviadaPara, etapaDoFeeder } from '../common/juntada-etapa';
 import { carregarPecasPendentes, descreverPendentes } from '../common/pedido-completo';
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
@@ -1891,12 +1892,19 @@ export class PickOrdersService {
    * Idempotente: card já shipped só retorna.
    */
   async marcarCaixaJuntadaRecebida(pickOrderId: string) {
-    const pick = await this.prisma.pickOrder.findUnique({ where: { id: pickOrderId } });
+    const pick: any = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: { order: { select: { isPickup: true } } },
+    });
     if (!pick) return { ok: false as const, motivo: 'pick não existe' };
     if (pick.status === 'shipped') return { ok: true as const, jaEnviado: true };
+    // RETIRADA (26/09): a caixa chegou na loja onde a cliente busca — o card
+    // da ORIGEM fecha como `Retirada` (a peça saiu de lá). Isso NÃO entrega o
+    // pedido: `fechaComoEntregue` só aceita o card próprio da loja de retirada.
+    const carrier = pick.carrier ?? (pick.order?.isPickup ? 'Retirada' : 'Juntada entre lojas');
     await this.prisma.pickOrder.update({
       where: { id: pickOrderId },
-      data: { status: 'shipped', carrier: pick.carrier ?? 'Juntada entre lojas' },
+      data: { status: 'shipped', carrier },
     });
     this.afterShippedSideEffects(pickOrderId, {}).catch((e) =>
       this.logger.warn(`[juntada] afterShipped do feeder ${pickOrderId} falhou: ${e?.message || e}`),
@@ -2611,6 +2619,18 @@ export class PickOrdersService {
         faltamBipar: faltamBiparDe(r),
         // Envio esperando decisão da matriz (2+ pacotes em SP) — pinta a faixa.
         aguardaDecisaoPacotes: aguardaDecisaoDe(r),
+        /**
+         * CARD RECEPTOR DA RETIRADA (26/09, LP-001652): card próprio da loja
+         * onde a cliente busca, SEM peça própria — tudo chega por
+         * transferência. O front esconde bipe/separação e conta a história
+         * certa: "aguardando a peça" → "peça chegou" → "Cliente retirou".
+         * Régua em `common/retirada-receptora`.
+         */
+        receptorRetirada: ehCardReceptor(
+          { isTransfer: r.isTransfer, storeCode: minhaLoja?.code ?? null },
+          r.order as any,
+          (itemsByOrder.get(r.orderId) ?? []).some((i: any) => !i.cancelledAt && !ehItemSemEstoque(i)),
+        ),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,
         /**
@@ -4408,7 +4428,11 @@ export class PickOrdersService {
         toStatus: input.status,
         note:
           input.status === 'shipped'
-            ? `Enviado pela loja. Rastreio: ${input.trackingCode} (${input.carrier})`
+            ? current.isTransfer && pedidoDoCard?.isPickup
+              // Transferência da retirada: a peça SAIU da origem — isso não é
+              // entrega (26/09). Quem registra a entrega é a loja de retirada.
+              ? `Peças saíram desta loja pra loja de retirada ${current.transferToStoreCode ?? ''} (${input.carrier}) — aguardando a cliente buscar lá`
+              : `Enviado pela loja. Rastreio: ${input.trackingCode} (${input.carrier})`
             : `Mudança de status: ${currentStatus} → ${input.status}`,
       },
     });
@@ -4458,8 +4482,15 @@ export class PickOrdersService {
            * `shipped` pra sempre (o rastreio nunca confirma o que não tem
            * código; eram 123 retiradas sem `deliveredAt` em 26/08).
            */
-          const entregueNaHora =
-            !!pedidoDoCard?.isPickup && /retirada/i.test((input.carrier ?? '').trim());
+          /**
+           * SÓ O CARD DE QUEM ENTREGA fecha como entregue (26/09, LP-001652):
+           * o "📦 Enviei pra loja X" da origem também manda `Retirada`, e o
+           * pedido constava ENTREGUE com a caixa ainda dentro da loja de
+           * origem — sem ninguém na loja de retirada ter botão pra registrar
+           * a retirada real. Régua em `common/retirada-receptora`: card de
+           * transferência deixa o pedido ENVIADO; a loja de retirada fecha.
+           */
+          const entregueNaHora = fechaComoEntregue(current, pedidoDoCard, input.carrier);
           await this.prisma.order.update({
             where: { id: current.orderId },
             data: {

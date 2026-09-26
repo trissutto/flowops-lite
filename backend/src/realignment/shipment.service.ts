@@ -14,6 +14,8 @@ import { CorreiosService } from '../correios/correios.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { RemessaEnvioService } from './remessa-envio.service';
 import { PromessaEstoqueService } from './promessa-estoque.service';
+import { destinoObrigatorioDoPedido } from '../common/destino-obrigatorio';
+import { avancarReceptorSeCaixasChegaram, garantirCardReceptor } from '../common/retirada-receptora';
 
 /**
  * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
@@ -1772,12 +1774,43 @@ export class RealignmentShipmentService {
     });
     if (!store) throw new ForbiddenException('Loja inválida');
 
-    const shipments = await (this.prisma as any).realignmentShipment.findMany({
+    const shipments: any[] = await (this.prisma as any).realignmentShipment.findMany({
       where: { toStoreCode: (store as any).code, status: 'in_transit' },
       orderBy: { sentAt: 'desc' },
     });
 
-    return shipments;
+    /**
+     * A CAIXA DO PEDIDO CHEGA COM O PEDIDO (26/09, LP-001652). A tarefa
+     * "Receber remessa" dizia só "1 peça de Anália Franco": Sorocaba não
+     * tinha como saber que era a peça da Nair, que vai buscar ALI. O número,
+     * a cliente e o desfecho (retirada aqui / juntada) vêm junto — a tela de
+     * recebimento carimba "guardar separado, não vai pra arara".
+     */
+    return this.anexarPedidoDasCaixas(shipments);
+  }
+
+  /** `pedido` de cada caixa que nasceu de um pedido (juntada ou retirada). */
+  private async anexarPedidoDasCaixas<T extends { orderId?: string | null; toStoreCode?: string | null }>(
+    shipments: T[],
+  ): Promise<Array<T & { pedido: { numero: string | null; cliente: string | null; retirada: boolean; juntada: boolean } | null }>> {
+    const orderIds = [...new Set(shipments.map((s) => s.orderId).filter((x): x is string => !!x))];
+    const pedidos: any[] = orderIds.length
+      ? await this.prisma.order.findMany({
+          where: { id: { in: orderIds } },
+          select: { id: true, wcOrderNumber: true, customerName: true, isPickup: true, pickupStoreCode: true, shippingMethod: true },
+        })
+      : [];
+    const porId = new Map(pedidos.map((p) => [p.id, p]));
+    return shipments.map((s) => {
+      const p = s.orderId ? porId.get(s.orderId) : null;
+      if (!p) return { ...s, pedido: null };
+      const destino = destinoObrigatorioDoPedido(p);
+      const retirada = !!destino && destino === String(s.toStoreCode || '').trim();
+      return {
+        ...s,
+        pedido: { numero: p.wcOrderNumber ?? null, cliente: p.customerName ?? null, retirada, juntada: !retirada },
+      };
+    });
   }
 
   /**
@@ -1823,7 +1856,8 @@ export class RealignmentShipmentService {
       } as any,
     });
 
-    return { ...shipment, items };
+    const [comPedido] = await this.anexarPedidoDasCaixas([shipment]);
+    return { ...comPedido, items };
   }
 
   /**
@@ -3513,6 +3547,11 @@ export class RealignmentShipmentService {
 
     this.invalidateSkuCache(shipment.id);
 
+    // RETIRADA (26/09): a caixa chegou na loja onde a cliente busca → o card
+    // receptor sai de "aguardando a peça" pra "peça chegou" (e nasce, se o
+    // pedido é anterior ao receptor). Best-effort: a entrada já está feita.
+    if (ehJuntada) await this.avancarReceptorDeRetirada(shipment);
+
     this.logger.log(
       `[shipment] ${shipment.code} recebida: ${receivedItems.length} itens entrada (Giga aplicou ${increaseResult.applied?.length || 0}), ` +
         `${missingItems.length} faltantes`,
@@ -3538,5 +3577,78 @@ export class RealignmentShipmentService {
       missingItems: missingItems.length,
       gigaApplied: increaseResult.applied?.length || 0,
     };
+  }
+
+  /**
+   * A CAIXA DA RETIRADA DEU ENTRADA (26/09/2026, caso LP-001652).
+   *
+   * Até aqui a entrada não tocava o pedido: a loja de retirada dava entrada
+   * na caixa e o pedido continuava invisível pra ela. Agora:
+   *   1. se o pedido é anterior ao card receptor (legado), o receptor nasce
+   *      aqui — já `separated`, porque a caixa acabou de chegar;
+   *   2. se já existe em `new`, avança pra `separated` quando TODAS as caixas
+   *      dos alimentadores chegaram — é o que libera o "🏬 Cliente retirou".
+   * A loja é avisada por socket nos dois casos. Régua em
+   * `common/retirada-receptora`. Nunca derruba a entrada: erro vira warn.
+   */
+  private async avancarReceptorDeRetirada(shipment: any): Promise<void> {
+    try {
+      if (!shipment?.orderId) return;
+      const order: any = await this.prisma.order.findUnique({
+        where: { id: shipment.orderId },
+        select: {
+          id: true, wcOrderId: true, wcOrderNumber: true, source: true, status: true,
+          customerName: true, customerPhone: true, shippingCep: true, shippingAddress: true,
+          totalAmount: true, wcDateCreated: true, isPickup: true, pickupStoreCode: true, shippingMethod: true,
+        },
+      });
+      if (!order) return;
+      const destino = destinoObrigatorioDoPedido(order);
+      if (!destino || destino !== String(shipment.toStoreCode || '').trim()) return; // caixa de juntada (âncora)
+
+      const numero = order.wcOrderNumber || order.wcOrderId || order.id.slice(0, 8);
+      const criado = await garantirCardReceptor(this.prisma, order.id, {
+        motivo: `caixa ${shipment.code} deu entrada na loja de retirada`,
+      });
+      if (criado.criado) {
+        this.logger.log(
+          `[retirada-receptor] ${numero}: card receptor criado na ${criado.storeCode} pela entrada da ${shipment.code} (${criado.status})`,
+        );
+        try {
+          this.gateway.emitPickOrderToStore(criado.storeId, {
+            id: criado.pickOrderId,
+            status: criado.status,
+            storeId: criado.storeId,
+            orderId: order.id,
+            order: { ...order, items: [] },
+            strategy: 'retirada-receptor',
+            storeCode: criado.storeCode,
+            storeName: criado.storeName,
+            isTransfer: false,
+            transferToStoreCode: null,
+            transferToStoreName: null,
+            pickupStoreCode: criado.storeCode,
+            pickupStoreName: criado.storeName,
+            receptorRetirada: true,
+          });
+        } catch { /* socket é best-effort */ }
+      }
+
+      const avancado = await avancarReceptorSeCaixasChegaram(this.prisma, order.id);
+      if (avancado) {
+        this.logger.log(
+          `[retirada-receptor] ${numero}: receptor da ${avancado.storeCode} liberou "Cliente retirou" (caixas ${avancado.caixas.join(', ')})`,
+        );
+        try {
+          this.gateway.emitPickOrderStatus(avancado.storeId, {
+            id: avancado.pickOrderId,
+            status: 'separated',
+            receptorRetirada: true,
+          });
+        } catch { /* socket é best-effort */ }
+      }
+    } catch (e: any) {
+      this.logger.warn(`[retirada-receptor] entrada da ${shipment?.code}: ${e?.message || e}`);
+    }
   }
 }
