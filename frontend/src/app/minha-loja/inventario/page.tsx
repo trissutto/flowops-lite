@@ -61,16 +61,17 @@ const uuid = () =>
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 /**
- * SÓ EAN-13 ENTRA. A etiqueta tem o código de barras E um QR code, e o leitor
- * às vezes pega o QR: chegava texto que não é peça nenhuma e virava "sem
- * cadastro" fantasma. Decisão do dono (28/09): o inventário aceita SOMENTE o
- * código de barras (13 dígitos). Mesma régua do servidor
- * (`backend/src/common/inventario-contagem.ts`, `ehEan13`).
+ * SÓ NÚMERO ENTRA. A etiqueta tem o código de barras E um QR code, e o leitor
+ * às vezes pega o QR (URL/texto, com letra e barra). Código de barras é só
+ * dígito — EAN-13 nas peças novas, 6-8 dígitos nas antigas (o leitor manda
+ * sem zeros à esquerda). Já foi "exatamente 13" por ~1h em 28/09 e travou a
+ * loja 15 nas peças antigas. Mesma régua do servidor
+ * (`common/inventario-contagem.ts`, `ehCodigoDeBarras`).
  */
-const ehEan13 = (v: string) => /^\d{13}$/.test(v.trim());
+const ehCodigoDeBarras = (v: string) => /^\d+$/.test(v.trim());
 const MSG_SO_EAN13 =
   'Isso não é o código de barras da peça — o leitor pegou o QR code (ou outra coisa). ' +
-  'Aponte pro código de BARRAS (13 dígitos) e bipe de novo. Nada foi contado.';
+  'Aponte pro código de BARRAS (só números) e bipe de novo. Nada foi contado.';
 
 /** Som pela Web Audio, sem arquivo. O leitor apita igual pra tudo — o som
  *  GRAVE e triplo é o que faz a pessoa olhar pra tela quando deu errado. */
@@ -238,7 +239,7 @@ export default function InventarioLojaPage() {
     const valor = codigo.trim();
     setCodigo('');
     if (!valor) return;
-    if (!ehEan13(valor)) {
+    if (!ehCodigoDeBarras(valor)) {
       // QR code (ou digitação) — recusa NA HORA, sem ir pro servidor nem pra
       // fila offline: não é peça, não conta.
       setUltima(null);
