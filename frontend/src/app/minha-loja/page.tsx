@@ -37,7 +37,7 @@ import SwapModal, { SwapPayload, SwapResponse } from './SwapModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
-  Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
+  Package2, ClipboardList, Shuffle, Inbox, Package, PackageSearch, ShoppingCart,
   Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone, AlertTriangle,
   Globe, Copy, ChevronDown, UserMinus,
 } from 'lucide-react';
@@ -2027,6 +2027,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/transferencia', icon: ArrowLeftRight, label: 'Transferir',    subtitle: 'Ponto a ponto', description: 'Mandar pra outra loja',    tone: 'sky'    },
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
     { href: '/minha-loja/defeitos',      icon: AlertTriangle, label: 'Defeitos',      subtitle: 'Avaria',      description: 'Tirar do estoque e mandar pra matriz', tone: 'amber' },
+    { href: '/minha-loja/inventario',    icon: PackageSearch, label: 'Inventário',     subtitle: 'Contar',      description: 'Bipar a loja com a loja aberta', tone: 'purple' },
     { href: '/minha-loja/ponto',         icon: Fingerprint,  label: 'Ponto',          subtitle: 'Bater',       description: 'Entrada · almoço · saída', tone: 'indigo' },
     { href: '/minha-loja/ponto-celular', icon: Smartphone,   label: 'Ponto Celular',  subtitle: 'Totem',       description: 'Bater no celular da loja', tone: 'indigo' },
     { href: '/minha-loja/funcionarias',  icon: KeyRound,     label: 'Funcionárias',   subtitle: 'Função & PIN', description: 'Liberar desconto no PDV',   tone: 'amber'  },

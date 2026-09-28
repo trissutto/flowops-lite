@@ -31,6 +31,7 @@ import { ErpModule } from './erp/erp.module';
 import { ProductClassificationModule } from './product-classification/product-classification.module';
 import { AtributosPecaModule } from './atributos-peca/atributos-peca.module';
 import { DefeitosModule } from './defeitos/defeitos.module';
+import { InventarioModule } from './inventario/inventario.module';
 import { ProdutoFichaModule } from './produto-ficha/produto-ficha.module';
 import { ContasPagarModule } from './contas-pagar/contas-pagar.module';
 import { FornecedoresModule } from './fornecedores/fornecedores.module';
@@ -144,6 +145,7 @@ import { ConciliacaoCartaoModule } from './conciliacao-cartao/conciliacao-cartao
     ProductClassificationModule,
     AtributosPecaModule,
     DefeitosModule,
+    InventarioModule,
     ProdutoFichaModule,
     ContasPagarModule,
     FornecedoresModule,

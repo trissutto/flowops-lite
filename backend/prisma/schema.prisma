@@ -8729,3 +8729,137 @@ model ConciliacaoCartaoDia {
   @@index([status])
   @@map("conciliacao_cartao_dias")
 }
+
+// ════════════════════════════════════════════════════════════════════════
+//  INVENTÁRIO DE LOJA — contar A LOJA INTEIRA SEM FECHAR (28/09/2026)
+//
+//  No Giga o inventário era um truque: criava-se uma loja fantasma
+//  ("MOEMA 2"), transferia-se tudo pra ela peça por peça e no fim renomeava
+//  a base. Aqui isso não existe e não pode existir: `storeCode` é chave viva
+//  no roteamento do site, no estoque entregável da vitrine, no royalty, no
+//  CNPJ da NFC-e e no StoneCode da conciliação — e a loja de origem passaria
+//  o inventário inteiro com SALDO ZERO, que é fechar a loja por outro nome.
+//
+//  O que substitui o truque é uma contagem PARALELA que não toca o estoque
+//  até o fim, e um ajuste aplicado como DELTA — nunca "o saldo passa a ser".
+//  É o delta que deixa a loja vender durante a contagem:
+//
+//    sistema diz 5 · conta-se 3 às 14h · às 14h30 vende 1 (saldo vai a 4)
+//    fechamento aplica −2 (3 − 5) sobre 4  →  2     ✔ contou 3, vendeu 1
+//
+//  O marco que torna a conta acima verdadeira é o PRIMEIRO BIPE de cada
+//  código: é ali que o saldo daquele código é congelado (InventarioEsperado).
+//  Sem esse congelamento, um esperado lido no fim do dia já viria descontado
+//  das vendas do dia e a peça vendida às 14h30 apareceria como SOBRA — o
+//  ajuste devolveria ao estoque uma peça que está na sacola da cliente.
+// ════════════════════════════════════════════════════════════════════════
+
+/// Uma contagem de uma loja. Só UMA aberta por loja (garantido no service —
+/// unique parcial não existe no Prisma).
+model InventarioSessao {
+  id           String    @id @default(uuid())
+  storeCode    String    @map("store_code")
+  /// aberta | encerrada | aplicada | cancelada
+  status       String    @default("aberta") @db.VarChar(12)
+  abertaEm     DateTime  @default(now()) @map("aberta_em")
+  abertaPor    String?   @map("aberta_por")
+  encerradaEm  DateTime? @map("encerrada_em")
+  encerradaPor String?   @map("encerrada_por")
+  /// Carimbo do ajuste. É o WHERE que impede aplicar duas vezes.
+  aplicadaEm   DateTime? @map("aplicada_em")
+  aplicadaPor  String?   @map("aplicada_por")
+  canceladaEm  DateTime? @map("cancelada_em")
+  nota         String?   @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([storeCode, status])
+  @@index([abertaEm(sort: Desc)])
+  @@map("inventario_sessoes")
+}
+
+/// Uma linha por PEÇA encostada no leitor. INSERT-ONLY: "desfazer" e "tirar 1"
+/// entram como delta −1, nunca como UPDATE ou DELETE — quem contou o quê é
+/// justamente o que se precisa saber quando a diferença aparece.
+model InventarioBipe {
+  id        String   @id @default(uuid())
+  sessaoId  String   @map("sessao_id")
+  storeCode String   @map("store_code")
+  sku       String
+  /// +1 bipe · −1 correção
+  delta     Int      @default(1)
+  /// REF · COR · TAM congelado: a peça pode sair do catálogo depois.
+  rotulo    String?
+  /// Código que NÃO existe no cadastro. Conta na tela (a fila não trava) e
+  /// fica FORA do ajuste: criar linha de estoque de um código inexistente é
+  /// inventar peça. Vai pra lista da matriz cadastrar.
+  naoCadastrado Boolean @default(false) @map("nao_cadastrado")
+  /// Rodada de contagem (recontagem pedida pela matriz = rodada+1). O contado
+  /// que vale é o da rodada MAIS ALTA daquele código.
+  rodada    Int      @default(1)
+  /// UUID gerado na tela antes do POST — reenvio por rede caída é no-op.
+  clientId  String?  @map("client_id")
+  /// pc | celular
+  origem    String?  @db.VarChar(10)
+  bipadoPor String?  @map("bipado_por")
+  bipadoEm  DateTime @default(now()) @map("bipado_em")
+
+  @@unique([sessaoId, clientId])
+  @@index([sessaoId, sku])
+  @@index([sessaoId, bipadoEm(sort: Desc)])
+  @@map("inventario_bipes")
+}
+
+/// O SALDO CONGELADO no primeiro bipe de cada código — a base da conta.
+model InventarioEsperado {
+  id              String    @id @default(uuid())
+  sessaoId        String    @map("sessao_id")
+  storeCode       String    @map("store_code")
+  sku             String
+  /// Saldo de `giga_estoque` no instante do congelamento. É ESTA tabela que o
+  /// delta de `mirrorStockApplyDelta` usa como base (previousStock), então é
+  /// dela que o esperado tem de sair pro saldo final bater com o contado.
+  esperado        Int
+  /// O mesmo saldo em `wincred_estoque` — a vista que site e PDV leem. Só pra
+  /// denunciar divergência entre os dois espelhos (o que o
+  /// VigilanciaSeparacaoCron mede); não entra na conta.
+  esperadoVitrine Int?      @map("esperado_vitrine")
+  congeladoEm     DateTime  @default(now()) @map("congelado_em")
+  rodada          Int       @default(1)
+  recontarEm      DateTime? @map("recontar_em")
+  recontarPor     String?   @map("recontar_por")
+  /// Custo unitário congelado — o relatório precisa dizer a diferença em R$.
+  custo           Float?
+  rotulo          String?
+
+  @@unique([sessaoId, sku])
+  @@index([sessaoId])
+  @@map("inventario_esperado")
+}
+
+/// O que o "Aplicar" fez, linha por linha. Insert-only, é o comprovante do
+/// inventário: `antes`/`depois` vêm do RETORNO do estoque, não do que a tela
+/// pediu — movimento que não entrou no `applied` fica aqui com aplicado=false.
+model InventarioAjuste {
+  id        String   @id @default(uuid())
+  sessaoId  String   @map("sessao_id")
+  storeCode String   @map("store_code")
+  sku       String
+  contado   Int
+  esperado  Int
+  delta     Int
+  /// entrada | saida | zerado_nao_contado
+  tipo      String   @db.VarChar(20)
+  antes     Int?
+  depois    Int?
+  aplicado  Boolean  @default(false)
+  erro      String?
+  custo     Float?
+  rotulo    String?
+  criadoEm  DateTime @default(now()) @map("criado_em")
+  criadoPor String?  @map("criado_por")
+
+  @@index([sessaoId])
+  @@index([sku])
+  @@map("inventario_ajustes")
+}

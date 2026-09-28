@@ -350,8 +350,232 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  // ── INVENTÁRIO — contagem de loja (28/09/2026) ─────────────────────────────
+  // Estado em memória: uma sessão aberta na loja 01. O saldo "do sistema" é
+  // determinístico por código (pra haver falta e sobra sem sorteio mudando a
+  // cada carga) e o bipe resolve pelo CODIGO do catálogo do mock.
+  if (url.pathname.startsWith('/api/inventario')) {
+    const saldoDe = (codigo) => (Number(String(codigo).slice(-1)) % 4) + 1; // 1..4
+    const custoDe = (p) => Math.round((p?.preco ?? 80) * 0.38 * 100) / 100;
+    const achar = (cod) => PRODUTOS.find((p) => p.codigo === String(cod).trim().replace(/^0+/, ''));
+    const rot = (p) => [p.ref, p.cor, p.tamanho].filter(Boolean).join(' · ');
+    const contadoDe = (sku) =>
+      INV.bipes.filter((b) => b.sku === sku).reduce((s, b) => s + b.delta, 0);
+
+    const painel = () => ({
+      sessao: INV.sessao,
+      pecasContadas: INV.bipes.reduce((s, b) => s + b.delta, 0),
+      codigosContados: Array.from(new Set(INV.bipes.map((b) => b.sku))).filter(
+        (s) => contadoDe(s) > 0,
+      ).length,
+      ultimos: INV.bipes.slice(-30).reverse(),
+      recontar: Object.values(INV.esperado)
+        .filter((e) => e.recontarEm)
+        .map((e) => ({ sku: e.sku, rotulo: e.rotulo, rodada: e.rodada, contadoNaRodada: contadoDe(e.sku) })),
+    });
+
+    if (url.pathname === '/api/inventario/loja') return json(painel());
+
+    if (url.pathname === '/api/inventario' && req.method === 'GET') {
+      return json([
+        {
+          ...INV.sessao,
+          storeName: 'SANTOS',
+          pecasContadas: INV.bipes.reduce((s, b) => s + b.delta, 0),
+        },
+      ]);
+    }
+
+    if (url.pathname === '/api/inventario/bipar' && req.method === 'POST') {
+      return lerCorpo(req, (body) => {
+        const p = achar(body?.codigo);
+        const sku = p ? p.codigo : String(body?.codigo || '').trim().replace(/^0+/, '');
+        if (p && !INV.esperado[sku]) {
+          INV.esperado[sku] = {
+            sku,
+            rotulo: rot(p),
+            esperado: saldoDe(sku),
+            custo: custoDe(p),
+            rodada: 1,
+            recontarEm: null,
+          };
+        }
+        INV.bipes.push({
+          id: 'b' + INV.bipes.length,
+          sku,
+          rotulo: p ? rot(p) : null,
+          delta: 1,
+          naoCadastrado: !p,
+          bipadoEm: new Date().toISOString(),
+          bipadoPor: 'Loja Santos',
+        });
+        json({
+          ok: true,
+          sku,
+          rotulo: p ? rot(p) : null,
+          contadoDesteCodigo: contadoDe(sku),
+          pecasContadas: INV.bipes.reduce((s, b) => s + b.delta, 0),
+          naoCadastrado: !p,
+          recontagem: !!INV.esperado[sku]?.recontarEm,
+        });
+      });
+    }
+
+    if (url.pathname === '/api/inventario/corrigir' && req.method === 'POST') {
+      return lerCorpo(req, () => {
+        const ultimo = [...INV.bipes].reverse().find((b) => b.delta === 1);
+        if (!ultimo) return json({ error: 'Não há bipe pra tirar' }, 400);
+        INV.bipes.push({ ...ultimo, id: 'b' + INV.bipes.length, delta: -1, bipadoEm: new Date().toISOString() });
+        json({
+          ok: true,
+          sku: ultimo.sku,
+          rotulo: ultimo.rotulo,
+          contadoDesteCodigo: contadoDe(ultimo.sku),
+          pecasContadas: INV.bipes.reduce((s, b) => s + b.delta, 0),
+        });
+      });
+    }
+
+    const m = /^\/api\/inventario\/([^/]+)(\/(\w[\w-]*))?$/.exec(url.pathname);
+    if (m && req.method === 'GET') {
+      const linhas = Object.values(INV.esperado).map((e) => {
+        const contado = contadoDe(e.sku);
+        const delta = contado - e.esperado;
+        return {
+          sku: e.sku,
+          rotulo: e.rotulo,
+          contado,
+          esperado: e.esperado,
+          delta,
+          situacao: delta === 0 ? 'confere' : delta < 0 ? 'faltou' : 'sobrou',
+          pecas: Math.abs(delta),
+          valor: Math.round(Math.abs(delta) * e.custo * 100) / 100,
+          recontar: Math.abs(delta) >= 3 || Math.abs(delta) * e.custo >= 200,
+          recontarPedidoEm: e.recontarEm,
+          rodada: e.rodada,
+          congeladoEm: INV.sessao.abertaEm,
+          jaAjustado: INV.ajustes.some((a) => a.sku === e.sku && a.aplicado),
+          foraDoSaldo: delta > 0 ? { marcado: delta, cardBipado: 0, remessa: 0 } : null,
+          sobraExplicada: delta > 0,
+        };
+      });
+      const div = linhas.filter((l) => l.delta !== 0).sort((a, b) => b.valor - a.valor);
+      const faltou = div.filter((l) => l.delta < 0);
+      const sobrou = div.filter((l) => l.delta > 0);
+      const vf = Math.round(faltou.reduce((s, l) => s + l.valor, 0) * 100) / 100;
+      const vs = Math.round(sobrou.reduce((s, l) => s + l.valor, 0) * 100) / 100;
+      const naoContados =
+        INV.sessao.status === 'aberta'
+          ? []
+          : PRODUTOS.filter((p) => !INV.esperado[p.codigo])
+              .slice(0, 12)
+              .map((p) => ({
+                sku: p.codigo,
+                rotulo: rot(p),
+                saldo: saldoDe(p.codigo),
+                custo: custoDe(p),
+                valor: Math.round(saldoDe(p.codigo) * custoDe(p) * 100) / 100,
+              }));
+      return json({
+        sessao: INV.sessao,
+        resumo: {
+          skus: linhas.length,
+          pecasContadas: INV.bipes.reduce((s, b) => s + b.delta, 0),
+          skusConferem: linhas.length - div.length,
+          skusFaltou: faltou.length,
+          pecasFaltou: faltou.reduce((s, l) => s + l.pecas, 0),
+          valorFaltou: vf,
+          skusSobrou: sobrou.length,
+          pecasSobrou: sobrou.reduce((s, l) => s + l.pecas, 0),
+          valorSobrou: vs,
+          pecasLiquido: sobrou.reduce((s, l) => s + l.pecas, 0) - faltou.reduce((s, l) => s + l.pecas, 0),
+          valorLiquido: Math.round((vs - vf) * 100) / 100,
+          semCusto: 0,
+          naoContadosSkus: naoContados.length,
+          naoContadosPecas: naoContados.reduce((s, n) => s + n.saldo, 0),
+          naoContadosValor: Math.round(naoContados.reduce((s, n) => s + n.valor, 0) * 100) / 100,
+          naoCadastrados: INV.bipes.filter((b) => b.naoCadastrado && b.delta > 0).length,
+          pedidosDeRecontagem: Object.values(INV.esperado).filter((e) => e.recontarEm).length,
+        },
+        divergencias: div,
+        naoContados,
+        naoCadastrados: INV.bipes
+          .filter((b) => b.naoCadastrado && b.delta > 0)
+          .map((b) => ({ sku: b.sku, contado: 1 })),
+        vistasDivergentes: [],
+        ajustes: INV.ajustes,
+      });
+    }
+
+    if (m && req.method === 'POST') {
+      const acao = m[3];
+      return lerCorpo(req, (body) => {
+        if (acao === 'encerrar') INV.sessao.status = 'encerrada';
+        if (acao === 'reabrir') INV.sessao.status = 'aberta';
+        if (acao === 'recontagem') {
+          for (const sku of body?.skus || []) {
+            if (INV.esperado[sku]) {
+              INV.esperado[sku].recontarEm = new Date().toISOString();
+              INV.esperado[sku].rodada += 1;
+            }
+          }
+          INV.sessao.status = 'aberta';
+          return json({ ok: true, pedidos: (body?.skus || []).length, reaberta: true });
+        }
+        if (acao === 'aplicar') {
+          let n = 0;
+          for (const e of Object.values(INV.esperado)) {
+            const contado = contadoDe(e.sku);
+            if (contado === e.esperado) continue;
+            INV.ajustes.push({
+              id: 'a' + INV.ajustes.length,
+              sku: e.sku,
+              rotulo: e.rotulo,
+              contado,
+              esperado: e.esperado,
+              delta: contado - e.esperado,
+              tipo: contado > e.esperado ? 'entrada' : 'saida',
+              antes: e.esperado,
+              depois: contado,
+              aplicado: true,
+              erro: null,
+              criadoEm: new Date().toISOString(),
+              criadoPor: 'Thiago',
+            });
+            n++;
+          }
+          INV.sessao.status = 'aplicada';
+          INV.sessao.aplicadaEm = new Date().toISOString();
+          return json({ ok: true, aplicados: n, total: n, falhas: 0, pulados: 0 });
+        }
+        if (acao === 'zerar-nao-contados') {
+          return json({ ok: true, zerados: (body?.skus || []).length, total: (body?.skus || []).length, falhas: 0 });
+        }
+        json(INV.sessao);
+      });
+    }
+  }
+
   json({ error: 'mock: rota nao coberta ' + url.pathname }, 404);
 });
+
+/** Estado do inventário do mock — uma sessão aberta na loja 01. */
+const INV = {
+  sessao: {
+    id: 'inv-mock-1',
+    storeCode: '01',
+    status: 'aberta',
+    abertaEm: new Date(Date.now() - 3 * 3600e3).toISOString(),
+    abertaPor: 'Thiago',
+    encerradaEm: null,
+    aplicadaEm: null,
+    aplicadaPor: null,
+    nota: null,
+  },
+  bipes: [],
+  esperado: {},
+  ajustes: [],
+};
 
 /** Corpo JSON do POST — o mock nasceu só com GET. */
 function lerCorpo(req, cb) {
