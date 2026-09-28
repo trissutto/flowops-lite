@@ -1234,6 +1234,9 @@ function ContaCorrente() {
 
       <p className="mt-3 text-xs text-slate-400">
         Linhas em cinza = débitos automáticos do sistema (mercadoria ÷2,5 + royalties 8% + marketing 4% por mês).
+        A mercadoria vem por três caminhos, porque são três jeitos de a peça andar: <strong>GIGA</strong> (história, até 25/08/26),
+        <strong> FLOW</strong> (remessa entre lojas, contada quando o destino dá entrada) e <strong>SITE/LIVE</strong>
+        (peça despachada pra cliente num pedido do site ou da live — essa não vira remessa, vai direto da arara pro correio).
         Pagamentos e ajustes são lançados manualmente, com documento anexável. Saldo &gt; 0 = a franqueada deve à rede.
       </p>
 
