@@ -10,7 +10,6 @@ import { FinanceiroService } from './financeiro.service';
 import { RealignmentReportService } from '../realignment/realignment-report.service';
 import { ErpService } from '../erp/erp.service';
 import { GigaMirrorService } from './giga-mirror.service';
-import { LOJA_CANAL_CODES } from '../common/loja-canal';
 
 /**
  * Item de detalhe de um débito de mercadoria. Além do `label` (compat), carrega
@@ -41,14 +40,15 @@ type DetalheItem = {
  * - DÉBITOS (o que ela deve): calculados na hora, sempre LÍQUIDOS do que a
  *   franquia mandou pra rede, a preço da época ÷2,5. A MERCADORIA tem TRÊS
  *   caminhos, porque são três jeitos diferentes de a peça andar:
- *     GIGA      — espelho `giga_transferencia` (história, até 25/08/26);
- *     FLOW      — remessa física RECEBIDA no mês (`realignmentShipment`);
- *     SITE/LIVE — peça despachada pra cliente num pedido de CANAL, que não
- *                 vira remessa nenhuma (ver `canalWork`). Esse pedaço faltava
- *                 até 28/09: a franquia entregava a peça e não era creditada.
+ *     GIGA         — espelho `giga_transferencia` (história, até 25/08/26);
+ *     FLOW         — remessa física RECEBIDA no mês (`realignmentShipment`);
+ *     VENDA DIRETA — peça despachada pra cliente num pedido do SITE, da LIVE
+ *                    ou numa VENDA ONLINE do PDV. Essa não vira remessa
+ *                    nenhuma (ver `canalWork`), e o pedaço faltava inteiro até
+ *                    28/09: a loja entregava a peça e ninguém acertava.
  *   Mais royalties 8% + marketing 4%.
- *   Dos três, só o SITE/LIVE consulta `InterStoreObligation` — e só porque é
- *   ela que carrega o preço congelado no despacho. Os outros dois recalculam
+ *   Dos três, só a VENDA DIRETA consulta `InterStoreObligation` — e só porque
+ *   é ela que carrega o preço congelado no despacho. Os outros dois recalculam
  *   da mercadoria, de propósito (desvio da época do bug ÷100, curado em 08/09).
  * - CRÉDITOS/AJUSTES (manuais): tabela FranquiaLancamento — pagamentos da
  *   franqueada (com comprovante) e ajustes manuais.
@@ -365,30 +365,41 @@ export class ContaCorrenteService {
       return { valor, detalhe, ok };
     })();
 
-    // MERCADORIA SITE/LIVE — a peça que a loja tira da arara pra atender pedido
-    // de CANAL (site, live) NÃO vira remessa: ela vai direto pra cliente. Por
-    // isso não existe `realignmentShipment` pra ela, e até 28/09 essa saída não
-    // abatia NADA neste extrato — a franqueada entregava a peça, o site recebia
-    // o dinheiro e a conta corrente dela seguia cheia. Medido em 28/09: só em
-    // 09/26 são 355 peças / R$ 17.427,52 das 5 franquias (SJC 113 pç /
-    // R$ 5.457,58), e em 08/26 mais 226 peças / R$ 10.948,95.
+    // MERCADORIA DE VENDA DIRETA — a peça que a loja tira da arara pra atender
+    // pedido do SITE, da LIVE ou uma VENDA ONLINE do PDV **não vira remessa**:
+    // ela vai direto pra cliente. Por isso não existe `realignmentShipment` pra
+    // ela, e até 28/09 essa saída não abatia NADA neste extrato — a franqueada
+    // entregava a peça, quem vendeu ficava com o dinheiro e a conta corrente
+    // dela seguia cheia. Medido em 28/09: R$ 39,5 mil de acerto por card desde
+    // julho (SITE 28,6k · ONLINE 7,8k · LIVE 3,1k), nada disso no extrato.
     //
-    // O rastro dela é `TransferOrder` (sem `shipmentId`, destino = loja-canal)
-    // + `InterStoreObligation`, os dois gravados no despacho
+    // O rastro dela é `TransferOrder` SEM `shipmentId` (tipo SITE, LIVE ou
+    // ONLINE) + `InterStoreObligation`, os dois gravados no despacho
     // (`pick-orders.service.ts` → `afterShippedSideEffects`) com o preço DA
     // ÉPOCA ÷2,5 — a régua do dono de 08/09. O valor sai da obrigação porque é
-    // ela que carrega o preço: o TransferOrder de canal nasce sem
-    // `precoUnitCents`.
+    // ela que carrega o preço: esse TransferOrder nasce sem `precoUnitCents`.
+    //
+    // ⚠️ `shipmentId: null` é o que separa este bloco do `flowWork`: remessa
+    // física tem os dois (TransferOrder COM remessa + obrigação própria) e já é
+    // contada lá. Aqui entra só o que saiu sem caixa.
     //
     // Só entra o que TEM obrigação, e obrigação só nasce entre naturezas
     // diferentes: loja própria → canal é registro sem dinheiro (mesmo bolso) e
     // fica de fora, como deve.
     //
-    // ⚠️ Escopo deliberado: só o que vai PRA LOJA-CANAL. O mesmo despacho
-    // também gera acerto quando o card manda pra outra loja física (retirada) —
-    // esse caso já tem remessa física, e contá-lo aqui pagaria a mesma perna
-    // duas vezes. A 13 não recebe caixa (não tem arara), então aqui não há
-    // sobreposição com o `flowWork`.
+    // 🚨 O DESTINO NÃO É SÓ A LOJA-CANAL (dono, 28/09: "a venda online usa a
+    // estrutura dos pedidos do site e também deve gerar crédito e débito entre
+    // lojas"). São três donas de venda diferentes:
+    //   SITE / LIVE   → a loja-canal 13;
+    //   ONLINE        → a LOJA VENDEDORA do PDV (`Order.sellerStoreCode`);
+    //   retirada      → a loja onde a cliente retira (card `isTransfer`).
+    // A primeira versão (PR #1160) só contava a loja-canal, com medo de pagar
+    // duas vezes a perna que também viaja em caixa. Medido antes de abrir:
+    // mesma peça (sku), mesmo par de lojas e MESMO DIA com obrigação pelos dois
+    // caminhos = **1 caso, R$ 127,92** desde julho (R$ 1.198,92 se afrouxar a
+    // janela pra qualquer data, o que já pega REF repetida legítima). Contra
+    // R$ 39,5 mil de acerto por card no mesmo período: o medo custava caro e o
+    // risco não se confirmou.
     const canalWork = (async () => {
       let valor = 0;
       let ok = true;
@@ -396,7 +407,7 @@ export class ContaCorrenteService {
       try {
         const tos = await (this.prisma as any).transferOrder.findMany({
           where: {
-            lojaDestinoCode: { in: LOJA_CANAL_CODES },
+            tipo: { in: ['SITE', 'LIVE', 'ONLINE'] },
             shipmentId: null,
             createdAt: {
               gte: new Date(`${fromStr}T00:00:00Z`),
@@ -493,7 +504,7 @@ export class ContaCorrenteService {
         }
       } catch (e: any) {
         ok = false;
-        this.logger.warn(`[conta-corrente] mercadoria SITE/LIVE ${mes} indisponível: ${e?.message || e}`);
+        this.logger.warn(`[conta-corrente] mercadoria VENDA DIRETA ${mes} indisponível: ${e?.message || e}`);
       }
       detalhe.sort((a, b) => b.valor - a.valor);
       return { valor, detalhe, ok };
@@ -540,7 +551,7 @@ export class ContaCorrenteService {
       this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria GIGA ${mes}`),
       this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[], ok: false }, `royalties ${mes}`),
       this.withTimeout(flowWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria FLOW ${mes}`),
-      this.withTimeout(canalWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria SITE/LIVE ${mes}`),
+      this.withTimeout(canalWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria VENDA DIRETA ${mes}`),
     ]);
 
     // ok = as duas leituras do espelho (Postgres) deram certo. Leitura local não
@@ -656,7 +667,7 @@ export class ContaCorrenteService {
       if (!d.ok) mesesIndisponiveis.push(mes);
       pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
       pushAuto(mes, `Mercadoria FLOW — ${mes}`, 'flow', d.mercadoriaFlow, d.detalheFlow);
-      pushAuto(mes, `Mercadoria SITE/LIVE — ${mes}`, 'canal', d.mercadoriaCanal, d.detalheCanal);
+      pushAuto(mes, `Mercadoria VENDA DIRETA (site/live/online) — ${mes}`, 'canal', d.mercadoriaCanal, d.detalheCanal);
       pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
     }
 
@@ -789,14 +800,15 @@ export class ContaCorrenteService {
       }));
     }
 
-    // CANAL (site/live): aqui o "controle" é o NÚMERO DO PEDIDO — a peça foi
-    // direto pra cliente, então não existe remessa nem linha no espelho. O
-    // rastro é o TransferOrder que o despacho gravou (`Pedido <nº> expedido`),
-    // e o preço da época mora na obrigação. Sem o dia não vale varrer a tabela.
+    // VENDA DIRETA (site / live / venda online): aqui o "controle" é o NÚMERO
+    // DO PEDIDO — a peça foi direto pra cliente, então não existe remessa nem
+    // linha no espelho. O rastro é o TransferOrder que o despacho gravou
+    // (`Pedido <nº> expedido`), e o preço da época mora na obrigação. Sem o dia
+    // não vale varrer a tabela.
     if (!dia) return [];
     const tos = await (this.prisma as any).transferOrder.findMany({
       where: {
-        lojaDestinoCode: { in: LOJA_CANAL_CODES },
+        tipo: { in: ['SITE', 'LIVE', 'ONLINE'] },
         shipmentId: null,
         createdAt: { gte: new Date(`${dia}T00:00:00Z`), lte: new Date(`${dia}T23:59:59.999Z`) },
       },
