@@ -13,7 +13,7 @@ import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.
 import {
   classificarLinha,
   normalizarCodigo,
-  ehEan13,
+  ehCodigoDeBarras,
   MSG_SO_EAN13,
   ordenarPorDinheiro,
   planoDeAjuste,
@@ -79,18 +79,17 @@ export class InventarioService {
   }
 
   /**
-   * Saldo dos dois espelhos, em lote.
+   * Saldo da loja por código, em lote — lido de `wincred_estoque`, a MESMA
+   * tabela que o PDV, o site e o roteamento leem (`STOCK_WINCRED_FIRST`).
    *
-   * `giga` é a base da conta (é o que o delta soma). `vitrine` é
-   * `wincred_estoque`, o que site e PDV leem — vem junto só pra denunciar
-   * divergência entre os dois, que é sintoma conhecido (o
-   * `VigilanciaSeparacaoCron` mede os pares).
+   * 🚨 Até 28/09 a base era a `giga_estoque` (tabela nativa do Postgres com
+   * nome herdado). Ela não tem linha pra boa parte dos códigos antigos: na
+   * loja 15 saíram 42 "diferenças" com Sistema 0 em peça que a vitrine
+   * mostrava certinho — a loja contou certo e o inventário mentiu. Um clique
+   * em "Ajustar" teria dobrado o saldo. Inventário lê o que a operação lê.
    */
-  private async saldos(
-    skus: string[],
-    storeCode: string,
-  ): Promise<Map<string, { giga: number; vitrine: number }>> {
-    const out = new Map<string, { giga: number; vitrine: number }>();
+  private async saldos(skus: string[], storeCode: string): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
     const alvo = Array.from(new Set(skus.map((s) => normalizarCodigo(s)).filter(Boolean)));
     if (!alvo.length) return out;
 
@@ -104,33 +103,16 @@ export class InventarioService {
       }
     }
 
-    const [giga, vitrine] = await Promise.all([
-      (this.prisma as any).gigaEstoque.findMany({
-        where: { codigo: { in: todasVariantes }, loja: { in: lojas } },
-        select: { codigo: true, estoque: true },
-      }),
-      (this.prisma as any).wincredEstoque.findMany({
-        where: { codigo: { in: todasVariantes }, loja: { in: lojas } },
-        select: { codigo: true, estoque: true },
-      }),
-    ]);
-
-    const zero = () => ({ giga: 0, vitrine: 0 });
-    for (const r of giga) {
+    const linhas = await (this.prisma as any).wincredEstoque.findMany({
+      where: { codigo: { in: todasVariantes }, loja: { in: lojas } },
+      select: { codigo: true, estoque: true },
+    });
+    for (const r of linhas) {
       const sku = variantePorSku.get(String(r.codigo));
       if (!sku) continue;
-      const atual = out.get(sku) ?? zero();
       // `mirrorStockApplyDelta` aplica no PRIMEIRO registro que encontra; com
       // linhas duplicadas (variante de loja), o maior é o que a operação vê.
-      atual.giga = Math.max(atual.giga, Number(r.estoque) || 0);
-      out.set(sku, atual);
-    }
-    for (const r of vitrine) {
-      const sku = variantePorSku.get(String(r.codigo));
-      if (!sku) continue;
-      const atual = out.get(sku) ?? zero();
-      atual.vitrine = Math.max(atual.vitrine, Number(r.estoque) || 0);
-      out.set(sku, atual);
+      out.set(sku, Math.max(out.get(sku) ?? 0, Number(r.estoque) || 0));
     }
     return out;
   }
@@ -284,7 +266,7 @@ export class InventarioService {
     if (!digitado) throw new BadRequestException('Bipe vazio');
     /* Só o código de BARRAS entra. O leitor pega o QR code da etiqueta às
      * vezes, e isso viraria um "sem cadastro" fantasma na contagem. */
-    if (!ehEan13(digitado)) throw new BadRequestException(MSG_SO_EAN13);
+    if (!ehCodigoDeBarras(digitado)) throw new BadRequestException(MSG_SO_EAN13);
 
     /* Reenvio (rede caiu, botão clicado 2x) é no-op: a linha já existe. */
     if (input.clientId) {
@@ -309,15 +291,15 @@ export class InventarioService {
       where: { sessaoId_sku: { sessaoId: sessao.id, sku } },
     });
     if (!esperado && !naoCadastrado) {
-      const saldo = (await this.saldos([sku], loja)).get(sku) ?? { giga: 0, vitrine: 0 };
+      const saldo = (await this.saldos([sku], loja)).get(sku) ?? 0;
       esperado = await (this.prisma as any).inventarioEsperado
         .create({
           data: {
             sessaoId: sessao.id,
             storeCode: loja,
             sku,
-            esperado: saldo.giga,
-            esperadoVitrine: saldo.vitrine,
+            esperado: saldo,
+            esperadoVitrine: saldo,
             custo: info?.custo ?? null,
             rotulo,
           },
@@ -646,8 +628,9 @@ export class InventarioService {
         }),
       );
 
-    /* Divergência entre os dois espelhos naquele código — informação que só
-     * aparece aqui, porque o inventário é o único lugar que lê os dois. */
+    /* Sessões congeladas ANTES de 28/09 leram a base errada (giga_estoque):
+     * aqui a diferença fica visível pra matriz. Sessão nova grava o mesmo
+     * número nas duas colunas e esta lista sai vazia. */
     const vistasDivergentes = esperados
       .filter(
         (e: any) => e.esperadoVitrine != null && Number(e.esperadoVitrine) !== Number(e.esperado),
@@ -753,13 +736,13 @@ export class InventarioService {
         where: { sessaoId_sku: { sessaoId: sessao.id, sku } },
       });
       if (!atual) continue;
-      const saldo = saldos.get(sku) ?? { giga: 0, vitrine: 0 };
+      const saldo = saldos.get(sku) ?? 0;
       await (this.prisma as any).inventarioEsperado.update({
         where: { id: atual.id },
         data: {
           rodada: Number(atual.rodada || 1) + 1,
-          esperado: saldo.giga,
-          esperadoVitrine: saldo.vitrine,
+          esperado: saldo,
+          esperadoVitrine: saldo,
           congeladoEm: new Date(),
           recontarEm: new Date(),
           recontarPor: input.userName ?? null,
@@ -1001,7 +984,7 @@ export class InventarioService {
     const loja = sessao.storeCode;
     const saldos = await this.saldos(skus, loja);
     const aZerar = skus
-      .map((sku) => ({ sku, saldo: saldos.get(sku)?.giga ?? 0 }))
+      .map((sku) => ({ sku, saldo: saldos.get(sku) ?? 0 }))
       .filter((s) => s.saldo > 0);
     if (!aZerar.length) return { ok: true, zerados: 0, mensagem: 'Nenhum deles tem saldo' };
 

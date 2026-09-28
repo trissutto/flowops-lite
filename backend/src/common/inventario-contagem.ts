@@ -32,19 +32,19 @@ export const normalizarCodigo = (v: unknown): string =>
 /**
  * A ETIQUETA TEM DOIS CÓDIGOS e o leitor pega qualquer um dos dois.
  *
- * O código de barras é o EAN-13 da peça (13 dígitos). Do lado dele tem um
- * QR code, e o leitor às vezes lê o QR em vez da barra: chega texto que não
- * é código de peça nenhuma e a contagem grava um "sem cadastro" fantasma.
- * Decisão do dono (28/09): o inventário aceita SOMENTE EAN-13. Qualquer
- * outra coisa é recusada NA HORA e não conta — a pessoa aponta o leitor de
- * novo. A régua olha o texto CRU do leitor (antes de tirar zero à esquerda).
+ * O código de barras da peça é SÓ NÚMERO: EAN-13 nas peças novas, código
+ * curto de 6-8 dígitos nas antigas (o leitor manda SEM os zeros à esquerda).
+ * O QR code carrega URL/texto — tem letra, barra, ponto. Regra: só dígitos
+ * passa, qualquer tamanho; qualquer outra coisa é recusada NA HORA e não
+ * conta. Ficou "exatamente 13 dígitos" por ~1h em 28/09 e travou a contagem
+ * da loja 15 em toda peça antiga — não repetir.
  */
-export const ehEan13 = (v: unknown): boolean => /^\d{13}$/.test(String(v ?? '').trim());
+export const ehCodigoDeBarras = (v: unknown): boolean => /^\d+$/.test(String(v ?? '').trim());
 
 /** Mensagem única — tela e servidor dizem a mesma coisa. */
 export const MSG_SO_EAN13 =
   'Isso não é o código de barras da peça — o leitor pegou o QR code (ou outra coisa). ' +
-  'Aponte pro código de BARRAS (13 dígitos) e bipe de novo. Nada foi contado.';
+  'Aponte pro código de BARRAS (só números) e bipe de novo. Nada foi contado.';
 
 export type SituacaoLinha = 'confere' | 'faltou' | 'sobrou';
 
