@@ -10,6 +10,7 @@ import { FinanceiroService } from './financeiro.service';
 import { RealignmentReportService } from '../realignment/realignment-report.service';
 import { ErpService } from '../erp/erp.service';
 import { GigaMirrorService } from './giga-mirror.service';
+import { LOJA_CANAL_CODES } from '../common/loja-canal';
 
 /**
  * Item de detalhe de um débito de mercadoria. Além do `label` (compat), carrega
@@ -37,10 +38,18 @@ type DetalheItem = {
  * Há UMA franqueada só (todas as lojas FILIAL = mesmo dono), então é uma conta
  * única que soma todas as FILIAL.
  *
- * - DÉBITOS (o que ela deve): calculados na hora — MERCADORIA vem do RELATÓRIO
- *   de transferências (mesma fonte da aba "Análise", preço VENDAUN em reais ÷2,5,
- *   líquida do que ela mandou pra rede) + royalties 8% + marketing 4%. NÃO usa a
- *   tabela InterStoreObligation (está com bug de preço ÷100).
+ * - DÉBITOS (o que ela deve): calculados na hora, sempre LÍQUIDOS do que a
+ *   franquia mandou pra rede, a preço da época ÷2,5. A MERCADORIA tem TRÊS
+ *   caminhos, porque são três jeitos diferentes de a peça andar:
+ *     GIGA      — espelho `giga_transferencia` (história, até 25/08/26);
+ *     FLOW      — remessa física RECEBIDA no mês (`realignmentShipment`);
+ *     SITE/LIVE — peça despachada pra cliente num pedido de CANAL, que não
+ *                 vira remessa nenhuma (ver `canalWork`). Esse pedaço faltava
+ *                 até 28/09: a franquia entregava a peça e não era creditada.
+ *   Mais royalties 8% + marketing 4%.
+ *   Dos três, só o SITE/LIVE consulta `InterStoreObligation` — e só porque é
+ *   ela que carrega o preço congelado no despacho. Os outros dois recalculam
+ *   da mercadoria, de propósito (desvio da época do bug ÷100, curado em 08/09).
  * - CRÉDITOS/AJUSTES (manuais): tabela FranquiaLancamento — pagamentos da
  *   franqueada (com comprovante) e ajustes manuais.
  * - SALDO = total débitos − total créditos (quanto a franqueada ainda deve).
@@ -120,11 +129,13 @@ export class ContaCorrenteService {
     mes: string;
     mercadoriaGiga: number;
     mercadoriaFlow: number;
+    mercadoriaCanal: number;
     royalties: number;
     marketing: number;
     total: number;
     detalheGiga: DetalheItem[];
     detalheFlow: DetalheItem[];
+    detalheCanal: DetalheItem[];
     detalheRoy: DetalheItem[];
     ok: boolean; // false = Giga falhou/indisponível neste mês (não confiar nos 0)
   }> {
@@ -354,6 +365,140 @@ export class ContaCorrenteService {
       return { valor, detalhe, ok };
     })();
 
+    // MERCADORIA SITE/LIVE — a peça que a loja tira da arara pra atender pedido
+    // de CANAL (site, live) NÃO vira remessa: ela vai direto pra cliente. Por
+    // isso não existe `realignmentShipment` pra ela, e até 28/09 essa saída não
+    // abatia NADA neste extrato — a franqueada entregava a peça, o site recebia
+    // o dinheiro e a conta corrente dela seguia cheia. Medido em 28/09: só em
+    // 09/26 são 355 peças / R$ 17.427,52 das 5 franquias (SJC 113 pç /
+    // R$ 5.457,58), e em 08/26 mais 226 peças / R$ 10.948,95.
+    //
+    // O rastro dela é `TransferOrder` (sem `shipmentId`, destino = loja-canal)
+    // + `InterStoreObligation`, os dois gravados no despacho
+    // (`pick-orders.service.ts` → `afterShippedSideEffects`) com o preço DA
+    // ÉPOCA ÷2,5 — a régua do dono de 08/09. O valor sai da obrigação porque é
+    // ela que carrega o preço: o TransferOrder de canal nasce sem
+    // `precoUnitCents`.
+    //
+    // Só entra o que TEM obrigação, e obrigação só nasce entre naturezas
+    // diferentes: loja própria → canal é registro sem dinheiro (mesmo bolso) e
+    // fica de fora, como deve.
+    //
+    // ⚠️ Escopo deliberado: só o que vai PRA LOJA-CANAL. O mesmo despacho
+    // também gera acerto quando o card manda pra outra loja física (retirada) —
+    // esse caso já tem remessa física, e contá-lo aqui pagaria a mesma perna
+    // duas vezes. A 13 não recebe caixa (não tem arara), então aqui não há
+    // sobreposição com o `flowWork`.
+    const canalWork = (async () => {
+      let valor = 0;
+      let ok = true;
+      const detalhe: DetalheItem[] = [];
+      try {
+        const tos = await (this.prisma as any).transferOrder.findMany({
+          where: {
+            lojaDestinoCode: { in: LOJA_CANAL_CODES },
+            shipmentId: null,
+            createdAt: {
+              gte: new Date(`${fromStr}T00:00:00Z`),
+              lte: new Date(`${toStr}T23:59:59.999Z`),
+            },
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            mensagem: true,
+            lojaOrigemCode: true,
+            lojaDestinoCode: true,
+          },
+        });
+        if (tos.length) {
+          const info = new Map<string, { origem: string; destino: string; data: string; pedido: string }>();
+          for (const t of tos as any[]) {
+            info.set(t.id, {
+              origem: String(t.lojaOrigemCode || ''),
+              destino: String(t.lojaDestinoCode || ''),
+              data: new Date(t.createdAt).toISOString().slice(0, 10),
+              pedido: this.pedidoDaMensagem(t.mensagem),
+            });
+          }
+          // A obrigação é a portadora do preço (÷2,5 congelado no despacho).
+          // Cancelada some — peça que voltou não é mercadoria entregue.
+          const obrigacoes = await (this.prisma as any).interStoreObligation.findMany({
+            where: {
+              transferOrderId: { in: Array.from(info.keys()) },
+              status: { not: 'cancelled' },
+            },
+            select: { transferOrderId: true, qty: true, precoTotal: true },
+          });
+          // Agrupa por par origem→destino e, dentro dele, por PEDIDO+dia (o
+          // "controle" da cascata — é o número que a loja reconhece).
+          const pares = new Map<
+            string,
+            {
+              origem: string;
+              destino: string;
+              qty: number;
+              totalPreco: number;
+              porPedido: Map<string, { data: string; controle: string; pecas: number; valor: number }>;
+            }
+          >();
+          for (const o of obrigacoes as any[]) {
+            const i = info.get(o.transferOrderId);
+            if (!i) continue;
+            const qty = Number(o.qty || 1);
+            const preco = Number(o.precoTotal || 0);
+            const key = `${i.origem}->${i.destino}`;
+            let p = pares.get(key);
+            if (!p) {
+              p = { origem: i.origem, destino: i.destino, qty: 0, totalPreco: 0, porPedido: new Map() };
+              pares.set(key, p);
+            }
+            p.qty += qty;
+            p.totalPreco += preco;
+            const pk = `${i.pedido}|${i.data}`;
+            let t = p.porPedido.get(pk);
+            if (!t) {
+              t = { data: i.data, controle: i.pedido, pecas: 0, valor: 0 };
+              p.porPedido.set(pk, t);
+            }
+            t.pecas += qty;
+            t.valor = round(t.valor + preco / 2.5);
+          }
+          let recebeu = 0;
+          let mandou = 0;
+          for (const p of pares.values()) {
+            const oFil = tipoOf(p.origem) === 'FILIAL';
+            const dFil = tipoOf(p.destino) === 'FILIAL';
+            const base = {
+              label: `${nomeOf(p.origem)} → ${nomeOf(p.destino)} · ${p.qty} pç`,
+              valor: round(p.totalPreco / 2.5),
+              from: nomeOf(p.origem),
+              to: nomeOf(p.destino),
+              fromTipo: tipoOf(p.origem),
+              toTipo: tipoOf(p.destino),
+              pecas: p.qty,
+              transfers: Array.from(p.porPedido.values()).sort(
+                (a, b) => (a.data < b.data ? -1 : a.data > b.data ? 1 : 0) || b.valor - a.valor,
+              ),
+            };
+            if (!oFil && dFil) {
+              recebeu += p.totalPreco; // REDE → FRANQUIA (soma)
+              detalhe.push({ ...base, sinal: '+' });
+            } else if (oFil && !dFil) {
+              mandou += p.totalPreco; // FRANQUIA → REDE (abate)
+              detalhe.push({ ...base, sinal: '-' });
+            }
+          }
+          valor = (recebeu - mandou) / 2.5;
+        }
+      } catch (e: any) {
+        ok = false;
+        this.logger.warn(`[conta-corrente] mercadoria SITE/LIVE ${mes} indisponível: ${e?.message || e}`);
+      }
+      detalhe.sort((a, b) => b.valor - a.valor);
+      return { valor, detalhe, ok };
+    })();
+
     const royWork = (async () => {
       let royalties = 0;
       let marketing = 0;
@@ -391,25 +536,28 @@ export class ContaCorrenteService {
     // Giga (mercadoria) e royalties são os débitos REAIS — 1 query cada no pool
     // do ERP. Rodam juntos (2 conexões, tranquilo) com time-box generoso só pra
     // o endpoint nunca pendurar numa query presa.
-    const [giga, roy, flow] = await Promise.all([
+    const [giga, roy, flow, canal] = await Promise.all([
       this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria GIGA ${mes}`),
       this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[], ok: false }, `royalties ${mes}`),
       this.withTimeout(flowWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria FLOW ${mes}`),
+      this.withTimeout(canalWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria SITE/LIVE ${mes}`),
     ]);
 
     // ok = as duas leituras do espelho (Postgres) deram certo. Leitura local não
     // dá blip; só marca falha se o Postgres em si der erro. Se !ok, não cacheia.
-    const ok = giga.ok && roy.ok && flow.ok;
+    const ok = giga.ok && roy.ok && flow.ok && canal.ok;
 
     const data = {
       mes,
       mercadoriaGiga: round(giga.valor),
       mercadoriaFlow: round(flow.valor),
+      mercadoriaCanal: round(canal.valor),
       royalties: round(roy.royalties),
       marketing: round(roy.marketing),
-      total: round(giga.valor + flow.valor + roy.royalties + roy.marketing),
+      total: round(giga.valor + flow.valor + canal.valor + roy.royalties + roy.marketing),
       detalheGiga: giga.detalhe,
       detalheFlow: flow.detalhe,
+      detalheCanal: canal.detalhe,
       detalheRoy: roy.detalhe,
       ok,
     };
@@ -439,6 +587,17 @@ export class ContaCorrenteService {
 
   private brl(n: number): string {
     return 'R$ ' + (Number(n) || 0).toFixed(2).replace('.', ',');
+  }
+
+  /**
+   * Número do pedido a partir da mensagem que o despacho gravou no
+   * TransferOrder de canal (`Pedido LP-001652 expedido (rastreio ...)`). É o
+   * único vínculo entre a peça e o pedido nessa tabela — e é o número que a
+   * loja reconhece na cascata. Sem número, a linha vira o dia.
+   */
+  private pedidoDaMensagem(mensagem: unknown): string {
+    const m = String(mensagem || '').match(/pedido\s+([A-Za-z0-9._\-\/]+)/i);
+    return m ? m[1] : 's/nº';
   }
 
   // ── Extrato (a conta corrente) ────────────────────────────────────────────
@@ -497,6 +656,7 @@ export class ContaCorrenteService {
       if (!d.ok) mesesIndisponiveis.push(mes);
       pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
       pushAuto(mes, `Mercadoria FLOW — ${mes}`, 'flow', d.mercadoriaFlow, d.detalheFlow);
+      pushAuto(mes, `Mercadoria SITE/LIVE — ${mes}`, 'canal', d.mercadoriaCanal, d.detalheCanal);
       pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
     }
 
@@ -613,20 +773,73 @@ export class ContaCorrenteService {
       }
       return Array.from(agg.values()).sort((a, b) => b.valor - a.valor);
     }
+    const dia = input.data && /^\d{4}-\d{2}-\d{2}$/.test(input.data) ? input.data : null;
     const where: any = { controle };
-    if (input.data && /^\d{4}-\d{2}-\d{2}$/.test(input.data)) {
-      where.data = new Date(`${input.data}T00:00:00Z`);
-    }
+    if (dia) where.data = new Date(`${dia}T00:00:00Z`);
     const items = await (this.prisma as any).gigaTransferenciaItem.findMany({
       where,
       orderBy: { totalPreco: 'desc' },
     });
-    return (items as any[]).map((i) => ({
-      codigo: i.codigo,
-      descricao: i.descricao || '',
-      pecas: i.qty,
-      valor: round((i.totalPreco || 0) / 2.5), // custo ÷2,5, igual ao resto
-    }));
+    if (items.length) {
+      return (items as any[]).map((i) => ({
+        codigo: i.codigo,
+        descricao: i.descricao || '',
+        pecas: i.qty,
+        valor: round((i.totalPreco || 0) / 2.5), // custo ÷2,5, igual ao resto
+      }));
+    }
+
+    // CANAL (site/live): aqui o "controle" é o NÚMERO DO PEDIDO — a peça foi
+    // direto pra cliente, então não existe remessa nem linha no espelho. O
+    // rastro é o TransferOrder que o despacho gravou (`Pedido <nº> expedido`),
+    // e o preço da época mora na obrigação. Sem o dia não vale varrer a tabela.
+    if (!dia) return [];
+    const tos = await (this.prisma as any).transferOrder.findMany({
+      where: {
+        lojaDestinoCode: { in: LOJA_CANAL_CODES },
+        shipmentId: null,
+        createdAt: { gte: new Date(`${dia}T00:00:00Z`), lte: new Date(`${dia}T23:59:59.999Z`) },
+      },
+      select: {
+        id: true,
+        mensagem: true,
+        refCode: true,
+        codigoBipado: true,
+        cor: true,
+        tamanho: true,
+        descricao: true,
+      },
+    });
+    const doPedido = (tos as any[]).filter((t) => this.pedidoDaMensagem(t.mensagem) === controle);
+    if (!doPedido.length) return [];
+    const obrigacoes = await (this.prisma as any).interStoreObligation.findMany({
+      where: {
+        transferOrderId: { in: doPedido.map((t: any) => t.id) },
+        status: { not: 'cancelled' },
+      },
+      select: { transferOrderId: true, qty: true, precoTotal: true },
+    });
+    const toById = new Map<string, any>(doPedido.map((t: any) => [t.id, t]));
+    const agg = new Map<string, { codigo: string; descricao: string; pecas: number; valor: number }>();
+    for (const o of obrigacoes as any[]) {
+      const t = toById.get(o.transferOrderId);
+      if (!t) continue;
+      const codigo = String(t.codigoBipado || t.refCode || '');
+      const k = `${codigo}|${t.cor || ''}|${t.tamanho || ''}`;
+      let a = agg.get(k);
+      if (!a) {
+        a = {
+          codigo,
+          descricao: (t.descricao || `${t.refCode || ''} ${t.cor || ''} ${t.tamanho || ''}`).trim(),
+          pecas: 0,
+          valor: 0,
+        };
+        agg.set(k, a);
+      }
+      a.pecas += Number(o.qty || 1);
+      a.valor = round(a.valor + Number(o.precoTotal || 0) / 2.5);
+    }
+    return Array.from(agg.values()).sort((a, b) => b.valor - a.valor);
   }
 
   /** Dispara o sync do espelho do Giga sob demanda (botão "Sincronizar agora"). */
