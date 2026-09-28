@@ -22,32 +22,54 @@ escreveu no Postgres do Flow. Compra do site antigo dentro dos 12 meses entra
 assim mesmo, porque o pedido do WooCommerce está em `orders`. O que só existe lá
 é lead que nunca comprou — se um dia quiserem, tem que ser export manual.
 
+## O que já está no ar (28/09/2026, conta 892-523-1246)
+
+| lista | id | pessoas |
+|---|---|---|
+| Compradoras do site - 12 meses | `9479548071` | 5.591 |
+| Compradoras do site - historico completo | `9478824058` | 16.664 (desde abr/2021) |
+| ~~COMPRADORES SITE~~ | `9183621142` | 6.800 casados, 91% — **já existia**, não foi feita aqui |
+
+As duas novas subiram com **e-mail + telefone + endereço**. A terceira é
+anterior e provavelmente foi subida pela gestora — dá pra comparar o match
+delas depois de algumas horas e aposentar a que sobrar.
+
 ## 1. Gerar (só lê o banco)
 
 ```bash
 railway link --project heroic-mercy --environment production --service Postgres
 railway run node backend/scripts/google-customer-match/gerar-lista.js
+MESES=tudo railway run node backend/scripts/google-customer-match/gerar-lista.js
 ```
 
-Gera três CSVs nesta pasta (o `.gitignore` impede que e-mail de cliente vá pro
-git):
+`MESES` é a janela (padrão `12`); `MESES=tudo` leva o histórico inteiro. Quanto
+cada faixa acrescenta, medido em 28/09/2026:
+
+| janela | e-mails | a mais |
+|---|---|---|
+| 12m | 5.591 | — |
+| 24m | 9.346 | +3.755 |
+| 36m | 11.602 | +2.256 |
+| 48m | 15.603 | +4.001 |
+| tudo | 16.664 | +1.061 |
+
+Gera três CSVs por janela (o `.gitignore` impede que e-mail de cliente vá pro
+git). Com `MESES=12` eles se chamam `site-12m-*`; com `MESES=tudo`, `site-tudo-*`:
 
 | arquivo | o que é |
 |---|---|
-| `site-12m-email.csv` | uma coluna, só o e-mail — **é o que sobe** |
-| `site-12m-email-sha256.csv` | o mesmo já hasheado (a API exige hash) |
-| `site-12m-completo.csv` | as MESMAS pessoas com telefone, nome, país e CEP |
+| `…-email.csv` | uma coluna, só o e-mail |
+| `…-email-sha256.csv` | o mesmo já hasheado |
+| `…-completo.csv` | as MESMAS pessoas com telefone, nome, país e CEP — **é o que sobe** |
 
-O `completo` existe porque mais identificador = mais gente casada. A ordem de
-28/09 foi "só e-mail", então ele fica de reserva — trocar é mudar
-`LISTA_ARQUIVO`.
+O `completo` é o preferido porque mais identificador = mais gente casada:
+e-mail morto ainda casa pelo telefone. 99% das compradoras têm os dois.
 
 ## 2. Subir
 
 ```bash
-railway link --project heroic-mercy --environment production --service flowops-lite
-railway run node backend/scripts/google-customer-match/subir-lista.js            # ensaio a seco
-TERMOS_ACEITOS=1 railway run node backend/scripts/google-customer-match/subir-lista.js --aplicar
+railway run --service flowops-lite node backend/scripts/google-customer-match/subir-lista.js   # ensaio a seco
+TERMOS_ACEITOS=1 railway run --service flowops-lite node backend/scripts/google-customer-match/subir-lista.js --aplicar
 ```
 
 Sem `--aplicar` nada é criado nem enviado: o Google só confere. Com `--aplicar`
@@ -55,8 +77,24 @@ a lista é criada e, **antes de qualquer e-mail subir**, um lote de 10 passa por
 uma validação a seco — se faltar aceite de termos ou a conta não for elegível, o
 erro aparece com a lista ainda vazia.
 
+O `--service flowops-lite` evita trocar o link do repo (o `railway link` é **por
+pasta**, e a raiz aponta pro Postgres).
+
 Variáveis: `LISTA_CONTA` (padrão `8925231246`, Plus Size Ecomm), `LISTA_NOME`,
-`LISTA_ARQUIVO`, `LISTA_ID` (pra reenviar numa lista que já existe).
+`LISTA_DESC`, `LISTA_ARQUIVO`, `LISTA_ID` (pra reenviar numa lista que já
+existe — é assim que se **atualiza** a lista todo mês, em vez de criar outra).
+
+## 3. Conferir o match
+
+```powershell
+$env:LISTA_ID = '9479548071'; railway run --service flowops-lite node backend/scripts/google-customer-match/conferir-lista.js
+```
+
+Sem `LISTA_ID` mostra todas as listas de contato da conta. **Tamanho 0 logo
+depois de subir é esperado** — o Google casa os hashes em algumas horas.
+
+⚠️ O terminal do dono é **PowerShell 5.1**: `&&` e `VAR=1 comando` não existem
+lá. Use `;` e `$env:VAR = '1'`.
 
 ## As três pegadinhas que custaram tempo
 
