@@ -7864,6 +7864,18 @@ model SiteEvento {
   @@index([evento, criadoEm])
   /// Toda tela de métrica filtra `bot = false` antes de qualquer outra coisa.
   @@index([bot, criadoEm])
+  /// A SESSÃO é a chave do FUNIL, e faltava índice por ela (28/09). Toda
+  /// pergunta do relatório de conversão é "o que ESSA sessão fez depois":
+  /// `GROUP BY session_id`, `session_id NOT IN (sessões de loja)` e duas
+  /// subconsultas CORRELACIONADAS que voltam nesta mesma tabela pelo
+  /// `session_id` (a contagem de `payment_retry` e o EXISTS de recuperação).
+  /// Sem índice cada uma varria a tabela inteira; com `work_mem` de 16 MB o
+  /// plano derrama pra disco, e em 28/09 isso ESTOUROU o volume do Postgres —
+  /// `53100: could not write to file "base/pgsql_tmp/…": No space left on
+  /// device`, que é o 500 de `/retaguarda/cliques-lojas`. O banco já tinha
+  /// escrito 64,8 GB de arquivos temporários. E dobra de tamanho por mês
+  /// (ago/26 551 mil linhas → set/26 1,02 milhão), então só piora sozinho.
+  @@index([sessionId, criadoEm])
   @@map("site_eventos")
 }
 
