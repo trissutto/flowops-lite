@@ -75,18 +75,42 @@ let TOKEN;
   console.log(`conta ..... ${CONTA}`);
   console.log(`lista ..... "${NOME_LISTA}"`);
 
-  const linhas = fs
+  const cruas = fs
     .readFileSync(ARQUIVO, 'utf8')
     .split(/\r?\n/)
-    .slice(1)
     .map((l) => l.trim())
     .filter(Boolean);
-  console.log(`arquivo ... ${path.basename(ARQUIVO)} (${linhas.length} e-mails)\n`);
-  if (!linhas.length) throw new Error('arquivo vazio');
+  const cabecalho = (cruas.shift() || '').toLowerCase();
+  const COMPLETO = cabecalho.includes('phone');
+  if (!cruas.length) throw new Error('arquivo vazio');
+  console.log(`arquivo ... ${path.basename(ARQUIVO)} (${cruas.length} pessoas, ${COMPLETO ? 'e-mail + telefone + endereço' : 'só e-mail'})\n`);
 
-  const hashes = linhas.map((e) =>
-    /^[0-9a-f]{64}$/.test(e) ? e : crypto.createHash('sha256').update(e.toLowerCase()).digest('hex'),
-  );
+  const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
+  /** Já hasheado passa direto; texto puro é hasheado aqui. O Google recusa
+   *  texto puro, então nada sai daqui sem passar por SHA-256. */
+  const h = (v) => (/^[0-9a-f]{64}$/.test(v) ? v : sha(String(v).trim().toLowerCase()));
+
+  /**
+   * Cada pessoa vira uma lista de identificadores. Quanto mais o Google tem,
+   * mais gente ele casa — e-mail morto pode casar pelo telefone.
+   * ⚠️ `regionCode` e `postalCode` vão em TEXTO PURO; só nome e sobrenome são
+   * hasheados dentro de `address`.
+   */
+  const pessoas = cruas.map((linha) => {
+    if (!COMPLETO) return [{ emailAddress: h(linha) }];
+    const [email, fone, first, last, pais, cep] = linha.split(',');
+    const ids = [];
+    if (email) ids.push({ emailAddress: h(email) });
+    if (fone) ids.push({ phoneNumber: h(fone) });
+    // O bloco de endereço só vale COMPLETO — meio endereço é recusado.
+    if (first && last && pais && cep) {
+      ids.push({ address: { givenName: h(first), familyName: h(last), regionCode: pais, postalCode: cep } });
+    }
+    return ids;
+  });
+  const enviaveis = pessoas.filter((p) => p.length);
+  const vazias = pessoas.length - enviaveis.length;
+  if (vazias) console.log(`  ⚠ ${vazias} linha(s) sem identificador nenhum — ficam de fora`);
 
   TOKEN = await token();
   console.log('✓ OAuth ok\n');
@@ -97,7 +121,9 @@ let TOKEN;
   const pai = `accountTypes/GOOGLE_ADS/accounts/${CONTA}`;
   const corpoLista = {
     displayName: NOME_LISTA,
-    description: 'Compradoras do site (WooCommerce + lurds.com.br) nos ultimos 12 meses. Gerada do Postgres do FlowOps.',
+    description:
+      env('LISTA_DESC') ||
+      'Compradoras do site (WooCommerce + lurds.com.br). Gerada do Postgres do FlowOps.',
     ingestedUserListInfo: { uploadKeyTypes: ['CONTACT_ID'] },
     // Duration em SEGUNDOS, múltiplo exato de 24h — não é "…Days". 540 dias é
     // o teto do Customer Match.
@@ -131,7 +157,7 @@ let TOKEN;
   /** Monta o corpo do ingest. `seco` = o Google confere e não grava nada. */
   const montar = (pedaco, seco) => ({
       destinations: [destino],
-      audienceMembers: pedaco.map((h) => ({ userData: { userIdentifiers: [{ emailAddress: h }] } })),
+      audienceMembers: pedaco.map((ids) => ({ userData: { userIdentifiers: ids } })),
       encoding: 'HEX',
       // `ACCEPTED` aqui é uma AFIRMAÇÃO de que os Termos de Dados de Clientes
       // foram aceitos NA CONTA — aceite humano, na tela do Google Ads. Só vai
@@ -146,7 +172,7 @@ let TOKEN;
   // Ensaio a seco do INGEST antes de mandar 5 mil e-mails: se faltar aceite de
   // termos ou a conta não for elegível, o erro aparece aqui, com a lista ainda
   // vazia e nenhum dado de cliente entregue.
-  await dm('audienceMembers:ingest', montar(hashes.slice(0, 10), true));
+  await dm('audienceMembers:ingest', montar(enviaveis.slice(0, 10), true));
   console.log('✓ membros validados pelo Google (nada gravado ainda)');
 
   if (!APLICAR) {
@@ -154,8 +180,8 @@ let TOKEN;
   }
 
   let enviados = 0;
-  for (let i = 0; i < hashes.length; i += LOTE) {
-    const pedaco = hashes.slice(i, i + LOTE);
+  for (let i = 0; i < enviaveis.length; i += LOTE) {
+    const pedaco = enviaveis.slice(i, i + LOTE);
     const r = await dm('audienceMembers:ingest', montar(pedaco, false));
     enviados += pedaco.length;
     const avisos = Array.isArray(r?.fieldWarnings) ? r.fieldWarnings.length : 0;

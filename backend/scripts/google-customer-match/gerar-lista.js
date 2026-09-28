@@ -33,7 +33,11 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
-const MESES = 12;
+// Janela em meses. `MESES=0` (ou `tudo`) leva o histórico inteiro do site —
+// abril/2021 em diante, 16.664 e-mails contra 5.591 dos últimos 12 meses.
+const CRU = (process.env.MESES || '12').trim().toLowerCase();
+const MESES = CRU === 'tudo' || CRU === '0' ? 0 : Number(CRU) || 12;
+const ROTULO = MESES ? `${MESES}m` : 'tudo';
 
 /* ─────────────────────────── normalização do Google ─────────────────────────── */
 
@@ -108,16 +112,22 @@ if (require.main !== module) return;
   // Mesma régua de "vendeu" do DRE e da ficha do cliente.
   const VENDIDO = ['paid', 'separating', 'ready', 'shipped', 'delivered', 'completed', 'finished'];
 
-  log(`\n=== COMPRADORAS DO SITE — ÚLTIMOS ${MESES} MESES ===\n`);
+  log(`\n=== COMPRADORAS DO SITE — ${MESES ? `ÚLTIMOS ${MESES} MESES` : 'HISTÓRICO INTEIRO'} ===\n`);
+
+  // `MESES=0` tira a janela e leva tudo. A data da compra é `paid_at` quando
+  // existe; senão a do WooCommerce; senão a de chegada no Flow.
+  const janela = MESES
+    ? `AND COALESCE(paid_at, wc_date_created, created_at) >= now() - interval '${MESES} months'`
+    : '';
 
   const r = await db.query(
     `SELECT source, customer_email AS email, customer_phone AS fone,
             customer_name AS nome, shipping_cep AS cep
        FROM orders
-      WHERE COALESCE(paid_at, wc_date_created, created_at) >= now() - interval '${MESES} months'
-        AND source IN ('site', 'ecommerce')
+      WHERE source IN ('site', 'ecommerce')
         AND status <> 'cancelled'
-        AND (status = ANY($1::text[]) OR paid_at IS NOT NULL)`,
+        AND (status = ANY($1::text[]) OR paid_at IS NOT NULL)
+        ${janela}`,
     [VENDIDO],
   );
   const porFonte = {};
@@ -155,14 +165,14 @@ if (require.main !== module) return;
   const grava = (nome, conteudo) =>
     fs.writeFileSync(path.join(__dirname, nome), conteudo.join('\n') + '\n', 'utf8');
 
-  grava('site-12m-email.csv', ['Email', ...linhas.map((l) => l.email)]);
-  grava('site-12m-email-sha256.csv', ['Email', ...linhas.map((l) => sha(l.email))]);
+  grava(`site-${ROTULO}-email.csv`, ['Email', ...linhas.map((l) => l.email)]);
+  grava(`site-${ROTULO}-email-sha256.csv`, ['Email', ...linhas.map((l) => sha(l.email))]);
 
   // O Google só aceita o bloco de endereço COMPLETO (nome + sobrenome + país +
   // CEP). Faltando um, os quatro saem vazios: meio endereço derruba a linha
   // inteira em vez de ajudar o match.
   const completo = (l) => l.first && l.last && l.cep;
-  grava('site-12m-completo.csv', [
+  grava(`site-${ROTULO}-completo.csv`, [
     'Email,Phone,First Name,Last Name,Country,Zip',
     ...linhas.map((l) => {
       const ok = completo(l);
