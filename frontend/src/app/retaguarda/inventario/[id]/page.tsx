@@ -54,6 +54,9 @@ type Divergencia = {
   recontarPedidoEm: string | null;
   rodada: number;
   congeladoEm: string | null;
+  /** Primeiro e último bipe do código nesta sessão. */
+  primeiroBipeEm: string | null;
+  ultimoBipeEm: string | null;
   jaAjustado: boolean;
   foraDoSaldo: ForaDoSaldo;
   sobraExplicada: boolean;
@@ -106,7 +109,7 @@ type Relatorio = {
   };
   divergencias: Divergencia[];
   naoContados: NaoContado[];
-  naoCadastrados: Array<{ sku: string; contado: number }>;
+  naoCadastrados: Array<{ sku: string; contado: number; ultimoBipeEm: string | null }>;
   vistasDivergentes: Array<{ sku: string; rotulo: string | null; base: number; vitrine: number }>;
   ajustes: Ajuste[];
 };
@@ -118,6 +121,19 @@ const brl = (v: number | null) =>
 
 const data = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+
+/** "dd/mm HH:MM" e, se houve mais de um bipe em horários diferentes,
+ *  "dd/mm HH:MM → HH:MM" (mesmo dia) ou as duas datas inteiras. */
+const janelaBipe = (primeiro: string | null, ultimo: string | null) => {
+  if (!primeiro) return '—';
+  const a = new Date(primeiro);
+  const b = ultimo ? new Date(ultimo) : a;
+  const dia = (d: Date) => d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  const hora = (d: Date) => d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  if (hora(a) === hora(b) && dia(a) === dia(b)) return `${dia(a)} ${hora(a)}`;
+  if (dia(a) === dia(b)) return `${dia(a)} ${hora(a)} → ${hora(b)}`;
+  return `${dia(a)} ${hora(a)} → ${dia(b)} ${hora(b)}`;
+};
 
 type Aba = 'divergencias' | 'naoContados' | 'semCadastro' | 'ajustes';
 
@@ -395,6 +411,7 @@ export default function InventarioDetalhePage() {
                       <th className="px-3 py-2 text-right">Sistema</th>
                       <th className="px-3 py-2 text-right">Diferença</th>
                       <th className="px-3 py-2 text-right">R$</th>
+                      <th className="px-3 py-2 text-left">Bipado</th>
                       <th className="px-3 py-2 text-left">Observação</th>
                     </tr>
                   </thead>
@@ -435,6 +452,12 @@ export default function InventarioDetalhePage() {
                           {d.delta > 0 ? `+${d.delta}` : d.delta}
                         </td>
                         <td className="px-3 py-2 text-right font-mono">{brl(d.valor)}</td>
+                        <td
+                          className="px-3 py-2 font-mono text-[12px] text-slate-600 whitespace-nowrap"
+                          title="Primeiro → último bipe deste código"
+                        >
+                          {janelaBipe(d.primeiroBipeEm, d.ultimoBipeEm)}
+                        </td>
                         <td className="px-3 py-2">
                           <div className="flex flex-wrap gap-1.5">
                             {d.jaAjustado && (
@@ -555,8 +578,13 @@ export default function InventarioDetalhePage() {
                     key={n.sku}
                     className="flex items-center justify-between border border-slate-200 rounded-lg px-3 py-2"
                   >
-                    <span className="font-mono font-bold text-slate-800">{n.sku}</span>
-                    <span className="font-mono text-slate-500">{n.contado}×</span>
+                    <span className="font-mono font-bold text-slate-800 truncate" title={n.sku}>
+                      {n.sku}
+                    </span>
+                    <span className="font-mono text-slate-500 shrink-0 ml-2">
+                      {n.contado}×
+                      <span className="ml-2 text-[11px] text-slate-400">{data(n.ultimoBipeEm)}</span>
+                    </span>
                   </div>
                 ))}
               </div>
