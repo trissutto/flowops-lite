@@ -60,6 +60,42 @@ const uuid = () =>
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+/**
+ * SÓ EAN-13 ENTRA. A etiqueta tem o código de barras E um QR code, e o leitor
+ * às vezes pega o QR: chegava texto que não é peça nenhuma e virava "sem
+ * cadastro" fantasma. Decisão do dono (28/09): o inventário aceita SOMENTE o
+ * código de barras (13 dígitos). Mesma régua do servidor
+ * (`backend/src/common/inventario-contagem.ts`, `ehEan13`).
+ */
+const ehEan13 = (v: string) => /^\d{13}$/.test(v.trim());
+const MSG_SO_EAN13 =
+  'Isso não é o código de barras da peça — o leitor pegou o QR code (ou outra coisa). ' +
+  'Aponte pro código de BARRAS (13 dígitos) e bipe de novo. Nada foi contado.';
+
+/** Som pela Web Audio, sem arquivo. O leitor apita igual pra tudo — o som
+ *  GRAVE e triplo é o que faz a pessoa olhar pra tela quando deu errado. */
+const tocar = (tipo: 'ok' | 'erro') => {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const bipe = (em: number, dur: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = tipo === 'ok' ? 'sine' : 'square';
+      osc.frequency.value = tipo === 'ok' ? 880 : 200;
+      gain.gain.value = tipo === 'ok' ? 0.12 : 0.25;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + em);
+      osc.stop(ctx.currentTime + em + dur);
+    };
+    if (tipo === 'ok') bipe(0, 0.07);
+    else {
+      bipe(0, 0.3);
+      bipe(0.4, 0.3);
+      bipe(0.8, 0.3);
+    }
+  } catch {}
+};
+
 const hora = (iso: string) =>
   new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
@@ -167,6 +203,7 @@ export default function InventarioLojaPage() {
           });
           setPainel((p) => ({ ...p, pecasContadas: r.pecasContadas }));
           setErro(null);
+          tocar(r.naoCadastrado ? 'erro' : 'ok');
         } catch (e: any) {
           const msg = String(e?.message || '');
           // Recusa do servidor (inventário fechado, código vazio) NÃO vai pra
@@ -185,6 +222,7 @@ export default function InventarioLojaPage() {
             setUltima({ rotulo: 'guardado no aparelho', sku: item.codigo, contado: 0 });
           } else {
             setErro(msg || 'Não consegui registrar este bipe');
+            tocar('erro');
           }
         }
       }
@@ -200,9 +238,18 @@ export default function InventarioLojaPage() {
     const valor = codigo.trim();
     setCodigo('');
     if (!valor) return;
+    if (!ehEan13(valor)) {
+      // QR code (ou digitação) — recusa NA HORA, sem ir pro servidor nem pra
+      // fila offline: não é peça, não conta.
+      setUltima(null);
+      setErro(MSG_SO_EAN13);
+      tocar('erro');
+      focar();
+      return;
+    }
     pendenteEnvio.current.push({ codigo: valor, clientId: uuid() });
     void consumir();
-  }, [codigo, consumir]);
+  }, [codigo, consumir, focar]);
 
   /* A fila sobe sozinha: a cada 8s e sempre que o navegador avisa que voltou. */
   const drenarFila = useCallback(async () => {
@@ -393,9 +440,9 @@ export default function InventarioLojaPage() {
               />
 
               {erro && (
-                <div className="mt-3 flex items-start gap-2 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
-                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                  <div className="text-sm text-red-800 font-medium">{erro}</div>
+                <div className="mt-3 flex items-start gap-3 bg-red-600 border-4 border-red-800 rounded-xl px-4 py-4 animate-pulse">
+                  <AlertTriangle className="w-8 h-8 text-white shrink-0" />
+                  <div className="text-lg text-white font-black leading-snug">{erro}</div>
                 </div>
               )}
 
@@ -403,21 +450,30 @@ export default function InventarioLojaPage() {
                 <div
                   className={`mt-3 rounded-xl px-4 py-3 border-2 ${
                     ultima.naoCadastrado
-                      ? 'bg-amber-50 border-amber-300'
+                      ? 'bg-red-600 border-red-800 text-white'
                       : 'bg-emerald-50 border-emerald-300'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="font-black text-slate-800 text-lg truncate">
-                        {ultima.rotulo || ultima.sku}
-                      </div>
-                      <div className="font-mono text-xs text-slate-500">{ultima.sku}</div>
-                      {ultima.naoCadastrado && (
-                        <div className="text-[12px] font-bold text-amber-800 mt-1">
-                          Este código não está no cadastro. Contei e guardei pra matriz cadastrar —
-                          separe a peça.
-                        </div>
+                      {ultima.naoCadastrado ? (
+                        <>
+                          <div className="flex items-center gap-2 font-black text-2xl uppercase">
+                            <AlertTriangle className="w-8 h-8 shrink-0" /> Código NÃO EXISTE no cadastro
+                          </div>
+                          <div className="font-mono text-lg font-bold mt-1">{ultima.sku}</div>
+                          <div className="text-base font-bold mt-2 leading-snug">
+                            Contei e guardei pra matriz cadastrar. SEPARE ESTA PEÇA da arara antes de
+                            seguir — ela não vai entrar no ajuste.
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="font-black text-slate-800 text-lg truncate">
+                            {ultima.rotulo || ultima.sku}
+                          </div>
+                          <div className="font-mono text-xs text-slate-500">{ultima.sku}</div>
+                        </>
                       )}
                       {ultima.recontagem && (
                         <div className="text-[12px] font-bold text-amber-800 mt-1">

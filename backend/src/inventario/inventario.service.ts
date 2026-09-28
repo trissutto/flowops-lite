@@ -13,6 +13,8 @@ import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.
 import {
   classificarLinha,
   normalizarCodigo,
+  ehEan13,
+  MSG_SO_EAN13,
   ordenarPorDinheiro,
   planoDeAjuste,
   resumirContagem,
@@ -280,6 +282,9 @@ export class InventarioService {
 
     const digitado = String(input.codigo || '').trim();
     if (!digitado) throw new BadRequestException('Bipe vazio');
+    /* Só o código de BARRAS entra. O leitor pega o QR code da etiqueta às
+     * vezes, e isso viraria um "sem cadastro" fantasma na contagem. */
+    if (!ehEan13(digitado)) throw new BadRequestException(MSG_SO_EAN13);
 
     /* Reenvio (rede caiu, botão clicado 2x) é no-op: a linha já existe. */
     if (input.clientId) {
@@ -594,27 +599,39 @@ export class InventarioService {
         by: ['sku', 'rodada', 'naoCadastrado'],
         where: { sessaoId },
         _sum: { delta: true },
+        _min: { bipadoEm: true },
         _max: { bipadoEm: true },
       }),
       (this.prisma as any).inventarioAjuste.findMany({ where: { sessaoId } }),
     ]);
 
     const esperadoPorSku = new Map<string, any>(esperados.map((e: any) => [String(e.sku), e]));
-    const contadoPorSku = new Map<string, { qtd: number; rotulo: string | null; em: Date | null }>();
-    const naoCadastrados: Array<{ sku: string; contado: number }> = [];
+    /* Horário do PRIMEIRO e do ÚLTIMO bipe do código (pedido do dono 28/09):
+     * é o que diz em que arara a pessoa estava e se a peça foi bipada de novo
+     * horas depois. Cada bipe individual continua em `inventario_bipe`. */
+    const contadoPorSku = new Map<
+      string,
+      { qtd: number; rotulo: string | null; em: Date | null; primeiroEm: Date | null }
+    >();
+    const naoCadastrados: Array<{ sku: string; contado: number; ultimoBipeEm: Date | null }> = [];
 
     for (const b of bipes) {
       const sku = String(b.sku);
       const qtd = Number(b._sum?.delta) || 0;
       if (b.naoCadastrado) {
-        if (qtd > 0) naoCadastrados.push({ sku, contado: qtd });
+        if (qtd > 0) naoCadastrados.push({ sku, contado: qtd, ultimoBipeEm: b._max?.bipadoEm ?? null });
         continue;
       }
       /* O que vale é a rodada MAIS ALTA: recontagem substitui a contagem
        * anterior daquele código, não soma com ela. */
       const rodadaQueVale = esperadoPorSku.get(sku)?.rodada ?? 1;
       if (b.rodada !== rodadaQueVale) continue;
-      contadoPorSku.set(sku, { qtd, rotulo: null, em: b._max?.bipadoEm ?? null });
+      contadoPorSku.set(sku, {
+        qtd,
+        rotulo: null,
+        em: b._max?.bipadoEm ?? null,
+        primeiroEm: b._min?.bipadoEm ?? null,
+      });
     }
 
     const linhas: LinhaClassificada[] = esperados
@@ -657,6 +674,8 @@ export class InventarioService {
         recontarPedidoEm: esperadoPorSku.get(l.sku)?.recontarEm ?? null,
         rodada: esperadoPorSku.get(l.sku)?.rodada ?? 1,
         congeladoEm: esperadoPorSku.get(l.sku)?.congeladoEm ?? null,
+        primeiroBipeEm: contadoPorSku.get(l.sku)?.primeiroEm ?? null,
+        ultimoBipeEm: contadoPorSku.get(l.sku)?.em ?? null,
         jaAjustado: ajustes.some((a: any) => a.sku === l.sku && a.aplicado),
         /* Sobra explicada: a peça está na loja mas já é de alguém. */
         foraDoSaldo: fora ? m : null,

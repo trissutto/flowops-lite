@@ -1,5 +1,6 @@
 import {
   classificarLinha,
+  ehEan13,
   normalizarCodigo,
   ordenarPorDinheiro,
   planoDeAjuste,
@@ -20,6 +21,26 @@ describe('inventário — a régua da contagem', () => {
     expect(normalizarCodigo('008000000001234')).toBe('8000000001234');
     expect(normalizarCodigo('  132908 ')).toBe('132908');
     expect(normalizarCodigo(null)).toBe('');
+  });
+
+  describe('só EAN-13 entra — o leitor pega o QR code da etiqueta às vezes', () => {
+    it('13 dígitos passa, com espaço em volta também', () => {
+      expect(ehEan13('8000000001234')).toBe(true);
+      expect(ehEan13(' 8000000001234 ')).toBe(true);
+      expect(ehEan13('0000011264750')).toBe(true);
+    });
+    it('QR code (URL, ref, texto) é recusado', () => {
+      expect(ehEan13('https://lurds.com.br/produto/ref-207279?cor=preto')).toBe(false);
+      expect(ehEan13('207279 PRETO 48')).toBe(false);
+      expect(ehEan13('REF207279')).toBe(false);
+    });
+    it('código curto, 12 ou 14 dígitos e vazio são recusados', () => {
+      expect(ehEan13('132908')).toBe(false);
+      expect(ehEan13('800000000123')).toBe(false);
+      expect(ehEan13('80000000012345')).toBe(false);
+      expect(ehEan13('')).toBe(false);
+      expect(ehEan13(null)).toBe(false);
+    });
   });
 
   describe('delta e situação', () => {
