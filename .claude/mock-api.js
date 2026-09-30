@@ -150,6 +150,16 @@ const server = http.createServer((req, res) => {
     return json(out);
   }
 
+  // Bipe: codigo exato -> a peca; 7891234567890 = mesmo codigo de barras em 2
+  // cadastros; 666666 = erro de consulta; o resto = nao cadastrado.
+  if (url.pathname === '/api/purchase-orders/reposicao/bipe') {
+    const c = String(url.searchParams.get('codigo') || '').trim();
+    if (c === '666666') return json({ message: 'banco fora' }, 500);
+    const out = c === '7891234567890' ? PRODUTOS.slice(0, 2) : PRODUTOS.filter((p) => p.codigo === c);
+    console.log(`[mock] bipe codigo="${c}" -> ${out.length}`);
+    return json(out);
+  }
+
   if (url.pathname === '/api/purchase-orders/reposicao/confirmar' && req.method === 'POST') {
     let body = '';
     req.on('data', (c) => (body += c));

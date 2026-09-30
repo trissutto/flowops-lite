@@ -266,6 +266,15 @@ export class PurchaseOrdersController {
     return this.svc.reposicaoBuscar(q || '');
   }
 
+  /**
+   * Bipe da reposicao: codigo de barras → a peca exata (CODIGO ou EAN).
+   * GET /purchase-orders/reposicao/bipe?codigo=7891234567890
+   */
+  @Get('reposicao/bipe')
+  async reposicaoBipe(@Query('codigo') codigo: string) {
+    return this.svc.reposicaoBipe(codigo || '');
+  }
+
   // GET /purchase-orders/reposicao/diagnose saiu em 09/26: fazia SHOW COLUMNS
   // e um SELECT de amostra direto no pool MySQL do Giga pra explicar por que a
   // busca de reposição não achava a peça. O pool nem é mais criado (o método só

@@ -12,13 +12,19 @@
  *
  * Tirar as fotos não é só estética: a versão antiga disparava ~1 request de
  * foto POR SKU (115 numa busca "BMM-100") — era isso que pendurava a tela.
+ *
+ * BIPE (30/09): muita peça já tem código de barras cadastrado. Bipar no campo
+ * de busca (o leitor digita e manda Enter) confere o código no cadastro e, se
+ * existe, abre direto a caixa de QUANTIDADE — sem cascata. Confirmou, o foco
+ * volta pro campo pra bipar a próxima. A quantidade SOMA ao que já está na
+ * lista (bipar a mesma peça duas vezes não apaga a primeira).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, Printer, Package, CheckCircle2,
-  ChevronDown, ChevronRight, Trash2, X,
+  ChevronDown, ChevronRight, Trash2, X, ScanLine,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import EtiquetaPrint, { type EtiquetaConfig } from '@/components/EtiquetaPrint';
@@ -44,6 +50,9 @@ type Label = {
 
 /** Item digitado — vive FORA dos resultados pra sobreviver a uma nova busca. */
 type ItemSel = { p: Produto; qty: number };
+
+/** Só dígitos, 6+: é leitura de código de barras, não busca por REF/descrição. */
+const pareceCodigoDeBarras = (t: string) => /^\d{6,}$/.test(t);
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -71,6 +80,73 @@ export default function ReposicaoPage() {
   const [resultado, setResultado] = useState<{ ok: boolean; total: number; labels: Label[] } | null>(null);
   const [etiquetaCfg, setEtiquetaCfg] = useState<EtiquetaConfig | undefined>(undefined);
   useEffect(() => { api<EtiquetaConfig>('/etiqueta-config').then(setEtiquetaCfg).catch(() => {}); }, []);
+
+  // ── Bipe ──
+  const buscaRef = useRef<HTMLInputElement>(null);
+  const qtdRef = useRef<HTMLInputElement>(null);
+  const [bipando, setBipando] = useState(false);
+  /** Aviso do último bipe: código não cadastrado, erro de consulta, etc. */
+  const [avisoBipe, setAvisoBipe] = useState<{ tipo: 'nao_achou' | 'erro' | 'varios'; texto: string } | null>(null);
+  /** Peça bipada esperando a quantidade (a caixa). */
+  const [caixa, setCaixa] = useState<{ p: Produto; qtd: string; erro: string | null } | null>(null);
+
+  const bipar = async (codigo: string) => {
+    setBusca('');
+    setAvisoBipe(null);
+    setBipando(true);
+    try {
+      const r = await api<Produto[]>(`/purchase-orders/reposicao/bipe?codigo=${encodeURIComponent(codigo)}`);
+      if (r.length === 1) {
+        setCaixa({ p: r[0], qtd: '1', erro: null });
+      } else if (r.length === 0) {
+        setAvisoBipe({ tipo: 'nao_achou', texto: `Código ${codigo} não está cadastrado. Procure a peça pela REF ou descrição.` });
+      } else {
+        // Mesmo código de barras em mais de um cadastro: mostra todos, a pessoa escolhe.
+        setResultados(r);
+        setAbertas(new Set(r.map((p) => p.ref)));
+        setAvisoBipe({ tipo: 'varios', texto: `Código ${codigo} está em ${r.length} cadastros. Digite a quantidade na peça certa, abaixo.` });
+      }
+    } catch (e: any) {
+      // Consulta quebrada NÃO é "não cadastrado".
+      setAvisoBipe({ tipo: 'erro', texto: `Não deu pra conferir o código ${codigo} agora (${e?.message || 'erro'}). Bipe de novo.` });
+    } finally {
+      setBipando(false);
+    }
+  };
+
+  // Caixa aberta → foco e seleção na quantidade (digitar já substitui o 1).
+  const codigoNaCaixa = caixa?.p.codigo;
+  useEffect(() => {
+    if (!codigoNaCaixa) return;
+    qtdRef.current?.focus();
+    qtdRef.current?.select();
+  }, [codigoNaCaixa]);
+
+  const fecharCaixa = () => {
+    setCaixa(null);
+    setTimeout(() => buscaRef.current?.focus(), 0);
+  };
+
+  const confirmarCaixa = () => {
+    if (!caixa) return;
+    const txt = caixa.qtd.trim();
+    const qty = Math.floor(Number(txt));
+    // Leitor bipando a PRÓXIMA peça com a caixa aberta digita o código de
+    // barras no campo de quantidade — isso não pode virar 7 bilhões de peças.
+    if (!/^\d+$/.test(txt) || qty <= 0 || qty > 999) {
+      setCaixa({
+        ...caixa,
+        qtd: '',
+        erro: txt.length >= 6
+          ? 'Isso parece um código de barras. Digite a QUANTIDADE desta peça primeiro.'
+          : 'Digite uma quantidade de 1 a 999.',
+      });
+      return;
+    }
+    const p = caixa.p;
+    setSel((prev) => ({ ...prev, [p.codigo]: { p, qty: (prev[p.codigo]?.qty || 0) + qty } }));
+    fecharCaixa();
+  };
 
   // Busca com debounce. Erro NÃO vira lista vazia — busca quebrada e busca
   // vazia não podem ter a mesma cara (lição de 27/08).
@@ -254,13 +330,21 @@ export default function ReposicaoPage() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
+              ref={buscaRef}
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
-              placeholder="Buscar por REF (ex: BMM-100) ou descrição (ex: BLUSA PRETO)..."
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                const t = busca.trim();
+                if (!pareceCodigoDeBarras(t) || bipando) return;
+                e.preventDefault();
+                bipar(t);
+              }}
+              placeholder="Bipe o código de barras, ou busque por REF (ex: BMM-100) ou descrição (ex: BLUSA PRETO)..."
               autoFocus
               className="w-full pl-10 pr-3 py-3 border-2 rounded-lg text-base"
             />
-            {loading && (
+            {(loading || bipando) && (
               <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 animate-spin text-violet-600" />
             )}
           </div>
@@ -268,6 +352,24 @@ export default function ReposicaoPage() {
             <div className="mt-2 text-xs text-slate-400">Digite pelo menos 2 caracteres</div>
           )}
         </section>
+
+        {/* Aviso do bipe */}
+        {avisoBipe && (
+          <div
+            role="alert"
+            className={`flex items-start gap-3 rounded-2xl p-4 border-2 ${
+              avisoBipe.tipo === 'varios'
+                ? 'bg-amber-50 border-amber-300 text-amber-900'
+                : 'bg-rose-50 border-rose-300 text-rose-800'
+            }`}
+          >
+            <ScanLine className="w-5 h-5 shrink-0 mt-0.5" />
+            <div className="flex-1 text-sm font-bold">{avisoBipe.texto}</div>
+            <button onClick={() => setAvisoBipe(null)} className="p-1 rounded hover:bg-black/5" title="Fechar aviso">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* Erro de busca — NÃO é "não achei" */}
         {busca.length >= 2 && !loading && erroBusca && (
@@ -421,6 +523,72 @@ export default function ReposicaoPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* CAIXA DE QUANTIDADE — abre quando o bipe acha a peça */}
+      {caixa && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 print:hidden"
+          onClick={fecharCaixa}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => { e.preventDefault(); confirmarCaixa(); }}
+            onKeyDown={(e) => { if (e.key === 'Escape') fecharCaixa(); }}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5"
+          >
+            <div className="flex items-center gap-2 text-emerald-700 text-xs font-black uppercase">
+              <CheckCircle2 className="w-4 h-4" /> Peça cadastrada
+            </div>
+            <div className="mt-2 flex items-baseline gap-2 flex-wrap">
+              <span className="text-xl font-black font-mono text-violet-700">{caixa.p.ref}</span>
+              <span className="text-base font-black text-slate-800 uppercase">{caixa.p.cor}</span>
+              <span className="text-base font-black text-slate-800">TAM {caixa.p.tamanho}</span>
+            </div>
+            <div className="text-sm text-slate-600">{caixa.p.descricao}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              <span className="font-mono">{caixa.p.codigo}</span>
+              {' · '}
+              {caixa.p.preco > 0
+                ? <b className="text-emerald-700">{brl(caixa.p.preco)}</b>
+                : <b className="text-rose-600">sem preço no cadastro</b>}
+            </div>
+
+            <label className="block mt-4 text-sm font-black text-slate-700" htmlFor="qtd-bipe">
+              Quantidade
+            </label>
+            <input
+              id="qtd-bipe"
+              ref={qtdRef}
+              inputMode="numeric"
+              value={caixa.qtd}
+              onChange={(e) => setCaixa({ ...caixa, qtd: e.target.value, erro: null })}
+              className="mt-1 w-full h-14 text-center text-3xl font-mono font-black border-2 border-slate-300 focus:border-emerald-500 rounded-lg outline-none"
+            />
+            {caixa.erro && <div className="mt-2 text-sm font-bold text-rose-700">{caixa.erro}</div>}
+            {(sel[caixa.p.codigo]?.qty || 0) > 0 && (
+              <div className="mt-2 text-xs text-slate-500">
+                Já tem <b>{sel[caixa.p.codigo].qty}</b> desta peça na lista — a quantidade digitada <b>soma</b>.
+              </div>
+            )}
+
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={fecharCaixa}
+                className="flex-1 py-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm"
+              >
+                Cancelar (Esc)
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-black text-sm"
+              >
+                Adicionar (Enter)
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

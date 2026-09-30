@@ -1431,7 +1431,7 @@ export class PurchaseOrdersService {
    * Por isso o erro agora SOBE: vazio e quebrado nao podem ter a mesma cara.
    *
    * Termo casa por: REF (LIKE), REF sem hifen/espaco, descricao completa/PDV,
-   * CODIGO exato e — com 2+ palavras — TODAS as palavras na descricao.
+   * CODIGO exato, EAN exato e — com 2+ palavras — TODAS as palavras na descricao.
    * `vendaUn` ja esta em REAIS: nao dividir por 100.
    */
   async reposicaoBuscar(q: string) {
@@ -1450,6 +1450,7 @@ export class PurchaseOrdersService {
         OR upper(${a}."descricaoCompleta") LIKE $1
         OR upper(${a}."descricaoPdv") LIKE $1
         OR ${a}.codigo = $3
+        OR ${a}.ean = $3
         OR ($4::text[] IS NOT NULL AND upper(${a}."descricaoCompleta") LIKE ALL ($4::text[]))
       )`;
 
@@ -1484,6 +1485,66 @@ export class PurchaseOrdersService {
       todasPalavras,
     );
     this.logger.log(`reposicaoBuscar "${termo}" → ${rows.length} resultados (Postgres)`);
+
+    return rows.map((r) => ({
+      codigo: String(r.codigo || '').trim(),
+      ref: String(r.ref || '').trim(),
+      cor: String(r.cor || '').trim(),
+      tamanho: String(r.tamanho || '').trim(),
+      preco: Number(r.preco || 0),
+      descricao: String(r.descricao || '').trim(),
+      marca: r.marca ? String(r.marca).trim() : null,
+    }));
+  }
+
+  /**
+   * BIPE da reposicao (30/09): o leitor manda o codigo de barras e a tela abre
+   * direto a caixa de quantidade — sem passar pela cascata REF → cor → grade.
+   *
+   * Casa EXATO, nunca LIKE: pelo CODIGO (como veio e sem zeros a esquerda — a
+   * chave do catalogo) ou pela coluna `ean` (codigo de barras de fornecedor /
+   * EAN legado). Mesmas duas tabelas da busca, nativa vence.
+   *
+   * Devolve LISTA: 0 = nao cadastrado, 1 = a peca, 2+ = o mesmo codigo de
+   * barras em mais de um cadastro (a tela mostra todos e a pessoa escolhe —
+   * nunca palpite). Erro do banco SOBE: quebrado nao pode ter cara de
+   * "nao cadastrado".
+   */
+  async reposicaoBipe(codigoBarras: string) {
+    const raw = String(codigoBarras || '').trim();
+    if (raw.length < 4) return [];
+    const digitos = raw.replace(/\D/g, '');
+    const semZeros = raw.replace(/^0+/, '') || raw;
+    const codigos = Array.from(new Set([raw, semZeros]));
+    const eans = Array.from(new Set([raw, digitos, semZeros])).filter((e) => e.length >= 6);
+
+    const cond = (a: string) =>
+      `(${a}.codigo = ANY($1::text[]) OR ($2::text[] <> '{}' AND ${a}.ean = ANY($2::text[])))`;
+    const sql = `
+      WITH base AS (
+        SELECT p.codigo, p.ref, p.cor, p.tamanho, p."vendaUn" AS preco,
+               COALESCE(p."descricaoCompleta", p."descricaoPdv") AS descricao,
+               p.marca, 0 AS prio
+          FROM product p
+         WHERE p.ativo = true AND ${cond('p')}
+        UNION ALL
+        SELECT w.codigo, w.ref, w.cor, w.tamanho, w."vendaUn",
+               COALESCE(w."descricaoCompleta", w."descricaoPdv"), w.marca, 1
+          FROM wincred_produtos w
+         WHERE ${cond('w')}
+      ), dedup AS (
+        SELECT DISTINCT ON (codigo)
+               codigo, ref, cor, tamanho, preco, descricao, marca, prio
+          FROM base
+         ORDER BY codigo, prio
+      )
+      SELECT codigo, ref, cor, tamanho, preco, descricao, marca
+        FROM dedup
+       ORDER BY ref, cor, tamanho
+       LIMIT 20`;
+
+    const rows: any[] = await this.prisma.$queryRawUnsafe(sql, codigos, eans);
+    this.logger.log(`reposicaoBipe "${raw}" → ${rows.length} peca(s)`);
 
     return rows.map((r) => ({
       codigo: String(r.codigo || '').trim(),
