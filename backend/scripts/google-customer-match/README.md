@@ -84,7 +84,53 @@ Variáveis: `LISTA_CONTA` (padrão `8925231246`, Plus Size Ecomm), `LISTA_NOME`,
 `LISTA_DESC`, `LISTA_ARQUIVO`, `LISTA_ID` (pra reenviar numa lista que já
 existe — é assim que se **atualiza** a lista todo mês, em vez de criar outra).
 
-## 3. Conferir o match
+## 3. Campanha Demand Gen de recompra
+
+```bash
+ROTULO=novidades INDICE=2 railway run --service flowops-lite node backend/scripts/google-customer-match/criar-demand-gen.js --aplicar
+```
+
+**Nasce PAUSADA** — texto de anúncio é a cara da marca e orçamento é dinheiro.
+Ligar é um clique (ou `LIGAR=1`).
+
+No ar desde 30/09/2026: **`[Claude] Demand Gen - novidades - compradoras`**
+(campanha `24300304002`, grupo `202209914362`) — R$ 100/dia exclusivo,
+MAXIMIZE_CONVERSIONS, produtos `custom_label_2 = novidades` × compradoras dos
+12 meses (lista `9479548071`).
+
+### Como o feed é recortado
+
+| | conteúdo | peças |
+|---|---|---|
+| `custom_label_0` | subcategoria | todas |
+| `custom_label_1` | coleção pontual (`colecao-resort`) | 9 |
+| `custom_label_2` | **novidades** (últimas 25 cadastradas) | 43 |
+| `custom_label_3` | **conforto** (Linha Conforto) | 40 |
+
+🚨 **Não filtre Linha Conforto por `product_type`.** Lá só aparecem as **3**
+peças cuja categoria PRIMÁRIA é `linha-conforto`; as outras 37 entram como
+`t-shirts-premium`/`blusas`/`vestidos`, porque Linha Conforto é categoria de
+CAMPANHA (`categorias_extras`) e o `product_type` leva só a primária. É o
+`custom_label_3` que enxerga as 40 — e uma campanha filtrando errado acha 3
+peças **sem dar erro nenhum**.
+
+### Quatro recusas da API que custaram tempo
+
+1. **`contains_eu_political_advertising` é obrigatório** na criação da campanha.
+   Sem ele: "The required field was not present", apontando pro campo.
+2. **Demand Gen não aceita a lista pendurada no grupo** — "Audience segment
+   attachment is not allowed when use audience grouped bit is set to true". A
+   lista tem que virar um recurso `Audience`, e é ele que vira critério.
+3. **`DemandGenProductAd` leva UM título e UMA descrição** (não são campos
+   repetidos), e `businessName` é um `AdTextAsset`, não string. Pra vários
+   títulos em teste, o formato é `DemandGenMultiAssetAd`.
+4. **A árvore de produtos precisa do galho "todo o resto"** excluído. Só o
+   galho incluído deixa a partição incompleta e o Google recusa.
+
+Se o Google recusar no meio, passe `GRUPO_ID=<id>` e o script **retoma** em vez
+de deixar campanha órfã pra trás.
+
+## 4. Conferir o match
 
 ```powershell
 $env:LISTA_ID = '9479548071'; railway run --service flowops-lite node backend/scripts/google-customer-match/conferir-lista.js
