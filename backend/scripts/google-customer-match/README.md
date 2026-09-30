@@ -93,10 +93,20 @@ ROTULO=novidades INDICE=2 railway run --service flowops-lite node backend/script
 **Nasce PAUSADA** — texto de anúncio é a cara da marca e orçamento é dinheiro.
 Ligar é um clique (ou `LIGAR=1`).
 
-No ar desde 30/09/2026: **`[Claude] Demand Gen - novidades - compradoras`**
-(campanha `24300304002`, grupo `202209914362`) — R$ 100/dia exclusivo,
-MAXIMIZE_CONVERSIONS, produtos `custom_label_2 = novidades` × compradoras dos
-12 meses (lista `9479548071`).
+**ATIVAS desde 30/09/2026** (as duas: R$ 100/dia exclusivo cada — R$ 200/dia de
+verba nova, decisão do dono —, MAXIMIZE_CONVERSIONS, público = compradoras dos
+12 meses, lista `9479548071`):
+
+| campanha | id | produtos |
+|---|---|---|
+| `[Claude] Demand Gen - novidades - compradoras` | `24300304002` | `custom_label_2 = novidades` (43) |
+| `[Claude] Demand Gen - conforto - compradoras` | `24312235354` | `custom_label_3 = conforto` (40) |
+
+Ligar/pausar depois é com `ligar-campanha.js`:
+
+```bash
+CAMPANHA=24300304002 railway run --service flowops-lite node backend/scripts/google-customer-match/ligar-campanha.js --ligar
+```
 
 ### Como o feed é recortado
 
