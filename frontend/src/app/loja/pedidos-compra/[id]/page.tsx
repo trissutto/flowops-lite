@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
+import { codigosDosItens, marcarRecemRecebidas } from '@/lib/etiquetas-recem-recebidas';
 
 type Order = {
   id: string;
@@ -90,8 +91,10 @@ export default function PedidoDetalhePage() {
     try {
       const r = await api<Order>(`/purchase-orders/${id}`);
       setData(r);
+      return r;
     } catch (e: any) {
       setError(e?.message || 'Erro ao carregar pedido');
+      return null;
     } finally {
       setLoading(false);
     }
@@ -100,6 +103,13 @@ export default function PedidoDetalhePage() {
   useEffect(() => {
     if (id) fetchData();
   }, [id, fetchData]);
+
+  // Recarrega e anota o que ESTA entrada gerou: o botão "Etiquetas" imprime
+  // só isso, não a REF inteira de novo (cor recebida antes já tem etiqueta).
+  const recarregarAposReceber = async (itemIds: string[]) => {
+    const o = await fetchData();
+    if (o) marcarRecemRecebidas(id, codigosDosItens(o.items, itemIds));
+  };
 
   const confirmarRecebimento = async () => {
     if (!data) return;
@@ -116,12 +126,13 @@ export default function PedidoDetalhePage() {
             tamanhosQty: adjustedQty[it.id] || it.tamanhosQty,
           }))
         : [];
+      const pendentes = data.items.filter((it) => it.itemStatus !== 'recebido').map((it) => it.id);
       const r = await api<any>(`/purchase-orders/${id}/receive`, {
         method: 'POST',
         body: JSON.stringify({ itemsRecebidos }),
       });
       setReceiveResult(r);
-      await fetchData();
+      await recarregarAposReceber(pendentes);
     } catch (e: any) {
       alert('Erro: ' + e?.message);
     } finally {
@@ -189,7 +200,7 @@ export default function PedidoDetalhePage() {
         body: JSON.stringify({ itemIds, itemsRecebidos }),
       });
       setReceiveResult(r);
-      await fetchData();
+      await recarregarAposReceber(itemIds);
     } catch (e: any) {
       alert('Erro ao receber REF: ' + e?.message);
     } finally {
@@ -218,7 +229,7 @@ export default function PedidoDetalhePage() {
         body: JSON.stringify({ itemIds: [it.id], itemsRecebidos }),
       });
       setReceiveResult(r);
-      await fetchData();
+      await recarregarAposReceber([it.id]);
     } catch (e: any) {
       alert('Erro ao receber cor: ' + e?.message);
     } finally {
@@ -228,11 +239,11 @@ export default function PedidoDetalhePage() {
 
   /** Abre tela de etiquetas filtrada por REF — só imprime as desta ref */
   const imprimirEtiquetasDaRef = (ref: string) => {
-    router.push(`/loja/pedidos-compra/${id}/etiquetas?ref=${encodeURIComponent(ref)}`);
+    router.push(`/loja/pedidos-compra/${id}/etiquetas?ref=${encodeURIComponent(ref)}&novas=1`);
   };
 
   const irPraEtiquetas = () => {
-    router.push(`/loja/pedidos-compra/${id}/etiquetas`);
+    router.push(`/loja/pedidos-compra/${id}/etiquetas?novas=1`);
   };
 
   /**
@@ -702,7 +713,7 @@ export default function PedidoDetalhePage() {
                   <button
                     onClick={() => imprimirEtiquetasDaRef(ref)}
                     className="flex items-center gap-1 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs rounded-md shadow"
-                    title={`Imprimir etiquetas SÓ desta REF (${ref})`}
+                    title={`Etiquetas da REF ${ref} — abre só as que acabaram de entrar; as já impressas ficam em "Ver todas"`}
                   >
                     <Printer className="w-3.5 h-3.5" />
                     Etiquetas

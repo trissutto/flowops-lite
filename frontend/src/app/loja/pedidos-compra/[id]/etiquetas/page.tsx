@@ -14,6 +14,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Printer, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import EtiquetaPrint, { type EtiquetaConfig } from '@/components/EtiquetaPrint';
+import { lerRecemRecebidas, tirarRecemRecebidas } from '@/lib/etiquetas-recem-recebidas';
 
 type Label = {
   ref: string;
@@ -56,11 +57,26 @@ export default function EtiquetasPage() {
     if (refFromUrl) setFilterRef(refFromUrl);
   }, [refFromUrl]);
 
-  const filtered = filterRef.trim()
+  // ?novas=1 — só o que acabou de entrar neste computador e ainda não foi
+  // impresso. Recebeu uma cor depois da outra: a primeira já tem etiqueta.
+  const [soNovas, setSoNovas] = useState(searchParams?.get('novas') === '1');
+  const [novas, setNovas] = useState<Set<string>>(new Set());
+  useEffect(() => { if (id) setNovas(new Set(lerRecemRecebidas(id))); }, [id]);
+
+  const daRef = filterRef.trim()
     ? labels.filter((l) => l.ref.toUpperCase() === filterRef.trim().toUpperCase())
     : labels;
+  const novasDaRef = daRef.filter((l) => novas.has(String(l.codigo)));
+  // Nada anotado (outro PC, pedido antigo, já impresso) → mostra tudo.
+  const filtrandoNovas = soNovas && novasDaRef.length > 0 && novasDaRef.length < daRef.length;
+  const filtered = filtrandoNovas ? novasDaRef : daRef;
 
-  const imprimir = () => window.print();
+  const imprimir = () => {
+    const impressos = Array.from(new Set(filtered.map((l) => String(l.codigo))));
+    window.print();
+    // Mandou imprimir: sai da lista do que falta etiquetar.
+    tirarRecemRecebidas(id, impressos);
+  };
 
   if (loading) {
     return (
@@ -97,7 +113,7 @@ export default function EtiquetasPage() {
               )}
             </h1>
             <p className="text-xs text-slate-500">
-              <b>{filtered.length}</b> etiquetas {filterRef && `(filtrado de ${labels.length})`}
+              <b>{filtered.length}</b> etiquetas {(filterRef || filtrandoNovas) && `(filtrado de ${labels.length})`}
             </p>
           </div>
           <input
@@ -119,6 +135,21 @@ export default function EtiquetasPage() {
       </header>
 
       <main className="max-w-[900px] mx-auto p-4 print:p-0 print:max-w-full">
+        {filtrandoNovas && (
+          <div className="mb-3 bg-emerald-50 border border-emerald-300 rounded-lg p-3 flex items-center gap-3 text-sm print:hidden">
+            <div className="flex-1 text-emerald-900">
+              Só as <b>{novasDaRef.length}</b> etiquetas do que acabou de entrar
+              {' '}(<b>{Array.from(new Set(novasDaRef.map((l) => l.cor))).join(', ')}</b>).
+              As outras {daRef.length - novasDaRef.length} já tinham sido recebidas antes.
+            </div>
+            <button
+              onClick={() => setSoNovas(false)}
+              className="px-3 py-1.5 bg-white border border-emerald-400 text-emerald-800 font-bold text-xs rounded-md hover:bg-emerald-100"
+            >
+              Ver todas ({daRef.length})
+            </button>
+          </div>
+        )}
         {filtered.length === 0 ? (
           <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-8 text-center print:hidden">
             <div className="text-4xl mb-3">⚠️</div>

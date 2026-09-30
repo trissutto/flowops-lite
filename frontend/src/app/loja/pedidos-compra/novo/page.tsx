@@ -20,6 +20,7 @@ import {
 import { PoShell } from '../PoShell';
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
+import { codigosDosItens, marcarRecemRecebidas } from '@/lib/etiquetas-recem-recebidas';
 import {
   applyPurchaseOrderCollection,
   completeGradeAndPrepareNext,
@@ -859,9 +860,15 @@ export default function NovoPedidoPage() {
       }
       // Aba de etiquetas SÓ quando pedida (botão "Etiquetas") — no fluxo do
       // Enter ela roubava o foco e quebrava o ritmo do lançamento.
+      // Anota o que ESTA conferência gerou: a aba de etiquetas abre só isso,
+      // não as cores da REF que já tinham sido recebidas (e etiquetadas) antes.
+      try {
+        const o = await api<{ items: any[] }>(`/purchase-orders/${oid}`);
+        marcarRecemRecebidas(oid, codigosDosItens(o.items, itemIds));
+      } catch { /* sem a lista a aba mostra a REF inteira, como antes */ }
       if (opts?.abrirEtiquetas) {
         window.open(
-          `/loja/pedidos-compra/${oid}/etiquetas?ref=${encodeURIComponent(it.ref.trim().toUpperCase())}`,
+          `/loja/pedidos-compra/${oid}/etiquetas?ref=${encodeURIComponent(it.ref.trim().toUpperCase())}&novas=1`,
           '_blank',
         );
       }
