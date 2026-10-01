@@ -2732,6 +2732,15 @@ model NfceAttempt {
   xmlEnviado    String?  @map("xml_enviado") @db.Text
   xmlResposta   String?  @map("xml_resposta") @db.Text
   xmlAutorizado String?  @map("xml_autorizado") @db.Text
+  // ── Nota CANCELADA que foi substituída por outra (01/10/2026) ──
+  // Quando a venda emite de novo depois do cancelamento, os campos nfce* da
+  // venda passam a ser os da nota NOVA. O evento de cancelamento da antiga
+  // (protocolo, justificativa, XML) fica guardado aqui — documento fiscal,
+  // não pode sumir junto com a reemissão.
+  canceladaEm        DateTime? @map("cancelada_em")
+  cancelamentoProto  String?   @map("cancelamento_proto")
+  cancelamentoMotivo String?   @map("cancelamento_motivo") @db.Text
+  cancelamentoXml    String?   @map("cancelamento_xml") @db.Text
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

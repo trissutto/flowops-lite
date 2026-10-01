@@ -163,6 +163,10 @@ export default function NotasEmitidasPage() {
   const [fixError, setFixError] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // Nota CANCELADA: a venda continua valendo e pode ganhar nota nova (01/10).
+  const notaCancelada = (r: NfceRow | null) =>
+    !!r && (r.nfceStatus === 'cancelled' || !!r.nfceCanceladaEm);
+
   function abrirCorrecao(r: NfceRow) {
     setFixTarget(r);
     setFixDoc((r.customerCpf || '').replace(/\D/g, ''));
@@ -267,7 +271,12 @@ export default function NotasEmitidasPage() {
         });
       }
       // 2) Emite/reemite a NFC-e (transmite pra SEFAZ).
-      const r = await api<any>(`/pdv/sales/${fixTarget.id}/nfce`, { method: 'POST' });
+      //    Nota cancelada: a chave `reemitirCancelada` manda o backend guardar
+      //    a cancelada no arquivo e pegar número novo.
+      const r = await api<any>(`/pdv/sales/${fixTarget.id}/nfce`, {
+        method: 'POST',
+        body: JSON.stringify(notaCancelada(fixTarget) ? { reemitirCancelada: true } : {}),
+      });
       if (r?.status === 'authorized') {
         setFixResult({ ok: true, msg: `NFC-e ${r.numero || ''} autorizada!` });
         await carregar();
@@ -576,6 +585,18 @@ export default function NotasEmitidasPage() {
                           : 'Tirar nota'}
                       </button>
                     )}
+                    {/* Nota CANCELADA (ex.: saiu sem CPF): edita o CPF e tira
+                        uma nota NOVA, com número novo. A cancelada fica guardada. */}
+                    {notaCancelada(r) && (
+                      <button
+                        onClick={() => abrirCorrecao(r)}
+                        className="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded text-xs font-bold border border-amber-300 flex items-center gap-1"
+                        title="A nota foi cancelada — corrija o CPF/nome e emita uma nota nova pra esta venda"
+                      >
+                        <AlertCircle className="w-3 h-3" />
+                        Editar e emitir de novo
+                      </button>
+                    )}
                     {/* Reimprimir NFC-e (cupom fiscal) — só pra autorizadas */}
                     {r.nfceStatus === 'authorized' && r.nfceChave && (
                       <button
@@ -746,9 +767,11 @@ export default function NotasEmitidasPage() {
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-lg flex items-center gap-2">
                 <AlertCircle className="w-5 h-5 text-amber-600" />
-                {fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error'
-                  ? 'Corrigir & reemitir'
-                  : 'Tirar nota desta venda'}
+                {notaCancelada(fixTarget)
+                  ? 'Editar e emitir de novo'
+                  : fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error'
+                    ? 'Corrigir & reemitir'
+                    : 'Tirar nota desta venda'}
               </h3>
               <button onClick={() => setFixTarget(null)} disabled={fixSaving}>
                 <X className="w-5 h-5" />
@@ -760,7 +783,9 @@ export default function NotasEmitidasPage() {
               <div className="flex justify-between"><span>Doc. atual:</span><b className="font-mono">{fixTarget.customerCpf || '—'}</b></div>
             </div>
             <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-amber-900">
-              {fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error' ? (
+              {notaCancelada(fixTarget) ? (
+                <>A NFC-e <b>{fixTarget.nfceNumber}</b> desta venda foi <b>cancelada</b>. Corrija o CPF/nome e emita: sai uma nota <b>nova, com número novo</b>. A cancelada continua guardada.</>
+              ) : fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error' ? (
                 <>A nota foi <b>rejeitada</b> pela SEFAZ. Corrija o CPF/CNPJ e reemita.</>
               ) : (
                 <>Essa venda ainda <b>não tem NFC-e</b> (a tela do PIX fechou antes, etc). Adicione o CPF se quiser e clique em <b>Tirar nota</b> pra emitir agora.</>
@@ -827,7 +852,7 @@ export default function NotasEmitidasPage() {
                 {fixSaving ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> Emitindo…</>
                 ) : (
-                  <><FileText className="w-4 h-4" /> {fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error' ? 'Reemitir NFC-e' : 'Tirar nota'}</>
+                  <><FileText className="w-4 h-4" /> {notaCancelada(fixTarget) ? 'Emitir nota nova' : fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error' ? 'Reemitir NFC-e' : 'Tirar nota'}</>
                 )}
               </button>
             </div>

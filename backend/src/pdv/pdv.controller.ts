@@ -520,9 +520,15 @@ export class PdvController {
    * Em modo stub (sem certificado A1) retorna XML preview + chave válida.
    */
   @Post('sales/:id/nfce')
-  emitNfce(@Req() req: any, @Param('id') id: string) {
+  emitNfce(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body?: { reemitirCancelada?: boolean },
+  ) {
     this.requireRole(req);
-    return this.nfce.emit(id);
+    // `reemitirCancelada`: a nota desta venda foi cancelada e a tela pediu
+    // uma nova ("Editar e emitir de novo"). Sem a chave, cancelada é recusa.
+    return this.nfce.emit(id, { reemitirCancelada: body?.reemitirCancelada === true });
   }
 
   /**

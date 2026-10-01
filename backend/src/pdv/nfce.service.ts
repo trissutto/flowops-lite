@@ -292,6 +292,82 @@ export class NfceService {
     });
   }
 
+  /**
+   * Guarda a nota CANCELADA no arquivo de tentativas e devolve a venda ao
+   * estado "sem nota", pra que a próxima emissão pegue número novo.
+   *
+   * O evento de cancelamento (protocolo, justificativa, XML) é documento
+   * fiscal: sai dos campos da venda — que passam a ser da nota nova — e fica
+   * na linha da tentativa que tinha sido autorizada. Nota antiga sem
+   * tentativa gravada ganha uma linha aqui, com o XML que estava na venda.
+   *
+   * O `updateMany` condicional é a trava: dois cliques simultâneos arquivam
+   * uma vez só.
+   */
+  private async arquivarNotaCancelada(sale: any): Promise<void> {
+    const numero = parseInt(String(sale.nfceNumber || ''), 10);
+    const arquivo = {
+      status: 'cancelled',
+      canceladaEm: sale.nfceCanceladaEm ?? new Date(),
+      cancelamentoProto: sale.nfceCancelamentoProto ?? null,
+      cancelamentoMotivo: sale.nfceCancelamentoMotivo ?? null,
+      cancelamentoXml: sale.nfceCancelamentoXml ?? null,
+    };
+    await (this.prisma as any).$transaction(async (tx: any) => {
+      const solta = await tx.pdvSale.updateMany({
+        where: {
+          id: sale.id,
+          OR: [{ nfceStatus: 'cancelled' }, { nfceCanceladaEm: { not: null } }],
+        },
+        data: {
+          // 'skipped' e não null: a tela de notas só lista venda com status,
+          // e se a emissão falhar logo abaixo a venda tem que continuar lá,
+          // com o "Tirar nota" à mão.
+          nfceStatus: 'skipped',
+          nfceNumber: null,
+          nfceChave: null,
+          nfceXml: null,
+          nfceProtocolo: null,
+          nfceMotivo: null,
+          nfceQrUrl: null,
+          nfceUrlConsulta: null,
+          nfceAutorizadaEm: null,
+          nfceCanceladaEm: null,
+          nfceCancelamentoProto: null,
+          nfceCancelamentoMotivo: null,
+          nfceCancelamentoXml: null,
+        },
+      });
+      if (solta.count !== 1) return; // outro clique já arquivou
+
+      const marcadas = Number.isFinite(numero) && numero > 0
+        ? await tx.nfceAttempt.updateMany({
+            where: { saleId: sale.id, numero, status: 'authorized' },
+            data: arquivo,
+          })
+        : { count: 0 };
+      if (marcadas.count === 0) {
+        await tx.nfceAttempt.create({
+          data: {
+            saleId: sale.id,
+            storeCode: sale.storeCode,
+            serie: String(sale.nfceSerie || '1'),
+            numero: Number.isFinite(numero) && numero > 0 ? numero : 0,
+            chave: sale.nfceChave ?? null,
+            protocolo: sale.nfceProtocolo ?? null,
+            xmlAutorizado: sale.nfceXml ?? null,
+            motivo: 'Nota cancelada — arquivada na reemissão',
+            ...arquivo,
+          },
+        });
+      }
+    });
+    this.logger.log(
+      `[nfce] venda ${String(sale.id).slice(0, 8)} loja=${sale.storeCode}: NFC-e ${sale.nfceNumber} CANCELADA ` +
+        `arquivada (chave ${sale.nfceChave}) — a venda vai emitir nota nova`,
+    );
+  }
+
   private async acquireEmissionLock(saleId: string): Promise<string> {
     const lockId = crypto.randomUUID();
     const expiredBefore = new Date(Date.now() - 2 * 60 * 1000);
@@ -918,7 +994,7 @@ export class NfceService {
   /**
    * Emite NFC-e da venda usando a config DA LOJA onde a venda foi feita.
    */
-  async emit(saleId: string): Promise<{
+  async emit(saleId: string, opts?: { reemitirCancelada?: boolean }): Promise<{
     status: 'preview' | 'authorized' | 'rejected' | 'error';
     chave: string;
     numero: number;
@@ -929,13 +1005,42 @@ export class NfceService {
     qrUrl?: string;
     urlConsulta?: string;
   }> {
-    const sale = await (this.prisma as any).pdvSale.findUnique({
+    let sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: saleId },
       include: { items: true, payments: true },
     });
     if (!sale) throw new BadRequestException('Venda não encontrada');
     if (sale.status !== 'finalized') {
-      throw new BadRequestException('Venda precisa estar finalizada');
+      throw new BadRequestException(
+        sale.status === 'cancelled'
+          ? 'Esta VENDA foi cancelada — não há o que emitir. Nota nova só existe pra venda que continua valendo.'
+          : 'Venda precisa estar finalizada',
+      );
+    }
+    /**
+     * NOTA CANCELADA → EMITIR DE NOVO (01/10/2026 — Sorocaba, NFC-e 92: a nota
+     * saiu sem CPF, foi cancelada pra corrigir, e a tela não tinha caminho de
+     * volta).
+     *
+     * Sem este ramo o `reserveNumero` REUSARIA o número da cancelada (ele
+     * reaproveita o número que já tem tentativa) e a SEFAZ recusaria; pior, a
+     * recusa trocava o status pra "rejeitada" e apagava da tela que existiu um
+     * cancelamento. Aqui a cancelada vai pro arquivo (`nfce_attempts`) e a
+     * venda volta a ser "sem nota": número NOVO, chave nova.
+     *
+     * Só com pedido explícito — nenhuma rotina reemite cancelada sozinha.
+     */
+    if (sale.nfceStatus === 'cancelled' || sale.nfceCanceladaEm) {
+      if (!opts?.reemitirCancelada) {
+        throw new BadRequestException(
+          'A NFC-e desta venda foi CANCELADA. Use "Editar e emitir de novo" na tela de notas pra tirar uma nota nova.',
+        );
+      }
+      await this.arquivarNotaCancelada(sale);
+      sale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: saleId },
+        include: { items: true, payments: true },
+      });
     }
     if (sale.nfceStatus === 'authorized') {
       return {
