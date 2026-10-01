@@ -3735,27 +3735,88 @@ export class OrdersController {
     if (item.cancelledAt) {
       return { ok: true as const, jaCancelada: true, valorEstornar: (item.unitPrice ?? 0) * (item.quantity ?? 1) };
     }
-    // Peça em card ATIVO não cancela por baixo dos panos.
-    if (item.assignedStoreId) {
-      const cardVivo = await this.prisma.pickOrder.findFirst({
-        where: {
-          orderId: local.id,
-          storeId: item.assignedStoreId,
-          status: { in: ['new', 'separating', 'separated', 'ready'] },
-        },
-        include: { store: { select: { code: true } } },
-      });
-      if (cardVivo) {
-        throw new BadRequestException(
-          `A peça está no card da loja ${cardVivo.store?.code} — tire de lá primeiro (Mover peça) ou espere a loja reportar.`,
-        );
-      }
-    }
     const atorReq = this.atorDoRequest(req);
     const userId = await this.userIdGravavel(atorReq.userId);
     const valor = (Number(item.unitPrice) || 0) * (Number(item.quantity) || 1);
     const pecaTxt = [item.ref, item.cor, item.tamanho].filter(Boolean).join(' ') || item.sku;
+    /**
+     * PEÇA EM CARD ATIVO SAI DO CARD JUNTO (01/10 — LP-001764: "mesmo a peça
+     * saindo do sistema ela não saiu do card").
+     *
+     * Até aqui a porta recusava qualquer peça com loja trabalhando, e o botão
+     * nem aparecia: pra tirar UMA peça de um pedido recém-roteado a matriz
+     * não tinha caminho nenhum. Agora a peça sai do card na mesma transação
+     * que a cancela — o card lista a peça por `assignedStoreId`, então zerar
+     * o dono é o que a tira da tela e do bipe da loja.
+     *
+     * O que continua fechado, porque o estoque já andou em nível de CARD:
+     * card finalizado (`separated`/`ready`) ou com a baixa carimbada — ali
+     * quem estorna é o "↔ Trocar loja", que devolve o card inteiro.
+     */
+    const cardVivo: any = item.assignedStoreId
+      ? await this.prisma.pickOrder.findFirst({
+          where: {
+            orderId: local.id,
+            storeId: item.assignedStoreId,
+            status: { in: ['new', 'separating', 'separated', 'ready'] },
+          },
+          include: { store: { select: { code: true, name: true } } },
+        })
+      : null;
+    let bipesDevolvidos = 0;
+    if (cardVivo) {
+      const lojaCode = cardVivo.store?.code ?? '—';
+      if (['separated', 'ready'].includes(String(cardVivo.status)) || cardVivo.debitApprovedAt) {
+        throw new BadRequestException(
+          `A loja ${lojaCode} já FINALIZOU a separação deste card — o estoque saiu pelo card inteiro. ` +
+            `Use "↔ Trocar loja" (estorna o card) ou "Trocar" a peça; cancelar por baixo deixaria a peça fora do estoque.`,
+        );
+      }
+      // Peça já bipada: o estoque dela saiu no bipe e volta agora. Com duas
+      // linhas do MESMO código no card não dá pra saber de qual é o bipe.
+      const gemeas = await (this.prisma as any).orderItem.count({
+        where: {
+          orderId: local.id,
+          assignedStoreId: item.assignedStoreId,
+          sku: item.sku,
+          cancelledAt: null,
+          id: { not: orderItemId },
+        },
+      });
+      const bipes = await (this.prisma as any).pickOrderScan.count({
+        where: { pickOrderId: cardVivo.id, sku: String(item.sku), revertedAt: null },
+      });
+      if (bipes > 0 && gemeas > 0) {
+        throw new BadRequestException(
+          `A loja ${lojaCode} já bipou este código e o card tem outra peça igual — ` +
+            `peça pra loja desfazer o bipe desta peça antes de cancelar.`,
+        );
+      }
+      if (bipes > 0) {
+        const r = await this.pickScans.revertScansForSku(cardVivo.id, String(item.sku), 'peca_cancelada', userId);
+        bipesDevolvidos = r.pecas;
+      }
+    }
     await this.prisma.$transaction(async (tx: any) => {
+      if (cardVivo) {
+        // Mesma fila do bipe/finish da loja: reconfere DEPOIS da trava.
+        await this.pickScans.lockPickOrder(tx, cardVivo.id);
+        const atual: any = await tx.pickOrder.findUnique({
+          where: { id: cardVivo.id },
+          select: { status: true, debitApprovedAt: true },
+        });
+        const bipouNoMeio = await tx.pickOrderScan.count({
+          where: { pickOrderId: cardVivo.id, sku: String(item.sku), revertedAt: null },
+        });
+        if (
+          (atual && (!['new', 'separating'].includes(String(atual.status)) || atual.debitApprovedAt)) ||
+          bipouNoMeio > 0
+        ) {
+          throw new BadRequestException(
+            'A loja mexeu neste card agora mesmo (bipou ou finalizou) — recarregue a tela e tente de novo.',
+          );
+        }
+      }
       await tx.orderItem.update({
         where: { id: orderItemId },
         data: {
@@ -3774,10 +3835,32 @@ export class OrdersController {
           note:
             `Peça CANCELADA do pedido: ${pecaTxt} (${item.quantity}x). Motivo: ${motivo}. ` +
             `🔴 DEVOLVER R$ ${valor.toFixed(2)} à cliente (estorno manual no gateway).` +
+            (cardVivo
+              ? ` Saiu do card da loja ${cardVivo.store?.code ?? '—'}` +
+                (bipesDevolvidos ? ` (${bipesDevolvidos} bipe(s) devolvido(s) ao estoque).` : '.')
+              : '') +
             (atorReq.nome ? ` · por ${atorReq.nome}` : ''),
         },
       });
     });
+    // Card que ficou sem peça nenhuma some; o que ainda tem peça avisa a loja
+    // pra tela dela recarregar sem a cancelada.
+    let cardsRemovidos: string[] = [];
+    // Pedido antigo com peça viva SEM carimbo de loja: a limpeza mede "vazio"
+    // pelo carimbo e apagaria um card que ainda tem o que separar.
+    const vivasSemCarimbo = cardVivo
+      ? await (this.prisma as any).orderItem.count({
+          where: { orderId: local.id, cancelledAt: null, assignedStoreId: null },
+        })
+      : 0;
+    if (cardVivo && vivasSemCarimbo === 0) {
+      cardsRemovidos = await this.routing
+        .limparCardsVaziosDoPedido(local.id, { userId, nome: atorReq.nome ?? null, reason: `peça ${pecaTxt} cancelada` })
+        .catch((e: any) => {
+          console.warn(`[cancelar-peca] limpeza de card vazio falhou (${local.id}): ${e?.message ?? e}`);
+          return [] as string[];
+        });
+    }
     /**
      * A peça cancelada pode ter sido a ÚLTIMA pendência de um pedido com
      * tudo postado (26/09): sem isto o pedido ficava "Em separação" pra
@@ -3789,7 +3872,15 @@ export class OrdersController {
       // convite de avaliação (ordem do dono 26/09).
       .tentarFecharPedido(local.id, { origem: `peça ${pecaTxt} cancelada na ficha`, userId, semConvite: true })
       .catch(() => ({ fechou: false as const, motivo: 'erro' }));
-    return { ok: true as const, valorEstornar: valor, peca: pecaTxt, pedidoFechado: fechamento.fechou };
+    return {
+      ok: true as const,
+      valorEstornar: valor,
+      peca: pecaTxt,
+      pedidoFechado: fechamento.fechou,
+      saiuDoCard: cardVivo?.store?.code ?? null,
+      cardsRemovidos,
+      bipesDevolvidos,
+    };
   }
 
   /**
