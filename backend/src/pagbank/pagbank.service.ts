@@ -1366,12 +1366,25 @@ export class PagbankService {
   // `common/estornos.ts`. Aqui é só a ida ao gateway — quem decide o status é
   // o `EstornosService`, lendo a resposta.
 
+  /**
+   * ⚠️ `Accept` nas rotas de COBRANÇA (`/charges/...`) tem que ser o curinga.
+   * Medido em produção em 01/10/2026 (ON-000361, loja 07): o MESMO token e o
+   * MESMO `CHAR_` respondem **406 sem corpo** com `Accept: application/json`
+   * e **200** com o curinga. As rotas de pedido (`/orders/...`)
+   * aceitam os dois. Com o 406 a tela dizia "não deu pra confirmar o saldo"
+   * e NENHUM estorno PagBank saiu desde a estreia do módulo (22/09).
+   */
+  private static readonly ACCEPT_CHARGES = '*/*';
+
   /** A cobrança como o PagBank a enxerga AGORA (saldo devolvido incluso). */
   async consultarCobranca(chargeId: string, storeCode?: string): Promise<any> {
     const cfg = await this.getConfigInternalForStore(String(storeCode || ''));
     const r = await firstValueFrom(
       this.http.get(`${this.getBaseUrl(cfg.ambiente)}/charges/${encodeURIComponent(chargeId)}`, {
-        headers: { Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`, Accept: 'application/json' },
+        headers: {
+          Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`,
+          Accept: PagbankService.ACCEPT_CHARGES,
+        },
         timeout: 10000,
       }),
     );
@@ -1401,7 +1414,7 @@ export class PagbankService {
     const url = `${this.getBaseUrl(cfg.ambiente)}/charges/${encodeURIComponent(input.chargeId)}/cancel`;
     const headers = {
       Authorization: `Bearer ${String(cfg.bearerToken || '').trim()}`,
-      Accept: 'application/json',
+      Accept: PagbankService.ACCEPT_CHARGES,
       'Content-Type': 'application/json',
       'x-idempotency-key': String(input.idempotencyKey).slice(0, 64),
     };
