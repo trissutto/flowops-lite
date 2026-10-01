@@ -449,7 +449,9 @@ export class PickOrdersService {
       .filter((p) => p.id !== po.id)
       .map((p) => p.storeId);
     const daCaixa = ((order?.items || []) as any[]).filter(
-      (i) => !i.assignedStoreId || !outrasLojas.includes(i.assignedStoreId),
+      // Peça CANCELADA fica sem loja — e "sem loja" aqui quer dizer "desta
+      // caixa". Sem o filtro ela voltava pro card depois de cancelada (01/10).
+      (i) => !i.cancelledAt && (!i.assignedStoreId || !outrasLojas.includes(i.assignedStoreId)),
     );
     const fonte = daCaixa.length ? daCaixa : ((order?.items || []) as any[]);
     return {
@@ -1117,9 +1119,9 @@ export class PickOrdersService {
     if (!r?.destDce) return null;
     // Âncora da JUNTADA: o pacote leva o pedido INTEIRO (peso e declaração).
     const itensLoja = (await this.souAncoraDaJuntada(order, pick))
-      ? (order.items || [])
-      : (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
-    const lista = itensLoja.length ? itensLoja : (order.items || []);
+      ? (order.items || []).filter((i: any) => !i.cancelledAt)
+      : (order.items || []).filter((i: any) => !i.cancelledAt && (!i.assignedStoreId || i.assignedStoreId === pick.storeId));
+    const lista = itensLoja.length ? itensLoja : (order.items || []).filter((i: any) => !i.cancelledAt);
     if (!lista.length) return null;
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const fallbackUnit = order.totalAmount ? Number(order.totalAmount) / totalPecas : 0;
@@ -1241,9 +1243,9 @@ export class PickOrdersService {
 
     // Âncora da JUNTADA: o pacote leva o pedido INTEIRO (peso e declaração).
     const itensLoja = (await this.souAncoraDaJuntada(order, pick))
-      ? (order.items || [])
-      : (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
-    const lista = itensLoja.length ? itensLoja : (order.items || []);
+      ? (order.items || []).filter((i: any) => !i.cancelledAt)
+      : (order.items || []).filter((i: any) => !i.cancelledAt && (!i.assignedStoreId || i.assignedStoreId === pick.storeId));
+    const lista = itensLoja.length ? itensLoja : (order.items || []).filter((i: any) => !i.cancelledAt);
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
     // SERVIÇO = o que a cliente PAGOU (mesma leitura do caminho Correios).
@@ -1314,9 +1316,9 @@ export class PickOrdersService {
 
     // Âncora da JUNTADA: o pacote leva o pedido INTEIRO (peso e declaração).
     const itensLoja = (await this.souAncoraDaJuntada(order, pick))
-      ? (order.items || [])
-      : (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
-    const lista = itensLoja.length ? itensLoja : (order.items || []);
+      ? (order.items || []).filter((i: any) => !i.cancelledAt)
+      : (order.items || []).filter((i: any) => !i.cancelledAt && (!i.assignedStoreId || i.assignedStoreId === pick.storeId));
+    const lista = itensLoja.length ? itensLoja : (order.items || []).filter((i: any) => !i.cancelledAt);
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
     // SERVIÇO = o que a cliente PAGOU no checkout. Até 12/08 isto era
@@ -3903,7 +3905,9 @@ export class PickOrdersService {
     // vai pra loja onde foi assignado; sem assignação (pedido de loja única)
     // conta pra loja se for a única pick-order.
     const itens = await this.prisma.orderItem.findMany({
-      where: { orderId: order.id },
+      // Peça cancelada fica SEM loja — sem este filtro o card único a
+      // adotava de volta e ela "não saía do card" (01/10 — LP-001764).
+      where: { orderId: order.id, cancelledAt: null },
       select: {
         id: true,
         sku: true,
@@ -4097,8 +4101,10 @@ export class PickOrdersService {
       throw new ForbiddenException('Pick-order não pertence à sua loja');
     }
     // Filtra itens só dessa loja
+    // ... e nunca a peça CANCELADA: ela fica sem loja, e "sem loja" aqui
+    // cairia no card de novo (01/10 — LP-001764).
     const items = row.order.items.filter(
-      (i) => !i.assignedStoreId || i.assignedStoreId === storeId,
+      (i) => !(i as any).cancelledAt && (!i.assignedStoreId || i.assignedStoreId === storeId),
     );
     // Parse snapshot do cliente (só em transferência) pro frontend não precisar
     // parsear JSON textual de novo.

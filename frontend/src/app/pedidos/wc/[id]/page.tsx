@@ -797,14 +797,23 @@ export default function PedidoDetailPage() {
     setCancelarBusy(true);
     setCancelarErro(null);
     try {
-      const r = await api<{ ok: boolean; valorEstornar: number; peca?: string; pedidoFechado?: boolean }>(
+      const r = await api<{
+        ok: boolean; valorEstornar: number; peca?: string; pedidoFechado?: boolean;
+        saiuDoCard?: string | null; cardsRemovidos?: string[]; bipesDevolvidos?: number;
+      }>(
         `/orders/wc/${wcId}/cancelar-peca`,
         { method: 'POST', body: JSON.stringify({ orderItemId: cancelarPeca.orderItemId, motivo: cancelarMotivo.trim() }) },
       );
       setCancelarPeca(null);
       setCancelarMotivo('');
       setFlash(
-        `✂ Peça cancelada. 🔴 ESTORNE R$ ${Number(r.valorEstornar ?? 0).toFixed(2)} pra cliente no gateway — ` +
+        `✂ Peça cancelada` +
+          (r.saiuDoCard
+            ? ` e tirada do card da loja ${r.saiuDoCard}` +
+              (r.cardsRemovidos?.length ? ' (o card ficou vazio e foi removido)' : '') +
+              (r.bipesDevolvidos ? ` — ${r.bipesDevolvidos} peça(s) bipada(s) voltaram ao estoque` : '')
+            : '') +
+          `. 🔴 ESTORNE R$ ${Number(r.valorEstornar ?? 0).toFixed(2)} pra cliente no gateway — ` +
           (r.pedidoFechado
             ? 'era a última pendência: o pedido foi CONCLUÍDO (todas as caixas já estavam postadas).'
             : 'o pedido segue com as outras peças.'),
@@ -3003,6 +3012,21 @@ export default function PedidoDetailPage() {
                             title="Cancela SÓ esta peça e devolve o valor dela — o pedido segue com as outras"
                           >
                             cancelar e devolver
+                          </button>
+                        )}
+                        {/* Peça em card que a loja ainda não finalizou: sai do
+                            pedido E do card (01/10 — LP-001764). */}
+                        {cardItem &&
+                          !cardItem.issueReason &&
+                          peca.estado !== 'cancelada' &&
+                          ['new', 'separating'].includes(cardItem.status) && (
+                          <button
+                            type="button"
+                            onClick={() => { setCancelarPeca(peca); setCancelarMotivo(''); setCancelarErro(null); }}
+                            className="text-xs font-semibold text-crit underline hover:opacity-80"
+                            title="Tira SÓ esta peça do pedido e do card da loja, e devolve o valor dela — o pedido segue com as outras"
+                          >
+                            excluir do pedido
                           </button>
                         )}
                       </div>

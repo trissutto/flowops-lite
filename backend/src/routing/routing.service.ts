@@ -227,6 +227,17 @@ export class RoutingService {
   }
 
   /**
+   * Porta pública da limpeza de card vazio — pra quem tira peça do card sem
+   * passar pelo roteamento (peça CANCELADA na ficha, 01/10 — LP-001764).
+   */
+  async limparCardsVaziosDoPedido(
+    orderId: string,
+    opts?: { userId?: string | null; nome?: string | null; reason?: string },
+  ): Promise<string[]> {
+    return this.cleanupEmptyActivePickOrders(orderId, opts);
+  }
+
+  /**
    * Calcula o roteamento SEM persistir (preview para aprovação manual).
    * Retorna também info de contato das lojas para montar mensagens WhatsApp.
    */
