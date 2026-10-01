@@ -98,6 +98,22 @@ export class ProductsEditorController {
   }
 
   /**
+   * POST /products-editor/trocar-codigo — Body: { de, para, executar? }
+   * Troca o CÓDIGO (SKU) de uma variação em todas as tabelas, numa transação.
+   * executar=false (padrão) = prévia: quantas linhas cada tabela reescreve.
+   */
+  @Post('trocar-codigo')
+  async trocarCodigo(@Req() req: any, @Body() body: { de?: string; para?: string; executar?: boolean }) {
+    this.requireAdmin(req);
+    return this.svc.trocarCodigo({
+      de: String(body?.de || ''),
+      para: String(body?.para || ''),
+      executar: body?.executar === true,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
+  /**
    * POST /products-editor/apply-marca-todos — Body: { q, marca }
    * MARCA EM MASSA: aplica em TODOS os resultados da busca no servidor,
    * sem o teto de 5.000 da tela (marcas com dezenas de milhares de variações).

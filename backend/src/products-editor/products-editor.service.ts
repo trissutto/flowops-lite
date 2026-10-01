@@ -1073,6 +1073,162 @@ export class ProductsEditorService {
     return { ok: aplicados > 0, aplicados, total: movs.length, resultados, batchId };
   }
 
+  /**
+   * TROCAR O CÓDIGO (SKU) de uma variação — pedido do dono em 01/10/2026
+   * ("deixe editável o SKU"). A tela dizia "SKU nunca muda" porque o código é
+   * a CHAVE de tudo: cadastro, estoque por loja, venda, marcado, card de
+   * separação, inventário… Trocar só no cadastro deixaria o estoque e o
+   * histórico órfãos (peça "some" da Consulta e do site, venda antiga aponta
+   * pra código que não existe). Então a troca é UMA transação que reescreve
+   * TODAS as tabelas que carregam o código — cadastro, estoque e histórico —
+   * e, se nada falhar, commita tudo junto.
+   *
+   * Regras:
+   * - o código novo NÃO pode existir em nenhuma tabela de cadastro/estoque
+   *   (seria fundir duas peças: estoque somado, histórico misturado);
+   * - normalização do catálogo (só dígitos perdem zeros à esquerda), teto de
+   *   14 caracteres (coluna), só letras/números/hífen;
+   * - se o código antigo tem cara de código de barras (8+ dígitos) e a peça
+   *   não tem `ean`, o antigo vira o `ean` — a etiqueta que já está na peça
+   *   continua bipando (caso 7891186984207 → código da família 5397xxx);
+   * - `executar=false` é a PRÉVIA: devolve quantas linhas cada tabela vai
+   *   reescrever, sem gravar. A tela mostra isso antes do confirmar.
+   *
+   * Auditoria: linha `CODIGO` ANTES→DEPOIS no `product_edit_audit`, gravada
+   * já sob o código NOVO (as linhas antigas migram junto, pro histórico da
+   * peça seguir inteiro).
+   */
+  async trocarCodigo(input: { de: string; para: string; executar: boolean; userName?: string | null }) {
+    const de = this.normalizeCodigo(input.de);
+    const paraRaw = String(input.para ?? '').trim().toUpperCase();
+    const para = this.normalizeCodigo(paraRaw);
+    if (!de) throw new BadRequestException('Código atual não informado');
+    if (!para) throw new BadRequestException('Informe o código novo');
+    if (!/^[A-Z0-9-]{1,14}$/.test(para)) {
+      throw new BadRequestException('Código novo: só letras, números e hífen, até 14 caracteres');
+    }
+    if (para === de) throw new BadRequestException('O código novo é igual ao atual');
+
+    const p: any = this.prisma;
+    const [nativo, espelho] = await Promise.all([
+      p.product.findUnique({ where: { codigo: de } }),
+      p.wincredProduto.findUnique({ where: { codigo: de } }),
+    ]);
+    if (!nativo && !espelho) throw new BadRequestException(`Código ${de} não existe no cadastro`);
+
+    // Colisão: o novo não pode existir em NENHUMA tabela de cadastro/estoque.
+    const colisao = await Promise.all([
+      p.product.count({ where: { codigo: para } }),
+      p.wincredProduto.count({ where: { codigo: para } }),
+      p.gigaProduto.count({ where: { codigo: para } }),
+      p.gigaEstoque.count({ where: { codigo: para } }),
+      p.wincredEstoque.count({ where: { codigo: para } }),
+      p.stock.count({ where: { sku: para } }),
+    ]);
+    if (colisao.some((n) => n > 0)) {
+      throw new BadRequestException(
+        `Código ${para} já existe no cadastro ou no estoque — trocar fundiria duas peças. Escolha outro.`,
+      );
+    }
+
+    // Tudo que carrega o código, com o nome da coluna em cada tabela.
+    // [model, coluna, rótulo pra tela]
+    const TABELAS: Array<[string, string, string]> = [
+      ['product', 'codigo', 'cadastro (product)'],
+      ['wincredProduto', 'codigo', 'cadastro (espelho)'],
+      ['gigaProduto', 'codigo', 'cadastro (giga_produto)'],
+      ['gigaEstoque', 'codigo', 'estoque por loja (giga_estoque)'],
+      ['wincredEstoque', 'codigo', 'estoque por loja (wincred_estoque)'],
+      ['stock', 'sku', 'estoque (stock)'],
+      ['stockMovement', 'sku', 'movimentos de estoque'],
+      ['pdvSaleItem', 'sku', 'itens de venda do PDV'],
+      ['pdvReturnItem', 'sku', 'itens de devolução'],
+      ['pdvReturn', 'manualSku', 'devoluções (peça digitada)'],
+      ['orderItem', 'sku', 'itens de pedido do site'],
+      ['orderItemSwap', 'oldSku', 'trocas de item (peça antiga)'],
+      ['orderItemSwap', 'newSku', 'trocas de item (peça nova)'],
+      ['marcado', 'sku', 'marcados'],
+      ['pickOrderScan', 'sku', 'bipes de separação'],
+      ['pickOrderItemReport', 'sku', 'reportes de separação'],
+      ['pecaExtraviada', 'sku', 'peças extraviadas'],
+      ['interStoreObligation', 'sku', 'acertos entre lojas'],
+      ['livePdvItem', 'codigoBipado', 'itens da live'],
+      ['transferOrder', 'codigoBipado', 'transferências'],
+      ['trocaItem', 'sku', 'itens de troca'],
+      ['trocaSolicitacao', 'novaSku', 'solicitações de troca'],
+      ['defectItem', 'sku', 'defeitos'],
+      ['supplyItem', 'sku', 'itens de suprimento'],
+      ['wcReturnRequestItem', 'sku', 'devoluções do site'],
+      ['inventarioEsperado', 'sku', 'inventário (esperado)'],
+      ['inventarioBipe', 'sku', 'inventário (bipes)'],
+      ['inventarioAjuste', 'sku', 'inventário (ajustes)'],
+      ['gigaTransferenciaItem', 'codigo', 'transferências (histórico)'],
+      ['gigaCaixaMov', 'codigo', 'caixa (espelho do financeiro)'],
+      ['productEditAudit', 'codigo', 'auditoria do editor'],
+    ];
+
+    // Prévia: conta linha a linha. Vazio e quebrado têm caras diferentes —
+    // erro de contagem SOBE.
+    const previa: Array<{ tabela: string; linhas: number }> = [];
+    for (const [model, col, rotulo] of TABELAS) {
+      const n: number = await p[model].count({ where: { [col]: de } });
+      if (n > 0) previa.push({ tabela: rotulo, linhas: n });
+    }
+    const totalLinhas = previa.reduce((s, x) => s + x.linhas, 0);
+
+    const eanAtual = String(nativo?.ean ?? espelho?.ean ?? '').trim();
+    const guardarComoEan = /^\d{8,}$/.test(de) && !eanAtual;
+
+    const peca = {
+      codigo: de,
+      ref: String(nativo?.ref ?? espelho?.ref ?? '').trim(),
+      cor: String(nativo?.cor ?? espelho?.cor ?? '').trim(),
+      tamanho: String(nativo?.tamanho ?? espelho?.tamanho ?? '').trim(),
+      descricao: String(nativo?.descricaoCompleta ?? espelho?.descricaoCompleta ?? '').trim(),
+    };
+
+    if (!input.executar) {
+      return { ok: true, previa: true, de, para, peca, tabelas: previa, totalLinhas, guardarComoEan };
+    }
+
+    const batchId = randomUUID();
+    const resultado: Array<{ tabela: string; linhas: number }> = [];
+    await p.$transaction(async (tx: any) => {
+      for (const [model, col, rotulo] of TABELAS) {
+        const r = await tx[model].updateMany({ where: { [col]: de }, data: { [col]: para } });
+        const n = Number(r.count) || 0;
+        if (n > 0) resultado.push({ tabela: rotulo, linhas: n });
+      }
+      if (guardarComoEan) {
+        await tx.product.updateMany({ where: { codigo: para }, data: { ean: de } });
+        await tx.wincredProduto.updateMany({ where: { codigo: para }, data: { ean: de } });
+      }
+      if (nativo) {
+        await tx.product.update({ where: { codigo: para }, data: { flowIsSource: true, editedAt: new Date() } });
+      }
+      await tx.productEditAudit.create({
+        data: {
+          batchId,
+          codigo: para,
+          ref: peca.ref || null,
+          field: 'CODIGO',
+          oldValue: de,
+          newValue: para,
+          userName: input.userName || null,
+          applied: true,
+        },
+      });
+    });
+
+    this.logger.log(
+      `[editor-produtos] CODIGO ${de} → ${para} por ${input.userName || '?'}: ` +
+      `${resultado.reduce((s, x) => s + x.linhas, 0)} linha(s) em ${resultado.length} tabela(s)` +
+      (guardarComoEan ? ` (antigo guardado como EAN)` : ''),
+    );
+    this.avisarSite();
+    return { ok: true, previa: false, de, para, peca, tabelas: resultado, totalLinhas, guardarComoEan, batchId };
+  }
+
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
   async auditRecent(limit = 200) {
     return (this.prisma as any).productEditAudit.findMany({

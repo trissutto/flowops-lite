@@ -19,7 +19,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Search, Pencil, Tags, DollarSign, ReplaceAll, Loader2,
-  AlertTriangle, Check, X, Lock, History, Trash2,
+  AlertTriangle, Check, X, History, Trash2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -105,6 +105,54 @@ export default function EditorProdutosPage() {
       setHistLoading(false);
     }
   }
+
+  // TROCAR CÓDIGO (SKU) — dono, 01/10/2026. O código é a chave de tudo
+  // (estoque, vendas, cards); a troca reescreve todas as tabelas numa
+  // transação no backend. Aqui: prévia (quantas linhas) → confirmar.
+  type TrocaPrevia = {
+    de: string; para: string;
+    peca: { ref: string; cor: string; tamanho: string; descricao: string };
+    tabelas: Array<{ tabela: string; linhas: number }>;
+    totalLinhas: number; guardarComoEan: boolean;
+  };
+  const [trocaRow, setTrocaRow] = useState<Row | null>(null);
+  const [trocaPara, setTrocaPara] = useState('');
+  const [trocaPrevia, setTrocaPrevia] = useState<TrocaPrevia | null>(null);
+  const [trocaErro, setTrocaErro] = useState('');
+  const [trocaBusy, setTrocaBusy] = useState(false);
+
+  const abrirTroca = (row: Row) => {
+    setTrocaRow(row); setTrocaPara(''); setTrocaPrevia(null); setTrocaErro('');
+  };
+  const fecharTroca = () => { setTrocaRow(null); setTrocaPrevia(null); setTrocaErro(''); };
+
+  const trocarCodigo = async (executar: boolean) => {
+    if (!trocaRow) return;
+    const para = trocaPara.trim().toUpperCase();
+    if (!para) { setTrocaErro('Digite o código novo'); return; }
+    setTrocaBusy(true); setTrocaErro('');
+    try {
+      const r = await api<TrocaPrevia & { ok: boolean; previa: boolean }>('/products-editor/trocar-codigo', {
+        method: 'POST',
+        body: JSON.stringify({ de: trocaRow.codigo, para, executar }),
+      });
+      if (!executar) { setTrocaPrevia(r); return; }
+      fecharTroca();
+      // Recarrega a busca: a linha agora vive sob o código novo. O aviso vem
+      // DEPOIS — buscar() limpa as mensagens.
+      await buscar();
+      setOkMsg(`Código ${r.de} → ${r.para}: ${r.totalLinhas} linha(s) reescritas em ${r.tabelas.length} tabela(s)`);
+    } catch (e: any) {
+      // api() devolve "400: {json}" — a tela mostra só a frase do servidor.
+      const bruto = String(e?.message || 'Não deu pra trocar o código');
+      let frase = bruto;
+      try { frase = JSON.parse(bruto.replace(/^\d+:\s*/, '')).message || bruto; } catch { /* já é texto */ }
+      setTrocaErro(frase);
+      setTrocaPrevia(null);
+    } finally {
+      setTrocaBusy(false);
+    }
+  };
 
   // Modais
   const [modalRef, setModalRef] = useState(false);
@@ -574,7 +622,7 @@ export default function EditorProdutosPage() {
           <Link href="/retaguarda" className="text-slate-500 hover:text-slate-800"><ArrowLeft className="w-5 h-5" /></Link>
           <Pencil className="w-5 h-5 text-amber-600" />
           <h1 className="font-bold text-slate-800 text-lg">Editor de Produtos</h1>
-          <span className="text-[11px] text-slate-500">vale na hora · SKU nunca muda · preview antes de aplicar</span>
+          <span className="text-[11px] text-slate-500">vale na hora · preview antes de aplicar</span>
           {meta?.shadowMode && (
             <span className="text-[10px] font-bold uppercase bg-amber-500 text-white px-2 py-0.5 rounded-full">
               Shadow mode — não grava
@@ -727,7 +775,14 @@ export default function EditorProdutosPage() {
                         <td className="px-2 py-1 font-mono text-xs text-slate-500 whitespace-nowrap">
                           <span className="inline-flex items-center gap-1">
                             {r.codigo}
-                            <Lock className="w-3 h-3 text-slate-300" />
+                            <button
+                              type="button"
+                              onClick={() => abrirTroca(r)}
+                              title="Trocar o código (SKU) desta peça — reescreve estoque e histórico junto"
+                              className="text-slate-300 hover:text-amber-700"
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
                             <button
                               type="button"
                               onClick={() => abrirHistorico(r.codigo, r.descricao)}
@@ -1121,6 +1176,60 @@ export default function EditorProdutosPage() {
               Confirmar e gravar
             </button>
           </div>
+        </Modal>
+      )}
+
+      {/* TROCAR CÓDIGO (SKU) — prévia do que será reescrito → confirmar */}
+      {trocaRow && (
+        <Modal title={`Trocar código — ${trocaRow.codigo}`} onClose={() => !trocaBusy && fecharTroca()}>
+          <div className="text-sm text-slate-700 mb-3">
+            <span className="font-mono font-bold">{trocaRow.ref}</span>
+            {' · '}{trocaRow.cor} {trocaRow.tamanho}
+            <div className="text-xs text-slate-500 truncate">{trocaRow.descricao}</div>
+          </div>
+          <label className="block text-xs font-bold text-slate-600" htmlFor="troca-para">Código novo</label>
+          <input
+            id="troca-para"
+            autoFocus
+            value={trocaPara}
+            onChange={(e) => { setTrocaPara(e.target.value); setTrocaPrevia(null); setTrocaErro(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !trocaBusy) trocarCodigo(!!trocaPrevia); }}
+            maxLength={14}
+            placeholder="só letras, números e hífen (até 14)"
+            className="mt-1 w-full px-3 py-2 rounded-lg border-2 border-slate-300 focus:border-amber-400 font-mono text-base outline-none"
+          />
+          <p className="mt-2 text-[11px] text-slate-500">
+            O código é a chave do estoque, das vendas, dos marcados e dos cards de separação. A troca
+            reescreve <b>tudo</b> de uma vez — ou não grava nada. O código novo não pode existir em outra peça.
+          </p>
+          {trocaErro && (
+            <div className="mt-2 text-sm font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{trocaErro}</div>
+          )}
+          {trocaPrevia && (
+            <div className="mt-3 border border-amber-200 bg-amber-50 rounded-lg p-3 text-xs text-amber-900">
+              <div className="font-bold mb-1">
+                {trocaPrevia.de} → {trocaPrevia.para} · {trocaPrevia.totalLinhas} linha(s) em {trocaPrevia.tabelas.length} tabela(s)
+              </div>
+              <ul className="max-h-40 overflow-auto space-y-0.5">
+                {trocaPrevia.tabelas.map((t) => (
+                  <li key={t.tabela} className="flex justify-between gap-2">
+                    <span>{t.tabela}</span><span className="tabular-nums font-semibold">{t.linhas}</span>
+                  </li>
+                ))}
+              </ul>
+              {trocaPrevia.guardarComoEan && (
+                <div className="mt-2 text-[11px]">
+                  O código antigo <span className="font-mono">{trocaPrevia.de}</span> fica guardado como <b>código de barras</b> da peça — a etiqueta que já está nela continua bipando.
+                </div>
+              )}
+            </div>
+          )}
+          <ModalActions
+            okLabel={trocaBusy ? 'Aguarde…' : trocaPrevia ? 'Confirmar a troca' : 'Ver o que muda'}
+            okDisabled={trocaBusy || !trocaPara.trim()}
+            onOk={() => trocarCodigo(!!trocaPrevia)}
+            onCancel={fecharTroca}
+          />
         </Modal>
       )}
 

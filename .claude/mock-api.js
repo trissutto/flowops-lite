@@ -24,6 +24,11 @@ add('BMM-100', 'BLUSA FEMININA PLUS SIZE MANGA CURTA BMM-100 MARRIE', 'PISTACHE'
 add('VLM-222', 'VESTIDO LONGO MANGA CURTA PLUS SIZE VLM-222 MARRIE', 'LARANJA', GRADE(46, 54), 139.9);
 add('VLM-222', 'VESTIDO LONGO MANGA CURTA PLUS SIZE VLM-222 MARRIE', 'VINHO', GRADE(46, 54), 139.9);
 
+const EDITOR_ROWS = [['5397334', 'G'], ['5397341', 'GG'], ['7891186984207', 'M'], ['5397310', 'P']].map(([codigo, tamanho]) => ({
+  codigo, ref: '5716', descricao: 'MEIA CALCA BALLET ADULTO FIO 60 5716', marca: 'LUPO', cor: 'ROSA', tamanho,
+  preco: 59.9, precoDe: null, estoque: 3, estoqueLojas: { '01': 3 },
+}));
+
 const norm = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
 
 const server = http.createServer((req, res) => {
@@ -187,7 +192,40 @@ const server = http.createServer((req, res) => {
       { code: '13', name: 'SITE', active: true },
     ]);
   }
-  if (url.pathname === '/api/auth/me') return json({ role: 'store', storeCode: '01', name: 'Loja Santos' });
+  // Editor de produtos (/retaguarda/editor-produtos): busca + trocar codigo.
+  // Codigo novo "5397310" = colisao (ja existe).
+  if (url.pathname === '/api/products-editor/search') {
+    return json({ rows: EDITOR_ROWS, fonte: 'espelho', warnings: { legendaAtiva: [], classificacao: [] } });
+  }
+  if (url.pathname === '/api/products-editor/trocar-codigo' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const b = JSON.parse(body || '{}');
+      console.log(`[mock] trocar-codigo ${JSON.stringify(b)}`);
+      const para = String(b.para || '').trim().toUpperCase();
+      if (EDITOR_ROWS.some((r) => r.codigo === para)) {
+        return json({ message: `Código ${para} já existe no cadastro ou no estoque — trocar fundiria duas peças. Escolha outro.` }, 400);
+      }
+      const row = EDITOR_ROWS.find((r) => r.codigo === b.de);
+      if (!row) return json({ message: `Código ${b.de} não existe no cadastro` }, 400);
+      const tabelas = [
+        { tabela: 'cadastro (product)', linhas: 1 },
+        { tabela: 'estoque por loja (wincred_estoque)', linhas: 3 },
+        { tabela: 'itens de venda do PDV', linhas: 12 },
+      ];
+      if (b.executar) row.codigo = para;
+      return json({ ok: true, previa: !b.executar, de: b.de, para, peca: row, tabelas, totalLinhas: 16, guardarComoEan: /^\d{8,}$/.test(b.de) });
+    });
+    return;
+  }
+
+  // A retaguarda exige admin; as telas de loja, store. Suba o mock com
+  // `--admin` (node .claude/mock-api.js --admin) pra previewar a retaguarda.
+  if (url.pathname === '/api/auth/me') {
+    const admin = process.argv.includes('--admin');
+    return json({ role: admin ? 'admin' : 'store', storeCode: '01', name: 'Loja Santos' });
+  }
   if (url.pathname === '/api/pdv/discount-policy') return json({ freeUpToPct: 5, caixaUpToPct: 10 });
   if (url.pathname === '/api/pdv/convenio/ativo') return json(null);
   if (url.pathname === '/api/pick-orders/mine') return json([]);
