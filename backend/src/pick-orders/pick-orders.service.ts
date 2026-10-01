@@ -18,6 +18,7 @@ import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 import { caixaDoSite } from '../common/caixa-site';
+import { acharGemeoNoPedido } from '../common/codigo-gemeo';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { pacotesAguardandoLiberacao, dentroDeSaoPaulo } from '../common/politica-frete';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
@@ -1705,6 +1706,46 @@ export class PickOrdersService {
     const hit = await this.erp.findSkuByAnyEan(rawEan);
     if (hit && pedidoSkus.has(hit)) {
       return { found: true, sku: hit, ean: rawEan, source: 'erp-wide' as const };
+    }
+
+    // CÓDIGO GÊMEO (ON-000550, 01/10): a peça da arara tem OUTRO código, mas é
+    // a mesma REF+COR+TAMANHO de um item do card — cadastro duplicado. Vale
+    // como o item do pedido: o bipe é gravado no SKU do pedido (teto, finish e
+    // estorno seguem iguais) e o código lido fica no `ean` do scan. A baixa sai
+    // do código DO PEDIDO — o que o roteamento contou nesta loja. Erro de
+    // leitura do cadastro SOBE (nunca vira "não pertence ao pedido").
+    if (hit && pedidoSkus.size) {
+      const semZeros = (s: string) => String(s).trim().replace(/^0+/, '') || String(s).trim();
+      const codigos = Array.from(
+        new Set([hit, ...pedidoSkus].flatMap((s) => [String(s).trim(), semZeros(s)])),
+      );
+      const linhas = await this.prisma.product.findMany({
+        where: { codigo: { in: codigos } },
+        select: { codigo: true, ref: true, cor: true, tamanho: true },
+      });
+      const porCodigo = new Map(linhas.map((l) => [semZeros(l.codigo), l]));
+      const doPedido = Array.from(pedidoSkus)
+        .map((sku) => {
+          const l = porCodigo.get(semZeros(sku));
+          return l ? { ...l, codigo: sku } : null;
+        })
+        .filter((l): l is NonNullable<typeof l> => !!l);
+      const gemeo = acharGemeoNoPedido(porCodigo.get(semZeros(hit)), doPedido);
+      if (gemeo) {
+        this.logger.warn(
+          `[bipe-gemeo] card ${pickOrderId}: código ${hit} aceito como ${gemeo} (mesma REF/cor/tamanho — cadastro duplicado)`,
+        );
+        await this.prisma.integrationLog.create({
+          data: {
+            source: 'pick-order',
+            direction: 'internal',
+            event: 'pick-order.scan.codigo-gemeo',
+            payload: JSON.stringify({ pickOrderId, orderId: po.orderId, storeId, bipado: hit, skuDoPedido: gemeo }),
+            status: 200,
+          },
+        });
+        return { found: true, sku: gemeo, ean: rawEan, source: 'codigo-gemeo' as const, gemeoDe: hit };
+      }
     }
 
     // Não achou — devolve dump dos SKUs do pedido pra UI exibir debug
