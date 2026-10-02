@@ -43,6 +43,7 @@ const iso = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).t
 type Coluna = {
   key: string; label: string; grupo: 'LOJA' | 'CANAL'; cnpj: string | null; markup: number;
   faturamentoBruto: number; devolucoes: number; receitaLiquida: number;
+  valeTrocaUsado: number;
   devolucoesDinheiro: number; devolucoesTroca: number; ajustesNaVenda: number;
   cmv: number; margemBruta: number; margemBrutaPct: number;
   impostos: number; aliquotaPct: number | null; despesasVariaveis: number;
@@ -121,10 +122,14 @@ const LINHAS: Array<{
   /** Linha de despesa: abre detalhe por espécie deste grupo quando ligado. */
   grupoDespesa?: 'FIXA' | 'VARIAVEL' | 'FINANCEIRA';
 }> = [
-  { campo: 'faturamentoBruto', label: '( + ) Faturamento bruto', tipo: 'receita', drill: 'FATURAMENTO' },
+  // Faturamento = o MESMO número da tela Faturamento por Loja (mesma função no
+  // backend). As três linhas ( i ) abaixo mostram o que JÁ saiu dele — nenhuma
+  // subtrai de novo, por isso a receita líquida repete o faturamento.
+  { campo: 'faturamentoBruto', label: '( + ) Faturamento', tipo: 'receita', drill: 'FATURAMENTO', nota: 'Igual à tela Faturamento: vendido − vale-troca − devolução em dinheiro · marcado não conta' },
   { campo: 'ajustesNaVenda', label: '( i ) Ajuste negativo dentro da venda', tipo: 'info', nota: 'JÁ abatido no faturamento acima — não subtrai de novo' },
-  { campo: 'devolucoesDinheiro', label: '( - ) Devolução em dinheiro/pix', tipo: 'deducao', nota: 'Único que abate — a cliente levou o dinheiro' },
-  { campo: 'devolucoesTroca', label: '( i ) Troca / vale gerado', tipo: 'info', nota: 'NÃO abate do faturamento (decisão do dono) — a peça nova entra cheia depois' },
+  { campo: 'valeTrocaUsado', label: '( i ) Vale-troca usado como pagamento', tipo: 'info', nota: 'JÁ abatido no faturamento acima — não é dinheiro novo' },
+  { campo: 'devolucoesDinheiro', label: '( i ) Devolução em dinheiro/pix', tipo: 'info', nota: 'JÁ abatida no faturamento acima — a cliente levou o dinheiro' },
+  { campo: 'devolucoesTroca', label: '( i ) Troca / vale gerado', tipo: 'info', nota: 'Só informação — o abate acontece no dia em que a cliente USA o vale' },
   { campo: 'receitaLiquida', label: '( = ) Receita líquida', tipo: 'subtotal' },
   { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao', nota: 'Venda ÷ markup da loja' },
   { campo: 'margemBruta', label: '( = ) Margem bruta', tipo: 'subtotal', pctCampo: 'margemBrutaPct' },
@@ -1014,9 +1019,11 @@ function Kpi({ titulo, valor, sub, tom = 'neutro' }: {
  */
 function Waterfall({ total }: { total: Coluna }) {
   const base = total.faturamentoBruto || 1;
+  // Sem barra de "Devoluções": o faturamento já chega líquido de vale-troca e
+  // de devolução em dinheiro, e a barra antiga mostrava como SAÍDA um valor
+  // (troca + dinheiro) que não entrava na conta do lucro.
   const etapas = [
     { label: 'Faturamento', valor: total.faturamentoBruto, tipo: 'base' as const },
-    { label: 'Devoluções', valor: -total.devolucoes, tipo: 'saida' as const },
     { label: 'CMV', valor: -total.cmv, tipo: 'saida' as const },
     { label: 'Impostos', valor: -total.impostos, tipo: 'saida' as const },
     { label: 'Var.', valor: -total.despesasVariaveis, tipo: 'saida' as const },
@@ -1051,10 +1058,11 @@ function Waterfall({ total }: { total: Coluna }) {
 }
 
 /**
- * Fecha a conta contra a tela "Faturamento por Loja". As duas telas leem a
- * MESMA fonte (a caixa no Postgres do Flow); a DRE só mostra as lojas próprias, então o
- * total dela é menor de propósito. Esta faixa mostra a soma completa pra
- * ninguém precisar desconfiar de qual número está certo.
+ * Fecha a conta contra a tela "Faturamento por Loja". As duas telas chamam a
+ * MESMA função no backend (venda do PDV, líquida de vale-troca e devolução em
+ * dinheiro, marcado fora); a DRE só mostra as lojas próprias, então o
+ * total dela é menor de propósito. Esta faixa mostra a soma completa — que
+ * tem que bater com o "Total da rede" de lá ao centavo.
  */
 function Conciliacao({ data }: { data: Resultado }) {
   const c = data.conciliacao;

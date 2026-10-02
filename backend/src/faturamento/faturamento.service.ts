@@ -55,11 +55,66 @@ export class FaturamentoService {
    * PÚBLICO (29/08): o MetasService (gamificação do PDV) consome ESTE método
    * pro realizado do mês/dia — mesma razão do getFlowopsSiteFaturamento:
    * reimplementar a régua é como as telas divergem.
+   *
+   * A DRE TAMBÉM (02/10): ela tinha ficado no espelho `giga_caixa_mov` quando
+   * esta tela mudou pra cá em 30/07, e o espelho — alimentado pelo próprio
+   * Flow desde 25/08 — contava MARCADO como venda, não abatia vale-troca e
+   * ignorava o desconto dado na venda inteira. Setembro/2026: a DRE mostrava
+   * R$ 142.719,75 a mais que esta tela (Itanhaém R$ 231.715,83 × R$ 150.910,65,
+   * sendo R$ 75.073,80 de peça que a cliente só levou pra provar). `valeTroca`
+   * e `devolucaoDinheiro` voltam junto pra DRE mostrar o que JÁ foi abatido.
    */
   async faturamentoHibrido(
     dInicio: Date,
     dFimExclusive: Date,
-  ): Promise<Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>> {
+  ): Promise<Array<{
+    storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number;
+    /** Vale-troca usado como pagamento no período — JÁ abatido de `faturamento`. */
+    valeTroca: number;
+    /** Devolução em dinheiro/pix no período — JÁ abatida de `faturamento`. */
+    devolucaoDinheiro: number;
+  }>> {
+    const linhas = await this.hibridoCore(dInicio, dFimExclusive, false);
+    return linhas.map((l) => ({
+      storeCode: l.storeCode,
+      faturamento: l.faturamento,
+      cupons: l.cupons,
+      pecas: l.pecas,
+      ticketMedio: l.ticketMedio,
+      valeTroca: l.valeTroca,
+      devolucaoDinheiro: l.devolucaoDinheiro,
+    }));
+  }
+
+  /**
+   * A MESMA régua do `faturamentoHibrido`, aberta por DIA (dia de Brasília).
+   * Existe pra série diária e pro "ver venda por dia" da DRE somarem
+   * exatamente o número da linha de faturamento — a soma dos dias É o total,
+   * porque é a mesma consulta com um GROUP BY a mais.
+   */
+  async faturamentoHibridoPorDia(
+    dInicio: Date,
+    dFimExclusive: Date,
+  ): Promise<Array<{ storeCode: string; dia: string; faturamento: number; cupons: number; pecas: number }>> {
+    const linhas = await this.hibridoCore(dInicio, dFimExclusive, true);
+    return linhas.map((l) => ({
+      storeCode: l.storeCode,
+      dia: String(l.dia),
+      faturamento: l.faturamento,
+      cupons: l.cupons,
+      pecas: l.pecas,
+    }));
+  }
+
+  private async hibridoCore(dInicio: Date, dFimExclusive: Date, porDia: boolean) {
+    // Dia de BRASÍLIA. As colunas de TIMESTAMP guardam UTC e São Paulo é UTC-3
+    // fixo (sem horário de verão desde 2019) — subtrair 3h antes do ::date põe
+    // a venda das 22h no dia em que a loja a fez. `data_fec` já é DATE.
+    const diaTs = (col: string) =>
+      porDia ? ` to_char((${col} - interval '3 hours')::date, 'YYYY-MM-DD') AS dia,` : '';
+    const diaDate = porDia ? ` to_char(data_fec, 'YYYY-MM-DD') AS dia,` : '';
+    const grupoDia = porDia ? ', 2' : '';
+
     const [flowRows, gigaRows, devolucoes, lojas] = await Promise.all([
       // PDV do Flow — marcado fora (não é venda), treino fora, cancelada fora
       //
@@ -82,12 +137,13 @@ export class FaturamentoService {
       // Consequência aceita pelo dono: a comparação com 2025 confronta réguas
       // diferentes (o histórico antigo da caixa não separa o vale igual).
       this.prisma.$queryRawUnsafe<Array<any>>(
-        `SELECT store_code AS "storeCode",
+        `SELECT store_code AS "storeCode",${diaTs('s.finalized_at')}
                 COUNT(*)::int                              AS cupons,
                 COALESCE(SUM(it.pecas), 0)::float8         AS pecas,
                 COALESCE(SUM(
                   s.total - COALESCE(vt.vale, 0)
-                ), 0)::float8                              AS faturamento
+                ), 0)::float8                              AS faturamento,
+                COALESCE(SUM(COALESCE(vt.vale, 0)), 0)::float8 AS vale
            FROM pdv_sales s
            LEFT JOIN (
              SELECT sale_id, SUM(qty)::float8 AS pecas FROM pdv_sale_items
@@ -102,13 +158,13 @@ export class FaturamentoService {
             AND s.status = 'finalized'
             AND s.is_training = false
             AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
-          GROUP BY store_code`,
+          GROUP BY store_code${grupoDia}`,
         // finalized_at é TIMESTAMP → limites no fuso BR (ver brInstant).
         this.brInstant(dInicio), this.brInstant(dFimExclusive),
       ),
       // Histórico da caixa (giga_caixa_mov) SEM a réplica da venda do Flow
       this.prisma.$queryRawUnsafe<Array<any>>(
-        `SELECT loja AS "storeCode",
+        `SELECT loja AS "storeCode",${diaDate}
                 COUNT(DISTINCT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero))::int AS cupons,
                 COALESCE(SUM(quantidade), 0)::float8 AS pecas,
                 COALESCE(SUM(valor_total), 0)::float8 AS faturamento
@@ -122,7 +178,7 @@ export class FaturamentoService {
             -- e abatia troca/vale, que a régua do dono (04/08) não abate.
             -- Mesmo critério do fix da DRE (semDevolucoesEspelhadas).
             AND registro NOT LIKE 'r%'
-          GROUP BY loja`,
+          GROUP BY loja${grupoDia}`,
         // data_fec é DATE (sem hora) → segue no parseDate. Ver brInstant.
         dInicio, dFimExclusive,
       ),
@@ -131,14 +187,14 @@ export class FaturamentoService {
       // acima no dia em que a cliente USA. Devolução cancelada não conta.
       // Mesma regra do CommissionEngineService (DEVOLUCAO_ABATE_SQL).
       this.prisma.$queryRawUnsafe<Array<any>>(
-        `SELECT store_code AS "storeCode",
+        `SELECT store_code AS "storeCode",${diaTs('created_at')}
                 COALESCE(SUM(valor_total), 0)::float8 AS total
            FROM pdv_returns
           WHERE created_at >= $1 AND created_at < $2
             AND is_training = false
             AND modo IN ('dinheiro', 'pix')
             AND COALESCE(status, '') <> 'cancelled'
-          GROUP BY store_code`,
+          GROUP BY store_code${grupoDia}`,
         this.brInstant(dInicio), this.brInstant(dFimExclusive),
       ),
       (this.prisma as any).store.findMany({ select: { code: true, name: true, nomesAntigos: true } }),
@@ -161,34 +217,50 @@ export class FaturamentoService {
       return paraCode.get(k) ?? k;
     };
 
-    const acc = new Map<string, { faturamento: number; cupons: number; pecas: number }>();
-    const soma = (raw: any, r: any) => {
+    type Acc = {
+      storeCode: string; dia: string | null;
+      faturamento: number; cupons: number; pecas: number;
+      valeTroca: number; devolucaoDinheiro: number;
+    };
+    const acc = new Map<string, Acc>();
+    const alvo = (raw: any, dia: any): Acc => {
       const code = canon(raw);
-      const cur = acc.get(code) || { faturamento: 0, cupons: 0, pecas: 0 };
+      const d = porDia ? String(dia ?? '') : null;
+      const k = `${code}|${d ?? ''}`;
+      let cur = acc.get(k);
+      if (!cur) {
+        cur = { storeCode: code, dia: d, faturamento: 0, cupons: 0, pecas: 0, valeTroca: 0, devolucaoDinheiro: 0 };
+        acc.set(k, cur);
+      }
+      return cur;
+    };
+    const soma = (r: any) => {
+      const cur = alvo(r.storeCode, r.dia);
       cur.faturamento += Number(r.faturamento) || 0;
       cur.cupons += Number(r.cupons) || 0;
       cur.pecas += Number(r.pecas) || 0;
-      acc.set(code, cur);
+      // Só a venda do Flow traz `vale` (o histórico da caixa não separa).
+      cur.valeTroca += Number(r.vale) || 0;
     };
-    for (const r of flowRows) soma(r.storeCode, r);
-    for (const r of gigaRows) soma(r.storeCode, r);
+    for (const r of flowRows) soma(r);
+    for (const r of gigaRows) soma(r);
     // Devolução em dinheiro sai do faturamento da loja onde foi devolvida.
     for (const r of devolucoes as any[]) {
-      const code = canon(r.storeCode);
-      const cur = acc.get(code) || { faturamento: 0, cupons: 0, pecas: 0 };
+      const cur = alvo(r.storeCode, r.dia);
       cur.faturamento -= Number(r.total) || 0;
-      acc.set(code, cur);
+      cur.devolucaoDinheiro += Number(r.total) || 0;
     }
 
-    return Array.from(acc.entries())
-      .map(([storeCode, v]) => ({
-        storeCode,
-        faturamento: v.faturamento,
-        cupons: v.cupons,
-        pecas: v.pecas,
+    return Array.from(acc.values())
+      .map((v) => ({
+        ...v,
         ticketMedio: v.cupons > 0 ? v.faturamento / v.cupons : 0,
       }))
-      .sort((a, b) => b.faturamento - a.faturamento);
+      .sort((a, b) =>
+        porDia
+          ? String(a.dia).localeCompare(String(b.dia)) || b.faturamento - a.faturamento
+          : b.faturamento - a.faturamento,
+      );
   }
 
   /**
