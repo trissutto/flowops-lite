@@ -665,7 +665,9 @@ export class GigaMirrorService implements OnModuleInit {
    * Regra: venda FINALIZADA, sem treinamento, MENOS as devoluções do dia
    * (a caixa do Giga também tinha lançamento negativo — daí a loja 19
    * aparecer com saldo negativo no espelho antigo). Dia e loja no fuso de
-   * São Paulo, que é como a loja fecha o caixa.
+   * São Paulo, que é como a loja fecha o caixa — e o dia TEM que ser o mesmo
+   * que o espelho `giga_caixa_mov` usa (dia local da venda), senão a união
+   * com o histórico conta a mesma venda em dois dias.
    *
    * 🔴 E O HISTÓRICO ANTERIOR AO PDV DO FLOW.
    *
@@ -692,7 +694,14 @@ export class GigaMirrorService implements OnModuleInit {
     const rows: any[] = await (this.prisma as any).$queryRaw`
       WITH venda AS (
         SELECT lpad(regexp_replace(store_code, '[^0-9]', '', 'g'), 2, '0') AS loja,
-               ((COALESCE(finalized_at, created_at) AT TIME ZONE 'America/Sao_Paulo'))::date AS dia,
+               -- DIA DE BRASÍLIA (02/10). A coluna é timestamp SEM fuso e guarda
+               -- UTC: um AT TIME ZONE só lê o valor como se JÁ fosse hora de SP
+               -- e SOMA 3h — toda venda depois das 18h caía no dia seguinte.
+               -- Aí o dia de verdade ficava sem linha do Flow, o histórico
+               -- abaixo o preenchia, e a mesma venda entrava DUAS vezes na base
+               -- do royalty (setembro: Suzano 239,90 e Anália 789,50 a mais). E a
+               -- venda da noite do último dia do mês ia pro mês seguinte.
+               (((COALESCE(finalized_at, created_at) AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo'))::date AS dia,
                sum(total) AS valor
           FROM pdv_sales
          WHERE status = 'finalized'
@@ -708,7 +717,7 @@ export class GigaMirrorService implements OnModuleInit {
          GROUP BY 1, 2
       ), devolucao AS (
         SELECT lpad(regexp_replace(store_code, '[^0-9]', '', 'g'), 2, '0') AS loja,
-               ((created_at AT TIME ZONE 'America/Sao_Paulo'))::date AS dia,
+               (((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo'))::date AS dia,
                sum(valor_total) AS valor
           FROM pdv_returns
          WHERE COALESCE(is_training, false) = false
