@@ -20,12 +20,31 @@ interface RespostaLogin {
   customer: Record<string, unknown>;
 }
 
-/** Erro do backend em português, sem vazar detalhe de infraestrutura. */
-function mensagem(e: unknown, padrao: string): { texto: string; status: number } {
+/**
+ * Erro do backend em português, sem vazar detalhe de infraestrutura.
+ *
+ * O 401 dizia "CPF ou senha não conferem" pros DOIS casos. Quem compra na
+ * loja física lê "sua conta é a mesma da loja" e tenta entrar sem nunca ter
+ * criado a conta do site: ouvia "senha" errada, ia no "esqueci" e esperava um
+ * código que não existia (02/10/2026). Separar não revela nada novo — o
+ * cadastro já responde "este CPF já tem cadastro" — e dá o próximo passo.
+ */
+function mensagem(e: unknown, padrao: string): { texto: string; status: number; motivo?: string } {
   if (e instanceof ApiError) {
-    if (e.status === 401) return { texto: 'CPF ou senha não conferem.', status: 401 };
-    if (e.status === 409) return { texto: 'Este CPF já tem cadastro. Tente entrar.', status: 409 };
+    if (e.status === 401) {
+      return /n[aã]o cadastrado/i.test(e.mensagemDoBackend ?? '')
+        ? {
+            texto: 'Este CPF ainda não tem conta no site. Toque em “Criar conta” — leva um minuto.',
+            status: 401,
+            motivo: 'sem_conta',
+          }
+        : { texto: 'Senha incorreta. Se esqueceu, toque em “Esqueci minha senha”.', status: 401 };
+    }
+    if (e.status === 409) return { texto: 'Este CPF já tem cadastro. Tente entrar.', status: 409, motivo: 'ja_tem_conta' };
     if (e.status === 400) return { texto: 'Confira os dados informados.', status: 400 };
+    if (e.status === 429) {
+      return { texto: 'Muitas tentativas seguidas. Aguarde alguns minutos e tente de novo.', status: 429 };
+    }
     if (e.status === 503) return { texto: 'Sistema em manutenção — tente em instantes.', status: 503 };
   }
   console.error('[conta] falha:', e);
@@ -84,8 +103,8 @@ export async function POST(request: Request) {
     await gravarToken(resposta.token);
     return NextResponse.json({ cliente: resposta.customer ?? null });
   } catch (e) {
-    const { texto, status } = mensagem(e, cadastro ? 'Não consegui criar a conta.' : 'Não consegui entrar.');
-    return NextResponse.json({ erro: texto }, { status });
+    const { texto, status, motivo } = mensagem(e, cadastro ? 'Não consegui criar a conta.' : 'Não consegui entrar.');
+    return NextResponse.json({ erro: texto, ...(motivo ? { motivo } : {}) }, { status });
   }
 }
 
