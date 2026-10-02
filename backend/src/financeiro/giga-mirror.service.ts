@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { pullGigaLigado } from '../common/replica-giga';
+import { ratearTotalDaVenda } from '../common/ratear-total-da-venda';
 import { ErpService } from '../erp/erp.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 
@@ -277,6 +278,18 @@ export class GigaMirrorService implements OnModuleInit {
    *  - o delete da janela só alcança linhas com o prefixo sintético.
    *  - São Paulo é UTC-3 fixo (DST acabou em 2019): a DATA da linha é o
    *    dia local da venda, gravado como meia-noite UTC (convenção do sync).
+   *  - MARCADO não é venda (02/10): a peça que a cliente levou pra provar
+   *    é uma PdvSale 'finalized' com paymentMethod='MARCADO'. Ela entra aqui
+   *    com `marcado='SIM'` — a coluna que TODO leitor do espelho já filtra.
+   *    Até 02/10 entrava com `marcado=null` e virava venda em tudo que lê
+   *    daqui (DRE, ranking, Inteligência): setembro/2026 teve R$ 82.505,99
+   *    disso na rede, R$ 75.073,80 só em Itanhaém — sendo R$ 40.610,00 de
+   *    peça DEVOLVIDA (nunca vendeu) e o resto contado de novo na venda de
+   *    verdade, que nasce como outra PdvSale quando a cliente paga.
+   *  - A soma das linhas FECHA com o total da venda (02/10): o desconto dado
+   *    na venda inteira (`setSaleDiscount`) não mora em item nenhum, então é
+   *    rateado aqui. Sem isso o espelho ficava acima do que entrou no caixa
+   *    (R$ 8.670,07 em setembro/2026).
    */
   async espelharCaixaMovDoFlow(days = 35): Promise<number> {
     const CORTE = new Date('2026-08-25T00:00:00Z');
@@ -318,7 +331,14 @@ export class GigaMirrorService implements OnModuleInit {
       if (dia < fromDia) continue;
       const numero =
         (v.nfceNumber && String(v.nfceNumber).trim()) || String(v.id).slice(0, 8);
-      for (const it of v.items || []) {
+      const ehMarcado = String(v.paymentMethod || '').trim().toUpperCase() === 'MARCADO';
+      const itens: any[] = v.items || [];
+      const totais = ratearTotalDaVenda(
+        itens.map((it) => (it.total != null ? Number(it.total) : null)),
+        ehMarcado ? null : Number(v.total),
+      );
+      for (let i = 0; i < itens.length; i++) {
+        const it = itens[i];
         rows.push({
           registro: 'f' + md5(String(it.id)).slice(0, 19),
           numero: numero.slice(0, 20),
@@ -329,14 +349,14 @@ export class GigaMirrorService implements OnModuleInit {
           descricao: it.descricao ? String(it.descricao).slice(0, 120) : null,
           quantidade: Number(it.qty) || 1,
           valor: it.precoUnit != null ? Number(it.precoUnit) : null,
-          valorTotal: it.total != null ? Number(it.total) : null,
+          valorTotal: totais[i],
           vendedor: (it.sellerName || v.sellerName || null)?.slice?.(0, 40) ?? null,
           vendedora: (it.sellerName || v.sellerName || null)?.slice?.(0, 40) ?? null,
           cliente: v.customerName ? String(v.customerName).slice(0, 80) : null,
           nomeCliente: v.customerName ? String(v.customerName).slice(0, 80) : null,
           cpf: v.customerCpf ? String(v.customerCpf).slice(0, 20) : null,
           loja: loja2(v.storeCode),
-          marcado: null,
+          marcado: ehMarcado ? 'SIM' : null,
           fpag: v.paymentMethod ? String(v.paymentMethod).slice(0, 30) : null,
           obsPedido: ('flowops-' + v.id).slice(0, 200),
           valorUnitario: it.precoUnit != null ? Number(it.precoUnit) : null,
@@ -389,6 +409,20 @@ export class GigaMirrorService implements OnModuleInit {
           skipDuplicates: true,
         });
       }
+      // Marcado gravado ANTES de 02/10 que já saiu da janela de 35 dias (o
+      // delete acima não o alcança mais) continua com `marcado=null`. Corrige
+      // no lugar: só linha sintética de venda ('f…'), só do corte pra cá, só
+      // a que o próprio Flow carimbou como MARCADO. Idempotente — depois da
+      // primeira passada não acha mais nada.
+      await tx.gigaCaixaMov.updateMany({
+        where: {
+          data: { gte: CORTE },
+          registro: { startsWith: 'f' },
+          fpag: 'MARCADO',
+          OR: [{ marcado: null }, { marcado: { not: 'SIM' } }],
+        },
+        data: { marcado: 'SIM' },
+      });
     }, { timeout: 120_000 });
     await this.setState('caixa_mov_flow', unique.length, null);
     return unique.length;
@@ -663,6 +697,12 @@ export class GigaMirrorService implements OnModuleInit {
           FROM pdv_sales
          WHERE status = 'finalized'
            AND COALESCE(is_training, false) = false
+           -- MARCADO não é venda (02/10): a peça que a cliente levou pra provar
+           -- é uma PdvSale 'finalized' com payment_method='MARCADO'. Sem este
+           -- filtro ela entrava na BASE DO ROYALTY — e de novo quando a cliente
+           -- pagava (a venda de verdade é outra PdvSale). Era assim também no
+           -- espelho antigo, que já vinha líquido de MARCADO='SIM'.
+           AND COALESCE(payment_method, '') <> 'MARCADO'
            AND COALESCE(finalized_at, created_at) >= ${from}
            AND COALESCE(finalized_at, created_at) < ${to}
          GROUP BY 1, 2

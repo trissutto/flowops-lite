@@ -1,23 +1,26 @@
 import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ErpService } from '../erp/erp.service';
 import { FaturamentoService } from '../faturamento/faturamento.service';
 import { contasDeLojaTodas } from '../common/contas-de-anuncio';
 
 /**
  * DRE por loja — painel /retaguarda/dre.
  *
- * ┌─ FONTE ÚNICA DE FATURAMENTO (fix 26/07) ────────────────────────────────┐
+ * ┌─ FONTE ÚNICA DE FATURAMENTO (26/07, refeita em 02/10) ──────────────────┐
  * │ O faturamento sai do MESMO método que a tela /retaguarda/faturamento    │
- * │ usa (`ErpService.getFaturamentoPorLoja` → espelho `giga_caixa_mov`,     │
- * │ filtro DATAFEC, sem MARCADO='SIM'). Não é query paralela "equivalente": │
- * │ é a mesma chamada, pra não existir dois faturamentos no sistema.        │
+ * │ usa: `FaturamentoService.faturamentoHibrido`. Não é query paralela      │
+ * │ "equivalente": é a mesma chamada, pra não existir dois faturamentos.    │
  * │                                                                         │
- * │ A v1 lia PdvSale (Postgres do Flow) e dava ~R$ 100k a menos no mês —    │
- * │ o caixa do Giga é SUPERSET: contém as vendas do PDV (via outbox) MAIS   │
- * │ as lançadas direto no Giga (WhatsApp, loja fora do PDV novo). Pro       │
- * │ resultado do dono não pode faltar venda.                                │
- * │ O CMV NAO vem do cadastro: e VENDA / 2,65 (markup do dono).             │
+ * │ RÉGUA (dono, 04/08 e 02/10): faturamento = vendido − vale-troca −       │
+ * │ devolução em dinheiro/pix. MARCADO não é venda. "Não faz sentido        │
+ * │ computar coisa que não gerou entrada financeira."                       │
+ * │                                                                         │
+ * │ POR QUE MUDOU: em 30/07 a tela trocou `getFaturamentoPorLoja` (espelho  │
+ * │ `giga_caixa_mov`) pelo híbrido e a DRE ficou pra trás. Desde 25/08 o    │
+ * │ espelho é montado pelo próprio Flow e contava MARCADO como venda, sem   │
+ * │ abater vale nem o desconto da venda inteira. Setembro/2026: Itanhaém    │
+ * │ R$ 231.715,83 aqui × R$ 150.910,65 na tela; rede R$ 142.719,75 a mais.  │
+ * │ O CMV NAO vem do cadastro: e VENDA / markup da loja (padrão 2,7).       │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
  * REDE × FRANQUIAS (decisão do dono 26/07): franquia NÃO é resultado dele.
@@ -102,16 +105,23 @@ export interface DreColuna {
   /** Markup usado no CMV desta coluna (padrão da rede ou override da loja). */
   markup: number;
 
+  /**
+   * O FATURAMENTO da tela /retaguarda/faturamento, pela mesma função:
+   * vendido − vale-troca − devolução em dinheiro/pix, marcado fora. O nome
+   * "bruto" é herança do contrato com a tela — o número já é o líquido.
+   */
   faturamentoBruto: number;
   devolucoes: number;
-  /** Devolução em dinheiro/pix — cliente levou o dinheiro, não há venda nova. */
+  /** Vale-troca usado como pagamento — informativo, JÁ abatido do faturamento. */
+  valeTrocaUsado: number;
+  /** Devolução em dinheiro/pix — informativo, JÁ abatida do faturamento. */
   devolucoesDinheiro: number;
-  /** Devolução que virou vale/troca — a peça nova entra CHEIA no caixa depois. */
+  /** Devolução que virou vale/troca — informativo; o abate é quando o vale é USADO. */
   devolucoesTroca: number;
   /**
    * Ajuste negativo lançado DENTRO da venda (item manual com valor negativo,
-   * ex. "TROCA DEFEITO -39,90"). JÁ sai abatido do faturamento bruto porque o
-   * item negativo vai pro caixa do Giga — informativo, NÃO subtrai de novo.
+   * ex. "TROCA DEFEITO -39,90"). JÁ sai abatido do faturamento porque reduz o
+   * total da venda — informativo, NÃO subtrai de novo.
    */
   ajustesNaVenda: number;
   receitaLiquida: number;
@@ -172,7 +182,6 @@ export class DreService implements OnApplicationBootstrap {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly erp: ErpService,
     private readonly faturamento: FaturamentoService,
   ) {}
 
@@ -538,7 +547,7 @@ export class DreService implements OnApplicationBootstrap {
   private colunaVazia(key: string, label: string, grupo: 'LOJA' | 'CANAL', cnpj: string | null, markup = MARKUP_PADRAO): DreColuna {
     return {
       key, label, grupo, cnpj, markup,
-      faturamentoBruto: 0, devolucoes: 0, devolucoesDinheiro: 0, devolucoesTroca: 0,
+      faturamentoBruto: 0, devolucoes: 0, valeTrocaUsado: 0, devolucoesDinheiro: 0, devolucoesTroca: 0,
       ajustesNaVenda: 0, receitaLiquida: 0,
       cmv: 0, margemBruta: 0, margemBrutaPct: 0,
       impostos: 0, aliquotaPct: null, despesasVariaveis: 0,
@@ -626,14 +635,11 @@ export class DreService implements OnApplicationBootstrap {
     };
 
     // ── 1) FATURAMENTO: mesma chamada da tela /retaguarda/faturamento ──
-    // `semDevolucoesEspelhadas`: desde 25/08 o espelho contém as devoluções do
-    // Flow como linhas negativas 'r%' (e desde 08/09 também as retroativas).
-    // A DRE precisa do BRUTO puro — ela abate pdv_returns logo abaixo com a
-    // régua fina (só devolução em DINHEIRO reduz receita; troca/vale não).
-    // Sem este flag a mesma devolução era abatida em DOBRO.
-    const gigaPorLoja = await this.erp.getFaturamentoPorLoja(inicio, fimExclusive, {
-      semDevolucoesEspelhadas: true,
-    });
+    // `faturamentoHibrido` já devolve o número FINAL da régua do dono: venda
+    // do PDV (marcado fora) − vale-troca usado − devolução em dinheiro/pix,
+    // mais o histórico da caixa que só existe lá. Nada é abatido de novo
+    // aqui embaixo — vale e devolução voltam só pra tela mostrar o que saiu.
+    const gigaPorLoja = await this.faturamento.faturamentoHibrido(inicio, fimExclusive);
 
     let faturamentoForaDaDre = 0;
     const lojasForaDaDre: string[] = [];
@@ -661,26 +667,28 @@ export class DreService implements OnApplicationBootstrap {
       col.faturamentoBruto += g.faturamento;
       col.cupons += g.cupons;
       col.pecas += g.pecas;
+      // Informativos: os dois JÁ saíram de `g.faturamento`.
+      col.valeTrocaUsado += g.valeTroca;
+      col.devolucoesDinheiro += g.devolucaoDinheiro;
+      col.devolucoes += g.devolucaoDinheiro;
     }
 
     // ── 2) CMV = receita ÷ markup ────────────────────────────────────────
-    // Aplicado no fim (depois das devoluções), sobre a RECEITA LÍQUIDA: peça
-    // devolvida não vendeu, então o custo dela sai junto automaticamente.
+    // Aplicado no fim, sobre a RECEITA LÍQUIDA: peça devolvida não vendeu,
+    // então o custo dela sai junto automaticamente.
 
-    // ── 3) Devoluções ────────────────────────────────────────────────────
-    // O caixa do Giga NÃO registra devolução (returns.service só mexe em
-    // estoque) e o vale-troca é FORMA DE PAGAMENTO — a peça nova entra CHEIA
-    // no caixa. Sem abater aqui, a mesma mercadoria contaria duas vezes:
-    // venda original + venda que consumiu o vale.
-    //
-    // Separado por modo porque são coisas diferentes: dinheiro/pix o cliente
-    // levou embora; troca/crédito volta como venda nova depois.
+    // ── 3) Troca / vale GERADO — só informação ───────────────────────────
+    // A devolução que vira vale não mexe no faturamento do dia em que nasce:
+    // o abate acontece quando a cliente USA o vale (é o `valeTroca` que o
+    // híbrido já descontou). A devolução em DINHEIRO/pix também já veio
+    // abatida lá de cima — por isso esta consulta lê só o que virou troca.
     const devolucoes: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT store_code AS "storeCode",
-              SUM(CASE WHEN modo IN ('dinheiro','pix') THEN valor_total ELSE 0 END)::float AS dinheiro,
-              SUM(CASE WHEN modo NOT IN ('dinheiro','pix') THEN valor_total ELSE 0 END)::float AS troca
+              SUM(valor_total)::float AS troca
          FROM pdv_returns
         WHERE created_at >= $1 AND created_at <= $2 AND is_training = false
+          AND modo NOT IN ('dinheiro','pix')
+          AND COALESCE(status, '') <> 'cancelled'
         GROUP BY store_code`,
       startDate, endDate,
     );
@@ -688,9 +696,8 @@ export class DreService implements OnApplicationBootstrap {
       const key = resolve(d.storeCode);
       if (!key) continue;
       const col = colunas.get(key)!;
-      col.devolucoesDinheiro += Number(d.dinheiro || 0);
       col.devolucoesTroca += Number(d.troca || 0);
-      col.devolucoes += Number(d.dinheiro || 0) + Number(d.troca || 0);
+      col.devolucoes += Number(d.troca || 0);
     }
 
     // ── 3a) SANIDADE DA CONTAGEM DE CUPOM ────────────────────────────────
@@ -1035,10 +1042,11 @@ export class DreService implements OnApplicationBootstrap {
     const serie = await this.serieDiaria(inicio, fimExclusive, indice);
 
     for (const col of lista) {
-      // TROCA/VALE NÃO ABATE (decisão do dono, 26/07 — repetida). Só sai da
-      // receita a devolução em DINHEIRO/PIX, onde a cliente levou o dinheiro
-      // embora. Troca fica visível na tela como informação, fora da conta.
-      col.receitaLiquida = col.faturamentoBruto - col.devolucoesDinheiro;
+      // RECEITA = o faturamento da tela Faturamento, sem tirar nem pôr. Vale
+      // usado e devolução em dinheiro já saíram dentro do `faturamentoHibrido`
+      // (decisão do dono 02/10, que substitui a de 26/07 de não abater vale):
+      // abater aqui de novo seria contar a mesma saída duas vezes.
+      col.receitaLiquida = col.faturamentoBruto;
       // CMV = venda ÷ 2,65 sobre a receita LÍQUIDA — peça devolvida não
       // vendeu, então o custo dela já sai junto. Regra ÚNICA: vale pra loja
       // física e pra canal digital (LIVE/SITE) igual.
@@ -1237,7 +1245,7 @@ export class DreService implements OnApplicationBootstrap {
         especiesSemGrupo: especies.filter((e) => !e.dreGrupo).length,
         contasSemEspecie: { valor: semEspecie.valor, lojas: [...semEspecie.lojas] },
       },
-      fonte: 'Caixa do Giga (espelho giga_caixa_mov) — MESMA fonte da tela Faturamento por Loja',
+      fonte: 'Venda do PDV no Flow, MESMA régua da tela Faturamento por Loja (vendido − vale-troca − devolução em dinheiro; marcado não conta)',
     };
   }
 
@@ -1398,6 +1406,7 @@ export class DreService implements OnApplicationBootstrap {
     for (const c of lista) {
       t.faturamentoBruto += c.faturamentoBruto;
       t.devolucoes += c.devolucoes;
+      t.valeTrocaUsado += c.valeTrocaUsado;
       t.devolucoesDinheiro += c.devolucoesDinheiro;
       t.devolucoesTroca += c.devolucoesTroca;
       t.ajustesNaVenda += c.ajustesNaVenda;
@@ -1417,8 +1426,8 @@ export class DreService implements OnApplicationBootstrap {
       }
     }
     t.despesasDetalhe.sort((a, b) => b.valor - a.valor);
-    // Mesma regra das colunas: troca/vale não abate.
-    t.receitaLiquida = t.faturamentoBruto - t.devolucoesDinheiro;
+    // Mesma regra das colunas: o faturamento já vem líquido de vale e devolução.
+    t.receitaLiquida = t.faturamentoBruto;
     t.margemBruta = t.receitaLiquida - t.cmv;
     // O CMV do total é a SOMA das colunas (cada uma com o seu markup), então
     // o markup da rede é o EFETIVO — mistura de 2,7 com o 2,35 de ITANHAÉM.
@@ -1486,25 +1495,22 @@ export class DreService implements OnApplicationBootstrap {
     }
   }
 
-  /** Faturamento por dia e por loja (caixa do Giga) — base do PE-dia. */
+  /**
+   * Faturamento por dia e por loja — base do PE-dia. Mesma régua da linha de
+   * faturamento (`faturamentoHibridoPorDia`), então a soma dos dias fecha com
+   * ela; lendo o espelho direto, o dia do equilíbrio chegava cedo demais
+   * (contava marcado e não abatia vale).
+   */
   private async serieDiaria(inicio: Date, fimExclusive: Date, indice: Map<string, string>) {
     const out = new Map<string, Array<{ dia: string; total: number }>>();
     try {
-      const rows: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT loja AS "storeCode",
-                to_char(data_fec, 'YYYY-MM-DD') AS dia,
-                COALESCE(SUM(valor_total), 0)::float8 AS total
-           FROM giga_caixa_mov
-          WHERE data_fec >= $1 AND data_fec < $2
-            AND (marcado IS NULL OR marcado <> 'SIM')
-          GROUP BY 1, 2 ORDER BY 2`,
-        inicio, fimExclusive,
-      );
+      // Já vem ordenado por dia.
+      const rows = await this.faturamento.faturamentoHibridoPorDia(inicio, fimExclusive);
       for (const r of rows) {
         const key = indice.get(String(r.storeCode || '').trim().toUpperCase());
         if (!key || key.startsWith('__')) continue;
         const arr = out.get(key) || [];
-        arr.push({ dia: r.dia, total: Number(r.total || 0) });
+        arr.push({ dia: r.dia, total: Number(r.faturamento || 0) });
         out.set(key, arr);
       }
     } catch (e: any) {
@@ -1680,19 +1686,21 @@ export class DreService implements OnApplicationBootstrap {
     const codes = [...this.variantes(input.coluna), ...(store?.name ? [String(store.name).toUpperCase()] : [])];
 
     if (linha === 'FATURAMENTO') {
-      const vendas: any[] = await this.prisma.$queryRawUnsafe(
-        // Aqui o GROUP BY já é por DIA, então DISTINCT numero basta — mas
-        // mantém a chave completa pra não virar armadilha se o agrupamento mudar.
-        `SELECT to_char(data_fec, 'YYYY-MM-DD') AS dia,
-                COUNT(DISTINCT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero))::int AS cupons,
-                COALESCE(SUM(valor_total), 0)::float8 AS total
-           FROM giga_caixa_mov
-          WHERE data_fec >= $1 AND data_fec < $2
-            AND (marcado IS NULL OR marcado <> 'SIM')
-            AND upper(trim(loja)) = ANY($3::text[])
-          GROUP BY 1 ORDER BY 1`,
-        inicio, fimExclusive, codes,
-      );
+      // Mesma régua da linha que abriu este detalhe: a soma dos dias É o
+      // faturamento da coluna (marcado fora, vale e devolução em dinheiro
+      // abatidos no dia). Canal digital mostra aqui só a parte do PDV — site
+      // e live entram na linha pelo `aplicaCanais`, sem abertura por dia.
+      const alvos = new Set(codes.map((c) => String(c).trim().toUpperCase()));
+      const porDia = await this.faturamento.faturamentoHibridoPorDia(inicio, fimExclusive);
+      const dias = new Map<string, { dia: string; cupons: number; total: number }>();
+      for (const r of porDia) {
+        if (!alvos.has(String(r.storeCode || '').trim().toUpperCase())) continue;
+        const d = dias.get(r.dia) || { dia: r.dia, cupons: 0, total: 0 };
+        d.cupons += r.cupons;
+        d.total += r.faturamento;
+        dias.set(r.dia, d);
+      }
+      const vendas = [...dias.values()].sort((a, b) => a.dia.localeCompare(b.dia));
       return { tipo: 'faturamento', linhas: vendas };
     }
 
