@@ -23,11 +23,32 @@ export default function EsqueciSenhaPage() {
     }
     setLoading(true);
     try {
-      const r = await api<{ sent: true; phoneMasked?: string }>(
+      const r = await api<{
+        sent: boolean;
+        motivo?: 'sem_conta' | 'sem_contato' | 'falha_envio' | 'aguarde';
+        phoneMasked?: string;
+        emailMasked?: string;
+      }>(
         '/customers/app/forgot-password',
         { method: 'POST', body: JSON.stringify({ cpf: cpfDigits(cpf) }) },
       );
-      setSentTo(r.phoneMasked || 'seu WhatsApp cadastrado');
+      // O backend agora diz quando o código NÃO saiu — antes a tela mostrava
+      // "Código enviado!" pra CPF sem conta e pra WhatsApp fora do ar.
+      if (r.sent === false) {
+        setErr(
+          r.motivo === 'sem_conta'
+            ? 'Não encontramos conta com este CPF. Volte e toque em "Criar conta".'
+            : r.motivo === 'sem_contato'
+              ? 'Sua conta não tem WhatsApp nem e-mail cadastrados. Fale com a loja pra atualizar.'
+              : 'Não conseguimos enviar o código agora. Tente de novo em instantes.',
+        );
+        return;
+      }
+      setSentTo(
+        [r.phoneMasked && `WhatsApp ${r.phoneMasked}`, r.emailMasked && `e-mail ${r.emailMasked}`]
+          .filter(Boolean)
+          .join(' e ') || 'seu WhatsApp cadastrado',
+      );
       // Redireciona pra tela de inserir código depois de 2s
       setTimeout(() => {
         router.push(`/resetar-senha?cpf=${cpfDigits(cpf)}`);
