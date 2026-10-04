@@ -95,42 +95,7 @@ function despacharPorPostura(
  * Handler
  * ──────────────────────────────────────────────────────────────────────────── */
 
-/**
- * Lote legítimo pesa poucos KB (50 eventos com contexto ≈ 60 KB no pior caso).
- * Acima disto não é aba de cliente — é alguém usando a rota pra escrever no
- * banco. Cada evento aceito vira linha em `site_eventos`, a tabela que encheu
- * o disco do Postgres em 28/09.
- */
-const TETO_CORPO_BYTES = 200_000;
-
-/**
- * A rota só existe pro PRÓPRIO site chamar. O navegador carimba toda
- * requisição com `Sec-Fetch-Site` (e `Origin` em POST), e script de outra
- * página não consegue forjar nenhum dos dois. Cabeçalho AUSENTE passa:
- * webview antiga não manda, e perder evento de cliente real é pior do que
- * aceitar um curl — pra esse caso o freio é o limite por IP logo abaixo.
- */
-function veioDeFora(req: Request): boolean {
-  const site = req.headers.get('sec-fetch-site');
-  if (site && site !== 'same-origin' && site !== 'none') return true;
-  const origin = req.headers.get('origin');
-  if (!origin) return false;
-  try {
-    const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || new URL(req.url).host;
-    return new URL(origin).host !== host;
-  } catch {
-    return true;
-  }
-}
-
 export async function POST(req: Request) {
-  if (veioDeFora(req)) {
-    return NextResponse.json({ ok: false, error: 'origem não permitida' }, { status: 403 });
-  }
-  if (Number(req.headers.get('content-length') || 0) > TETO_CORPO_BYTES) {
-    return NextResponse.json({ ok: false, error: 'lote grande demais' }, { status: 413 });
-  }
-
   const ip = clientIp(req);
   if (excedeuLimite(ip)) {
     return NextResponse.json({ ok: false, error: 'rate limit' }, { status: 429 });
@@ -138,12 +103,7 @@ export async function POST(req: Request) {
 
   let raw: unknown;
   try {
-    const texto = await req.text();
-    // `content-length` pode faltar (corpo em pedaços) — o teto vale pelo que chegou.
-    if (texto.length > TETO_CORPO_BYTES) {
-      return NextResponse.json({ ok: false, error: 'lote grande demais' }, { status: 413 });
-    }
-    raw = JSON.parse(texto);
+    raw = await req.json();
   } catch {
     return NextResponse.json({ ok: false, error: 'JSON inválido' }, { status: 400 });
   }

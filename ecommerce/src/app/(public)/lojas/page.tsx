@@ -4,7 +4,6 @@ import { stores, site, imgSrc, SITE_URL, instagramUrl, directionsUrl, type Store
 import { getBanners } from '@/services/banners';
 import { fetchVitrine } from '@/services/vitrine';
 import { sanitizeCampaignParams } from '@/lib/campaign-links';
-import { jsonLdSeguro } from '@/lib/seo';
 
 // No site novo a rota é /lojas (o menu, o rodapé e a retirada em loja já
 // apontam pra ela). O /nossaslojas do site antigo redireciona pra cá.
@@ -136,7 +135,7 @@ export default async function NossasLojasPage({
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLdSeguro(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
       <NossasLojasClient
         heroImagem={capa?.imagemUrl ?? null}

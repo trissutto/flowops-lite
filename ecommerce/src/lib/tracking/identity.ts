@@ -464,33 +464,9 @@ function fbcSintetico(): string | undefined {
  * Contexto completo
  * ──────────────────────────────────────────────────────────────────────────── */
 
-/**
- * Páginas cujo ÚLTIMO SEGMENTO é uma credencial: quem tem o endereço abre o
- * pedido (nome, telefone, endereço) ou avalia no lugar da cliente. Esse
- * endereço ia inteiro pra CAPI da Meta (`event_source_url`) e pro GA4
- * (`page_location`) — terceiro guardando link que abre dado pessoal.
- */
-const ROTAS_COM_SEGREDO = ['/checkout/confirmacao/', '/pedido/', '/avaliar/'];
-
-/** Troca o segmento-credencial por `:id`. Query e hash saem junto nessas rotas. */
-export function semSegredoNoCaminho(path: string, url: string): { path: string; url: string } {
-  const rota = ROTAS_COM_SEGREDO.find((r) => path.startsWith(r) && path.length > r.length);
-  if (!rota) return { path, url };
-  const limpo = `${rota}:id`;
-  try {
-    return { path: limpo, url: `${new URL(url).origin}${limpo}` };
-  } catch {
-    return { path: limpo, url: limpo };
-  }
-}
-
 /** Monta o contexto que acompanha todo evento. Barato: só lê storage e DOM. */
 export function buildContext(): EventContext {
-  const bruto = typeof window !== 'undefined' ? window.location.pathname : '/';
-  const { path, url } = semSegredoNoCaminho(
-    bruto,
-    typeof window !== 'undefined' ? window.location.href : bruto,
-  );
+  const path = typeof window !== 'undefined' ? window.location.pathname : '/';
   return {
     session_id: getSessionId(),
     anonymous_id: getAnonymousId(),
@@ -498,7 +474,7 @@ export function buildContext(): EventContext {
     ...getGa4BrowserIds(),
     page: {
       path,
-      url,
+      url: typeof window !== 'undefined' ? window.location.href : path,
       title: typeof document !== 'undefined' ? document.title : undefined,
       referrer: typeof document !== 'undefined' ? document.referrer || undefined : undefined,
     },
