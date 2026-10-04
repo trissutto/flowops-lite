@@ -18,6 +18,7 @@ import { fetchStoreLaunches } from '@/services/store-launches.server';
 import StoreCtas, { StoreHeroActions } from './StoreCtas';
 import StoreLaunches from './StoreLaunches';
 import { STORE_LAUNCH_HERO_DESCRIPTION, storeLaunchHeroTitle } from './store-launches';
+import { jsonLdSeguro } from '@/lib/seo';
 
 /**
  * A PÁGINA DE UMA LOJA — a landing que faltava desde a virada de 19/08/2026.
@@ -179,11 +180,11 @@ export default async function LojaCidadePage({ params }: Params) {
     <main className="bg-[var(--lj-ivory)] pb-16">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(storeJsonLd(s)) }}
+        dangerouslySetInnerHTML={{ __html: jsonLdSeguro(storeJsonLd(s)) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd(s)) }}
+        dangerouslySetInnerHTML={{ __html: jsonLdSeguro(breadcrumbJsonLd(s)) }}
       />
 
       {/* Capa editorial da rede: a primeira novidade ilustra todas as páginas;
