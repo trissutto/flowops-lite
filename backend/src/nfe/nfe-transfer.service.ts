@@ -5,6 +5,7 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { NfeSequenceService } from './nfe-sequence.service';
 import { signXmlNfeWithA1, transmitNfeSefazSp, cancelNfceSefazSp } from '../pdv/nfce-sefaz';
 import { SEFAZ_SP_NFE_ENDPOINTS, HOMOLOG_FRASE } from './nfe-sefaz-endpoints';
+import { contaQueCobrouAVenda } from '../common/emitente-venda-online';
 
 /** UF → código IBGE (cUF). Só os estados que a rede opera; expandir se preciso. */
 // ═══ REGRAS FISCAIS DE VENDA (tabela do contador, 28/07/26) ══════════════
@@ -668,6 +669,18 @@ export class NfeTransferService {
       : null;
   }
 
+  /** A identidade tem tudo que a nota exige (CNPJ, IE, razão social, endereço)? */
+  private identidadeCompleta(id: { cnpj: string; ie: string; razaoSocial: string; endereco: any }): boolean {
+    const endereco = typeof id.endereco === 'string' ? id.endereco.trim() : JSON.stringify(id.endereco || {});
+    return (
+      this.digits(String(id.cnpj || '')).length === 14 &&
+      this.digits(String(id.ie || '')).length >= 2 &&
+      String(id.razaoSocial || '').trim().length >= 2 &&
+      !!endereco &&
+      endereco !== '{}'
+    );
+  }
+
   /**
    * ORDEM DE EMITENTE POR RAIZ (dono 30/07) — env, não hardcode:
    *   NFE_TRANSFER_EMITENTE_RAIZ_JSON = {"<raiz 8 díg>": ["<code>", "<code>"]}
@@ -785,10 +798,33 @@ export class NfeTransferService {
       };
 
       const extras = this.parseIdentidadesExtras(cfg.nfeIdentidadesExtras);
-      let alt: any =
-        extras.find(
-          (e) => this.digits(String(e.cnpj || '')).slice(0, 8) === opts.matchRaiz && podeAssinar(e.cnpj),
-        ) || null;
+      let alt: any = null;
+
+      // VENDA pela raiz da CONTA QUE COBROU (04/10): antes de ir buscar no
+      // grupo, o estabelecimento que a PRÓPRIA loja tem dessa raiz. Sorocaba e
+      // Praia Grande emitem cupom pela LURDS (identidade 'base'), mas têm CNPJ
+      // T.O. próprio na identidade de NF-e — é dele que a peça sai, então é ele
+      // que assina a venda cobrada na conta da T.O., não a matriz de Itanhaém.
+      // Só pra identidade 'base' (venda): a transferência já parte da
+      // identidade de NF-e e não muda de comportamento. Identidade incompleta
+      // não serve — cai pro grupo em vez de derrubar a nota.
+      let ehIdentidadeDeNfeDaLoja = false;
+      if (opts.identidade === 'base') {
+        const propria = this.identidadeDaRaiz(cfg, opts.matchRaiz, podeAssinar);
+        if (propria && this.identidadeCompleta(propria)) {
+          alt = propria;
+          // É a MESMA identidade (e o mesmo CNPJ) que a transferência desta loja
+          // já usa — a numeração herda igual à de lá, não como empréstimo.
+          ehIdentidadeDeNfeDaLoja = this.digits(String(propria.cnpj)) === nfeCnpjD;
+        }
+      }
+
+      if (!alt) {
+        alt =
+          extras.find(
+            (e) => this.digits(String(e.cnpj || '')).slice(0, 8) === opts.matchRaiz && podeAssinar(e.cnpj),
+          ) || null;
+      }
 
       // REGRA DO DONO (28/07): se a PRÓPRIA loja origem não tem identidade da
       // raiz do destino (ex.: Sorocaba raiz 20 → Limeira raiz 30), procura no
@@ -822,7 +858,9 @@ export class NfeTransferService {
         if (escolhida) {
           alt = escolhida.id;
           this.logger.log(
-            `[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${escolhida.c.storeCode} (mesma raiz do destino)`,
+            opts.identidade === 'base'
+              ? `[nfe] venda da loja ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${escolhida.c.storeCode} (a loja não tem estabelecimento dessa raiz)`
+              : `[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${escolhida.c.storeCode} (mesma raiz do destino)`,
           );
         } else if (vetado.length === 14) {
           // Só existia UM estabelecimento elegível e ele é o destino. Emitir
@@ -834,7 +872,7 @@ export class NfeTransferService {
       }
 
       if (alt) {
-        identidadeEmprestada = true;
+        identidadeEmprestada = !ehIdentidadeDeNfeDaLoja;
         cnpjSrc = this.digits(String(alt.cnpj || ''));
         ieSrc = this.digits(String(alt.ie || ''));
         razaoSrc = String(alt.razaoSocial || '').trim();
@@ -1434,7 +1472,7 @@ export class NfeTransferService {
   ) {
     const sale: any = await (this.prisma as any).pdvSale.findUnique({
       where: { id: saleId },
-      include: { items: true },
+      include: { items: true, payments: { select: { method: true } } },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'finalized') throw new BadRequestException('A venda precisa estar finalizada.');
@@ -1466,7 +1504,22 @@ export class NfeTransferService {
     if (faltam.length) throw new BadRequestException(`Dados da cliente incompletos pra NF-e: ${faltam.join(', ')}.`);
 
     // Identidade fiscal = a da NFC-e (mesmo CNPJ que vendeu). NÃO usa nfe* de transferência.
-    const origem = await this.loadStoreFiscal(sale.storeCode, { requireCert: true, identidade: 'base' });
+    // EXCEÇÃO — VENDA ONLINE paga em conta de gateway (dono 04/10): a nota sai
+    // pela empresa TITULAR da conta que recebeu, não pela loja. É por aqui que
+    // a loja emite a nota da retirada sem endereço cadastrado (a automática
+    // não consegue) — e ela tem que cair no mesmo CNPJ da automática.
+    const ehVendaOnline = ((sale.payments || []) as any[]).some((p) => String(p?.method || '') === 'venda_online');
+    const conta = ehVendaOnline ? await contaQueCobrouAVenda(this.prisma, saleId) : null;
+    const origem = await this.loadStoreFiscal(sale.storeCode, {
+      requireCert: true,
+      identidade: 'base',
+      matchRaiz: conta?.raiz,
+    });
+    if (conta) {
+      this.logger.log(
+        `[nfe] nota grande da venda online ${saleId}: emitente ${origem.cnpj} (conta que cobrou: raiz ${conta.raiz}, cobrança da loja ${conta.lojaDaCobranca})`,
+      );
+    }
     const tpAmb = origem.ambiente;
     const serie = '1';
 
@@ -1478,11 +1531,17 @@ export class NfeTransferService {
       if (min > 30) {
         throw new BadRequestException('O cupom (NFC-e) desta venda já passou dos 30 min pra cancelar na SEFAZ. Não dá pra emitir a NF-e sem duplicar — fale com o contador.');
       }
+      // Quem cancela o cupom é quem EMITIU o cupom — a identidade de NFC-e da
+      // loja. Quando a nota sai pela empresa da conta (acima), `origem` é
+      // OUTRO CNPJ, com outro certificado: cancelar com ele seria recusado.
+      const doCupom = conta
+        ? await this.loadStoreFiscal(sale.storeCode, { requireCert: true, identidade: 'base' })
+        : origem;
       const canc = await cancelNfceSefazSp({
         chave: sale.nfceChave, protocolo: sale.nfceProtocolo,
         justificativa: 'Substituicao do cupom fiscal por NF-e a pedido do cliente',
-        cnpj: origem.cnpj, ambiente: tpAmb,
-        pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass,
+        cnpj: doCupom.cnpj, ambiente: tpAmb,
+        pfxBase64: doCupom.certPfxB64, pfxPassword: doCupom.certPfxPass,
       });
       const okc = canc.success && (canc.cStat === '135' || canc.cStat === '155');
       if (!okc) {
@@ -1622,8 +1681,16 @@ export class NfeTransferService {
     ambienteOverride?: '1' | '2';
     /** Emitir pela identidade DESSA raiz de CNPJ (ex.: site = LURDS matriz), buscada na config da loja/grupo. */
     emitirPorRaiz?: string;
+    /**
+     * VENDA SEM CARD (04/10): motoboy fechado na própria vendedora não tem
+     * pick-order — a nota se amarra à VENDA do PDV (`venda:<saleId>`, a mesma
+     * chave da "nota grande"), e a venda ganha o selo "NF-e emitida" pra o
+     * caixa não emitir cupom por cima. Com `saleId`, `pickOrderId` é ignorado.
+     */
+    saleId?: string;
   }) {
-    const linkId = `envio:${input.pickOrderId}`;
+    const saleId = String(input.saleId || '').trim();
+    const linkId = saleId ? `venda:${saleId}` : `envio:${input.pickOrderId}`;
 
     const d = input.dest;
     const cpfCnpj = this.digits(d.cpfCnpj || '');
@@ -1699,7 +1766,7 @@ export class NfeTransferService {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
       chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: this.agoraBrasilia() });
-      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, vFrete, vDesc, saleRef: `envio ${String(input.pickOrderId).slice(0, 8)}` });
+      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, vFrete, vDesc, saleRef: saleId ? String(saleId).slice(0, 8) : `envio ${String(input.pickOrderId).slice(0, 8)}` });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
       try {
@@ -1728,7 +1795,18 @@ export class NfeTransferService {
         erro: autorizada ? null : res.xMotivo || res.error || 'Rejeitada',
       },
     });
-    return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo };
+    if (autorizada && saleId) {
+      // Mesmo selo da "nota grande": a lista de vendas mostra "NF-e EMITIDA" e
+      // ninguém emite cupom por cima de uma venda que já tem nota.
+      await (this.prisma as any).pdvSale.update({
+        where: { id: saleId },
+        data: {
+          nfceStatus: 'substituida_nfe',
+          nfceMotivo: `NF-e ${numero} da venda online autorizada (CNPJ ${origem.cnpj})`,
+        },
+      }).catch(() => null);
+    }
+    return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo, emitente: { cnpj: origem.cnpj, razaoSocial: origem.razaoSocial } };
   }
 
   /** NF-e autorizada de uma VENDA (modal da nota grande checa antes de pedir os dados). */

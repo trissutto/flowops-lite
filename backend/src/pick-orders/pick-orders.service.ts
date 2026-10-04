@@ -30,6 +30,14 @@ import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situaca
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { JuntadaService } from './juntada.service';
 import { motivoDeRecusaDoDestrave, notaDoDestrave } from '../common/destrave-matriz';
+import { contaQueCobrouOPedido, decidirEmitente, erroTransitorio, pdvSaleIdDoPedido } from '../common/emitente-venda-online';
+
+/**
+ * Marcador do histórico do pedido pra nota AUTOMÁTICA de retirada/motoboy
+ * (`emitirNotaSemEnvio`). É ele que garante UMA tentativa por pedido — a
+ * varredura pula quem já tem linha começando assim.
+ */
+const MARCA_NOTA_AUTO = '[nota-auto]';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -600,39 +608,66 @@ export class PickOrdersService {
    * front avisa. NFE_ENVIO_AMBIENTE=2 força homologação (e aí a chave de
    * teste NÃO vai pra pré-postagem). Emissão idempotente por pick+ambiente.
    */
-  private async emitirNfeDoEnvio(id: string, order: any, pick: any, store: any): Promise<{ nfe: any; nfeChave?: string; nfeInfoME: any }> {
+  private async emitirNfeDoEnvio(
+    id: string,
+    order: any,
+    pick: any,
+    store: any,
+    /**
+     * NOTA SEM ETIQUETA (04/10) — retirada e motoboy, que não passam pelo
+     * "Gerar envio". `semEtiqueta` abre a porta da retirada; `saleId` amarra a
+     * nota à VENDA quando o pedido fechou na vendedora sem card nenhum.
+     */
+    opts: { semEtiqueta?: boolean; saleId?: string } = {},
+  ): Promise<{ nfe: any; nfeChave?: string; nfeInfoME: any }> {
     let nfe: any = null;
     let nfeChave: string | undefined;
     let nfeInfoME: any = null;
-    if (String(process.env.NFE_ENVIO_ENABLED || '').trim() === '1' && !order.isPickup) {
+    if (String(process.env.NFE_ENVIO_ENABLED || '').trim() === '1' && (!order.isPickup || opts.semEtiqueta)) {
       try {
-        const dados = await this.montarDadosNfeEnvio(order, pick, String(store?.code || ''));
+        const diag: { motivo?: string } = {};
+        const dados = await this.montarDadosNfeEnvio(order, pick, String(store?.code || ''), diag);
         if (!dados) {
           // montarDadosNfeEnvio já logou o motivo específico. Este registro
           // fecha o rastro: a etiqueta VAI sair, mas sem nota — e antes disso
           // acontecia em silêncio absoluto (caso Limeira/Piracicaba 30/07).
-          nfe = { status: 'skipped', motivo: 'dados da NF-e não puderam ser montados — ver log [nfe-envio] acima' };
+          nfe = { status: 'skipped', motivo: diag.motivo || 'dados da NF-e não puderam ser montados — ver log [nfe-envio] acima' };
         }
         if (dados) {
           const amb = process.env.NFE_ENVIO_AMBIENTE === '2' ? '2' : process.env.NFE_ENVIO_AMBIENTE === '1' ? '1' : undefined;
-          // Venda do SITE = empresa do site (LURDS matriz, raiz 30), não a loja
-          // separadora (regra do dono 28/07: "não temos código, seria site").
-          // Envs: NFE_SITE_EMITENTE_RAIZ (8 díg) + NFE_SITE_EMITENTE_STORE
-          // (loja cuja config guarda a identidade/numeração; default a própria).
-          const isSite = order.source !== 'live';
-          const siteRaiz = String(process.env.NFE_SITE_EMITENTE_RAIZ || '').replace(/\D/g, '');
-          const siteStore = String(process.env.NFE_SITE_EMITENTE_STORE || '').trim();
-          // FRANQUIAS emitem pela MDD CERQUEIRA (dono 28/07): mapa loja→raiz
-          // por env, ex. NFE_EMITENTE_RAIZ_POR_LOJA = {"10":"<raizMDD>",...}.
-          // Vale pra venda da LIVE da franquia; site continua LURDS.
+          // QUEM EMITE — a ordem das réguas mora em `decidirEmitente`
+          // (common/emitente-venda-online.ts):
+          //  1. A NOTA SEGUE O DINHEIRO (dono 04/10): venda online do PDV paga
+          //     em conta de gateway sai pela empresa TITULAR da conta (hoje
+          //     T.O. RISSUTTO, a única conta PagBank da rede) — não mais pelo
+          //     CNPJ de quem despacha. Eram 45 de 68 notas no CNPJ errado.
+          //  2. Venda do SITE = empresa do site (dono 28/07) — envs
+          //     NFE_SITE_EMITENTE_RAIZ (8 díg) + NFE_SITE_EMITENTE_STORE.
+          //  3. FRANQUIAS pela MDD CERQUEIRA (dono 28/07): mapa loja→raiz em
+          //     NFE_EMITENTE_RAIZ_POR_LOJA = {"10":"<raizMDD>",...}.
           let lojaRaiz = '';
           try {
             const mapa = JSON.parse(process.env.NFE_EMITENTE_RAIZ_POR_LOJA || '{}');
             lojaRaiz = String(mapa[String(store?.code || '')] || '').replace(/\D/g, '');
           } catch { /* JSON inválido → sem override */ }
+          const conta = await contaQueCobrouOPedido(this.prisma as any, order);
+          const emitente = decidirEmitente({
+            source: order.source,
+            lojaQueDespacha: String(store?.code || ''),
+            raizDaConta: conta?.raiz,
+            siteRaiz: process.env.NFE_SITE_EMITENTE_RAIZ,
+            siteStore: process.env.NFE_SITE_EMITENTE_STORE,
+            lojaRaiz,
+          });
+          if (conta) {
+            this.logger.log(
+              `[nfe-envio] ${order.wcOrderNumber || order.id}: venda paga na conta da raiz ${conta.raiz} ` +
+                `(cobrança da loja ${conta.lojaDaCobranca}) — a nota sai por ela, não pelo CNPJ da loja ${store?.code} que despacha`,
+            );
+          }
           const r2: any = await this.nfe.emitVendaForEnvio({
             pickOrderId: id,
-            storeCode: isSite && siteRaiz.length === 8 && siteStore ? siteStore : String(store?.code || ''),
+            storeCode: emitente.storeCode,
             dest: dados.dest,
             items: dados.items,
             // Frete cobrado da cliente vai no campo vFrete da nota (nunca
@@ -642,9 +677,10 @@ export class PickOrdersService {
             // — sem isso a nota sai pelo valor cheio (LP-000025, 15/08).
             vDesc: dados.vDesc,
             ambienteOverride: amb as any,
-            emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : (lojaRaiz.length === 8 ? lojaRaiz : undefined),
+            emitirPorRaiz: emitente.emitirPorRaiz,
+            saleId: opts.saleId,
           });
-          nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, jaEmitida: !!r2?.jaEmitida };
+          nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, numero: r2?.doc?.numero, jaEmitida: !!r2?.jaEmitida, emitente: r2?.emitente ?? null, regra: emitente.regra };
           if (r2?.ok && r2?.doc?.chave && r2?.doc?.tpAmb === '1') nfeChave = String(r2.doc.chave);
           // Mais Envios: a nota vai SEMPRE (mesmo homolog) — lá o nf.nfeKey é
           // referência/unicidade da etiqueta (chave vazia COLIDE: "Etiqueta já
@@ -862,7 +898,13 @@ export class PickOrdersService {
    * Destinatário + itens da NF-e do envio. CEP-authoritative (ViaCEP) pra
    * UF/cidade e principalmente o código IBGE (cMun, obrigatório na NF-e).
    */
-  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[]; vFrete: number; vDesc: number } | null> {
+  private async montarDadosNfeEnvio(
+    order: any,
+    pick: any,
+    storeCode?: string,
+    /** Recebe o MOTIVO quando a nota não pôde ser montada — a varredura da nota sem etiqueta grava no pedido. */
+    diag: { motivo?: string } = {},
+  ): Promise<{ dest: any; items: any[]; vFrete: number; vDesc: number } | null> {
     let nome = '';
     let cpfCnpj = '';
     let endereco = '';
@@ -1015,16 +1057,25 @@ export class PickOrdersService {
       // Dividido: SÓ os itens atribuídos a esta loja. Loja única: mantém o
       // comportamento antigo (atribuídos + sem dono; sem nada, o pedido todo).
       // Âncora da JUNTADA: todas as peças do pedido (o pacote leva tudo).
-      const lista = ancoraJuntada
-        ? pecas
-        : dividido
-          ? atribuidos
-          : (atribuidos.length ? [...atribuidos, ...semDono] : (order.items || []));
+      // RETIRADA (04/10): a cliente leva o pedido INTEIRO no balcão de uma
+      // loja só — o card dela (o que não é transferência) fatura todas as
+      // peças vivas, inclusive as que chegaram de caixa de outra loja (essas
+      // viajaram com NF de transferência). Sem isso o card RECEPTOR, que não
+      // tem peça atribuída, ficava sem nada pra faturar.
+      const retiradaNoBalcao = !!order.isPickup && !pick?.isTransfer;
+      const lista = retiradaNoBalcao
+        ? pecas.filter((i: any) => !i.cancelledAt)
+        : ancoraJuntada
+          ? pecas
+          : dividido
+            ? atribuidos
+            : (atribuidos.length ? [...atribuidos, ...semDono] : (order.items || []));
       if (!lista.length) {
         this.logger.warn(
           `[nfe-envio] SEM NOTA: pedido ${order.id} sem itens atribuídos à loja ${storeCode} ` +
             `(dividido=${dividido} · itensNoPedido=${(order.items || []).length})`,
         );
+        diag.motivo = `o pedido não tem peça atribuída à loja ${storeCode}`;
         return null;
       }
       // Rateio do fallback pelo TOTAL DE PEÇAS DO PEDIDO (não só da lista) —
@@ -1058,10 +1109,28 @@ export class PickOrdersService {
       }
     }
 
+    /**
+     * RETIRADA NÃO PEDE ENDEREÇO (dono 18/08) — mas a NF-e modelo 55 exige o
+     * endereço do destinatário. Antes de desistir, o cadastro da cliente no
+     * CRM (mesmo CPF): se ela já tem endereço lá, é ele que vai na nota. Sem
+     * nenhum dos dois não há o que inventar — a nota fica pendente com o
+     * motivo escrito, e a loja emite a "nota grande" pelo PDV informando o
+     * endereço (que sai pelo mesmo CNPJ desta regra).
+     */
+    if (cep.length !== 8 && order.isPickup && order.source !== 'live') {
+      const doCadastro = await this.enderecoDoCadastro(cpfCnpj);
+      if (doCadastro) {
+        ({ cep, endereco, numero, bairro, cidade, uf } = doCadastro);
+        this.logger.log(`[nfe-envio] pedido ${order.wcOrderNumber || order.id}: sem endereço no pedido — usando o do cadastro da cliente no CRM`);
+      }
+    }
     if (cep.length !== 8) {
       this.logger.warn(
         `[nfe-envio] SEM NOTA: CEP inválido no pedido ${order.id} — recebido "${cep}" (${cep.length} dígitos, precisa 8)`,
       );
+      diag.motivo = cep.length
+        ? `CEP da cliente inválido ("${cep}")`
+        : 'a cliente não tem endereço no pedido nem no cadastro (a NF-e exige endereço do destinatário)';
       return null;
     }
     // ViaCEP manda: UF/cidade/bairro + o código IBGE (cMun da NF-e)
@@ -1083,6 +1152,149 @@ export class PickOrdersService {
       vFrete,
       vDesc,
     };
+  }
+
+  /**
+   * Endereço que a cliente JÁ TEM no cadastro do CRM (por CPF) — o principal,
+   * senão o mais recente. Só devolve endereço completo o bastante pra nota
+   * (CEP de 8 dígitos + rua). Null se não houver: quem chama decide.
+   */
+  private async enderecoDoCadastro(
+    cpf: string,
+  ): Promise<{ cep: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string } | null> {
+    const d = String(cpf || '').replace(/\D/g, '');
+    if (d.length !== 11) return null;
+    const cliente: any = await (this.prisma as any).customer.findFirst({
+      where: { cpf: d },
+      select: {
+        addresses: {
+          where: { active: true },
+          orderBy: [{ isPrimary: 'desc' }, { updatedAt: 'desc' }],
+          select: { cep: true, street: true, number: true, district: true, city: true, state: true },
+        },
+      },
+    });
+    for (const a of (cliente?.addresses || []) as any[]) {
+      const cep = String(a?.cep || '').replace(/\D/g, '');
+      const rua = String(a?.street || '').trim();
+      if (cep.length !== 8 || !rua) continue;
+      return {
+        cep,
+        endereco: rua,
+        numero: String(a?.number || '').trim() || 'S/N',
+        bairro: String(a?.district || '').trim(),
+        cidade: String(a?.city || '').trim(),
+        uf: String(a?.state || '').trim().toUpperCase().slice(0, 2),
+      };
+    }
+    return null;
+  }
+
+  /**
+   * NOTA DA VENDA ONLINE QUE NÃO GERA ETIQUETA — retirada e motoboy (dono
+   * 04/10: "SIM", emitir automática pela mesma regra do link).
+   *
+   * A NF-e só nascia no "Gerar envio" dos Correios. Retirada pulava
+   * (`!isPickup`), motoboy nem passava por ali, e a venda online pula o cupom
+   * no caixa — em 30 dias, 77 pedidos pagos no PagBank (R$ 21,1 mil) sem
+   * documento fiscal nenhum. Aqui a nota sai DEPOIS que a peça foi entregue
+   * (card fechado em "Cliente retirou"/"Entregue por motoboy", ou pedido
+   * fechado na própria vendedora), chamada pela varredura
+   * `NotaVendaOnlineCron` — fora do caminho do caixa e do botão da loja.
+   *
+   * ESCOPO, de propósito estreito:
+   *  - só venda online do PDV (`pdv_online`) paga em CONTA DE GATEWAY: é a
+   *    regra do link. Venda cobrada fora (franquia na maquininha dela) segue
+   *    como estava — quem recebeu aí é a loja, e o cupom é com ela.
+   *  - UMA tentativa por pedido. O resultado fica no histórico com o marcador
+   *    `[nota-auto]`; rejeição e cadastro incompleto esperam gente (tentar de
+   *    novo daria o mesmo erro e queimaria número). Só erro de rede repete.
+   *  - venda com cupom (NFC-e) autorizado nunca ganha nota: "nunca os dois".
+   *
+   * Kill-switch: `NFE_NOTA_SEM_ENVIO=0` (e continua valendo `NFE_ENVIO_ENABLED`).
+   */
+  async emitirNotaSemEnvio(
+    orderId: string,
+  ): Promise<{ resultado: 'emitida' | 'rejeitada' | 'pendente' | 'pulada' | 'tentar-depois'; motivo?: string }> {
+    if (String(process.env.NFE_ENVIO_ENABLED || '').trim() !== '1') return { resultado: 'pulada', motivo: 'NFE_ENVIO_ENABLED desligada' };
+    if (String(process.env.NFE_NOTA_SEM_ENVIO ?? '1').trim() === '0') return { resultado: 'pulada', motivo: 'NFE_NOTA_SEM_ENVIO=0' };
+
+    const order: any = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: true, pickOrders: { include: { store: { select: { id: true, code: true, name: true } } } } },
+    });
+    if (!order || order.source !== 'pdv_online') return { resultado: 'pulada', motivo: 'não é venda online do PDV' };
+    if (!['shipped', 'delivered'].includes(String(order.status))) return { resultado: 'pulada', motivo: `pedido ${order.status}` };
+    const semEtiqueta = retiradaOuMotoboy(order);
+    if (!semEtiqueta) return { resultado: 'pulada', motivo: 'pedido de Correios — a nota sai no Gerar envio' };
+
+    const saleId = pdvSaleIdDoPedido(order);
+    if (!saleId) return { resultado: 'pulada', motivo: 'pedido sem venda do PDV' };
+    const conta = await contaQueCobrouOPedido(this.prisma as any, order);
+    if (!conta) return { resultado: 'pulada', motivo: 'venda não foi paga em conta de gateway' };
+
+    // Card da CLIENTE = o que não é transferência. Sem card nenhum, o pedido
+    // fechou na própria vendedora (motoboy com a peça na mão).
+    const cards = ((order.pickOrders || []) as any[]).filter((p) => !p.isTransfer);
+    const card = cards.find((p) => p.status === 'shipped') ?? null;
+    if (cards.length && !card) return { resultado: 'pulada', motivo: 'card da cliente ainda não foi fechado' };
+
+    const jaTentou = await this.prisma.orderHistory.findFirst({
+      where: { orderId: order.id, note: { startsWith: MARCA_NOTA_AUTO } },
+      select: { id: true },
+    });
+    if (jaTentou) return { resultado: 'pulada', motivo: 'já tentada (ver histórico do pedido)' };
+
+    const links = [`venda:${saleId}`, ...((order.pickOrders || []) as any[]).filter((p) => !p.isTransfer).map((p) => `envio:${p.id}`)];
+    const docExistente = await this.prisma.nfeDoc.findFirst({ where: { shipmentId: { in: links } }, select: { id: true } });
+    if (docExistente) return { resultado: 'pulada', motivo: 'já existe NF-e (ou tentativa) pra esta venda' };
+
+    const sale: any = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { status: true, isTraining: true, nfceStatus: true, storeCode: true },
+    });
+    if (!sale || sale.isTraining || sale.status !== 'finalized') return { resultado: 'pulada', motivo: 'venda não finalizada (ou de treino)' };
+    if (sale.nfceStatus === 'authorized') return { resultado: 'pulada', motivo: 'a venda já tem cupom (NFC-e) autorizado' };
+
+    // De onde a peça saiu: a loja do card; sem card, a vendedora.
+    const store: any = card?.store
+      ? card.store
+      : await this.prisma.store.findFirst({ where: { code: String(order.sellerStoreCode || sale.storeCode || '') }, select: { id: true, code: true, name: true } });
+    if (!store?.code) return { resultado: 'pulada', motivo: 'loja da venda não encontrada' };
+    const pick = card ?? { id: '', storeId: store.id, isTransfer: false };
+
+    const registrar = async (texto: string) => {
+      await this.prisma.orderHistory
+        .create({ data: { orderId: order.id, fromStatus: order.status, toStatus: order.status, note: `${MARCA_NOTA_AUTO} ${texto}` } })
+        .catch((e: any) => this.logger.warn(`[nota-auto] histórico do ${order.wcOrderNumber} não gravado: ${e?.message || e}`));
+    };
+
+    const { nfe } = await this.emitirNfeDoEnvio(card?.id ?? '', order, pick, store, {
+      semEtiqueta: true,
+      saleId: card ? undefined : saleId,
+    });
+    const rotulo = semEtiqueta === 'RETIRADA' ? 'retirada' : 'motoboy';
+
+    if (nfe?.status === 'authorized') {
+      const quem = nfe?.emitente ? `${nfe.emitente.razaoSocial} (CNPJ ${nfe.emitente.cnpj})` : `raiz ${conta.raiz}`;
+      await registrar(`NF-e ${nfe.numero ?? ''} emitida por ${quem} — a empresa da conta que recebeu o pagamento (${rotulo}).`);
+      this.logger.log(`[nota-auto] ${order.wcOrderNumber}: NF-e ${nfe.numero} autorizada por ${quem} (${rotulo}, loja ${store.code})`);
+      return { resultado: 'emitida' };
+    }
+    const motivo =
+      nfe?.status === 'rejected'
+        ? `a SEFAZ rejeitou (${nfe.cStat ?? '?'}: ${nfe.xMotivo ?? 'sem motivo'})`
+        : String(nfe?.motivo || nfe?.erro || 'falha sem detalhe');
+    if (nfe?.status === 'error' && erroTransitorio(motivo)) {
+      this.logger.warn(`[nota-auto] ${order.wcOrderNumber}: ${motivo} — tenta de novo no próximo ciclo`);
+      return { resultado: 'tentar-depois', motivo };
+    }
+    await registrar(
+      `NF-e NÃO emitida (${rotulo}): ${motivo}. ` +
+        `Pra emitir: PDV → Notas → botão "NF-e" da venda, informando o endereço da cliente — sai pelo CNPJ da conta que recebeu.`,
+    );
+    this.logger.warn(`[nota-auto] ${order.wcOrderNumber}: NF-e NÃO emitida — ${motivo}`);
+    return { resultado: nfe?.status === 'rejected' ? 'rejeitada' : 'pendente', motivo };
   }
 
   /**
