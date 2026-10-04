@@ -1,5 +1,24 @@
 import 'server-only';
-import sharp from 'sharp';
+
+/**
+ * ⚠️ O `sharp` NÃO É IMPORTADO NO TOPO — e não é detalhe (04/10/2026).
+ *
+ * Este arquivo entra no layout público (via `services/banners`). Com
+ * `import sharp from 'sharp'` aqui em cima, se o binário nativo não carregar
+ * na função da Vercel o módulo inteiro falha ao subir e TODA página
+ * renderizada sob demanda responde 500 — ficha do produto, /lojas, /busca —
+ * enquanto as pré-renderizadas no build (onde o binário existe) seguem 200.
+ *
+ * Foi exatamente o que aconteceu ao subir o sharp de 0.34 pra 0.35: 9 minutos
+ * com a página de destino dos anúncios fora do ar, e a build local (Windows)
+ * servindo tudo normalmente. Reproduzido isolado num deploy de preview: só o
+ * sharp 0.35 quebra; o Next novo sozinho passa.
+ *
+ * Carregado sob demanda e dentro do try, a pior falha possível do sharp custa
+ * a variante embutida do hero (o `next/image` assume) — nunca o site.
+ * Subir o sharp de versão: SEMPRE conferir a ficha do produto no deploy de
+ * PREVIEW antes do merge.
+ */
 
 const MAX_SOURCE_BYTES = 3 * 1024 * 1024;
 const TIMEOUT_MS = 5000;
@@ -20,6 +39,7 @@ export async function gerarHeroMobileInline(url?: string | null): Promise<string
     const source = Buffer.from(await response.arrayBuffer());
     if (source.byteLength > MAX_SOURCE_BYTES) return undefined;
 
+    const { default: sharp } = await import('sharp');
     const optimized = await sharp(source)
       .resize({ width: 768, withoutEnlargement: true })
       .avif({ quality: 58, effort: 3 })
