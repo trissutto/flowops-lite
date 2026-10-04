@@ -109,6 +109,13 @@ export default async function CategoryPage({
 
   const meta = categoryMeta(slug);
   /**
+   * Categorias que são DESTINO de anúncio e de redirect do site antigo mas não
+   * estão em `CATEGORY_SLUGS`. Se uma delas zerar de peça e sair da lista do
+   * backend por um dia, o clique pago não pode cair num 404 — abre vazia, como
+   * sempre abriu, e volta sozinha quando a peça voltar.
+   */
+  const DESTINO_DE_ANUNCIO = ['linha-conforto', 't-shirts-premium', 'lingerie'];
+  /**
    * AS TRÊS LEITURAS SAEM JUNTAS (04/10/2026). Eram três `await` em fila —
    * catálogo, categorias, Instagram — e nenhuma depende da outra: a página
    * pagava a SOMA dos três tempos a cada regeneração, quando só precisa do
@@ -150,6 +157,7 @@ export default async function CategoryPage({
    */
   const existe =
     CATEGORY_SLUGS.includes(slug) ||
+    DESTINO_DE_ANUNCIO.includes(slug) ||
     categorias.some((c) => c.slug === slug) ||
     (primeiraPagina?.total ?? 0) > 0;
   if (!existe && primeiraPagina !== null && categorias.length > 0) notFound();
