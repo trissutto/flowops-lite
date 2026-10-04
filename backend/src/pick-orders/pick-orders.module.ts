@@ -15,6 +15,7 @@ import { NfeModule } from '../nfe/nfe.module';
 import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cron';
 import { PedidoFechamentoReconcileCron } from './pedido-fechamento-reconcile.cron';
 import { EntregaAvisoCron } from './entrega-aviso.cron';
+import { NotaVendaOnlineCron } from './nota-venda-online.cron';
 import { HttpModule } from '@nestjs/axios';
 import { EmailModule } from '../email/email.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
@@ -43,7 +44,9 @@ import { JuntadaService } from './juntada.service';
   controllers: [PickOrdersController],
   // PedidoFechamentoReconcileCron → varredura de 10 min do pedido com tudo
   // postado que nenhum gatilho fechou (rede de segurança do `tentarFecharPedido`).
-  providers: [PickOrdersService, JuntadaService, CorreiosPostagemReconcileCron, PedidoFechamentoReconcileCron, EntregaAvisoCron, PedidoEmailService],
+  // NotaVendaOnlineCron → varredura de 5 min da NF-e de retirada/motoboy da
+  // venda online paga em conta de gateway (a nota segue o CNPJ do link, 04/10).
+  providers: [PickOrdersService, JuntadaService, CorreiosPostagemReconcileCron, PedidoFechamentoReconcileCron, EntregaAvisoCron, NotaVendaOnlineCron, PedidoEmailService],
   exports: [PickOrdersService, JuntadaService],
 })
 export class PickOrdersModule {}
