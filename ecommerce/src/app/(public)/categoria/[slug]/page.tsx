@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
 import { Section } from '@/components/layout/Section';
 import { Container } from '@/components/layout/Container';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -57,6 +58,9 @@ export const revalidate = 60;
  * linha-conforto) não está na lista e funciona igual: o primeiro acesso gera
  * e as seguintes reaproveitam (`dynamicParams` é o padrão).
  */
+/** Slug de categoria: minúsculas, dígitos e hífen. O resto é 404 sem custo. */
+const SLUG_VALIDO = /^[a-z0-9][a-z0-9-]{0,59}$/;
+
 export async function generateStaticParams() {
   return CATEGORY_SLUGS.map((slug) => ({ slug }));
 }
@@ -96,36 +100,61 @@ export default async function CategoryPage({
    * é sempre a categoria inteira: é ele que o Google indexa e que pinta o LCP;
    * quem chega por link com `?sub=` vê o recorte aplicar na hidratação.
    */
+  /**
+   * SLUG MALFORMADO NEM CHEGA NO BACKEND. Antes qualquer texto depois de
+   * `/categoria/` virava página: render, três chamadas à API e uma entrada
+   * nova no cache da Vercel — de graça, pra quem quisesse rodar um laço.
+   */
+  if (!SLUG_VALIDO.test(slug)) notFound();
+
   const meta = categoryMeta(slug);
-  // NOVIDADES é a ordem padrão de toda categoria (dono 07/08): a cliente que
-  // volta toda semana precisa ver o que ENTROU, não a mesma vitrine de sempre.
-  // ⚠️ Tem que casar com o `ordemPadrao` do CategoryListing abaixo — se as duas
-  // divergirem, a página 1 vinda do servidor (ordenada aqui) seria exibida como
-  // se fosse a ordem do cliente, e a cliente veria uma lista que não pediu.
-  const primeiraPagina = await fetchPrimeiraPagina({
-    categoria: slug,
-    perPage: 24,
-    ordenar: 'novidades',
-  });
-
   /**
-   * SUBCATEGORIAS desta categoria — "Blusas" → "Manga curta".
+   * AS TRÊS LEITURAS SAEM JUNTAS (04/10/2026). Eram três `await` em fila —
+   * catálogo, categorias, Instagram — e nenhuma depende da outra: a página
+   * pagava a SOMA dos três tempos a cada regeneração, quando só precisa do
+   * mais lento.
    *
-   * O `fresco: true` (revalidate 0) saiu em 06/09: um único fetch `no-store`
-   * derruba a rota inteira de volta pro dinâmico. O "classificou → o chip
-   * aparece" que ele garantia agora vem por evento: a classificação dispara
-   * `revalidateTag('categorias')`, que derruba exatamente este fetch.
+   * NOVIDADES é a ordem padrão de toda categoria (dono 07/08): a cliente que
+   * volta toda semana precisa ver o que ENTROU, não a mesma vitrine de sempre.
+   * ⚠️ Tem que casar com o `ordemPadrao` do CategoryListing abaixo — se as duas
+   * divergirem, a página 1 vinda do servidor (ordenada aqui) seria exibida como
+   * se fosse a ordem do cliente, e a cliente veria uma lista que não pediu.
+   *
+   * SUBCATEGORIAS ("Blusas" → "Manga curta"): o `fresco: true` (revalidate 0)
+   * saiu em 06/09 — um único fetch `no-store` derruba a rota inteira de volta
+   * pro dinâmico. O "classificou → o chip aparece" que ele garantia agora vem
+   * por evento: a classificação dispara `revalidateTag('categorias')`.
+   *
+   * INSTAGRAM: os posts REAIS da @lurdsplussize ("insta saiu de novo", dono
+   * 13/08). `getInstagram` já cai na estática sozinho se a integração falhar.
    */
-  const subcategorias =
-    (await getCategorias()).find((c) => c.slug === slug)?.subcategorias ?? [];
+  const [primeiraPagina, categorias, postsInstagram] = await Promise.all([
+    fetchPrimeiraPagina({ categoria: slug, perPage: 24, ordenar: 'novidades' }),
+    getCategorias(),
+    getInstagram(6),
+  ]);
 
   /**
-   * OS POSTS REAIS da @lurdsplussize ("insta saiu de novo", dono 13/08 —
-   * na verdade esta página NUNCA teve: ela renderizava a grade estática de
-   * `data/content` enquanto só a home tinha sido ligada no feed de verdade).
-   * `getInstagram` já cai na estática sozinho se a integração falhar.
+   * CATEGORIA QUE NÃO EXISTE É 404, NÃO VITRINE VAZIA (04/10/2026).
+   *
+   * `/categoria/qualquer-coisa` respondia 200, indexável, com o texto da URL
+   * no título ("Qualquer coisa plus size") e a grade vazia. Dois estragos: o
+   * Google lia página rala com o nome da loja, e `/categoria/novidades` —
+   * endereço que gente e anúncio de fato usam — mostrava uma loja sem peça.
+   *
+   * ⚠️ Só nega com CERTEZA: o catálogo respondeu (`primeiraPagina` não é
+   * nulo) E a lista de categorias veio. Backend fora do ar devolve lista
+   * vazia e catálogo nulo — transformar isso em 404 derrubaria toda categoria
+   * de campanha (a Linha Conforto não está em `CATEGORY_SLUGS`) justo num
+   * deploy do Railway. Na dúvida, a página abre como sempre abriu.
    */
-  const postsInstagram = await getInstagram(6);
+  const existe =
+    CATEGORY_SLUGS.includes(slug) ||
+    categorias.some((c) => c.slug === slug) ||
+    (primeiraPagina?.total ?? 0) > 0;
+  if (!existe && primeiraPagina !== null && categorias.length > 0) notFound();
+
+  const subcategorias = categorias.find((c) => c.slug === slug)?.subcategorias ?? [];
 
   const trail = [
     { name: 'Início', path: '/' },

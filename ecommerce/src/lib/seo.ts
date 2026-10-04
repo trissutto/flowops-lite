@@ -245,7 +245,20 @@ export function storeSchema(store: Store): JsonLd {
   };
 }
 
+/**
+ * JSON pronto pra ir dentro de `<script type="application/ld+json">`.
+ *
+ * `JSON.stringify` não escapa `<`: um nome de peça contendo `</script>`
+ * fecharia a tag e o resto viraria HTML executável na página do produto. Hoje
+ * só quem edita catálogo consegue escrever isso — mas basta a conta de admin
+ * cair, ou texto de cliente (avaliação) entrar no schema, pra virar XSS
+ * armazenado. `<` é JSON válido e o Google lê igual.
+ */
+export function jsonLdSeguro(valor: unknown): string {
+  return JSON.stringify(valor).replace(/</g, '\\u003c');
+}
+
 /** Empacota nós num @graph único — 1 script por página. */
 export function jsonLdGraph(...nodes: JsonLd[]): string {
-  return JSON.stringify({ '@context': 'https://schema.org', '@graph': nodes });
+  return jsonLdSeguro({ '@context': 'https://schema.org', '@graph': nodes });
 }

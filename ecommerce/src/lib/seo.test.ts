@@ -3,6 +3,8 @@ import type { Product } from '@/types';
 import {
   buildMetadata,
   itemListSchema,
+  jsonLdGraph,
+  jsonLdSeguro,
   organizationSchema,
   productSchema,
   SITE,
@@ -103,5 +105,23 @@ describe('ItemList schema', () => {
       { '@type': 'ListItem', position: 1, url: `${SITE.url}/produto/a`, name: 'A preto' },
       { '@type': 'ListItem', position: 2, url: `${SITE.url}/produto/b`, name: 'B' },
     ]);
+  });
+});
+
+describe('jsonLdSeguro', () => {
+  it('nome de produto com </script> nao fecha a tag do JSON-LD', () => {
+    const html = jsonLdSeguro({ name: 'Vestido </script><script>alert(1)</script>' });
+
+    expect(html).not.toContain('</script>');
+    expect(html).not.toContain('<');
+    // Continua sendo o MESMO dado pra quem le o JSON (Google incluido).
+    expect(JSON.parse(html).name).toBe('Vestido </script><script>alert(1)</script>');
+  });
+
+  it('jsonLdGraph usa o mesmo escape', () => {
+    const html = jsonLdGraph({ '@type': 'Thing', name: '<b>x</b>' });
+
+    expect(html).not.toContain('<');
+    expect(JSON.parse(html)['@graph'][0].name).toBe('<b>x</b>');
   });
 });

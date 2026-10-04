@@ -1,8 +1,86 @@
 import type { NextConfig } from 'next';
 import { redirectsLegado } from './redirects-legado';
 
+/**
+ * ── CSP EM MODO RELATÓRIO (04/10/2026) ──
+ *
+ * O cartão é digitado em campo do PRÓPRIO site (`CardForm`), na mesma página
+ * em que rodam gtag e fbevents. Sem política nenhuma, script de terceiro
+ * adulterado lê o cartão e manda pra onde quiser.
+ *
+ * Entra como `Report-Only` de propósito: NÃO bloqueia nada, só manda o que
+ * teria bloqueado pra `/api/csp-report` (sai no log da Vercel com o prefixo
+ * `[csp]`). Enforçar às cegas é o jeito de derrubar a conversão do Google Ads
+ * ou do Meta em silêncio por um host esquecido — vira `Content-Security-Policy`
+ * só depois de uma ou duas semanas de relatório limpo.
+ *
+ * `'unsafe-inline'` em script-src é inevitável enquanto a vitrine for ISR: o
+ * Next injeta `self.__next_f.push(...)` inline, e nonce exigiria render
+ * dinâmico em toda página.
+ */
+const CSP_REPORT_ONLY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'self'",
+  "form-action 'self' https://www.facebook.com",
+  "script-src 'self' 'unsafe-inline' https://*.googletagmanager.com https://www.googleadservices.com https://googleads.g.doubleclick.net https://www.google.com https://connect.facebook.net https://analytics.tiktok.com https://*.clarity.ms https://assets.pagseguro.com.br",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' blob: https://*.r2.dev",
+  "connect-src 'self' https://viacep.com.br https://api.pagar.me https://*.pagseguro.com.br https://*.pagseguro.com https://*.pagbank.com.br https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://*.g.doubleclick.net https://www.google.com https://google.com https://www.google.com.br https://pagead2.googlesyndication.com https://www.googleadservices.com https://www.facebook.com https://connect.facebook.net https://analytics.tiktok.com https://*.clarity.ms https://c.bing.com",
+  "frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com https://www.google.com https://td.doubleclick.net https://bid.g.doubleclick.net https://www.googletagmanager.com https://www.facebook.com",
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+  'report-uri /api/csp-report',
+].join('; ');
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+
+  // Não anunciar o framework pra quem varre alvo por versão.
+  poweredByHeader: false,
+
+  /**
+   * CABEÇALHOS DE SEGURANÇA (04/10/2026) — o site respondia só com o HSTS
+   * padrão da Vercel. `/checkout` e `/conta` podiam ser embutidos em iframe
+   * de terceiro (clickjacking sobre "Finalizar pedido").
+   *
+   * O HSTS continua o da Vercel (2 anos). `includeSubDomains` NÃO entrou de
+   * propósito: vale pra todo host de `lurds.com.br`, e basta um subdomínio
+   * antigo só em HTTP (link de e-mail marketing, painel) pra ele parar de
+   * abrir no navegador de quem já visitou a loja. Entra depois de inventariar
+   * o DNS.
+   *
+   * `Permissions-Policy` só fecha o que o site não usa. Acelerômetro, autoplay
+   * e tela cheia ficam livres porque o player do YouTube da ficha os pede;
+   * geolocalização é do "perto de mim" de `/lojas`.
+   */
+  async headers() {
+    const base = [
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+      {
+        key: 'Permissions-Policy',
+        value: 'camera=(), microphone=(), usb=(), serial=(), bluetooth=(), midi=(), geolocation=(self)',
+      },
+    ];
+    return [
+      { source: '/:path*', headers: base },
+      // Só documento: arquivo estático, API e feed não executam script.
+      {
+        source: '/((?!_next/|api/|feed/|images/|banners/|og/).*)',
+        headers: [{ key: 'Content-Security-Policy-Report-Only', value: CSP_REPORT_ONLY }],
+      },
+      // Resposta com dado da sessão nunca pode parar em cache compartilhado.
+      {
+        source: '/api/(conta|editor)/:path*',
+        headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+      },
+    ];
+  },
 
   // Este projeto é irmão do frontend do FlowOps no mesmo repositório; sem isto
   // o Turbopack sobe a raiz até o lockfile do repo e avisa da ambiguidade.
@@ -35,7 +113,14 @@ const nextConfig: NextConfig = {
       // subdomínio padrão é `pub-<id>.r2.dev`; se o bucket for servido por
       // domínio próprio, informe em R2_PUBLIC_HOST na Vercel (sem https://),
       // senão o next/image recusa a URL e o banner some da home.
-      { protocol: 'https', hostname: '**.r2.dev' },
+      //
+      // ⚠️ É O BUCKET, não `**.r2.dev` (04/10/2026). Com o curinga, qualquer
+      // pessoa com um bucket R2 gratuito usava `lurds.com.br/_next/image` pra
+      // redimensionar a imagem dela — transformação cobrada da loja, e imagem
+      // de terceiro servida sob o domínio da marca. Medido antes de fechar:
+      // feed, home, banners e categorias usam SÓ este host (o `R2_PUBLIC_URL`
+      // único do backend). Bucket novo? Acrescente aqui ou em R2_PUBLIC_HOST.
+      { protocol: 'https', hostname: 'pub-84da472609374e0ab161fd54571b5f38.r2.dev' },
       // Capa do vídeo do YouTube (o slide de vídeo da PDP). Sem este host o
       // next/image RECUSA a URL e o slide vira quadro vazio — o vídeo estaria
       // lá e ninguém veria o ▶.
@@ -84,6 +169,13 @@ const nextConfig: NextConfig = {
       // URL canônica é /lojas.
       { source: '/nossas-lojas', destination: '/lojas', permanent: true },
       { source: '/nossaslojas', destination: '/lojas', permanent: true },
+
+      // "Novidades" NÃO é categoria do catálogo — é a página `/novidades`
+      // (peça publicada há até 60 dias). `/categoria/novidades` respondia 200
+      // com a grade VAZIA e título "Novidades plus size", indexável: quem
+      // chegava por ali (anúncio, link colado) via uma loja sem peça nova.
+      { source: '/categoria/novidades', destination: '/novidades', permanent: true },
+      { source: '/categoria/lancamentos', destination: '/novidades', permanent: true },
 
       // TROCA FÁCIL — a tela agora é DAQUI (10/08/2026), não mais um desvio
       // pro FlowOps. A REGRA continua lá (prazo, reversa grátis, motivos,
