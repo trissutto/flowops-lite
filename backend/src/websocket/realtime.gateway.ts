@@ -61,6 +61,15 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       const storeId = payload.storeId ? String(payload.storeId) : null;
       const userId = String(payload.sub || '');
 
+      // Token da conta de CLIENTE do site é assinado com o mesmo segredo e não
+      // tem `role`: caía no ramo de baixo e entrava na sala 'admin', ouvindo o
+      // tempo real da rede inteira. Mesma régua do `JwtStrategy`.
+      if (payload?.scope === 'customer' || !role) {
+        this.logger.warn(`[socket ${client.id}] token sem papel de operador, desconectando`);
+        client.disconnect(true);
+        return;
+      }
+
       // Guarda infos no próprio socket pra uso posterior
       (client.data as any).userId = userId;
       (client.data as any).role = role;
