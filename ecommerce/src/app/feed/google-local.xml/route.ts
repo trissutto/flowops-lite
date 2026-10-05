@@ -2,6 +2,7 @@ import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
 import { type PecaFeed } from '@/lib/feed/variantes';
 import {
+  ESTOQUE_MINIMO_PADRAO,
   LOJAS_COM_FICHA,
   linhasDeInventarioLocal,
   numeroDaLoja,
@@ -45,7 +46,9 @@ import {
  * oferta local é elegível. A regra e a medição estão escritas por inteiro em
  * `lib/feed/inventario-local.ts`, que é quem monta as linhas.
  *
- * Hoje: **só sai linha pra loja que TEM a peça, com a quantidade dela**.
+ * Hoje: **só sai linha pra loja que TEM a peça, com a quantidade dela** — e
+ * com 2 unidades ou mais (`FEED_LOCAL_MIN_ESTOQUE`, margem contra a peça que
+ * vendeu depois da leitura diária do Google).
  * `FEED_LOCAL_ESTOQUE_REDE=1` volta à regra de 13/09 (só depois de aprovado).
  */
 
@@ -145,7 +148,10 @@ export async function GET() {
 
   /** Ver `lib/feed/inventario-local.ts`: a prateleira manda, a chave reverte. */
   const estoqueDaRede = process.env.FEED_LOCAL_ESTOQUE_REDE === '1';
-  const inventario = linhasDeInventarioLocal(fonte, estoques, { estoqueDaRede });
+  /** Margem de segurança da loja (padrão 2). `FEED_LOCAL_MIN_ESTOQUE=1` desliga. */
+  const pedido = Number(process.env.FEED_LOCAL_MIN_ESTOQUE);
+  const estoqueMinimo = Number.isFinite(pedido) && pedido >= 1 ? Math.floor(pedido) : ESTOQUE_MINIMO_PADRAO;
+  const inventario = linhasDeInventarioLocal(fonte, estoques, { estoqueDaRede, estoqueMinimo });
 
   const linhas = inventario.map(
     (l) =>

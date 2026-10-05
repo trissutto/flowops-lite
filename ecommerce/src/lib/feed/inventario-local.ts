@@ -72,6 +72,21 @@ export const LOJAS_COM_FICHA: ReadonlySet<string> = new Set([
   '18', // Anália Franco
 ]);
 
+/**
+ * MARGEM DE SEGURANÇA: a loja só declara a peça com 2 ou mais unidades.
+ *
+ * O Merchant lê este arquivo UMA vez por dia (00:00). Peça com 1 unidade é a
+ * que mais erra entre uma leitura e a outra: vendeu às 10h e o Google passa o
+ * resto do dia dizendo "tem na loja"; e é também onde mora o furo de estoque
+ * (o sistema diz 1, a arara diz 0). Na verificação de inventário cada uma
+ * dessas conta como divergência — e foi por divergência que a de 23/09 caiu.
+ *
+ * Medido em 05/10: o corte tira 135 das 1.065 linhas (loja 01: 76 → 67 itens).
+ * `FEED_LOCAL_MIN_ESTOQUE=1` (Vercel) desliga a margem — faz sentido depois
+ * que a verificação estiver aprovada e a vitrine local estiver no ar.
+ */
+export const ESTOQUE_MINIMO_PADRAO = 2;
+
 /** `1`, `07`, ` 7 ` → `07`. A mesma chave que o código da ficha usa. */
 export const numeroDaLoja = (loja: string) => String(loja).trim().padStart(2, '0');
 
@@ -96,8 +111,9 @@ export interface LinhaInventario {
 export function linhasDeInventarioLocal(
   pecas: readonly PecaFeed[],
   estoques: readonly EstoqueLoja[],
-  opcoes: { estoqueDaRede?: boolean } = {},
+  opcoes: { estoqueDaRede?: boolean; estoqueMinimo?: number } = {},
 ): LinhaInventario[] {
+  const minimo = Math.max(1, Math.floor(opcoes.estoqueMinimo ?? 1));
   /**
    * Índice do estoque: `REF` → `COR normalizada` → loja (2 dígitos) → quantidade.
    *
@@ -161,6 +177,9 @@ export function linhasDeInventarioLocal(
         const quantidade = opcoes.estoqueDaRede ? totalRede : (porLoja.get(numero) ?? 0);
         // A prateleira manda: loja sem a peça não a declara "em estoque".
         if (!(quantidade > 0)) continue;
+        // Margem de segurança — ver `ESTOQUE_MINIMO_PADRAO`. Não vale pra regra
+        // da rede: lá a quantidade é a soma das 14 lojas, e o corte perde o sentido.
+        if (!opcoes.estoqueDaRede && quantidade < minimo) continue;
         linhas.push({ loja: numero, id: v.id, quantidade, preco });
       }
     }

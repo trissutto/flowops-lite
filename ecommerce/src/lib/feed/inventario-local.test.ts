@@ -146,3 +146,29 @@ describe('inventário local — chave FEED_LOCAL_ESTOQUE_REDE (a regra de 13/09)
     expect(linhas).toEqual([]);
   });
 });
+
+describe('inventário local — margem de segurança (FEED_LOCAL_MIN_ESTOQUE)', () => {
+  const p = [peca('8493', [{ nome: 'PRETO', estoque: 9 }])];
+  const e = [est('01', '8493', 'PRETO', 1), est('02', '8493', 'PRETO', 2), est('10', '8493', 'PRETO', 6)];
+
+  it('com mínimo 2, a loja com 1 unidade não declara a peça', () => {
+    const linhas = linhasDeInventarioLocal(p, e, { estoqueMinimo: 2 });
+    expect(linhas.map((l) => `${l.loja}:${l.quantidade}`)).toEqual(['02:2', '10:6']);
+  });
+
+  it('sem a opção (ou com 1) vale qualquer unidade', () => {
+    expect(linhasDeInventarioLocal(p, e)).toHaveLength(3);
+    expect(linhasDeInventarioLocal(p, e, { estoqueMinimo: 1 })).toHaveLength(3);
+  });
+
+  it('valor torto não derruba o feed: 0, negativo e fração caem pra 1 ou pro inteiro', () => {
+    expect(linhasDeInventarioLocal(p, e, { estoqueMinimo: 0 })).toHaveLength(3);
+    expect(linhasDeInventarioLocal(p, e, { estoqueMinimo: -5 })).toHaveLength(3);
+    expect(linhasDeInventarioLocal(p, e, { estoqueMinimo: 2.9 })).toHaveLength(2);
+  });
+
+  it('a margem não se aplica à regra da rede', () => {
+    const linhas = linhasDeInventarioLocal(p, e, { estoqueDaRede: true, estoqueMinimo: 50 });
+    expect(linhas).toHaveLength(LOJAS_COM_FICHA.size);
+  });
+});
