@@ -1,4 +1,4 @@
-import { api } from '@/lib/api';
+import { feedIndisponivel, lerListaDoBackend, respostaDoFeed } from '@/lib/feed/leitura';
 import { SITE } from '@/lib/seo';
 import { type PecaFeed } from '@/lib/feed/variantes';
 import {
@@ -52,19 +52,26 @@ import {
  * `FEED_LOCAL_ESTOQUE_REDE=1` volta à regra de 13/09 (só depois de aprovado).
  */
 
-/** O catálogo muda pouco durante o dia e o Google lê 1× — 1h é de sobra. */
-const revalidate = 3600;
-
 /**
  * O FEED NÃO ENTRA NO CACHE DE PÁGINA — mesma proteção do feed nacional
  * (14/09/2026, e lá está o incidente escrito por inteiro).
  *
  * Aqui o estrago tem uma cara a mais: se o catálogo responde e só o ESTOQUE
- * POR LOJA falha, o arquivo sai bem formado, com as 14 lojas no lugar e ZERO
- * linha de inventário — e o Google entende isso como "nenhuma loja tem nada".
- * A vitrine local morre nas 14 fichas de uma vez, sem erro em lugar nenhum.
- * Com o segmento dinâmico, quem manda no cache é o `Cache-Control` do GET, que
- * sabe qual das duas fontes caiu.
+ * POR LOJA falha, o arquivo sairia bem formado, com as 14 lojas no lugar e
+ * ZERO linha de inventário — e o Google entende isso como "nenhuma loja tem
+ * nada". A vitrine local morreria nas 14 fichas de uma vez, sem erro em lugar
+ * nenhum. Por isso a falha de QUALQUER uma das duas fontes responde 503 sem
+ * cache (`feedIndisponivel`): o Merchant registra "não consegui buscar" e
+ * mantém o inventário da última leitura boa.
+ *
+ * ── A LEITURA É SEMPRE FRESCA (05/10/2026) ──
+ *
+ * O Merchant lê este arquivo UMA vez por dia, e é contra esse retrato que a
+ * verificação de inventário confere a prateleira. Com o `revalidate = 3600`
+ * no `fetch` e o `stale-while-revalidate` de 24 h na CDN, quem lê 1×/dia
+ * recebia sempre a cópia da leitura ANTERIOR — estoque de ontem (ou de
+ * anteontem) apresentado como "tem na loja hoje". A regra e a conta estão em
+ * `lib/feed/leitura.ts`, que as três rotas de feed dividem.
  */
 export const dynamic = 'force-dynamic';
 
@@ -94,38 +101,27 @@ const escapar = (v: string) =>
 const dinheiro = (v: number) => `${Number(v || 0).toFixed(2)} BRL`;
 
 export async function GET() {
-  let pecas: PecaFeed[] = [];
-  let estoques: EstoqueLoja[] = [];
-
   /**
-   * As duas fontes em paralelo. Falha de qualquer uma devolve feed VAZIO e
-   * VÁLIDO — nunca erro. Resposta com erro o Google trata como falha de
-   * importação e pode desagendar a busca; arquivo vazio ele registra e tenta
-   * de novo amanhã. Mesma postura do feed nacional.
-   */
-  /**
-   * ⚠️ UM `try` POR FONTE, e não um `Promise.all` num `try` só.
+   * As duas fontes em paralelo, sem Data Cache e com segunda chance
+   * (`lerListaDoBackend`). Falhou uma, o feed inteiro responde 503: metade do
+   * dado aqui não é "feed menor", é inventário apagado.
    *
-   * A primeira versão embrulhava as duas num bloco: falhou uma, as DUAS
-   * variáveis ficavam vazias e o feed saía sem nada — sem nenhuma pista de
-   * qual das duas caiu. Separado, a que responder responde, e o `console.error`
-   * diz o nome da que faltou.
+   * `allSettled` e não `all` pra o log dizer o NOME de quem caiu — com `all`
+   * a primeira rejeição esconde a segunda.
    */
-  let falhou = false;
-  await Promise.all([
-    api<PecaFeed[]>('/public/loja/feed?rev=2', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
-      .then((r) => { pecas = r ?? []; })
-      .catch((e) => {
-        falhou = true;
-        console.error('[feed-local] catálogo nacional falhou:', e?.message ?? e);
-      }),
-    api<EstoqueLoja[]>('/public/loja/feed-local?rev=2', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })
-      .then((r) => { estoques = r ?? []; })
-      .catch((e) => {
-        falhou = true;
-        console.error('[feed-local] estoque por loja falhou:', e?.message ?? e);
-      }),
+  const [lidoCatalogo, lidoEstoque] = await Promise.allSettled([
+    lerListaDoBackend<PecaFeed>('/public/loja/feed'),
+    lerListaDoBackend<EstoqueLoja>('/public/loja/feed-local'),
   ]);
+  if (lidoCatalogo.status === 'rejected') {
+    console.error('[feed-local] catálogo nacional falhou — respondendo 503:', lidoCatalogo.reason?.message ?? lidoCatalogo.reason);
+  }
+  if (lidoEstoque.status === 'rejected') {
+    console.error('[feed-local] estoque por loja falhou — respondendo 503:', lidoEstoque.reason?.message ?? lidoEstoque.reason);
+  }
+  if (lidoCatalogo.status === 'rejected' || lidoEstoque.status === 'rejected') return feedIndisponivel();
+  const pecas = lidoCatalogo.value;
+  const estoques = lidoEstoque.value;
 
   /**
    * SÓ A VITRINE COMBINADA (dono, 14/09/2026): a ficha de cada loja e as PMax
@@ -179,13 +175,14 @@ export async function GET() {
 
   /**
    * Arquivo sem uma única linha de inventário é sempre anomalia: a rede tem
-   * 14 lojas com estoque todo dia. Não cacheia.
+   * 14 lojas com estoque todo dia. Responde 503 — o vazio com 200 seria a
+   * ordem de zerar o inventário das 14 fichas.
    */
   if (!linhas.length) {
-    falhou = true;
     console.error(
-      `[feed-local] ZERO linhas — ${pecas.length} peça(s) e ${estoques.length} linha(s) de estoque`,
+      `[feed-local] ZERO linhas — ${pecas.length} peça(s) e ${estoques.length} linha(s) de estoque — respondendo 503`,
     );
+    return feedIndisponivel();
   }
 
   /**
@@ -193,19 +190,12 @@ export async function GET() {
    * da prateleira o Google passa a ler isso como "essa loja não tem nada".
    * Não derruba o feed (as outras 13 estão certas); só grita no log.
    */
-  if (linhas.length) {
+  {
     const comLinha = new Set(inventario.map((l) => l.loja));
     const vazias = [...LOJAS_COM_FICHA].filter((n) => !comLinha.has(n));
     if (vazias.length) console.error(`[feed-local] loja(s) sem nenhuma peça no feed: ${vazias.join(', ')}`);
   }
 
-  return new Response(xml, {
-    headers: {
-      'Content-Type': 'application/xml; charset=utf-8',
-      /** Ver o comentário do `dynamic` no topo: só o que deu certo é guardado. */
-      'Cache-Control': falhou
-        ? 'no-store'
-        : 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
-    },
-  });
+  /* Só a resposta BOA chega aqui, e só ela é guardada pela CDN (15 min). */
+  return respostaDoFeed(xml);
 }

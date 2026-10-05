@@ -1,6 +1,6 @@
-import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
-import { tituloShopping, variantes, type PecaFeed, type Variante } from '@/lib/feed/variantes';
+import { feedIndisponivel, lerListaDoBackend, respostaDoFeed } from '@/lib/feed/leitura';
+import { linkDoItem, tituloShopping, variantes, type PecaFeed, type Variante } from '@/lib/feed/variantes';
 
 /**
  * FEED DO GOOGLE MERCHANT CENTER — o maior canal da loja, medido.
@@ -59,13 +59,6 @@ import { tituloShopping, variantes, type PecaFeed, type Variante } from '@/lib/f
  */
 
 /**
- * Quanto tempo o CATÁLOGO fica guardado (Data Cache do `fetch`, tag
- * `catalogo`). Uma chamada ao backend por hora, e a retaguarda derruba na hora
- * pelo `/api/revalidar`.
- */
-const revalidate = 3600;
-
-/**
  * O FEED NÃO ENTRA NO CACHE DE PÁGINA — e isso é proteção, não descuido.
  *
  * Medido em 14/09/2026: a revalidação do catálogo coincidiu com um restart do
@@ -76,8 +69,15 @@ const revalidate = 3600;
  *
  * Com o segmento dinâmico, quem decide o que pode ser guardado é o
  * `Cache-Control` que o GET devolve — por execução, sabendo se a busca deu
- * certo. O custo é remontar o XML quando a CDN expira (1×/hora no pior caso),
- * enquanto o catálogo em si continua vindo do Data Cache.
+ * certo.
+ *
+ * ── 04/10/2026: O CATÁLOGO DEIXOU DE VIR DO DATA CACHE ──
+ *
+ * Aqui havia um `revalidate = 3600` no `fetch` do catálogo. Ele e o
+ * `stale-while-revalidate` de 24 h da CDN faziam o Merchant (1 leitura por
+ * dia) receber SEMPRE a cópia de ontem — ~38 h entre publicar a peça e o
+ * Google enxergar. A conta inteira, e por que a falha agora responde 503 em
+ * vez de feed vazio, está em `lib/feed/leitura.ts`.
  */
 export const dynamic = 'force-dynamic';
 
@@ -121,46 +121,12 @@ const CATEGORIA_GOOGLE: Record<string, string> = {
 
 
 
-/**
- * O ENDEREÇO ESTÁVEL DA PEÇA — o que o feed manda (13/09/2026).
- *
- * O `slug` embute o NOME e a COR PRINCIPAL
- * (`blusa-feminina-manga-curta-plus-size-207372-marrie-207372`). Renomear a
- * peça — ou a cor principal rodar quando a anterior cai abaixo do piso de
- * estoque, o mesmo mecanismo do `common/atributos-do-feed.ts` — muda o slug e
- * MATA o endereço que o Merchant guardou na busca das 00:00.
- *
- * A rede de recuperação existe (`slugAtualDoLegado`), mas só pega slug que
- * contenha o padrão `ref-`, e por um bom motivo: casar por dado, nunca por
- * heurística em cima do texto. Medido em produção no dia:
- *   · `/produto/nome-velho-ref-900834-cor-que-saiu` → 308, volta
- *   · `/produto/nome-velho-900834-cor-que-saiu`     → 404, morre
- * E é exatamente o segundo formato que várias peças têm hoje.
- *
- * O preço disso apareceu no diagnóstico da campanha em 12/09: **"Página do
- * produto indisponível: 3"**, com 128 impressões e R$ 2,59 gastos mandando
- * cliente pra erro.
- *
- * `/produto/ref-<REF>` responde **200 direto** (não é redirect), não depende
- * do nome nem da cor, e a página serve o `canonical` apontando pro slug — que
- * segue sendo o do sitemap e o do SEO. Conferido item a item antes de trocar:
- * as **968 URLs do feed respondem 200** nesta forma.
- */
-function enderecoDaPeca(p: PecaFeed): string {
-  const chave = String(p.ref ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  // Peça sem REF utilizável volta pro slug: endereço velho que às vezes quebra
-  // ainda é melhor que `/produto/ref-`, que quebra sempre.
-  return chave ? `${SITE.url}/produto/ref-${chave}` : `${SITE.url}/produto/${p.slug}`;
-}
-
 function item(p: PecaFeed, v: Variante): string {
-  // `?cor=` só na peça de várias cores, como sempre foi: a de cor única não
-  // tem o que escolher, e a query a mais seria um segundo endereço à toa.
-  const base = enderecoDaPeca(p);
-  const link = v.grupo ? `${base}?cor=${encodeURIComponent(v.cor)}` : base;
+  // O endereço ESTÁVEL da peça (`/produto/ref-<REF>`, com `?cor=` só na de
+  // várias cores). A regra e o incidente que a motivou moram em
+  // `lib/feed/variantes.ts` desde 04/10/2026 — o feed do Meta passou a usar a
+  // mesma função.
+  const link = linkDoItem(p, v, SITE.url);
   const [capa, ...resto] = v.fotos;
 
   const campos: string[] = [
@@ -235,11 +201,15 @@ function item(p: PecaFeed, v: Variante): string {
    *   · 0 = slug da subcategoria (`blusas-confort`)
    *   · 1 = curadoria da tela: `top-semana` (fixa) ou `colecao-<slug>` (pontual)
    *
-   * Os slots 2, 3 e 4 do Meta (novidades e as duas vitrines de estoque) ficam
-   * de fora por enquanto: eles são CALCULADOS sobre o catálogo inteiro dentro
-   * da rota do Meta, e copiar a conta pra cá criaria a segunda cópia que o
-   * `variantes.ts` existe pra evitar. Quando fizerem falta, o caminho é
-   * extrair a conta pra `lib/feed/` e os dois lerem dela.
+   * Os slots 2, 3 e 4 do META (`novidades-<categoria>` e as duas vitrines de
+   * estoque `top30-*`) NÃO saem daqui: eles são CALCULADOS sobre o catálogo
+   * inteiro dentro da rota do Meta, e copiar a conta pra cá criaria a segunda
+   * cópia que o `variantes.ts` existe pra evitar.
+   *
+   * ⚠️ Os slots 2 e 3 DESTE feed têm dono próprio desde 14/09 (logo abaixo:
+   * `novidades` e `conforto`, que vêm prontos do backend) e NÃO falam o mesmo
+   * idioma do Meta — lá o 2 é `novidades-<categoria>` e o 3 é `top30-<cat>`.
+   * Filtro de campanha copiado de um canal pro outro casa com zero produto.
    */
   if (p.subcategoria) campos.push(`<g:custom_label_0>${escapar(p.subcategoria)}</g:custom_label_0>`);
   // Um valor só por peça: a coleção fixa vence quando a REF está nas duas.
@@ -285,32 +255,30 @@ function item(p: PecaFeed, v: Variante): string {
 }
 
 export async function GET() {
-  let pecas: PecaFeed[] = [];
-  let falhou = false;
+  let pecas: PecaFeed[];
   try {
-    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=2', {
-      revalidate,
-      tags: ['catalogo'],
-      timeoutMs: 25000,
-    })) ?? [];
+    pecas = await lerListaDoBackend<PecaFeed>('/public/loja/feed');
   } catch (e) {
-    /* Catálogo fora do ar: feed VAZIO e válido, nunca erro. Resposta com erro
-       o Google trata como falha de importação e pode desagendar a busca; feed
-       vazio ele registra e tenta de novo amanhã. O que NÃO pode é esse vazio
-       ser guardado por uma hora — ver o `Cache-Control` no fim do arquivo. */
-    falhou = true;
-    console.error('[feed] catálogo falhou:', (e as Error)?.message ?? e);
+    /* Catálogo fora do ar: 503 SEM cache, nunca feed vazio com 200 (04/10/2026).
+       Até aqui a resposta era um RSS válido sem item nenhum — e é exatamente o
+       estado que apaga a conta no Merchant. Com 5xx o Google registra que não
+       conseguiu buscar e mantém o último arquivo bom. Ver `lib/feed/leitura.ts`. */
+    console.error('[feed] catálogo falhou — respondendo 503:', (e as Error)?.message ?? e);
+    return feedIndisponivel();
   }
 
   const validas = pecas.filter((p) => p.ref && p.slug && p.preco > 0);
+  const itens = validas.flatMap((p) => variantes(p).map((v) => item(p, v)));
   /**
-   * Catálogo que RESPONDE mas não traz nenhuma peça válida é anomalia, não
-   * notícia: a rede nunca está com zero peça à venda. Trata igual à falha —
-   * sai sem cache e a próxima visita tenta de novo.
+   * Catálogo que RESPONDE mas não rende nenhum item é anomalia, não notícia:
+   * a rede nunca está com zero peça à venda. Trata igual à falha — 503 sem
+   * cache, e a próxima visita tenta de novo.
    */
-  if (!validas.length) {
-    falhou = true;
-    console.error(`[feed] catálogo respondeu ${pecas.length} peça(s) e NENHUMA válida`);
+  if (!itens.length) {
+    console.error(
+      `[feed] catálogo respondeu ${pecas.length} peça(s), ${validas.length} válida(s) e NENHUM item — respondendo 503`,
+    );
+    return feedIndisponivel();
   }
 
   const xml =
@@ -319,21 +287,9 @@ export async function GET() {
     `<title>${escapar(SITE.name)}</title>` +
     `<link>${escapar(SITE.url)}</link>` +
     `<description>${escapar(SITE.description)}</description>` +
-    validas.flatMap((p) => variantes(p).map((v) => item(p, v))).join("") +
+    itens.join("") +
     `</channel></rss>`;
 
-  return new Response(xml, {
-    headers: {
-      'Content-Type': 'application/xml; charset=utf-8',
-      /**
-       * Resposta BOA cacheia como sempre. Resposta nascida de falha sai
-       * `no-store`: a janela de exposição a um feed vazio cai de uma hora pra
-       * o tempo da próxima visita. Nunca o contrário — o vazio é o estado que
-       * apaga a conta inteira no Merchant.
-       */
-      'Cache-Control': falhou
-        ? 'no-store'
-        : 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
-    },
-  });
+  /* Só a resposta BOA chega aqui, e só ela é guardada pela CDN (15 min). */
+  return respostaDoFeed(xml);
 }
