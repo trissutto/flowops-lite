@@ -1,6 +1,12 @@
 import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
-import { chaveDeCor, variantes, type PecaFeed } from '@/lib/feed/variantes';
+import { type PecaFeed } from '@/lib/feed/variantes';
+import {
+  LOJAS_COM_FICHA,
+  linhasDeInventarioLocal,
+  numeroDaLoja,
+  type EstoqueLoja,
+} from '@/lib/feed/inventario-local';
 
 /**
  * FEED DE INVENTÁRIO LOCAL — o que faz a peça aparecer na vitrine da FICHA de
@@ -30,23 +36,17 @@ import { chaveDeCor, variantes, type PecaFeed } from '@/lib/feed/variantes';
  * seu: id divergente falha do pior jeito possível — **sem erro em lugar
  * nenhum**, a vitrine local simplesmente não aparece e ninguém descobre.
  *
- * ── 🚨 A REGRA MUDOU EM 13/09/2026: ESTOQUE DA REDE, NÃO DA LOJA ──
+ * ── 🚨 A QUANTIDADE É A DA PRATELEIRA DA LOJA (05/10/2026) ──
  *
- * Até aqui valia "só sai linha pra loja que TEM a peça", pelo medo de mandar a
- * cliente atravessar a cidade atrás de peça que não está lá.
+ * De 13/09 a 05/10 valeu "estoque da REDE nas 14 fichas" (decisão do dono:
+ * "as lojas podem pegar de outra loja para atender"). O Google REPROVOU a
+ * verificação de inventário com esse arquivo em 23/09 — ele confere na loja,
+ * com foto, se a peça declarada está lá — e sem verificação aprovada nenhuma
+ * oferta local é elegível. A regra e a medição estão escritas por inteiro em
+ * `lib/feed/inventario-local.ts`, que é quem monta as linhas.
  *
- * O dono derrubou essa regra, e com um motivo de operação que a supera:
- * **"LIGAR COM ESTOQUE TOTAL POIS AS LOJAS PODEM PEGAR DE OUTRA LOJA PARA
- * ATENDER"**. A rede transfere peça entre unidades todo dia — é o mesmo
- * mecanismo que o roteamento do site já usa. Então "esta loja te atende" é
- * verdade mesmo quando a peça está na unidade vizinha, e esconder a peça da
- * ficha de Piracicaba só porque ela dormiu em Santos custa a venda inteira.
- *
- * Consequência assumida: **toda peça que a REDE tem aparece nas 14 fichas**, e
- * a quantidade publicada é a da rede, não a da prateleira daquela loja.
- * A cobertura sai de 78% (10.577 linhas) para 100% (13.482).
- *
- * O que continua valendo: peça que a rede NÃO tem não entra em ficha nenhuma.
+ * Hoje: **só sai linha pra loja que TEM a peça, com a quantidade dela**.
+ * `FEED_LOCAL_ESTOQUE_REDE=1` volta à regra de 13/09 (só depois de aprovado).
  */
 
 /** O catálogo muda pouco durante o dia e o Google lê 1× — 1h é de sobra. */
@@ -79,51 +79,6 @@ export const dynamic = 'force-dynamic';
  */
 function codigoDaFicha(loja: string): string {
   return `LURDS-${numeroDaLoja(loja)}`;
-}
-
-/**
- * SÓ LOJA QUE A CLIENTE PODE VISITAR — as 14 que têm ficha no Meu Negócio.
- *
- * O Flow tem 18 códigos de loja, e nem todos são porta de rua. Sem esta trava
- * o feed anunciava também (medido em 23/08, 132 linhas):
- *
- *   09 MATRIZ (inativa) · 13 SITE (o estoque do e-commerce)
- *   19 ITU (**fechada** — as duas fichas viraram "Encerrado permanentemente"
- *      em 23/08) · 20 DEPÓSITO
- *
- * As três primeiras o Google descartaria em silêncio, por não existir ficha
- * com esse código. ITU é o caso que dói: no dia em que alguém criasse a ficha
- * de novo, o feed começaria a mandar cliente pra uma loja que não abre mais.
- *
- * A lista é explícita de propósito. Loja nova entra AQUI depois que a ficha
- * dela existe no Meu Negócio com o código — nunca antes.
- */
-const LOJAS_COM_FICHA = new Set([
-  '01', // Itanhaém
-  '02', // Santos (Parque Balneário)
-  '03', // Vinhedo
-  '04', // Indaiatuba
-  '05', // Piracicaba
-  '06', // Sorocaba
-  '07', // Campinas
-  '08', // São José dos Campos
-  '10', // Jundiaí
-  '11', // Limeira
-  '14', // Praia Grande
-  '15', // Moema
-  '17', // Suzano
-  '18', // Anália Franco
-]);
-
-/** `1`, `07`, ` 7 ` → `07`. A mesma chave que o `codigoDaFicha` usa. */
-const numeroDaLoja = (loja: string) => String(loja).trim().padStart(2, '0');
-
-/** Uma linha de estoque por (peça × cor × loja), vinda do backend. */
-interface EstoqueLoja {
-  loja: string;
-  ref: string;
-  cor: string | null;
-  estoque: number;
 }
 
 const escapar = (v: string) =>
@@ -170,36 +125,6 @@ export async function GET() {
   ]);
 
   /**
-   * Índice do estoque: `REF` → `COR normalizada` → mapa de loja → quantidade.
-   *
-   * A cor é normalizada porque as duas pontas vêm do mesmo `wincred_produtos`
-   * mas por caminhos diferentes, e chegam com acento e caixa variando —
-   * "CAFÉ" contra "CAFE" já custou uma vitrine inteira antes.
-   */
-  const porRef = new Map<string, Map<string, Map<string, number>>>();
-  for (const e of estoques) {
-    if (!e.ref || !e.loja || !(e.estoque > 0)) continue;
-    const ref = e.ref.trim().toUpperCase();
-    const cor = chaveDeCor(e.cor);
-    if (!porRef.has(ref)) porRef.set(ref, new Map());
-    const porCor = porRef.get(ref)!;
-    if (!porCor.has(cor)) porCor.set(cor, new Map());
-    const porLoja = porCor.get(cor)!;
-    porLoja.set(e.loja, (porLoja.get(e.loja) ?? 0) + e.estoque);
-  }
-
-  /** Soma todas as cores de uma REF — o caso da peça de cor única. */
-  function todasAsCores(ref: string): Map<string, number> {
-    const total = new Map<string, number>();
-    for (const porLoja of porRef.get(ref)?.values() ?? []) {
-      for (const [loja, qtd] of porLoja) total.set(loja, (total.get(loja) ?? 0) + qtd);
-    }
-    return total;
-  }
-
-  const linhas: string[] = [];
-
-  /**
    * SÓ A VITRINE COMBINADA (dono, 14/09/2026): a ficha de cada loja e as PMax
    * de loja mostram a LINHA CONFORTO + as últimas cadastradas no Flow — os
    * mesmos rótulos que o feed nacional carrega em `custom_label_2=novidades`
@@ -218,56 +143,24 @@ export async function GET() {
   }
   const fonte = pecasDaVitrine.length ? pecasDaVitrine : pecas;
 
-  for (const p of fonte) {
-    if (!p.ref || !p.slug || !(p.preco > 0)) continue;
-    const ref = p.ref.trim().toUpperCase();
-    const vars = variantes(p);
-    /**
-     * Peça de cor única sai como um item só no feed nacional — então aqui ela
-     * some o estoque de TODAS as cores por loja. Peça explodida por cor casa
-     * cor a cor: é o que faz a ficha mostrar a blusa preta onde tem preta e a
-     * vinho onde tem vinho.
-     */
-    const corUnica = vars.length === 1;
+  /** Ver `lib/feed/inventario-local.ts`: a prateleira manda, a chave reverte. */
+  const estoqueDaRede = process.env.FEED_LOCAL_ESTOQUE_REDE === '1';
+  const inventario = linhasDeInventarioLocal(fonte, estoques, { estoqueDaRede });
 
-    for (const v of vars) {
-      const preco = p.precoPromocional && p.precoPromocional > 0 ? p.precoPromocional : p.preco;
-      const porLoja = corUnica ? todasAsCores(ref) : (porRef.get(ref)?.get(chaveDeCor(v.cor)) ?? new Map());
-
-      /**
-       * O ESTOQUE DA REDE, somado só das lojas que têm ficha.
-       *
-       * ⚠️ Depósito, matriz e sobretudo a 13/SITE ficam DE FORA da soma. A do
-       * site não é prateleira: é o estoque separado pro e-commerce, e a regra
-       * da casa é que ela não cede peça pra loja. Contá-la aqui prometeria na
-       * ficha uma peça que a loja não consegue buscar em lugar nenhum.
-       */
-      let totalRede = 0;
-      for (const [loja, qtd] of porLoja) {
-        if (qtd > 0 && LOJAS_COM_FICHA.has(numeroDaLoja(loja))) totalRede += qtd;
-      }
-      if (!(totalRede > 0)) continue;
-
-      /* Uma linha por FICHA, não por loja com saldo — ver a regra de 13/09. */
-      for (const numero of LOJAS_COM_FICHA) {
-        const quantidade = totalRede;
-
-        linhas.push(
-          '<item>' +
-          `<g:store_code>${escapar(codigoDaFicha(numero))}</g:store_code>` +
-          `<g:id>${escapar(v.id)}</g:id>` +
-          `<g:quantity>${quantidade}</g:quantity>` +
-          `<g:availability>in_stock</g:availability>` +
-          `<g:price>${dinheiro(preco)}</g:price>` +
-          // A cliente vê a peça na ficha e vai buscar na loja — é o
-          // comportamento que a rede já tem no balcão.
-          `<g:pickup_method>buy</g:pickup_method>` +
-          `<g:pickup_sla>same_day</g:pickup_sla>` +
-          '</item>',
-        );
-      }
-    }
-  }
+  const linhas = inventario.map(
+    (l) =>
+      '<item>' +
+      `<g:store_code>${escapar(codigoDaFicha(l.loja))}</g:store_code>` +
+      `<g:id>${escapar(l.id)}</g:id>` +
+      `<g:quantity>${l.quantidade}</g:quantity>` +
+      `<g:availability>in_stock</g:availability>` +
+      `<g:price>${dinheiro(l.preco)}</g:price>` +
+      // A cliente vê a peça na ficha e vai buscar na loja — é o
+      // comportamento que a rede já tem no balcão.
+      `<g:pickup_method>buy</g:pickup_method>` +
+      `<g:pickup_sla>same_day</g:pickup_sla>` +
+      '</item>',
+  );
 
   const xml =
     '<?xml version="1.0" encoding="UTF-8"?>' +
@@ -287,6 +180,17 @@ export async function GET() {
     console.error(
       `[feed-local] ZERO linhas — ${pecas.length} peça(s) e ${estoques.length} linha(s) de estoque`,
     );
+  }
+
+  /**
+   * Loja com ficha que saiu SEM NENHUMA peça também é anomalia — com a regra
+   * da prateleira o Google passa a ler isso como "essa loja não tem nada".
+   * Não derruba o feed (as outras 13 estão certas); só grita no log.
+   */
+  if (linhas.length) {
+    const comLinha = new Set(inventario.map((l) => l.loja));
+    const vazias = [...LOJAS_COM_FICHA].filter((n) => !comLinha.has(n));
+    if (vazias.length) console.error(`[feed-local] loja(s) sem nenhuma peça no feed: ${vazias.join(', ')}`);
   }
 
   return new Response(xml, {
