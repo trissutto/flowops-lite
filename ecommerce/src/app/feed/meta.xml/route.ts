@@ -1,12 +1,15 @@
-import { api } from '@/lib/api';
 import { SITE } from '@/lib/seo';
+import { feedIndisponivel, lerListaDoBackend, respostaDoFeed } from '@/lib/feed/leitura';
+import { linkDoItem } from '@/lib/feed/variantes';
 
 /**
  * FEED DE PRODUTOS DO META — o que destrava o anúncio dinâmico.
  *
  * Endereço pra cadastrar no Meta:
  *   Commerce Manager → Catálogo → Fontes de dados → Feed agendado
- *   https://<dominio>/feed/meta.xml   (buscar 1× por dia)
+ *   https://<dominio>/feed/meta.xml
+ *   (hoje o catálogo 1286815124507399 lê de HORA EM HORA — conferido na
+ *   auditoria de 04/10/2026; este cabeçalho dizia "1× por dia")
  *
  * Sem catálogo cadastrado, o Meta não consegue rodar **anúncio dinâmico** —
  * aquele que mostra pra cliente exatamente a peça que ela olhou e não
@@ -39,19 +42,19 @@ import { SITE } from '@/lib/seo';
  */
 
 /**
- * De hora em hora, não uma vez por dia: o Meta lê 1×/dia, mas com ISR de 24h
- * a leitura pegava um retrato de até um dia atrás — foi o que manteve o feed
- * em 60 peças mesmo depois do fix do backend (13/08). O backend cacheia o
- * catálogo internamente, então regenerar custa um request por hora.
- */
-const revalidate = 3600;
-
-/**
  * O FEED NÃO ENTRA NO CACHE DE PÁGINA — a proteção que nasceu no feed do
  * Google em 14/09/2026 (o incidente está escrito lá por inteiro): resposta
- * nascida de falha não pode ser GUARDADA por uma hora. Quem decide o que pode
- * ser guardado é o `Cache-Control` do GET, por execução. O catálogo continua
- * vindo do Data Cache, então isto não gera request a mais pro backend.
+ * nascida de falha não pode ser GUARDADA. Quem decide o que pode ser guardado
+ * é o `Cache-Control` do GET, por execução.
+ *
+ * ── 04/10/2026: SEM DATA CACHE, E FALHA VIROU 503 ──
+ *
+ * Aqui havia um `revalidate = 3600` no `fetch` do catálogo (e antes dele um
+ * ISR de 24 h, que manteve o feed em 60 peças mesmo depois do fix do backend,
+ * em 13/08). O catálogo agora é lido fresco a cada regeneração e a única
+ * cópia guardada é a da CDN, por 15 min — a conta e o porquê do 503 no lugar
+ * do feed vazio estão em `lib/feed/leitura.ts`. O backend guarda o catálogo
+ * em memória por 60 s, então regenerar custa no máximo ~4 requests por hora.
  */
 export const dynamic = 'force-dynamic';
 
@@ -184,7 +187,8 @@ function carimboNovidade(categoria: unknown): string {
  * pra desempatar.
  *
  * Pior: a trava contra isso JÁ EXISTIA — o carimbo `novidades-*` abaixo exige
- * `lancamento` (≤30 dias) exatamente porque o dono reclamou da mesma coisa em
+ * `lancamento` (janela de `NOVIDADE_DIAS` no backend — 60 dias hoje; este
+ * comentário dizia 30) exatamente porque o dono reclamou da mesma coisa em
  * 16/08. Ela foi removida aqui de propósito, com um comentário justificando.
  * O comentário estava errado e o bug voltou. Lição: quando existe uma trava
  * com dono e data, ela é resposta a um incidente — não a remova sem descobrir
@@ -284,10 +288,14 @@ function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
   const carimbo = new Map<string, string>();
   for (const p of pecas) {
     const alvo = carimboNovidade(p.categoria);
-    // SÓ peça NOVA de verdade (≤30 dias da 1ª venda, `lancamento`) e disponível.
-    // Sem a trava de lancamento o feed completava as 20 com peça de 60-90 dias
-    // (o "peça velha como nova" — dono 16/08). Com ela o conjunto varia (às vezes
-    // <20) e cresce sozinho conforme entra peça nova; peça envelhece 30d e sai.
+    // SÓ peça NOVA de verdade (`lancamento`) e disponível. A janela é a do
+    // backend — `NOVIDADE_DIAS`, 60 dias contados do carimbo da peça (1ª venda
+    // da REF; sem venda, 1ª foto). ⚠️ Este comentário dizia "≤30 dias" e o
+    // código já contava 60: conferido em 04/10/2026, quando a página
+    // /novidades e este rótulo marcavam as mesmas 21 REFs.
+    // Sem a trava de lancamento o feed completava as 20 com peça velha (o
+    // "peça velha como nova" — dono 16/08). Com ela o conjunto varia (às vezes
+    // <20) e cresce sozinho conforme entra peça nova; a peça envelhece e sai.
     if (!p.disponivel || !p.lancamento) continue;
     const n = usadas.get(alvo) ?? 0;
     if (n >= NOVIDADES_TETO) continue;
@@ -357,11 +365,19 @@ function variantes(p: PecaFeed): Variante[] {
 }
 
 function item(p: PecaFeed, v: Variante, novidade?: string, top30?: string, top30Geral?: boolean): string {
-  // `?cor=` faz a PDP abrir já na cor do anúncio — sem isso a cliente clica
-  // no bege e cai na página mostrando o preto.
-  const link = v.grupo
-    ? `${SITE.url}/produto/${p.slug}?cor=${encodeURIComponent(v.cor)}`
-    : `${SITE.url}/produto/${p.slug}`;
+  /**
+   * O MESMO ENDEREÇO DO FEED DO GOOGLE (04/10/2026): `/produto/ref-<REF>`, com
+   * `?cor=` na peça de várias cores — a ficha abre já na cor do anúncio.
+   *
+   * Até aqui este link era `/produto/<slug>`. O slug embute nome e cor
+   * principal, e 38 peças tinham slug SEM `ref-` — o formato que vira 404 sem
+   * volta quando a peça é renomeada (incidente de 13/09, escrito em
+   * `enderecoDaPeca`). O anúncio guarda a URL: o clique pago caía no erro.
+   *
+   * ⚠️ SÓ O LINK MUDA. O `<g:id>` continua o mesmo, então pro Meta o item é o
+   * de sempre (aprendizado e `content_ids` do pixel seguem casando).
+   */
+  const link = linkDoItem(p, v, SITE.url);
   const [capa, ...resto] = v.fotos;
 
   const campos: string[] = [
@@ -400,7 +416,12 @@ function item(p: PecaFeed, v: Variante, novidade?: string, top30?: string, top30
   // Um valor só por peça: a fixa vence quando a REF está nas duas.
   if (p.topSemana) campos.push(`<g:custom_label_1>top-semana</g:custom_label_1>`);
   else if (p.colecaoSlug) campos.push(`<g:custom_label_1>colecao-${escapar(p.colecaoSlug)}</g:custom_label_1>`);
-  // As 30 mais recentes da categoria e do site — ver `carimbarTop30`.
+  // As 30 de MAIOR ESTOQUE da categoria (3) e do resto do catálogo (4) — ver
+  // `carimbarTop30`. ⚠️ Este comentário dizia "as 30 mais recentes": era o
+  // desenho de antes do incidente de 19/08, e o valor `top30-novidades` ficou
+  // com o nome antigo de propósito (renomear rótulo = conjunto do Meta
+  // servindo zero produto, calado). Quem quer NOVIDADE filtra o
+  // `custom_label_2` (`novidades-*`), não estes dois.
   if (top30) campos.push(`<g:custom_label_3>${escapar(top30)}</g:custom_label_3>`);
   if (top30Geral) campos.push(`<g:custom_label_4>${TOP30_GERAL}</g:custom_label_4>`);
 
@@ -424,39 +445,39 @@ function item(p: PecaFeed, v: Variante, novidade?: string, top30?: string, top30
 }
 
 export async function GET() {
-  let pecas: PecaFeed[] = [];
-  let falhou = false;
+  let pecas: PecaFeed[];
   try {
-    // A tag deixa a retaguarda derrubar este cache junto com o resto do
-    // catálogo (POST /api/revalidar com tags:['catalogo']) — sem ela, o dado
-    // preso aqui só saía pelo relógio, por mais que o backend já respondesse
-    // o catálogo novo.
-    //
-    // O `?rev=2` rotaciona a CHAVE no Data Cache da Vercel (13/08): a entrada
-    // antiga foi gravada com validade de 24h e SEM tag, e o Data Cache
-    // sobrevive a deploy — trocar revalidate/tags no código não alcança a
-    // entrada já gravada (config de cache não entra na chave). O backend
-    // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
-    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=5', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
+    // Sem Data Cache desde 04/10/2026 (ver `lib/feed/leitura.ts`). O `?rev=5`
+    // que vivia aqui só existia pra rotacionar a chave de uma entrada
+    // envenenada do Data Cache — sem cache, não há chave pra rotacionar.
+    pecas = await lerListaDoBackend<PecaFeed>('/public/loja/feed');
   } catch (e) {
-    /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
-       trata resposta com erro como falha de importação e pode desativar o
-       agendamento; feed vazio ele só registra e tenta de novo amanhã. O que
-       NÃO pode é o vazio ser GUARDADO — ver o `Cache-Control` no fim. */
-    falhou = true;
-    console.error('[feed-meta] catálogo falhou:', (e as Error)?.message ?? e);
+    /* Catálogo fora do ar: 503 SEM cache, nunca feed vazio com 200 (04/10/2026).
+       O feed agendado do Meta SUBSTITUI o catálogo pelo arquivo que leu: um RSS
+       válido sem item nenhum é a ordem de apagar tudo. Com 5xx ele registra a
+       falha da sessão e mantém os itens como estão. */
+    console.error('[feed-meta] catálogo falhou — respondendo 503:', (e as Error)?.message ?? e);
+    return feedIndisponivel();
   }
 
   // A ORDEM DA LISTA É O DADO. O backend devolve por `novidades` (mais nova
   // primeiro) e o carimbo das 20 depende disso — nunca reordenar aqui.
   const validas = pecas.filter((p) => p.ref && p.slug && p.preco > 0);
-  /* Zero peça válida é anomalia, não notícia — trata igual à falha. */
-  if (!validas.length) {
-    falhou = true;
-    console.error(`[feed-meta] catálogo respondeu ${pecas.length} peça(s) e NENHUMA válida`);
-  }
   const novidades = carimbarNovidades(validas);
   const top30 = carimbarTop30(validas);
+
+  const itens = validas.flatMap((p) =>
+    variantes(p).map((v) =>
+      item(p, v, novidades.get(p.ref), top30.categoria.get(p.ref), top30.geral.has(p.ref)),
+    ),
+  );
+  /* Zero item é anomalia, não notícia — trata igual à falha. */
+  if (!itens.length) {
+    console.error(
+      `[feed-meta] catálogo respondeu ${pecas.length} peça(s), ${validas.length} válida(s) e NENHUM item — respondendo 503`,
+    );
+    return feedIndisponivel();
+  }
 
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -464,24 +485,9 @@ export async function GET() {
     `<title>${escapar(SITE.name)}</title>` +
     `<link>${escapar(SITE.url)}</link>` +
     `<description>${escapar(SITE.description)}</description>` +
-    validas
-      .flatMap((p) =>
-        variantes(p).map((v) =>
-          item(p, v, novidades.get(p.ref), top30.categoria.get(p.ref), top30.geral.has(p.ref)),
-        ),
-      )
-      .join("") +
+    itens.join("") +
     `</channel></rss>`;
 
-  return new Response(xml, {
-    headers: {
-      'Content-Type': 'application/xml; charset=utf-8',
-      // CDN no ritmo de 1h; SWR cobre a virada sem buraco. Resposta nascida de
-      // falha sai `no-store` — o vazio guardado apaga o catálogo do canal
-      // inteiro, e foi o que aconteceu no feed do Google em 14/09/2026.
-      'Cache-Control': falhou
-        ? 'no-store'
-        : 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
-    },
-  });
+  /* Só a resposta BOA chega aqui, e só ela é guardada pela CDN (15 min). */
+  return respostaDoFeed(xml);
 }

@@ -38,8 +38,10 @@ export interface PecaFeed {
   /** Slug da coleção PONTUAL que contém a REF ('resort') — o outro `custom_label_1`. */
   colecaoSlug?: string | null;
   /**
-   * Uma das últimas 25 peças CADASTRADAS, tirando as da Linha Conforto — a
-   * régua do dono (14/09) para o que a campanha de loja anuncia como novidade.
+   * Uma das últimas 30 peças CADASTRADAS (`NOVIDADES_FEED_QTD` no backend —
+   * este comentário dizia 25 e o código já contava 30, conferido em
+   * 04/10/2026), tirando as da Linha Conforto — a régua do dono (14/09) para o
+   * que a campanha de loja anuncia como novidade.
    * Vira `custom_label_2`. ⚠️ Não confundir com janela de tempo: contagem não
    * esvazia quando o cadastro para, e em 14/09 já havia 18 dias sem peça nova.
    */
@@ -63,8 +65,9 @@ export interface Variante {
  * A CURA é no backend (`common/foto-viva.ts` + `montarPeca`): peça cuja
  * galeria inteira está no WordPress morto passa a sair do catálogo, e como os
  * feeds leem o catálogo ela nem chega aqui. Esta função existe porque o
- * backend e o site sobem em deploys separados e o feed fica cacheado até uma
- * hora — enquanto uma das duas pontas estiver velha, o item continuaria
+ * backend e o site sobem em deploys separados e o feed fica guardado na CDN
+ * (até 25 min desde 04/10/2026; era uma hora) — enquanto uma das duas pontas
+ * estiver velha, o item continuaria
  * saindo com `<g:image_link>` em `lurds.com.br/wp-content/...`, que responde
  * 403 desde 27/08/2026 e faz o Google REPROVAR o item (medido em 14/09: 48
  * dos 945 itens, mais 152 fotos extras).
@@ -133,6 +136,71 @@ export function variantes(p: PecaFeed): Variante[] {
     tamanhos: c.tamanhos?.length ? c.tamanhos : p.tamanhos,
     grupo: p.ref,
   }));
+}
+
+/**
+ * O ENDEREÇO ESTÁVEL DA PEÇA — o que os feeds mandam (13/09/2026).
+ *
+ * O `slug` embute o NOME e a COR PRINCIPAL
+ * (`blusa-feminina-manga-curta-plus-size-207372-marrie-207372`). Renomear a
+ * peça — ou a cor principal rodar quando a anterior cai abaixo do piso de
+ * estoque, o mesmo mecanismo do `common/atributos-do-feed.ts` — muda o slug e
+ * MATA o endereço que o Merchant guardou na busca das 00:00.
+ *
+ * A rede de recuperação existe (`slugAtualDoLegado`), mas só pega slug que
+ * contenha o padrão `ref-`, e por um bom motivo: casar por dado, nunca por
+ * heurística em cima do texto. Medido em produção no dia:
+ *   · `/produto/nome-velho-ref-900834-cor-que-saiu` → 308, volta
+ *   · `/produto/nome-velho-900834-cor-que-saiu`     → 404, morre
+ * E é exatamente o segundo formato que várias peças têm hoje.
+ *
+ * O preço disso apareceu no diagnóstico da campanha em 12/09: **"Página do
+ * produto indisponível: 3"**, com 128 impressões e R$ 2,59 gastos mandando
+ * cliente pra erro.
+ *
+ * `/produto/ref-<REF>` responde **200 direto** (não é redirect), não depende
+ * do nome nem da cor, e a página serve o `canonical` apontando pro slug — que
+ * segue sendo o do sitemap e o do SEO. Conferido item a item antes de trocar:
+ * as **968 URLs do feed respondem 200** nesta forma.
+ *
+ * ── MOROU NO `google.xml` ATÉ 04/10/2026 ──
+ *
+ * Só o feed do Google usava; o do Meta seguia montando o link com o slug.
+ * Medido na auditoria de 04/10: **306 das 700 peças** saíam com um endereço no
+ * Google e outro no Meta, e 38 slugs nem tinham `ref-` (33 delas à venda) — o
+ * formato que vira 404 sem volta. O anúncio do Meta guarda a URL do catálogo:
+ * renomear uma dessas peças mandava o clique pago pra página de erro. Veio
+ * pra cá pelo mesmo motivo de `variantes()`: uma regra, importada pelos dois.
+ *
+ * `site` entra por parâmetro (e não por `import` do `lib/seo`) pra este
+ * arquivo continuar sem dependência nenhuma — é o que deixa o teste rodar
+ * sem montar o site inteiro.
+ */
+export function enderecoDaPeca(p: Pick<PecaFeed, 'ref' | 'slug'>, site: string): string {
+  const chave = String(p.ref ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  // Peça sem REF utilizável volta pro slug: endereço velho que às vezes quebra
+  // ainda é melhor que `/produto/ref-`, que quebra sempre.
+  return chave ? `${site}/produto/ref-${chave}` : `${site}/produto/${p.slug}`;
+}
+
+/**
+ * O `<g:link>` de UM item — o endereço da peça, mais a cor quando há escolha.
+ *
+ * `?cor=` só na peça de várias cores, como sempre foi: faz a ficha abrir já na
+ * cor do anúncio (sem isso a cliente clica no bege e cai na página mostrando o
+ * preto). A de cor única não tem o que escolher, e a query a mais seria um
+ * segundo endereço à toa.
+ */
+export function linkDoItem(
+  p: Pick<PecaFeed, 'ref' | 'slug'>,
+  v: Pick<Variante, 'grupo' | 'cor'>,
+  site: string,
+): string {
+  const base = enderecoDaPeca(p, site);
+  return v.grupo ? `${base}?cor=${encodeURIComponent(v.cor)}` : base;
 }
 
 /**
