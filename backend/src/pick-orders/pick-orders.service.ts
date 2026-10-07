@@ -29,6 +29,7 @@ import { carregarFechamento, decidirFechamento, descreverPendentes } from '../co
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { JuntadaService } from './juntada.service';
+import { mensagemPedidoIncompleto, pecasSemLoja, travaPedidoIncompletoLigada } from '../common/pedido-incompleto';
 import {
   LABEL_CONGELADO,
   MOTIVO_CONGELADO,
@@ -383,6 +384,12 @@ export class PickOrdersService {
       // PEÇA SEM BIPE NÃO EMBARCA (ON-000201, 29/08) — mesma trava do envio
       // manual: a etiqueta só sai com o card 100% bipado.
       await this.travarEnvioSemBipe(pick);
+      // PEDIDO INCOMPLETO NÃO POSTA (07/10 — ON-000600): só na COMPRA da
+      // etiqueta; reimpressão de etiqueta já paga passa. Retirada fica de fora
+      // (decisão de 26/08: retirada dividida avisa, não trava).
+      if (ordemJ && !ordemJ.isPickup && !pick.trackingCode && !pick.correiosPrepostagemId) {
+        await this.travarEnvioPedidoIncompleto(pick);
+      }
     }
     // ── IDEMPOTÊNCIA (28/07: 17 pré-postagens do MESMO pedido no Mais Envios,
     // uma por clique enquanto o request anterior pendurava) ──────────────────
@@ -573,6 +580,26 @@ export class PickOrdersService {
         `${faltando.join(' · ')}. O bipe é a baixa de estoque — bipe pelo botão "Bipar peça faltante" ` +
         `do card antes de enviar. Peça que não está fisicamente aí: use "Reportar problema".`,
     );
+  }
+
+  /**
+   * PEDIDO INCOMPLETO NÃO POSTA (07/10 — ON-000600, ordem do dono: "nenhuma
+   * loja posta caixa de um pedido que ainda tem peça sem loja definida").
+   * Régua em `common/pedido-incompleto.ts`. Destrava sozinho quando a matriz
+   * resolve a peça (outra loja, crédito ou reembolso — os dois cancelam).
+   * Kill-switch: `ENVIO_EXIGE_PEDIDO_COMPLETO=0`.
+   */
+  private async travarEnvioPedidoIncompleto(pick: { orderId: string }): Promise<void> {
+    if (!travaPedidoIncompletoLigada()) return;
+    const linhas = await this.prisma.orderItem.findMany({
+      where: { orderId: pick.orderId, assignedStoreId: null, cancelledAt: null },
+      select: {
+        sku: true, quantity: true, ref: true, cor: true, tamanho: true, productName: true,
+        assignedStoreId: true, cancelledAt: true,
+      },
+    });
+    const faltam = pecasSemLoja(linhas);
+    if (faltam.length) throw new BadRequestException(mensagemPedidoIncompleto(faltam));
   }
 
   private async travarEnvioAncoraSeFaltamCaixas(pick: any): Promise<void> {
@@ -4877,6 +4904,16 @@ export class PickOrdersService {
        * o card aceita bipar a peça faltante em qualquer status.
        */
       await this.travarEnvioSemBipe(current);
+      /**
+       * PEDIDO INCOMPLETO NÃO POSTA (07/10 — ON-000600). Card que JÁ tem
+       * etiqueta paga passa: aí a caixa saiu ou vai sair de qualquer jeito, e
+       * travar o registro só prende a loja (lição do LP-000999, 31/08). A
+       * trava de verdade fica na COMPRA da etiqueta. Retirada fica de fora
+       * (26/08: retirada dividida avisa, não trava).
+       */
+      if (!pedidoDoCard?.isPickup && !current.trackingCode && !(current as any).correiosPrepostagemId) {
+        await this.travarEnvioPedidoIncompleto(current);
+      }
       /**
        * ARRUMA O CÓDIGO NA ENTRADA (22/08) — a loja digita na mão e um em
        * cada dez sai com espaço ou minúscula ("AD 717 071 708 BR",
