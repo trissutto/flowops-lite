@@ -1085,6 +1085,14 @@ model OrderItem {
   // Pedido da LIVE grava o basePriceCents; site fica null (unitPrice é o cheio).
   baseUnitPrice   Float?    @map("base_unit_price")
   assignedStoreId String?   @map("assigned_store_id")
+  // CARD DE COMPLEMENTO (07/10 — ON-000600): a loja que JÁ POSTOU a parte
+  // dela pode mandar a segunda caixa do mesmo pedido. Só aí as peças ganham
+  // dono por CARD — as postadas apontam pro card antigo, as novas pro card
+  // novo. Nulo = regra de sempre (a peça é do card da loja). Valor que aponta
+  // pra card de OUTRA loja ou que não existe mais é ignorado. Sem FK de
+  // propósito (card apagado não pode levar a peça junto). Régua em
+  // `common/itens-do-card.ts`.
+  pickOrderId     String?   @map("pick_order_id")
 
   order         Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   assignedStore Store? @relation(fields: [assignedStoreId], references: [id])

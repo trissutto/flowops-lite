@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { whereDoCard } from '../common/itens-do-card';
 
 /**
  * BIPE DA SEPARAÇÃO — o bipe É a baixa de estoque.
@@ -108,8 +109,9 @@ export class PickScanService {
     storeId: string,
     storeCode: string,
   ): Promise<Array<{ sku: string; qty: number; storeCode: string }>> {
+    // Card de complemento (07/10): só as peças DESTE card.
     const items = await this.prisma.orderItem.findMany({
-      where: { orderId, assignedStoreId: storeId },
+      where: await whereDoCard(this.prisma, { id: pickOrderId, orderId, storeId }),
       select: { sku: true, quantity: true },
     });
     const already = await this.debitedBySku(pickOrderId);
@@ -260,7 +262,7 @@ export class PickScanService {
     }
 
     const itens = await this.prisma.orderItem.findMany({
-      where: { orderId: po.orderId, assignedStoreId: storeId },
+      where: await whereDoCard(this.prisma, { id: pickOrderId, orderId: po.orderId, storeId }),
       select: { sku: true, quantity: true },
     });
     const esperadoDoSku = itens
@@ -558,7 +560,7 @@ export class PickScanService {
         if (po?.debitApprovedAt && !opts.jaEstornadoPeloCaller) {
           const storeCode = String(po.store?.code ?? '').trim();
           const itens = await tx.orderItem.findMany({
-            where: { orderId: po.orderId, assignedStoreId: po.storeId },
+            where: await whereDoCard(tx, { id: pickOrderId, orderId: po.orderId, storeId: po.storeId }),
             select: { sku: true, quantity: true },
           });
           const porSku = new Map<string, number>();

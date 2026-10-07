@@ -30,6 +30,7 @@ describe('PickScanService — peça nova em card já baixado', () => {
           issueReason: null,
         }),
         update: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       pickOrderScan: {
         count: jest.fn().mockResolvedValue(opts.jaBipadosDoSku ?? 0),
@@ -57,6 +58,7 @@ describe('PickScanService — peça nova em card já baixado', () => {
           issueReason: null,
           store: { code: '17' },
         }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       orderItem: {
         findMany: jest.fn().mockResolvedValue([

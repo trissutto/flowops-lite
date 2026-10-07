@@ -35,6 +35,7 @@
  */
 
 import { ehItemSemEstoque } from './item-sem-estoque';
+import { pecaDoCard } from './itens-do-card';
 import { fechaComoEntregue } from './retirada-receptora';
 
 export type ItemDoPedido = {
@@ -47,9 +48,13 @@ export type ItemDoPedido = {
   quantity?: number | null;
   cancelledAt?: Date | string | null;
   assignedStoreId?: string | null;
+  /** Card dono da peça quando a loja tem mais de um card (complemento, 07/10). */
+  pickOrderId?: string | null;
 };
 
 export type CardDoPedido = {
+  /** Id do card — distingue a caixa que já saiu do card de complemento da mesma loja. */
+  id?: string;
   storeId?: string | null;
   /** Código da loja do card — é por ele que o feeder aponta a âncora (`transferToStoreCode`). */
   storeCode?: string | null;
@@ -122,7 +127,11 @@ export function pecasPendentesDoPedido(ctx: {
 
     // Prova de envio nº 1: o card da loja DONA da peça já postou.
     const dono = it.assignedStoreId || null;
-    const cardDono = dono ? cards.find((c) => c.storeId === dono) ?? null : null;
+    // Card de complemento (07/10): com 2 cards da mesma loja, o dono é o card
+    // carimbado na peça — senão a segunda caixa contaria como já postada.
+    const cardDono = dono
+      ? cards.find((c) => c.storeId === dono && pecaDoCard(it, { id: String(c.id ?? ''), storeId: dono }, cards as any)) ?? null
+      : null;
     let enviadaPeloCard = !!cardDono && CARD_ENVIADO.includes(String(cardDono.status));
 
     // Card FEEDER postado = a peça foi pra loja ÂNCORA, não pra cliente. Só
@@ -260,7 +269,7 @@ export async function carregarFechamento(
       where: { orderId },
       select: {
         id: true, sku: true, ref: true, cor: true, tamanho: true, productName: true,
-        quantity: true, cancelledAt: true, assignedStoreId: true,
+        quantity: true, cancelledAt: true, assignedStoreId: true, pickOrderId: true,
       },
     }),
     prisma.pickOrder.findMany({
