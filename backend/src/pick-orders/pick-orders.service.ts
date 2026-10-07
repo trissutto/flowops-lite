@@ -29,6 +29,7 @@ import { carregarFechamento, decidirFechamento, descreverPendentes } from '../co
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { JuntadaService } from './juntada.service';
+import { outrosCardsDaLoja, pecaDoCard, whereDoCard } from '../common/itens-do-card';
 import { mensagemPedidoIncompleto, pecasSemLoja, travaPedidoIncompletoLigada } from '../common/pedido-incompleto';
 import {
   LABEL_CONGELADO,
@@ -550,7 +551,7 @@ export class PickOrdersService {
   }): Promise<void> {
     if (String(process.env.ENVIO_EXIGE_BIPE ?? '').trim() === '0') return;
     const itens = await this.prisma.orderItem.findMany({
-      where: { orderId: pick.orderId, assignedStoreId: pick.storeId, cancelledAt: null },
+      where: { ...(await whereDoCard(this.prisma, pick)), cancelledAt: null },
       select: { sku: true, quantity: true, ref: true, cor: true, tamanho: true },
     });
     if (!itens.length) return;
@@ -648,6 +649,20 @@ export class PickOrdersService {
    * front avisa. NFE_ENVIO_AMBIENTE=2 força homologação (e aí a chave de
    * teste NÃO vai pra pré-postagem). Emissão idempotente por pick+ambiente.
    */
+  /**
+   * CARD DE COMPLEMENTO (07/10 — ON-000600): tira da lista as peças que são
+   * de OUTRO card da mesma loja (a caixa que já saiu). Nota, declaração,
+   * peso e etiqueta da segunda caixa levam só o que vai nela. Pedido normal
+   * (um card por loja) volta a lista intacta, sem consulta extra de peças.
+   */
+  private async semPecasDeOutroCard(items: any[], pick: { id: string; orderId: string; storeId: string }): Promise<any[]> {
+    const outros = await outrosCardsDaLoja(this.prisma, pick);
+    if (!outros.length) return items || [];
+    return (items || []).filter(
+      (i: any) => !(i.assignedStoreId === pick.storeId && i.pickOrderId && outros.includes(i.pickOrderId)),
+    );
+  }
+
   private async emitirNfeDoEnvio(
     id: string,
     order: any,
@@ -660,6 +675,7 @@ export class PickOrdersService {
      */
     opts: { semEtiqueta?: boolean; saleId?: string } = {},
   ): Promise<{ nfe: any; nfeChave?: string; nfeInfoME: any }> {
+    if (order?.items && pick?.id) order = { ...order, items: await this.semPecasDeOutroCard(order.items, pick) };
     let nfe: any = null;
     let nfeChave: string | undefined;
     let nfeInfoME: any = null;
@@ -827,6 +843,7 @@ export class PickOrdersService {
   private async gerarEnvioCorreiosInner(id: string, pick: any) {
     const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido não encontrado');
+    order.items = await this.semPecasDeOutroCard(order.items, pick);
 
     const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
 
@@ -1734,6 +1751,15 @@ export class PickOrdersService {
     if (item.orderId !== po.orderId || (item as any).assignedStoreId !== storeId) {
       throw new BadRequestException('Item não pertence a este pedido/loja');
     }
+    // Card de complemento (07/10): peça da caixa que JÁ SAIU não se troca aqui.
+    {
+      const cardsDoPedido = await this.prisma.pickOrder.findMany({
+        where: { orderId: po.orderId }, select: { id: true, storeId: true },
+      });
+      if (!pecaDoCard(item as any, { id: pickOrderId, storeId }, cardsDoPedido)) {
+        throw new BadRequestException('Esta peça é da caixa que a loja já enviou — não é deste card.');
+      }
+    }
     const oldSku = item.sku;
     if (newSku === oldSku) throw new BadRequestException('É a mesma peça — nada pra trocar');
 
@@ -1861,8 +1887,9 @@ export class PickOrdersService {
     if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
 
     // Items atribuídos a essa loja (pedido multi-loja só retorna o pedaço dela)
+    // — e, no card de complemento, só as peças DESTE card (07/10).
     const items = await this.prisma.orderItem.findMany({
-      where: { orderId: po.orderId, assignedStoreId: storeId },
+      where: await whereDoCard(this.prisma, { id: pickOrderId, orderId: po.orderId, storeId }),
       select: {
         id: true,
         sku: true,
@@ -1950,7 +1977,7 @@ export class PickOrdersService {
     if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
 
     const items = await this.prisma.orderItem.findMany({
-      where: { orderId: po.orderId, assignedStoreId: storeId },
+      where: await whereDoCard(this.prisma, { id: pickOrderId, orderId: po.orderId, storeId }),
       select: { sku: true },
     });
     const pedidoSkus = new Set(items.map((i) => i.sku).filter(Boolean));
@@ -2069,7 +2096,7 @@ export class PickOrdersService {
 
     // Valida que bipou tudo que era esperado
     const items = await this.prisma.orderItem.findMany({
-      where: { orderId: po.orderId, assignedStoreId: storeId },
+      where: await whereDoCard(this.prisma, { id: pickOrderId, orderId: po.orderId, storeId }),
       select: { sku: true, quantity: true },
     });
     const expected = new Map<string, number>();
@@ -2586,7 +2613,11 @@ export class PickOrdersService {
     const orderIds = [...new Set(cards.map((c) => c.orderId))];
     const itens = await this.prisma.orderItem.findMany({
       where: { orderId: { in: orderIds }, cancelledAt: null, assignedStoreId: { not: null } },
-      select: { orderId: true, sku: true, quantity: true, assignedStoreId: true, ref: true, cor: true, tamanho: true },
+      select: { orderId: true, sku: true, quantity: true, assignedStoreId: true, pickOrderId: true, ref: true, cor: true, tamanho: true },
+    });
+    // Card de complemento (07/10): a peça é do card dono dela, não de todo card da loja.
+    const todosCardsDosPedidos = await this.prisma.pickOrder.findMany({
+      where: { orderId: { in: orderIds } }, select: { id: true, storeId: true, orderId: true },
     });
     const scans: any[] = await (this.prisma as any).pickOrderScan.groupBy({
       by: ['pickOrderId', 'sku'],
@@ -2598,7 +2629,10 @@ export class PickOrdersService {
 
     const out: any[] = [];
     for (const c of cards) {
-      const doCard = itens.filter((i) => i.orderId === c.orderId && i.assignedStoreId === c.storeId);
+      const doCard = itens.filter(
+        (i) => i.orderId === c.orderId &&
+          pecaDoCard(i, c as any, todosCardsDosPedidos.filter((x) => x.orderId === c.orderId)),
+      );
       if (!doCard.length) continue;
       const porSku = new Map<string, { qtd: number; nome: string }>();
       for (const i of doCard) {
@@ -2781,6 +2815,19 @@ export class PickOrdersService {
       arr.push(it);
       itemsByOrder.set(it.orderId, arr);
     }
+    // CARD DE COMPLEMENTO (07/10 — ON-000600): a loja pode ter 2 cards no
+    // mesmo pedido (a caixa que já saiu + a segunda). Cada card mostra só as
+    // peças dele — senão a segunda caixa listaria o que já foi pelo correio.
+    const cardsDaLojaNosPedidos = orderIds.length
+      ? await this.prisma.pickOrder.findMany({
+          where: { orderId: { in: orderIds }, storeId },
+          select: { id: true, storeId: true, orderId: true },
+        })
+      : [];
+    const itensDoRow = (r: any): any[] =>
+      (itemsByOrder.get(r.orderId) ?? []).filter((i: any) =>
+        pecaDoCard(i, { id: r.id, storeId }, cardsDaLojaNosPedidos.filter((c) => c.orderId === r.orderId)),
+      );
 
     // GATE DE PACOTES DENTRO DE SP (31/08): quantos cards NÃO-transfer o
     // pedido tem — 2+ dentro de SP sem carimbo = envio esperando a matriz.
@@ -2830,7 +2877,7 @@ export class PickOrdersService {
       bipesPorCardSku.set(`${s.pickOrderId}::${s.sku}`, Number(s._count?._all) || 0);
     }
     const faltamBiparDe = (r: any): number => {
-      const doCard = (itemsByOrder.get(r.orderId) ?? []).filter((i: any) => !i.cancelledAt);
+      const doCard = itensDoRow(r).filter((i: any) => !i.cancelledAt);
       const porSku = new Map<string, number>();
       for (const i of doCard) porSku.set(i.sku, (porSku.get(i.sku) ?? 0) + i.quantity);
       let faltam = 0;
@@ -3142,7 +3189,7 @@ export class PickOrdersService {
         receptorRetirada: ehCardReceptor(
           { isTransfer: r.isTransfer, storeCode: minhaLoja?.code ?? null },
           r.order as any,
-          (itemsByOrder.get(r.orderId) ?? []).some((i: any) => !i.cancelledAt && !ehItemSemEstoque(i)),
+          itensDoRow(r).some((i: any) => !i.cancelledAt && !ehItemSemEstoque(i)),
         ),
         // ── JUNTADA (21/08) ──
         juntadaFeeder: ehFeederJuntada,
@@ -3205,7 +3252,7 @@ export class PickOrdersService {
           pickupStoreName: (r.order as any)?.pickupStoreCode
             ? storeByCode.get((r.order as any).pickupStoreCode)?.name ?? null
             : null,
-          items: itemsByOrder.get(r.orderId) ?? [],
+          items: itensDoRow(r),
         },
       };
     });
@@ -3387,9 +3434,16 @@ export class PickOrdersService {
         })
       : [];
     const itemsByPickOrder = new Map<string, any[]>();
+    // Card de complemento (07/10): cada card fica só com as peças dele.
+    const cardsDosPedidos = orderIds.length
+      ? await this.prisma.pickOrder.findMany({
+          where: { orderId: { in: orderIds } }, select: { id: true, storeId: true, orderId: true },
+        })
+      : [];
     for (const r of rows) {
       const its = allItems.filter(
-        (it) => it.orderId === r.orderId && it.assignedStoreId === r.storeId,
+        (it) => it.orderId === r.orderId &&
+          pecaDoCard(it, r, cardsDosPedidos.filter((c) => c.orderId === r.orderId)),
       );
       itemsByPickOrder.set(r.id, its);
     }
@@ -3690,7 +3744,7 @@ export class PickOrdersService {
     }
 
     const items = await this.prisma.orderItem.findMany({
-      where: { orderId: po.orderId, assignedStoreId: po.storeId },
+      where: await whereDoCard(this.prisma, { id: pickOrderId, orderId: (po as any).orderId, storeId: (po as any).storeId }),
       select: { sku: true, quantity: true, productName: true },
     });
 
@@ -4217,6 +4271,7 @@ export class PickOrdersService {
         tamanho: true,
         quantity: true,
         assignedStoreId: true,
+        pickOrderId: true,
       },
     });
     const soUmaLoja = rows.length === 1;
@@ -4238,7 +4293,8 @@ export class PickOrdersService {
     }
     const itensDaStore = (row: { id: string; storeId: string; status: string }) =>
       itens.filter((i) => {
-        if (i.assignedStoreId === row.storeId) return true;
+        // Card de complemento (07/10): a peça é do card dono dela.
+        if (i.assignedStoreId === row.storeId) return pecaDoCard(i, row, rows as any);
         if (!i.assignedStoreId && soUmaLoja) {
           const enviado = row.status === 'shipped' || row.status === 'delivered';
           if (!enviado) return true;
@@ -4404,8 +4460,12 @@ export class PickOrdersService {
     // Filtra itens só dessa loja
     // ... e nunca a peça CANCELADA: ela fica sem loja, e "sem loja" aqui
     // cairia no card de novo (01/10 — LP-001764).
+    // Card de complemento (07/10): só as peças DESTE card da loja.
+    const cardsDoPedido = await this.prisma.pickOrder.findMany({
+      where: { orderId: row.orderId }, select: { id: true, storeId: true },
+    });
     const items = row.order.items.filter(
-      (i) => !(i as any).cancelledAt && (!i.assignedStoreId || i.assignedStoreId === storeId),
+      (i) => !(i as any).cancelledAt && (!i.assignedStoreId || pecaDoCard(i as any, row, cardsDoPedido)),
     );
     // Parse snapshot do cliente (só em transferência) pro frontend não precisar
     // parsear JSON textual de novo.
@@ -4508,10 +4568,10 @@ export class PickOrdersService {
     const storeCode = po.store.code;
     const storeName = po.store.name;
 
-    // Conta items que estavam atribuídos a essa loja (pra retornar count)
-    const itemsLiberados = await this.prisma.orderItem.count({
-      where: { orderId, assignedStoreId: storeId },
-    });
+    // Conta items que estavam atribuídos a essa loja (pra retornar count) —
+    // no card de complemento, só os DESTE card (a caixa que já saiu fica).
+    const whereCard = await whereDoCard(this.prisma, { id: pickOrderId, orderId, storeId });
+    const itemsLiberados = await this.prisma.orderItem.count({ where: whereCard });
 
     // ESTORNO ANTES DE APAGAR: a linha do bipe não tem FK pro card (ela é a
     // prova de que a peça saiu), mas o `assignedStoreId` dos itens é zerado
@@ -4525,8 +4585,8 @@ export class PickOrdersService {
     await this.prisma.$transaction(async (tx) => {
       // Libera items
       await tx.orderItem.updateMany({
-        where: { orderId, assignedStoreId: storeId },
-        data: { assignedStoreId: null },
+        where: whereCard,
+        data: { assignedStoreId: null, pickOrderId: null },
       });
       // Deleta pick-order
       await tx.pickOrder.delete({ where: { id: pickOrderId } });
@@ -5286,8 +5346,13 @@ export class PickOrdersService {
      * naturezas diferentes. Franquia→franquia e rede→rede continuam SÓ
      * REGISTRO, sem financeiro (decisão do dono, 17/08).
      */
+    // Card de complemento (07/10): a segunda caixa da mesma loja acerta SÓ
+    // as peças dela — a primeira já acertou as suas no envio dela.
+    const cardsDoPedidoAcerto = await this.prisma.pickOrder.findMany({
+      where: { orderId: po.orderId }, select: { id: true, storeId: true },
+    });
     const meusItens: any[] = (order.items || []).filter(
-      (i: any) => i.assignedStoreId === po.storeId,
+      (i: any) => pecaDoCard(i, po, cardsDoPedidoAcerto),
     );
 
     // `isTransfer` = este card MANDA pra outra loja. Quem entrega é o outro.
@@ -5587,7 +5652,7 @@ export class PickOrdersService {
 
       const storeCode = String(((po as any).store?.code) ?? '').trim();
       const items = await this.prisma.orderItem.findMany({
-        where: { orderId: po.orderId, assignedStoreId: po.storeId },
+        where: await whereDoCard(this.prisma, { id: pickOrderId, orderId: (po as any).orderId, storeId: (po as any).storeId }),
         select: { sku: true, quantity: true, productName: true },
       });
 
@@ -5786,7 +5851,7 @@ export class PickOrdersService {
     const storeCode = String(po.store?.code ?? '').trim();
     if (reason === 'out_of_stock' && storeCode) {
       const linhas = await this.prisma.orderItem.findMany({
-        where: { orderId: po.orderId, assignedStoreId: po.storeId },
+        where: await whereDoCard(this.prisma, po),
       });
       const bipes = await this.prisma.pickOrderScan.findMany({
         where: { pickOrderId, revertedAt: null },
@@ -6202,6 +6267,14 @@ export class PickOrdersService {
       if (!item || item.orderId !== po.orderId || item.assignedStoreId !== storeId) {
         throw new BadRequestException('Esse item não está (mais) neste pedido da sua loja.');
       }
+      {
+        const cardsDoPedidoTx = await tx.pickOrder.findMany({
+          where: { orderId: po.orderId }, select: { id: true, storeId: true },
+        });
+        if (!pecaDoCard(item as any, { id: pickOrderId, storeId }, cardsDoPedidoTx)) {
+          throw new BadRequestException('Esta peça é da caixa que a loja já enviou — não é deste card.');
+        }
+      }
       if (ehItemSemEstoque(item)) {
         throw new BadRequestException('Esse item não é peça de estoque (frete/linha manual).');
       }
@@ -6210,8 +6283,9 @@ export class PickOrdersService {
       // O bipe conta por SKU, não por linha — então o reporte também trabalha
       // por SKU: soma o esperado de TODAS as linhas do SKU nesta loja e
       // desconta o que já foi bipado.
+      const whereCard = await whereDoCard(tx, { id: pickOrderId, orderId: po.orderId, storeId });
       const linhasDoSku = await tx.orderItem.findMany({
-        where: { orderId: po.orderId, assignedStoreId: storeId, sku },
+        where: { ...whereCard, sku },
         orderBy: { id: 'asc' },
       });
       const esperadoSku = linhasDoSku.reduce((a, b) => a + b.quantity, 0);
@@ -6224,7 +6298,7 @@ export class PickOrdersService {
       }
 
       const todasLinhas = await tx.orderItem.findMany({
-        where: { orderId: po.orderId, assignedStoreId: storeId },
+        where: whereCard,
         select: { quantity: true },
       });
       const esperadoCard = todasLinhas.reduce((a, b) => a + b.quantity, 0);

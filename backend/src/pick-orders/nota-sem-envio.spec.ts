@@ -82,6 +82,7 @@ describe('emitirNotaSemEnvio — nota de retirada/motoboy pela conta que cobrou'
       pickOrder: {
         count: jest.fn().mockResolvedValue((opts.order?.pickOrders || []).length),
         findFirst: jest.fn().mockResolvedValue((opts.order?.pickOrders || [])[0] ?? null),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       pagbankPayment: { findFirst: jest.fn().mockResolvedValue(opts.pagoNoPagbank === false ? null : { storeCode: '11' }) },
       customer: { findFirst: jest.fn().mockResolvedValue(opts.enderecoCrm ? { addresses: [opts.enderecoCrm] } : null) },

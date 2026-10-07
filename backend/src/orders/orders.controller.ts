@@ -7,6 +7,7 @@ import { wordpressLegadoLigado } from '../common/replica-giga';
 import { conferenciaTravaLigada } from '../common/prova-pagamento';
 import { carregarPecasPendentes, descreverPendentes, pecasPendentesDoPedido } from '../common/pedido-completo';
 import { pedidoPago, STATUS_NUNCA_RECEITA } from '../common/pedido-pago';
+import { pecaDoCard } from '../common/itens-do-card';
 import { PedidoEmailService, metodoDePagamento } from '../loja-orders/pedido-email.service';
 import { dentroDeSaoPaulo } from '../common/politica-frete';
 import { lojasDaRotaPropria } from '../common/rota-propria';
@@ -3134,7 +3135,8 @@ export class OrdersController {
     const nomeDestino = new Map<string, string>(destinos.map((s: any) => [s.code, s.name]));
 
     for (const pick of picks) {
-      const itens = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
+      // Card de complemento (07/10): só as peças DESTE card da loja.
+      const itens = (order.items || []).filter((i: any) => pecaDoCard(i, pick as any, picks as any));
       if (!itens.length) continue;
       groups.push({
         storeId: pick.storeId,
@@ -4098,7 +4100,7 @@ export class OrdersController {
           storeName: p.store?.name,
           status: p.status,
           pecas: (o.items as any[])
-            .filter((i) => !i.cancelledAt && i.assignedStoreId === p.storeId)
+            .filter((i) => !i.cancelledAt && pecaDoCard(i, p, pacotes))
             .reduce((s, i) => s + i.quantity, 0),
         })),
         // Sugestão de âncora pro 1-clique "Juntar": a loja com mais peças.
@@ -4107,7 +4109,7 @@ export class OrdersController {
             .map((p: any) => ({
               code: p.store?.code,
               pecas: (o.items as any[])
-                .filter((i) => !i.cancelledAt && i.assignedStoreId === p.storeId)
+                .filter((i) => !i.cancelledAt && pecaDoCard(i, p, pacotes))
                 .reduce((s: number, i: any) => s + i.quantity, 0),
             }))
             .sort((a: any, b: any) => b.pecas - a.pecas);

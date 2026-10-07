@@ -23,6 +23,7 @@ import { PickScanService } from '../pick-orders/pick-scan.service';
 import { LOJA_CANAL_CODES } from '../common/loja-canal';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { lojaReportouDeVerdade } from '../common/pedido-congelado';
+import { pecaDoCard, whereDoCard } from '../common/itens-do-card';
 import { nomeDaPeca as nomeDaPecaIncompleta, pecasSemLoja } from '../common/pedido-incompleto';
 
 @Injectable()
@@ -146,7 +147,7 @@ export class RoutingService {
       where: { id: orderId },
       select: {
         id: true, status: true, isPickup: true, pickupStoreCode: true, shippingMethod: true,
-        items: { select: { assignedStoreId: true, quantity: true, sku: true } },
+        items: { select: { assignedStoreId: true, pickOrderId: true, quantity: true, sku: true } },
         pickOrders: {
           where: { status: { in: ['new', 'separating'] } },
           select: {
@@ -158,10 +159,15 @@ export class RoutingService {
     });
     if (!order) return [];
 
-    const storesComPeca = new Set<string>();
-    for (const item of order.items ?? []) {
-      if (item.assignedStoreId && !ehItemSemEstoque(item)) storesComPeca.add(item.assignedStoreId);
-    }
+    // Card de complemento (07/10): "tem peça" é por CARD — a loja pode ter a
+    // caixa que já saiu (com peças) e um card novo que ficou vazio.
+    const todosCardsDoPedido = await this.prisma.pickOrder.findMany({
+      where: { orderId }, select: { id: true, storeId: true },
+    });
+    const cardTemPeca = (card: { id: string; storeId: string }) =>
+      (order.items ?? []).some(
+        (item: any) => !ehItemSemEstoque(item) && pecaDoCard(item, card, todosCardsDoPedido),
+      );
 
     const destinoCode = destinoObrigatorioDoPedido(order) ?? '';
     const temDestinoObrigatorio = !!destinoCode;
@@ -169,10 +175,10 @@ export class RoutingService {
       (p: any) =>
         p.isTransfer &&
         p.transferToStoreCode === destinoCode &&
-        storesComPeca.has(p.storeId),
+        cardTemPeca(p),
     );
 
-    const vazios = order.pickOrders.filter((p: any) => !storesComPeca.has(p.storeId));
+    const vazios = order.pickOrders.filter((p: any) => !cardTemPeca(p));
     const removidos: string[] = [];
     for (const card of vazios) {
       const receptorLegitimo =
@@ -184,7 +190,7 @@ export class RoutingService {
       // Revalida imediatamente antes de apagar: uma atribuição concorrente não
       // pode perder o card recém-preenchido.
       const ganhouPeca = await this.prisma.orderItem.count({
-        where: { orderId, assignedStoreId: card.storeId },
+        where: await whereDoCard(this.prisma, { id: card.id, orderId, storeId: card.storeId }),
       });
       if (ganhouPeca > 0) continue;
 
@@ -667,7 +673,7 @@ export class RoutingService {
         if (!aindaExiste) continue;
         const assignment = result.assignments.find((a) => a.storeId === po.storeId);
         const items = await this.prisma.orderItem.findMany({
-          where: { orderId, assignedStoreId: po.storeId },
+          where: await whereDoCard(this.prisma, { id: po.id, orderId, storeId: po.storeId }),
         });
 
         this.gateway.emitPickOrderToStore(po.storeId, {
@@ -1766,12 +1772,12 @@ export class RoutingService {
      * `PATCH status=separacao` recriando card pra peça JÁ POSTADA. Aqui só
      * anda a peça que o guard por peça deixa passar — a que nunca viajou.
      */
-    const cardsDoPedido: any[] = ['shipped', 'delivered'].includes(String(order.status))
-      ? await this.prisma.pickOrder.findMany({
-          where: { orderId },
-          select: { storeId: true, status: true },
-        })
-      : [];
+    // Sempre carregados (07/10): com o card de complemento a mesma loja pode
+    // ter a caixa que JÁ SAIU e uma aberta — o dono da peça é por card.
+    const cardsDoPedido: any[] = await this.prisma.pickOrder.findMany({
+      where: { orderId },
+      select: { id: true, storeId: true, status: true },
+    });
 
     const alvo = await this.prisma.store.findFirst({
       where: { code: String(toStoreCode || '').trim(), active: true },
@@ -1783,7 +1789,7 @@ export class RoutingService {
       where: { id: { in: ids }, orderId },
       select: {
         id: true, sku: true, quantity: true, ref: true, cor: true, tamanho: true,
-        productName: true, assignedStoreId: true,
+        productName: true, assignedStoreId: true, pickOrderId: true,
       },
     });
     if (itens.length !== ids.length) {
@@ -1794,7 +1800,7 @@ export class RoutingService {
     if (cardsDoPedido.length) {
       const jaEnviadas = itens.filter((i) => {
         const card = i.assignedStoreId
-          ? cardsDoPedido.find((c) => c.storeId === i.assignedStoreId)
+          ? cardsDoPedido.find((c) => pecaDoCard(i, c, cardsDoPedido))
           : null;
         return !!card && ['shipped', 'delivered'].includes(String(card.status));
       });
@@ -1845,17 +1851,25 @@ export class RoutingService {
       }
     }
 
-    // Destino: NUNCA um segundo card pra mesma loja no mesmo pedido.
+    /**
+     * CARD DE COMPLEMENTO (07/10 — ON-000600, ordem do dono: "tenho que mandar
+     * por São José, a terceira peça está lá").
+     *
+     * Até aqui a loja que já postou a parte dela NÃO podia receber peça nova:
+     * o segundo card mostraria também o que ela já enviou (ON-000106), porque
+     * a peça era do card pela LOJA. Agora a peça ganha dono por CARD
+     * (`OrderItem.pickOrderId`, régua em `common/itens-do-card.ts`): as
+     * peças que já saíram ficam carimbadas no card antigo, as novas no card
+     * novo — e cada tela, bipe, nota, etiqueta e acerto enxerga só as suas.
+     */
     const cardAlvo = cardAtivoDa(alvo.id);
-    const cardAlvoFechado = cards.find(
+    const cardsFechadosDoAlvo = cards.filter(
       (c) => c.storeId === alvo.id && ['shipped', 'delivered'].includes(c.status),
     );
-    if (!cardAlvo && cardAlvoFechado) {
-      throw new BadRequestException(
-        `${alvo.code} já postou a parte dela deste pedido (card ${cardAlvoFechado.status}). ` +
-          `Peça nova pra lá criaria um segundo card, que mostraria também o que ela já enviou.`,
-      );
-    }
+    const complemento = !cardAlvo && cardsFechadosDoAlvo.length > 0;
+    // A loja tem (ou vai ter) mais de um card neste pedido? Então a peça
+    // movida precisa do carimbo do card dela.
+    const lojaComVariosCards = cardsFechadosDoAlvo.length > 0;
 
     // JUNTADA vigente — quem é a âncora hoje.
     const feeders = cards.filter(
@@ -1904,9 +1918,33 @@ export class RoutingService {
       // estaria velho.
       if (cardAlvo) await this.pickScans.lockPickOrder(tx, cardAlvo.id);
 
+      if (complemento) {
+        // As peças que JÁ SAÍRAM desta loja ganham o carimbo do card delas
+        // ANTES do card novo existir — senão o card novo as listaria também.
+        const dono = cardsFechadosDoAlvo[0];
+        await tx.orderItem.updateMany({
+          where: { orderId, assignedStoreId: alvo.id, pickOrderId: null, id: { notIn: mover.map((i) => i.id) } },
+          data: { pickOrderId: dono.id },
+        });
+        const ehAncoraC = !!ancoraCode && alvo.code === ancoraCode;
+        cardCriado = await tx.pickOrder.create({
+          data: {
+            orderId,
+            storeId: alvo.id,
+            status: PickStatus.new,
+            isTransfer: !!ancoraCode && !ehAncoraC,
+            transferToStoreCode: ancoraCode && !ehAncoraC ? ancoraCode : null,
+            customerSnapshot: ancoraCode && !ehAncoraC ? snapshotJuntada : null,
+          },
+        });
+      }
+      const cardDono = complemento ? cardCriado?.id : lojaComVariosCards ? cardAlvo?.id : null;
+
       await tx.orderItem.updateMany({
         where: { id: { in: mover.map((i) => i.id) } },
-        data: { assignedStoreId: alvo.id },
+        // Sem vários cards na loja o carimbo fica nulo (regra de sempre) —
+        // e um carimbo velho de outra loja não acompanha a peça.
+        data: { assignedStoreId: alvo.id, pickOrderId: cardDono ?? null },
       });
 
       if (cardAlvo) {
@@ -1943,7 +1981,7 @@ export class RoutingService {
               `Use "↔ Trocar loja" (estorna o card inteiro) ou mande a peça pra outra loja.`,
           });
         }
-      } else {
+      } else if (!complemento) {
         const ehAncora = !!ancoraCode && alvo.code === ancoraCode;
         cardCriado = await tx.pickOrder.create({
           data: {
@@ -2084,6 +2122,9 @@ export class RoutingService {
           (deLojas.length ? ` de ${deLojas.join('/')}` : '') +
           ` pra ${alvo.code} (${alvo.name}). ` +
           `${mover.length} peça(s) — o resto do card ficou onde estava.` +
+          (complemento
+            ? ` A ${alvo.code} já tinha postado a parte dela: nasceu um CARD DE COMPLEMENTO (segunda caixa) só com ${mover.length === 1 ? 'esta peça' : 'estas peças'}.`
+            : '') +
           (cardsRemovidos.length
             ? ` Card da ${cardsRemovidos.join('/')} ficou sem peça e foi removido.`
             : '') +
@@ -2101,8 +2142,12 @@ export class RoutingService {
 
     // Loja de destino vê a peça na hora (o app da loja não recarrega sozinho).
     try {
+      // Card de complemento (07/10): a loja vê só as peças do card que ganhou peça.
+      const cardDoAviso = cardCriado?.id ?? cardAlvo?.id ?? null;
       const itensDoAlvo = await this.prisma.orderItem.findMany({
-        where: { orderId, assignedStoreId: alvo.id },
+        where: cardDoAviso
+          ? await whereDoCard(this.prisma, { id: cardDoAviso, orderId, storeId: alvo.id })
+          : { orderId, assignedStoreId: alvo.id },
       });
       if (cardCriado) {
         const ordemSocket = await this.prisma.order.findUnique({
@@ -2154,7 +2199,7 @@ export class RoutingService {
       );
       for (const c of origensAtivas) {
         const itensDaOrigem = await this.prisma.orderItem.findMany({
-          where: { orderId, assignedStoreId: c.storeId },
+          where: await whereDoCard(this.prisma, { id: c.id, orderId, storeId: c.storeId }),
         });
         if (!itensDaOrigem.length) continue; // esvaziou — o removed cobre
         this.gateway.emitPickOrderStatus(c.storeId, {
@@ -2318,8 +2363,17 @@ export class RoutingService {
         sku: { in: skus },
         assignedStoreId: { in: storeIds },
       },
-      select: { orderId: true, sku: true, quantity: true, assignedStoreId: true },
+      select: { orderId: true, sku: true, quantity: true, assignedStoreId: true, pickOrderId: true },
     });
+    // Card de complemento (07/10): com 2 cards da mesma loja no pedido, a peça
+    // da caixa que JÁ SAIU não pode seguir reservada pelo card novo.
+    const todosCardsDosPedidos = await this.prisma.pickOrder.findMany({
+      where: { orderId: { in: orderIds } }, select: { id: true, storeId: true, orderId: true },
+    });
+    const itensDoCardAtivo = (po: { id: string; orderId: string; storeId: string }) =>
+      items
+        .filter((it) => it.orderId === po.orderId && pecaDoCard(it, po, todosCardsDosPedidos.filter((c) => c.orderId === po.orderId)))
+        .map((it) => ({ sku: it.sku, quantity: it.quantity }));
     const itemsByCard = new Map<string, Array<{ sku: string; quantity: number }>>();
     for (const it of items) {
       const key = `${it.orderId}::${it.assignedStoreId}`;
@@ -2356,7 +2410,7 @@ export class RoutingService {
         pickOrderId: po.id,
         storeCode: codeByStoreId.get(po.storeId) ?? '',
         debitApproved: !!po.debitApprovedAt,
-        items: itemsByCard.get(`${po.orderId}::${po.storeId}`) ?? [],
+        items: itensDoCardAtivo(po),
         debited: debitedByCard.get(po.id),
       })),
     );

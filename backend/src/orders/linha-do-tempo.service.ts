@@ -356,7 +356,12 @@ export class LinhaDoTempoService {
           : null;
       })();
 
-      const card = cardDaLoja(it.assignedStoreId) ?? cardUnico;
+      // Card de complemento (07/10): a peça carimbada mostra o card DELA (a
+      // caixa que já saiu), não o mais novo da loja.
+      const cardCarimbado = it.pickOrderId
+        ? order.pickOrders.find((p: any) => p.id === it.pickOrderId && p.storeId === it.assignedStoreId) ?? null
+        : null;
+      const card = cardCarimbado ?? cardDaLoja(it.assignedStoreId) ?? cardUnico;
       if (card) {
         const loja = { storeCode: card.store?.code ?? null, storeName: card.store?.name ?? null };
         if (card.status === 'shipped' || card.status === 'delivered') {

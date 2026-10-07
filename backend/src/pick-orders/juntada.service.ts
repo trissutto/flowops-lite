@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { whereDoCard } from '../common/itens-do-card';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { RealignmentShipmentService } from '../realignment/shipment.service';
 import { RemessaEnvioService } from '../realignment/remessa-envio.service';
@@ -324,7 +325,8 @@ export class JuntadaService {
 
     const itens = (
       await this.prisma.orderItem.findMany({
-        where: { orderId: pick.orderId, assignedStoreId: pick.storeId },
+        // Card de complemento (07/10): só as peças DESTE card vão na caixa.
+        where: await whereDoCard(this.prisma, { id: pickOrderId, orderId: pick.orderId, storeId: pick.storeId }),
       })
     ).filter((i: any) => !ehItemSemEstoque(i));
     if (!itens.length) {

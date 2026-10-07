@@ -5,7 +5,10 @@ describe('RoutingService — saneamento de cards vazios', () => {
     const prisma: any = {
       order: { findUnique: jest.fn().mockResolvedValue(order) },
       orderItem: { count: jest.fn().mockResolvedValue(0) },
-      pickOrder: { delete: jest.fn().mockResolvedValue({}) },
+      pickOrder: {
+        delete: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockResolvedValue(order?.pickOrders ?? []),
+      },
       orderHistory: { create: jest.fn().mockResolvedValue({}) },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
     };

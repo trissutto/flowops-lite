@@ -27,6 +27,8 @@ describe('travarEnvioSemBipe — peça sem bipe não embarca', () => {
     const svc = Object.create(PickOrdersService.prototype);
     (svc as any).prisma = {
       orderItem: { findMany: jest.fn().mockResolvedValue(opts.itens) },
+      // Sem outro card da mesma loja (pedido normal) — régua do card de complemento.
+      pickOrder: { findMany: jest.fn().mockResolvedValue([]) },
     };
     (svc as any).scans = {
       listActiveScans: jest.fn().mockResolvedValue(opts.scans),
