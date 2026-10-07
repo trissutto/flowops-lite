@@ -935,6 +935,8 @@ export default function PedidoDetailPage() {
     try {
       const res = await api<{
         ok: boolean; avisoJuntada?: string | null; cardsRemovidos?: string[];
+        /** Peças que continuam sem loja depois do movimento (07/10 — ON-000600). */
+        avisoSemLoja?: string | null;
         /** Marcas de "não achei" que a escolha manual desfez nesta loja. */
         extraviadasAchadas?: number;
       }>(
@@ -956,7 +958,13 @@ export default function PedidoDetailPage() {
       const fresh = await api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`).catch(() => []);
       setLiveStatus(Array.isArray(fresh) ? fresh : []);
       loadJuntada(); loadRaiox(); loadItemReports();
-      if (res.avisoJuntada) setSepError(`🧲 ${res.avisoJuntada}`);
+      // Sobrou peça sem loja: a loja NÃO consegue postar até a matriz decidir
+      // o resto — dizer isso agora, não quando a loja ligar perguntando.
+      const avisos = [
+        res.avisoSemLoja ? `⚠️ ${res.avisoSemLoja}` : null,
+        res.avisoJuntada ? `🧲 ${res.avisoJuntada}` : null,
+      ].filter(Boolean);
+      if (avisos.length) setSepError(avisos.join('\n'));
     } catch (e: any) {
       setMoverErro(e?.body?.message || e?.message || 'Não deu pra mover a peça.');
     } finally {

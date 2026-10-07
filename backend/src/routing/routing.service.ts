@@ -23,6 +23,7 @@ import { PickScanService } from '../pick-orders/pick-scan.service';
 import { LOJA_CANAL_CODES } from '../common/loja-canal';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { lojaReportouDeVerdade } from '../common/pedido-congelado';
+import { nomeDaPeca as nomeDaPecaIncompleta, pecasSemLoja } from '../common/pedido-incompleto';
 
 @Injectable()
 export class RoutingService {
@@ -2050,6 +2051,24 @@ export class RoutingService {
       });
     }
 
+    // SOBROU PEÇA SEM LOJA? (07/10 — ON-000600: moveram 1 de 3 e as outras 2
+    // ficaram sem ninguém; a loja postou a caixa incompleta). A porta do envio
+    // agora trava, mas quem move precisa saber NA HORA que falta decidir o resto.
+    const semLojaDepois = pecasSemLoja(
+      await this.prisma.orderItem.findMany({
+        where: { orderId, assignedStoreId: null, cancelledAt: null },
+        select: {
+          sku: true, ref: true, cor: true, tamanho: true, productName: true,
+          assignedStoreId: true, cancelledAt: true,
+        },
+      }),
+    );
+    const avisoSemLoja = semLojaDepois.length
+      ? `Ainda ${semLojaDepois.length === 1 ? 'falta 1 peça' : `faltam ${semLojaDepois.length} peças`} SEM LOJA: ` +
+        `${semLojaDepois.map(nomeDaPecaIncompleta).join(' · ')}. Nenhuma loja posta este pedido até ` +
+        'elas ganharem loja, virarem crédito ou reembolso.'
+      : null;
+
     // Assinado (26/08): FK conferida — id de token velho não derruba o create.
     const moveuUser = opts?.userId
       ? await this.prisma.user.findUnique({ where: { id: opts.userId }, select: { id: true } })
@@ -2075,6 +2094,7 @@ export class RoutingService {
             ? ` A ${alvo.code} tinha dado ${mover.length === 1 ? 'esta peça' : 'estas peças'} como EXTRAVIADA ` +
               `("não achei"): a marca foi desfeita aqui — ela volta a ser escolhida pelo roteamento pra este código.`
             : '') +
+          (avisoSemLoja ? ` ⚠️ ${avisoSemLoja}` : '') +
           (opts?.nome ? ` · por ${opts.nome}` : ''),
       },
     });
@@ -2193,6 +2213,8 @@ export class RoutingService {
         : null,
       cardsRemovidos,
       avisoJuntada,
+      /** Peças que seguem sem loja depois do movimento — a tela avisa (07/10). */
+      avisoSemLoja,
     };
   }
 
