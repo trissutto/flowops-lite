@@ -117,6 +117,37 @@ export function pecasPendentesDoPedido(ctx: {
   const reports = ctx.reportsAbertos ?? [];
   const sobraBipe: Record<string, number> = { ...(ctx.bipesEnviadosPorSku ?? {}) };
 
+  // Card de complemento (07/10): com 2 cards da mesma loja, o dono é o card
+  // carimbado na peça — senão a segunda caixa contaria como já postada.
+  const cardDonoDe = (it: ItemDoPedido): CardDoPedido | null => {
+    const dono = it.assignedStoreId || null;
+    return dono
+      ? cards.find((c) => c.storeId === dono && pecaDoCard(it, { id: String(c.id ?? ''), storeId: dono }, cards as any)) ?? null
+      : null;
+  };
+
+  /**
+   * UM BIPE PROVA UMA PEÇA SÓ (07/10 — caso ON-000550).
+   *
+   * Duas linhas da mesma peça (207333 OFF WHITE 56): uma movida pra
+   * Piracicaba, a outra SEM LOJA. Piracicaba bipou 1 e postou 1. O bipe dela
+   * provava a linha dela (prova nº 1, pelo card) E de novo a linha sem dono
+   * (prova nº 2, "bipe que sobra") — porque a nº 1 não gastava o bipe. O
+   * pedido fechou "nenhuma peça pendente" e a cliente recebeu 1 de 2.
+   *
+   * Agora a peça que o card postado provou GASTA o bipe dela primeiro; só o
+   * que sobra depois disso pode provar peça sem dono (que é o motivo da prova
+   * nº 2 existir: bipe de card APAGADO depois de postar, caso ON-000106).
+   */
+  for (const it of ctx.items ?? []) {
+    if (it.cancelledAt || ehItemSemEstoque(it)) continue;
+    const c = cardDonoDe(it);
+    if (!c || !CARD_ENVIADO.includes(String(c.status))) continue;
+    const skuGasto = String(it.sku || '').trim();
+    if (!skuGasto || !sobraBipe[skuGasto]) continue;
+    sobraBipe[skuGasto] = Math.max(0, sobraBipe[skuGasto] - Math.max(1, Number(it.quantity) || 1));
+  }
+
   const pendentes: PecaPendente[] = [];
   for (const it of ctx.items ?? []) {
     if (it.cancelledAt) continue;
@@ -127,11 +158,7 @@ export function pecasPendentesDoPedido(ctx: {
 
     // Prova de envio nº 1: o card da loja DONA da peça já postou.
     const dono = it.assignedStoreId || null;
-    // Card de complemento (07/10): com 2 cards da mesma loja, o dono é o card
-    // carimbado na peça — senão a segunda caixa contaria como já postada.
-    const cardDono = dono
-      ? cards.find((c) => c.storeId === dono && pecaDoCard(it, { id: String(c.id ?? ''), storeId: dono }, cards as any)) ?? null
-      : null;
+    const cardDono = cardDonoDe(it);
     let enviadaPeloCard = !!cardDono && CARD_ENVIADO.includes(String(cardDono.status));
 
     // Card FEEDER postado = a peça foi pra loja ÂNCORA, não pra cliente. Só
