@@ -491,6 +491,14 @@ function SeparacaoPageInner() {
         if (r.wcOrderId == null) continue;
         (map[r.wcOrderId] ||= []).push(r);
       }
+      // Quem reportou de verdade vem primeiro: os cards CONGELADOS (07/10 —
+      // outra loja reportou e o pedido voltou inteiro pra matriz) são
+      // consequência, não a causa que a linha tem que mostrar.
+      for (const k of Object.keys(map)) {
+        map[Number(k)].sort(
+          (a, b) => Number(a.reason === 'pedido_congelado') - Number(b.reason === 'pedido_congelado'),
+        );
+      }
       setIssuesByWcId(map);
     } catch (e) {
       console.error('Falha ao carregar issues ativos', e);
@@ -1361,6 +1369,7 @@ function SeparacaoPageInner() {
                           disabled={recalculating[wcId]}
                           className="inline-flex items-center gap-1.5 rounded-field bg-crit px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
                           title={`Recalcular excluindo: ${issues
+                            .filter((i) => i.reason !== 'pedido_congelado')
                             .map((i) => i.storeCode)
                             .filter(Boolean)
                             .join(', ')}`}

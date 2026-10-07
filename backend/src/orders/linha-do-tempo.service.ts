@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { feederOrfao } from '../common/destino-obrigatorio';
+import { estaCongelado } from '../common/pedido-congelado';
 
 /**
  * LINHA DO TEMPO + RAIO-X DO PEDIDO (26/08/2026 — contrato do dono).
@@ -434,7 +435,9 @@ export class LinhaDoTempoService {
             ...base, ...loja,
             estado: card.issueReason ? 'reportada' : 'com_loja',
             onde: card.issueReason
-              ? `loja ${loja.storeName} reportou problema (${card.issueReason}) — aguardando decisão da matriz`
+              ? estaCongelado(card.issueReason)
+                ? `com a loja ${loja.storeName} — CONGELADA: outra peça do pedido foi reportada, aguardando decisão da matriz`
+                : `loja ${loja.storeName} reportou problema (${card.issueReason}) — aguardando decisão da matriz`
               : `com a loja ${loja.storeName} — ${rotulo[card.status] ?? card.status}`,
             cor_semaforo: card.issueReason ? 'vermelho' : 'amarelo',
           };

@@ -610,6 +610,18 @@ export default function BipModal({
       setReportCtx(null);
       setReportNote('');
       setReportReason('out_of_stock');
+      // PEDIDO REPORTADO VOLTA INTEIRO PRA MATRIZ (07/10 — ON-000600): o card
+      // não segue mais com o resto. As peças bipadas ficam separadas na loja
+      // até a matriz decidir — não é pra postar nada deste pedido.
+      if (res?.congelado) {
+        window.alert(
+          'Peça reportada. O PEDIDO INTEIRO voltou pra matriz.\n\n' +
+            'Não poste nada deste pedido. Guarde as peças que já bipou separadas — ' +
+            'a matriz vai decidir e, se for pra seguir, o pedido volta pra sua fila.',
+        );
+        onClose();
+        return;
+      }
       setFeedback({
         type: 'warn',
         msg: res?.stockDecreased

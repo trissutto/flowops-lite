@@ -29,6 +29,14 @@ import { carregarFechamento, decidirFechamento, descreverPendentes } from '../co
 import { pedidoOnlineEmAndamento, situacaoPedidoOnline } from '../common/situacao-pedido-online';
 import { transportadoraParaCliente } from '../common/transportadora-cliente';
 import { JuntadaService } from './juntada.service';
+import {
+  LABEL_CONGELADO,
+  MOTIVO_CONGELADO,
+  STATUS_CONGELAVEIS,
+  cardsACongelar,
+  estaCongelado,
+  motivoTravaDaLoja,
+} from '../common/pedido-congelado';
 import { motivoDeRecusaDoDestrave, notaDoDestrave } from '../common/destrave-matriz';
 import { contaQueCobrouOPedido, decidirEmitente, erroTransitorio, pdvSaleIdDoPedido } from '../common/emitente-venda-online';
 
@@ -324,6 +332,11 @@ export class PickOrdersService {
     if (!pick) throw new NotFoundException('Pick-order não encontrado');
     if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
     if (pick.status === 'shipped') throw new BadRequestException('Pedido já enviado.');
+    // Pedido que voltou pra matriz não ganha etiqueta paga (07/10 — ON-000600).
+    {
+      const trava = motivoTravaDaLoja((pick as any).issueReason);
+      if (trava) throw new BadRequestException(trava);
+    }
     /**
      * MOTOBOY NÃO GERA ETIQUETA (17/08). O botão azul do card era o único
      * caminho visível e a loja clicava nele pra "sair da tela": nascia uma
@@ -2015,10 +2028,14 @@ export class PickOrdersService {
   ) {
     const po = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
-      select: { id: true, storeId: true, status: true, orderId: true },
-    });
+      select: { id: true, storeId: true, status: true, orderId: true, issueReason: true } as any,
+    }) as any;
     if (!po) throw new NotFoundException('Pick-order não encontrado');
     if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
+    {
+      const trava = motivoTravaDaLoja(po.issueReason);
+      if (trava) throw new BadRequestException(trava);
+    }
     if (po.status !== 'separating' && po.status !== 'new') {
       throw new BadRequestException(`Status atual é "${po.status}" — só pode finalizar de "separating"/"new"`);
     }
@@ -3521,7 +3538,9 @@ export class PickOrdersService {
     const rows = await this.prisma.pickOrder.findMany({
       where: {
         issueReason: { not: null },
-        status: { in: ['new', 'separating'] },
+        // separated/ready entram por causa do congelado (07/10): a caixa
+        // pronta que parou por reporte de outra loja também é pendência.
+        status: { in: [...STATUS_CONGELAVEIS] },
       } as any,
       orderBy: { issueReportedAt: 'desc' } as any,
       include: {
@@ -3535,6 +3554,7 @@ export class PickOrdersService {
       defective: 'Peça com defeito',
       divergence: 'Divergência (cor/tamanho)',
       other: 'Outro',
+      [MOTIVO_CONGELADO]: LABEL_CONGELADO,
     };
 
     const cards = rows.map((r) => {
@@ -4285,6 +4305,7 @@ export class PickOrdersService {
       defective: 'Peça com defeito',
       divergence: 'Divergência (cor/tamanho)',
       other: 'Outro',
+      [MOTIVO_CONGELADO]: LABEL_CONGELADO,
     };
     return rows.map((r) => {
       const issueReason = (r as any).issueReason ?? null;
@@ -4743,6 +4764,12 @@ export class PickOrdersService {
     if (!current) throw new NotFoundException('Pick-order não encontrado');
     if (current.storeId !== storeId) {
       throw new ForbiddenException('Pick-order não pertence à sua loja');
+    }
+    // Card com problema (reportado ou congelado) é da matriz: a loja não
+    // posta, não fecha e não marca retirada até ela liberar (07/10).
+    {
+      const trava = motivoTravaDaLoja((current as any).issueReason);
+      if (trava) throw new BadRequestException(trava);
     }
 
     const currentStatus = current.status as PickStatus;
@@ -5846,6 +5873,16 @@ export class PickOrdersService {
       },
     });
 
+    // O resto do pedido (outras lojas que ainda não postaram) volta pra matriz.
+    // ANTES do socket de issue: a /separacao recarrega a lista nele e já
+    // precisa ver os cards congelados juntos.
+    const congelados = await this.congelarRestoDoPedido(po.orderId, {
+      origemId: pickOrderId,
+      incluirOrigem: false,
+      lojaQueReportou: storeCode || null,
+      userId,
+    });
+
     const reasonLabels: Record<string, string> = {
       out_of_stock: 'Sem estoque físico',
       defective: 'Peça com defeito',
@@ -5879,7 +5916,133 @@ export class PickOrdersService {
       reasonLabel: reasonLabels[reason],
       reportedAt: now.toISOString(),
       pecasEstornadas: estorno.pecas,
+      congelados,
     };
+  }
+
+  /**
+   * PEDIDO REPORTADO VOLTA INTEIRO PRA MATRIZ (07/10 — ON-000600, ordem do
+   * dono). Régua em `common/pedido-congelado.ts`.
+   *
+   * Todo card do pedido que ainda não saiu da loja ganha o motivo
+   * `pedido_congelado`: some da fila da loja (`listMine` esconde card com
+   * problema), as portas da loja recusam (finalizar, status, etiqueta, bipe)
+   * e a matriz vê o alarme. Caixa já postada (`shipped`) segue viagem.
+   *
+   * NÃO estorna bipe: a peça de um card congelado foi separada de verdade e,
+   * se a matriz liberar, o card segue de onde parou. Quem re-rotear (Recalcular
+   * / Trocar loja) já devolve os bipes ao estoque no próprio caminho.
+   *
+   * Nunca lança: o reporte da loja já gravou e é ele que importa. Falha aqui
+   * vira log em `error` (o pedido fica com o comportamento antigo).
+   */
+  private async congelarRestoDoPedido(
+    orderId: string,
+    opts: { origemId: string; incluirOrigem: boolean; lojaQueReportou: string | null; userId: string | null },
+  ): Promise<string[]> {
+    try {
+      const cards = await this.prisma.pickOrder.findMany({
+        where: { orderId },
+        select: {
+          id: true, status: true, issueReason: true, storeId: true,
+          store: { select: { code: true } },
+        } as any,
+      });
+      const ids = cardsACongelar(cards as any, { origemId: opts.origemId, incluirOrigem: opts.incluirOrigem });
+      if (!ids.length) return [];
+      const now = new Date();
+      const nota =
+        `Loja ${opts.lojaQueReportou ?? '?'} reportou peça deste pedido — o pedido inteiro voltou pra matriz. ` +
+        'Não separe nem poste até a matriz liberar.';
+      // `issueReason: null` no where: se a loja reportou algo de verdade no
+      // mesmo instante, o motivo dela vence e este card não é sobrescrito.
+      await this.prisma.pickOrder.updateMany({
+        where: { id: { in: ids }, issueReason: null } as any,
+        data: {
+          issueReason: MOTIVO_CONGELADO,
+          issueNote: nota,
+          issueReportedAt: now,
+          issueReportedBy: opts.userId,
+        } as any,
+      });
+      const afetados = (cards as any[]).filter((c) => ids.includes(c.id));
+      const lojas = afetados.map((c) => `${c.store?.code ?? '?'} (${c.status})`).join(', ');
+      const order = await this.prisma.order.findUnique({ where: { id: orderId }, select: { status: true } });
+      // Texto SEM "Loja X reportou" pras lojas congeladas: a tela usa esse
+      // padrão do histórico pra marcar quem NEGOU a peça ("já negou este
+      // pedido"), e loja congelada não negou nada.
+      await this.prisma.orderHistory.create({
+        data: {
+          orderId,
+          userId: opts.userId,
+          fromStatus: order?.status ?? null,
+          toStatus: order?.status ?? null,
+          note:
+            `⏸ PEDIDO CONGELADO — voltou inteiro pra matriz por causa do reporte. ` +
+            `Card(s) que ainda não tinham saído e pararam: ${lojas}. ` +
+            'O que já foi postado segue viagem. Decisão da matriz: re-rotear, crédito/reembolso da peça, ou liberar o card.',
+        },
+      });
+      for (const c of afetados) {
+        try {
+          this.gateway.emitPickOrderRemoved(c.storeId, { orderId, pickOrderId: c.id });
+        } catch { /* best-effort */ }
+      }
+      this.logger.warn(`[congelado] pedido ${orderId}: ${afetados.length} card(s) congelado(s) — ${lojas}`);
+      return ids;
+    } catch (e: any) {
+      this.logger.error(`[congelado] pedido ${orderId}: falhou ao congelar o resto — ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
+   * MATRIZ LIBERA um card congelado: decidiu que o resto do pedido pode
+   * seguir com esta loja (a peça reportada virou crédito/reembolso, ou já
+   * foi re-roteada). Só vale pro motivo `pedido_congelado` — card que a loja
+   * reportou de verdade sai pelo Recalcular / Trocar loja, como sempre.
+   */
+  async liberarCongelado(pickOrderId: string, user: { id?: string | null; name?: string | null }) {
+    const po: any = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: { store: { select: { code: true, name: true } } },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (!estaCongelado(po.issueReason)) {
+      throw new BadRequestException(
+        po.issueReason
+          ? 'Este card foi reportado pela própria loja — resolva com Recalcular ou Trocar loja.'
+          : 'Este card não está congelado.',
+      );
+    }
+    const userId = user?.id
+      ? (await this.prisma.user.findUnique({ where: { id: user.id }, select: { id: true } }))?.id ?? null
+      : null;
+    const r = await this.prisma.pickOrder.updateMany({
+      where: { id: pickOrderId, issueReason: MOTIVO_CONGELADO } as any,
+      data: { issueReason: null, issueNote: null, issueReportedAt: null, issueReportedBy: null } as any,
+    });
+    if (r.count === 0) throw new BadRequestException('O card mudou enquanto você liberava — recarregue a tela.');
+    const order = await this.prisma.order.findUnique({ where: { id: po.orderId }, select: { status: true } });
+    await this.prisma.orderHistory.create({
+      data: {
+        orderId: po.orderId,
+        userId,
+        fromStatus: order?.status ?? null,
+        toStatus: order?.status ?? null,
+        note:
+          `▶ Matriz LIBEROU o card da loja ${po.store?.code ?? '?'} (${po.status}) — volta pra fila da loja.` +
+          (user?.name ? ` · por ${user.name}` : ''),
+      },
+    });
+    const fresh = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: { order: true, store: true },
+    });
+    try {
+      this.gateway.emitPickOrderToStore(po.storeId, fresh);
+    } catch { /* best-effort */ }
+    return { ok: true, pickOrderId, storeCode: po.store?.code ?? null };
   }
 
   /**
@@ -6170,8 +6333,18 @@ export class PickOrdersService {
       },
     });
 
+    // PEDIDO REPORTADO VOLTA INTEIRO PRA MATRIZ (07/10): até aqui o card
+    // seguia com o resto das peças e a loja postava — agora ele congela junto
+    // com os das outras lojas que ainda não saíram. A peça bipada fica bipada.
+    const congelados = await this.congelarRestoDoPedido(po.orderId, {
+      origemId: pickOrderId,
+      incluirOrigem: true,
+      lojaQueReportou: storeCode,
+      userId,
+    });
+
     // Mesmo evento que o report do card — /separacao e /pedidos já destacam.
-    // `itemLevel` deixa o front distinguir (o card NÃO saiu da fila da loja).
+    // `itemLevel` deixa o front distinguir o reporte por peça do card inteiro.
     this.gateway.emitPickOrderIssue(storeId, {
       pickOrderId,
       orderId: po.orderId,
@@ -6197,6 +6370,8 @@ export class PickOrdersService {
       stockDecreased: !!out.report.stockDecreasedAt,
       debitSkippedReason,
       esperadoRestante: out.esperadoRestante,
+      // A tela da loja fecha a bipagem e avisa: o pedido saiu da fila dela.
+      congelado: congelados.includes(pickOrderId),
     };
   }
 
