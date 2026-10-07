@@ -565,6 +565,20 @@ export class PickOrdersController {
     });
   }
 
+  /**
+   * MATRIZ LIBERA um card CONGELADO (07/10 — pedido reportado volta inteiro
+   * pra matriz): o resto do pedido pode seguir com esta loja. Só vale pro
+   * card que parou por reporte de OUTRA loja/peça.
+   */
+  @Post(':id/liberar-congelado')
+  liberarCongelado(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) libera pedido congelado');
+    }
+    return this.svc.liberarCongelado(id, { id: user.userId, name: (user as any).name || null });
+  }
+
   /** Créditos já emitidos por peça faltante neste pedido (painel que sobrevive ao F5). */
   @Get('item-reports/creditos/by-wc/:wcOrderId')
   creditosByWc(@Req() req: any, @Param('wcOrderId') wcOrderId: string) {

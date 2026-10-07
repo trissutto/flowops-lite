@@ -214,6 +214,18 @@ interface WcOrderDetail {
  * LIVE e na fila da /minha-loja. Pedido sem REF gravada (antes de 13/08, live,
  * WooCommerce) continua mostrando o nome, como sempre mostrou.
  */
+/**
+ * Card CONGELADO (07/10 — ON-000600): outra loja/peça do pedido foi reportada
+ * e o pedido inteiro voltou pra matriz. Esta loja NÃO negou nada — não entra
+ * no "já negou este pedido" nem é excluída no re-roteamento.
+ */
+function ehCongelado(card: { issueReason?: string | null }): boolean {
+  return card.issueReason === 'pedido_congelado';
+}
+function reportouDeVerdade(card: { issueReason?: string | null }): boolean {
+  return !!card.issueReason && !ehCongelado(card);
+}
+
 function tituloPeca(li: { name: string; sku: string; ref?: string | null; cor?: string | null; tamanho?: string | null }): string {
   return refCorTam(li) || li.name || li.sku;
 }
@@ -880,7 +892,7 @@ export default function PedidoDetailPage() {
         (preview.alternativesBySku?.[item.sku] ?? []).map((a) => [a.storeCode, a.availableQty ?? 0]),
       );
       const reportou = new Set(
-        liveStatus.filter((p) => p.issueReason && p.storeCode).map((p) => p.storeCode as string),
+        liveStatus.filter((p) => reportouDeVerdade(p) && p.storeCode).map((p) => p.storeCode as string),
       );
       const noPedido = new Set(
         liveStatus
@@ -1381,8 +1393,34 @@ export default function PedidoDetailPage() {
    * As outras lojas do pedido — inclusive as que JÁ ENVIARAM — não são tocadas.
    * Bug real 13/07: o botão recalculava o pedido INTEIRO e "trocava tudo".
    */
+  /**
+   * LIBERAR card congelado (07/10): a matriz decidiu que o resto do pedido
+   * segue com esta loja — o card volta pra fila dela de onde parou.
+   */
+  async function liberarCongelado(pickOrderId: string, loja: string) {
+    if (!confirm(
+      `Liberar o card da ${loja}?\n\n` +
+      'A loja volta a ver o pedido e segue de onde parou (separar / postar). ' +
+      'Confira antes que a peça reportada já foi resolvida (outra loja, crédito ou reembolso).',
+    )) return;
+    setSepLoading(true);
+    setSepError(null);
+    try {
+      await api(`/pick-orders/${pickOrderId}/liberar-congelado`, { method: 'POST' });
+      setFlash(`✓ Card da ${loja} liberado — voltou pra fila da loja.`);
+      setTimeout(() => setFlash(null), 6000);
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setSepError(e?.message || 'Falha ao liberar o card.');
+    } finally {
+      setSepLoading(false);
+    }
+  }
+
   async function recalcularLojasComProblema() {
-    const issues = liveStatus.filter((r) => r.issueReason && r.id);
+    const issues = liveStatus.filter((r) => reportouDeVerdade(r) && r.id);
     if (!issues.length) return;
     const nomes = issues.map((r) => `${r.storeName || r.storeCode}`).join(', ');
     if (!confirm(
@@ -1756,7 +1794,7 @@ export default function PedidoDetailPage() {
 
       // Lojas que reportaram problema nesse pedido (pra marcar no modal)
       const issueCodes = new Set(
-        liveStatus.filter((p) => p.issueReason && p.storeCode).map((p) => p.storeCode as string),
+        liveStatus.filter((p) => reportouDeVerdade(p) && p.storeCode).map((p) => p.storeCode as string),
       );
       // O swap APAGA o card reportado — e o issueReason morre junto: quem já
       // negou voltava a aparecer "limpa" e recebia o card DE NOVO (Suzano no
@@ -3386,18 +3424,42 @@ export default function PedidoDetailPage() {
               <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1 text-sm">
                 <div className="font-bold text-red-900">
-                  Loja reportou problema neste pedido
+                  {liveStatus.some(ehCongelado)
+                    ? 'Pedido CONGELADO — voltou inteiro pra matriz'
+                    : 'Loja reportou problema neste pedido'}
                 </div>
+                {liveStatus.some(ehCongelado) && (
+                  <div className="mt-1 text-xs text-red-700">
+                    Uma peça foi reportada e nenhuma loja separa nem posta o resto até você decidir.
+                    O que já foi postado segue viagem. Resolva a peça (outra loja, crédito ou
+                    reembolso) e depois <b>libere</b> cada card que pode seguir.
+                  </div>
+                )}
                 {liveStatus
                   .filter((r) => r.issueReason)
                   .map((r) => (
-                    <div key={r.id} className="mt-1 text-red-800">
-                      <b>{r.storeName} ({r.storeCode})</b>: {r.issueReasonLabel ?? r.issueReason}
-                      {r.issueNote && (
-                        <span className="text-red-700 italic"> — "{r.issueNote}"</span>
+                    <div key={r.id} className="mt-1 text-red-800 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>
+                        <b>{r.storeName} ({r.storeCode})</b>: {ehCongelado(r)
+                          ? `parado (${pickStatusStyles(r.status).label.toLowerCase()}) — aguardando sua decisão`
+                          : r.issueReasonLabel ?? r.issueReason}
+                        {r.issueNote && !ehCongelado(r) && (
+                          <span className="text-red-700 italic"> — "{r.issueNote}"</span>
+                        )}
+                      </span>
+                      {ehCongelado(r) && r.id && (
+                        <button
+                          onClick={() => liberarCongelado(r.id as string, `${r.storeName || r.storeCode}`)}
+                          disabled={sepLoading}
+                          className="px-2 py-0.5 rounded text-xs font-semibold bg-white border border-red-400 text-red-800 hover:bg-red-100 disabled:opacity-60"
+                          title="A loja volta a ver o card e segue de onde parou (as peças bipadas continuam bipadas)"
+                        >
+                          ▶ Liberar pra loja seguir
+                        </button>
                       )}
                     </div>
                   ))}
+                {liveStatus.some(reportouDeVerdade) && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {/* CIRÚRGICO: os dois botões agem SÓ na(s) loja(s) que reportou(aram)
                       problema — as outras lojas do pedido (inclusive as que já
@@ -3412,7 +3474,7 @@ export default function PedidoDetailPage() {
                   </button>
                   <button
                     onClick={() => {
-                      const issue = liveStatus.find((r) => r.issueReason && r.id);
+                      const issue = liveStatus.find((r) => reportouDeVerdade(r) && r.id);
                       if (issue) {
                         // Alvo por PARÂMETRO: setState não reflete no closure desta
                         // render — sem isso o modal media cobertura contra o pedido
@@ -3438,6 +3500,7 @@ export default function PedidoDetailPage() {
                     🎯 Escolher outra loja manualmente
                   </button>
                 </div>
+                )}
               </div>
             </div>
           </div>

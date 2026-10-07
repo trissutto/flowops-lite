@@ -22,6 +22,7 @@ import { PushService } from '../push/push.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
 import { LOJA_CANAL_CODES } from '../common/loja-canal';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
+import { lojaReportouDeVerdade } from '../common/pedido-congelado';
 
 @Injectable()
 export class RoutingService {
@@ -1046,7 +1047,8 @@ export class RoutingService {
     // do recalc (pra não mandar de volta pra mesma loja que disse "sem estoque").
     // Combina com excludeStoreIds opcional vindo do admin (reforço manual).
     const issueReporterStoreIds = order.pickOrders
-      .filter((p) => (p as any).issueReason)
+      // Card CONGELADO (outra loja reportou) não negou nada: continua elegível.
+      .filter((p) => lojaReportouDeVerdade((p as any).issueReason))
       .map((p) => p.storeId);
     const allExcludedStoreIds = Array.from(
       new Set([...(opts?.excludeStoreIds ?? []), ...issueReporterStoreIds]),
@@ -1385,7 +1387,7 @@ export class RoutingService {
       select: { storeId: true, status: true, issueReason: true } as any,
     });
     const issueReporterStoreIds = (otherPickOrdersOfOrder as any[])
-      .filter((p) => p.issueReason)
+      .filter((p) => lojaReportouDeVerdade(p.issueReason))
       .map((p) => p.storeId);
     // Também exclui lojas que JÁ ESTÃO atendendo o mesmo pedido (não duplica peça)
     const otherActiveStoreIds = (otherPickOrdersOfOrder as any[])
