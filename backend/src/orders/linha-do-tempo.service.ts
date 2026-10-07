@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { feederOrfao } from '../common/destino-obrigatorio';
 import { estaCongelado } from '../common/pedido-congelado';
+import { pecaDoCard } from '../common/itens-do-card';
 
 /**
  * LINHA DO TEMPO + RAIO-X DO PEDIDO (26/08/2026 — contrato do dono).
@@ -298,6 +299,55 @@ export class LinhaDoTempoService {
      */
     const houveTentativaDeRota = !!order.routingResult || order.pickOrders.length > 0;
 
+    /**
+     * UM BIPE PROVA UMA PEÇA SÓ (07/10 — caso ON-000550).
+     *
+     * A peça SEM LOJA podia ser dada como "enviada por Piracicaba" usando o
+     * mesmo bipe que já provava a peça que Piracicaba de fato postou (duas
+     * linhas da mesma regata, uma só bipada). A tela mostrava as duas como
+     * enviadas, o botão de trocar a loja ficava travado e a cliente recebeu
+     * 1 de 2. Aqui o saldo de bipe de cada card postado é gasto PRIMEIRO
+     * pelas peças atribuídas a ele; só o que sobra prova peça sem dono (o
+     * caso legítimo é o bipe de card apagado depois de postar — ON-000106).
+     */
+    const ehBipeDeEnvio = (sc: any): boolean => {
+      if (!sc.stockDecreasedAt || sc.stockIncreasedAt) return false;
+      const c: any = order.pickOrders.find((p: any) => p.id === sc.pickOrderId);
+      return !!c && (c.status === 'shipped' || c.status === 'delivered');
+    };
+    const sobraBipe = new Map<string, number>(); // `${cardId}::${sku}`
+    for (const sc of scans) {
+      if (!ehBipeDeEnvio(sc)) continue;
+      const k = `${sc.pickOrderId}::${sc.sku}`;
+      sobraBipe.set(k, (sobraBipe.get(k) ?? 0) + 1);
+    }
+    for (const it of order.items as any[]) {
+      if (it.cancelledAt || !it.assignedStoreId) continue;
+      let falta = Math.max(1, Number(it.quantity) || 1);
+      for (const c of order.pickOrders as any[]) {
+        if (falta <= 0) break;
+        if (c.status !== 'shipped' && c.status !== 'delivered') continue;
+        if (!pecaDoCard(it, c, order.pickOrders)) continue;
+        const k = `${c.id}::${it.sku}`;
+        const tem = sobraBipe.get(k) ?? 0;
+        const gasta = Math.min(tem, falta);
+        if (gasta > 0) sobraBipe.set(k, tem - gasta);
+        falta -= gasta;
+      }
+    }
+    /** Gasta 1 bipe de envio sobrando desta peça (no card dado, ou em qualquer um). */
+    const gastarBipe = (sku: string, cardId?: string): any | null => {
+      const sc = scans.find((x: any) => {
+        if (x.sku !== sku || !ehBipeDeEnvio(x)) return false;
+        if (cardId && x.pickOrderId !== cardId) return false;
+        return (sobraBipe.get(`${x.pickOrderId}::${x.sku}`) ?? 0) > 0;
+      });
+      if (!sc) return null;
+      const k = `${sc.pickOrderId}::${sc.sku}`;
+      sobraBipe.set(k, (sobraBipe.get(k) ?? 0) - 1);
+      return sc;
+    };
+
     const pecas: PecaRaioX[] = order.items.map((it: any) => {
       const base = {
         orderItemId: it.id,
@@ -351,9 +401,8 @@ export class LinhaDoTempoService {
           (s: any) => s.pickOrderId === unico.id && s.stockDecreasedAt && !s.stockIncreasedAt,
         );
         if (!bipesDoCard.length) return unico; // sem bipe nenhum não há como negar
-        return bipesDoCard.some((s: any) => String(s.sku || '').trim() === String(it.sku || '').trim())
-          ? unico
-          : null;
+        // Um bipe = uma peça (07/10): 2 linhas iguais e 1 bipe → só uma é dele.
+        return gastarBipe(it.sku, unico.id) ? unico : null;
       })();
 
       // Card de complemento (07/10): a peça carimbada mostra o card DELA (a
@@ -454,11 +503,7 @@ export class LinhaDoTempoService {
       // viajou. Foi o buraco do ON-000106: o remove zerou a loja das peças e
       // as 2 que Campinas tinha postado viraram "sem dono" na tela.
       const cardPorId = new Map(order.pickOrders.map((p: any) => [p.id, p]));
-      const bipeEnviado = scans.find((s) => {
-        if (s.sku !== it.sku || !s.stockDecreasedAt || s.stockIncreasedAt) return false;
-        const c: any = cardPorId.get(s.pickOrderId);
-        return c && (c.status === 'shipped' || c.status === 'delivered');
-      });
+      const bipeEnviado = gastarBipe(it.sku);
       if (bipeEnviado) {
         const c: any = cardPorId.get(bipeEnviado.pickOrderId);
         const ras: any = c?.trackingCode ? rastreioPorCodigo.get(c.trackingCode) : null;

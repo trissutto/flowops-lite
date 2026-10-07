@@ -16,6 +16,38 @@ describe('peças pendentes do pedido', () => {
     ...extra,
   });
 
+  /**
+   * ON-000550 (07/10): duas linhas da MESMA regata (207333 OFF WHITE 56). Uma
+   * movida pra Piracicaba, a outra SEM LOJA. Piracicaba bipou 1 e postou 1 —
+   * o bipe dela provava a linha dela E a sem dono, e o pedido fechou.
+   */
+  test('ON-000550: um bipe prova UMA peça — a linha igual sem loja fica pendente', () => {
+    const pendentes = pecasPendentesDoPedido({
+      items: [
+        item('sem-loja', '5390830', { assignedStoreId: null }),
+        item('pira', '5390830', { assignedStoreId: 's-pira' }),
+        item('preto', '5390748', { assignedStoreId: 's-vinhedo' }),
+        item('bege', '5390809', { assignedStoreId: 's-vinhedo' }),
+      ],
+      cards: [
+        { storeId: 's-pira', status: 'shipped' },
+        { storeId: 's-vinhedo', status: 'shipped' },
+      ],
+      bipesEnviadosPorSku: { '5390830': 1, '5390748': 1, '5390809': 1 },
+    });
+    expect(pendentes.map((p) => p.itemId)).toEqual(['sem-loja']);
+    expect(pendentes[0].motivo).toBe('sem_dono');
+  });
+
+  test('ON-000106 continua: bipe de card APAGADO depois de postar ainda prova a peça sem dono', () => {
+    expect(
+      pecasPendentesDoPedido({
+        items: [item('i1', 'X', { assignedStoreId: null })],
+        cards: [{ storeId: 's-outra', status: 'shipped' }],
+        bipesEnviadosPorSku: { X: 1 },
+      }),
+    ).toEqual([]);
+  });
   test('tudo enviado pelo card do dono: nada pendente', () => {
     expect(
       pecasPendentesDoPedido({
