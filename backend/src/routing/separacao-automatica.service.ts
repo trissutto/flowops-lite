@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { pedidoOnlineLiberado } from '../common/prova-pagamento';
 import { RoutingService } from './routing.service';
 import { buildWhatsappMessage } from './whatsapp-message.util';
 import { pecasDaLoja } from './pecas-por-loja.util';
@@ -31,6 +32,11 @@ import type { LinhaDoPedido } from './pecas-por-loja.util';
  *  Nesses casos ele deixa uma nota no histórico ("🤖 não aplicada: …") e o
  *  pedido segue pra retaguarda como sempre.
  *
+ *  VENDA ONLINE DO PDV (ON-, 09/10/2026) entra pela mesma porta: o
+ *  `PedidoOnlineService` chama aqui quando o pedido cai na fila de roteamento
+ *  (a vendedora não atende), e a Conferência de Vendas chama de novo quando
+ *  carimba o pagamento de um ON que nasceu sem prova no gateway.
+ *
  *  TAG: o `routingResult` gravado ganha `automatico: { em, origem }` e o
  *  histórico recebe "🤖 SEPARAÇÃO AUTOMÁTICA — …". A lista da retaguarda e
  *  a tela do pedido mostram o chip a partir daí.
@@ -46,6 +52,8 @@ export class SeparacaoAutomaticaService {
   static readonly CHAVE = 'pilot_automatic_on';
   /** Estratégias que a máquina pode fechar sozinha. O resto é gente. */
   static readonly ESTRATEGIAS_AUTOMATICAS = new Set(['single-store', 'multi-store', 'pickup-lock']);
+  /** Pedido do site (LP-) e venda online do PDV (ON-). */
+  static readonly ORIGENS = new Set(['ecommerce', 'pdv_online']);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -81,9 +89,16 @@ export class SeparacaoAutomaticaService {
     if (!order) return this.pular(orderId, null, 'pedido-nao-encontrado');
     const rot = String(order.wcOrderNumber ?? order.wcOrderId ?? orderId);
 
-    // Só o site novo entra no teste (venda online do PDV já roteia por conta
-    // própria — PEDIDO_ONLINE_ROTEAMENTO — e a live tem o trilho dela).
-    if (order.source !== 'ecommerce') return this.pular(orderId, rot, 'origem-nao-e-site');
+    // Site novo E venda online do PDV (ON-, 09/10). A live tem o trilho dela.
+    //
+    // O ON ficava de fora achando que "a venda online roteia por conta
+    // própria" — e só roteia quando a VENDEDORA atende (tem tudo, motoboy,
+    // retirada). SEDEX/PAC de quem não tem a peça (a 13/SITE nunca tem: é
+    // loja-canal) nascia 'processing' e esperava um clique da matriz, com o
+    // botão 🤖 Automática ligado.
+    if (!SeparacaoAutomaticaService.ORIGENS.has(String(order.source))) {
+      return this.pular(orderId, rot, 'origem-fora-da-automatica');
+    }
     if (!order.paidAt) return this.pular(orderId, rot, 'nao-pago');
     if (order.pickOrders?.length) return this.pular(orderId, rot, 'ja-tem-card');
     if (['separating', 'awaiting_stock', 'shipped', 'delivered', 'cancelled'].includes(String(order.status))) {
@@ -95,6 +110,18 @@ export class SeparacaoAutomaticaService {
 
     const itens = (order.items ?? []).filter((i: any) => !i.cancelledAt && !ehItemSemEstoque(i));
     if (!itens.length) return this.pular(orderId, rot, 'sem-itens');
+
+    // ON pago por "PIX recebido"/"Link externo" não tem prova no gateway: o
+    // confirmRoute recusaria igual. Pergunta ANTES, com a frase certa — e a
+    // Conferência de Vendas chama de novo quando carimbar o pagamento.
+    if (!(await pedidoOnlineLiberado(this.prisma, order))) {
+      return this.pular(
+        orderId,
+        rot,
+        'pagamento sem prova no gateway — entra sozinho assim que a Conferência de Vendas confirmar o dinheiro',
+        true,
+      );
+    }
 
     const preview: any = await this.routing.previewRoute(orderId);
     if (!preview?.success || !SeparacaoAutomaticaService.ESTRATEGIAS_AUTOMATICAS.has(String(preview.strategy))) {
@@ -199,7 +226,7 @@ export class SeparacaoAutomaticaService {
         wcOrderNumber: String(order.wcOrderNumber ?? order.wcOrderId ?? ''),
         orderDateIso: (order.wcDateCreated ?? order.createdAt ?? new Date()).toISOString(),
         totalAmount: Number(order.totalAmount ?? 0),
-        paymentMethod: 'Site',
+        paymentMethod: this.rotuloOrigem(order),
         items: itens,
         customerName: order.customerName ?? '',
         customerPhone: order.customerPhone ?? null,
@@ -230,6 +257,20 @@ export class SeparacaoAutomaticaService {
         this.logger.warn(`[auto-sep] WhatsApp pra ${a.storeCode} falhou: ${(e as Error)?.message}`);
       }
     }
+  }
+
+  /** "Site" ou "Venda online · <loja que vendeu>" — a linha de pagamento da mensagem. */
+  private rotuloOrigem(order: any): string {
+    if (order?.source !== 'pdv_online') return 'Site';
+    let loja = '';
+    try {
+      const ci = JSON.parse(order.checkoutInfo || '{}');
+      loja = String(ci?.sellerStoreName || ci?.sellerStoreCode || '').trim();
+    } catch {
+      loja = '';
+    }
+    loja = loja || String(order.sellerStoreCode ?? '').trim();
+    return loja ? `Venda online · ${loja}` : 'Venda online';
   }
 
   /**

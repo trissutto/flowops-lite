@@ -8,6 +8,7 @@ import { ehLojaCanal } from '../common/loja-canal';
 import { fechaMotoboySemSeparacao } from '../common/fechamento-motoboy';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { ErpService } from '../erp/erp.service';
+import { SeparacaoAutomaticaService } from '../routing/separacao-automatica.service';
 
 /**
  * PEDIDO ONLINE (14/08) — a Venda Online do PDV vira um Order no trilho do
@@ -25,7 +26,8 @@ import { ErpService } from '../erp/erp.service';
  *     com o card na PRÓPRIA loja (a peça precisa ser separada e guardada pro
  *     balcão — decisão do dono 14/08, "PIRACICABA ATENDE O PEDIDO TODO").
  *   - falta peça → nasce 'processing' e cai na tela de roteamento da matriz,
- *     igual pedido do site.
+ *     igual pedido do site — e, com o 🤖 Automática ligado, a separação
+ *     automática roteia sozinha, igual pedido do site (09/10).
  *
  * ⚠️ TRAVA DE BAIXA DUPLA: quem cria o Order NÃO baixa estoque no finalize —
  * o finalize marca sale.stockDecreasedAt e quem baixa é a loja que SEPARA
@@ -44,6 +46,7 @@ export class PedidoOnlineService {
     private readonly routing: RoutingService,
     private readonly pedidoEmail: PedidoEmailService,
     private readonly erp: ErpService,
+    private readonly separacaoAutomatica: SeparacaoAutomaticaService,
   ) {}
 
   enabled(): boolean {
@@ -1025,6 +1028,14 @@ export class PedidoOnlineService {
             ? `card na ${lojaEntrega.name} (loja escolhida, ${entrega.pickup ? 'retirada' : 'motoboy'})`
             : 'fila de roteamento';
       this.logger.log(`[pedido-online] venda ${sale.id} → pedido ${order.wcOrderNumber} (${destino})`);
+
+      // Caiu na fila da matriz → mesma separação automática do pedido do site
+      // (botão 🤖 Automática). Fire-and-forget, nunca lança: desligada, sem
+      // prova de pagamento ou ruptura, o pedido fica na fila como antes e a
+      // razão vai pro histórico.
+      if (!fechadoNaLoja && !autoOk && !lojaEscolhidaOk) {
+        this.separacaoAutomatica.disparar(order.id, 'venda-online');
+      }
       return {
         wcOrderNumber: order.wcOrderNumber,
         autoAtendida: autoOk,

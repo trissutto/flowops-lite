@@ -4,6 +4,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { DOMParser } from '@xmldom/xmldom';
 import { PrismaService } from '../prisma/prisma.service';
+import { SeparacaoAutomaticaService } from '../routing/separacao-automatica.service';
 
 /**
  * CONCILIADOR AUTOMÁTICO DE EXTRATO (20/08 — item 2 da Conferência de Vendas).
@@ -36,6 +37,7 @@ export class ConferenciaExtratoService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly http: HttpService,
+    private readonly separacaoAutomatica: SeparacaoAutomaticaService,
   ) {}
 
   private ligado(): boolean {
@@ -111,6 +113,7 @@ export class ConferenciaExtratoService {
           })
           .catch(() => null);
         carimbados++;
+        this.separacaoAutomatica.disparar(o.id, 'conferencia-extrato');
         this.logger.log(`[extrato] ${o.wcOrderNumber} conferido pela transação ${tx.code} (R$ ${tx.valor.toFixed(2)})`);
       }
       if (carimbados) this.logger.log(`[extrato] ciclo: ${carimbados} pedido(s) conferido(s) automaticamente`);

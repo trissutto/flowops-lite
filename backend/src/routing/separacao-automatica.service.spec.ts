@@ -25,6 +25,8 @@ function monta(opts: {
     order: { findUnique: jest.fn(async () => opts.order ?? null) },
     orderItem: { findMany: jest.fn(async () => opts.linhas ?? opts.order?.items ?? []) },
     pickOrderItemReport: { count: jest.fn(async () => opts.reportes ?? 0) },
+    // Prova de pagamento do ON (`pedidoOnlineLiberado`): payment sem id de gateway.
+    pdvSalePayment: { findMany: jest.fn(async () => [{ details: '{"tipo":"pix"}' }]) },
     orderHistory: {
       create: jest.fn(async ({ data }: any) => {
         historico.push(String(data.note));
@@ -144,12 +146,48 @@ describe('SeparacaoAutomaticaService — portas', () => {
     expect(m.historico[0]).toMatch(/NÃO aplicada: reportado/);
   });
 
-  it('não é pedido do site (venda online do PDV, live) → pula em silêncio', async () => {
-    for (const source of ['pdv_online', 'live', 'site']) {
+  it('live e origem desconhecida → pula em silêncio', async () => {
+    for (const source of ['live', 'site']) {
       const m = monta({ order: pedidoSite({ source }), preview: previewOk() });
       const r = await m.svc.tentar('o1');
-      expect(r).toEqual({ aplicado: false, motivo: 'origem-nao-e-site' });
+      expect(r).toEqual({ aplicado: false, motivo: 'origem-fora-da-automatica' });
       expect(m.historico).toHaveLength(0);
+    }
+  });
+
+  // ── VENDA ONLINE DO PDV (ON-, 09/10): caía na fila da matriz e ninguém roteava ──
+  const pedidoOn = (extra: Record<string, any> = {}) =>
+    pedidoSite({
+      source: 'pdv_online',
+      wcOrderNumber: 'ON-000643',
+      shippingMethod: 'SEDEX',
+      sellerStoreCode: '13',
+      checkoutInfo: JSON.stringify({ origem: 'pdv_online', pdvSaleId: 'v1', sellerStoreCode: '13', sellerStoreName: 'SITE' }),
+      ...extra,
+    });
+
+  it('ON com pagamento conferido → roteia sozinho e a loja lê "Venda online · SITE"', async () => {
+    const m = monta({ order: pedidoOn({ vendaConferidaEm: new Date() }), preview: previewOk() });
+    await expect(m.svc.tentar('o1', 'venda-online')).resolves.toEqual({ aplicado: true, motivo: 'single-store' });
+    expect(m.routing.confirmRoute).toHaveBeenCalledTimes(1);
+    expect(m.enviados).toHaveLength(1);
+    expect(m.enviados[0].texto).toContain('ON-000643');
+    expect(m.enviados[0].texto).toContain('Venda online · SITE');
+    expect(m.enviados[0].texto).not.toContain('· Site ·');
+  });
+
+  it('ON sem prova no gateway ("PIX recebido") → não roteia, diz que espera a Conferência', async () => {
+    const envTrava = process.env.CONFERENCIA_TRAVA;
+    delete process.env.CONFERENCIA_TRAVA;
+    try {
+      const m = monta({ order: pedidoOn(), preview: previewOk() });
+      const r = await m.svc.tentar('o1', 'venda-online');
+      expect(r.aplicado).toBe(false);
+      expect(m.routing.previewRoute).not.toHaveBeenCalled();
+      expect(m.routing.confirmRoute).not.toHaveBeenCalled();
+      expect(m.historico[0]).toMatch(/NÃO aplicada: pagamento sem prova.*Conferência de Vendas/);
+    } finally {
+      if (envTrava !== undefined) process.env.CONFERENCIA_TRAVA = envTrava;
     }
   });
 

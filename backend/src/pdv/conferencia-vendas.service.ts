@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { SeparacaoAutomaticaService } from '../routing/separacao-automatica.service';
 
 /**
  * CONFERÊNCIA DE VENDAS (20/08 — caso ON-000049 e os 24 sem prova).
@@ -27,6 +28,7 @@ export class ConferenciaVendasService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly whats: WhatsappService,
+    private readonly separacaoAutomatica: SeparacaoAutomaticaService,
   ) {}
 
   private tipoLabel(tipo: string): string {
@@ -291,6 +293,9 @@ export class ConferenciaVendasService {
     this.logger.log(
       `[conferencia] ${order.wcOrderNumber} ${desfazer ? 'desconferido' : 'conferido'} por ${usuario}`,
     );
+    // Dinheiro conferido = o ON que esperava prova pode separar. A porta da
+    // automática decide (desligada, já tem card, ruptura → não faz nada).
+    if (!desfazer) this.separacaoAutomatica.disparar(orderId, 'conferencia');
     return { ok: true };
   }
 }

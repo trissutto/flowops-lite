@@ -345,7 +345,7 @@ function SeparacaoPageInner() {
     const ligar = !autoSep.on;
     const ok = window.confirm(
       ligar
-        ? 'LIGAR a separação automática?\n\nTodo pedido PAGO do site vai sozinho pra(s) loja(s) em segundos, com WhatsApp pra loja e a tag 🤖 AUTO aqui na lista.\n\nContinuam vindo pra você: retirada em loja que NÃO tem a peça, pedido sem estoque na rede e pedido reportado pela loja.'
+        ? 'LIGAR a separação automática?\n\nTodo pedido PAGO do site (LP-) e toda venda online do PDV (ON-) que cair aqui vai sozinho pra(s) loja(s) em segundos, com WhatsApp pra loja e a tag 🤖 AUTO aqui na lista.\n\nContinuam vindo pra você: retirada em loja que NÃO tem a peça, pedido sem estoque na rede, pedido reportado pela loja e ON pago sem prova no gateway (até a Conferência de Vendas confirmar).'
         : 'DESLIGAR a separação automática?\n\nOs pedidos pagos voltam a esperar o clique "Confirmar separação" aqui na retaguarda.',
     );
     if (!ok) return;
@@ -1476,7 +1476,7 @@ function SeparacaoPageInner() {
             }`}
             title={
               autoSep.on
-                ? 'Separação automática LIGADA: pedido pago do site vai sozinho pra loja (franquia primeiro; Indaiatuba só em último caso; retirada só se a própria loja tem a peça). Clique pra desligar.'
+                ? 'Separação automática LIGADA: pedido pago do site e venda online do PDV vão sozinhos pra loja (franquia primeiro; Indaiatuba só em último caso; retirada só se a própria loja tem a peça). Clique pra desligar.'
                 : 'Separação automática DESLIGADA: pedido pago espera o clique aqui. Clique pra ligar o teste.'
             }
           >
