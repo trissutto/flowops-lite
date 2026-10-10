@@ -1803,6 +1803,14 @@ export class PickOrdersService {
     // bipa a peça nova e o estoque acompanha a troca.
     const estorno = await this.scans.revertScansForSku(pickOrderId, oldSku, 'swap', userId ?? null);
 
+    // REF/COR/TAMANHO acompanham o código novo (LP-001944, 08/10): a troca
+    // reescrevia só sku e nome, e o título do card (REF · COR TAMANHO) seguia
+    // dizendo "50" com o código do 46/48 por baixo — a loja bipava a peça certa
+    // e o sistema recusava, sem ninguém ver que a troca tinha mudado o tamanho.
+    // Vale o CADASTRO do código novo; o que a tela mandou é só reserva.
+    const novoRef = (newInfo.ref || input.ref || '').trim() || null;
+    const novaCor = (newInfo.cor || input.cor || '').trim() || null;
+    const novoTam = (newInfo.tamanho || input.tamanho || '').trim() || null;
     const newName = this.buildItemName(input, newInfo);
     const updated = await this.prisma.orderItem.update({
       where: { id: item.id },
@@ -1811,6 +1819,9 @@ export class PickOrdersService {
         productName: newName,
         unitPrice: newPrice,
         baseUnitPrice: newPrice,
+        ref: novoRef,
+        cor: novaCor,
+        tamanho: novoTam,
       },
     });
 
@@ -1826,6 +1837,10 @@ export class PickOrdersService {
           userId: userId ?? null,
           oldSku,
           newSku,
+          oldCor: item.cor ?? null,
+          newCor: novaCor,
+          oldTamanho: item.tamanho ?? null,
+          newTamanho: novoTam,
           oldPrice,
           newPrice,
           diff,
