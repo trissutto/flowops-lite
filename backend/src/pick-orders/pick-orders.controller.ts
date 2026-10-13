@@ -354,6 +354,21 @@ export class PickOrdersController {
     return this.svc.gerarEnvioCorreios(id, user.storeId, user.userId);
   }
 
+  /**
+   * REEMITE a NF-e do envio quando a tentativa automática foi rejeitada
+   * (ex.: 531 falso de validador antigo da SEFAZ, NF-e 214 de Suzano em
+   * 13/10). Matriz (admin/operator) ou a própria loja do card. Idempotente:
+   * nota autorizada existente volta `jaEmitida`.
+   */
+  @Post(':id/nfe-reemitir')
+  nfeReemitir(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (!['admin', 'operator', 'store'].includes(user.role)) {
+      throw new ForbiddenException('Sem permissão pra reemitir a NF-e do envio');
+    }
+    return this.svc.reemitirNfeDoEnvio(id, { userId: user.userId, role: user.role, storeId: user.storeId });
+  }
+
   /** Documentos do envio num PDF único: etiqueta + DANFE (nessa ordem). */
   @Get(':id/docs-envio')
   docsEnvio(@Req() req: any, @Param('id') id: string) {
