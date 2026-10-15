@@ -14,11 +14,13 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, AlertCircle, Package, CheckCircle2,
-  Truck, Printer, FileText, Edit3, Trash2, Plus, X, Search,
+  Truck, Printer, FileText, Edit3, Trash2, Plus, X, Search, ScanBarcode,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
 import { codigosDosItens, marcarRecemRecebidas } from '@/lib/etiquetas-recem-recebidas';
+import { chaveDaLinha, type LinhaBipe } from '@/lib/codigo-barras-fornecedor';
+import { BipeCodigoBarrasModal } from '@/components/pedidos-compra/BipeCodigoBarrasModal';
 
 type Order = {
   id: string;
@@ -45,15 +47,26 @@ type Order = {
     subgrupoNome: string | null;
     ncm: string | null;
     plusSize: boolean;
+    /** A peça usa o código de barras do FORNECEDOR — o leitor pede ao receber. */
+    codigoBarrasProprio: boolean;
+    /** O que o leitor mandou na última conferência, por tamanho (pré-preenche). */
+    eansInformados: Record<string, string> | null;
     custoUnit: number;
     precoUnit: number;
     tributoPct: number;
     tamanhosQty: Record<string, number>;
     tamanhosQtyRecebida: Record<string, number> | null;
-    skusGerados: Array<{ codigo: string; cor: string; tamanho: string; descricao: string; qty: number }> | null;
+    skusGerados: Array<{
+      codigo: string; cor: string; tamanho: string; descricao: string; qty: number;
+      /** Código de barras do fornecedor gravado no cadastro (só com a flag). */
+      ean?: string | null;
+      /** A peça já existia com esse EAN: entrou no código que existe, sem cadastro novo. */
+      reutilizado?: boolean;
+    }> | null;
     itemStatus: string;
   }>;
 };
+type OrderItem = Order['items'][number];
 
 const STATUS_INFO: Record<string, { label: string; color: string }> = {
   rascunho: { label: 'Rascunho', color: 'bg-slate-100 text-slate-700' },
@@ -111,6 +124,45 @@ export default function PedidoDetalhePage() {
     if (o) marcarRecemRecebidas(id, codigosDosItens(o.items, itemIds));
   };
 
+  // ── CÓDIGO DE BARRAS PRÓPRIO (15/10, dono) ────────────────────────────
+  // Item marcado: o leitor pede o código de cada tamanho com peça ANTES do
+  // /receive. Cancelou = nada recebido. O servidor confere de novo (e contra
+  // o catálogo), então a tela só coleta.
+  const [bipeModal, setBipeModal] = useState<{
+    titulo: string;
+    linhas: LinhaBipe[];
+    resolve: (eans: Record<string, Record<string, string>> | null) => void;
+  } | null>(null);
+  const qtyQueVaiReceber = (it: OrderItem): Record<string, number> =>
+    editMode ? adjustedQty[it.id] || it.tamanhosQty : it.tamanhosQty;
+  /** itemId → tamanho → código, ou null se cancelou. `{}` quando nenhum item pede leitor. */
+  const pedirCodigosDeBarras = (itens: OrderItem[], titulo: string) =>
+    new Promise<Record<string, Record<string, string>> | null>((resolve) => {
+      const linhas: LinhaBipe[] = [];
+      for (const it of itens) {
+        if (!it.codigoBarrasProprio || it.itemStatus === 'recebido') continue;
+        const qty = qtyQueVaiReceber(it);
+        for (const t of Object.keys(qty).sort((a, b) => ordemTamanho(a) - ordemTamanho(b))) {
+          if (Number(qty[t]) <= 0) continue;
+          linhas.push({
+            chave: chaveDaLinha(it.id, t), grupo: it.id, ref: it.ref, cor: it.cor, tamanho: t,
+            qty: Number(qty[t]), inicial: it.eansInformados?.[t] || null,
+          });
+        }
+      }
+      if (!linhas.length) { resolve({}); return; }
+      setBipeModal({ titulo, linhas, resolve });
+    });
+  /** Payload do /receive: qty ajustada (modo edição) e os códigos lidos dos itens marcados. */
+  const montarItemsRecebidos = (itens: OrderItem[], eansPorItem: Record<string, Record<string, string>>) =>
+    itens
+      .filter((it) => editMode || it.codigoBarrasProprio)
+      .map((it) => ({
+        itemId: it.id,
+        tamanhosQty: qtyQueVaiReceber(it),
+        ...(eansPorItem[it.id] ? { eans: eansPorItem[it.id] } : {}),
+      }));
+
   const confirmarRecebimento = async () => {
     if (!data) return;
     if (!confirm(
@@ -118,15 +170,13 @@ export default function PedidoDetalhePage() {
       `O sistema vai cadastrar automaticamente cada SKU no catálogo (com EAN-13) e atualizar estoque.`,
     )) return;
 
+    const pendentesItens = data.items.filter((it) => it.itemStatus !== 'recebido');
+    const eansPorItem = await pedirCodigosDeBarras(pendentesItens, `Pedido #${data.numero}`);
+    if (!eansPorItem) return;
     setReceiving(true);
     try {
-      const itemsRecebidos = editMode
-        ? data.items.map((it) => ({
-            itemId: it.id,
-            tamanhosQty: adjustedQty[it.id] || it.tamanhosQty,
-          }))
-        : [];
-      const pendentes = data.items.filter((it) => it.itemStatus !== 'recebido').map((it) => it.id);
+      const itemsRecebidos = montarItemsRecebidos(editMode ? data.items : pendentesItens, eansPorItem);
+      const pendentes = pendentesItens.map((it) => it.id);
       const r = await api<any>(`/purchase-orders/${id}/receive`, {
         method: 'POST',
         body: JSON.stringify({ itemsRecebidos }),
@@ -186,15 +236,12 @@ export default function PedidoDetalhePage() {
       `As outras REFs continuam pendentes. Você pode receber elas depois.`,
     )) return;
 
+    const eansPorItem = await pedirCodigosDeBarras(refItems as OrderItem[], `REF ${ref}`);
+    if (!eansPorItem) return;
     setReceiving(true);
     try {
       const itemIds = refItems.map((it) => it.id);
-      const itemsRecebidos = editMode
-        ? refItems.map((it) => ({
-            itemId: it.id,
-            tamanhosQty: adjustedQty[it.id] || it.tamanhosQty,
-          }))
-        : [];
+      const itemsRecebidos = montarItemsRecebidos(refItems as OrderItem[], eansPorItem);
       const r = await api<any>(`/purchase-orders/${id}/receive`, {
         method: 'POST',
         body: JSON.stringify({ itemIds, itemsRecebidos }),
@@ -219,11 +266,11 @@ export default function PedidoDetalhePage() {
       `Confirmar recebimento de ${ref} · ${it.cor} (${totalCor} peças)?\n\n` +
       `As outras cores desta REF continuam pendentes.`,
     )) return;
+    const eansPorItem = await pedirCodigosDeBarras([it as OrderItem], `${ref} · ${it.cor}`);
+    if (!eansPorItem) return;
     setReceiving(true);
     try {
-      const itemsRecebidos = editMode
-        ? [{ itemId: it.id, tamanhosQty: adjustedQty[it.id] || it.tamanhosQty }]
-        : [];
+      const itemsRecebidos = montarItemsRecebidos([it as OrderItem], eansPorItem);
       const r = await api<any>(`/purchase-orders/${id}/receive`, {
         method: 'POST',
         body: JSON.stringify({ itemIds: [it.id], itemsRecebidos }),
@@ -588,6 +635,16 @@ export default function PedidoDetalhePage() {
           />
         )}
 
+        {/* Leitor: código de barras do fornecedor, antes do /receive */}
+        {bipeModal && (
+          <BipeCodigoBarrasModal
+            titulo={bipeModal.titulo}
+            linhas={bipeModal.linhas}
+            onConfirmar={(eans) => { const { resolve } = bipeModal; setBipeModal(null); resolve(eans); }}
+            onCancelar={() => { const { resolve } = bipeModal; setBipeModal(null); resolve(null); }}
+          />
+        )}
+
         {/* Modal de editar header (fornecedor, CNPJ, marca, NF) */}
         {editHeader && data && (
           <EditHeaderModal
@@ -756,6 +813,39 @@ export default function PedidoDetalhePage() {
                             ) : (
                               it.cor
                             )}
+                            {/* CÓDIGO DE BARRAS PRÓPRIO: chip (e, no modo edição, o liga/desliga) */}
+                            {(it.codigoBarrasProprio || (editMode && it.itemStatus !== 'recebido')) && (
+                              <label
+                                className={`ml-2 inline-flex items-center gap-1 align-middle rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${
+                                  it.codigoBarrasProprio ? 'bg-[#16233a] text-[#d3ac52]' : 'bg-slate-100 text-slate-500'
+                                } ${editMode && it.itemStatus !== 'recebido' ? 'cursor-pointer' : ''}`}
+                                title="A peça usa o código de barras do FORNECEDOR: ao receber, o leitor pede o código de cada tamanho e o caixa passa a bipar por ele"
+                              >
+                                {editMode && it.itemStatus !== 'recebido' && (
+                                  <input
+                                    type="checkbox"
+                                    checked={!!it.codigoBarrasProprio}
+                                    onChange={(e) => patchItem(it.id, { codigoBarrasProprio: e.target.checked })}
+                                    disabled={savingItem === it.id}
+                                    className="h-3 w-3 accent-[#d3ac52]"
+                                  />
+                                )}
+                                <ScanBarcode className="h-3 w-3" aria-hidden="true" />
+                                cód. barras próprio
+                              </label>
+                            )}
+                            {it.codigoBarrasProprio && it.itemStatus === 'recebido' &&
+                              Array.isArray(it.skusGerados) && it.skusGerados.some((s) => s.ean) && (
+                              <div
+                                className="mt-0.5 font-mono text-[10px] font-normal text-slate-500"
+                                title="Código de barras do fornecedor gravado no cadastro de cada tamanho (↺ = a peça já existia e entrou no código de sempre)"
+                              >
+                                {it.skusGerados
+                                  .filter((s) => s.ean)
+                                  .map((s) => `${s.tamanho} ${s.ean}${s.reutilizado ? ' ↺' : ''}`)
+                                  .join(' · ')}
+                              </div>
+                            )}
                           </td>
                           {tamanhosOrdenados.map((t) => {
                             const qty = Number(qtyPraExibir[t] || 0);
@@ -860,6 +950,8 @@ function AddItemModal({
   const [ncm, setNcm] = useState('');
   const [cfop, setCfop] = useState('5102');
   const [plusSize, setPlusSize] = useState(true);
+  // A peça usa o código de barras do FORNECEDOR — o leitor pede ao receber.
+  const [codigoBarrasProprio, setCodigoBarrasProprio] = useState(false);
   const [custoUnit, setCustoUnit] = useState('');
   const [descontoPct, setDescontoPct] = useState('');
   const [tributoPct, setTributoPct] = useState('');
@@ -1001,6 +1093,7 @@ function AddItemModal({
             ncm: ncm.trim(),
             cfop: cfop.trim() || '5102',
             plusSize,
+            codigoBarrasProprio,
             custoUnit: custo,
             precoUnit: preco,
             descontoPct: Number((descontoPct || '0').replace(',', '.')) || 0,
@@ -1087,6 +1180,18 @@ function AddItemModal({
           <input type="checkbox" checked={plusSize} onChange={(e) => setPlusSize(e.target.checked)}
             className="accent-violet-600 w-4 h-4" />
           <span className="text-sm font-bold text-violet-700">PLUS SIZE</span>
+        </label>
+        {/* Código de barras próprio (15/10, dono): o leitor pede ao receber */}
+        <label
+          className="flex items-center gap-2 mt-1 cursor-pointer"
+          title="A peça usa o código de barras do FORNECEDOR: ao receber, o leitor pede o código de cada tamanho e o caixa passa a bipar por ele"
+        >
+          <input type="checkbox" checked={codigoBarrasProprio} onChange={(e) => setCodigoBarrasProprio(e.target.checked)}
+            className="accent-violet-600 w-4 h-4" />
+          <span className="text-sm font-bold text-slate-700">
+            CÓDIGO DE BARRAS PRÓPRIO
+            <span className="ml-1 font-normal text-slate-500">— o leitor pede o código de cada tamanho ao receber</span>
+          </span>
         </label>
 
         {/* Precificação */}

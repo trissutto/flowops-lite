@@ -31,10 +31,78 @@ const EDITOR_ROWS = [['5397334', 'G'], ['5397341', 'GG'], ['7891186984207', 'M']
 
 const norm = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
 
+// ── Pedido de compra — código de barras próprio (15/10/2026) ────────────────
+// Pedido #123 da LUPO com duas REFs pendentes: 7031 AZUL (cueca, usa o código
+// de barras do FORNECEDOR → o leitor pede ao receber) e 7032 PRETO (etiqueta
+// nossa). O /receive repete a régua do backend (item marcado sem código = 400)
+// e grava o EAN lido no SKU gerado. Também cobre o lançamento (/novo).
+const PEDIDOS = new Map();
+let poSeq = 124;
+let poItemSeq = 1;
+const poItem = (orderId, it) => ({
+  id: `poi-${poItemSeq++}`, orderId, descricaoBase: 'CUECA BOXER ALGODAO', grupoCode: 9001, grupoNome: 'CUECA',
+  subgrupoCode: 9101, subgrupoNome: 'BOXER ALGODAO', ncm: '61071100', cfop: '5102', plusSize: false,
+  codigoBarrasProprio: false, eansInformados: null, custoUnit: 10, precoUnit: 23.9, tributoPct: 0, descontoPct: 0,
+  tamanhosQtyRecebida: null, skusGerados: null, itemStatus: 'pendente', ...it,
+});
+const poTotais = (po) => {
+  po.totalPecas = po.items.reduce((s, it) => s + Object.values(it.tamanhosQty).reduce((a, b) => a + Number(b || 0), 0), 0);
+  po.totalCusto = po.items.reduce((s, it) => s + it.custoUnit * Object.values(it.tamanhosQty).reduce((a, b) => a + Number(b || 0), 0), 0);
+  po.totalVenda = po.items.reduce((s, it) => s + it.precoUnit * Object.values(it.tamanhosQty).reduce((a, b) => a + Number(b || 0), 0), 0);
+  return po;
+};
+PEDIDOS.set('po-cb-1', poTotais({
+  id: 'po-cb-1', numero: 123, fornecedorNome: 'LUPO', fornecedorCnpj: '11111111000191', marca: 'LUPO',
+  dataPedido: new Date().toISOString(), dataPrevista: null, nfNumero: null, observacoes: null, status: 'rascunho',
+  recebidoAt: null, cadastroLog: null, origem: null,
+  items: [
+    poItem('po-cb-1', { ref: '7031', cor: 'AZUL', codigoBarrasProprio: true, tamanhosQty: { P: 2, M: 3, G: 1 } }),
+    poItem('po-cb-1', { ref: '7032', cor: 'PRETO', tamanhosQty: { M: 2, G: 2 } }),
+  ],
+}));
+let eanSeq = 800000000001;
+const corpoJson = (req) => new Promise((ok) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => ok(b)); });
+const receberPedido = (po, body) => {
+  const filtro = Array.isArray(body.itemIds) && body.itemIds.length ? new Set(body.itemIds) : null;
+  const porItem = new Map((body.itemsRecebidos || []).map((ir) => [ir.itemId, ir]));
+  // A régua do backend, ANTES de escrever: item marcado sem código = recusa inteira.
+  for (const it of po.items) {
+    if (filtro && !filtro.has(it.id)) continue;
+    if (it.itemStatus === 'recebido' || !it.codigoBarrasProprio) continue;
+    const qtd = porItem.get(it.id)?.tamanhosQty || it.tamanhosQty;
+    const tams = Object.keys(qtd).filter((t) => Number(qtd[t]) > 0);
+    const lidos = porItem.get(it.id)?.eans || it.eansInformados || {};
+    const faltando = tams.filter((t) => !String(lidos[t] || '').trim());
+    if (faltando.length) return { code: 400, body: { message: `REF ${it.ref} ${it.cor} (código de barras próprio): sem código de barras no tamanho ${faltando.join(', ')}` } };
+  }
+  let totalPecas = 0, totalSkusInseridos = 0;
+  const log = [];
+  for (const it of po.items) {
+    if (filtro && !filtro.has(it.id)) continue;
+    if (it.itemStatus === 'recebido') continue;
+    const qtd = porItem.get(it.id)?.tamanhosQty || it.tamanhosQty;
+    const lidos = porItem.get(it.id)?.eans || it.eansInformados || null;
+    it.tamanhosQtyRecebida = qtd; it.itemStatus = 'recebido';
+    if (it.codigoBarrasProprio && lidos) it.eansInformados = lidos;
+    it.skusGerados = Object.keys(qtd).filter((t) => Number(qtd[t]) > 0).map((t) => ({
+      codigo: String(eanSeq++), cor: it.cor, tamanho: t, qty: Number(qtd[t]),
+      descricao: `${it.descricaoBase} ${it.ref} ${it.cor} ${t} LUPO`,
+      ...(it.codigoBarrasProprio ? { ean: lidos?.[t] || null } : {}),
+    }));
+    totalPecas += it.skusGerados.reduce((s, x) => s + x.qty, 0); totalSkusInseridos += it.skusGerados.length;
+    log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'ok', inseridos: it.skusGerados.length, ...(lidos ? { codigoBarrasProprio: true, eans: lidos } : {}) });
+  }
+  const pendentes = po.items.filter((x) => x.itemStatus !== 'recebido').length;
+  po.status = pendentes > 0 ? 'recebido_parcial' : 'recebido';
+  if (!pendentes) po.recebidoAt = new Date().toISOString();
+  console.log(`[mock] receive ${po.id}: ${JSON.stringify({ itemIds: body.itemIds, itemsRecebidos: body.itemsRecebidos })}`);
+  return { code: 200, body: { ok: true, isParcial: !!filtro, statusFinal: po.status, pendentesRestantes: pendentes, totalPecas, totalSkusInseridos, totalSkusJaExistiam: 0, errors: [], log } };
+};
+
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, x-estorno-sessao, x-training-mode');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const url = new URL(req.url, 'http://localhost');
   const json = (obj, code = 200) => {
@@ -181,6 +249,67 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+
+  // ── Pedido de compra: lançamento (/novo) e tela do pedido (/[id]) ──────────
+  if (url.pathname === '/api/purchase-orders/lookups/fornecedores') {
+    return json([{ nome: 'LUPO S/A', fantasia: 'LUPO', cnpj: '11111111000191', marcas: ['LUPO'] }]);
+  }
+  if (url.pathname === '/api/purchase-orders/lookups/grupos') return json([{ codigo: 9001, nome: 'CUECA' }]);
+  if (url.pathname === '/api/purchase-orders/lookups/subgrupos') return json([{ codigo: 9101, nome: 'BOXER ALGODAO' }]);
+  if (url.pathname === '/api/purchase-orders/categorias') return json([]);
+  if (url.pathname === '/api/atributos-peca') return json({ tecido: [], colecao: [], ocasiao: [], modelagem: [] });
+  if (url.pathname === '/api/purchase-orders' && req.method === 'POST') {
+    corpoJson(req).then((b) => {
+      const h = JSON.parse(b || '{}');
+      const id = `po-${poSeq}`;
+      const po = poTotais({ id, numero: poSeq++, fornecedorNome: h.fornecedorNome || 'LUPO', fornecedorCnpj: h.fornecedorCnpj || null,
+        marca: h.marca || null, dataPedido: new Date().toISOString(), dataPrevista: null, nfNumero: null, observacoes: null,
+        status: 'rascunho', recebidoAt: null, cadastroLog: null, origem: null, items: [] });
+      PEDIDOS.set(id, po);
+      console.log(`[mock] pedido criado ${id}`);
+      json(po);
+    });
+    return;
+  }
+  const mItems = /^\/api\/purchase-orders\/([^/]+)\/items$/.exec(url.pathname);
+  if (mItems && req.method === 'POST') {
+    const po = PEDIDOS.get(mItems[1]);
+    if (!po) return json({ message: 'Pedido não encontrado' }, 404);
+    corpoJson(req).then((b) => {
+      const it = JSON.parse(b || '{}');
+      const novo = poItem(po.id, { ref: it.ref, cor: it.cor, codigoBarrasProprio: !!it.codigoBarrasProprio, tamanhosQty: it.tamanhosQty || {},
+        custoUnit: Number(it.custoUnit || 10), precoUnit: Number(it.precoUnit || 23.9), plusSize: !!it.plusSize });
+      po.items.push(novo); poTotais(po);
+      console.log(`[mock] item ${novo.id} ${novo.ref} ${novo.cor} codigoBarrasProprio=${novo.codigoBarrasProprio}`);
+      json(novo);
+    });
+    return;
+  }
+  const mItem = /^\/api\/purchase-orders\/items\/([^/]+)$/.exec(url.pathname);
+  if (mItem && (req.method === 'PATCH' || req.method === 'DELETE')) {
+    for (const po of PEDIDOS.values()) {
+      const it = po.items.find((x) => x.id === mItem[1]);
+      if (!it) continue;
+      if (req.method === 'DELETE') { po.items = po.items.filter((x) => x.id !== it.id); poTotais(po); return json({ ok: true }); }
+      corpoJson(req).then((b) => {
+        const patch = JSON.parse(b || '{}');
+        Object.assign(it, patch); poTotais(po);
+        console.log(`[mock] PATCH item ${it.id}: ${b}`);
+        json(it);
+      });
+      return;
+    }
+    return json({ message: 'Item não encontrado' }, 404);
+  }
+  const mReceive = /^\/api\/purchase-orders\/([^/]+)\/receive$/.exec(url.pathname);
+  if (mReceive && req.method === 'POST') {
+    const po = PEDIDOS.get(mReceive[1]);
+    if (!po) return json({ message: 'Pedido não encontrado' }, 404);
+    corpoJson(req).then((b) => { const r = receberPedido(po, JSON.parse(b || '{}')); json(r.body, r.code); });
+    return;
+  }
+  const mPo = /^\/api\/purchase-orders\/([^/]+)$/.exec(url.pathname);
+  if (mPo && req.method === 'GET' && PEDIDOS.has(mPo[1])) return json(PEDIDOS.get(mPo[1]));
 
   // ── PDV mínimo pro header renderizar (metas, 29/08) ────────────────────────
   if (url.pathname === '/api/stores') {

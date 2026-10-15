@@ -4632,6 +4632,14 @@ model PurchaseOrderItem {
   // SKUs gerados no Wincred após auto-cadastro (rastreabilidade)
   // formato: [{tam, codigoWincred, ean, qtdInserida}, ...]
   skusGerados         String?       @map("skus_gerados") @db.Text // JSON
+  /// CÓDIGO DE BARRAS PRÓPRIO (15/10/2026, dono): a peça usa o código de barras
+  /// do FORNECEDOR. Na conferência o leitor pede o código de cada tamanho com
+  /// peça; ele vai pra coluna `ean` do cadastro (o CÓDIGO continua sendo o
+  /// EAN-13 do Flow). Sem a flag, nada muda. Régua: common/codigo-barras-fornecedor.ts
+  codigoBarrasProprio Boolean       @default(false) @map("codigo_barras_proprio")
+  /// O que o leitor mandou, por tamanho — JSON {"P":"7891234567895",...}.
+  /// Fica depois do estorno (Corrigir) pra pré-preencher a próxima conferência.
+  eansInformados      String?       @map("eans_informados") @db.Text
   // Status do ITEM (não confundir com status do pedido)
   // pendente | recebido | parcial | cancelado
   itemStatus          String        @default("pendente") @map("item_status")

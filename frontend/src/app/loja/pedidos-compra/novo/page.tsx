@@ -15,12 +15,14 @@ import { useRouter } from 'next/navigation';
 import {
   Plus, Trash2, Loader2, Save,
   AlertCircle, Copy, X, Eye, Check, Printer, ChevronDown,
-  Tag, FilePlus2, Search, Clock3, Shirt, CheckCircle2,
+  Tag, FilePlus2, Search, Clock3, Shirt, CheckCircle2, ScanBarcode,
 } from 'lucide-react';
 import { PoShell } from '../PoShell';
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
 import { codigosDosItens, marcarRecemRecebidas } from '@/lib/etiquetas-recem-recebidas';
+import { chaveDaLinha, type LinhaBipe } from '@/lib/codigo-barras-fornecedor';
+import { BipeCodigoBarrasModal } from '@/components/pedidos-compra/BipeCodigoBarrasModal';
 import {
   applyPurchaseOrderCollection,
   completeGradeAndPrepareNext,
@@ -57,6 +59,11 @@ type ItemForm = {
   ncm: string;
   cfop: string;
   plusSize: boolean;
+  // CÓDIGO DE BARRAS PRÓPRIO (15/10, dono): a peça usa o código de barras do
+  // FORNECEDOR. No Conferir, o leitor pede o código de cada cor × tamanho
+  // com peça ANTES de dar entrada; ele vai pro `ean` do cadastro e o caixa
+  // bipa por ele. Sem a flag, tudo como sempre (EAN-13 nosso + etiqueta).
+  codigoBarrasProprio: boolean;
   // Classificação da peça (Cadastros → Classificação da Peça). Preenchida aqui,
   // na compra, porque quem compra tem a peça na mão e sabe o tecido — evita a
   // segunda passada em milhares de itens depois.
@@ -88,6 +95,10 @@ type ItemForm = {
   // true = editada depois do último save — o "Salvar pedido" só regrava
   // cards sujos (regravar as 40 REFs intactas era o que travava o botão).
   dirty?: boolean;
+  // Códigos de barras lidos na última conferência desta REF, por cor →
+  // tamanho. Pré-preenche o leitor quando a REF é corrigida e conferida de
+  // novo (a etiqueta da peça não mudou).
+  eansLidos?: Record<string, Record<string, string>>;
 };
 
 const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
@@ -168,6 +179,31 @@ export default function NovoPedidoPage() {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [conferindoId, setConferindoId] = useState<string | null>(null);
   const conferindoIdRef = useRef<string | null>(null);
+  // Leitor de código de barras do fornecedor (REF com "código de barras
+  // próprio"): abre ANTES de qualquer chamada do Conferir e devolve cor →
+  // tamanho → código, ou null se a pessoa cancelou.
+  const [bipeModal, setBipeModal] = useState<{
+    titulo: string;
+    linhas: LinhaBipe[];
+    resolve: (eans: Record<string, Record<string, string>> | null) => void;
+  } | null>(null);
+  const pedirCodigosDeBarras = (it: ItemForm) =>
+    new Promise<Record<string, Record<string, string>> | null>((resolve) => {
+      const linhas: LinhaBipe[] = [];
+      const ref = it.ref.trim().toUpperCase();
+      for (const cor of it.cores) {
+        for (const t of it.tamanhos) {
+          const qty = Number(it.grade[`${cor}|${t}`] || 0);
+          if (qty <= 0) continue;
+          linhas.push({
+            chave: chaveDaLinha(cor, t), grupo: cor, ref, cor, tamanho: t, qty,
+            inicial: it.eansLidos?.[cor]?.[t] || null,
+          });
+        }
+      }
+      if (!linhas.length) { resolve({}); return; }
+      setBipeModal({ titulo: `REF ${ref}`, linhas, resolve });
+    });
   const [focusRefId, setFocusRefId] = useState<string | null>(null);
   const [carregandoPedido, setCarregandoPedido] = useState(false);
 
@@ -397,6 +433,9 @@ export default function NovoPedidoPage() {
           ncm: '',
           cfop: last?.cfop || '5102',
           plusSize: last?.plusSize ?? true,
+          // Herda como o Plus Size: fornecedor que etiqueta uma REF etiqueta
+          // as outras — e desmarcar é um clique no card.
+          codigoBarrasProprio: last?.codigoBarrasProprio ?? false,
           // Herda a classificação: numa mesma compra o fornecedor costuma
           // mandar várias REFs do mesmo tecido e da mesma coleção.
           tecidoId: last?.tecidoId ?? '',
@@ -629,6 +668,7 @@ export default function NovoPedidoPage() {
         ncm: it.ncm || null,
         cfop: it.cfop || '5102',
         plusSize: it.plusSize,
+        codigoBarrasProprio: !!it.codigoBarrasProprio,
         custoUnit: Number(it.custoUnit.replace(',', '.')),
         precoUnit: Number(it.precoUnit.replace(',', '.')),
         tributoPct: Number(it.tributoPct.replace(',', '.') || 0),
@@ -722,6 +762,7 @@ export default function NovoPedidoPage() {
           ncm: first.ncm || '',
           cfop: first.cfop || '5102',
           plusSize: first.plusSize ?? true,
+          codigoBarrasProprio: sis.some((x: any) => !!x.codigoBarrasProprio),
           tecidoId: first.tecidoId || '',
           colecaoId: first.colecaoId || '',
           ocasiaoIds: (parse(first.ocasioes, []) as any[]).map((x) => x?.id).filter(Boolean),
@@ -738,6 +779,11 @@ export default function NovoPedidoPage() {
           conferido: recebido ? { orderId: id, pecas, skusNovos: 0, erros: 0 } : undefined,
           serverItemIds: sis.map((x: any) => x.id),
           precoTravado: true,
+          eansLidos: Object.fromEntries(
+            sis
+              .filter((x: any) => x.eansInformados && typeof x.eansInformados === 'object')
+              .map((x: any) => [x.cor, x.eansInformados as Record<string, string>]),
+          ),
         });
       }
       // Conferidas primeiro (travadas), pendentes depois — ordem de lançamento
@@ -818,6 +864,13 @@ export default function NovoPedidoPage() {
     conferindoIdRef.current = tempId;
     setConferindoId(tempId);
     try {
+      // CÓDIGO DE BARRAS PRÓPRIO: o leitor pede os códigos ANTES de qualquer
+      // chamada — cancelou, nada foi gravado nem recebido.
+      let eansPorCor: Record<string, Record<string, string>> | null = null;
+      if (it.codigoBarrasProprio) {
+        eansPorCor = await pedirCodigosDeBarras(it);
+        if (!eansPorCor) return false;
+      }
       const oid = await ensureOrder(cnpjFinal);
       // Regrava com o que está na tela — edição = delete+recreate (tolerante
       // a id velho; ver apagarItensPendentesDaRef).
@@ -829,21 +882,27 @@ export default function NovoPedidoPage() {
         return false;
       }
       const itemIds: string[] = [];
+      const itemsRecebidos: Array<{ itemId: string; tamanhosQty: Record<string, number>; eans: Record<string, string> }> = [];
       for (const ai of apiItems) {
         const criado = await api<{ id: string }>(`/purchase-orders/${oid}/items`, {
           method: 'POST',
           body: JSON.stringify(ai),
         });
-        if (criado?.id) itemIds.push(criado.id);
+        if (!criado?.id) continue;
+        itemIds.push(criado.id);
+        if (eansPorCor) {
+          itemsRecebidos.push({ itemId: criado.id, tamanhosQty: ai.tamanhosQty, eans: eansPorCor[ai.cor] || {} });
+        }
       }
       const r = await api<any>(`/purchase-orders/${oid}/receive`, {
         method: 'POST',
-        body: JSON.stringify({ itemIds }),
+        body: JSON.stringify({ itemIds, ...(itemsRecebidos.length ? { itemsRecebidos } : {}) }),
       });
       const erros = Array.isArray(r?.errors) ? r.errors.length : 0;
       updateItem(tempId, {
         serverItemIds: itemIds,
         dirty: false,
+        ...(eansPorCor ? { eansLidos: eansPorCor } : {}),
         conferido: {
           orderId: oid,
           pecas: Number(r?.totalPecas || 0) || calcularTotalItem(it),
@@ -1142,6 +1201,15 @@ export default function NovoPedidoPage() {
           </div>
 
           <main className="space-y-5">
+        {/* Leitor: código de barras do fornecedor, antes do Conferir gravar qualquer coisa */}
+        {bipeModal && (
+          <BipeCodigoBarrasModal
+            titulo={bipeModal.titulo}
+            linhas={bipeModal.linhas}
+            onConfirmar={(eans) => { const { resolve } = bipeModal; setBipeModal(null); resolve(eans); }}
+            onCancelar={() => { const { resolve } = bipeModal; setBipeModal(null); resolve(null); }}
+          />
+        )}
         {carregandoPedido && (
           <div className="rounded-xl border border-[#e4e8ee] bg-white p-3 text-sm font-bold text-[#16233a] shadow-sm">
             Carregando pedido…
@@ -1596,6 +1664,7 @@ function ItemEditor({
               {item.conferido
                 ? `Conferida · ${item.conferido.pecas} pç no estoque`
                 : `Salva no pedido · ${totalLinha} pç — clique pra editar`}
+              {item.codigoBarrasProprio ? ' · cód. barras do fornecedor' : ''}
             </span>
             <ChevronDown
               className="h-5 w-5 shrink-0 text-[#c19a2e] transition-transform group-hover:translate-y-0.5"
@@ -1742,6 +1811,24 @@ function ItemEditor({
           <span className="po-plus-copy">
             <strong>Plus Size</strong>
             <small>Grade 46–60</small>
+          </span>
+          <span className="po-plus-switch" aria-hidden="true"><span /></span>
+        </label>
+        {/* CÓDIGO DE BARRAS PRÓPRIO (15/10, dono): a peça usa a etiqueta do
+            fornecedor — no Conferir o leitor pede o código de cada tamanho. */}
+        <label
+          className={`po-plus-toggle sm:max-w-[320px] ${item.codigoBarrasProprio ? 'is-active' : ''}`}
+          title="A peça usa o código de barras do FORNECEDOR: no Conferir, o leitor pede o código de cada cor × tamanho e o caixa passa a bipar por ele"
+        >
+          <input
+            type="checkbox"
+            checked={item.codigoBarrasProprio}
+            onChange={(e) => onUpdate({ codigoBarrasProprio: e.target.checked })}
+          />
+          <span className="po-plus-symbol" aria-hidden="true"><ScanBarcode /></span>
+          <span className="po-plus-copy">
+            <strong>Cód. barras próprio</strong>
+            <small>o leitor pede na conferência</small>
           </span>
           <span className="po-plus-switch" aria-hidden="true"><span /></span>
         </label>

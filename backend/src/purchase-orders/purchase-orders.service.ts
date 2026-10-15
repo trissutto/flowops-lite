@@ -9,6 +9,18 @@ import { ErpService } from '../erp/erp.service';
 import { ProductRegistrationService } from '../product-registration/product-registration.service';
 import { AtributosPecaService } from '../atributos-peca/atributos-peca.service';
 import { NcmAiClassifierService } from './ncm-ai-classifier.service';
+import {
+  conferirCodigosDeBarras,
+  descreverProblemasDosCodigos,
+  mesmaPeca,
+} from '../common/codigo-barras-fornecedor';
+
+/** Resultado da conferência dos códigos de barras de UM item, por tamanho. */
+type CodigosDeBarrasDoItem = {
+  porTamanho: Record<string, string>;
+  /** tamanho → peça que JÁ carrega esse código (mesma REF/cor/tam): entra nela, sem cadastro novo. */
+  reuso: Map<string, { codigo: string; descricao: string }>;
+};
 
 /**
  * PurchaseOrdersService — pedidos de compra do fornecedor.
@@ -270,8 +282,15 @@ export class PurchaseOrdersService {
       tamanhosQty: it.tamanhosQty ? JSON.parse(it.tamanhosQty) : {},
       tamanhosQtyRecebida: it.tamanhosQtyRecebida ? JSON.parse(it.tamanhosQtyRecebida) : null,
       skusGerados: it.skusGerados ? JSON.parse(it.skusGerados) : null,
+      eansInformados: this.parseJsonOuNull(it.eansInformados),
     }));
     return o;
+  }
+
+  private parseJsonOuNull(raw: unknown): any {
+    if (raw == null || raw === '') return null;
+    if (typeof raw !== 'string') return raw;
+    try { return JSON.parse(raw); } catch { return null; }
   }
 
   async create(input: {
@@ -294,6 +313,7 @@ export class PurchaseOrdersService {
       ncm?: string;
       cfop?: string;
       plusSize?: boolean;
+      codigoBarrasProprio?: boolean;
       custoUnit: number;
       precoUnit: number;
       tributoPct?: number;
@@ -366,6 +386,8 @@ export class PurchaseOrdersService {
     ncm?: string;
     cfop?: string;
     plusSize?: boolean;
+    /** A peça usa o código de barras do FORNECEDOR — a conferência pede ao leitor. */
+    codigoBarrasProprio?: boolean;
     custoUnit: number;
     precoUnit: number;
     tributoPct?: number;
@@ -430,6 +452,7 @@ export class PurchaseOrdersService {
         ncm: ncmDecision.ncm,
         cfop: input.cfop?.trim() || '5102',
         plusSize: input.plusSize ?? true,
+        codigoBarrasProprio: !!input.codigoBarrasProprio,
         custoUnit: Number(input.custoUnit),
         precoUnit: Number(input.precoUnit),
         tributoPct: Number(input.tributoPct || 0),
@@ -479,6 +502,7 @@ export class PurchaseOrdersService {
     if (input.ncm !== undefined) data.ncm = input.ncm?.trim() || null;
     if (input.cfop !== undefined) data.cfop = input.cfop?.trim() || '5102';
     if (input.plusSize !== undefined) data.plusSize = input.plusSize;
+    if (input.codigoBarrasProprio !== undefined) data.codigoBarrasProprio = !!input.codigoBarrasProprio;
     if (input.custoUnit !== undefined) data.custoUnit = Number(input.custoUnit);
     if (input.precoUnit !== undefined) data.precoUnit = Number(input.precoUnit);
     if (input.tributoPct !== undefined) data.tributoPct = Number(input.tributoPct);
@@ -555,7 +579,14 @@ export class PurchaseOrdersService {
     input: {
       itemsRecebidos?: Array<{
         itemId: string;
-        tamanhosQty: Record<string, number>;
+        /** Qty ajustada por tamanho. Ausente = a qty pedida do item. */
+        tamanhosQty?: Record<string, number>;
+        /**
+         * CÓDIGO DE BARRAS PRÓPRIO: o que o leitor mandou, por tamanho
+         * (`{"P":"7891234567895"}`). Obrigatório pra item marcado — sem ele o
+         * recebimento inteiro é recusado antes de qualquer escrita.
+         */
+        eans?: Record<string, string>;
       }>;
       /**
        * RECEBIMENTO PARCIAL — IDs dos PurchaseOrderItem que estão sendo
@@ -609,9 +640,32 @@ export class PurchaseOrdersService {
       }
     }
 
-    const itemsRecebidosMap = new Map<string, Record<string, number>>();
+    const itemsRecebidosMap = new Map<
+      string,
+      { tamanhosQty?: Record<string, number>; eans?: Record<string, string> }
+    >();
     for (const ir of input.itemsRecebidos || []) {
-      itemsRecebidosMap.set(ir.itemId, ir.tamanhosQty);
+      itemsRecebidosMap.set(ir.itemId, { tamanhosQty: ir.tamanhosQty, eans: ir.eans });
+    }
+
+    // CÓDIGO DE BARRAS PRÓPRIO (15/10/2026): confere e resolve os códigos
+    // lidos ANTES de tocar em qualquer item. Falta, código inválido, o mesmo
+    // EAN em dois tamanhos ou um EAN que já é de OUTRA peça = recusa do
+    // recebimento inteiro, com o motivo — e nada mudou no banco.
+    const codigosPorItem = new Map<string, CodigosDeBarrasDoItem>();
+    const codigosJaUsados = new Map<string, string>();
+    for (const it of order.items as any[]) {
+      if (!it.codigoBarrasProprio) continue;
+      if (itemIdsFilter && !itemIdsFilter.has(it.id)) continue;
+      if (it.itemStatus === 'recebido') continue;
+      const entrada = itemsRecebidosMap.get(it.id);
+      const qtd = entrada?.tamanhosQty ?? it.tamanhosQty;
+      const tamanhos = Object.keys(qtd || {}).filter((t) => Number(qtd[t]) > 0);
+      if (!tamanhos.length) continue;
+      // Sem leitura nova, vale a da conferência anterior (estornada no
+      // Corrigir) — a tela sempre reabre o leitor, isto é só a rede.
+      const lidos = entrada?.eans ?? it.eansInformados ?? null;
+      codigosPorItem.set(it.id, await this.resolverCodigosDeBarras(it, tamanhos, lidos, codigosJaUsados));
     }
 
     // Escrita no Giga ASSÍNCRONA (via erp_outbox): o recebimento finaliza no
@@ -638,7 +692,7 @@ export class PurchaseOrdersService {
         log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'ja_recebido', skipped: true });
         continue;
       }
-      const qtdRecebida = itemsRecebidosMap.get(it.id) || it.tamanhosQty;
+      const qtdRecebida = itemsRecebidosMap.get(it.id)?.tamanhosQty ?? it.tamanhosQty;
       const cores = [it.cor];
       const tamanhos = Object.keys(qtdRecebida).filter((t) => Number(qtdRecebida[t]) > 0);
       const qtdTotal = Object.values(qtdRecebida).reduce<number>(
@@ -646,6 +700,7 @@ export class PurchaseOrdersService {
         0,
       );
       totalPecas += qtdTotal;
+      const codigosLidos = codigosPorItem.get(it.id) || null;
 
       // Atualiza item no banco
       await (this.prisma as any).purchaseOrderItem.update({
@@ -653,6 +708,7 @@ export class PurchaseOrdersService {
         data: {
           tamanhosQtyRecebida: JSON.stringify(qtdRecebida),
           itemStatus: 'recebido',
+          ...(codigosLidos ? { eansInformados: JSON.stringify(codigosLidos.porTamanho) } : {}),
         },
       });
 
@@ -675,24 +731,37 @@ export class PurchaseOrdersService {
       //   - tributo: string (alíquota como texto, ex: "6")
       //   - NÃO tem campo descricao (a descrição é gerada por concatenação dentro do processar)
       try {
-        const r = await this.productReg.processar({
-          ref: it.ref,
-          grupoCodigo: it.grupoCode,
-          grupoNome: it.grupoNome,
-          subgrupoCodigo: it.subgrupoCode,
-          subgrupoNome: it.subgrupoNome,
-          fornecedorCnpj: order.fornecedorCnpj || '',
-          fornecedorNome: order.marca || order.fornecedorNome,
-          cores,
-          tamanhos,
-          custo: it.custoUnit,
-          precoVenda: it.precoUnit,
-          tributo: it.tributoPct != null ? String(it.tributoPct) : undefined,
-          plusSize: it.plusSize,
-          ncm: it.ncm || undefined,
-          cfop: it.cfop ? Number(it.cfop) : 5102,
-          marca: order.marca || order.fornecedorNome,
-        }, { gigaAsync: usarOutbox });
+        // Código de barras próprio: tamanho cujo EAN já é desta mesma peça
+        // no catálogo NÃO ganha cadastro novo — a peça entra no código que
+        // existe (segunda compra). Os demais nascem com `ean` = o lido.
+        const reuso = codigosLidos?.reuso ?? new Map<string, { codigo: string; descricao: string }>();
+        const tamanhosNovos = tamanhos.filter((t) => !reuso.has(t));
+        const corChave = String(it.cor).trim();
+        const r = tamanhosNovos.length
+          ? await this.productReg.processar({
+              ref: it.ref,
+              grupoCodigo: it.grupoCode,
+              grupoNome: it.grupoNome,
+              subgrupoCodigo: it.subgrupoCode,
+              subgrupoNome: it.subgrupoNome,
+              fornecedorCnpj: order.fornecedorCnpj || '',
+              fornecedorNome: order.marca || order.fornecedorNome,
+              cores,
+              tamanhos: tamanhosNovos,
+              custo: it.custoUnit,
+              precoVenda: it.precoUnit,
+              tributo: it.tributoPct != null ? String(it.tributoPct) : undefined,
+              plusSize: it.plusSize,
+              ncm: it.ncm || undefined,
+              cfop: it.cfop ? Number(it.cfop) : 5102,
+              marca: order.marca || order.fornecedorNome,
+              eans: codigosLidos
+                ? Object.fromEntries(
+                    tamanhosNovos.map((t) => [`${corChave}|${String(t).trim()}`, codigosLidos.porTamanho[t]]),
+                  )
+                : undefined,
+            }, { gigaAsync: usarOutbox })
+          : { itens: [] as any[], inseridos: 0, ignorados: 0, total: 0 };
 
         // Estende com qtd recebida + atualiza estoque inicial via increaseStock
         const skusGerados: any[] = [];
@@ -704,6 +773,18 @@ export class PurchaseOrdersService {
             tamanho: item.tamanho,
             descricao: item.descricaoCompleta,
             qty,
+            ...(codigosLidos ? { ean: codigosLidos.porTamanho[item.tamanho] || null } : {}),
+          });
+        }
+        for (const [tamanho, peca] of reuso) {
+          skusGerados.push({
+            codigo: peca.codigo,
+            cor: it.cor,
+            tamanho,
+            descricao: peca.descricao,
+            qty: Number(qtdRecebida[tamanho] || 0),
+            ean: codigosLidos?.porTamanho[tamanho] || null,
+            reutilizado: true,
           });
         }
 
@@ -749,6 +830,7 @@ export class PurchaseOrdersService {
           inseridos: r.inseridos,
           ignorados: r.ignorados,
           total: r.total,
+          ...(codigosLidos ? { codigoBarrasProprio: true, reutilizados: reuso.size } : {}),
         });
       } catch (e: any) {
         const err = `Item ${it.ref} ${it.cor}: ${e?.message || e}`;
@@ -903,6 +985,88 @@ export class PurchaseOrdersService {
     return { ok: errors.length === 0, estornados, errors, statusFinal };
   }
 
+  // ── Código de barras próprio ──
+
+  /**
+   * CÓDIGO DE BARRAS PRÓPRIO — confere o que o leitor mandou e resolve cada
+   * código no catálogo ANTES de qualquer escrita (régua em
+   * `common/codigo-barras-fornecedor.ts`).
+   *
+   * Por tamanho com peça: o código normalizado e, quando ele JÁ existe no
+   * catálogo (como CÓDIGO ou como `ean`), a peça que o carrega. Se for a
+   * MESMA peça (REF+COR+TAM), a entrada reaproveita o código dela em vez de
+   * cadastrar outro — é a segunda compra da mesma cueca; dois cadastros com
+   * o mesmo EAN deixariam o bipe do caixa no escuro. Se for OUTRA peça, é
+   * recusa com o nome dela: a pessoa bipou a etiqueta errada.
+   *
+   * `jaUsados` acumula os códigos do recebimento inteiro: o mesmo código em
+   * duas cores do mesmo pedido também é recusa (a peça na mão não trocou).
+   */
+  private async resolverCodigosDeBarras(
+    it: { id: string; ref: string; cor: string },
+    tamanhosComPeca: string[],
+    lidos: Record<string, unknown> | null | undefined,
+    jaUsados: Map<string, string>,
+  ): Promise<CodigosDeBarrasDoItem> {
+    const conf = conferirCodigosDeBarras(tamanhosComPeca, lidos);
+    if (!conf.ok) {
+      throw new BadRequestException(
+        `REF ${it.ref} ${it.cor} (código de barras próprio): ${descreverProblemasDosCodigos(conf)}`,
+      );
+    }
+    const reuso = new Map<string, { codigo: string; descricao: string }>();
+    for (const [tamanho, codigoBarras] of Object.entries(conf.porTamanho)) {
+      const onde = `${it.ref} ${it.cor} ${tamanho}`;
+      const dono = jaUsados.get(codigoBarras);
+      if (dono) {
+        throw new BadRequestException(
+          `${onde}: o código de barras ${codigoBarras} já foi lido em ${dono} neste recebimento — troque a peça na mão e bipe de novo`,
+        );
+      }
+      jaUsados.set(codigoBarras, onde);
+      const achada = await this.acharPecaPorCodigoDeBarras(codigoBarras);
+      if (!achada) continue;
+      if (mesmaPeca(achada, { ref: it.ref, cor: it.cor, tamanho })) {
+        reuso.set(tamanho, { codigo: String(achada.codigo), descricao: String(achada.descricaoCompleta || '') });
+        continue;
+      }
+      const nome =
+        String(achada.descricaoCompleta || '').trim() ||
+        `${achada.ref || ''} ${achada.cor || ''} ${achada.tamanho || ''}`.replace(/\s+/g, ' ').trim();
+      throw new BadRequestException(
+        `${onde}: o código de barras ${codigoBarras} já é da peça ${achada.codigo}` +
+          (nome ? ` (${nome})` : '') +
+          `. Bipe a etiqueta certa ou tire a marcação "código de barras próprio" deste item.`,
+      );
+    }
+    return { porTamanho: conf.porTamanho, reuso };
+  }
+
+  /**
+   * Cadastro que carrega este código de barras — como CÓDIGO (normalizado,
+   * sem zero à esquerda, igual ao catálogo) ou na coluna `ean` (cru e só
+   * dígitos, as duas formas que o bipe do PDV procura). Nativa `product`
+   * vence; o espelho `wincred_produtos` cobre o que só existe nele.
+   */
+  private async acharPecaPorCodigoDeBarras(codigoBarras: string): Promise<{
+    codigo: string;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    descricaoCompleta: string | null;
+  } | null> {
+    const digitos = codigoBarras.replace(/\D/g, '');
+    const codigoNormalizado = digitos.replace(/^0+/, '');
+    const or: any[] = [{ ean: codigoBarras }];
+    if (digitos && digitos !== codigoBarras) or.push({ ean: digitos });
+    if (codigoNormalizado) or.push({ codigo: codigoNormalizado });
+    const select = { codigo: true, ref: true, cor: true, tamanho: true, descricaoCompleta: true };
+    const p: any = this.prisma;
+    const nativa = await p.product.findFirst({ where: { OR: or }, select });
+    if (nativa) return nativa;
+    return p.wincredProduto.findFirst({ where: { OR: or }, select });
+  }
+
   // ── Etiquetas ──
 
   /**
@@ -933,6 +1097,7 @@ export class PurchaseOrdersService {
     let totalSkusJaExistiam = 0;
     const errors: string[] = [];
     const log: any[] = [];
+    const codigosJaUsados = new Map<string, string>();
 
     for (const it of order.items as any[]) {
       // Le qty recebida (preferencia) ou pedida
@@ -954,6 +1119,24 @@ export class PurchaseOrdersService {
         continue;
       }
 
+      // Código de barras próprio: a mesma régua do /receive — o lido fica
+      // gravado no item (eansInformados); sem ele o cadastro não sai, porque
+      // sairia sem o EAN que o caixa vai bipar.
+      let codigosLidos: CodigosDeBarrasDoItem | null = null;
+      if (it.codigoBarrasProprio) {
+        try {
+          codigosLidos = await this.resolverCodigosDeBarras(it, tamanhos, it.eansInformados, codigosJaUsados);
+        } catch (e: any) {
+          const err = String(e?.message || e);
+          errors.push(err);
+          log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'erro', error: err });
+          continue;
+        }
+      }
+      const reuso = codigosLidos?.reuso ?? new Map<string, { codigo: string; descricao: string }>();
+      const tamanhosNovos = tamanhos.filter((t) => !reuso.has(t));
+      const corChave = String(it.cor).trim();
+
       const payloadProcessar = {
         ref: it.ref,
         grupoCodigo: it.grupoCode,
@@ -963,7 +1146,7 @@ export class PurchaseOrdersService {
         fornecedorCnpj: order.fornecedorCnpj || '',
         fornecedorNome: order.marca || order.fornecedorNome,
         cores,
-        tamanhos,
+        tamanhos: tamanhosNovos,
         custo: it.custoUnit,
         precoVenda: it.precoUnit,
         tributo: it.tributoPct != null ? String(it.tributoPct) : undefined,
@@ -971,16 +1154,24 @@ export class PurchaseOrdersService {
         ncm: it.ncm || undefined,
         cfop: it.cfop ? Number(it.cfop) : 5102,
         marca: order.marca || order.fornecedorNome,
+        eans: codigosLidos
+          ? Object.fromEntries(
+              tamanhosNovos.map((t) => [`${corChave}|${String(t).trim()}`, codigosLidos!.porTamanho[t]]),
+            )
+          : undefined,
       };
       this.logger.log(
         `[cadastrar-faltantes] processar ${it.ref}/${it.cor}: ` +
-        `cores=${JSON.stringify(cores)} tamanhos=${JSON.stringify(tamanhos)} ` +
+        `cores=${JSON.stringify(cores)} tamanhos=${JSON.stringify(tamanhosNovos)} ` +
         `cnpj=${payloadProcessar.fornecedorCnpj} custo=${it.custoUnit} preco=${it.precoUnit} ` +
-        `grupo=${it.grupoCode}/${it.subgrupoCode} ncm=${it.ncm} cfop=${it.cfop}`
+        `grupo=${it.grupoCode}/${it.subgrupoCode} ncm=${it.ncm} cfop=${it.cfop}` +
+        (codigosLidos ? ` codigoBarrasProprio reutilizados=${reuso.size}` : '')
       );
 
       try {
-        const r = await this.productReg.processar(payloadProcessar as any);
+        const r = tamanhosNovos.length
+          ? await this.productReg.processar(payloadProcessar as any)
+          : { itens: [] as any[], inseridos: 0, ignorados: 0, total: 0 };
 
         // Monta skusGerados a partir dos itens retornados pelo processar
         const skusGerados: any[] = [];
@@ -992,6 +1183,18 @@ export class PurchaseOrdersService {
             tamanho: item.tamanho,
             descricao: item.descricaoCompleta,
             qty,
+            ...(codigosLidos ? { ean: codigosLidos.porTamanho[item.tamanho] || null } : {}),
+          });
+        }
+        for (const [tamanho, peca] of reuso) {
+          skusGerados.push({
+            codigo: peca.codigo,
+            cor: it.cor,
+            tamanho,
+            descricao: peca.descricao,
+            qty: Number(qtdRecebida[tamanho] || 0),
+            ean: codigosLidos?.porTamanho[tamanho] || null,
+            reutilizado: true,
           });
         }
 

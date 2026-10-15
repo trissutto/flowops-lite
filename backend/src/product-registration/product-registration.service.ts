@@ -116,6 +116,8 @@ export class ProductRegistrationService {
       tributo: input.tributo,
       marca: input.marca,
       estoqueInicial: 0,
+      // Código de barras do fornecedor (se a compra pediu) — vai pro `ean`.
+      ean: input.eans?.[`${l.cor}|${l.tamanho}`] || undefined,
     }));
 
     // 3) FLOW PRIMEIRO (incidente da live 14/07: produto cadastrado não
@@ -194,6 +196,7 @@ export class ProductRegistrationService {
         descricaoCompleta: p.descricaoCompleta,
         cor: p.cor,
         tamanho: p.tamanho,
+        ean: p.ean || p.codigo,
       })),
     };
   }
@@ -201,7 +204,9 @@ export class ProductRegistrationService {
   /**
    * Write-through do cadastro no Flow: `product` nativa (flowIsSource — o sync
    * nunca sobrescreve) + espelho `wincred_produtos` (bipe/busca/separação leem
-   * daqui). O EAN prefixo 8 É o próprio código.
+   * daqui). O EAN prefixo 8 É o próprio código — salvo quando a compra trouxe
+   * o código de barras do FORNECEDOR (`ean` no payload): aí a coluna `ean`
+   * guarda esse, e é por ela que o bipe acha a peça.
    */
   private async gravarNoFlow(
     produtos: Array<{
@@ -209,7 +214,7 @@ export class ProductRegistrationService {
       descricaoCompleta: string; descricaoPdv?: string; custo: number;
       precoVenda: number; margem: number; fornecedor: string; cor: string;
       tamanho: string; ref: string; plusSize: boolean; ncm?: string;
-      cfop?: number; tributo?: string; marca?: string;
+      cfop?: number; tributo?: string; marca?: string; ean?: string;
     }>,
   ): Promise<void> {
     const hoje = new Date();
@@ -233,7 +238,7 @@ export class ProductRegistrationService {
         ncm: p.ncm?.slice(0, 8) || null,
         tributo: p.tributo?.slice(0, 4) || null,
         plusSize: p.plusSize ? 1 : 0,
-        ean: p.codigo,
+        ean: p.ean || p.codigo,
       };
       await (this.prisma as any).product.upsert({
         where: { codigo: p.codigo },
@@ -474,6 +479,14 @@ export interface PreviewInput {
   marca?: string;
   cores: string[];
   tamanhos: string[];
+  /**
+   * CÓDIGO DE BARRAS DO FORNECEDOR por SKU, chave `COR|TAMANHO` (15/10/2026,
+   * compra com "código de barras próprio"). Quando vem, a peça nasce com
+   * `ean` = esse código — o CÓDIGO continua sendo o EAN-13 do Flow. Sem ele,
+   * `ean` = o próprio código, como sempre. Quem confere o que o leitor mandou
+   * é `common/codigo-barras-fornecedor.ts`, ANTES de chegar aqui.
+   */
+  eans?: Record<string, string>;
 }
 
 export type ProcessarInput = PreviewInput;
