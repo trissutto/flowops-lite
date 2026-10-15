@@ -183,13 +183,21 @@ export default function EtiquetasAvulsasPage() {
           body: JSON.stringify({ codigos }),
         },
       );
-      setLabels(r.labels || []);
+      // A peça é o CÓDIGO: se a mesma peça entrou por dois caminhos (REF e
+      // EAN na lista, "784" e "00784"), fica UMA linha — a qty é por código.
+      const vistos = new Set<string>();
+      const unicos = (r.labels || []).filter((l) => {
+        if (vistos.has(l.codigo)) return false;
+        vistos.add(l.codigo);
+        return true;
+      });
+      setLabels(unicos);
       setNotFound(r.notFound || []);
       // Inicializa qty = 0 pra cada label — vendedora escolhe explicitamente
       // o que quer imprimir (botões 1/2/3/5/10 aplicam em todos, OU usa +/-
       // peça a peça). Evita imprimir etiqueta sem querer.
       const initialQty: Record<string, number> = {};
-      for (const l of (r.labels || [])) initialQty[l.codigo] = 0;
+      for (const l of unicos) initialQty[l.codigo] = 0;
       setQty(initialQty);
     } catch (e: any) {
       setError(e?.message || 'Erro ao buscar');
@@ -317,6 +325,7 @@ export default function EtiquetasAvulsasPage() {
                 </h2>
                 <p className="text-xs text-slate-500">
                   Começa zerado. Use os botões em "Aplicar em todas" ou os ± de cada peça pra escolher qty.
+                  O código de barras é o que sai impresso na etiqueta — é por ele que se distingue duas peças com a mesma REF, cor e tamanho.
                 </p>
               </div>
               <div className="flex items-center gap-1">
@@ -344,6 +353,7 @@ export default function EtiquetasAvulsasPage() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase text-slate-600">
                   <tr>
+                    <th className="text-left px-2 py-1.5">Código de barras</th>
                     <th className="text-left px-2 py-1.5">REF</th>
                     <th className="text-left px-2 py-1.5">Cor</th>
                     <th className="text-center px-2 py-1.5">Tam</th>
@@ -355,6 +365,12 @@ export default function EtiquetasAvulsasPage() {
                 <tbody>
                   {labels.map((l) => (
                     <tr key={l.codigo} className="border-t border-slate-100 hover:bg-slate-50">
+                      <td
+                        className="px-2 py-1 font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap"
+                        title="É este número que sai no código de barras da etiqueta"
+                      >
+                        {l.codigo}
+                      </td>
                       <td className="px-2 py-1 font-mono font-bold text-violet-700">{l.ref}</td>
                       <td className="px-2 py-1 font-bold text-amber-700">{l.cor}</td>
                       <td className="px-2 py-1 text-center font-mono text-slate-700">{l.tamanho}</td>
@@ -400,7 +416,7 @@ export default function EtiquetasAvulsasPage() {
                 </tbody>
                 <tfoot className="bg-violet-50 font-bold">
                   <tr>
-                    <td colSpan={5} className="px-2 py-2 text-right text-violet-900">
+                    <td colSpan={6} className="px-2 py-2 text-right text-violet-900">
                       Total de etiquetas a imprimir:
                     </td>
                     <td className="px-2 py-2 text-center text-violet-900 tabular-nums text-base">
