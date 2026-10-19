@@ -173,6 +173,9 @@ export class PdvService {
       descricao: info.descricao,
       cor: info.cor,
       tamanho: info.tamanho,
+      // A data de cadastro saiu junto com a régua do 50% (15/09) e a loja
+      // continuou bipando aqui pra saber "quando essa peça chegou" (19/10).
+      dataCadastro: info.dataCadastro ?? null,
       campanha: { ativa, nome, pct },
       entra: d.entra,
       motivo,
