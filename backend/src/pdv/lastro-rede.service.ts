@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoutingService } from '../routing/routing.service';
 import { StockService } from '../stock/stock.service';
-import { ehLojaCanal } from '../common/loja-canal';
+import { naoSepara } from '../common/loja-sem-separacao';
 
 /**
  * LASTRO DA VENDA À DISTÂNCIA (26/08 — caso ON-000110/ON-000162).
@@ -74,7 +74,9 @@ export class LastroRedeService {
       where: { active: true },
       select: { code: true, name: true },
     });
-    const lojas = stores.filter((s) => !ehLojaCanal(s.code));
+    // Nem a DEPOSITO (dono, 19/10): o roteamento não manda ela separar, então
+    // peça que só existe lá não é lastro de venda à distância.
+    const lojas = stores.filter((s) => !naoSepara(s.code));
     const codes = lojas.map((s) => s.code);
 
     // Estoque bruto por loja — a vista do ROUTING (`wincred_estoque`, sem o

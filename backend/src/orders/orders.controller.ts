@@ -11,6 +11,7 @@ import { pecaDoCard } from '../common/itens-do-card';
 import { PedidoEmailService, metodoDePagamento } from '../loja-orders/pedido-email.service';
 import { dentroDeSaoPaulo } from '../common/politica-frete';
 import { lojasDaRotaPropria } from '../common/rota-propria';
+import { ehLojaSemSeparacao } from '../common/loja-sem-separacao';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { VigilanciaSeparacaoCron } from '../routing/vigilancia-separacao.cron';
 import { voltariaProFluxo, motivoDaRecusa } from '../common/volta-pro-fluxo';
@@ -1187,14 +1188,19 @@ export class OrdersController {
     const countMap = new Map<string, number>();
     for (const c of countsRaw) countMap.set(c.storeId, c._count._all);
 
+    // A DEPOSITO saiu da separação (dono, 19/10) e sai do filtro junto — mas
+    // só enquanto não tiver card na mão: esconder loja com trabalho parado
+    // seria o silêncio no lugar do alarme de que fala o comentário acima.
     return {
-      stores: stores.map((s: any) => ({
-        code: s.code,
-        name: s.name,
-        city: s.city,
-        state: s.state,
-        openOrders: countMap.get(s.id) || 0,
-      })),
+      stores: stores
+        .filter((s: any) => !ehLojaSemSeparacao(s.code) || (countMap.get(s.id) || 0) > 0)
+        .map((s: any) => ({
+          code: s.code,
+          name: s.name,
+          city: s.city,
+          state: s.state,
+          openOrders: countMap.get(s.id) || 0,
+        })),
     };
   }
 

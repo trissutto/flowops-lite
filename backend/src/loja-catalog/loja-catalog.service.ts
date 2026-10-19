@@ -7,7 +7,7 @@ import { classificarPorNome } from './classificacao-por-nome';
 import type { RegraCampanha } from '../common/promo-por-termo';
 import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
 import { EventLoopService } from '../health/event-loop.service';
-import { SQL_SEM_LOJA_CANAL } from '../common/loja-canal';
+import { SQL_SO_QUEM_SEPARA } from '../common/loja-sem-separacao';
 import { sqlDisponivel, sqlReservadoPorSku } from '../common/estoque-reservado';
 import { coresDoFeed, tamanhosDoFeed } from '../common/atributos-do-feed';
 import { fotosVivas } from '../common/foto-viva';
@@ -629,9 +629,11 @@ export class LojaCatalogService {
     LEFT JOIN (
       -- SEM A LOJA-CANAL (dono, 24/08): o saldo dela não é peça na arara, e o
       -- site não pode prometer o que ninguém tem. Ver common/loja-canal.ts —
-      -- eram 5 SKUs cujo único estoque positivo da rede estava lá.
+      -- eram 5 SKUs cujo único estoque positivo da rede estava lá. Sem a
+      -- DEPOSITO também (dono, 19/10): ela não separa pedido, então o site não
+      -- promete o que só ela tem (common/loja-sem-separacao.ts).
       SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
-        FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo
+        FROM wincred_estoque ${SQL_SO_QUEM_SEPARA} GROUP BY codigo
     ) e ON e.codigo = p.codigo
     -- ── MENOS O QUE JÁ ESTÁ PROMETIDO A OUTRA CLIENTE (31/08) ──
     -- A vitrine passa a contar o MESMO número que o guarda do carrinho cobra
@@ -4135,7 +4137,7 @@ export class LojaCatalogService {
         SELECT COUNT(*)::int AS n FROM (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
+            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SO_QUEM_SEPARA} GROUP BY codigo) e
               ON e.codigo = p.codigo
            WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
            GROUP BY 1 HAVING SUM(COALESCE(e.total,0)) <= 0
@@ -4161,7 +4163,7 @@ export class LojaCatalogService {
         LEFT JOIN (
           SELECT UPPER(TRIM(p.ref)) AS ref, SUM(COALESCE(e.total,0)) AS est
             FROM wincred_produtos p
-            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SEM_LOJA_CANAL} GROUP BY codigo) e
+            LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total FROM wincred_estoque ${SQL_SO_QUEM_SEPARA} GROUP BY codigo) e
               ON e.codigo = p.codigo
            GROUP BY 1
         ) k ON k.ref = s.ref

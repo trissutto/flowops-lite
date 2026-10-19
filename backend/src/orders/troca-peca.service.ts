@@ -18,7 +18,7 @@ import {
   type TrocaCtx,
 } from '../common/troca-bloqueio';
 import { motivoDeRecusaDoDestrave, notaDoDestrave, podeDestravar } from '../common/destrave-matriz';
-import { LOJA_CANAL_CODES } from '../common/loja-canal';
+import { LOJAS_FORA_DA_SEPARACAO } from '../common/loja-sem-separacao';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -110,8 +110,9 @@ export class TrocaPecaService {
     try {
       // Sem a loja-canal: ela não cede peça (dono, 24/08 — `common/loja-canal.ts`),
       // e trocar por peça que "só existe" nela é ruptura marcada pra depois.
+      // Idem a DEPOSITO, que não separa (dono, 19/10 — `common/loja-sem-separacao.ts`).
       const lojas = await this.prisma.store.findMany({
-        where: { active: true, code: { notIn: LOJA_CANAL_CODES } },
+        where: { active: true, code: { notIn: LOJAS_FORA_DA_SEPARACAO } },
         select: { code: true },
       });
       const entradas = await this.stock.getStockFor([novo.sku], lojas.map((l) => l.code));

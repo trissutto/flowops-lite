@@ -1,4 +1,4 @@
-import { condSemLojaCanal } from './loja-canal';
+import { condSoQuemSepara } from './loja-sem-separacao';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -89,6 +89,10 @@ export function skuNorm(col: string): string {
  * Devolve `(codigo, total)` — o mesmo contrato da subquery que ela substitui,
  * pra entrar no lugar sem tocar em quem soma.
  *
+ * Antes de tudo sai a loja que não separa — a loja-canal e a DEPOSITO
+ * (`common/loja-sem-separacao.ts`, dono 19/10), as mesmas que o roteamento
+ * tira da lista de candidatas.
+ *
  * Duas exclusões, as duas copiadas do roteamento:
  *
  *  1. **Loja INATIVA** (`stores.active = false`). O `DISTINCT` não é enfeite:
@@ -115,7 +119,7 @@ export function sqlEstoqueEntregavelPorCodigo(): string {
     return `
       SELECT codigo, SUM(COALESCE(estoque, 0))::int AS total
         FROM wincred_estoque
-       WHERE ${condSemLojaCanal('loja')}
+       WHERE ${condSoQuemSepara('loja')}
        GROUP BY codigo`;
   }
   return `
@@ -129,7 +133,7 @@ export function sqlEstoqueEntregavelPorCodigo(): string {
                       ${lojaNorm('e.loja')}  AS loja,
                       ${skuNorm('e.codigo')} AS sku
                  FROM wincred_estoque e
-                WHERE ${condSemLojaCanal('e.loja')}
+                WHERE ${condSoQuemSepara('e.loja')}
                   -- linha zerada não soma nada e é METADE do espelho (294.634
                   -- linhas, 159.541 com saldo): cortar aqui é o que devolve o
                   -- tempo que as duas exclusões custam.

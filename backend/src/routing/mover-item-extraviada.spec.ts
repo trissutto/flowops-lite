@@ -38,7 +38,7 @@ describe('RoutingService — mover peça na mão desfaz a marca de EXTRAVIADA', 
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       store: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'store-itanhaem', code: '20', name: 'ITANHAEM' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'store-itanhaem', code: '01', name: 'ITANHAEM' }),
       },
       orderItem: { findMany: jest.fn().mockResolvedValue([ITEM]) },
       pickOrder: { findMany: jest.fn().mockResolvedValue([]) },
@@ -66,30 +66,30 @@ describe('RoutingService — mover peça na mão desfaz a marca de EXTRAVIADA', 
   it('marca a peça como ACHADA na loja de destino e conta isso no retorno', async () => {
     const { service, extraviadas } = makeService();
 
-    const r: any = await service.moverItensParaLoja('order-1083', ['item-bmm'], '20', {
+    const r: any = await service.moverItensParaLoja('order-1083', ['item-bmm'], '01', {
       userId: 'user-thiago', nome: 'Thiago',
     });
 
     expect(r.movidos).toBe(1);
-    expect(extraviadas.marcarAchadaPorSku).toHaveBeenCalledWith('20', '0012345', 'user-thiago');
+    expect(extraviadas.marcarAchadaPorSku).toHaveBeenCalledWith('01', '0012345', 'user-thiago');
     expect(r.extraviadasAchadas).toBe(1);
   });
 
   it('escreve no histórico do pedido que a marca foi desfeita', async () => {
     const { service, prisma } = makeService();
 
-    await service.moverItensParaLoja('order-1083', ['item-bmm'], '20', { nome: 'Thiago' });
+    await service.moverItensParaLoja('order-1083', ['item-bmm'], '01', { nome: 'Thiago' });
 
     const nota = prisma.orderHistory.create.mock.calls[0][0].data.note as string;
     expect(nota).toContain('EXTRAVIADA');
-    expect(nota).toContain('20');
+    expect(nota).toContain('01');
   });
 
   it('falha do "achei" NÃO derruba a movimentação — a peça já tem dono novo', async () => {
     const { service, extraviadas } = makeService();
     extraviadas.marcarAchadaPorSku.mockRejectedValue(new Error('banco fora'));
 
-    const r: any = await service.moverItensParaLoja('order-1083', ['item-bmm'], '20', {});
+    const r: any = await service.moverItensParaLoja('order-1083', ['item-bmm'], '01', {});
 
     expect(r.ok).toBe(true);
     expect(r.movidos).toBe(1);
@@ -99,9 +99,18 @@ describe('RoutingService — mover peça na mão desfaz a marca de EXTRAVIADA', 
   it('não mexe na marca das OUTRAS lojas: só a de destino é contradita', async () => {
     const { service, extraviadas } = makeService();
 
-    await service.moverItensParaLoja('order-1083', ['item-bmm'], '20', {});
+    await service.moverItensParaLoja('order-1083', ['item-bmm'], '01', {});
 
     expect(extraviadas.marcarAchadaPorSku).toHaveBeenCalledTimes(1);
-    expect(extraviadas.marcarAchadaPorSku.mock.calls[0][0]).toBe('20');
+    expect(extraviadas.marcarAchadaPorSku.mock.calls[0][0]).toBe('01');
+  });
+
+  it('recusa mover peça pra DEPOSITO (20): ela não separa pedido (dono, 19/10)', async () => {
+    const { service, prisma } = makeService();
+
+    await expect(
+      service.moverItensParaLoja('order-1083', ['item-bmm'], '20', { nome: 'Thiago' }),
+    ).rejects.toThrow(/não separa/);
+    expect(prisma.orderHistory.create).not.toHaveBeenCalled();
   });
 });
