@@ -13890,7 +13890,13 @@ function PromoCheckModal({
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 mt-4">
+              <div className="grid grid-cols-3 gap-2 mt-4">
+                <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
+                  <div className="text-[11px] text-slate-500">Data de cadastro</div>
+                  <div className="text-lg font-bold text-slate-900">
+                    {res.dataCadastro ? String(res.dataCadastro).slice(0, 10).split('-').reverse().join('/') : '—'}
+                  </div>
+                </div>
                 <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
                   <div className="text-[11px] text-slate-500">Campanha</div>
                   <div className="text-lg font-bold text-slate-900">
