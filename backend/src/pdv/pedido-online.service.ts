@@ -4,7 +4,7 @@ import { RoutingService } from '../routing/routing.service';
 import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
-import { ehLojaCanal } from '../common/loja-canal';
+import { naoSepara } from '../common/loja-sem-separacao';
 import { fechaMotoboySemSeparacao } from '../common/fechamento-motoboy';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { ErpService } from '../erp/erp.service';
@@ -198,7 +198,8 @@ export class PedidoOnlineService {
       select: { code: true, name: true, city: true },
       orderBy: { name: 'asc' },
     });
-    const candidatas = lojas.filter((s) => !ehLojaCanal(s.code));
+    // + a DEPOSITO, que o roteamento também tira (dono, 19/10).
+    const candidatas = lojas.filter((s) => !naoSepara(s.code));
     const cidadeCliente = this.chaveCidade(sale.customerCidade);
     const daCliente = (s: { city: string | null }) =>
       !!cidadeCliente && this.chaveCidade(s.city) === cidadeCliente;

@@ -20,7 +20,7 @@ import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { ErpService } from '../erp/erp.service';
 import { PushService } from '../push/push.service';
 import { PickScanService } from '../pick-orders/pick-scan.service';
-import { LOJA_CANAL_CODES } from '../common/loja-canal';
+import { LOJAS_FORA_DA_SEPARACAO, ehLojaSemSeparacao } from '../common/loja-sem-separacao';
 import { PecasExtraviadasService } from '../pecas-extraviadas/pecas-extraviadas.service';
 import { lojaReportouDeVerdade } from '../common/pedido-congelado';
 import { pecaDoCard, whereDoCard } from '../common/itens-do-card';
@@ -283,8 +283,11 @@ export class RoutingService {
     //
     // Seguro de excluir: a loja 13 tem 53 SKUs / 58 peças (a menor da rede;
     // Itanhaém tem 89.483) e só 5 SKUs existem exclusivamente lá.
+    //
+    // A DEPOSITO (20) saiu pelo mesmo caminho em 19/10 (dono: "retire a loja
+    // DEPOSITO da separação") — ver `common/loja-sem-separacao.ts`.
     const excludeCodes = Array.from(
-      new Set([...(opts?.excludeStoreCodes ?? []).filter(Boolean), ...LOJA_CANAL_CODES]),
+      new Set([...(opts?.excludeStoreCodes ?? []).filter(Boolean), ...LOJAS_FORA_DA_SEPARACAO]),
     );
     const stores = await this.prisma.store.findMany({
       where: {
@@ -1168,6 +1171,13 @@ export class RoutingService {
     // Items que vão pra loja forçada: APENAS os ÓRFÃOS (assignedStoreId = null).
     // Items dos pick-orders avançados (ex: MOEMA já enviou) ficam preservados.
     if (opts?.forceStoreCode) {
+      if (ehLojaSemSeparacao(opts.forceStoreCode)) {
+        return {
+          ok: false as const,
+          reason: 'force-store-sem-separacao',
+          message: `A loja ${opts.forceStoreCode} não separa pedido (dono, 19/10). Escolha outra loja.`,
+        };
+      }
       const forcedStore = await this.prisma.store.findFirst({
         where: { code: opts.forceStoreCode },
         select: { id: true, code: true, name: true },
@@ -1493,6 +1503,13 @@ export class RoutingService {
     // retaguarda), bypassa o routing e cria pick-order direto pra essa loja
     // com os items órfãos. Senão, usa previewRoute normal.
     if (opts?.forceStoreCode) {
+      if (ehLojaSemSeparacao(opts.forceStoreCode)) {
+        return {
+          ok: false as const,
+          reason: 'force-store-sem-separacao',
+          message: `A loja ${opts.forceStoreCode} não separa pedido (dono, 19/10). Escolha outra loja.`,
+        };
+      }
       const forcedStore = await this.prisma.store.findFirst({
         where: { code: opts.forceStoreCode },
         select: { id: true, code: true, name: true },
@@ -1779,6 +1796,9 @@ export class RoutingService {
       select: { id: true, storeId: true, status: true },
     });
 
+    if (ehLojaSemSeparacao(toStoreCode)) {
+      throw new BadRequestException(`A loja ${toStoreCode} não separa pedido (dono, 19/10). Escolha outra loja.`);
+    }
     const alvo = await this.prisma.store.findFirst({
       where: { code: String(toStoreCode || '').trim(), active: true },
       select: { id: true, code: true, name: true },
@@ -2558,9 +2578,9 @@ export class RoutingService {
     // A LOJA-CANAL NÃO SEPARA (dono, 24/08): ela RECEBE a peça no acerto entre
     // lojas, não tem arara pra ceder. Ver `common/loja-canal.ts` — 3 cards
     // caíram nela em 90 dias e ficaram parados em `new`, porque não há quem
-    // separe do outro lado.
+    // separe do outro lado. A DEPOSITO (20) também não separa (dono, 19/10).
     const stores = await this.prisma.store.findMany({
-      where: { active: true, code: { notIn: LOJA_CANAL_CODES } },
+      where: { active: true, code: { notIn: LOJAS_FORA_DA_SEPARACAO } },
     });
     if (stores.length === 0) {
       throw new BadRequestException(
@@ -2790,9 +2810,9 @@ export class RoutingService {
     // A LOJA-CANAL NÃO SEPARA (dono, 24/08): ela RECEBE a peça no acerto entre
     // lojas, não tem arara pra ceder. Ver `common/loja-canal.ts` — 3 cards
     // caíram nela em 90 dias e ficaram parados em `new`, porque não há quem
-    // separe do outro lado.
+    // separe do outro lado. A DEPOSITO (20) também não separa (dono, 19/10).
     const stores = await this.prisma.store.findMany({
-      where: { active: true, code: { notIn: LOJA_CANAL_CODES } },
+      where: { active: true, code: { notIn: LOJAS_FORA_DA_SEPARACAO } },
     });
     if (stores.length === 0) {
       throw new BadRequestException(
