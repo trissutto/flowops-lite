@@ -1,4 +1,5 @@
 import {
+  codigoDeBarrasDaEtiqueta,
   conferirCodigosDeBarras,
   descreverProblemasDosCodigos,
   mesmaPeca,
@@ -118,6 +119,36 @@ describe('codigo-barras-fornecedor — o que o leitor mandou na conferência', (
           { ref: 'ABCDEFGHIJKL', cor: 'VERDE MUSGO CLARO', tamanho: 'P' },
         ),
       ).toBe(true);
+    });
+  });
+
+  // 20/10: "na hora de imprimir as etiquetas ele imprime a NOSSA, com início
+  // 8000 — preciso que imprima o código que nós escaneamos".
+  describe('codigoDeBarrasDaEtiqueta — o número que sai impresso', () => {
+    it('peça com código de barras do fornecedor imprime o lido, não o EAN-13 do Flow', () => {
+      expect(codigoDeBarrasDaEtiqueta('8000000003614', '7891234567895')).toBe('7891234567895');
+    });
+
+    it('peça nascida no Flow (ean = código) imprime o código', () => {
+      expect(codigoDeBarrasDaEtiqueta('8000000003614', '8000000003614')).toBe('8000000003614');
+    });
+
+    it('sem ean imprime o código', () => {
+      expect(codigoDeBarrasDaEtiqueta('5397334', null)).toBe('5397334');
+      expect(codigoDeBarrasDaEtiqueta('5397334', '  ')).toBe('5397334');
+    });
+
+    // Espelho legado guarda o código com zero à esquerda ou com espaço: isso
+    // ainda é "o mesmo número", não um código de barras próprio.
+    it('ean igual ao código a menos de zero à esquerda/espaço não vira outro número', () => {
+      expect(codigoDeBarrasDaEtiqueta('5397334', '05397334')).toBe('5397334');
+      expect(codigoDeBarrasDaEtiqueta('5397334', ' 5397334 ')).toBe('5397334');
+    });
+
+    // trocarCodigo: o código antigo com cara de código de barras virou o ean —
+    // a etiqueta que já está na peça é essa.
+    it('ean guardado pelo trocarCodigo imprime a etiqueta que já está na peça', () => {
+      expect(codigoDeBarrasDaEtiqueta('5397334', '7891186984207')).toBe('7891186984207');
     });
   });
 });

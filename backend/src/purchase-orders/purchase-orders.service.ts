@@ -10,6 +10,7 @@ import { ProductRegistrationService } from '../product-registration/product-regi
 import { AtributosPecaService } from '../atributos-peca/atributos-peca.service';
 import { NcmAiClassifierService } from './ncm-ai-classifier.service';
 import {
+  codigoDeBarrasDaEtiqueta,
   conferirCodigosDeBarras,
   descreverProblemasDosCodigos,
   mesmaPeca,
@@ -1491,6 +1492,8 @@ export class PurchaseOrdersService {
       cor: string;
       tamanho: string;
       codigo: string;
+      /** O número que sai IMPRESSO: o código de barras do fornecedor quando a peça tem um (`skusGerados[].ean`), senão o código. */
+      codigoBarras: string;
       preco: number;
       marca: string | null;
       descricao: string;
@@ -1511,6 +1514,7 @@ export class PurchaseOrdersService {
             cor: sku.cor,
             tamanho: sku.tamanho,
             codigo: sku.codigo,
+            codigoBarras: codigoDeBarrasDaEtiqueta(sku.codigo, sku.ean),
             preco: it.precoUnit,
             marca: order.marca,
             descricao: sku.descricao,
@@ -1555,40 +1559,40 @@ export class PurchaseOrdersService {
         SELECT * FROM unnest($1::int[], $2::text[], $3::text[], $4::text[])
              AS t(idx, up, norm, digits)
       ), base AS (
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn" AS preco, x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn" AS preco, x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv") AS descricao, 0 AS prio
           FROM entrada e JOIN product x ON e.digits <> '' AND x.codigo = e.digits AND x.ativo = true
         UNION ALL
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv"), 0
           FROM entrada e JOIN product x ON x.ean IS NOT NULL AND btrim(x.ean) = e.up AND x.ativo = true
         UNION ALL
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv"), 0
           FROM entrada e JOIN product x ON upper(btrim(x.ref)) = e.up AND x.ativo = true
         UNION ALL
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv"), 0
           FROM entrada e JOIN product x ON replace(replace(upper(btrim(x.ref)), '-', ''), ' ', '') = e.norm AND x.ativo = true
         UNION ALL
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
           FROM entrada e JOIN wincred_produtos x ON e.digits <> '' AND x.codigo = e.digits
         UNION ALL
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
           FROM entrada e JOIN wincred_produtos x ON x.ean IS NOT NULL AND btrim(x.ean) = e.up
         UNION ALL
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
           FROM entrada e JOIN wincred_produtos x ON upper(btrim(x.ref)) = e.up
         UNION ALL
-        SELECT e.idx, x.codigo, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
+        SELECT e.idx, x.codigo, x.ean, x.ref, x.cor, x.tamanho, x."vendaUn", x.marca,
                COALESCE(x."descricaoCompleta", x."descricaoPdv"), 1
           FROM entrada e JOIN wincred_produtos x ON replace(replace(upper(btrim(x.ref)), '-', ''), ' ', '') = e.norm
       ), dedup AS (
         SELECT DISTINCT ON (idx, codigo)
-               idx, codigo, ref, cor, tamanho, preco, marca, descricao
+               idx, codigo, ean, ref, cor, tamanho, preco, marca, descricao
           FROM base ORDER BY idx, codigo, prio
       )
       SELECT * FROM dedup`;
@@ -1598,11 +1602,15 @@ export class PurchaseOrdersService {
     const encontrouIdx = new Set<number>();
     const labels = rows.map((r) => {
       encontrouIdx.add(Number(r.idx));
+      const codigo = String(r.codigo || '').trim();
       return {
         ref: String(r.ref || '').trim(),
         cor: String(r.cor || '').trim(),
         tamanho: String(r.tamanho || '').trim(),
-        codigo: String(r.codigo || '').trim(),
+        codigo,
+        // O que sai impresso: o código de barras do fornecedor quando a peça
+        // tem um (coluna `ean` diferente do código), senão o código.
+        codigoBarras: codigoDeBarrasDaEtiqueta(codigo, r.ean),
         preco: Number(r.preco || 0),
         marca: r.marca ? String(r.marca).trim() : null,
         descricao: String(r.descricao || '').trim(),
@@ -1817,19 +1825,17 @@ export class PurchaseOrdersService {
       this.logger.log(`reposicao em modo SO REIMPRIME (sem mexer estoque)`);
     }
 
-    // Gera labels — usa dados do request; so faz fallback query se faltar.
-    // O fallback resolve NO POSTGRES, em UM lote, pelo mesmo buscador das
-    // etiquetas avulsas (product + wincred_produtos, nativa vence). O caminho
-    // antigo (erp.buscarProdutoPorCodigo, MySQL do Giga) devolvia [] com o
-    // Giga morto e a etiqueta saia sem REF/preco.
-    const semInfo = validos.filter(
-      (i) => !i.ref?.trim() || !i.cor?.trim() || !i.tamanho?.trim() || !Number(i.preco || 0),
-    );
+    // Gera labels — usa dados do request. O Postgres é consultado em UM lote
+    // pelo mesmo buscador das etiquetas avulsas (product + wincred_produtos,
+    // nativa vence): completa o que faltou (REF/cor/tamanho/preço — o caminho
+    // antigo, erp.buscarProdutoPorCodigo no MySQL do Giga, devolvia [] com o
+    // Giga morto e a etiqueta saia sem REF/preco) e diz QUAL NÚMERO sai no
+    // código de barras: o do fornecedor quando a peça tem um (20/10).
     const infoPorCodigo = new Map<string, any>();
-    if (semInfo.length > 0) {
+    {
       try {
         const { labels: achados } = await this.buscarEtiquetasAvulsas(
-          Array.from(new Set(semInfo.map((i) => String(i.codigo).trim()))),
+          Array.from(new Set(validos.map((i) => String(i.codigo).trim()))),
         );
         for (const a of achados) {
           // codigo normalizado SEM zeros a esquerda — mesma chave do catalogo
@@ -1856,19 +1862,19 @@ export class PurchaseOrdersService {
       let preco = Number(i.preco || 0);
       let descricao = i.descricao?.trim() || '';
       let marca = i.marca || null;
+      let codigoBarras = String(i.codigo).trim();
 
+      const chave = String(i.codigo).trim().replace(/^0+/, '') || String(i.codigo).trim();
+      const p = infoPorCodigo.get(chave);
+      if (p?.codigoBarras) codigoBarras = p.codigoBarras;
       // Completa o que faltou com o que o Postgres achou (best-effort)
-      if (!ref || !cor || !tamanho || preco === 0) {
-        const chave = String(i.codigo).trim().replace(/^0+/, '') || String(i.codigo).trim();
-        const p = infoPorCodigo.get(chave);
-        if (p) {
-          ref = ref || p.ref;
-          cor = cor || p.cor;
-          tamanho = tamanho || p.tamanho;
-          preco = preco || Number(p.preco || 0);
-          descricao = descricao || p.descricao;
-          marca = marca || p.marca || null;
-        }
+      if (p && (!ref || !cor || !tamanho || preco === 0)) {
+        ref = ref || p.ref;
+        cor = cor || p.cor;
+        tamanho = tamanho || p.tamanho;
+        preco = preco || Number(p.preco || 0);
+        descricao = descricao || p.descricao;
+        marca = marca || p.marca || null;
       }
 
       for (let n = 0; n < qtyLabel; n++) {
@@ -1877,6 +1883,7 @@ export class PurchaseOrdersService {
           cor,
           tamanho,
           codigo: i.codigo,
+          codigoBarras,
           preco,
           marca,
           descricao,

@@ -21,6 +21,8 @@ type Label = {
   cor: string;
   tamanho: string;
   codigo: string;
+  /** O número impresso: código de barras do fornecedor quando a peça tem um, senão o código. */
+  codigoBarras?: string | null;
   preco: number;
   marca: string | null;
   descricao: string;

@@ -120,6 +120,30 @@ export function descreverProblemasDosCodigos(c: ConferenciaCodigosDeBarras): str
 }
 
 /**
+ * O QUE SAI NO CÓDIGO DE BARRAS DA ETIQUETA (20/10/2026, dono: "na hora de
+ * imprimir as etiquetas ele imprime a NOSSA, com início 8000 — preciso que
+ * imprima o código que nós escaneamos").
+ *
+ * A peça tem um `ean` próprio (diferente do CÓDIGO) quando a compra entrou
+ * com "código de barras próprio" — ou quando o `trocarCodigo` guardou o
+ * código antigo com cara de código de barras. Nos dois casos a etiqueta que
+ * já está na peça é esse `ean`, e é ele que o caixa vai bipar; imprimir o
+ * EAN-13 do Flow por cima seria uma segunda etiqueta pra mesma peça. Sem
+ * `ean`, ou com `ean` igual ao código (peça nascida no Flow), sai o código.
+ *
+ * O CÓDIGO continua sendo a identidade da etiqueta (chave de qty, filtro do
+ * "que acabou de entrar"): só o número impresso muda.
+ */
+export function codigoDeBarrasDaEtiqueta(codigo: unknown, ean: unknown): string {
+  const cod = String(codigo ?? '').trim();
+  const e = normalizarCodigoBarras(ean);
+  if (!e) return cod;
+  const digitos = (s: string) => s.replace(/\D/g, '').replace(/^0+/, '');
+  const mesmo = e === cod.toUpperCase() || (digitos(e) !== '' && digitos(e) === digitos(cod));
+  return mesmo ? cod : e;
+}
+
+/**
  * A peça achada no catálogo pelo código de barras é ESTA (REF + COR + TAMANHO
  * do item do pedido)? Se for, a entrada reaproveita o código que já existe
  * (segunda compra da mesma peça) em vez de cadastrar outro — dois cadastros

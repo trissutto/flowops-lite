@@ -308,6 +308,23 @@ const server = http.createServer((req, res) => {
     corpoJson(req).then((b) => { const r = receberPedido(po, JSON.parse(b || '{}')); json(r.body, r.code); });
     return;
   }
+  // Etiquetas do pedido: o número impresso é o código de barras do
+  // fornecedor quando a peça tem um (ean), senão o código do Flow.
+  const mLabels = /^\/api\/purchase-orders\/([^/]+)\/labels$/.exec(url.pathname);
+  if (mLabels && req.method === 'GET') {
+    const po = PEDIDOS.get(mLabels[1]);
+    if (!po) return json({ message: 'Pedido não encontrado' }, 404);
+    const labels = [];
+    for (const it of po.items) {
+      for (const s of it.skusGerados || []) {
+        for (let n = 0; n < s.qty; n++) {
+          labels.push({ ref: it.ref, cor: s.cor, tamanho: s.tamanho, codigo: s.codigo, codigoBarras: s.ean || s.codigo,
+            preco: it.precoUnit, marca: po.marca, descricao: s.descricao });
+        }
+      }
+    }
+    return json({ total: labels.length, labels });
+  }
   const mPo = /^\/api\/purchase-orders\/([^/]+)$/.exec(url.pathname);
   if (mPo && req.method === 'GET' && PEDIDOS.has(mPo[1])) return json(PEDIDOS.get(mPo[1]));
 

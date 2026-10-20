@@ -19,7 +19,15 @@ export interface EtiquetaLabel {
   ref: string;
   cor: string;
   tamanho: string;
+  /** Identidade da peça no Flow (chave de qty, filtro do "que acabou de entrar"). */
   codigo: string;
+  /**
+   * O número que sai IMPRESSO no código de barras (20/10/2026): o código de
+   * barras do FORNECEDOR quando a peça tem um (compra com "código de barras
+   * próprio" — o caixa bipa a etiqueta que já veio na peça), senão o código.
+   * Ausente = imprime o código, como sempre.
+   */
+  codigoBarras?: string | null;
   preco: number;
   descricao: string;
   marca?: string | null;
@@ -171,8 +179,8 @@ export default function EtiquetaPrint({ labels, config }: Props) {
                 <span className="et-tam" style={{ fontSize: refFontSize(l.ref), whiteSpace: 'nowrap' }}>{l.ref}</span>
                 <span className="et-cor-destaque">{l.tamanho}</span>
               </div>
-              {/* Código de barras */}
-              <svg className="barcode-target" data-code={l.codigo} />
+              {/* Código de barras — o do fornecedor quando a peça tem um */}
+              <svg className="barcode-target" data-code={l.codigoBarras || l.codigo} />
               {/* Cor + preço */}
               <div className="et-base">
                 <span className="et-base-ref" style={{ fontSize: corFontSize(l.cor) }}>

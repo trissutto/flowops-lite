@@ -27,6 +27,8 @@ type Label = {
   cor: string;
   tamanho: string;
   codigo: string;
+  /** O número impresso: código de barras do fornecedor quando a peça tem um, senão o código. */
+  codigoBarras?: string | null;
   preco: number;
   marca: string | null;
   descricao: string;
@@ -367,9 +369,13 @@ export default function EtiquetasAvulsasPage() {
                     <tr key={l.codigo} className="border-t border-slate-100 hover:bg-slate-50">
                       <td
                         className="px-2 py-1 font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap"
-                        title="É este número que sai no código de barras da etiqueta"
+                        title={
+                          l.codigoBarras && l.codigoBarras !== l.codigo
+                            ? `É este número que sai no código de barras da etiqueta — o da peça (fornecedor). Código no Flow: ${l.codigo}`
+                            : 'É este número que sai no código de barras da etiqueta'
+                        }
                       >
-                        {l.codigo}
+                        {l.codigoBarras || l.codigo}
                       </td>
                       <td className="px-2 py-1 font-mono font-bold text-violet-700">{l.ref}</td>
                       <td className="px-2 py-1 font-bold text-amber-700">{l.cor}</td>
