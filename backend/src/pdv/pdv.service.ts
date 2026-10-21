@@ -2513,17 +2513,21 @@ export class PdvService {
   }
 
   /**
-   * Adiciona um item MANUAL na venda — descrição livre + valor digitado pela
-   * vendedora. Usado quando o produto não passa pelo bipe (cadastro errado,
-   * EAN ausente, peça importada sem código, etc). Não toca no Giga e marca
-   * o item com promoTag='MANUAL' pra fugir do recálculo automático.
+   * Linha MANUAL na venda — descrição e valor livres, sem peça do catálogo.
+   *
+   * ⚠️ Até 21/10/2026 isto tinha rota própria (`POST /pdv/sales/:id/items/manual`)
+   * e a vendedora chegava nela digitando "0" no bipe — a "função zero", que
+   * deixava lançar qualquer coisa com qualquer valor. O dono mandou RETIRAR:
+   * a rota e o modal saíram, e o método ficou PRIVADO, só pro vale presente
+   * (`venderValePresente`), que precisa de uma linha no cupom sem baixar
+   * estoque. Não exponha de novo.
    *
    * Característica:
    *   - SKU gerado: "MANUAL-{epoch}" pra cada item (sempre nova linha, não merge)
-   *   - precoUnit = valor digitado · descricao = livre · qty = livre
+   *   - precoUnit = valor · descricao = livre · qty = livre
    *   - Não cai em applyAutoDiscounts (item solto, não tem campanha)
    */
-  async addManualItem(input: {
+  private async addManualItem(input: {
     saleId: string;
     descricao: string;
     valor: number;

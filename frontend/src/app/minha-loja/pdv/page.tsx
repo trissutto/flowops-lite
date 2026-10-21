@@ -429,7 +429,7 @@ async function postCrediarioComOverride(saleId: string, payload: any): Promise<a
 //      automático de código 7+ díg não encontrado → tenta como REF.
 //
 // O pai interage só via ref imperativo (focus/focusSelect/clear/isActiveEmpty)
-// e callbacks (onScanResult/onError/onRequestManualItem).
+// e callbacks (onScanResult/onError).
 // ===========================================================================
 type ScanBarHandle = {
   focus: () => void;
@@ -445,14 +445,13 @@ type ScanBarProps = {
   ensureSaleId: () => Promise<string | null>;
   onScanResult: (fresh: Sale) => void;     // pai faz flashAddedItem + setSale
   onError: (msg: string | null) => void;   // pai faz setError
-  onRequestManualItem: () => void;         // pai abre o modal de item manual
   onAbrirPromoCheck: () => void;           // pai abre "essa peça entra na promo?"
   /** Peça bipada com DE/POR registrado → pai mostra "cliente economizou R$ X". */
   onPromoDePor?: (p: { de: number; por: number; economia: number } | null) => void;
 };
 
 const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
-  { saleId, ensureSaleId, onScanResult, onError, onRequestManualItem, onAbrirPromoCheck, onPromoDePor },
+  { saleId, ensureSaleId, onScanResult, onError, onAbrirPromoCheck, onPromoDePor },
   ref,
 ) {
   type ErpSearchHit = {
@@ -519,13 +518,10 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
     e?.preventDefault();
     const sku = scanInput.trim();
     if (!sku) return;
-    // Atalho item manual: vendedora digita "0" → abre modal pra lançar
-    // produto livre (descrição + valor) sem precisar achar no catálogo.
-    if (sku === '0') {
-      setScanInput('');
-      onRequestManualItem();
-      return;
-    }
+    // A "função zero" (digitar 0 → modal de item manual com descrição e
+    // valor livres) foi RETIRADA em 21/10/2026 por ordem do dono: toda peça
+    // da venda vem do catálogo, pelo bipe ou pela REF. A linha MANUAL só
+    // nasce pelo vale presente (backend).
     // BUSCA DE REF/GRADE — gatilhos:
     //   1. forceRef (Shift+Enter / REF+ESPAÇO): explícito, REF de QUALQUER tamanho.
     //   2. Fallback no catch abaixo: bipou código + ENTER e não achou → tenta REF.
@@ -1857,8 +1853,6 @@ function PdvPageInner() {
   const notifiedPaidRef = useRef<Set<string>>(new Set());
   const [showPixAvulso, setShowPixAvulso] = useState(false);
   const [showValeTroca, setShowValeTroca] = useState(false);
-  // ── Modal Item Manual (digitar produto livre) ──
-  const [showManualItem, setShowManualItem] = useState(false);
   // ── Modal Vale Presente (vende um vale; código VP- sai no cupom) ──
   const [showGiftVoucher, setShowGiftVoucher] = useState(false);
   // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
@@ -2926,7 +2920,6 @@ function PdvPageInner() {
               setSale(fresh);
             }}
             onError={setError}
-            onRequestManualItem={() => setShowManualItem(true)}
             onAbrirPromoCheck={() => setPromoCheckOpen(true)}
             onPromoDePor={avisarEconomia}
           />
@@ -4489,21 +4482,6 @@ function PdvPageInner() {
               updateItem(showDiscount.itemId, { desconto: valor });
             }
             setShowDiscount(null);
-          }}
-        />
-      )}
-
-      {/* Modal Item Manual — digitado quando produto não passa */}
-      {showManualItem && sale && (
-        <ManualItemModal
-          saleId={sale.id}
-          onClose={() => setShowManualItem(false)}
-          onAdded={async () => {
-            const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
-            setSale(fresh);
-            setShowManualItem(false);
-            toast('success', 'Item manual adicionado', 'Confira descrição e valor no carrinho');
-            setTimeout(() => scanBarRef.current?.focus(), 50);
           }}
         />
       )}
@@ -13522,172 +13500,6 @@ function GiftVoucherModal({
   );
 }
 
-// ── MANUAL ITEM MODAL ─────────────────────────────────────────────────
-// Quando o produto não passa pelo bipe (cadastro errado, EAN ausente, etc),
-// vendedora digita "0" no input → abre este modal pra lançar item manual
-// com descrição e valor livres. Não trava o caixa.
-function ManualItemModal({
-  saleId,
-  onClose,
-  onAdded,
-}: {
-  saleId: string;
-  onClose: () => void;
-  onAdded: () => void;
-}) {
-  const { toast } = usePdvToast();
-  const [descricao, setDescricao] = useState('');
-  const [valor, setValor] = useState('');
-  const [qty, setQty] = useState('1');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const parseNum = (s: string) => {
-    const n = Number(String(s).trim().replace(/\./g, '').replace(',', '.'));
-    return isNaN(n) ? null : n;
-  };
-
-  const adicionar = async () => {
-    setError(null);
-    if (descricao.trim().length < 2) {
-      setError('Descreva o item (ex: "Brinco prata", "Troca defeito")');
-      return;
-    }
-    const v = parseNum(valor);
-    // Aceita NEGATIVO (ex: TROCA DEFEITO -39,90). Bloqueia só zero.
-    if (v == null || v === 0) {
-      setError('Valor inválido — use números (ex: 49,90 ou -39,90 pra abater)');
-      return;
-    }
-    const q = Number(qty);
-    if (!q || q < 1 || !Number.isInteger(q)) {
-      setError('Quantidade deve ser número inteiro ≥ 1');
-      return;
-    }
-    setSaving(true);
-    try {
-      await api(`/pdv/sales/${saleId}/items/manual`, {
-        method: 'POST',
-        body: JSON.stringify({ descricao: descricao.trim(), valor: v, qty: q }),
-      });
-      onAdded();
-    } catch (e: any) {
-      const h = humanizeError(e);
-      setError(`${h.title}${h.hint ? ' · ' + h.hint : ''}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const total = (parseNum(valor) || 0) * (Number(qty) || 0);
-
-  return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" {...overlayClose(onClose)}>
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between">
-          <h2 className="font-black text-lg text-rose-700 flex items-center gap-2">
-            <FileText className="w-5 h-5" /> Item Manual
-          </h2>
-          <button onClick={onClose}><X className="w-5 h-5" /></button>
-        </div>
-
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[11px] text-amber-800 leading-snug">
-          ⚠️ Use só quando o produto não passa pelo bipe. Como não tem peça bipada, <b>não baixa estoque</b>.
-          <br />
-          💡 Valor pode ser <b>negativo</b> pra abater (ex: <b>TROCA DEFEITO -39,90</b>).
-        </div>
-
-        <div>
-          <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
-            Descrição
-          </label>
-          <input
-            type="text"
-            autoFocus
-            value={descricao}
-            onChange={(e) => setDescricao(e.target.value.slice(0, 80))}
-            onKeyDown={(e) => e.key === 'Enter' && document.getElementById('manual-valor')?.focus()}
-            placeholder="Ex: Brinco prata · Camisa P azul"
-            className="w-full px-3 py-3 text-base font-medium border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400"
-          />
-          <div className="text-[10px] text-slate-400 text-right mt-0.5">
-            {descricao.length}/80
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
-              Valor unitário (pode ser negativo)
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">R$</span>
-              <input
-                id="manual-valor"
-                type="text"
-                inputMode="decimal"
-                value={valor}
-                onChange={(e) => setValor(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && adicionar()}
-                placeholder="0,00 ou -39,90"
-                className={`w-full px-3 py-3 pl-10 text-xl font-bold tabular-nums border-2 rounded-xl focus:outline-none focus:ring-2 ${
-                  (parseNum(valor) ?? 0) < 0
-                    ? 'text-rose-700 border-rose-200 focus:ring-rose-300 focus:border-rose-400'
-                    : 'text-emerald-700 border-emerald-200 focus:ring-emerald-300 focus:border-emerald-400'
-                }`}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
-              Quantidade
-            </label>
-            <input
-              type="number"
-              min={1}
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && adicionar()}
-              className="w-full px-3 py-3 text-xl font-bold tabular-nums text-slate-800 border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400"
-            />
-          </div>
-        </div>
-
-        <div className="bg-slate-50 rounded-xl p-3 flex items-center justify-between">
-          <span className="text-xs text-slate-500 font-bold uppercase tracking-wide">Total do item</span>
-          <span className="text-2xl font-black text-emerald-600 tabular-nums">{brl(total)}</span>
-        </div>
-
-        {error && (
-          <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2 rounded text-sm">
-            {error}
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={onClose}
-            disabled={saving}
-            className="px-4 py-3 border-2 border-slate-300 text-slate-700 font-bold rounded-xl hover:bg-slate-50 disabled:opacity-50"
-          >
-            Cancelar
-          </button>
-          <button
-            onClick={adicionar}
-            disabled={saving}
-            className="px-4 py-3 text-white font-black rounded-xl shadow-md transition disabled:opacity-50 flex items-center justify-center gap-2"
-            style={{ background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }}
-          >
-            {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
-            Adicionar
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
 /* ─── PDV2: Overlay de ajuda — lista de atalhos do teclado (F12 / ?) ─── */
 function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
   const close = useSmartBackdropClose(onClose);
@@ -13702,7 +13514,6 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
     ['Del', 'Remover último item do carrinho'],
     ['Esc', 'Fechar modal aberto'],
     ['F12 ou ?', 'Abrir / fechar esta ajuda'],
-    ['0 + Enter', 'Lançar item manual (produto livre)'],
     ['REF + Espaço', 'Abrir a grade do modelo (tamanhos/cores)'],
   ];
   return (

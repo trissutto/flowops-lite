@@ -895,25 +895,10 @@ export class PdvController {
     return this.svc.recalcularPrecos({ saleId: id });
   }
 
-  /**
-   * POST /pdv/sales/:id/items/manual { descricao, valor, qty? }
-   * Adiciona item MANUAL — usado quando o produto não passa pelo bipe.
-   * Vendedora digita descrição + valor livres pra não travar o caixa.
-   */
-  @Post('sales/:id/items/manual')
-  addManualItem(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body() body: { descricao: string; valor: number; qty?: number },
-  ) {
-    this.requireRole(req);
-    return this.svc.addManualItem({
-      saleId: id,
-      descricao: body?.descricao,
-      valor: body?.valor,
-      qty: body?.qty,
-    });
-  }
+  // A rota POST /pdv/sales/:id/items/manual (item MANUAL com descrição e
+  // valor livres — a "função zero" do PDV) foi RETIRADA em 21/10/2026 por
+  // ordem do dono. A linha MANUAL continua existindo só pro vale presente,
+  // que a cria por dentro do serviço.
 
   /**
    * POST /pdv/sales/:id/frete { valor }
