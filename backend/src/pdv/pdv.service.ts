@@ -14,6 +14,7 @@ import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
 import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
 import { totalDoItemComDesconto } from '../common/promo-por-termo';
+import { PROMO_ANTIGOS, decidirAntigos, rotuloAntigos, totalDoItemAntigos } from '../common/promo-antigos';
 import { AccessPolicyService } from '../access-policy/access-policy.service';
 import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
@@ -3122,6 +3123,8 @@ export class PdvService {
    *   - 'POR_TERMO'     → a campanha da retaguarda (hoje "Inverno 30%", 15/09/2026):
    *                       peça cujo texto casa com um termo, menos a família tirada
    *                       na mão — a MESMA régua do site (`common/promo-por-termo.ts`)
+   *   - 'ANTIGOS'       → cadastro até 31/12/2023, MODA: R$ 49,90 até 149,90 e
+   *                       R$ 99,90 acima (`common/promo-antigos.ts`, 23/10/2026)
    *   - 'FOUR_FOR_THREE' → carrinho com ≥4 peças, a menor sai de graça (1 un)
    *   - null/'NONE'     → SEM promoção (zera todos os descontos auto)
    *
@@ -3134,6 +3137,23 @@ export class PdvService {
    * Defensivo: se a coluna `promoTag`/`active_promotion` não existir no DB
    * (db push pendente), tenta sem ela e loga o erro pra debug.
    */
+  /** REF + data de cadastro dos códigos da venda, do cadastro nativo (`product`). */
+  private async cadastroParaAntigos(
+    skus: string[],
+  ): Promise<Map<string, { ref: string | null; dataAlt: Date | null }>> {
+    const lista = Array.from(new Set(skus.filter(Boolean)));
+    const out = new Map<string, { ref: string | null; dataAlt: Date | null }>();
+    if (!lista.length) return out;
+    const rows: any[] = await (this.prisma as any).product.findMany({
+      where: { codigo: { in: lista } },
+      select: { codigo: true, ref: true, dataAlt: true },
+    });
+    for (const r of rows) {
+      out.set(String(r.codigo).trim(), { ref: r.ref ?? null, dataAlt: r.dataAlt ?? null });
+    }
+    return out;
+  }
+
   private async applyAutoDiscounts(saleId: string, knownPromotion?: string | null) {
     // PERF: quem já tem a promoção ativa em mãos (addItem) passa por parâmetro
     // e economiza uma ida ao banco por bipe.
@@ -3249,6 +3269,50 @@ export class PdvService {
           updates.push({ id: it.id, desconto: 0, total: bruto, tag });
         }
       }
+    } else if (activePromotion === PROMO_ANTIGOS) {
+      /**
+       * ANTIGOS ATÉ 2023 (dono, 23/10/2026) — preço FIXO por faixa: cadastro
+       * até 31/12/2023, MODA, R$ 49,90 até 149,90 e R$ 99,90 acima. Régua em
+       * `common/promo-antigos.ts`. Só no PDV: o site não aplica.
+       *
+       * A data e a REF saem do cadastro NATIVO (`product`, a mesma fonte do
+       * bipe e da consulta de promoção); peça fora dele decide sem data, ou
+       * seja, fica fora — salvo o ⬆️ da vendedora. Erro de leitura SOBE, igual
+       * à campanha por termo: sem a lista de básicos não se adivinha desconto.
+       */
+      const skus = (items as any[]).filter((it) => !isManual(it)).map((it) => String(it.sku || '').trim());
+      const [basicos, cadastro] = await Promise.all([
+        this.promoCampanha.basicos(),
+        this.cadastroParaAntigos(skus),
+      ]);
+      for (const it of items as any[]) {
+        if (isManual(it)) continue;
+        const c = cadastro.get(String(it.sku || '').trim());
+        const d = decidirAntigos(
+          { ref: c?.ref ?? it.ref, codigo: it.sku, dataCadastro: c?.dataAlt ?? null, preco: it.precoUnit },
+          basicos,
+          !!it.forcarPromo,
+        );
+        if (d.entra && d.precoFaixa != null) {
+          const r = totalDoItemAntigos(it.precoUnit, it.qty, d.precoFaixa);
+          updates.push({
+            id: it.id,
+            desconto: r.desconto,
+            total: r.total,
+            tag: rotuloAntigos(d.precoFaixa, d.criterio !== 'faixa'),
+          });
+        } else {
+          const tag =
+            d.criterio === 'basico'
+              ? 'Básico · sem promo'
+              : d.criterio === 'nova'
+                ? 'Sem promo · cadastro 2024+'
+                : d.criterio === 'sem_data'
+                  ? 'Sem promo · sem data'
+                  : 'Sem promo · já custa menos';
+          updates.push({ id: it.id, desconto: 0, total: it.precoUnit * it.qty, tag });
+        }
+      }
     } else if (activePromotion === 'FOUR_FOR_THREE') {
       const totalPecas = (items as any[]).reduce((s, i) => s + i.qty, 0);
       // Zera todos os descontos auto primeiro (preserva manuais)
@@ -3321,7 +3385,7 @@ export class PdvService {
         'A promoção "Liquida antigos" saiu do ar. Atualize a tela (Ctrl+Shift+R) pra ver a campanha nova.',
       );
     }
-    const allowed = ['POR_TERMO', 'FOUR_FOR_THREE', 'NONE'];
+    const allowed = ['POR_TERMO', PROMO_ANTIGOS, 'FOUR_FOR_THREE', 'NONE'];
     const promo = input.promotion && allowed.includes(input.promotion) ? input.promotion : 'NONE';
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },

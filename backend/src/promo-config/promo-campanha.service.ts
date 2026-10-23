@@ -230,9 +230,10 @@ export class PromoCampanhaService {
    * Chaves BÁSICO (`chaveDeClassificacao`). Erro de leitura SOBE: sem a lista
    * não se sabe o que é básico, e a régua anterior (que sabia) continua
    * valendo pelo fallback de `regra()` — errar pro lado de dar desconto em
-   * linha básica é o que o dono proibiu.
+   * linha básica é o que o dono proibiu. Pública: a promoção dos antigos do
+   * PDV (`common/promo-antigos.ts`) tira os mesmos básicos.
    */
-  private async basicos(): Promise<Set<string>> {
+  async basicos(): Promise<Set<string>> {
     const c = this.cacheBasicos;
     if (c && Date.now() - c.at < PromoCampanhaService.TTL) return c.chaves;
     const rows: any[] = await (this.prisma as any).productClassification.findMany({

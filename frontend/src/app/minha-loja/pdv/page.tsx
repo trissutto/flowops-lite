@@ -2987,6 +2987,7 @@ function PdvPageInner() {
                   <span className="uppercase tracking-wider">Campanha:</span>
                   <span className="font-black">
                     {sale.activePromotion === 'POR_TERMO' ? rotuloCampanha :
+                     sale.activePromotion === 'ANTIGOS' ? 'Antigos até 2023' :
                      <span className="text-slate-500 font-medium">Nenhuma</span>}
                   </span>
                 </div>
@@ -3035,6 +3036,20 @@ function PdvPageInner() {
                         ? `peças de ${campanha.nome.toLowerCase()} = ${campanha.pct}% off`
                         : 'campanha desligada'}
                   </div>
+                </button>
+                {/* Antigos (dono, 23/10/2026): preço FIXO por faixa pra peça de
+                    MODA cadastrada até 31/12/2023 — régua no backend
+                    (`common/promo-antigos.ts`). Só PDV. */}
+                <button
+                  onClick={() => setPromotion('ANTIGOS')}
+                  className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
+                    sale.activePromotion === 'ANTIGOS'
+                      ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
+                      : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  🏷️ Antigos até 2023
+                  <div className="text-[9px] font-normal">até R$ 149,90 = R$ 49,90 · acima = R$ 99,90</div>
                 </button>
               </div>
               {/* Recalcular preços — resgata o preço ATUAL (promoção) de cada
@@ -3279,20 +3294,24 @@ function PdvPageInner() {
                             >🚫</button>
                           );
                         }
-                        if (sale.activePromotion === 'POR_TERMO') {
+                        if (sale.activePromotion === 'POR_TERMO' || sale.activePromotion === 'ANTIGOS') {
                           const pecaDeCatalogo =
                             it.ref !== 'FRETE' && it.ref !== 'MANUAL' && !String(it.sku || '').startsWith('MANUAL-');
+                          // "já custa menos" (antigos): a faixa não baixa o preço — pôr não daria nada.
                           const semDesconto =
                             tag === 'SEM_PROMO' ||
                             tag === 'Básico · sem promo' ||
-                            (tag.startsWith('Sem promo') && tag !== 'Sem promo · campanha desligada');
+                            (tag.startsWith('Sem promo') &&
+                              tag !== 'Sem promo · campanha desligada' &&
+                              tag !== 'Sem promo · já custa menos');
                           const podePor = pecaDeCatalogo && semDesconto;
                           if (!podePor) return null;
+                          const nomePromo = sale.activePromotion === 'ANTIGOS' ? 'Antigos até 2023' : rotuloCampanha;
                           return (
                             <button
                               onClick={() => updateItem(it.id, { forcePromo: true })}
                               className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
-                              title={`Pôr este item na promoção ${rotuloCampanha} (só nesta venda)`}
+                              title={`Pôr este item na promoção ${nomePromo} (só nesta venda)`}
                             >⬆️</button>
                           );
                         }
