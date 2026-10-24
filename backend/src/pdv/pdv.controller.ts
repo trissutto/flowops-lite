@@ -1034,7 +1034,8 @@ export class PdvController {
   /**
    * PATCH /pdv/sales/:id/promotion { promotion }
    * Define campanha promocional ATIVA (exclusiva).
-   * Valores: 'POR_TERMO' (campanha da retaguarda) | 'FOUR_FOR_THREE' | 'NONE' | null
+   * Valores: 'POR_TERMO' (campanha da retaguarda) | 'ANTIGOS' (antigos até
+   * 31/12/2023 a 49,90/99,90) | 'FOUR_FOR_THREE' | 'NONE' | null
    */
   @Patch('sales/:id/promotion')
   setPromotion(
