@@ -1,5 +1,6 @@
 import {
   codigoDeBarrasDaEtiqueta,
+  codigoDoCadastroPeloCodigoDeBarras,
   conferirCodigosDeBarras,
   descreverProblemasDosCodigos,
   mesmaPeca,
@@ -150,5 +151,30 @@ describe('codigo-barras-fornecedor — o que o leitor mandou na conferência', (
     it('ean guardado pelo trocarCodigo imprime a etiqueta que já está na peça', () => {
       expect(codigoDeBarrasDaEtiqueta('5397334', '7891186984207')).toBe('7891186984207');
     });
+  });
+});
+
+describe('codigoDoCadastroPeloCodigoDeBarras — o lido vira o CÓDIGO da peça (04/11/2026)', () => {
+  it('EAN-13 do fornecedor vira o código como está', () => {
+    expect(codigoDoCadastroPeloCodigoDeBarras('7909989904862')).toBe('7909989904862');
+  });
+  it('segue a normalização do catálogo: só dígitos perdem o zero à esquerda', () => {
+    expect(codigoDoCadastroPeloCodigoDeBarras('0012345678905')).toBe('12345678905');
+  });
+  it('com letra fica como está, em maiúsculas e sem espaço', () => {
+    expect(codigoDoCadastroPeloCodigoDeBarras('abc-123 4567')).toBe('ABC-1234567');
+  });
+  it('lido que não cabe na coluna codigo (15+ caracteres) NÃO vira código — fica só no ean', () => {
+    expect(codigoDoCadastroPeloCodigoDeBarras('123456789012345')).toBeNull();
+    expect(codigoDoCadastroPeloCodigoDeBarras('12345678901234')).toBe('12345678901234');
+  });
+  it('lido que a conferência já recusaria (curto, símbolo, vazio) também não vira código', () => {
+    expect(codigoDoCadastroPeloCodigoDeBarras('1234567')).toBeNull();
+    expect(codigoDoCadastroPeloCodigoDeBarras('7909989904862!')).toBeNull();
+    expect(codigoDoCadastroPeloCodigoDeBarras('')).toBeNull();
+    expect(codigoDoCadastroPeloCodigoDeBarras(null)).toBeNull();
+  });
+  it('só zeros não vira código', () => {
+    expect(codigoDoCadastroPeloCodigoDeBarras('00000000')).toBeNull();
   });
 });

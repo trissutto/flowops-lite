@@ -58,7 +58,7 @@ type Order = {
     tamanhosQtyRecebida: Record<string, number> | null;
     skusGerados: Array<{
       codigo: string; cor: string; tamanho: string; descricao: string; qty: number;
-      /** Código de barras do fornecedor gravado no cadastro (só com a flag). */
+      /** Código de barras do fornecedor lido na entrada (só com a flag) — desde 04/11 é o próprio CÓDIGO da peça. */
       ean?: string | null;
       /** A peça já existia com esse EAN: entrou no código que existe, sem cadastro novo. */
       reutilizado?: boolean;
@@ -167,7 +167,7 @@ export default function PedidoDetalhePage() {
     if (!data) return;
     if (!confirm(
       `Confirmar recebimento de TODAS as ${data.totalPecas} peças do pedido #${data.numero}?\n\n` +
-      `O sistema vai cadastrar automaticamente cada SKU no catálogo (com EAN-13) e atualizar estoque.`,
+      `O sistema vai cadastrar automaticamente cada SKU no catálogo (EAN-13 do Flow — ou o código de barras lido, nas REFs com "código de barras próprio") e atualizar estoque.`,
     )) return;
 
     const pendentesItens = data.items.filter((it) => it.itemStatus !== 'recebido');
@@ -819,7 +819,7 @@ export default function PedidoDetalhePage() {
                                 className={`ml-2 inline-flex items-center gap-1 align-middle rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${
                                   it.codigoBarrasProprio ? 'bg-[#16233a] text-[#d3ac52]' : 'bg-slate-100 text-slate-500'
                                 } ${editMode && it.itemStatus !== 'recebido' ? 'cursor-pointer' : ''}`}
-                                title="A peça usa o código de barras do FORNECEDOR: ao receber, o leitor pede o código de cada tamanho e o caixa passa a bipar por ele"
+                                title="A peça usa o código de barras do FORNECEDOR: ao receber, o leitor pede o código de cada tamanho e a peça nasce com ELE como código — editor, consulta e caixa mostram o lido"
                               >
                                 {editMode && it.itemStatus !== 'recebido' && (
                                   <input
@@ -838,7 +838,7 @@ export default function PedidoDetalhePage() {
                               Array.isArray(it.skusGerados) && it.skusGerados.some((s) => s.ean) && (
                               <div
                                 className="mt-0.5 font-mono text-[10px] font-normal text-slate-500"
-                                title="Código de barras do fornecedor gravado no cadastro de cada tamanho (↺ = a peça já existia e entrou no código de sempre)"
+                                title="Código de barras lido na entrada = o código da peça no cadastro (↺ = a peça já existia com esse código e entrou nela)"
                               >
                                 {it.skusGerados
                                   .filter((s) => s.ean)
@@ -1184,13 +1184,13 @@ function AddItemModal({
         {/* Código de barras próprio (15/10, dono): o leitor pede ao receber */}
         <label
           className="flex items-center gap-2 mt-1 cursor-pointer"
-          title="A peça usa o código de barras do FORNECEDOR: ao receber, o leitor pede o código de cada tamanho e o caixa passa a bipar por ele"
+          title="A peça usa o código de barras do FORNECEDOR: ao receber, o leitor pede o código de cada tamanho e a peça nasce com ELE como código — editor, consulta e caixa mostram o lido"
         >
           <input type="checkbox" checked={codigoBarrasProprio} onChange={(e) => setCodigoBarrasProprio(e.target.checked)}
             className="accent-violet-600 w-4 h-4" />
           <span className="text-sm font-bold text-slate-700">
             CÓDIGO DE BARRAS PRÓPRIO
-            <span className="ml-1 font-normal text-slate-500">— o leitor pede o código de cada tamanho ao receber</span>
+            <span className="ml-1 font-normal text-slate-500">— o leitor pede o código de cada tamanho ao receber, e ele vira o código da peça</span>
           </span>
         </label>
 

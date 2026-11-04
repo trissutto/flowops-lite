@@ -4,6 +4,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 import { generateEan13Batch } from './ean.util';
+import {
+  codigoDoCadastroPeloCodigoDeBarras,
+  mesmaPeca,
+  normalizarCodigoBarras,
+} from '../common/codigo-barras-fornecedor';
 
 /**
  * Service do Cadastro Dinâmico de Produtos.
@@ -12,8 +17,17 @@ import { generateEan13Batch } from './ean.util';
  *  1. Frontend monta o form (grupo, subgrupo, ref, fornecedor, custo, preço,
  *     plus_size, NCM, CFOP, etc.) + lista de cores e tamanhos.
  *  2. /preview: gera matriz cor×tamanho com EANs (sem gravar).
- *  3. /processar: reserva range de EAN-13 (transação na EanSequence),
- *     insere todos no Wincred via ErpService.inserirProdutosBatch.
+ *  3. /processar: reserva range de EAN-13 (transação na EanSequence) pra
+ *     cada SKU que NÃO trouxe código de barras lido, grava na `product`
+ *     nativa + espelho `wincred_produtos` (o Flow é a fonte) e enfileira a
+ *     réplica do ERP morto no outbox (descartada com motivo).
+ *
+ * CÓDIGO DE BARRAS LIDO = CÓDIGO (04/11/2026, dono): quando a compra entra
+ * com "código de barras próprio", o SKU nasce com o código LIDO como
+ * `codigo` (e `ean`) — não mais EAN-13 do Flow + lido só no `ean`, que fazia
+ * o editor mostrar o 8000… e o dono trocar peça por peça. Régua em
+ * `common/codigo-barras-fornecedor.ts` (`codigoDoCadastroPeloCodigoDeBarras`);
+ * a conferência contra o banco é `conferirCodigosLidos`, abaixo.
  */
 @Injectable()
 export class ProductRegistrationService {
@@ -91,13 +105,28 @@ export class ProductRegistrationService {
     const linhas = this.expandirCombinacoes(input);
     if (!linhas.length) throw new BadRequestException('Nenhuma combinação cor×tamanho gerada.');
 
-    // 1) Reserva o range de EANs em transação (atualiza last_seq atomicamente)
-    const seq = await this.reservarRangeSeq(linhas.length);
-    const eans = generateEan13Batch(seq, linhas.length);
+    // 1) CÓDIGO DE BARRAS LIDO = CÓDIGO (04/11/2026, dono). Cada linha que
+    //    trouxe um código lido que serve de CÓDIGO nasce com ele; as outras
+    //    recebem EAN-13 do Flow. Confere no banco ANTES de reservar sequência
+    //    ou escrever: código de OUTRA peça é recusa honesta (nunca upsert por
+    //    cima de cadastro alheio); código da MESMA peça (segunda compra) é
+    //    reaproveitado — volta em `itens` sem regravar.
+    const linhasComCodigo = linhas.map((l) => {
+      const lido = normalizarCodigoBarras(input.eans?.[`${l.cor}|${l.tamanho}`]) || null;
+      return { ...l, lido, codigoLido: lido ? codigoDoCadastroPeloCodigoDeBarras(lido) : null };
+    });
+    const reaproveitados = await this.conferirCodigosLidos(linhasComCodigo, input);
 
-    // 2) Monta payload pro INSERT no Wincred
-    const produtos = linhas.map((l, i) => ({
-      codigo: eans[i],
+    // 2) Reserva o range de EANs do Flow SÓ pra quem não trouxe código
+    //    (atualiza last_seq atomicamente). Sem ninguém, não consome sequência.
+    const semCodigo = linhasComCodigo.filter((l) => !l.codigoLido).length;
+    const seq = semCodigo > 0 ? await this.reservarRangeSeq(semCodigo) : null;
+    const eans = seq != null ? generateEan13Batch(seq, semCodigo) : [];
+    let proximoEan = 0;
+
+    // 3) Monta payload do cadastro
+    const todos = linhasComCodigo.map((l) => ({
+      codigo: l.codigoLido ?? eans[proximoEan++],
       grupo: input.grupoCodigo,
       nomeGrupo: input.grupoNome,
       subgrupo: input.subgrupoCodigo ?? undefined,
@@ -116,26 +145,35 @@ export class ProductRegistrationService {
       tributo: input.tributo,
       marca: input.marca,
       estoqueInicial: 0,
-      // Código de barras do fornecedor (se a compra pediu) — vai pro `ean`.
-      ean: input.eans?.[`${l.cor}|${l.tamanho}`] || undefined,
+      // Código de barras lido (se a compra pediu): é o próprio CÓDIGO quando
+      // serve de código; senão (15+ caracteres) fica só no `ean`, como antes.
+      ean: l.lido || undefined,
+      codigoLido: !!l.codigoLido,
+      reaproveitado: !!l.codigoLido && reaproveitados.has(l.codigoLido),
     }));
+    // Peça que JÁ existe com esse código (segunda compra) não é regravada —
+    // o cadastro dela é do editor. Só entra na resposta.
+    const produtos = todos.filter((p) => !p.reaproveitado);
 
-    // 3) FLOW PRIMEIRO (incidente da live 14/07: produto cadastrado não
+    // 4) FLOW PRIMEIRO (incidente da live 14/07: produto cadastrado não
     //    aparecia na separação porque só existia no Giga e os espelhos
     //    demoravam 10min-6h). Grava na `product` nativa + espelho
     //    `wincred_produtos` NA HORA — grade da live, bipe e separação
     //    enxergam em segundos, e o cadastro não depende do Giga estar vivo.
     await this.gravarNoFlow(produtos);
 
-    // 4) Réplica pro Giga: tenta inline (best effort); se o Giga estiver
+    // 5) Réplica pro Giga: tenta inline (best effort); se o Giga estiver
     //    pendurado/fora, enfileira no erp_outbox (kind produto_cadastro,
     //    INSERT IGNORE = retry idempotente) e o cadastro NÃO trava.
     //    gigaAsync=true (fluxo em LOTE, ex: recebimento de compra): NÃO tenta
     //    inline — enfileira direto pra não pendurar a tela no Giga lento.
     let inseridos = produtos.length;
-    let ignorados = 0;
+    let ignorados = reaproveitados.size;
     let gigaEnfileirado = false;
-    if (opts?.gigaAsync) {
+    if (!produtos.length) {
+      // Tudo reaproveitado (a peça já existia com o código lido): nada a
+      // gravar, nada a replicar.
+    } else if (opts?.gigaAsync) {
       await (this.prisma as any).erpOutbox.create({
         data: {
           kind: 'produto_cadastro',
@@ -152,7 +190,7 @@ export class ProductRegistrationService {
       try {
         const result = await this.erp.inserirProdutosBatch(produtos);
         inseridos = result.inseridos;
-        ignorados = result.ignorados;
+        ignorados += result.ignorados;
       } catch (e) {
         gigaEnfileirado = true;
         await (this.prisma as any).erpOutbox.create({
@@ -168,45 +206,123 @@ export class ProductRegistrationService {
         );
       }
     }
+    const nascidosComLido = produtos.filter((p) => p.codigoLido).length;
     this.logger.log(
       `Cadastro Dinâmico: ref=${input.ref} grupo=${input.grupoCodigo} → ${produtos.length} no Flow` +
-        (gigaEnfileirado ? ' + Giga via outbox' : ` + ${inseridos} no Giga`),
+        (nascidosComLido ? ` (${nascidosComLido} com o código de barras lido como CÓDIGO)` : '') +
+        (reaproveitados.size ? ` + ${reaproveitados.size} já existia(m) com o código lido` : '') +
+        (gigaEnfileirado ? ' + Giga via outbox' : produtos.length ? ` + ${inseridos} no Giga` : ''),
     );
 
-    // 4) ESPELHO IMEDIATO (14/07, caso VOGUE BEGE na live): sem isso, a peça
+    // 6) ESPELHO IMEDIATO (14/07, caso VOGUE BEGE na live): sem isso, a peça
     // recém-cadastrada só aparecia na busca da live/PDV depois da corrente de
     // syncs (espelho 10min → nativa no minuto 38 — até ~1h de espera). Semeia
     // as três cópias do Postgres AGORA; os syncs seguintes só confirmam.
     // Falha aqui NUNCA desfaz o cadastro (o Giga é a fonte) — só loga.
-    try {
-      await this.espelhoImediato(produtos);
-      this.logger.log(`Cadastro Dinâmico: ${produtos.length} produto(s) espelhados na hora (wincred+giga+nativa)`);
-    } catch (e) {
-      this.logger.warn(`Cadastro Dinâmico: espelho imediato falhou (syncs normais cobrem): ${(e as Error).message}`);
+    if (produtos.length) {
+      try {
+        await this.espelhoImediato(produtos);
+        this.logger.log(`Cadastro Dinâmico: ${produtos.length} produto(s) espelhados na hora (wincred+giga+nativa)`);
+      } catch (e) {
+        this.logger.warn(`Cadastro Dinâmico: espelho imediato falhou (syncs normais cobrem): ${(e as Error).message}`);
+      }
     }
     return {
       inseridos,
       ignorados,
-      total: produtos.length,
-      seqInicial: seq.toString(),
-      seqFinal: (seq + BigInt(produtos.length - 1)).toString(),
+      total: todos.length,
+      // null quando nenhuma linha precisou de EAN do Flow (todas com código lido)
+      seqInicial: seq != null ? seq.toString() : null,
+      seqFinal: seq != null ? (seq + BigInt(semCodigo - 1)).toString() : null,
       gigaEnfileirado,
-      itens: produtos.map((p) => ({
+      itens: todos.map((p) => ({
         codigo: p.codigo,
-        descricaoCompleta: p.descricaoCompleta,
+        descricaoCompleta: p.reaproveitado
+          ? reaproveitados.get(p.codigo)?.descricaoCompleta || p.descricaoCompleta
+          : p.descricaoCompleta,
         cor: p.cor,
         tamanho: p.tamanho,
         ean: p.ean || p.codigo,
+        /** true = a peça já existia com o código lido e entrou nela, sem cadastro novo */
+        reaproveitado: p.reaproveitado,
       })),
     };
   }
 
   /**
+   * CÓDIGO LIDO VIRA CÓDIGO — a conferência no banco, ANTES de qualquer
+   * escrita (04/11/2026). O `gravarNoFlow` é upsert por código: com EAN-13 do
+   * Flow o código é sempre novo, mas o lido pode já existir — e upsert por
+   * cima de cadastro alheio fundiria duas peças (a família que o
+   * `trocarCodigo` recusa). Regra de ouro: erro honesto que SOBE.
+   *
+   *  - o mesmo código lido em duas linhas deste lote → recusa;
+   *  - código já no cadastro (`product`/`wincred_produtos`) da MESMA peça
+   *    (REF+COR+TAM, `mesmaPeca`) → reaproveita: não regrava (o cadastro dela
+   *    é do editor), mas entra na resposta — segunda compra: estoque e
+   *    etiqueta seguem no código que existe;
+   *  - código já no cadastro de OUTRA peça → recusa com o nome dela;
+   *  - código sem cadastro mas com saldo (giga_estoque, wincred_estoque,
+   *    stock) → recusa: cadastrar nele adotaria saldo de peça desconhecida.
+   *
+   * Devolve os códigos reaproveitados (código → o cadastro que existe).
+   */
+  private async conferirCodigosLidos(
+    linhas: Array<{ cor: string; tamanho: string; lido: string | null; codigoLido: string | null }>,
+    input: PreviewInput,
+  ): Promise<Map<string, { descricaoCompleta: string }>> {
+    const p: any = this.prisma;
+    const reaproveitados = new Map<string, { descricaoCompleta: string }>();
+    const vistos = new Map<string, string>();
+    const select = { codigo: true, ref: true, cor: true, tamanho: true, descricaoCompleta: true };
+    for (const l of linhas) {
+      if (!l.codigoLido) continue;
+      const onde = `${input.ref} ${l.cor} ${l.tamanho}`;
+      const dono = vistos.get(l.codigoLido);
+      if (dono) {
+        throw new BadRequestException(
+          `${onde}: o código de barras ${l.lido} já foi lido em ${dono} neste cadastro — cada tamanho tem o seu`,
+        );
+      }
+      vistos.set(l.codigoLido, onde);
+
+      const existente =
+        (await p.product.findUnique({ where: { codigo: l.codigoLido }, select })) ??
+        (await p.wincredProduto.findUnique({ where: { codigo: l.codigoLido }, select }));
+      if (existente) {
+        if (mesmaPeca(existente, { ref: input.ref, cor: l.cor, tamanho: l.tamanho })) {
+          reaproveitados.set(l.codigoLido, { descricaoCompleta: String(existente.descricaoCompleta || '') });
+          continue;
+        }
+        const nome = String(existente.descricaoCompleta || '').trim();
+        throw new BadRequestException(
+          `${onde}: o código de barras ${l.lido} já é o código da peça ${existente.codigo}` +
+            (nome ? ` (${nome})` : '') +
+            ` — bipe a etiqueta certa`,
+        );
+      }
+
+      const [ge, we, st] = await Promise.all([
+        p.gigaEstoque.count({ where: { codigo: l.codigoLido } }),
+        p.wincredEstoque.count({ where: { codigo: l.codigoLido } }),
+        p.stock.count({ where: { sku: l.codigoLido } }),
+      ]);
+      if (ge + we + st > 0) {
+        throw new BadRequestException(
+          `${onde}: o código ${l.codigoLido} não tem cadastro mas já tem estoque de outra peça — não dá pra cadastrar por cima`,
+        );
+      }
+    }
+    return reaproveitados;
+  }
+
+  /**
    * Write-through do cadastro no Flow: `product` nativa (flowIsSource — o sync
    * nunca sobrescreve) + espelho `wincred_produtos` (bipe/busca/separação leem
-   * daqui). O EAN prefixo 8 É o próprio código — salvo quando a compra trouxe
-   * o código de barras do FORNECEDOR (`ean` no payload): aí a coluna `ean`
-   * guarda esse, e é por ela que o bipe acha a peça.
+   * daqui). O EAN prefixo 8 É o próprio código. Com código de barras lido
+   * (`ean` no payload) o normal desde 04/11 é `codigo` = `ean` = o lido; só o
+   * lido que não cabe na coluna `codigo` fica apenas no `ean`, e nesse caso é
+   * por ela que o bipe acha a peça.
    */
   private async gravarNoFlow(
     produtos: Array<{
@@ -481,10 +597,14 @@ export interface PreviewInput {
   tamanhos: string[];
   /**
    * CÓDIGO DE BARRAS DO FORNECEDOR por SKU, chave `COR|TAMANHO` (15/10/2026,
-   * compra com "código de barras próprio"). Quando vem, a peça nasce com
-   * `ean` = esse código — o CÓDIGO continua sendo o EAN-13 do Flow. Sem ele,
-   * `ean` = o próprio código, como sempre. Quem confere o que o leitor mandou
-   * é `common/codigo-barras-fornecedor.ts`, ANTES de chegar aqui.
+   * compra com "código de barras próprio"). Quando vem, a peça NASCE COM ELE
+   * COMO CÓDIGO (e `ean`) — ordem do dono de 04/11/2026; antes o CÓDIGO era o
+   * EAN-13 do Flow e o lido ficava só no `ean`, e o editor mostrava o 8000….
+   * Lido que não serve de código (15–20 caracteres) ainda cai nesse modo
+   * antigo. Sem `eans`, `ean` = o próprio código, como sempre. Quem confere o
+   * que o leitor mandou é `common/codigo-barras-fornecedor.ts`, ANTES de
+   * chegar aqui; quem confere que o código não é de OUTRA peça é o
+   * `processar`, no banco (`conferirCodigosLidos`).
    */
   eans?: Record<string, string>;
 }

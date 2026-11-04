@@ -35,7 +35,7 @@ const norm = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
 // Pedido #123 da LUPO com duas REFs pendentes: 7031 AZUL (cueca, usa o código
 // de barras do FORNECEDOR → o leitor pede ao receber) e 7032 PRETO (etiqueta
 // nossa). O /receive repete a régua do backend (item marcado sem código = 400)
-// e grava o EAN lido no SKU gerado. Também cobre o lançamento (/novo).
+// e o EAN lido vira o CÓDIGO do SKU gerado (04/11). Também cobre o lançamento (/novo).
 const PEDIDOS = new Map();
 let poSeq = 124;
 let poItemSeq = 1;
@@ -85,7 +85,9 @@ const receberPedido = (po, body) => {
     it.tamanhosQtyRecebida = qtd; it.itemStatus = 'recebido';
     if (it.codigoBarrasProprio && lidos) it.eansInformados = lidos;
     it.skusGerados = Object.keys(qtd).filter((t) => Number(qtd[t]) > 0).map((t) => ({
-      codigo: String(eanSeq++), cor: it.cor, tamanho: t, qty: Number(qtd[t]),
+      // 04/11: o código de barras lido É o código da peça (antes: EAN do Flow + lido só no ean)
+      codigo: it.codigoBarrasProprio && lidos?.[t] ? String(lidos[t]).trim().toUpperCase() : String(eanSeq++),
+      cor: it.cor, tamanho: t, qty: Number(qtd[t]),
       descricao: `${it.descricaoBase} ${it.ref} ${it.cor} ${t} LUPO`,
       ...(it.codigoBarrasProprio ? { ean: lidos?.[t] || null } : {}),
     }));

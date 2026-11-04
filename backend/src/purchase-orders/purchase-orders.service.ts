@@ -734,7 +734,9 @@ export class PurchaseOrdersService {
       try {
         // Código de barras próprio: tamanho cujo EAN já é desta mesma peça
         // no catálogo NÃO ganha cadastro novo — a peça entra no código que
-        // existe (segunda compra). Os demais nascem com `ean` = o lido.
+        // existe (segunda compra). Os demais nascem com o lido como CÓDIGO
+        // (04/11, dono) — o `processar` confere de novo, no banco, que ele
+        // não é de outra peça antes de gravar.
         const reuso = codigosLidos?.reuso ?? new Map<string, { codigo: string; descricao: string }>();
         const tamanhosNovos = tamanhos.filter((t) => !reuso.has(t));
         const corChave = String(it.cor).trim();
@@ -1057,7 +1059,10 @@ export class PurchaseOrdersService {
     descricaoCompleta: string | null;
   } | null> {
     const digitos = codigoBarras.replace(/\D/g, '');
-    const codigoNormalizado = digitos.replace(/^0+/, '');
+    // Como CÓDIGO: a normalização do catálogo (só dígitos perdem o zero à
+    // esquerda; com letra fica como está) — é assim que o cadastro grava o
+    // lido desde 04/11 e que o `trocarCodigo` grava o digitado.
+    const codigoNormalizado = /^\d+$/.test(codigoBarras) ? codigoBarras.replace(/^0+/, '') : codigoBarras;
     const or: any[] = [{ ean: codigoBarras }];
     if (digitos && digitos !== codigoBarras) or.push({ ean: digitos });
     if (codigoNormalizado) or.push({ codigo: codigoNormalizado });

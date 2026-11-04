@@ -8,8 +8,9 @@
  * marcada com "código de barras próprio" não imprime etiqueta nossa — o
  * caixa vai bipar a etiqueta do FORNECEDOR. Então, na hora de dar entrada,
  * este modal abre com UMA linha por cor × tamanho com peça, e a pessoa lê
- * uma peça de cada tamanho. O código vai pro cadastro (`ean`) e o bipe do
- * PDV passa a achar a peça por ele.
+ * uma peça de cada tamanho. O código lido vira o CÓDIGO da peça no cadastro
+ * (e o `ean`) — desde 04/11/2026; antes ia só pro `ean` e o editor mostrava
+ * o EAN-13 do Flow, que o dono trocava à mão. É ele que o bipe do PDV acha.
  *
  * Como funciona com leitor USB (emula teclado + Enter):
  *  - o foco nasce na primeira linha sem código; cada Enter confere o lido
@@ -149,7 +150,7 @@ export function BipeCodigoBarrasModal({
             </h2>
             <p className="mt-1 text-[12.5px] leading-snug text-slate-300">
               Esta peça usa o código de barras do fornecedor. Leia a etiqueta de <b className="text-white">uma peça de cada tamanho</b>:
-              o código vai pro cadastro e o caixa passa a bipar por ele.
+              o código lido vira o código da peça no cadastro — é ele que o editor mostra e o caixa bipa.
             </p>
           </div>
           <button

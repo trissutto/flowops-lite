@@ -165,3 +165,33 @@ export function mesmaPeca(
     n(achada.tamanho, 20) === n(item.tamanho, 20)
   );
 }
+
+/**
+ * O CÓDIGO DE BARRAS LIDO É O CÓDIGO DA PEÇA (04/11/2026, dono: "eu altero
+ * para o código que vem no produto escaneando; aí no editor de produtos o
+ * código é ainda o antigo e eu tenho que mudar de novo — preciso que ele já
+ * salve o código escaneado no ato do cadastro").
+ *
+ * Até aqui a peça com "código de barras próprio" nascia com o EAN-13 do Flow
+ * como CÓDIGO e o lido só na coluna `ean`: o editor, a consulta e a etiqueta
+ * mostravam o 8000…, e o dono trocava peça por peça com o `trocarCodigo`.
+ * Agora o cadastro faz o que o `trocarCodigo` faria: o lido vira o CÓDIGO
+ * (e o `ean`), pela MESMA régua dele — normalização do catálogo (só dígitos
+ * perdem o zero à esquerda), teto de 14 caracteres (coluna `codigo`), só
+ * letra/número/hífen. Código de barras que não cabe nessa régua (15 a 20
+ * caracteres) fica como antes: CÓDIGO do Flow + `ean` = o lido, e o bipe
+ * continua achando pelo `ean`.
+ *
+ * Devolve o código que a peça vai ter, ou null quando o lido não serve de
+ * CÓDIGO. Quem confere que ele não é de OUTRA peça é o cadastro, no banco.
+ */
+export const CODIGO_CADASTRO_MAX = 14;
+
+export function codigoDoCadastroPeloCodigoDeBarras(codigoBarras: unknown): string | null {
+  const lido = normalizarCodigoBarras(codigoBarras);
+  if (!lido || motivoCodigoBarrasInvalido(lido)) return null;
+  const codigo = /^\d+$/.test(lido) ? lido.replace(/^0+/, '') : lido;
+  if (!codigo) return null;
+  if (!new RegExp(`^[A-Z0-9-]{1,${CODIGO_CADASTRO_MAX}}$`).test(codigo)) return null;
+  return codigo;
+}

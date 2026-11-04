@@ -4634,8 +4634,11 @@ model PurchaseOrderItem {
   skusGerados         String?       @map("skus_gerados") @db.Text // JSON
   /// CÓDIGO DE BARRAS PRÓPRIO (15/10/2026, dono): a peça usa o código de barras
   /// do FORNECEDOR. Na conferência o leitor pede o código de cada tamanho com
-  /// peça; ele vai pra coluna `ean` do cadastro (o CÓDIGO continua sendo o
-  /// EAN-13 do Flow). Sem a flag, nada muda. Régua: common/codigo-barras-fornecedor.ts
+  /// peça e, desde 04/11/2026, a peça NASCE com ele como CÓDIGO (e `ean`) —
+  /// antes o CÓDIGO era o EAN-13 do Flow e o lido ficava só no `ean`, e o
+  /// editor mostrava o 8000…. Lido que não cabe na coluna `codigo` (15+
+  /// caracteres) ainda fica só no `ean`. Sem a flag, nada muda.
+  /// Régua: common/codigo-barras-fornecedor.ts
   codigoBarrasProprio Boolean       @default(false) @map("codigo_barras_proprio")
   /// O que o leitor mandou, por tamanho — JSON {"P":"7891234567895",...}.
   /// Fica depois do estorno (Corrigir) pra pré-preencher a próxima conferência.

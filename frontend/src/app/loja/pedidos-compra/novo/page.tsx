@@ -1818,7 +1818,7 @@ function ItemEditor({
             fornecedor — no Conferir o leitor pede o código de cada tamanho. */}
         <label
           className={`po-plus-toggle sm:max-w-[320px] ${item.codigoBarrasProprio ? 'is-active' : ''}`}
-          title="A peça usa o código de barras do FORNECEDOR: no Conferir, o leitor pede o código de cada cor × tamanho e o caixa passa a bipar por ele"
+          title="A peça usa o código de barras do FORNECEDOR: no Conferir, o leitor pede o código de cada cor × tamanho e a peça nasce com ele como código — editor, consulta e caixa mostram o lido"
         >
           <input
             type="checkbox"
