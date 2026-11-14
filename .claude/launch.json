@@ -95,6 +95,15 @@
       ],
       "cwd": "frontend",
       "port": 3020
+    },
+    {
+      "name": "mock-api-admin",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/mock-api.js",
+        "--admin"
+      ],
+      "port": 3001
     }
   ]
 }

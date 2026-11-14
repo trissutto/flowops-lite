@@ -27,6 +27,11 @@ import {
   type HorasDoEvento as Horas,
   type JanelaCadastrada,
 } from '@/lib/atestado-horas';
+import {
+  horasDaJornada,
+  podePreencherPelaJornada,
+  resumoDaJornada,
+} from '@/lib/horas-da-jornada';
 
 type Seller = {
   id: string;
@@ -80,6 +85,9 @@ type Espelho = {
     faltaInjustificada?: boolean;
     /** Jornada cadastrada do dia — preenche o "das" do atestado de horas. */
     janela?: JanelaCadastrada | null;
+    /** Dia de DUAS batidas (jornada sem intervalo) — decide se o "preencher
+     *  pela jornada" põe almoço. Ausente na API velha. */
+    semIntervalo?: boolean;
   }>;
   totais: {
     minTrabalhado: number;
@@ -892,6 +900,10 @@ function ModalAjustarDia({
   const [erro, setErro] = useState<string | null>(null);
 
   // A loja da batida nova: a do próprio dia, senão a loja da funcionária.
+  // Pode vir VAZIA (vendedora/caixa sem responsável no cadastro, ou a API
+  // velha durante o deploy) — e aí quem resolve é o backend, pelo cadastro
+  // dela. Até 14/11/2026 a caixa travava aqui com "Loja da funcionária não
+  // identificada": FALTA de quem esqueceu de bater não tinha conserto.
   const storeId = registros[0]?.storeId || seller.storeId || '';
 
   const mudou = SLOTS.some((s) => (horas[s.tipo] || '') !== (original[s.tipo]?.hora ?? ''));
@@ -954,11 +966,14 @@ function ModalAjustarDia({
             body: JSON.stringify({ timestamp: iso(agora), justificativa: motivo }),
           });
         } else if (!antes && agora) {
-          if (!storeId) throw new Error('Loja da funcionária não identificada — não dá pra lançar a batida.');
           await api('/ponto/manual', {
             method: 'POST',
             body: JSON.stringify({
-              sellerId: seller.id, storeId, tipo: s.tipo,
+              sellerId: seller.id,
+              // Sem loja aqui, o backend acha a dela (cadastro → loja de
+              // origem → última batida) e recusa com motivo se não houver.
+              ...(storeId ? { storeId } : {}),
+              tipo: s.tipo,
               timestamp: iso(agora), justificativa: motivo,
             }),
           });
@@ -1102,6 +1117,26 @@ function ModalAjustarDia({
               Campo vazio que você preencher vira batida nova; campo preenchido
               que você apagar exclui a batida.
             </p>
+            {/* DIA SEM BATIDA (dono, 14/11/2026: "permitir inserir os horários
+                manualmente nos dias em que não ocorreram batidas"). A jornada
+                cadastrada já diz as horas do dia — um clique preenche os campos
+                e a supervisão corrige só o que foi diferente. Salvar segue o
+                caminho de sempre: campo preenchido vira batida. */}
+            {registros.length === 0 && podePreencherPelaJornada(dia.janela) && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap text-[11px]">
+                <button
+                  type="button"
+                  disabled={apiVelha || busy}
+                  onClick={() => setHoras(horasDaJornada(dia.janela!, dia.semIntervalo))}
+                  className="font-bold text-brand hover:underline disabled:opacity-40"
+                >
+                  Preencher com a jornada do dia
+                </button>
+                <span className="text-slate-500">
+                  {resumoDaJornada(dia.janela!, dia.semIntervalo)} — depois ajuste o que foi diferente
+                </span>
+              </div>
+            )}
             {/* Batida que a JORNADA leu diferente do que o terminal carimbou: o
                 sábado sem intervalo em que a saída das 13:00 nasceu como "saída
                 almoço" (antes de 26/09/2026). O backend já conta certo — aqui

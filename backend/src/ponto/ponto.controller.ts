@@ -269,16 +269,17 @@ export class PontoController {
     @Body()
     body: {
       sellerId: string;
-      storeId: string;
+      /** Opcional: sem ela o service resolve pelo cadastro da funcionária. */
+      storeId?: string;
       tipo: string;
       timestamp: string;
       justificativa: string;
     },
     @Req() req: any,
   ) {
-    if (!body?.sellerId || !body?.storeId || !body?.tipo || !body?.timestamp) {
+    if (!body?.sellerId || !body?.tipo || !body?.timestamp) {
       throw new BadRequestException(
-        'sellerId, storeId, tipo e timestamp são obrigatórios',
+        'sellerId, tipo e timestamp são obrigatórios',
       );
     }
     return this.svc.criarManual({

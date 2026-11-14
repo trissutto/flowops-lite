@@ -185,6 +185,12 @@ const server = http.createServer((req, res) => {
       efeito, parcial, foraDaJornada: parcial && minPrevisto > 0 && efeito !== 'nenhum' && afetados === 0,
       tipo: { codigo: tipo, label: tipo, admiteParcial } });
   }
+  if (url.pathname === '/api/ponto/manual' && req.method === 'POST') {
+    return lerCorpo(req, (body) => {
+      console.log(`[mock] POST /ponto/manual ${JSON.stringify(body)}`);
+      json({ id: `r-manual-${Date.now()}`, source: 'manual_admin', justificado: true, ...body, storeId: body.storeId || 'loja01 (resolvida pelo cadastro)' });
+    });
+  }
   if (url.pathname === '/api/ponto/espelho') {
     const ano = Number(url.searchParams.get('ano')) || 2026;
     const mes = Number(url.searchParams.get('mes')) || 9;
@@ -212,9 +218,11 @@ const server = http.createServer((req, res) => {
       tT += minTrabalhado; tP += minPrevisto;
       dias.push({ data, diaSemana, folga: !janela, entrada: ts('entrada'), saidaAlmoco: ts('saida_almoco'), voltaAlmoco: ts('volta_almoco'), saida: ts('saida'),
         minTrabalhado, minPrevisto, saldoMin: minTrabalhado - minPrevisto, batidas: registros.length, registros,
-        completo: !!ts('entrada') && !!ts('saida'), justificado: false, eventos: [], minAbonado: 0, minDebitadoBanco: 0, abonado: false, faltaInjustificada: false, janela });
+        completo: !!ts('entrada') && !!ts('saida'), justificado: false, eventos: [], minAbonado: 0, minDebitadoBanco: 0, abonado: false, faltaInjustificada: false, janela,
+        // Dia de DUAS batidas (sem almoço cadastrado) — o "preencher pela jornada" (14/11) lê isto.
+        semIntervalo: !!janela && !janela.almocoInicio });
     }
-    return json({ seller: { id: 's1', name: 'MARIA APARECIDA', cargo: 'VENDEDORA', storeId: 'loja01' }, periodo: { ano, mes },
+    return json({ seller: { id: 's1', name: 'MARIA APARECIDA', cargo: 'VENDEDORA', storeId: null /* API velha: caixa sem responsável (14/11) */ }, periodo: { ano, mes },
       dias, totais: { minTrabalhado: tT, minPrevisto: tP, saldoMin: tT - tP, minAbonado: 0, minDebitadoBanco: 0 } });
   }
 

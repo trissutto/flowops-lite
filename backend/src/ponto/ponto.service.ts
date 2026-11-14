@@ -677,9 +677,12 @@ export class PontoService {
         name: true,
         horarioTrabalho: true,
         cargo: true,
-        // Pra tela poder LANÇAR batida que faltou: `POST /ponto/manual` exige
-        // storeId, e num dia sem nenhuma batida não há de onde tirar.
+        // Pra tela poder LANÇAR batida que faltou: `POST /ponto/manual` grava
+        // storeId, e num dia sem nenhuma batida não há de onde tirar. Os dois
+        // campos entram em `lojaDaFuncionaria` — só o responsável deixava
+        // vendedora e caixa (que vêm com `storeCodeOrigin`) sem loja.
         responsibleStoreId: true,
+        storeCodeOrigin: true,
       },
     });
     if (!seller) throw new NotFoundException('Funcionária não encontrada');
@@ -833,7 +836,10 @@ export class PontoService {
         id: seller.id,
         name: seller.name,
         cargo: seller.cargo,
-        storeId: seller.responsibleStoreId ?? null,
+        // A loja que a caixa "Ajustar" manda na batida lançada à mão num dia
+        // SEM batida. Era só `responsibleStoreId` — vazio em vendedora e
+        // caixa, que chegam com `storeCodeOrigin` (ver `lojaDaFuncionaria`).
+        storeId: await this.lojaDaFuncionaria(seller),
       },
       periodo: { ano, mes, inicio, fim },
       dias,
@@ -1077,10 +1083,55 @@ export class PontoService {
     });
   }
 
-  /** Admin cria registro manual (esqueceu de bater). */
+  /**
+   * A LOJA DA FUNCIONÁRIA — pra batida lançada à mão num dia SEM batida.
+   *
+   * `POST /ponto/manual` grava `storeId` (coluna obrigatória) e a caixa
+   * "Ajustar" do espelho tirava a loja da primeira batida do dia; num dia
+   * vazio, do `seller.storeId` do espelho, que era só `responsibleStoreId`.
+   * Esse campo é de LÍDER/GERENTE: vendedora e caixa chegam do Wincred com
+   * `storeCodeOrigin` (o CODE da loja) e `responsibleStoreId` vazio — 62 das
+   * 73 ativas em 14/11/2026 (a Ariadne, caixa da 10, entre elas). Resultado:
+   * a FALTA de quem esqueceu de bater não tinha conserto ("Loja da
+   * funcionária não identificada") e a supervisão só conseguia lançar
+   * horário pra gerente. Pedido do dono, 14/11/2026: "permitir inserir os
+   * horários manualmente nos dias em que não ocorreram batidas de ponto".
+   *
+   * Ordem: cadastro de responsável → loja de origem (por code) → loja da
+   * última batida dela. Null só quando nada disso existe — e aí o erro sobe
+   * honesto em vez de gravar batida numa loja inventada.
+   */
+  private async lojaDaFuncionaria(seller: {
+    id: string;
+    responsibleStoreId?: string | null;
+    storeCodeOrigin?: string | null;
+  }): Promise<string | null> {
+    if (seller.responsibleStoreId) return seller.responsibleStoreId;
+    if (seller.storeCodeOrigin) {
+      const loja = await (this.prisma as any).store.findUnique({
+        where: { code: seller.storeCodeOrigin },
+        select: { id: true },
+      });
+      if (loja?.id) return loja.id;
+    }
+    const ultima = await (this.prisma as any).pontoRegistro.findFirst({
+      where: { sellerId: seller.id },
+      orderBy: { timestamp: 'desc' },
+      select: { storeId: true },
+    });
+    return ultima?.storeId ?? null;
+  }
+
+  /**
+   * Admin cria registro manual (esqueceu de bater).
+   *
+   * `storeId` é opcional desde 14/11/2026: sem ele a loja sai do cadastro da
+   * funcionária (`lojaDaFuncionaria`). Quem manda continua valendo — a caixa
+   * "Ajustar" manda a loja da primeira batida do dia quando há uma.
+   */
   async criarManual(input: {
     sellerId: string;
-    storeId: string;
+    storeId?: string | null;
     tipo: string;
     timestamp: string;
     justificativa: string;
@@ -1089,24 +1140,42 @@ export class PontoService {
     if (!PontoService.TIPOS_VALIDOS.includes(input.tipo)) {
       throw new BadRequestException('Tipo inválido');
     }
+    if (!input.justificativa || input.justificativa.trim().length < 3) {
+      throw new BadRequestException('Justificativa obrigatória (mínimo 3 caracteres)');
+    }
+    const ts = new Date(input.timestamp);
+    if (isNaN(ts.getTime())) throw new BadRequestException('timestamp inválido');
     const seller = await (this.prisma as any).seller.findUnique({
       where: { id: input.sellerId },
     });
     if (!seller) throw new NotFoundException('Funcionária não encontrada');
 
-    return (this.prisma as any).pontoRegistro.create({
+    const storeId = input.storeId || (await this.lojaDaFuncionaria(seller));
+    if (!storeId) {
+      throw new BadRequestException(
+        `${seller.name} está sem loja no cadastro (e nunca bateu ponto) — ` +
+          'informe a loja na ficha da funcionária antes de lançar o horário.',
+      );
+    }
+
+    const criado = await (this.prisma as any).pontoRegistro.create({
       data: {
         sellerId: input.sellerId,
-        storeId: input.storeId,
+        storeId,
         tipo: input.tipo,
         source: 'manual_admin',
-        timestamp: new Date(input.timestamp),
+        timestamp: ts,
         justificado: true,
-        justificativa: input.justificativa,
+        justificativa: input.justificativa.trim(),
         justificadoBy: input.userId || null,
         justificadoAt: new Date(),
       },
     });
+    this.logger.log(
+      `[ponto] MANUAL ${seller.name}: ${input.tipo}@${ts.toISOString()} loja ${storeId}` +
+        `${input.storeId ? '' : ' (resolvida pelo cadastro)'} por ${input.userId || '?'} — ${input.justificativa.trim()}`,
+    );
+    return criado;
   }
 
   // ── LISTA DE FUNCIONÁRIAS DA LOJA (pro enroll facial da gerente) ──
