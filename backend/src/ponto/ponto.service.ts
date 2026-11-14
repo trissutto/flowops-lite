@@ -21,6 +21,7 @@ import {
   sequenciaDoDia,
   turnoDoDia,
 } from '../common/jornada-do-dia';
+import { antesDaAdmissao, chaveDataSo } from '../common/vinculo-do-dia';
 
 /**
  * Retorna chave YYYY-MM-DD da data NA TIMEZONE DE SÃO PAULO (UTC-3).
@@ -683,6 +684,8 @@ export class PontoService {
         // vendedora e caixa (que vêm com `storeCodeOrigin`) sem loja.
         responsibleStoreId: true,
         storeCodeOrigin: true,
+        // Dia ANTERIOR à admissão não cobra jornada (dono, 14/11/2026).
+        dataAdmissao: true,
       },
     });
     if (!seller) throw new NotFoundException('Funcionária não encontrada');
@@ -698,6 +701,11 @@ export class PontoService {
     // A jornada cadastrada, lida pela régua (`common/jornada-do-dia.ts`): é
     // ela que diz quanto o dia cobra E quantas batidas o dia tem.
     const turnos = parseHorarioTrabalho(seller.horarioTrabalho);
+
+    // A admissão como DATA ('YYYY-MM-DD', régua `common/vinculo-do-dia.ts`).
+    // `@db.Date` chega como meia-noite UTC — lida em Brasília seria o dia
+    // ANTERIOR, e a admissão de dia 06 passaria a valer dia 05.
+    const admissao = chaveDataSo(seller.dataAdmissao);
 
     // Agrupa por dia — USA TIMEZONE BRASIL (jun/2026: bug de batida 22:32 BR
     // virava 01:32 UTC do dia seguinte e aparecia no dia errado no espelho)
@@ -738,10 +746,20 @@ export class PontoService {
       const { entrada, saidaAlmoco, voltaAlmoco, saida } = leitura;
       let minTrabalhado = leitura.minTrabalhado;
 
+      // ANTES DA ADMISSÃO (dono, 14/11/2026: "não gerar falta, nem saldo
+      // devedor em datas anteriores à admissão"): o dia não cobra jornada —
+      // previsto 0, saldo 0, e a loja não vê FALTA de quem ainda não era
+      // funcionária. Dia anterior à admissão COM batida NÃO é zerado: a
+      // batida é o fato, e diz que a data da ficha está errada. Ele conta
+      // como qualquer dia e vai carimbado (`antesDaAdmissao`) pra tela
+      // cobrar a ficha, em vez de virar hora extra calada.
+      const antesDaAdm = antesDaAdmissao(dKey, admissao);
+      const foraDoVinculo = antesDaAdm && batidas.length === 0;
+
       // Minutos previstos — a MESMA conta do abono (`minutosPrevistos`), pra
       // previsto e atestado não divergirem sobre o tamanho do mesmo dia.
       const folga = !!expected?.folga;
-      let minPrevisto = minutosPrevistosDoTurno(expected);
+      let minPrevisto = foraDoVinculo ? 0 : minutosPrevistosDoTurno(expected);
 
       // ── EVENTO DE RH ──────────────────────────────────────────────
       // Atestado, férias, treinamento. O TIPO decide o efeito (régua em
@@ -816,6 +834,9 @@ export class PontoService {
         minDebitadoBanco,
         abonado: efeito.abonado,
         faltaInjustificada: efeito.faltaInjustificada,
+        // Dia anterior à admissão da ficha. Sem batida ele veio com previsto
+        // 0; com batida, a tela avisa que a ficha está errada.
+        antesDaAdmissao: antesDaAdm,
         // A jornada cadastrada do dia, pra caixa "Ajustar" preencher o "das"
         // do atestado de horas com a ENTRADA dela — quem lança digita só o
         // "até". Null em folga e em dia sem cadastro: não há o que preencher.
@@ -842,6 +863,9 @@ export class PontoService {
         storeId: await this.lojaDaFuncionaria(seller),
       },
       periodo: { ano, mes, inicio, fim },
+      // A data que corta o mês. Null = ficha sem admissão: o espelho cobra o
+      // mês inteiro, e a tela pede pra preencher.
+      vinculo: { admissao },
       dias,
       totais: {
         minTrabalhado: totalMinTrabalhado,

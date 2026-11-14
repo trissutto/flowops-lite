@@ -88,7 +88,14 @@ type Espelho = {
     /** Dia de DUAS batidas (jornada sem intervalo) — decide se o "preencher
      *  pela jornada" põe almoço. Ausente na API velha. */
     semIntervalo?: boolean;
+    /** Dia ANTERIOR à admissão da ficha (dono, 14/11/2026): sem batida ele
+     *  vem com previsto 0 — não é FALTA de quem ainda não era funcionária.
+     *  Com batida, a ficha é que está errada. Ausente na API velha. */
+    antesDaAdmissao?: boolean;
   }>;
+  /** A data que corta o mês. `admissao: null` = ficha sem admissão (o espelho
+   *  cobra o mês inteiro). Ausente na API velha. */
+  vinculo?: { admissao: string | null };
   totais: {
     minTrabalhado: number;
     minPrevisto: number;
@@ -659,6 +666,29 @@ export default function EspelhoPontoPage() {
               />
             </div>
 
+            {/* ADMISSÃO (dono, 14/11/2026): dia anterior à admissão não cobra
+                jornada. Quando o corte cai DENTRO do mês a tela diz onde; sem
+                data na ficha, pede pra preencher — senão o mês inteiro cobra
+                de quem entrou no dia 20. */}
+            {espelho.vinculo && !espelho.vinculo.admissao && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2 text-xs flex gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  <b>Sem data de admissão na ficha.</b> O espelho cobra o mês inteiro — se ela
+                  entrou no meio do mês, preencha a admissão em Vendedoras → ficha e os dias
+                  anteriores deixam de contar como falta.
+                </span>
+              </div>
+            )}
+            {espelho.vinculo?.admissao && espelho.dias.some((d) => d.antesDaAdmissao) && (
+              <div className="bg-slate-50 border border-slate-200 text-slate-600 rounded-lg px-3 py-2 text-xs">
+                Admitida em <b>{fmtData(espelho.vinculo.admissao)}</b>
+                {espelho.dias.every((d) => d.antesDaAdmissao)
+                  ? ' — este mês é anterior à admissão: nenhum dia cobra jornada.'
+                  : ' — os dias anteriores não cobram jornada e não contam como falta.'}
+              </div>
+            )}
+
             {/* Tabela */}
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
               <div className="overflow-x-auto">
@@ -696,17 +726,24 @@ export default function EspelhoPontoPage() {
                         !d.folga &&
                         d.batidas > 0 &&
                         d.batidas < (d.entrada && d.saida ? 2 : 4);
+                      // Antes da admissão (14/11): sem batida o dia veio com
+                      // previsto 0 e não é falta; com batida, a ficha está
+                      // errada — a linha avisa em vez de virar hora extra.
+                      const antesDaAdmissao = !!d.antesDaAdmissao && d.batidas === 0;
+                      const bateuAntesDaAdmissao = !!d.antesDaAdmissao && d.batidas > 0;
                       return (
                         <tr
                           key={d.data}
                           className={`border-t ${
-                            d.folga
-                              ? 'bg-slate-50'
-                              : isFalta
-                                ? 'bg-rose-50'
-                                : evento
-                                  ? 'bg-sky-50'
-                                  : ''
+                            antesDaAdmissao
+                              ? 'bg-slate-50 text-slate-400'
+                              : d.folga
+                                ? 'bg-slate-50'
+                                : isFalta
+                                  ? 'bg-rose-50'
+                                  : evento
+                                    ? 'bg-sky-50'
+                                    : ''
                           }`}
                         >
                           <td className="px-3 py-2 font-bold">
@@ -730,7 +767,21 @@ export default function EspelhoPontoPage() {
                             {fmtMin(d.saldoMin)}
                           </td>
                           <td className="px-3 py-2 text-center">
-                            {d.folga ? (
+                            {antesDaAdmissao ? (
+                              <span
+                                className="text-xs text-slate-400"
+                                title="Dia anterior à admissão da ficha — não cobra jornada"
+                              >
+                                Antes da admissão
+                              </span>
+                            ) : bateuAntesDaAdmissao ? (
+                              <span
+                                className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded"
+                                title="Há batida ANTES da data de admissão da ficha — confira a admissão em Vendedoras → ficha"
+                              >
+                                Bateu antes da admissão
+                              </span>
+                            ) : d.folga ? (
                               <span className="text-xs text-slate-400">Folga</span>
                             ) : evento ? (
                               // O evento vem ANTES da falta: a razão do dia
@@ -795,6 +846,7 @@ export default function EspelhoPontoPage() {
               <span><b className="text-rose-700">FALTA</b> previsto mas não bateu</span>
               <span><b className="text-amber-700">Incompl.</b> bateu mas não fechou</span>
               <span><b className="text-amber-700">Justific.</b> corrigido pelo admin</span>
+              <span><b className="text-slate-500">Antes da admissão</b> não cobra jornada</span>
             </div>
           </>
         )}
@@ -1070,6 +1122,7 @@ function ModalAjustarDia({
             <p className="text-xs text-slate-500">
               {seller.name} · {dia.diaSemana}
               {dia.folga && ' · folga no cadastro'}
+              {dia.antesDaAdmissao && ' · antes da admissão'}
             </p>
           </div>
           <button onClick={onFechar} className="p-1.5 rounded hover:bg-slate-100">
@@ -1117,6 +1170,16 @@ function ModalAjustarDia({
               Campo vazio que você preencher vira batida nova; campo preenchido
               que você apagar exclui a batida.
             </p>
+            {/* ANTES DA ADMISSÃO (14/11): o dia já veio sem jornada. Lançar
+                horário aqui é dizer que ela trabalhou antes da data da ficha —
+                o conserto certo é na ficha, e a tela diz isso ANTES de gravar. */}
+            {dia.antesDaAdmissao && (
+              <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mt-2">
+                Este dia é anterior à data de admissão da ficha e não cobra jornada. Se ela
+                trabalhou neste dia, corrija a admissão em Vendedoras → ficha; o horário
+                lançado aqui fica marcado como "bateu antes da admissão".
+              </p>
+            )}
             {/* DIA SEM BATIDA (dono, 14/11/2026: "permitir inserir os horários
                 manualmente nos dias em que não ocorreram batidas"). A jornada
                 cadastrada já diz as horas do dia — um clique preenche os campos

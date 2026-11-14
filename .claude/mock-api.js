@@ -133,6 +133,9 @@ const server = http.createServer((req, res) => {
     return Math.max(0, t);
   };
   const rhIso = (d, hhmm) => new Date(`${d}T${hhmm}:00-03:00`).toISOString();
+  // Admissão (14/11/2026): dia anterior não cobra jornada. 01/09 (terça) é o
+  // caso limpo (zerado); 02/09 tem batida ANTES da ficha (a tela avisa).
+  const RH_ADMISSAO = '2026-09-03';
   if (url.pathname === '/api/sellers') {
     return json([{ id: 's1', name: 'MARIA APARECIDA', active: true, cargo: 'VENDEDORA', responsibleStoreId: 'loja01' }]);
   }
@@ -201,8 +204,9 @@ const server = http.createServer((req, res) => {
       const data = `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const janela = RH_JANELA(data);
       const diaSemana = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'][new Date(`${data}T12:00:00Z`).getUTCDay()];
-      const minPrevisto = rhPrevisto(janela);
-      const passado = data <= '2026-09-25' && janela;
+      const antesDaAdmissao = data < RH_ADMISSAO;
+      const passado = data >= '2026-09-02' && data <= '2026-09-25' && janela;
+      const minPrevisto = antesDaAdmissao && !passado ? 0 : rhPrevisto(janela);
       const atrasada = data === '2026-09-21';
       const horas = !passado ? null
         : diaSemana === 'SAB' ? { entrada: '09:02', saida: '13:01' }
@@ -220,9 +224,10 @@ const server = http.createServer((req, res) => {
         minTrabalhado, minPrevisto, saldoMin: minTrabalhado - minPrevisto, batidas: registros.length, registros,
         completo: !!ts('entrada') && !!ts('saida'), justificado: false, eventos: [], minAbonado: 0, minDebitadoBanco: 0, abonado: false, faltaInjustificada: false, janela,
         // Dia de DUAS batidas (sem almoço cadastrado) — o "preencher pela jornada" (14/11) lê isto.
-        semIntervalo: !!janela && !janela.almocoInicio });
+        semIntervalo: !!janela && !janela.almocoInicio, antesDaAdmissao });
     }
     return json({ seller: { id: 's1', name: 'MARIA APARECIDA', cargo: 'VENDEDORA', storeId: null /* API velha: caixa sem responsável (14/11) */ }, periodo: { ano, mes },
+      vinculo: { admissao: RH_ADMISSAO },
       dias, totais: { minTrabalhado: tT, minPrevisto: tP, saldoMin: tT - tP, minAbonado: 0, minDebitadoBanco: 0 } });
   }
 
