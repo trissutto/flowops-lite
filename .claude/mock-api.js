@@ -421,7 +421,9 @@ const server = http.createServer((req, res) => {
   if (/^\/api\/nfe\/venda\/[^/]+$/.test(url.pathname) && req.method === 'POST') {
     return lerCorpo(req, (body) => {
       console.log(`[mock] NF-e da venda: ${JSON.stringify(body)}`);
-      json({ ok: true, doc: { id: 'nfe-doc-1', numero: 87, status: 'authorized' } });
+      // ⚠️ Nunca responder "autorizada" aqui: o dono clica no preview e a tela é
+      // igual à de produção (16/11/2026 — ele emitiu no mock achando que era real).
+      json({ ok: false, xMotivo: 'SIMULADO (mock local) — nada foi enviado à SEFAZ. Emita na tela de produção.' });
     });
   }
   if (/^\/api\/pdv\/sales\/[^/]+\/customer$/.test(url.pathname) && req.method === 'PATCH') {
@@ -432,7 +434,7 @@ const server = http.createServer((req, res) => {
   }
   if (/^\/api\/pdv\/sales\/[^/]+\/nfce$/.test(url.pathname) && req.method === 'POST') {
     console.log('[mock] reemissão da NFC-e');
-    return json({ status: 'authorized', numero: 425 });
+    return json({ status: 'rejected', motivo: 'SIMULADO (mock local) — nada foi enviado à SEFAZ. Reemita na tela de produção.' });
   }
   if (url.pathname === '/api/pdv/discount-policy') return json({ freeUpToPct: 5, caixaUpToPct: 10 });
   if (url.pathname === '/api/pdv/convenio/ativo') return json(null);
