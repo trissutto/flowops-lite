@@ -6,6 +6,7 @@ import { NfeSequenceService } from './nfe-sequence.service';
 import { signXmlNfeWithA1, transmitNfeSefazSp, cancelNfceSefazSp } from '../pdv/nfce-sefaz';
 import { SEFAZ_SP_NFE_ENDPOINTS, HOMOLOG_FRASE } from './nfe-sefaz-endpoints';
 import { contaQueCobrouAVenda } from '../common/emitente-venda-online';
+import { rejeicaoDeSomatorioContraditoria, verAplicDaResposta } from '../common/nfe-somatorios';
 
 /** UF → código IBGE (cUF). Só os estados que a rede opera; expandir se preciso. */
 // ═══ REGRAS FISCAIS DE VENDA (tabela do contador, 28/07/26) ══════════════
@@ -152,6 +153,7 @@ export class NfeTransferService {
     let res: any = null;
     let chave = '';
     let cNF = '';
+    let retentouContraditoria = false;
     for (let tentativa = 0; ; tentativa++) {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
@@ -185,6 +187,20 @@ export class NfeTransferService {
       });
       const ok = res.success && (res.cStat === '100' || res.cStat === '150');
       if (ok) break;
+      // REJEIÇÃO DE SOMATÓRIO que o PRÓPRIO XML desmente (13/10/2026: a NF-e
+      // 214 de Suzano levou 531 de um validador antigo da SEFAZ-SP, o
+      // SP_NFE_PL_008i2, com XML igual ao de dezenas autorizadas no mesmo dia
+      // pelo PL009_V4). Se as somas batem, a culpa não é do XML: reenvia UMA
+      // vez, mesmo número, cNF novo — rejeição não consome numeração. Soma que
+      // não bate segue rejeitada como sempre (common/nfe-somatorios.ts).
+      if (!retentouContraditoria && rejeicaoDeSomatorioContraditoria(res.cStat, xmlMin)) {
+        retentouContraditoria = true;
+        this.logger.error(
+          `[nfe] ${origem.storeCode} nº ${numero}: SEFAZ devolveu ${res.cStat} "${res.xMotivo}" mas as somas do XML batem ` +
+            `(validador ${verAplicDaResposta(res.xmlResposta).join(' / ') || '?'}) — reenviando uma vez com cNF novo`,
+        );
+        continue;
+      }
       // 539/204 = número JÁ USADO no GigaNFe → avança e re-tenta o próximo.
       const duplicado = res.cStat === '539' || res.cStat === '204';
       if (duplicado && tentativa < MAX_DUP_RETRY) {
@@ -1605,6 +1621,7 @@ export class NfeTransferService {
     let res: any = null;
     let chave = '';
     let cNF = '';
+    let retentouContraditoria = false;
     for (let t = 0; ; t++) {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
@@ -1622,6 +1639,16 @@ export class NfeTransferService {
       res = await transmitNfeSefazSp({ xmlAssinado, ambiente: tpAmb, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass, endpointOverride: SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao });
       const okk = res.success && (res.cStat === '100' || res.cStat === '150');
       if (okk) break;
+      // Rejeição de somatório desmentida pelo XML → UMA retentativa com cNF
+      // novo (caso NF-e 214 de Suzano, 13/10/2026 — comentário no emitTransfer).
+      if (!retentouContraditoria && rejeicaoDeSomatorioContraditoria(res.cStat, xmlMin)) {
+        retentouContraditoria = true;
+        this.logger.error(
+          `[nfe] ${origem.storeCode} nº ${numero}: SEFAZ devolveu ${res.cStat} "${res.xMotivo}" mas as somas do XML batem ` +
+            `(validador ${verAplicDaResposta(res.xmlResposta).join(' / ') || '?'}) — reenviando uma vez com cNF novo`,
+        );
+        continue;
+      }
       if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(this.digits(origem.cnpj), serie); continue; }
       if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
       // 225 = Falha no Schema — loga o XML inteiro pra diagnóstico no Railway
@@ -1762,6 +1789,7 @@ export class NfeTransferService {
     let res: any = null;
     let chave = '';
     let cNF = '';
+    let retentouContraditoria = false;
     for (let t = 0; ; t++) {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
@@ -1779,6 +1807,16 @@ export class NfeTransferService {
       res = await transmitNfeSefazSp({ xmlAssinado, ambiente: tpAmb, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass, endpointOverride: SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao });
       const okk = res.success && (res.cStat === '100' || res.cStat === '150');
       if (okk) break;
+      // Rejeição de somatório desmentida pelo XML → UMA retentativa com cNF
+      // novo (caso NF-e 214 de Suzano, 13/10/2026 — comentário no emitTransfer).
+      if (!retentouContraditoria && rejeicaoDeSomatorioContraditoria(res.cStat, xmlMin)) {
+        retentouContraditoria = true;
+        this.logger.error(
+          `[nfe] ${origem.storeCode} nº ${numero}: SEFAZ devolveu ${res.cStat} "${res.xMotivo}" mas as somas do XML batem ` +
+            `(validador ${verAplicDaResposta(res.xmlResposta).join(' / ') || '?'}) — reenviando uma vez com cNF novo`,
+        );
+        continue;
+      }
       if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(this.digits(origem.cnpj), serie); continue; }
       if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
       // 225 = Falha no Schema — loga o XML inteiro pra diagnóstico no Railway

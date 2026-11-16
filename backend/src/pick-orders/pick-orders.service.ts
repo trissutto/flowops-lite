@@ -663,6 +663,57 @@ export class PickOrdersService {
     );
   }
 
+  /**
+   * REEMITIR a NF-e do envio (13/10/2026). A automática roda UMA vez, no
+   * "Gerar envio"; quando a SEFAZ rejeita (a 214 de Suzano levou um 531 falso
+   * de um validador antigo), a única porta era a LOJA clicar "Reimprimir
+   * etiqueta" — a ficha do pedido mostrava "NF-e REJEITADA" e nenhum botão
+   * pra matriz. Idempotente: nota autorizada existente volta `jaEmitida`
+   * (`emitVendaForEnvio` confere por pick + ambiente) — nunca duplica nota.
+   * Loja só reemite o card dela; matriz, qualquer um.
+   */
+  async reemitirNfeDoEnvio(
+    pickOrderId: string,
+    user: { userId: string; role: string; storeId: string | null },
+  ): Promise<{ ok: boolean; nfe: any }> {
+    const pick: any = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: { store: true },
+    });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+    if (user.role === 'store' && user.storeId !== pick.storeId) {
+      throw new ForbiddenException('Este card é de outra loja');
+    }
+    if (pick.isTransfer) {
+      throw new BadRequestException(
+        'Esta caixa é da JUNTADA: a nota dela é de TRANSFERÊNCIA e sai em "Documentos da caixa", não aqui.',
+      );
+    }
+    if (String(process.env.NFE_ENVIO_ENABLED || '').trim() !== '1') {
+      throw new BadRequestException('A NF-e do envio está desligada (NFE_ENVIO_ENABLED).');
+    }
+    const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+
+    // `semEtiqueta`: a retirada não passa pelo "Gerar envio" e a automática
+    // recusaria; aqui a pessoa pediu de propósito, então a porta abre.
+    const { nfe } = await this.emitirNfeDoEnvio(pickOrderId, order, pick, pick.store, { semEtiqueta: true });
+    if (!nfe) {
+      throw new BadRequestException('A nota não pôde ser montada — veja o motivo no log [nfe-envio] do pedido.');
+    }
+    const ok = nfe.status === 'authorized';
+    const texto = nfe.jaEmitida
+      ? `NF-e do envio já estava autorizada (nº ${nfe.numero}) — nada a reemitir`
+      : ok
+        ? `NF-e do envio reemitida: nº ${nfe.numero} autorizada (loja ${pick.store?.code || ''})`
+        : `NF-e do envio reemitida e ${nfe.status === 'rejected' ? 'REJEITADA' : 'com erro'}: ${nfe.cStat ? `${nfe.cStat} ` : ''}${nfe.xMotivo || nfe.erro || 'sem motivo'}`;
+    await this.prisma.orderHistory
+      .create({ data: { orderId: order.id, fromStatus: order.status, toStatus: order.status, userId: user.userId, note: texto } })
+      .catch((e: any) => this.logger.warn(`[nfe-envio] histórico da reemissão do ${order.wcOrderNumber || order.id} não gravado: ${e?.message || e}`));
+    this.logger.log(`[nfe-envio] ${order.wcOrderNumber || order.id}: ${texto} (pedido por ${user.role} ${user.userId})`);
+    return { ok, nfe };
+  }
+
   private async emitirNfeDoEnvio(
     id: string,
     order: any,

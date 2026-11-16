@@ -658,6 +658,27 @@ export default function PedidoDetailPage() {
     }
   };
 
+  // NF-e do envio REJEITADA → "Emitir de novo" (13/10/2026). Antes a ficha
+  // só mostrava o motivo e a única porta era a loja clicar "Reimprimir
+  // etiqueta". O backend é idempotente: nota já autorizada volta jaEmitida.
+  const [notaReemitindo, setNotaReemitindo] = useState<string | null>(null);
+  const reemitirNota = async (pickId: string) => {
+    if (!confirm('Tentar emitir a NF-e deste envio de novo na SEFAZ?')) return;
+    setNotaReemitindo(pickId);
+    try {
+      const r: any = await api(`/pick-orders/${pickId}/nfe-reemitir`, { method: 'POST' });
+      const n = r?.nfe || {};
+      if (n.jaEmitida) alert(`A NF-e ${n.numero} já estava autorizada — nada a reemitir.`);
+      else if (r?.ok) alert(`NF-e ${n.numero} autorizada.`);
+      else alert(`A SEFAZ rejeitou de novo: ${n.cStat ? `${n.cStat} ` : ''}${n.xMotivo || n.erro || 'sem motivo'}`);
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Não consegui reemitir a NF-e: ${e?.message || e}`);
+    } finally {
+      setNotaReemitindo(null);
+    }
+  };
+
   const abrirCredito = (r: ReportLinha) => {
     setCreditoAlvo(r);
     setCreditoErro(null);
@@ -3947,9 +3968,22 @@ export default function PedidoDetailPage() {
                   </div>
                 )}
                 {r.nota && r.nota.status !== 'authorized' && (
-                  <div className="mt-1 text-[11.5px] font-semibold text-crit">
-                    NF-e {r.nota.status === 'rejected' ? 'REJEITADA' : r.nota.status}
-                    {r.nota.xMotivo && <span className="font-normal"> — {r.nota.xMotivo}</span>}
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px] font-semibold text-crit">
+                    <span>
+                      NF-e {r.nota.status === 'rejected' ? 'REJEITADA' : r.nota.status}
+                      {r.nota.xMotivo && <span className="font-normal"> — {r.nota.xMotivo}</span>}
+                    </span>
+                    {!r.isTransfer && (
+                      <button
+                        type="button"
+                        onClick={() => reemitirNota(r.id)}
+                        disabled={notaReemitindo === r.id}
+                        className="rounded-field border border-line bg-surface px-2 py-1 text-[11.5px] font-semibold text-ink hover:bg-surface-2 disabled:opacity-50"
+                        title="Monta a nota de novo e manda pra SEFAZ. Nota já autorizada não duplica."
+                      >
+                        {notaReemitindo === r.id ? '…' : 'Emitir de novo'}
+                      </button>
+                    )}
                   </div>
                 )}
                 {/* Despachou sem nota: 99 de 647 cards em 30 dias. Pendência
