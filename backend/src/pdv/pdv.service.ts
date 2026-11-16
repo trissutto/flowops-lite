@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { escritaGigaBloqueada } from '../common/replica-giga';
+import { selecionarPecasDoPedido } from '../common/pedido-online-parcial';
 import { startOfDayBR, startOfNextDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd } from '../lib/date-br';
 import { ErpService } from '../erp/erp.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
@@ -4612,6 +4613,8 @@ export class PdvService {
     dados?: {
       nome?: string; cep?: string; endereco?: string; numero?: string; complemento?: string;
       bairro?: string; cidade?: string; uf?: string; entregaTipo?: string;
+      /** PEDIDO PARCIAL (16/11): só estas linhas da venda viram pedido. Vazio = todas. */
+      itemIds?: string[];
     },
   ) {
     let sale = await this.getSale(saleId);
@@ -4659,7 +4662,17 @@ export class PdvService {
       throw new BadRequestException('Roteamento de pedido online desligado (PEDIDO_ONLINE_ROTEAMENTO)');
     }
 
-    const onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
+    // PEÇAS ESCOLHIDAS (16/11, ordem do dono): "às vezes é somente peças
+    // selecionadas que irão sair de outra loja para entrega". A régua
+    // (`common/pedido-online-parcial.ts`) recusa id de outra venda e linha
+    // que não é peça — recusa INTEIRA, nunca "gera o que deu".
+    const itemIds = Array.isArray(dados?.itemIds)
+      ? dados!.itemIds!.map((v) => String(v ?? '').trim()).filter(Boolean)
+      : [];
+    const selecao = selecionarPecasDoPedido((sale.items || []) as any[], itemIds, Number(sale.total));
+    if (!selecao.ok) throw new BadRequestException(selecao.erro);
+
+    const onlineOrder = await this.pedidoOnline.criarDoFinalize(sale, { itemIds: selecao.parcial ? itemIds : null });
     if (!onlineOrder) {
       throw new BadRequestException(
         'Não consegui gerar o pedido — veja o log [pedido-online] (motivos comuns: venda sem CEP e não é retirada, loja não cadastrada, só frete/manual)',
@@ -4670,8 +4683,12 @@ export class PdvService {
     // job não baixa. Aqui o job JÁ baixou na loja vendedora — devolve o que
     // baixou, senão a peça some duas vezes (uma na 13, outra na loja do card).
     let estoqueDevolvido = 0;
+    // Parcial: devolve SÓ o que viaja. A peça que ficou fora já saiu na sacola
+    // da cliente (ou sai da própria vendedora) — devolver ela ao estoque seria
+    // a família do estorno que devolvia a peça NOVA (11/09).
+    const noPedido = new Set(selecao.pecas.map((it: any) => String(it.id)));
     const jaBaixou = (sale.items || []).filter(
-      (it: any) => it.stockDecreasedAt && this.isStockEligibleItem(it),
+      (it: any) => it.stockDecreasedAt && this.isStockEligibleItem(it) && noPedido.has(String(it.id)),
     );
     if (jaBaixou.length) {
       try {
@@ -4696,7 +4713,8 @@ export class PdvService {
 
     this.logger.log(
       `[pedido-online] venda ${sale.id} → pedido ${onlineOrder.wcOrderNumber} gerado a posteriori por ${actor || 'admin'} ` +
-        `(auto-atendida=${onlineOrder.autoAtendida}, estoque devolvido na ${sale.storeCode}: ${estoqueDevolvido} item(ns))`,
+        `(auto-atendida=${onlineOrder.autoAtendida}, estoque devolvido na ${sale.storeCode}: ${estoqueDevolvido} item(ns))` +
+        (selecao.parcial ? ` · PARCIAL ${selecao.pecasNoPedido}/${selecao.pecasDaVenda} peças` : ''),
     );
     return { ok: true, jaExistia: false, ...onlineOrder, estoqueDevolvido };
   }

@@ -708,8 +708,20 @@ export class PedidoEmailService {
         return `• ${desc || i?.sku || 'Peça'}${qtd > 1 ? ` ×${qtd}` : ''} — ${this.moeda(i?.unitPrice)}`;
       })
       .join('\n');
+    // PEDIDO PARCIAL (16/11): só parte da compra viaja por este pedido — o
+    // resto ficou com a loja vendedora (na sacola da cliente ou sai de lá).
+    // Sem esta linha a cliente lê 2 peças e um total menor e pergunta onde
+    // estão as outras 3.
+    const p = order?.parcial;
+    const fora = p ? Number(p.pecasDaVenda || 0) - Number(p.pecasNoPedido || 0) : 0;
+    const parcial =
+      p && fora > 0
+        ? ` (${p.pecasNoPedido} das ${p.pecasDaVenda} peças da sua compra — ` +
+          `${fora === 1 ? 'a outra fica' : `as outras ${fora} ficam`} por conta da loja` +
+          `${p.lojaVendedora ? ` ${p.lojaVendedora}` : ''})`
+        : '';
     const texto =
-      `Oi, ${nome}! 💛\n\nSeu pedido${numero} foi registrado com a nossa equipe:\n\n` +
+      `Oi, ${nome}! 💛\n\nSeu pedido${numero} foi registrado com a nossa equipe${parcial}:\n\n` +
       (linhas ? `${linhas}\n\n` : '') +
       `Total: ${this.moeda(order?.totalAmount)}\n\n` +
       `Confere se está tudo certinho? Qualquer coisa é só responder por aqui — ` +

@@ -381,6 +381,90 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // ── Produtos vendidos → Gerar pedido online com PEÇAS ESCOLHIDAS (16/11) ──
+  // Duas vendas de hoje na loja 01: v-sel-1 tem CEP + SEDEX (o modal só
+  // escolhe peças); v-sel-2 fechou sem CEP (o modal completa o endereço). O
+  // POST ecoa o corpo e devolve o `parcial` que o backend devolve. SIMULADO.
+  const VENDAS_SEL = (() => {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const item = (id, sku, ref, cor, tamanho, descricao, total, qty = 1) => ({
+      id, sku, ref, cor, tamanho, descricao, qty, precoUnit: total / qty, total, desconto: 0, stockDecreasedAt: `${hoje}T15:38:00.000Z`,
+    });
+    const base = {
+      status: 'finalized', storeCode: '01', storeName: 'Loja Santos', customerName: 'ANA PAULA SOUZA',
+      customerCpf: '12345678901', customerPhone: '13999990000', total: 0, desconto: 0,
+    };
+    const v1 = {
+      ...base, id: 'v-sel-1aaaa', entregaTipo: 'sedex', customerCep: '11010100', customerEndereco: 'Rua Amador Bueno',
+      customerNumero: '120', customerBairro: 'Centro', customerCidade: 'Santos', customerUf: 'SP', sellerName: 'ZORANTE',
+      items: [
+        item('it-1', '7891109486238', 'TOP', 'PRETO', '41 42', 'CHINELO TOP HAVAIANAS PRETO 41 42', 43.9),
+        item('it-2', '7891186802433', '41018', 'NATURAL', 'G', 'TOP SEM COSTURA 41018 LUPO NATURAL G', 54.9),
+        item('it-3', '11481126', '1000004500', 'AZUL', 'G', 'BLUSA FEMININA BASICA MANGA CURTA 4500', 56.9),
+        item('it-4', '8000000017093', '138867', 'OFF WHITE', 'M', 'BLUSA FEMININA MANGA CURTA 138867 OFF WHITE', 73.9),
+        item('it-5', '11522027', '67995', 'EST BEGE', 'P', 'VESTIDO MANGA CURTA 67995 LUNENDER EST BEGE', 99.9),
+        { ...item('it-frete', 'FRETE', 'FRETE', null, null, 'FRETE', 25), stockDecreasedAt: null },
+      ],
+    };
+    v1.total = v1.items.reduce((s, i) => s + i.total, 0);
+    const v2 = {
+      ...base, id: 'v-sel-2bbbb', entregaTipo: null, customerCep: null, sellerName: 'MARIA', customerName: 'CARLA DIAS',
+      items: [
+        item('it-6', '7892888887667', '25392', 'CINZA', 'EG4', 'CAMISETA MASC MANGA CURTA 25392 ELITE', 79.9),
+        item('it-7', '5397334', '5716', 'ROSA', 'G', 'MEIA CALCA BALLET ADULTO FIO 60 5716', 59.9, 2),
+      ],
+    };
+    v2.total = v2.items.reduce((s, i) => s + i.total, 0);
+    return [v1, v2];
+  })();
+  if (url.pathname === '/api/pdv/produtos-vendidos') {
+    const linhas = [];
+    for (const v of VENDAS_SEL) {
+      for (const it of v.items) {
+        linhas.push({
+          tipo: 'venda', saleNumber: v.id.slice(0, 8), saleId: v.id, itemId: it.id,
+          data: new Date().toISOString().slice(0, 10), hora: v.id.endsWith('aaaa') ? '12:38' : '11:24',
+          sku: it.sku, ref: it.ref, cor: it.cor, tamanho: it.tamanho, descricao: it.descricao, qty: it.qty,
+          precoUnit: it.precoUnit, total: it.total, storeCode: '01', storeName: 'Loja Santos', sellerName: v.sellerName,
+          customerName: v.customerName, customerCpf: v.customerCpf, paymentMethod: 'venda_online',
+          paymentsBreakdown: [{ method: 'venda_online', valor: v.total }], saleTotal: v.total,
+        });
+      }
+    }
+    const valor = VENDAS_SEL.reduce((s, v) => s + v.total, 0);
+    return json({
+      linhas,
+      totais: { vendasQtd: linhas.length, vendasValor: valor, devolucoesQtd: 0, devolucoesValor: 0, liquidoQtd: linhas.length, liquidoValor: valor },
+      conciliacao: {
+        totalVendidoLiquido: valor, totalRecebido: valor, diferenca: 0, ok: true,
+        porModalidade: { dinheiro: 0, pix: 0, credito: 0, debito: 0, crediario: 0, vale_troca: 0, outros: valor },
+      },
+    });
+  }
+  const mSaleSel = /^\/api\/pdv\/sales\/([^/]+)$/.exec(url.pathname);
+  if (mSaleSel && req.method === 'GET') {
+    const v = VENDAS_SEL.find((x) => x.id === mSaleSel[1]);
+    return v ? json(v) : json({ message: 'Venda não encontrada' }, 404);
+  }
+  const mGerar = /^\/api\/pdv\/sales\/([^/]+)\/gerar-pedido-online$/.exec(url.pathname);
+  if (mGerar && req.method === 'POST') {
+    return lerCorpo(req, (body) => {
+      const v = VENDAS_SEL.find((x) => x.id === mGerar[1]);
+      const pecas = (v?.items || []).filter((i) => i.sku !== 'FRETE');
+      const ids = Array.isArray(body.itemIds) ? body.itemIds : [];
+      const invalida = ids.find((id) => !pecas.some((p) => p.id === id));
+      console.log(`[mock] POST gerar-pedido-online ${mGerar[1]} ${JSON.stringify(body)}`);
+      if (invalida) return json({ message: `Peça ${invalida} não é desta venda` }, 400);
+      const noPedido = ids.length ? pecas.filter((p) => ids.includes(p.id)) : pecas;
+      const n = (l) => l.reduce((s, p) => s + p.qty, 0);
+      const parcial = ids.length && noPedido.length < pecas.length ? { pecasNoPedido: n(noPedido), pecasDaVenda: n(pecas) } : null;
+      json({
+        ok: true, jaExistia: false, wcOrderNumber: 'ON-SIMULADO', autoAtendida: false, fechadoNaLoja: false,
+        lojaEscolhida: null, storeName: 'Loja Santos (SIMULADO)', estoqueDevolvido: noPedido.length, parcial,
+      });
+    });
+  }
+  if (url.pathname === '/api/pdv/customer-resume') return json({ found: false });
   // A retaguarda exige admin; as telas de loja, store. Suba o mock com
   // `--admin` (node .claude/mock-api.js --admin) pra previewar a retaguarda.
   if (url.pathname === '/api/auth/me') {

@@ -952,6 +952,8 @@ export class PdvController {
     @Body() body?: {
       nome?: string; cep?: string; endereco?: string; numero?: string; complemento?: string;
       bairro?: string; cidade?: string; uf?: string; entregaTipo?: string;
+      /** PEDIDO PARCIAL (16/11): ids das linhas da venda que viram pedido. Vazio = todas. */
+      itemIds?: string[];
     },
   ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');

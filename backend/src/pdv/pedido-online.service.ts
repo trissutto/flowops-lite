@@ -4,6 +4,7 @@ import { RoutingService } from '../routing/routing.service';
 import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { ehItemSemEstoque } from '../common/item-sem-estoque';
+import { selecionarPecasDoPedido } from '../common/pedido-online-parcial';
 import { naoSepara } from '../common/loja-sem-separacao';
 import { fechaMotoboySemSeparacao } from '../common/fechamento-motoboy';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
@@ -536,7 +537,18 @@ export class PedidoOnlineService {
    * NUNCA lança: qualquer falha → null e o finalize segue no comportamento
    * legado (baixa na própria loja). Retorna info pro front exibir a mensagem.
    */
-  async criarDoFinalize(sale: any): Promise<{
+  async criarDoFinalize(
+    sale: any,
+    opts?: {
+      /**
+       * PEDIDO PARCIAL (16/11): só estas linhas da venda viram pedido — as
+       * outras ficam com a loja vendedora. Vazio/ausente = a venda inteira.
+       * Quem manda isto valida antes com `selecionarPecasDoPedido` (400 na
+       * porta); aqui uma seleção inválida vira null como qualquer outra falha.
+       */
+      itemIds?: readonly string[] | null;
+    },
+  ): Promise<{
     wcOrderNumber: string;
     autoAtendida: boolean;
     /** Loja vendedora entregou ela mesma: estoque já baixou nela, sem card. */
@@ -544,6 +556,8 @@ export class PedidoOnlineService {
     /** Retirada/motoboy em OUTRA loja: o card já nasceu nela (com transferências, se faltar peça). */
     lojaEscolhida: { code: string; name: string } | null;
     storeName: string | null;
+    /** Só parte da venda virou pedido (peças escolhidas na tela). null = a venda inteira. */
+    parcial: { pecasNoPedido: number; pecasDaVenda: number } | null;
   } | null> {
     try {
       if (!this.enabled()) return null;
@@ -559,7 +573,14 @@ export class PedidoOnlineService {
        * Copiar a linha de FRETE pra cá fazia o roteamento caçar estoque do
        * SKU "FRETE" e o pedido nascer em ruptura falsa.
        */
-      const pecas = items.filter((it) => !ehItemSemEstoque(it));
+      // PEÇAS ESCOLHIDAS (16/11): `opts.itemIds` recorta a venda; sem ele, a
+      // régua devolve todas as peças (o filtro de sempre).
+      const selecao = selecionarPecasDoPedido(items, opts?.itemIds, Number(sale.total));
+      if (!selecao.ok) {
+        this.logger.warn(`[pedido-online] venda ${sale.id}: seleção de peças recusada (${selecao.erro}) — não vira Order`);
+        return null;
+      }
+      const pecas = selecao.pecas;
       const freteReais = items
         .filter((it) => String(it?.ref ?? it?.sku ?? '').trim().toUpperCase() === 'FRETE')
         .reduce((s, it) => s + (Number(it.total) || Number(it.precoUnit) || 0), 0);
@@ -783,7 +804,28 @@ export class PedidoOnlineService {
          * NF-e sai sem o abatimento. Mesmo campo do checkout do site
          * (`discount`), que a nota já sabe ratear.
          */
-        discount: Math.max(0, Math.round((Number(sale.desconto) || 0) * 100) / 100),
+        discount: selecao.parcial
+          ? selecao.discount
+          : Math.max(0, Math.round((Number(sale.desconto) || 0) * 100) / 100),
+        // PEDIDO PARCIAL (16/11): o que ficou FORA (com a loja vendedora),
+        // pra ficha e pra auditoria. Ausente = a venda inteira, como sempre.
+        ...(selecao.parcial
+          ? {
+              parcial: {
+                pecasNoPedido: selecao.pecasNoPedido,
+                pecasDaVenda: selecao.pecasDaVenda,
+                itemIds: pecas.map((it) => String(it.id)),
+                foraDoPedido: selecao.foraDoPedido.map((it) => ({
+                  id: String(it.id),
+                  sku: String(it.sku),
+                  ref: it.ref || null,
+                  cor: it.cor || null,
+                  tamanho: it.tamanho || null,
+                  qty: Number(it.qty || 1),
+                })),
+              },
+            }
+          : {}),
       };
 
       const base = PedidoOnlineService.ONLINE_WC_ID_BASE;
@@ -811,7 +853,10 @@ export class PedidoOnlineService {
               customerCpf: this.digits(sale.customerCpf) || null,
               shippingCep: this.digits(sale.customerCep) || null,
               shippingAddress: JSON.stringify(this.montarShippingWc(sale)),
-              totalAmount: Number(sale.total || 0),
+              // PARCIAL: só as linhas que viajam (+ frete), já com a parte do
+              // desconto da venda — é o valor declarado da etiqueta e o teto
+              // do crédito de peça faltante. Inteiro: o total da venda.
+              totalAmount: selecao.parcial ? Number(selecao.totalAmount || 0) : Number(sale.total || 0),
               // FORMA DE ENTREGA (14/08): SEDEX/PAC/MOTOBOY/RETIRADA, do jeito
               // que a loja escolheu. `pickupStoreCode` é a TRAVA da engine
               // (retirada E motoboy travam na loja que atende); `isPickup`
@@ -868,6 +913,27 @@ export class PedidoOnlineService {
         }
       }
       if (!order) throw new Error('colisão de wcOrderId em 6 tentativas');
+
+      // PEDIDO PARCIAL: quem abrir a ficha precisa ver, na primeira linha do
+      // histórico, que este pedido NÃO é a venda inteira e o que ficou com a
+      // loja vendedora — senão a matriz procura peça que nunca ia viajar.
+      if (selecao.parcial) {
+        const ficaram = selecao.foraDoPedido
+          .map((it) => `${this.rotuloPeca(it)}${Number(it.qty) > 1 ? ` ×${Number(it.qty)}` : ''}`)
+          .join(', ');
+        await (this.prisma as any).orderHistory
+          .create({
+            data: {
+              orderId: order.id,
+              toStatus: 'processing',
+              note:
+                `Pedido PARCIAL da venda #${String(sale.id).slice(0, 8)}: ` +
+                `${selecao.pecasNoPedido} de ${selecao.pecasDaVenda} peça(s) entram aqui. ` +
+                `Ficaram com a loja vendedora (${store.name}): ${ficaram}.`,
+            },
+          })
+          .catch(() => null);
+      }
 
       let autoOk = false;
       let fechadoNaLoja = false;
@@ -1018,7 +1084,14 @@ export class PedidoOnlineService {
       // `pdv_online`). Aqui a gente só escolhe a mensagem certa direto — e o
       // pedido do SITE segue com a confirmação automática, intacto.
       void this.pedidoEmail
-        .aoRegistrarPedidoOnline({ ...order, items: order.items ?? [] })
+        .aoRegistrarPedidoOnline({
+          ...order,
+          items: order.items ?? [],
+          // Parcial: a mensagem diz que só parte da compra viaja por aqui.
+          parcial: selecao.parcial
+            ? { pecasNoPedido: selecao.pecasNoPedido, pecasDaVenda: selecao.pecasDaVenda, lojaVendedora: store.name }
+            : null,
+        })
         .catch((e: any) => this.logger.warn(`[pedido-online] aviso ao cliente falhou: ${e?.message || e}`));
 
       const destino = fechadoNaLoja
@@ -1028,7 +1101,10 @@ export class PedidoOnlineService {
           : lojaEscolhidaOk
             ? `card na ${lojaEntrega.name} (loja escolhida, ${entrega.pickup ? 'retirada' : 'motoboy'})`
             : 'fila de roteamento';
-      this.logger.log(`[pedido-online] venda ${sale.id} → pedido ${order.wcOrderNumber} (${destino})`);
+      this.logger.log(
+        `[pedido-online] venda ${sale.id} → pedido ${order.wcOrderNumber} (${destino})` +
+          (selecao.parcial ? ` · PARCIAL ${selecao.pecasNoPedido}/${selecao.pecasDaVenda} peças` : ''),
+      );
 
       // Caiu na fila da matriz → mesma separação automática do pedido do site
       // (botão 🤖 Automática). Fire-and-forget, nunca lança: desligada, sem
@@ -1043,6 +1119,7 @@ export class PedidoOnlineService {
         fechadoNaLoja,
         lojaEscolhida: lojaEscolhidaOk ? { code: lojaEntrega.code, name: lojaEntrega.name } : null,
         storeName: store.name,
+        parcial: selecao.parcial ? { pecasNoPedido: selecao.pecasNoPedido, pecasDaVenda: selecao.pecasDaVenda } : null,
       };
     } catch (e: any) {
       this.logger.error(`[pedido-online] venda ${sale?.id}: ${e?.message || e} — fluxo legado (baixa local)`);

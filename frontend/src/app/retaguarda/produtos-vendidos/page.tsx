@@ -161,25 +161,31 @@ function ProdutosVendidosContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editSeller, setEditSeller] = useState<{ itemId: string; saleId: string; currentName: string; produtoHint: string } | null>(null);
-  // Gerar pedido online de venda sem CEP/entrega — o modal completa e roteia.
-  const [gerarPedido, setGerarPedido] = useState<{ saleId: string; saleLabel: string; sale: any } | null>(null);
+  // Gerar pedido online — o modal escolhe as PEÇAS que viajam (16/11) e, se a
+  // venda fechou sem CEP/entrega, completa o endereço antes de rotear.
+  const [gerarPedido, setGerarPedido] = useState<{
+    saleId: string; saleLabel: string; sale: any; storeCode: string | null; precisaEndereco: boolean;
+  } | null>(null);
 
   async function gerarPedidoOnline(saleId: string, saleLabel: string, storeCode?: string | null) {
     let sale: any = null;
     try { sale = await api<any>(`/pdv/sales/${saleId}`); } catch { /* segue sem — o backend valida */ }
-    const semCep = !String(sale?.customerCep || '').replace(/\D/g, '');
-    const semEntrega = !sale?.entregaTipo;
-    if (sale && (semCep || semEntrega) && String(sale?.entregaTipo || '') !== 'retirada') {
-      setGerarPedido({ saleId, saleLabel, sale });
+    if (!sale) {
+      // Sem a venda na mão não dá pra listar as peças: vai a venda inteira,
+      // como sempre foi (o backend continua validando tudo).
+      if (!confirm(
+        `📦 GERAR PEDIDO ONLINE da venda #${saleLabel}?\n\n` +
+        `Cria o pedido ON- na fila de roteamento (card pra loja separar) ` +
+        `e devolve o estoque que baixou na loja ${storeCode || '-'}.\n` +
+        `Use só pra venda online PAGA que não gerou pedido.`,
+      )) return;
+      await enviarGerarPedido(saleId, {});
       return;
     }
-    if (!confirm(
-      `📦 GERAR PEDIDO ONLINE da venda #${saleLabel}?\n\n` +
-      `Cria o pedido ON- na fila de roteamento (card pra loja separar) ` +
-      `e devolve o estoque que baixou na loja ${storeCode || '-'}.\n` +
-      `Use só pra venda online PAGA que não gerou pedido.`,
-    )) return;
-    await enviarGerarPedido(saleId, {});
+    const semCep = !String(sale?.customerCep || '').replace(/\D/g, '');
+    const semEntrega = !sale?.entregaTipo;
+    const precisaEndereco = (semCep || semEntrega) && String(sale?.entregaTipo || '') !== 'retirada';
+    setGerarPedido({ saleId, saleLabel, sale, storeCode: storeCode || sale?.storeCode || null, precisaEndereco });
   }
 
   async function enviarGerarPedido(saleId: string, body: Record<string, any>) {
@@ -190,7 +196,10 @@ function ProdutosVendidosContent() {
           ? `Já existia: pedido ${r.wcOrderNumber} (${r.status})`
           : `✓ Pedido ${r?.wcOrderNumber} gerado` +
             (r?.autoAtendida ? ` — card já na loja ${r.storeName || ''}` : ' — na fila de roteamento da matriz') +
-            (r?.estoqueDevolvido ? ` · ${r.estoqueDevolvido} item(ns) devolvido(s) ao estoque da loja vendedora` : ''),
+            (r?.estoqueDevolvido ? ` · ${r.estoqueDevolvido} item(ns) devolvido(s) ao estoque da loja vendedora` : '') +
+            (r?.parcial
+              ? `\n\nPedido PARCIAL: ${r.parcial.pecasNoPedido} de ${r.parcial.pecasDaVenda} peças — o resto ficou com a loja vendedora.`
+              : ''),
       );
       setGerarPedido(null);
       return true;
@@ -845,6 +854,8 @@ function ProdutosVendidosContent() {
         <GerarPedidoOnlineModal
           saleLabel={gerarPedido.saleLabel}
           sale={gerarPedido.sale}
+          storeCode={gerarPedido.storeCode}
+          precisaEndereco={gerarPedido.precisaEndereco}
           onClose={() => setGerarPedido(null)}
           onConfirm={(body) => enviarGerarPedido(gerarPedido.saleId, body)}
         />
@@ -1048,20 +1059,60 @@ function EditSellerModal({
   );
 }
 
+/** Mesma régua do backend (`common/item-sem-estoque.ts`): FRETE e linha MANUAL não são peça. */
+function linhaNaoEhPeca(it: any): boolean {
+  const sku = String(it?.sku ?? '').trim().toUpperCase();
+  const ref = String(it?.ref ?? '').trim().toUpperCase();
+  if (!sku) return true;
+  if (sku === 'FRETE' || ref === 'FRETE') return true;
+  if (sku.startsWith('MANUAL-') || ref === 'MANUAL') return true;
+  return false;
+}
+
+const ENTREGA_LABEL: Record<string, string> = {
+  sedex: '⚡ SEDEX', pac: '📦 PAC', motoboy: '🛵 Motoboy', retirada: '🏬 Retirada na loja',
+};
+
 /**
- * Completa CEP/endereço/forma de entrega de uma venda online FECHADA que ficou
- * sem pedido (17/08, Sandra Micheli: link pago, cron fechou, sem CEP na venda).
- * Não existe outra tela que edite endereço de venda finalizada — o backend
- * grava na venda e roteia na mesma chamada.
+ * Gera o pedido ON- de uma venda online FECHADA que ficou sem ele.
+ *
+ * PEÇAS ESCOLHIDAS (16/11, ordem do dono): "às vezes é somente peças
+ * selecionadas que irão sair de outra loja para entrega" — a cliente levou
+ * parte da sacola e só o resto viaja. Todas vêm marcadas; desmarcar é tirar
+ * do pedido (a peça fica com a loja vendedora e o estoque dela NÃO volta).
+ * A venda gera UM pedido só, então a escolha é feita de uma vez.
+ *
+ * Endereço: a venda que fechou sem CEP/forma de entrega (17/08, Sandra
+ * Micheli: link pago, cron fechou, sem CEP) completa aqui — não existe outra
+ * tela que edite endereço de venda finalizada; o backend grava na venda e
+ * roteia na mesma chamada. Venda que já tem tudo mostra a entrega como está
+ * e NÃO manda endereço nenhum: o que foi escolhido no caixa (SEDEX/PAC/
+ * motoboy/retirada e a loja que atende) continua valendo.
  */
 function GerarPedidoOnlineModal({
-  saleLabel, sale, onClose, onConfirm,
+  saleLabel, sale, storeCode, precisaEndereco, onClose, onConfirm,
 }: {
   saleLabel: string;
   sale: any;
+  storeCode: string | null;
+  precisaEndereco: boolean;
   onClose: () => void;
   onConfirm: (body: Record<string, any>) => Promise<boolean>;
 }) {
+  const itens: any[] = Array.isArray(sale?.items) ? sale.items : [];
+  const pecas = itens.filter((it) => !linhaNaoEhPeca(it));
+  const frete = itens
+    .filter((it) => String(it?.sku ?? '').trim().toUpperCase() === 'FRETE' || String(it?.ref ?? '').trim().toUpperCase() === 'FRETE')
+    .reduce((s, it) => s + (Number(it?.total) || 0), 0);
+  const qtd = (it: any) => Math.max(1, Math.floor(Number(it?.qty) || 1));
+  const [marcadas, setMarcadas] = useState<Set<string>>(() => new Set(pecas.map((it) => String(it.id))));
+  const escolhidas = pecas.filter((it) => marcadas.has(String(it.id)));
+  const pecasDaVenda = pecas.reduce((s, it) => s + qtd(it), 0);
+  const pecasNoPedido = escolhidas.reduce((s, it) => s + qtd(it), 0);
+  const parcial = pecasNoPedido < pecasDaVenda;
+  const alternar = (id: string) =>
+    setMarcadas((m) => { const n = new Set(m); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
   const [f, setF] = useState({
     nome: sale?.customerName || '',
     cep: sale?.customerCep || '',
@@ -1083,6 +1134,7 @@ function GerarPedidoOnlineModal({
 
   // Endereço da ficha da cliente (CPF) — a venda não tinha, mas o CRM pode ter.
   useEffect(() => {
+    if (!precisaEndereco) return;
     const cpf = String(sale?.customerCpf || '').replace(/\D/g, '');
     if (cpf.length !== 11 || f.cep) return;
     let off = false;
@@ -1128,72 +1180,146 @@ function GerarPedidoOnlineModal({
 
   const retirada = f.entregaTipo === 'retirada';
   const cepOk = String(f.cep).replace(/\D/g, '').length === 8;
-  const pode = retirada || (cepOk && f.endereco && f.cidade && f.uf);
+  const enderecoOk = !precisaEndereco || retirada || (cepOk && f.endereco && f.cidade && f.uf);
+  const pode = pecasNoPedido > 0 && enderecoOk;
   const campo = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-teal-500';
+  const cepDaVenda = String(sale?.customerCep || '').replace(/\D/g, '');
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-1 flex items-center justify-between">
           <h3 className="text-lg font-bold text-slate-800">📦 Gerar pedido online — venda #{saleLabel}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
         </div>
         <p className="mb-3 text-xs text-slate-500">
-          A venda fechou sem endereço/forma de entrega. Completa aqui e o pedido vai pra fila de roteamento
-          (o estoque que baixou na loja vendedora é devolvido).
+          {precisaEndereco ? (
+            <>A venda fechou sem endereço/forma de entrega. Completa aqui e o pedido vai pra fila de roteamento
+              (o estoque das peças marcadas que baixou na loja vendedora é devolvido).</>
+          ) : (
+            <>Cria o pedido ON- na fila de roteamento (card pra loja separar) e devolve o estoque das peças
+              marcadas que baixou na loja {storeCode || '-'}. Use só pra venda online PAGA que não gerou pedido.</>
+          )}
           {buscandoCliente && <span className="ml-1 text-teal-700">buscando ficha da cliente…</span>}
         </p>
 
-        <div className="space-y-2.5">
-          <div>
-            <label className="text-[11px] uppercase tracking-wide text-slate-400">Forma de entrega</label>
-            <select {...set('entregaTipo')} className={campo}>
-              <option value="sedex">⚡ SEDEX</option>
-              <option value="pac">📦 PAC</option>
-              <option value="retirada">🏬 Retira na loja vendedora</option>
-            </select>
+        {/* PEÇAS — o que viaja neste pedido. Desmarcada = fica com a loja vendedora. */}
+        <div className="mb-3 rounded-lg border border-slate-200">
+          <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-1.5">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-600">
+              Peças do pedido · {pecasNoPedido} de {pecasDaVenda}
+            </span>
+            <span className="flex gap-3 text-[11px] font-bold">
+              <button type="button" onClick={() => setMarcadas(new Set(pecas.map((it) => String(it.id))))} className="text-teal-700 hover:underline">
+                Todas
+              </button>
+              <button type="button" onClick={() => setMarcadas(new Set())} className="text-slate-500 hover:underline">
+                Nenhuma
+              </button>
+            </span>
           </div>
-          <div>
-            <label className="text-[11px] uppercase tracking-wide text-slate-400">Nome da destinatária</label>
-            <input {...set('nome')} className={campo} />
+          <ul className="max-h-56 divide-y divide-slate-100 overflow-y-auto">
+            {pecas.map((it) => {
+              const id = String(it.id);
+              const on = marcadas.has(id);
+              return (
+                <li key={id}>
+                  <label className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs ${on ? '' : 'opacity-60'}`}>
+                    <input type="checkbox" checked={on} onChange={() => alternar(id)} className="h-4 w-4 accent-teal-600" />
+                    <span className="min-w-0 flex-1">
+                      <span className={`block font-bold ${on ? 'text-slate-800' : 'text-slate-500 line-through'}`}>
+                        {[it.ref, it.cor, it.tamanho].filter(Boolean).join(' · ') || it.sku}
+                        {qtd(it) > 1 ? ` ×${qtd(it)}` : ''}
+                      </span>
+                      <span className="block truncate text-[10px] text-slate-500" title={it.descricao}>{it.descricao}</span>
+                    </span>
+                    <span className="font-mono text-xs font-bold text-emerald-700">{brl(Number(it.total) || 0)}</span>
+                  </label>
+                </li>
+              );
+            })}
+            {!pecas.length && (
+              <li className="px-3 py-2 text-xs text-amber-700">Esta venda não tem peça (só frete/linha manual) — não vira pedido.</li>
+            )}
+          </ul>
+          <div className="border-t border-slate-200 px-3 py-1.5 text-[10px] leading-tight text-slate-500">
+            {parcial ? (
+              <>Pedido PARCIAL: as peças desmarcadas ficam com a loja vendedora e o estoque delas <b>não</b> volta. </>
+            ) : (
+              <>Desmarque o que fica com a loja vendedora (já saiu na sacola ou sai de lá). </>
+            )}
+            A venda gera <b>um</b> pedido só.{frete > 0 && <> Frete de {brl(frete)} vai junto.</>}
           </div>
-          {!retirada && (
-            <>
-              <div>
-                <label className="text-[11px] uppercase tracking-wide text-slate-400">CEP</label>
-                <input {...set('cep')} onBlur={(e) => void buscarCep(e.target.value)} className={campo} />
-              </div>
-              <div className="grid grid-cols-[1fr_90px] gap-2">
-                <div>
-                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Rua</label>
-                  <input {...set('endereco')} className={campo} />
-                </div>
-                <div>
-                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Número</label>
-                  <input {...set('numero')} className={campo} />
-                </div>
-              </div>
-              <div>
-                <label className="text-[11px] uppercase tracking-wide text-slate-400">Complemento</label>
-                <input {...set('complemento')} placeholder="Apto, bloco, fundos…" className={campo} />
-              </div>
-              <div>
-                <label className="text-[11px] uppercase tracking-wide text-slate-400">Bairro</label>
-                <input {...set('bairro')} className={campo} />
-              </div>
-              <div className="grid grid-cols-[1fr_70px] gap-2">
-                <div>
-                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Cidade</label>
-                  <input {...set('cidade')} className={campo} />
-                </div>
-                <div>
-                  <label className="text-[11px] uppercase tracking-wide text-slate-400">UF</label>
-                  <input {...set('uf')} maxLength={2} className={campo} />
-                </div>
-              </div>
-            </>
-          )}
         </div>
+
+        {!precisaEndereco && (
+          <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            <div className="text-[11px] uppercase tracking-wide text-slate-400">Entrega (como foi escolhida no caixa)</div>
+            <div className="font-bold">
+              {ENTREGA_LABEL[String(sale?.entregaTipo || '')] || sale?.entregaTipo || 'não informada'}
+              {sale?.entregaStoreCode ? ` · loja ${sale.entregaStoreCode}` : ''}
+            </div>
+            {cepDaVenda && (
+              <div className="text-slate-600">
+                {[sale?.customerEndereco, sale?.customerNumero].filter(Boolean).join(', ')}
+                {sale?.customerCidade ? ` · ${sale.customerCidade}/${sale?.customerUf || ''}` : ''} · CEP {sale.customerCep}
+              </div>
+            )}
+          </div>
+        )}
+
+        {precisaEndereco && (
+          <div className="space-y-2.5">
+            <div>
+              <label className="text-[11px] uppercase tracking-wide text-slate-400">Forma de entrega</label>
+              <select {...set('entregaTipo')} className={campo}>
+                <option value="sedex">⚡ SEDEX</option>
+                <option value="pac">📦 PAC</option>
+                <option value="retirada">🏬 Retira na loja vendedora</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wide text-slate-400">Nome da destinatária</label>
+              <input {...set('nome')} className={campo} />
+            </div>
+            {!retirada && (
+              <>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-slate-400">CEP</label>
+                  <input {...set('cep')} onBlur={(e) => void buscarCep(e.target.value)} className={campo} />
+                </div>
+                <div className="grid grid-cols-[1fr_90px] gap-2">
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wide text-slate-400">Rua</label>
+                    <input {...set('endereco')} className={campo} />
+                  </div>
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wide text-slate-400">Número</label>
+                    <input {...set('numero')} className={campo} />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Complemento</label>
+                  <input {...set('complemento')} placeholder="Apto, bloco, fundos…" className={campo} />
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-slate-400">Bairro</label>
+                  <input {...set('bairro')} className={campo} />
+                </div>
+                <div className="grid grid-cols-[1fr_70px] gap-2">
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wide text-slate-400">Cidade</label>
+                    <input {...set('cidade')} className={campo} />
+                  </div>
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wide text-slate-400">UF</label>
+                    <input {...set('uf')} maxLength={2} className={campo} />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         <div className="mt-4 flex gap-2">
           <button onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50">
@@ -1202,13 +1328,18 @@ function GerarPedidoOnlineModal({
           <button
             onClick={async () => {
               setSalvando(true);
-              const ok = await onConfirm({ ...f, uf: String(f.uf).toUpperCase() });
+              const body: Record<string, any> = {};
+              // Endereço só vai quando a venda não tinha — senão o que o caixa
+              // escolheu (inclusive motoboy, que o select daqui não oferece) ficaria pra trás.
+              if (precisaEndereco) Object.assign(body, { ...f, uf: String(f.uf).toUpperCase() });
+              if (parcial) body.itemIds = escolhidas.map((it) => String(it.id));
+              const ok = await onConfirm(body);
               if (!ok) setSalvando(false);
             }}
             disabled={!pode || salvando}
             className="flex-1 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-black text-white hover:bg-teal-700 disabled:opacity-50"
           >
-            {salvando ? 'Gerando…' : 'Gerar pedido'}
+            {salvando ? 'Gerando…' : parcial ? `Gerar pedido (${pecasNoPedido} de ${pecasDaVenda} peças)` : 'Gerar pedido'}
           </button>
         </div>
       </div>
