@@ -387,6 +387,53 @@ const server = http.createServer((req, res) => {
     const admin = process.argv.includes('--admin');
     return json({ role: admin ? 'admin' : 'store', storeCode: '01', name: 'Loja Santos' });
   }
+  // ── Notas do PDV — destinatário CNPJ (16/11/2026, rejeição 181) ───────────
+  // /minha-loja/pdv/notas: uma NFC-e REJEITADA com CNPJ no destinatário. A
+  // consulta do CNPJ cobre os quatro estados que a tela mostra:
+  //   66503871000136 achou (ATIVA) · 20104813000643 achou (BAIXADA) ·
+  //   11222333000181 não existe · 00000000000191 fonte fora do ar · resto: dígito errado
+  if (url.pathname === '/api/pdv/nfces') {
+    return json({
+      rows: [{
+        id: 'venda-cnpj-1', storeCode: '02', storeName: 'SANTOS', total: 219.8, paymentMethod: 'credito',
+        customerName: null, customerCpf: '66503871000136', nfceStatus: 'rejected', nfceNumber: '425', nfceSerie: '06',
+        nfceChave: null, nfceProtocolo: null, nfceAutorizadaEm: null, nfceCanceladaEm: null, nfceCancelamentoMotivo: null,
+        finalizedAt: new Date().toISOString(), podeCancelar: false, minutosRestantes: 0,
+      }],
+      summary: { totalNotas: 1, totalValor: 0, autorizadas: 0, canceladas: 0, rejeitadas: 1, porLoja: [] },
+    });
+  }
+  if (url.pathname.startsWith('/api/pdv/cnpj/')) {
+    const doc = url.pathname.split('/').pop();
+    const cadastro = {
+      cnpj: doc, razaoSocial: 'CONDOMINIO EDIFICIO EXCELSIOR', fantasia: null, situacao: 'ATIVA', ativa: true,
+      logradouro: 'AVENIDA BARTOLOMEU DE GUSMAO', numero: '22', complemento: null, bairro: 'EMBARE',
+      municipio: 'SANTOS', codMunicipio: '3548500', uf: 'SP', cep: '11045400', fonte: 'brasilapi',
+    };
+    console.log(`[mock] consulta CNPJ ${doc}`);
+    if (doc === '66503871000136') return json({ status: 'encontrado', cadastro });
+    if (doc === '20104813000643') return json({ status: 'encontrado', cadastro: { ...cadastro, razaoSocial: 'EMPRESA ENCERRADA LTDA', situacao: 'BAIXADA', ativa: false } });
+    if (doc === '11222333000181') return json({ status: 'inexistente' });
+    if (doc === '00000000000191') return json({ status: 'indisponivel', erro: 'brasilapi: ECONNABORTED' });
+    return json({ status: 'invalido' });
+  }
+  if (/^\/api\/nfe\/venda\/[^/]+$/.test(url.pathname) && req.method === 'GET') return json({ jaEmitida: false });
+  if (/^\/api\/nfe\/venda\/[^/]+$/.test(url.pathname) && req.method === 'POST') {
+    return lerCorpo(req, (body) => {
+      console.log(`[mock] NF-e da venda: ${JSON.stringify(body)}`);
+      json({ ok: true, doc: { id: 'nfe-doc-1', numero: 87, status: 'authorized' } });
+    });
+  }
+  if (/^\/api\/pdv\/sales\/[^/]+\/customer$/.test(url.pathname) && req.method === 'PATCH') {
+    return lerCorpo(req, (body) => {
+      console.log(`[mock] cliente da venda: ${JSON.stringify(body)}`);
+      json({ ok: true });
+    });
+  }
+  if (/^\/api\/pdv\/sales\/[^/]+\/nfce$/.test(url.pathname) && req.method === 'POST') {
+    console.log('[mock] reemissão da NFC-e');
+    return json({ status: 'authorized', numero: 425 });
+  }
   if (url.pathname === '/api/pdv/discount-policy') return json({ freeUpToPct: 5, caixaUpToPct: 10 });
   if (url.pathname === '/api/pdv/convenio/ativo') return json(null);
   if (url.pathname === '/api/pick-orders/mine') return json([]);

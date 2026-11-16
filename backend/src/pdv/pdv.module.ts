@@ -64,6 +64,9 @@ import { CobrancasOnlineService } from './cobrancas-online.service';
 import { FaturamentoModule } from '../faturamento/faturamento.module';
 import { MetasService } from './metas.service';
 import { MetasController } from './metas.controller';
+// CnpjModule (16/11): consulta pública do CNPJ pro destinatário da nota. É
+// módulo FOLHA (não importa ninguém) — sem caminho de volta pro PdvModule.
+import { CnpjModule } from '../cnpj/cnpj.module';
 
 /**
  * ⚠️ O `WooCommerceModule` SAIU DAS IMPORTS EM 14/09/2026.
@@ -81,7 +84,7 @@ import { MetasController } from './metas.controller';
  * qualquer caminho até o host morto.
  */
 @Module({
-  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule, FaturamentoModule, StockModule],
+  imports: [CnpjModule, CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule, FaturamentoModule, StockModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController, MetasController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou

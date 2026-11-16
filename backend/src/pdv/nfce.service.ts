@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
 import * as QRCode from 'qrcode';
@@ -9,6 +9,8 @@ import {
   transmitNfeSefazSp,
   cancelNfceSefazSp,
 } from './nfce-sefaz';
+import { CnpjConsultaService } from '../cnpj/cnpj-consulta.service';
+import { CadastroCnpj, enderecoDoDestinatario } from '../common/cnpj-cadastro';
 
 /**
  * NFC-e (NFe modelo 65) — emissão fiscal de cupom no PDV.
@@ -50,7 +52,12 @@ const ABATIMENTOS = ['vale_troca', 'vale', 'troca', 'cashback'];
 export class NfceService {
   private readonly logger = new Logger(NfceService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Opcional de propósito: os specs montam o serviço só com o Prisma, e sem
+    // a consulta o cupom sai como sempre saiu (destinatário sem endereço).
+    @Optional() private readonly cnpjConsulta?: CnpjConsultaService,
+  ) {}
 
   // ── Config CRUD por loja ────────────────────────────────────────────
 
@@ -492,7 +499,14 @@ export class NfceService {
     if (docDest.length === 11) {
       dest = `<dest><CPF>${docDest}</CPF><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length === 14) {
-      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+      // DESTINATÁRIO PJ (16/11/2026 — NFC-e 425 de Santos, rejeição 181): a
+      // SEFAZ passou a conferir o CNPJ na base da Receita pela chave UF +
+      // CNPJ (NT 2026.007, regra 12E02-10), e o cupom saía sem endereço —
+      // sem UF. O cadastro público do CNPJ dá a razão social e o endereço
+      // com UF e código IBGE. Sem resposta da consulta o cupom sai como
+      // sempre saiu e quem decide é a SEFAZ.
+      const cad = await this.cadastroDoDestinatarioPj(docDest);
+      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.xmlTexto(sale.customerName || cad?.razaoSocial, 60, 'CONSUMIDOR')}</xNome>${this.enderDestXml(cad)}<indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length > 0) {
       this.logger.warn(`[nfce] customerCpf com ${docDest.length} digitos invalidos: ${docDest}. Emitindo sem destinatario.`);
     }
@@ -955,6 +969,52 @@ export class NfceService {
     return this.esc(limpo || fallback);
   }
 
+  /** Cadastro do CNPJ do destinatário na Receita — null se não deu pra consultar. */
+  private async cadastroDoDestinatarioPj(cnpj: string): Promise<CadastroCnpj | null> {
+    if (!this.cnpjConsulta) return null;
+    try {
+      // Prazo curto: a vendedora está esperando o cupom. Na reemissão a tela
+      // de notas já consultou antes, e aí a resposta vem da memória.
+      const r = await this.cnpjConsulta.consultar(cnpj, { prazoMs: 6000 });
+      if (r.status === 'encontrado') return r.cadastro;
+      this.logger.warn(
+        `[nfce] destinatário CNPJ ${cnpj}: consulta do cadastro voltou "${r.status}"` +
+          `${r.status === 'indisponivel' ? ` (${r.erro})` : ''} — cupom sai SEM o endereço do destinatário (a SEFAZ pode rejeitar com 181)`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`[nfce] destinatário CNPJ ${cnpj}: consulta do cadastro falhou — ${e?.message || e}`);
+    }
+    return null;
+  }
+
+  /** Grupo `enderDest` do destinatário PJ — '' quando o cadastro não fecha um endereço válido. */
+  private enderDestXml(cad: CadastroCnpj | null): string {
+    const e = enderecoDoDestinatario(cad);
+    if (!e) return '';
+    return (
+      `<enderDest><xLgr>${this.xmlTexto(e.xLgr, 60, 'NAO INFORMADO')}</xLgr>` +
+      `<nro>${this.xmlTexto(e.nro, 60, 'S/N')}</nro>` +
+      `<xBairro>${this.xmlTexto(e.xBairro, 60, 'NAO INFORMADO')}</xBairro>` +
+      `<cMun>${e.cMun}</cMun><xMun>${this.xmlTexto(e.xMun, 60, 'NAO INFORMADO')}</xMun>` +
+      `<UF>${e.UF}</UF>${e.CEP ? `<CEP>${e.CEP}</CEP>` : ''}` +
+      `<cPais>1058</cPais><xPais>BRASIL</xPais></enderDest>`
+    );
+  }
+
+  /** Venda com CNPJ e sem nome: grava a razão social da Receita como nome do destinatário. */
+  private async nomearDestinatarioPj(sale: any): Promise<void> {
+    const doc = String(sale?.customerCpf || '').replace(/\D/g, '');
+    if (doc.length !== 14 || String(sale?.customerName || '').trim()) return;
+    const cad = await this.cadastroDoDestinatarioPj(doc);
+    if (!cad?.razaoSocial) return;
+    sale.customerName = cad.razaoSocial.slice(0, 120);
+    await (this.prisma as any).pdvSale
+      .update({ where: { id: sale.id }, data: { customerName: sale.customerName } })
+      .catch((e: any) =>
+        this.logger.warn(`[nfce] razão social do CNPJ ${doc} não gravada na venda ${sale.id}: ${e?.message || e}`),
+      );
+  }
+
   private esc(s: string): string {
     return String(s || '')
       .replace(/&/g, '&amp;')
@@ -1080,6 +1140,11 @@ export class NfceService {
       cscToken: cfgRaw.cscToken || '',
     };
     const ready = !!(cfgRaw.cnpj && cfgRaw.ie && cfgRaw.cscToken && cfgRaw.certPfxB64);
+
+    // Destinatário PJ sem nome na venda: a razão social da Receita vira o
+    // nome — a lista de notas deixa de dizer "não identificado" pra empresa
+    // que está com o CNPJ na nota. Nome digitado pela loja nunca é trocado.
+    await this.nomearDestinatarioPj(sale);
 
     const emissionLockId = await this.acquireEmissionLock(sale.id);
     const numero = await this.reserveNumero(sale.id, sale.storeCode, config.serie);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, RefreshCw, FileText, X, Search, Printer, Loader2, Check, AlertCircle } from 'lucide-react';
 import { api, API_URL, getAuthToken } from '@/lib/api';
@@ -45,6 +45,74 @@ type Summary = {
   rejeitadas: number;
   porLoja: Array<{ storeCode: string; storeName: string | null; count: number; total: number }>;
 };
+
+type CnpjCadastro = {
+  cnpj: string; razaoSocial: string; fantasia: string | null; situacao: string; ativa: boolean;
+  logradouro: string; numero: string; complemento: string | null; bairro: string;
+  municipio: string; codMunicipio: string; uf: string; cep: string;
+};
+type CnpjConsulta = {
+  status: 'encontrado' | 'inexistente' | 'invalido' | 'indisponivel';
+  cadastro?: CnpjCadastro;
+  erro?: string;
+};
+
+/**
+ * O que a Receita tem do CNPJ digitado — ou o aviso do que a SEFAZ vai recusar.
+ *
+ * Desde 16/11/2026 a SEFAZ confere o CNPJ do destinatário na base da Receita
+ * (rejeição 181 "não cadastrado" e 182 "situação irregular"), e a chave da
+ * consulta é UF + CNPJ: nota sem o endereço da empresa volta rejeitada mesmo
+ * com o CNPJ certo (NFC-e 425 de Santos). A tela mostra a empresa ANTES de
+ * emitir, em vez de a vendedora descobrir pela rejeição.
+ */
+function CnpjCartao({ doc, info, buscando, onTentarDeNovo }: {
+  doc: string; info?: CnpjConsulta; buscando: boolean; onTentarDeNovo: () => void;
+}) {
+  if (doc.length !== 14) return null;
+  const caixa = 'mt-1.5 rounded border p-2 text-[11px] leading-snug';
+  if (buscando && (!info || info.status === 'indisponivel')) {
+    return <div className={`${caixa} border-slate-200 bg-slate-50 text-slate-600`}>Buscando a empresa na Receita…</div>;
+  }
+  if (!info) return null;
+  if (info.status === 'encontrado' && info.cadastro) {
+    const c = info.cadastro;
+    const rua = [c.logradouro, c.numero].filter(Boolean).join(', ');
+    return (
+      <div className={`${caixa} ${c.ativa ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-300 bg-rose-50 text-rose-900'}`}>
+        <div className="font-bold">{c.razaoSocial}</div>
+        <div>{rua}{c.bairro ? ` · ${c.bairro}` : ''} · {c.municipio}/{c.uf}{c.cep ? ` · CEP ${c.cep}` : ''}</div>
+        {c.ativa ? (
+          <div className="mt-0.5">Situação na Receita: <b>ATIVA</b>. A nota sai com a razão social e o endereço da empresa.</div>
+        ) : (
+          <div className="mt-0.5 font-semibold">
+            Situação na Receita: {c.situacao || 'não informada'}. A SEFAZ recusa nota pra CNPJ que não está ATIVO (rejeição 182) — confira com a cliente.
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (info.status === 'invalido') {
+    return (
+      <div className={`${caixa} border-rose-300 bg-rose-50 text-rose-900`}>
+        Esse CNPJ não fecha o dígito verificador — tem número digitado errado.
+      </div>
+    );
+  }
+  if (info.status === 'inexistente') {
+    return (
+      <div className={`${caixa} border-rose-300 bg-rose-50 text-rose-900`}>
+        Não achei esse CNPJ na Receita. Confira o número com a cliente — CNPJ que não existe volta rejeitado pela SEFAZ (181).
+      </div>
+    );
+  }
+  return (
+    <div className={`${caixa} border-amber-300 bg-amber-50 text-amber-900`}>
+      Não consegui consultar a Receita agora. Sem o endereço da empresa a SEFAZ tende a rejeitar a nota (181).{' '}
+      <button type="button" onClick={onTentarDeNovo} className="font-bold underline">Consultar de novo</button>
+    </div>
+  );
+}
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -214,6 +282,88 @@ export default function NotasEmitidasPage() {
       }));
     } catch { /* offline — preenche na mão */ }
   }
+  // ── CADASTRO DO CNPJ NA RECEITA (16/11/2026) ─────────────────────────
+  // CNPJ completo num dos dois modais → busca a empresa. O backend guarda a
+  // resposta, então a emissão que vem em seguida não espera a consulta de novo.
+  const [cnpjInfo, setCnpjInfo] = useState<Record<string, CnpjConsulta>>({});
+  const [cnpjBuscando, setCnpjBuscando] = useState<string | null>(null);
+  const consultarCnpj = useCallback(async (docCru: string): Promise<CnpjConsulta | null> => {
+    const doc = docCru.replace(/\D/g, '');
+    if (doc.length !== 14) return null;
+    setCnpjBuscando(doc);
+    let r: CnpjConsulta;
+    try {
+      r = await api<CnpjConsulta>(`/pdv/cnpj/${doc}`);
+    } catch (e: any) {
+      // Falha da NOSSA chamada não é "CNPJ não existe" — é "não deu pra perguntar".
+      r = { status: 'indisponivel', erro: e?.message || String(e) };
+    }
+    setCnpjInfo((p) => ({ ...p, [doc]: r }));
+    setCnpjBuscando((b) => (b === doc ? null : b));
+    return r;
+  }, []);
+
+  // Corrigir & reemitir: sugere a razão social quando o nome está vazio.
+  // ⚠️ O nome sugerido pertence AO CNPJ consultado: mudou o documento, a
+  // sugestão sai junto — senão a nota do CNPJ novo sairia com a razão social
+  // da empresa anterior. Nome que a pessoa digitou nunca é tocado.
+  const fixDocDigits = fixDoc.replace(/\D/g, '');
+  const nomeSugeridoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!fixTarget) return;
+    const anterior = nomeSugeridoRef.current;
+    if (anterior) {
+      nomeSugeridoRef.current = null;
+      setFixName((n) => (n === anterior ? '' : n));
+    }
+    if (fixDocDigits.length !== 14) return;
+    let vivo = true;
+    consultarCnpj(fixDocDigits).then((r) => {
+      if (!vivo || r?.status !== 'encontrado' || !r.cadastro) return;
+      const razao = r.cadastro.razaoSocial;
+      nomeSugeridoRef.current = razao;
+      setFixName((n) => (n.trim() ? n : razao));
+    });
+    return () => { vivo = false; };
+  }, [fixTarget, fixDocDigits, consultarCnpj]);
+
+  // NF-e (nota grande): preenche razão social e endereço — só o que está
+  // VAZIO; o que a pessoa já digitou ganha.
+  // ⚠️ Mesma regra do nome acima, e aqui vale mais: mudou o CNPJ, o endereço
+  // que a tela preencheu sai junto — endereço de uma empresa no CNPJ de outra
+  // é nota fiscal errada.
+  const vDocDigits = String(vCust.cpfCnpj || '').replace(/\D/g, '');
+  const vPreenchidoRef = useRef<Record<string, string> | null>(null);
+  useEffect(() => {
+    if (!vendaTarget || vOkDoc) return;
+    const anterior = vPreenchidoRef.current;
+    if (anterior) {
+      vPreenchidoRef.current = null;
+      setVCust((p: any) => {
+        const q = { ...p };
+        for (const k of Object.keys(anterior)) if (q[k] === anterior[k]) q[k] = '';
+        return q;
+      });
+    }
+    if (vDocDigits.length !== 14) return;
+    let vivo = true;
+    consultarCnpj(vDocDigits).then((r) => {
+      if (!vivo || r?.status !== 'encontrado' || !r.cadastro) return;
+      const c = r.cadastro;
+      const daReceita: Record<string, string> = {
+        nome: c.razaoSocial, cep: c.cep, endereco: c.logradouro, numero: c.numero,
+        bairro: c.bairro, cidade: c.municipio, uf: c.uf, codMunicipio: c.codMunicipio,
+      };
+      vPreenchidoRef.current = daReceita;
+      setVCust((p: any) => {
+        const q = { ...p };
+        for (const [k, v] of Object.entries(daReceita)) if (!q[k]) q[k] = v;
+        return q;
+      });
+    });
+    return () => { vivo = false; };
+  }, [vendaTarget, vOkDoc, vDocDigits, consultarCnpj]);
+
   async function emitirVenda() {
     if (!vendaTarget || vBusy) return;
     setVBusy(true); setVErr(null);
@@ -804,6 +954,12 @@ export default function NotasEmitidasPage() {
               <div className="text-[10px] text-slate-500 mt-0.5">
                 {fixDoc.replace(/\D/g, '').length} dígitos · opcional — em branco = nota SEM CPF (consumidor não identificado)
               </div>
+              <CnpjCartao
+                doc={fixDocDigits}
+                info={cnpjInfo[fixDocDigits]}
+                buscando={cnpjBuscando === fixDocDigits}
+                onTentarDeNovo={() => consultarCnpj(fixDocDigits)}
+              />
             </div>
             <div>
               <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Nome / razão social (opcional)</label>
@@ -910,6 +1066,12 @@ export default function NotasEmitidasPage() {
                     <input value={vCust.uf || ''} onChange={(e) => setVCust({ ...vCust, uf: e.target.value.toUpperCase().slice(0, 2) })}
                       className="w-full p-2 border rounded mt-0.5 text-sm" /></label>
                 </div>
+                <CnpjCartao
+                  doc={vDocDigits}
+                  info={cnpjInfo[vDocDigits]}
+                  buscando={cnpjBuscando === vDocDigits}
+                  onTentarDeNovo={() => consultarCnpj(vDocDigits)}
+                />
                 {vErr && <div className="mt-2 rounded bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-800">{vErr}</div>}
                 <div className="flex justify-end gap-2 mt-4">
                   <button onClick={() => !vBusy && setVendaTarget(null)} disabled={vBusy}

@@ -37,6 +37,7 @@ import { FotoProdutoService } from './foto-produto.service';
 import { ReturnsService } from './returns.service';
 import { CobrancasOnlineService } from './cobrancas-online.service';
 import { LastroRedeService } from './lastro-rede.service';
+import { CnpjConsultaService } from '../cnpj/cnpj-consulta.service';
 import type { CobrancaOnline } from './cobrancas-online.service';
 import { donosDosPagamentos } from '../common/dono-do-pagamento';
 
@@ -68,7 +69,26 @@ export class PdvController {
     private readonly crediarioCriacao: CrediarioCriacaoService,
     private readonly cobrancasOnlineSvc: CobrancasOnlineService,
     private readonly lastroRede: LastroRedeService,
+    private readonly cnpjConsulta: CnpjConsultaService,
   ) {}
+
+  /**
+   * GET /pdv/cnpj/:cnpj — cadastro da empresa na Receita (razão social,
+   * endereço com UF e código IBGE, situação cadastral).
+   *
+   * Desde 16/11/2026 a SEFAZ confere o CNPJ do destinatário na base da
+   * Receita (rejeições 181 "não cadastrado" e 182 "situação irregular"). A
+   * tela de notas chama isto ANTES de emitir: mostra a empresa, preenche o
+   * que a nota precisa e avisa quando o número não existe — em vez de a
+   * vendedora descobrir pela rejeição. Responde `status`:
+   * encontrado | inexistente | invalido | indisponivel (nunca lança por
+   * fonte fora do ar — "não consegui perguntar" não é "não existe").
+   */
+  @Get('cnpj/:cnpj')
+  consultarCnpj(@Req() req: any, @Param('cnpj') cnpj: string) {
+    this.requireRole(req);
+    return this.cnpjConsulta.consultar(cnpj);
+  }
 
   // ── LASTRO DA VENDA À DISTÂNCIA (26/08 — carrossel ON-000110/162) ────────
   // Semáforo por SKU do carrinho: verde tem, amarelo com ressalva (parcial /
