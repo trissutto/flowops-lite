@@ -3,7 +3,7 @@ import archiver from 'archiver';
 import { PassThrough, Readable } from 'stream';
 import { prisma } from '@/lib/prisma';
 import { enforceRateLimit } from '@/lib/security';
-import { getObjectNodeStream } from '@/lib/storage';
+import { describeStorageError, getObjectNodeStream } from '@/lib/storage';
 import { PublicPropertySnapshot } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -11,8 +11,10 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ publicId: string }> }) {
+  let publicIdForLog: string | undefined;
   try {
     const { publicId } = await params;
+    publicIdForLog = publicId;
     await enforceRateLimit(request, `zip:${publicId}`, 5);
     const property = await prisma.publicProperty.findFirst({
       where: { publicId, active: true },
@@ -41,12 +43,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   } catch (error: any) {
     const limited = /Muitas solicitações/i.test(String(error?.message || ''));
     if (!limited) {
-      console.error('[fotos-zip] falha ao montar o pacote', {
-        name: error?.name,
-        code: error?.Code || error?.code || error?.$metadata?.httpStatusCode,
-        // mensagem do S3 pode trazer a chave do objeto (= link secreto da ficha)
-        message: String(error?.message || error).replace(/properties\/[^/\s"']+/g, 'properties/<ficha>').slice(0, 300),
-      });
+      // describeStorageError tira URL assinada, X-Amz, access key e o publicId.
+      console.error('[fotos-zip] falha ao montar o pacote', describeStorageError(error, publicIdForLog));
     }
     return new NextResponse(limited ? 'Muitas solicitações.' : 'Não foi possível gerar o pacote de fotos.', {
       status: limited ? 429 : 500,

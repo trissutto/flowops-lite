@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { enforceRateLimit } from '@/lib/security';
-import { getObjectBytes } from '@/lib/storage';
+import { describeStorageError, getObjectBytes, storageKeyPublicPart } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,8 +10,10 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ publicId: string; mediaId: string }> },
 ) {
+  let publicIdForLog: string | undefined;
   try {
     const { publicId, mediaId } = await params;
+    publicIdForLog = publicId;
     await enforceRateLimit(request, `media:${publicId}`, 180);
     const media = await prisma.publicMedia.findFirst({
       where: {
@@ -27,13 +29,12 @@ export async function GET(
     try {
       bytes = await getObjectBytes(media.storageKey);
     } catch (error: any) {
-      // publicId é o link secreto da ficha: não vai pro log (só o fim da chave).
+      // publicId é o link secreto da ficha: não vai pro log, nem pela chave
+      // do objeto nem pela mensagem do SDK (describeStorageError limpa).
       console.error('[media] falha ao ler do bucket', {
         mediaId,
-        storageKeyTail: media.storageKey.slice(-40),
-        name: error?.name,
-        code: error?.Code || error?.code || error?.$metadata?.httpStatusCode,
-        message: redactKeys(String(error?.message || error)).slice(0, 300),
+        storageKey: storageKeyPublicPart(media.storageKey),
+        ...describeStorageError(error, publicId),
       });
       return new NextResponse('Foto indisponível no momento.', { status: 500, headers: noStoreHeaders() });
     }
@@ -49,20 +50,13 @@ export async function GET(
   } catch (error: any) {
     const limited = /Muitas solicitações/i.test(String(error?.message || ''));
     if (!limited) {
-      console.error('[media] falha antes do bucket', {
-        name: error?.name,
-        message: redactKeys(String(error?.message || error)).slice(0, 300),
-      });
+      console.error('[media] falha antes do bucket', describeStorageError(error, publicIdForLog));
     }
     return new NextResponse(limited ? 'Muitas solicitações.' : 'Foto indisponível no momento.', {
       status: limited ? 429 : 500,
       headers: noStoreHeaders(),
     });
   }
-}
-
-function redactKeys(text: string) {
-  return text.replace(/properties\/[^/\s"']+/g, 'properties/<ficha>');
 }
 
 function safeFileName(name: string) {
