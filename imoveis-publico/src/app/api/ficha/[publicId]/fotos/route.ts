@@ -40,6 +40,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     });
   } catch (error: any) {
     const limited = /Muitas solicitações/i.test(String(error?.message || ''));
+    if (!limited) {
+      console.error('[fotos-zip] falha ao montar o pacote', {
+        name: error?.name,
+        code: error?.Code || error?.code || error?.$metadata?.httpStatusCode,
+        message: String(error?.message || error).slice(0, 300),
+      });
+    }
     return new NextResponse(limited ? 'Muitas solicitações.' : 'Não foi possível gerar o pacote de fotos.', {
       status: limited ? 429 : 500,
       headers: noStoreHeaders(),

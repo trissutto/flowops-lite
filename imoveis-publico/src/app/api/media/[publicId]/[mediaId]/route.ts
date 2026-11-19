@@ -20,7 +20,23 @@ export async function GET(
       },
     });
     if (!media?.storageKey) return new NextResponse('Não encontrado.', { status: 404, headers: noStoreHeaders() });
-    const bytes = await getObjectBytes(media.storageKey);
+    // Falha do bucket é ERRO (500) e vai pro log, não "não encontrado":
+    // em 19/11/2026 todas as fotos do portal sumiram como 404 por semanas
+    // porque este catch engolia a falha do S3 sem registrar nada.
+    let bytes: Awaited<ReturnType<typeof getObjectBytes>>;
+    try {
+      bytes = await getObjectBytes(media.storageKey);
+    } catch (error: any) {
+      console.error('[media] falha ao ler do bucket', {
+        publicId,
+        mediaId,
+        storageKey: media.storageKey,
+        name: error?.name,
+        code: error?.Code || error?.code || error?.$metadata?.httpStatusCode,
+        message: String(error?.message || error).slice(0, 300),
+      });
+      return new NextResponse('Foto indisponível no momento.', { status: 500, headers: noStoreHeaders() });
+    }
     return new NextResponse(bytes, {
       status: 200,
       headers: {
@@ -32,8 +48,14 @@ export async function GET(
     });
   } catch (error: any) {
     const limited = /Muitas solicitações/i.test(String(error?.message || ''));
-    return new NextResponse(limited ? 'Muitas solicitações.' : 'Não encontrado.', {
-      status: limited ? 429 : 404,
+    if (!limited) {
+      console.error('[media] falha antes do bucket', {
+        name: error?.name,
+        message: String(error?.message || error).slice(0, 300),
+      });
+    }
+    return new NextResponse(limited ? 'Muitas solicitações.' : 'Foto indisponível no momento.', {
+      status: limited ? 429 : 500,
       headers: noStoreHeaders(),
     });
   }
