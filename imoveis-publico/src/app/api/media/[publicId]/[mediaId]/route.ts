@@ -27,13 +27,13 @@ export async function GET(
     try {
       bytes = await getObjectBytes(media.storageKey);
     } catch (error: any) {
+      // publicId é o link secreto da ficha: não vai pro log (só o fim da chave).
       console.error('[media] falha ao ler do bucket', {
-        publicId,
         mediaId,
-        storageKey: media.storageKey,
+        storageKeyTail: media.storageKey.slice(-40),
         name: error?.name,
         code: error?.Code || error?.code || error?.$metadata?.httpStatusCode,
-        message: String(error?.message || error).slice(0, 300),
+        message: redactKeys(String(error?.message || error)).slice(0, 300),
       });
       return new NextResponse('Foto indisponível no momento.', { status: 500, headers: noStoreHeaders() });
     }
@@ -51,7 +51,7 @@ export async function GET(
     if (!limited) {
       console.error('[media] falha antes do bucket', {
         name: error?.name,
-        message: String(error?.message || error).slice(0, 300),
+        message: redactKeys(String(error?.message || error)).slice(0, 300),
       });
     }
     return new NextResponse(limited ? 'Muitas solicitações.' : 'Foto indisponível no momento.', {
@@ -59,6 +59,10 @@ export async function GET(
       headers: noStoreHeaders(),
     });
   }
+}
+
+function redactKeys(text: string) {
+  return text.replace(/properties\/[^/\s"']+/g, 'properties/<ficha>');
 }
 
 function safeFileName(name: string) {
