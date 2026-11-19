@@ -9,27 +9,50 @@ import { MediaSource } from './types';
 
 let clientCache: S3Client | null = null;
 
+// Nome oficial é MEDIA_S3_<X>. Os dois prefixos antigos (PUBLIC_MEDIA_S3_ e
+// PUBLIC_MEDIA_R2_) continuam lidos só por compatibilidade: a Vercel CLI
+// recusa gravar variável "PUBLIC_*" como Secret (acha que é pública no
+// navegador), então a credencial do bucket só pode ser trocada pelo nome novo.
+function env(sufixo: string) {
+  return process.env[`MEDIA_S3_${sufixo}`]
+    || process.env[`PUBLIC_MEDIA_S3_${sufixo}`]
+    || process.env[`PUBLIC_MEDIA_R2_${sufixo}`]
+    || undefined;
+}
+
+function envNome(sufixo: string) {
+  if (process.env[`MEDIA_S3_${sufixo}`]) return `MEDIA_S3_${sufixo}`;
+  if (process.env[`PUBLIC_MEDIA_S3_${sufixo}`]) return `PUBLIC_MEDIA_S3_${sufixo}`;
+  if (process.env[`PUBLIC_MEDIA_R2_${sufixo}`]) return `PUBLIC_MEDIA_R2_${sufixo}`;
+  return null;
+}
+
 function client() {
   if (clientCache) return clientCache;
-  const accountId = process.env.PUBLIC_MEDIA_R2_ACCOUNT_ID;
-  const endpoint = process.env.PUBLIC_MEDIA_S3_ENDPOINT
+  const accountId = env('ACCOUNT_ID');
+  const endpoint = env('ENDPOINT')
     || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
-  const accessKeyId = process.env.PUBLIC_MEDIA_S3_ACCESS_KEY_ID
-    || process.env.PUBLIC_MEDIA_R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.PUBLIC_MEDIA_S3_SECRET_ACCESS_KEY
-    || process.env.PUBLIC_MEDIA_R2_SECRET_ACCESS_KEY;
+  const accessKeyId = env('ACCESS_KEY_ID');
+  const secretAccessKey = env('SECRET_ACCESS_KEY');
   if (!endpoint || !accessKeyId || !secretAccessKey) throw new Error('Armazenamento público não configurado.');
-  const region = process.env.PUBLIC_MEDIA_S3_REGION || 'auto';
-  const forcePathStyle = process.env.PUBLIC_MEDIA_S3_FORCE_PATH_STYLE === '1';
-  // As envs são "Sensitive" na Vercel (ninguém lê o valor depois de salvar).
+  const region = env('REGION') || 'auto';
+  const forcePathStyle = env('FORCE_PATH_STYLE') === '1';
+  // As chaves são Secret na Vercel (ninguém lê o valor depois de salvar).
   // Este log é o único retrato do que o portal está usando — sem segredo:
-  // só host, bucket, estilo de URL e o começo da access key.
+  // só host, bucket, estilo de URL, o começo da access key e de QUAL nome
+  // de variável cada uma veio (pra flagrar credencial velha ainda em uso).
   console.info('[storage] cliente S3', {
     endpointHost: safeHost(endpoint),
-    bucket: process.env.PUBLIC_MEDIA_S3_BUCKET_NAME || process.env.PUBLIC_MEDIA_R2_BUCKET_NAME || null,
+    bucket: env('BUCKET_NAME') || null,
     region,
     forcePathStyle,
     accessKeyIdPrefix: accessKeyId.slice(0, 4),
+    origem: {
+      endpoint: envNome('ENDPOINT'),
+      accessKeyId: envNome('ACCESS_KEY_ID'),
+      secretAccessKey: envNome('SECRET_ACCESS_KEY'),
+      bucket: envNome('BUCKET_NAME'),
+    },
   });
   clientCache = new S3Client({
     region,
@@ -75,9 +98,8 @@ function safeHost(value: string) {
 }
 
 function bucket() {
-  const name = process.env.PUBLIC_MEDIA_S3_BUCKET_NAME
-    || process.env.PUBLIC_MEDIA_R2_BUCKET_NAME;
-  if (!name) throw new Error('PUBLIC_MEDIA_S3_BUCKET_NAME não configurado.');
+  const name = env('BUCKET_NAME');
+  if (!name) throw new Error('MEDIA_S3_BUCKET_NAME não configurado.');
   return name;
 }
 
