@@ -17,14 +17,16 @@ Copie os nomes de `.env.example` para o projeto Vercel:
 - `PUBLICATION_SYNC_SECRET`: segredo aleatório com no mínimo 32 bytes.
 - `PUBLICATION_MEDIA_SOURCE_HOSTS`: hosts, separados por vírgula, de onde o publicador pode copiar as mídias comerciais internas. Não informe protocolo nem caminho.
 - `PUBLIC_SITE_URL`: `https://imoveis.lurds.com.br`.
-- `PUBLIC_MEDIA_S3_ENDPOINT`: endpoint S3 mostrado na aba Credentials do bucket.
-- `PUBLIC_MEDIA_S3_REGION`: `auto` para o Railway Bucket.
-- `PUBLIC_MEDIA_S3_FORCE_PATH_STYLE`: `1` para o Railway Bucket.
-- `PUBLIC_MEDIA_S3_ACCESS_KEY_ID`.
-- `PUBLIC_MEDIA_S3_SECRET_ACCESS_KEY`.
-- `PUBLIC_MEDIA_S3_BUCKET_NAME`.
+- `MEDIA_S3_ENDPOINT`: endpoint S3 mostrado por `railway bucket credentials -b imoveis-publicos-media --json` (hoje `https://t3.storageapi.dev`).
+- `MEDIA_S3_REGION`: `auto` para o Railway Bucket.
+- `MEDIA_S3_FORCE_PATH_STYLE`: `1` para o Railway Bucket.
+- `MEDIA_S3_ACCESS_KEY_ID` (Secret).
+- `MEDIA_S3_SECRET_ACCESS_KEY` (Secret).
+- `MEDIA_S3_BUCKET_NAME`: o nome REAL que o Railway devolve (`bucketName`, com sufixo — hoje `imoveis-publicos-media-wmfgoa`), não o apelido do painel.
 
-O bucket não deve possuir domínio público. Fotos, PDF e ZIP são entregues somente por rotas que confirmam que a ficha continua ativa. As variáveis antigas `PUBLIC_MEDIA_R2_*` continuam aceitas apenas para compatibilidade.
+O bucket não deve possuir domínio público. Fotos, PDF e ZIP são entregues somente por rotas que confirmam que a ficha continua ativa.
+
+Os nomes antigos `PUBLIC_MEDIA_S3_*` e `PUBLIC_MEDIA_R2_*` continuam aceitos apenas para compatibilidade, e o nome novo sempre ganha. O prefixo `PUBLIC_` foi abandonado em 19/11/2026 porque a Vercel CLI recusa gravar variável `PUBLIC_*` como Secret (trata o prefixo como "exposta no navegador"), o que impedia trocar a credencial do bucket pela linha de comando. Se a credencial do bucket for resetada no Railway, regrave as duas chaves `MEDIA_S3_*` na Vercel (Production + Preview) e redeploye; o sintoma de chave velha é `SignatureDoesNotMatch` no log `[media] falha ao ler do bucket`, com toda foto pública respondendo 500. O log `[storage] cliente S3` diz de qual nome de variável cada valor veio.
 
 ## Variáveis do backend FlowOps
 
