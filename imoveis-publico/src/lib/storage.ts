@@ -19,13 +19,33 @@ function client() {
   const secretAccessKey = process.env.PUBLIC_MEDIA_S3_SECRET_ACCESS_KEY
     || process.env.PUBLIC_MEDIA_R2_SECRET_ACCESS_KEY;
   if (!endpoint || !accessKeyId || !secretAccessKey) throw new Error('Armazenamento público não configurado.');
+  const region = process.env.PUBLIC_MEDIA_S3_REGION || 'auto';
+  const forcePathStyle = process.env.PUBLIC_MEDIA_S3_FORCE_PATH_STYLE === '1';
+  // As envs são "Sensitive" na Vercel (ninguém lê o valor depois de salvar).
+  // Este log é o único retrato do que o portal está usando — sem segredo:
+  // só host, bucket, estilo de URL e o começo da access key.
+  console.info('[storage] cliente S3', {
+    endpointHost: safeHost(endpoint),
+    bucket: process.env.PUBLIC_MEDIA_S3_BUCKET_NAME || process.env.PUBLIC_MEDIA_R2_BUCKET_NAME || null,
+    region,
+    forcePathStyle,
+    accessKeyIdPrefix: accessKeyId.slice(0, 4),
+  });
   clientCache = new S3Client({
-    region: process.env.PUBLIC_MEDIA_S3_REGION || 'auto',
+    region,
     endpoint,
-    forcePathStyle: process.env.PUBLIC_MEDIA_S3_FORCE_PATH_STYLE === '1',
+    forcePathStyle,
     credentials: { accessKeyId, secretAccessKey },
   });
   return clientCache;
+}
+
+function safeHost(value: string) {
+  try {
+    return new URL(value).host;
+  } catch {
+    return 'inválido';
+  }
 }
 
 function bucket() {
