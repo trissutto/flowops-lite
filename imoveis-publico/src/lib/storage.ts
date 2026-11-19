@@ -40,6 +40,32 @@ function client() {
   return clientCache;
 }
 
+/**
+ * Resumo de um erro do S3 que pode ir pro log sem vazar segredo: nada de URL
+ * assinada, parâmetros X-Amz, access key, nem o publicId (link secreto da
+ * ficha), que aparece tanto na chave do objeto quanto na mensagem do SDK.
+ */
+export function describeStorageError(error: any, publicId?: string) {
+  let message = String(error?.message || error || '');
+  if (publicId) message = message.split(publicId).join('<ficha>');
+  message = message
+    .replace(/https?:\/\/[^\s"']+/g, '<url>')
+    .replace(/([?&])(X-Amz-[A-Za-z-]+|Signature|Credential|Security-Token)=[^&\s"']*/gi, '$1$2=<oculto>')
+    .replace(/\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, '<akid>')
+    .replace(/\btid_[A-Za-z0-9_-]+/g, '<akid>')
+    .replace(/properties\/[^/\s"']+/g, 'properties/<ficha>');
+  return {
+    name: error?.name ?? null,
+    code: error?.Code || error?.code || error?.$metadata?.httpStatusCode || null,
+    message: message.slice(0, 300),
+  };
+}
+
+/** Parte da chave do objeto que não carrega o publicId (`v2/<mediaId>-arquivo.jpg`). */
+export function storageKeyPublicPart(storageKey: string) {
+  return storageKey.split('/').slice(2).join('/');
+}
+
 function safeHost(value: string) {
   try {
     return new URL(value).host;
