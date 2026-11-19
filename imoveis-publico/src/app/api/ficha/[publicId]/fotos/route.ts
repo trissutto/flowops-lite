@@ -44,7 +44,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       console.error('[fotos-zip] falha ao montar o pacote', {
         name: error?.name,
         code: error?.Code || error?.code || error?.$metadata?.httpStatusCode,
-        message: String(error?.message || error).slice(0, 300),
+        // mensagem do S3 pode trazer a chave do objeto (= link secreto da ficha)
+        message: String(error?.message || error).replace(/properties\/[^/\s"']+/g, 'properties/<ficha>').slice(0, 300),
       });
     }
     return new NextResponse(limited ? 'Muitas solicitações.' : 'Não foi possível gerar o pacote de fotos.', {
