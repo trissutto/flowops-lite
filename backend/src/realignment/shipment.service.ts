@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -481,14 +482,34 @@ export class RealignmentShipmentService {
       );
     }
 
+    // REALINHAMENTO volta pra fila de separação (a ordem é da matriz, a peça
+    // ainda precisa ir). Peça EXCLUÍDA (lixeirinha) NÃO volta — excluir a
+    // caixa ressuscitava peça que a loja tinha tirado do pedido de propósito.
     const upd = await this.prisma.transferOrder.updateMany({
-      // Peça EXCLUÍDA (lixeirinha) NÃO volta pra fila — excluir a caixa
-      // ressuscitava peça que a loja tinha tirado do pedido de propósito.
-      where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } } as any,
+      where: {
+        shipmentId: shipment.id,
+        realignmentStatus: { not: 'cancelled' },
+        tipo: { not: 'TRANSFERENCIA' },
+      } as any,
       data: {
         realignmentStatus: 'pending',
         realignmentSentAt: null,
         shipmentId: null,
+      } as any,
+    });
+    // TRANSFERÊNCIA não tem fila: a linha nasceu do bipe e só existe dentro
+    // da caixa. Sem caixa ela virava órfã invisível, contada pela trava do eco
+    // do leitor como "já pedida" (23/11/2026). Cancela, com o rastro.
+    const canc = await this.prisma.transferOrder.updateMany({
+      where: {
+        shipmentId: shipment.id,
+        realignmentStatus: { not: 'cancelled' },
+        tipo: 'TRANSFERENCIA',
+      } as any,
+      data: {
+        realignmentStatus: 'cancelled',
+        realignmentSentAt: null,
+        realignmentNotFoundNote: 'Remessa excluída pela loja (transferência)',
       } as any,
     });
 
@@ -498,9 +519,15 @@ export class RealignmentShipmentService {
     });
 
     this.logger.warn(
-      `[shipment] ${shipment.code} EXCLUÍDA (aberta): ${upd.count} peça(s) voltaram pra fila de separação`,
+      `[shipment] ${shipment.code} EXCLUÍDA (aberta): ${upd.count} peça(s) voltaram pra fila de separação · ` +
+        `${canc.count} bipe(s) de transferência cancelado(s)`,
     );
-    return { ok: true, code: shipment.code, pecasDevolvidas: upd.count ?? 0 };
+    return {
+      ok: true,
+      code: shipment.code,
+      pecasDevolvidas: upd.count ?? 0,
+      pecasCanceladas: canc.count ?? 0,
+    };
   }
 
   /**
@@ -975,30 +1002,9 @@ export class RealignmentShipmentService {
         : null;
     const precoUnitCents = Math.round((precoReais || 0) * 100);
 
-    // Cria o TransferOrder ad-hoc (tipo TRANSFERENCIA) — 1 peça por bipe (cada
-    // unidade vira uma linha; não soma SKU igual).
-    const order = await this.prisma.transferOrder.create({
-      data: {
-        tipo: 'TRANSFERENCIA',
-        refCode: ref,
-        codigoBipado: codigo,
-        descricao,
-        cor,
-        tamanho,
-        qtyOrigem: 1,
-        precoUnitCents,
-        lojaOrigemCode: (origem as any).code,
-        lojaOrigemName: (origem as any).name,
-        lojaDestinoCode: (destino as any).code,
-        lojaDestinoName: (destino as any).name,
-        solicitanteNome: input.userName || 'Operador',
-        mensagem: `📦 TRANSFERÊNCIA — ${(origem as any).code}→${(destino as any).code}: ${ref} ${cor || ''} ${tamanho || ''}`.trim(),
-        createdByUserId: input.userId ?? null,
-        realignmentStatus: 'pending',
-      } as any,
-    });
-
-    // Acha/cria a remessa ABERTA de TRANSFERENCIA do par origem→destino
+    // Acha/cria a remessa ABERTA de TRANSFERENCIA do par origem→destino —
+    // ANTES de gravar a peça. Caixa vazia é inofensiva (é o que a tela já
+    // mostra entre um bipe e o próximo); peça gravada FORA da caixa não é.
     let shipment = await (this.prisma as any).realignmentShipment.findFirst({
       where: {
         fromStoreCode: (origem as any).code,
@@ -1018,16 +1024,66 @@ export class RealignmentShipmentService {
       });
     }
 
-    // Linka a ordem na remessa (mesma marcação do realinhamento)
-    await this.prisma.transferOrder.update({
-      where: { id: order.id },
-      data: {
-        realignmentStatus: 'sent',
-        realignmentSentAt: new Date(),
-        realignmentSentByUserId: input.userId ?? null,
-        shipmentId: shipment.id,
-      } as any,
-    });
+    /**
+     * A PEÇA NASCE DENTRO DA CAIXA (23/11/2026). Até aqui a linha era criada
+     * `pending` e só DEPOIS, num segundo UPDATE, virava `sent` + caixa. Em
+     * 23/11 esse segundo passo falhou em 42 bipes seguidos de Itanhaém pra
+     * Praia Grande (a REM-2026-003253 ficou com 0 peças): cada linha ficou
+     * `pending` sem caixa — invisível em toda tela — e a trava do eco do
+     * leitor contava cada uma como "peça já pedida daqui pra essa loja", até
+     * a loja não conseguir bipar mais nada. Um INSERT só: ou a peça está na
+     * caixa, ou não existe. 1 peça por bipe (cada unidade vira uma linha; não
+     * soma SKU igual).
+     *
+     * Falhou? O erro sai com o motivo real. Naquele dia a tela só dizia
+     * "Internal server error" e a causa ficou sem rastro.
+     */
+    const agora = new Date();
+    let order: any;
+    try {
+      order = await this.prisma.transferOrder.create({
+        data: {
+          tipo: 'TRANSFERENCIA',
+          refCode: ref,
+          codigoBipado: codigo,
+          descricao,
+          cor,
+          tamanho,
+          qtyOrigem: 1,
+          precoUnitCents,
+          lojaOrigemCode: (origem as any).code,
+          lojaOrigemName: (origem as any).name,
+          lojaDestinoCode: (destino as any).code,
+          lojaDestinoName: (destino as any).name,
+          solicitanteNome: input.userName || 'Operador',
+          mensagem: `📦 TRANSFERÊNCIA — ${(origem as any).code}→${(destino as any).code}: ${ref} ${cor || ''} ${tamanho || ''}`.trim(),
+          createdByUserId: input.userId ?? null,
+          realignmentStatus: 'sent',
+          realignmentSentAt: agora,
+          realignmentSentByUserId: input.userId ?? null,
+          shipmentId: shipment.id,
+        } as any,
+      });
+    } catch (e: any) {
+      const ultimaLinha = String(e?.message || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .pop();
+      const detalhe = [e?.code, e?.meta?.cause, e?.meta?.field_name, ultimaLinha]
+        .filter(Boolean)
+        .join(' · ')
+        .slice(0, 300);
+      this.logger.error(
+        `[transferencia] bipe ${codigoReal} ${(origem as any).code}→${(destino as any).code} ` +
+          `NÃO gravado na ${shipment.code}: ${detalhe}`,
+        e?.stack,
+      );
+      throw new InternalServerErrorException(
+        `A peça ${[ref, cor, tamanho].filter(Boolean).join(' ')} NÃO entrou na caixa ${shipment.code} — ` +
+          `nada foi gravado, bipe de novo. Se repetir, mande este erro pra matriz: ${detalhe || 'erro sem código'}`,
+      );
+    }
 
     return {
       ok: true,
@@ -1255,6 +1311,7 @@ export class RealignmentShipmentService {
       where: { id: input.transferOrderId },
       select: {
         id: true,
+        tipo: true,
         lojaOrigemCode: true,
         shipmentId: true,
         realignmentStatus: true,
@@ -1273,14 +1330,27 @@ export class RealignmentShipmentService {
     if (shipment.status !== 'open')
       throw new BadRequestException('Remessa já foi fechada — não pode remover item');
 
+    // TRANSFERÊNCIA nasce do bipe e só existe dentro da caixa: tirada dela,
+    // CANCELA (fica atada à caixa com o rastro). Voltar pra `pending` sem
+    // caixa criava a órfã invisível que a trava do eco do leitor contava como
+    // "já pedida" (23/11/2026). REALINHAMENTO volta pra pilha, como sempre: a
+    // ordem é da matriz e a peça ainda precisa ir.
+    const ehTransferencia = String(o.tipo || '') === 'TRANSFERENCIA';
     await this.prisma.transferOrder.update({
       where: { id: o.id },
-      data: {
-        realignmentStatus: 'pending',
-        realignmentSentAt: null,
-        realignmentSentByUserId: null,
-        shipmentId: null,
-      } as any,
+      data: (ehTransferencia
+        ? {
+            realignmentStatus: 'cancelled',
+            realignmentSentAt: null,
+            realignmentSentByUserId: null,
+            realignmentNotFoundNote: 'Tirada da caixa pela loja (transferência)',
+          }
+        : {
+            realignmentStatus: 'pending',
+            realignmentSentAt: null,
+            realignmentSentByUserId: null,
+            shipmentId: null,
+          }) as any,
     });
 
     return { ok: true };

@@ -1,5 +1,9 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  NOTA_ORFA_TRANSFERENCIA,
+  promessaOrfaDeTransferencia,
+} from '../common/promessa-transferencia';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -69,6 +73,7 @@ export class PromessaEstoqueService {
         qtyOrigem: true,
         realignmentStatus: true,
         shipmentId: true,
+        tipo: true,
       } as any,
     });
     if (!rows.length) return out;
@@ -86,6 +91,9 @@ export class PromessaEstoqueService {
     const statusCaixa = new Map<string, string>(ships.map((s) => [s.id, s.status]));
 
     for (const r of rows) {
+      // Bipe de transferência que não entrou na caixa não é promessa
+      // (`common/promessa-transferencia.ts`, 23/11/2026).
+      if (promessaOrfaDeTransferencia(r)) continue;
       if (r.realignmentStatus === 'sent') {
         const caixa = r.shipmentId ? (statusCaixa.get(r.shipmentId) ?? 'open') : 'open';
         if (caixa !== 'open') continue; // já baixou na origem
@@ -216,6 +224,10 @@ export class PromessaEstoqueService {
    * nasceram: VOGUE-PD PRETO DOURADO 46 e 48 bipadas DUAS vezes pra Anália
    * Franco com 3 segundos de diferença, com 1 peça na loja. Duas peças de
    * verdade continuam passando; o eco do leitor, não.
+   *
+   * ⚠️ "Aberta" é promessa DENTRO de caixa aberta ou ordem pendente de
+   * realinhamento. Transferência `pending` sem caixa é bipe que não completou
+   * (23/11/2026) e NÃO conta — senão a própria falha do bipe tranca a loja.
    */
   async garantirNaoDuplicaBipe(input: {
     codigo?: string | null;
@@ -348,7 +360,7 @@ export class PromessaEstoqueService {
         lojaDestinoCode: destinoCode,
         realignmentStatus: { in: ['pending', 'sent'] },
       } as any,
-      select: { qtyOrigem: true, realignmentStatus: true, shipmentId: true } as any,
+      select: { qtyOrigem: true, realignmentStatus: true, shipmentId: true, tipo: true } as any,
     });
     if (!rows.length) return 0;
 
@@ -365,6 +377,10 @@ export class PromessaEstoqueService {
 
     let total = 0;
     for (const r of rows) {
+      // O caso de 23/11/2026: 42 bipes de Itanhaém pra Praia Grande gravaram a
+      // linha e não entraram na caixa. Elas somavam aqui como "já pedida" até
+      // a loja não conseguir bipar mais nada — órfã não é promessa.
+      if (promessaOrfaDeTransferencia(r)) continue;
       if (r.realignmentStatus === 'sent') {
         const caixa = r.shipmentId ? (statusCaixa.get(r.shipmentId) ?? 'open') : 'open';
         if (caixa !== 'open') continue;
@@ -372,6 +388,63 @@ export class PromessaEstoqueService {
       total += Number(r.qtyOrigem) || 0;
     }
     return total;
+  }
+
+  /**
+   * A VARREDURA DAS ÓRFÃS (23/11/2026). Cancela `tipo=TRANSFERENCIA` que está
+   * `pending` SEM caixa há mais de `minutos` — o resto que um bipe deixou
+   * quando falhou entre gravar a peça e amarrá-la na remessa (hoje o bipe é
+   * um INSERT só e esse estado não nasce mais; o que sobrou é do código
+   * antigo, ou de peça tirada da caixa / caixa excluída antes do conserto).
+   *
+   * Ninguém vê essas linhas em tela nenhuma, e elas distorcem três contas:
+   * a trava do eco do leitor, o `prometido` da Grade por Loja e o
+   * "comprometido" do plano de realinhamento. Cancela, não apaga — mesma
+   * política do `expirarPendenciasVelhas`: o rastro fica com a nota.
+   */
+  async cancelarOrfasDeTransferencia(minutos: number): Promise<{
+    canceladas: number;
+    porLoja: Array<{ loja: string; n: number }>;
+  }> {
+    const m = Math.max(0, Math.floor(Number(minutos) || 0));
+    const corte = new Date(Date.now() - m * 60 * 1000);
+    const where = {
+      tipo: 'TRANSFERENCIA',
+      realignmentStatus: 'pending',
+      shipmentId: null,
+      createdAt: { lt: corte },
+    } as any;
+
+    const alvo: any[] = await this.prisma.transferOrder.findMany({
+      where,
+      select: { lojaOrigemCode: true, lojaDestinoCode: true },
+    });
+    if (!alvo.length) return { canceladas: 0, porLoja: [] };
+
+    const contagem = new Map<string, number>();
+    for (const r of alvo) {
+      const k = `${r.lojaOrigemCode || '—'}→${r.lojaDestinoCode || '—'}`;
+      contagem.set(k, (contagem.get(k) ?? 0) + 1);
+    }
+
+    const upd = await this.prisma.transferOrder.updateMany({
+      where,
+      data: {
+        realignmentStatus: 'cancelled',
+        realignmentNotFoundNote: NOTA_ORFA_TRANSFERENCIA,
+      } as any,
+    });
+
+    const porLoja = Array.from(contagem.entries())
+      .map(([loja, n]) => ({ loja, n }))
+      .sort((a, b) => b.n - a.n);
+
+    this.logger.warn(
+      `[orfa-transferencia] ${upd.count} bipe(s) de transferência sem caixa cancelado(s) · ` +
+        porLoja.map((p) => `${p.loja}:${p.n}`).join(' '),
+    );
+
+    return { canceladas: upd.count ?? 0, porLoja };
   }
 
   /**

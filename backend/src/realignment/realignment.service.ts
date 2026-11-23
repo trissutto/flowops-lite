@@ -5,6 +5,7 @@ import { ErpService } from '../erp/erp.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { refBaseOf, refsDeBusca } from '../common/ref-base';
 import { PromessaEstoqueService } from './promessa-estoque.service';
+import { promessaOrfaDeTransferencia } from '../common/promessa-transferencia';
 
 /**
  * RealignmentService — Realinhamento de estoques entre lojas.
@@ -317,11 +318,17 @@ export class RealignmentService {
           codigoBipado: true,
           lojaOrigemCode: true,
           qtyOrigem: true,
+          tipo: true,
+          realignmentStatus: true,
+          shipmentId: true,
         },
       });
       // Soma comprometido por (codigo, loja)
       const committedMap = new Map<string, number>(); // "sku::storeCode" → qty
       for (const t of pendingTransfers as any[]) {
+        // Bipe de transferência que não entrou na caixa não compromete peça
+        // (`common/promessa-transferencia.ts`, 23/11/2026).
+        if (promessaOrfaDeTransferencia(t)) continue;
         const k = `${t.codigoBipado}::${t.lojaOrigemCode}`;
         committedMap.set(k, (committedMap.get(k) || 0) + (Number(t.qtyOrigem) || 1));
       }
@@ -615,9 +622,15 @@ export class RealignmentService {
           codigoBipado: true,
           lojaOrigemCode: true,
           qtyOrigem: true,
+          tipo: true,
+          realignmentStatus: true,
+          shipmentId: true,
         },
       });
       for (const t of pendingTransfers as any[]) {
+        // Bipe de transferência que não entrou na caixa não compromete peça
+        // (`common/promessa-transferencia.ts`, 23/11/2026).
+        if (promessaOrfaDeTransferencia(t)) continue;
         const k = `${t.codigoBipado}::${t.lojaOrigemCode}`;
         committedMap.set(k, (committedMap.get(k) || 0) + (Number(t.qtyOrigem) || 1));
       }
@@ -741,6 +754,7 @@ export class RealignmentService {
         realignmentStatus: true,
         createdAt: true,
         shipmentId: true,
+        tipo: true,
       } as any,
       orderBy: { createdAt: 'asc' },
     });
@@ -759,6 +773,9 @@ export class RealignmentService {
 
     return rows
       .map((r) => {
+        // Bipe de transferência que não entrou na caixa: não é promessa e não
+        // desconta da grade (23/11/2026 — Itanhaém ficou com 42 dessas).
+        if (promessaOrfaDeTransferencia(r)) return null;
         let status = r.realignmentStatus as string;
         if (status === 'sent') {
           const caixa = r.shipmentId ? (statusCaixa.get(r.shipmentId) ?? 'open') : 'open';
