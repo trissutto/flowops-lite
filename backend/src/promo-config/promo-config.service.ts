@@ -8,8 +8,10 @@ import {
   PCT_MIN,
   TERMOS_MAX,
   compilarTermo,
+  diaISO,
   idDeEstrutura,
   normalizarConfig,
+  vigenciaTexto,
 } from '../common/promo-por-termo';
 
 const APP_CONFIG_KEY = 'promo-config';
@@ -20,8 +22,10 @@ const APP_CONFIG_KEY = 'promo-config';
  * Até 15/09/2026 guardava só o filtro de BÁSICO da promoção de 50% ("liquida
  * antigos"). A promoção saiu do ar e o que mora aqui agora é a CAMPANHA POR
  * TERMO (`common/promo-por-termo.ts`): ligada, nome, %, termos, palavras que
- * excluem e grupos/subgrupos do ERP. O resto da regra (quem entra, exceção por
- * família, arredondamento) é da régua, não desta config.
+ * excluem, grupos/subgrupos do ERP e, desde a Black Friday (25/11/2026), o
+ * corte de DATA DE CADASTRO (`cadastroAte`) e a VIGÊNCIA (de/até). O resto da
+ * regra (quem entra, exceção por família, arredondamento) é da régua, não
+ * desta config.
  *
  * Config gravada antes dos campos novos existirem lê o padrão deles (ex.: as
  * palavras que excluem BERMUDA e 22 DE ABRIL) — o `normalizarConfig` completa.
@@ -129,12 +133,31 @@ export class PromoConfigService {
       throw new BadRequestException(`No máximo ${ESTRUTURA_MAX} grupos e subgrupos somados.`);
     }
 
+    // Datas: vazio = sem critério; preenchido tem que ser um dia de verdade.
+    // "2025-13-40" virando null calado ligaria 50% em TUDO sem ninguém ver.
+    const lerDia = (v: unknown, rotulo: string): string | null => {
+      if (v == null || String(v).trim() === '') return null;
+      const dia = diaISO(String(v));
+      if (!dia) throw new BadRequestException(`${rotulo} inválida: "${String(v).trim()}". Use o formato AAAA-MM-DD.`);
+      return dia;
+    };
+    const cadastroAte = lerDia(pedida.cadastroAte, 'Data de cadastro');
+    const vigencia = {
+      de: lerDia((pedida.vigencia as any)?.de, 'Início da vigência'),
+      ate: lerDia((pedida.vigencia as any)?.ate, 'Fim da vigência'),
+    };
+    if (vigencia.de && vigencia.ate && vigencia.de > vigencia.ate) {
+      throw new BadRequestException('A vigência termina antes de começar — confira as datas De/Até.');
+    }
+
     const novo: PromoConfig = {
       campanha: {
         ...normalizarConfig({
           ativa: pedida.ativa !== false, nome, pct, termos, termosExclusao, grupos, subgrupos,
           // Só desliga com `false` explícito: "linha básica não entra" é a regra.
           excluirBasico: pedida.excluirBasico !== false,
+          cadastroAte,
+          vigencia,
         }),
         atualizadaEm: new Date().toISOString(),
         atualizadaPor: usuario || null,
@@ -151,7 +174,9 @@ export class PromoConfigService {
       `[promo-config] campanha "${novo.campanha.nome}" ${novo.campanha.ativa ? 'LIGADA' : 'desligada'} · ` +
         `${novo.campanha.pct}% · ${novo.campanha.termos.length} termo(s) · ` +
         `${novo.campanha.termosExclusao.length} exclusão(ões) · ` +
-        `${novo.campanha.grupos.length} grupo(s) · ${novo.campanha.subgrupos.length} subgrupo(s) · por ${usuario || '?'}`,
+        `${novo.campanha.grupos.length} grupo(s) · ${novo.campanha.subgrupos.length} subgrupo(s) · ` +
+        `cadastro até ${novo.campanha.cadastroAte ?? '—'} · vigência ${vigenciaTexto(novo.campanha.vigencia) ?? 'sempre'} · ` +
+        `por ${usuario || '?'}`,
     );
     return novo;
   }

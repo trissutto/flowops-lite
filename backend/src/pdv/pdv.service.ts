@@ -128,8 +128,20 @@ export class PdvService {
    * nome e o % que a matriz gravou — "Inverno 30%" não fica escrito no front.
    */
   async campanhaDoPdv() {
-    const { ativa, nome, pct } = (await this.promoCampanha.regra()).config;
-    return { ativa, nome, pct, rotulo: `${nome} ${pct}%` };
+    const regra = await this.promoCampanha.regra();
+    const { ativa, nome, pct, cadastroAte } = regra.config;
+    return {
+      // `ativa` aqui é o que VALE AGORA (ligada E dentro da vigência) — é o que
+      // habilita o botão da venda. `agendada` = ligada na retaguarda esperando
+      // a janela abrir (Black Friday gravada na véspera).
+      ativa: regra.ligada,
+      agendada: ativa && !regra.ligada,
+      vigencia: regra.vigenciaTexto,
+      cadastroAte,
+      nome,
+      pct,
+      rotulo: `${nome} ${pct}%`,
+    };
   }
 
   /**
@@ -155,16 +167,24 @@ export class PdvService {
       codigo: String(info.sku), ref: info.ref, descricao: info.descricao, descricaoPdv: null, grupo: null, preco: info.preco,
     };
     const d = regra.decidir(linha);
-    const { ativa, nome, pct } = regra.config;
+    const { nome, pct } = regra.config;
+    // "Ativa" pra consulta = vale AGORA (ligada e dentro da vigência).
+    const ativa = regra.ligada;
 
     let motivo: string;
-    if (!ativa) motivo = 'Nenhuma campanha ligada agora — a peça sai pelo preço da loja.';
+    if (!ativa) {
+      motivo = regra.config.ativa
+        ? `A campanha ${nome} está ${regra.motivoDesligada} — a peça sai pelo preço da loja.`
+        : 'Nenhuma campanha ligada agora — a peça sai pelo preço da loja.';
+    }
     else if (d.excecao?.decisao === 'fora') motivo = `Tirada da campanha ${nome} na mão — dá pra pôr só nesta venda com o ⬆️ do item.`;
     else if (d.excecao?.decisao === 'dentro') motivo = `A matriz pôs esta peça na campanha ${nome} na mão.`;
     else if (d.exclusao) motivo = `Fora: a descrição tem "${d.exclusao}", palavra que a campanha ${nome} exclui — dá pra pôr só nesta venda com o ⬆️.`;
     else if (d.criterio === 'basico') motivo = `Fora: peça da linha BÁSICA (Classificação) — dá pra pôr só nesta venda com o ⬆️ do item.`;
     else if (d.termo) motivo = `Entra: a descrição tem "${d.termo}".`;
     else if (d.estrutura) motivo = `Entra: está no ${d.estrutura}.`;
+    else if (d.criterio === 'cadastro') motivo = `Entra: ${d.motivo}.`;
+    else if (regra.config.cadastroAte) motivo = `Fora da promoção: ${d.motivo} — dá pra pôr só nesta venda com o ⬆️ do item.`;
     else motivo = `Nenhum termo nem grupo da campanha ${nome} — fora da promoção.`;
 
     const preco = Number(info.preco) || 0;
@@ -217,7 +237,11 @@ export class PdvService {
     const atual = await this.promoCampanha.decidirCodigo(String(info.sku));
     if (!atual) throw new NotFoundException(`Peça ${info.sku} não encontrada no catálogo`);
     const { regra, decisao } = atual;
-    if (!regra.config.ativa) throw new BadRequestException('Nenhuma campanha ligada agora.');
+    if (!regra.ligada) {
+      throw new BadRequestException(
+        regra.config.ativa ? `A campanha ${regra.config.nome} está ${regra.motivoDesligada}.` : 'Nenhuma campanha ligada agora.',
+      );
+    }
     if (decisao.excecao?.decisao === 'dentro') {
       throw new BadRequestException(
         `A matriz pôs esta peça na campanha ${regra.config.nome} na mão — pra tirar, fale com a matriz.`,
@@ -3247,7 +3271,7 @@ export class PdvService {
           codigo: String(it.sku || ''), ref: it.ref, descricao: it.descricao, descricaoPdv: null, grupo: null,
         };
         const d = regra.decidir(linha);
-        const pelaVendedora = !d.entra && !!it.forcarPromo && regra.config.ativa;
+        const pelaVendedora = !d.entra && !!it.forcarPromo && regra.ligada;
         if (d.entra || pelaVendedora) {
           const r = totalDoItemComDesconto(it.precoUnit, it.qty, regra.config.pct);
           updates.push({
@@ -3258,7 +3282,7 @@ export class PdvService {
           });
         } else {
           const bruto = it.precoUnit * it.qty;
-          const tag = !regra.config.ativa
+          const tag = !regra.ligada
             ? 'Sem promo · campanha desligada'
             : d.criterio === 'excecao'
               ? 'Sem promo · tirada'
@@ -3393,8 +3417,15 @@ export class PdvService {
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
-    if (promo === 'POR_TERMO' && !(await this.promoCampanha.regra()).config.ativa) {
-      throw new BadRequestException('A campanha está desligada na retaguarda — não há desconto pra aplicar.');
+    if (promo === 'POR_TERMO') {
+      const regra = await this.promoCampanha.regra();
+      if (!regra.ligada) {
+        throw new BadRequestException(
+          regra.config.ativa
+            ? `A campanha ${regra.config.nome} está ${regra.motivoDesligada} — não há desconto pra aplicar.`
+            : 'A campanha está desligada na retaguarda — não há desconto pra aplicar.',
+        );
+      }
     }
 
     try {

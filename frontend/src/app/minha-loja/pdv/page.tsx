@@ -1032,9 +1032,12 @@ function PdvPageInner() {
   // Falha de leitura (backend reiniciando no deploy) NÃO apaga o que já se
   // sabia — e sem saber nada o botão fica ligado: quem decide é o backend,
   // que recusa com frase clara se a campanha estiver desligada.
-  const [campanha, setCampanha] = useState<{ ativa: boolean; nome: string; pct: number } | null>(null);
+  // `ativa` = vale AGORA (ligada e dentro da vigência); `agendada` = ligada na
+  // retaguarda esperando a janela (Black Friday gravada na véspera, 25/11/2026).
+  type CampanhaPdv = { ativa: boolean; nome: string; pct: number; agendada?: boolean; vigencia?: string | null };
+  const [campanha, setCampanha] = useState<CampanhaPdv | null>(null);
   const lerCampanha = useCallback(() => {
-    api<{ ativa: boolean; nome: string; pct: number }>('/pdv/promo-campanha')
+    api<CampanhaPdv>('/pdv/promo-campanha')
       .then((r) => { if (r && typeof r.pct === 'number') setCampanha(r); })
       .catch(() => { /* mantém o último valor; a próxima leitura tenta de novo */ });
   }, []);
@@ -1044,6 +1047,16 @@ function PdvPageInner() {
     return () => clearInterval(t);
   }, [lerCampanha]);
   const rotuloCampanha = campanha ? `${campanha.nome} ${campanha.pct}%` : 'Campanha';
+  // O ícone segue o nome da campanha — o floco de neve era do "Inverno".
+  const iconeCampanha = !campanha
+    ? '🎁'
+    : /BLACK/i.test(campanha.nome)
+      ? '🖤'
+      : /VER[AÃ]O|PRAIA/i.test(campanha.nome)
+        ? '☀️'
+        : /INVERNO/i.test(campanha.nome)
+          ? '❄️'
+          : '🏷️';
 
   // Menu lateral recolhível (só visual). Persiste a preferência por PC.
   const [menuCollapsed, setMenuCollapsed] = useState(false);
@@ -3021,20 +3034,28 @@ function PdvPageInner() {
                 <button
                   onClick={() => setPromotion('POR_TERMO')}
                   disabled={campanha ? !campanha.ativa : false}
-                  title={campanha && !campanha.ativa ? 'A campanha está desligada na retaguarda' : undefined}
+                  title={
+                    campanha && !campanha.ativa
+                      ? campanha.agendada
+                        ? `A campanha ${campanha.nome} vale ${campanha.vigencia || 'em outra data'} — ainda não começou (ou já acabou)`
+                        : 'A campanha está desligada na retaguarda'
+                      : undefined
+                  }
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border disabled:opacity-40 ${
                     sale.activePromotion === 'POR_TERMO'
                       ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
                       : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
                   }`}
                 >
-                  ❄️ {rotuloCampanha}
+                  {iconeCampanha} {rotuloCampanha}
                   <div className="text-[9px] font-normal">
                     {!campanha
                       ? 'desconto nas peças da campanha'
                       : campanha.ativa
                         ? `peças de ${campanha.nome.toLowerCase()} = ${campanha.pct}% off`
-                        : 'campanha desligada'}
+                        : campanha.agendada
+                          ? `vale ${campanha.vigencia || 'em outra data'}`
+                          : 'campanha desligada'}
                   </div>
                 </button>
                 {/* Antigos (dono, 23/10/2026): preço FIXO por faixa pra peça de

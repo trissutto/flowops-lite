@@ -17,6 +17,7 @@ import {
   formaDoTermo,
   normalizarConfig,
   precoComDesconto,
+  rotuloDoCadastro,
   sugestoesPara,
   termoCasa,
   textoDaLinha,
@@ -374,6 +375,7 @@ export class PromoCampanhaService {
               p."descricaoCompleta" AS descricao,
               p."descricaoPdv"      AS "descricaoPdv",
               p."nomeGrupo"         AS grupo,
+              p."dataAlt"           AS "dataCadastro",
               COALESCE(p."vendaUn", 0)::float8 AS preco
          FROM wincred_produtos p
         WHERE p.codigo = ANY($1)`,
@@ -386,6 +388,7 @@ export class PromoCampanhaService {
         descricao: r.descricao ?? null,
         descricaoPdv: r.descricaoPdv ?? null,
         grupo: r.grupo ?? null,
+        dataCadastro: r.dataCadastro ?? null,
         preco: Number(r.preco) || 0,
       });
     }
@@ -554,6 +557,7 @@ export class PromoCampanhaService {
               COALESCE(NULLIF(TRIM(g.grupo), ''), NULLIF(TRIM(p."nomeGrupo"), '')) AS "grupoNome",
               NULLIF(TRIM(s.subgrupo), '') AS "subgrupoNome",
               NULLIF(UPPER(TRIM(p.marca)), '') AS marca,
+              p."dataAlt"           AS "dataCadastro",
               COALESCE(p."vendaUn", 0)::float8 AS preco,
               e.total::int AS estoque
          FROM wincred_produtos p
@@ -580,6 +584,7 @@ export class PromoCampanhaService {
         grupoNome: r.grupoNome ?? null,
         subgrupoNome: r.subgrupoNome ?? null,
         marca: r.marca ?? null,
+        dataCadastro: r.dataCadastro ?? null,
         preco: Number(r.preco) || 0,
         estoque: Number(r.estoque) || 0,
       };
@@ -608,7 +613,9 @@ export class PromoCampanhaService {
     const excecaoPorChave = new Map(excecoes.map((e) => [e.chave, e]));
     const linhas = await this.catalogoComEstoque();
     const basicos = config.excluirBasico ? await this.basicos() : null;
-    const regra = criarRegra(config, excecoes, this.estruturaDasLinhas(linhas, config), basicos);
+    // `ignorarVigencia`: a Black Friday é gravada na véspera e a matriz
+    // precisa conferir o que vai entrar ANTES de a janela abrir.
+    const regra = criarRegra(config, excecoes, this.estruturaDasLinhas(linhas, config), basicos, { ignorarVigencia: true });
     return { config, chaveCampanha, excecoes, excecaoPorChave, linhas, regra };
   }
 
@@ -684,6 +691,7 @@ export class PromoCampanhaService {
           acc.origens.add(d.termo);
         }
         if (d.estrutura) acc.origens.add(d.estrutura);
+        if (d.cadastro) acc.origens.add(rotuloDoCadastro(d.cadastro));
         if (l.preco > 0) acc.precoPromoMin = Math.min(acc.precoPromoMin, precoComDesconto(l.preco, config.pct));
       }
     }
@@ -825,6 +833,7 @@ export class PromoCampanhaService {
         acc.naCampanha++;
         if (d.termo) acc.origens.add(d.termo);
         if (d.estrutura) acc.origens.add(d.estrutura);
+        if (d.cadastro) acc.origens.add(rotuloDoCadastro(d.cadastro));
         if (l.preco > 0) acc.precoPromoMin = Math.min(acc.precoPromoMin, precoComDesconto(l.preco, config.pct));
       } else if (d.exclusao) {
         acc.exclusoes.add(d.exclusao);

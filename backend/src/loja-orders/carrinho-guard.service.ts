@@ -187,6 +187,8 @@ type LinhaCatalogo = {
   descricao?: string | null;
   descricaoPdv?: string | null;
   grupo?: string | null;
+  /** Data de cadastro (`dataAlt`) — a campanha com corte de data lê daqui. */
+  dataCadastro?: Date | string | null;
 };
 
 @Injectable()
@@ -241,7 +243,8 @@ export class CarrinhoGuardService {
         COALESCE(e.total, 0)::int     AS estoque,
         NULLIF(TRIM(p."descricaoCompleta"), '') AS descricao,
         NULLIF(TRIM(p."descricaoPdv"), '')      AS "descricaoPdv",
-        NULLIF(TRIM(p."nomeGrupo"), '')         AS grupo
+        NULLIF(TRIM(p."nomeGrupo"), '')         AS grupo,
+        p."dataAlt"                             AS "dataCadastro"
       FROM wincred_produtos p
       LEFT JOIN (
         -- O SALDO QUE A REDE CONSEGUE ENTREGAR — a MESMA subquery da vitrine
@@ -627,6 +630,7 @@ export class CarrinhoGuardService {
             const d = regraCampanha.decidir({
               ref: l.ref, codigo: l.codigo, descricao: l.descricao ?? null,
               descricaoPdv: l.descricaoPdv ?? null, grupo: l.grupo ?? null,
+              dataCadastro: l.dataCadastro ?? null,
             });
             return d.entra ? regraCampanha.precoComDesconto(cheio) : cheio;
           }),

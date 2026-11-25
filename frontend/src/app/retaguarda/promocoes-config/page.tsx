@@ -39,6 +39,10 @@ interface Campanha {
   subgrupos: number[];
   /** Linha BÁSICA (Produtos Loja → Classificação) não entra pela regra. */
   excluirBasico: boolean;
+  /** Peça cadastrada ATÉ este dia (AAAA-MM-DD) entra — a porta da Black Friday. null = sem corte. */
+  cadastroAte: string | null;
+  /** Janela em que a campanha vale (AAAA-MM-DD, inclusive). Vazia = sempre. */
+  vigencia: { de: string | null; ate: string | null };
   atualizadaEm?: string | null;
   atualizadaPor?: string | null;
 }
@@ -158,6 +162,8 @@ const comListas = (c: Campanha): Campanha => ({
   grupos: c.grupos ?? [],
   subgrupos: c.subgrupos ?? [],
   excluirBasico: c.excluirBasico !== false,
+  cadastroAte: c.cadastroAte ?? null,
+  vigencia: { de: c.vigencia?.de ?? null, ate: c.vigencia?.ate ?? null },
 });
 
 /** O que vai pro backend como rascunho (prévia e busca respondem por ele). */
@@ -169,7 +175,30 @@ const corpoRascunho = (c: Campanha) => ({
   grupos: c.grupos,
   subgrupos: c.subgrupos,
   excluirBasico: c.excluirBasico,
+  cadastroAte: c.cadastroAte || null,
+  vigencia: { de: c.vigencia.de || null, ate: c.vigencia.ate || null },
 });
+
+/** 'AAAA-MM-DD' → 'DD/MM/AAAA'. */
+const dataBr = (iso: string | null | undefined) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : '');
+
+/** Hoje em Brasília como 'AAAA-MM-DD' — o mesmo relógio que o backend usa pra vigência. */
+const hojeBr = () => {
+  const d = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  return d.toISOString().slice(0, 10);
+};
+
+/**
+ * Onde a campanha está em relação à janela: antes (agendada), dentro, depois
+ * (já acabou) ou sem janela. É só pra tela avisar — quem decide é o backend.
+ */
+const situacaoDaVigencia = (v: { de: string | null; ate: string | null }): 'sem' | 'antes' | 'dentro' | 'depois' => {
+  const hoje = hojeBr();
+  if (!v.de && !v.ate) return 'sem';
+  if (v.de && hoje < v.de) return 'antes';
+  if (v.ate && hoje > v.ate) return 'depois';
+  return 'dentro';
+};
 
 const SITUACAO: Record<ProdutoBusca['situacao'], { rotulo: string; classe: string }> = {
   entra: { rotulo: 'Na campanha', classe: 'bg-sky-100 text-sky-900' },
@@ -253,7 +282,10 @@ export default function PromocoesConfigPage() {
       !mesmaLista(gravada.termosExclusao, rascunho.termosExclusao) ||
       !mesmaLista(gravada.grupos, rascunho.grupos) ||
       !mesmaLista(gravada.subgrupos, rascunho.subgrupos) ||
-      gravada.excluirBasico !== rascunho.excluirBasico
+      gravada.excluirBasico !== rascunho.excluirBasico ||
+      (gravada.cadastroAte || null) !== (rascunho.cadastroAte || null) ||
+      (gravada.vigencia?.de || null) !== (rascunho.vigencia.de || null) ||
+      (gravada.vigencia?.ate || null) !== (rascunho.vigencia.ate || null)
     );
   }, [gravada, rascunho]);
 
@@ -286,7 +318,7 @@ export default function PromocoesConfigPage() {
   const chavePrevia = rascunho
     ? JSON.stringify([
         rascunho.nome, rascunho.pct, rascunho.termos, rascunho.termosExclusao,
-        rascunho.grupos, rascunho.subgrupos, rascunho.excluirBasico,
+        rascunho.grupos, rascunho.subgrupos, rascunho.excluirBasico, rascunho.cadastroAte,
       ])
     : '';
   useEffect(() => {
@@ -656,6 +688,101 @@ export default function PromocoesConfigPage() {
                     <>Desligada: nenhuma peça tem desconto, nem no caixa nem no site.</>
                   )}
                 </p>
+
+                {/* VIGÊNCIA — a campanha liga e desliga sozinha na data (Black Friday, 25/11/2026) */}
+                {(() => {
+                  const s = situacaoDaVigencia(rascunho.vigencia);
+                  const texto =
+                    rascunho.vigencia.de && rascunho.vigencia.ate
+                      ? `de ${dataBr(rascunho.vigencia.de)} a ${dataBr(rascunho.vigencia.ate)}`
+                      : rascunho.vigencia.de
+                        ? `a partir de ${dataBr(rascunho.vigencia.de)}`
+                        : rascunho.vigencia.ate
+                          ? `até ${dataBr(rascunho.vigencia.ate)}`
+                          : '';
+                  const aviso = !rascunho.ativa || s === 'sem'
+                    ? null
+                    : s === 'antes'
+                      ? { classe: 'border-amber-300 bg-amber-50 text-amber-900', frase: `Agendada: vale ${texto}. Até lá, caixa e site seguem sem desconto — a campanha liga sozinha no dia.` }
+                      : s === 'depois'
+                        ? { classe: 'border-rose-300 bg-rose-50 text-rose-900', frase: `Já acabou: valia ${texto}. Caixa e site estão sem desconto — mude a data ou desligue.` }
+                        : { classe: 'border-emerald-300 bg-emerald-50 text-emerald-900', frase: `Valendo agora: ${texto}. Desliga sozinha depois do último dia.` };
+                  return (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5 space-y-2">
+                      <div className="text-xs font-bold text-slate-500 uppercase tracking-wide">Vigência</div>
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="text-xs text-slate-500">De</span>
+                        <input
+                          type="date"
+                          value={rascunho.vigencia.de ?? ''}
+                          onChange={(e) => setRascunho({ ...rascunho, vigencia: { ...rascunho.vigencia, de: e.target.value || null } })}
+                          className="px-2 py-1.5 rounded-lg border border-slate-300 text-slate-800"
+                        />
+                        <span className="text-xs text-slate-500">Até</span>
+                        <input
+                          type="date"
+                          value={rascunho.vigencia.ate ?? ''}
+                          onChange={(e) => setRascunho({ ...rascunho, vigencia: { ...rascunho.vigencia, ate: e.target.value || null } })}
+                          className="px-2 py-1.5 rounded-lg border border-slate-300 text-slate-800"
+                        />
+                        {(rascunho.vigencia.de || rascunho.vigencia.ate) && (
+                          <button
+                            type="button"
+                            onClick={() => setRascunho({ ...rascunho, vigencia: { de: null, ate: null } })}
+                            className="text-xs text-slate-500 underline"
+                          >
+                            sem janela
+                          </button>
+                        )}
+                        {!rascunho.vigencia.de && !rascunho.vigencia.ate && (
+                          <span className="text-xs text-slate-400">Sem janela: vale enquanto estiver ligada.</span>
+                        )}
+                      </div>
+                      {aviso && <div className={`rounded-lg border px-3 py-2 text-sm font-semibold ${aviso.classe}`}>{aviso.frase}</div>}
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        Dias inclusive, no horário de Brasília. Fora da janela a campanha responde como <b>desligada</b> no
+                        caixa, na consulta e no site — ninguém precisa ligar à meia-noite. A prévia aqui embaixo mostra o
+                        que vai entrar mesmo antes de a janela abrir.
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* DATA DE CADASTRO — "todos os itens cadastrados até 31/12/2025" (Black Friday) */}
+                <div className="rounded-xl border border-violet-200 bg-violet-50/60 px-3 py-2.5 space-y-2">
+                  <div className="text-xs font-bold text-violet-700 uppercase tracking-wide">Peças cadastradas até uma data</div>
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="text-xs text-slate-500">Cadastro até</span>
+                    <input
+                      type="date"
+                      value={rascunho.cadastroAte ?? ''}
+                      onChange={(e) => setRascunho({ ...rascunho, cadastroAte: e.target.value || null })}
+                      className="px-2 py-1.5 rounded-lg border border-slate-300 text-slate-800"
+                    />
+                    {rascunho.cadastroAte ? (
+                      <>
+                        <span className="text-sm text-violet-900 font-semibold">
+                          entra toda peça cadastrada até {dataBr(rascunho.cadastroAte)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setRascunho({ ...rascunho, cadastroAte: null })}
+                          className="text-xs text-slate-500 underline"
+                        >
+                          tirar o corte
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-xs text-slate-400">Sem corte: só palavras e grupos decidem.</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Soma com as palavras e os grupos: a peça entra por qualquer um deles. A data é a de cadastro de cada
+                    <b> código</b> (a mesma que a consulta de promoção do PDV mostra) — numeração cadastrada depois da data
+                    numa REF antiga fica fora. Peça sem data de cadastro fica fora. Linha BÁSICA, palavra que exclui e
+                    família tirada na mão continuam valendo por cima.
+                  </p>
+                </div>
 
                 {/* TERMOS */}
                 <div>

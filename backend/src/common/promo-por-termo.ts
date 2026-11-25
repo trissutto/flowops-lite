@@ -1,4 +1,5 @@
 import { refBaseOf } from './ref-base';
+import { hojeBrasilia } from './tz';
 
 /**
  * PROMOÇÃO POR TERMO — a régua, num lugar só (dono, 15/09/2026).
@@ -52,7 +53,28 @@ import { refBaseOf } from './ref-base';
  *      mesma regra do 50% antigo: a vendedora ainda põe a peça básica NA
  *      VENDA com o ⬆️, como sempre pôde; palavra que exclui, não.
  *   6. termo OU grupo/subgrupo do ERP    → entra
- *   7. nada disso                        → fora
+ *   7. cadastro ATÉ a data da campanha   → entra (Black Friday, 25/11/2026)
+ *   8. nada disso                        → fora
+ *
+ * ── A DATA DE CADASTRO E A VIGÊNCIA (dono, 25/11/2026) ──
+ *
+ * A Black Friday pediu "50% em TODOS os itens com data de cadastro de
+ * 31/12/2025 pra trás, exceto os BÁSICOS, de quinta a domingo". Termo nenhum
+ * descreve isso — então a campanha ganhou duas datas:
+ *
+ *   `cadastroAte`  porta de entrada a mais, ao lado do termo e do grupo: peça
+ *                  cadastrada até a data entra; sem data de cadastro fica fora
+ *                  (a mesma regra da promoção dos antigos: não dá pra saber se
+ *                  é antiga). A data é por CÓDIGO (`dataAlt` do espelho, a que
+ *                  a vitrine e a trava do carrinho já leem) — uma numeração
+ *                  cadastrada em 2026 numa REF antiga fica fora.
+ *   `vigencia`     de/até (dias em Brasília, inclusive): fora da janela a
+ *                  campanha responde como DESLIGADA, pra ninguém precisar
+ *                  acordar à meia-noite pra ligar ou desligar. O "Ligada" da
+ *                  retaguarda continua sendo o interruptor geral.
+ *
+ * `ligada` (a régua) = ativa E dentro da vigência. É ELA que o PDV, a consulta
+ * e a vitrine olham — `config.ativa` sozinho é só o interruptor.
  *
  * O grupo/subgrupo entra por CÓDIGO (`EstruturaCampanha`, montada por quem
  * carrega a régua): todo chamador já manda o código, então nenhum SQL de
@@ -85,6 +107,18 @@ export interface ConfigCampanha {
    * Loja → Classificação) fica fora da regra automática. Ligado de fábrica.
    */
   excluirBasico: boolean;
+  /**
+   * Peça com data de cadastro ATÉ este dia ('YYYY-MM-DD') entra — porta de
+   * entrada a mais, ao lado do termo e do grupo. null = critério desligado.
+   */
+  cadastroAte: string | null;
+  /** Janela em que a campanha vale (dias em Brasília, inclusive). Vazia = sempre. */
+  vigencia: VigenciaCampanha;
+}
+
+export interface VigenciaCampanha {
+  de: string | null;
+  ate: string | null;
 }
 
 export type DecisaoExcecao = 'fora' | 'dentro';
@@ -109,13 +143,16 @@ export interface LinhaCampanha {
   descricao?: string | null;
   descricaoPdv?: string | null;
   grupo?: string | null;
+  /** Data de cadastro (`dataAlt` do espelho) — Date, ISO ou 'YYYY-MM-DD'. Só pesa com `cadastroAte`. */
+  dataCadastro?: Date | string | null;
 }
 
 /**
  * Quem decidiu, na ordem da régua. É o que a tela usa pra explicar a linha —
  * e o que os testes trancam: a precedência não pode mudar sem alguém ver.
  */
-export type CriterioCampanha = 'desligada' | 'excecao' | 'exclusao' | 'basico' | 'termo' | 'estrutura' | 'nenhum';
+export type CriterioCampanha =
+  | 'desligada' | 'excecao' | 'exclusao' | 'basico' | 'termo' | 'estrutura' | 'cadastro' | 'nenhum';
 
 export interface DecisaoCampanha {
   entra: boolean;
@@ -130,6 +167,8 @@ export interface DecisaoCampanha {
   exclusao: string | null;
   /** A exceção que decidiu, quando foi exceção. */
   excecao: ExcecaoCampanha | null;
+  /** O corte de data ('YYYY-MM-DD') que pôs a peça, quando foi o cadastro. */
+  cadastro: string | null;
   /** Chave da família — é nela que a exceção se grava. */
   chave: string;
 }
@@ -156,6 +195,8 @@ export const CAMPANHA_PADRAO: ConfigCampanha = {
   grupos: [],
   subgrupos: [],
   excluirBasico: true,
+  cadastroAte: null,
+  vigencia: { de: null, ate: null },
 };
 
 export const PCT_MIN = 1;
@@ -344,6 +385,61 @@ function listaDeIds(lista: unknown): number[] {
   return Array.from(new Set(ids)).sort((a, b) => a - b).slice(0, ESTRUTURA_MAX);
 }
 
+/**
+ * Um dia como 'YYYY-MM-DD', ou null quando não há data válida.
+ *
+ * Coluna `@db.Date` chega do Prisma como meia-noite UTC: lê-se em UTC de
+ * propósito — passar pelo fuso da loja faria 31/12 virar 30/12 (regra geral do
+ * sistema: data-só nunca passa pelo fuso; o fuso é pra instante).
+ */
+export function diaISO(v: Date | string | null | undefined): string | null {
+  if (v == null || v === '') return null;
+  let dia: string;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return null;
+    dia = s.slice(0, 10);
+  } else {
+    const d = v instanceof Date ? v : new Date(String(v));
+    if (Number.isNaN(d.getTime())) return null;
+    dia = d.toISOString().slice(0, 10);
+  }
+  const t = Date.parse(`${dia}T00:00:00Z`);
+  return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== dia ? null : dia;
+}
+
+/** 'YYYY-MM-DD' → 'DD/MM/YYYY' (a tela e o PDV falam assim). */
+export function dataBr(iso: string | null | undefined): string {
+  const d = diaISO(iso);
+  return d ? d.split('-').reverse().join('/') : '';
+}
+
+export function normalizarVigencia(v: Partial<VigenciaCampanha> | null | undefined): VigenciaCampanha {
+  return { de: diaISO(v?.de ?? null), ate: diaISO(v?.ate ?? null) };
+}
+
+/** A campanha vale HOJE? Janela vazia vale sempre; `de` depois de `ate` nunca vale. */
+export function dentroDaVigencia(v: VigenciaCampanha | null | undefined, hoje: string): boolean {
+  const { de, ate } = normalizarVigencia(v);
+  if (de && hoje < de) return false;
+  if (ate && hoje > ate) return false;
+  return true;
+}
+
+/** "de 26/11/2026 a 29/11/2026" · "a partir de …" · "até …" · null sem janela. */
+export function vigenciaTexto(v: VigenciaCampanha | null | undefined): string | null {
+  const { de, ate } = normalizarVigencia(v);
+  if (de && ate) return `de ${dataBr(de)} a ${dataBr(ate)}`;
+  if (de) return `a partir de ${dataBr(de)}`;
+  if (ate) return `até ${dataBr(ate)}`;
+  return null;
+}
+
+/** O rótulo da origem "cadastro" nas listas da retaguarda. */
+export function rotuloDoCadastro(cadastroAte: string): string {
+  return `cadastro até ${dataBr(cadastroAte)}`;
+}
+
 /** Normaliza o que chega da tela/banco. Nunca lança — valida quem grava. */
 export function normalizarConfig(c: Partial<ConfigCampanha> | null | undefined): ConfigCampanha {
   const base = { ...CAMPANHA_PADRAO, ...(c || {}) };
@@ -357,6 +453,8 @@ export function normalizarConfig(c: Partial<ConfigCampanha> | null | undefined):
     grupos: listaDeIds(base.grupos),
     subgrupos: listaDeIds(base.subgrupos),
     excluirBasico: base.excluirBasico !== false,
+    cadastroAte: diaISO(base.cadastroAte ?? null),
+    vigencia: normalizarVigencia(base.vigencia),
   };
 }
 
@@ -401,6 +499,17 @@ export interface RegraCampanha {
    */
   assinatura: string;
   /**
+   * Ativa E dentro da vigência — o que vale AGORA. É isto que o caixa, a
+   * consulta e a vitrine olham; `config.ativa` sozinho é só o interruptor.
+   */
+  ligada: boolean;
+  /** O dia ('YYYY-MM-DD', Brasília) em que a régua foi montada. */
+  hoje: string;
+  /** "de 26/11/2026 a 29/11/2026", ou null sem janela. */
+  vigenciaTexto: string | null;
+  /** Por que não vale agora ("campanha desligada" / "fora da vigência (…)"), ou null quando vale. */
+  motivoDesligada: string | null;
+  /**
    * `texto` pronto é só atalho de desempenho (a tela da retaguarda indexa o
    * catálogo inteiro uma vez) — a resposta é a mesma de indexar aqui.
    */
@@ -410,14 +519,33 @@ export interface RegraCampanha {
   precoComDesconto(preco: number): number;
 }
 
+export interface OpcoesRegra {
+  /** 'YYYY-MM-DD' em Brasília — os testes fixam; a produção lê o relógio. */
+  hoje?: string | null;
+  /** A prévia da retaguarda mostra o que ENTRARIA mesmo fora da vigência. */
+  ignorarVigencia?: boolean;
+}
+
 export function criarRegra(
   configEntrada: Partial<ConfigCampanha> | null | undefined,
   excecoes: ExcecaoCampanha[] = [],
   estrutura: EstruturaCampanha | null = null,
   /** Chaves (`chaveDeClassificacao`) marcadas BÁSICO na tela de Classificação. */
   basicos: Set<string> | null = null,
+  opcoes: OpcoesRegra = {},
 ): RegraCampanha {
   const config = normalizarConfig(configEntrada);
+  // A régua é um retrato: `ligada` sai do dia em que foi montada, e quem a
+  // guarda em cache (60s no serviço) remonta antes de a virada do dia pesar.
+  const hoje = diaISO(opcoes.hoje) ?? hojeBrasilia();
+  const naVigencia = opcoes.ignorarVigencia ? true : dentroDaVigencia(config.vigencia, hoje);
+  const ligada = config.ativa && naVigencia;
+  const textoVigencia = vigenciaTexto(config.vigencia);
+  const motivoDesligada = ligada
+    ? null
+    : !config.ativa
+      ? 'campanha desligada'
+      : `fora da vigência (${textoVigencia ?? 'sem janela'})`;
   const compilar = (lista: string[]) =>
     lista.map((t) => compilarTermo(t)).filter((t): t is TermoCompilado => !!t);
   const termos = compilar(config.termos);
@@ -441,14 +569,14 @@ export function criarRegra(
     entra: boolean,
     criterio: CriterioCampanha,
     motivo: string,
-    extra: Partial<Pick<DecisaoCampanha, 'termo' | 'estrutura' | 'exclusao' | 'excecao'>> = {},
+    extra: Partial<Pick<DecisaoCampanha, 'termo' | 'estrutura' | 'exclusao' | 'excecao' | 'cadastro'>> = {},
   ): DecisaoCampanha => ({
-    entra, motivo, criterio, termo: null, estrutura: null, exclusao: null, excecao: null, chave, ...extra,
+    entra, motivo, criterio, termo: null, estrutura: null, exclusao: null, excecao: null, cadastro: null, chave, ...extra,
   });
 
   const decidir = (linha: LinhaCampanha, textoPronto?: TextoIndexado): DecisaoCampanha => {
     const chave = chaveDaFamilia(linha?.ref, linha?.codigo);
-    if (!config.ativa) return decisao(chave, false, 'desligada', 'campanha desligada');
+    if (!ligada) return decisao(chave, false, 'desligada', motivoDesligada ?? 'campanha desligada');
 
     const excecao = chave ? porChave.get(chave) ?? null : null;
     if (excecao?.decisao === 'fora') {
@@ -476,6 +604,19 @@ export function criarRegra(
     if (daEstrutura) {
       return decisao(chave, true, 'estrutura', `está no ${daEstrutura}`, { estrutura: daEstrutura });
     }
+    if (config.cadastroAte) {
+      // Sem data não dá pra saber se é antiga — fica fora (a mesma regra da
+      // promoção dos antigos). A vendedora ainda põe na venda com o ⬆️.
+      const dia = diaISO(linha?.dataCadastro);
+      if (dia && dia <= config.cadastroAte) {
+        return decisao(chave, true, 'cadastro', `cadastrada em ${dataBr(dia)} (até ${dataBr(config.cadastroAte)} entra)`, {
+          cadastro: config.cadastroAte,
+        });
+      }
+      const porque = dia ? `cadastrada em ${dataBr(dia)}, depois de ${dataBr(config.cadastroAte)}` : 'sem data de cadastro';
+      const temOutraPorta = termos.length > 0 || porCodigo.size > 0;
+      return decisao(chave, false, 'nenhum', temOutraPorta ? `nenhum termo nem grupo da campanha; ${porque}` : porque);
+    }
     return decisao(chave, false, 'nenhum', 'nenhum termo nem grupo da campanha');
   };
 
@@ -485,6 +626,8 @@ export function criarRegra(
     temEstrutura ? digestoDe(porCodigo.keys()) : '',
     // Reclassificar BÁSICO/MODA muda preço no site: a vitrine remonta por aqui.
     config.excluirBasico ? digestoDe(setBasicos) : '',
+    // A virada da vigência muda o preço de tudo: a vitrine remonta por aqui.
+    ligada,
   ]);
 
   return {
@@ -492,6 +635,10 @@ export function criarRegra(
     campanha: chaveDaCampanha(config.nome),
     rotulo: `PROMO ${config.pct}% · ${config.nome.toLowerCase()}`,
     assinatura,
+    ligada,
+    hoje,
+    vigenciaTexto: textoVigencia,
+    motivoDesligada,
     decidir,
     excecaoDe,
     precoComDesconto: (preco: number) => precoComDesconto(preco, config.pct),

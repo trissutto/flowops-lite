@@ -927,6 +927,7 @@ export class LojaCatalogService {
         const d = regraCampanha.decidir({
           ref: l.ref, codigo: l.codigo, descricao: l.descricao,
           descricaoPdv: l.descricaoPdv ?? null, grupo: l.categoria,
+          dataCadastro: l.dataAlt ?? null,
         });
         if (!d.entra) continue;
         naCampanha.add(l.codigo);
