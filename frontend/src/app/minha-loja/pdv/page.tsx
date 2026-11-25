@@ -812,6 +812,19 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
  * Relógio do header — "Caixa aberto · 14:32". Puramente visual, atualiza a
  * cada 30s. Nenhuma dependência de estado da venda.
  */
+/**
+ * O ícone da campanha segue o NOME que a matriz gravou — o floco de neve era
+ * do "Inverno" e ficaria em "❄️ Black Friday 50%". Um lugar só: o botão da
+ * venda e a Consulta de promoção mostram o mesmo.
+ */
+function iconeDaCampanha(nome: string | null | undefined): string {
+  const n = String(nome || '');
+  if (/BLACK/i.test(n)) return '🖤';
+  if (/VER[AÃ]O|PRAIA/i.test(n)) return '☀️';
+  if (/INVERNO/i.test(n)) return '❄️';
+  return '🏷️';
+}
+
 function HeaderClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -1047,16 +1060,7 @@ function PdvPageInner() {
     return () => clearInterval(t);
   }, [lerCampanha]);
   const rotuloCampanha = campanha ? `${campanha.nome} ${campanha.pct}%` : 'Campanha';
-  // O ícone segue o nome da campanha — o floco de neve era do "Inverno".
-  const iconeCampanha = !campanha
-    ? '🎁'
-    : /BLACK/i.test(campanha.nome)
-      ? '🖤'
-      : /VER[AÃ]O|PRAIA/i.test(campanha.nome)
-        ? '☀️'
-        : /INVERNO/i.test(campanha.nome)
-          ? '❄️'
-          : '🏷️';
+  const iconeCampanha = campanha ? iconeDaCampanha(campanha.nome) : '🎁';
 
   // Menu lateral recolhível (só visual). Persiste a preferência por PC.
   const [menuCollapsed, setMenuCollapsed] = useState(false);
@@ -3054,7 +3058,7 @@ function PdvPageInner() {
                       : campanha.ativa
                         ? `peças de ${campanha.nome.toLowerCase()} = ${campanha.pct}% off`
                         : campanha.agendada
-                          ? `vale ${campanha.vigencia || 'em outra data'}`
+                          ? `só ${campanha.vigencia || 'em outra data'}` // vale antes E depois da janela
                           : 'campanha desligada'}
                   </div>
                 </button>
@@ -13751,7 +13755,7 @@ function PromoCheckModal({
                 <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
                   <div className="text-[11px] text-slate-500">Campanha</div>
                   <div className="text-lg font-bold text-slate-900">
-                    {camp?.ativa ? `❄️ ${camp.nome} ${camp.pct}%` : 'Desligada'}
+                    {camp?.ativa ? `${iconeDaCampanha(camp.nome)} ${camp.nome} ${camp.pct}%` : 'Desligada'}
                   </div>
                 </div>
                 <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
