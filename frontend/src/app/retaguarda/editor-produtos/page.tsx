@@ -33,6 +33,13 @@ type Row = {
   preco: number | null;
   /** Preço "DE" registrado da promoção (só nativa) — POR é o próprio preço. */
   precoDe: number | null;
+  /**
+   * Data de cadastro (`AAAA-MM-DD`) — a `dataAlt` do cadastro, que a campanha
+   * por data (Black Friday) e a promoção dos antigos leem. No ERP ela era
+   * "data de alteração" e cada edição rejuvenescia a peça; aqui só muda quando
+   * a matriz digita a data certa.
+   */
+  dataCadastro: string | null;
   estoque: number | null;
   estoqueLojas?: Record<string, number>;
 };
@@ -58,9 +65,18 @@ type Changes = {
   preco?: number;
   /** Staged como string digitada; '' = LIMPAR o DE (encerrar promoção). */
   precoDe?: string;
+  /** Data de cadastro `AAAA-MM-DD` (input type=date). */
+  dataCadastro?: string;
 };
 
 const LIMITS: Record<string, number> = { ref: 10, descricao: 100, marca: 30, cor: 15, tamanho: 20 };
+
+/** `AAAA-MM-DD` → `DD/MM/AAAA` pra ler na tela; vazio vira "—". */
+const dataBr = (iso: string | null | undefined) =>
+  iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '—';
+
+/** Hoje em Brasília (UTC−3) como `AAAA-MM-DD` — teto do input de data. */
+const hojeIso = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 
 const brl = (n: number | null | undefined) =>
   n == null ? '—' : Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -159,6 +175,10 @@ export default function EditorProdutosPage() {
   const [modalPreco, setModalPreco] = useState(false);
   const [modalDesc, setModalDesc] = useState(false);
   const [modalMarca, setModalMarca] = useState(false);
+  // Data de cadastro em bloco (26/11/2026): a Black Friday achou peça de 2023
+  // "cadastrada em 2026" — a matriz corrige a família inteira de uma vez.
+  const [modalCadastro, setModalCadastro] = useState(false);
+  const [novoCadastro, setNovoCadastro] = useState('');
   const [novaMarca, setNovaMarca] = useState('');
   const [massaBusy, setMassaBusy] = useState(false);
   const [preview, setPreview] = useState<Array<{ codigo: string; ref: string; field: string; antes: string; depois: string }> | null>(null);
@@ -347,6 +367,25 @@ export default function EditorProdutosPage() {
       return next;
     });
     setModalMarca(false); setNovaMarca('');
+  };
+
+  // Data de cadastro em bloco: a data digitada vai SÓ pro campo CADASTRO das
+  // selecionadas (quem já tem essa data não entra no lote).
+  const aplicarCadastro = () => {
+    const dia = novoCadastro.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return;
+    setPending((prev) => {
+      const next = new Map(prev);
+      for (const r of rows) {
+        if (!sel.has(r.codigo)) continue;
+        const cur = { ...(next.get(r.codigo) || {}) };
+        if (dia === (r.dataCadastro || '')) delete (cur as any).dataCadastro;
+        else cur.dataCadastro = dia;
+        if (Object.keys(cur).length) next.set(r.codigo, cur); else next.delete(r.codigo);
+      }
+      return next;
+    });
+    setModalCadastro(false); setNovoCadastro('');
   };
 
   // MARCA EM MASSA no servidor: sem teto de 5.000, sem preview — dupla
@@ -542,6 +581,11 @@ export default function EditorProdutosPage() {
             }
             linhas.push({ codigo, ref: row.ref, field: 'PREÇO DE', antes: brl(row.precoDe), depois: brl(n) });
           }
+        } else if (field === 'dataCadastro') {
+          const dia = String(value).trim();
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) { setErr(`Data de cadastro inválida no código ${codigo}: "${value}"`); return; }
+          if (dia > hojeIso()) { setErr(`Data de cadastro no futuro no código ${codigo} (${dataBr(dia)})`); return; }
+          linhas.push({ codigo, ref: row.ref, field: 'CADASTRO', antes: dataBr(row.dataCadastro), depois: dataBr(dia) });
         } else {
           const max = LIMITS[field] || 100;
           if (String(value).trim().length > max) {
@@ -705,6 +749,11 @@ export default function EditorProdutosPage() {
               className="px-3 py-1.5 rounded-lg border-2 border-violet-300 bg-violet-50 text-violet-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
               <Tags className="w-3.5 h-3.5" /> Marca em bloco
             </button>
+            <button onClick={() => setModalCadastro(true)} disabled={!sel.size}
+              title="Corrigir a data de cadastro das selecionadas — é a data que a promoção por data (Black Friday) e a dos antigos leem"
+              className="px-3 py-1.5 rounded-lg border-2 border-rose-300 bg-rose-50 text-rose-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
+              <History className="w-3.5 h-3.5" /> Data de cadastro
+            </button>
             <button onClick={() => setModalDesc(true)} disabled={!sel.size}
               className="px-3 py-1.5 rounded-lg border-2 border-sky-300 bg-sky-50 text-sky-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
               <ReplaceAll className="w-3.5 h-3.5" /> Substituir na descrição
@@ -744,6 +793,7 @@ export default function EditorProdutosPage() {
                     <th className="text-left px-2 py-1.5">Tam</th>
                     <th className="text-right px-2 py-1.5" title="POR — o preço cobrado (caixa e site)">Preço (R$)</th>
                     <th className="text-right px-2 py-1.5" title="DE — preço original da promoção (riscado no site; 'você economizou' no PDV). Vazio = sem promoção.">DE (R$)</th>
+                    <th className="text-left px-2 py-1.5" title="Data de cadastro da peça — a campanha por data (Black Friday) e a promoção dos antigos decidem por ela. No ERP antigo cada edição carimbava a data do dia por cima; aqui só muda quando você digita.">Cadastro</th>
                     {lojasDisponiveis.map((l) => (
                       <th key={l} title={`Loja ${l}`} className="text-center px-0.5 py-1.5 w-9 whitespace-nowrap">
                         {lojaNomes.get(l) || l}
@@ -800,6 +850,22 @@ export default function EditorProdutosPage() {
                         <td className="px-1 py-1">{cell('tamanho', 'w-12', false, LIMITS.tamanho)}</td>
                         <td className="px-1 py-1">{cell('preco', 'w-20', true)}</td>
                         <td className="px-1 py-1">{cell('precoDe', 'w-20', true)}</td>
+                        <td className="px-1 py-1">
+                          <input
+                            type="date"
+                            value={val(r, 'dataCadastro')}
+                            max={hojeIso()}
+                            onChange={(e) => setField(r.codigo, 'dataCadastro', e.target.value, r)}
+                            title={r.dataCadastro ? `Cadastro: ${dataBr(r.dataCadastro)}` : 'Sem data de cadastro — fica fora de toda promoção por data'}
+                            className={`w-36 px-2 py-1 rounded border text-sm font-medium tabular-nums ${
+                              (dirty as any).dataCadastro !== undefined
+                                ? 'border-amber-400 bg-amber-50 text-amber-900'
+                                : r.dataCadastro
+                                  ? 'border-transparent bg-transparent hover:border-slate-200'
+                                  : 'border-rose-200 bg-rose-50 text-rose-700'
+                            } focus:border-amber-400 focus:bg-white focus:outline-none`}
+                          />
+                        </td>
                         {/* MATRIZ por loja: clicou → stepper −/+ grava na hora */}
                         {lojasDisponiveis.map((loja) => {
                           const qtd = r.estoqueLojas?.[loja] ?? 0;
@@ -1099,6 +1165,33 @@ export default function EditorProdutosPage() {
               exibidas. Grava direto (sem preview), com registro na auditoria.
             </p>
           </div>
+        </Modal>
+      )}
+
+      {/* ── Modal: Data de cadastro em bloco ── */}
+      {modalCadastro && (
+        <Modal title="Data de cadastro em bloco" onClose={() => setModalCadastro(false)}>
+          <p className="text-xs text-slate-500 mb-2">
+            As {sel.size} variações selecionadas passam a ter esta data de cadastro — só o campo CADASTRO muda.
+            É a data que a <b>promoção por data</b> (Black Friday: cadastro até 31/12/2025) e a promoção dos antigos leem.
+          </p>
+          <input
+            type="date"
+            value={novoCadastro}
+            max={hojeIso()}
+            onChange={(e) => setNovoCadastro(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && /^\d{4}-\d{2}-\d{2}$/.test(novoCadastro) && aplicarCadastro()}
+            className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl font-bold tabular-nums focus:border-rose-400 focus:outline-none" />
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-snug">
+            Não sabe o dia exato? Qualquer data em que a peça já existia serve (a da primeira venda, por exemplo) —
+            o que importa pra promoção é de que lado do corte ela fica. A alteração entra na auditoria com ANTES→DEPOIS.
+          </p>
+          <ModalActions
+            okLabel="Aplicar às selecionadas"
+            okDisabled={!/^\d{4}-\d{2}-\d{2}$/.test(novoCadastro)}
+            onOk={aplicarCadastro}
+            onCancel={() => setModalCadastro(false)}
+          />
         </Modal>
       )}
 

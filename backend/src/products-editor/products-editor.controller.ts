@@ -172,6 +172,28 @@ export class ProductsEditorController {
     return this.svc.restaurarDataAltNativoDoEspelho(!!body?.executar);
   }
 
+  /**
+   * POST /products-editor/data-cadastro/restaurar
+   * { executar?, corte?: 'AAAA-MM-DD', criterios?: ('venda'|'id'|'familia')[], amostra? }
+   * Devolve à peça a data de cadastro que a PROVA permite (vendeu antes;
+   * ordem do ID do ERP; família) — ver `restaurarDataCadastro`. Dry-run por
+   * padrão; `executar: true` grava nas duas tabelas com auditoria.
+   */
+  @Post('data-cadastro/restaurar')
+  async restaurarDataCadastro(
+    @Req() req: any,
+    @Body() body: { executar?: boolean; corte?: string; criterios?: string[]; amostra?: number },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.restaurarDataCadastro({
+      executar: !!body?.executar,
+      corte: body?.corte ?? null,
+      criterios: body?.criterios ?? null,
+      amostra: body?.amostra ?? null,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** GET /products-editor/audit — histórico recente (ANTES→DEPOIS). */
   @Get('audit')
   async audit(@Req() req: any, @Query('limit') limit?: string) {

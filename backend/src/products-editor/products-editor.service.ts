@@ -6,6 +6,8 @@ import { ProductSearchService } from '../product-search/product-search.service';
 import { LojaCatalogService } from '../loja-catalog/loja-catalog.service';
 import { avisarVitrine } from '../common/avisar-vitrine';
 import { refBaseOf } from '../common/ref-base';
+import { diaISO } from '../common/promo-por-termo';
+import { hojeBrasilia } from '../common/tz';
 
 /**
  * EDITOR DE PRODUTOS (/retaguarda/editor-produtos) — padronizar REF, corrigir
@@ -36,7 +38,27 @@ export type EditChanges = {
    * set sem campo conhecido).
    */
   precoDe?: number | null;
+  /**
+   * DATA DE CADASTRO da peça (`YYYY-MM-DD`) — a coluna `dataAlt` de
+   * `wincred_produtos` E de `product` (as duas, sempre juntas: a campanha do
+   * site/PDV lê o espelho, a promoção dos antigos e o bipe leem a nativa).
+   *
+   * É a ÚNICA porta que muda essa data de propósito. No ERP a coluna chamava
+   * DATAALT ("data de alteração") e era carimbada com a data da EDIÇÃO: toda
+   * mexida de preço ou descrição rejuvenescia a peça — foi assim que o
+   * incidente de 14/07 tirou milhares de peças antigas da promoção, e é por
+   * isso que a Black Friday de 26/11 achou peça de 2023 "cadastrada em 2026".
+   * O editor NÃO toca a data em nenhuma outra edição; quem corrige é a
+   * matriz, aqui, com ANTES→DEPOIS na auditoria (`DATA_CADASTRO`).
+   */
+  dataCadastro?: string;
 };
+
+/** Piso de sanidade da data de cadastro: a rede não tem peça anterior a isto. */
+const CADASTRO_MINIMO = '1990-01-01';
+
+/** `YYYY-MM-DD` → Date em meia-noite UTC — o que o Prisma grava numa `@db.Date`. */
+const dataSoUTC = (dia: string) => new Date(`${dia}T00:00:00.000Z`);
 
 // Limites reais das colunas do Giga (ver inserirProdutosBatch).
 const LIMITS: Record<string, number> = {
@@ -223,12 +245,15 @@ export class ProductsEditorService {
      * não é matriz) — aqui só é buscado.
      */
     const custoPorCodigo = new Map<string, { custo: number | null; margem: number | null }>();
+    // Data de cadastro (`dataAlt` do espelho — a que a campanha lê), em
+    // `YYYY-MM-DD`: a coluna editável da tela. Ver EditChanges.dataCadastro.
+    const cadastroPorCodigo = new Map<string, string | null>();
     try {
       const norm = codigos.map((c) => this.normalizeCodigo(c)).filter(Boolean) as string[];
       if (norm.length) {
         const wrows: any[] = await (this.prisma as any).wincredProduto.findMany({
           where: { codigo: { in: norm } },
-          select: { codigo: true, custo: true, margem: true },
+          select: { codigo: true, custo: true, margem: true, dataAlt: true },
         });
         const byNorm = new Map(wrows.map((w) => [w.codigo, w]));
         for (const c of codigos) {
@@ -238,6 +263,7 @@ export class ProductsEditorService {
               custo: w.custo != null ? Number(w.custo) : null,
               margem: w.margem != null ? Number(w.margem) : null,
             });
+            cadastroPorCodigo.set(c, diaISO(w.dataAlt));
           }
         }
       }
@@ -272,6 +298,7 @@ export class ProductsEditorService {
           tamanho: ex?.tamanho ?? (r.tamanho != null ? String(r.tamanho).trim() : ''),
           preco: ex?.vendaUn ?? (r as any).vendaUn ?? null,
           precoDe: precoDePorCodigo.get(codigo) ?? null,
+          dataCadastro: cadastroPorCodigo.get(codigo) ?? null,
           custo: cm?.custo ?? null,
           margem: cm?.margem ?? null,
           estoque: estoquePorCodigo.get(codigo) ?? null,
@@ -525,6 +552,20 @@ export class ProductsEditorService {
           );
         }
       }
+      if (c.dataCadastro !== undefined) {
+        // Data que não existe ("2025-13-40") virando null calado tiraria a peça
+        // de toda promoção por data ("peça sem data fica fora") — recusa alto.
+        const dia = diaISO(String(c.dataCadastro ?? ''));
+        if (!dia) {
+          throw new BadRequestException(`Data de cadastro inválida no código ${e.codigo}: "${c.dataCadastro}". Use AAAA-MM-DD.`);
+        }
+        if (dia > hojeBrasilia()) {
+          throw new BadRequestException(`Data de cadastro no futuro (${dia}) no código ${e.codigo} — peça não nasce amanhã.`);
+        }
+        if (dia < CADASTRO_MINIMO) {
+          throw new BadRequestException(`Data de cadastro ${dia} no código ${e.codigo} é anterior a ${CADASTRO_MINIMO} — confira o ano.`);
+        }
+      }
     }
 
     // ── Valores atuais (espelho) pra auditoria ANTES→DEPOIS ──
@@ -533,6 +574,20 @@ export class ProductsEditorService {
       where: { codigo: { in: codigos } },
     });
     const atualPorCodigo = new Map(atuais.map((a) => [String(a.codigo).trim(), a]));
+
+    // Data de cadastro atual (espelho) — ANTES→DEPOIS da auditoria. Só pros
+    // códigos cuja data está sendo editada.
+    const cadastroAtualPorCodigo = new Map<string, string | null>();
+    const comData = edits.filter((e) => e.changes.dataCadastro !== undefined).map((e) => e.codigo);
+    if (comData.length) {
+      const norm = Array.from(new Set(comData.map((c) => this.normalizeCodigo(c)).filter(Boolean))) as string[];
+      const wrows: any[] = await (this.prisma as any).wincredProduto.findMany({
+        where: { codigo: { in: norm } },
+        select: { codigo: true, dataAlt: true },
+      });
+      const byNorm = new Map(wrows.map((w) => [String(w.codigo), diaISO(w.dataAlt)]));
+      for (const c of comData) cadastroAtualPorCodigo.set(c, byNorm.get(this.normalizeCodigo(c) as string) ?? null);
+    }
 
     // DE atual (só a nativa tem a coluna) — pro ANTES→DEPOIS da auditoria.
     const deAtualPorCodigo = new Map<string, number | null>();
@@ -576,6 +631,11 @@ export class ProductsEditorService {
         const v = c.precoDe === null ? null : Math.round(Number(c.precoDe) * 100) / 100;
         set.precoDe = v;
         push('PRECO_DE', deAtualPorCodigo.get(e.codigo) ?? null, v);
+      }
+      if (c.dataCadastro !== undefined) {
+        const v = diaISO(String(c.dataCadastro)) as string; // validado acima
+        set.dataCadastro = v;
+        push('DATA_CADASTRO', cadastroAtualPorCodigo.get(e.codigo) ?? null, v);
       }
       if (Object.keys(set).length) erpRows.push({ codigo: e.codigo, set });
     }
@@ -624,6 +684,8 @@ export class ProductsEditorService {
     const dataNativa = (set: any) => ({
       ...buildData(set),
       ...(set.precoDe !== undefined ? { precoDe: set.precoDe } : {}),
+      // Data de cadastro: a nativa recebe a mesma data do espelho (abaixo).
+      ...(set.dataCadastro !== undefined ? { dataAlt: dataSoUTC(set.dataCadastro) } : {}),
     });
 
     if (this.nativeWrites) {
@@ -690,6 +752,10 @@ export class ProductsEditorService {
           });
         }
         const w = buildData(g.set);
+        // A ÚNICA edição que muda a data de cadastro é a edição DA DATA
+        // (campo "Cadastro" da tela, com ANTES→DEPOIS na auditoria). As outras
+        // nunca a tocam — ver EditChanges.dataCadastro e o incidente 14/07.
+        if (g.set.dataCadastro !== undefined) w.dataAlt = dataSoUTC(g.set.dataCadastro);
         if (Object.keys(w).length) {
           // ⚠️ NÃO tocar dataAlt (incidente 14/07): é a data de CADASTRO que
           // a promoção Liquida Antigos usa. Edição não muda idade da peça.
@@ -955,6 +1021,263 @@ export class ProductsEditorService {
     );
     this.logger.log(`[dataalt] nativa ← espelho: ${atualizados} linhas corrigidas`);
     return { dryRun: false, atualizados };
+  }
+
+  /**
+   * RESTAURAR A DATA DE CADASTRO POR EVIDÊNCIA (Black Friday, 26/11/2026).
+   *
+   * "Muitos itens estão com data de 2026 e são mais antigos." A data de
+   * cadastro é a `dataAlt` de `wincred_produtos` — no ERP ela chamava DATAALT
+   * ("data de alteração") e era carimbada com a data da EDIÇÃO: mexeu no
+   * preço em março/2026, a peça de 2023 virou "cadastrada em 2026". O editor
+   * do Flow parou de fazer isso em 14/07, mas o que o ERP carimbou antes de
+   * morrer (e o que escapou da restauração daquele incidente) continua lá.
+   *
+   * Ninguém tem a data original — o ERP só tinha essa coluna. O que existe
+   * é PROVA de que a peça é mais velha do que a data diz, e cada prova dá um
+   * TETO pra data de cadastro (a peça nasceu NO MÁXIMO naquele dia):
+   *
+   *  - `venda`   — a peça VENDEU antes da data gravada (`giga_caixa_mov`, o
+   *                histórico do caixa do ERP + do Flow). Fato: quem vendeu em
+   *                2024 foi cadastrada em 2024 ou antes. A data vira a da
+   *                PRIMEIRA venda — mais nova que o cadastro real, mas
+   *                verdadeira, e mais velha que o carimbo errado.
+   *  - `id`      — `idWincred` é o auto-incremento da tabela `produtos` do
+   *                Wincred: nasce na hora do cadastro e nunca muda com edição.
+   *                Se uma peça de ID MAIOR tem data plausível ≤ corte, esta
+   *                (de ID menor) nasceu antes dela. O teto é a MENOR data
+   *                plausível entre as 200 linhas seguintes na ordem do ID
+   *                (janela curta pra um lixo isolado não contaminar tudo).
+   *                Vale só pra peça que nasceu no ERP (as do Flow não têm ID).
+   *  - `familia` — outra numeração/cor da MESMA REF tem data ≤ corte. NÃO é
+   *                teto (numeração nova de modelo antigo é cadastro novo de
+   *                verdade) — por isso só entra quando pedida.
+   *
+   * Prioridade: a MENOR data entre `venda` e `id` (o teto mais apertado);
+   * `familia` só quando as duas faltam. Só desce a data, nunca sobe. Só
+   * peça COM ESTOQUE na rede e data DEPOIS do corte entra na conta (é o que
+   * a campanha enxerga; peça sem estoque não vende e pode ser corrigida
+   * depois, pela tela). Dry-run por padrão: devolve contagens, a conferência
+   * da ordem do ID e uma amostra. `executar: true` grava nas DUAS tabelas
+   * (`wincred_produtos` e `product`) com ANTES→DEPOIS em `product_edit_audit`
+   * (campo `DATA_CADASTRO`, um `batchId` por rodada) e derruba o cache do site.
+   */
+  async restaurarDataCadastro(input: {
+    executar: boolean;
+    corte?: string | null;
+    criterios?: string[] | null;
+    userName?: string | null;
+    amostra?: number | null;
+  }) {
+    const corte = diaISO(input.corte ?? '2025-12-31');
+    if (!corte) throw new BadRequestException('Corte inválido — use AAAA-MM-DD (ex.: 2025-12-31).');
+    const pedidos = (input.criterios && input.criterios.length ? input.criterios : ['venda', 'id']).map((c) => String(c).toLowerCase());
+    const desconhecidos = pedidos.filter((c) => !['venda', 'id', 'familia'].includes(c));
+    if (desconhecidos.length) throw new BadRequestException(`Critério desconhecido: ${desconhecidos.join(', ')} (vale venda, id, familia).`);
+    const usa = { venda: pedidos.includes('venda'), id: pedidos.includes('id'), familia: pedidos.includes('familia') };
+    const amostra = Math.min(Math.max(Number(input.amostra) || 30, 1), 200);
+    // Data "plausível": antes disto é lixo de migração (ano 1900, 2001-01-01…).
+    const PISO = '2005-01-01';
+    const batchId = randomUUID();
+    const t0 = Date.now();
+
+    // BigInt (idWincred) e Date não passam no JSON da resposta — achata.
+    const plain = (v: any): any => {
+      if (typeof v === 'bigint') return Number(v);
+      if (v instanceof Date) return diaISO(v);
+      if (Array.isArray(v)) return v.map(plain);
+      if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)]));
+      return v;
+    };
+    const sqlBool = (b: boolean) => (b ? 'TRUE' : 'FALSE');
+
+    const resultado = await this.prisma.$transaction(
+      async (tx) => {
+        const q = (sql: string, ...params: any[]): Promise<any[]> => (tx as any).$queryRawUnsafe(sql, ...params);
+        const x = (sql: string, ...params: any[]): Promise<number> => (tx as any).$executeRawUnsafe(sql, ...params);
+
+        // 1) Candidatas: com estoque na rede e data DEPOIS do corte.
+        await x(
+          `CREATE TEMP TABLE dc_cand ON COMMIT DROP AS
+           SELECT w.codigo,
+                  UPPER(TRIM(COALESCE(w.ref, ''))) AS ref,
+                  w."dataAlt"   AS atual,
+                  w."idWincred" AS id,
+                  e.estoque
+             FROM wincred_produtos w
+             JOIN (SELECT codigo, SUM(COALESCE(estoque, 0))::int AS estoque
+                     FROM wincred_estoque GROUP BY codigo
+                   HAVING SUM(COALESCE(estoque, 0)) > 0) e ON e.codigo = w.codigo
+            WHERE w."dataAlt" IS NOT NULL AND w."dataAlt" > $1::date`,
+          corte,
+        );
+        await x(`CREATE INDEX ON dc_cand (codigo)`);
+
+        // 2) Primeira venda por código (histórico do caixa inteiro, uma passada).
+        //    O código do caixa pode vir com zero à esquerda; o do espelho não.
+        await x(
+          `CREATE TEMP TABLE dc_pv ON COMMIT DROP AS
+           SELECT LTRIM(COALESCE(m.codigo, ''), '0') AS codigo, MIN(m.data) AS primeira_venda
+             FROM giga_caixa_mov m
+            WHERE m.data >= $1::date
+            GROUP BY 1`,
+          PISO,
+        );
+        await x(`CREATE INDEX ON dc_pv (codigo)`);
+
+        // 3) Teto pela ordem do ID: menor data plausível (≤ corte) nas 200
+        //    linhas SEGUINTES do auto-incremento.
+        await x(
+          `CREATE TEMP TABLE dc_id ON COMMIT DROP AS
+           SELECT codigo, id,
+                  MIN(CASE WHEN "dataAlt" >= $1::date AND "dataAlt" <= $2::date THEN "dataAlt" END)
+                    OVER (ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 200 FOLLOWING) AS teto
+             FROM (SELECT codigo, "idWincred" AS id, "dataAlt"
+                     FROM wincred_produtos WHERE "idWincred" IS NOT NULL) s`,
+          PISO,
+          corte,
+        );
+        await x(`CREATE INDEX ON dc_id (codigo)`);
+
+        // 4) Família: a data mais velha plausível da MESMA REF.
+        await x(
+          `CREATE TEMP TABLE dc_fam ON COMMIT DROP AS
+           SELECT c.codigo, MIN(w2."dataAlt") AS familia_min
+             FROM dc_cand c
+             JOIN wincred_produtos w2 ON UPPER(TRIM(COALESCE(w2.ref, ''))) = c.ref
+            WHERE c.ref <> '' AND w2."dataAlt" >= $1::date AND w2."dataAlt" <= $2::date
+            GROUP BY c.codigo`,
+          PISO,
+          corte,
+        );
+
+        // 5) A decisão por código.
+        await x(
+          `CREATE TEMP TABLE dc_sug ON COMMIT DROP AS
+           SELECT c.codigo, c.ref, c.atual, c.estoque, c.id,
+                  v.primeira_venda, i.teto AS teto_id, f.familia_min,
+                  LEAST(CASE WHEN ${sqlBool(usa.venda)} AND v.primeira_venda < c.atual THEN v.primeira_venda END,
+                        CASE WHEN ${sqlBool(usa.id)}    AND i.teto < c.atual          THEN i.teto END) AS teto,
+                  CASE WHEN ${sqlBool(usa.familia)} AND f.familia_min < c.atual THEN f.familia_min END AS pela_familia
+             FROM dc_cand c
+             LEFT JOIN dc_pv  v ON v.codigo = c.codigo
+             LEFT JOIN dc_id  i ON i.codigo = c.codigo
+             LEFT JOIN dc_fam f ON f.codigo = c.codigo`,
+        );
+        await x(`ALTER TABLE dc_sug ADD COLUMN sugerida date, ADD COLUMN criterio text`);
+        await x(
+          `UPDATE dc_sug SET
+             sugerida = COALESCE(teto, pela_familia),
+             criterio = CASE WHEN teto IS NOT NULL AND teto = primeira_venda THEN 'venda'
+                             WHEN teto IS NOT NULL THEN 'id'
+                             WHEN pela_familia IS NOT NULL THEN 'familia' END`,
+        );
+
+        // ── Contagens ──
+        const [tot] = await q(
+          `SELECT COUNT(*)::int AS codigos, COALESCE(SUM(estoque), 0)::int AS pecas FROM dc_cand`,
+        );
+        const porCriterio = await q(
+          `SELECT COALESCE(criterio, 'sem_prova') AS criterio,
+                  COUNT(*)::int AS codigos, COALESCE(SUM(estoque), 0)::int AS pecas,
+                  COUNT(*) FILTER (WHERE sugerida <= $1::date)::int AS codigos_entram,
+                  COALESCE(SUM(estoque) FILTER (WHERE sugerida <= $1::date), 0)::int AS pecas_entram
+             FROM dc_sug GROUP BY 1 ORDER BY 1`,
+          corte,
+        );
+        // O que cada critério NÃO pedido acrescentaria (pra decidir com número).
+        const [extra] = await q(
+          `SELECT COUNT(*) FILTER (WHERE sugerida IS NULL AND primeira_venda IS NOT NULL AND primeira_venda < atual)::int AS venda_codigos,
+                  COALESCE(SUM(estoque) FILTER (WHERE sugerida IS NULL AND primeira_venda IS NOT NULL AND primeira_venda < atual), 0)::int AS venda_pecas,
+                  COUNT(*) FILTER (WHERE sugerida IS NULL AND teto_id IS NOT NULL)::int AS id_codigos,
+                  COALESCE(SUM(estoque) FILTER (WHERE sugerida IS NULL AND teto_id IS NOT NULL), 0)::int AS id_pecas,
+                  COUNT(*) FILTER (WHERE sugerida IS NULL AND familia_min IS NOT NULL)::int AS familia_codigos,
+                  COALESCE(SUM(estoque) FILTER (WHERE sugerida IS NULL AND familia_min IS NOT NULL), 0)::int AS familia_pecas,
+                  COUNT(*) FILTER (WHERE primeira_venda IS NOT NULL AND teto_id IS NOT NULL AND teto_id < primeira_venda)::int AS id_mais_apertado_que_venda,
+                  COUNT(*) FILTER (WHERE primeira_venda IS NOT NULL AND teto_id IS NOT NULL)::int AS com_venda_e_id
+             FROM dc_sug`,
+        );
+        // Até onde vai o histórico do caixa (a prova `venda` só alcança isto).
+        const [caixa] = await q(
+          `SELECT MIN(data) AS primeira_data, COUNT(*)::int AS codigos FROM dc_pv`,
+        );
+        // A ordem do ID é mesmo a ordem do cadastro? Se for, a mediana da
+        // primeira venda SOBE a cada decil do ID.
+        const ordemDoId = await q(
+          `SELECT dec, COUNT(*)::int AS codigos, MIN(id) AS id_min, MAX(id) AS id_max,
+                  percentile_disc(0.5) WITHIN GROUP (ORDER BY pv) AS primeira_venda_mediana
+             FROM (SELECT w."idWincred" AS id, p.primeira_venda AS pv,
+                          NTILE(10) OVER (ORDER BY w."idWincred") AS dec
+                     FROM wincred_produtos w JOIN dc_pv p ON p.codigo = w.codigo
+                    WHERE w."idWincred" IS NOT NULL) s
+            GROUP BY dec ORDER BY dec`,
+        );
+        const amostraRows = await q(
+          `SELECT codigo, ref, atual, sugerida, criterio, primeira_venda, teto_id, familia_min, estoque, id
+             FROM dc_sug WHERE sugerida IS NOT NULL ORDER BY estoque DESC, codigo LIMIT ${amostra}`,
+        );
+        const semProvaRows = await q(
+          `SELECT codigo, ref, atual, estoque, id, primeira_venda, familia_min
+             FROM dc_sug WHERE sugerida IS NULL ORDER BY estoque DESC, codigo LIMIT ${Math.min(amostra, 30)}`,
+        );
+
+        let gravacao: any = null;
+        if (input.executar) {
+          const auditadas = await x(
+            `INSERT INTO product_edit_audit (id, batch_id, codigo, ref, field, old_value, new_value, user_name, applied, created_at)
+             SELECT gen_random_uuid()::text, $1, codigo, NULLIF(ref, ''), 'DATA_CADASTRO',
+                    atual::text, sugerida::text || ' (' || criterio || ')', $2, TRUE, now()
+               FROM dc_sug WHERE sugerida IS NOT NULL AND sugerida < atual`,
+            batchId,
+            input.userName || 'restaurar-data-cadastro',
+          );
+          const espelho = await x(
+            `UPDATE wincred_produtos w SET "dataAlt" = s.sugerida
+               FROM dc_sug s
+              WHERE w.codigo = s.codigo AND s.sugerida IS NOT NULL AND s.sugerida < w."dataAlt"`,
+          );
+          const nativa = await x(
+            `UPDATE product p
+                SET "dataAlt" = s.sugerida, flow_is_source = TRUE, edited_at = now(), updated_at = now()
+               FROM dc_sug s
+              WHERE p.codigo = s.codigo AND s.sugerida IS NOT NULL
+                AND (p."dataAlt" IS NULL OR s.sugerida < p."dataAlt")`,
+          );
+          gravacao = { batchId, auditadas, espelho, nativa };
+        }
+
+        return {
+          dryRun: !input.executar,
+          corte,
+          criterios: pedidos,
+          piso: PISO,
+          candidatas: tot,
+          porCriterio,
+          acrescentariam: extra,
+          historicoCaixa: caixa,
+          ordemDoId,
+          amostra: amostraRows,
+          semProva: semProvaRows,
+          gravacao,
+          ms: Date.now() - t0,
+        };
+      },
+      { timeout: 10 * 60_000, maxWait: 15_000 },
+    );
+
+    const r = plain(resultado);
+    if (input.executar) {
+      this.logger.log(
+        `[data-cadastro] restauração ${r.gravacao?.batchId}: ${r.gravacao?.espelho} no espelho, ` +
+          `${r.gravacao?.nativa} na nativa, ${r.gravacao?.auditadas} auditadas · corte ${corte} · ` +
+          `critérios ${pedidos.join('+')} · ${r.ms}ms · por ${input.userName || '?'}`,
+      );
+      // A campanha do site decide pela data: a vitrine tem que remontar.
+      this.avisarSite();
+    } else {
+      this.logger.log(`[data-cadastro] prévia: ${r.candidatas?.codigos} candidatas · ${r.ms}ms`);
+    }
+    return r;
   }
 
   /**
