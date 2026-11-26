@@ -71,6 +71,27 @@ type Changes = {
 
 const LIMITS: Record<string, number> = { ref: 10, descricao: 100, marca: 30, cor: 15, tamanho: 20 };
 
+/** Resposta de `POST /products-editor/data-cadastro/restaurar` (prévia ou gravação). */
+type DatasPrevia = {
+  dryRun: boolean;
+  corte: string;
+  criterios: string[];
+  candidatas: { codigos: number; pecas: number };
+  porCriterio: Array<{ criterio: string; codigos: number; pecas: number; codigos_entram: number; pecas_entram: number }>;
+  acrescentariam: { familia_codigos: number; familia_pecas: number };
+  historicoCaixa: { primeira_data: string | null; codigos: number };
+  amostra: Array<{ codigo: string; ref: string; atual: string; sugerida: string; criterio: string; estoque: number }>;
+  gravacao: { batchId: string; auditadas: number; espelho: number; nativa: number } | null;
+  ms: number;
+};
+
+const CRITERIO_LABEL: Record<string, string> = {
+  venda: 'Vendeu ANTES da data gravada → data da 1ª venda',
+  id: 'Ordem do cadastro no ERP',
+  familia: 'Outra numeração da MESMA REF é mais antiga → data da família',
+  sem_prova: 'Sem prova — ficam como estão',
+};
+
 /** `AAAA-MM-DD` → `DD/MM/AAAA` pra ler na tela; vazio vira "—". */
 const dataBr = (iso: string | null | undefined) =>
   iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '—';
@@ -179,6 +200,15 @@ export default function EditorProdutosPage() {
   // "cadastrada em 2026" — a matriz corrige a família inteira de uma vez.
   const [modalCadastro, setModalCadastro] = useState(false);
   const [novoCadastro, setNovoCadastro] = useState('');
+  // Datas de cadastro SUSPEITAS (26/11/2026): a prévia/aplicação em massa da
+  // restauração por evidência — `POST /products-editor/data-cadastro/restaurar`.
+  const [modalDatas, setModalDatas] = useState(false);
+  const [datasBusy, setDatasBusy] = useState(false);
+  const [datasCorte, setDatasCorte] = useState('2025-12-31');
+  const [datasFamilia, setDatasFamilia] = useState(false);
+  const [datasPrevia, setDatasPrevia] = useState<DatasPrevia | null>(null);
+  const [datasPreviaChave, setDatasPreviaChave] = useState('');
+  const [datasFeito, setDatasFeito] = useState<DatasPrevia['gravacao']>(null);
   const [novaMarca, setNovaMarca] = useState('');
   const [massaBusy, setMassaBusy] = useState(false);
   const [preview, setPreview] = useState<Array<{ codigo: string; ref: string; field: string; antes: string; depois: string }> | null>(null);
@@ -386,6 +416,36 @@ export default function EditorProdutosPage() {
       return next;
     });
     setModalCadastro(false); setNovoCadastro('');
+  };
+
+  // DATAS DE CADASTRO SUSPEITAS: prévia (só leitura) e aplicação da restauração
+  // por evidência. Só peça COM estoque e data DEPOIS do corte; a data só desce.
+  const criteriosDatas = () => (datasFamilia ? ['venda', 'familia'] : ['venda']);
+  const chaveDatas = () => `${datasCorte}|${criteriosDatas().join(',')}`;
+  const chamarDatas = async (executar: boolean) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datasCorte)) { setErr('Corte inválido — use a data no formato do campo.'); return; }
+    setDatasBusy(true); setErr('');
+    try {
+      const r = await api<DatasPrevia>('/products-editor/data-cadastro/restaurar', {
+        method: 'POST',
+        body: JSON.stringify({ executar, corte: datasCorte, criterios: criteriosDatas(), amostra: 12 }),
+      });
+      setDatasPrevia(r);
+      setDatasPreviaChave(chaveDatas());
+      if (executar) {
+        setDatasFeito(r.gravacao);
+        setOkMsg(`✓ Data de cadastro corrigida em ${r.gravacao?.espelho ?? 0} variações (lote ${(r.gravacao?.batchId || '').slice(0, 8)}) — vale na hora no caixa; o site remonta em instantes.`);
+        if (rows.length) await buscar();
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao conferir as datas de cadastro');
+    } finally {
+      setDatasBusy(false);
+    }
+  };
+  const abrirDatas = () => {
+    setModalDatas(true); setDatasPrevia(null); setDatasPreviaChave(''); setDatasFeito(null);
+    void chamarDatas(false);
   };
 
   // MARCA EM MASSA no servidor: sem teto de 5.000, sem preview — dupla
@@ -673,6 +733,13 @@ export default function EditorProdutosPage() {
             </span>
           )}
           <div className="flex-1" />
+          <button
+            onClick={abrirDatas}
+            title="Peça com estoque cuja data de cadastro é DEPOIS do corte mas que tem prova de ser mais antiga (vendeu antes da data gravada). Prévia primeiro; grava só no Aplicar."
+            className="text-[11px] font-bold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1 flex items-center gap-1 hover:bg-rose-100"
+          >
+            <AlertTriangle className="w-3.5 h-3.5" /> Datas de cadastro suspeitas
+          </button>
           <Link href="#" onClick={(e) => { e.preventDefault(); alert('Auditoria: GET /products-editor/audit (tela na v2 — cada alteração já fica registrada ANTES→DEPOIS).'); }}
             className="text-[11px] text-slate-400 hover:text-slate-600 flex items-center gap-1">
             <History className="w-3.5 h-3.5" /> auditado
@@ -1167,6 +1234,106 @@ export default function EditorProdutosPage() {
           </div>
         </Modal>
       )}
+
+      {/* ── Modal: Datas de cadastro SUSPEITAS (restauração por evidência) ── */}
+      {modalDatas && (() => {
+        const p = datasPrevia;
+        const stale = !!p && datasPreviaChave !== chaveDatas();
+        const corrigiveis = p ? p.porCriterio.filter((c) => c.criterio !== 'sem_prova') : [];
+        const nCodigos = corrigiveis.reduce((s, c) => s + c.codigos, 0);
+        const nPecas = corrigiveis.reduce((s, c) => s + c.pecas, 0);
+        const nEntram = corrigiveis.reduce((s, c) => s + c.pecas_entram, 0);
+        const semProva = p?.porCriterio.find((c) => c.criterio === 'sem_prova');
+        const fmt = (n: number) => n.toLocaleString('pt-BR');
+        return (
+          <Modal title="Datas de cadastro suspeitas — conferir e corrigir" onClose={() => !datasBusy && setModalDatas(false)} wide>
+            <p className="text-xs text-slate-600 leading-snug mb-3">
+              A data de cadastro nasceu como <b>data de alteração</b> no ERP antigo: cada mexida de preço carimbava a data do dia por cima,
+              e peça de 2023 virou &quot;cadastrada em 2026&quot;. Ninguém tem a data original — o que existe é <b>prova</b> de que a peça é mais velha:
+              ela <b>vendeu antes</b> da data gravada. Aqui a data volta pra <b>primeira venda</b> (mais nova que o cadastro real, mas verdadeira).
+              Só peça <b>com estoque</b> e data <b>depois do corte</b> entra; a data só desce, nunca sobe; tudo fica na auditoria.
+            </p>
+            <div className="flex flex-wrap items-end gap-3 mb-3">
+              <label className="text-[11px] font-bold uppercase text-slate-500 flex flex-col gap-1">
+                Corte (entra na promoção até)
+                <input type="date" value={datasCorte} max={hojeIso()} onChange={(e) => setDatasCorte(e.target.value)}
+                  className="px-3 py-2 border-2 border-slate-200 rounded-xl font-bold tabular-nums focus:border-rose-400 focus:outline-none" />
+              </label>
+              <label className="flex items-center gap-2 text-xs text-slate-700 pb-2.5 cursor-pointer">
+                <input type="checkbox" checked={datasFamilia} onChange={(e) => setDatasFamilia(e.target.checked)} className="w-4 h-4 accent-rose-600" />
+                <span>Também pela <b>família</b>: numeração que não vendeu ganha a data mais velha da mesma REF
+                  <span className="block text-[10px] text-slate-500">(numeração NOVA de modelo antigo passa a contar como antiga — decisão sua)</span></span>
+              </label>
+              <button onClick={() => chamarDatas(false)} disabled={datasBusy}
+                className="px-3 py-2 rounded-xl border-2 border-slate-300 text-slate-700 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5 mb-0.5">
+                {datasBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />} Conferir
+              </button>
+            </div>
+
+            {datasBusy && !p && <p className="text-sm text-slate-500">Conferindo o catálogo inteiro…</p>}
+            {p && (
+              <div className={`space-y-2 ${stale ? 'opacity-50' : ''}`}>
+                {stale && <p className="text-[11px] font-bold text-amber-700">Opções mudaram — clique em Conferir pra recalcular antes de aplicar.</p>}
+                <div className="text-xs text-slate-700">
+                  Com estoque e cadastro depois de <b>{dataBr(p.corte)}</b>: <b>{fmt(p.candidatas.codigos)}</b> códigos · <b>{fmt(p.candidatas.pecas)}</b> peças.
+                </div>
+                <table className="w-full text-xs">
+                  <tbody className="divide-y divide-slate-100">
+                    {p.porCriterio.map((c) => (
+                      <tr key={c.criterio} className={c.criterio === 'sem_prova' ? 'text-slate-500' : 'text-emerald-900'}>
+                        <td className="py-1 pr-2">{CRITERIO_LABEL[c.criterio] || c.criterio}</td>
+                        <td className="py-1 text-right tabular-nums whitespace-nowrap">{fmt(c.codigos)} cód. · {fmt(c.pecas)} pç</td>
+                        <td className="py-1 pl-3 text-right tabular-nums whitespace-nowrap text-slate-500">
+                          {c.criterio === 'sem_prova' ? '' : `${fmt(c.pecas_entram)} pç passam a entrar`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[11px] text-slate-500 leading-snug">
+                  O histórico do caixa começa em <b>{dataBr(p.historicoCaixa.primeira_data)}</b>: peça que não vendeu desde então não tem prova por venda.
+                  {!datasFamilia && p.acrescentariam.familia_codigos > 0 && (
+                    <> Pela família entrariam mais <b>{fmt(p.acrescentariam.familia_codigos)}</b> códigos / <b>{fmt(p.acrescentariam.familia_pecas)}</b> peças — marque a opção e confira de novo.</>
+                  )}
+                  {semProva && <> Sem prova: {fmt(semProva.codigos)} códigos / {fmt(semProva.pecas)} peças ficam como estão (a maioria é cadastro de 2026 de verdade; o que não for, corrija pela coluna Cadastro).</>}
+                </p>
+                {p.amostra.length > 0 && (
+                  <div className="max-h-48 overflow-auto border border-slate-200 rounded-lg">
+                    <table className="w-full text-[11px]">
+                      <thead className="sticky top-0 bg-slate-100 text-[10px] uppercase text-slate-500">
+                        <tr><th className="text-left px-2 py-1">SKU</th><th className="text-left px-2 py-1">REF</th><th className="text-left px-2 py-1">Hoje</th><th className="text-left px-2 py-1">Vira</th><th className="text-left px-2 py-1">Prova</th><th className="text-right px-2 py-1">Estoque</th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {p.amostra.map((a) => (
+                          <tr key={a.codigo}>
+                            <td className="px-2 py-0.5 font-mono">{a.codigo}</td>
+                            <td className="px-2 py-0.5">{a.ref}</td>
+                            <td className="px-2 py-0.5 tabular-nums text-rose-700">{dataBr(a.atual)}</td>
+                            <td className="px-2 py-0.5 tabular-nums text-emerald-800 font-bold">{dataBr(a.sugerida)}</td>
+                            <td className="px-2 py-0.5">{a.criterio}</td>
+                            <td className="px-2 py-0.5 text-right tabular-nums">{a.estoque}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {datasFeito && (
+                  <div className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center gap-2">
+                    <Check className="w-4 h-4" /> Gravado: {fmt(datasFeito.espelho)} no espelho, {fmt(datasFeito.nativa)} na nativa, {fmt(datasFeito.auditadas)} na auditoria (lote {datasFeito.batchId.slice(0, 8)}).
+                  </div>
+                )}
+              </div>
+            )}
+            <ModalActions
+              okLabel={datasFeito ? 'Fechar' : datasBusy ? 'Aguarde…' : nCodigos ? `Aplicar em ${fmt(nCodigos)} códigos (${fmt(nPecas)} peças · ${fmt(nEntram)} passam a entrar)` : 'Nada a corrigir'}
+              okDisabled={datasBusy || (!datasFeito && (!p || stale || nCodigos === 0))}
+              onOk={() => (datasFeito ? setModalDatas(false) : chamarDatas(true))}
+              onCancel={() => !datasBusy && setModalDatas(false)}
+            />
+          </Modal>
+        );
+      })()}
 
       {/* ── Modal: Data de cadastro em bloco ── */}
       {modalCadastro && (
