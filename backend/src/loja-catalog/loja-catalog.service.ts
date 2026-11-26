@@ -1856,9 +1856,10 @@ export class LojaCatalogService {
      * hora; se a vitrine esperasse o teto de 10 min, a peça que a vendedora
      * acabou de tirar da campanha seguiria anunciada com desconto e o checkout
      * recusaria o pedido por "preço subiu". A régua está em memória — ler a
-     * assinatura dela não custa ida ao banco.
+     * assinatura dela não custa ida ao banco. É a assinatura da régua DO SITE
+     * (`paraSite()`): marcar/desmarcar "vale no site" remonta a vitrine.
      */
-    const campanha = (await this.promoCampanha.regra()).assinatura;
+    const campanha = (await this.promoCampanha.regra()).paraSite().assinatura;
     return `${r.n}|${r.ult ?? ''}|${campanha}`;
   }
 
@@ -2316,9 +2317,12 @@ export class LojaCatalogService {
     /**
      * A CAMPANHA DO CAIXA — a régua carregada UMA vez pro catálogo inteiro
      * (config + exceções em memória); cada linha decide pelo próprio texto
-     * dentro de `montarPeca`, sem ida ao banco por peça.
+     * dentro de `montarPeca`, sem ida ao banco por peça. VISTA DO SITE
+     * (`paraSite()`, 26/11/2026): campanha que a matriz não marcou "vale no
+     * site" responde desligada aqui e a vitrine mostra o preço cheio — o caixa
+     * segue com ela. A trava do carrinho lê a MESMA vista.
      */
-    const regraCampanha = await this.promoCampanha.regra();
+    const regraCampanha = (await this.promoCampanha.regra()).paraSite();
 
     const pecas: any[] = [];
     for (const [ref, todas] of agrupadas) {

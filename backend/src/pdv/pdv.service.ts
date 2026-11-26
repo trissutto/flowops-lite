@@ -129,7 +129,7 @@ export class PdvService {
    */
   async campanhaDoPdv() {
     const regra = await this.promoCampanha.regra();
-    const { ativa, nome, pct, cadastroAte } = regra.config;
+    const { ativa, nome, pct, cadastroAte, valeNoSite } = regra.config;
     return {
       // `ativa` aqui é o que VALE AGORA (ligada E dentro da vigência) — é o que
       // habilita o botão da venda. `agendada` = ligada na retaguarda esperando
@@ -138,6 +138,8 @@ export class PdvService {
       agendada: ativa && !regra.ligada,
       vigencia: regra.vigenciaTexto,
       cadastroAte,
+      // O site aplica a mesma campanha? (26/11/2026: a Black Friday é só do caixa.)
+      valeNoSite,
       nome,
       pct,
       rotulo: `${nome} ${pct}%`,

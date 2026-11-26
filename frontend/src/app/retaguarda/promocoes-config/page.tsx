@@ -43,6 +43,8 @@ interface Campanha {
   cadastroAte: string | null;
   /** Janela em que a campanha vale (AAAA-MM-DD, inclusive). Vazia = sempre. */
   vigencia: { de: string | null; ate: string | null };
+  /** O site aplica a campanha? O caixa aplica sempre; o site só marcado (nasce desmarcado — 26/11/2026). */
+  valeNoSite: boolean;
   atualizadaEm?: string | null;
   atualizadaPor?: string | null;
 }
@@ -164,6 +166,8 @@ const comListas = (c: Campanha): Campanha => ({
   excluirBasico: c.excluirBasico !== false,
   cadastroAte: c.cadastroAte ?? null,
   vigencia: { de: c.vigencia?.de ?? null, ate: c.vigencia?.ate ?? null },
+  // Só com `true`: backend antigo (sem o campo) e config gravada antes = só caixa.
+  valeNoSite: c.valeNoSite === true,
 });
 
 /** O que vai pro backend como rascunho (prévia e busca respondem por ele). */
@@ -177,6 +181,7 @@ const corpoRascunho = (c: Campanha) => ({
   excluirBasico: c.excluirBasico,
   cadastroAte: c.cadastroAte || null,
   vigencia: { de: c.vigencia.de || null, ate: c.vigencia.ate || null },
+  valeNoSite: c.valeNoSite === true,
 });
 
 /** 'AAAA-MM-DD' → 'DD/MM/AAAA'. */
@@ -285,7 +290,8 @@ export default function PromocoesConfigPage() {
       gravada.excluirBasico !== rascunho.excluirBasico ||
       (gravada.cadastroAte || null) !== (rascunho.cadastroAte || null) ||
       (gravada.vigencia?.de || null) !== (rascunho.vigencia.de || null) ||
-      (gravada.vigencia?.ate || null) !== (rascunho.vigencia.ate || null)
+      (gravada.vigencia?.ate || null) !== (rascunho.vigencia.ate || null) ||
+      gravada.valeNoSite !== rascunho.valeNoSite
     );
   }, [gravada, rascunho]);
 
@@ -410,7 +416,11 @@ export default function PromocoesConfigPage() {
       });
       setGravada(comListas(r.campanha));
       setRascunho(comListas(r.campanha));
-      setAviso(`Salvo — vale agora no caixa das lojas e no site (a vitrine atualiza em até 2 minutos).`);
+      setAviso(
+        r.campanha.valeNoSite === true
+          ? 'Salvo — vale agora no caixa das lojas e no site (a vitrine atualiza em até 2 minutos).'
+          : 'Salvo — vale agora no caixa das lojas. O site segue SEM a campanha (preço cheio na vitrine e no carrinho).',
+      );
       setTimeout(() => setAviso(null), 6000);
       void calcular(comListas(r.campanha));
     } catch (e: any) {
@@ -505,7 +515,7 @@ export default function PromocoesConfigPage() {
       setAviso(
         `${fmt(r.alteradas)} ${r.alteradas === 1 ? 'peça' : 'peças'} ${verbo} campanha` +
           (r.ignoradas?.length ? ` · ${fmt(r.ignoradas.length)} sem estoque ficaram de fora` : '') +
-          ' — vale no caixa e no site.',
+          (gravada?.valeNoSite ? ' — vale no caixa e no site.' : ' — vale no caixa (o site está sem a campanha).'),
       );
       setTimeout(() => setAviso(null), 6000);
       setSelecionados(new Set());
@@ -602,7 +612,7 @@ export default function PromocoesConfigPage() {
           <div className="flex-1 min-w-0">
             <h1 className="text-lg font-bold text-slate-800">Promoções</h1>
             <p className="text-xs text-slate-500">
-              Campanha por termo — vale no caixa das lojas e no site, com o mesmo preço
+              Campanha por termo — vale no caixa das lojas e, se a matriz marcar, no site com o mesmo preço
             </p>
           </div>
         </div>
@@ -648,6 +658,23 @@ export default function PromocoesConfigPage() {
                     {rascunho.ativa ? 'Ligada' : 'Desligada'}
                   </span>
                 </label>
+                {/* ONDE VALE — o caixa sempre; o site só marcado (dono, 26/11/2026: Black Friday fora do site) */}
+                <label
+                  className={`flex items-center gap-2 cursor-pointer select-none rounded-lg border px-2 py-1 ${
+                    rascunho.valeNoSite ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'
+                  }`}
+                  title="O caixa das lojas aplica a campanha sempre que ela está ligada. O site (vitrine, carrinho e troca de peça) só aplica com esta marca."
+                >
+                  <input
+                    type="checkbox"
+                    checked={rascunho.valeNoSite}
+                    onChange={(e) => setRascunho({ ...rascunho, valeNoSite: e.target.checked })}
+                    className="w-5 h-5 accent-emerald-700"
+                  />
+                  <span className={`text-sm font-bold ${rascunho.valeNoSite ? 'text-emerald-900' : 'text-amber-900'}`}>
+                    {rascunho.valeNoSite ? 'Vale no site também' : 'Só no caixa — site fora'}
+                  </span>
+                </label>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-500">Nome</span>
                   <input
@@ -682,7 +709,15 @@ export default function PromocoesConfigPage() {
                     <>
                       No PDV a vendedora escolhe a campanha <b>{rascunho.nome} {rascunho.pct}%</b> na venda (onde era
                       o &quot;Liquida antigos&quot;), e em cada item tira ou põe na promoção com um clique — só naquela
-                      venda. No site o desconto é automático.
+                      venda.{' '}
+                      {rascunho.valeNoSite ? (
+                        <>No site o desconto é automático, com o mesmo preço do caixa.</>
+                      ) : (
+                        <b className="text-amber-900">
+                          No site NÃO vale: vitrine, carrinho e troca de peça cobram o preço cheio. Marque &quot;Vale no
+                          site também&quot; pra levar a campanha pro site.
+                        </b>
+                      )}
                     </>
                   ) : (
                     <>Desligada: nenhuma peça tem desconto, nem no caixa nem no site.</>
@@ -700,13 +735,14 @@ export default function PromocoesConfigPage() {
                         : rascunho.vigencia.ate
                           ? `até ${dataBr(rascunho.vigencia.ate)}`
                           : '';
+                  const onde = rascunho.valeNoSite ? 'caixa e site' : 'o caixa';
                   const aviso = !rascunho.ativa || s === 'sem'
                     ? null
                     : s === 'antes'
-                      ? { classe: 'border-amber-300 bg-amber-50 text-amber-900', frase: `Agendada: vale ${texto}. Até lá, caixa e site seguem sem desconto — a campanha liga sozinha no dia.` }
+                      ? { classe: 'border-amber-300 bg-amber-50 text-amber-900', frase: `Agendada: vale ${texto}. Até lá, ${onde} segue${rascunho.valeNoSite ? 'm' : ''} sem desconto — a campanha liga sozinha no dia.` }
                       : s === 'depois'
-                        ? { classe: 'border-rose-300 bg-rose-50 text-rose-900', frase: `Já acabou: valia ${texto}. Caixa e site estão sem desconto — mude a data ou desligue.` }
-                        : { classe: 'border-emerald-300 bg-emerald-50 text-emerald-900', frase: `Valendo agora: ${texto}. Desliga sozinha depois do último dia.` };
+                        ? { classe: 'border-rose-300 bg-rose-50 text-rose-900', frase: `Já acabou: valia ${texto}. ${rascunho.valeNoSite ? 'Caixa e site estão' : 'O caixa está'} sem desconto — mude a data ou desligue.` }
+                        : { classe: 'border-emerald-300 bg-emerald-50 text-emerald-900', frase: `Valendo agora ${rascunho.valeNoSite ? 'no caixa e no site' : 'só no caixa'}: ${texto}. Desliga sozinha depois do último dia.` };
                   return (
                     <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5 space-y-2">
                       <div className="text-xs font-bold text-slate-500 uppercase tracking-wide">Vigência</div>
@@ -741,7 +777,7 @@ export default function PromocoesConfigPage() {
                       {aviso && <div className={`rounded-lg border px-3 py-2 text-sm font-semibold ${aviso.classe}`}>{aviso.frase}</div>}
                       <p className="text-xs text-slate-500 leading-relaxed">
                         Dias inclusive, no horário de Brasília. Fora da janela a campanha responde como <b>desligada</b> no
-                        caixa, na consulta e no site — ninguém precisa ligar à meia-noite. A prévia aqui embaixo mostra o
+                        caixa, na consulta e no site (quando marcado) — ninguém precisa ligar à meia-noite. A prévia aqui embaixo mostra o
                         que vai entrar mesmo antes de a janela abrir.
                       </p>
                     </div>
@@ -1214,7 +1250,7 @@ export default function PromocoesConfigPage() {
                         ) : null;
                       })()}
                       <p className="basis-full text-[11px] text-slate-500">
-                        Vale pro modelo em todas as cores, no caixa das lojas e no site. Tirar na mão ganha de tudo —
+                        Vale pro modelo em todas as cores, no caixa das lojas{rascunho.valeNoSite ? ' e no site' : ' (o site está sem a campanha)'}. Tirar na mão ganha de tudo —
                         nem a loja consegue pôr a peça na venda.
                       </p>
                     </div>

@@ -158,6 +158,8 @@ export class PromoConfigService {
           excluirBasico: pedida.excluirBasico !== false,
           cadastroAte,
           vigencia,
+          // Só liga com `true` explícito: o site é opt-in (dono, 26/11/2026).
+          valeNoSite: pedida.valeNoSite === true,
         }),
         atualizadaEm: new Date().toISOString(),
         atualizadaPor: usuario || null,
@@ -176,6 +178,7 @@ export class PromoConfigService {
         `${novo.campanha.termosExclusao.length} exclusão(ões) · ` +
         `${novo.campanha.grupos.length} grupo(s) · ${novo.campanha.subgrupos.length} subgrupo(s) · ` +
         `cadastro até ${novo.campanha.cadastroAte ?? '—'} · vigência ${vigenciaTexto(novo.campanha.vigencia) ?? 'sempre'} · ` +
+        `${novo.campanha.valeNoSite ? 'caixa E site' : 'SÓ caixa (site fora)'} · ` +
         `por ${usuario || '?'}`,
     );
     return novo;

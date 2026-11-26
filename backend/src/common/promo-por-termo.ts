@@ -44,6 +44,7 @@ import { hojeBrasilia } from './tz';
  * ── A ORDEM DE QUEM DECIDE (dono, 15/09/2026, 2ª rodada) ──
  *
  *   1. campanha desligada                → ninguém entra
+ *      (no SITE: campanha sem "vale no site" → ninguém entra; o caixa segue)
  *   2. família TIRADA na mão (`fora`)    → fora, sempre (é a proteção)
  *   3. família INCLUÍDA na mão (`dentro`) → entra
  *   4. palavra que EXCLUI ("BERMUDA")    → fora — trava do termo largo:
@@ -75,6 +76,18 @@ import { hojeBrasilia } from './tz';
  *
  * `ligada` (a régua) = ativa E dentro da vigência. É ELA que o PDV, a consulta
  * e a vitrine olham — `config.ativa` sozinho é só o interruptor.
+ *
+ * ── ONDE VALE: O CAIXA SEMPRE, O SITE SÓ SE A MATRIZ MARCAR (dono, 26/11/2026) ──
+ *
+ * "No site não habilite promoção de Black" — dito no PRIMEIRO dia da Black
+ * Friday, com os 50% no ar no caixa E na vitrine. A campanha ganhou
+ * `valeNoSite`: vitrine, trava do carrinho e troca de peça leem a régua por
+ * `paraSite()`, que responde DESLIGADA quando a matriz não marcou "vale no
+ * site" — o caixa segue com a campanha inteira. Nasce DESMARCADO (config
+ * gravada sem o campo = só caixa): desconto é dinheiro, e o site é o canal
+ * onde ninguém confere o preço peça a peça antes de a cliente pagar. Marcar é
+ * um clique na retaguarda, sem deploy. O Inverno 30% de 15/09 valia nos dois
+ * canais — quem o religar marca o site de novo.
  *
  * O grupo/subgrupo entra por CÓDIGO (`EstruturaCampanha`, montada por quem
  * carrega a régua): todo chamador já manda o código, então nenhum SQL de
@@ -114,7 +127,18 @@ export interface ConfigCampanha {
   cadastroAte: string | null;
   /** Janela em que a campanha vale (dias em Brasília, inclusive). Vazia = sempre. */
   vigencia: VigenciaCampanha;
+  /**
+   * O SITE (vitrine, carrinho, troca de peça) aplica a campanha? O caixa aplica
+   * sempre que `ligada`; o site só com isto marcado. Nasce falso (26/11/2026).
+   */
+  valeNoSite: boolean;
 }
+
+/** Quem está perguntando à régua: o caixa das lojas ou o site. */
+export type CanalCampanha = 'caixa' | 'site';
+
+/** O motivo que o site recebe quando a campanha vale só no caixa. */
+export const MOTIVO_SO_CAIXA = 'campanha só no caixa das lojas (não vale no site)';
 
 export interface VigenciaCampanha {
   de: string | null;
@@ -197,6 +221,8 @@ export const CAMPANHA_PADRAO: ConfigCampanha = {
   excluirBasico: true,
   cadastroAte: null,
   vigencia: { de: null, ate: null },
+  // Só caixa até a matriz marcar — ordem do dono em 26/11/2026 (ver cabeçalho).
+  valeNoSite: false,
 };
 
 export const PCT_MIN = 1;
@@ -455,6 +481,8 @@ export function normalizarConfig(c: Partial<ConfigCampanha> | null | undefined):
     excluirBasico: base.excluirBasico !== false,
     cadastroAte: diaISO(base.cadastroAte ?? null),
     vigencia: normalizarVigencia(base.vigencia),
+    // Só com `true` explícito: config gravada antes do campo (ou sem ele) = só caixa.
+    valeNoSite: base.valeNoSite === true,
   };
 }
 
@@ -517,6 +545,12 @@ export interface RegraCampanha {
   /** A exceção da família, se houver (a tela mostra quem tirou e por quê). */
   excecaoDe(ref: unknown, codigo?: unknown): ExcecaoCampanha | null;
   precoComDesconto(preco: number): number;
+  /**
+   * A MESMA régua vista do SITE: é esta quando `config.valeNoSite`; senão
+   * responde DESLIGADA (`MOTIVO_SO_CAIXA`), com assinatura própria. Vitrine,
+   * trava do carrinho e troca de peça leem por aqui — o caixa, nunca.
+   */
+  paraSite(): RegraCampanha;
 }
 
 export interface OpcoesRegra {
@@ -620,21 +654,22 @@ export function criarRegra(
     return decisao(chave, false, 'nenhum', 'nenhum termo nem grupo da campanha');
   };
 
-  const assinatura = JSON.stringify([
-    config,
-    [...porChave.values()].map((e) => `${e.chave}:${e.decisao}`).sort(),
-    temEstrutura ? digestoDe(porCodigo.keys()) : '',
-    // Reclassificar BÁSICO/MODA muda preço no site: a vitrine remonta por aqui.
-    config.excluirBasico ? digestoDe(setBasicos) : '',
-    // A virada da vigência muda o preço de tudo: a vitrine remonta por aqui.
-    ligada,
-  ]);
+  const assinar = (ligadaNoCanal: boolean) =>
+    JSON.stringify([
+      config,
+      [...porChave.values()].map((e) => `${e.chave}:${e.decisao}`).sort(),
+      temEstrutura ? digestoDe(porCodigo.keys()) : '',
+      // Reclassificar BÁSICO/MODA muda preço no site: a vitrine remonta por aqui.
+      config.excluirBasico ? digestoDe(setBasicos) : '',
+      // A virada da vigência muda o preço de tudo: a vitrine remonta por aqui.
+      ligadaNoCanal,
+    ]);
 
-  return {
+  const regra: RegraCampanha = {
     config,
     campanha: chaveDaCampanha(config.nome),
     rotulo: `PROMO ${config.pct}% · ${config.nome.toLowerCase()}`,
-    assinatura,
+    assinatura: assinar(ligada),
     ligada,
     hoje,
     vigenciaTexto: textoVigencia,
@@ -642,7 +677,27 @@ export function criarRegra(
     decidir,
     excecaoDe,
     precoComDesconto: (preco: number) => precoComDesconto(preco, config.pct),
+    paraSite: () => regraSite,
   };
+
+  /**
+   * O SITE sem "vale no site" vê a campanha DESLIGADA — mesma config, mesmas
+   * exceções, mesmo %; só a resposta muda (e a assinatura, pra vitrine
+   * remontar quando a matriz marcar). Com a marca, é a própria régua.
+   */
+  const motivoNoSite = ligada ? MOTIVO_SO_CAIXA : motivoDesligada ?? 'campanha desligada';
+  const regraSite: RegraCampanha = config.valeNoSite
+    ? regra
+    : {
+        ...regra,
+        ligada: false,
+        assinatura: assinar(false),
+        motivoDesligada: motivoNoSite,
+        decidir: (linha) => decisao(chaveDaFamilia(linha?.ref, linha?.codigo), false, 'desligada', motivoNoSite),
+        paraSite: () => regraSite,
+      };
+
+  return regra;
 }
 
 /**

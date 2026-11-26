@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { PromoConfigService } from './promo-config.service';
 import {
+  CanalCampanha,
   ConfigCampanha,
   DecisaoCampanha,
   DecisaoExcecao,
@@ -395,12 +396,18 @@ export class PromoCampanhaService {
     return out;
   }
 
-  /** Uma peça só (consulta do PDV, troca de peça). null = código fora do catálogo. */
+  /**
+   * Uma peça só (consulta do PDV, troca de peça). null = código fora do catálogo.
+   * `canal: 'site'` responde pela régua do SITE (`paraSite()`): campanha sem
+   * "vale no site" sai como desligada — é o preço que a vitrine cobra.
+   */
   async decidirCodigo(
     codigo: string,
+    canal: CanalCampanha = 'caixa',
   ): Promise<{ regra: RegraCampanha; linha: LinhaCatalogoCampanha; decisao: DecisaoCampanha } | null> {
     const cod = String(codigo ?? '').trim();
-    const [regra, linhas] = await Promise.all([this.regra(), this.linhasPorCodigo([cod])]);
+    const [cheia, linhas] = await Promise.all([this.regra(), this.linhasPorCodigo([cod])]);
+    const regra = canal === 'site' ? cheia.paraSite() : cheia;
     const linha = linhas.get(cod);
     if (!linha) return null;
     return { regra, linha, decisao: regra.decidir(linha) };

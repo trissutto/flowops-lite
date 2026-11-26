@@ -856,7 +856,9 @@ export class TrocaPecaService {
     // carregada, sugere o preço da loja e diz isso — não trava a troca.
     let precoSite = precoErp;
     let motivoDoPreco = 'preço da loja';
-    const campanha = await this.promo.decidirCodigo(info.sku).catch((e: any) => {
+    // Canal SITE: campanha que vale só no caixa (dono, 26/11/2026) não entra
+    // no preço da troca — é o que a cliente pagaria no site hoje.
+    const campanha = await this.promo.decidirCodigo(info.sku, 'site').catch((e: any) => {
       this.logger.warn(`[troca-peca] campanha indisponível pra ${info.sku}: ${e?.message || e}`);
       motivoDoPreco = 'preço da loja (não consegui conferir a campanha agora)';
       return null;

@@ -479,10 +479,12 @@ export class CarrinhoGuardService {
      * linha. Sem ela não se cobra no escuro: um preço sem a campanha seria
      * maior que o da página (recusa injusta) ou, pior, a campanha desligada
      * seguiria dando desconto. Mesma saída do catálogo fora do ar.
+     * VISTA DO SITE (`paraSite()`): a mesma que montou a vitrine — campanha
+     * só do caixa cobra o preço cheio aqui também (dono, 26/11/2026).
      */
     let regraCampanha: RegraCampanha;
     try {
-      regraCampanha = await this.promoCampanha.regra();
+      regraCampanha = (await this.promoCampanha.regra()).paraSite();
     } catch (e: any) {
       this.logger.error(`[guard] campanha indisponível: ${e?.message || e}`);
       return {
