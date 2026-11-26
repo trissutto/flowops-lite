@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
@@ -1090,8 +1090,15 @@ export class ProductsEditorService {
       return v;
     };
     const sqlBool = (b: boolean) => (b ? 'TRUE' : 'FALSE');
+    // Datas entram como LITERAL nos CREATE TABLE AS: o Postgres não aceita
+    // parâmetro ($1) em comando utilitário ("there is no parameter $1") — só
+    // em SELECT/INSERT/UPDATE. As duas já passaram pelo `diaISO` (AAAA-MM-DD).
+    const dCorte = `DATE '${corte}'`;
+    const dPiso = `DATE '${PISO}'`;
 
-    const resultado = await this.prisma.$transaction(
+    let resultado: any;
+    try {
+    resultado = await this.prisma.$transaction(
       async (tx) => {
         const q = (sql: string, ...params: any[]): Promise<any[]> => (tx as any).$queryRawUnsafe(sql, ...params);
         const x = (sql: string, ...params: any[]): Promise<number> => (tx as any).$executeRawUnsafe(sql, ...params);
@@ -1108,8 +1115,7 @@ export class ProductsEditorService {
              JOIN (SELECT codigo, SUM(COALESCE(estoque, 0))::int AS estoque
                      FROM wincred_estoque GROUP BY codigo
                    HAVING SUM(COALESCE(estoque, 0)) > 0) e ON e.codigo = w.codigo
-            WHERE w."dataAlt" IS NOT NULL AND w."dataAlt" > $1::date`,
-          corte,
+            WHERE w."dataAlt" IS NOT NULL AND w."dataAlt" > ${dCorte}`,
         );
         await x(`CREATE INDEX ON dc_cand (codigo)`);
 
@@ -1119,9 +1125,8 @@ export class ProductsEditorService {
           `CREATE TEMP TABLE dc_pv ON COMMIT DROP AS
            SELECT LTRIM(COALESCE(m.codigo, ''), '0') AS codigo, MIN(m.data) AS primeira_venda
              FROM giga_caixa_mov m
-            WHERE m.data >= $1::date
+            WHERE m.data >= ${dPiso}
             GROUP BY 1`,
-          PISO,
         );
         await x(`CREATE INDEX ON dc_pv (codigo)`);
 
@@ -1130,12 +1135,10 @@ export class ProductsEditorService {
         await x(
           `CREATE TEMP TABLE dc_id ON COMMIT DROP AS
            SELECT codigo, id,
-                  MIN(CASE WHEN "dataAlt" >= $1::date AND "dataAlt" <= $2::date THEN "dataAlt" END)
+                  MIN(CASE WHEN "dataAlt" >= ${dPiso} AND "dataAlt" <= ${dCorte} THEN "dataAlt" END)
                     OVER (ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 200 FOLLOWING) AS teto
              FROM (SELECT codigo, "idWincred" AS id, "dataAlt"
                      FROM wincred_produtos WHERE "idWincred" IS NOT NULL) s`,
-          PISO,
-          corte,
         );
         await x(`CREATE INDEX ON dc_id (codigo)`);
 
@@ -1145,10 +1148,8 @@ export class ProductsEditorService {
            SELECT c.codigo, MIN(w2."dataAlt") AS familia_min
              FROM dc_cand c
              JOIN wincred_produtos w2 ON UPPER(TRIM(COALESCE(w2.ref, ''))) = c.ref
-            WHERE c.ref <> '' AND w2."dataAlt" >= $1::date AND w2."dataAlt" <= $2::date
+            WHERE c.ref <> '' AND w2."dataAlt" >= ${dPiso} AND w2."dataAlt" <= ${dCorte}
             GROUP BY c.codigo`,
-          PISO,
-          corte,
         );
 
         // 5) A decisão por código.
@@ -1264,6 +1265,13 @@ export class ProductsEditorService {
       },
       { timeout: 10 * 60_000, maxWait: 15_000 },
     );
+    } catch (e: any) {
+      // Rota de admin, usada à mão: o motivo tem que chegar na resposta — um
+      // 500 seco obriga a caçar o erro no log do Railway.
+      const msg = String(e?.message || e).replace(/\s+/g, ' ').slice(0, 400);
+      this.logger.error(`[data-cadastro] restauração falhou: ${msg}`);
+      throw new InternalServerErrorException(`Restauração da data de cadastro falhou: ${msg}`);
+    }
 
     const r = plain(resultado);
     if (input.executar) {
