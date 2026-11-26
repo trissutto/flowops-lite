@@ -1200,7 +1200,7 @@ export class ProductsEditorService {
         );
         // Até onde vai o histórico do caixa (a prova `venda` só alcança isto).
         const [caixa] = await q(
-          `SELECT MIN(data) AS primeira_data, COUNT(*)::int AS codigos FROM dc_pv`,
+          `SELECT MIN(primeira_venda) AS primeira_data, COUNT(*)::int AS codigos FROM dc_pv`,
         );
         // A ordem do ID é mesmo a ordem do cadastro? Se for, a mediana da
         // primeira venda SOBE a cada decil do ID.
