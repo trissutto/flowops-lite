@@ -24,11 +24,13 @@ import { ProductSearchService } from '../product-search/product-search.service';
  *
  * A conta corrente lê SÓ dessas tabelas do Postgres → instantâneo.
  *
- * 🚨 `syncCaixa` faz `deleteMany({})` da `giga_caixa_diario` INTEIRA e recria
+ * 🚨 `syncCaixa` refaz só a JANELA (`windowFrom()`→hoje) da `giga_caixa_diario`
+ *    desde 27/11/2026 — antes dela vive o histórico 2006→2024 importado do dump
+ *    do Giga, SEM fonte viva. Até 27/11 fazia `deleteMany({})` INTEIRA e recriava
  * com o que a fonte devolver. Essa tabela é A BASE DO ROYALTY, e uma troca de
- * fonte mal feita já apagou de jan/2025 a abr/2026 (7.678 → 921 linhas). Hoje
- * só não repete porque `vendaDiariaDoFlow` é uma UNIÃO: venda do Flow onde
- * existe + histórico remontado do próprio `giga_caixa_mov`. Quem mexer nela
+ * fonte mal feita já apagou de jan/2025 a abr/2026 (7.678 → 921 linhas). Dentro
+ * da janela só não repete porque `vendaDiariaDoFlow` é uma UNIÃO: venda do Flow
+ * onde existe + histórico remontado do próprio `giga_caixa_mov`. Quem mexer nela
  * sem saber apaga histórico de royalty de novo, calado.
  */
 @Injectable()
@@ -633,9 +635,21 @@ export class GigaMirrorService implements OnModuleInit {
     const data = rows
       .filter((r) => r.loja && r.data)
       .map((r) => ({ loja: r.loja, data: new Date(`${r.data}T00:00:00Z`), bruto: r.bruto }));
+    // Guarda "fonte vazia = não toca" (lição de 28/08): sem linha nenhuma na
+    // janela, o replace viraria DELETE + nada.
+    if (data.length === 0) {
+      this.logger.warn('[syncCaixa] fonte devolveu 0 linhas — espelho giga_caixa_diario preservado como está');
+      return 0;
+    }
+    // Só a JANELA (windowFrom..hoje) é refeita. O que existe ANTES dela é o
+    // histórico 2006→2024 carregado uma única vez do dump final do Giga
+    // (27/11/2026, backend/scripts/_arquivo-giga/importar-caixa-do-dump.js)
+    // e não tem mais fonte pra ser remontado: um deleteMany({}) aqui apagaria
+    // 19 anos de diário — e com ele o histórico do royalty/conta corrente.
+    const from = this.windowFrom();
     await this.prisma.$transaction(
       async (tx) => {
-        await (tx as any).gigaCaixaDiario.deleteMany({});
+        await (tx as any).gigaCaixaDiario.deleteMany({ where: { data: { gte: from } } });
         for (let i = 0; i < data.length; i += 2000) {
           await (tx as any).gigaCaixaDiario.createMany({ data: data.slice(i, i + 2000) });
         }
@@ -671,16 +685,22 @@ export class GigaMirrorService implements OnModuleInit {
    *
    * 🔴 E O HISTÓRICO ANTERIOR AO PDV DO FLOW.
    *
-   * `syncCaixa` faz `deleteMany({})` e recria a tabela inteira com o que a
+   * `syncCaixa` fazia `deleteMany({})` e recriava a tabela inteira com o que a
    * fonte devolve. Na primeira execução com a fonte nova isso APAGOU o que só
    * o Giga tinha: a tabela caiu de 7.678 para 921 linhas, perdendo de
    * jan/2025 a abr/2026 — o PDV do Flow só começa em 27/04/2026. Erro meu, e
    * o servidor do Giga já estava inacessível pra refazer o pull.
    *
-   * O que salva é `giga_caixa_mov` (a caixa DETALHADA, 249 mil linhas desde
-   * 02/01/2025, sincronizada até 24/08/2026): ela é dado do próprio Giga e
-   * permite remontar o diário por loja e dia. Então a fonte é uma UNIÃO —
-   * venda do Flow onde ela existe, caixa detalhada no resto.
+   * O que salva é `giga_caixa_mov` (a caixa DETALHADA): ela é dado do próprio
+   * Giga e permite remontar o diário por loja e dia. Então a fonte é uma
+   * UNIÃO — venda do Flow onde ela existe, caixa detalhada no resto.
+   *
+   * Desde 27/11/2026 o `syncCaixa` só refaz a JANELA (`windowFrom()`, hoje
+   * 01/01/2025, até amanhã). Antes dela fica o histórico 2006→2024, carregado
+   * uma única vez do dump final do Giga em `giga_caixa_mov` (1,4 mi linhas) e
+   * agregado em `giga_caixa_diario` pelo mesmo script
+   * (`backend/scripts/_arquivo-giga/importar-caixa-do-dump.js`). Esse
+   * histórico NÃO tem fonte viva: quem apagar não remonta.
    *
    * ⚠️ A remontagem NÃO reproduz número por número o que o diário do Giga
    * trazia: agosto/2026 fecha em R$ 805.423,41 pela detalhada contra
