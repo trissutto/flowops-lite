@@ -102,9 +102,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * histórico recente. Consulta que começa ANTES da data mais antiga do
    * espelho (ex.: comparação "ano anterior" do faturamento) tem que ir pro
    * Giga ao vivo — senão volta vazio e o gráfico compara com R$ 0,00.
+   *
+   * 🚨 Com o Giga DESLIGADO (27/08) não existe "ao vivo" pra cair: negar a
+   * cobertura aqui não protege ninguém — o caller chega no pool nulo e
+   * devolve `[]` calado, que vira R$ 0,00 na tela (a família "fonte morta
+   * com cara de não-existe" da regra de ouro). Incidente 27/11: filtro
+   * 01/01/2026 comparava com 01/01/2025, UM dia antes da primeira linha do
+   * espelho (02/01/2025 — 01/01 é feriado, loja fechada) → "ano anterior
+   * R$ 0,00", gráfico sem a linha cinza e "falta meta" vazio em todas as
+   * lojas. O espelho é a ÚNICA fonte: responde o que tem.
    */
   private mirrorCaixaMinCache: { min: Date | null; at: number } | null = null;
   private async mirrorCaixaCovers(inicio: Date): Promise<boolean> {
+    if (gigaDesligado()) return true;
     const now = Date.now();
     if (!this.mirrorCaixaMinCache || now - this.mirrorCaixaMinCache.at > 60_000) {
       const row = await (this.prismaFlow as any).gigaCaixaDiario
@@ -790,6 +800,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   private mirrorCaixaMovMinCache: { min: Date | null; at: number } | null = null;
   private async mirrorCaixaMovCovers(inicio: Date): Promise<boolean> {
+    // Giga desligado = sem fonte viva pra cair; o espelho responde o que tem
+    // (mesmo motivo do mirrorCaixaCovers — incidente 27/11, 01/01 × 02/01).
+    if (gigaDesligado()) return true;
     const now = Date.now();
     if (!this.mirrorCaixaMovMinCache || now - this.mirrorCaixaMovMinCache.at > 60_000) {
       // INÍCIO ROBUSTO, não MIN(data) cru (incidente 31/07: "faturamento do
@@ -10222,7 +10235,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         // melhor UMA consulta ao vivo do que um zero errado na tela do dono.
         if (doEspelho.length > 0) return doEspelho;
         this.logger.warn(
-          `[mirror-reads] getFaturamentoPorLoja: espelho vazio pra ${inicio.toISOString().slice(0, 10)}..${fim.toISOString().slice(0, 10)} — conferindo no Giga ao vivo`,
+          `[mirror-reads] getFaturamentoPorLoja: espelho vazio pra ${inicio.toISOString().slice(0, 10)}..${fim.toISOString().slice(0, 10)}` +
+            (this.pool ? ' — conferindo no Giga ao vivo' : ' — sem Giga ao vivo pra conferir: resposta vazia'),
         );
       }
     } catch (e) {

@@ -36,6 +36,8 @@ type Resumo = {
   to: string;
   granularity: Granularity;
   periodoAnterior: { from: string; to: string };
+  /** Primeiro dia com venda no histórico da caixa (YYYY-MM-DD) — antes disso não há o que comparar */
+  historicoDesde?: string | null;
   totalRede: {
     atual: number;
     anterior: number;
@@ -378,6 +380,14 @@ export default function FaturamentoPage() {
             <div className="text-xs text-slate-500 ml-auto flex items-center gap-1">
               <Calendar className="w-3 h-3" />
               Comparando com {fmtDate(data.periodoAnterior.from)} – {fmtDate(data.periodoAnterior.to)}
+              {data.historicoDesde && data.periodoAnterior.from < data.historicoDesde && (
+                <span
+                  className="text-amber-700"
+                  title="Antes dessa data não há venda registrada no histórico da caixa — a comparação enxerga só dali em diante."
+                >
+                  {' '}· histórico da caixa começa em {fmtDate(data.historicoDesde)}
+                </span>
+              )}
             </div>
           )}
         </div>

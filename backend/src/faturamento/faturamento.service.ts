@@ -984,6 +984,9 @@ export class FaturamentoService {
         from: this.isoDate(dInicioAnterior),
         to: this.isoDate(new Date(dFimAnterior.getTime() - 86400_000)),
       },
+      // Primeiro dia com venda no histórico da caixa — a tela avisa quando o
+      // período de comparação começa ANTES disso (ver historicoCaixaDesde).
+      historicoDesde: await this.historicoCaixaDesde(),
       totalRede: {
         atual: totalAtual,
         anterior: totalAnterior,
@@ -1396,6 +1399,36 @@ export class FaturamentoService {
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+  }
+
+  /**
+   * Primeiro dia com venda na caixa detalhada (`giga_caixa_mov`) — o histórico
+   * do Giga começa em 02/01/2025 (01/01 é feriado). A tela usa pra dizer que a
+   * comparação com um período que começa ANTES disso só enxerga dali em
+   * diante. Incidente 27/11: o filtro 01/01/2026 × 01/01/2025 caía um dia
+   * antes do espelho e a cobertura negada virava "ano anterior R$ 0,00".
+   * Mesmo "início robusto" do ErpService (OFFSET 100 pula linha com data
+   * lixo). Cache de 1h: o início do histórico não muda.
+   */
+  private historicoDesdeCache: { v: string | null; at: number } | null = null;
+  private async historicoCaixaDesde(): Promise<string | null> {
+    const now = Date.now();
+    if (this.historicoDesdeCache && now - this.historicoDesdeCache.at < 3600_000) {
+      return this.historicoDesdeCache.v;
+    }
+    let v: string | null = null;
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<Array<{ data: Date | null }>>(
+        `SELECT data FROM giga_caixa_mov WHERE data IS NOT NULL ORDER BY data ASC OFFSET 100 LIMIT 1`,
+      );
+      // Coluna DATE: o Prisma devolve meia-noite UTC → formatar em UTC, senão
+      // o servidor (UTC-0) ou um dev em SP (UTC-3) voltam um dia.
+      v = rows?.[0]?.data ? new Date(rows[0].data).toISOString().slice(0, 10) : null;
+    } catch (e: any) {
+      this.logger.warn(`historicoCaixaDesde falhou: ${e?.message || e}`);
+    }
+    this.historicoDesdeCache = { v, at: now };
+    return v;
   }
 
   /** Parseia YYYY-MM-DD em Date local. Se endExclusive=true, adiciona 1 dia. */
