@@ -29,6 +29,7 @@ pergunta de auditoria, é por aqui que se começa.
 | `02-dump.ps1` | A2 | `mysqldump` comprimido do banco inteiro. |
 | `03-restore.ps1` | A3 | Restaura o dump num MySQL local. |
 | `04-verificar.ps1` | A4 | Compara contagem de linhas tabela a tabela, dump × origem. |
+| `importar-caixa-do-dump.js` | — | Lê o dump (gzip, INSERT multi-linha) e carrega a `caixa` 2000→2024 em `giga_caixa_mov` + diário em `giga_caixa_diario` (temp table + ON CONFLICT DO NOTHING, uma transação). `--dry-run` gera o CSV e conta por ano sem conectar; `--verify` só lê. Rodado em 27/11/2026 às 23h: 1.400.763 linhas. |
 
 O runbook que amarra os quatro passos: **`docs/RUNBOOK-SAIDA-KINGHOST.md`**.
 
