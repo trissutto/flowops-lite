@@ -112,6 +112,24 @@ export type ArvoreSite = {
   subcategorias: Array<{ slug: string; nome: string; pai: string; ativo: boolean }>;
 };
 
+/**
+ * O estado de "Novidades" da peça, como o backend o conta
+ * (`common/novidade-do-site.ts`): a marcação na mão, a porta automática por
+ * idade e até quando a peça fica no ar.
+ */
+export type FichaNovidade = {
+  noAr: boolean;
+  motivo: 'manual' | 'idade' | null;
+  manual: boolean;
+  manualEm: string | null;
+  manualPor: string | null;
+  manualVencidaEm: string | null;
+  porIdade: boolean;
+  publicadoEm: string | null;
+  ate: string | null;
+  janelaDias: number;
+};
+
 export type VitrinesPeca = {
   ok?: boolean;
   erro?: string;
@@ -120,4 +138,5 @@ export type VitrinesPeca = {
   categorias: string[];
   subcategorias: string[];
   principal?: string | null;
+  novidade?: FichaNovidade | null;
 };

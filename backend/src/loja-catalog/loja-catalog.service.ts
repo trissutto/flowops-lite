@@ -4,6 +4,7 @@ import { refBaseOf } from '../common/ref-base';
 import { avisarVitrine } from '../common/avisar-vitrine';
 import { limparNomeVitrine, nomeDaDescricaoErp } from './nome-vitrine';
 import { classificarPorNome } from './classificacao-por-nome';
+import { chaveOrdemNovidade, decidirNovidade } from '../common/novidade-do-site';
 import type { RegraCampanha } from '../common/promo-por-termo';
 import { PromoCampanhaService } from '../promo-config/promo-campanha.service';
 import { EventLoopService } from '../health/event-loop.service';
@@ -166,13 +167,16 @@ export class LojaCatalogService {
           /**
            * "Novidade" é quando a peça ENTROU NO AR (`publicadoEm`), não
            * quando o ERP mexeu nela (13/08) — o critério antigo (`dataAlt`)
-           * subia peça velha pro topo a cada acerto de estoque. Empate ou
-           * peça sem carimbo cai pro `atualizadoEm`, só pra ordem ser
-           * estável.
+           * subia peça velha pro topo a cada acerto de estoque. Desde 27/11 a
+           * marcação na mão (`novidadeEm`) conta como entrada também: marcada
+           * hoje = chegou hoje = topo (régua em `common/novidade-do-site.ts`;
+           * sem isso a peça marcada entraria pelo FIM e a página de 50 a
+           * cortaria). Empate ou peça sem carimbo cai pro `atualizadoEm`, só
+           * pra ordem ser estável.
            */
-          const pubB = new Date(b.publicadoEm ?? 0).getTime();
-          const pubA = new Date(a.publicadoEm ?? 0).getTime();
-          if (pubB !== pubA) return pubB - pubA;
+          const chaveB = chaveOrdemNovidade(b);
+          const chaveA = chaveOrdemNovidade(a);
+          if (chaveB !== chaveA) return chaveB - chaveA;
           return new Date(b.atualizadoEm ?? 0).getTime() - new Date(a.atualizadoEm ?? 0).getTime();
         }
         default:
@@ -978,6 +982,14 @@ export class LojaCatalogService {
     const anchorRegistrado = ancoraCampanha ? null : maiorNoMapa(precoDeRegistrado);
     const anchorHistorico = ancoraCampanha || anchorRegistrado ? null : maiorNoMapa(precoAnterior);
     const precoDe = ancoraCampanha ?? (anchorRegistrado ?? anchorHistorico);
+
+    /**
+     * NOVIDADES — régua única em `common/novidade-do-site.ts` (27/11/2026):
+     * entra por IDADE (`publicadoEm`, como desde 13/08) OU pela marcação NA
+     * MÃO da retaguarda (`novidadeEm`, "chegou hoje" mesmo com cadastro
+     * antigo); as duas saem sozinhas depois de `NOVIDADE_DIAS`.
+     */
+    const novidade = decidirNovidade({ publicadoEm: site?.publicadoEm, novidadeEm: site?.novidadeEm });
     const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
 
     /**
@@ -1526,12 +1538,15 @@ export class LojaCatalogService {
        * sempre, e peça recém-publicada sem a tag nunca entrava. Agora:
        * publicou (1ª venda) há até `NOVIDADE_DIAS` dias = novidade; envelheceu =
        * sai sozinha. Janela via env (dono 16/08 escolheu 60): tunar sem deploy.
+       *
+       * Desde 27/11 há a SEGUNDA porta, a marcação na mão (`novidadeEm`), pra
+       * peça nova com cadastro antigo — com a MESMA janela. Ver `novidade`.
        */
-      lancamento: !!(
-        site?.publicadoEm &&
-        Date.now() - new Date(site.publicadoEm).getTime() <=
-          Math.max(1, Number(process.env.NOVIDADE_DIAS ?? 60)) * 24 * 60 * 60 * 1000
-      ),
+      lancamento: novidade.lancamento,
+      /** 'manual' | 'idade' | null — por que está (ou não) em Novidades. */
+      novidadeMotivo: novidade.motivo,
+      /** Quando a retaguarda marcou "chegou hoje"; null = nunca, ou tirada. */
+      novidadeEm: site?.novidadeEm ?? null,
       /**
        * PROMOÇÃO = TEM DESCONTO DE VERDADE (dono, 15/08). É este campo que
        * monta o Outlet (`?promocao=1`).
@@ -2909,6 +2924,8 @@ export class LojaCatalogService {
        * nova de conforto cairia nos dois e o Google recusaria a configuração
        * por sobreposição.
        */
+      // A lista vem em ordem de "entrou em Novidades" — a peça MARCADA na mão
+      // (27/11, "chegou hoje" com cadastro antigo) entra no topo e conta aqui.
       novidade: indice < NOVIDADES_QTD && !ehConforto(p),
       linhaConforto: ehConforto(p),
       // ≤30 dias desde a PRIMEIRA VENDA (a mesma flag do badge "novo"). O feed usa

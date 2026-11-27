@@ -62,6 +62,15 @@ export function VitrinesDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreS
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [salvo, setSalvo] = useState(false);
+  /**
+   * NOVIDADES (dono, 27/11/2026): "colocar as peças que forem novas, mesmo
+   * que o cadastro seja antigo, nas novidades do site". Não é categoria — é
+   * a marcação "esta peça chegou HOJE", que entra pelo mesmo Salvar. O
+   * checkbox espelha a marcação VIVA do servidor; `renovar` re-carimba a
+   * data de uma marcação que ainda vale.
+   */
+  const [novidade, setNovidade] = useState(false);
+  const [renovar, setRenovar] = useState(false);
 
   useEffect(() => {
     let vivo = true;
@@ -74,6 +83,8 @@ export function VitrinesDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreS
         setDados(d);
         setCats(d?.categorias ?? []);
         setSubs(d?.subcategorias ?? []);
+        setNovidade(!!d?.novidade?.manual);
+        setRenovar(false);
       })
       .catch((e: unknown) => {
         if (vivo) setErro((e as Error)?.message || 'Não consegui ler as vitrines');
@@ -122,12 +133,22 @@ export function VitrinesDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreS
     try {
       const r = await api<VitrinesPeca>(
         `/loja-catalog/classificacao/peca/${encodeURIComponent(ref_)}`,
-        { method: 'POST', body: JSON.stringify({ categorias: cats, subcategorias: subs }) },
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            categorias: cats,
+            subcategorias: subs,
+            novidade,
+            renovarNovidade: novidade && renovar,
+          }),
+        },
       );
       if (r?.ok === false) throw new Error(r?.erro || 'Não consegui salvar');
       setDados(r);
       setCats(r?.categorias ?? []);
       setSubs(r?.subcategorias ?? []);
+      setNovidade(!!r?.novidade?.manual);
+      setRenovar(false);
       setSalvo(true);
     } catch (e: unknown) {
       setErro((e as Error)?.message || 'Não consegui salvar');
@@ -152,7 +173,34 @@ export function VitrinesDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreS
     );
   }
 
-  const marcadas = cats.length + subs.length;
+  const marcadas = cats.length + subs.length + (novidade ? 1 : 0);
+
+  /* ── O texto ao lado de "Novidades" — diz o que o site mostra e o que o Salvar vai fazer. */
+  const fichaNov = dados?.novidade ?? null;
+  const janelaNov = fichaNov?.janelaDias ?? 60;
+  const dataBr = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('pt-BR') : '—');
+  const maisDias = (iso: string | null | undefined, dias: number) =>
+    iso ? new Date(new Date(iso).getTime() + dias * 86_400_000).toLocaleDateString('pt-BR') : '—';
+  const hojeMais = (dias: number) => new Date(Date.now() + dias * 86_400_000).toLocaleDateString('pt-BR');
+  const quemMarcou = fichaNov?.manualPor ? ` por ${fichaNov.manualPor}` : '';
+  let textoNov: string;
+  if (novidade && fichaNov?.manual && renovar) {
+    textoNov = `Ao salvar, a marcação volta pra HOJE — sai sozinha em ${hojeMais(janelaNov)}.`;
+  } else if (novidade && fichaNov?.manual) {
+    textoNov = `Marcada${quemMarcou} em ${dataBr(fichaNov.manualEm)} · sai sozinha em ${dataBr(fichaNov.ate)} (${janelaNov} dias).`;
+  } else if (novidade) {
+    textoNov = `Ao salvar entra nas Novidades como peça que chegou HOJE, mesmo com cadastro antigo — sai sozinha em ${hojeMais(janelaNov)}.`;
+  } else if (fichaNov?.manual) {
+    textoNov = `Ao salvar sai das Novidades${
+      fichaNov.porIdade ? ` (continua lá por idade até ${maisDias(fichaNov.publicadoEm, janelaNov)})` : ''
+    }.`;
+  } else if (fichaNov?.porIdade) {
+    textoNov = `Já está lá por idade: entrou no ar em ${dataBr(fichaNov.publicadoEm)} e sai em ${dataBr(fichaNov.ate)}. Marcar renova a partir de hoje.`;
+  } else if (fichaNov?.manualVencidaEm) {
+    textoNov = `Esteve nas Novidades até ${dataBr(fichaNov.manualVencidaEm)}${quemMarcou ? ` (marcada${quemMarcou})` : ''}. Marque de novo pra voltar por mais ${janelaNov} dias.`;
+  } else {
+    textoNov = `Fora das Novidades. Marque pra ela entrar hoje, mesmo com cadastro antigo — fica ${janelaNov} dias.`;
+  }
 
   return (
     <div className="px-10 py-3 bg-sky-50/50 space-y-3">
@@ -213,6 +261,53 @@ export function VitrinesDoSite({ ref_, arvore }: { ref_: string; arvore: ArvoreS
             </div>
           );
         })}
+      </div>
+
+      {/*
+        NOVIDADES não é categoria da árvore: é a marcação "chegou hoje" (dono,
+        27/11). Fica fora da grade, com a própria cor, pra ninguém confundir
+        com vitrine permanente — ela vence sozinha depois da janela.
+      */}
+      <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={novidade}
+              onChange={() => {
+                setSalvo(false);
+                setRenovar(false);
+                setNovidade((v) => !v);
+              }}
+              className="w-4 h-4 accent-amber-600"
+            />
+            <span className={`text-sm ${novidade ? 'font-bold text-amber-900' : 'text-slate-700'}`}>Novidades</span>
+          </label>
+          <span
+            title="A página /novidades e o carrossel 'Novidades' da home do site"
+            className="text-[9px] font-bold uppercase text-amber-700 bg-amber-100 rounded px-1 py-0.5"
+          >
+            página Novidades + home
+          </span>
+          {fichaNov?.noAr && (
+            <span className="text-[9px] font-bold uppercase text-emerald-700 bg-emerald-100 rounded px-1 py-0.5">
+              no ar agora{fichaNov.motivo === 'idade' ? ' · por idade' : ''}
+            </span>
+          )}
+          {novidade && fichaNov?.manual && (
+            <button
+              type="button"
+              onClick={() => {
+                setSalvo(false);
+                setRenovar((v) => !v);
+              }}
+              className="text-[11px] underline text-amber-800 hover:text-amber-900"
+            >
+              {renovar ? 'desfazer renovação' : 'renovar a partir de hoje'}
+            </button>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-600">{textoNov}</p>
       </div>
 
       {erro && <p className="text-xs text-rose-700">{erro}</p>}

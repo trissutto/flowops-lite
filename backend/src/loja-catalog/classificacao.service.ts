@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { avisarVitrine } from '../common/avisar-vitrine';
 import { LojaCatalogService } from './loja-catalog.service';
 import { refBaseOf } from '../common/ref-base';
+import { fichaNovidade, instante, janelaNovidadeDias } from '../common/novidade-do-site';
 
 /**
  * CLASSIFICAÇÃO EM LOTE — pôr 773 peças na árvore do site sem enlouquecer.
@@ -402,6 +403,7 @@ export class ClassificacaoService {
         ref: true, nome: true, publicado: true,
         categoria: true, subcategoria: true,
         categoriasExtras: true, subcategoriasExtras: true,
+        publicadoEm: true, novidadeEm: true, novidadePor: true,
       },
     });
     const exata = String(refBusca || '').trim().toUpperCase();
@@ -429,7 +431,32 @@ export class ClassificacaoService {
       subcategorias: uniao('subcategoria', 'subcategoriasExtras'),
       /** Só pra tela poder mostrar qual é a que manda na PDP. */
       principal: this.normSlug(dona?.categoria) || null,
+      /**
+       * NOVIDADES (27/11) — o estado do checkbox e o texto ao lado dele. Lê a
+       * família pelo carimbo MAIS RECENTE de cada porta: o card do site sai de
+       * uma das irmãs, e a mais generosa é a que descreve o que a cliente vê.
+       */
+      novidade: this.fichaNovidadeDaFamilia(linhas),
     };
+  }
+
+  /** A ficha de Novidades de uma família — ver `common/novidade-do-site.ts`. */
+  private fichaNovidadeDaFamilia(
+    linhas: Array<{ publicadoEm?: unknown; novidadeEm?: unknown; novidadePor?: unknown }>,
+  ) {
+    let publicadoEm: number | null = null;
+    let novidadeEm: number | null = null;
+    let novidadePor: string | null = null;
+    for (const l of linhas) {
+      const pub = instante(l.publicadoEm as any);
+      if (pub != null && (publicadoEm == null || pub > publicadoEm)) publicadoEm = pub;
+      const man = instante(l.novidadeEm as any);
+      if (man != null && (novidadeEm == null || man > novidadeEm)) {
+        novidadeEm = man;
+        novidadePor = l.novidadePor ? String(l.novidadePor) : null;
+      }
+    }
+    return fichaNovidade({ publicadoEm, novidadeEm, novidadePor });
   }
 
   /**
@@ -456,6 +483,14 @@ export class ClassificacaoService {
     ref: string;
     categorias: string[];
     subcategorias: string[];
+    /**
+     * NOVIDADES (dono, 27/11): `true` = "esta peça chegou hoje" (entra na
+     * vitrine de Novidades mesmo com cadastro antigo), `false` = tira,
+     * `undefined` = não mexe. Régua em `common/novidade-do-site.ts`.
+     */
+    novidade?: boolean;
+    /** Com `novidade: true`: re-carimba a data mesmo se a marcação ainda vale. */
+    renovarNovidade?: boolean;
     quem: string;
   }) {
     const refs = await this.refsDaFamilia(input.ref);
@@ -500,11 +535,49 @@ export class ClassificacaoService {
 
     // As vitrines que a peça está DEIXANDO também precisam de tag — ver o
     // comentário homônimo em `classificar()`.
-    const linhasAntes: Array<{ categoria: string | null; categoriasExtras: unknown }> =
-      await (this.prisma as any).siteProduto.findMany({
-        where: { ref: { in: refs } },
-        select: { categoria: true, categoriasExtras: true },
-      });
+    const linhasAntes: Array<{
+      categoria: string | null;
+      categoriasExtras: unknown;
+      novidadeEm: Date | null;
+    }> = await (this.prisma as any).siteProduto.findMany({
+      where: { ref: { in: refs } },
+      select: { categoria: true, categoriasExtras: true, novidadeEm: true },
+    });
+
+    /**
+     * A MARCAÇÃO DE NOVIDADES — só quando a tela mandou o campo.
+     *
+     * `true` com marcação ainda VIVA mantém a data (o Salvar das vitrines não
+     * pode renovar a novidade por tabela — senão toda edição de categoria
+     * empurraria a peça de volta pro topo, calada); viva nas irmãs com datas
+     * diferentes vira a mais recente, pra família andar junta. `true` sem
+     * marcação (ou vencida), ou com `renovarNovidade`, carimba AGORA.
+     * `false` apaga — e a peça volta a depender só da idade.
+     */
+    const dataNovidade: { novidadeEm?: Date | null; novidadePor?: string | null } = {};
+    let novidadeMudou = false;
+    if (input.novidade !== undefined) {
+      const agora = Date.now();
+      const janela = janelaNovidadeDias() * 24 * 60 * 60 * 1000;
+      let viva: number | null = null;
+      for (const l of linhasAntes) {
+        const t = instante(l.novidadeEm);
+        if (t != null && agora - t <= janela && (viva == null || t > viva)) viva = t;
+      }
+      if (!input.novidade) {
+        if (viva != null || linhasAntes.some((l) => l.novidadeEm != null)) {
+          dataNovidade.novidadeEm = null;
+          dataNovidade.novidadePor = null;
+          novidadeMudou = true;
+        }
+      } else if (viva == null || input.renovarNovidade) {
+        dataNovidade.novidadeEm = new Date(agora);
+        dataNovidade.novidadePor = input.quem;
+        novidadeMudou = true;
+      } else if (linhasAntes.some((l) => instante(l.novidadeEm) !== viva)) {
+        dataNovidade.novidadeEm = new Date(viva);
+      }
+    }
 
     const r = await (this.prisma as any).siteProduto.updateMany({
       where: { ref: { in: refs } },
@@ -515,16 +588,27 @@ export class ClassificacaoService {
         subcategoriasExtras,
         classificadoPor: input.quem,
         classificadoEm: new Date(),
+        ...dataNovidade,
       },
     });
     this.logger.log(
       `[classificacao] peça ${input.ref} (${r.count} REF) → ` +
         `[${categorias.join(', ') || '-'}] / [${subcategorias.join(', ') || '-'}] ` +
-        `principal=${categoria ?? '-'} por ${input.quem}`,
+        `principal=${categoria ?? '-'}` +
+        (novidadeMudou
+          ? ` novidade=${dataNovidade.novidadeEm ? dataNovidade.novidadeEm.toISOString() : 'tirada'}`
+          : '') +
+        ` por ${input.quem}`,
     );
 
     // Muda a página de CADA vitrine marcada — e de cada uma que a peça deixou.
     const tags = new Set(['categorias', 'filtros', 'catalogo']);
+    // Novidades vive em /novidades e no carrossel da home — as duas páginas
+    // leem com as tags genéricas da vitrine, não com `categoria:<slug>`.
+    if (novidadeMudou) {
+      tags.add('vitrine');
+      tags.add('vitrines-home');
+    }
     for (const slug of categorias) tags.add(`categoria:${slug}`);
     for (const linha of linhasAntes) {
       if (linha.categoria) tags.add(`categoria:${this.normSlug(linha.categoria)}`);
@@ -537,6 +621,11 @@ export class ClassificacaoService {
     avisarVitrine([...tags], this.logger, 'classificacao');
     this.catalogo.invalidarCache();
 
+    const depois: any[] = await (this.prisma as any).siteProduto.findMany({
+      where: { ref: { in: refs } },
+      select: { publicadoEm: true, novidadeEm: true, novidadePor: true },
+    });
+
     return {
       ok: true,
       refs,
@@ -544,6 +633,9 @@ export class ClassificacaoService {
       categorias,
       subcategorias,
       principal: categoria,
+      // Relido do banco — a tela redesenha o checkbox e o "sai sozinha em"
+      // com o que FOI gravado, não com o que ela achou que mandou.
+      novidade: this.fichaNovidadeDaFamilia(depois),
     };
   }
 

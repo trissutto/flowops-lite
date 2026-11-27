@@ -530,7 +530,17 @@ export class LojaCatalogAdminController {
   classPecaSalvar(
     @Req() req: any,
     @Param('ref') ref: string,
-    @Body() body: { categorias?: string[]; subcategorias?: string[] },
+    @Body() body: {
+      categorias?: string[];
+      subcategorias?: string[];
+      /**
+       * NOVIDADES (27/11): `true` marca "chegou hoje", `false` tira, ausente
+       * não mexe — tela antiga que só manda as vitrines não apaga a marcação.
+       */
+      novidade?: boolean;
+      /** Com `novidade: true`: re-carimba a data mesmo se a marcação ainda vale. */
+      renovarNovidade?: boolean;
+    },
   ) {
     this.requireAdmin(req);
     const quem = req?.user?.email || req?.user?.name || 'admin';
@@ -538,6 +548,8 @@ export class LojaCatalogAdminController {
       ref,
       categorias: Array.isArray(body?.categorias) ? body.categorias : [],
       subcategorias: Array.isArray(body?.subcategorias) ? body.subcategorias : [],
+      novidade: typeof body?.novidade === 'boolean' ? body.novidade : undefined,
+      renovarNovidade: body?.renovarNovidade === true,
       quem,
     });
   }

@@ -7657,6 +7657,16 @@ model SiteProduto {
   /// backfill = primeira foto R2 da REF, senão syncedAt congelado). Nulo =
   /// nunca publicada (ou despublicada antes do carimbo existir).
   publicadoEm DateTime? @map("publicado_em")
+  /// "ESTA PEÇA É NOVIDADE" marcado NA MÃO (dono, 27/11/2026) — a segunda
+  /// porta de "Novidades", pra peça que acabou de chegar mas tem cadastro
+  /// antigo (REF reciclada, cor nova em família velha, `publicadoEm` da 1ª
+  /// venda de uma irmã). Vale como "chegou neste dia": entra no topo da
+  /// vitrine e SAI SOZINHA depois de `NOVIDADE_DIAS`, igual à porta
+  /// automática — não é a tag eterna de volta. Nulo = sem marcação. Gravado
+  /// na família inteira pelo painel de vitrines da ficha do produto.
+  /// Régua única em `common/novidade-do-site.ts`.
+  novidadeEm  DateTime? @map("novidade_em")
+  novidadePor String?   @map("novidade_por") @db.VarChar(80)
 
   /// TOMADA DE POSSE: 'woocommerce' = ainda espelha o site antigo; 'flow' =
   /// alguém editou aqui e o Flow virou dono — o importador PULA essa peça
