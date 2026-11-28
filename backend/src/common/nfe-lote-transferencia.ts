@@ -118,3 +118,41 @@ export function remessasDaNota(d: { shipmentId?: string | null; shipmentIds?: st
 export function ondeNotaDasRemessas(ids: string[]) {
   return { OR: [{ shipmentId: { in: ids } }, { shipmentIds: { hasSome: ids } }] };
 }
+
+// ── Documentos de transferência do GIGA (sistema anterior) ────────────────
+// Dono, 28/11/2026: as transferências da matriz LURDS pra Campinas de jan/2025
+// a mar/2026 foram feitas no Giga e ficaram sem nota. O Flow guardou cada
+// documento peça a peça em giga_transferencia_item — é essa a mercadoria
+// real que a nota documenta. A chave de idempotência vai em NfeDoc.shipmentIds.
+
+export function chaveDocGiga(origem: string, controle: string, data: Date | string): string {
+  const d = new Date(data);
+  const dia = Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : String(data);
+  return `giga:${origem}:${controle}:${dia}`;
+}
+
+/** Pega os documentos em ORDEM (o mais antigo primeiro) enquanto a soma não
+ *  passa do teto. Para no primeiro que estouraria — não pula pra frente
+ *  catando documento menor, senão o período coberto vira um queijo suíço. */
+export function prefixoAteTeto<T extends { valor: number }>(docs: T[], teto: number): { escolhidos: T[]; soma: number } {
+  const escolhidos: T[] = [];
+  let soma = 0;
+  for (const d of docs) {
+    if (soma + d.valor > teto + 1e-9) break;
+    escolhidos.push(d);
+    soma += d.valor;
+  }
+  return { escolhidos, soma: Math.round(soma * 100) / 100 };
+}
+
+export function textoInfCplGiga(nota: NotaPlanejada): string {
+  const datas = nota.remessas.map((r) => quando(r.receivedAt)).filter((t) => t > 0);
+  const de = datas.length ? dataBr(new Date(Math.min(...datas))) : '?';
+  const ate = datas.length ? dataBr(new Date(Math.max(...datas))) : '?';
+  const codigos = nota.remessas.map((r) => r.code).join(', ');
+  const texto =
+    `Transferencia de mercadoria entre estabelecimentos do mesmo titular. ` +
+    `Nota emitida em regularizacao de ${nota.remessas.length} documento(s) de transferencia ` +
+    `do sistema anterior (Giga) de ${de} a ${ate}. Docs: ${codigos}`;
+  return texto.length > 4900 ? texto.slice(0, 4897) + '...' : texto;
+}

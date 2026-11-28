@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { api, API_URL, getAuthToken } from '@/lib/api';
 import NfeLoteModal from '@/components/nfe/NfeLoteModal';
+import NfeGigaModal from '@/components/nfe/NfeGigaModal';
 
 type ShipmentRow = {
   id: string;
@@ -508,6 +509,7 @@ export default function RemessasAdminPage() {
   };
 
   const [showNfeLote, setShowNfeLote] = useState(false);
+  const [showNfeGiga, setShowNfeGiga] = useState(false);
   // ── Numeração NF-e por loja (gerência) ────────────────────────────────────
   const [seqOpen, setSeqOpen] = useState(false);
   const [seqList, setSeqList] = useState<any[] | null>(null);
@@ -754,6 +756,14 @@ export default function RemessasAdminPage() {
             🧾 NF-e em lote
           </button>
           {showNfeLote && <NfeLoteModal onClose={() => setShowNfeLote(false)} />}
+          <button
+            onClick={() => setShowNfeGiga(true)}
+            className="px-3 py-2 rounded-lg border-2 border-amber-300 text-amber-800 hover:bg-amber-50 text-sm font-bold"
+            title="Emitir NF-e das transferências do Giga (sistema anterior) que ficaram sem nota"
+          >
+            📜 NF-e do Giga
+          </button>
+          {showNfeGiga && <NfeGigaModal onClose={() => setShowNfeGiga(false)} />}
           <button
             onClick={abrirSeq}
             className="px-3 py-2 rounded-lg border-2 border-slate-300 text-slate-700 hover:bg-slate-50 text-sm font-bold"

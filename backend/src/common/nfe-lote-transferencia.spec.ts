@@ -75,3 +75,21 @@ describe('auxiliares', () => {
     expect(maxItensPorNota('50')).toBe(50);
   });
 });
+
+import { chaveDocGiga, prefixoAteTeto, textoInfCplGiga } from './nfe-lote-transferencia';
+
+describe('documentos do Giga', () => {
+  it('chave estável por origem, controle e dia', () => {
+    expect(chaveDocGiga('01', '0114011606', new Date('2025-01-14T00:00:00Z'))).toBe('giga:01:0114011606:2025-01-14');
+  });
+  it('prefixo para no primeiro que estouraria o teto', () => {
+    const r = prefixoAteTeto([{ valor: 100 }, { valor: 150 }, { valor: 80 }, { valor: 10 }], 300);
+    expect(r.escolhidos).toHaveLength(2);
+    expect(r.soma).toBe(250);
+  });
+  it('texto cita o Giga e os documentos', () => {
+    const [n] = planejarNotas([rem('0114011606', 14, [['1', 1]])]);
+    expect(textoInfCplGiga(n)).toContain('sistema anterior (Giga)');
+    expect(textoInfCplGiga(n)).toContain('0114011606');
+  });
+});

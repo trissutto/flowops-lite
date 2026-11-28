@@ -131,6 +131,40 @@ export class NfeController {
     });
   }
 
+  /** NF-e dos documentos de transferência do GIGA (28/11/2026) — PRÉVIA. */
+  @Get('transfer/giga/preview')
+  previewLoteGiga(
+    @Req() req: any,
+    @Query('destino') destino: string,
+    @Query('origens') origens: string,
+    @Query('de') de: string,
+    @Query('ate') ate: string,
+    @Query('teto') teto: string,
+  ) {
+    this.requireMatriz(req);
+    return this.transfer.previewLoteGiga({
+      destino, origens: String(origens || '').split(','), de, ate, teto: Number(teto),
+    });
+  }
+
+  /** NF-e dos documentos do GIGA — EMISSÃO (exige as chaves da prévia). */
+  @Post('transfer/giga/emit')
+  emitLoteGiga(
+    @Req() req: any,
+    @Body() body: { destino: string; origens: string[]; de: string; ate: string; teto: number; chaves: string[] },
+  ) {
+    this.requireMatriz(req);
+    return this.transfer.emitLoteGiga({
+      destino: body?.destino,
+      origens: Array.isArray(body?.origens) ? body.origens : [],
+      de: body?.de,
+      ate: body?.ate,
+      teto: Number(body?.teto),
+      chaves: Array.isArray(body?.chaves) ? body.chaves : [],
+      userId: req?.user?.userId || req?.user?.sub || null,
+    });
+  }
+
   @Post('transfer/emit/:shipmentId')
   emitTransfer(
     @Req() req: any,

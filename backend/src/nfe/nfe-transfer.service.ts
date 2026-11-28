@@ -16,6 +16,9 @@ import {
   maxItensPorNota,
   RemessaDoLote,
   NotaPlanejada,
+  chaveDocGiga,
+  prefixoAteTeto,
+  textoInfCplGiga,
 } from '../common/nfe-lote-transferencia';
 
 /** UF → código IBGE (cUF). Só os estados que a rede opera; expandir se preciso. */
@@ -319,6 +322,210 @@ export class NfeTransferService {
       notas.push({ plan, origem, destino, cfop, interestadual, items, valorTotal: items.reduce((s, i) => s + i.vProd, 0), warnings });
     }
     return { notas, excluidas, jaComNota };
+  }
+
+  // ── NF-e dos documentos do GIGA (dono, 28/11/2026) ────────────────────
+  // Transferências da matriz LURDS pra Campinas feitas no sistema anterior
+  // (jan/2025–mar/2026) sem nota. Fonte: giga_transferencia_item (peça a
+  // peça, por documento). Emitente SEMPRE a LURDS matriz (loja 13, CNPJ
+  // raiz 30 — ordem do dono), sem imposto, do documento mais antigo pro mais
+  // novo até o TETO de valor pedido.
+
+  async previewLoteGiga(p: { destino: string; origens: string[]; de: string; ate: string; teto: number }) {
+    const plano = await this.planoDoLoteGiga(p, { requireCert: false });
+    return {
+      ok: true,
+      imposto: 'ZERO — ICMS CST 90 + cBenef SP099000; PIS/COFINS sem destaque',
+      emitente: { storeCode: plano.origem.storeCode, cnpj: plano.origem.cnpj, razaoSocial: plano.origem.razaoSocial, ambiente: plano.origem.ambiente },
+      destinatario: { storeCode: plano.destino.storeCode, cnpj: plano.destino.cnpj, razaoSocial: plano.destino.razaoSocial },
+      notas: plano.notas.map((n, i) => ({
+        ordem: i + 1,
+        documentos: n.plan.remessas.map((r) => r.code),
+        chaves: n.plan.remessas.map((r) => r.id),
+        de: n.de,
+        ate: n.ate,
+        itens: n.items.length,
+        pecas: n.items.reduce((s, it) => s + it.qty, 0),
+        valorTotal: Math.round(n.valorTotal * 100) / 100,
+      })),
+      totais: {
+        notas: plano.notas.length,
+        documentos: plano.escolhidos,
+        pecas: plano.notas.reduce((s, n) => s + n.items.reduce((a, it) => a + it.qty, 0), 0),
+        valorTotal: plano.soma,
+        teto: p.teto,
+        periodoCoberto: plano.periodo,
+      },
+      fora: plano.fora,
+      jaComNota: plano.jaComNota,
+      semCusto: plano.semCusto,
+      avisos: plano.avisos.slice(0, 40),
+    };
+  }
+
+  async emitLoteGiga(p: { destino: string; origens: string[]; de: string; ate: string; teto: number; chaves: string[]; userId?: string | null }) {
+    const plano = await this.planoDoLoteGiga(p, { requireCert: true });
+    const doPlano = plano.notas.flatMap((n) => n.plan.remessas.map((r) => r.id)).sort();
+    const conferidas = [...new Set((p.chaves || []).map(String))].sort();
+    if (!doPlano.length) throw new BadRequestException('Nenhum documento do Giga sem nota nesse período — nada a emitir.');
+    if (doPlano.join(',') !== conferidas.join(',')) {
+      throw new BadRequestException('A lista de documentos mudou desde a prévia. Refaça a prévia e confira de novo antes de emitir.');
+    }
+    const resultados: any[] = [];
+    for (const n of plano.notas) {
+      const { autorizada, updated } = await this.transmitirTransferencia({
+        shipmentId: null,
+        shipmentIds: n.plan.remessas.map((r) => r.id),
+        origem: plano.origem, destino: plano.destino, items: n.items, valorTotal: n.valorTotal,
+        cfop: plano.cfop, interestadual: plano.interestadual,
+        remCode: n.plan.remessas[0].code,
+        infCpl: textoInfCplGiga(n.plan),
+        impostoZero: true,
+        userId: p.userId ?? null,
+      });
+      resultados.push({
+        ok: autorizada,
+        documentos: n.plan.remessas.length,
+        valorTotal: Math.round(n.valorTotal * 100) / 100,
+        doc: this.publicDoc(updated),
+      });
+      this.logger.log(
+        `[nfe-giga] ${plano.origem.storeCode}→${plano.destino.storeCode} nº ${updated.numero}: ${updated.status} ` +
+          `(${updated.cStat || '-'} ${updated.xMotivo || ''}) · ${n.plan.remessas.length} doc(s) · R$ ${n.valorTotal.toFixed(2)}`,
+      );
+      if (!autorizada) break;
+    }
+    return {
+      ok: resultados.length === plano.notas.length && resultados.every((r) => r.ok),
+      emitidas: resultados.filter((r) => r.ok).length,
+      totalPlanejado: plano.notas.length,
+      resultados,
+    };
+  }
+
+  private async planoDoLoteGiga(
+    p: { destino: string; origens: string[]; de: string; ate: string; teto: number },
+    opts: { requireCert: boolean },
+  ) {
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    const destinoCode = String(p.destino || '').trim();
+    const origens = (p.origens || []).map((o) => String(o).trim()).filter(Boolean);
+    const teto = Number(p.teto);
+    if (!destinoCode || !origens.length) throw new BadRequestException('Informe origem(ns) e destino.');
+    if (!iso.test(String(p.de || '')) || !iso.test(String(p.ate || ''))) throw new BadRequestException('Informe De e Até (AAAA-MM-DD).');
+    if (!Number.isFinite(teto) || teto <= 0 || teto > 5_000_000) throw new BadRequestException('Teto de valor inválido (entre R$ 1 e R$ 5 milhões).');
+
+    const destino = await this.loadStoreFiscal(destinoCode, { requireCert: false });
+    const emitenteCode = String(process.env.NFE_GIGA_EMITENTE || '13').trim();
+    const origem = await this.loadStoreFiscal(emitenteCode, {
+      ...opts, matchRaiz: destino.cnpj.slice(0, 8), excludeCnpj: destino.cnpj,
+    });
+    this.checarMesmaEmpresa(origem, destino);
+    const interestadual = origem.ender.uf !== destino.ender.uf;
+    const cfop = interestadual ? '6152' : '5152';
+
+    const linhas: any[] = await (this.prisma as any).gigaTransferenciaItem.findMany({
+      where: {
+        ljDestino: destinoCode,
+        ljOrigem: { in: origens },
+        data: { gte: new Date(`${p.de}T00:00:00Z`), lte: new Date(`${p.ate}T00:00:00Z`) },
+      },
+      orderBy: [{ data: 'asc' }, { controle: 'asc' }],
+    });
+
+    type Doc = { key: string; controle: string; origem: string; data: Date; pecas: Map<string, number>; preco: Map<string, number>; desc: Map<string, string> };
+    const docs = new Map<string, Doc>();
+    for (const l of linhas) {
+      const sku = String(l.codigo || '').trim();
+      const q = Number(l.qty) || 0;
+      if (!sku || q <= 0) continue;
+      const key = chaveDocGiga(l.ljOrigem, l.controle, l.data);
+      let d = docs.get(key);
+      if (!d) {
+        d = { key, controle: l.controle, origem: l.ljOrigem, data: l.data, pecas: new Map(), preco: new Map(), desc: new Map() };
+        docs.set(key, d);
+      }
+      d.pecas.set(sku, (d.pecas.get(sku) || 0) + q);
+      d.preco.set(sku, (d.preco.get(sku) || 0) + (Number(l.totalPreco) || 0));
+      if (l.descricao && !d.desc.has(sku)) d.desc.set(sku, l.descricao);
+    }
+
+    // Documento já coberto por nota (autorizada, ou em voo) sai da conta.
+    const chaves = [...docs.keys()];
+    const cobertas = new Set<string>();
+    for (let i = 0; i < chaves.length; i += 500) {
+      const lote = chaves.slice(i, i + 500);
+      const ds: any[] = await this.prisma.nfeDoc.findMany({
+        where: { shipmentIds: { hasSome: lote }, status: { in: ['authorized', 'pending', 'signed'] } } as any,
+        select: { shipmentIds: true } as any,
+      });
+      for (const d of ds) for (const k of d.shipmentIds || []) cobertas.add(k);
+    }
+
+    // Custo unitário por código (cache), calculado só pros documentos que entram.
+    const cache = new Map<string, { sku: string; ean: string; xProd: string; ncm: string; cfop: string; vUn: number }>();
+    const avisos: string[] = [];
+    const candidatos: Array<{ doc: Doc; valor: number }> = [];
+    let soma = 0;
+    let jaComNota = 0;
+    let parou = false;
+    const fora = { documentos: 0, pecas: 0 };
+    for (const d of docs.values()) {
+      if (cobertas.has(d.key)) { jaComNota++; continue; }
+      if (parou) { fora.documentos++; for (const q of d.pecas.values()) fora.pecas += q; continue; }
+      const novos = [...d.pecas.keys()].filter((s) => !cache.has(s));
+      if (novos.length) {
+        const its = await this.itensACusto(
+          novos.map((s) => ({ sku: s, qty: 1, descricao: d.desc.get(s), precoFallback: (d.preco.get(s) || 0) / (d.pecas.get(s) || 1) })),
+          cfop,
+          avisos,
+        );
+        for (const it of its) cache.set(it.sku, { sku: it.sku, ean: it.ean, xProd: it.xProd, ncm: it.ncm, cfop: it.cfop, vUn: it.vUn });
+      }
+      let valor = 0;
+      for (const [s, q] of d.pecas) valor += Math.round((cache.get(s)?.vUn || 0) * q * 100) / 100;
+      const { escolhidos } = prefixoAteTeto([{ valor }], teto - soma);
+      if (!escolhidos.length) { parou = true; fora.documentos++; for (const q of d.pecas.values()) fora.pecas += q; continue; }
+      candidatos.push({ doc: d, valor });
+      soma += valor;
+    }
+
+    const remessas: RemessaDoLote[] = candidatos.map(({ doc }) => ({
+      id: doc.key,
+      code: `${doc.origem}/${doc.controle}`,
+      emitenteCnpj: origem.cnpj,
+      destinoCnpj: destino.cnpj,
+      receivedAt: doc.data,
+      pecas: doc.pecas,
+    }));
+    const planos = planejarNotas(remessas, maxItensPorNota(process.env.NFE_LOTE_MAX_ITENS));
+    const notas = planos.map((plan) => {
+      const items = [...pecasDaNota(plan)].map(([sku, qty]) => {
+        const c = cache.get(sku)!;
+        return { ...c, qty, vProd: Math.round(c.vUn * qty * 100) / 100 };
+      });
+      const tempos = plan.remessas.map((r) => new Date(r.receivedAt as any).getTime());
+      return {
+        plan,
+        items,
+        valorTotal: items.reduce((s, i) => s + i.vProd, 0),
+        de: new Date(Math.min(...tempos)).toISOString().slice(0, 10),
+        ate: new Date(Math.max(...tempos)).toISOString().slice(0, 10),
+      };
+    });
+    const tempos = candidatos.map((c) => new Date(c.doc.data).getTime());
+    return {
+      origem, destino, cfop, interestadual, notas,
+      escolhidos: candidatos.length,
+      soma: Math.round(notas.reduce((s, n) => s + n.valorTotal, 0) * 100) / 100,
+      periodo: tempos.length
+        ? { de: new Date(Math.min(...tempos)).toISOString().slice(0, 10), ate: new Date(Math.max(...tempos)).toISOString().slice(0, 10) }
+        : null,
+      fora,
+      jaComNota,
+      semCusto: avisos.filter((a) => a.includes('sem custo')).length,
+      avisos,
+    };
   }
 
   /** Numera, assina, transmite e grava a NF-e de transferência — o MESMO
@@ -783,7 +990,7 @@ export class NfeTransferService {
    *  sempre da transferência, usada pela nota avulsa e pela do lote. Lê o
    *  catálogo em blocos paralelos (o lote tem centenas de SKUs). */
   private async itensACusto(
-    pecas: Array<{ sku: string; qty: number; descricao?: string | null }>,
+    pecas: Array<{ sku: string; qty: number; descricao?: string | null; precoFallback?: number }>,
     cfop: string,
     warnings: string[],
   ): Promise<Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>> {
@@ -803,7 +1010,9 @@ export class NfeTransferService {
       // Valor = CUSTO UNITÁRIO real (sem fator). Fallback base/2.5 só se sem custo.
       let vUn = Number(info?.custo) || 0;
       if (vUn <= 0) {
-        const alt = (Number(info?.preco) || 0) / 2.5;
+        // Preço do cadastro; peça antiga que saiu do catálogo usa o preço
+        // gravado no documento de origem (transferência do Giga).
+        const alt = (Number(info?.preco) || Number(g.precoFallback) || 0) / 2.5;
         vUn = Math.round(alt * 100) / 100;
         warnings.push(`SKU ${g.sku} sem custo cadastrado — usei base÷2,5 (R$ ${vUn.toFixed(2)})`);
       }
