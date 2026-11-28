@@ -7,6 +7,16 @@ import { signXmlNfeWithA1, transmitNfeSefazSp, cancelNfceSefazSp } from '../pdv/
 import { SEFAZ_SP_NFE_ENDPOINTS, HOMOLOG_FRASE } from './nfe-sefaz-endpoints';
 import { contaQueCobrouAVenda } from '../common/emitente-venda-online';
 import { rejeicaoDeSomatorioContraditoria, verAplicDaResposta } from '../common/nfe-somatorios';
+import {
+  planejarNotas,
+  pecasDaNota,
+  textoInfCplLote,
+  remessasDaNota,
+  ondeNotaDasRemessas,
+  maxItensPorNota,
+  RemessaDoLote,
+  NotaPlanejada,
+} from '../common/nfe-lote-transferencia';
 
 /** UF → código IBGE (cUF). Só os estados que a rede opera; expandir se preciso. */
 // ═══ REGRAS FISCAIS DE VENDA (tabela do contador, 28/07/26) ══════════════
@@ -97,9 +107,10 @@ export class NfeTransferService {
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
     this.checarLojaBloqueada(shipment);
 
-    // Idempotência: não reemitir o que já foi autorizado.
+    // Idempotência: não reemitir o que já foi autorizado — inclusive quando a
+    // remessa já está coberta por uma nota do LOTE.
     const jaAutorizada = await this.prisma.nfeDoc.findFirst({
-      where: { shipmentId, status: 'authorized' },
+      where: { ...ondeNotaDasRemessas([shipmentId]), status: 'authorized' } as any,
     });
     if (jaAutorizada) {
       return { ok: true, jaEmitida: true, doc: this.publicDoc(jaAutorizada) };
@@ -111,15 +122,235 @@ export class NfeTransferService {
 
     this.checarMesmaEmpresa(origem, destino);
 
+    const { autorizada, updated } = await this.transmitirTransferencia({
+      shipmentId, shipmentIds: [], origem, destino, items, valorTotal, cfop, interestadual,
+      remCode: shipment.code,
+      // Transporte da remessa (dono 29/07): Correios → modFrete 9; próprio → default (3)
+      modFrete: this.transporteDaRemessa(shipment, items) === 'correios' ? '9' : undefined,
+      userId: opts.userId, serie: opts.serie, startNumero: opts.startNumero,
+    });
+
+    return {
+      ok: autorizada,
+      jaEmitida: false,
+      doc: this.publicDoc(updated),
+      warnings,
+    };
+  }
+
+  // ── NF-e EM LOTE (dono, 28/11/2026) ──────────────────────────────────
+  // "Gerar nota fiscal de tudo que Campinas recebeu nos últimos 3 meses — eu
+  // não gerei — juntando as remessas pra não sair um monte de notas; é nota
+  // de transferência 5152, não pode gerar imposto." Cada nota carrega as
+  // LINHAS REAIS das remessas que ela cobre (as que já moveram o estoque);
+  // a régua de agrupamento é common/nfe-lote-transferencia.ts.
+
+  /** PRÉVIA do lote: o que vai virar nota, o que fica de fora e por quê —
+   *  sem numerar, sem assinar, sem transmitir. */
+  async previewLote(p: { toStoreCode: string; de: string; ate?: string }) {
+    const plano = await this.planoDoLote(p, { requireCert: false });
+    const notas = plano.notas.map((n, i) => ({
+      ordem: i + 1,
+      emitente: { storeCode: n.origem.storeCode, cnpj: n.origem.cnpj, razaoSocial: n.origem.razaoSocial, ambiente: n.origem.ambiente },
+      destinatario: { storeCode: n.destino.storeCode, cnpj: n.destino.cnpj, razaoSocial: n.destino.razaoSocial },
+      cfop: n.cfop,
+      natOp: 'TRANSFERENCIA DE MERC ADQ TERCEIROS',
+      remessas: n.plan.remessas.map((r) => r.code),
+      shipmentIds: n.plan.remessas.map((r) => r.id),
+      itens: n.items.length,
+      pecas: n.items.reduce((s, it) => s + it.qty, 0),
+      valorTotal: Math.round(n.valorTotal * 100) / 100,
+      infCpl: textoInfCplLote(n.plan),
+      warnings: n.warnings,
+    }));
+    return {
+      ok: true,
+      imposto: 'ZERO — ICMS CST 90 + cBenef SP099000; PIS/COFINS sem destaque',
+      notas,
+      excluidas: plano.excluidas,
+      jaComNota: plano.jaComNota,
+      totais: {
+        notas: notas.length,
+        remessas: notas.reduce((s, n) => s + n.remessas.length, 0),
+        pecas: notas.reduce((s, n) => s + n.pecas, 0),
+        valorTotal: Math.round(notas.reduce((s, n) => s + n.valorTotal, 0) * 100) / 100,
+      },
+    };
+  }
+
+  /** EMITE o lote. Recalcula o plano e só segue se as remessas forem
+   *  EXATAMENTE as da prévia que a pessoa conferiu. Para na primeira nota
+   *  recusada — rodar de novo retoma (remessa com nota autorizada sai do plano). */
+  async emitLote(p: { toStoreCode: string; de: string; ate?: string; shipmentIds: string[]; userId?: string | null }) {
+    const plano = await this.planoDoLote(p, { requireCert: true });
+    const doPlano = plano.notas.flatMap((n) => n.plan.remessas.map((r) => r.id)).sort();
+    const conferidas = [...new Set((p.shipmentIds || []).map(String))].sort();
+    if (!doPlano.length) throw new BadRequestException('Nenhuma remessa sem nota nesse período — nada a emitir.');
+    if (doPlano.join(',') !== conferidas.join(',')) {
+      throw new BadRequestException(
+        'A lista de remessas mudou desde a prévia (chegou caixa nova ou alguma já ganhou nota). Refaça a prévia e confira de novo antes de emitir.',
+      );
+    }
+    const resultados: any[] = [];
+    for (const n of plano.notas) {
+      const { autorizada, updated } = await this.transmitirTransferencia({
+        shipmentId: null,
+        shipmentIds: n.plan.remessas.map((r) => r.id),
+        origem: n.origem, destino: n.destino, items: n.items, valorTotal: n.valorTotal,
+        cfop: n.cfop, interestadual: n.interestadual,
+        remCode: n.plan.remessas[0].code,
+        infCpl: textoInfCplLote(n.plan),
+        impostoZero: true,
+        userId: p.userId ?? null,
+      });
+      resultados.push({
+        ok: autorizada,
+        remessas: n.plan.remessas.map((r) => r.code),
+        valorTotal: Math.round(n.valorTotal * 100) / 100,
+        doc: this.publicDoc(updated),
+      });
+      this.logger.log(
+        `[nfe-lote] ${n.origem.storeCode}→${n.destino.storeCode} nº ${updated.numero}: ${updated.status} ` +
+          `(${updated.cStat || '-'} ${updated.xMotivo || ''}) · ${n.plan.remessas.length} remessa(s)`,
+      );
+      if (!autorizada) break;
+    }
+    return {
+      ok: resultados.length === plano.notas.length && resultados.every((r) => r.ok),
+      emitidas: resultados.filter((r) => r.ok).length,
+      totalPlanejado: plano.notas.length,
+      resultados,
+    };
+  }
+
+  private async planoDoLote(p: { toStoreCode: string; de: string; ate?: string }, opts: { requireCert: boolean }) {
+    const to = String(p.toStoreCode || '').trim();
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    if (!to) throw new BadRequestException('Informe a loja de destino.');
+    if (!iso.test(String(p.de || ''))) throw new BadRequestException('Informe a data inicial (De) no formato AAAA-MM-DD.');
+    if (p.ate && !iso.test(p.ate)) throw new BadRequestException('Data final (Até) inválida.');
+    const gte = new Date(`${p.de}T00:00:00-03:00`);
+    const lte = p.ate ? new Date(`${p.ate}T23:59:59.999-03:00`) : new Date();
+
+    const shipments: any[] = await this.prisma.realignmentShipment.findMany({
+      where: { toStoreCode: to, status: 'received', receivedAt: { gte, lte } },
+      orderBy: { receivedAt: 'asc' },
+    });
+    const excluidas: Array<{ code: string; de: string; motivo: string }> = [];
+    if (!shipments.length) return { notas: [] as any[], excluidas, jaComNota: 0 };
+
+    // Já coberta por nota autorizada — ou com nota em voo (assinada e sem
+    // resposta): emitir de novo poderia duplicar documento.
+    const docs: any[] = await this.prisma.nfeDoc.findMany({
+      where: { ...ondeNotaDasRemessas(shipments.map((s) => s.id)), status: { in: ['authorized', 'pending', 'signed'] } } as any,
+      select: { shipmentId: true, shipmentIds: true, status: true, numero: true } as any,
+    });
+    const cobertas = new Map<string, any>();
+    for (const d of docs) for (const id of remessasDaNota(d)) if (!cobertas.has(id) || d.status === 'authorized') cobertas.set(id, d);
+    let jaComNota = 0;
+
+    const rows: any[] = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: { in: shipments.map((s) => s.id) }, realignmentStatus: { not: 'cancelled' } } as any,
+      select: { shipmentId: true, codigoBipado: true, qtyOrigem: true, descricao: true } as any,
+    });
+    const rowsPor = new Map<string, any[]>();
+    for (const r of rows) {
+      const arr = rowsPor.get(r.shipmentId) || [];
+      arr.push(r);
+      rowsPor.set(r.shipmentId, arr);
+    }
+
+    const destino = await this.loadStoreFiscal(to, { requireCert: false });
+    const origens = new Map<string, StoreFiscal | Error>();
+    const descricaoPorSku = new Map<string, string>();
+    const remessas: RemessaDoLote[] = [];
+    const fiscalPorCnpj = new Map<string, StoreFiscal>();
+
+    for (const s of shipments) {
+      const doc = cobertas.get(s.id);
+      if (doc?.status === 'authorized') { jaComNota++; continue; }
+      if (doc) { excluidas.push({ code: s.code, de: s.fromStoreCode, motivo: `NF-e nº ${doc.numero} assinada e sem resposta da SEFAZ — confira na lista de NF-e antes` }); continue; }
+      try { this.checarLojaBloqueada(s); } catch (e: any) { excluidas.push({ code: s.code, de: s.fromStoreCode, motivo: e?.message || String(e) }); continue; }
+
+      if (!origens.has(s.fromStoreCode)) {
+        try {
+          origens.set(s.fromStoreCode, await this.loadStoreFiscal(s.fromStoreCode, {
+            ...opts, matchRaiz: destino.cnpj.slice(0, 8), preferStoreCode: to, excludeCnpj: destino.cnpj,
+          }));
+        } catch (e: any) {
+          origens.set(s.fromStoreCode, e instanceof Error ? e : new Error(String(e)));
+        }
+      }
+      const origem = origens.get(s.fromStoreCode)!;
+      if (origem instanceof Error) { excluidas.push({ code: s.code, de: s.fromStoreCode, motivo: origem.message }); continue; }
+      try { this.checarMesmaEmpresa(origem, destino); } catch (e: any) { excluidas.push({ code: s.code, de: s.fromStoreCode, motivo: e?.message || String(e) }); continue; }
+
+      const linhas = rowsPor.get(s.id) || [];
+      if (!linhas.length) { excluidas.push({ code: s.code, de: s.fromStoreCode, motivo: 'Remessa sem peças (todas canceladas)' }); continue; }
+      const semCodigo = linhas.filter((r) => !String(r.codigoBipado || '').trim()).length;
+      if (semCodigo) { excluidas.push({ code: s.code, de: s.fromStoreCode, motivo: `${semCodigo} peça(s) sem código — a nota sairia incompleta` }); continue; }
+
+      const pecas = new Map<string, number>();
+      for (const r of linhas) {
+        const sku = String(r.codigoBipado).trim();
+        pecas.set(sku, (pecas.get(sku) || 0) + (r.qtyOrigem || 1));
+        if (r.descricao && !descricaoPorSku.has(sku)) descricaoPorSku.set(sku, r.descricao);
+      }
+      fiscalPorCnpj.set(origem.cnpj, origem);
+      remessas.push({ id: s.id, code: s.code, emitenteCnpj: origem.cnpj, destinoCnpj: destino.cnpj, receivedAt: s.receivedAt, pecas });
+    }
+
+    const planos = planejarNotas(remessas, maxItensPorNota(process.env.NFE_LOTE_MAX_ITENS));
+    const notas: Array<{
+      plan: NotaPlanejada; origem: StoreFiscal; destino: StoreFiscal; cfop: string; interestadual: boolean;
+      items: Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>;
+      valorTotal: number; warnings: string[];
+    }> = [];
+    for (const plan of planos) {
+      const origem = fiscalPorCnpj.get(plan.emitenteCnpj)!;
+      const interestadual = origem.ender.uf !== destino.ender.uf;
+      const cfop = interestadual ? '6152' : '5152';
+      const warnings: string[] = [];
+      const items = await this.itensACusto(
+        [...pecasDaNota(plan)].map(([sku, qty]) => ({ sku, qty, descricao: descricaoPorSku.get(sku) })),
+        cfop,
+        warnings,
+      );
+      notas.push({ plan, origem, destino, cfop, interestadual, items, valorTotal: items.reduce((s, i) => s + i.vProd, 0), warnings });
+    }
+    return { notas, excluidas, jaComNota };
+  }
+
+  /** Numera, assina, transmite e grava a NF-e de transferência — o MESMO
+   *  caminho pra nota de UMA remessa (emitForShipment) e pra nota que junta
+   *  VÁRIAS (emitLote). Retorna o doc gravado e se a SEFAZ autorizou. */
+  private async transmitirTransferencia(p: {
+    shipmentId: string | null;
+    shipmentIds: string[];
+    origem: StoreFiscal;
+    destino: StoreFiscal;
+    items: Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>;
+    valorTotal: number;
+    cfop: string;
+    interestadual: boolean;
+    remCode: string;
+    infCpl?: string;
+    impostoZero?: boolean;
+    modFrete?: string;
+    userId?: string | null;
+    serie?: string;
+    startNumero?: number;
+  }): Promise<{ autorizada: boolean; updated: any }> {
+    const { origem, destino, items, valorTotal, cfop, interestadual } = p;
     const ambiente = origem.ambiente;
     const tpAmb = ambiente;
-    const serie = opts.serie || '1';
+    const serie = p.serie || '1';
     await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
     // NUMERAÇÃO POR CNPJ EMITENTE (dono 29/07): T.O. e LURDS têm sequências
     // PRÓPRIAS — chavear pela loja física misturava as duas matrizes de
     // Itanhaém no mesmo contador (2332 LURDS → 2334 T.O.).
     let numero = await this.seq.next(this.digits(origem.cnpj), serie, {
-      start: opts.startNumero ?? this.startPadraoPara(origem.cnpj, serie),
+      start: p.startNumero ?? this.startPadraoPara(origem.cnpj, serie),
       // herda o contador legado da loja — só quando a identidade é a DELA
       legacyKey: origem.identidadeEmprestada ? undefined : origem.storeCode,
     });
@@ -138,9 +369,9 @@ export class NfeTransferService {
     // depois do doc da loja 06.
     const doc = await this.prisma.nfeDoc.create({
       data: {
-        shipmentId, fromStoreCode: origem.storeCode, toStoreCode: destino.storeCode,
+        shipmentId: p.shipmentId, shipmentIds: p.shipmentIds, fromStoreCode: origem.storeCode, toStoreCode: destino.storeCode,
         modelo: '55', serie, numero, cNF: '', chave: null, tpAmb, natOp, cfop, valorTotalCents,
-        status: 'pending', emittedByUserId: opts.userId ?? null,
+        status: 'pending', emittedByUserId: p.userId ?? null,
       },
     });
 
@@ -160,9 +391,8 @@ export class NfeTransferService {
       chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: this.agoraBrasilia() });
       const xml = this.buildXml({
         chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp,
-        origem, destino, interestadual, items, valorTotal, remCode: shipment.code,
-        // Transporte da remessa (dono 29/07): Correios → modFrete 9; próprio → default (3)
-        modFrete: this.transporteDaRemessa(shipment, items) === 'correios' ? '9' : undefined,
+        origem, destino, interestadual, items, valorTotal, remCode: p.remCode, infCpl: p.infCpl, impostoZero: p.impostoZero,
+        modFrete: p.modFrete,
       });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
@@ -234,13 +464,7 @@ export class NfeTransferService {
         erro: autorizada ? null : res.xMotivo || res.error || 'Rejeitada',
       },
     });
-
-    return {
-      ok: autorizada,
-      jaEmitida: false,
-      doc: this.publicDoc(updated),
-      warnings,
-    };
+    return { autorizada, updated };
   }
 
   /** Notas do período pro DOWNLOAD EM LOTE (ZIP do contador): AUTORIZADAS e
@@ -419,6 +643,7 @@ export class NfeTransferService {
     return {
       id: d.id,
       shipmentId: d.shipmentId,
+      shipmentIds: d.shipmentIds || [],
       fromStoreCode: d.fromStoreCode,
       toStoreCode: d.toStoreCode,
       modelo: d.modelo,
@@ -542,15 +767,39 @@ export class NfeTransferService {
 
     // Monta itens com custo + NCM do espelho.
     const warnings: string[] = [];
+    const interestadual = origem.ender.uf !== destino.ender.uf;
+    const cfop = interestadual ? '6152' : '5152';
+    const items = await this.itensACusto(
+      [...grouped.values()].map((g) => ({ sku: g.sku, qty: g.qty, descricao: g.row.descricao })),
+      cfop,
+      warnings,
+    );
+
+    const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
+    return { origem, destino, items, valorTotal, warnings, interestadual, cfop };
+  }
+
+  /** Itens da nota a CUSTO UNITÁRIO real + NCM/EAN do espelho — a régua de
+   *  sempre da transferência, usada pela nota avulsa e pela do lote. Lê o
+   *  catálogo em blocos paralelos (o lote tem centenas de SKUs). */
+  private async itensACusto(
+    pecas: Array<{ sku: string; qty: number; descricao?: string | null }>,
+    cfop: string,
+    warnings: string[],
+  ): Promise<Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>> {
+    const infos = new Map<string, any>();
+    const BLOCO = 15;
+    for (let i = 0; i < pecas.length; i += BLOCO) {
+      const bloco = pecas.slice(i, i + BLOCO);
+      const r = await Promise.all(bloco.map((g) => this.catalog.getPdvProductInfo(g.sku).catch(() => null)));
+      bloco.forEach((g, k) => infos.set(g.sku, r[k]));
+    }
     const items: Array<{
       sku: string; ean: string; xProd: string; ncm: string; cfop: string;
       qty: number; vUn: number; vProd: number;
     }> = [];
-    const interestadual = origem.ender.uf !== destino.ender.uf;
-    const cfop = interestadual ? '6152' : '5152';
-
-    for (const g of grouped.values()) {
-      const info = await this.catalog.getPdvProductInfo(g.sku).catch(() => null);
+    for (const g of pecas) {
+      const info = infos.get(g.sku);
       // Valor = CUSTO UNITÁRIO real (sem fator). Fallback base/2.5 só se sem custo.
       let vUn = Number(info?.custo) || 0;
       if (vUn <= 0) {
@@ -566,7 +815,7 @@ export class NfeTransferService {
         // GTIN do schema aceita SÓ 8/12/13/14 dígitos — EAN torto do espelho
         // (7/9/11 díg, letra, espaço) derruba o LOTE inteiro com cStat 225.
         ean: this.gtinValido((info?.ean || '').trim()),
-        xProd: (info?.descricao || g.row.descricao || g.sku).trim().slice(0, 120),
+        xProd: String(info?.descricao || g.descricao || g.sku).trim().slice(0, 120),
         ncm,
         cfop,
         qty: g.qty,
@@ -574,9 +823,7 @@ export class NfeTransferService {
         vProd,
       });
     }
-
-    const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
-    return { origem, destino, items, valorTotal, warnings, interestadual, cfop };
+    return items;
   }
 
   /**
@@ -591,7 +838,7 @@ export class NfeTransferService {
     this.checarLojaBloqueada(shipment);
 
     const jaAutorizada = await this.prisma.nfeDoc.findFirst({
-      where: { shipmentId, status: 'authorized' },
+      where: { ...ondeNotaDasRemessas([shipmentId]), status: 'authorized' } as any,
     });
 
     const data = await this.buildTransferData(shipment, { requireCert: false });
@@ -1275,6 +1522,13 @@ export class NfeTransferService {
     valorTotal: number; remCode: string;
     /** Override do modFrete (regra do transporte da remessa: correios → '9'). */
     modFrete?: string;
+    /** Texto da informação complementar (a nota do LOTE cita as remessas). */
+    infCpl?: string;
+    /** TRANSFERÊNCIA SEM IMPOSTO (ordem do dono, 28/11/2026, notas do lote):
+     *  ICMS CST 90 + cBenef SP099000 (remessa entre estabelecimentos do mesmo
+     *  titular) e PIS/COFINS zerados (CST 49) — mesmo no Lucro Presumido, que
+     *  na nota avulsa destaca ICMS 18% + PIS 0,65% + COFINS 3% (contador 29/07). */
+    impostoZero?: boolean;
   }): string {
     const homolog = p.tpAmb === '2';
     const destNome = homolog ? HOMOLOG_FRASE : (p.destino.razaoSocial || 'DESTINATARIO');
@@ -1338,7 +1592,9 @@ export class NfeTransferService {
     // crédito — Anexo XI Port. SRE 41/2023), PIS 0,65% e COFINS 3%.
     // Kill-switch do destaque: NFE_TRANSFER_ICMS=sem (volta CST 90 + cBenef).
     const crt3 = String(p.origem.regime || '1') === '3';
-    const icmsDestacado = crt3 && String(process.env.NFE_TRANSFER_ICMS ?? 'destacado').trim() === 'destacado';
+    const icmsDestacado =
+      crt3 && !p.impostoZero && String(process.env.NFE_TRANSFER_ICMS ?? 'destacado').trim() === 'destacado';
+    const pisCofinsDestacado = crt3 && !p.impostoZero;
     const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
     const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
     const { pPIS, pCOFINS } = this.aliqPisCofins();
@@ -1404,15 +1660,18 @@ export class NfeTransferService {
         }
         // Presumido: PIS 0,65% e COFINS 3% destacados sobre o item (contador 29/07)
         const vBCItem = Math.round(it.vProd * 100) / 100;
-        const vPisItem = crt3 ? Math.round(vBCItem * pPIS) / 100 : 0;
-        const vCofItem = crt3 ? Math.round(vBCItem * pCOFINS) / 100 : 0;
+        const vPisItem = pisCofinsDestacado ? Math.round(vBCItem * pPIS) / 100 : 0;
+        const vCofItem = pisCofinsDestacado ? Math.round(vBCItem * pCOFINS) / 100 : 0;
         totPIS += vPisItem;
         totCOFINS += vCofItem;
-        const pisCofins = crt3
+        // Sem destaque: Simples usa CST 99; Presumido sem imposto (lote) usa 49
+        // ("outras operações de saída" — transferência não é receita).
+        const cstZero = crt3 ? '49' : '99';
+        const pisCofins = pisCofinsDestacado
           ? `<PIS><PISAliq><CST>01</CST><vBC>${this.money(vBCItem)}</vBC><pPIS>${pPIS.toFixed(4)}</pPIS><vPIS>${this.money(vPisItem)}</vPIS></PISAliq></PIS>` +
             `<COFINS><COFINSAliq><CST>01</CST><vBC>${this.money(vBCItem)}</vBC><pCOFINS>${pCOFINS.toFixed(4)}</pCOFINS><vCOFINS>${this.money(vCofItem)}</vCOFINS></COFINSAliq></COFINS>`
-          : `<PIS><PISOutr><CST>99</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISOutr></PIS>` +
-            `<COFINS><COFINSOutr><CST>99</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSOutr></COFINS>`;
+          : `<PIS><PISOutr><CST>${cstZero}</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISOutr></PIS>` +
+            `<COFINS><COFINSOutr><CST>${cstZero}</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSOutr></COFINS>`;
         const ibi = this.ibscbsItem(ib, vBCItem);
         if (ib.on) {
           ibTot.vBC += vBCItem;
@@ -1461,7 +1720,7 @@ export class NfeTransferService {
       `</transp>`;
     // Transferência não tem pagamento → tPag 90 (sem pagamento), vPag 0.
     const pag = `<pag><detPag><tPag>90</tPag><vPag>0.00</vPag></detPag></pag>`;
-    const infAdic = `<infAdic><infCpl>${this.esc(`Transferencia de mercadoria - Remessa ${p.remCode}`)}</infCpl></infAdic>`;
+    const infAdic = `<infAdic><infCpl>${this.esc(p.infCpl || `Transferencia de mercadoria - Remessa ${p.remCode}`)}</infCpl></infAdic>`;
 
     const infNFe =
       `<infNFe versao="4.00" Id="NFe${p.chave}">` +

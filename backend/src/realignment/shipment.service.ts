@@ -17,6 +17,7 @@ import { RemessaEnvioService } from './remessa-envio.service';
 import { PromessaEstoqueService } from './promessa-estoque.service';
 import { destinoObrigatorioDoPedido } from '../common/destino-obrigatorio';
 import { avancarReceptorSeCaixasChegaram, garantirCardReceptor } from '../common/retirada-receptora';
+import { ondeNotaDasRemessas, remessasDaNota } from '../common/nfe-lote-transferencia';
 
 /**
  * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
@@ -419,12 +420,12 @@ export class RealignmentShipmentService {
     // descobrir no erro. Uma query pra todas em vez de uma por cartão.
     const notas = paraEtiqueta.length
       ? await (this.prisma as any).nfeDoc.findMany({
-          where: { shipmentId: { in: paraEtiqueta.map((s: any) => s.id) }, status: 'authorized' },
-          select: { shipmentId: true, numero: true },
+          where: { ...ondeNotaDasRemessas(paraEtiqueta.map((s: any) => s.id)), status: 'authorized' },
+          select: { shipmentId: true, shipmentIds: true, numero: true },
         })
       : [];
     const notaPorCaixa = new Map<string, any>(
-      (notas as any[]).map((n) => [n.shipmentId, n.numero]),
+      (notas as any[]).flatMap((n) => remessasDaNota(n).map((id) => [id, n.numero] as [string, any])),
     );
 
     return Promise.all(
@@ -625,9 +626,17 @@ export class RealignmentShipmentService {
      */
     let notaCancelada: string | null = null;
     const nfAutorizada = await (this.prisma as any).nfeDoc.findFirst({
-      where: { shipmentId: shipment.id, status: 'authorized' },
-      select: { id: true, numero: true } as any,
+      where: { ...ondeNotaDasRemessas([shipment.id]), status: 'authorized' },
+      select: { id: true, numero: true, shipmentIds: true } as any,
     });
+    // Nota do LOTE cobre outras remessas também: cancelar por aqui derrubaria
+    // o documento de caixas que não têm nada a ver com esta.
+    if (nfAutorizada && (nfAutorizada.shipmentIds || []).length > 1) {
+      throw new BadRequestException(
+        `Esta caixa está na NF-e ${nfAutorizada.numero}, emitida em lote junto com outras ${nfAutorizada.shipmentIds.length - 1} remessa(s). ` +
+        'Não dá pra reabrir por aqui — fale com a matriz.',
+      );
+    }
     if (nfAutorizada && !input.cancelarNota) {
       throw new BadRequestException(
         `Esta caixa tem a NF-e ${nfAutorizada.numero} autorizada. ` +
@@ -3050,13 +3059,13 @@ export class RealignmentShipmentService {
 
     // NF-e AUTORIZADA por remessa (selo "nota emitida" na lista, dono 24/07).
     const nfeDocs = await (this.prisma as any).nfeDoc.findMany({
-      where: { shipmentId: { in: ids }, status: 'authorized' },
-      select: { shipmentId: true, numero: true, serie: true },
+      where: { ...ondeNotaDasRemessas(ids), status: 'authorized' },
+      select: { shipmentId: true, shipmentIds: true, numero: true, serie: true },
     });
     const nfeByShipment = new Map<string, { numero: number; serie: string }>();
     for (const d of nfeDocs as any[]) {
-      if (d.shipmentId && !nfeByShipment.has(d.shipmentId)) {
-        nfeByShipment.set(d.shipmentId, { numero: d.numero, serie: d.serie });
+      for (const id of remessasDaNota(d)) {
+        if (!nfeByShipment.has(id)) nfeByShipment.set(id, { numero: d.numero, serie: d.serie });
       }
     }
 

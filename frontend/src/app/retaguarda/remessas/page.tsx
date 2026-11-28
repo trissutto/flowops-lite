@@ -33,6 +33,7 @@ import {
   PackageCheck,
 } from 'lucide-react';
 import { api, API_URL, getAuthToken } from '@/lib/api';
+import NfeLoteModal from '@/components/nfe/NfeLoteModal';
 
 type ShipmentRow = {
   id: string;
@@ -506,6 +507,7 @@ export default function RemessasAdminPage() {
     }
   };
 
+  const [showNfeLote, setShowNfeLote] = useState(false);
   // ── Numeração NF-e por loja (gerência) ────────────────────────────────────
   const [seqOpen, setSeqOpen] = useState(false);
   const [seqList, setSeqList] = useState<any[] | null>(null);
@@ -744,6 +746,14 @@ export default function RemessasAdminPage() {
           >
             📄 NF-e emitidas
           </button>
+          <button
+            onClick={() => setShowNfeLote(true)}
+            className="px-3 py-2 rounded-lg border-2 border-emerald-300 text-emerald-800 hover:bg-emerald-50 text-sm font-bold"
+            title="Emitir de uma vez a NF-e das remessas recebidas que ficaram sem nota"
+          >
+            🧾 NF-e em lote
+          </button>
+          {showNfeLote && <NfeLoteModal onClose={() => setShowNfeLote(false)} />}
           <button
             onClick={abrirSeq}
             className="px-3 py-2 rounded-lg border-2 border-slate-300 text-slate-700 hover:bg-slate-50 text-sm font-bold"

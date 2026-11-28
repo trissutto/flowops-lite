@@ -2767,6 +2767,10 @@ model NfeDoc {
   id              String  @id @default(uuid())
   // Origem do documento (remessa de transferência). Null se emitido avulso.
   shipmentId      String? @map("shipment_id")
+  // NF-e EM LOTE (28/11/2026): uma nota cobrindo VÁRIAS remessas. Nela o
+  // shipmentId fica nulo e as remessas cobertas moram aqui. Toda leitura de
+  // "esta remessa tem nota?" usa ondeNotaDasRemessas (common/nfe-lote-transferencia).
+  shipmentIds     String[] @default([]) @map("shipment_ids")
   fromStoreCode   String  @map("from_store_code") // emitente
   toStoreCode     String  @map("to_store_code") // destinatário
   modelo          String  @default("55")

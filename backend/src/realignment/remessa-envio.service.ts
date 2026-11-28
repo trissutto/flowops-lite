@@ -5,6 +5,7 @@ import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
 import { lojasDaRotaPropria } from '../common/rota-propria';
+import { ondeNotaDasRemessas } from '../common/nfe-lote-transferencia';
 
 // Lojas que despacham pelo Mais Envios (mesma regra dos pedidos): mapa fixo da
 // rede + extensão por env MAISENVIOS_STORES_JSON (franquias etc.).
@@ -100,13 +101,13 @@ export class RemessaEnvioService {
     if (shipment.status === 'open') {
       throw new BadRequestException('Processe e envie a remessa primeiro — a nota sai na sequência.');
     }
-    let doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+    let doc: any = await this.prisma.nfeDoc.findFirst({ where: { ...ondeNotaDasRemessas([shipmentId]), status: 'authorized' } as any });
     if (!doc) {
       const r: any = await this.nfe.emitForShipment(shipmentId, { userId: userId ?? null });
       if (!r?.ok) {
         throw new BadRequestException(`NF-e não autorizada (${r?.cStat ?? ''}): ${r?.xMotivo ?? r?.erro ?? 'erro'}`);
       }
-      doc = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+      doc = await this.prisma.nfeDoc.findFirst({ where: { ...ondeNotaDasRemessas([shipmentId]), status: 'authorized' } as any });
     }
     if (!doc) throw new BadRequestException('NF-e não encontrada após a emissão — tente de novo.');
     const { buffer } = await this.danfePdf.generateForDoc(doc.id);
@@ -259,13 +260,13 @@ export class RemessaEnvioService {
     }
 
     // 1) NF-e de transferência (5152) — auto-emite se ainda não existir
-    let doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+    let doc: any = await this.prisma.nfeDoc.findFirst({ where: { ...ondeNotaDasRemessas([shipmentId]), status: 'authorized' } as any });
     if (!doc) {
       const r: any = await this.nfe.emitForShipment(shipmentId, { userId: userId ?? null });
       if (!r?.ok) {
         throw new BadRequestException(`NF-e da remessa não autorizada (${r?.cStat ?? ''}): ${r?.xMotivo ?? 'erro'} — o envio precisa da chave.`);
       }
-      doc = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+      doc = await this.prisma.nfeDoc.findFirst({ where: { ...ondeNotaDasRemessas([shipmentId]), status: 'authorized' } as any });
     }
     const chave = String(doc?.chave || '').replace(/\D/g, '');
     if (chave.length !== 44) throw new BadRequestException('NF-e da remessa sem chave — não dá pra gerar o envio.');
@@ -474,7 +475,7 @@ export class RemessaEnvioService {
     let temNota = false;
     if (!opts?.somenteEtiqueta) {
       try {
-        const doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+        const doc: any = await this.prisma.nfeDoc.findFirst({ where: { ...ondeNotaDasRemessas([shipmentId]), status: 'authorized' } as any });
         if (doc?.id) {
           const { buffer } = await this.danfePdf.generateForDoc(doc.id);
           pdfs.push(buffer);

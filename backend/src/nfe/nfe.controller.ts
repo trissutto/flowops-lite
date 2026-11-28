@@ -102,6 +102,35 @@ export class NfeController {
     return this.transfer.previewForShipment(shipmentId);
   }
 
+  /** NF-e EM LOTE (28/11/2026) — PRÉVIA: remessas RECEBIDAS por uma loja no
+   *  período e ainda sem nota, agrupadas em poucas notas (sem imposto). */
+  @Get('transfer/lote/preview')
+  previewLote(
+    @Req() req: any,
+    @Query('toStoreCode') toStoreCode: string,
+    @Query('de') de: string,
+    @Query('ate') ate?: string,
+  ) {
+    this.requireMatriz(req);
+    return this.transfer.previewLote({ toStoreCode, de, ate });
+  }
+
+  /** NF-e EM LOTE — EMISSÃO. Exige a lista de remessas da prévia conferida. */
+  @Post('transfer/lote/emit')
+  emitLote(
+    @Req() req: any,
+    @Body() body: { toStoreCode: string; de: string; ate?: string; shipmentIds: string[] },
+  ) {
+    this.requireMatriz(req);
+    return this.transfer.emitLote({
+      toStoreCode: body?.toStoreCode,
+      de: body?.de,
+      ate: body?.ate,
+      shipmentIds: Array.isArray(body?.shipmentIds) ? body.shipmentIds : [],
+      userId: req?.user?.userId || req?.user?.sub || null,
+    });
+  }
+
   @Post('transfer/emit/:shipmentId')
   emitTransfer(
     @Req() req: any,
